@@ -101,12 +101,10 @@ import {
 } from './services/workspaceProjectStore';
 import {
   deleteWorkspaceProjectObjects,
-  fetchWorkflowPackedFromCloud,
   fetchWorkspaceCloudIndex,
   isWorkspaceCloudEnabled,
   isWorkspaceCloudLiteStructureSyncEnabled,
   migrateLocalWorkspaceToCloud,
-  pushWorkflowBundleToCloud,
   pushWorkflowLiteStructureToCloud,
   pushWorkspaceIndex,
   WORKSPACE_CLOUD_DEFAULT_QUOTA_BYTES,
@@ -176,50 +174,11 @@ import {
   findCompanionKeysMissingFromManifest,
   mergeUnlinkedManifestEntriesIntoWorkflowAssets,
 } from './services/workflowManifestCrossCheck';
-import { fetchCompanionAssetAsDataUrl, workflowBundleNeedsCompanionHydrateForCloudPack } from './services/workflowCompanionAssets';
+import { fetchCompanionAssetAsDataUrl } from './services/workflowCompanionAssets';
 import { isWorkflowStoryboardTableAsset } from './services/storyboardTableAsset';
 import { collectReferencedObjectKeysFromPackedV2, hydrateWorkflowBundleFromCloud } from './services/workspaceR2ImageBundle';
 function isImagePreviewEscapeKey(e: KeyboardEvent): boolean {
   return e.key === 'Escape' || e.code === 'Escape' || e.keyCode === 27;
-}
-
-type ClipboardCopyOutcome = 'clipboard' | 'exec' | 'manual';
-
-function tryCopyTextViaExecCommand(text: string): boolean {
-  if (typeof document === 'undefined') return false;
-  try {
-    const ta = document.createElement('textarea');
-    ta.value = text;
-    ta.setAttribute('readonly', '');
-    ta.style.position = 'fixed';
-    ta.style.left = '-9999px';
-    ta.style.top = '0';
-    ta.style.opacity = '0';
-    ta.style.pointerEvents = 'none';
-    document.body.appendChild(ta);
-    ta.focus();
-    ta.select();
-    const ok = document.execCommand('copy');
-    document.body.removeChild(ta);
-    return Boolean(ok);
-  } catch {
-    return false;
-  }
-}
-
-async function copyTextToClipboardWithFallback(text: string): Promise<ClipboardCopyOutcome> {
-  if (typeof navigator !== 'undefined' && navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
-    try {
-      await navigator.clipboard.writeText(text);
-      return 'clipboard';
-    } catch {
-      // fall through
-    }
-  }
-  if (typeof document !== 'undefined' && tryCopyTextViaExecCommand(text)) {
-    return 'exec';
-  }
-  return 'manual';
 }
 
 /** 自动同步间隔：默认 3 分钟，减少后台上传频率；可在 .env 设 `VITE_WORKSPACE_AUTO_SYNC_INTERVAL_MS`（30000～3600000）覆盖 */
@@ -245,94 +204,6 @@ const WORKSPACE_LITE_STRUCTURE_DEBOUNCE_MS = readWorkspaceLiteStructureDebounceM
 /** 打开项目时：是否把伴侣 manifest 里非 wf-orig/wf-res/wf-mdl 的遗留文件扫成多张新卡（默认关，避免打乱组与生成关系） */
 const WORKSPACE_IMPORT_LEGACY_COMPANION_ORPHANS =
   String(import.meta.env.VITE_WORKSPACE_IMPORT_LEGACY_COMPANION_ORPHANS || '').trim().toLowerCase() === 'true';
-
-function estimateStringBytes(value: string): number {
-  if (!value) return 0;
-  const v = String(value);
-  if (v.startsWith('data:')) {
-    const comma = v.indexOf(',');
-    if (comma >= 0 && comma < v.length - 1) {
-      const payload = v.slice(comma + 1);
-      return Math.floor((payload.length * 3) / 4);
-    }
-  }
-  return v.length;
-}
-
-function formatApproxBytes(bytes: number): string {
-  const n = Math.max(0, Number(bytes) || 0);
-  if (n >= 1024 * 1024 * 1024) return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`;
-  if (n >= 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
-  if (n >= 1024) return `${(n / 1024).toFixed(1)} KB`;
-  return `${Math.round(n)} B`;
-}
-
-type ManualUploadMode = 'full' | 'incremental';
-type ManualUploadEstimate = {
-  assetCount: number;
-  previewCount: number;
-  modelCount: number;
-  bytesApprox: number;
-};
-
-function buildManualUploadEstimate(assets: WorkflowAsset[]): ManualUploadEstimate {
-  let previewCount = 0;
-  let modelCount = 0;
-  let bytesApprox = 0;
-  for (const asset of assets) {
-    const original = String(asset?.original || '');
-    if (original) {
-      previewCount += 1;
-      bytesApprox += estimateStringBytes(original);
-    }
-    const models = Array.isArray(asset?.modelUrls) ? asset.modelUrls : [];
-    modelCount += models.length;
-    for (const url of models) {
-      bytesApprox += estimateStringBytes(String(url || ''));
-    }
-  }
-  return {
-    assetCount: assets.length,
-    previewCount,
-    modelCount,
-    bytesApprox,
-  };
-}
-
-function normalizeModelUrls(value: unknown): string[] {
-  if (!Array.isArray(value)) return [];
-  return value.map((it) => String(it || ''));
-}
-
-function buildAssetDiffSignature(asset: Partial<WorkflowAsset> | null | undefined): string {
-  if (!asset) return '';
-  const original = String(asset.original || '');
-  const originalObjectKey = String(asset.originalObjectKey || '');
-  const modelUrls = normalizeModelUrls(asset.modelUrls).join('|');
-  const title = String((asset as Partial<WorkflowAsset> & { title?: string }).title || '');
-  return [original, originalObjectKey, modelUrls, title].join('::');
-}
-
-function pickIncrementalAssets(localAssets: WorkflowAsset[], cloudAssets: WorkflowAsset[] | null): WorkflowAsset[] {
-  if (!Array.isArray(cloudAssets)) return [...localAssets];
-  const cloudSig = new Map<string, string>();
-  for (const asset of cloudAssets) {
-    cloudSig.set(String(asset?.id || ''), buildAssetDiffSignature(asset));
-  }
-  return localAssets.filter((asset) => {
-    const id = String(asset?.id || '');
-    if (!id) return true;
-    const prev = cloudSig.get(id);
-    const next = buildAssetDiffSignature(asset);
-    return !prev || prev !== next;
-  });
-}
-
-function pickAssetsById(localAssets: WorkflowAsset[], ids: string[]): WorkflowAsset[] {
-  if (!Array.isArray(ids) || ids.length === 0) return [];
-  const idSet = new Set(ids.map((id) => String(id || '').trim()).filter(Boolean));
-  return localAssets.filter((asset) => idSet.has(String(asset?.id || '').trim()));
-}
 
 /** 对话大图预览全景模式：与工作区 ImagePreviewOverlay 同 registry chunk */
 const LazyDialogTempEquirectViewer = getLazyImagePreviewViewer('image.equirect');
@@ -980,42 +851,6 @@ const MainApp: React.FC = () => {
     id: string;
     name: string;
   } | null>(null);
-  const [workspaceProjectBindPending, setWorkspaceProjectBindPending] = useState<{
-    id: string;
-    name: string;
-  } | null>(null);
-  const [workspaceProjectUnbindPending, setWorkspaceProjectUnbindPending] = useState<{
-    id: string;
-    name: string;
-  } | null>(null);
-  const [workspaceProjectManualUploadPending, setWorkspaceProjectManualUploadPending] = useState<{
-    id: string;
-    name: string;
-    fullEstimate: ManualUploadEstimate;
-    incrementalEstimate: ManualUploadEstimate | null;
-    incrementalReady: boolean;
-  } | null>(null);
-  const [workspaceManualUploadMode, setWorkspaceManualUploadMode] = useState<ManualUploadMode>('full');
-  const [workspaceUploadingProjectId, setWorkspaceUploadingProjectId] = useState<string | null>(null);
-  const [workspaceUploadFailureDetailDialog, setWorkspaceUploadFailureDetailDialog] = useState<{
-    projectId: string;
-    projectName: string;
-    mode: ManualUploadMode;
-    attempted: number;
-    succeeded: number;
-    uploadedAt: number | null;
-    error: string;
-    failedAssetIds: string[];
-    selectedAssetIds: string[];
-  } | null>(null);
-  /** 失败详情弹层：按 assetId 关键字过滤列表（仅 UI，不入库） */
-  const [workspaceUploadFailureFilter, setWorkspaceUploadFailureFilter] = useState('');
-  /** 剪贴板 API 与 execCommand 均失败时，展示全文供用户手动复制 */
-  const [workspaceUploadFailureCopyFallback, setWorkspaceUploadFailureCopyFallback] = useState<{
-    text: string;
-    kind: 'visible' | 'selected';
-  } | null>(null);
-  const workspaceUploadFailureCopyFallbackTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const [workspaceTrashDialog, setWorkspaceTrashDialog] = useState<{
     open: boolean;
     loading: boolean;
@@ -1048,31 +883,6 @@ const MainApp: React.FC = () => {
     usernameRef.current = user?.username;
   }, [user?.username]);
 
-  useLayoutEffect(() => {
-    if (!workspaceUploadFailureCopyFallback) return;
-    const el = workspaceUploadFailureCopyFallbackTextareaRef.current;
-    if (!el) return;
-    el.focus();
-    el.select();
-  }, [workspaceUploadFailureCopyFallback]);
-
-  useEffect(() => {
-    if (!workspaceUploadFailureDetailDialog && !workspaceUploadFailureCopyFallback) return;
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (!isImagePreviewEscapeKey(e)) return;
-      e.preventDefault();
-      e.stopPropagation();
-      if (workspaceUploadFailureCopyFallback) {
-        setWorkspaceUploadFailureCopyFallback(null);
-        return;
-      }
-      setWorkspaceUploadFailureFilter('');
-      setWorkspaceUploadFailureDetailDialog(null);
-    };
-    document.addEventListener('keydown', onKeyDown, true);
-    return () => document.removeEventListener('keydown', onKeyDown, true);
-  }, [workspaceUploadFailureDetailDialog, workspaceUploadFailureCopyFallback]);
-
   useEffect(() => {
     if (!user?.id) workspaceCloudPushAllowedUserIdRef.current = null;
   }, [user?.id]);
@@ -1096,12 +906,8 @@ const MainApp: React.FC = () => {
     }
   }, [user?.id]);
 
-  function isProjectBoundToCurrentUser(projectId: string | null | undefined): boolean {
-    if (!projectId) return false;
-    const uid = userIdRef.current;
-    if (!uid) return false;
-    const p = workspaceProjectsRef.current.find((x) => x.id === projectId);
-    return Boolean(p?.boundUserId && p.boundUserId === uid);
+  function canSyncWorkspaceProjectToCloud(projectId: string | null | undefined): boolean {
+    return Boolean(projectId && userIdRef.current);
   }
 
   useEffect(() => {
@@ -1123,7 +929,7 @@ const MainApp: React.FC = () => {
   /** 画布变更后标记未同步（云端拉取过程中不标脏） */
   useEffect(() => {
     if (authLoading || !user?.id || !user?.username || !isWorkspaceCloudEnabled() || !activeWorkspaceProjectId) return;
-    if (!isProjectBoundToCurrentUser(activeWorkspaceProjectId)) return;
+    if (!canSyncWorkspaceProjectToCloud(activeWorkspaceProjectId)) return;
     if (workspaceCloudPostPullDirtySuppressRef.current > 0) {
       workspaceCloudPostPullDirtySuppressRef.current -= 1;
       return;
@@ -1135,7 +941,7 @@ const MainApp: React.FC = () => {
   useEffect(() => {
     if (!workspaceCloudQuotaSuspended) return;
     if (!user?.id || !user?.username || !isWorkspaceCloudEnabled() || !activeWorkspaceProjectId) return;
-    if (!isProjectBoundToCurrentUser(activeWorkspaceProjectId)) return;
+    if (!canSyncWorkspaceProjectToCloud(activeWorkspaceProjectId)) return;
     editedWhileQuotaSuspendedRef.current = true;
   }, [workflowAssets, workflowPending, workspaceCloudQuotaSuspended, user?.id, user?.username, activeWorkspaceProjectId]);
 
@@ -1433,22 +1239,34 @@ const MainApp: React.FC = () => {
     }
   }, [addGlobalLog, activeWorkspaceProjectId, user?.id, workflowAssets.length, workflowPending.length]);
 
-  const pullWorkspaceProjectsFromCompanion = useCallback(async (): Promise<null | { id: string; name: string; createdAt: number; boundUserId?: string; boundAt?: number }[]> => {
+  const pullWorkspaceProjectsFromCompanion = useCallback(async (
+    localSnapshot?: WorkspaceProject[]
+  ): Promise<null | { id: string; name: string; createdAt: number; boundUserId?: string; boundAt?: number }[]> => {
     const base = getCompanionLocalBaseUrl();
     const res = await listCompanionWorkspaceProjects(base);
     if (!res.ok) return null;
     const list = Array.isArray(res.data.projects) ? res.data.projects : [];
+    const localList = localSnapshot ?? workspaceProjectsRef.current ?? [];
     const localById = new Map<string, WorkspaceProject>(
-      (workspaceProjectsRef.current || []).map((p) => [p.id, p] as const)
+      localList.map((p) => [p.id, p] as const)
     );
     const fromCompanion = list
       .map((p) => {
         const idKey = String(p.id || '').trim();
         const local = localById.get(idKey);
+        const companionName = String(p.name || '').trim();
+        const localName = String(local?.name || '').trim();
+        let name = companionName || localName || idKey;
+        // 浏览器索引有自定义显示名时优先（伴侣 meta 未同步或 PATCH 失败）
+        if (localName && localName !== idKey && localName !== companionName) {
+          name = localName;
+        } else if (localName && localName !== idKey && companionName === idKey) {
+          name = localName;
+        }
         return {
           id: idKey,
-          name: String(p.name || '').trim(),
-          createdAt: Number(p.createdAt || Date.now()),
+          name,
+          createdAt: Number(p.createdAt || local?.createdAt || Date.now()),
           ...(typeof local?.boundUserId === 'string' && local.boundUserId.trim()
             ? { boundUserId: local.boundUserId.trim() }
             : {}),
@@ -1457,8 +1275,7 @@ const MainApp: React.FC = () => {
       })
       .filter((p) => p.id && p.name);
     const companionIds = new Set(fromCompanion.map((p) => p.id));
-    const locals = workspaceProjectsRef.current || [];
-    const extras = locals.filter((p) => String(p.id || '').trim() && !companionIds.has(String(p.id || '').trim()));
+    const extras = localList.filter((p) => String(p.id || '').trim() && !companionIds.has(String(p.id || '').trim()));
     return [...fromCompanion, ...extras];
   }, []);
 
@@ -1551,7 +1368,7 @@ const MainApp: React.FC = () => {
       await ensureWorkspaceBundlesHydratedFromIdb(null);
       if (cancelled) return;
       const localProjects = loadWorkspaceProjects(null);
-      const remoteProjects = await pullWorkspaceProjectsFromCompanion();
+      const remoteProjects = await pullWorkspaceProjectsFromCompanion(localProjects);
       if (cancelled) return;
       const effectiveProjects = remoteProjects && remoteProjects.length > 0 ? remoteProjects : localProjects;
       setWorkspaceProjects(effectiveProjects);
@@ -1585,7 +1402,7 @@ const MainApp: React.FC = () => {
       await ensureWorkspaceBundlesHydratedFromIdb(uid);
       if (cancelled) return;
       const localProjects = loadWorkspaceProjects(uid);
-      const remoteProjects = await pullWorkspaceProjectsFromCompanion();
+      const remoteProjects = await pullWorkspaceProjectsFromCompanion(localProjects);
       if (cancelled) return;
       const effectiveProjects = remoteProjects && remoteProjects.length > 0 ? remoteProjects : localProjects;
       setWorkspaceProjects(effectiveProjects);
@@ -1625,7 +1442,7 @@ const MainApp: React.FC = () => {
 
     const applyIndex = async (index: NonNullable<Awaited<ReturnType<typeof fetchWorkspaceCloudIndex>>>) => {
       if (cancelled) return;
-      const remoteProjects = await pullWorkspaceProjectsFromCompanion();
+      const remoteProjects = await pullWorkspaceProjectsFromCompanion(index.projects);
       if (cancelled) return;
       const effectiveProjects = remoteProjects && remoteProjects.length > 0 ? remoteProjects : index.projects;
       const validLast =
@@ -1660,7 +1477,7 @@ const MainApp: React.FC = () => {
         if (cancelled) return;
         if (migrated) {
           const { projects, lastOpenProjectId } = migrated;
-          const remoteProjects = await pullWorkspaceProjectsFromCompanion();
+          const remoteProjects = await pullWorkspaceProjectsFromCompanion(projects);
           if (cancelled) return;
           const effectiveProjects = remoteProjects && remoteProjects.length > 0 ? remoteProjects : projects;
           const validLast =
@@ -1686,7 +1503,7 @@ const MainApp: React.FC = () => {
           return;
         }
         const localOnly = loadWorkspaceProjects(uid);
-        const remoteProjects = await pullWorkspaceProjectsFromCompanion();
+        const remoteProjects = await pullWorkspaceProjectsFromCompanion(localOnly);
         if (cancelled) return;
         const effectiveProjects = remoteProjects && remoteProjects.length > 0 ? remoteProjects : localOnly;
         const last = getLastOpenedWorkspaceProjectId(uid);
@@ -1706,7 +1523,7 @@ const MainApp: React.FC = () => {
         console.warn('[workspace cloud] hydrate', e);
         if (cancelled) return;
         const localOnly = loadWorkspaceProjects(uid);
-        const remoteProjects = await pullWorkspaceProjectsFromCompanion();
+        const remoteProjects = await pullWorkspaceProjectsFromCompanion(localOnly);
         if (cancelled) return;
         const effectiveProjects = remoteProjects && remoteProjects.length > 0 ? remoteProjects : localOnly;
         const last = getLastOpenedWorkspaceProjectId(uid);
@@ -1778,7 +1595,7 @@ const MainApp: React.FC = () => {
     if (!isWorkspaceCloudEnabled() || !isWorkspaceCloudLiteStructureSyncEnabled()) return;
     if (!user?.id || !user?.username) return;
     if (workspaceCloudQuotaSuspended) return;
-    if (!isProjectBoundToCurrentUser(activeWorkspaceProjectId)) return;
+    if (!canSyncWorkspaceProjectToCloud(activeWorkspaceProjectId)) return;
     setLiteStructureSyncScheduleSeq((n) => n + 1);
   }, [
     workflowAssets,
@@ -1802,7 +1619,7 @@ const MainApp: React.FC = () => {
     if (!uid || !uname) return;
     if (workspaceCloudPushAllowedUserIdRef.current !== uid) return;
     if (workspaceCloudQuotaSuspendedRef.current) return;
-    if (!isProjectBoundToCurrentUser(activeWorkspaceProjectId)) return;
+    if (!canSyncWorkspaceProjectToCloud(activeWorkspaceProjectId)) return;
     if (workspaceCloudHydratingProjectIdRef.current === activeWorkspaceProjectId) return;
 
     const pid = activeWorkspaceProjectId;
@@ -1881,7 +1698,7 @@ const MainApp: React.FC = () => {
           isWorkspaceCloudBundleMergeEnabled() &&
           workspaceCloudPushAllowedUserIdRef.current === uidMerge &&
           !workspaceCloudQuotaSuspendedRef.current &&
-          isProjectBoundToCurrentUser(id)
+          canSyncWorkspaceProjectToCloud(id)
         ) {
           setWorkspaceCloudHydratingProjectId(id);
           void reconcileWorkflowBundleWithCloud({ projectId: id, userId: uidMerge, username: unameMerge })
@@ -2083,7 +1900,8 @@ const MainApp: React.FC = () => {
           );
         }
       }
-      const refreshed = await pullWorkspaceProjectsFromCompanion();
+      const localBeforeRestore = loadWorkspaceProjects(scope);
+      const refreshed = await pullWorkspaceProjectsFromCompanion(localBeforeRestore);
       if (refreshed) {
         setWorkspaceProjects(refreshed);
         saveWorkspaceProjects(refreshed, scope);
@@ -2139,7 +1957,7 @@ const MainApp: React.FC = () => {
           isWorkspaceCloudEnabled() &&
           !workspaceCloudQuotaSuspendedRef.current &&
           workspaceCloudPushAllowedUserIdRef.current === uid &&
-          isProjectBoundToCurrentUser(curId)
+          canSyncWorkspaceProjectToCloud(curId)
         ) {
           setWorkspaceCloudLeaveSyncing(true);
           try {
@@ -2244,7 +2062,7 @@ const MainApp: React.FC = () => {
           isWorkspaceCloudEnabled() &&
           !workspaceCloudQuotaSuspendedRef.current &&
           workspaceCloudPushAllowedUserIdRef.current === uid &&
-          isProjectBoundToCurrentUser(pid)
+          canSyncWorkspaceProjectToCloud(pid)
         ) {
           setWorkspaceCloudLeaveSyncing(true);
           try {
@@ -2277,17 +2095,19 @@ const MainApp: React.FC = () => {
     async (name: string) => {
       const scope = user?.id ?? null;
       const base = getCompanionLocalBaseUrl();
-      let next = [...workspaceProjects];
       const trimmed = String(name || '').trim();
       /** 未填名称时伴侣会返回 workspace_project_name_required；给默认目录名避免回退成 UUID 导致 manifest project_not_found */
       const nameForCompanion = trimmed || `proj-${Date.now().toString(36)}`;
-      const createdRemote = await createCompanionWorkspaceProject(base, nameForCompanion);
-      if (createdRemote.ok === false) {
-        const p = createWorkspaceProject(trimmed || nameForCompanion);
-        next = [...workspaceProjects, p];
-        addGlobalLog('工作区', 'warn', '本地伴侣新建项目失败，已回退浏览器侧创建', createdRemote.error);
-      } else {
+      let next: WorkspaceProject[];
+      if (base) {
+        const createdRemote = await createCompanionWorkspaceProject(base, nameForCompanion);
+        if (createdRemote.ok === false) {
+          addGlobalLog('工作区', 'error', '本地伴侣新建项目失败', createdRemote.error);
+          return;
+        }
         next = [...workspaceProjects, createdRemote.data.project];
+      } else {
+        next = [...workspaceProjects, createWorkspaceProject(trimmed || nameForCompanion)];
       }
       setWorkspaceProjects(next);
       saveWorkspaceProjects(next, scope);
@@ -2574,29 +2394,14 @@ const MainApp: React.FC = () => {
       const trimmed = String(name || '').trim();
       if (!trimmed) return;
       const scope = user?.id ?? null;
-      const prevList = workspaceProjectsRef.current;
-      let next = prevList.map((p) => (p.id === id ? { ...p, name: trimmed } : p));
+      const next = workspaceProjectsRef.current.map((p) => (p.id === id ? { ...p, name: trimmed } : p));
+      setWorkspaceProjects(next);
+      saveWorkspaceProjects(next, scope);
       const base = getCompanionLocalBaseUrl();
       const renamed = await renameCompanionWorkspaceProject(base, id, trimmed);
       if (renamed.ok === false) {
-        addGlobalLog('工作区', 'warn', '本地伴侣重命名失败，已回退浏览器侧重命名', renamed.error);
-      } else {
-        next = prevList.map((p) => (p.id === id ? renamed.data.project : p));
-        const newId = String(renamed.data.project?.id || '').trim();
-        if (newId && newId !== id) {
-          await migrateWorkflowBundleProjectId(id, newId, scope);
-          if (activeWorkspaceProjectIdRef.current === id) {
-            const b = loadWorkflowBundle(newId, scope);
-            setActiveWorkspaceProjectId(newId);
-            setWorkflowAssets(b.assets);
-            setWorkflowPending(b.pending);
-          }
-          const lastOpen = getLastOpenedWorkspaceProjectId(scope);
-          if (lastOpen === id) setLastOpenedWorkspaceProjectId(newId, scope);
-        }
+        addGlobalLog('工作区', 'warn', '本地伴侣更新显示名失败，名称已保存在浏览器', renamed.error);
       }
-      setWorkspaceProjects(next);
-      saveWorkspaceProjects(next, scope);
       if (
         user?.id &&
         user?.username &&
@@ -2616,404 +2421,6 @@ const MainApp: React.FC = () => {
     const p = workspaceProjectsRef.current.find((q) => q.id === id);
     setWorkspaceProjectDeletePending({ id, name: p?.name ?? '该项目' });
   }, []);
-
-  const requestBindWorkspaceProject = useCallback((id: string) => {
-    const p = workspaceProjectsRef.current.find((q) => q.id === id);
-    if (!p) return;
-    setWorkspaceProjectBindPending({ id, name: p.name || '该项目' });
-  }, []);
-
-  const requestUnbindWorkspaceProject = useCallback((id: string) => {
-    const p = workspaceProjectsRef.current.find((q) => q.id === id);
-    if (!p) return;
-    setWorkspaceProjectUnbindPending({ id, name: p.name || '该项目' });
-  }, []);
-
-  const requestManualUploadWorkspaceProject = useCallback(async (id: string) => {
-    const p = workspaceProjectsRef.current.find((q) => q.id === id);
-    if (!p) return;
-    const scope = userIdRef.current ?? null;
-    const bundle = loadWorkflowBundle(id, scope);
-    const fullEstimate = buildManualUploadEstimate(bundle.assets);
-    setWorkspaceManualUploadMode('full');
-    setWorkspaceProjectManualUploadPending({
-      id,
-      name: p.name || '该项目',
-      fullEstimate,
-      incrementalEstimate: null,
-      incrementalReady: false,
-    });
-    const uid = userIdRef.current;
-    const uname = usernameRef.current;
-    if (!uid || !uname) {
-      setWorkspaceProjectManualUploadPending((prev) =>
-        prev && prev.id === id ? { ...prev, incrementalReady: true } : prev
-      );
-      return;
-    }
-    try {
-      const packed = await fetchWorkflowPackedFromCloud(uid, id, uname);
-      const picked = pickIncrementalAssets(bundle.assets, packed?.assets ?? null);
-      const incrementalEstimate = buildManualUploadEstimate(picked);
-      setWorkspaceProjectManualUploadPending((prev) =>
-        prev && prev.id === id
-          ? {
-              ...prev,
-              incrementalEstimate,
-              incrementalReady: true,
-            }
-          : prev
-      );
-    } catch {
-      setWorkspaceProjectManualUploadPending((prev) =>
-        prev && prev.id === id ? { ...prev, incrementalReady: true } : prev
-      );
-    }
-  }, []);
-
-  const requestOpenWorkspaceUploadFailureDetail = useCallback((id: string) => {
-    const p = workspaceProjectsRef.current.find((q) => q.id === id);
-    if (!p) return;
-    const failedAssetIds = Array.isArray(p.lastManualUploadFailedAssetIds) ? p.lastManualUploadFailedAssetIds : [];
-    if (failedAssetIds.length === 0) {
-      addGlobalLog('工作区', 'info', '该项目暂无失败项');
-      return;
-    }
-    setWorkspaceUploadFailureFilter('');
-    setWorkspaceUploadFailureDetailDialog({
-      projectId: id,
-      projectName: p.name || '该项目',
-      mode: p.lastManualUploadMode === 'incremental' ? 'incremental' : 'full',
-      attempted: Math.max(0, Number(p.lastManualUploadAttemptedCount || 0)),
-      succeeded: Math.max(0, Number(p.lastManualUploadSucceededCount || 0)),
-      uploadedAt: typeof p.lastManualUploadAt === 'number' ? p.lastManualUploadAt : null,
-      error: String(p.lastManualUploadError || ''),
-      failedAssetIds,
-      selectedAssetIds: [...failedAssetIds],
-    });
-  }, [addGlobalLog]);
-
-  const executeManualWorkflowUpload = useCallback(
-    async (id: string, opts?: { onlyAssetIds?: string[]; mode?: ManualUploadMode; reason?: 'manual' | 'retry-failed' }) => {
-      const uid = userIdRef.current;
-      const uname = usernameRef.current;
-      if (!uid || !uname) {
-        addGlobalLog('工作区', 'warn', '请先登录账号，再执行手动上传');
-        return;
-      }
-      if (!isWorkspaceCloudEnabled()) {
-        addGlobalLog('工作区', 'warn', '当前环境未开启云同步，无法上传项目资产');
-        return;
-      }
-      if (workspaceCloudPushAllowedUserIdRef.current !== uid) {
-        addGlobalLog('工作区', 'warn', '云端配置尚未就绪，请稍后再试');
-        return;
-      }
-      if (workspaceCloudQuotaSuspendedRef.current) {
-        addGlobalLog('工作区', 'warn', '云空间已满，无法上传项目资产');
-        return;
-      }
-      const project = workspaceProjectsRef.current.find((p) => p.id === id);
-      if (!project) {
-        addGlobalLog('工作区', 'warn', '未找到待上传的项目');
-        return;
-      }
-      if (project.boundUserId !== uid) {
-        addGlobalLog('工作区', 'warn', '请先将项目绑定到当前账号，再执行手动上传');
-        return;
-      }
-      if (workspaceUploadingProjectId === id) {
-        return;
-      }
-      setWorkspaceUploadingProjectId(id);
-      const mode = opts?.mode ?? workspaceManualUploadMode;
-      const onlyAssetIds = opts?.onlyAssetIds;
-      try {
-        const bundle = loadWorkflowBundle(id, uid);
-        const requestedCount = Array.isArray(onlyAssetIds) ? onlyAssetIds.length : bundle.assets.length;
-        const scopedAssets = Array.isArray(onlyAssetIds) ? pickAssetsById(bundle.assets, onlyAssetIds) : bundle.assets;
-        const skippedCount = Math.max(0, requestedCount - scopedAssets.length);
-        if (Array.isArray(onlyAssetIds) && scopedAssets.length === 0) {
-          addGlobalLog('工作区', 'warn', '重试失败项时未找到仍存在的资产，已跳过上传');
-          return;
-        }
-        let uploadBundle = { ...bundle, assets: scopedAssets };
-        if (mode === 'incremental') {
-          try {
-            const packed = await fetchWorkflowPackedFromCloud(uid, id, uname);
-            const pickedAssets = pickIncrementalAssets(scopedAssets, packed?.assets ?? null);
-            uploadBundle = {
-              ...bundle,
-              assets: pickedAssets,
-            };
-          } catch (e) {
-            addGlobalLog('工作区', 'warn', '增量基线读取失败，已回退全量上传', e instanceof Error ? e.message : String(e));
-          }
-        }
-        const attemptedCount = uploadBundle.assets.length;
-        if (attemptedCount === 0) {
-          const nextProjects = workspaceProjectsRef.current.map((p) =>
-            p.id === id
-              ? {
-                  ...p,
-                  lastManualUploadAt: Date.now(),
-                  lastManualUploadMode: mode,
-                  lastManualUploadAssetCount: 0,
-                  lastManualUploadBytesApprox: 0,
-                  lastManualUploadAttemptedCount: 0,
-                  lastManualUploadSucceededCount: 0,
-                  lastManualUploadFailedAssetIds: [],
-                  lastManualUploadError: '',
-                }
-              : p
-          );
-          setWorkspaceProjects(nextProjects);
-          saveWorkspaceProjects(nextProjects, uid);
-          addGlobalLog('工作区', 'info', '无需上传：当前选择范围内没有待上传资产');
-          return;
-        }
-        // 若 IDB 仅存 originalCompanionKey，打包时从本地伴侣读回再打 data URL 上传 R2（需设置并启动伴侣）
-        const companionBase = String(getCompanionLocalBaseUrl() || '').trim();
-        const needsCompanionHydrate = workflowBundleNeedsCompanionHydrateForCloudPack(uploadBundle);
-        if (needsCompanionHydrate && !companionBase) {
-          addGlobalLog(
-            '工作区',
-            'warn',
-            '部分原图或步骤结果仅保存在本地伴侣。请在设置中填写本地伴侣地址并启动伴侣后再上传。'
-          );
-          return;
-        }
-        // MANUAL_WORKFLOW_UPLOAD_ALLOWED
-        await pushWorkflowBundleToCloud(uid, id, uploadBundle, uname, {
-          companionHydrate: companionBase ? { baseUrl: companionBase, projectId: id } : undefined,
-        });
-        const uploadedAt = Date.now();
-        const uploadedBytesApprox = uploadBundle.assets.reduce((sum, asset) => {
-          const base = estimateStringBytes(String(asset?.original || ''));
-          const modelBytes = Array.isArray(asset?.modelUrls)
-            ? asset.modelUrls.reduce((acc, u) => acc + estimateStringBytes(String(u || '')), 0)
-            : 0;
-          return sum + base + modelBytes;
-        }, 0);
-        const nextProjects = workspaceProjectsRef.current.map((p) =>
-          p.id === id
-            ? {
-                ...p,
-                lastManualUploadAt: uploadedAt,
-                lastManualUploadMode: mode,
-                lastManualUploadAssetCount: uploadBundle.assets.length,
-                lastManualUploadBytesApprox: uploadedBytesApprox,
-                lastManualUploadAttemptedCount: attemptedCount,
-                lastManualUploadSucceededCount: attemptedCount,
-                lastManualUploadFailedAssetIds: [],
-                lastManualUploadError: '',
-              }
-            : p
-        );
-        setWorkspaceProjects(nextProjects);
-        saveWorkspaceProjects(nextProjects, uid);
-        workspaceCloudDirtyRef.current = false;
-        setWorkspaceCloudLastSyncAt(uploadedAt);
-        setWorkspaceCloudNextAutoSyncAt(uploadedAt + WORKSPACE_AUTO_SYNC_INTERVAL_MS);
-        await refreshAuthUser();
-        addGlobalLog(
-          '工作区',
-          'info',
-          `${opts?.reason === 'retry-failed' ? '重试失败项完成' : '手动上传完成'}：${project.name}`,
-          `mode=${mode}, attempted=${attemptedCount}, success=${attemptedCount}, failed=0, skipped=${skippedCount}, approx=${formatApproxBytes(uploadedBytesApprox)}`
-        );
-      } catch (e) {
-        if (e instanceof HttpRequestError && e.code === 'STORAGE_QUOTA_EXCEEDED') {
-          setWorkspaceCloudQuotaSuspended(true);
-          editedWhileQuotaSuspendedRef.current = true;
-        }
-        const bundle = loadWorkflowBundle(id, uid);
-        const scopedAssets = Array.isArray(onlyAssetIds) ? pickAssetsById(bundle.assets, onlyAssetIds) : bundle.assets;
-        const attemptedAssetIds = scopedAssets.map((asset) => String(asset?.id || '')).filter(Boolean);
-        const nextProjects = workspaceProjectsRef.current.map((p) =>
-          p.id === id
-            ? {
-                ...p,
-                lastManualUploadAt: Date.now(),
-                lastManualUploadMode: mode,
-                lastManualUploadAssetCount: scopedAssets.length,
-                lastManualUploadBytesApprox: buildManualUploadEstimate(scopedAssets).bytesApprox,
-                lastManualUploadAttemptedCount: attemptedAssetIds.length,
-                lastManualUploadSucceededCount: 0,
-                lastManualUploadFailedAssetIds: attemptedAssetIds,
-                lastManualUploadError: e instanceof Error ? e.message : String(e),
-              }
-            : p
-        );
-        setWorkspaceProjects(nextProjects);
-        saveWorkspaceProjects(nextProjects, uid);
-        addGlobalLog(
-          '工作区',
-          'error',
-          opts?.reason === 'retry-failed' ? '重试失败项上传失败' : '手动上传失败',
-          e instanceof Error ? e.message : String(e)
-        );
-      } finally {
-        setWorkspaceUploadingProjectId((prev) => (prev === id ? null : prev));
-        setWorkspaceManualUploadMode('full');
-      }
-    },
-    [addGlobalLog, refreshAuthUser, workspaceManualUploadMode, workspaceUploadingProjectId]
-  );
-
-  const performBindWorkspaceProject = useCallback(async (id: string) => {
-    const uid = userIdRef.current;
-    const uname = usernameRef.current;
-    if (!uid || !uname) {
-      addGlobalLog('工作区', 'warn', '请先登录账号，再绑定项目');
-      return;
-    }
-    const scope = uid;
-    const next = workspaceProjectsRef.current.map((p) =>
-      p.id === id ? { ...p, boundUserId: uid, boundAt: Date.now() } : p
-    );
-    setWorkspaceProjects(next);
-    saveWorkspaceProjects(next, scope);
-    if (isWorkspaceCloudEnabled() && workspaceCloudPushAllowedUserIdRef.current === uid && !workspaceCloudQuotaSuspendedRef.current) {
-      try {
-        await pushWorkspaceIndex(uid, next, getLastOpenedWorkspaceProjectId(scope), uname);
-        addGlobalLog('工作区', 'info', '项目已绑定到当前账号（仅同步索引，不上传大文件）');
-      } catch (e) {
-        addGlobalLog('工作区', 'warn', '绑定索引写入云端失败，项目已保留本地绑定状态', e instanceof Error ? e.message : String(e));
-      }
-    } else {
-      addGlobalLog('工作区', 'info', '项目已标记绑定；云同步关闭或不可用时仅保留本地状态');
-    }
-  }, [addGlobalLog]);
-
-  const performUnbindWorkspaceProject = useCallback(async (id: string) => {
-    const uid = userIdRef.current;
-    const uname = usernameRef.current;
-    if (!uid || !uname) {
-      addGlobalLog('工作区', 'warn', '请先登录账号，再解绑项目');
-      return;
-    }
-    const scope = uid;
-    const next = workspaceProjectsRef.current.map((p) => {
-      if (p.id !== id) return p;
-      const { boundUserId: _dropUserId, boundAt: _dropBoundAt, ...rest } = p;
-      return rest;
-    });
-    setWorkspaceProjects(next);
-    saveWorkspaceProjects(next, scope);
-    if (isWorkspaceCloudEnabled() && workspaceCloudPushAllowedUserIdRef.current === uid && !workspaceCloudQuotaSuspendedRef.current) {
-      try {
-        await pushWorkspaceIndex(uid, next, getLastOpenedWorkspaceProjectId(scope), uname);
-        addGlobalLog('工作区', 'info', '项目已解绑当前账号（仅更新索引）');
-      } catch (e) {
-        addGlobalLog('工作区', 'warn', '解绑索引写入云端失败，项目已保留本地解绑状态', e instanceof Error ? e.message : String(e));
-      }
-    } else {
-      addGlobalLog('工作区', 'info', '项目已解绑；云同步关闭或不可用时仅保留本地状态');
-    }
-  }, [addGlobalLog]);
-
-  const performManualUploadWorkspaceProject = useCallback(async (id: string) => {
-    await executeManualWorkflowUpload(id, { mode: workspaceManualUploadMode, reason: 'manual' });
-  }, [executeManualWorkflowUpload, workspaceManualUploadMode]);
-
-  const retryFailedManualUploadWorkspaceProject = useCallback(async (id: string) => {
-    const project = workspaceProjectsRef.current.find((p) => p.id === id);
-    const failedIds = Array.isArray(project?.lastManualUploadFailedAssetIds) ? project.lastManualUploadFailedAssetIds : [];
-    if (!project || failedIds.length === 0) {
-      addGlobalLog('工作区', 'warn', '该项目暂无可重试的失败项');
-      return;
-    }
-    await executeManualWorkflowUpload(id, { onlyAssetIds: failedIds, mode: 'incremental', reason: 'retry-failed' });
-  }, [addGlobalLog, executeManualWorkflowUpload]);
-
-  const retrySelectedFailedManualUploadWorkspaceProject = useCallback(async () => {
-    if (!workspaceUploadFailureDetailDialog) return;
-    const selectedIds = workspaceUploadFailureDetailDialog.selectedAssetIds.filter(Boolean);
-    if (selectedIds.length === 0) {
-      addGlobalLog('工作区', 'warn', '请至少选择一个失败项再重试');
-      return;
-    }
-    const uid = userIdRef.current ?? null;
-    const bundle = loadWorkflowBundle(workspaceUploadFailureDetailDialog.projectId, uid);
-    const existing = new Set(bundle.assets.map((a) => String(a?.id || '')).filter(Boolean));
-    const existingSelectedIds = selectedIds.filter((id) => existing.has(id));
-    const missingCount = Math.max(0, selectedIds.length - existingSelectedIds.length);
-    addGlobalLog(
-      '工作区',
-      'info',
-      '重试选择统计',
-      `selection_total=${selectedIds.length}, selection_existing=${existingSelectedIds.length}, selection_missing=${missingCount}`
-    );
-    if (existingSelectedIds.length === 0) {
-      addGlobalLog('工作区', 'warn', '所选失败项在本地均不存在，已跳过重试');
-      return;
-    }
-    const projectId = workspaceUploadFailureDetailDialog.projectId;
-    setWorkspaceUploadFailureFilter('');
-    setWorkspaceUploadFailureDetailDialog(null);
-    await executeManualWorkflowUpload(projectId, {
-      onlyAssetIds: existingSelectedIds,
-      mode: 'incremental',
-      reason: 'retry-failed',
-    });
-  }, [addGlobalLog, executeManualWorkflowUpload, workspaceUploadFailureDetailDialog]);
-
-  const copyWorkspaceFailureIdsToClipboard = useCallback(
-    async (kind: 'visible' | 'selected') => {
-      const d = workspaceUploadFailureDetailDialog;
-      if (!d) return;
-      const filterQ = workspaceUploadFailureFilter.trim().toLowerCase();
-      const visible = filterQ
-        ? d.failedAssetIds.filter((id) => String(id).toLowerCase().includes(filterQ))
-        : [...d.failedAssetIds];
-      const ids =
-        kind === 'visible'
-          ? visible
-          : d.selectedAssetIds.map((id) => String(id || '').trim()).filter(Boolean);
-      if (ids.length === 0) {
-        addGlobalLog('工作区', 'warn', kind === 'visible' ? '当前列表无 ID 可复制' : '请先勾选至少一项再复制');
-        return;
-      }
-      const uploadedIso = d.uploadedAt ? new Date(d.uploadedAt).toISOString() : '';
-      const header = [
-        `# project=${d.projectName}`,
-        `# projectId=${d.projectId}`,
-        `# mode=${d.mode}`,
-        uploadedIso ? `# uploadedAt=${uploadedIso}` : '',
-        '---',
-        '',
-      ]
-        .filter((line) => line.length > 0)
-        .join('\n');
-      const text = `${header}${ids.join('\n')}`;
-      const outcome = await copyTextToClipboardWithFallback(text);
-      if (outcome === 'clipboard') {
-        addGlobalLog(
-          '工作区',
-          'info',
-          kind === 'visible' ? `已复制 ${ids.length} 条失败项 ID（当前列表）` : `已复制 ${ids.length} 条失败项 ID（已勾选）`
-        );
-      } else if (outcome === 'exec') {
-        addGlobalLog(
-          '工作区',
-          'info',
-          kind === 'visible'
-            ? `已复制 ${ids.length} 条失败项 ID（当前列表，兼容模式）`
-            : `已复制 ${ids.length} 条失败项 ID（已勾选，兼容模式）`
-        );
-      } else {
-        setWorkspaceUploadFailureCopyFallback({ text, kind });
-        addGlobalLog(
-          '工作区',
-          'warn',
-          '系统剪贴板不可用',
-          '已在弹窗中展示全文，请手动全选复制（Ctrl+C / Cmd+C）'
-        );
-      }
-    },
-    [addGlobalLog, workspaceUploadFailureDetailDialog, workspaceUploadFailureFilter]
-  );
 
   const performDeleteWorkspaceProject = useCallback(async (id: string) => {
     const scope = userIdRef.current ?? null;
@@ -5386,18 +4793,13 @@ const MainApp: React.FC = () => {
                   activeWorkspaceProjectId={activeWorkspaceProjectId}
                   user={user}
                   workspaceProjects={workspaceProjects}
+                  persistUserId={user?.id ?? null}
                   onWorkspaceCreate={createWorkspaceProjectEntry}
                   onWorkspaceOpen={openWorkspaceProject}
                   onWorkspaceRename={renameWorkspaceProjectEntry}
                   onWorkspaceDelete={requestDeleteWorkspaceProject}
-                  onWorkspaceBind={requestBindWorkspaceProject}
-                  onWorkspaceUnbind={requestUnbindWorkspaceProject}
-                  onWorkspaceManualUpload={requestManualUploadWorkspaceProject}
                   onWorkspaceExport={exportWorkspaceProjectEntry}
                   onWorkspaceImport={(file) => void importWorkspaceProjectEntry(file)}
-                  onWorkspaceRetryFailedUpload={retryFailedManualUploadWorkspaceProject}
-                  onOpenWorkspaceUploadFailureDetail={requestOpenWorkspaceUploadFailureDetail}
-                  workspaceUploadingProjectId={workspaceUploadingProjectId}
                   onOpenWorkspaceTrash={() => void openWorkspaceTrashDialog()}
                   onWorkflowSectionLoadRetry={() => setWorkflowSectionLoadAttempt((n) => n + 1)}
                   workflowSectionSuspenseKey={workflowSectionLoadAttempt}
@@ -6826,422 +6228,6 @@ const MainApp: React.FC = () => {
         </div>
       ) : null}
 
-      {workspaceProjectBindPending ? (
-        <div
-          className="fixed inset-0 z-[5600] flex items-center justify-center bg-black/70 backdrop-blur-sm px-6"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="workspace-bind-title"
-          onClick={() => setWorkspaceProjectBindPending(null)}
-        >
-          <div
-            className="w-full max-w-md rounded-2xl border border-white/10 bg-[#0f0f0f] shadow-2xl px-6 py-5"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h2 id="workspace-bind-title" className="text-[14px] font-semibold text-white">
-              绑定到当前账号
-            </h2>
-            <p className="mt-3 text-[12px] text-gray-300 leading-relaxed">
-              确定将「
-              <span className="text-white font-medium">{workspaceProjectBindPending.name}</span>
-              」绑定到当前账号吗？该操作只同步项目索引，不上传本地大文件。
-            </p>
-            <div className="mt-6 flex flex-wrap items-center justify-end gap-2">
-              <button
-                type="button"
-                onClick={() => setWorkspaceProjectBindPending(null)}
-                className="rounded-xl border border-white/10 bg-white/5 px-4 py-2.5 text-[11px] font-medium text-gray-200 hover:bg-white/10 outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50"
-              >
-                取消
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  const id = workspaceProjectBindPending.id;
-                  setWorkspaceProjectBindPending(null);
-                  void performBindWorkspaceProject(id);
-                }}
-                className="rounded-xl border border-emerald-500/40 bg-emerald-950/40 px-4 py-2.5 text-[11px] font-medium text-emerald-100 hover:bg-emerald-900/50 outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/50"
-              >
-                绑定
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
-
-      {workspaceProjectUnbindPending ? (
-        <div
-          className="fixed inset-0 z-[5600] flex items-center justify-center bg-black/70 backdrop-blur-sm px-6"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="workspace-unbind-title"
-          onClick={() => setWorkspaceProjectUnbindPending(null)}
-        >
-          <div
-            className="w-full max-w-md rounded-2xl border border-white/10 bg-[#0f0f0f] shadow-2xl px-6 py-5"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h2 id="workspace-unbind-title" className="text-[14px] font-semibold text-white">
-              解绑当前账号
-            </h2>
-            <p className="mt-3 text-[12px] text-gray-300 leading-relaxed">
-              确定解除「
-              <span className="text-white font-medium">{workspaceProjectUnbindPending.name}</span>
-              」与当前账号的索引绑定吗？该操作不删除本地项目目录与内容。
-            </p>
-            <div className="mt-6 flex flex-wrap items-center justify-end gap-2">
-              <button
-                type="button"
-                onClick={() => setWorkspaceProjectUnbindPending(null)}
-                className="rounded-xl border border-white/10 bg-white/5 px-4 py-2.5 text-[11px] font-medium text-gray-200 hover:bg-white/10 outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50"
-              >
-                取消
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  const id = workspaceProjectUnbindPending.id;
-                  setWorkspaceProjectUnbindPending(null);
-                  void performUnbindWorkspaceProject(id);
-                }}
-                className="rounded-xl border border-amber-500/40 bg-amber-950/40 px-4 py-2.5 text-[11px] font-medium text-amber-100 hover:bg-amber-900/50 outline-none focus-visible:ring-2 focus-visible:ring-amber-500/50"
-              >
-                解绑
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
-      {workspaceProjectManualUploadPending ? (
-        <div
-          className="fixed inset-0 z-[5600] flex items-center justify-center bg-black/70 backdrop-blur-sm px-6"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="workspace-manual-upload-title"
-          onClick={() => {
-            setWorkspaceProjectManualUploadPending(null);
-            setWorkspaceManualUploadMode('full');
-          }}
-        >
-          <div
-            className="w-full max-w-md rounded-2xl border border-white/10 bg-[#0f0f0f] shadow-2xl px-6 py-5"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h2 id="workspace-manual-upload-title" className="text-[14px] font-semibold text-white">
-              手动上传项目资产
-            </h2>
-            <p className="mt-3 text-[12px] text-gray-300 leading-relaxed">
-              确定将「
-              <span className="text-white font-medium">{workspaceProjectManualUploadPending.name}</span>
-              」的工作流资产手动上传到云端吗？该操作可能耗时，并会占用账号云空间。
-            </p>
-            <div className="mt-3">
-              <div className="text-[10px] text-gray-400 mb-1">上传模式</div>
-              <CustomDropdown
-                value={workspaceManualUploadMode}
-                options={[
-                  { value: 'full', label: '全量上传' },
-                  { value: 'incremental', label: '仅上传新增/变更' },
-                ]}
-                onChange={(v) => setWorkspaceManualUploadMode(v === 'incremental' ? 'incremental' : 'full')}
-                triggerClassName={DROPDOWN_TRIGGER_COMPACT}
-              />
-            </div>
-            {(() => {
-              const estimate =
-                workspaceManualUploadMode === 'incremental'
-                  ? workspaceProjectManualUploadPending.incrementalEstimate
-                  : workspaceProjectManualUploadPending.fullEstimate;
-              const unresolvedIncremental =
-                workspaceManualUploadMode === 'incremental' && !workspaceProjectManualUploadPending.incrementalReady;
-              return (
-                <div className="mt-3 rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-[11px] text-gray-300 space-y-1">
-                  {unresolvedIncremental ? (
-                    <div className="text-amber-200/90">正在读取云端基线，稍后可见增量预估；若失败将按全量上传执行。</div>
-                  ) : (
-                    <>
-                      <div>资产数：{estimate?.assetCount ?? 0}</div>
-                      <div>预览图：{estimate?.previewCount ?? 0}</div>
-                      <div>模型引用：{estimate?.modelCount ?? 0}</div>
-                      <div>
-                        预估上传体积：
-                        <span className="text-cyan-200 ml-1">{formatApproxBytes(estimate?.bytesApprox ?? 0)}</span>
-                      </div>
-                    </>
-                  )}
-                </div>
-              );
-            })()}
-            <div className="mt-6 flex flex-wrap items-center justify-end gap-2">
-              <button
-                type="button"
-                onClick={() => {
-                  setWorkspaceProjectManualUploadPending(null);
-                  setWorkspaceManualUploadMode('full');
-                }}
-                className="rounded-xl border border-white/10 bg-white/5 px-4 py-2.5 text-[11px] font-medium text-gray-200 hover:bg-white/10 outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50"
-              >
-                取消
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  const id = workspaceProjectManualUploadPending.id;
-                  setWorkspaceProjectManualUploadPending(null);
-                  void performManualUploadWorkspaceProject(id);
-                }}
-                className="rounded-xl border border-cyan-500/40 bg-cyan-950/40 px-4 py-2.5 text-[11px] font-medium text-cyan-100 hover:bg-cyan-900/50 outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/50"
-              >
-                确认上传
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
-      {workspaceUploadFailureDetailDialog ? (
-        (() => {
-          const uid = userIdRef.current ?? null;
-          const bundle = loadWorkflowBundle(workspaceUploadFailureDetailDialog.projectId, uid);
-          const existingSet = new Set(bundle.assets.map((a) => String(a?.id || '')).filter(Boolean));
-          const filterQ = workspaceUploadFailureFilter.trim().toLowerCase();
-          const allFailedIds = workspaceUploadFailureDetailDialog.failedAssetIds;
-          const visibleFailedIds = filterQ
-            ? allFailedIds.filter((id) => String(id).toLowerCase().includes(filterQ))
-            : allFailedIds;
-          const selectedExistingCount = workspaceUploadFailureDetailDialog.selectedAssetIds.filter((id) => existingSet.has(id)).length;
-          const selectedMissingCount = Math.max(0, workspaceUploadFailureDetailDialog.selectedAssetIds.length - selectedExistingCount);
-          return (
-        <div
-          className="fixed inset-0 z-[5600] flex items-center justify-center bg-black/70 backdrop-blur-sm px-6"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="workspace-upload-failure-detail-title"
-          onClick={() => {
-            setWorkspaceUploadFailureFilter('');
-            setWorkspaceUploadFailureDetailDialog(null);
-          }}
-        >
-          <div
-            className="w-full max-w-lg rounded-2xl border border-white/10 bg-[#0f0f0f] shadow-2xl px-6 py-5"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h2 id="workspace-upload-failure-detail-title" className="text-[14px] font-semibold text-white">
-              上传失败项详情
-            </h2>
-            <p className="mt-2 text-[12px] text-gray-300 leading-relaxed">
-              项目：<span className="text-white font-medium">{workspaceUploadFailureDetailDialog.projectName}</span>
-            </p>
-            <p className="mt-1 text-[11px] text-gray-400">
-              模式：{workspaceUploadFailureDetailDialog.mode === 'incremental' ? '仅上传新增/变更' : '全量上传'}
-              {' · '}
-              尝试 {workspaceUploadFailureDetailDialog.attempted}
-              {' · '}
-              成功 {workspaceUploadFailureDetailDialog.succeeded}
-              {' · '}
-              失败 {Math.max(0, workspaceUploadFailureDetailDialog.attempted - workspaceUploadFailureDetailDialog.succeeded)}
-            </p>
-            {workspaceUploadFailureDetailDialog.uploadedAt ? (
-              <p className="mt-1 text-[11px] text-gray-500">
-                时间：{new Date(workspaceUploadFailureDetailDialog.uploadedAt).toLocaleString()}
-              </p>
-            ) : null}
-            {workspaceUploadFailureDetailDialog.error ? (
-              <p className="mt-2 rounded-lg border border-amber-500/30 bg-amber-900/20 px-3 py-2 text-[11px] text-amber-100">
-                错误摘要：{workspaceUploadFailureDetailDialog.error}
-              </p>
-            ) : null}
-            <div className="mt-3">
-              <label htmlFor="workspace-upload-failure-filter" className="text-[10px] text-gray-500">
-                过滤 assetId
-              </label>
-              <input
-                id="workspace-upload-failure-filter"
-                type="text"
-                value={workspaceUploadFailureFilter}
-                onChange={(e) => setWorkspaceUploadFailureFilter(e.target.value)}
-                placeholder="输入片段匹配…"
-                className="mt-1 w-full rounded-xl border border-white/10 bg-[#1c1c22] px-3 py-2 text-[11px] text-white outline-none focus:border-blue-500 placeholder:text-gray-600"
-              />
-              <p className="mt-1 text-[10px] text-gray-500">
-                列表显示 {visibleFailedIds.length} / {allFailedIds.length} 项
-                {filterQ ? '（已启用过滤）' : ''}
-              </p>
-              <div className="mt-2 flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  onClick={() => void copyWorkspaceFailureIdsToClipboard('visible')}
-                  className="rounded-lg border border-white/15 bg-white/5 px-2.5 py-1 text-[10px] text-gray-200 hover:bg-white/10"
-                  title="含首行注释（项目名、projectId、模式、时间）"
-                >
-                  复制当前列表
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void copyWorkspaceFailureIdsToClipboard('selected')}
-                  className="rounded-lg border border-white/15 bg-white/5 px-2.5 py-1 text-[10px] text-gray-200 hover:bg-white/10"
-                  title="仅复制当前勾选的 assetId，含首行注释"
-                >
-                  复制已勾选
-                </button>
-              </div>
-            </div>
-            <div className="mt-3 flex flex-wrap items-center gap-2">
-              <button
-                type="button"
-                onClick={() =>
-                  setWorkspaceUploadFailureDetailDialog((prev) =>
-                    prev ? { ...prev, selectedAssetIds: [...prev.failedAssetIds] } : prev
-                  )
-                }
-                className="rounded-lg border border-white/15 bg-white/5 px-2.5 py-1 text-[10px] text-gray-200 hover:bg-white/10"
-              >
-                全选
-              </button>
-              <button
-                type="button"
-                onClick={() =>
-                  setWorkspaceUploadFailureDetailDialog((prev) =>
-                    prev ? { ...prev, selectedAssetIds: [] } : prev
-                  )
-                }
-                className="rounded-lg border border-white/15 bg-white/5 px-2.5 py-1 text-[10px] text-gray-200 hover:bg-white/10"
-              >
-                全不选
-              </button>
-              <button
-                type="button"
-                onClick={() =>
-                  setWorkspaceUploadFailureDetailDialog((prev) =>
-                    prev
-                      ? {
-                          ...prev,
-                          selectedAssetIds: prev.failedAssetIds.filter((id) => existingSet.has(id)),
-                        }
-                      : prev
-                  )
-                }
-                className="rounded-lg border border-cyan-500/35 bg-cyan-900/20 px-2.5 py-1 text-[10px] text-cyan-200 hover:bg-cyan-900/35"
-              >
-                仅选本地仍存在
-              </button>
-              <button
-                type="button"
-                onClick={() =>
-                  setWorkspaceUploadFailureDetailDialog((prev) =>
-                    prev ? { ...prev, selectedAssetIds: [...visibleFailedIds] } : prev
-                  )
-                }
-                className="rounded-lg border border-blue-500/35 bg-blue-900/20 px-2.5 py-1 text-[10px] text-blue-200 hover:bg-blue-900/35"
-                title="将勾选范围设为当前列表中的全部项"
-              >
-                仅选当前列表
-              </button>
-            </div>
-            <div className="mt-3 rounded-xl border border-white/10 bg-white/[0.03] p-2 max-h-64 overflow-y-auto space-y-1">
-              {visibleFailedIds.length === 0 ? (
-                <p className="px-2 py-3 text-[11px] text-gray-500">无匹配项，请调整过滤关键字。</p>
-              ) : null}
-              {visibleFailedIds.map((assetId) => {
-                const selected = workspaceUploadFailureDetailDialog.selectedAssetIds.includes(assetId);
-                const exists = existingSet.has(assetId);
-                return (
-                  <label key={assetId} className="flex items-center gap-2 px-2 py-1 rounded hover:bg-white/[0.04] cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={selected}
-                      onChange={() =>
-                        setWorkspaceUploadFailureDetailDialog((prev) => {
-                          if (!prev) return prev;
-                          const has = prev.selectedAssetIds.includes(assetId);
-                          return {
-                            ...prev,
-                            selectedAssetIds: has
-                              ? prev.selectedAssetIds.filter((id) => id !== assetId)
-                              : [...prev.selectedAssetIds, assetId],
-                          };
-                        })
-                      }
-                    />
-                    <span className="text-[11px] text-gray-200 font-mono break-all">{assetId}</span>
-                    {!exists ? <span className="text-[10px] text-amber-300/90">（本地不存在）</span> : null}
-                  </label>
-                );
-              })}
-            </div>
-            <div className="mt-2 text-[10px] text-gray-500">
-              已选择 {workspaceUploadFailureDetailDialog.selectedAssetIds.length} / {workspaceUploadFailureDetailDialog.failedAssetIds.length}
-            </div>
-            <div className="mt-1 text-[10px] text-gray-500">
-              将重试 {selectedExistingCount} 项（不可用 {selectedMissingCount} 项）
-            </div>
-            <div className="mt-5 flex flex-wrap items-center justify-end gap-2">
-              <button
-                type="button"
-                onClick={() => {
-                  setWorkspaceUploadFailureFilter('');
-                  setWorkspaceUploadFailureDetailDialog(null);
-                }}
-                className="rounded-xl border border-white/10 bg-white/5 px-4 py-2.5 text-[11px] font-medium text-gray-200 hover:bg-white/10 outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50"
-              >
-                关闭
-              </button>
-              <button
-                type="button"
-                onClick={() => void retrySelectedFailedManualUploadWorkspaceProject()}
-                disabled={selectedExistingCount <= 0}
-                className="rounded-xl border border-amber-500/40 bg-amber-950/40 px-4 py-2.5 text-[11px] font-medium text-amber-100 hover:bg-amber-900/50 outline-none focus-visible:ring-2 focus-visible:ring-amber-500/50 disabled:cursor-not-allowed disabled:opacity-40"
-              >
-                重试所选失败项
-              </button>
-            </div>
-          </div>
-        </div>
-          );
-        })()
-      ) : null}
-      {workspaceUploadFailureCopyFallback ? (
-        <div
-          className="fixed inset-0 z-[5700] flex items-center justify-center bg-black/75 backdrop-blur-sm px-6"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="workspace-upload-copy-fallback-title"
-          onClick={() => setWorkspaceUploadFailureCopyFallback(null)}
-        >
-          <div
-            className="w-full max-w-2xl rounded-2xl border border-white/10 bg-[#0f0f0f] shadow-2xl px-6 py-5"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h2 id="workspace-upload-copy-fallback-title" className="text-[14px] font-semibold text-white">
-              手动复制文本
-            </h2>
-            <p className="mt-2 text-[11px] text-gray-400 leading-relaxed">
-              来源：
-              <span className="text-gray-300">
-                {workspaceUploadFailureCopyFallback.kind === 'visible' ? '当前列表' : '已勾选'}
-              </span>
-              。系统无法自动写入剪贴板（可能受浏览器权限或非安全上下文限制）；请全选下方文本后使用 Ctrl+C / Cmd+C 复制。
-            </p>
-            <textarea
-              ref={workspaceUploadFailureCopyFallbackTextareaRef}
-              readOnly
-              value={workspaceUploadFailureCopyFallback.text}
-              rows={14}
-              spellCheck={false}
-              className="mt-3 w-full resize-y rounded-xl border border-white/10 bg-[#1c1c22] px-3 py-2 font-mono text-[11px] leading-relaxed text-gray-200 outline-none focus:border-blue-500"
-            />
-            <div className="mt-4 flex justify-end">
-              <button
-                type="button"
-                onClick={() => setWorkspaceUploadFailureCopyFallback(null)}
-                className="rounded-xl border border-white/10 bg-white/5 px-4 py-2.5 text-[11px] font-medium text-gray-200 hover:bg-white/10 outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50"
-              >
-                关闭
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
     </div>
   );
 };

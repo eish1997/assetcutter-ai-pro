@@ -5,6 +5,7 @@ export type AssetSetTaskSession = {
   busy: boolean;
   progress: { done: number; total: number } | null;
   busyComponentIds: Set<string>;
+  abortController: AbortController | null;
 };
 
 type Listener = (state: AssetSetTaskSession) => void;
@@ -18,6 +19,7 @@ function emptySession(): AssetSetTaskSession {
     busy: false,
     progress: null,
     busyComponentIds: new Set(),
+    abortController: null,
   };
 }
 
@@ -54,6 +56,8 @@ export function patchAssetSetTaskSession(
     ...prev,
     ...patch,
     busyComponentIds: patch.busyComponentIds ?? prev.busyComponentIds,
+    abortController:
+      patch.abortController !== undefined ? patch.abortController : prev.abortController,
   };
   sessions.set(assetId, next);
   emit(assetId);
@@ -63,4 +67,13 @@ export function patchAssetSetTaskSession(
 export function clearAssetSetTaskSession(assetId: string) {
   sessions.delete(assetId);
   emit(assetId);
+}
+
+export function abortAssetSetTaskSession(assetId: string): boolean {
+  const prev = sessions.get(assetId);
+  if (!prev?.busy || !prev.abortController) return false;
+  prev.abortController.abort();
+  sessions.delete(assetId);
+  emit(assetId);
+  return true;
 }

@@ -1,4 +1,5 @@
 import {
+  fetchWorkflowModelFromCompanionAsObjectUrl,
   fetchWorkflowOriginalFromCompanionAsObjectUrl,
   shouldKeepExistingCompanionRasterUrl,
 } from '../workflowCompanionAssets';
@@ -13,7 +14,9 @@ export type AssetSetCompanionHydrateSlot =
   | { kind: 'source'; sourceId: string }
   | { kind: 'crop'; componentId: string }
   | { kind: 'sheet'; componentId: string }
-  | { kind: 'view'; componentId: string; viewId: string };
+  | { kind: 'view'; componentId: string; viewId: string }
+  | { kind: 'model3d_preview'; componentId: string }
+  | { kind: 'model3d_file'; componentId: string; fileIndex: number };
 
 export type AssetSetCompanionHydrateTask = {
   assetId: string;
@@ -27,7 +30,9 @@ function slotTaskKey(task: AssetSetCompanionHydrateTask): string {
   if (s.kind === 'source') return `source:${s.sourceId}`;
   if (s.kind === 'crop') return `crop:${s.componentId}`;
   if (s.kind === 'sheet') return `sheet:${s.componentId}`;
-  return `view:${s.componentId}:${s.viewId}`;
+  if (s.kind === 'view') return `view:${s.componentId}:${s.viewId}`;
+  if (s.kind === 'model3d_preview') return `model3d_preview:${s.componentId}`;
+  return `model3d_file:${s.componentId}:${s.fileIndex}`;
 }
 
 export function listAssetSetCompanionHydrateTasks(assets: WorkflowAsset[]): AssetSetCompanionHydrateTask[] {
@@ -75,6 +80,27 @@ export function listAssetSetCompanionHydrateTasks(assets: WorkflowAsset[]): Asse
           prevImg: String(view.image || '').trim(),
         });
       }
+      const model = component.model3d;
+      const previewKey = String(model?.previewCompanionKey || '').trim();
+      if (previewKey) {
+        tasks.push({
+          assetId: asset.id,
+          slot: { kind: 'model3d_preview', componentId: component.id },
+          companionKey: previewKey,
+          prevImg: String(model?.previewUrl || '').trim(),
+        });
+      }
+      const fileKeys = model?.fileCompanionKeys ?? [];
+      fileKeys.forEach((companionKey, fileIndex) => {
+        const key = String(companionKey || '').trim();
+        if (!key) return;
+        tasks.push({
+          assetId: asset.id,
+          slot: { kind: 'model3d_file', componentId: component.id, fileIndex },
+          companionKey: key,
+          prevImg: String(model?.files?.[fileIndex] || '').trim(),
+        });
+      });
     }
   }
   return tasks;
@@ -133,7 +159,10 @@ export async function hydrateAssetSetCompanionTasks(
   }
 
   const outcomes = await mapLimit(eligible, concurrency, async (task) => {
-    const got = await fetchWorkflowOriginalFromCompanionAsObjectUrl(base, pid, task.companionKey);
+    const isModelFile = task.slot.kind === 'model3d_file';
+    const got = isModelFile
+      ? await fetchWorkflowModelFromCompanionAsObjectUrl(base, pid, task.companionKey)
+      : await fetchWorkflowOriginalFromCompanionAsObjectUrl(base, pid, task.companionKey);
     if (got.ok === false) {
       return { task, error: got.error } as const;
     }
@@ -188,6 +217,25 @@ export function applyAssetSetCompanionHydrateResults(
           }
           if (slot.kind === 'sheet') {
             return { ...component, multiviewSheet: objectUrl };
+          }
+          if (slot.kind === 'model3d_preview') {
+            return {
+              ...component,
+              model3d: component.model3d
+                ? { ...component.model3d, previewUrl: objectUrl }
+                : component.model3d,
+            };
+          }
+          if (slot.kind === 'model3d_file') {
+            const files = [...(component.model3d?.files ?? [])];
+            while (files.length <= slot.fileIndex) files.push('');
+            files[slot.fileIndex] = objectUrl;
+            return {
+              ...component,
+              model3d: component.model3d
+                ? { ...component.model3d, files }
+                : component.model3d,
+            };
           }
           return {
             ...component,

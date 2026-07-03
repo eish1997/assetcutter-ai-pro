@@ -41,6 +41,32 @@ export function buildAssetSetComponentsFromBoxes(
   });
 }
 
+/** 追加模式：在已有组件后新增格，不覆盖既有 index */
+export function buildAssetSetComponentsFromBoxesAppend(
+  boxes: BoundingBox[],
+  existing: AssetSetComponent[]
+): AssetSetComponent[] {
+  const baseIndex = existing.length;
+  return boxes.map((box, offset) => {
+    const index = baseIndex + offset;
+    const region: BoundingBox = {
+      id: box.id || newStoryboardSheetSplitBoxId(),
+      label: box.label?.trim() || String(index + 1),
+      xmin: box.xmin,
+      ymin: box.ymin,
+      xmax: box.xmax,
+      ymax: box.ymax,
+    };
+    return createAssetSetComponent(
+      {
+        cropRegion: region,
+        cropSource: 'styled',
+      },
+      index
+    );
+  });
+}
+
 export async function applyCropPreviewsToComponents(
   styledImageDataUrl: string,
   components: AssetSetComponent[]

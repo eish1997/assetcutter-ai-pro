@@ -580,6 +580,40 @@ export function stripWorkflowBundleForIdbPersist(bundle: WorkflowProjectBundle):
           touchedAs = true;
           next = { ...next, views: nextViews };
         }
+        const model = next.model3d;
+        if (model) {
+          const previewKey = String(model.previewCompanionKey || '').trim();
+          if (previewKey) {
+            const cur = String(model.previewUrl || '').trim();
+            if (cur && shouldStripResultUrlForPersist(cur)) {
+              touchedAs = true;
+              next = {
+                ...next,
+                model3d: { ...model, previewUrl: '' },
+              };
+            }
+          }
+          const fileKeys = model.fileCompanionKeys ?? [];
+          if (fileKeys.length) {
+            let touchedFiles = false;
+            const nextFiles = (model.files ?? []).map((fileUrl, index) => {
+              if (!fileKeys[index]) return fileUrl;
+              const cur = String(fileUrl || '').trim();
+              if (cur && shouldStripResultUrlForPersist(cur)) {
+                touchedFiles = true;
+                return '';
+              }
+              return fileUrl;
+            });
+            if (touchedFiles) {
+              touchedAs = true;
+              next = {
+                ...next,
+                model3d: { ...(next.model3d ?? model), files: nextFiles },
+              };
+            }
+          }
+        }
         return next;
       });
       if (touchedAs) {

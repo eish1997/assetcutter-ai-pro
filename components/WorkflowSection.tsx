@@ -358,6 +358,7 @@ import {
   clampWorkflowCardAspectRatio,
   mergeCardAspectFromIntrinsic,
   nextGridCardAspectRatioFromIntrinsic,
+  loadImageIntrinsicSize,
   persistWorkflowCardAspects,
   readSessionWorkflowCardAspects,
   resolveWorkflowCanvasCardAspect,
@@ -1787,14 +1788,6 @@ const WorkflowSection: React.FC<{
     [setAssets]
   );
 
-  const handleWorkflowFeatureClick = useCallback(
-    (featureId: string) => {
-      if (featureId !== 'storyboard_flow') return;
-      const id = addWorkflowStoryboardTableAsset();
-      openStoryboardTablePanel(id);
-    },
-    [addWorkflowStoryboardTableAsset, openStoryboardTablePanel]
-  );
 
   const storyboardRedrawPresets = useMemo(
     () => listStoryboardRedrawPresets(capabilityPresets),
@@ -2696,7 +2689,7 @@ ${lineSvg}
     [makePendingTaskForAsset, setPending]
   );
 
-  const addWorkflowTextAsset = useCallback((initialText?: string) => {
+  const addWorkflowTextAsset = useCallback((initialText?: string): string => {
     const raw = (initialText || '').trim();
     const id = uuid();
     setAssets((prev) => {
@@ -2727,8 +2720,25 @@ ${lineSvg}
         })
         .concat(newAsset);
     });
-    onLog?.('info', raw ? '已粘贴为文字资产' : '已添加文字资产');
+    onLog?.('info', raw ? '已粘贴为文字资产' : '已新建文本');
+    return id;
   }, [groupFilterId, onLog, setAssets]);
+
+  const createWorkflowTextAssetAndOpen = useCallback(() => {
+    const id = addWorkflowTextAsset();
+    setStoryboardPanelAssetId(null);
+    setAssetSetPanelAssetId(null);
+    openWorkflowLightbox(id);
+  }, [addWorkflowTextAsset, openWorkflowLightbox]);
+
+  const handleWorkflowFeatureClick = useCallback(
+    (featureId: string) => {
+      if (featureId !== 'storyboard_flow') return;
+      const id = addWorkflowStoryboardTableAsset();
+      openStoryboardTablePanel(id);
+    },
+    [addWorkflowStoryboardTableAsset, openStoryboardTablePanel]
+  );
 
   const addTasksToPending = useCallback((tasks: WorkflowPendingTask[]) => {
     if (tasks.length === 0) return;
@@ -3580,16 +3590,17 @@ ${lineSvg}
               });
               }
               const after = assetsRef.current.find((x) => x.id === task.assetId);
-              if (
-                after &&
-                result &&
-                parseDataUrlToBlob(result) &&
-                !isWorkflowTextAsset(after)
-              ) {
-                const order = after.resultOrder || [];
-                const lastKey = order[order.length - 1];
-                if (lastKey && String(after.results?.[lastKey] || '') === String(result)) {
-                  scheduleCompanionPersistResult(task.assetId, lastKey, result);
+              if (after && result && parseDataUrlToBlob(result)) {
+                if (isWorkflowTextAsset(after)) {
+                  void loadImageIntrinsicSize(result).then((dim) => {
+                    if (dim) applyIntrinsicAspectToAsset(task.assetId, dim.w, dim.h);
+                  });
+                } else {
+                  const order = after.resultOrder || [];
+                  const lastKey = order[order.length - 1];
+                  if (lastKey && String(after.results?.[lastKey] || '') === String(result)) {
+                    scheduleCompanionPersistResult(task.assetId, lastKey, result);
+                  }
                 }
               }
               markTaskCompleted(task);
@@ -9798,6 +9809,16 @@ ${lineSvg}
               {!showArchived && (
                 <button
                   type="button"
+                  onClick={createWorkflowTextAssetAndOpen}
+                  className={TITLE_ROW_BTN_NEUTRAL}
+                  title="新建文本资产并打开编辑"
+                >
+                  新建文本
+                </button>
+              )}
+              {!showArchived && (
+                <button
+                  type="button"
                   onClick={() => {
                     const id = addWorkflowStoryboardTableAsset();
                     openStoryboardTablePanel(id);
@@ -10109,6 +10130,7 @@ ${lineSvg}
     storyboardExportTitle,
     addWorkflowStoryboardTableAsset,
     openStoryboardTablePanel,
+    createWorkflowTextAssetAndOpen,
     showFunctionSidebar,
   ]);
   const sidebarOpsAllowed = workflowDragSourceAllowsSidebarOps(
@@ -11126,11 +11148,18 @@ ${lineSvg}
                 </p>
                 <button
                   type="button"
+                  onClick={createWorkflowTextAssetAndOpen}
+                  className="mt-4 rounded-xl border border-emerald-500/35 bg-emerald-500/10 px-4 py-2 text-[10px] font-bold text-emerald-200 hover:bg-emerald-500/20"
+                >
+                  新建文本
+                </button>
+                <button
+                  type="button"
                   onClick={() => {
                     const id = addWorkflowStoryboardTableAsset();
                     openStoryboardTablePanel(id);
                   }}
-                  className="mt-4 rounded-xl border border-violet-500/35 bg-violet-500/10 px-4 py-2 text-[10px] font-bold text-violet-200 hover:bg-violet-500/20"
+                  className="mt-2 rounded-xl border border-violet-500/35 bg-violet-500/10 px-4 py-2 text-[10px] font-bold text-violet-200 hover:bg-violet-500/20"
                 >
                   新建分镜表
                 </button>

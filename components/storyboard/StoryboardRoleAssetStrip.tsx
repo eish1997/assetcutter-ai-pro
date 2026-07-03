@@ -27,6 +27,10 @@ type Props = {
   onClearImage: (id: string) => void;
   onPreviewImage?: (src: string) => void;
   onAssetImageClick?: (asset: { id: string; name: string; image?: string }) => boolean;
+  /** 高亮当前生成输入图 */
+  highlightAssetId?: string | null;
+  onUseAsGenerationInput?: (asset: { id: string; name: string; image?: string }) => void;
+  onSplitFromAsset?: (asset: { id: string; name: string; image?: string }) => void;
 };
 
 function allowImageDrop(event: React.DragEvent) {
@@ -52,6 +56,9 @@ export default function StoryboardRoleAssetStrip({
   onClearImage,
   onPreviewImage,
   onAssetImageClick,
+  highlightAssetId = null,
+  onUseAsGenerationInput,
+  onSplitFromAsset,
 }: Props) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const pendingIdRef = useRef<string | null>(null);
@@ -118,10 +125,13 @@ export default function StoryboardRoleAssetStrip({
         {assets.map((asset) => {
           const img = resolveDisplaySrc(asset);
           const busy = busyId === asset.id;
+          const highlighted = highlightAssetId === asset.id;
           return (
             <div key={asset.id} className="flex w-[4.75rem] shrink-0 flex-col gap-1">
               <div
-                className="group relative aspect-square w-full overflow-hidden rounded-xl ring-1 ring-white/[0.08]"
+                className={`group relative aspect-square w-full overflow-hidden rounded-xl ring-1 ${
+                  highlighted ? 'ring-cyan-400/55' : 'ring-white/[0.08]'
+                }`}
                 onDragOver={readOnly || busy ? undefined : allowImageDrop}
                 onDrop={readOnly || busy ? undefined : (event) => handleDrop(asset.id, event)}
               >
@@ -178,6 +188,34 @@ export default function StoryboardRoleAssetStrip({
                   >
                     清除
                   </button>
+                ) : null}
+                {!readOnly && img && (onUseAsGenerationInput || onSplitFromAsset) ? (
+                  <div className="absolute inset-x-0 bottom-0 flex gap-0.5 bg-gradient-to-t from-black/80 to-transparent p-0.5 pt-3 opacity-0 transition-opacity group-hover:opacity-100">
+                    {onUseAsGenerationInput ? (
+                      <button
+                        type="button"
+                        className="min-w-0 flex-1 rounded bg-cyan-500/25 px-0.5 py-0.5 text-[7px] font-semibold text-cyan-100 ring-1 ring-cyan-400/30"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onUseAsGenerationInput(asset);
+                        }}
+                      >
+                        作输入
+                      </button>
+                    ) : null}
+                    {onSplitFromAsset ? (
+                      <button
+                        type="button"
+                        className="min-w-0 flex-1 rounded bg-white/10 px-0.5 py-0.5 text-[7px] font-semibold text-gray-200 ring-1 ring-white/15"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onSplitFromAsset(asset);
+                        }}
+                      >
+                        框选
+                      </button>
+                    ) : null}
+                  </div>
                 ) : null}
               </div>
               <input

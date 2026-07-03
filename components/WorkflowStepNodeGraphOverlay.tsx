@@ -4,7 +4,11 @@ import type { WorkflowAsset } from '../types';
 import type { ImageVersion, VgpAssetExtension } from '../types/vgp';
 import { ensureWorkflowAssetVgp } from '../services/vgp/migrateLegacyAsset';
 import { previewSrcCacheFingerprint } from '../services/workflowImageThumb';
+import {
+  workflowVersionTextThumbLines,
+} from '../services/workflowTextAsset';
 import { WorkflowGridImage } from './ProgressivePreviewImage';
+import WorkflowVersionTextThumbCell from './workflow/WorkflowVersionTextThumbCell';
 import WorkflowPixelBusyOverlay from './WorkflowPixelBusyOverlay';
 import { resolveVersionImageSrc } from './WorkflowGenerationRecordPanel';
 
@@ -299,6 +303,9 @@ export function WorkflowStepNodeGraphOverlay({
     const key = v.imageRef.kind === 'original_field' ? 'original' : v.imageRef.key;
     const active = selectedId === id;
     const verSrc = resolveVersionImageSrc(displayAsset, v);
+    const textThumb = !String(verSrc || '').trim()
+      ? workflowVersionTextThumbLines(displayAsset, key)
+      : null;
     const companionKey =
       key === 'original'
         ? String(displayAsset.originalCompanionKey || '').trim()
@@ -324,17 +331,21 @@ export function WorkflowStepNodeGraphOverlay({
         ].join(' ')}
         style={{ left: p.x, top: p.y, width: NODE, height: NODE }}
       >
-        <WorkflowGridImage
-          fullSrc={verSrc}
-          cacheKey={thumbCacheKey}
-          thumbMaxEdge={128}
-          className="relative h-full w-full"
-          imgClassName="h-full w-full object-cover"
-          alt=""
-          draggable={false}
-          imageFetchPriority="high"
-          thumbDecodePriority="high"
-        />
+        {textThumb ? (
+          <WorkflowVersionTextThumbCell lines={textThumb} />
+        ) : (
+          <WorkflowGridImage
+            fullSrc={verSrc}
+            cacheKey={thumbCacheKey}
+            thumbMaxEdge={128}
+            className="relative h-full w-full"
+            imgClassName="h-full w-full object-cover"
+            alt=""
+            draggable={false}
+            imageFetchPriority="high"
+            thumbDecodePriority="high"
+          />
+        )}
         <span className="pointer-events-none absolute bottom-0 inset-x-0 bg-black/55 text-[7px] font-black tabular-nums text-white/95 text-center py-px">
           {v.stepIndex}
         </span>

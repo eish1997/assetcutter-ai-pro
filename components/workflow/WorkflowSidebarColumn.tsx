@@ -40,7 +40,10 @@ import { dragTransferHasPlainText } from './workflowSectionHelpers';
 import { SET_ACTION_PREFIX, WORKFLOW_EDGE_GUTTER } from './workflowSectionUiConstants';
 import { uuid } from './workflowIds';
 import type { CapabilityCategoryGroup } from './workflowCapabilityGroups';
-import { WORKFLOW_SIDEBAR_FEATURE_GROUPS } from './workflowSidebarFeatureGroups';
+import {
+  WORKFLOW_SIDEBAR_FEATURE_GROUPS,
+  WORKFLOW_SIDEBAR_ACTIONABLE_FEATURE_IDS,
+} from './workflowSidebarFeatureGroups';
 import {
   extractCapabilitySearchKeywords,
   keywordsMatchCapabilityLabelId,
@@ -2595,19 +2598,22 @@ export function WorkflowSidebarColumn({
                   </button>
                   {!collapsedSectionIds[`wf:${group.id}`] && (
                     <div className={capabilityGridClass}>
-                      {group.items.map((item) => (
+                      {group.items.map((item) => {
+                        const actionable =
+                          WORKFLOW_SIDEBAR_ACTIONABLE_FEATURE_IDS.has(item.id) && !!onWorkflowFeatureClick;
+                        return (
                         <button
                           key={item.id}
                           type="button"
                           title={item.hint || '功能开发中'}
-                          disabled={!onWorkflowFeatureClick && item.id === 'storyboard_flow'}
+                          disabled={WORKFLOW_SIDEBAR_ACTIONABLE_FEATURE_IDS.has(item.id) && !onWorkflowFeatureClick}
                           onClick={() => onWorkflowFeatureClick?.(item.id)}
                           className={`rounded-xl border min-h-[60px] h-auto flex overflow-hidden transition-all duration-150 text-left ${
-                            onWorkflowFeatureClick
+                            actionable
                               ? `cursor-pointer hover:scale-[1.01] ring-1 ring-violet-500/25 hover:ring-violet-400/45 ${getSidebarCapabilityTone('workflow').hoverBorderClass}`
                               : 'cursor-default opacity-80'
                           } ${getSidebarCapabilityTone('workflow').idleBorderClass} ${
-                            onWorkflowFeatureClick && item.id === 'storyboard_flow'
+                            actionable
                               ? 'bg-gradient-to-br from-[#1a1528] to-[#181a1f]'
                               : 'bg-[#181a1f]'
                           }`}
@@ -2617,11 +2623,12 @@ export function WorkflowSidebarColumn({
                               {item.label}
                             </span>
                             <span className="text-[7px] font-bold uppercase tracking-wide text-violet-400/80">
-                              {onWorkflowFeatureClick ? '新建' : '占位'}
+                              {actionable ? '新建' : '占位'}
                             </span>
                           </div>
                         </button>
-                      ))}
+                        );
+                      })}
                     </div>
                   )}
                 </div>

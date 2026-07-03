@@ -99,6 +99,65 @@ export function workflowTextAssetOutlineLabel(a: WorkflowAsset): string {
   return '文字';
 }
 
+/** VGP 步骤树 / 版本节点：该 resultKey 是否按文本通道展示（无位图） */
+export function workflowVersionDisplayIsTextChannel(asset: WorkflowAsset, resultKey: string): boolean {
+  if (!isWorkflowTextAsset(asset)) return false;
+  const key = String(resultKey || 'original').trim() || 'original';
+  if (key === 'original') return true;
+  return !String((asset.results || {})[key] ?? '').trim();
+}
+
+export function resolveWorkflowVersionDisplayText(
+  asset: WorkflowAsset,
+  resultKey: string
+): { title: string; body: string } {
+  if (!isWorkflowTextAsset(asset)) return { title: '', body: '' };
+  const key = String(resultKey || 'original').trim() || 'original';
+  if (key === 'original') {
+    return { title: String(asset.textTitle || ''), body: String(asset.textBody || '') };
+  }
+  return { title: '', body: String((asset.textResults || {})[key] ?? '') };
+}
+
+/** 小节点缩略图：优先正文前几字，否则标题；空白则「文本」 */
+export function workflowVersionTextSnippet(
+  asset: WorkflowAsset,
+  resultKey: string,
+  maxLen = 28
+): string {
+  if (!workflowVersionDisplayIsTextChannel(asset, resultKey)) return '';
+  const thumb = workflowVersionTextThumbLines(asset, resultKey);
+  if (!thumb) return '';
+  const visible = `${thumb.line1}${thumb.line2}`;
+  if (thumb.showEllipsis) return `${visible}…`;
+  return visible || thumb.fullText;
+}
+
+export type WorkflowVersionTextThumbLines = {
+  line1: string;
+  line2: string;
+  showEllipsis: boolean;
+  fullText: string;
+};
+
+/** 大图预览缩略节点：最多 6 字，两行各 3 字，超出第三行 … */
+export function workflowVersionTextThumbLines(
+  asset: WorkflowAsset,
+  resultKey: string
+): WorkflowVersionTextThumbLines | null {
+  if (!workflowVersionDisplayIsTextChannel(asset, resultKey)) return null;
+  const { title, body } = resolveWorkflowVersionDisplayText(asset, resultKey);
+  const raw = (body || title).trim().replace(/\s+/g, '');
+  const fullText = raw || '文本';
+  const chars = [...fullText];
+  return {
+    line1: chars.slice(0, 3).join(''),
+    line2: chars.slice(3, 6).join(''),
+    showEllipsis: chars.length > 6,
+    fullText,
+  };
+}
+
 function escapeXmlForSvgText(s: string): string {
   return String(s || '')
     .replace(/&/g, '&amp;')

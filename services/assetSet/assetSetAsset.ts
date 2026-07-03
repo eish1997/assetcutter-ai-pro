@@ -72,6 +72,7 @@ function normalizeModel3d(raw: unknown): AssetSetComponentModel3d | undefined {
       ? m.fileCompanionKeys.filter(Boolean)
       : undefined,
     previewUrl: m.previewUrl?.trim() || undefined,
+    previewCompanionKey: m.previewCompanionKey?.trim() || undefined,
     updatedAt: typeof m.updatedAt === 'number' ? m.updatedAt : undefined,
   };
 }
@@ -122,6 +123,10 @@ function normalizePanelPrefs(raw: unknown): AssetSetPanelPrefs | undefined {
   if (p.componentSheetPresetId?.trim()) out.componentSheetPresetId = p.componentSheetPresetId.trim();
   if (p.single3dPresetId?.trim()) out.single3dPresetId = p.single3dPresetId.trim();
   if (p.multi3dPresetId?.trim()) out.multi3dPresetId = p.multi3dPresetId.trim();
+  if (p.genPresetId?.trim()) out.genPresetId = p.genPresetId.trim();
+  if (p.genOutputMode === 'append' || p.genOutputMode === 'styled' || p.genOutputMode === 'multiview') {
+    out.genOutputMode = p.genOutputMode;
+  }
   return Object.keys(out).length ? out : undefined;
 }
 

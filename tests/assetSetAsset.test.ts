@@ -9,7 +9,8 @@ import {
   patchAssetSetComponents,
 } from '../services/assetSet/assetSetAsset';
 import { buildAssetSetComponentsFromBoxes } from '../services/assetSet/assetSetCrop';
-import { pickAssetSet3dPreset, mapAssetSetViewsToTripoMultiview } from '../services/assetSet/assetSetBatch3d';
+import { pickAssetSet3dPreset, mapAssetSetViewsToTripoMultiview, assetSetComponent3dResultKey } from '../services/assetSet/assetSetBatch3d';
+import { ASSET_SET_COMPONENT_SHEET_PRESET_ID, resolveAssetSetComponentSheetPresetFallback } from '../services/assetSet/assetSetPresets';
 
 describe('assetSetAsset', () => {
   it('creates asset set with default source slots', () => {
@@ -71,6 +72,10 @@ describe('assetSetAsset', () => {
 });
 
 describe('assetSetBatch3d', () => {
+  it('builds stable result key per component', () => {
+    expect(assetSetComponent3dResultKey('c1')).toBe('asset-set-3d-c1');
+  });
+
   it('routes single view to single preset', () => {
     const single = { id: 's', label: 'single' } as import('../types').CustomAppModule;
     const multi = { id: 'm', label: 'multi' } as import('../types').CustomAppModule;
@@ -95,6 +100,22 @@ describe('assetSetBatch3d', () => {
     ]);
     expect(mapped?.front).toBe('data:p');
     expect(mapped?.back).toBe('data:b');
+  });
+});
+
+describe('assetSetPresets', () => {
+  it('prefers seeded component sheet preset as fallback', () => {
+    const presets = [
+      { id: 'other', label: 'other', enabled: true } as import('../types').CustomAppModule,
+      {
+        id: ASSET_SET_COMPONENT_SHEET_PRESET_ID,
+        label: 'seed',
+        enabled: true,
+      } as import('../types').CustomAppModule,
+    ];
+    expect(resolveAssetSetComponentSheetPresetFallback(presets)?.id).toBe(
+      ASSET_SET_COMPONENT_SHEET_PRESET_ID
+    );
   });
 });
 

@@ -27,7 +27,7 @@ export type ReconcileWorkflowBundleWithCloudResult = {
 
 /**
  * 读取本地 bundle，拉取（并 hydrate）云端 workflow，再按策略合并。
- * 调用方负责：仅在已登录、云同步开启、项目已绑定当前账号等条件下调用。
+ * 调用方负责：仅在已登录、云同步开启等条件下调用。
  */
 export async function reconcileWorkflowBundleWithCloud(options: {
   projectId: string;

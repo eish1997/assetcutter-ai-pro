@@ -1,5 +1,5 @@
 import React, { Suspense } from 'react';
-import type { WorkspaceProject } from '../services/workspaceProjectStore';
+import type { WorkspacePersistUserId, WorkspaceProject } from '../services/workspaceProjectStore';
 import WorkspaceProjectShell from './WorkspaceProjectShell';
 import WorkflowErrorBoundary from './workflow/WorkflowErrorBoundary';
 import LazySectionFallback from './ui/LazySectionFallback';
@@ -9,18 +9,13 @@ export type WorkflowModeShellProps = {
   activeWorkspaceProjectId: string | null;
   user: { id?: string | null; role?: string | null } | null | undefined;
   workspaceProjects: WorkspaceProject[];
+  persistUserId?: WorkspacePersistUserId;
   onWorkspaceCreate: (name: string) => void;
   onWorkspaceOpen: (id: string) => void;
   onWorkspaceRename: (id: string, name: string) => void;
   onWorkspaceDelete: (id: string) => void;
-  onWorkspaceBind?: (id: string) => void;
-  onWorkspaceUnbind?: (id: string) => void;
-  onWorkspaceManualUpload?: (id: string) => void;
   onWorkspaceExport?: (id: string) => void;
   onWorkspaceImport?: (payload: { file: File; mode: 'new' | 'overwrite'; targetProjectId?: string }) => void;
-  onWorkspaceRetryFailedUpload?: (id: string) => void;
-  onOpenWorkspaceUploadFailureDetail?: (id: string) => void;
-  workspaceUploadingProjectId?: string | null;
   onOpenWorkspaceTrash?: () => void;
   /** 工作流 chunk 懒加载失败后重建 React.lazy */
   onWorkflowSectionLoadRetry?: () => void;
@@ -35,18 +30,13 @@ const WorkflowModeShell: React.FC<WorkflowModeShellProps> = ({
   activeWorkspaceProjectId,
   user,
   workspaceProjects,
+  persistUserId = null,
   onWorkspaceCreate,
   onWorkspaceOpen,
   onWorkspaceRename,
   onWorkspaceDelete,
-  onWorkspaceBind,
-  onWorkspaceUnbind,
-  onWorkspaceManualUpload,
   onWorkspaceExport,
   onWorkspaceImport,
-  onWorkspaceRetryFailedUpload,
-  onOpenWorkspaceUploadFailureDetail,
-  workspaceUploadingProjectId,
   onOpenWorkspaceTrash,
   onWorkflowSectionLoadRetry,
   workflowSectionSuspenseKey = 0,
@@ -73,35 +63,17 @@ const WorkflowModeShell: React.FC<WorkflowModeShellProps> = ({
         .join(' ') || undefined}
     >
       {!activeWorkspaceProjectId && (
-        <>
-          {onOpenWorkspaceTrash && (
-            <div className="mx-auto mb-2 w-full max-w-6xl flex items-center justify-end">
-              <button
-                type="button"
-                onClick={onOpenWorkspaceTrash}
-                className="px-3 py-1.5 rounded-lg bg-[#1c1c22] border border-[#2e2e32] text-[10px] font-black uppercase text-gray-300 hover:bg-[#26262c]"
-              >
-                回收站
-              </button>
-            </div>
-          )}
           <WorkspaceProjectShell
             projects={workspaceProjects}
+            persistUserId={persistUserId}
             onCreate={onWorkspaceCreate}
             onOpen={onWorkspaceOpen}
             onRename={onWorkspaceRename}
             onDelete={onWorkspaceDelete}
-            onBind={onWorkspaceBind}
-            onUnbind={onWorkspaceUnbind}
-            onManualUpload={onWorkspaceManualUpload}
             onExport={onWorkspaceExport}
             onImport={onWorkspaceImport}
-            onRetryFailedUpload={onWorkspaceRetryFailedUpload}
-            onOpenUploadFailureDetail={onOpenWorkspaceUploadFailureDetail}
-            uploadingProjectId={workspaceUploadingProjectId}
-            currentUserId={user?.id ?? null}
+            onOpenTrash={onOpenWorkspaceTrash}
           />
-        </>
       )}
       {activeWorkspaceProjectId && (
         <WorkflowErrorBoundary onRetry={onWorkflowSectionLoadRetry}>

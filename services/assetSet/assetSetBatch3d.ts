@@ -6,6 +6,7 @@ import {
   extractTripoModelAndPreviewUrls,
 } from '../generate3d/tripoWorkflow';
 import { normalizeApiErrorMessage } from '../geminiService';
+import { persistWorkflow3dSlots } from '../persistWorkflow3dSlots';
 import { resolveAssetSetComponentViewSrc } from './assetSetAsset';
 
 export function pickAssetSet3dPreset(
@@ -76,6 +77,56 @@ export type RunAssetSetComponent3dResult =
       previewUrl: string;
     }
   | { ok: false; error: string };
+
+export function assetSetComponent3dResultKey(componentId: string): string {
+  return `asset-set-3d-${componentId}`;
+}
+
+export async function persistAssetSetComponent3dModels(params: {
+  apiKey: string;
+  taskId: string;
+  assetId: string;
+  componentId: string;
+  glbSourceUrls: string[];
+  previewUrl?: string;
+  companionBaseUrl?: string;
+  companionProjectId?: string;
+  existing?: {
+    files?: string[];
+    fileCompanionKeys?: string[];
+  };
+  onLog?: (level: 'info' | 'warn' | 'error', message: string) => void;
+}): Promise<{
+  files: string[];
+  fileCompanionKeys: string[];
+  previewUrl: string;
+  previewCompanionKey?: string;
+}> {
+  const persisted = await persistWorkflow3dSlots({
+    provider: 'tripo',
+    apiKey: params.apiKey,
+    taskId: params.taskId,
+    glbSourceUrls: params.glbSourceUrls,
+    previewUrl: params.previewUrl,
+    assetId: params.assetId,
+    resultKey: assetSetComponent3dResultKey(params.componentId),
+    companionBaseUrl: params.companionBaseUrl,
+    companionProjectId: params.companionProjectId,
+    existing: params.existing?.fileCompanionKeys?.length
+      ? {
+          urls: params.existing.files,
+          companionKeys: params.existing.fileCompanionKeys,
+        }
+      : undefined,
+    onLog: params.onLog,
+  });
+  return {
+    files: persisted.modelUrls,
+    fileCompanionKeys: persisted.modelCompanionKeys,
+    previewUrl: persisted.preview?.objectUrl || params.previewUrl || '',
+    previewCompanionKey: persisted.preview?.companionKey,
+  };
+}
 
 export async function runAssetSetComponent3d(params: {
   apiKey: string;

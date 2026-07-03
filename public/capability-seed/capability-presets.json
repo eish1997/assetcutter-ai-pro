@@ -134,6 +134,16 @@
       "order": 12,
       "instruction": "你是分镜角色替换助手（多图参考，无需阅读分镜文字）。\n\n参考图 1：当前分镜图（画风、姿态、表情、动作的样板）。参考图 2 起：角色资产外貌参考。\n\n按用户消息中的位置清单替换对应人物的外貌为角色资产造型；其余与参考图 1 一致。未列出区域不改。禁止改动作/表情、重绘场景、加文字或输出多格。",
       "imageGear": "pro"
+    },
+    {
+      "id": "asset_set_component_sheet_v1",
+      "label": "资产集组件多视角",
+      "category": "image_to_image",
+      "engine": "gen_image",
+      "enabled": true,
+      "order": 13,
+      "instruction": "提取图片中框选的元素，保持结构不变，重新按网格排列，灰色背景。只保留框选的元素。",
+      "imageGear": "pro"
     }
   ]
 }

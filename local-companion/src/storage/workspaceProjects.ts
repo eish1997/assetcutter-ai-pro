@@ -1,7 +1,51 @@
-import { existsSync, mkdirSync, readdirSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { getVolumeProjectsDir } from './projectPaths.js';
 import { isSafeWorkspaceFolderName, isWorkspaceTrashDirName } from './safeIds.js';
+
+const WORKSPACE_META_FILE = 'workspace-meta.json';
+
+type WorkspaceProjectMeta = {
+  displayName: string;
+  updatedAt: number;
+};
+
+function workspaceMetaPath(projectId: string): string {
+  return join(projectDir(projectId), WORKSPACE_META_FILE);
+}
+
+function readWorkspaceProjectMeta(projectId: string): WorkspaceProjectMeta | null {
+  const p = workspaceMetaPath(projectId);
+  if (!existsSync(p)) return null;
+  try {
+    const o = JSON.parse(readFileSync(p, 'utf8')) as Partial<WorkspaceProjectMeta>;
+    const displayName = normalizeProjectName(String(o.displayName || ''));
+    if (!displayName) return null;
+    return {
+      displayName,
+      updatedAt: Number(o.updatedAt || Date.now()),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function writeWorkspaceProjectMeta(projectId: string, displayNameRaw: string): void {
+  const displayName = normalizeProjectName(displayNameRaw);
+  if (!displayName) throw new Error('WORKSPACE_PROJECT_NAME_REQUIRED');
+  const payload: WorkspaceProjectMeta = {
+    displayName,
+    updatedAt: Date.now(),
+  };
+  const p = workspaceMetaPath(projectId);
+  const tmp = `${p}.tmp`;
+  writeFileSync(tmp, JSON.stringify(payload, null, 2), 'utf8');
+  renameSync(tmp, p);
+}
+
+function resolveWorkspaceProjectDisplayName(projectId: string): string {
+  return readWorkspaceProjectMeta(projectId)?.displayName || projectId;
+}
 
 export type WorkspaceProjectItem = {
   id: string;
@@ -80,7 +124,7 @@ export function listWorkspaceProjectsFromRepo(): WorkspaceProjectItem[] {
       const st = statSync(join(root, name));
       out.push({
         id: name,
-        name,
+        name: resolveWorkspaceProjectDisplayName(name),
         createdAt: Number(st.birthtimeMs || st.ctimeMs || Date.now()),
         updatedAt: Number(st.mtimeMs || Date.now()),
       });
@@ -99,6 +143,7 @@ export function createWorkspaceProjectInRepo(nameRaw: string): WorkspaceProjectI
   if (existsSync(root)) throw new Error('WORKSPACE_PROJECT_ALREADY_EXISTS');
   ensureProjectLayoutByName(name);
   writeProjectManifest(name);
+  writeWorkspaceProjectMeta(name, name);
   const st = statSync(root);
   return {
     id: name,
@@ -114,27 +159,17 @@ export function renameWorkspaceProjectInRepo(idRaw: string, nextNameRaw: string)
   const nextName = normalizeProjectName(nextNameRaw);
   if (!nextName) throw new Error('WORKSPACE_PROJECT_NAME_REQUIRED');
   if (!isSafeWorkspaceFolderName(nextName)) throw new Error('WORKSPACE_PROJECT_NAME_INVALID');
-  if (id === nextName) {
-    const st = statSync(projectDir(id));
-    return {
-      id,
-      name: id,
-      createdAt: Number(st.birthtimeMs || st.ctimeMs || Date.now()),
-      updatedAt: Number(st.mtimeMs || Date.now()),
-    };
-  }
-  const oldDir = projectDir(id);
-  const newDir = projectDir(nextName);
-  if (!existsSync(oldDir)) throw new Error('WORKSPACE_PROJECT_NOT_FOUND');
-  if (existsSync(newDir)) throw new Error('WORKSPACE_PROJECT_ALREADY_EXISTS');
-  renameSync(oldDir, newDir);
-  writeProjectManifest(nextName);
-  const st = statSync(newDir);
+  const dir = projectDir(id);
+  if (!existsSync(dir)) throw new Error('WORKSPACE_PROJECT_NOT_FOUND');
+  writeWorkspaceProjectMeta(id, nextName);
+  const st = statSync(dir);
+  const createdAt = Number(st.birthtimeMs || st.ctimeMs || Date.now());
+  const meta = readWorkspaceProjectMeta(id);
   return {
-    id: nextName,
-    name: nextName,
-    createdAt: Number(st.birthtimeMs || st.ctimeMs || Date.now()),
-    updatedAt: Number(st.mtimeMs || Date.now()),
+    id,
+    name: meta?.displayName || nextName,
+    createdAt,
+    updatedAt: Number(meta?.updatedAt || Date.now()),
   };
 }
 
@@ -214,7 +249,7 @@ export function restoreWorkspaceProjectFromTrash(
     nameResolved: restoreName !== originalId,
     project: {
       id: restoreName,
-      name: restoreName,
+      name: resolveWorkspaceProjectDisplayName(restoreName),
       createdAt: Number(st.birthtimeMs || st.ctimeMs || Date.now()),
       updatedAt: Number(st.mtimeMs || Date.now()),
     },

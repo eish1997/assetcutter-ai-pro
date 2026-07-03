@@ -10,24 +10,25 @@ export type WorkspaceProject = {
   id: string;
   name: string;
   createdAt: number;
-  /** 绑定账号：仅用于索引与协作语义，不影响本地目录真相源 */
+  /** @deprecated 历史字段，不再使用项目绑定 */
   boundUserId?: string;
+  /** @deprecated 历史字段，不再使用项目绑定 */
   boundAt?: number;
-  /** 最近一次手动上传工作流资产到云端的时间戳 */
+  /** @deprecated 历史字段，手动上传已移除 */
   lastManualUploadAt?: number;
-  /** 最近一次手动上传时的项目资产计数 */
+  /** @deprecated 历史字段，手动上传已移除 */
   lastManualUploadAssetCount?: number;
-  /** 最近一次手动上传时估算字节数（仅用于 UI 提示） */
+  /** @deprecated 历史字段，手动上传已移除 */
   lastManualUploadBytesApprox?: number;
-  /** 最近一次手动上传模式 */
+  /** @deprecated 历史字段，手动上传已移除 */
   lastManualUploadMode?: 'full' | 'incremental';
-  /** 最近一次手动上传的总尝试项 */
+  /** @deprecated 历史字段，手动上传已移除 */
   lastManualUploadAttemptedCount?: number;
-  /** 最近一次手动上传成功项 */
+  /** @deprecated 历史字段，手动上传已移除 */
   lastManualUploadSucceededCount?: number;
-  /** 最近一次手动上传失败项（用于一键重试） */
+  /** @deprecated 历史字段，手动上传已移除 */
   lastManualUploadFailedAssetIds?: string[];
-  /** 最近一次手动上传错误摘要 */
+  /** @deprecated 历史字段，手动上传已移除 */
   lastManualUploadError?: string;
 };
 

@@ -90,6 +90,31 @@ export function resolveWorkflowGridCardAspect(
 }
 
 /** 工作区画布卡片占位宽高比（分镜表 / 文本 / 图片 / 合成 key） */
+export function readLockedWorkflowGridCardAspect(
+  asset: WorkflowAsset | null | undefined,
+  aspectMap: Record<string, number>,
+  syntheticKey?: string
+): number | null {
+  const ratio = resolveWorkflowGridCardAspect(asset, aspectMap, syntheticKey, 0);
+  return ratio > 0 ? ratio : null;
+}
+
+/** 从图片 src 读取固有尺寸（data URL / blob / http） */
+export function loadImageIntrinsicSize(src: string): Promise<{ w: number; h: number } | null> {
+  const s = String(src || '').trim();
+  if (!s) return Promise.resolve(null);
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      const w = img.naturalWidth || 0;
+      const h = img.naturalHeight || 0;
+      resolve(w > 0 && h > 0 ? { w, h } : null);
+    };
+    img.onerror = () => resolve(null);
+    img.src = s;
+  });
+}
+
 export function resolveWorkflowCanvasCardAspect(
   asset: WorkflowAsset | null | undefined,
   aspectMap: Record<string, number>,
@@ -102,6 +127,13 @@ export function resolveWorkflowCanvasCardAspect(
 ): number {
   const fallback = opts.fallback ?? 1;
   if (asset && isWorkflowStoryboardTableAsset(asset)) return 4 / 3;
+
+  const locked = readLockedWorkflowGridCardAspect(asset, aspectMap, opts.syntheticKey);
+  // 文本资产：一旦首张图锁定宽高比，切换回文本步骤时仍保持卡片宽度
+  if (asset && isWorkflowTextAsset(asset) && locked != null) {
+    return locked;
+  }
+
   if (opts.hasDisplayImage) {
     return resolveWorkflowGridCardAspect(asset, aspectMap, opts.syntheticKey, fallback);
   }

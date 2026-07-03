@@ -1,7 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import type { BoundingBox, CustomAppModule, WorkflowAsset } from '../../types';
+import type { AssetSetComponent, BoundingBox, CustomAppModule, WorkflowAsset } from '../../types';
 import { CustomDropdown } from '../ui/CustomDropdown';
+import { ImagePreviewOverlay } from '../ImagePreviewOverlay';
 import { useDebouncedLocalText } from '../../hooks/useDebouncedLocalText';
 import StoryboardSheetSplitAdjustModal from '../storyboard/StoryboardSheetSplitAdjustModal';
 import { compressStoryboardFrameDataUrl } from '../storyboard/storyboardFrameImage';
@@ -21,7 +22,19 @@ import {
 import {
   applyCropPreviewsToComponents,
   buildAssetSetComponentsFromBoxes,
+  buildAssetSetComponentsFromBoxesAppend,
 } from '../../services/assetSet/assetSetCrop';
+import {
+  ASSET_SET_GENERATION_OUTPUT_OPTIONS,
+  assetSetGenerationInputRefKey,
+  defaultAssetSetGenerationInputRef,
+  listAssetSetGenerationInputOptions,
+  nextAssetSetGenerationOutputName,
+  parseAssetSetGenerationInputRefKey,
+  resolveAssetSetGenerationInputFields,
+  type AssetSetGenerationInputRef,
+  type AssetSetGenerationOutputMode,
+} from '../../services/assetSet/assetSetGeneration';
 import {
   createAssetSetSourceAsset,
   assetSetSourceAssetCompanionKey,
@@ -32,14 +45,17 @@ import {
   listAssetSetImagePresets,
   listAssetSetMulti3dPresets,
   listAssetSetSingle3dPresets,
+  resolveAssetSetComponentSheetPresetFallback,
   resolveAssetSetPreset,
 } from '../../services/assetSet/assetSetPresets';
 import { splitAssetSetSheetToViews } from '../../services/assetSet/assetSetSheetPipeline';
 import {
   pickAssetSet3dPreset,
+  persistAssetSetComponent3dModels,
   runAssetSetComponent3d,
 } from '../../services/assetSet/assetSetBatch3d';
 import {
+  abortAssetSetTaskSession,
   patchAssetSetTaskSession,
   clearAssetSetTaskSession,
   subscribeAssetSetTaskSession,
@@ -91,6 +107,8 @@ const CATEGORY_OPTIONS = [
   { value: 'prop', label: '道具' },
 ];
 
+const ASSET_SET_LIGHTBOX_Z = 'z-[2180]';
+
 export default function AssetSetPanel({
   asset,
   capabilityPresets,
@@ -128,6 +146,8 @@ export default function AssetSetPanel({
       componentSheetPresetId?: string;
       single3dPresetId?: string;
       multi3dPresetId?: string;
+      genPresetId?: string;
+      genOutputMode?: AssetSetGenerationOutputMode;
     }>(scopedPrefsKey, {})
   );
 
@@ -138,8 +158,13 @@ export default function AssetSetPanel({
   const [sourceBusyId, setSourceBusyId] = useState<string | null>(null);
   const [busyComponentId, setBusyComponentId] = useState<string | null>(null);
   const [splitOpen, setSplitOpen] = useState(false);
+  const [splitSourceAssetId, setSplitSourceAssetId] = useState<string | null>(null);
+  const [splitAppendMode, setSplitAppendMode] = useState(true);
+  const [genInputKey, setGenInputKey] = useState('');
   const [taskBusy, setTaskBusy] = useState(false);
+  const [taskKind, setTaskKind] = useState<'component_sheet' | 'batch_3d' | null>(null);
   const [taskProgress, setTaskProgress] = useState<{ done: number; total: number } | null>(null);
+  const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
   const selectionAnchorRef = useRef<string | null>(null);
   const [hydrateSeq, setHydrateSeq] = useState(0);
   const hydrateDebounceRef = useRef(0);
@@ -152,16 +177,21 @@ export default function AssetSetPanel({
   }, []);
 
   const panelPrefs = { ...storedPrefs, ...doc.panelPrefs };
-  const stylePreset = resolveAssetSetPreset(imagePresets, panelPrefs.stylePresetId, imagePresets[0]);
-  const assetMvPreset = resolveAssetSetPreset(
+  const genOutputMode: AssetSetGenerationOutputMode =
+    panelPrefs.genOutputMode === 'styled' ||
+    panelPrefs.genOutputMode === 'multiview' ||
+    panelPrefs.genOutputMode === 'append'
+      ? panelPrefs.genOutputMode
+      : 'append';
+  const genPreset = resolveAssetSetPreset(
     imagePresets,
-    panelPrefs.assetMultiviewPresetId,
+    panelPrefs.genPresetId || panelPrefs.stylePresetId,
     imagePresets[0]
   );
   const sheetPreset = resolveAssetSetPreset(
     imagePresets,
     panelPrefs.componentSheetPresetId,
-    imagePresets[0]
+    resolveAssetSetComponentSheetPresetFallback(imagePresets)
   );
   const single3dPreset = resolveAssetSetPreset(
     single3dPresets,
@@ -175,9 +205,51 @@ export default function AssetSetPanel({
   );
 
   const styledAsset = resolveAssetSetSourceAssetBySlot(doc.sourceAssets, 'styled');
-  const originalAsset = resolveAssetSetSourceAssetBySlot(doc.sourceAssets, 'original');
-  const styledSrc = resolveAssetSetSourceAssetDisplaySrc(styledAsset);
-  const originalSrc = resolveAssetSetSourceAssetDisplaySrc(originalAsset);
+
+  const genInputOptions = useMemo(() => listAssetSetGenerationInputOptions(doc), [doc]);
+  const genInputRef = useMemo(
+    () => parseAssetSetGenerationInputRefKey(genInputKey),
+    [genInputKey]
+  );
+  const genInputHasImage = useMemo(
+    () => genInputOptions.find((o) => o.key === genInputKey)?.hasImage ?? false,
+    [genInputKey, genInputOptions]
+  );
+  const genInputSelectOptions = useMemo(
+    () =>
+      genInputOptions.map((o) => ({
+        value: o.key,
+        label: o.hasImage ? o.label : `${o.label}（无图）`,
+        disabled: !o.hasImage,
+      })),
+    [genInputOptions]
+  );
+  const genInputHighlightSourceId =
+    genInputRef?.kind === 'source' ? genInputRef.sourceId : null;
+
+  const splitSourceAsset = useMemo(() => {
+    if (splitSourceAssetId) {
+      return doc.sourceAssets.find((s) => s.id === splitSourceAssetId);
+    }
+    if (genInputRef?.kind === 'source') {
+      return doc.sourceAssets.find((s) => s.id === genInputRef.sourceId);
+    }
+    return styledAsset ?? doc.sourceAssets.find((s) => resolveAssetSetSourceAssetDisplaySrc(s));
+  }, [doc.sourceAssets, genInputRef, splitSourceAssetId, styledAsset]);
+  const splitSourceSrc = resolveAssetSetSourceAssetDisplaySrc(splitSourceAsset);
+  const canSplitCurrent =
+    genInputRef?.kind !== 'component' && Boolean(splitSourceSrc);
+
+  useEffect(() => {
+    if (genInputKey && genInputOptions.some((o) => o.key === genInputKey && o.hasImage)) return;
+    const def = defaultAssetSetGenerationInputRef(doc);
+    if (def) setGenInputKey(assetSetGenerationInputRefKey(def));
+  }, [doc, genInputKey, genInputOptions]);
+
+  const openLightbox = useCallback((src: string) => {
+    const trimmed = String(src || '').trim();
+    if (trimmed) setLightboxSrc(trimmed);
+  }, []);
 
   const activeComponent = doc.components.find((c) => c.id === activeComponentId) ?? null;
 
@@ -232,6 +304,7 @@ export default function AssetSetPanel({
     return subscribeAssetSetTaskSession(asset.id, (session) => {
       setTaskBusy(session.busy);
       setTaskProgress(session.progress);
+      setTaskKind(session.kind);
     });
   }, [asset.id]);
 
@@ -349,40 +422,110 @@ export default function AssetSetPanel({
     [asset.id, companionBaseUrl, companionProjectId, onNotify, patchDoc, readOnly]
   );
 
-  const runSourceCapability = useCallback(
-    async (slotKind: 'styled' | 'multiview', preset: CustomAppModule | null) => {
-      if (readOnly || !preset) {
+  const runGeneration = useCallback(
+    async (params: {
+      inputRef: AssetSetGenerationInputRef;
+      preset: CustomAppModule | null;
+      outputMode: AssetSetGenerationOutputMode;
+      outputComponentId?: string;
+      successMessage?: string;
+    }) => {
+      if (readOnly || !params.preset) {
         onNotify?.('warn', '请选择能力预设');
-        return;
+        return null;
       }
-      if (getCapabilityEngine(preset) !== 'gen_image') {
+      if (getCapabilityEngine(params.preset) !== 'gen_image') {
         onNotify?.('warn', '需选择图生图/文生图预设');
-        return;
+        return null;
       }
-      const source = resolveAssetSetSourceAssetBySlot(doc.sourceAssets, 'original');
+      const fields = resolveAssetSetGenerationInputFields(doc, params.inputRef);
       const resolved = await resolveAssetSetImageDataUrl(
-        source,
+        fields,
         companionBaseUrl,
         companionProjectId
       );
       if (!resolved.ok) {
         onNotify?.('warn', resolved.error);
-        return;
+        return null;
       }
-      const target = resolveAssetSetSourceAssetBySlot(doc.sourceAssets, slotKind);
-      if (!target) return;
-      setSourceBusyId(target.id);
+      const busyKey =
+        params.inputRef.kind === 'source'
+          ? params.inputRef.sourceId
+          : params.inputRef.componentId;
+      setSourceBusyId(busyKey);
       try {
-        const result = await executeCapability(preset, resolved.dataUrl, {
+        const result = await executeCapability(params.preset, resolved.dataUrl, {
           onLog: (level, message) => onNotify?.(level, message),
         });
         const out = result.ok && result.kind === 'image' ? result.image : '';
         if (!out) {
           onNotify?.('error', '生成未返回图片');
-          return;
+          return null;
         }
         const compressed = await compressStoryboardFrameDataUrl(out);
-        const fields = await persistAssetSetImageFields({
+
+        if (params.outputComponentId) {
+          const fieldsOut = await persistAssetSetImageFields({
+            dataUrl: compressed,
+            tableAssetId: asset.id,
+            companionKey: assetSetComponentImageCompanionKey(params.outputComponentId, 'crop'),
+            companionBaseUrl,
+            companionProjectId,
+          });
+          patchDoc((prev) =>
+            patchAssetSetComponents(prev, [params.outputComponentId!], (c) => ({
+              ...c,
+              cropPreview: fieldsOut.image ?? compressed,
+              cropPreviewCompanionKey: fieldsOut.imageCompanionKey,
+              cropPreviewObjectKey: fieldsOut.imageObjectKey,
+              views: [],
+              multiviewSheet: undefined,
+              multiviewSheetCompanionKey: undefined,
+              multiviewSheetObjectKey: undefined,
+              model3d: undefined,
+            }))
+          );
+          onNotify?.('info', params.successMessage ?? '裁切图已更新');
+          return { kind: 'component' as const, componentId: params.outputComponentId };
+        }
+
+        if (params.outputMode === 'append') {
+          const newId = Math.random().toString(36).slice(2, 11);
+          const name = nextAssetSetGenerationOutputName(doc.sourceAssets);
+          const fieldsOut = await persistAssetSetImageFields({
+            dataUrl: compressed,
+            tableAssetId: asset.id,
+            companionKey: assetSetSourceAssetCompanionKey(newId),
+            companionBaseUrl,
+            companionProjectId,
+          });
+          const newAsset = createAssetSetSourceAsset(
+            {
+              id: newId,
+              name,
+              slotKind: 'custom',
+              image: fieldsOut.image ?? compressed,
+              imageCompanionKey: fieldsOut.imageCompanionKey,
+              imageObjectKey: fieldsOut.imageObjectKey,
+            },
+            doc.sourceAssets.length
+          );
+          patchDoc((prev) => ({
+            ...prev,
+            sourceAssets: [...prev.sourceAssets, newAsset],
+          }));
+          setGenInputKey(assetSetGenerationInputRefKey({ kind: 'source', sourceId: newId }));
+          onNotify?.('info', params.successMessage ?? `已追加「${name}」`);
+          return { kind: 'source' as const, sourceId: newId };
+        }
+
+        const slotKind = params.outputMode;
+        const target = resolveAssetSetSourceAssetBySlot(doc.sourceAssets, slotKind);
+        if (!target) {
+          onNotify?.('warn', `缺少 ${slotKind} 槽位`);
+          return null;
+        }
+        const fieldsOut = await persistAssetSetImageFields({
           dataUrl: compressed,
           tableAssetId: asset.id,
           companionKey: assetSetSourceAssetCompanionKey(target.id),
@@ -392,12 +535,18 @@ export default function AssetSetPanel({
         patchDoc((prev) => ({
           ...prev,
           sourceAssets: prev.sourceAssets.map((item) =>
-            item.id === target.id ? { ...item, ...fields } : item
+            item.id === target.id ? { ...item, ...fieldsOut } : item
           ),
         }));
-        onNotify?.('info', slotKind === 'styled' ? '转风格完成' : '多视角拼图已生成');
+        setGenInputKey(assetSetGenerationInputRefKey({ kind: 'source', sourceId: target.id }));
+        onNotify?.(
+          'info',
+          params.successMessage ?? (slotKind === 'styled' ? '转风格完成' : '多视角拼图已生成')
+        );
+        return { kind: 'source' as const, sourceId: target.id };
       } catch (e) {
         onNotify?.('error', e instanceof Error ? e.message : '生成失败');
+        return null;
       } finally {
         setSourceBusyId(null);
       }
@@ -406,28 +555,38 @@ export default function AssetSetPanel({
       asset.id,
       companionBaseUrl,
       companionProjectId,
-      doc.sourceAssets,
+      doc,
       onNotify,
       patchDoc,
       readOnly,
     ]
   );
 
+  const openSplitForSource = useCallback((sourceId: string) => {
+    setSplitSourceAssetId(sourceId);
+    setSplitAppendMode(doc.components.length > 0);
+    setSplitOpen(true);
+  }, [doc.components.length]);
+
   const confirmSplit = useCallback(
     async (boxes: BoundingBox[]) => {
-      if (!styledAsset) return;
-      const styledResolved = await resolveAssetSetImageDataUrl(
-        styledAsset,
+      if (!splitSourceAsset) return;
+      const sourceResolved = await resolveAssetSetImageDataUrl(
+        splitSourceAsset,
         companionBaseUrl,
         companionProjectId
       );
-      const styledDataUrl = styledResolved.ok ? styledResolved.dataUrl : styledSrc;
-      if (!styledDataUrl) {
-        onNotify?.('warn', '风格图无法加载，请重新转风格');
+      const sourceDataUrl = sourceResolved.ok
+        ? sourceResolved.dataUrl
+        : splitSourceSrc || '';
+      if (!sourceDataUrl) {
+        onNotify?.('warn', '拆分底图无法加载');
         return;
       }
-      const built = buildAssetSetComponentsFromBoxes(boxes, doc.components);
-      const withCrops = await applyCropPreviewsToComponents(styledDataUrl, built);
+      const built = splitAppendMode
+        ? buildAssetSetComponentsFromBoxesAppend(boxes, doc.components)
+        : buildAssetSetComponentsFromBoxes(boxes, []);
+      const withCrops = await applyCropPreviewsToComponents(sourceDataUrl, built);
       const withPersistedCrops = await Promise.all(
         withCrops.map(async (component) => {
           if (!component.cropPreview) return component;
@@ -447,13 +606,21 @@ export default function AssetSetPanel({
           };
         })
       );
-      patchDoc((prev) => ({ ...prev, components: withPersistedCrops }));
+      const nextComponents = splitAppendMode
+        ? [...doc.components, ...withPersistedCrops]
+        : withPersistedCrops;
+      patchDoc((prev) => ({ ...prev, components: nextComponents }));
       setSplitOpen(false);
       if (withPersistedCrops[0]) {
         setActiveComponentId(withPersistedCrops[0].id);
         setSelectedComponentIds(new Set(withPersistedCrops.map((c) => c.id)));
       }
-      onNotify?.('info', `已创建 ${withPersistedCrops.length} 个组件占位格`);
+      onNotify?.(
+        'info',
+        splitAppendMode
+          ? `已追加 ${withPersistedCrops.length} 个组件（共 ${nextComponents.length} 个）`
+          : `已创建 ${withPersistedCrops.length} 个组件`
+      );
     },
     [
       asset.id,
@@ -462,8 +629,9 @@ export default function AssetSetPanel({
       doc.components,
       onNotify,
       patchDoc,
-      styledAsset,
-      styledSrc,
+      splitAppendMode,
+      splitSourceAsset,
+      splitSourceSrc,
     ]
   );
 
@@ -482,15 +650,22 @@ export default function AssetSetPanel({
   const runComponentSheetBatch = useCallback(async () => {
     if (readOnly || !sheetPreset || sheetEligible.length === 0) return;
     const total = sheetEligible.length;
+    const abortController = new AbortController();
     patchAssetSetTaskSession(asset.id, {
       kind: 'component_sheet',
       busy: true,
       progress: { done: 0, total },
       busyComponentIds: new Set(sheetEligible.map((c) => c.id)),
+      abortController,
     });
     const pendingPatches = new Map<string, import('../../types').AssetSetComponent>();
     let done = 0;
+    let cancelled = false;
     for (const component of sheetEligible) {
+      if (abortController.signal.aborted) {
+        cancelled = true;
+        break;
+      }
       setBusyComponentId(component.id);
       try {
         const cropResolved = await resolveAssetSetImageDataUrl(
@@ -562,7 +737,11 @@ export default function AssetSetPanel({
       }));
     }
     clearAssetSetTaskSession(asset.id);
-    onNotify?.('info', `组件多视角：${pendingPatches.size}/${total} 完成`);
+    if (cancelled) {
+      onNotify?.('info', `组件多视角已取消：${pendingPatches.size}/${total} 完成`);
+    } else {
+      onNotify?.('info', `组件多视角：${pendingPatches.size}/${total} 完成`);
+    }
   }, [
     asset.id,
     companionBaseUrl,
@@ -581,27 +760,17 @@ export default function AssetSetPanel({
     return listAssetSet3dEligibleComponents(pool);
   }, [doc.components, selectedList]);
 
-  const runBatch3d = useCallback(async () => {
-    if (readOnly || threeDEligible.length === 0) return;
-    const apiKey = getTripoApiKey();
-    if (!apiKey) {
-      onNotify?.('warn', '请先在设置中配置 Tripo API Key');
-      return;
-    }
-    const total = threeDEligible.length;
-    patchAssetSetTaskSession(asset.id, {
-      kind: 'batch_3d',
-      busy: true,
-      progress: { done: 0, total },
-      busyComponentIds: new Set(threeDEligible.map((c) => c.id)),
-    });
-    let done = 0;
-    for (const component of threeDEligible) {
+  const runOneComponent3d = useCallback(
+    async (component: AssetSetComponent, options?: { forceNew?: boolean }) => {
+      const apiKey = getTripoApiKey();
+      if (!apiKey) {
+        onNotify?.('warn', '请先在设置中配置 Tripo API Key');
+        return false;
+      }
       const preset = pickAssetSet3dPreset(component.views, single3dPreset, multi3dPreset);
       if (!preset) {
-        onNotify?.('warn', `组件 ${component.name}：无可用 3D 预设`);
-        done += 1;
-        continue;
+        onNotify?.('warn', `组件 ${component.name ?? component.id}：无可用 3D 预设`);
+        return false;
       }
       setBusyComponentId(component.id);
       patchDoc((prev) =>
@@ -614,6 +783,8 @@ export default function AssetSetPanel({
         apiKey,
         preset,
         component,
+        existingJobId: options?.forceNew ? undefined : component.model3d?.jobId,
+        forceNewTask: options?.forceNew,
         onStatus: (status) => {
           patchDoc((prev) =>
             patchAssetSetComponents(prev, [component.id], (c) => ({
@@ -626,45 +797,138 @@ export default function AssetSetPanel({
           );
         },
       });
+      if (result.ok) {
+        let files = result.files;
+        let fileCompanionKeys: string[] | undefined;
+        let previewUrl = result.previewUrl;
+        let previewCompanionKey: string | undefined;
+        try {
+          const persisted = await persistAssetSetComponent3dModels({
+            apiKey,
+            taskId: result.jobId,
+            assetId: asset.id,
+            componentId: component.id,
+            glbSourceUrls: result.files,
+            previewUrl: result.previewUrl,
+            companionBaseUrl,
+            companionProjectId,
+            existing: component.model3d,
+            onLog: (level, message) => onNotify?.(level, message),
+          });
+          files = persisted.files;
+          fileCompanionKeys = persisted.fileCompanionKeys;
+          previewUrl = persisted.previewUrl;
+          previewCompanionKey = persisted.previewCompanionKey;
+        } catch (e) {
+          onNotify?.(
+            'warn',
+            e instanceof Error ? e.message : '3D 模型落盘失败，仅保留远程链接'
+          );
+        }
+        patchDoc((prev) =>
+          patchAssetSetComponents(prev, [component.id], (c) => ({
+            ...c,
+            model3d: {
+              status: 'done',
+              jobId: result.jobId,
+              provider: 'tripo',
+              files,
+              fileCompanionKeys,
+              previewUrl,
+              previewCompanionKey,
+              updatedAt: Date.now(),
+            },
+          }))
+        );
+        setBusyComponentId(null);
+        return true;
+      }
       patchDoc((prev) =>
         patchAssetSetComponents(prev, [component.id], (c) => ({
           ...c,
-          model3d: result.ok
-            ? {
-                status: 'done',
-                jobId: result.jobId,
-                provider: 'tripo',
-                files: result.files,
-                previewUrl: result.previewUrl,
-                updatedAt: Date.now(),
-              }
-            : {
-                status: 'failed',
-                error: result.error,
-                updatedAt: Date.now(),
-              },
+          model3d: {
+            status: 'failed',
+            error: result.error,
+            updatedAt: Date.now(),
+          },
         }))
       );
+      setBusyComponentId(null);
+      return false;
+    },
+    [
+      asset.id,
+      companionBaseUrl,
+      companionProjectId,
+      multi3dPreset,
+      onNotify,
+      patchDoc,
+      single3dPreset,
+    ]
+  );
+
+  const runBatch3d = useCallback(async () => {
+    if (readOnly || threeDEligible.length === 0) return;
+    const count = threeDEligible.length;
+    if (
+      !window.confirm(
+        `将对 ${count} 个组件提交 3D 生成（已锁定或无视角图的格已跳过），是否继续？`
+      )
+    ) {
+      return;
+    }
+    const total = count;
+    patchAssetSetTaskSession(asset.id, {
+      kind: 'batch_3d',
+      busy: true,
+      progress: { done: 0, total },
+      busyComponentIds: new Set(threeDEligible.map((c) => c.id)),
+      abortController: null,
+    });
+    let done = 0;
+    let success = 0;
+    for (const component of threeDEligible) {
+      const ok = await runOneComponent3d(component);
+      if (ok) success += 1;
       done += 1;
       patchAssetSetTaskSession(asset.id, { progress: { done, total } });
-      setBusyComponentId(null);
     }
     clearAssetSetTaskSession(asset.id);
-    onNotify?.('info', `批量 3D：${done}/${total} 完成`);
-  }, [
-    asset.id,
-    multi3dPreset,
-    onNotify,
-    patchDoc,
-    readOnly,
-    single3dPreset,
-    threeDEligible,
-  ]);
+    onNotify?.('info', `批量 3D：${success}/${total} 成功`);
+  }, [asset.id, onNotify, readOnly, runOneComponent3d, threeDEligible]);
+
+  const handleRetryActive3d = useCallback(() => {
+    if (!activeComponent || readOnly) return;
+    void runOneComponent3d(activeComponent, { forceNew: true });
+  }, [activeComponent, readOnly, runOneComponent3d]);
 
   const splitSeedBoxes = useMemo(
-    () => doc.components.map((c) => c.cropRegion),
-    [doc.components]
+    () => (splitAppendMode ? [] : doc.components.map((c) => c.cropRegion)),
+    [doc.components, splitAppendMode]
   );
+
+  const handleRunWorkbenchGeneration = useCallback(() => {
+    if (!genInputRef) {
+      onNotify?.('warn', '请选择输入图');
+      return;
+    }
+    void runGeneration({
+      inputRef: genInputRef,
+      preset: genPreset,
+      outputMode: genOutputMode,
+    });
+  }, [genInputRef, genOutputMode, genPreset, onNotify, runGeneration]);
+
+  const handleRegenerateActiveCrop = useCallback(() => {
+    if (!activeComponentId) return;
+    void runGeneration({
+      inputRef: { kind: 'component', componentId: activeComponentId },
+      preset: genPreset,
+      outputMode: genOutputMode,
+      outputComponentId: activeComponentId,
+      successMessage: '已用裁切图再生成并更新该组件',
+    });
+  }, [activeComponentId, genOutputMode, genPreset, runGeneration]);
 
   const handleActiveComponentRename = useCallback(
     (name: string) => {
@@ -727,6 +991,7 @@ export default function AssetSetPanel({
             assets={doc.sourceAssets}
             readOnly={readOnly}
             busyId={sourceBusyId}
+            highlightInputId={genInputHighlightSourceId}
             onAdd={() =>
               patchDoc((prev) => ({
                 ...prev,
@@ -759,46 +1024,91 @@ export default function AssetSetPanel({
                 ),
               }))
             }
+            onPreviewImage={openLightbox}
+            onUseAsGenerationInput={(sourceAsset) => {
+              setGenInputKey(assetSetGenerationInputRefKey({ kind: 'source', sourceId: sourceAsset.id }));
+            }}
+            onSplitFromAsset={(sourceAsset) => {
+              if (!resolveAssetSetSourceAssetDisplaySrc(sourceAsset)) {
+                onNotify?.('warn', '该参考图尚无画面，无法框选');
+                return;
+              }
+              openSplitForSource(sourceAsset.id);
+            }}
             onSourceAssetImageClick={(sourceAsset) => {
-              if (sourceAsset.slotKind !== 'styled') return false;
               if (!resolveAssetSetSourceAssetDisplaySrc(sourceAsset)) return false;
-              setSplitOpen(true);
+              openLightbox(resolveAssetSetSourceAssetDisplaySrc(sourceAsset));
               return true;
             }}
           />
-          <div className="mt-2 flex flex-wrap items-center gap-2">
-            <CustomDropdown
-              value={stylePreset?.id ?? ''}
-              options={imagePresetOptions}
-              disabled={readOnly || taskBusy}
-              onChange={(value) => savePanelPref('stylePresetId', value)}
-              triggerClassName="h-7 min-w-[8rem] rounded-lg bg-white/5 px-2 text-[10px] text-gray-200 ring-1 ring-white/10"
-              portalZIndex={STORYBOARD_EDIT_DROPDOWN_Z}
-            />
-            <button
-              type="button"
-              disabled={readOnly || !originalSrc || taskBusy}
-              onClick={() => void runSourceCapability('styled', stylePreset)}
-              className={STORYBOARD_TOOL_BTN_PRIMARY}
-            >
-              转风格
-            </button>
-            <CustomDropdown
-              value={assetMvPreset?.id ?? ''}
-              options={imagePresetOptions}
-              disabled={readOnly || taskBusy}
-              onChange={(value) => savePanelPref('assetMultiviewPresetId', value)}
-              triggerClassName="h-7 min-w-[8rem] rounded-lg bg-white/5 px-2 text-[10px] text-gray-200 ring-1 ring-white/10"
-              portalZIndex={STORYBOARD_EDIT_DROPDOWN_Z}
-            />
-            <button
-              type="button"
-              disabled={readOnly || !originalSrc || taskBusy}
-              onClick={() => void runSourceCapability('multiview', assetMvPreset)}
-              className={STORYBOARD_TOOL_BTN_NEUTRAL}
-            >
-              资产级多视角
-            </button>
+          <div className="mt-2 rounded-lg border border-white/[0.05] bg-black/20 p-2">
+            <p className={`${STORYBOARD_COLUMN_HEAD} !mb-2`}>生成工作台</p>
+            <div className="flex flex-wrap items-center gap-2">
+              <CustomDropdown
+                value={genInputKey}
+                options={genInputSelectOptions}
+                disabled={readOnly || taskBusy}
+                onChange={(value) => setGenInputKey(value)}
+                triggerClassName="h-7 min-w-[9rem] max-w-[12rem] rounded-lg bg-white/5 px-2 text-[10px] text-gray-200 ring-1 ring-white/10"
+                portalZIndex={STORYBOARD_EDIT_DROPDOWN_Z}
+              />
+              <CustomDropdown
+                value={genPreset?.id ?? ''}
+                options={imagePresetOptions}
+                disabled={readOnly || taskBusy}
+                onChange={(value) => savePanelPref('genPresetId', value)}
+                triggerClassName="h-7 min-w-[8rem] rounded-lg bg-white/5 px-2 text-[10px] text-gray-200 ring-1 ring-white/10"
+                portalZIndex={STORYBOARD_EDIT_DROPDOWN_Z}
+              />
+              <CustomDropdown
+                value={genOutputMode}
+                options={ASSET_SET_GENERATION_OUTPUT_OPTIONS}
+                disabled={readOnly || taskBusy}
+                onChange={(value) =>
+                  savePanelPref('genOutputMode', value as AssetSetGenerationOutputMode)
+                }
+                triggerClassName="h-7 min-w-[7rem] rounded-lg bg-white/5 px-2 text-[10px] text-gray-200 ring-1 ring-white/10"
+                portalZIndex={STORYBOARD_EDIT_DROPDOWN_Z}
+              />
+              <button
+                type="button"
+                disabled={readOnly || !genInputHasImage || !genPreset || taskBusy || Boolean(sourceBusyId)}
+                onClick={handleRunWorkbenchGeneration}
+                className={STORYBOARD_TOOL_BTN_PRIMARY}
+              >
+                {sourceBusyId ? '生成中…' : '生成'}
+              </button>
+              <button
+                type="button"
+                disabled={readOnly || !canSplitCurrent || taskBusy}
+                onClick={() => {
+                  if (genInputRef?.kind === 'source') {
+                    openSplitForSource(genInputRef.sourceId);
+                    return;
+                  }
+                  if (splitSourceAsset?.id) openSplitForSource(splitSourceAsset.id);
+                }}
+                className={STORYBOARD_TOOL_BTN_NEUTRAL}
+                title={canSplitCurrent ? '在当前输入图上框选组件' : '请选择参考图作为输入后再框选'}
+              >
+                框选拆分
+              </button>
+              <label className="flex items-center gap-1 text-[9px] text-gray-400">
+                <input
+                  type="checkbox"
+                  checked={splitAppendMode}
+                  disabled={readOnly}
+                  onChange={(e) => setSplitAppendMode(e.target.checked)}
+                  className="h-3 w-3 rounded border-white/20 bg-white/5"
+                />
+                拆分时追加格
+              </label>
+            </div>
+            {!genInputHasImage ? (
+              <p className="mt-1.5 text-[9px] text-amber-200/70">
+                选择有图的输入；生成结果默认追加到参考图条，可链式「作输入 → 再生成」
+              </p>
+            ) : null}
           </div>
         </div>
 
@@ -839,6 +1149,19 @@ export default function AssetSetPanel({
                     ? `出图中 ${taskProgress.done}/${taskProgress.total}`
                     : `生成组件多视角 (${sheetEligible.length})`}
                 </button>
+                {taskBusy && taskKind === 'component_sheet' ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (abortAssetSetTaskSession(asset.id)) {
+                        onNotify?.('info', '已取消组件出图');
+                      }
+                    }}
+                    className={STORYBOARD_TOOL_BTN_NEUTRAL}
+                  >
+                    取消
+                  </button>
+                ) : null}
                 <CustomDropdown
                   value={single3dPreset?.id ?? ''}
                   options={single3dPresetOptions}
@@ -876,6 +1199,16 @@ export default function AssetSetPanel({
                   readOnly={readOnly}
                   onRename={handleActiveComponentRename}
                   onToggleLock={handleActiveComponentToggleLock}
+                  onPreviewImage={openLightbox}
+                  onRetry3d={handleRetryActive3d}
+                  retry3dBusy={busyComponentId === activeComponent.id}
+                  onRegenerateFromCrop={
+                    resolveAssetSetComponentCropSrc(activeComponent)
+                      ? handleRegenerateActiveCrop
+                      : undefined
+                  }
+                  regenerateCropBusy={sourceBusyId === activeComponent.id}
+                  cropRegenPresetLabel={genPreset?.label}
                 />
               ) : (
                 <p className="py-8 text-center text-[10px] text-gray-600">请选择组件</p>
@@ -887,14 +1220,27 @@ export default function AssetSetPanel({
 
       <StoryboardSheetSplitAdjustModal
         open={splitOpen}
-        imageSrc={styledSrc}
+        imageSrc={splitSourceSrc}
         boxes={splitSeedBoxes}
-        sheetLabel="风格图拆分"
+        sheetLabel={splitSourceAsset?.name?.trim() || '参考图拆分'}
         onClose={() => setSplitOpen(false)}
         onConfirm={(boxes) => void confirmSplit(boxes)}
       />
     </div>
   );
 
-  return createPortal(panel, document.body);
+  return (
+    <>
+      {createPortal(panel, document.body)}
+      {lightboxSrc ? (
+        <ImagePreviewOverlay
+          open
+          resetKey={lightboxSrc}
+          imageSrc={lightboxSrc}
+          onClose={() => setLightboxSrc(null)}
+          shellZIndexClassName={ASSET_SET_LIGHTBOX_Z}
+        />
+      ) : null}
+    </>
+  );
 }

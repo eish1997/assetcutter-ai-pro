@@ -1,6 +1,8 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import type { WorkflowAsset } from '../../types';
+import { workflowVersionTextThumbLines } from '../../services/workflowTextAsset';
 import { WorkflowGridImage } from '../ProgressivePreviewImage';
+import WorkflowVersionTextThumbCell from './WorkflowVersionTextThumbCell';
 import { WORKFLOW_LIGHTBOX_ASSET_THUMB_STRIP_WIDTH_CLASS } from './workflowSectionUiConstants';
 import WorkflowAssetContextMenu from './WorkflowAssetContextMenu';
 
@@ -79,7 +81,10 @@ export default function WorkflowLightboxAssetThumbStrip({
             {assets.map((asset) => {
               const active = asset.id === activeAssetId;
               const previewSrc = getPreviewSrc(asset);
-              const copyEnabled = Boolean(onCopyImage || onCopyId || onAddToComposeInput);
+              const textThumb =
+                !String(previewSrc || '').trim()
+                  ? workflowVersionTextThumbLines(asset, asset.displayKey || 'original')
+                  : null;
               return (
                 <button
                   key={asset.id}
@@ -106,15 +111,22 @@ export default function WorkflowLightboxAssetThumbStrip({
                   aria-label={asset.label?.trim() || `资产 ${asset.id.slice(0, 8)}`}
                   aria-current={active ? 'true' : undefined}
                 >
-                  <WorkflowGridImage
-                    fullSrc={previewSrc}
-                    cacheKey={`lightbox-strip:${asset.id}:${asset.displayKey}`}
-                    thumbMaxEdge={128}
-                    mediaVariant={getMediaVariant?.(asset) ?? 'image'}
-                    className="h-full w-full"
-                    imgClassName="block h-full w-full object-cover"
-                    alt=""
-                  />
+                  {textThumb ? (
+                    <WorkflowVersionTextThumbCell
+                      lines={textThumb}
+                      textClassName="text-[7px] leading-[1.1] text-gray-300"
+                    />
+                  ) : (
+                    <WorkflowGridImage
+                      fullSrc={previewSrc}
+                      cacheKey={`lightbox-strip:${asset.id}:${asset.displayKey}`}
+                      thumbMaxEdge={128}
+                      mediaVariant={getMediaVariant?.(asset) ?? 'image'}
+                      className="h-full w-full"
+                      imgClassName="block h-full w-full object-cover"
+                      alt=""
+                    />
+                  )}
                   {active ? (
                     <span
                       className="pointer-events-none absolute inset-y-1 left-0 w-0.5 rounded-full bg-blue-400 shadow-[0_0_8px_rgba(96,165,250,0.85)]"

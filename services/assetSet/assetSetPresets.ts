@@ -4,7 +4,17 @@ import { normalizeGenerate3DPresetForRun } from '../generate3d/normalizePreset';
 
 export const ASSET_SET_PANEL_PREFS_KEY = 'ac_asset_set_panel_prefs_v1';
 
+export const ASSET_SET_COMPONENT_SHEET_PRESET_ID = 'asset_set_component_sheet_v1';
+
 export const DEFAULT_ASSET_SET_COMPONENT_SHEET_INSTRUCTION = `提取图片中框选的元素，保持结构不变，重新按网格排列，灰色背景。只保留框选的元素。`;
+
+export function resolveAssetSetComponentSheetPresetFallback(
+  presets: CustomAppModule[]
+): CustomAppModule | null {
+  const seeded = presets.find((p) => p.id === ASSET_SET_COMPONENT_SHEET_PRESET_ID);
+  if (seeded && seeded.enabled !== false) return seeded;
+  return presets[0] ?? null;
+}
 
 export const ASSET_SET_DEFAULT_VIEW_ROLES = [
   'perspective',

@@ -14,6 +14,11 @@ type Props = {
   onRename: (name: string) => void;
   onToggleLock: (locked: boolean) => void;
   onPreviewImage?: (src: string) => void;
+  onRetry3d?: () => void;
+  retry3dBusy?: boolean;
+  onRegenerateFromCrop?: () => void;
+  regenerateCropBusy?: boolean;
+  cropRegenPresetLabel?: string;
 };
 
 export default function AssetSetComponentEditor({
@@ -22,6 +27,11 @@ export default function AssetSetComponentEditor({
   onRename,
   onToggleLock,
   onPreviewImage,
+  onRetry3d,
+  retry3dBusy = false,
+  onRegenerateFromCrop,
+  regenerateCropBusy = false,
+  cropRegenPresetLabel,
 }: Props) {
   const cropSrc = resolveAssetSetComponentCropSrc(component);
   const sheetSrc = resolveAssetSetComponentMultiviewSheetSrc(component);
@@ -58,7 +68,20 @@ export default function AssetSetComponentEditor({
 
       {cropSrc ? (
         <div>
-          <p className="mb-1 text-[10px] font-semibold text-gray-300">裁切预览</p>
+          <div className="mb-1 flex items-center justify-between gap-2">
+            <p className="text-[10px] font-semibold text-gray-300">裁切预览</p>
+            {!readOnly && onRegenerateFromCrop ? (
+              <button
+                type="button"
+                disabled={regenerateCropBusy}
+                onClick={onRegenerateFromCrop}
+                className="rounded-md bg-white/5 px-1.5 py-0.5 text-[9px] text-cyan-200 ring-1 ring-cyan-400/25 disabled:opacity-40"
+                title={cropRegenPresetLabel ? `预设：${cropRegenPresetLabel}` : undefined}
+              >
+                {regenerateCropBusy ? '生成中…' : '用裁切再生成'}
+              </button>
+            ) : null}
+          </div>
           <button
             type="button"
             className="block w-full overflow-hidden rounded-lg ring-1 ring-white/10"
@@ -126,6 +149,16 @@ export default function AssetSetComponentEditor({
           <p className="font-semibold text-gray-200">3D 状态</p>
           <p className="mt-1 capitalize">{model.status}</p>
           {model.error ? <p className="mt-1 text-red-300/90">{model.error}</p> : null}
+          {model.status === 'failed' && !readOnly && onRetry3d ? (
+            <button
+              type="button"
+              disabled={retry3dBusy}
+              onClick={onRetry3d}
+              className="mt-2 rounded-lg bg-cyan-500/15 px-2 py-1 text-[10px] font-semibold text-cyan-100 ring-1 ring-cyan-400/30 disabled:opacity-40"
+            >
+              {retry3dBusy ? '重试中…' : '重试 3D'}
+            </button>
+          ) : null}
           {model.previewUrl ? (
             <button
               type="button"

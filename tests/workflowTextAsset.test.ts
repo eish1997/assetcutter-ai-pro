@@ -7,6 +7,8 @@ import {
   workflowAssetCurrentDisplayIsTextChannel,
   workflowAssetLightboxRasterEligible,
   workflowAssetToInputText,
+  workflowVersionTextSnippet,
+  workflowVersionTextThumbLines,
 } from '../services/workflowTextAsset';
 import type { CustomAppModule } from '../types';
 
@@ -123,6 +125,51 @@ describe('buildComposerTextAssetThumbDataUrl', () => {
     const decoded = decodeURIComponent(url.slice(url.indexOf(',') + 1));
     expect(decoded).toContain('a&lt;b');
     expect(decoded).toContain('c&amp;d');
+  });
+});
+
+describe('workflowVersionTextThumbLines', () => {
+  it('两行各三字，超出第三行省略', () => {
+    const asset = makeTextAsset({ textBody: '这是一段很长的正文内容' });
+    expect(workflowVersionTextThumbLines(asset, 'original')).toEqual({
+      line1: '这是一',
+      line2: '段很长',
+      showEllipsis: true,
+      fullText: '这是一段很长的正文内容',
+    });
+  });
+
+  it('不足六字不显示第三行', () => {
+    const asset = makeTextAsset({ textBody: '你好世界' });
+    expect(workflowVersionTextThumbLines(asset, 'original')).toEqual({
+      line1: '你好世',
+      line2: '界',
+      showEllipsis: false,
+      fullText: '你好世界',
+    });
+  });
+});
+
+describe('workflowVersionTextSnippet', () => {
+  it('原文步骤取正文前几字', () => {
+    const asset = makeTextAsset({ textBody: '这是一段很长的正文内容用于测试截断' });
+    expect(workflowVersionTextSnippet(asset, 'original')).toBe('这是一段很长…');
+  });
+
+  it('文生文结果步骤取 textResults', () => {
+    const asset = makeTextAsset({
+      displayKey: 'text_to_text:abc',
+      textResults: { 'text_to_text:abc': '扩写后的新段落内容' },
+    });
+    expect(workflowVersionTextSnippet(asset, 'text_to_text:abc')).toBe('扩写后的新段…');
+  });
+
+  it('有位图结果的步骤不返回文本摘要', () => {
+    const asset = makeTextAsset({
+      displayKey: 'text_to_image:abc',
+      results: { 'text_to_image:abc': 'data:image/png;base64,AAA' },
+    });
+    expect(workflowVersionTextSnippet(asset, 'text_to_image:abc')).toBe('');
   });
 });
 

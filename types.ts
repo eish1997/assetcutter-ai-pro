@@ -580,6 +580,7 @@ export type AssetSetComponentModel3d = {
   files?: string[];
   fileCompanionKeys?: string[];
   previewUrl?: string;
+  previewCompanionKey?: string;
   updatedAt?: number;
 };
 
@@ -606,6 +607,8 @@ export type AssetSetPanelPrefs = {
   componentSheetPresetId?: string;
   single3dPresetId?: string;
   multi3dPresetId?: string;
+  genPresetId?: string;
+  genOutputMode?: 'append' | 'styled' | 'multiview';
 };
 
 export type AssetSetDoc = {
