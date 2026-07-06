@@ -963,6 +963,8 @@ export async function initAuthStore() {
   await ensureGeminiFairnessConfigStore();
   const { ensureWorkflowTaskEventsStore } = await import('./workflow-task-events-store.js');
   await ensureWorkflowTaskEventsStore();
+  const { ensureCreditStore } = await import('./credit-store.js');
+  await ensureCreditStore();
 }
 
 /** @internal RBAC JSON/Postgres helpers */

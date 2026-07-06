@@ -1,11 +1,12 @@
 import React from 'react';
 import type { AuthUser } from '../../services/authClient';
 import { HttpRequestError } from '../../services/httpClient';
-import { fetchAdminUsers, reconcileAdminUserWorkspaceUsage, updateAdminUser, downloadAdminUsersCsv } from '../../services/adminClient';
+import { fetchAdminUsers, reconcileAdminUserWorkspaceUsage, updateAdminUser, downloadAdminUsersCsv, adjustAdminUserCredits } from '../../services/adminClient';
 import { fetchAdminRoles, type AdminRoleRow } from '../../services/adminRolesClient';
-import { PERMISSIONS } from '../../services/adminPermissions';
+import { PERMISSIONS, canGrantAdminCredits } from '../../services/adminPermissions';
 import { blockIfRolePreview } from '../../services/adminRolePreview';
 import { adminAuditUrlForUser, adminUserDetailUrl, navigateAdmin } from '../../services/adminNavigate';
+import { fmtCredits } from '../../shared/credits';
 import { CustomDropdown } from '../ui/CustomDropdown';
 import { useAdminStaff } from './AdminStaffContext';
 import UserRecentAuditSnippet from './UserRecentAuditSnippet';
@@ -23,8 +24,9 @@ function readHighlightUserIdFromUrl(): string {
 }
 
 const AdminUsersPanel: React.FC = () => {
-  const { can, isRolePreview } = useAdminStaff();
+  const { can, isRolePreview, me } = useAdminStaff();
   const canWrite = can(PERMISSIONS.USERS_WRITE);
+  const canCreditsWrite = canGrantAdminCredits(me?.permissions, me?.staffRole?.slug);
   const canRoleWrite = can(PERMISSIONS.USERS_ROLE_WRITE);
   const canReconcile = can(PERMISSIONS.USERS_RECONCILE);
   const canAudit = can(PERMISSIONS.AUDIT_READ);
@@ -43,6 +45,7 @@ const AdminUsersPanel: React.FC = () => {
   const [quotaWarnOnly, setQuotaWarnOnly] = React.useState(false);
   const [savingId, setSavingId] = React.useState<string>('');
   const [quotaDraftMb, setQuotaDraftMb] = React.useState<Record<string, string>>({});
+  const [creditDeltaDraft, setCreditDeltaDraft] = React.useState<Record<string, string>>({});
   const [exporting, setExporting] = React.useState(false);
   const [exportHint, setExportHint] = React.useState('');
 
@@ -66,6 +69,13 @@ const AdminUsersPanel: React.FC = () => {
         drafts[u.id] = q != null && Number.isFinite(q) ? String(Math.round(q / (1024 * 1024))) : '200';
       }
       setQuotaDraftMb((prev) => ({ ...prev, ...drafts }));
+      setCreditDeltaDraft((prev) => {
+        const next = { ...prev };
+        for (const u of res.users) {
+          if (!(u.id in next)) next[u.id] = '';
+        }
+        return next;
+      });
     } catch (err) {
       setError(err instanceof Error ? err.message : '加载失败');
     } finally {
@@ -175,6 +185,28 @@ const AdminUsersPanel: React.FC = () => {
     }
   };
 
+  const handleGrantCredits = async (userId: string) => {
+    if (blockIfRolePreview(isRolePreview)) return;
+    const n = Math.floor(Number(creditDeltaDraft[userId] ?? ''));
+    if (!Number.isFinite(n) || n < 1) {
+      setError('积分请输入至少 1 的整数');
+      return;
+    }
+    setSavingId(userId);
+    setError('');
+    try {
+      const res = await adjustAdminUserCredits(userId, n, '管理后台列表发放');
+      setUsers((prev) =>
+        prev.map((u) => (u.id === userId ? { ...u, creditBalance: res.balance.balance } : u))
+      );
+      setCreditDeltaDraft((prev) => ({ ...prev, [userId]: '' }));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '发放失败');
+    } finally {
+      setSavingId('');
+    }
+  };
+
   const roleOptions = [
     { value: '', label: '全部后台角色' },
     { value: '__none__', label: '无后台角色' },
@@ -196,7 +228,7 @@ const AdminUsersPanel: React.FC = () => {
           <div>
             <h2 className="text-[12px] font-black uppercase tracking-[0.2em] text-gray-300">用户管理</h2>
             <p className="mt-1 text-[10px] text-gray-500 max-w-xl leading-relaxed">
-              共 {total} 用户。修改配额后用户下次请求生效；「同步用量」从 R2 扫描重建用量账本。
+              共 {total} 用户。积分与配额均在列表内直接修改；配额保存后下次请求生效，「同步用量」从 R2 扫描重建云空间账本。
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -282,6 +314,11 @@ const AdminUsersPanel: React.FC = () => {
       </div>
 
       {error ? <p className="text-[11px] text-red-400">{error}</p> : null}
+      {isRolePreview ? (
+        <p className="text-[10px] text-amber-400/90 rounded-xl border border-amber-500/20 bg-amber-500/5 px-3 py-2">
+          当前为角色预览模式，积分发放等按钮按预览角色权限显示。点顶栏「退出预览」恢复超级管理员完整能力。
+        </p>
+      ) : null}
       {loading ? (
         <div className="rounded-2xl border border-[#2e2e32] bg-[#121214] p-6 text-[11px] text-gray-400">加载用户中…</div>
       ) : (
@@ -292,7 +329,8 @@ const AdminUsersPanel: React.FC = () => {
                 <th className="text-left px-3 py-2">用户名</th>
                 <th className="text-left px-3 py-2">邮箱</th>
                 <th className="text-left px-3 py-2">云空间</th>
-                <th className="text-left px-3 py-2">配额(MB)</th>
+                <th className="text-left px-3 py-2">积分</th>
+                <th className="text-left px-3 py-2">配额 (MB)</th>
                 <th className="text-left px-3 py-2">后台角色</th>
                 <th className="text-left px-3 py-2">状态</th>
                 <th className="text-left px-3 py-2">创建时间</th>
@@ -312,6 +350,39 @@ const AdminUsersPanel: React.FC = () => {
                     {fmtMb(u.workspaceUsedBytes)} / {fmtMb(u.workspaceQuotaBytes)}
                   </td>
                   <td className="px-3 py-2">
+                    <p className="text-[10px] text-gray-500 mb-1">
+                      余额 <span className="text-amber-400/90 tabular-nums">{fmtCredits(u.creditBalance ?? 0)}</span>
+                    </p>
+                    {canCreditsWrite ? (
+                      <div className="flex flex-wrap items-center gap-1">
+                        <input
+                          type="number"
+                          min={1}
+                          value={creditDeltaDraft[u.id] ?? ''}
+                          onChange={(e) =>
+                            setCreditDeltaDraft((prev) => ({ ...prev, [u.id]: e.target.value }))
+                          }
+                          disabled={savingId === u.id}
+                          placeholder="增量"
+                          className="w-16 rounded-lg border border-[#343438] bg-[#16161a] px-2 py-1 text-[10px] text-white outline-none focus:border-[#3b82f6] disabled:opacity-40 placeholder:text-gray-600"
+                        />
+                        <button
+                          type="button"
+                          disabled={savingId === u.id}
+                          onClick={() => {
+                            void handleGrantCredits(u.id);
+                          }}
+                          className="px-2 py-1 rounded-lg border border-[#3b6fb8] bg-[#1e3a5f] text-blue-200 disabled:opacity-40 hover:bg-[#2a5080]"
+                        >
+                          发放积分
+                        </button>
+                      </div>
+                    ) : null}
+                  </td>
+                  <td className="px-3 py-2">
+                    <p className="text-[10px] text-gray-500 mb-1">
+                      限额 <span className="text-gray-300 tabular-nums">{fmtMb(u.workspaceQuotaBytes)}</span>
+                    </p>
                     <div className="flex flex-wrap items-center gap-1">
                       <input
                         type="number"
@@ -418,7 +489,7 @@ const AdminUsersPanel: React.FC = () => {
                 </tr>
                 {canAudit && auditExpandUserId === u.id ? (
                   <tr className="border-t border-[#252528]">
-                    <td colSpan={8} className="p-0">
+                    <td colSpan={9} className="p-0">
                       <UserRecentAuditSnippet userId={u.id} username={u.username} />
                     </td>
                   </tr>

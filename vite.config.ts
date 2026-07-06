@@ -259,6 +259,11 @@ export default defineConfig(({ mode }) => {
             target: 'http://127.0.0.1:9100',
             changeOrigin: true,
           },
+          /** 统一积分制：余额 / 流水 */
+          '/api/credits': {
+            target: 'http://127.0.0.1:9100',
+            changeOrigin: true,
+          },
           /** 工作流任务执行上报（管理端任务执行页） */
           '/api/workflow': {
             target: 'http://127.0.0.1:9100',

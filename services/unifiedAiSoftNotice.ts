@@ -5,7 +5,7 @@
 
 export const AC_UNIFIED_AI_SOFT_NOTICE_EVENT = "ac:unified-ai-soft-notice" as const;
 
-export type AcUnifiedAiSoftNoticeKind = "rate_limit" | "upstream_busy";
+export type AcUnifiedAiSoftNoticeKind = "rate_limit" | "upstream_busy" | "credits_exceeded" | "credits_consumed";
 
 export type AcUnifiedAiSoftNoticeDetail = {
   kind: AcUnifiedAiSoftNoticeKind;
@@ -28,7 +28,8 @@ export function dispatchUnifiedAiSoftNotice(detail: AcUnifiedAiSoftNoticeDetail)
   if (typeof window === "undefined") return;
   const now = Date.now();
   const last = lastFiredAt[detail.kind] ?? 0;
-  if (now - last < SOFT_MIN_GAP_MS) return;
+  const gap = detail.kind === "credits_consumed" ? 2_500 : SOFT_MIN_GAP_MS;
+  if (now - last < gap) return;
   lastFiredAt[detail.kind] = now;
   const message = clipUnifiedAiNoticeMessage(detail.message);
   if (!message) return;
@@ -37,4 +38,12 @@ export function dispatchUnifiedAiSoftNotice(detail: AcUnifiedAiSoftNoticeDetail)
   } catch {
     /* ignore */
   }
+}
+
+export function dispatchCreditsConsumedNotice(credits: number): void {
+  if (!Number.isFinite(credits) || credits <= 0) return;
+  dispatchUnifiedAiSoftNotice({
+    kind: "credits_consumed",
+    message: `本次 −${Math.floor(credits).toLocaleString("zh-CN")} 积分`,
+  });
 }

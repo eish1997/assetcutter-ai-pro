@@ -6,7 +6,12 @@ type AuthContextValue = {
   user: AuthUser | null;
   loading: boolean;
   login: (identifier: string, password: string) => Promise<void>;
-  register: (username: string, email: string, password: string, opts?: { staffInvite?: string }) => Promise<void>;
+  register: (
+    username: string,
+    email: string,
+    password: string,
+    opts?: { staffInvite?: string; inviteCode?: string }
+  ) => Promise<void>;
   logout: () => Promise<void>;
   refresh: () => Promise<void>;
 };
@@ -37,10 +42,18 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setUser(res.user);
   }, []);
 
-  const register = React.useCallback(async (username: string, email: string, password: string, opts?: { staffInvite?: string }) => {
-    const res = await registerByEmail(username, email, password, opts);
-    setUser(res.user);
-  }, []);
+  const register = React.useCallback(
+    async (
+      username: string,
+      email: string,
+      password: string,
+      opts?: { staffInvite?: string; inviteCode?: string }
+    ) => {
+      const res = await registerByEmail(username, email, password, opts);
+      setUser(res.user);
+    },
+    []
+  );
 
   const logout = React.useCallback(async () => {
     await logoutSession();

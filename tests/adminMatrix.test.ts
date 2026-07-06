@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { ADMIN_ROLE_SLUG, PERMISSIONS } from '../server/admin-permissions.js';
 import { matrixToPermissions, permissionsToMatrix } from '../server/admin-matrix.js';
+import { canGrantAdminCredits, PERMISSIONS as FE_PERMISSIONS, SUPER_ROLE_SLUG } from '../services/adminPermissions';
 
 describe('admin-matrix', () => {
   it('用量同步 alone 不会隐式开启用户管理', () => {
@@ -39,9 +40,26 @@ describe('admin-matrix', () => {
     expect(perms).not.toContain(PERMISSIONS.TASK_EVENTS_READ);
   });
 
+  it('积分发放 alone 隐式开启用户列表查看', () => {
+    const perms = matrixToPermissions({ users: 'none', credits: 'yes' }, ADMIN_ROLE_SLUG);
+    expect(perms).toContain(PERMISSIONS.CREDITS_WRITE);
+    expect(perms).toContain(PERMISSIONS.USERS_READ);
+    expect(perms).not.toContain(PERMISSIONS.USERS_WRITE);
+
+    const matrix = permissionsToMatrix(perms, ADMIN_ROLE_SLUG);
+    expect(matrix.credits).toBe('yes');
+    expect(matrix.users).toBe('read');
+  });
+
   it('系统状态与运营首页可独立配置', () => {
     const perms = matrixToPermissions({ dashboard: 'yes', systemStatus: 'none' }, ADMIN_ROLE_SLUG);
     expect(perms).toContain(PERMISSIONS.DASHBOARD_READ);
     expect(perms).not.toContain(PERMISSIONS.SYSTEM_STATUS_READ);
+  });
+
+  it('super 无 credits.write 时前端仍允许发放', () => {
+    expect(canGrantAdminCredits([], SUPER_ROLE_SLUG)).toBe(true);
+    expect(canGrantAdminCredits([], 'admin')).toBe(false);
+    expect(canGrantAdminCredits([FE_PERMISSIONS.CREDITS_WRITE], 'admin')).toBe(true);
   });
 });

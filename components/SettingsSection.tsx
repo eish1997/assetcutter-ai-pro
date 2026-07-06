@@ -16,6 +16,7 @@ import {
   setDebugClientLogPersistEnabled,
 } from '../services/settingsStore';
 import AiProviderCredentialsPanel from './AiProviderCredentialsPanel';
+import UsageSettingsPanel from './usage/UsageSettingsPanel';
 import { isWorkspaceCloudEnabled } from '../services/workspaceCloudSync';
 import {
   getCompanionLocalBaseUrl,
@@ -75,6 +76,7 @@ import {
 
 const SETTINGS_NAV: { id: string; label: string }[] = [
   { id: 'settings-user', label: '用户' },
+  { id: 'settings-usage', label: 'AI 用量' },
   { id: 'settings-storage', label: '数据与存储' },
   { id: 'settings-companion', label: '本地伴侣' },
   { id: 'settings-api', label: 'API' },
@@ -1116,6 +1118,8 @@ const SettingsSection: React.FC<{
                 ) : null}
               </div>
             </section>
+
+            <UsageSettingsPanel userId={currentUser?.id ?? null} activeProjectId={activeWorkspaceProjectId} />
 
             <section id="settings-storage" className="scroll-mt-4 rounded-2xl border border-[#2e2e32] bg-[#121214] p-6">
               <h2 className="text-xs font-black uppercase tracking-wider text-blue-400/90 mb-4">数据与存储</h2>

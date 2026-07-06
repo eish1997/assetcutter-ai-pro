@@ -13,6 +13,8 @@ import { useWorkflowWorkspacePanes } from '../hooks/useWorkflowWorkspacePanes';
 import { useWorkflowMarquee } from '../hooks/useWorkflowMarquee';
 import { useWorkflowExecutionStartedAt } from '../hooks/useWorkflowAssetExecutionElapsed';
 import { useWorkflowJustifiedLayout } from '../hooks/useWorkflowJustifiedLayout';
+import { useWorkflowAssetCardHoverKeys, type WorkflowCardHoverControl } from '../hooks/useWorkflowAssetCardHoverKeys';
+import { stepDisplayKeyInOrder } from '../services/workflowAssetDisplayKeyCycle';
 import { useWorkflowLightboxBoot } from '../hooks/useWorkflowLightboxBoot';
 import { createPortal, flushSync } from 'react-dom';
 import {
@@ -40,6 +42,18 @@ import {
   workflowGenerateImage,
   getTencentCredsFromEnv,
 } from '../services/unifiedAiGateway';
+import {
+  creditsExceededUserMessage,
+  dispatchCreditsBalanceChanged,
+  isCreditsExceededError,
+  proxyGateJobKindForWorkflowBranch,
+} from '../shared/credits';
+import { assertWorkflowCreditsPrecheck } from '../services/proxyCreditsGate';
+import { fetchCreditBalance } from '../services/creditsApi';
+import { getUserApiKey } from '../services/settingsStore';
+import { dispatchCreditsConsumedNotice } from '../services/unifiedAiSoftNotice';
+import { useCreditBalance } from '../hooks/useCreditBalance';
+import WorkflowZeroBalanceBanner from './WorkflowZeroBalanceBanner';
 import { DEFAULT_MODEL_TEXT } from '../services/modelRegistry/constants';
 import { detectCutImageBoxes, FALLBACK_CUT_IMAGE_PRESET, FULL_IMAGE_BOX } from '../services/cutImageExecution';
 import {
@@ -231,6 +245,7 @@ import {
   isWorkflowTextAsset,
   workflowAssetAllowedForCapabilityDrop,
   workflowAssetCurrentDisplayIsTextChannel,
+  workflowAssetCardZoomEligible,
   workflowAssetLightboxRasterEligible,
   workflowAssetToInputText,
   workflowPresetAcceptsTextCardDrag,
@@ -434,6 +449,11 @@ import {
   workflowAssetNeedsCompanionOriginalHydrate,
   workflowAssetNeedsCompanionResultHydrate,
 } from '../services/workflowCompanionAssets';
+import {
+  applyCompanionHydratePatches,
+  buildCompanionHydrateSessionKey,
+  runWorkflowCompanionEagerRasterHydrate,
+} from '../services/workflowCompanionLazyHydrate';
 
 const WORKFLOW_MODEL_EXT_RE = /\.(glb|gltf|fbx|obj)$/i;
 
@@ -497,6 +517,14 @@ function emitWorkflowTaskFailure(
     args.logDetail ?? (args.detail?.error != null ? String(args.detail.error) : undefined),
     { auditEventId: ev.id, retryable: Boolean(ev.detail?.retryable) }
   );
+}
+
+function formatWorkflowRunTaskErrorMessage(err: unknown, taskLabel: string): string {
+  if (isCreditsExceededError(err)) {
+    return `[${taskLabel}] ${creditsExceededUserMessage()}`;
+  }
+  const msg = err instanceof Error ? err.message : safeUnknownToString(err);
+  return `[${taskLabel}] ${msg}`;
 }
 
 const WorkflowComposerOverlay = lazy(() => import('./WorkflowComposerOverlay'));
@@ -766,6 +794,7 @@ const WorkflowSection: React.FC<{
   workspaceProjectChrome,
   quickComposeShellActive = true,
 }) => {
+  const { balance: creditBalance, loading: creditBalanceLoading } = useCreditBalance(preferenceScope);
   const assets = useMemo(() => (Array.isArray(assetsProp) ? assetsProp : []), [assetsProp]);
   const pending = useMemo(() => (Array.isArray(pendingProp) ? pendingProp : []), [pendingProp]);
   const capabilitySets = useMemo(
@@ -1304,7 +1333,6 @@ const WorkflowSection: React.FC<{
   const [cardAspectByAssetId, setCardAspectByAssetId] = useState<Record<string, number>>({});
   const cardAspectProjectRef = useRef<string | null>(null);
   const [thumbUnlockKeys, setThumbUnlockKeys] = useState<Set<string>>(() => new Set());
-  /** 当前视口内（严格 intersect）卡片：缩略解码队列 high，优先于屏外 */
   const [thumbHotKeys, setThumbHotKeys] = useState<Set<string>>(() => new Set());
   const thumbOnboardingRef = useRef<string | null>(null);
   const gridRef = useRef<HTMLDivElement>(null);
@@ -2140,92 +2168,46 @@ const WorkflowSection: React.FC<{
     return parts.sort().join('|');
   }, [assets]);
 
-  useEffect(() => {
-    const projectId = String(workspaceProjectChrome?.activeProjectId || '').trim();
-    const base = String(getCompanionLocalBaseUrl() || '').trim();
-    if (!companionHydrateKey || !projectId || !base) return;
-    const targets = assetsRef.current.filter(workflowAssetNeedsCompanionOriginalHydrate);
-    if (targets.length === 0) return;
-    let cancelled = false;
-    void (async () => {
-      for (const a of targets) {
-        const key = String(a.originalCompanionKey || '').trim();
-        if (!key) continue;
-        const prevO = String(a.original || '').trim();
-        if (await shouldKeepExistingCompanionRasterUrl(prevO, key)) continue;
-        const got = await fetchWorkflowOriginalFromCompanionAsObjectUrl(base, projectId, key);
-        if (cancelled) return;
-        if (got.ok === false) {
-          onLogRef.current?.('warn', '本地伴侣原图恢复失败', `${a.id}: ${got.error}`);
-          continue;
-        }
-        setAssets((prev) =>
-          prev.map((x) => {
-            if (x.id !== a.id) return x;
-            const prevO = String(x.original || '').trim();
-            if (/^blob:/i.test(prevO)) {
-              try {
-                URL.revokeObjectURL(prevO);
-              } catch {
-                /* ignore */
-              }
-            }
-            return { ...x, original: got.objectUrl };
-          })
-        );
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [companionHydrateKey, workspaceProjectChrome?.activeProjectId, setAssets]);
+  const companionHydrateSessionKey = useMemo(
+    () =>
+      buildCompanionHydrateSessionKey(
+        String(workspaceProjectChrome?.activeProjectId || '').trim(),
+        assets
+      ),
+    [workspaceProjectChrome?.activeProjectId, assets]
+  );
 
   useEffect(() => {
     const projectId = String(workspaceProjectChrome?.activeProjectId || '').trim();
     const base = String(getCompanionLocalBaseUrl() || '').trim();
-    if (!companionResultsHydrateKey || !projectId || !base) return;
-    const targets = assetsRef.current.filter(workflowAssetNeedsCompanionResultHydrate);
-    if (targets.length === 0) return;
+    if (!companionHydrateSessionKey || !projectId || !base) return;
     let cancelled = false;
-    void (async () => {
-      for (const a of targets) {
-        const rck = a.resultsCompanionKeys || {};
-        for (const stepId of Object.keys(rck)) {
-          const ck = String(rck[stepId] || '').trim();
-          if (!ck) continue;
-          const prevV = String(a.results?.[stepId] ?? '').trim();
-          if (!companionRasterSlotNeedsHydrate(prevV, ck)) continue;
-          if (await shouldKeepExistingCompanionRasterUrl(prevV, ck)) continue;
-          const got = await fetchWorkflowOriginalFromCompanionAsObjectUrl(base, projectId, ck);
-          if (cancelled) return;
-          if (got.ok === false) {
-            onLogRef.current?.('warn', '本地伴侣步骤结果图恢复失败', `${a.id}/${stepId}: ${got.error}`);
-            continue;
-          }
-          setAssets((prev) =>
-            prev.map((x) => {
-              if (x.id !== a.id) return x;
-              const prevV = String((x.results || {})[stepId] || '').trim();
-              if (/^blob:/i.test(prevV)) {
-                try {
-                  URL.revokeObjectURL(prevV);
-                } catch {
-                  /* ignore */
-                }
-              }
-              return {
-                ...x,
-                results: { ...(x.results || {}), [stepId]: got.objectUrl },
-              };
-            })
-          );
-        }
-      }
-    })();
+    void runWorkflowCompanionEagerRasterHydrate({
+      projectId,
+      companionBaseUrl: base,
+      getAssets: () => assetsRef.current,
+      isCancelled: () => cancelled,
+      onPatch: (patches) => {
+        if (cancelled || !patches.length) return;
+        setAssets((prev) => applyCompanionHydratePatches(prev, patches));
+      },
+      onFailure: (task, error) => {
+        if (cancelled) return;
+        const label =
+          task.kind === 'original'
+            ? `${task.assetId}: ${error}`
+            : `${task.assetId}/${task.stepId}: ${error}`;
+        onLogRef.current?.(
+          'warn',
+          task.kind === 'original' ? '本地伴侣原图恢复失败' : '本地伴侣步骤结果图恢复失败',
+          label
+        );
+      },
+    });
     return () => {
       cancelled = true;
     };
-  }, [companionResultsHydrateKey, workspaceProjectChrome?.activeProjectId, setAssets]);
+  }, [companionHydrateSessionKey, workspaceProjectChrome?.activeProjectId, setAssets]);
 
   useEffect(() => {
     const projectId = String(workspaceProjectChrome?.activeProjectId || '').trim();
@@ -2826,8 +2808,8 @@ ${lineSvg}
           resolvedInputImagesForExecute = box.inputImagesForExecute;
         }
       } catch (err: unknown) {
+        const full = formatWorkflowRunTaskErrorMessage(err, getTaskLogLabel(task));
         const msg = err instanceof Error ? err.message : safeUnknownToString(err);
-        const full = `[${getTaskLogLabel(task)}] ${msg}`;
         setAssetError(task.assetId, full);
         auditRunFail(WORKFLOW_AUDIT_CODES.RUN_TASK_LIGHTBOX_COMPOSITE_EXCEPTION, 'warn', full, {
           error: msg,
@@ -2914,6 +2896,24 @@ ${lineSvg}
     const runTaskBranch = classifyWorkflowRunTaskBranch({ actionType, module });
     const actionLabel = getTaskLogLabel(task);
 
+    const aiProxyBranch =
+      runTaskBranch === 'branch_capability_set' ||
+      runTaskBranch === 'branch_generate_3d' ||
+      runTaskBranch === 'branch_preset_execute_capability';
+    if (aiProxyBranch && !getUserApiKey()?.trim()) {
+      try {
+        const jobKind = proxyGateJobKindForWorkflowBranch(runTaskBranch, module);
+        await assertWorkflowCreditsPrecheck(jobKind);
+      } catch (err: unknown) {
+        const full = formatWorkflowRunTaskErrorMessage(err, actionLabel);
+        setAssetError(task.assetId, full);
+        auditRunFail(WORKFLOW_AUDIT_CODES.RUN_TASK_EXECUTE, 'warn', full, {
+          error: err instanceof Error ? err.message : String(err),
+        });
+        return { image: null };
+      }
+    }
+
     switch (runTaskBranch) {
       case 'branch_capability_set': {
         const set = getSet(actionType.slice(SET_ACTION_PREFIX.length));
@@ -2984,8 +2984,11 @@ ${lineSvg}
               ? { image: result.image, vgpSteps: result.vgpSteps }
               : { image: null };
           } catch (err: unknown) {
+            const taskLabel = getActionLabel(actionType);
             const msg = err instanceof Error ? err.message : safeUnknownToString(err);
-            const full = `[${getActionLabel(actionType)}] 能力集合执行异常：${msg}`;
+            const full = isCreditsExceededError(err)
+              ? formatWorkflowRunTaskErrorMessage(err, taskLabel)
+              : `[${taskLabel}] 能力集合执行异常：${msg}`;
             setAssetError(task.assetId, full);
             auditRunFail(WORKFLOW_AUDIT_CODES.RUN_TASK_CAPABILITY_SET_EXCEPTION, 'error', full, { error: msg }, msg);
             return { image: null };
@@ -3040,8 +3043,9 @@ ${lineSvg}
           await onAddGenerate3DJob(module, resolvedInputImage, task, resolvedTripoMultiviewImages);
           setAssetError(task.assetId, null);
         } catch (err) {
+          const taskLabel = getTaskLogLabel(task);
           const msg = err instanceof Error ? err.message : safeUnknownToString(err);
-          const full = `[${getTaskLogLabel(task)}] ${msg}`;
+          const full = formatWorkflowRunTaskErrorMessage(err, taskLabel);
           setAssetError(task.assetId, full);
           auditRunFail(WORKFLOW_AUDIT_CODES.RUN_TASK_GENERATE3D_EXCEPTION, 'error', full, { error: msg }, msg);
         }
@@ -3117,7 +3121,9 @@ ${lineSvg}
           return { image: out.image, vgpSteps: out.vgpSteps };
         } catch (err: unknown) {
           const msg = err instanceof Error ? err.message : safeUnknownToString(err);
-          const full = `[${actionLabel}] 失败：${msg}`;
+          const full = isCreditsExceededError(err)
+            ? formatWorkflowRunTaskErrorMessage(err, actionLabel)
+            : `[${actionLabel}] 失败：${msg}`;
           setAssetError(task.assetId, full);
           auditRunFail(WORKFLOW_AUDIT_CODES.RUN_TASK_CAPABILITY_EXCEPTION, 'error', full, { error: msg }, msg);
           return { image: null };
@@ -3274,9 +3280,28 @@ ${lineSvg}
         task: WorkflowPendingTask,
         batchGroup?: { key: string; expected: number }
       ) => {
+        let balanceBeforeTask: number | null = null;
+        if (!getUserApiKey()?.trim() && preferenceScope) {
+          try {
+            balanceBeforeTask = (await fetchCreditBalance()).balance;
+          } catch {
+            balanceBeforeTask = null;
+          }
+        }
         const markTaskCompleted = (t: WorkflowPendingTask, opts?: { auditSuccess?: boolean }) => {
           if (opts?.auditSuccess !== false && !cancelledTaskIdsRef.current.has(t.id)) {
             appendWorkflowRunTaskSuccessAudit({ task: t });
+            dispatchCreditsBalanceChanged();
+            if (balanceBeforeTask != null) {
+              void fetchCreditBalance()
+                .then((res) => {
+                  const delta = balanceBeforeTask! - res.balance;
+                  if (delta > 0) dispatchCreditsConsumedNotice(delta);
+                })
+                .catch(() => {
+                  /* ignore */
+                });
+            }
           }
           setCompletedTaskIds((prev) => new Set(prev).add(t.id));
         };
@@ -4853,18 +4878,6 @@ ${lineSvg}
         const blobUrl = URL.createObjectURL(file);
         const placeholder = buildWorkflowModelPlaceholderDataUrl(file.name);
         setCardAspectByAssetId((prev) => (prev[newId] != null ? prev : { ...prev, [newId]: ratio }));
-        setThumbUnlockKeys((prev) => {
-          if (prev.has(newId)) return prev;
-          const next = new Set(prev);
-          next.add(newId);
-          return next;
-        });
-        setThumbHotKeys((prev) => {
-          if (prev.has(newId)) return prev;
-          const next = new Set(prev);
-          next.add(newId);
-          return next;
-        });
         setAssets((prev) => {
           const parentGroup = groupFilterId ? prev.find((a) => a.id === groupFilterId) : null;
           const newAsset: WorkflowAsset = attachInitialVgpToNewAsset({
@@ -6694,16 +6707,92 @@ ${lineSvg}
   const getGeneratedImageCount = (a: WorkflowAsset): number =>
     Math.max(0, getDisplayKeysForAsset(a).length - 1);
 
-  const cycleDisplayKey = (assetId: string, delta: number) => {
-    const a = assets.find((x) => x.id === assetId);
-    if (!a) return;
-    const keys = getDisplayKeysForAsset(a);
-    if (keys.length <= 1) return;
-    const idx = keys.indexOf(a.displayKey);
-    const current = idx >= 0 ? idx : 0;
-    const next = (current + (delta > 0 ? 1 : -1) + keys.length) % keys.length;
-    setDisplayKey(assetId, keys[next]);
-  };
+  const cycleDisplayKey = useCallback(
+    (assetId: string, delta: number) => {
+      setAssets((prev) => {
+        const a = prev.find((x) => x.id === assetId);
+        if (!a) return prev;
+        const keys = getDisplayKeysForAsset(a);
+        const nextKey = stepDisplayKeyInOrder(keys, a.displayKey, delta);
+        if (!nextKey) return prev;
+        return prev.map((x) => (x.id === assetId ? { ...x, displayKey: nextKey } : x));
+      });
+    },
+    [setAssets]
+  );
+
+  const triggerCardPreviewBounce = useCallback((assetId: string, direction: 'up' | 'down') => {
+    setGroupBounceStateById((prev) => ({ ...prev, [assetId]: direction }));
+    window.setTimeout(() => {
+      setGroupBounceStateById((prev) => ({ ...prev, [assetId]: 'idle' }));
+    }, 180);
+  }, []);
+
+  const stepAssetCardPreview = useCallback(
+    (control: WorkflowCardHoverControl, delta: -1 | 1) => {
+      const assetId = control.previewAssetId;
+      if (!assetId) return;
+      if (control.previewKind === 'groupIndex') {
+        const groupLen = control.groupLen ?? 0;
+        if (groupLen <= 1) return;
+        setGroupPreviewIndexById((prev) => {
+          const current = prev[assetId] ?? 0;
+          const next = ((current + delta) % groupLen + groupLen) % groupLen;
+          if (next === current) return prev;
+          return { ...prev, [assetId]: next };
+        });
+        triggerCardPreviewBounce(assetId, delta > 0 ? 'down' : 'up');
+        return;
+      }
+      if (control.previewKind === 'displayKey') {
+        cycleDisplayKey(assetId, delta);
+        triggerCardPreviewBounce(assetId, delta > 0 ? 'down' : 'up');
+      }
+    },
+    [cycleDisplayKey, triggerCardPreviewBounce]
+  );
+
+  const buildAssetCardHoverControl = useCallback(
+    (params: {
+      controlId: string;
+      asset: WorkflowAsset;
+      isGroupCard?: boolean;
+      groupLen?: number;
+      hasDisplayImage?: boolean;
+      busy?: boolean;
+    }): WorkflowCardHoverControl | null => {
+      if (params.busy || showArchived || lightboxAssetId) return null;
+      const { controlId, asset, isGroupCard, groupLen = 0, hasDisplayImage = false } = params;
+      if (isWorkflowStoryboardTableAsset(asset) || isWorkflowAssetSetAsset(asset)) return null;
+
+      let previewKind: WorkflowCardHoverControl['previewKind'];
+      let previewAssetId: string | undefined;
+      if (isGroupCard && groupLen > 1) {
+        previewKind = 'groupIndex';
+        previewAssetId = asset.id;
+      } else if (getDisplayKeysForAsset(asset).length > 1) {
+        previewKind = 'displayKey';
+        previewAssetId = asset.id;
+      }
+
+      const zoomEligible = workflowAssetCardZoomEligible(asset, getAssetDisplayImage(asset));
+
+      if (!previewKind && !zoomEligible) return null;
+      return {
+        controlId,
+        previewKind,
+        previewAssetId,
+        groupLen: previewKind === 'groupIndex' ? groupLen : undefined,
+        zoomEligible,
+      };
+    },
+    [showArchived, lightboxAssetId, getAssetDisplayImage]
+  );
+
+  const { setHoveredCard, clearHoveredCard, registerCardZoomHost } = useWorkflowAssetCardHoverKeys({
+    disabled: showArchived || !!lightboxAssetId,
+    onPreviewStep: stepAssetCardPreview,
+  });
 
   const duplicateAssetInPlace = useCallback(
     (sourceIds: string[], parentGroupId: string | null) => {
@@ -8822,6 +8911,12 @@ ${lineSvg}
   }, [lightboxAssetId, lightboxRasterChrome]);
 
   useEffect(() => {
+    if (!lightboxAssetId) return;
+    document.documentElement.setAttribute('data-ac-lightbox-open', '');
+    return () => document.documentElement.removeAttribute('data-ac-lightbox-open');
+  }, [lightboxAssetId]);
+
+  useEffect(() => {
     if (!lightboxAssetId || !lightboxRasterChrome) return;
     const onKey = (e: KeyboardEvent) => {
       if (isWorkflowEditableTarget(e.target)) return;
@@ -10271,6 +10366,11 @@ ${lineSvg}
           </div>
         </div>
       </div>
+      <WorkflowZeroBalanceBanner
+        preferenceScope={preferenceScope}
+        balance={creditBalance}
+        loading={creditBalanceLoading}
+      />
 
       <div className="flex-1 min-h-0 flex flex-col overflow-hidden min-w-0">
         <div
@@ -10470,7 +10570,12 @@ ${lineSvg}
                           key={idx}
                           data-workflow-card
                           data-workflow-thumb-key={gallKey}
+                          ref={(el) => registerCardZoomHost(gallKey, el)}
                           className={`absolute min-w-0 rounded-2xl overflow-hidden bg-[#141416] flex justify-center ${WORKFLOW_CARD_SURFACE_IDLE}`}
+                          onMouseEnter={() =>
+                            setHoveredCard({ controlId: gallKey, zoomEligible: true })
+                          }
+                          onMouseLeave={clearHoveredCard}
                           style={
                             layoutBox
                               ? {
@@ -10505,6 +10610,7 @@ ${lineSvg}
                       );
                     })
                   : currentGroupItems.map((item, idx) => {
+                      const groupKey = currentGroupAsset ? `${currentGroupAsset.id}::${idx}` : `${idx}`;
                       const isAssetRef = typeof item === 'object' && item && 'assetId' in item;
                       const childAsset = isAssetRef ? assets.find((x) => x.id === (item as { assetId: string }).assetId) : null;
                       const img =
@@ -10513,7 +10619,6 @@ ${lineSvg}
                           : typeof item === 'string'
                             ? item
                             : currentGroupAsset?.original ?? '';
-                      const groupKey = currentGroupAsset ? `${currentGroupAsset.id}::${idx}` : `${idx}`;
                       const layoutBox = groupJustifiedLayout.boxById.get(groupKey);
                       const taskMatchesGroupSlot = (t: WorkflowPendingTask) =>
                         t.sourceGroupAssetId === currentGroupAsset?.id && t.sourceItemIndex === idx;
@@ -10630,6 +10735,7 @@ ${lineSvg}
                               return (
                                 <div
                                   data-workflow-drop-host
+                                  ref={(el) => registerCardZoomHost(childAsset.id, el)}
                                   className={`min-w-0 h-full ${WORKFLOW_CARD_SHELL_PAD} ${
                                     selectedGroupItemKeys.has(groupKey)
                                       ? WORKFLOW_CARD_SHELL_SELECTED
@@ -10698,35 +10804,28 @@ ${lineSvg}
                                   onDrop={(e) => {
                                     e.currentTarget.removeAttribute('data-drag-over');
                                   }}
-                                  {...((getDisplayKeysForAsset(childAsset).length > 1 || (childAsset.assetIds?.length ?? 0) > 1)
-                                    ? { 'data-prevent-wheel-scroll': '' }
-                                    : {})}
-                                  onWheel={(e) => {
-                                    if (spaceMarqueeEnabled) return;
-                                    if (isBusyGroupItem) return;
-                                    e.preventDefault();
-                                    e.stopPropagation();
-                                    if (isGroupAsset(childAsset) && (childAsset.assetIds?.length ?? 0) > 0) {
-                                      const delta = e.deltaY > 0 ? 1 : -1;
-                                      setGroupPreviewIndexById((prev) => {
-                                        const current = prev[childAsset.id] ?? 0;
-                                        const len = childAsset.assetIds?.length ?? 1;
-                                        const next = ((current + delta) % len + len) % len;
-                                        return { ...prev, [childAsset.id]: next };
-                                      });
-                                      const direction: 'up' | 'down' = e.deltaY > 0 ? 'down' : 'up';
-                                      setGroupBounceStateById((prev) => ({ ...prev, [childAsset.id]: direction }));
-                                      window.setTimeout(() => {
-                                        setGroupBounceStateById((prev) => ({ ...prev, [childAsset.id]: 'idle' }));
-                                      }, 180);
-                                      return;
-                                    }
-                                    if (getDisplayKeysForAsset(childAsset).length <= 1) return;
-                                    cycleDisplayKey(childAsset.id, e.deltaY);
-                                  }}
                                 >
                                   <div
                                     className="relative h-full w-full cursor-pointer"
+                                    onMouseEnter={() => {
+                                      if (childAsset) {
+                                        const childIsGroup = isGroupAsset(childAsset);
+                                        const childGroupLen = childIsGroup ? (childAsset.assetIds?.length ?? 0) : 0;
+                                        setHoveredCard(
+                                          buildAssetCardHoverControl({
+                                            controlId: childAsset.id,
+                                            asset: childAsset,
+                                            isGroupCard: childIsGroup,
+                                            groupLen: childGroupLen,
+                                            hasDisplayImage: hasChildDisplayImage,
+                                            busy: isBusyGroupItem,
+                                          })
+                                        );
+                                      } else {
+                                        setHoveredCard(null);
+                                      }
+                                    }}
+                                    onMouseLeave={clearHoveredCard}
                                     onContextMenu={(e) => {
                                       if (showArchived) return;
                                       if (
@@ -10925,6 +11024,12 @@ ${lineSvg}
                         <div
                           key={idx}
                           data-workflow-drop-host
+                          ref={(el) =>
+                            registerCardZoomHost(
+                              isAssetRef && childAsset ? childAsset.id : groupKey,
+                              el
+                            )
+                          }
                           className={`absolute min-w-0 ${WORKFLOW_CARD_SHELL_PAD} ${
                             selectedGroupItemKeys.has(groupKey)
                               ? WORKFLOW_CARD_SHELL_SELECTED
@@ -10990,6 +11095,27 @@ ${lineSvg}
                         >
                           <div
                             className="relative h-full w-full cursor-pointer"
+                            onMouseEnter={() => {
+                              if (isAssetRef && childAsset) {
+                                const childIsGroup = isGroupAsset(childAsset);
+                                const childGroupLen = childIsGroup ? (childAsset.assetIds?.length ?? 0) : 0;
+                                setHoveredCard(
+                                  buildAssetCardHoverControl({
+                                    controlId: childAsset.id,
+                                    asset: childAsset,
+                                    isGroupCard: childIsGroup,
+                                    groupLen: childGroupLen,
+                                    hasDisplayImage: Boolean(String(img || '').trim()),
+                                    busy: isBusyGroupItem,
+                                  })
+                                );
+                              } else if (String(img || '').trim()) {
+                                setHoveredCard({ controlId: groupKey, zoomEligible: true });
+                              } else {
+                                setHoveredCard(null);
+                              }
+                            }}
+                            onMouseLeave={clearHoveredCard}
                             onContextMenu={(e) => {
                               if (showArchived || !isAssetRef || !childAsset) return;
                               if (
@@ -11266,6 +11392,7 @@ ${lineSvg}
                     <div
                       key={a.id}
                       data-workflow-drop-host
+                      ref={(el) => registerCardZoomHost(a.id, el)}
                       className={`absolute min-w-0 ${WORKFLOW_CARD_SHELL_PAD} ${
                         selectedAssetIds.has(a.id) ? WORKFLOW_CARD_SHELL_SELECTED : WORKFLOW_CARD_SHELL_IDLE
                       }`}
@@ -11394,42 +11521,31 @@ ${lineSvg}
                             clearWorkflowDragSession();
                           }
                         }}
-                        {...((!isBusy && !showArchived && (getDisplayKeysForAsset(a).length > 1 || gLen > 1))
-                          ? { 'data-prevent-wheel-scroll': '' }
-                          : {})}
-                        onWheel={(e) => {
-                          if (spaceMarqueeEnabled) return;
-                          if (isBusy) return;
-                          e.preventDefault();
-                          e.stopPropagation();
-                          if (showArchived) return;
-                          if (isGroupCard) {
-                            if (gLen <= 1) return;
-                            const delta = e.deltaY > 0 ? 1 : -1;
-                            setGroupPreviewIndexById((prev) => {
-                              const current = prev[a.id] ?? 0;
-                              const next = ((current + delta) % gLen + gLen) % gLen;
-                              return { ...prev, [a.id]: next };
-                            });
-                            const direction: 'up' | 'down' = e.deltaY > 0 ? 'down' : 'up';
-                            const assetId = a.id;
-                            setGroupBounceStateById((prev) => ({ ...prev, [assetId]: direction }));
-                            window.setTimeout(() => {
-                              setGroupBounceStateById((prev) => ({ ...prev, [assetId]: 'idle' }));
-                            }, 180);
-                            return;
-                          }
-                          if (getDisplayKeysForAsset(a).length <= 1) return;
-                          cycleDisplayKey(a.id, e.deltaY);
-                        }}
                       >
                         <div
                           className="relative h-full w-full cursor-pointer"
                           onMouseEnter={() => {
-                            if (showArchived || isGroupCard) return;
-                            if (isWorkflowStoryboardTableAsset(a) || isWorkflowAssetSetAsset(a)) return;
-                            scheduleWorkflowLightboxPrefetch(a);
+                            if (showArchived) {
+                              setHoveredCard(null);
+                              return;
+                            }
+                            if (isWorkflowStoryboardTableAsset(a) || isWorkflowAssetSetAsset(a)) {
+                              setHoveredCard(null);
+                              return;
+                            }
+                            setHoveredCard(
+                              buildAssetCardHoverControl({
+                                controlId: a.id,
+                                asset: a,
+                                isGroupCard,
+                                groupLen: gLen,
+                                hasDisplayImage,
+                                busy: isBusy,
+                              })
+                            );
+                            if (!isGroupCard) scheduleWorkflowLightboxPrefetch(a);
                           }}
+                          onMouseLeave={clearHoveredCard}
                           onContextMenu={(e) => {
                             if (showArchived) return;
                             let target: WorkflowAsset | null = a;

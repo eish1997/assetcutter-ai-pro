@@ -42,6 +42,12 @@ export function workflowAssetLightboxRasterEligible(a: WorkflowAsset, displayIma
   return Boolean(String(displayImage || '').trim());
 }
 
+/** 工作区卡片悬停 W 放大：当前有位图时可放大；纯文字通道的文字资产也可放大阅读 */
+export function workflowAssetCardZoomEligible(a: WorkflowAsset, displayImage: string): boolean {
+  if (Boolean(String(displayImage || '').trim())) return true;
+  return isWorkflowTextAsset(a) && workflowAssetCurrentDisplayIsTextChannel(a);
+}
+
 /** 文字卡可拖入：文生文、文生图 */
 export function workflowPresetAcceptsTextCardDrag(mod: CustomAppModule): boolean {
   return mod.category === 'text_to_text' || mod.category === 'text_to_image';

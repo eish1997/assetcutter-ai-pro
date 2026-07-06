@@ -8,6 +8,18 @@ import {
   type CompanionArtifactSummary,
 } from '../services/companionArtifactsClient';
 import { HttpRequestError } from '../services/httpClient';
+import {
+  CREDITS_LOW_BALANCE_THRESHOLD,
+  fmtCredits,
+  fmtCreditsSidebar,
+} from '../shared/credits';
+import { useCreditBalance } from '../hooks/useCreditBalance';
+
+/** 侧栏底栏：与「已接 / 本地」同宽同间距（见 App 左侧 fixed w-14 栏最底部） */
+const SIDEBAR_STATUS_ROW_CLASS =
+  'flex w-full min-w-0 items-center justify-center gap-1.5 rounded-lg bg-white/[0.05] px-2 py-2 ring-1 ring-white/[0.07]';
+
+const SIDEBAR_STATUS_BTN_CLASS = `${SIDEBAR_STATUS_ROW_CLASS} hover:bg-white/[0.08] outline-none focus-visible:ring-2 focus-visible:ring-blue-500/55 focus-visible:ring-offset-2 focus-visible:ring-offset-[#050505]`;
 
 function platformAbbrev(label: string): string {
   const trimmed = label.trim();
@@ -25,13 +37,13 @@ function platformAbbrev(label: string): string {
 
 export type WorkspaceSidebarFooterProps = {
   user: { id?: string | null; role?: string | null } | null | undefined;
-  activeWorkspaceProjectId: string;
+  activeWorkspaceProjectId?: string | null;
   onOpenApiKeyModal: () => void;
   aiInvocationReady: boolean;
   aiPlatformLabel: string;
 };
 
-/** 窄侧栏底部：少套层、少 padding，避免固定宽度下文字竖排错乱 */
+/** 窄侧栏底部：积分 + AI 平台 + 本地伴侣（App.tsx 左侧 fixed 栏最底） */
 const WorkspaceSidebarFooter: React.FC<WorkspaceSidebarFooterProps> = ({
   user,
   activeWorkspaceProjectId,
@@ -40,12 +52,11 @@ const WorkspaceSidebarFooter: React.FC<WorkspaceSidebarFooterProps> = ({
   aiPlatformLabel,
 }) => {
   const [companionLinked, setCompanionLinked] = useState<boolean | null>(null);
-  /** 当前仅发行 Windows 桌面壳；侧栏与弹窗均拉取 win32 latest */
   const [latestWinShell, setLatestWinShell] = useState<CompanionArtifactSummary | null>(null);
-  /** 与「库中无记录」区分：网络 / CORS / 构建未指向 auth-api 等 */
   const [shellLatestFetchError, setShellLatestFetchError] = useState<string | null>(null);
   const [downloadBusy, setDownloadBusy] = useState(false);
   const [companionDownloadModalOpen, setCompanionDownloadModalOpen] = useState(false);
+  const { balance, loading: creditsLoading } = useCreditBalance(user?.id);
 
   useEffect(() => {
     let alive = true;
@@ -130,13 +141,37 @@ const WorkspaceSidebarFooter: React.FC<WorkspaceSidebarFooterProps> = ({
     companionLinked === true ? '已连接' : companionLinked === false ? '未连接' : '检测中…';
   const companionCardTitle = `本地伴侣 · ${companionStatusLong}${latestWinShell ? ` · ${latestWinShell.fileName}` : ''}`;
 
+  const creditsLabel = creditsLoading ? '…' : fmtCreditsSidebar(balance);
+  const creditsTitle =
+    creditsLoading
+      ? '加载积分余额…'
+      : balance == null
+        ? '积分余额暂不可用'
+        : balance <= 0
+          ? `积分已用完（${fmtCredits(balance)}）`
+          : balance < CREDITS_LOW_BALANCE_THRESHOLD
+            ? `积分偏低：${fmtCredits(balance)}`
+            : `剩余 AI 积分 ${fmtCredits(balance)}`;
+
   return (
     <div className="flex w-full min-w-0 shrink-0 flex-col gap-2.5 px-1 py-2">
+      {user?.id ? (
+        <div
+          data-ac-sidebar-credits
+          className={SIDEBAR_STATUS_ROW_CLASS}
+          title={creditsTitle}
+          role="status"
+          aria-label={creditsTitle}
+        >
+          <span className="text-[8px] font-bold leading-[1.25] tabular-nums text-gray-300">{creditsLabel}</span>
+        </div>
+      ) : null}
+
       {user?.id ? (
         <button
           type="button"
           onClick={onOpenApiKeyModal}
-          className="flex w-full min-w-0 items-center justify-center gap-1.5 rounded-lg bg-white/[0.05] px-2 py-2 ring-1 ring-white/[0.07] hover:bg-white/[0.08]"
+          className={SIDEBAR_STATUS_BTN_CLASS}
           title={
             aiInvocationReady
               ? `${aiPlatformLabel} · 已就绪，点击配置 API`
@@ -159,7 +194,7 @@ const WorkspaceSidebarFooter: React.FC<WorkspaceSidebarFooterProps> = ({
         <button
           type="button"
           onClick={() => setCompanionDownloadModalOpen(true)}
-          className="flex w-full min-w-0 items-center justify-center gap-1.5 rounded-lg bg-white/[0.05] px-2 py-2 ring-1 ring-white/[0.07] hover:bg-white/[0.08]"
+          className={SIDEBAR_STATUS_BTN_CLASS}
           title={`${companionCardTitle} · 点击查看说明与下载`}
           aria-label={`本地伴侣 ${companionStatusLong}，打开说明与下载`}
         >
@@ -174,7 +209,7 @@ const WorkspaceSidebarFooter: React.FC<WorkspaceSidebarFooterProps> = ({
                   : 'bg-amber-500'
             }`}
           />
-          <span className="min-w-0 truncate text-[8px] font-bold leading-[1.25] text-gray-300">本地</span>
+          <span className="text-[8px] font-bold leading-[1.25] text-gray-300">本地</span>
         </button>
       ) : null}
 
@@ -304,3 +339,5 @@ const WorkspaceSidebarFooter: React.FC<WorkspaceSidebarFooterProps> = ({
 };
 
 export default WorkspaceSidebarFooter;
+
+export { SIDEBAR_STATUS_BTN_CLASS, SIDEBAR_STATUS_ROW_CLASS };

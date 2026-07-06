@@ -1,7 +1,6 @@
 import {
   isClientPointInElementRect,
   isClientPointInWorkflowAssetListWheelZone,
-  isClientPointInWorkflowFunctionSidebarWheelGuard,
 } from './workflowFunctionSidebarLayout';
 
 export const WORKFLOW_SCROLL_PORT_ATTR = 'data-workflow-scroll-port';
@@ -56,7 +55,7 @@ export function resolveWorkflowColumnScrollPort(
   }
 
   const fnCol = queryColumnRoot('[data-workflow-function-sidebar]');
-  if (fnCol && isClientPointInWorkflowFunctionSidebarWheelGuard(clientX, clientY)) {
+  if (fnCol && isClientPointInElementRect(clientX, clientY, fnCol)) {
     return resolveFunctionColumnScrollPort(fnCol);
   }
 

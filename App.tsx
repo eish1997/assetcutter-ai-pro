@@ -39,6 +39,8 @@ import { useDialogWorkspace } from './hooks/useDialogWorkspace';
 import { useDialogGeneration } from './hooks/useDialogGeneration';
 import { useDialogPostProcessing } from './hooks/useDialogPostProcessing';
 import { useAuth } from './components/auth/AuthContext';
+import { canAccessAdminPanel } from './services/authClient';
+import { navigateAdmin } from './services/adminNavigate';
 import { CustomDropdown, DROPDOWN_TRIGGER_COMPACT } from './components/ui/CustomDropdown';
 import { SidebarAccountAvatar } from './components/SidebarAccountAvatar';
 import LazySectionFallback from './components/ui/LazySectionFallback';
@@ -72,6 +74,8 @@ import {
   RIGHT_DOCK_RIGHT,
 } from './components/floatingDockConstants';
 import { isWorkflowEditableTarget } from './components/workflow/workflowDomUtils';
+import KeyboardShortcutsModal from './components/KeyboardShortcutsModal';
+import { AC_NAVIGATE_SETTINGS_EVENT } from './services/navigateSettings';
 import { ProgressivePreviewImage } from './components/ProgressivePreviewImage';
 import { DialogSessionRowBackdrop } from './components/DialogSessionRowBackdrop';
 import { SiteImage } from './components/SiteImage';
@@ -229,6 +233,7 @@ const AdminUsagePanel = React.lazy(() => import('./components/admin/AdminUsagePa
 const AdminCapabilityPresetsPanel = React.lazy(() => import('./components/admin/AdminCapabilityPresetsPanel'));
 const AdminSystemStatusPanel = React.lazy(() => import('./components/admin/AdminSystemStatusPanel'));
 const AdminStaffInvitesPanel = React.lazy(() => import('./components/admin/AdminStaffInvitesPanel'));
+const AdminRegistrationInvitesPanel = React.lazy(() => import('./components/admin/AdminRegistrationInvitesPanel'));
 const AdminCompanionArtifactsPanel = React.lazy(() => import('./components/admin/AdminCompanionArtifactsPanel'));
 const AdminGeminiFairnessPanel = React.lazy(() => import('./components/admin/AdminGeminiFairnessPanel'));
 type SourceAggregate = {
@@ -422,6 +427,8 @@ const AdminAppShell: React.FC = () => {
             <AdminSystemStatusPanel />
           ) : pathname === '/admin/staff-invites' ? (
             <AdminStaffInvitesPanel />
+          ) : pathname === '/admin/registration-invites' ? (
+            <AdminRegistrationInvitesPanel />
           ) : pathname === '/admin/companion-artifacts' ? (
             <AdminCompanionArtifactsPanel />
           ) : pathname === '/admin/gemini-fairness' ? (
@@ -1086,6 +1093,18 @@ const MainApp: React.FC = () => {
   const clearSettingsScrollTarget = useCallback(() => {
     setSettingsScrollTarget(null);
   }, []);
+
+  useEffect(() => {
+    const onNavigateSettings = (ev: Event) => {
+      const ce = ev as CustomEvent<{ sectionId?: string }>;
+      const sectionId = ce.detail?.sectionId?.trim();
+      setMode(AppMode.SETTINGS);
+      setIsSidebarOpen(false);
+      if (sectionId) setSettingsScrollTarget(sectionId);
+    };
+    window.addEventListener(AC_NAVIGATE_SETTINGS_EVENT, onNavigateSettings);
+    return () => window.removeEventListener(AC_NAVIGATE_SETTINGS_EVENT, onNavigateSettings);
+  }, []);
   /** 侧栏「实验性功能」分组：展开侧栏时默认折叠；进入实验性模块时自动展开 */
   const [experimentalNavExpanded, setExperimentalNavExpanded] = useState(false);
 
@@ -1121,6 +1140,11 @@ const MainApp: React.FC = () => {
   useEffect(() => {
     globalLogOpenRef.current = globalLogOpen;
   }, [globalLogOpen]);
+  const [shortcutsHelpOpen, setShortcutsHelpOpen] = useState(false);
+  const shortcutsHelpOpenRef = useRef(shortcutsHelpOpen);
+  useEffect(() => {
+    shortcutsHelpOpenRef.current = shortcutsHelpOpen;
+  }, [shortcutsHelpOpen]);
   const [globalLogUnreadImportant, setGlobalLogUnreadImportant] = useState(0);
   const [globalLogUnreadHasError, setGlobalLogUnreadHasError] = useState(false);
   const [globalLogCopiedId, setGlobalLogCopiedId] = useState<string | null>(null);
@@ -1169,6 +1193,32 @@ const MainApp: React.FC = () => {
     setGlobalLogUnreadImportant(0);
     setGlobalLogUnreadHasError(false);
   }, [globalLogOpen]);
+
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.code !== 'KeyB') return;
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      if (isWorkflowEditableTarget(e.target)) return;
+
+      const rasterActive = document.documentElement.hasAttribute('data-ac-lightbox-raster-shortcuts');
+      const shift = e.shiftKey;
+
+      if (shortcutsHelpOpenRef.current) {
+        e.preventDefault();
+        e.stopPropagation();
+        setShortcutsHelpOpen(false);
+        return;
+      }
+
+      if (rasterActive && !shift) return;
+
+      e.preventDefault();
+      e.stopPropagation();
+      setShortcutsHelpOpen(true);
+    };
+    window.addEventListener('keydown', onKeyDown, true);
+    return () => window.removeEventListener('keydown', onKeyDown, true);
+  }, []);
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -2468,10 +2518,17 @@ const MainApp: React.FC = () => {
   const aiProviderToolbarLabel = getAiProviderToolbarLabel();
   const workspaceProjectOptions = workspaceProjects.map((p) => ({ value: p.id, label: p.name }));
 
+  const showAdminEntry = canAccessAdminPanel(user);
+
   const handleUserMenuAction = useCallback(async (action: string) => {
     if (!action) return;
     if (action === 'manage') {
       setMode(AppMode.SETTINGS);
+      setIsSidebarOpen(false);
+      return;
+    }
+    if (action === 'admin') {
+      navigateAdmin('/admin');
       setIsSidebarOpen(false);
       return;
     }
@@ -4341,95 +4398,104 @@ const MainApp: React.FC = () => {
       >
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
           <div className="min-h-0 flex-1 overflow-y-auto no-scrollbar p-2">
-          <div className="flex flex-col items-center gap-2">
-            {user ? (
-              <div className="w-full">
-                <CustomDropdown
-                  triggerAriaLabel="账户菜单"
-                  options={[
-                    { value: 'manage', label: '管理账户' },
-                    { value: 'switch', label: '切换用户' },
-                    { value: 'logout', label: '退出登录' },
-                  ]}
-                  value=""
-                  placeholder=""
-                  onChange={(value) => {
-                    void handleUserMenuAction(value);
-                  }}
-                  renderTrigger={({ open }) => (
-                    <span className="relative inline-flex">
-                      <SidebarAccountAvatar user={user} prefs={userUiPrefs} />
-                      <span className="pointer-events-none absolute -right-0.5 -bottom-0.5 flex h-3.5 min-w-[14px] items-center justify-center rounded-full border border-[#3a3a40] bg-[#16161a] px-[2px] text-[6px] font-black leading-none text-gray-500">
-                        {open ? '▲' : '▼'}
+            <div className="flex flex-col items-center gap-2">
+              {user ? (
+                <div className="w-full">
+                  <CustomDropdown
+                    triggerAriaLabel="账户菜单"
+                    options={[
+                      { value: 'manage', label: '管理账户' },
+                      ...(showAdminEntry ? [{ value: 'admin', label: '管理后台' }] : []),
+                      { value: 'switch', label: '切换用户' },
+                      { value: 'logout', label: '退出登录' },
+                    ]}
+                    value=""
+                    placeholder=""
+                    onChange={(value) => {
+                      void handleUserMenuAction(value);
+                    }}
+                    renderTrigger={({ open }) => (
+                      <span className="relative inline-flex">
+                        <SidebarAccountAvatar user={user} prefs={userUiPrefs} />
+                        <span className="pointer-events-none absolute -right-0.5 -bottom-0.5 flex h-3.5 min-w-[14px] items-center justify-center rounded-full border border-[#3a3a40] bg-[#16161a] px-[2px] text-[6px] font-black leading-none text-gray-500">
+                          {open ? '▲' : '▼'}
+                        </span>
                       </span>
-                    </span>
-                  )}
-                  triggerClassName="w-full h-10 rounded-xl bg-white/[0.05] ring-1 ring-white/[0.06] p-0 flex items-center justify-center outline-none focus-visible:ring-blue-500/50 hover:bg-white/[0.09] transition-colors"
-                  portalZIndex={{ backdrop: 1100, list: 1101 }}
-                />
+                    )}
+                    triggerClassName="w-full h-10 rounded-xl bg-white/[0.05] ring-1 ring-white/[0.06] p-0 flex items-center justify-center outline-none focus-visible:ring-blue-500/50 hover:bg-white/[0.09] transition-colors"
+                    portalZIndex={{ backdrop: 1100, list: 1101 }}
+                  />
+                </div>
+              ) : null}
+
+              <SidebarIconButton active={mode === AppMode.WORKFLOW} label="工作区" onClick={() => { setMode(AppMode.WORKFLOW); setIsSidebarOpen(false); }}>
+                <svg viewBox="0 0 20 20" className="w-4 h-4" fill="none" aria-hidden><path d="M3.5 8.5L10 3.5l6.5 5v8H3.5v-8Z" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round"/><path d="M8 16.5v-4h4v4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"/></svg>
+              </SidebarIconButton>
+              {DIALOG_PAGE_ENABLED ? (
+                <SidebarIconButton active={mode === AppMode.DIALOG} label="对话" onClick={() => { setMode(AppMode.DIALOG); setIsSidebarOpen(false); }}>
+                  <svg viewBox="0 0 20 20" className="w-4 h-4" fill="none" aria-hidden><path d="M4 5.5h12v8H9l-3.5 3v-3H4v-8Z" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round"/></svg>
+                </SidebarIconButton>
+              ) : null}
+              <SidebarIconButton active={mode === AppMode.SETTINGS} label="设置" onClick={() => { setMode(AppMode.SETTINGS); setIsSidebarOpen(false); }}>
+                <svg viewBox="0 0 20 20" className="w-4 h-4" fill="none" aria-hidden><circle cx="10" cy="10" r="2.5" stroke="currentColor" strokeWidth="1.6"/><path d="M10 3v2.1M10 14.9V17M17 10h-2.1M5.1 10H3M14.9 5.1l-1.5 1.5M6.6 13.4l-1.5 1.5M14.9 14.9l-1.5-1.5M6.6 6.6 5.1 5.1" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"/></svg>
+              </SidebarIconButton>
+              {showAdminEntry ? (
+                <SidebarIconButton active={false} label="管理后台" onClick={() => { navigateAdmin('/admin'); setIsSidebarOpen(false); }}>
+                  <svg viewBox="0 0 20 20" className="w-4 h-4" fill="none" aria-hidden>
+                    <path d="M3.5 3.5h5v5h-5v-5Z M11.5 3.5h5v5h-5v-5Z M3.5 11.5h5v5h-5v-5Z M11.5 11.5h5v5h-5v-5Z" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
+                  </svg>
+                </SidebarIconButton>
+              ) : null}
+
+              <button
+                type="button"
+                onClick={() => setExperimentalNavExpanded((e) => !e)}
+                className={`group relative flex h-10 w-full cursor-pointer items-center justify-center rounded-xl outline-none transition-colors duration-200 focus-visible:ring-2 focus-visible:ring-blue-500/55 focus-visible:ring-offset-2 focus-visible:ring-offset-[#050505] ${
+                  isExperimentalMode(mode) && !experimentalNavExpanded
+                    ? 'bg-[#152a4a] text-blue-200 ring-1 ring-blue-500/40'
+                    : 'text-gray-400 ring-1 ring-transparent hover:bg-white/[0.06] hover:ring-white/[0.06]'
+                }`}
+                aria-label="实验性功能"
+                aria-expanded={experimentalNavExpanded}
+              >
+                <svg viewBox="0 0 20 20" className="w-4 h-4 shrink-0" fill="none" aria-hidden>
+                  <path
+                    d="M8 3.5h4M9 3.5v4.2l-4.1 6.6a2 2 0 0 0 1.7 3h6.8a2 2 0 0 0 1.7-3L11 7.7V3.5"
+                    stroke="currentColor"
+                    strokeWidth="1.6"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                  <path d="M6.8 12.5h6.4" stroke="currentColor" strokeWidth="1.4" />
+                </svg>
+                <span className="pointer-events-none absolute left-[calc(100%+10px)] top-1/2 -translate-y-1/2 rounded-lg bg-[#0c0c0f] px-2 py-1 text-[10px] text-gray-200 ring-1 ring-white/[0.12] shadow-md whitespace-nowrap opacity-0 -translate-x-1 group-hover:opacity-100 group-hover:translate-x-0 transition-all duration-150 motion-reduce:transition-none">
+                  实验性功能
+                </span>
+              </button>
+            </div>
+
+            {experimentalNavExpanded ? (
+              <div className="mt-2 flex flex-col gap-2 pt-2">
+                <SidebarIconButton active={mode === AppMode.TEXTURE} label="提取花纹" onClick={() => { setMode(AppMode.TEXTURE); setStep(AppStep.T_PATTERN); setIsSidebarOpen(false); }}>
+                  <svg viewBox="0 0 20 20" className="w-4 h-4" fill="none" aria-hidden><rect x="3.5" y="4" width="13" height="12" rx="1.8" stroke="currentColor" strokeWidth="1.6"/><path d="M6 12l2.2-2.2 2.2 2.2 1.8-1.8L14 12" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                </SidebarIconButton>
+                <SidebarIconButton active={mode === AppMode.SEAM_REPAIR} label="贴图修缝" onClick={() => { setMode(AppMode.SEAM_REPAIR); setIsSidebarOpen(false); }}>
+                  <svg viewBox="0 0 20 20" className="w-4 h-4" fill="none" aria-hidden><path d="M4 6h5l2 2h5v6H4V6Z" stroke="currentColor" strokeWidth="1.6"/><path d="M8.2 8.2l3.6 3.6M11.8 8.2l-3.6 3.6" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/></svg>
+                </SidebarIconButton>
+                <SidebarIconButton active={mode === AppMode.PBR_TEXTURE} label="生成贴图" onClick={() => { setMode(AppMode.PBR_TEXTURE); setIsSidebarOpen(false); }}>
+                  <svg viewBox="0 0 20 20" className="w-4 h-4" fill="none" aria-hidden><circle cx="10" cy="10" r="6.2" stroke="currentColor" strokeWidth="1.6"/><path d="M10 3.8v12.4M3.8 10h12.4" stroke="currentColor" strokeWidth="1.2"/></svg>
+                </SidebarIconButton>
+                <SidebarIconButton active={mode === AppMode.ADMIN} label="提示词效果" onClick={() => { setMode(AppMode.ADMIN); setIsSidebarOpen(false); }}>
+                  <svg viewBox="0 0 20 20" className="w-4 h-4" fill="none" aria-hidden><path d="M4 14.5V11m4 3.5V8.5M12 14.5V6m4 8.5V9.5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"/></svg>
+                </SidebarIconButton>
+                <SidebarIconButton active={mode === AppMode.ARENA} label="提示词擂台" onClick={() => { setMode(AppMode.ARENA); setIsSidebarOpen(false); }}>
+                  <svg viewBox="0 0 20 20" className="w-4 h-4" fill="none" aria-hidden><path d="M6 5.5h8l-1.2 2.6L15 10l-5 6-5-6 2.2-1.9L6 5.5Z" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round"/></svg>
+                </SidebarIconButton>
               </div>
             ) : null}
-
-            <SidebarIconButton active={mode === AppMode.WORKFLOW} label="工作区" onClick={() => { setMode(AppMode.WORKFLOW); setIsSidebarOpen(false); }}>
-              <svg viewBox="0 0 20 20" className="w-4 h-4" fill="none" aria-hidden><path d="M3.5 8.5L10 3.5l6.5 5v8H3.5v-8Z" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round"/><path d="M8 16.5v-4h4v4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"/></svg>
-            </SidebarIconButton>
-            {DIALOG_PAGE_ENABLED ? (
-              <SidebarIconButton active={mode === AppMode.DIALOG} label="对话" onClick={() => { setMode(AppMode.DIALOG); setIsSidebarOpen(false); }}>
-                <svg viewBox="0 0 20 20" className="w-4 h-4" fill="none" aria-hidden><path d="M4 5.5h12v8H9l-3.5 3v-3H4v-8Z" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round"/></svg>
-              </SidebarIconButton>
-            ) : null}
-            <SidebarIconButton active={mode === AppMode.SETTINGS} label="设置" onClick={() => { setMode(AppMode.SETTINGS); setIsSidebarOpen(false); }}>
-              <svg viewBox="0 0 20 20" className="w-4 h-4" fill="none" aria-hidden><circle cx="10" cy="10" r="2.5" stroke="currentColor" strokeWidth="1.6"/><path d="M10 3v2.1M10 14.9V17M17 10h-2.1M5.1 10H3M14.9 5.1l-1.5 1.5M6.6 13.4l-1.5 1.5M14.9 14.9l-1.5-1.5M6.6 6.6 5.1 5.1" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"/></svg>
-            </SidebarIconButton>
-
-            <button
-              type="button"
-              onClick={() => setExperimentalNavExpanded((e) => !e)}
-              className={`group relative flex h-10 w-full cursor-pointer items-center justify-center rounded-xl outline-none transition-colors duration-200 focus-visible:ring-2 focus-visible:ring-blue-500/55 focus-visible:ring-offset-2 focus-visible:ring-offset-[#050505] ${
-                isExperimentalMode(mode) && !experimentalNavExpanded
-                  ? 'bg-[#152a4a] text-blue-200 ring-1 ring-blue-500/40'
-                  : 'text-gray-400 ring-1 ring-transparent hover:bg-white/[0.06] hover:ring-white/[0.06]'
-              }`}
-              aria-label="实验性功能"
-              aria-expanded={experimentalNavExpanded}
-            >
-              <svg viewBox="0 0 20 20" className="w-4 h-4 shrink-0" fill="none" aria-hidden>
-                <path
-                  d="M8 3.5h4M9 3.5v4.2l-4.1 6.6a2 2 0 0 0 1.7 3h6.8a2 2 0 0 0 1.7-3L11 7.7V3.5"
-                  stroke="currentColor"
-                  strokeWidth="1.6"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-                <path d="M6.8 12.5h6.4" stroke="currentColor" strokeWidth="1.4" />
-              </svg>
-              <span className="pointer-events-none absolute left-[calc(100%+10px)] top-1/2 -translate-y-1/2 rounded-lg bg-[#0c0c0f] px-2 py-1 text-[10px] text-gray-200 ring-1 ring-white/[0.12] shadow-md whitespace-nowrap opacity-0 -translate-x-1 group-hover:opacity-100 group-hover:translate-x-0 transition-all duration-150 motion-reduce:transition-none">
-                实验性功能
-              </span>
-            </button>
           </div>
 
-          {experimentalNavExpanded && (
-            <div className="mt-2 flex flex-col gap-2 pt-2">
-              <SidebarIconButton active={mode === AppMode.TEXTURE} label="提取花纹" onClick={() => { setMode(AppMode.TEXTURE); setStep(AppStep.T_PATTERN); setIsSidebarOpen(false); }}>
-                <svg viewBox="0 0 20 20" className="w-4 h-4" fill="none" aria-hidden><rect x="3.5" y="4" width="13" height="12" rx="1.8" stroke="currentColor" strokeWidth="1.6"/><path d="M6 12l2.2-2.2 2.2 2.2 1.8-1.8L14 12" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/></svg>
-              </SidebarIconButton>
-              <SidebarIconButton active={mode === AppMode.SEAM_REPAIR} label="贴图修缝" onClick={() => { setMode(AppMode.SEAM_REPAIR); setIsSidebarOpen(false); }}>
-                <svg viewBox="0 0 20 20" className="w-4 h-4" fill="none" aria-hidden><path d="M4 6h5l2 2h5v6H4V6Z" stroke="currentColor" strokeWidth="1.6"/><path d="M8.2 8.2l3.6 3.6M11.8 8.2l-3.6 3.6" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/></svg>
-              </SidebarIconButton>
-              <SidebarIconButton active={mode === AppMode.PBR_TEXTURE} label="生成贴图" onClick={() => { setMode(AppMode.PBR_TEXTURE); setIsSidebarOpen(false); }}>
-                <svg viewBox="0 0 20 20" className="w-4 h-4" fill="none" aria-hidden><circle cx="10" cy="10" r="6.2" stroke="currentColor" strokeWidth="1.6"/><path d="M10 3.8v12.4M3.8 10h12.4" stroke="currentColor" strokeWidth="1.2"/></svg>
-              </SidebarIconButton>
-              <SidebarIconButton active={mode === AppMode.ADMIN} label="提示词效果" onClick={() => { setMode(AppMode.ADMIN); setIsSidebarOpen(false); }}>
-                <svg viewBox="0 0 20 20" className="w-4 h-4" fill="none" aria-hidden><path d="M4 14.5V11m4 3.5V8.5M12 14.5V6m4 8.5V9.5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"/></svg>
-              </SidebarIconButton>
-              <SidebarIconButton active={mode === AppMode.ARENA} label="提示词擂台" onClick={() => { setMode(AppMode.ARENA); setIsSidebarOpen(false); }}>
-                <svg viewBox="0 0 20 20" className="w-4 h-4" fill="none" aria-hidden><path d="M6 5.5h8l-1.2 2.6L15 10l-5 6-5-6 2.2-1.9L6 5.5Z" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round"/></svg>
-              </SidebarIconButton>
-            </div>
-          )}
-          </div>
-          {mode === AppMode.WORKFLOW && activeWorkspaceProjectId ? (
+          {user ? (
             <WorkspaceSidebarFooter
               user={user}
               activeWorkspaceProjectId={activeWorkspaceProjectId}
@@ -6228,12 +6294,20 @@ const MainApp: React.FC = () => {
         </div>
       ) : null}
 
+      <KeyboardShortcutsModal
+        open={shortcutsHelpOpen}
+        mode={mode}
+        activeWorkspaceProjectId={activeWorkspaceProjectId}
+        onClose={() => setShortcutsHelpOpen(false)}
+      />
+
     </div>
   );
 };
 
 const App: React.FC = () => {
-  const pathname = typeof window !== 'undefined' ? window.location.pathname : '/';
+  const fullPath = usePathname();
+  const pathname = fullPath.split('?')[0].split('#')[0];
   if (pathname.startsWith('/admin')) {
     return (
       <>

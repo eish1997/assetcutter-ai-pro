@@ -59,6 +59,18 @@ export const MATRIX_COLUMNS = [
     permissions: [PERMISSIONS.USAGE_READ],
   },
   {
+    id: 'credits',
+    label: '积分发放',
+    kind: 'toggle',
+    permissions: [PERMISSIONS.CREDITS_WRITE],
+  },
+  {
+    id: 'registrationInvites',
+    label: '注册邀请码',
+    kind: 'toggle',
+    permissions: [PERMISSIONS.REGISTRATION_INVITES_WRITE],
+  },
+  {
     id: 'companion',
     label: '伴侣发行',
     kind: 'rw',
@@ -142,6 +154,12 @@ export function matrixToPermissions(matrix, roleSlug) {
   if (set.has(PERMISSIONS.USERS_WRITE) || set.has(PERMISSIONS.USERS_ROLE_WRITE)) {
     set.add(PERMISSIONS.USERS_READ);
   }
+  if (set.has(PERMISSIONS.CREDITS_WRITE)) {
+    set.add(PERMISSIONS.USERS_READ);
+  }
+  if (set.has(PERMISSIONS.REGISTRATION_INVITES_WRITE)) {
+    set.add(PERMISSIONS.USERS_READ);
+  }
   if (set.has(PERMISSIONS.ROLES_WRITE)) set.add(PERMISSIONS.ROLES_READ);
   return filterPermissionsForRoleSlug(roleSlug, [...set]);
 }
@@ -177,6 +195,7 @@ export const AUDIT_ACTION_LABELS = {
   'auth.register': '注册',
   'auth.logout': '登出',
   'admin.user_update': '用户变更',
+  'admin.credits_adjust': '积分调整',
   'admin.users_export': '用户 CSV 导出',
   'admin.role_create': '创建角色',
   'admin.role_delete': '删除角色',
@@ -192,6 +211,9 @@ export const AUDIT_ACTION_LABELS = {
   'admin.staff_invite_create': '创建成员邀请',
   'admin.staff_invite_revoke': '撤销成员邀请',
   'admin.staff_invite_redeemed': '成员邀请核销',
+  'admin.registration_invite_create': '创建注册邀请码',
+  'admin.registration_invite_revoke': '撤销注册邀请码',
+  'auth.registration_invite_redeemed': '注册邀请码核销',
   companion_artifact_download: '伴侣下载',
 };
 

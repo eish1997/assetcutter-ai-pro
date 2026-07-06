@@ -5,6 +5,7 @@ import {
   AC_UNIFIED_AI_SOFT_NOTICE_EVENT,
   clipUnifiedAiNoticeMessage,
   dispatchUnifiedAiSoftNotice,
+  dispatchCreditsConsumedNotice,
 } from '../services/unifiedAiSoftNotice';
 
 describe('unifiedAiSoftNotice', () => {
@@ -31,6 +32,17 @@ describe('unifiedAiSoftNotice', () => {
     vi.mocked(Date.now).mockReturnValue(1_000_000_000 + 15_000);
     dispatchUnifiedAiSoftNotice({ kind: 'rate_limit', message: 'three' });
     expect(spy).toHaveBeenCalledTimes(3);
+    window.removeEventListener(AC_UNIFIED_AI_SOFT_NOTICE_EVENT, spy);
+  });
+
+  it('dispatchCreditsConsumedNotice emits credits_consumed kind', () => {
+    const spy = vi.fn();
+    window.addEventListener(AC_UNIFIED_AI_SOFT_NOTICE_EVENT, spy);
+    dispatchCreditsConsumedNotice(12);
+    expect(spy).toHaveBeenCalledTimes(1);
+    const detail = spy.mock.calls[0]![0].detail;
+    expect(detail.kind).toBe('credits_consumed');
+    expect(detail.message).toContain('12');
     window.removeEventListener(AC_UNIFIED_AI_SOFT_NOTICE_EVENT, spy);
   });
 });

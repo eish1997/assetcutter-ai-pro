@@ -4,6 +4,14 @@
 import crypto from 'crypto';
 import { readDb, writeDb, USE_POSTGRES, getPool, ensurePostgres } from './auth-store.js';
 import { estimateCostFromCatalog } from './usage-price-catalog.js';
+import {
+  consumeCreditsInTx,
+  consumeCreditsJson,
+  creditsForEvent,
+  CreditsExceededError,
+  ensureCreditStore,
+  shouldChargeCreditsForEvent,
+} from './credit-store.js';
 
 const MAX_JSON_EVENTS = 20000;
 const METER_KINDS = new Set(['token', 'image', 'second', 'task', 'byte']);
@@ -81,6 +89,14 @@ function normalizeEventInput(userId, raw) {
     jobKind: raw?.jobKind ? String(raw.jobKind).slice(0, 64) : null,
     metaJson: meta ? JSON.stringify(meta) : null,
     createdAt: nowIso(),
+    creditsCharged: shouldChargeCreditsForEvent({
+      status,
+      costUsdEst: costUsdEst == null ? null : Number(costUsdEst),
+      meta,
+      metaJson: meta ? JSON.stringify(meta) : null,
+    })
+      ? creditsForEvent({ costUsdEst: costUsdEst == null ? null : Number(costUsdEst) })
+      : 0,
   };
 }
 
@@ -119,6 +135,8 @@ function mapRow(r) {
     jobKind: r.job_kind ?? r.jobKind ?? null,
     meta,
     createdAt: r.created_at ?? r.createdAt,
+    creditsCharged:
+      r.credits_charged != null ? Number(r.credits_charged) : r.creditsCharged != null ? Number(r.creditsCharged) : null,
   };
 }
 
@@ -161,6 +179,7 @@ export async function ensureUsageBillingStore() {
   await p.query(
     `CREATE INDEX IF NOT EXISTS idx_usage_events_billing_sku_created ON usage_events(billing_sku, created_at DESC);`
   );
+  await p.query(`ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS credits_charged BIGINT NULL;`);
 }
 
 /**
@@ -178,43 +197,66 @@ export async function insertUsageEvents(userId, rawEvents) {
 
   if (USE_POSTGRES) {
     await ensureUsageBillingStore();
+    await ensureCreditStore();
     const p = getPool();
     let inserted = 0;
     for (const ev of list) {
-      const res = await p.query(
-        `INSERT INTO usage_events
-         (id, idempotency_key, user_id, workspace_id, project_id, workflow_step_id, audit_log_id,
-          provider, registry_id, billing_sku, meter_kind, quantity_in, quantity_out, quantity, unit,
-          cost_usd_est, cost_confidence, status, upstream_task_id, request_id, job_kind, meta_json, created_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22::jsonb,$23)
-         ON CONFLICT (idempotency_key) DO NOTHING`,
-        [
-          ev.id,
-          ev.idempotencyKey,
-          ev.userId,
-          ev.workspaceId,
-          ev.projectId,
-          ev.workflowStepId,
-          ev.auditLogId,
-          ev.provider,
-          ev.registryId,
-          ev.billingSku,
-          ev.meterKind,
-          ev.quantityIn,
-          ev.quantityOut,
-          ev.quantity,
-          ev.unit,
-          ev.costUsdEst,
-          ev.costConfidence,
-          ev.status,
-          ev.upstreamTaskId,
-          ev.requestId,
-          ev.jobKind,
-          ev.metaJson,
-          ev.createdAt,
-        ]
-      );
-      if (res.rowCount > 0) inserted += 1;
+      const client = await p.connect();
+      try {
+        await client.query('BEGIN');
+        const dup = await client.query(`SELECT id FROM usage_events WHERE idempotency_key = $1`, [ev.idempotencyKey]);
+        if (dup.rows[0]) {
+          await client.query('COMMIT');
+          continue;
+        }
+        if (shouldChargeCreditsForEvent(ev)) {
+          await consumeCreditsInTx(client, uid, ev.creditsCharged, {
+            usageEventId: ev.id,
+            idempotencyKey: ev.idempotencyKey,
+          });
+        }
+        const res = await client.query(
+          `INSERT INTO usage_events
+           (id, idempotency_key, user_id, workspace_id, project_id, workflow_step_id, audit_log_id,
+            provider, registry_id, billing_sku, meter_kind, quantity_in, quantity_out, quantity, unit,
+            cost_usd_est, cost_confidence, status, upstream_task_id, request_id, job_kind, meta_json, credits_charged, created_at)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22::jsonb,$23,$24)`,
+          [
+            ev.id,
+            ev.idempotencyKey,
+            ev.userId,
+            ev.workspaceId,
+            ev.projectId,
+            ev.workflowStepId,
+            ev.auditLogId,
+            ev.provider,
+            ev.registryId,
+            ev.billingSku,
+            ev.meterKind,
+            ev.quantityIn,
+            ev.quantityOut,
+            ev.quantity,
+            ev.unit,
+            ev.costUsdEst,
+            ev.costConfidence,
+            ev.status,
+            ev.upstreamTaskId,
+            ev.requestId,
+            ev.jobKind,
+            ev.metaJson,
+            ev.creditsCharged > 0 ? ev.creditsCharged : null,
+            ev.createdAt,
+          ]
+        );
+        await client.query('COMMIT');
+        if (res.rowCount > 0) inserted += 1;
+      } catch (e) {
+        await client.query('ROLLBACK');
+        if (e instanceof CreditsExceededError) throw e;
+        throw e;
+      } finally {
+        client.release();
+      }
     }
     return { inserted, skipped: list.length - inserted };
   }
@@ -225,6 +267,17 @@ export async function insertUsageEvents(userId, rawEvents) {
   let inserted = 0;
   for (const ev of list) {
     if (existing.has(ev.idempotencyKey)) continue;
+    try {
+      if (shouldChargeCreditsForEvent(ev)) {
+        consumeCreditsJson(db, uid, ev.creditsCharged, {
+          usageEventId: ev.id,
+          idempotencyKey: ev.idempotencyKey,
+        });
+      }
+    } catch (e) {
+      if (e instanceof CreditsExceededError) throw e;
+      throw e;
+    }
     db.usageEvents.push({
       id: ev.id,
       idempotencyKey: ev.idempotencyKey,
@@ -248,6 +301,7 @@ export async function insertUsageEvents(userId, rawEvents) {
       requestId: ev.requestId,
       jobKind: ev.jobKind,
       metaJson: ev.metaJson,
+      creditsCharged: ev.creditsCharged > 0 ? ev.creditsCharged : null,
       createdAt: ev.createdAt,
     });
     existing.add(ev.idempotencyKey);
@@ -461,20 +515,26 @@ export async function summarizeUsageForAdmin(query = {}) {
 function summarizeUsageFromEvents(events) {
   let totalCost = 0;
   let totalQuantity = 0;
+  let totalCreditsCharged = 0;
   const bySku = {};
   for (const ev of events) {
     totalQuantity += Number(ev.quantity) || 0;
     if (ev.costUsdEst != null && Number.isFinite(ev.costUsdEst)) totalCost += ev.costUsdEst;
+    if (ev.creditsCharged != null && Number.isFinite(ev.creditsCharged)) totalCreditsCharged += ev.creditsCharged;
     const sku = ev.billingSku || 'unknown';
-    if (!bySku[sku]) bySku[sku] = { billingSku: sku, count: 0, quantity: 0, costUsdEst: 0 };
+    if (!bySku[sku]) {
+      bySku[sku] = { billingSku: sku, count: 0, quantity: 0, costUsdEst: 0, creditsCharged: 0 };
+    }
     bySku[sku].count += 1;
     bySku[sku].quantity += Number(ev.quantity) || 0;
     if (ev.costUsdEst != null) bySku[sku].costUsdEst += ev.costUsdEst;
+    if (ev.creditsCharged != null) bySku[sku].creditsCharged += ev.creditsCharged;
   }
   return {
     eventCount: events.length,
     totalQuantity,
     totalCostUsdEst: Math.round(totalCost * 1e6) / 1e6,
+    totalCreditsCharged,
     bySku: Object.values(bySku).sort((a, b) => b.costUsdEst - a.costUsdEst),
   };
 }

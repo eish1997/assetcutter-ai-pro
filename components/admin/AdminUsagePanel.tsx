@@ -16,7 +16,8 @@ import {
 import { CustomDropdown } from '../ui/CustomDropdown';
 import UsageEventsGroupedTable from '../usage/UsageEventsGroupedTable';
 import ObservabilityTraceDrawer from './ObservabilityTraceDrawer';
-import { fmtUsageSummaryCost } from '../../services/usageApi';
+import { fmtUsageSummaryCredits, sliceCreditsTotal } from '../../services/usageApi';
+import { fmtCredits } from '../../shared/credits';
 
 const PAGE_SIZE = 50;
 
@@ -108,7 +109,7 @@ const AdminUsagePanel: React.FC = () => {
     <div className="space-y-4 p-4 max-w-6xl">
       <div>
         <h1 className="text-lg font-semibold text-white">AI 用量</h1>
-        <p className="text-[11px] text-gray-500 mt-1">Phase 0 计量探索：代理 Gemini / Tripo 建任务等工作流调用。</p>
+        <p className="text-[11px] text-gray-500 mt-1">工作流 AI 调用记录；汇总与明细均为积分消耗。</p>
       </div>
 
       {summary ? (
@@ -118,9 +119,9 @@ const AdminUsagePanel: React.FC = () => {
             <p className="text-[14px] text-white font-medium">{summary.eventCount}</p>
           </div>
           <div className="rounded-xl border border-[#2e2e32] bg-[#121214] p-3">
-            <p className="text-[10px] text-gray-500">估算成本 (USD)</p>
+            <p className="text-[10px] text-gray-500">积分消耗</p>
             <p className="text-[14px] text-amber-400 font-medium">
-              {fmtUsageSummaryCost(summary.totalCostUsdEst, summary.eventCount)}
+              {fmtUsageSummaryCredits(sliceCreditsTotal(summary), summary.eventCount)}
             </p>
           </div>
           <div className="rounded-xl border border-[#2e2e32] bg-[#121214] p-3 col-span-2">
@@ -129,7 +130,7 @@ const AdminUsagePanel: React.FC = () => {
               {summary.bySku.length
                 ? summary.bySku
                     .slice(0, 4)
-                    .map((s) => `${s.billingSku} ×${s.count} ${fmtUsageSummaryCost(s.costUsdEst, s.count)}`)
+                    .map((s) => `${s.billingSku} ×${s.count} ${fmtCredits(s.creditsCharged ?? 0)}`)
                     .join(' · ')
                 : '—'}
             </p>

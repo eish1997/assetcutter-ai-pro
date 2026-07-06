@@ -6,6 +6,7 @@ import {
   workflowAssetAllowedForCapabilityDrop,
   workflowAssetCurrentDisplayIsTextChannel,
   workflowAssetLightboxRasterEligible,
+  workflowAssetCardZoomEligible,
   workflowAssetToInputText,
   workflowVersionTextSnippet,
   workflowVersionTextThumbLines,
@@ -74,6 +75,54 @@ describe('workflowAssetCurrentDisplayIsTextChannel', () => {
         })
       )
     ).toBe(false);
+  });
+});
+
+describe('workflowAssetCardZoomEligible', () => {
+  it('文字 original 通道可放大阅读', () => {
+    expect(workflowAssetCardZoomEligible(makeTextAsset(), '')).toBe(true);
+  });
+
+  it('文字资产文生图结果可放大', () => {
+    expect(
+      workflowAssetCardZoomEligible(
+        makeTextAsset({
+          displayKey: 'gen_v1',
+          results: { gen_v1: 'data:image/png;base64,AAA' },
+        }),
+        'data:image/png;base64,AAA'
+      )
+    ).toBe(true);
+  });
+
+  it('普通图片资产有位图时可放大', () => {
+    const imageAsset: WorkflowAsset = {
+      id: 'img-1',
+      assetKind: 'image',
+      original: 'data:image/png;base64,AAA',
+      displayKey: 'original',
+      results: {},
+      resultOrder: [],
+      archived: false,
+      hiddenInGrid: false,
+      createdAt: Date.now(),
+    };
+    expect(workflowAssetCardZoomEligible(imageAsset, 'data:image/png;base64,AAA')).toBe(true);
+  });
+
+  it('无图非文字资产不可放大', () => {
+    const empty: WorkflowAsset = {
+      id: 'empty-1',
+      assetKind: 'image',
+      original: '',
+      displayKey: 'original',
+      results: {},
+      resultOrder: [],
+      archived: false,
+      hiddenInGrid: false,
+      createdAt: Date.now(),
+    };
+    expect(workflowAssetCardZoomEligible(empty, '')).toBe(false);
   });
 });
 

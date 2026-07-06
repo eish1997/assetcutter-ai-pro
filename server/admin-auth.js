@@ -1,4 +1,4 @@
-import { hasPermission } from './admin-permissions.js';
+import { hasPermission, PERMISSIONS, SUPER_ROLE_SLUG } from './admin-permissions.js';
 import { buildAdminMePayload, resolveStaffContext } from './admin-roles-store.js';
 import { findUserById } from './auth-store.js';
 
@@ -18,7 +18,11 @@ export function createAdminAuthHelpers({ requireAuth, json }) {
   async function requirePermission(req, res, permission) {
     const staff = await requireStaff(req, res);
     if (!staff) return null;
-    if (!hasPermission(staff.permissions, permission)) {
+    const isSuper = staff.staffRole?.slug === SUPER_ROLE_SLUG;
+    const allowed =
+      hasPermission(staff.permissions, permission) ||
+      (isSuper && permission === PERMISSIONS.CREDITS_WRITE);
+    if (!allowed) {
       json(res, 403, { error: '权限不足' });
       return null;
     }

@@ -38,6 +38,17 @@ import { dispatchUnifiedAiSoftNotice, clipUnifiedAiNoticeMessage } from "./unifi
 import { emitMeteredUsage } from "./observability/metering/pipeline";
 import { meterReadingFromTask } from "./observability/metering/adapters/task";
 import { resolveBillingSkuForWorkflowVideo } from "./usageBillingSku";
+import { assertUnifiedProxyCreditsGate } from "./proxyCreditsGate";
+import {
+  createTripoTask as createTripoTaskImpl,
+  getTripoTask as getTripoTaskImpl,
+  waitTripoTaskDone as waitTripoTaskDoneImpl,
+  type TripoCreateTaskInput,
+} from "./tripoService";
+import {
+  creditsExceededUserMessage,
+  isCreditsExceededError,
+} from "../shared/credits";
 
 /** 统一「活儿」标识（日志/可观测；与 `WorkflowAiJobKind` 同义保留别名） */
 export type UnifiedAiJobKind =
@@ -92,19 +103,30 @@ async function traceUnifiedAiCall<T>(
   const channels = getEnabledChannels().join(",");
   const fields = { channels, ...(debugFields?.() ?? {}) };
   try {
+    await assertUnifiedProxyCreditsGate(kind);
     const out = await fn();
     if (debug) console.info(`[unified-ai] ${kind} ok ${Math.round(nowMs() - t0)}ms`, fields);
     return out;
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     const errorHint =
-      e instanceof GeminiProxyFairnessRejectedError
+      isCreditsExceededError(e)
+        ? "credits_exceeded"
+        : e instanceof GeminiProxyFairnessRejectedError
         ? e.status === 429 || e.code === "rate_limited"
           ? "rate_limit"
           : "upstream_busy"
         : unifiedAiErrorHint(msg);
     if (debug) {
       console.warn(`[unified-ai] ${kind} fail ${Math.round(nowMs() - t0)}ms`, { ...fields, errorHint }, msg);
+    }
+    if (isCreditsExceededError(e)) {
+      dispatchUnifiedAiSoftNotice({
+        kind: "credits_exceeded",
+        message: creditsExceededUserMessage(),
+        jobKind: kind,
+      });
+      throw new Error(creditsExceededUserMessage(), { cause: e });
     }
     if (!(e instanceof GeminiProxyFairnessRejectedError)) {
       if (errorHint === "rate_limit" || errorHint === "upstream_busy") {
@@ -253,7 +275,15 @@ export type {
   TripoTaskType,
 } from "./tripoService";
 
-export { createTripoTask, getTripoTask, waitTripoTaskDone } from "./tripoService";
+export async function createTripoTask(input: TripoCreateTaskInput): Promise<string> {
+  return traceUnifiedAiCall(
+    "workflow_generate_3d",
+    () => createTripoTaskImpl(input),
+    () => ({ taskType: input.type })
+  );
+}
+
+export { getTripoTaskImpl as getTripoTask, waitTripoTaskDoneImpl as waitTripoTaskDone };
 
 // ----- 腾讯混元生 3D（ai3d，实现见 tencentService.ts） -----
 export * from "./tencentService";
@@ -269,6 +299,9 @@ export function isWorkflowVideoAvailable(): boolean {
 
 /** @kind workflow_generate_video — POST 至 `VITE_WORKFLOW_VIDEO_API_URL` */
 export async function workflowGenerateVideo(input: WorkflowVideoJobInput): Promise<WorkflowVideoJobResult> {
+  if (!isWorkflowVideoBridgeConfigured()) {
+    throw new WorkflowVideoNotAvailableError();
+  }
   return traceUnifiedAiCall(
     "workflow_generate_video",
     async () => {

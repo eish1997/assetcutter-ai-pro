@@ -1,5 +1,6 @@
 import React from 'react';
 import { ADMIN_NAV_ITEMS } from '../../services/adminPermissions';
+import { navigateMainSite } from '../../services/adminNavigate';
 import { useAdminStaff } from './AdminStaffContext';
 import { logoutSession } from '../../services/authClient';
 
@@ -83,12 +84,13 @@ const AdminLayout: React.FC<AdminLayoutProps> = ({ children, currentPath, onNavi
           ))}
         </nav>
         <div className="px-3 py-3 border-t border-[#2e2e32] space-y-2">
-          <a
-            href="/"
+          <button
+            type="button"
+            onClick={() => navigateMainSite()}
             className="flex items-center justify-center gap-2 w-full py-2.5 rounded-xl border border-[#2e2e32] bg-[#1c1c22] text-[9px] font-black uppercase tracking-widest text-gray-300 hover:bg-[#2e2e36] hover:border-[#3a3a40] transition-all"
           >
-            返回主界面
-          </a>
+            回到主站
+          </button>
           <button
             type="button"
             onClick={() => {
@@ -105,6 +107,16 @@ const AdminLayout: React.FC<AdminLayoutProps> = ({ children, currentPath, onNavi
       <main className="flex-1 flex flex-col">
         <header className="h-14 border-b border-[#2e2e32] flex items-center justify-between px-6 bg-[#16161a]">
           <h1 className="text-[12px] font-black uppercase tracking-[0.2em] text-gray-300">Admin Console</h1>
+          <button
+            type="button"
+            onClick={() => navigateMainSite()}
+            className="flex items-center gap-2 rounded-xl border border-[#2e2e32] bg-[#1c1c22] px-3 py-1.5 text-[10px] font-semibold text-gray-300 hover:bg-[#2e2e36] hover:border-[#3a3a40] transition-all"
+          >
+            <svg viewBox="0 0 20 20" className="w-3.5 h-3.5 shrink-0" fill="none" aria-hidden>
+              <path d="M4 10h10M9.5 5.5 4 10l5.5 4.5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+            回到主站
+          </button>
         </header>
         <div className="flex-1 overflow-auto p-6">{children}</div>
       </main>

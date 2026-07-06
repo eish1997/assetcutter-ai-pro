@@ -1,6 +1,5 @@
 /**
- * 试用（代理）通道配额：登录用户由 auth-api 按账号计数；未登录为设备级 localStorage（可清空）。
- * 与 legacy `trial` 供应商解耦：凡走站点 bulk 代理且未自带 Gemini Key 时扣减。
+ * 代理通道准入：登录用户优先走积分闸门（CREDITS_BILLING）；关闭时回退 trial-gemini 日次；访客 localStorage。
  */
 import { apiUrl } from './apiBase';
 import { readLocalJson, scopedStorageKey, writeLocalJson } from './clientPersist';
@@ -53,23 +52,58 @@ function consumeGuestTrialSlotOrThrow(limit: number): void {
   writeLocalJson(key, { day: today, count: count + 1 });
 }
 
-/**
- * 在发起 `VITE_BULK_IMAGE_API` 异步任务前调用：占用一次试用额度（登录走服务端，未登录走本机计数）。
- */
-export async function consumeTrialGeminiSlotBeforeProxyOrThrow(): Promise<void> {
-  if (getUserApiKey()?.trim()) return;
-  const limit = trialDailyLimitClient();
+function throwProxyGateNetworkError(): never {
+  try {
+    if (import.meta.env.DEV) {
+      console.warn(
+        '[assetcutter] 代理准入接口未送达。请确认 auth-api 已监听 9100，且通过 Vite 同源访问 /api/auth（勿把 API 指到不可达地址）。'
+      );
+    }
+  } catch {
+    /* ignore */
+  }
+  throw new Error('无法连接账户服务，请检查网络后重试。');
+}
+
+async function consumeLoggedInTrialGeminiSlotOrThrow(limit: number): Promise<void> {
   try {
     await requestJson<{ ok?: boolean }>(apiUrl('/api/auth/trial-gemini/consume'), {
       method: 'POST',
       body: '{}',
     });
   } catch (e) {
-    /** 404：多为本地 auth-api 未用当前代码重启，路由尚未挂载；与 401 一样走访客本机计数，避免能力名旁只显示「Not found」。 */
+    if (e instanceof HttpRequestError && e.status === 429) {
+      throw new Error(e.message || `试用通道每日限 ${limit} 次任务`);
+    }
+    if (e instanceof HttpRequestError && e.status === 403) {
+      throw e;
+    }
+    throw e;
+  }
+}
+
+/**
+ * 在发起站点 bulk 代理任务前调用：登录用户走 `/api/auth/credits-gate`（积分制）或 trial 日次；访客本机计数。
+ * @param estimatedCredits 预检最低消耗（默认 1；工作流按任务类型传入保守估计）
+ */
+export async function assertCreditsGateBeforeProxyOrThrow(estimatedCredits = 1): Promise<void> {
+  if (getUserApiKey()?.trim()) return;
+  const required = Math.max(1, Math.floor(Number(estimatedCredits) || 1));
+  const limit = trialDailyLimitClient();
+  try {
+    const res = await requestJson<{ ok?: boolean; disabled?: boolean }>(apiUrl('/api/auth/credits-gate'), {
+      method: 'POST',
+      body: JSON.stringify({ estimatedCredits: required }),
+    });
+    if (res.disabled) {
+      await consumeLoggedInTrialGeminiSlotOrThrow(limit);
+    }
+    return;
+  } catch (e) {
     if (e instanceof HttpRequestError && (e.status === 401 || e.status === 404)) {
       if (e.status === 404) {
         console.warn(
-          '[trial-gemini] POST /api/auth/trial-gemini/consume 返回 404，已按访客额度本机计数。请确认已运行 npm run dev:auth-backend（9100）且为当前仓库版本。'
+          '[proxy-gate] POST /api/auth/credits-gate 返回 404，已按访客额度本机计数。请确认 auth-api 为当前版本。'
         );
       }
       consumeGuestTrialSlotOrThrow(limit);
@@ -78,19 +112,16 @@ export async function consumeTrialGeminiSlotBeforeProxyOrThrow(): Promise<void> 
     if (e instanceof HttpRequestError && e.status === 429) {
       throw new Error(e.message || `试用通道每日限 ${limit} 次任务`);
     }
+    if (e instanceof HttpRequestError && e.status === 403) {
+      throw e;
+    }
     const msg = String((e as Error)?.message ?? e);
     if (/failed to fetch|networkerror|load failed/i.test(msg)) {
-      try {
-        if (import.meta.env.DEV) {
-          console.warn(
-            '[assetcutter] 试用额度接口未送达。请确认 auth-api 已监听 9100，且通过 Vite 同源访问 /api/auth（勿把 API 指到不可达地址）。'
-          );
-        }
-      } catch {
-        /* ignore */
-      }
-      throw new Error('无法连接账户服务，请检查网络后重试。');
+      throwProxyGateNetworkError();
     }
     throw e;
   }
 }
+
+/** @deprecated 使用 assertCreditsGateBeforeProxyOrThrow */
+export const consumeTrialGeminiSlotBeforeProxyOrThrow = assertCreditsGateBeforeProxyOrThrow;

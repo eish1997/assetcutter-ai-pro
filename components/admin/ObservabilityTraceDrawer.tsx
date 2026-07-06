@@ -9,7 +9,8 @@ import {
   taskEventLevelDot,
   taskEventSummary,
 } from '../../services/taskEventSummary';
-import { fmtUsageEstimateCell, fmtUsageQuantity } from '../../services/usageApi';
+import { fmtUsageEventCredits, sumUsageEventsCredits } from '../../services/usageApi';
+import { fmtCredits } from '../../shared/credits';
 
 type ObservabilityTraceDrawerProps = {
   correlationId: string | null;
@@ -77,10 +78,11 @@ const ObservabilityTraceDrawer: React.FC<ObservabilityTraceDrawerProps> = ({ cor
             <section className="rounded-xl border border-[#2e2e32] bg-[#0f0f0f] p-3 space-y-2">
               <h3 className="text-[10px] font-black uppercase text-blue-400/80">用量环</h3>
               <p className="text-[11px] text-gray-300">
-                {trace.usage.eventCount} 条 · 估算{' '}
+                {trace.usage.eventCount} 条 · 消耗{' '}
                 <span className="text-amber-400/90">
-                  ${Number(trace.usage.totalCostUsdEst || 0).toFixed(4)}
-                </span>
+                  {fmtCredits(sumUsageEventsCredits(usageEvents))}
+                </span>{' '}
+                积分
               </p>
               {usageEvents.length === 0 ? (
                 <p className="text-[10px] text-gray-500">无关联用量记录</p>
@@ -93,11 +95,9 @@ const ObservabilityTraceDrawer: React.FC<ObservabilityTraceDrawerProps> = ({ cor
                     >
                       <div className="flex justify-between gap-2">
                         <span className="text-gray-400">{new Date(ev.createdAt).toLocaleString()}</span>
-                        <span className="text-amber-400/80">{fmtUsageEstimateCell(ev)}</span>
+                        <span className="text-amber-400/80">{fmtUsageEventCredits(ev)}</span>
                       </div>
-                      <p>
-                        {ev.billingSku} · {fmtUsageQuantity(ev)}
-                      </p>
+                      <p>{ev.billingSku}</p>
                       {ev.auditLogId ? (
                         <p className="text-[9px] text-gray-500 font-mono mt-0.5">audit {ev.auditLogId}</p>
                       ) : null}

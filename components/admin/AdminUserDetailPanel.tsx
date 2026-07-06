@@ -7,15 +7,17 @@ import {
   fetchTaskExecutionEvents,
   reconcileAdminUserWorkspaceUsage,
   updateAdminUser,
+  adjustAdminUserCredits,
+  fetchAdminUserCreditLedger,
+  type AdminUserCredits,
   type AdminUserLastLogin,
   type AdminUserSession,
-  type AdminUserTrialGemini,
   type TaskExecutionEvent,
 } from '../../services/adminClient';
 import { fetchAdminRoles, type AdminRoleRow } from '../../services/adminRolesClient';
 import { auditActionLabel } from '../../services/adminMatrix';
 import { auditLogSummary } from '../../services/auditLogSummary';
-import { PERMISSIONS } from '../../services/adminPermissions';
+import { PERMISSIONS, canGrantAdminCredits } from '../../services/adminPermissions';
 import { blockIfRolePreview } from '../../services/adminRolePreview';
 import {
   adminAuditUrlForUser,
@@ -27,6 +29,7 @@ import {
   taskEventLevelDot,
   taskEventSummary,
 } from '../../services/taskEventSummary';
+import { fmtCredits, creditLedgerKindLabel, type CreditLedgerEntry } from '../../shared/credits';
 import { CustomDropdown } from '../ui/CustomDropdown';
 import { useAdminStaff } from './AdminStaffContext';
 
@@ -47,8 +50,9 @@ type Props = {
 };
 
 const AdminUserDetailPanel: React.FC<Props> = ({ userId }) => {
-  const { can, isRolePreview } = useAdminStaff();
+  const { can, isRolePreview, me } = useAdminStaff();
   const canWrite = can(PERMISSIONS.USERS_WRITE);
+  const canCreditsWrite = canGrantAdminCredits(me?.permissions, me?.staffRole?.slug);
   const canRoleWrite = can(PERMISSIONS.USERS_ROLE_WRITE);
   const canReconcile = can(PERMISSIONS.USERS_RECONCILE);
   const canAudit = can(PERMISSIONS.AUDIT_READ);
@@ -71,7 +75,41 @@ const AdminUserDetailPanel: React.FC<Props> = ({ userId }) => {
   const [tasksLoading, setTasksLoading] = React.useState(false);
   const [lastLogin, setLastLogin] = React.useState<AdminUserLastLogin | null>(null);
   const [sessions, setSessions] = React.useState<AdminUserSession[]>([]);
-  const [trialGemini, setTrialGemini] = React.useState<AdminUserTrialGemini | null>(null);
+  const [credits, setCredits] = React.useState<AdminUserCredits | null>(null);
+  const [creditDelta, setCreditDelta] = React.useState('');
+  const [creditNote, setCreditNote] = React.useState('');
+  const [creditModal, setCreditModal] = React.useState<'grant' | 'deduct' | null>(null);
+  const [creditLedger, setCreditLedger] = React.useState<CreditLedgerEntry[]>([]);
+  const [creditLedgerCursor, setCreditLedgerCursor] = React.useState<string | null>(null);
+  const [creditLedgerLoading, setCreditLedgerLoading] = React.useState(false);
+
+  const loadCreditLedger = React.useCallback(
+    async (opts?: { append?: boolean; cursor?: string | null }) => {
+      if (!userId) return;
+      setCreditLedgerLoading(true);
+      try {
+        const res = await fetchAdminUserCreditLedger(userId, {
+          limit: 20,
+          cursor: opts?.cursor || undefined,
+        });
+        setCreditLedger((prev) => (opts?.append ? [...prev, ...res.entries] : res.entries));
+        setCreditLedgerCursor(res.nextCursor);
+      } catch {
+        if (!opts?.append) setCreditLedger([]);
+        setCreditLedgerCursor(null);
+      } finally {
+        setCreditLedgerLoading(false);
+      }
+    },
+    [userId]
+  );
+
+  React.useEffect(() => {
+    if (loading || !user) return;
+    if (typeof window === 'undefined') return;
+    if (window.location.hash !== '#admin-user-credits') return;
+    document.getElementById('admin-user-credits')?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+  }, [loading, user]);
 
   const loadUser = React.useCallback(async () => {
     setLoading(true);
@@ -81,7 +119,7 @@ const AdminUserDetailPanel: React.FC<Props> = ({ userId }) => {
       setUser(res.user);
       setLastLogin(res.lastLogin ?? null);
       setSessions(res.sessions ?? []);
-      setTrialGemini(res.trialGemini ?? null);
+      setCredits(res.credits ?? null);
       const q = res.user.workspaceQuotaBytes;
       setQuotaDraftMb(q != null && Number.isFinite(q) ? String(Math.round(q / (1024 * 1024))) : '200');
     } catch (err) {
@@ -89,7 +127,7 @@ const AdminUserDetailPanel: React.FC<Props> = ({ userId }) => {
       setUser(null);
       setLastLogin(null);
       setSessions([]);
-      setTrialGemini(null);
+      setCredits(null);
     } finally {
       setLoading(false);
     }
@@ -98,6 +136,10 @@ const AdminUserDetailPanel: React.FC<Props> = ({ userId }) => {
   React.useEffect(() => {
     void loadUser();
   }, [loadUser]);
+
+  React.useEffect(() => {
+    void loadCreditLedger();
+  }, [loadCreditLedger]);
 
   React.useEffect(() => {
     if (!canRoleWrite) return;
@@ -226,6 +268,40 @@ const AdminUserDetailPanel: React.FC<Props> = ({ userId }) => {
     }
   };
 
+  const handleCreditAdjust = async () => {
+    if (!user || !creditModal) return;
+    if (blockIfRolePreview(isRolePreview)) return;
+    const n = Math.floor(Number(creditDelta));
+    if (!Number.isFinite(n) || n < 1) {
+      setError('请输入至少 1 的整数');
+      return;
+    }
+    const delta = creditModal === 'grant' ? n : -n;
+    const note = creditNote.trim();
+    if (!note) {
+      setError('备注必填');
+      return;
+    }
+    if (creditModal === 'deduct' && credits && n > credits.balance) {
+      setError('扣回数量不能超过当前余额');
+      return;
+    }
+    setSaving(true);
+    setError('');
+    try {
+      const res = await adjustAdminUserCredits(user.id, delta, note);
+      setCredits(res.balance);
+      setCreditModal(null);
+      setCreditDelta('');
+      setCreditNote('');
+      void loadCreditLedger();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '积分调整失败');
+    } finally {
+      setSaving(false);
+    }
+  };
+
   if (loading && !user) {
     return <div className="rounded-2xl border border-[#2e2e32] bg-[#121214] p-6 text-[11px] text-gray-400">加载用户详情…</div>;
   }
@@ -318,13 +394,13 @@ const AdminUserDetailPanel: React.FC<Props> = ({ userId }) => {
             )}
           </div>
           <div className="rounded-xl border border-[#252528] bg-[#0f0f0f] p-3">
-            <p className="text-[10px] uppercase tracking-wider text-gray-500">试用 Gemini（今日）</p>
-            {trialGemini ? (
+            <p className="text-[10px] uppercase tracking-wider text-gray-500">AI 积分</p>
+            {credits ? (
               <>
                 <p className="mt-2 text-[11px] text-gray-200">
-                  {trialGemini.used} / {trialGemini.limit} 次
+                  余额 {fmtCredits(credits.balance)} · 累计消耗 {fmtCredits(credits.lifetimeSpent)}
                 </p>
-                <p className="mt-1 text-[10px] text-gray-500">剩余 {trialGemini.remaining} · UTC {trialGemini.day}</p>
+                <p className="mt-1 text-[10px] text-gray-500">累计发放 {fmtCredits(credits.lifetimeGranted)}</p>
               </>
             ) : (
               <p className="mt-2 text-[11px] text-gray-600">—</p>
@@ -374,6 +450,152 @@ const AdminUserDetailPanel: React.FC<Props> = ({ userId }) => {
             </table>
           </div>
         ) : null}
+      </div>
+
+      <div id="admin-user-credits" className="scroll-mt-4 rounded-2xl border border-[#2e2e32] bg-[#121214] p-4 space-y-3">
+        <h3 className="text-[11px] font-semibold text-gray-300">AI 积分</h3>
+        <div className="grid gap-2 sm:grid-cols-3 text-[11px]">
+          <div>
+            <p className="text-[10px] text-gray-500">当前余额</p>
+            <p className="mt-1 text-lg font-semibold text-amber-400/95">{fmtCredits(credits?.balance ?? 0)}</p>
+          </div>
+          <div>
+            <p className="text-[10px] text-gray-500">累计发放</p>
+            <p className="mt-1 text-white">{fmtCredits(credits?.lifetimeGranted ?? 0)}</p>
+          </div>
+          <div>
+            <p className="text-[10px] text-gray-500">累计消耗</p>
+            <p className="mt-1 text-white">{fmtCredits(credits?.lifetimeSpent ?? 0)}</p>
+          </div>
+        </div>
+        {canCreditsWrite ? (
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              disabled={saving}
+              onClick={() => {
+                setCreditModal('grant');
+                setCreditDelta('');
+                setCreditNote('');
+              }}
+              className="px-3 py-2 rounded-xl border border-[#3b6fb8] bg-[#1e3a5f] text-[10px] text-blue-200 disabled:opacity-40"
+            >
+              发放积分
+            </button>
+            <button
+              type="button"
+              disabled={saving || !credits?.balance}
+              onClick={() => {
+                setCreditModal('deduct');
+                setCreditDelta('');
+                setCreditNote('');
+              }}
+              className="px-3 py-2 rounded-xl border border-[#2e2e32] bg-[#1c1c22] text-[10px] text-gray-300 disabled:opacity-40"
+            >
+              扣回积分
+            </button>
+          </div>
+        ) : null}
+        {!canCreditsWrite ? (
+          <p className="text-[10px] text-gray-500">
+            当前账号无积分发放权限。超级管理员默认可用；其他角色需在「角色与权限」勾选「积分发放」。
+          </p>
+        ) : null}
+        {creditModal ? (
+          <div className="rounded-xl border border-[#343438] bg-[#0f0f0f] p-3 space-y-2">
+            <p className="text-[10px] text-gray-400">{creditModal === 'grant' ? '发放积分' : '扣回积分'}</p>
+            <input
+              type="number"
+              min={1}
+              value={creditDelta}
+              onChange={(e) => setCreditDelta(e.target.value)}
+              placeholder="数量"
+              className="w-full rounded-xl border border-[#343438] bg-[#1c1c22] px-3 py-2 text-[11px] text-white outline-none focus:border-[#3b82f6]"
+            />
+            <input
+              type="text"
+              value={creditNote}
+              onChange={(e) => setCreditNote(e.target.value)}
+              placeholder="备注（必填）"
+              className="w-full rounded-xl border border-[#343438] bg-[#1c1c22] px-3 py-2 text-[11px] text-white outline-none focus:border-[#3b82f6]"
+            />
+            <div className="flex gap-2">
+              <button
+                type="button"
+                disabled={saving}
+                onClick={() => void handleCreditAdjust()}
+                className="px-3 py-2 rounded-xl border border-[#3b6fb8] bg-[#1e3a5f] text-[10px] text-blue-200 disabled:opacity-40"
+              >
+                确认
+              </button>
+              <button
+                type="button"
+                disabled={saving}
+                onClick={() => setCreditModal(null)}
+                className="px-3 py-2 rounded-xl border border-[#2e2e32] bg-[#1c1c22] text-[10px] text-gray-400"
+              >
+                取消
+              </button>
+            </div>
+          </div>
+        ) : null}
+        <div className="space-y-2 pt-1">
+          <div className="flex items-center justify-between gap-2">
+            <h4 className="text-[10px] font-semibold uppercase tracking-wider text-gray-500">积分流水</h4>
+            {creditLedgerLoading ? <span className="text-[10px] text-gray-600">加载中…</span> : null}
+          </div>
+          {creditLedger.length ? (
+            <div className="overflow-x-auto rounded-xl border border-[#252528]">
+              <table className="w-full text-[10px]">
+                <thead className="bg-[#151518] text-gray-500">
+                  <tr>
+                    <th className="text-left px-3 py-2 font-normal">时间</th>
+                    <th className="text-left px-3 py-2 font-normal">类型</th>
+                    <th className="text-right px-3 py-2 font-normal">变动</th>
+                    <th className="text-right px-3 py-2 font-normal">余额</th>
+                    <th className="text-left px-3 py-2 font-normal">备注</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {creditLedger.map((row) => (
+                    <tr key={row.id} className="border-t border-[#252528]">
+                      <td className="px-3 py-2 text-gray-400 whitespace-nowrap">
+                        {new Date(row.createdAt).toLocaleString()}
+                      </td>
+                      <td className="px-3 py-2 text-gray-300">{creditLedgerKindLabel(row.kind)}</td>
+                      <td
+                        className={`px-3 py-2 text-right tabular-nums ${
+                          row.delta >= 0 ? 'text-emerald-400/90' : 'text-amber-300/90'
+                        }`}
+                      >
+                        {row.delta >= 0 ? '+' : ''}
+                        {fmtCredits(row.delta)}
+                      </td>
+                      <td className="px-3 py-2 text-right tabular-nums text-gray-200">
+                        {fmtCredits(row.balanceAfter)}
+                      </td>
+                      <td className="px-3 py-2 text-gray-500 max-w-[12rem] truncate" title={row.note || ''}>
+                        {row.note || '—'}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <p className="text-[10px] text-gray-600">暂无流水</p>
+          )}
+          {creditLedgerCursor ? (
+            <button
+              type="button"
+              disabled={creditLedgerLoading}
+              onClick={() => void loadCreditLedger({ append: true, cursor: creditLedgerCursor })}
+              className="px-3 py-1.5 rounded-lg border border-[#2e2e32] bg-[#1c1c22] text-[10px] text-gray-400 hover:bg-[#2e2e36] disabled:opacity-40"
+            >
+              加载更多
+            </button>
+          ) : null}
+        </div>
       </div>
 
       <div className="rounded-2xl border border-[#2e2e32] bg-[#121214] p-4 space-y-3">

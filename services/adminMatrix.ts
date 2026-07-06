@@ -31,6 +31,8 @@ const ALL_PERMISSION_VALUES = [
   'presets.publish',
   'roles.read',
   'roles.write',
+  'credits.write',
+  'registration_invites.write',
 ] as const;
 
 export type MatrixColumnDef = {
@@ -53,6 +55,8 @@ export const MATRIX_COLUMN_DEFS: MatrixColumnDef[] = [
   { id: 'audit', label: '审计日志', kind: 'toggle', permissions: ['audit.read'] },
   { id: 'taskEvents', label: '任务执行', kind: 'toggle', permissions: ['task_events.read'] },
   { id: 'usage', label: 'AI 用量', kind: 'toggle', permissions: ['usage.read'] },
+  { id: 'credits', label: '积分发放', kind: 'toggle', permissions: ['credits.write'] },
+  { id: 'registrationInvites', label: '注册邀请码', kind: 'toggle', permissions: ['registration_invites.write'] },
   { id: 'companion', label: '伴侣发行', kind: 'rw', read: 'companion.read', write: 'companion.write' },
   { id: 'companionDelete', label: '伴侣删除', kind: 'toggle', permissions: ['companion.delete'] },
   {
@@ -92,6 +96,8 @@ export const PERMISSION_LABELS: Record<string, string> = {
   'presets.publish': '能力预设发布',
   'roles.read': '角色矩阵查看',
   'roles.write': '角色矩阵编辑',
+  'credits.write': '积分发放/扣回',
+  'registration_invites.write': '注册邀请码管理',
 };
 
 export function permissionLabel(key: string): string {
@@ -121,6 +127,12 @@ export function matrixToPermissions(matrix: Record<string, MatrixCellValue>, rol
   if (set.has('users.write') || set.has('users.role.write')) {
     set.add('users.read');
   }
+  if (set.has('credits.write')) {
+    set.add('users.read');
+  }
+  if (set.has('registration_invites.write')) {
+    set.add('users.read');
+  }
   if (set.has('roles.write')) set.add('roles.read');
   return filterPermissionsForRoleSlug(roleSlug, [...set]);
 }
@@ -134,6 +146,8 @@ export const MATRIX_COLUMN_IDS = [
   'audit',
   'taskEvents',
   'usage',
+  'credits',
+  'registrationInvites',
   'companion',
   'companionDelete',
   'geminiFairness',
@@ -151,6 +165,7 @@ export const AUDIT_ACTION_LABELS: Record<string, string> = {
   'auth.register': '注册',
   'auth.logout': '登出',
   'admin.user_update': '用户变更',
+  'admin.credits_adjust': '积分调整',
   'admin.users_export': '用户 CSV 导出',
   'admin.role_create': '创建角色',
   'admin.role_delete': '删除角色',
@@ -166,6 +181,9 @@ export const AUDIT_ACTION_LABELS: Record<string, string> = {
   'admin.staff_invite_create': '创建成员邀请',
   'admin.staff_invite_revoke': '撤销成员邀请',
   'admin.staff_invite_redeemed': '成员邀请核销',
+  'admin.registration_invite_create': '创建注册邀请码',
+  'admin.registration_invite_revoke': '撤销注册邀请码',
+  'auth.registration_invite_redeemed': '注册邀请码核销',
   'companion_artifact_download': '伴侣下载',
 };
 

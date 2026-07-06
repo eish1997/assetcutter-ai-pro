@@ -116,6 +116,9 @@ const AdminDashboardPanel: React.FC = () => {
           <div className="flex flex-wrap gap-2">
             {can(PERMISSIONS.SYSTEM_STATUS_READ) ? <QuickLink label="系统状态" path="/admin/system-status" /> : null}
             {can(PERMISSIONS.USERS_ROLE_WRITE) ? <QuickLink label="成员邀请" path="/admin/staff-invites" /> : null}
+            {can(PERMISSIONS.REGISTRATION_INVITES_WRITE) ? (
+              <QuickLink label="注册邀请码" path="/admin/registration-invites" />
+            ) : null}
             {can(PERMISSIONS.COMPANION_READ) ? <QuickLink label="伴侣发行" path="/admin/companion-artifacts" /> : null}
             {can(PERMISSIONS.GEMINI_FAIRNESS_READ) ? (
               <QuickLink label="Gemini 限流" path="/admin/gemini-fairness" />

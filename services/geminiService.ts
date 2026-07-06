@@ -15,7 +15,7 @@ import {
   getVectorengineApiKey,
   getVectorengineBaseUrl,
 } from "./settingsStore";
-import { consumeTrialGeminiSlotBeforeProxyOrThrow } from "./trialGeminiQuota";
+import { assertCreditsGateBeforeProxyOrThrow } from "./trialGeminiQuota";
 import { emitMeteredUsage } from "./observability/metering/pipeline";
 import { meterReadingFromGeminiProxy } from "./observability/metering/adapters/gemini";
 import {
@@ -563,7 +563,7 @@ async function bulkProxyGenerateContentAsync(args: {
   /** 服务端可对 503 多次退避，轮询上限需覆盖 */
   const maxPollMs = Math.max(httpTimeout + 240_000, GEMINI_ASYNC_CLIENT_MAX_POLL_MS);
 
-  await consumeTrialGeminiSlotBeforeProxyOrThrow();
+  await assertCreditsGateBeforeProxyOrThrow();
   await ensureGeminiProxySessionHint();
 
   const bindingRegistryId = resolveMeteringRegistryId({ model: args.model, config }) || (args.registryId || args.model || "").trim();
@@ -667,7 +667,7 @@ async function bulkProxyGenerateContentBatchAsync(args: {
   aiBackend?: "vertex";
 }): Promise<Array<{ ok: boolean; result?: { text?: string; candidates?: unknown[] }; error?: string }>> {
   if (!Array.isArray(args.items) || args.items.length === 0) return [];
-  await consumeTrialGeminiSlotBeforeProxyOrThrow();
+  await assertCreditsGateBeforeProxyOrThrow();
   await ensureGeminiProxySessionHint();
   const create = await bulkFetchCreateWithFairnessRetry(bulkApiUrl("/proxy/gemini/async-batch"), {
     method: "POST",

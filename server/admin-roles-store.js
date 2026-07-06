@@ -225,6 +225,62 @@ async function migrateSidebarPermissionKeys() {
   if (changed) writeDb(db);
 }
 
+/** 系统角色补全 credits.write（积分 v1 上线前已存在的库）。 */
+async function migrateCreditsWritePermission(roleIds) {
+  const targets = [
+    { slug: SUPER_ROLE_SLUG, roleId: roleIds[SUPER_ROLE_SLUG] },
+    { slug: ADMIN_ROLE_SLUG, roleId: roleIds[ADMIN_ROLE_SLUG] },
+  ].filter((t) => t.roleId);
+  const key = 'credits.write';
+  if (USE_POSTGRES) {
+    const p = getPool();
+    for (const { roleId } of targets) {
+      await p.query('INSERT INTO role_permissions (role_id, permission_key) VALUES ($1,$2) ON CONFLICT DO NOTHING', [
+        roleId,
+        key,
+      ]);
+    }
+    return;
+  }
+  const db = readDb();
+  let changed = false;
+  for (const { roleId } of targets) {
+    const has = (db.rolePermissions || []).some((rp) => rp.roleId === roleId && rp.permissionKey === key);
+    if (has) continue;
+    db.rolePermissions.push({ roleId, permissionKey: key });
+    changed = true;
+  }
+  if (changed) writeDb(db);
+}
+
+/** 系统角色补全 registration_invites.write（邀请注册 v1 上线前已存在的库）。 */
+async function migrateRegistrationInvitesWritePermission(roleIds) {
+  const targets = [
+    { slug: SUPER_ROLE_SLUG, roleId: roleIds[SUPER_ROLE_SLUG] },
+    { slug: ADMIN_ROLE_SLUG, roleId: roleIds[ADMIN_ROLE_SLUG] },
+  ].filter((t) => t.roleId);
+  const key = 'registration_invites.write';
+  if (USE_POSTGRES) {
+    const p = getPool();
+    for (const { roleId } of targets) {
+      await p.query('INSERT INTO role_permissions (role_id, permission_key) VALUES ($1,$2) ON CONFLICT DO NOTHING', [
+        roleId,
+        key,
+      ]);
+    }
+    return;
+  }
+  const db = readDb();
+  let changed = false;
+  for (const { roleId } of targets) {
+    const has = (db.rolePermissions || []).some((rp) => rp.roleId === roleId && rp.permissionKey === key);
+    if (has) continue;
+    db.rolePermissions.push({ roleId, permissionKey: key });
+    changed = true;
+  }
+  if (changed) writeDb(db);
+}
+
 export async function ensureAdminRbac() {
   if (rbacReady) return;
   if (USE_POSTGRES) {
@@ -236,6 +292,8 @@ export async function ensureAdminRbac() {
   const roleIds = await seedSystemRoles();
   await migrateLegacyStaffUsers(roleIds);
   await migrateSidebarPermissionKeys();
+  await migrateCreditsWritePermission(roleIds);
+  await migrateRegistrationInvitesWritePermission(roleIds);
   resetRoleCache();
   rbacReady = true;
 }

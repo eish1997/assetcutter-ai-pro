@@ -1,10 +1,8 @@
 import React from 'react';
 import type { UsageEventRow } from '../../services/adminClient';
 import {
-  fmtUsageEstimateCell,
-  fmtUsageGroupEstimate,
-  fmtUsageGroupMeterSummary,
-  fmtUsageQuantity,
+  fmtUsageEventCredits,
+  fmtUsageGroupCredits,
   groupUsageEventsByTask,
 } from '../../services/usageApi';
 
@@ -39,7 +37,7 @@ const UsageEventsGroupedTable: React.FC<UsageEventsGroupedTableProps> = ({
   onOpenTrace,
 }) => {
   const groups = React.useMemo(() => groupUsageEventsByTask(events), [events]);
-  const colCount = 5 + (showUser ? 1 : 0) + (showProvider ? 1 : 0);
+  const colCount = 4 + (showUser ? 1 : 0) + (showProvider ? 1 : 0);
 
   return (
     <table className="w-full text-[11px]">
@@ -49,8 +47,7 @@ const UsageEventsGroupedTable: React.FC<UsageEventsGroupedTableProps> = ({
           <th className="px-3 py-2 font-normal">时间</th>
           {showUser ? <th className="px-3 py-2 font-normal">用户</th> : null}
           <th className="px-3 py-2 font-normal">SKU</th>
-          <th className="px-3 py-2 font-normal">Token</th>
-          <th className="px-3 py-2 font-normal">估算</th>
+          <th className="px-3 py-2 font-normal text-right">积分消耗</th>
           {showProvider ? <th className="px-3 py-2 font-normal">供货商</th> : null}
         </tr>
       </thead>
@@ -77,12 +74,9 @@ const UsageEventsGroupedTable: React.FC<UsageEventsGroupedTableProps> = ({
                   {multi ? (
                     <p className="text-[9px] text-gray-500 mt-1">{rowSpan} 次请求</p>
                   ) : null}
-                  <p className="text-[9px] text-blue-400/80 mt-1" title={fmtUsageGroupMeterSummary(group.events)}>
-                    合计 {fmtUsageGroupMeterSummary(group.events)}
+                  <p className="text-[9px] text-amber-400/90 mt-1">
+                    合计 {fmtUsageGroupCredits(group.events)}
                   </p>
-                  {multi ? (
-                    <p className="text-[9px] text-amber-500/80 mt-0.5">{fmtUsageGroupEstimate(group.events)}</p>
-                  ) : null}
                   {traceTaskHref && group.displayTaskId && group.displayTaskId !== '—' ? (
                     <div className="flex flex-wrap gap-2 mt-1">
                       {onOpenTrace ? (
@@ -115,21 +109,10 @@ const UsageEventsGroupedTable: React.FC<UsageEventsGroupedTableProps> = ({
                 <td className="px-3 py-2 text-gray-300">{ev.username || ev.userId}</td>
               ) : null}
               <td className="px-3 py-2 text-gray-300 font-mono text-[10px]">{ev.billingSku}</td>
-              <td className="px-3 py-2 text-gray-400">
-                {fmtUsageQuantity(ev)}
-                {ev.requestId ? (
-                  <span
-                    className="block text-[8px] text-gray-600 font-mono truncate max-w-[7rem]"
-                    title={ev.requestId}
-                  >
-                    {shortId(ev.requestId, 8)}
-                  </span>
-                ) : null}
-              </td>
-              <td className="px-3 py-2 text-amber-500/90">
-                {fmtUsageEstimateCell(ev)}
+              <td className="px-3 py-2 text-amber-300/90 tabular-nums text-right">
+                {fmtUsageEventCredits(ev)}
                 {showConfidence ? (
-                  <span className="text-gray-600 ml-1">({ev.costConfidence})</span>
+                  <span className="block text-[8px] text-gray-600 font-normal">({ev.costConfidence})</span>
                 ) : null}
               </td>
               {showProvider ? <td className="px-3 py-2 text-gray-500">{ev.provider}</td> : null}

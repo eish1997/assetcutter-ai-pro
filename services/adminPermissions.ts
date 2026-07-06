@@ -1,6 +1,7 @@
 /** Keep in sync with server/admin-permissions.js */
 
 /** Keep in sync with server/admin-permissions.js */
+export const SUPER_ROLE_SLUG = 'super';
 export const AUDITOR_ROLE_SLUG = 'auditor';
 
 export const PERMISSIONS = {
@@ -22,6 +23,8 @@ export const PERMISSIONS = {
   PRESETS_PUBLISH: 'presets.publish',
   ROLES_READ: 'roles.read',
   ROLES_WRITE: 'roles.write',
+  CREDITS_WRITE: 'credits.write',
+  REGISTRATION_INVITES_WRITE: 'registration_invites.write',
 } as const;
 
 export type AdminPermission = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];
@@ -35,6 +38,15 @@ export const GEMINI_FAIRNESS_STRICT_FIELD_KEYS = new Set([
 export function hasAdminPermission(permissions: readonly string[] | undefined, key: AdminPermission): boolean {
   if (!permissions?.length) return false;
   return permissions.includes(key);
+}
+
+/** 积分发放：super 恒可；其余需 credits.write（兼容旧库未迁移权限） */
+export function canGrantAdminCredits(
+  permissions: readonly string[] | undefined,
+  staffRoleSlug?: string | null
+): boolean {
+  if (staffRoleSlug === SUPER_ROLE_SLUG) return true;
+  return hasAdminPermission(permissions, PERMISSIONS.CREDITS_WRITE);
 }
 
 /** 角色预览 / 无 Dashboard 权限时的首个可访问后台路径 */
@@ -55,6 +67,7 @@ export const ADMIN_NAV_ITEMS = [
   { label: '能力预设', path: '/admin/capability-presets', permission: PERMISSIONS.PRESETS_PUBLISH },
   { label: '系统状态', path: '/admin/system-status', permission: PERMISSIONS.SYSTEM_STATUS_READ },
   { label: '成员邀请', path: '/admin/staff-invites', permission: PERMISSIONS.USERS_ROLE_WRITE },
+  { label: '注册邀请码', path: '/admin/registration-invites', permission: PERMISSIONS.REGISTRATION_INVITES_WRITE },
   { label: '本地伴侣发行', path: '/admin/companion-artifacts', permission: PERMISSIONS.COMPANION_READ },
   { label: 'Gemini 公平限流', path: '/admin/gemini-fairness', permission: PERMISSIONS.GEMINI_FAIRNESS_READ },
   { label: '角色与权限', path: '/admin/roles', permission: PERMISSIONS.ROLES_READ },

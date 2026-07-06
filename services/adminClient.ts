@@ -1,3 +1,4 @@
+import type { CreditLedgerEntry } from '../shared/credits';
 import type { AuthUser } from './authClient';
 import { apiUrl, r2ApiUrl } from './apiBase';
 import { HttpRequestError, requestJson } from './httpClient';
@@ -27,11 +28,19 @@ export type AdminUserTrialGemini = {
   remaining: number;
 };
 
+export type AdminUserCredits = {
+  balance: number;
+  lifetimeGranted: number;
+  lifetimeSpent: number;
+  updatedAt?: string;
+};
+
 export type AdminUserDetailResponse = {
   user: AuthUser;
   lastLogin?: AdminUserLastLogin | null;
   sessions?: AdminUserSession[];
   trialGemini?: AdminUserTrialGemini;
+  credits?: AdminUserCredits;
 };
 
 type UserResponse = AdminUserDetailResponse;
@@ -287,6 +296,36 @@ export async function updateAdminUser(
   });
 }
 
+export async function adjustAdminUserCredits(userId: string, delta: number, note: string) {
+  return requestJson<{
+    ok: boolean;
+    balanceAfter: number;
+    ledgerId: string;
+    duplicate?: boolean;
+    balance: AdminUserCredits;
+  }>(apiUrl(`/api/admin/users/${encodeURIComponent(userId)}/credits/adjust`), {
+    method: 'POST',
+    body: JSON.stringify({ delta, note }),
+  });
+}
+
+export async function fetchAdminUserCreditLedger(
+  userId: string,
+  opts?: { limit?: number; cursor?: string }
+) {
+  const params = new URLSearchParams();
+  if (opts?.limit) params.set('limit', String(opts.limit));
+  if (opts?.cursor) params.set('cursor', opts.cursor);
+  const qs = params.toString();
+  return requestJson<{
+    entries: CreditLedgerEntry[];
+    nextCursor: string | null;
+    limit: number;
+  }>(apiUrl(`/api/admin/users/${encodeURIComponent(userId)}/credits/ledger${qs ? `?${qs}` : ''}`), {
+    cache: 'no-store',
+  });
+}
+
 export async function reconcileAdminUserWorkspaceUsage(userId: string, opts?: { force?: boolean }) {
   const q = opts?.force ? '?force=1' : '';
   return requestJson<{ ok: boolean; userId: string; workspaceUsedBytes: number; scannedKeys?: number }>(
@@ -462,6 +501,7 @@ export type UsageEventRow = {
   auditLogId?: string | null;
   createdAt: string;
   meta?: Record<string, unknown> | null;
+  creditsCharged?: number | null;
 };
 
 export type UsageEventsQuery = {
@@ -485,7 +525,8 @@ export type UsageSummaryResponse = {
   eventCount: number;
   totalQuantity: number;
   totalCostUsdEst: number;
-  bySku: Array<{ billingSku: string; count: number; quantity: number; costUsdEst: number }>;
+  totalCreditsCharged?: number;
+  bySku: Array<{ billingSku: string; count: number; quantity: number; costUsdEst: number; creditsCharged?: number }>;
 };
 
 export async function fetchUsageEvents(query: UsageEventsQuery = {}) {
@@ -633,6 +674,43 @@ export async function createAdminStaffInvite(body: { staffRoleId: string; note?:
 export async function revokeAdminStaffInvite(inviteId: string) {
   return requestJson<{ invite: AdminStaffInvite }>(
     apiUrl(`/api/admin/staff-invites/${encodeURIComponent(inviteId)}`),
+    { method: 'DELETE', body: '{}' }
+  );
+}
+
+export type AdminRegistrationInvite = {
+  id: string;
+  code: string;
+  note: string;
+  createdAt: string;
+  expiresAt: string;
+  usedAt: string | null;
+  usedByUserId: string | null;
+  revokedAt: string | null;
+  createdByUserId: string | null;
+  createdByIdentifier: string;
+};
+
+export async function fetchAdminRegistrationInvites() {
+  return requestJson<{ invites: AdminRegistrationInvite[] }>(apiUrl('/api/admin/registration-invites'), {
+    cache: 'no-store',
+  });
+}
+
+export async function createAdminRegistrationInvite(body: { note?: string; ttlDays?: number }) {
+  return requestJson<{
+    invite: AdminRegistrationInvite;
+    code: string;
+    registerPath: string;
+  }>(apiUrl('/api/admin/registration-invites'), {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+}
+
+export async function revokeAdminRegistrationInvite(inviteId: string) {
+  return requestJson<{ invite: AdminRegistrationInvite }>(
+    apiUrl(`/api/admin/registration-invites/${encodeURIComponent(inviteId)}`),
     { method: 'DELETE', body: '{}' }
   );
 }

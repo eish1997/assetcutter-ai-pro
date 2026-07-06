@@ -1,4 +1,4 @@
-import { createTripoTask, getTripoTask, waitTripoTaskDone } from '../tripoService';
+import { createTripoTask, getTripoTask, waitTripoTaskDone } from '../unifiedAiGateway';
 import type { TripoCreateTaskInput, TripoTaskResult, TripoTaskType } from '../tripoService';
 import type { CustomAppModule } from '../../types';
 import { normalizeGenerate3DPresetForRun } from './normalizePreset';

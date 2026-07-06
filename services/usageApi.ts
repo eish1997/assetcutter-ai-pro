@@ -1,4 +1,5 @@
 import type { UsageGeminiMetadata, UsageMeterKind } from '../shared/usageBilling';
+import { fmtCredits, usdEstToCredits } from '../shared/credits';
 import { apiUrl } from './apiBase';
 import { requestJson } from './httpClient';
 import type { UsageEventRow } from './adminClient';
@@ -8,7 +9,14 @@ export type UsageSummarySlice = {
   eventCount: number;
   totalQuantity: number;
   totalCostUsdEst: number;
-  bySku: Array<{ billingSku: string; count: number; quantity: number; costUsdEst: number }>;
+  totalCreditsCharged?: number;
+  bySku: Array<{
+    billingSku: string;
+    count: number;
+    quantity: number;
+    costUsdEst: number;
+    creditsCharged?: number;
+  }>;
 };
 
 export type UserUsageSummary = UsageSummarySlice & {
@@ -85,6 +93,49 @@ export function fmtUsageSummaryCost(
   if (eventCount <= 0) return '—';
   if (totalCostUsdEst != null && totalCostUsdEst > 0) return fmtUsageCostUsd(totalCostUsdEst);
   return '—';
+}
+
+/** 汇总卡片：积分消耗合计 */
+export function fmtUsageSummaryCredits(
+  totalCreditsCharged: number | null | undefined,
+  eventCount = 0
+): string {
+  if (eventCount <= 0) return '—';
+  const n = Math.floor(Number(totalCreditsCharged) || 0);
+  return fmtCredits(n);
+}
+
+export function usageEventCredits(
+  ev: Pick<UsageEventRow, 'creditsCharged' | 'costUsdEst' | 'meta' | 'idempotencyKey'>
+): number {
+  if (isUsageEventByok(ev)) return 0;
+  if (ev.creditsCharged != null && ev.creditsCharged > 0) return Math.floor(ev.creditsCharged);
+  return usdEstToCredits(ev.costUsdEst);
+}
+
+export function fmtUsageEventCredits(
+  ev: Pick<UsageEventRow, 'creditsCharged' | 'costUsdEst' | 'meta' | 'idempotencyKey'>
+): string {
+  if (isUsageEventByok(ev)) return '自备 Key';
+  const credits = usageEventCredits(ev);
+  return credits > 0 ? fmtCredits(credits) : '—';
+}
+
+export function sumUsageEventsCredits(events: UsageEventRow[]): number {
+  return events.reduce((sum, ev) => sum + usageEventCredits(ev), 0);
+}
+
+export function fmtUsageGroupCredits(events: UsageEventRow[]): string {
+  if (events.length > 0 && events.every(isUsageEventByok)) return '自备 Key';
+  const total = sumUsageEventsCredits(events);
+  return total > 0 ? fmtCredits(total) : '—';
+}
+
+export function sliceCreditsTotal(slice: UsageSummarySlice): number {
+  if (slice.totalCreditsCharged != null && slice.totalCreditsCharged >= 0) {
+    return Math.floor(slice.totalCreditsCharged);
+  }
+  return slice.bySku.reduce((sum, row) => sum + Math.floor(Number(row.creditsCharged) || 0), 0);
 }
 
 export function usageEventTokenTotals(

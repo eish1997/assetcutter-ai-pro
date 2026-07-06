@@ -29,6 +29,13 @@ jobs:
       - name: Workflow rings (audit + overlay IDB / hydrate)
         run: npm run test:workflow-rings
 
+      - name: Credits billing (store + consume + gate)
+        run: npm run test:credits
+
+      - name: Credits reconcile (dry run)
+        run: npm run credits:reconcile
+        continue-on-error: false
+
       - name: ESLint
         run: npm run lint
 

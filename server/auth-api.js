@@ -44,6 +44,16 @@ import {
   consumeStaffInviteToken,
   peekStaffInviteToken,
 } from './admin-staff-invites.js';
+import {
+  createRegistrationInvite,
+  consumeRegistrationInviteCode,
+  getRegistrationMode,
+  listRegistrationInvites,
+  peekRegistrationInviteCode,
+  registrationInviteErrorMessage,
+  revokeRegistrationInvite,
+} from './registration-invites.js';
+import { resolveSelfUsageTargetUserId } from './usage-user-read-api.js';
 import { createAdminRateLimitHelpers } from './admin-rate-limit.js';
 import { isAuditorStaff, redactAuditLogs, redactUserInsights } from './admin-audit-redact.js';
 import { getAuditLogRetentionMeta } from './admin-audit-retention.js';
@@ -115,6 +125,17 @@ import {
 } from './http-limits.js';
 import { createBridgeRelay } from './bridge-relay.js';
 import { consumeTrialGeminiSlotForUser } from './trial-gemini-quota-store.js';
+import {
+  adjustCredits,
+  decodeLedgerCursor,
+  getCreditBalance,
+  getCreditBalancesForUsers,
+  isCreditsBillingEnabled,
+  listCreditLedger,
+  precheckCredits,
+  CREDITS_EXCEEDED_CODE,
+  CreditsExceededError,
+} from './credit-store.js';
 import {
   insertUsageEvents,
   listUsageEventsForAdmin,
@@ -188,6 +209,7 @@ const AUTH_ALLOWED_ORIGINS = String(process.env.AUTH_ALLOWED_ORIGINS || '').trim
 const RATE_LIMIT_WINDOW_MS = Number(process.env.AUTH_RATE_LIMIT_WINDOW_MS || 60_000);
 const LOGIN_RATE_LIMIT_MAX = Number(process.env.AUTH_LOGIN_RATE_LIMIT_MAX || 10);
 const REGISTER_RATE_LIMIT_MAX = Number(process.env.AUTH_REGISTER_RATE_LIMIT_MAX || 20);
+const INVITE_VALIDATE_RATE_LIMIT_MAX = Number(process.env.AUTH_INVITE_VALIDATE_RATE_LIMIT_MAX || 40);
 const CSRF_COOKIE_NAME = 'ac_csrf';
 const BRIDGE_REQUIRE_AUTH = String(process.env.BRIDGE_REQUIRE_AUTH || 'true').trim().toLowerCase() !== 'false';
 const TRIPO_TIMEOUT_MS = Number(process.env.TRIPO_TIMEOUT_MS || 45_000);
@@ -427,6 +449,9 @@ function assertCsrf(req, res) {
   if (pathOnly === '/api/auth/trial-gemini/consume') return true;
   if (pathOnly === '/api/workflow/task-events') return true;
   if (pathOnly === '/api/usage/events') return true;
+  if (pathOnly === '/api/credits/balance') return true;
+  if (pathOnly === '/api/credits/ledger') return true;
+  if (pathOnly === '/api/auth/credits-gate') return true;
   /** 伴侣 Agent：partition Cookie 无法带 X-CSRF-Token，由 requireAgentAuth + 会话 Cookie 约束 */
   if (pathOnly.startsWith('/api/agent/workbench')) return true;
   if (pathOnly.startsWith('/api/debug/client-log')) return true;
@@ -679,6 +704,32 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (path === '/api/auth/registration-policy' && req.method === 'GET') {
+      json(res, 200, { mode: getRegistrationMode(), inviteRequired: getRegistrationMode() === 'invite_only' });
+      return;
+    }
+
+    if (path === '/api/auth/invite/validate' && req.method === 'GET') {
+      const u = new URL(req.url || '/', 'http://local');
+      const code = String(u.searchParams.get('code') || u.searchParams.get('invite') || '').trim();
+      const rateKey = `invite-validate:${getClientIp(req)}`;
+      if (isRateLimited(rateKey, INVITE_VALIDATE_RATE_LIMIT_MAX)) {
+        json(res, 429, { error: '请求过于频繁，请稍后再试' });
+        return;
+      }
+      if (!code) {
+        json(res, 400, { error: '缺少邀请码' });
+        return;
+      }
+      const peek = await peekRegistrationInviteCode(code);
+      if (!peek.ok) {
+        json(res, 200, { valid: false, reason: peek.reason });
+        return;
+      }
+      json(res, 200, { valid: true, code: peek.code });
+      return;
+    }
+
     if (path === '/api/auth/register' && req.method === 'POST') {
       const body = await readBody(req);
       const username = String(body.username || '');
@@ -689,7 +740,31 @@ const server = http.createServer(async (req, res) => {
         json(res, 429, { error: '请求过于频繁，请稍后再试' });
         return;
       }
+      const registrationMode = getRegistrationMode();
+      const registrationInviteCode = String(
+        body.inviteCode || body.registrationInvite || body.invite || ''
+      ).trim();
       const inviteToken = String(body.staffInviteToken || body.staffInvite || '').trim();
+      if (registrationMode === 'invite_only' && !inviteToken) {
+        if (!registrationInviteCode) {
+          json(res, 403, {
+            error: registrationInviteErrorMessage('required'),
+            code: 'INVITE_REQUIRED',
+          });
+          return;
+        }
+        const regPeek = await peekRegistrationInviteCode(registrationInviteCode);
+        if (!regPeek.ok) {
+          json(res, 400, { error: registrationInviteErrorMessage(regPeek.reason), code: 'INVITE_INVALID' });
+          return;
+        }
+      } else if (registrationInviteCode) {
+        const regPeek = await peekRegistrationInviteCode(registrationInviteCode);
+        if (!regPeek.ok) {
+          json(res, 400, { error: registrationInviteErrorMessage(regPeek.reason), code: 'INVITE_INVALID' });
+          return;
+        }
+      }
       if (inviteToken) {
         const peek = await peekStaffInviteToken(inviteToken);
         if (!peek.ok) {
@@ -709,6 +784,20 @@ const server = http.createServer(async (req, res) => {
       }
       const user = await createUser({ username, email, password, role: 'user' });
       let outUser = user;
+      if (registrationInviteCode) {
+        const regRedeemed = await consumeRegistrationInviteCode(registrationInviteCode, user.id, {
+          ip: getClientIp(req),
+          userAgent: req.headers['user-agent'],
+          username: user.username,
+        });
+        if (!regRedeemed.ok) {
+          json(res, 409, {
+            error: '邀请码已被使用或失效，账号已创建，请直接登录',
+            code: 'INVITE_RACE',
+          });
+          return;
+        }
+      }
       if (inviteToken) {
         const redeemed = await consumeStaffInviteToken(inviteToken, user.id, {
           ip: getClientIp(req),
@@ -822,6 +911,20 @@ const server = http.createServer(async (req, res) => {
       if (token) {
         const row = await getSessionWithUser(token);
         if (row?.user?.id) {
+          if (isCreditsBillingEnabled()) {
+            const check = await precheckCredits(row.user.id, 1);
+            if (!check.ok) {
+              json(res, 403, {
+                error: '积分不足，请联系管理员补充额度',
+                code: CREDITS_EXCEEDED_CODE,
+                balance: check.balance,
+                required: check.required,
+              });
+              return;
+            }
+            json(res, 200, { ok: true, balance: check.balance, creditsGate: true });
+            return;
+          }
           const r = await consumeTrialGeminiSlotForUser(row.user.id, dailyLimit);
           if (!r.ok) {
             json(res, 429, {
@@ -842,6 +945,50 @@ const server = http.createServer(async (req, res) => {
         }
       }
       json(res, 401, { error: '未登录' });
+      return;
+    }
+
+    if (path === '/api/auth/credits-gate' && req.method === 'POST') {
+      const body = await readBody(req);
+      const user = await requireAuth(req, res);
+      if (!user) return;
+      if (!isCreditsBillingEnabled()) {
+        json(res, 200, { ok: true, disabled: true });
+        return;
+      }
+      const estimatedCredits = Math.max(1, Math.floor(Number(body?.estimatedCredits) || 1));
+      const check = await precheckCredits(user.id, estimatedCredits);
+      if (!check.ok) {
+        json(res, 403, {
+          error: '积分不足，请联系管理员补充额度',
+          code: CREDITS_EXCEEDED_CODE,
+          balance: check.balance,
+          required: check.required,
+        });
+        return;
+      }
+      json(res, 200, { ok: true, balance: check.balance });
+      return;
+    }
+
+    if (path === '/api/credits/balance' && req.method === 'GET') {
+      const user = await requireAuth(req, res);
+      if (!user) return;
+      const bal = await getCreditBalance(user.id);
+      json(res, 200, { ...bal, userId: user.id });
+      return;
+    }
+
+    if (path === '/api/credits/ledger' && req.method === 'GET') {
+      const user = await requireAuth(req, res);
+      if (!user) return;
+      const u = new URL(req.url || '/', 'http://local');
+      const cursorRaw = u.searchParams.get('cursor') || '';
+      const result = await listCreditLedger(user.id, {
+        limit: u.searchParams.get('limit') || 20,
+        cursor: decodeLedgerCursor(cursorRaw),
+      });
+      json(res, 200, result);
       return;
     }
 
@@ -1076,6 +1223,69 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (path === '/api/admin/registration-invites' && req.method === 'GET') {
+      const staff = await requirePermission(req, res, PERMISSIONS.REGISTRATION_INVITES_WRITE);
+      if (!staff) return;
+      json(res, 200, { invites: await listRegistrationInvites() });
+      return;
+    }
+
+    if (path === '/api/admin/registration-invites' && req.method === 'POST') {
+      const staff = await requirePermission(req, res, PERMISSIONS.REGISTRATION_INVITES_WRITE);
+      if (!staff) return;
+      const body = await readBody(req);
+      try {
+        const result = await createRegistrationInvite({
+          note: body.note,
+          ttlDays: body.ttlDays,
+          actor: { userId: staff.user.id, identifier: staff.user.username },
+        });
+        await createAuditLog({
+          actorUserId: staff.user.id,
+          actorIdentifier: staff.user.username,
+          action: 'admin.registration_invite_create',
+          meta: {
+            inviteId: result.invite.id,
+            code: result.code,
+            expiresAt: result.invite.expiresAt,
+          },
+          ip: getClientIp(req),
+          userAgent: req.headers['user-agent'],
+        });
+        json(res, 200, result);
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        json(res, 400, { error: message });
+      }
+      return;
+    }
+
+    if (path.startsWith('/api/admin/registration-invites/') && req.method === 'DELETE') {
+      const staff = await requirePermission(req, res, PERMISSIONS.REGISTRATION_INVITES_WRITE);
+      if (!staff) return;
+      const inviteId = decodeURIComponent(path.slice('/api/admin/registration-invites/'.length).split('/')[0] || '');
+      if (!inviteId) {
+        json(res, 400, { error: '无效邀请 id' });
+        return;
+      }
+      try {
+        const invite = await revokeRegistrationInvite(inviteId);
+        await createAuditLog({
+          actorUserId: staff.user.id,
+          actorIdentifier: staff.user.username,
+          action: 'admin.registration_invite_revoke',
+          meta: { inviteId: invite.id, code: invite.code },
+          ip: getClientIp(req),
+          userAgent: req.headers['user-agent'],
+        });
+        json(res, 200, { invite });
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        json(res, 400, { error: message });
+      }
+      return;
+    }
+
     if (path.startsWith('/api/admin/staff-invites/') && req.method === 'DELETE') {
       const staff = await requirePermission(req, res, PERMISSIONS.USERS_ROLE_WRITE);
       if (!staff) return;
@@ -1217,6 +1427,7 @@ const server = http.createServer(async (req, res) => {
         if (isAuditorStaff(staff)) insights = redactUserInsights(insights);
         json(res, 200, {
           user: { ...enriched, workspaceUsedBytes: getWorkspaceUsedBytes(enriched.id) },
+          credits: await getCreditBalance(enriched.id),
           ...insights,
         });
         return;
@@ -1235,7 +1446,13 @@ const server = http.createServer(async (req, res) => {
           return { ...withStaff, workspaceUsedBytes: getWorkspaceUsedBytes(userRow.id) };
         })
       );
-      json(res, 200, { users: enriched, total: result.total, page: result.page, pageSize: result.pageSize });
+      const creditMap = await getCreditBalancesForUsers(enriched.map((u) => u.id));
+      const usersWithCredits = enriched.map((u) => ({
+        ...u,
+        creditBalance: creditMap[u.id]?.balance ?? 0,
+        creditLifetimeSpent: creditMap[u.id]?.lifetimeSpent ?? 0,
+      }));
+      json(res, 200, { users: usersWithCredits, total: result.total, page: result.page, pageSize: result.pageSize });
       return;
     }
 
@@ -1276,7 +1493,26 @@ const server = http.createServer(async (req, res) => {
       const rest = path.slice('/api/admin/users/'.length);
       const segments = rest.split('/').filter(Boolean);
       const targetId = decodeURIComponent(segments[0] || '');
-      if (!targetId || segments.length !== 1 || targetId.includes('..')) {
+      if (!targetId || targetId.includes('..')) {
+        json(res, 404, { error: 'Not found' });
+        return;
+      }
+      if (segments.length === 3 && segments[1] === 'credits' && segments[2] === 'ledger') {
+        const u = new URL(req.url || '/', 'http://local');
+        const result = await listCreditLedger(targetId, {
+          limit: u.searchParams.get('limit') || 20,
+          cursor: decodeLedgerCursor(u.searchParams.get('cursor') || ''),
+        });
+        json(res, 200, result);
+        return;
+      }
+      if (segments.length === 2 && segments[1] === 'credits') {
+        const bal = await getCreditBalance(targetId);
+        const ledger = await listCreditLedger(targetId, { limit: 10 });
+        json(res, 200, { balance: bal, recentLedger: ledger.entries });
+        return;
+      }
+      if (segments.length !== 1) {
         json(res, 404, { error: 'Not found' });
         return;
       }
@@ -1290,9 +1526,61 @@ const server = http.createServer(async (req, res) => {
       if (isAuditorStaff(staff)) insights = redactUserInsights(insights);
       json(res, 200, {
         user: { ...enriched, workspaceUsedBytes: getWorkspaceUsedBytes(enriched.id) },
+        credits: await getCreditBalance(enriched.id),
         ...insights,
       });
       return;
+    }
+
+    if (path.startsWith('/api/admin/users/') && req.method === 'POST') {
+      const rest = path.slice('/api/admin/users/'.length);
+      const segments = rest.split('/').filter(Boolean);
+      const targetId = decodeURIComponent(segments[0] || '');
+      if (segments.length === 3 && segments[1] === 'credits' && segments[2] === 'adjust') {
+        const staff = await requirePermission(req, res, PERMISSIONS.CREDITS_WRITE);
+        if (!staff) return;
+        const actor = staff.user;
+        if (!targetId || targetId.includes('..')) {
+          json(res, 400, { error: '无效用户 id' });
+          return;
+        }
+        const before = await findUserById(targetId);
+        if (!before) {
+          json(res, 404, { error: '用户不存在' });
+          return;
+        }
+        const body = await readBody(req);
+        const delta = body?.delta;
+        const note = body?.note;
+        const idempotencyKey = String(req.headers['idempotency-key'] || body?.idempotencyKey || '').trim() || null;
+        try {
+          const result = await adjustCredits(targetId, delta, {
+            note,
+            createdBy: actor.id,
+            idempotencyKey,
+          });
+          await createAuditLog({
+            actorUserId: actor.id,
+            actorIdentifier: actor.username,
+            action: 'admin.credits_adjust',
+            targetUserId: targetId,
+            meta: {
+              delta: Math.floor(Number(delta)),
+              balanceAfter: result.balanceAfter,
+              note: String(note || '').trim(),
+              ledgerId: result.ledgerId,
+              duplicate: !!result.duplicate,
+            },
+            ip: getClientIp(req),
+            userAgent: req.headers['user-agent'],
+          });
+          json(res, 200, { ok: true, ...result, balance: await getCreditBalance(targetId) });
+        } catch (e) {
+          const message = e instanceof Error ? e.message : String(e);
+          json(res, 400, { error: message });
+        }
+        return;
+      }
     }
 
     if (path === '/api/admin/capability-presets' && req.method === 'GET') {
@@ -1564,17 +1852,34 @@ const server = http.createServer(async (req, res) => {
       }
       const body = await readBody(req, { maxBytes: 128 * 1024 });
       const events = Array.isArray(body?.events) ? body.events : body?.event ? [body.event] : [];
-      const result = await insertUsageEvents(user.id, events);
-      json(res, 200, { ok: true, ...result });
+      try {
+        const result = await insertUsageEvents(user.id, events);
+        json(res, 200, { ok: true, ...result });
+      } catch (e) {
+        if (e instanceof CreditsExceededError) {
+          json(res, 403, {
+            error: e.message,
+            code: e.code,
+            balance: e.balance,
+            required: e.required,
+          });
+          return;
+        }
+        throw e;
+      }
       return;
     }
 
     if (path === '/api/usage/summary' && req.method === 'GET') {
-      const staff = await requirePermission(req, res, PERMISSIONS.USAGE_READ);
-      if (!staff) return;
+      const user = await requireAuth(req, res);
+      if (!user) return;
       const u = new URL(req.url || '/', 'http://local');
-      const targetUserId = u.searchParams.get('userId') || staff.user.id;
-      const summary = await summarizeUsageForUser(targetUserId, {
+      const scoped = resolveSelfUsageTargetUserId(user, u.searchParams);
+      if (!scoped.ok) {
+        json(res, 403, { error: '无权查看其他用户用量' });
+        return;
+      }
+      const summary = await summarizeUsageForUser(scoped.userId, {
         from: u.searchParams.get('from') || '',
         to: u.searchParams.get('to') || '',
         projectId: u.searchParams.get('projectId') || '',
@@ -1584,12 +1889,16 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (path === '/api/usage/events/list' && req.method === 'GET') {
-      const staff = await requirePermission(req, res, PERMISSIONS.USAGE_READ);
-      if (!staff) return;
+      const user = await requireAuth(req, res);
+      if (!user) return;
       const u = new URL(req.url || '/', 'http://local');
+      const scoped = resolveSelfUsageTargetUserId(user, u.searchParams);
+      if (!scoped.ok) {
+        json(res, 403, { error: '无权查看其他用户用量' });
+        return;
+      }
       const cursorRaw = u.searchParams.get('cursor') || '';
-      const targetUserId = u.searchParams.get('userId') || staff.user.id;
-      const result = await listUsageEventsForUser(targetUserId, {
+      const result = await listUsageEventsForUser(scoped.userId, {
         limit: u.searchParams.get('limit') || 50,
         billingSku: u.searchParams.get('billingSku') || '',
         provider: u.searchParams.get('provider') || '',
@@ -1604,11 +1913,15 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (path === '/api/usage/events/export' && req.method === 'GET') {
-      const staff = await requirePermission(req, res, PERMISSIONS.USAGE_READ);
-      if (!staff) return;
+      const user = await requireAuth(req, res);
+      if (!user) return;
       const u = new URL(req.url || '/', 'http://local');
-      const targetUserId = u.searchParams.get('userId') || staff.user.id;
-      const { events } = await listUsageEventsForUser(targetUserId, {
+      const scoped = resolveSelfUsageTargetUserId(user, u.searchParams);
+      if (!scoped.ok) {
+        json(res, 403, { error: '无权查看其他用户用量' });
+        return;
+      }
+      const { events } = await listUsageEventsForUser(scoped.userId, {
         limit: 2000,
         from: u.searchParams.get('from') || '',
         to: u.searchParams.get('to') || '',
@@ -2294,6 +2607,9 @@ server.on('upgrade', async (req, socket, head) => {
 server.listen(PORT, BIND_HOST, () => {
   console.log(`[auth-api] http://${BIND_HOST}:${PORT}${isR2Configured() ? ' (R2 /api/r2 enabled)' : ''}`);
   console.log(`[bridge-relay] ws://${BIND_HOST}:${PORT}/ws/bridge auth=${BRIDGE_REQUIRE_AUTH ? 'required' : 'disabled'}`);
+  console.log(
+    `[billing] usage=${isUsageBillingEnabled() ? 'on' : 'off'} credits=${isCreditsBillingEnabled() ? 'on' : 'off'}`
+  );
   startStoreInit();
 });
 

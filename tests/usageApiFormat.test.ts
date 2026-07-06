@@ -7,6 +7,11 @@ import {
   fmtUsageGroupMeterSummary,
   fmtUsageQuantity,
   fmtUsageSummaryCost,
+  fmtUsageEventCredits,
+  fmtUsageGroupCredits,
+  fmtUsageSummaryCredits,
+  usageEventCredits,
+  sumUsageEventsCredits,
   groupUsageEventsByTask,
   isUsageEventByok,
   resolveUsageTaskGroupId,
@@ -227,5 +232,54 @@ describe('usageApi formatters', () => {
   it('summary cost shows dash when events exist but total is zero', () => {
     expect(fmtUsageSummaryCost(0, 3)).toBe('—');
     expect(fmtUsageSummaryCost(0.12, 2)).toBe('$0.1200');
+  });
+
+  it('formats event credits from stored charge or usd fallback', () => {
+    expect(fmtUsageEventCredits(ev({ billingSku: 'llm.gemini.flash', meterKind: 'token', unit: 'token', creditsCharged: 42 }))).toBe(
+      '42'
+    );
+    expect(
+      fmtUsageEventCredits(
+        ev({ billingSku: 'llm.gemini.flash', meterKind: 'token', unit: 'token', costUsdEst: 0.012 })
+      )
+    ).toBe('12');
+    expect(
+      fmtUsageEventCredits(
+        ev({
+          idempotencyKey: 'user-direct:abc',
+          billingSku: 'llm.gemini.flash',
+          meterKind: 'token',
+          unit: 'token',
+          meta: { byok: true },
+        })
+      )
+    ).toBe('自备 Key');
+  });
+
+  it('aggregates group credits', () => {
+    const taskId = 'task-credits';
+    const rows = [
+      ev({
+        billingSku: 'image.gemini.flash',
+        meterKind: 'image',
+        unit: 'image',
+        creditsCharged: 10,
+        meta: { taskId },
+      }),
+      ev({
+        billingSku: 'image.gemini.flash',
+        meterKind: 'image',
+        unit: 'image',
+        creditsCharged: 5,
+        meta: { taskId },
+      }),
+    ];
+    expect(fmtUsageGroupCredits(rows)).toBe('15');
+    expect(sumUsageEventsCredits(rows)).toBe(15);
+  });
+
+  it('summary credits shows dash when no events', () => {
+    expect(fmtUsageSummaryCredits(120, 0)).toBe('—');
+    expect(fmtUsageSummaryCredits(120, 2)).toBe('120');
   });
 });

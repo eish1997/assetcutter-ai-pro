@@ -58,6 +58,16 @@ describe('resolveWorkflowFunctionSidebarLayout', () => {
     list.remove();
   });
 
+  it('does not treat asset or outline scroll ports as function sidebar guard', () => {
+    if (typeof document === 'undefined') return;
+    const assetPort = document.createElement('div');
+    assetPort.setAttribute('data-workflow-scroll-port', 'asset');
+    const outlinePort = document.createElement('div');
+    outlinePort.setAttribute('data-workflow-scroll-port', 'outline');
+    expect(isWheelTargetInWorkflowFunctionSidebarGuard(assetPort)).toBe(false);
+    expect(isWheelTargetInWorkflowFunctionSidebarGuard(outlinePort)).toBe(false);
+  });
+
   it('isClientPointInWorkflowAssetListWheelZone excludes function sidebar column', () => {
     if (typeof document === 'undefined') return;
     const fn = document.createElement('div');

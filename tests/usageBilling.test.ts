@@ -9,6 +9,7 @@ const DB_FILE = path.join(DATA_DIR, 'auth-db.json');
 describe('usage-billing-store', () => {
   beforeEach(() => {
     process.env.USAGE_BILLING_ENABLED = 'true';
+    process.env.CREDITS_BILLING_ENABLED = 'false';
     delete process.env.DATABASE_URL;
     if (fs.existsSync(DB_FILE)) {
       const db = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));

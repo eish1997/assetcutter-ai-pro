@@ -6,9 +6,9 @@ export const WORKFLOW_FUNCTION_SIDEBAR_HIDE_BELOW_PX = 880;
 
 export type WorkflowFunctionSidebarLayoutMode = 'hidden' | 'multiColumn';
 
-/** 滚轮不得转发到资产列表的功能区 DOM 标记（含能力列表滚动层） */
+/** 滚轮不得转发到资产列表的功能区 DOM 标记（勿用泛用 data-workflow-scroll-port，会误伤资产/大纲列） */
 export const WORKFLOW_FUNCTION_SIDEBAR_WHEEL_GUARD_SELECTOR =
-  '[data-workflow-sidebar], [data-workflow-function-sidebar], [data-workflow-sidebar-list-scroll], [data-workflow-scroll-port], [data-workflow-preset]';
+  '[data-workflow-sidebar], [data-workflow-function-sidebar], [data-workflow-sidebar-list-scroll], [data-workflow-scroll-port="function-catalog"], [data-workflow-preset], [data-workflow-preset-column]';
 
 function elementFromEventTarget(target: EventTarget | null): Element | null {
   if (target instanceof Element) return target;
@@ -41,12 +41,10 @@ export function isClientPointInWorkflowFunctionSidebarWheelGuard(
 ): boolean {
   if (typeof document === 'undefined') return false;
   if (isWheelTargetInWorkflowFunctionSidebarGuard(target)) return true;
+  const presetCol = document.querySelector('[data-workflow-preset-column]');
+  if (isClientPointInElementRect(clientX, clientY, presetCol)) return true;
   const fnSidebar = document.querySelector('[data-workflow-function-sidebar]');
-  if (isClientPointInElementRect(clientX, clientY, fnSidebar)) return true;
-  const listScroll = document.querySelector('[data-workflow-sidebar-list-scroll]');
-  if (isClientPointInElementRect(clientX, clientY, listScroll)) return true;
-  const hit = document.elementFromPoint(clientX, clientY);
-  return !!hit?.closest(WORKFLOW_FUNCTION_SIDEBAR_WHEEL_GUARD_SELECTOR);
+  return isClientPointInElementRect(clientX, clientY, fnSidebar);
 }
 
 /** 指针是否在资产列表列或大纲列内（仅此时才转发滚轮到资产列表） */
