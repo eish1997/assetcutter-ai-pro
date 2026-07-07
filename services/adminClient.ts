@@ -296,6 +296,28 @@ export async function updateAdminUser(
   });
 }
 
+export async function batchAdjustAdminCredits(opts: { csv?: string; dryRun?: boolean }) {
+  return requestJson<{
+    ok: boolean;
+    dryRun?: boolean;
+    successCount: number;
+    skipped: number;
+    failed: number;
+    results: Array<{
+      username: string;
+      userId?: string;
+      delta?: number;
+      note?: string;
+      status: string;
+      balanceAfter?: number;
+      error?: string;
+    }>;
+  }>(apiUrl('/api/admin/credits/batch-adjust'), {
+    method: 'POST',
+    body: JSON.stringify(opts),
+  });
+}
+
 export async function adjustAdminUserCredits(userId: string, delta: number, note: string) {
   return requestJson<{
     ok: boolean;
@@ -712,6 +734,93 @@ export async function revokeAdminRegistrationInvite(inviteId: string) {
   return requestJson<{ invite: AdminRegistrationInvite }>(
     apiUrl(`/api/admin/registration-invites/${encodeURIComponent(inviteId)}`),
     { method: 'DELETE', body: '{}' }
+  );
+}
+
+export type AdminPriceCatalogEntry = {
+  billingSku: string;
+  version: number;
+  effectiveFrom: string;
+  displayName: string | null;
+  meterKind: string;
+  inputPer1m?: number | null;
+  outputPer1m?: number | null;
+  imageOutputPer1m?: number | null;
+  perUnit?: number | null;
+  userCreditsPerUnit?: number | null;
+  enabled: boolean;
+  catalogVersion: string;
+  vendorSkuRef?: string | null;
+  markupPct?: number;
+};
+
+export type AdminPriceCatalogResponse = {
+  catalogVersion: string;
+  entries: AdminPriceCatalogEntry[];
+};
+
+export type AdminPriceCatalogWriteInput = {
+  billingSku?: string;
+  displayName?: string | null;
+  meterKind?: string;
+  inputPer1m?: number | null;
+  outputPer1m?: number | null;
+  imageOutputPer1m?: number | null;
+  perUnit?: number | null;
+  userCreditsPerUnit?: number | null;
+  enabled?: boolean;
+  effectiveFrom?: string;
+  vendorSkuRef?: string | null;
+  markupPct?: number | null;
+};
+
+export async function fetchAdminPriceCatalog() {
+  return requestJson<AdminPriceCatalogResponse>(apiUrl('/api/admin/price-catalog'), { cache: 'no-store' });
+}
+
+export async function createAdminPriceCatalogVersion(body: AdminPriceCatalogWriteInput) {
+  return requestJson<{ ok: boolean; entry: AdminPriceCatalogEntry }>(apiUrl('/api/admin/price-catalog'), {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+}
+
+export async function patchAdminPriceCatalog(billingSku: string, body: AdminPriceCatalogWriteInput) {
+  return requestJson<{ ok: boolean; entry: AdminPriceCatalogEntry }>(
+    apiUrl(`/api/admin/price-catalog/${encodeURIComponent(billingSku)}`),
+    { method: 'PATCH', body: JSON.stringify(body) }
+  );
+}
+
+export type UsageReconciliationRow = {
+  billingSku: string;
+  displayName: string | null;
+  eventCount: number;
+  creditsCharged: number;
+  costUsdEst: number;
+  creditsFromUsd: number;
+  variancePct: number | null;
+  avgCreditsPerEvent: number;
+  imageFloor: number | null;
+  flagged: boolean;
+  flagReasons: string[];
+};
+
+export type UsageReconciliationResponse = {
+  from: string | null;
+  to: string | null;
+  eventCount: number;
+  rows: UsageReconciliationRow[];
+};
+
+export async function fetchUsageReconciliation(query: { from?: string; to?: string } = {}) {
+  const params = new URLSearchParams();
+  if (query.from) params.set('from', query.from);
+  if (query.to) params.set('to', query.to);
+  const qs = params.toString();
+  return requestJson<UsageReconciliationResponse>(
+    apiUrl(`/api/admin/usage-reconciliation${qs ? `?${qs}` : ''}`),
+    { cache: 'no-store' }
   );
 }
 

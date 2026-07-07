@@ -5,6 +5,7 @@ import {
   fmtCredits,
   fmtCreditsSidebar,
 } from '../shared/credits';
+import { navigateToSettingsSection } from '../services/navigateSettings';
 import { useCreditBalance } from '../hooks/useCreditBalance';
 
 /** 侧栏底栏状态块（只读 / 可点共用外壳） */
@@ -19,7 +20,7 @@ type CreditBalanceChipProps = {
   loadingOverride?: boolean;
 };
 
-/** 侧栏底栏：只读积分余额（不跳转） */
+/** 侧栏底栏：积分余额（余额偏低/为 0 时可点进「AI 用量」） */
 export const CreditBalanceChip: React.FC<CreditBalanceChipProps> = ({
   className = '',
   balanceOverride,
@@ -37,12 +38,28 @@ export const CreditBalanceChip: React.FC<CreditBalanceChipProps> = ({
     loading
       ? '加载积分余额…'
       : balance == null
-        ? '积分余额暂不可用'
+        ? '积分余额暂不可用，点击查看 AI 用量'
         : balance <= 0
-          ? `积分已用完（${fmtCredits(balance)}）`
+          ? `积分已用完（${fmtCredits(balance)}），点击查看用量与说明`
           : balance < CREDITS_LOW_BALANCE_THRESHOLD
-            ? `积分偏低：${fmtCredits(balance)}`
+            ? `积分偏低：${fmtCredits(balance)}，点击查看用量`
             : `剩余 AI 积分 ${fmtCredits(balance)}`;
+
+  const clickable = !loading && balance != null && balance < CREDITS_LOW_BALANCE_THRESHOLD;
+
+  if (clickable) {
+    return (
+      <button
+        type="button"
+        className={`${SIDEBAR_STATUS_BTN_CLASS} ${className}`}
+        title={title}
+        aria-label={title}
+        onClick={() => navigateToSettingsSection('settings-usage')}
+      >
+        <span className="text-[8px] font-bold leading-[1.25] tabular-nums text-gray-300">{label}</span>
+      </button>
+    );
+  }
 
   return (
     <div

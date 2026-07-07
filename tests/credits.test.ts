@@ -11,8 +11,9 @@ import {
 } from '../server/credit-store.js';
 import { insertUsageEvents } from '../server/usage-billing-store.js';
 import { usdEstToCredits } from '../shared/credits';
+import { resolveAuthDbFileForTests } from './helpers/authDbTestPath.js';
 
-const DB_FILE = path.resolve(process.cwd(), 'server/data/auth-db.json');
+const DB_FILE = resolveAuthDbFileForTests();
 
 function resetCreditJson() {
   delete process.env.DATABASE_URL;

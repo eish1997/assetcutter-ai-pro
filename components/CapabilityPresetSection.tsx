@@ -18,6 +18,8 @@ import {
   normalizeCapabilityPreset,
 } from '../services/capabilityPresetStore';
 import { readLocalJson, writeLocalJson } from '../services/clientPersist';
+import { planCapabilityModuleRoutes, requiresPlatformCredits } from '../services/aiBillingGate';
+import TaskCreditsEstimate from './usage/TaskCreditsEstimate';
 import { getCapabilityEngine, isImageProcessPreset } from '../services/capabilityExecutor';
 import { useStoreCatalog, markStoreCatalogAutoSyncDone, shouldRunStoreCatalogAutoSync } from '../services/storeCatalogHook';
 import { buildCloudPresetIdSet, isCloudCapabilityPreset } from '../services/capabilityPresetCloudOrigin';
@@ -152,6 +154,8 @@ const CapabilityPresetSection: React.FC<{
   workflowComposeSearchQuery?: string;
   /** 工作区：功能区悬停联动，列表内 id 之外的预设卡片压暗 */
   sidebarLinkHoverPresetIds?: string[] | null;
+  /** 工作区嵌入：展示运行测试前的积分预估 */
+  creditBalance?: number | null;
 }> = ({
   presets,
   onUpdate,
@@ -165,6 +169,7 @@ const CapabilityPresetSection: React.FC<{
   scrollContainerRef,
   workflowComposeSearchQuery = '',
   sidebarLinkHoverPresetIds = null,
+  creditBalance = null,
 }) => {
   const [viewMode, setViewMode] = useState<ViewMode>('presets');
   const [presetTypeFilter, setPresetTypeFilter] = useState<PresetTypeFilter>('all');
@@ -2869,6 +2874,12 @@ const CapabilityPresetSection: React.FC<{
                 删除预设
               </button>
             </div>
+            {onRunTest && detailPreset.category !== 'generate_3d' ? (() => {
+              const steps = planCapabilityModuleRoutes(detailPreset);
+              return requiresPlatformCredits(steps) ? (
+                <TaskCreditsEstimate steps={steps} balance={creditBalance} compact />
+              ) : null;
+            })() : null}
           </div>
         </ImagePreviewOverlay>
       )}
@@ -2972,6 +2983,7 @@ const CapabilityPresetSection: React.FC<{
               }
               onSave={handleSaveSet}
               onLog={onLog}
+              creditBalance={creditBalance}
             />
           </React.Fragment>
         ))}

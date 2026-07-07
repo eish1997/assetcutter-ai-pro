@@ -1,12 +1,14 @@
 export class HttpRequestError extends Error {
   status: number;
   code?: string;
+  payload?: Record<string, unknown>;
 
-  constructor(message: string, status: number, code?: string) {
+  constructor(message: string, status: number, code?: string, payload?: Record<string, unknown>) {
     super(message);
     this.name = 'HttpRequestError';
     this.status = status;
     this.code = code;
+    this.payload = payload;
   }
 }
 
@@ -34,8 +36,13 @@ export async function requestJson<T>(url: string, init?: RequestInit): Promise<T
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    const d = data as { error?: string; code?: string };
-    throw new HttpRequestError(String(d.error || '请求失败'), res.status, typeof d.code === 'string' ? d.code : undefined);
+    const d = data as Record<string, unknown> & { error?: string; code?: string };
+    throw new HttpRequestError(
+      String(d.error || '请求失败'),
+      res.status,
+      typeof d.code === 'string' ? d.code : undefined,
+      d
+    );
   }
   return data as T;
 }

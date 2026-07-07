@@ -133,9 +133,24 @@ import {
   isCreditsBillingEnabled,
   listCreditLedger,
   precheckCredits,
+  prechargeCredits,
+  reserveCredits,
+  releaseCreditReserve,
+  validateActiveCreditReserve,
   CREDITS_EXCEEDED_CODE,
   CreditsExceededError,
 } from './credit-store.js';
+import {
+  isTripoProxyRateLimited,
+  tripoProxyRateLimitKey,
+  tripoProxyRateLimitMaxPerWindow,
+} from './tripo-proxy-rate-limit.js';
+import {
+  creditsProxyHeadersFromSigned,
+  fairnessKeyForUserId,
+  signCreditsGatePayload,
+} from './credits-gate-hmac.js';
+import { parseCreditsBatchCsv, runCreditsBatchAdjust } from './credits-batch-adjust.js';
 import {
   insertUsageEvents,
   listUsageEventsForAdmin,
@@ -153,6 +168,23 @@ import {
   readGeminiFairnessConfig,
   writeGeminiFairnessConfig,
 } from './gemini-fairness-config-store.js';
+import {
+  getJimengStatusResponse,
+  isJimengServiceAvailable,
+  jimengNotConfiguredBody,
+  pollJimengTask,
+  submitJimengTask,
+} from './jimeng-visual-api.js';
+import { assertJimengCreditsGate } from './jimeng-credits-gate.js';
+import { listPublicPriceCatalog } from './pricing-engine.js';
+import { buildUsageReceipt, quoteJobKinds } from './pricing-read-model.js';
+import {
+  createCatalogVersion,
+  ensurePriceCatalogStore,
+  listAdminPriceCatalog,
+  patchCatalogVersion,
+} from './price-catalog-store.js';
+import { buildUsageReconciliationSummary } from './admin-usage-reconciliation.js';
 
 const PORT = Number(process.env.PORT || process.env.AUTH_PORT || 9100);
 const BIND_HOST = String(process.env.AUTH_BIND_HOST || '0.0.0.0').trim() || '0.0.0.0';
@@ -164,6 +196,7 @@ function startStoreInit() {
   if (storeInitPromise) return storeInitPromise;
   storeInitPromise = (async () => {
     await initAuthStore();
+    await ensurePriceCatalogStore();
     storeReady = true;
     console.log('[auth-api] store ready');
     try {
@@ -446,12 +479,16 @@ function assertCsrf(req, res) {
   /** 与 R2 相同：前端经 VITE_AUTH_API_BASE_URL 跨域 POST，JS 读不到 auth 域名的 ac_csrf；由 assertWriteOrigin + requireAuth 约束 */
   if (pathOnly === '/api/companion-artifacts/resolve-download') return true;
   if (pathOnly.startsWith('/api/tripo')) return true;
+  if (pathOnly.startsWith('/api/jimeng')) return true;
   if (pathOnly === '/api/auth/trial-gemini/consume') return true;
   if (pathOnly === '/api/workflow/task-events') return true;
   if (pathOnly === '/api/usage/events') return true;
   if (pathOnly === '/api/credits/balance') return true;
   if (pathOnly === '/api/credits/ledger') return true;
   if (pathOnly === '/api/auth/credits-gate') return true;
+  if (pathOnly === '/api/auth/credits-proxy-bundle') return true;
+  if (pathOnly === '/api/internal/credits/precheck') return true;
+  if (pathOnly === '/api/internal/credits/validate-reserve') return true;
   /** 伴侣 Agent：partition Cookie 无法带 X-CSRF-Token，由 requireAgentAuth + 会话 Cookie 约束 */
   if (pathOnly.startsWith('/api/agent/workbench')) return true;
   if (pathOnly.startsWith('/api/debug/client-log')) return true;
@@ -483,6 +520,27 @@ async function readBody(req, options = {}) {
 
 function getClientIp(req) {
   return String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || '');
+}
+
+async function resolveOptionalAuthUserId(req) {
+  try {
+    const token = parseCookie(req)[COOKIE_NAME];
+    if (!token) return null;
+    const row = await getSessionWithUser(token);
+    return row?.user?.id ? String(row.user.id) : null;
+  } catch {
+    return null;
+  }
+}
+
+async function rejectIfTripoProxyRateLimited(req, res) {
+  const userId = await resolveOptionalAuthUserId(req);
+  const key = tripoProxyRateLimitKey(req, userId);
+  if (isTripoProxyRateLimited(key, tripoProxyRateLimitMaxPerWindow())) {
+    json(res, 429, { error: 'Tripo 代理请求过快，请稍后再试', code: 'rate_limited' });
+    return true;
+  }
+  return false;
 }
 
 function isRateLimited(key, maxAttempts) {
@@ -957,17 +1015,236 @@ const server = http.createServer(async (req, res) => {
         return;
       }
       const estimatedCredits = Math.max(1, Math.floor(Number(body?.estimatedCredits) || 1));
-      const check = await precheckCredits(user.id, estimatedCredits);
-      if (!check.ok) {
-        json(res, 403, {
-          error: '积分不足，请联系管理员补充额度',
-          code: CREDITS_EXCEEDED_CODE,
-          balance: check.balance,
-          required: check.required,
+      const existingReserveKey = String(body?.reserveKey || '').trim() || null;
+      if (existingReserveKey) {
+        const valid = await validateActiveCreditReserve(user.id, existingReserveKey, estimatedCredits);
+        if (!valid.ok) {
+          json(res, 403, {
+            error: '积分预扣无效或已过期，请重试',
+            code: 'CREDITS_RESERVE_INVALID',
+          });
+          return;
+        }
+        const bal = await getCreditBalance(user.id);
+        json(res, 200, {
+          ok: true,
+          balance: bal.balance,
+          available: bal.available,
+          reserveKey: existingReserveKey,
         });
         return;
       }
-      json(res, 200, { ok: true, balance: check.balance });
+      try {
+        const reserveKey = `gate:${crypto.randomUUID()}`;
+        await prechargeCredits(user.id, estimatedCredits, { idempotencyKey: reserveKey });
+        const bal = await getCreditBalance(user.id);
+        json(res, 200, {
+          ok: true,
+          balance: bal.balance,
+          available: bal.available,
+          reserveKey,
+          prechargeKey: reserveKey,
+        });
+      } catch (e) {
+        if (e instanceof CreditsExceededError) {
+          json(res, 403, {
+            error: '积分不足，请联系管理员补充额度',
+            code: CREDITS_EXCEEDED_CODE,
+            balance: e.balance,
+            required: e.required,
+          });
+          return;
+        }
+        throw e;
+      }
+      return;
+    }
+
+    if (path === '/api/auth/credits-proxy-bundle' && req.method === 'GET') {
+      const user = await requireAuth(req, res);
+      if (!user) return;
+      if (!isCreditsBillingEnabled()) {
+        json(res, 200, { ok: true, disabled: true, headers: {} });
+        return;
+      }
+      const q = (req.url || '').split('?')[1] || '';
+      const params = new URLSearchParams(q);
+      const estimatedCredits = Math.max(1, Math.floor(Number(params.get('estimatedCredits')) || 1));
+      try {
+        const reserveKey = `proxy:${crypto.randomUUID()}`;
+        await prechargeCredits(user.id, estimatedCredits, { idempotencyKey: reserveKey });
+        const bal = await getCreditBalance(user.id);
+        const signed = signCreditsGatePayload({ userId: user.id, estimatedCredits, reserveKey });
+        const headers = signed
+          ? creditsProxyHeadersFromSigned(signed)
+          : {
+              'X-AC-Fairness-Key': fairnessKeyForUserId(user.id),
+              'X-AC-Credits-Reserve': reserveKey,
+            };
+        if (!fairnessKeyForUserId(user.id)) {
+          json(res, 400, { error: '无效用户 id' });
+          return;
+        }
+        json(res, 200, {
+          ok: true,
+          balance: bal.balance,
+          available: bal.available,
+          reserveKey,
+          estimatedCredits,
+          headers,
+        });
+      } catch (e) {
+        if (e instanceof CreditsExceededError) {
+          json(res, 403, {
+            error: '积分不足，请联系管理员补充额度',
+            code: CREDITS_EXCEEDED_CODE,
+            balance: e.balance,
+            required: e.required,
+          });
+          return;
+        }
+        throw e;
+      }
+      return;
+    }
+
+    if (path === '/api/auth/credits-precharge' && req.method === 'POST') {
+      const body = await readBody(req);
+      const user = await requireAuth(req, res);
+      if (!user) return;
+      if (!isCreditsBillingEnabled()) {
+        json(res, 200, { ok: true, disabled: true });
+        return;
+      }
+      const amount = Math.max(1, Math.floor(Number(body?.amount ?? body?.estimatedCredits) || 1));
+      const scopeKey = String(body?.scopeKey || body?.idempotencyKey || '').trim();
+      const idempotencyKey = scopeKey
+        ? `workflow:${scopeKey}`.slice(0, 200)
+        : `precharge:${crypto.randomUUID()}`;
+      try {
+        const result = await prechargeCredits(user.id, amount, { idempotencyKey });
+        const bal = await getCreditBalance(user.id);
+        json(res, 200, {
+          ok: true,
+          prechargeKey: result.prechargeKey,
+          reserveKey: result.reserveKey,
+          amount: result.amount,
+          allocated: result.allocated ?? 0,
+          remaining: result.remaining ?? result.amount,
+          balance: bal.balance,
+          available: bal.available,
+        });
+      } catch (e) {
+        if (e instanceof CreditsExceededError) {
+          json(res, 403, {
+            error: '积分不足，无法完成本次 AI 任务。请补充积分后重试。',
+            code: CREDITS_EXCEEDED_CODE,
+            balance: e.balance,
+            required: e.required,
+          });
+          return;
+        }
+        throw e;
+      }
+      return;
+    }
+
+    if (path === '/api/auth/credits-release' && req.method === 'POST') {
+      const body = await readBody(req);
+      const user = await requireAuth(req, res);
+      if (!user) return;
+      if (!isCreditsBillingEnabled()) {
+        json(res, 200, { ok: true, disabled: true, released: false });
+        return;
+      }
+      const reserveKey = String(body?.reserveKey || '').trim();
+      if (!reserveKey) {
+        json(res, 400, { error: '缺少 reserveKey' });
+        return;
+      }
+      const fullVoid = Boolean(body?.fullVoid);
+      const result = await releaseCreditReserve(user.id, reserveKey, { fullVoid });
+      const bal = await getCreditBalance(user.id);
+      json(res, 200, {
+        ok: true,
+        released: result.released,
+        balance: bal.balance,
+        available: bal.available,
+      });
+      return;
+    }
+
+    if (path === '/api/internal/credits/precheck' && req.method === 'POST') {
+      const internalSecret = String(
+        process.env.GEMINI_PROXY_CREDITS_INTERNAL_SECRET || process.env.INTERNAL_API_SECRET || ''
+      ).trim();
+      const hdr = String(req.headers['x-internal-secret'] || '').trim();
+      if (!internalSecret || hdr !== internalSecret) {
+        json(res, 403, { error: 'Forbidden' });
+        return;
+      }
+      const body = await readBody(req);
+      const targetUserId = String(body?.userId || '').trim();
+      if (!targetUserId) {
+        json(res, 400, { error: '无效用户' });
+        return;
+      }
+      if (!isCreditsBillingEnabled()) {
+        json(res, 200, { ok: true, disabled: true });
+        return;
+      }
+      const estimatedCredits = Math.max(1, Math.floor(Number(body?.estimatedCredits) || 1));
+      try {
+        const reserveKey = String(body?.reserveKey || '').trim() || `internal:${crypto.randomUUID()}`;
+        if (body?.reserveKey) {
+          const valid = await validateActiveCreditReserve(targetUserId, reserveKey, estimatedCredits);
+          if (!valid.ok) {
+            json(res, 403, { error: '积分预扣无效', code: 'CREDITS_RESERVE_INVALID' });
+            return;
+          }
+        } else {
+          await prechargeCredits(targetUserId, estimatedCredits, { idempotencyKey: reserveKey });
+        }
+        const bal = await getCreditBalance(targetUserId);
+        json(res, 200, { ok: true, balance: bal.balance, available: bal.available, reserveKey });
+      } catch (e) {
+        if (e instanceof CreditsExceededError) {
+          json(res, 403, {
+            error: '积分不足，请联系管理员补充额度',
+            code: CREDITS_EXCEEDED_CODE,
+            balance: e.balance,
+            required: e.required,
+          });
+          return;
+        }
+        throw e;
+      }
+      return;
+    }
+
+    if (path === '/api/internal/credits/validate-reserve' && req.method === 'POST') {
+      const internalSecret = String(
+        process.env.GEMINI_PROXY_CREDITS_INTERNAL_SECRET || process.env.INTERNAL_API_SECRET || ''
+      ).trim();
+      const hdr = String(req.headers['x-internal-secret'] || '').trim();
+      if (!internalSecret || hdr !== internalSecret) {
+        json(res, 403, { error: 'Forbidden' });
+        return;
+      }
+      const body = await readBody(req);
+      const targetUserId = String(body?.userId || '').trim();
+      const reserveKey = String(body?.reserveKey || '').trim();
+      const estimatedCredits = Math.max(1, Math.floor(Number(body?.estimatedCredits) || 1));
+      if (!targetUserId || !reserveKey) {
+        json(res, 400, { error: '无效参数' });
+        return;
+      }
+      const valid = await validateActiveCreditReserve(targetUserId, reserveKey, estimatedCredits);
+      if (!valid.ok) {
+        json(res, 403, { error: '积分预扣无效或已过期', code: 'CREDITS_RESERVE_INVALID' });
+        return;
+      }
+      json(res, 200, { ok: true, amount: valid.amount });
       return;
     }
 
@@ -1532,6 +1809,45 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (path === '/api/admin/credits/batch-adjust' && req.method === 'POST') {
+      const staff = await requirePermission(req, res, PERMISSIONS.CREDITS_WRITE);
+      if (!staff) return;
+      const actor = staff.user;
+      const body = await readBody(req);
+      const dryRun = Boolean(body?.dryRun);
+      let rows = Array.isArray(body?.rows) ? body.rows : null;
+      if (!rows && typeof body?.csv === 'string') {
+        rows = parseCreditsBatchCsv(body.csv);
+      }
+      if (!rows?.length) {
+        json(res, 400, { error: '请提供 rows 或 csv' });
+        return;
+      }
+      if (rows.length > 500) {
+        json(res, 400, { error: '单次最多 500 行' });
+        return;
+      }
+      const result = await runCreditsBatchAdjust(rows, { dryRun, createdBy: actor.id });
+      if (!dryRun) {
+        await createAuditLog({
+          actorUserId: actor.id,
+          actorIdentifier: actor.username,
+          action: 'admin.credits_batch_adjust',
+          targetUserId: null,
+          meta: {
+            successCount: result.successCount,
+            failed: result.failed,
+            skipped: result.skipped,
+            rowCount: rows.length,
+          },
+          ip: getClientIp(req),
+          userAgent: req.headers['user-agent'],
+        });
+      }
+      json(res, 200, { ok: true, dryRun, ...result });
+      return;
+    }
+
     if (path.startsWith('/api/admin/users/') && req.method === 'POST') {
       const rest = path.slice('/api/admin/users/'.length);
       const segments = rest.split('/').filter(Boolean);
@@ -1823,6 +2139,94 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (path === '/api/admin/usage-reconciliation' && req.method === 'GET') {
+      const staff = await requirePermission(req, res, PERMISSIONS.USAGE_READ);
+      if (!staff) return;
+      const u = new URL(req.url || '/', 'http://local');
+      try {
+        const report = await buildUsageReconciliationSummary({
+          from: u.searchParams.get('from') || '',
+          to: u.searchParams.get('to') || '',
+        });
+        json(res, 200, report);
+      } catch (error) {
+        json(res, 500, { error: error instanceof Error ? error.message : String(error) });
+      }
+      return;
+    }
+
+    if (path === '/api/admin/price-catalog' && req.method === 'GET') {
+      const staff = await requireStaff(req, res);
+      if (!staff) return;
+      const canRead =
+        hasPermission(staff.permissions, PERMISSIONS.PRICING_WRITE) ||
+        hasPermission(staff.permissions, PERMISSIONS.USAGE_READ);
+      if (!canRead) {
+        json(res, 403, { error: '权限不足' });
+        return;
+      }
+      try {
+        json(res, 200, await listAdminPriceCatalog());
+      } catch (error) {
+        json(res, 500, { error: error instanceof Error ? error.message : String(error) });
+      }
+      return;
+    }
+
+    if (path === '/api/admin/price-catalog' && req.method === 'POST') {
+      const staff = await requirePermission(req, res, PERMISSIONS.PRICING_WRITE);
+      if (!staff) return;
+      const actor = staff.user;
+      const body = await readBody(req);
+      try {
+        const entry = await createCatalogVersion(body || {});
+        await createAuditLog({
+          actorUserId: actor.id,
+          actorIdentifier: actor.username,
+          action: 'admin.price_catalog.create',
+          targetUserId: null,
+          meta: { billingSku: entry.billingSku, version: entry.version, catalogVersion: entry.catalogVersion },
+          ip: getClientIp(req),
+          userAgent: req.headers['user-agent'],
+        });
+        json(res, 201, { ok: true, entry });
+      } catch (error) {
+        json(res, 400, { error: error instanceof Error ? error.message : String(error) });
+      }
+      return;
+    }
+
+    if (path.startsWith('/api/admin/price-catalog/') && req.method === 'PATCH') {
+      const staff = await requirePermission(req, res, PERMISSIONS.PRICING_WRITE);
+      if (!staff) return;
+      const actor = staff.user;
+      const billingSku = decodeURIComponent(
+        path.slice('/api/admin/price-catalog/'.length).split('/')[0] || ''
+      );
+      if (!billingSku) {
+        json(res, 400, { error: '无效 billingSku' });
+        return;
+      }
+      const body = await readBody(req);
+      try {
+        const entry = await patchCatalogVersion(billingSku, body || {});
+        await createAuditLog({
+          actorUserId: actor.id,
+          actorIdentifier: actor.username,
+          action: 'admin.price_catalog.update',
+          targetUserId: null,
+          meta: { billingSku: entry.billingSku, version: entry.version, catalogVersion: entry.catalogVersion },
+          ip: getClientIp(req),
+          userAgent: req.headers['user-agent'],
+        });
+        json(res, 200, { ok: true, entry });
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        json(res, msg.includes('不存在') ? 404 : 400, { error: msg });
+      }
+      return;
+    }
+
     if (path === '/api/workflow/task-events' && req.method === 'POST') {
       const user = await requireAuth(req, res);
       if (!user) return;
@@ -1933,6 +2337,41 @@ const server = http.createServer(async (req, res) => {
         'Content-Disposition': 'attachment; filename="usage-events.csv"',
       });
       res.end(csv);
+      return;
+    }
+
+    if (path === '/api/usage/price-list' && req.method === 'GET') {
+      const user = await requireAuth(req, res);
+      if (!user) return;
+      json(res, 200, { items: listPublicPriceCatalog() });
+      return;
+    }
+
+    if (path === '/api/usage/quote' && req.method === 'GET') {
+      const user = await requireAuth(req, res);
+      if (!user) return;
+      const u = new URL(req.url || '/', 'http://local');
+      const raw = String(u.searchParams.get('jobKinds') || '').trim();
+      const jobKinds = raw ? raw.split(',').map((s) => s.trim()).filter(Boolean) : [];
+      json(res, 200, quoteJobKinds(jobKinds));
+      return;
+    }
+
+    if (path === '/api/usage/receipt' && req.method === 'GET') {
+      const user = await requireAuth(req, res);
+      if (!user) return;
+      const u = new URL(req.url || '/', 'http://local');
+      const taskId = String(u.searchParams.get('taskId') || u.searchParams.get('correlationId') || '').trim();
+      if (!taskId) {
+        json(res, 400, { error: '缺少 taskId 参数' });
+        return;
+      }
+      const receipt = await buildUsageReceipt(user.id, taskId);
+      if (!receipt) {
+        json(res, 400, { error: '无效 taskId' });
+        return;
+      }
+      json(res, 200, receipt);
       return;
     }
 
@@ -2388,7 +2827,56 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (path === '/api/jimeng/status' && req.method === 'GET') {
+      json(res, 200, getJimengStatusResponse());
+      return;
+    }
+
+    if (path === '/api/jimeng/tasks' && req.method === 'POST') {
+      if (!isJimengServiceAvailable()) {
+        json(res, 503, jimengNotConfiguredBody());
+        return;
+      }
+      const body = await readBody(req);
+      const gate = await assertJimengCreditsGate(req, body.registryId, body.estimatedCredits);
+      if (!gate.ok) {
+        json(res, gate.status, gate.body);
+        return;
+      }
+      const result = await submitJimengTask(body);
+      if (!result.ok) {
+        json(res, result.status, result.body);
+        return;
+      }
+      json(res, 200, { taskId: result.taskId });
+      return;
+    }
+
+    if (path.startsWith('/api/jimeng/tasks/') && req.method === 'GET') {
+      if (!isJimengServiceAvailable()) {
+        json(res, 503, jimengNotConfiguredBody());
+        return;
+      }
+      const user = await requireAuth(req, res);
+      if (!user) return;
+      const taskId = decodeURIComponent(path.slice('/api/jimeng/tasks/'.length)).trim();
+      if (!taskId) {
+        json(res, 400, { error: '缺少 taskId' });
+        return;
+      }
+      const reqUrl = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
+      const registryId = normalizeTrimmed(reqUrl.searchParams.get('registryId') || '');
+      const pollResult = await pollJimengTask(taskId, registryId, { userId: user.id });
+      if (!pollResult.ok) {
+        json(res, pollResult.status, pollResult.body);
+        return;
+      }
+      json(res, pollResult.status, pollResult.body);
+      return;
+    }
+
     if (path === '/api/tripo/task' && req.method === 'POST') {
+      if (await rejectIfTripoProxyRateLimited(req, res)) return;
       const body = await readBody(req);
       const apiKey = normalizeTrimmed(body.apiKey);
       if (!apiKey) {
@@ -2423,6 +2911,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (path === '/api/tripo/upload' && req.method === 'POST') {
+      if (await rejectIfTripoProxyRateLimited(req, res)) return;
       const body = await readBody(req, { maxBytes: TRIPO_UPLOAD_JSON_BODY_MAX_BYTES });
       const apiKey = normalizeTrimmed(body.apiKey);
       if (!apiKey) {
@@ -2461,6 +2950,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (path === '/api/tripo/fetch-file' && req.method === 'POST') {
+      if (await rejectIfTripoProxyRateLimited(req, res)) return;
       const body = await readBody(req);
       const apiKey = normalizeTrimmed(body.apiKey);
       const fileUrl = normalizeTrimmed(body.url);
@@ -2528,6 +3018,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (path.startsWith('/api/tripo/task/') && req.method === 'GET') {
+      if (await rejectIfTripoProxyRateLimited(req, res)) return;
       const taskId = decodeURIComponent(path.slice('/api/tripo/task/'.length)).trim();
       if (!taskId) {
         json(res, 400, { error: '缺少 taskId' });

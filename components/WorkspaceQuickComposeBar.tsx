@@ -98,6 +98,11 @@ export type WorkspaceQuickComposeBarProps = {
   onReorderDropSlot?: (assetId: string, zone: QuickComposeDropZone, toIndex: number) => void;
   /** 参考图（@ 引用）数量上限 */
   maxMentions: number;
+  /** 积分不足等：禁用提交按钮与输入 */
+  submitDisabled?: boolean;
+  submitDisabledReason?: string;
+  /** 平台代付路径：提交按钮旁展示预估最低消耗 */
+  submitEstimateLabel?: string;
   onSubmit: () => void;
   genSettings: WorkspaceQuickComposeGenSettings;
   /** 展示档位 / 比例 / 输出尺寸（生图引擎） */
@@ -171,6 +176,9 @@ export default function WorkspaceQuickComposeBar({
   onReorderDropSlot,
   maxMentions,
   onSubmit,
+  submitDisabled = false,
+  submitDisabledReason,
+  submitEstimateLabel,
   genSettings,
   showGenImageSettings,
   showGenTextSettings,
@@ -774,7 +782,8 @@ export default function WorkspaceQuickComposeBar({
 
   if (!visible) return null;
 
-  const disabled = false;
+  const disabled = submitDisabled;
+  const disabledTitle = submitDisabled ? submitDisabledReason : undefined;
   const trimmedOverride = placeholderOverride?.trim();
   const placeholder = trimmedOverride
     ? trimmedOverride
@@ -1310,14 +1319,19 @@ export default function WorkspaceQuickComposeBar({
 
                 <div className="flex flex-wrap items-center justify-end gap-3">
                   {genActionControls}
+                  {submitEstimateLabel ? (
+                    <span className="text-[9px] tabular-nums text-amber-400/80" title="按任务类型的保守预估值，实际扣费以上游用量为准">
+                      {submitEstimateLabel}
+                    </span>
+                  ) : null}
 
                   <button
                     type="button"
                     disabled={disabled}
                     onClick={onSubmit}
                     className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-white text-[#0a0a0c] shadow-md outline-none transition-transform hover:scale-[1.03] active:scale-[0.98] disabled:opacity-35 focus-visible:ring-2 focus-visible:ring-blue-500/55"
-                    title="加入队列并执行"
-                    aria-label="加入队列并执行"
+                    title={disabledTitle ?? '加入队列并执行'}
+                    aria-label={disabledTitle ?? '加入队列并执行'}
                   >
                     <svg
                       viewBox="0 0 24 24"
@@ -1402,14 +1416,19 @@ export default function WorkspaceQuickComposeBar({
 
               <div className="ml-2 flex shrink-0 items-center gap-3">
                 {genActionControls}
+                {submitEstimateLabel ? (
+                  <span className="text-[9px] tabular-nums text-amber-400/80" title="按任务类型的保守预估值，实际扣费以上游用量为准">
+                    {submitEstimateLabel}
+                  </span>
+                ) : null}
 
                 <button
                   type="button"
                   disabled={disabled}
                   onClick={onSubmit}
                   className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-white text-[#0a0a0c] shadow-md outline-none transition-transform hover:scale-[1.03] active:scale-[0.98] disabled:opacity-35 focus-visible:ring-2 focus-visible:ring-blue-500/55"
-                  title="加入队列并执行"
-                  aria-label="加入队列并执行"
+                  title={disabledTitle ?? '加入队列并执行'}
+                  aria-label={disabledTitle ?? '加入队列并执行'}
                 >
                   <svg
                     viewBox="0 0 24 24"

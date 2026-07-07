@@ -11,10 +11,11 @@ import {
 } from '../shared/credits';
 
 describe('credits gate helpers', () => {
-  it('proxyGateMinCreditsForJob scales by workflow kind', () => {
-    expect(proxyGateMinCreditsForJob('workflow_chat')).toBe(2);
-    expect(proxyGateMinCreditsForJob('workflow_text_to_image')).toBe(50);
-    expect(proxyGateMinCreditsForJob('workflow_generate_3d')).toBe(500);
+  it('proxyGateMinCreditsForJob scales by workflow kind (catalog-aligned)', () => {
+    expect(proxyGateMinCreditsForJob('workflow_chat')).toBe(10);
+    expect(proxyGateMinCreditsForJob('workflow_text_to_image')).toBe(134);
+    expect(proxyGateMinCreditsForJob('workflow_generate_3d')).toBe(800);
+    expect(proxyGateMinCreditsForJob('workflow_generate_video')).toBe(250);
     expect(proxyGateMinCreditsForJob('unknown')).toBe(1);
   });
 
@@ -25,6 +26,9 @@ describe('credits gate helpers', () => {
     ).toBe('workflow_generate_video');
     expect(
       proxyGateJobKindForWorkflowBranch('branch_preset_execute_capability', { category: 'text_to_image' })
+    ).toBe('workflow_text_to_image');
+    expect(
+      proxyGateJobKindForWorkflowBranch('branch_preset_execute_capability', { category: 'image_to_image' })
     ).toBe('workflow_text_to_image');
     expect(proxyGateJobKindForWorkflowBranch('branch_capability_set')).toBe('workflow_text_to_image');
   });
@@ -37,6 +41,7 @@ describe('credits gate helpers', () => {
 
   it('creditsExceededUserMessage mentions settings', () => {
     expect(creditsExceededUserMessage()).toContain('设置');
+    expect(creditsExceededUserMessage(10, 25)).toContain('还差');
   });
 
   it('fmtCreditsSidebar compacts for narrow sidebar', () => {

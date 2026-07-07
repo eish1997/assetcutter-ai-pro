@@ -1,9 +1,17 @@
 import type { UsageGeminiMetadata, UsageMeterKind } from '../shared/usageBilling';
 import { fmtCredits, usdEstToCredits } from '../shared/credits';
+import {
+  presentationForSku,
+  presentationLabelForEvent,
+} from '../shared/billingPresentation';
+import type { PublicPriceCatalogItem, UsageQuoteStep } from '../shared/pricing/pricingEngine';
 import { apiUrl } from './apiBase';
 import { requestJson } from './httpClient';
 import type { UsageEventRow } from './adminClient';
 import { DEFAULT_PRICE_CATALOG, estimateUsageCostUsd, findPriceCatalogEntry } from './usageCost';
+
+export type { PublicPriceCatalogItem, UsageQuoteStep };
+export { presentationForSku, presentationLabelForEvent };
 
 export type UsageSummarySlice = {
   eventCount: number;
@@ -69,6 +77,44 @@ export async function fetchUserUsageEvents(query: UsageEventsQuery = {}): Promis
   return requestJson<UsageEventsResponse>(apiUrl(`/api/usage/events/list?${params.toString()}`));
 }
 
+export type UsagePriceListResponse = {
+  items: PublicPriceCatalogItem[];
+};
+
+export type UsageQuoteResponse = {
+  steps: UsageQuoteStep[];
+  totalMinCredits: number;
+};
+
+export type UsageReceiptLine = {
+  label: string;
+  billingSku: string;
+  credits: number;
+  meterSummary: string;
+};
+
+export type UsageReceiptResponse = {
+  taskId: string;
+  totalCredits: number;
+  lines: UsageReceiptLine[];
+};
+
+export async function fetchUsagePriceList(): Promise<UsagePriceListResponse> {
+  return requestJson<UsagePriceListResponse>(apiUrl('/api/usage/price-list'));
+}
+
+export async function fetchUsageQuote(jobKinds: string[]): Promise<UsageQuoteResponse> {
+  const params = new URLSearchParams();
+  if (jobKinds.length) params.set('jobKinds', jobKinds.join(','));
+  const qs = params.toString();
+  return requestJson<UsageQuoteResponse>(apiUrl(`/api/usage/quote${qs ? `?${qs}` : ''}`));
+}
+
+export async function fetchUsageReceipt(taskId: string): Promise<UsageReceiptResponse> {
+  const params = new URLSearchParams({ taskId: String(taskId || '').trim() });
+  return requestJson<UsageReceiptResponse>(apiUrl(`/api/usage/receipt?${params.toString()}`));
+}
+
 export function userUsageExportUrl(query: { from?: string; to?: string; projectId?: string } = {}): string {
   const params = new URLSearchParams();
   if (query.from) params.set('from', query.from);
@@ -114,11 +160,21 @@ export function usageEventCredits(
 }
 
 export function fmtUsageEventCredits(
-  ev: Pick<UsageEventRow, 'creditsCharged' | 'costUsdEst' | 'meta' | 'idempotencyKey'>
+  ev: Pick<UsageEventRow, 'billingSku' | 'creditsCharged' | 'costUsdEst' | 'meta' | 'idempotencyKey'>
 ): string {
   if (isUsageEventByok(ev)) return '自备 Key';
   const credits = usageEventCredits(ev);
   return credits > 0 ? fmtCredits(credits) : '—';
+}
+
+/** 积分列 title：展示 SKU 展示名 + 原始 billingSku */
+export function fmtUsageEventCreditsTitle(
+  ev: Pick<UsageEventRow, 'billingSku' | 'meta'>
+): string | undefined {
+  const sku = String(ev.billingSku || '').trim();
+  if (!sku) return undefined;
+  const label = presentationLabelForEvent(ev);
+  return label !== sku ? `${label} (${sku})` : sku;
 }
 
 export function sumUsageEventsCredits(events: UsageEventRow[]): number {

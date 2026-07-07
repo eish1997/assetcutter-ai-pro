@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { getCompanionManifest } from '../../services/companionClient';
 import { getCompanionLocalBaseUrl, normalizeCompanionBaseUrl } from '../../services/companionLocalPrefs';
+import { fetchUserUsageSummary, fmtUsageSummaryCredits } from '../../services/usageApi';
 import type { WorkspaceProject } from '../../services/workspaceProjectStore';
 import {
   loadWorkspaceProjectPreviews,
@@ -47,6 +48,27 @@ export default function WorkspaceProjectGalleryRow({
   const [totalBytes, setTotalBytes] = useState(() =>
     loadWorkspaceProjectTotalBytes(project.id, persistUserId)
   );
+  const [monthCreditsLabel, setMonthCreditsLabel] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setMonthCreditsLabel(null);
+    void fetchUserUsageSummary({ projectId: project.id })
+      .then((summary) => {
+        if (cancelled) return;
+        const label = fmtUsageSummaryCredits(
+          summary.month?.totalCreditsCharged,
+          summary.month?.eventCount ?? 0
+        );
+        setMonthCreditsLabel(label === '—' ? null : label);
+      })
+      .catch(() => {
+        if (!cancelled) setMonthCreditsLabel(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [project.id]);
 
   const revokeCompanionBlobUrls = () => {
     for (const url of companionBlobUrlsRef.current) {
@@ -128,6 +150,14 @@ export default function WorkspaceProjectGalleryRow({
               <span className="shrink-0 tabular-nums text-gray-400" title="项目总大小（本地估算）">
                 {formatWorkspaceProjectByteSize(totalBytes)}
               </span>
+              {monthCreditsLabel ? (
+                <>
+                  <span className="text-gray-600">·</span>
+                  <span className="shrink-0 tabular-nums text-amber-400/85" title="本月平台积分消耗">
+                    本月 {monthCreditsLabel}
+                  </span>
+                </>
+              ) : null}
             </div>
           </div>
 

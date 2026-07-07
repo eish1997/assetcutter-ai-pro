@@ -32,6 +32,8 @@ export type WorkflowComposerOverlayProps = {
   companionProjectId?: string | null;
   /** 与设置页文字模型一致，能力集合断点测试用 */
   textModelRegistryId?: string | null;
+  /** 平台积分余额（试运行预估） */
+  creditBalance?: number | null;
 };
 
 function isEscapeKey(e: KeyboardEvent): boolean {
@@ -68,6 +70,7 @@ export default function WorkflowComposerOverlay({
   onMinimizedChange,
   companionProjectId = null,
   textModelRegistryId = null,
+  creditBalance = null,
 }: WorkflowComposerOverlayProps) {
   const [setLabel, setSetLabel] = useState(initialSet?.label ?? '新建工作流');
   const [dock, setDock] = useState<ComposerDock>('fullscreen');
@@ -262,6 +265,7 @@ export default function WorkflowComposerOverlay({
                 assetCandidates={assetCandidates}
                 companionProjectId={companionProjectId}
                 textModelRegistryId={textModelRegistryId}
+                creditBalance={creditBalance}
               />
             </div>
           </div>

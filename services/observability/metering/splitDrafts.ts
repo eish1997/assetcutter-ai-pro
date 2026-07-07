@@ -1,4 +1,5 @@
 import type { UsageCostConfidence, UsageMeterKind } from '../../../shared/usageBilling';
+import { CONSUMER_FLAT_IMAGE_BILLING } from '../../../shared/pricing/consumerPricing';
 import type { MeterReading } from '../../../shared/observability/meterReading';
 
 export type MeterSplitDraft = {
@@ -42,11 +43,41 @@ export function splitMeterReadingToDrafts(reading: MeterReading): MeterSplitDraf
   }
 
   if (reading.modality === 'image') {
-    const drafts: MeterSplitDraft[] = [];
     const inPart = reading.parts.find((p) => p.kind === 'input_token');
     const outTok = reading.parts.find((p) => p.kind === 'output_token');
     const outImg = reading.parts.find((p) => p.kind === 'output_image');
 
+    const imageQty = outImg && outImg.quantity > 0 ? outImg.quantity : 1;
+    const outMeta: Record<string, unknown> = {
+      ...metaBase,
+      usagePart: 'output',
+      outputKind: 'image',
+    };
+
+    if (CONSUMER_FLAT_IMAGE_BILLING) {
+      outMeta.flatRate = true;
+      if (inPart && inPart.quantity > 0) {
+        outMeta.promptTokenCount = inPart.quantity;
+      }
+      if (outTok && outTok.quantity > 0) {
+        outMeta.outputTokenCount = outTok.quantity;
+      }
+      return [
+        {
+          idempotencySuffix: '',
+          meterKind: 'image',
+          quantityIn: 0,
+          quantityOut: 0,
+          quantity: imageQty,
+          unit: 'image',
+          costConfidence:
+            outImg && outImg.quantity > 0 ? 'estimated' : outTok ? 'exact' : 'estimated',
+          meta: outMeta,
+        },
+      ];
+    }
+
+    const drafts: MeterSplitDraft[] = [];
     if (inPart && inPart.quantity > 0) {
       drafts.push({
         idempotencySuffix: ':in',
@@ -61,29 +92,18 @@ export function splitMeterReadingToDrafts(reading: MeterReading): MeterSplitDraf
     }
 
     if (outTok && outTok.quantity > 0) {
-      drafts.push({
-        idempotencySuffix: ':out',
-        meterKind: 'token',
-        quantityIn: 0,
-        quantityOut: outTok.quantity,
-        quantity: outTok.quantity,
-        unit: 'token',
-        costConfidence: 'exact',
-        imageOutputTokens: true,
-        meta: { ...metaBase, usagePart: 'output', outputKind: 'token' },
-      });
-    } else if (outImg && outImg.quantity > 0) {
-      drafts.push({
-        idempotencySuffix: ':out',
-        meterKind: 'image',
-        quantityIn: 0,
-        quantityOut: 0,
-        quantity: outImg.quantity,
-        unit: 'image',
-        costConfidence: 'estimated',
-        meta: { ...metaBase, usagePart: 'output', outputKind: 'image' },
-      });
+      outMeta.outputTokenCount = outTok.quantity;
     }
+    drafts.push({
+      idempotencySuffix: ':out',
+      meterKind: 'image',
+      quantityIn: 0,
+      quantityOut: 0,
+      quantity: imageQty,
+      unit: 'image',
+      costConfidence: outImg && outImg.quantity > 0 ? 'estimated' : outTok ? 'exact' : 'estimated',
+      meta: outMeta,
+    });
 
     return drafts;
   }

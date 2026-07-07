@@ -1,6 +1,7 @@
+import type { BillingDecision } from '../shared/billingDecision';
 import { prepareImageDataUrlForTripoUpload } from './tripoUploadImagePrep';
 import { apiUrl } from './apiBase';
-import { emitMeteredUsage } from './observability/metering/pipeline';
+import { emitMeteredUsageAwait } from './observability/metering/pipeline';
 import { meterReadingFromTask } from './observability/metering/adapters/task';
 import { resolveBillingSkuForTripoTask } from './usageBillingSku';
 
@@ -334,13 +335,22 @@ export async function createTripoTask(input: TripoCreateTaskInput): Promise<stri
     ).trim() ||
     String(data.id || '').trim();
   if (!taskId) throw new Error('Tripo 返回中缺少 task_id');
-  emitMeteredUsage({
+  const tripoBillingDecision: BillingDecision = {
+    routeKind: 'byok',
+    jobKind: 'workflow_generate_3d',
+    registryId: 'tripo',
+    role: 'text',
+    minCredits: 0,
+  };
+  await emitMeteredUsageAwait({
     reading: meterReadingFromTask({ provider: 'tripo', modality: '3d' }),
     registryId: 'tripo',
     billingSku: resolveBillingSkuForTripoTask(input.type),
     idempotencyPrefix: `tripo-task:${taskId}`,
     requestId: taskId,
     upstreamTaskId: taskId,
+    jobKind: 'workflow_generate_3d',
+    billingDecision: tripoBillingDecision,
     extraMeta: { taskType: input.type, modelVersion: input.modelVersion || null },
   });
   return taskId;

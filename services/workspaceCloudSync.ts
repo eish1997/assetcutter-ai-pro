@@ -26,6 +26,24 @@ export function isWorkspaceCloudEnabled(): boolean {
   return import.meta.env.VITE_WORKSPACE_CLOUD !== 'false';
 }
 
+/**
+ * 是否在关闭/切换/重命名等项目操作时自动上传 `projects-index.json`。
+ * 默认 **关**：项目列表以本地伴侣目录为准（目录内项目默认公开可读）。
+ * 设 `VITE_WORKSPACE_CLOUD_INDEX_SYNC=1` 可恢复旧行为。
+ */
+export function isWorkspaceCloudProjectIndexAutoSyncEnabled(): boolean {
+  const raw = import.meta.env.VITE_WORKSPACE_CLOUD_INDEX_SYNC;
+  if (raw === undefined || raw === '') return false;
+  const v = String(raw).trim().toLowerCase();
+  if (v === '0' || v === 'false' || v === 'off' || v === 'no') return false;
+  return v === '1' || v === 'true' || v === 'on' || v === 'yes';
+}
+
+/** 伴侣项目目录 + 浏览器本地 bundle 为真源（不自动推索引/轻量结构，打开时不与云端 workflow merge） */
+export function isWorkspaceCompanionDirectorySourceOfTruth(): boolean {
+  return !isWorkspaceCloudProjectIndexAutoSyncEnabled();
+}
+
 function sanitizeUserPathSegment(s: string): string {
   return String(s || '')
     .trim()

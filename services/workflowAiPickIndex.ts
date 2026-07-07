@@ -101,6 +101,19 @@ export const WORKFLOW_AI_PICK_NODES: readonly WorkflowAiPickNode[] = [
     layer: 'gate',
     label: 'unifiedAiGateway',
     codeRefs: ['services/unifiedAiGateway.ts', 'services/unifiedAiSoftNotice.ts'],
+    notes: 'runMeteredAiCall → aiDispatchGate.gateBeforeUpstream',
+  },
+  {
+    id: 'ai_dispatch_gate',
+    layer: 'gate',
+    label: 'aiDispatchGate + billingRoute（派发单点闸门）',
+    codeRefs: [
+      'services/aiDispatchGate.ts',
+      'shared/billingRoute.ts',
+      'shared/billingDecision.ts',
+      'services/aiBillingGate.ts',
+    ],
+    notes: 'resolveBillingRoute 规则单源；platform reserve；L2 billingDecision',
   },
   {
     id: 'generate3d_module',
@@ -171,6 +184,39 @@ export const WORKFLOW_AI_PICK_NODES: readonly WorkflowAiPickNode[] = [
     label: 'HTTP 生视频上游（VITE_WORKFLOW_VIDEO_API_URL）',
     codeRefs: ['VITE_WORKFLOW_VIDEO_API_URL'],
   },
+  {
+    id: 'jimeng_warehouse',
+    layer: 'gate',
+    label: 'services/jimeng（catalog / adapter / client）',
+    codeRefs: [
+      'services/jimeng/catalog.ts',
+      'services/jimeng/adapter.ts',
+      'services/jimeng/client.ts',
+      'services/jimeng/pickJimengBinding.ts',
+      'services/modelRegistry/jimengImageRegistry.ts',
+      'services/modelRegistry/jimengVideoRegistry.ts',
+      'services/modelRegistry/jimengDigitalHumanRegistry.ts',
+    ],
+    notes: 'W0 warehouseOnly；图类经 pickBinding(role=image)；视频/数字人经 pickJimengBinding',
+  },
+  {
+    id: 'jimeng_server_proxy',
+    layer: 'supplier',
+    label: 'auth-api /api/jimeng + jimeng-visual-api',
+    codeRefs: [
+      'server/jimeng-visual-api.js',
+      'server/jimeng-sign.js',
+      'server/jimeng-credits-gate.js',
+      'server/auth-api.js',
+    ],
+    notes: '站点 VOLCENGINE_* AK/SK；L1 credits-gate；Submit + Poll',
+  },
+  {
+    id: 'volcengine_visual_upstream',
+    layer: 'supplier',
+    label: 'visual.volcengineapi.com（即梦 CV API）',
+    codeRefs: ['visual.volcengineapi.com'],
+  },
 ];
 
 /** §1.4.3 推荐依赖边（from → to） */
@@ -192,6 +238,10 @@ export const WORKFLOW_AI_PICK_EDGES: readonly WorkflowAiPickEdge[] = [
   { id: 'edge_g3_tc', from: 'generate3d_module', to: 'tencent_service' },
   { id: 'edge_ug_vb', from: 'unified_ai_gateway', to: 'workflow_video_bridge' },
   { id: 'edge_vb_http', from: 'workflow_video_bridge', to: 'http_video_bridge_upstream' },
+  { id: 'edge_ug_jimeng', from: 'unified_ai_gateway', to: 'jimeng_warehouse' },
+  { id: 'edge_jimeng_proxy', from: 'jimeng_warehouse', to: 'jimeng_server_proxy' },
+  { id: 'edge_jimeng_volc', from: 'jimeng_server_proxy', to: 'volcengine_visual_upstream' },
+  { id: 'edge_pick_jimeng', from: 'model_registry_pick', to: 'jimeng_warehouse' },
 ];
 
 /** §1.4.2 货物大类 → 闸门 → 运营手段 */
@@ -230,6 +280,27 @@ export const WORKFLOW_AI_CARGO_ROWS: readonly WorkflowAiCargoRow[] = [
     primaryGate: '经 unifiedAiGateway',
     opsMeans: '随文/图默认与渠道',
     remark: '见计划 §3.6',
+  },
+  {
+    id: 'cargo_jimeng_image',
+    cargoLabel: '即梦 · 图（W0 仓库）',
+    primaryGate: 'unifiedAiGateway.workflowGenerateImageJimeng → pickBinding(role=image) → /api/jimeng',
+    opsMeans: 'catalog.ts + jimengImageRegistry；warehouseOnly；M1 运营 allowlist',
+    remark: 'verified: jimeng-image-t2i-v40',
+  },
+  {
+    id: 'cargo_jimeng_video',
+    cargoLabel: '即梦 · 视频（W0 仓库）',
+    primaryGate: 'unifiedAiGateway.workflowGenerateVideoJimeng → pickJimengBinding(video)',
+    opsMeans: 'jimengVideoRegistry；不经 geminiService',
+    remark: 'verified: jimeng-video-ti2v-v30-pro',
+  },
+  {
+    id: 'cargo_jimeng_dh',
+    cargoLabel: '即梦 · 数字人（W0 仓库）',
+    primaryGate: 'unifiedAiGateway.workflowGenerateDigitalHumanJimeng → pickJimengBinding(digital_human)',
+    opsMeans: 'jimengDigitalHumanRegistry；asyncMode omnihuman_v1',
+    remark: 'W0 可 skip 冒烟；M1 generate_digital_human',
   },
 ];
 

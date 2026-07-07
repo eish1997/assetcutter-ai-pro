@@ -1,8 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   workflowGenerateVideo,
   workflowChat,
   createTripoTask,
+  getDialogTextResponse,
+  processTexture,
+  detectObjectsInImage,
   DEFAULT_PROMPTS,
   WorkflowVideoNotAvailableError,
   isWorkflowVideoAvailable,
@@ -10,9 +13,25 @@ import {
   startTencent3DProJob,
 } from "../services/unifiedAiGateway";
 
+vi.mock("../services/aiDispatchGate", () => ({
+  gateBeforeUpstream: vi.fn(async (params: { jobKind: string }) => ({
+    routeKind: "platform",
+    minCredits: 10,
+    jobKind: params.jobKind,
+    registryId: params.jobKind,
+    role: "text",
+  })),
+}));
+
 describe("unifiedAiGateway", () => {
   it("exports workflowChat as a function", () => {
     expect(typeof workflowChat).toBe("function");
+  });
+
+  it("exports metered dialog wrappers", () => {
+    expect(typeof getDialogTextResponse).toBe("function");
+    expect(typeof processTexture).toBe("function");
+    expect(typeof detectObjectsInImage).toBe("function");
   });
 
   it("re-exports Tripo createTask", () => {

@@ -47,6 +47,7 @@ import LazySectionFallback from './components/ui/LazySectionFallback';
 import WorkflowModeShell from './components/WorkflowModeShell';
 import WorkspaceSidebarFooter from './components/WorkspaceSidebarFooter';
 import { useUserUiPrefs } from './hooks/useUserUiPrefs';
+import { useCreditBalance } from './hooks/useCreditBalance';
 import Waves from './components/ui/Waves';
 import AppIcon from './components/ui/AppIcon';
 import GeminiFairnessFloatingNotice from './components/GeminiFairnessFloatingNotice';
@@ -108,6 +109,8 @@ import {
   fetchWorkspaceCloudIndex,
   isWorkspaceCloudEnabled,
   isWorkspaceCloudLiteStructureSyncEnabled,
+  isWorkspaceCloudProjectIndexAutoSyncEnabled,
+  isWorkspaceCompanionDirectorySourceOfTruth,
   migrateLocalWorkspaceToCloud,
   pushWorkflowLiteStructureToCloud,
   pushWorkspaceIndex,
@@ -230,6 +233,7 @@ const AdminUserDetailPanel = React.lazy(() => import('./components/admin/AdminUs
 const AdminAuditLogsPanel = React.lazy(() => import('./components/admin/AdminAuditLogsPanel'));
 const AdminTaskEventsPanel = React.lazy(() => import('./components/admin/AdminTaskEventsPanel'));
 const AdminUsagePanel = React.lazy(() => import('./components/admin/AdminUsagePanel'));
+const AdminPriceCatalogPanel = React.lazy(() => import('./components/admin/AdminPriceCatalogPanel'));
 const AdminCapabilityPresetsPanel = React.lazy(() => import('./components/admin/AdminCapabilityPresetsPanel'));
 const AdminSystemStatusPanel = React.lazy(() => import('./components/admin/AdminSystemStatusPanel'));
 const AdminStaffInvitesPanel = React.lazy(() => import('./components/admin/AdminStaffInvitesPanel'));
@@ -421,6 +425,8 @@ const AdminAppShell: React.FC = () => {
             <AdminTaskEventsPanel />
           ) : pathname === '/admin/usage' ? (
             <AdminUsagePanel />
+          ) : pathname === '/admin/price-catalog' ? (
+            <AdminPriceCatalogPanel />
           ) : pathname === '/admin/capability-presets' ? (
             <AdminCapabilityPresetsPanel />
           ) : pathname === '/admin/system-status' ? (
@@ -666,9 +672,10 @@ const DIALOG_PAGE_ENABLED = false;
 const MainApp: React.FC = () => {
   const { user, logout, loading: authLoading, refresh: refreshAuthUser } = useAuth();
   const userUiPrefs = useUserUiPrefs();
+  const { balance: creditBalance } = useCreditBalance(user?.id ?? null);
   const [workflowSectionLoadAttempt, setWorkflowSectionLoadAttempt] = useState(0);
   const WorkflowSection = useMemo(
-    () => React.lazy(() => import('./components/workflow/workflowSectionLazy')),
+    () => React.lazy(() => import('./components/workflow/workflowSectionLazyBoot')),
     [workflowSectionLoadAttempt],
   );
 
@@ -917,6 +924,10 @@ const MainApp: React.FC = () => {
     return Boolean(projectId && userIdRef.current);
   }
 
+  function shouldAutoPushWorkspaceProjectIndex(): boolean {
+    return isWorkspaceCloudEnabled() && isWorkspaceCloudProjectIndexAutoSyncEnabled();
+  }
+
   useEffect(() => {
     if (!user?.id) return;
     const used = Number(user.workspaceUsedBytes ?? 0);
@@ -933,8 +944,9 @@ const MainApp: React.FC = () => {
     return () => window.removeEventListener('focus', onFocus);
   }, [user?.id, refreshAuthUser]);
 
-  /** 画布变更后标记未同步（云端拉取过程中不标脏） */
+  /** 画布变更后标记未同步（云端拉取过程中不标脏；伴侣目录为真源时不标索引脏） */
   useEffect(() => {
+    if (isWorkspaceCompanionDirectorySourceOfTruth()) return;
     if (authLoading || !user?.id || !user?.username || !isWorkspaceCloudEnabled() || !activeWorkspaceProjectId) return;
     if (!canSyncWorkspaceProjectToCloud(activeWorkspaceProjectId)) return;
     if (workspaceCloudPostPullDirtySuppressRef.current > 0) {
@@ -1329,6 +1341,53 @@ const MainApp: React.FC = () => {
     return [...fromCompanion, ...extras];
   }, []);
 
+  const applyLocalWorkspaceIndex = useCallback(
+    async (uid: string) => {
+      await ensureWorkspaceBundlesHydratedFromIdb(uid);
+      const localProjects = loadWorkspaceProjects(uid);
+      const last = getLastOpenedWorkspaceProjectId(uid);
+      const validLast = last && localProjects.some((p) => p.id === last) ? last : null;
+      saveWorkspaceProjects(localProjects, uid);
+      setWorkspaceProjects(localProjects);
+      setLastOpenedWorkspaceProjectId(validLast, uid);
+      workspaceCloudPushAllowedUserIdRef.current = uid;
+      markWorkspaceLocalIdbHydrateReady();
+      if (validLast) {
+        loadWorkspaceProjectInternalRef.current(validLast);
+      } else {
+        setActiveWorkspaceProjectId(null);
+        setWorkflowAssets([]);
+        setWorkflowPending([]);
+      }
+    },
+    [markWorkspaceLocalIdbHydrateReady]
+  );
+
+  const applyCompanionFirstWorkspaceIndex = useCallback(
+    async (uid: string) => {
+      await ensureWorkspaceBundlesHydratedFromIdb(uid);
+      const localProjects = loadWorkspaceProjects(uid);
+      const remoteProjects = await pullWorkspaceProjectsFromCompanion(localProjects);
+      const effectiveProjects =
+        remoteProjects && remoteProjects.length > 0 ? remoteProjects : localProjects;
+      const last = getLastOpenedWorkspaceProjectId(uid);
+      const validLast = last && effectiveProjects.some((p) => p.id === last) ? last : null;
+      saveWorkspaceProjects(effectiveProjects, uid);
+      setWorkspaceProjects(effectiveProjects);
+      setLastOpenedWorkspaceProjectId(validLast, uid);
+      workspaceCloudPushAllowedUserIdRef.current = uid;
+      markWorkspaceLocalIdbHydrateReady();
+      if (validLast) {
+        loadWorkspaceProjectInternalRef.current(validLast);
+      } else {
+        setActiveWorkspaceProjectId(null);
+        setWorkflowAssets([]);
+        setWorkflowPending([]);
+      }
+    },
+    [markWorkspaceLocalIdbHydrateReady, pullWorkspaceProjectsFromCompanion]
+  );
+
   const workflowAssetsRef = useRef(workflowAssets);
   const workflowPendingRef = useRef(workflowPending);
   useEffect(() => {
@@ -1392,6 +1451,7 @@ const MainApp: React.FC = () => {
     const onBeforeUnload = (e: BeforeUnloadEvent) => {
       flushProjectPersistence();
       const shouldWarn =
+        !isWorkspaceCompanionDirectorySourceOfTruth() &&
         !!userIdRef.current &&
         !!usernameRef.current &&
         isWorkspaceCloudEnabled() &&
@@ -1473,10 +1533,41 @@ const MainApp: React.FC = () => {
     };
   }, [authLoading, user?.id, markWorkspaceLocalIdbHydrateReady, pullWorkspaceProjectsFromCompanion]);
 
-  /** 已登录且开启云同步：切换账号时先清空内存态，再从 R2 hydrate；访客数据仅在「云端无索引」时迁入 */
+  /** 已登录且开启云同步：伴侣目录为真源时只读本地/伴侣；否则从 R2 hydrate 项目索引 */
   useEffect(() => {
     if (authLoading || !user?.id || !user?.username || !isWorkspaceCloudEnabled()) return;
     const uid = user.id;
+    if (isWorkspaceCompanionDirectorySourceOfTruth()) {
+      if (typeof indexedDB !== 'undefined') {
+        workspaceLocalIdbHydrateReadyRef.current = false;
+        setWorkspaceLocalIdbHydrateReady(false);
+      }
+      workspaceCloudPushAllowedUserIdRef.current = null;
+      cloudWorkflowSyncGenRef.current += 1;
+      setWorkspaceCloudHydratingProjectId(null);
+      setWorkspaceProjects([]);
+      setActiveWorkspaceProjectId(null);
+      setWorkflowAssets([]);
+      setWorkflowPending([]);
+      let cancelled = false;
+      void (async () => {
+        try {
+          await applyCompanionFirstWorkspaceIndex(uid);
+        } catch (e) {
+          console.warn('[workspace] companion-first hydrate', e);
+          if (cancelled) return;
+          try {
+            await applyLocalWorkspaceIndex(uid);
+          } catch (fallbackErr) {
+            console.warn('[workspace] companion-first local fallback', fallbackErr);
+            if (!cancelled) markWorkspaceLocalIdbHydrateReady();
+          }
+        }
+      })();
+      return () => {
+        cancelled = true;
+      };
+    }
     if (typeof indexedDB !== 'undefined') {
       workspaceLocalIdbHydrateReadyRef.current = false;
       setWorkspaceLocalIdbHydrateReady(false);
@@ -1594,7 +1685,7 @@ const MainApp: React.FC = () => {
     return () => {
       cancelled = true;
     };
-  }, [authLoading, user?.id, user?.username, markWorkspaceLocalIdbHydrateReady, pullWorkspaceProjectsFromCompanion]);
+  }, [authLoading, user?.id, user?.username, markWorkspaceLocalIdbHydrateReady, pullWorkspaceProjectsFromCompanion, applyCompanionFirstWorkspaceIndex, applyLocalWorkspaceIndex]);
 
   useEffect(() => {
     workflowSessionHadNonEmptyAssetsRef.current = false;
@@ -1640,6 +1731,7 @@ const MainApp: React.FC = () => {
 
   /** 画布变更（且具备轻量上云前置条件）时递增序号，由下游 effect 单独防抖 PUT */
   useEffect(() => {
+    if (isWorkspaceCompanionDirectorySourceOfTruth()) return;
     if (!activeWorkspaceProjectId || !workspaceLocalIdbHydrateReady) return;
     if (authLoading) return;
     if (!isWorkspaceCloudEnabled() || !isWorkspaceCloudLiteStructureSyncEnabled()) return;
@@ -1660,6 +1752,7 @@ const MainApp: React.FC = () => {
 
   /** 已绑定 + 云可用：仅在画布调度序号变化时启动防抖；指纹未变则不调 PUT */
   useEffect(() => {
+    if (isWorkspaceCompanionDirectorySourceOfTruth()) return;
     if (liteStructureSyncScheduleSeq === 0) return;
     if (!activeWorkspaceProjectId || !workspaceLocalIdbHydrateReady) return;
     if (authLoading) return;
@@ -1745,6 +1838,7 @@ const MainApp: React.FC = () => {
           unameMerge &&
           scope === uidMerge &&
           isWorkspaceCloudEnabled() &&
+          !isWorkspaceCompanionDirectorySourceOfTruth() &&
           isWorkspaceCloudBundleMergeEnabled() &&
           workspaceCloudPushAllowedUserIdRef.current === uidMerge &&
           !workspaceCloudQuotaSuspendedRef.current &&
@@ -2002,9 +2096,9 @@ const MainApp: React.FC = () => {
         }
         const uid = userIdRef.current;
         if (
+          shouldAutoPushWorkspaceProjectIndex() &&
           uid &&
           usernameRef.current &&
-          isWorkspaceCloudEnabled() &&
           !workspaceCloudQuotaSuspendedRef.current &&
           workspaceCloudPushAllowedUserIdRef.current === uid &&
           canSyncWorkspaceProjectToCloud(curId)
@@ -2107,9 +2201,9 @@ const MainApp: React.FC = () => {
         }
         const uid = userIdRef.current;
         if (
+          shouldAutoPushWorkspaceProjectIndex() &&
           uid &&
           usernameRef.current &&
-          isWorkspaceCloudEnabled() &&
           !workspaceCloudQuotaSuspendedRef.current &&
           workspaceCloudPushAllowedUserIdRef.current === uid &&
           canSyncWorkspaceProjectToCloud(pid)
@@ -2162,9 +2256,9 @@ const MainApp: React.FC = () => {
       setWorkspaceProjects(next);
       saveWorkspaceProjects(next, scope);
       if (
+        shouldAutoPushWorkspaceProjectIndex() &&
         user?.id &&
         user?.username &&
-        isWorkspaceCloudEnabled() &&
         workspaceCloudPushAllowedUserIdRef.current === user.id &&
         !workspaceCloudQuotaSuspendedRef.current
       ) {
@@ -2453,9 +2547,9 @@ const MainApp: React.FC = () => {
         addGlobalLog('工作区', 'warn', '本地伴侣更新显示名失败，名称已保存在浏览器', renamed.error);
       }
       if (
+        shouldAutoPushWorkspaceProjectIndex() &&
         user?.id &&
         user?.username &&
-        isWorkspaceCloudEnabled() &&
         workspaceCloudPushAllowedUserIdRef.current === user.id &&
         !workspaceCloudQuotaSuspendedRef.current
       ) {
@@ -2498,9 +2592,9 @@ const MainApp: React.FC = () => {
       setWorkflowPending([]);
     }
     if (
+      shouldAutoPushWorkspaceProjectIndex() &&
       uid &&
       usernameRef.current &&
-      isWorkspaceCloudEnabled() &&
       workspaceCloudPushAllowedUserIdRef.current === uid &&
       !workspaceCloudQuotaSuspendedRef.current
     ) {
@@ -4985,6 +5079,7 @@ const MainApp: React.FC = () => {
                   }
                   companionProjectId={activeWorkspaceProjectId}
                   textModelRegistryId={config.modelText}
+                  creditBalance={creditBalance}
                   onSave={(set) => {
                     const next = capabilitySets.some((s) => s.id === set.id)
                       ? capabilitySets.map((s) => (s.id === set.id ? set : s))

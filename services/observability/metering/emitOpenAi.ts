@@ -22,5 +22,6 @@ export function emitOpenAiMeteredUsage(args: {
     idempotencyPrefix: prefix,
     requestId,
     jobKind: args.jobKind,
+    extraMeta: { byok: true },
   });
 }

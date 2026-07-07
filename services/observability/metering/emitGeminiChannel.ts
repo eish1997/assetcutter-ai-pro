@@ -89,6 +89,7 @@ export function emitGeminiChannelMeteredUsage(args: {
     idempotencyPrefix: `${args.provider}${streamTag}:${requestId}`,
     requestId,
     jobKind: args.jobKind ?? (imageRole ? 'workflow_image' : 'workflow_chat'),
+    extraMeta: { byok: true },
   });
 }
 

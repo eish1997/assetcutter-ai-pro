@@ -33,6 +33,11 @@ import {
 } from './gemini-proxy-fairness.js';
 import { initGeminiFairnessConfigLoader, resolveGeminiFairnessConfigSource } from './gemini-fairness-config-store.js';
 import { extractUsageMetadata } from './gemini-proxy-usage.js';
+import {
+  assertGeminiProxyCreditsGate,
+  estimatedCreditsFromProxyBody,
+  isGeminiProxyCreditsGateEnabled,
+} from './gemini-proxy-credits-gate.js';
 
 /** 监听端口：优先专用变量，避免与 .env.local 里给 ai3d 等用的通用 `PORT` 冲突 */
 const PORT =
@@ -848,13 +853,22 @@ function sendBodyReadError(res, e) {
   }
 }
 
+async function applyCreditsGateOrReject(req, res, parsed, fallbackCredits) {
+  if (!isGeminiProxyCreditsGateEnabled()) return true;
+  const est = estimatedCreditsFromProxyBody(parsed, fallbackCredits);
+  const gate = await assertGeminiProxyCreditsGate(req, est);
+  if (gate.ok) return true;
+  sendJson(res, gate.status, gate.body);
+  return false;
+}
+
 const GEMINI_ASYNC_PATH = '/proxy/gemini/async';
 const GEMINI_ASYNC_BATCH_PATH = '/proxy/gemini/async-batch';
 
 const server = http.createServer(async (req, res) => {
   const corsOk = applyCors(req, res);
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-AC-Fairness-Key, X-AC-Fairness-Signature, X-AC-Client-Ip');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-AC-Fairness-Key, X-AC-Fairness-Signature, X-AC-Client-Ip, X-AC-Credits-Reserve, X-AC-Credits-Gate-Signature');
   res.setHeader('Access-Control-Max-Age', '86400');
 
   if (req.method === 'OPTIONS') {
@@ -887,6 +901,7 @@ const server = http.createServer(async (req, res) => {
         sendError(res, 400, 'Missing model or contents');
         return;
       }
+      if (!(await applyCreditsGateOrReject(req, res, parsed, 50))) return;
       const useVertex = aiBackend === 'vertex';
       const key = normalizeSecret(process.env.GEMINI_API_KEY || '');
       if (useVertex) {
@@ -967,6 +982,7 @@ const server = http.createServer(async (req, res) => {
         sendError(res, 400, 'Each item needs model and contents');
         return;
       }
+      if (!(await applyCreditsGateOrReject(req, res, parsed, 50))) return;
       let fairnessKey = 'anon:unused';
       if (isFairnessEnabled()) {
         const fr = resolveFairnessKey(req);
@@ -1058,6 +1074,7 @@ const server = http.createServer(async (req, res) => {
         sendError(res, 500, vertexConfigGuideMessage());
         return;
       }
+      if (!(await applyCreditsGateOrReject(req, res, parsed, 2))) return;
       let syncFairnessKey = null;
       if (isFairnessEnabled()) {
         const fr = resolveFairnessKey(req);
@@ -1126,6 +1143,9 @@ server.listen(PORT, BIND_HOST, async () => {
     console.warn('[gemini-proxy-api] fairness config loader init failed:', e instanceof Error ? e.message : String(e));
   }
   console.log(`[gemini-proxy-api] http://${BIND_HOST}:${PORT}`);
+  console.log(
+    `[gemini-proxy-api] creditsGate=${isGeminiProxyCreditsGateEnabled() ? 'on' : 'off'} (AUTH_API_BASE / session cookie → auth-api)`
+  );
   console.log(
     `[gemini-proxy-api] GEMINI_FAIRNESS_ENABLED=${isFairnessEnabled() ? 'true' : 'false'} (see docs/Gemini代理-公平排队与每用户限流.md)`
   );

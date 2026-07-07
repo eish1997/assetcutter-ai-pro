@@ -5,7 +5,7 @@ import {
   tripoWorkflowPollUntilDone,
   extractTripoModelAndPreviewUrls,
 } from '../generate3d/tripoWorkflow';
-import { normalizeApiErrorMessage } from '../geminiService';
+import { normalizeApiErrorMessage } from '../unifiedAiGateway';
 import { persistWorkflow3dSlots } from '../persistWorkflow3dSlots';
 import { resolveAssetSetComponentViewSrc } from './assetSetAsset';
 

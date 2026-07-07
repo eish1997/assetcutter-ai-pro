@@ -1,8 +1,12 @@
 /** 统一积分制 — 前后端对齐（server 侧见 server/credits-math.js，数值须一致） */
 
+import { quoteGateMinCreditsForJob } from './pricing/pricingEngine';
+
 export const CREDITS_PER_USD = 1000;
 
 export const CREDITS_EXCEEDED_CODE = 'CREDITS_EXCEEDED';
+
+export const LOGIN_REQUIRED_CODE = 'LOGIN_REQUIRED';
 
 export const CREDITS_BALANCE_CHANGED_EVENT = 'ac:credits-balance-changed';
 
@@ -21,7 +25,9 @@ export function proxyGateJobKindForWorkflowBranch(
     case 'branch_preset_execute_capability': {
       const cat = String(module?.category || '').trim();
       if (cat === 'generate_video') return 'workflow_generate_video';
-      if (cat === 'text_to_image' || cat === 'image_edit') return 'workflow_text_to_image';
+      if (cat === 'text_to_image' || cat === 'image_edit' || cat === 'image_to_image') {
+        return 'workflow_text_to_image';
+      }
       if (cat === 'understand') return 'workflow_understand';
       return 'workflow_chat';
     }
@@ -32,22 +38,14 @@ export function proxyGateJobKindForWorkflowBranch(
   }
 }
 
+/** 1 积分 ≈ $0.001 USD 估算成本 */
+export function usdEstToCredits(costUsdEst: number | null | undefined): number {
+  if (costUsdEst == null || !Number.isFinite(costUsdEst) || costUsdEst <= 0) return 0;
+  return Math.ceil(costUsdEst * CREDITS_PER_USD);
+}
+
 export function proxyGateMinCreditsForJob(jobKind: string | null | undefined): number {
-  switch (String(jobKind || '').trim()) {
-    case 'workflow_generate_3d':
-      return 500;
-    case 'workflow_generate_video':
-      return 100;
-    case 'workflow_text_to_image':
-    case 'workflow_image_edit':
-      return 50;
-    case 'workflow_understand':
-      return 5;
-    case 'workflow_chat':
-      return 2;
-    default:
-      return 1;
-  }
+  return quoteGateMinCreditsForJob(jobKind);
 }
 
 export function dispatchCreditsBalanceChanged(): void {
@@ -65,14 +63,32 @@ export function isCreditsExceededError(err: unknown): boolean {
   return /积分不足|CREDITS_EXCEEDED/i.test(msg);
 }
 
-export function creditsExceededUserMessage(): string {
-  return '积分不足，无法完成本次 AI 任务。请联系管理员发放积分，或在「设置 → AI 用量」查看余额与流水。';
+export function creditsExceededUserMessage(available?: number, required?: number): string {
+  const base =
+    '积分不足，无法完成本次 AI 任务。请联系管理员发放积分，或在「设置 → AI 用量」查看余额与流水。';
+  if (
+    available != null &&
+    required != null &&
+    Number.isFinite(available) &&
+    Number.isFinite(required) &&
+    required > available
+  ) {
+    const shortfall = Math.max(1, Math.ceil(required - available));
+    return `积分不足，还差 ${fmtCredits(shortfall)} 积分。请联系管理员发放积分，或在「设置 → AI 用量」查看余额与流水。`;
+  }
+  return base;
+}
+
+export function platformAiLoginRequiredMessage(): string {
+  return '请先登录后再使用 AI 生成。';
 }
 
 export type CreditLedgerKind = 'grant' | 'admin_deduct' | 'consume' | 'refund';
 
 export type CreditBalance = {
   balance: number;
+  reserved?: number;
+  available?: number;
   lifetimeGranted: number;
   lifetimeSpent: number;
   updatedAt?: string;
@@ -91,18 +107,11 @@ export type CreditLedgerEntry = {
   createdAt: string;
 };
 
-/** 1 积分 ≈ $0.001 USD 估算成本 */
-export function usdEstToCredits(costUsdEst: number | null | undefined): number {
-  if (costUsdEst == null || !Number.isFinite(costUsdEst) || costUsdEst <= 0) return 0;
-  return Math.ceil(costUsdEst * CREDITS_PER_USD);
-}
-
 export function fmtCredits(n: number | null | undefined): string {
   if (n == null || !Number.isFinite(n)) return '—';
   return Math.floor(n).toLocaleString('zh-CN');
 }
 
-/** 窄侧栏（约 56px）：短标签，完整值放 title */
 export function fmtCreditsSidebar(n: number | null | undefined): string {
   if (n == null || !Number.isFinite(n)) return '—';
   const v = Math.floor(n);
@@ -127,4 +136,11 @@ const LEDGER_KIND_LABELS: Record<CreditLedgerKind, string> = {
 
 export function creditLedgerKindLabel(kind: CreditLedgerKind | string): string {
   return LEDGER_KIND_LABELS[kind as CreditLedgerKind] || kind;
+}
+
+/** 提交前预检：展示「约 N 积分起」 */
+export function fmtProxyGateEstimate(jobKind: string | null | undefined): string {
+  const n = proxyGateMinCreditsForJob(jobKind);
+  if (n <= 0) return '';
+  return `约 ${fmtCredits(n)} 积分起`;
 }

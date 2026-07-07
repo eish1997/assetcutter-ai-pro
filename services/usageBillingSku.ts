@@ -5,6 +5,7 @@ export {
   resolveBillingSkuForTripoTask,
   resolveBillingSkuForTencent3dTask,
   resolveBillingSkuForWorkflowVideo,
+  resolveBillingSkuForJimeng,
   resolveProviderForGeminiPath,
   resolveBillingSkuFromRegistry,
   isLikelyImageRegistryId,

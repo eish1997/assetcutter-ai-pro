@@ -55,6 +55,8 @@ import {
   type CapabilityGraphEdgeLite,
   type CapabilityGraphNodeLite,
 } from '../services/inferCapabilitySetIo';
+import { planCapabilitySetRoutes } from '../services/aiBillingGate';
+import TaskCreditsEstimate from './usage/TaskCreditsEstimate';
 
 const genId = () => Math.random().toString(36).slice(2, 11);
 
@@ -968,6 +970,8 @@ type CanvasInnerProps = {
   companionProjectId?: string | null;
   /** 与设置页「理解 / 文字模型」一致；未传则由 `capabilityExecutor` 回退默认 registryId */
   textModelRegistryId?: string | null;
+  /** 平台积分余额（试运行全流程预估） */
+  creditBalance?: number | null;
 };
 
 /** 不允许删除的固定节点：默认保留一个「资产输入」节点 */
@@ -992,6 +996,7 @@ function CanvasInner({
   assetCandidates = [],
   companionProjectId = null,
   textModelRegistryId = null,
+  creditBalance = null,
 }: CanvasInnerProps) {
   const { screenToFlowPosition, getNodes, getEdges } = useReactFlow();
   const updateNodeInternals = useUpdateNodeInternals();
@@ -1440,6 +1445,11 @@ function CanvasInner({
     };
   }, [initialSet, setLabel, nodes, edges, presetsById]);
 
+  const pipelineEstimateSteps = useMemo(
+    () => planCapabilitySetRoutes(buildPersistedSet(), presets),
+    [buildPersistedSet, presets]
+  );
+
   const handleSave = useCallback(() => {
     onSave(buildPersistedSet());
   }, [onSave, buildPersistedSet]);
@@ -1754,6 +1764,9 @@ function CanvasInner({
           >
             {testRunBusy ? '执行中…' : '试运行全流程'}
           </button>
+          {pipelineEstimateSteps.length > 0 ? (
+            <TaskCreditsEstimate steps={pipelineEstimateSteps} balance={creditBalance} compact />
+          ) : null}
         </div>
         <div className="sidebar-header">通用节点</div>
         <button
@@ -1980,6 +1993,7 @@ export type CapabilitySetCanvasProps = {
   assetCandidates?: CanvasInnerProps['assetCandidates'];
   companionProjectId?: CanvasInnerProps['companionProjectId'];
   textModelRegistryId?: CanvasInnerProps['textModelRegistryId'];
+  creditBalance?: CanvasInnerProps['creditBalance'];
 };
 
 export default function CapabilitySetCanvas(props: CapabilitySetCanvasProps) {

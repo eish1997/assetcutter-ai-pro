@@ -4,14 +4,18 @@
 import crypto from 'crypto';
 import { readDb, writeDb, USE_POSTGRES, getPool, ensurePostgres } from './auth-store.js';
 import { estimateCostFromCatalog } from './usage-price-catalog.js';
+import { priceUsageQuote } from './pricing-engine.js';
+import { getCatalogVersion, getCatalogVersionSync } from './price-catalog-store.js';
 import {
-  consumeCreditsInTx,
-  consumeCreditsJson,
-  creditsForEvent,
   CreditsExceededError,
   ensureCreditStore,
   shouldChargeCreditsForEvent,
+  usdEstToCredits,
 } from './credit-store.js';
+import {
+  settleUsageEventInTx,
+  settleUsageEventJson,
+} from './settlement-service.js';
 
 const MAX_JSON_EVENTS = 20000;
 const METER_KINDS = new Set(['token', 'image', 'second', 'task', 'byte']);
@@ -27,7 +31,7 @@ function nowIso() {
   return new Date().toISOString();
 }
 
-function normalizeEventInput(userId, raw) {
+function normalizeEventInput(userId, raw, catalogVersion = null) {
   const idempotencyKey = String(raw?.idempotencyKey || raw?.idempotency_key || '').trim();
   if (!idempotencyKey || idempotencyKey.length > 200) return null;
 
@@ -65,6 +69,47 @@ function normalizeEventInput(userId, raw) {
 
   const meta = raw?.meta && typeof raw.meta === 'object' && !Array.isArray(raw.meta) ? raw.meta : null;
 
+  const clientCredits =
+    raw?.creditsCharged ?? raw?.credits_charged;
+  const clientCreditsValid =
+    clientCredits != null && Number.isFinite(Number(clientCredits)) && Number(clientCredits) >= 0;
+
+  let creditsCharged = 0;
+  const chargeProbe = {
+    status,
+    billingSku,
+    meterKind,
+    quantityIn,
+    quantityOut,
+    quantity,
+    costUsdEst: costUsdEst == null ? null : Number(costUsdEst),
+    meta,
+    metaJson: meta ? JSON.stringify(meta) : null,
+  };
+  if (shouldChargeCreditsForEvent(chargeProbe)) {
+    if (clientCreditsValid) {
+      creditsCharged = Math.floor(Number(clientCredits));
+    } else {
+      const quote = priceUsageQuote({
+        billingSku,
+        meterKind,
+        quantityIn,
+        quantityOut,
+        quantity,
+        usagePart: meta?.usagePart,
+        outputKind: meta?.outputKind,
+        byok: meta?.byok === true,
+      });
+      creditsCharged = quote.creditsCharge;
+      if (costUsdEst != null && Number(costUsdEst) > 0) {
+        creditsCharged = Math.max(creditsCharged, usdEstToCredits(Number(costUsdEst)));
+      }
+      if (quote.costUsdEst != null && costUsdEst == null) {
+        costUsdEst = quote.costUsdEst;
+      }
+    }
+  }
+
   return {
     id: crypto.randomUUID(),
     idempotencyKey,
@@ -89,14 +134,8 @@ function normalizeEventInput(userId, raw) {
     jobKind: raw?.jobKind ? String(raw.jobKind).slice(0, 64) : null,
     metaJson: meta ? JSON.stringify(meta) : null,
     createdAt: nowIso(),
-    creditsCharged: shouldChargeCreditsForEvent({
-      status,
-      costUsdEst: costUsdEst == null ? null : Number(costUsdEst),
-      meta,
-      metaJson: meta ? JSON.stringify(meta) : null,
-    })
-      ? creditsForEvent({ costUsdEst: costUsdEst == null ? null : Number(costUsdEst) })
-      : 0,
+    creditsCharged,
+    catalogVersion: catalogVersion ? String(catalogVersion).slice(0, 120) : null,
   };
 }
 
@@ -137,6 +176,7 @@ function mapRow(r) {
     createdAt: r.created_at ?? r.createdAt,
     creditsCharged:
       r.credits_charged != null ? Number(r.credits_charged) : r.creditsCharged != null ? Number(r.creditsCharged) : null,
+    catalogVersion: r.catalog_version ?? r.catalogVersion ?? null,
   };
 }
 
@@ -180,6 +220,7 @@ export async function ensureUsageBillingStore() {
     `CREATE INDEX IF NOT EXISTS idx_usage_events_billing_sku_created ON usage_events(billing_sku, created_at DESC);`
   );
   await p.query(`ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS credits_charged BIGINT NULL;`);
+  await p.query(`ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS catalog_version TEXT NULL;`);
 }
 
 /**
@@ -190,8 +231,9 @@ export async function insertUsageEvents(userId, rawEvents) {
   if (!isUsageBillingEnabled()) return { inserted: 0, skipped: 0, disabled: true };
   const uid = String(userId || '').trim();
   if (!uid) return { inserted: 0, skipped: 0 };
+  const catalogVersion = await getCatalogVersion();
   const list = (Array.isArray(rawEvents) ? rawEvents : [rawEvents])
-    .map((e) => normalizeEventInput(uid, e))
+    .map((e) => normalizeEventInput(uid, e, catalogVersion))
     .filter(Boolean);
   if (!list.length) return { inserted: 0, skipped: 0 };
 
@@ -209,18 +251,13 @@ export async function insertUsageEvents(userId, rawEvents) {
           await client.query('COMMIT');
           continue;
         }
-        if (shouldChargeCreditsForEvent(ev)) {
-          await consumeCreditsInTx(client, uid, ev.creditsCharged, {
-            usageEventId: ev.id,
-            idempotencyKey: ev.idempotencyKey,
-          });
-        }
+        await settleUsageEventInTx(client, uid, ev);
         const res = await client.query(
           `INSERT INTO usage_events
            (id, idempotency_key, user_id, workspace_id, project_id, workflow_step_id, audit_log_id,
             provider, registry_id, billing_sku, meter_kind, quantity_in, quantity_out, quantity, unit,
-            cost_usd_est, cost_confidence, status, upstream_task_id, request_id, job_kind, meta_json, credits_charged, created_at)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22::jsonb,$23,$24)`,
+            cost_usd_est, cost_confidence, status, upstream_task_id, request_id, job_kind, meta_json, credits_charged, catalog_version, created_at)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22::jsonb,$23,$24,$25)`,
           [
             ev.id,
             ev.idempotencyKey,
@@ -245,6 +282,7 @@ export async function insertUsageEvents(userId, rawEvents) {
             ev.jobKind,
             ev.metaJson,
             ev.creditsCharged > 0 ? ev.creditsCharged : null,
+            ev.catalogVersion,
             ev.createdAt,
           ]
         );
@@ -261,19 +299,18 @@ export async function insertUsageEvents(userId, rawEvents) {
     return { inserted, skipped: list.length - inserted };
   }
 
+  const rawList = Array.isArray(rawEvents) ? rawEvents : [rawEvents];
   const db = readDb();
   if (!Array.isArray(db.usageEvents)) db.usageEvents = [];
+  const catalogVersionJson = getCatalogVersionSync();
   const existing = new Set(db.usageEvents.map((r) => r.idempotencyKey));
   let inserted = 0;
-  for (const ev of list) {
+  for (const raw of rawList) {
+    const ev = normalizeEventInput(uid, raw, catalogVersionJson);
+    if (!ev) continue;
     if (existing.has(ev.idempotencyKey)) continue;
     try {
-      if (shouldChargeCreditsForEvent(ev)) {
-        consumeCreditsJson(db, uid, ev.creditsCharged, {
-          usageEventId: ev.id,
-          idempotencyKey: ev.idempotencyKey,
-        });
-      }
+      settleUsageEventJson(db, uid, ev);
     } catch (e) {
       if (e instanceof CreditsExceededError) throw e;
       throw e;
@@ -302,6 +339,7 @@ export async function insertUsageEvents(userId, rawEvents) {
       jobKind: ev.jobKind,
       metaJson: ev.metaJson,
       creditsCharged: ev.creditsCharged > 0 ? ev.creditsCharged : null,
+      catalogVersion: ev.catalogVersion,
       createdAt: ev.createdAt,
     });
     existing.add(ev.idempotencyKey);
@@ -314,7 +352,7 @@ export async function insertUsageEvents(userId, rawEvents) {
       .slice(0, MAX_JSON_EVENTS);
   }
   writeDb(db);
-  return { inserted, skipped: list.length - inserted };
+  return { inserted, skipped: rawList.length - inserted };
 }
 
 function usernameForUserId(db, userId) {
@@ -423,7 +461,8 @@ export async function listUsageEventsByCorrelationId(correlationId, query = {}) 
 }
 
 export async function listUsageEventsForAdmin(query = {}) {
-  const max = Math.min(100, Math.max(1, Number.parseInt(String(query.limit ?? '50'), 10) || 50));
+  const requested = Number.parseInt(String(query.limit ?? '50'), 10) || 50;
+  const max = Math.min(5000, Math.max(1, requested));
 
   if (USE_POSTGRES) {
     await ensureUsageBillingStore();

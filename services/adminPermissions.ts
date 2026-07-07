@@ -24,6 +24,7 @@ export const PERMISSIONS = {
   ROLES_READ: 'roles.read',
   ROLES_WRITE: 'roles.write',
   CREDITS_WRITE: 'credits.write',
+  PRICING_WRITE: 'pricing.write',
   REGISTRATION_INVITES_WRITE: 'registration_invites.write',
 } as const;
 
@@ -64,6 +65,7 @@ export const ADMIN_NAV_ITEMS = [
   { label: '审计日志', path: '/admin/audit-logs', permission: PERMISSIONS.AUDIT_READ },
   { label: '任务执行', path: '/admin/task-events', permission: PERMISSIONS.TASK_EVENTS_READ },
   { label: 'AI 用量', path: '/admin/usage', permission: PERMISSIONS.USAGE_READ },
+  { label: '价目表', path: '/admin/price-catalog', permission: PERMISSIONS.USAGE_READ },
   { label: '能力预设', path: '/admin/capability-presets', permission: PERMISSIONS.PRESETS_PUBLISH },
   { label: '系统状态', path: '/admin/system-status', permission: PERMISSIONS.SYSTEM_STATUS_READ },
   { label: '成员邀请', path: '/admin/staff-invites', permission: PERMISSIONS.USERS_ROLE_WRITE },

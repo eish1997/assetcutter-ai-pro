@@ -1,5 +1,6 @@
 /**
- * 价目表种子 — 与 shared/usageBillingCatalog.ts 保持数值一致。
+ * 价目表 bootstrap 种子 — 与 shared/usageBillingCatalog.ts 保持数值一致。
+ * 运行时价目见 server/price-catalog-store.js。
  */
 export const DEFAULT_PRICE_CATALOG = [
   {
@@ -100,6 +101,27 @@ export const DEFAULT_PRICE_CATALOG = [
     meterKind: 'task',
     perUnit: 0.2,
     displayName: 'Workflow video task (estimate)',
+  },
+  {
+    billingSku: 'image.jimeng.t2i-v40',
+    meterKind: 'task',
+    perUnit: 0.05,
+    displayName: '即梦 图片 4.0 (estimate)',
+    vendorSkuRef: 'jimeng_t2i_v40',
+  },
+  {
+    billingSku: 'video.jimeng.ti2v-v30-pro',
+    meterKind: 'task',
+    perUnit: 0.25,
+    displayName: '即梦 视频 3.0 Pro (estimate)',
+    vendorSkuRef: 'jimeng_ti2v_v30_pro',
+  },
+  {
+    billingSku: 'digital_human.jimeng.omnihuman-v10',
+    meterKind: 'task',
+    perUnit: 0.35,
+    displayName: '即梦 OmniHuman 1.0 (estimate)',
+    vendorSkuRef: 'omnihuman_v1',
   },
 ];
 

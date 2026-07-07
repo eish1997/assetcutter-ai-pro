@@ -6,6 +6,10 @@ let fairnessUserId: string | null = null;
 
 const USER_ID_RE = /^[a-zA-Z0-9_-]{1,128}$/;
 
+export function getGeminiFairnessUserId(): string | null {
+  return fairnessUserId;
+}
+
 /** 由 `AuthProvider` 在登录态变化时调用。 */
 export function setGeminiFairnessUserId(id: string | null): void {
   const s = typeof id === "string" ? id.trim() : "";

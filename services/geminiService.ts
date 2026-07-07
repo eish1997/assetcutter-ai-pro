@@ -15,8 +15,7 @@ import {
   getVectorengineApiKey,
   getVectorengineBaseUrl,
 } from "./settingsStore";
-import { assertCreditsGateBeforeProxyOrThrow } from "./trialGeminiQuota";
-import { emitMeteredUsage } from "./observability/metering/pipeline";
+import { emitMeteredUsageAfterDelivery, emitMeteredUsageAwait } from "./observability/metering/pipeline";
 import { meterReadingFromGeminiProxy } from "./observability/metering/adapters/gemini";
 import {
   wrapGeminiClientWithChannelMetering,
@@ -29,7 +28,23 @@ import {
   resolveProviderForGeminiPath,
 } from "./observability/metering/resolveBillingSku";
 import type { UsageGeminiMetadata } from "../shared/usageBilling";
-import { getGeminiFairnessRequestHeaders } from "./geminiFairnessBridge";
+import { proxyGateMinCreditsForJob } from "../shared/credits";
+import { getCreditsProxyRequestHeaders, getLastCreditsReserveKey, releaseCreditsProxyReserve } from "./creditsProxyBridge";
+import { peekCreditsPrechargeSession } from "./creditsPrechargeSession";
+import {
+  GeminiAsyncPollTimeoutError,
+  dispatchGeminiAsyncRecovered,
+  expireStaleGeminiAsyncJobs,
+  getPendingGeminiAsyncJob,
+  isGeminiAsyncPollTimeoutError,
+  listPendingGeminiAsyncJobs,
+  markGeminiAsyncJobRecoverable,
+  removePendingGeminiAsyncJob,
+  touchGeminiAsyncJobPoll,
+  upsertPendingGeminiAsyncJob,
+} from "./geminiAsyncJobRecovery";
+import { peekCorrelationContext } from "./observability/correlationContext";
+import { releaseCreditReserve } from "./creditsApi";
 import { tryParseGeminiProxyFairnessRejected, throwFairnessRejected } from "./geminiProxyFairnessError";
 import {
   dispatchGeminiFairnessRetryWait,
@@ -324,7 +339,10 @@ function warnDevBulkImageNetwork(context: string): void {
 
 async function bulkFetchOrExplain(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
   try {
-    return await fetch(input, init);
+    return await fetch(input, {
+      ...init,
+      credentials: init?.credentials ?? 'include',
+    });
   } catch (e) {
     if (isBrowserFetchNetworkError(e)) {
       warnDevBulkImageNetwork("生图代理");
@@ -522,7 +540,191 @@ function emitGeminiAsyncDoneNoQueueHint(jobId: string, tracker: GeminiAsyncPollT
   });
 }
 
-function emitGeminiProxyMeteredUsage(args: {
+type GeminiAsyncDelivered = {
+  text?: string;
+  candidates?: unknown[];
+  usageMetadata?: UsageGeminiMetadata | null;
+};
+
+type GeminiAsyncPollStep =
+  | { kind: "completed"; result: GeminiAsyncDelivered }
+  | { kind: "failed"; error: string }
+  | { kind: "pending" };
+
+async function fetchGeminiAsyncPollStep(
+  jobId: string,
+  tracker: GeminiAsyncPollTracker,
+  abortSignal?: AbortSignal
+): Promise<GeminiAsyncPollStep> {
+  const pollRes = await bulkFetchOrExplain(bulkApiUrl(`/proxy/gemini/async/${encodeURIComponent(jobId)}`), {
+    signal: abortSignal,
+    cache: "no-store",
+  });
+  const pollText = await pollRes.text();
+  if (!pollRes.ok) {
+    const pt = (pollText || "").trim();
+    const fe = tryParseGeminiProxyFairnessRejected(pollRes.status, pt);
+    if (fe) throwFairnessRejected(fe);
+    throw new Error(parseBulkProxyErrorBody(pt) || `轮询失败（${pollRes.status}）`);
+  }
+  let j: GeminiAsyncPollBody;
+  try {
+    j = JSON.parse(pollText) as GeminiAsyncPollBody;
+  } catch {
+    throw new Error("轮询响应无效");
+  }
+  if (j.status === "completed" && j.result != null) {
+    emitGeminiAsyncDoneNoQueueHint(jobId, tracker);
+    return { kind: "completed", result: j.result as GeminiAsyncDelivered };
+  }
+  if (j.status === "failed") {
+    return { kind: "failed", error: j.error || "Gemini 任务失败" };
+  }
+  handleGeminiAsyncPollWaitState(jobId, j, tracker);
+  return { kind: "pending" };
+}
+
+async function finalizeGeminiAsyncDelivery(args: {
+  jobId: string;
+  model: string;
+  bindingRegistryId: string;
+  delivered: GeminiAsyncDelivered;
+}): Promise<GeminiAsyncDelivered> {
+  const imageRole = isLikelyImageRegistryId(args.bindingRegistryId);
+  const useVertex = bulkUsesVertexBackend(args.bindingRegistryId, imageRole ? "image" : "text");
+  const meterArgs = {
+    jobId: args.jobId,
+    model: args.model,
+    registryId: args.bindingRegistryId,
+    useVertex,
+    proxyResult: args.delivered,
+    usageMetadata: args.delivered.usageMetadata,
+    jobKind: imageRole ? "workflow_image" : "workflow_chat",
+  };
+  if (peekCreditsPrechargeSession()) {
+    await emitGeminiProxyMeteredUsage(meterArgs);
+  } else {
+    settleGeminiProxyMeteredUsageAfterDelivery(meterArgs);
+  }
+  return args.delivered;
+}
+
+function registerGeminiAsyncJobForRecovery(args: {
+  jobId: string;
+  model: string;
+  registryId: string;
+  useVertex: boolean;
+}): void {
+  const ctx = peekCorrelationContext();
+  upsertPendingGeminiAsyncJob({
+    jobId: args.jobId,
+    kind: "async",
+    model: args.model,
+    registryId: args.registryId,
+    prechargeKey: getLastCreditsReserveKey(),
+    workflowTaskId: ctx.correlationId ?? null,
+    assetId: ctx.assetId ?? null,
+    projectId: ctx.projectId ?? null,
+    actionType: ctx.actionType ?? null,
+    useVertex: args.useVertex,
+  });
+}
+
+/** 从 proxy async 结果提取首张图 data URL（工作流恢复用） */
+export function extractGeminiProxyImageDataUrl(result: unknown): string | null {
+  if (!result || typeof result !== "object") return null;
+  const r = result as { candidates?: unknown[] };
+  const candidates = Array.isArray(r.candidates) ? r.candidates : [];
+  for (const c of candidates) {
+    const parts = (c as { content?: { parts?: unknown[] } })?.content?.parts;
+    if (!Array.isArray(parts)) continue;
+    for (const part of parts) {
+      const inline = (part as { inlineData?: { mimeType?: string; data?: string } })?.inlineData;
+      if (inline?.data) {
+        const mime = String(inline.mimeType || "image/png");
+        return `data:${mime};base64,${inline.data}`;
+      }
+    }
+  }
+  return null;
+}
+
+export { GeminiAsyncPollTimeoutError, isGeminiAsyncPollTimeoutError };
+
+/** 续 poll 可恢复的 Gemini 异步任务 */
+export async function resumeGeminiAsyncJob(
+  jobId: string
+): Promise<GeminiAsyncDelivered> {
+  const job = getPendingGeminiAsyncJob(jobId);
+  if (!job) {
+    throw new Error("恢复任务不存在或已过期");
+  }
+  if (job.prechargeKey) {
+    setLastCreditsReserveKey(job.prechargeKey);
+  }
+  const deadline = Date.now() + GEMINI_ASYNC_CLIENT_MAX_POLL_MS;
+  const tracker = createGeminiAsyncPollTracker();
+  while (Date.now() < deadline) {
+    touchGeminiAsyncJobPoll(jobId);
+    const step = await fetchGeminiAsyncPollStep(jobId, tracker);
+    if (step.kind === "completed") {
+      removePendingGeminiAsyncJob(jobId);
+      const delivered = await finalizeGeminiAsyncDelivery({
+        jobId,
+        model: job.model,
+        bindingRegistryId: job.registryId,
+        delivered: step.result,
+      });
+      dispatchGeminiAsyncRecovered({
+        jobId,
+        workflowTaskId: job.workflowTaskId,
+        assetId: job.assetId,
+        projectId: job.projectId,
+        actionType: job.actionType,
+        result: delivered,
+      });
+      return delivered;
+    }
+    if (step.kind === "failed") {
+      removePendingGeminiAsyncJob(jobId);
+      if (!peekCreditsPrechargeSession() && job.prechargeKey) {
+        await releaseCreditReserve(job.prechargeKey);
+      }
+      throw new Error(step.error);
+    }
+    await sleepWithAbort(GEMINI_ASYNC_POLL_MS);
+  }
+  markGeminiAsyncJobRecoverable(jobId);
+  throw new GeminiAsyncPollTimeoutError(jobId, GEMINI_ASYNC_CLIENT_MAX_POLL_MS);
+}
+
+/** 页面 focus / 启动时尝试恢复所有未完成异步任务 */
+export async function retryAllRecoverableGeminiJobs(): Promise<void> {
+  await expireStaleGeminiAsyncJobs();
+  const jobs = listPendingGeminiAsyncJobs();
+  for (const job of jobs) {
+    try {
+      await resumeGeminiAsyncJob(job.jobId);
+    } catch (e) {
+      if (!isGeminiAsyncPollTimeoutError(e)) {
+        try {
+          if (import.meta.env.DEV) {
+            const msg = e instanceof Error ? e.message : String(e);
+            console.warn("[gemini-async-recovery] 恢复失败:", job.jobId, msg);
+          }
+        } catch {
+          /* ignore */
+        }
+      }
+    }
+  }
+}
+
+async function bulkProxyAdmissionHeaders(estimatedCredits: number): Promise<Record<string, string>> {
+  return getCreditsProxyRequestHeaders(estimatedCredits);
+}
+
+async function emitGeminiProxyMeteredUsage(args: {
   jobId: string;
   model: string;
   registryId?: string;
@@ -530,10 +732,10 @@ function emitGeminiProxyMeteredUsage(args: {
   usageMetadata?: UsageGeminiMetadata | null;
   proxyResult?: unknown;
   jobKind?: string;
-}): void {
+}): Promise<void> {
   const registryId = (args.registryId || args.model || "").trim();
   if (!registryId) return;
-  emitMeteredUsage({
+  await emitMeteredUsageAwait({
     reading: meterReadingFromGeminiProxy({
       registryId,
       provider: resolveProviderForGeminiPath(args.useVertex),
@@ -544,6 +746,30 @@ function emitGeminiProxyMeteredUsage(args: {
     idempotencyPrefix: `gemini-async:${args.jobId}`,
     requestId: args.jobId,
     jobKind: args.jobKind,
+    extraMeta: (() => {
+      const key = getLastCreditsReserveKey();
+      return key ? { creditsReserveKey: key } : undefined;
+    })(),
+  });
+}
+
+/** 先返回结果，后台结算（P2） */
+function settleGeminiProxyMeteredUsageAfterDelivery(args: Parameters<typeof emitGeminiProxyMeteredUsage>[0]): void {
+  emitMeteredUsageAfterDelivery({
+    reading: meterReadingFromGeminiProxy({
+      registryId: (args.registryId || args.model || "").trim(),
+      provider: resolveProviderForGeminiPath(args.useVertex),
+      usageMetadata: args.usageMetadata,
+      proxyResult: args.proxyResult,
+    }),
+    registryId: (args.registryId || args.model || "").trim(),
+    idempotencyPrefix: `gemini-async:${args.jobId}`,
+    requestId: args.jobId,
+    jobKind: args.jobKind,
+    extraMeta: (() => {
+      const key = getLastCreditsReserveKey();
+      return key ? { creditsReserveKey: key } : undefined;
+    })(),
   });
 }
 
@@ -563,7 +789,6 @@ async function bulkProxyGenerateContentAsync(args: {
   /** 服务端可对 503 多次退避，轮询上限需覆盖 */
   const maxPollMs = Math.max(httpTimeout + 240_000, GEMINI_ASYNC_CLIENT_MAX_POLL_MS);
 
-  await assertCreditsGateBeforeProxyOrThrow();
   await ensureGeminiProxySessionHint();
 
   const bindingRegistryId = resolveMeteringRegistryId({ model: args.model, config }) || (args.registryId || args.model || "").trim();
@@ -571,13 +796,17 @@ async function bulkProxyGenerateContentAsync(args: {
     ? { aiBackend: "vertex" as const }
     : {};
 
+  const gateCredits = proxyGateMinCreditsForJob("workflow_text_to_image");
+  let skipReleaseOnFinally = false;
+  try {
   const create = await bulkFetchCreateWithFairnessRetry(bulkApiUrl("/proxy/gemini/async"), {
     method: "POST",
-    headers: { "Content-Type": "application/json", ...getGeminiFairnessRequestHeaders() },
+    headers: { "Content-Type": "application/json", ...(await bulkProxyAdmissionHeaders(gateCredits)) },
     body: JSON.stringify({
       model: args.model,
       contents: args.contents,
       config: safeConfig,
+      estimatedCredits: gateCredits,
       ...aiBackendExtra,
     }),
     signal: abortSignal,
@@ -616,50 +845,42 @@ async function bulkProxyGenerateContentAsync(args: {
   }
   if (!jobId) throw new Error("未返回 jobId");
   dispatchGeminiQueueHint({ kind: "job_submitted", jobId, createStatus });
+  registerGeminiAsyncJobForRecovery({
+    jobId,
+    model: args.model,
+    registryId: bindingRegistryId,
+    useVertex: bulkUsesVertexBackend(bindingRegistryId, "image"),
+  });
 
   const deadline = Date.now() + maxPollMs;
   const tracker = createGeminiAsyncPollTracker();
   while (Date.now() < deadline) {
     if (abortSignal?.aborted) throw createAbortError("请求已取消");
-    const pollRes = await bulkFetchOrExplain(bulkApiUrl(`/proxy/gemini/async/${encodeURIComponent(jobId)}`), {
-      signal: abortSignal,
-      cache: "no-store",
-    });
-    const pollText = await pollRes.text();
-    if (!pollRes.ok) {
-      const pt = (pollText || "").trim();
-      const fe = tryParseGeminiProxyFairnessRejected(pollRes.status, pt);
-      if (fe) throwFairnessRejected(fe);
-      throw new Error(parseBulkProxyErrorBody(pt) || `轮询失败（${pollRes.status}）`);
-    }
-    let j: GeminiAsyncPollBody;
-    try {
-      j = JSON.parse(pollText) as GeminiAsyncPollBody;
-    } catch {
-      throw new Error("轮询响应无效");
-    }
-    if (j.status === "completed" && j.result != null) {
-      emitGeminiAsyncDoneNoQueueHint(jobId, tracker);
-      const imageRole = isLikelyImageRegistryId(bindingRegistryId);
-      const useVertex = bulkUsesVertexBackend(bindingRegistryId, imageRole ? "image" : "text");
-      emitGeminiProxyMeteredUsage({
+    touchGeminiAsyncJobPoll(jobId);
+    const step = await fetchGeminiAsyncPollStep(jobId, tracker, abortSignal);
+    if (step.kind === "completed") {
+      removePendingGeminiAsyncJob(jobId);
+      return finalizeGeminiAsyncDelivery({
         jobId,
         model: args.model,
-        registryId: bindingRegistryId,
-        useVertex,
-        proxyResult: j.result,
-        usageMetadata: (j.result as { usageMetadata?: UsageGeminiMetadata })?.usageMetadata,
-        jobKind: imageRole ? "workflow_image" : "workflow_chat",
+        bindingRegistryId,
+        delivered: step.result,
       });
-      return j.result;
     }
-    if (j.status === "failed") {
-      throw new Error(j.error || "Gemini 任务失败");
+    if (step.kind === "failed") {
+      removePendingGeminiAsyncJob(jobId);
+      throw new Error(step.error);
     }
-    handleGeminiAsyncPollWaitState(jobId, j, tracker);
     await sleepWithAbort(GEMINI_ASYNC_POLL_MS, abortSignal);
   }
-  throw new Error(`等待 Gemini 结果超时（>${maxPollMs}ms），请稍后重试`);
+  markGeminiAsyncJobRecoverable(jobId);
+  skipReleaseOnFinally = true;
+  throw new GeminiAsyncPollTimeoutError(jobId, maxPollMs);
+  } finally {
+    if (!skipReleaseOnFinally && !peekCreditsPrechargeSession()) {
+      await releaseCreditsProxyReserve();
+    }
+  }
 }
 
 async function bulkProxyGenerateContentBatchAsync(args: {
@@ -667,11 +888,12 @@ async function bulkProxyGenerateContentBatchAsync(args: {
   aiBackend?: "vertex";
 }): Promise<Array<{ ok: boolean; result?: { text?: string; candidates?: unknown[] }; error?: string }>> {
   if (!Array.isArray(args.items) || args.items.length === 0) return [];
-  await assertCreditsGateBeforeProxyOrThrow();
   await ensureGeminiProxySessionHint();
+  const batchGateCredits = proxyGateMinCreditsForJob("workflow_text_to_image");
+  try {
   const create = await bulkFetchCreateWithFairnessRetry(bulkApiUrl("/proxy/gemini/async-batch"), {
     method: "POST",
-    headers: { "Content-Type": "application/json", ...getGeminiFairnessRequestHeaders() },
+    headers: { "Content-Type": "application/json", ...(await bulkProxyAdmissionHeaders(batchGateCredits)) },
     body: JSON.stringify({
       items: args.items.map((item) => ({
         model: item.model,
@@ -679,6 +901,7 @@ async function bulkProxyGenerateContentBatchAsync(args: {
         config: item.config || {},
       })),
       ...(args.aiBackend ? { aiBackend: args.aiBackend } : {}),
+      estimatedCredits: batchGateCredits,
     }),
     cache: "no-store",
   });
@@ -730,18 +953,19 @@ async function bulkProxyGenerateContentBatchAsync(args: {
     if (j.status === "completed") {
       const items = Array.isArray(j.result?.items) ? j.result!.items! : [];
       emitGeminiAsyncDoneNoQueueHint(jobId, tracker);
-      items.forEach((it, idx) => {
+      for (let idx = 0; idx < items.length; idx += 1) {
+        const it = items[idx];
         const row = it as {
           ok?: boolean;
           result?: { text?: string; candidates?: unknown[]; usageMetadata?: UsageGeminiMetadata };
           error?: string;
         };
-        if (row?.ok !== true || !row.result) return;
+        if (row?.ok !== true || !row.result) continue;
         const bindingRegistryId = String(args.items[idx]?.model || "").trim();
-        if (!bindingRegistryId) return;
+        if (!bindingRegistryId) continue;
         const imageRole = isLikelyImageRegistryId(bindingRegistryId);
         const useVertex = bulkUsesVertexBackend(bindingRegistryId, imageRole ? "image" : "text");
-        emitGeminiProxyMeteredUsage({
+        const meterArgs = {
           jobId: `${jobId}:${idx}`,
           model: args.items[idx]!.model,
           registryId: bindingRegistryId,
@@ -749,8 +973,13 @@ async function bulkProxyGenerateContentBatchAsync(args: {
           proxyResult: row.result,
           usageMetadata: row.result.usageMetadata,
           jobKind: imageRole ? "workflow_image" : "workflow_chat",
-        });
-      });
+        };
+        if (peekCreditsPrechargeSession()) {
+          await emitGeminiProxyMeteredUsage(meterArgs);
+        } else {
+          settleGeminiProxyMeteredUsageAfterDelivery(meterArgs);
+        }
+      }
       return items.map((it) => {
         const row = it as { ok?: boolean; result?: { text?: string; candidates?: unknown[] }; error?: string };
         return {
@@ -767,6 +996,11 @@ async function bulkProxyGenerateContentBatchAsync(args: {
     await sleepWithAbort(GEMINI_ASYNC_POLL_MS);
   }
   throw new Error(`等待 Gemini 批量结果超时（>${GEMINI_ASYNC_CLIENT_MAX_POLL_MS}ms），请稍后重试`);
+  } finally {
+    if (!peekCreditsPrechargeSession()) {
+      await releaseCreditsProxyReserve();
+    }
+  }
 }
 
 type PendingImageBatchItem = {

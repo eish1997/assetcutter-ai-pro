@@ -44,29 +44,32 @@ describe('usageCost', () => {
     expect(m.costConfidence).toBe('estimated');
   });
 
-  it('splits image proxy usage into input token and output image drafts', () => {
+  it('emits one flat-rate image draft for proxy image usage', () => {
     const drafts = buildGeminiProxyUsageDrafts({
       role: 'image',
       usageMetadata: { promptTokenCount: 200, candidatesTokenCount: 0 },
     });
-    expect(drafts).toHaveLength(2);
-    expect(drafts[0]!.idempotencySuffix).toBe(':in');
-    expect(drafts[0]!.meter.meterKind).toBe('token');
-    expect(drafts[0]!.meter.quantityIn).toBe(200);
-    expect(drafts[1]!.idempotencySuffix).toBe(':out');
-    expect(drafts[1]!.meter.meterKind).toBe('image');
-    expect(drafts[1]!.meta).toMatchObject({ usagePart: 'output', outputKind: 'image' });
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0]!.meter.meterKind).toBe('image');
+    expect(drafts[0]!.meta).toMatchObject({
+      flatRate: true,
+      promptTokenCount: 200,
+      outputKind: 'image',
+    });
   });
 
-  it('uses output token draft when candidates tokens are present', () => {
+  it('keeps output token count in meta for flat-rate image drafts', () => {
     const drafts = buildGeminiProxyUsageDrafts({
       role: 'image',
       usageMetadata: { promptTokenCount: 100, candidatesTokenCount: 40 },
     });
-    expect(drafts).toHaveLength(2);
-    expect(drafts[1]!.meter.meterKind).toBe('token');
-    expect(drafts[1]!.meter.quantityOut).toBe(40);
-    expect(drafts[1]!.meta).toMatchObject({ usagePart: 'output', outputKind: 'token' });
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0]!.meter.meterKind).toBe('image');
+    expect(drafts[0]!.meter.quantity).toBe(1);
+    expect(drafts[0]!.meta).toMatchObject({
+      flatRate: true,
+      outputTokenCount: 40,
+    });
   });
 
   it('estimates image output token cost at imageOutputPer1m', () => {

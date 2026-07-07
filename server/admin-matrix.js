@@ -213,6 +213,8 @@ export const AUDIT_ACTION_LABELS = {
   'admin.staff_invite_redeemed': '成员邀请核销',
   'admin.registration_invite_create': '创建注册邀请码',
   'admin.registration_invite_revoke': '撤销注册邀请码',
+  'admin.price_catalog.create': '价目表新建版本',
+  'admin.price_catalog.update': '价目表更新版本',
   'auth.registration_invite_redeemed': '注册邀请码核销',
   companion_artifact_download: '伴侣下载',
 };

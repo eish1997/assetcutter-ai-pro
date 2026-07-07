@@ -7,7 +7,10 @@ import { auditLogMatchesCategory, auditCategorySql, normalizeAuditCategory, pars
 import { decodeAuditCursor, encodeAuditCursor, rowBeforeCursor } from './admin-audit-cursor.js';
 
 const DB_DIR = path.resolve(process.cwd(), 'server', 'data');
-const DB_FILE = path.join(DB_DIR, 'auth-db.json');
+const DB_FILE = path.join(
+  DB_DIR,
+  process.env.VITEST === 'true' || process.env.NODE_ENV === 'test' ? 'auth-db.test.json' : 'auth-db.json'
+);
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const { Pool } = pg;

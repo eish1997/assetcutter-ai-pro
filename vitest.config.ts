@@ -5,5 +5,7 @@ export default defineConfig({
   test: {
     include: ['tests/**/*.test.{ts,tsx}'],
     exclude: ['**/node_modules/**', '**/dist/**', '**/A-Driver/**', '**/示例项目/**', '**/local-companion/**', '**/companion-desktop/**'],
+    // auth-db.test.json 共用：catalog/credits 用例文件级串行，避免竞态污染
+    fileParallelism: false,
   },
 });

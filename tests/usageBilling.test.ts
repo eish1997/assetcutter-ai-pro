@@ -2,9 +2,9 @@ import { describe, expect, it, beforeEach } from 'vitest';
 import fs from 'fs';
 import path from 'path';
 import { insertUsageEvents, listUsageEventsForAdmin } from '../server/usage-billing-store.js';
+import { resolveAuthDbFileForTests } from './helpers/authDbTestPath.js';
 
-const DATA_DIR = path.resolve(process.cwd(), 'server/data');
-const DB_FILE = path.join(DATA_DIR, 'auth-db.json');
+const DB_FILE = resolveAuthDbFileForTests();
 
 describe('usage-billing-store', () => {
   beforeEach(() => {

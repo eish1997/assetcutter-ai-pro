@@ -24,6 +24,7 @@ export const PERMISSIONS = Object.freeze({
   ROLES_READ: 'roles.read',
   ROLES_WRITE: 'roles.write',
   CREDITS_WRITE: 'credits.write',
+  PRICING_WRITE: 'pricing.write',
   REGISTRATION_INVITES_WRITE: 'registration_invites.write',
 });
 
@@ -61,6 +62,7 @@ export const DEFAULT_ROLE_PERMISSIONS = Object.freeze({
     PERMISSIONS.GEMINI_FAIRNESS_READ,
     PERMISSIONS.GEMINI_FAIRNESS_WRITE,
     PERMISSIONS.CREDITS_WRITE,
+    PERMISSIONS.PRICING_WRITE,
     PERMISSIONS.REGISTRATION_INVITES_WRITE,
   ],
   [AUDITOR_ROLE_SLUG]: [

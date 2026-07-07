@@ -40,6 +40,21 @@ export function resolveBillingSkuForWorkflowVideo(): string {
   return 'video.workflow.task';
 }
 
+/** 即梦 registryId → billingSku（§4.8 占位命名） */
+export function resolveBillingSkuForJimeng(registryId: string | undefined): string {
+  const id = String(registryId || '').trim();
+  if (id.startsWith('jimeng-image-')) {
+    return `image.jimeng.${id.slice('jimeng-image-'.length)}`;
+  }
+  if (id.startsWith('jimeng-video-')) {
+    return `video.jimeng.${id.slice('jimeng-video-'.length)}`;
+  }
+  if (id.startsWith('jimeng-dh-')) {
+    return `digital_human.jimeng.${id.slice('jimeng-dh-'.length)}`;
+  }
+  return `task.jimeng.${id.replace(/^jimeng-/, '') || 'unknown'}`;
+}
+
 export function resolveProviderForGeminiPath(useVertex?: boolean): string {
   return useVertex ? 'vertex' : 'gemini';
 }

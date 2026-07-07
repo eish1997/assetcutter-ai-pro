@@ -308,6 +308,8 @@ export default defineConfig(({ mode }) => {
           '/proxy/gemini': {
             target: 'http://127.0.0.1:9002',
             changeOrigin: true,
+            /** 保留浏览器 Cookie，供 gemini-proxy 转发至 auth-api credits-gate */
+            cookieDomainRewrite: { '*': '' },
             configure(proxy) {
               proxy.on('error', (err, _req, res) => {
                 const msg =

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { DIALOG_IMAGE_REGISTRY } from "../services/modelRegistry/imageModels";
+import { JIMENG_IMAGE_REGISTRY } from "../services/modelRegistry/jimengImageRegistry";
 import {
   defaultEnabledChannelIds,
   getBindingsForRegistry,
@@ -13,6 +14,15 @@ describe("providerBindings", () => {
       const bindings = getBindingsForRegistry(row.registryId, "image");
       expect(bindings.length).toBeGreaterThan(0);
       expect(bindings.every((b) => b.registryId === row.registryId && b.role === "image")).toBe(true);
+    }
+  });
+
+  it("covers every jimeng image registry id with volcengine-jimeng binding", () => {
+    for (const row of JIMENG_IMAGE_REGISTRY) {
+      const bindings = getBindingsForRegistry(row.registryId, "image");
+      expect(bindings).toHaveLength(1);
+      expect(bindings[0]?.channel).toBe("volcengine-jimeng");
+      expect(bindings[0]?.defaultEnabled).toBe(false);
     }
   });
 

@@ -4,6 +4,8 @@ import {
   imageModelProviderRoute,
   isRegisteredImageModelId,
 } from "./imageModels";
+import { JIMENG_IMAGE_BINDINGS, getJimengImageBindingsForRegistry } from "./jimengBindings";
+import { isRegisteredJimengImageModelId } from "./jimengImageRegistry";
 import { TEXT_MODEL_REGISTRY, textModelFamily } from "./textModels";
 import type { ChannelId, ModelFamily, ModelResolveRole, ProviderBinding } from "./types";
 
@@ -27,6 +29,7 @@ const OPENAI_CHANNELS: readonly ChannelTemplate[] = [
 
 function familyForBindingRegistry(registryId: string, role: ModelResolveRole): ModelFamily {
   if (role === "image") {
+    if (isRegisteredJimengImageModelId(registryId)) return "volcengine-jimeng";
     if (isRegisteredImageModelId(registryId)) {
       return imageModelProviderRoute(registryId) === "openai" ? "openai" : "gemini";
     }
@@ -42,6 +45,9 @@ function bindingsForRegistry(
   role: ModelResolveRole,
   family: ModelFamily
 ): ProviderBinding[] {
+  if (family === "volcengine-jimeng" && role === "image") {
+    return getJimengImageBindingsForRegistry(registryId);
+  }
   const templates = family === "openai" ? OPENAI_CHANNELS : GEMINI_CHANNELS;
   return templates.map(({ channel, priority, defaultEnabled }) => ({
     bindingId: `${registryId}:${channel}:${role}`,
@@ -61,6 +67,7 @@ function buildProviderBindings(): ProviderBinding[] {
   for (const e of TEXT_MODEL_REGISTRY) {
     out.push(...bindingsForRegistry(e.registryId, "text", e.family));
   }
+  out.push(...JIMENG_IMAGE_BINDINGS);
   return out;
 }
 

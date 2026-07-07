@@ -10,6 +10,7 @@ import { fmtCredits } from '../../shared/credits';
 import { CustomDropdown } from '../ui/CustomDropdown';
 import { useAdminStaff } from './AdminStaffContext';
 import UserRecentAuditSnippet from './UserRecentAuditSnippet';
+import AdminCreditsBatchPanel from './AdminCreditsBatchPanel';
 
 function fmtMb(bytes: number | undefined) {
   if (bytes == null || !Number.isFinite(bytes)) return '—';
@@ -48,6 +49,7 @@ const AdminUsersPanel: React.FC = () => {
   const [creditDeltaDraft, setCreditDeltaDraft] = React.useState<Record<string, string>>({});
   const [exporting, setExporting] = React.useState(false);
   const [exportHint, setExportHint] = React.useState('');
+  const [batchCreditsOpen, setBatchCreditsOpen] = React.useState(false);
 
   const loadUsers = React.useCallback(async () => {
     setLoading(true);
@@ -232,6 +234,15 @@ const AdminUsersPanel: React.FC = () => {
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
+            {canCreditsWrite ? (
+              <button
+                type="button"
+                onClick={() => setBatchCreditsOpen(true)}
+                className="px-3 py-2 rounded-xl border border-blue-700/40 bg-[#1a2a40] text-[10px] text-blue-100 hover:bg-[#243552]"
+              >
+                批量发放积分
+              </button>
+            ) : null}
             <button
               type="button"
               disabled={exporting}
@@ -524,6 +535,11 @@ const AdminUsersPanel: React.FC = () => {
           </div>
         </div>
       )}
+      <AdminCreditsBatchPanel
+        open={batchCreditsOpen}
+        onClose={() => setBatchCreditsOpen(false)}
+        isRolePreview={isRolePreview}
+      />
     </div>
   );
 };

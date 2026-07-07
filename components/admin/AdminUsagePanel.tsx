@@ -2,7 +2,9 @@ import React from 'react';
 import {
   fetchUsageEvents,
   fetchUsageSummary,
+  fetchUsageReconciliation,
   type UsageEventRow,
+  type UsageReconciliationRow,
   type UsageSummaryResponse,
 } from '../../services/adminClient';
 import { PERMISSIONS, hasAdminPermission } from '../../services/adminPermissions';
@@ -20,6 +22,8 @@ import { fmtUsageSummaryCredits, sliceCreditsTotal } from '../../services/usageA
 import { fmtCredits } from '../../shared/credits';
 
 const PAGE_SIZE = 50;
+
+type UsageTab = 'events' | 'reconciliation';
 
 type UsageFilters = {
   timePreset: AuditTimePreset;
@@ -64,6 +68,7 @@ function filtersToQuery(filters: UsageFilters, cursor?: string) {
 const AdminUsagePanel: React.FC = () => {
   const { permissions } = useAdminStaff();
   const canRead = hasAdminPermission(permissions, PERMISSIONS.USAGE_READ);
+  const [tab, setTab] = React.useState<UsageTab>('events');
   const [draft, setDraft] = React.useState<UsageFilters>(() => {
     const base = defaultFilters();
     const userId = readUserIdFromUrl();
@@ -78,6 +83,8 @@ const AdminUsagePanel: React.FC = () => {
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState('');
   const [traceTaskId, setTraceTaskId] = React.useState<string | null>(null);
+  const [reconciliation, setReconciliation] = React.useState<UsageReconciliationRow[]>([]);
+  const [reconciliationEvents, setReconciliationEvents] = React.useState(0);
 
   const load = React.useCallback(async () => {
     if (!canRead) return;
@@ -85,17 +92,24 @@ const AdminUsagePanel: React.FC = () => {
     setError('');
     try {
       const q = filtersToQuery(applied, cursor);
-      const [listRes, sumRes] = await Promise.all([fetchUsageEvents(q), fetchUsageSummary(q)]);
-      setEvents(listRes.events);
-      setTotal(listRes.total ?? listRes.events.length);
-      setNextCursor(listRes.nextCursor ?? null);
-      setSummary(sumRes);
+      if (tab === 'reconciliation') {
+        const { from, to } = resolveAuditTimeRange(applied.timePreset, applied.customFrom, applied.customTo);
+        const report = await fetchUsageReconciliation({ from: from || undefined, to: to || undefined });
+        setReconciliation(report.rows);
+        setReconciliationEvents(report.eventCount);
+      } else {
+        const [listRes, sumRes] = await Promise.all([fetchUsageEvents(q), fetchUsageSummary(q)]);
+        setEvents(listRes.events);
+        setTotal(listRes.total ?? listRes.events.length);
+        setNextCursor(listRes.nextCursor ?? null);
+        setSummary(sumRes);
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setLoading(false);
     }
-  }, [applied, cursor, canRead]);
+  }, [applied, cursor, canRead, tab]);
 
   React.useEffect(() => {
     void load();
@@ -112,7 +126,36 @@ const AdminUsagePanel: React.FC = () => {
         <p className="text-[11px] text-gray-500 mt-1">工作流 AI 调用记录；汇总与明细均为积分消耗。</p>
       </div>
 
-      {summary ? (
+      <div className="flex gap-2">
+        <button
+          type="button"
+          onClick={() => {
+            setTab('events');
+            setCursor(undefined);
+          }}
+          className={`px-3 py-1.5 rounded-lg text-[11px] ${
+            tab === 'events' ? 'bg-white/15 text-white' : 'bg-white/5 text-gray-400 hover:text-gray-200'
+          }`}
+        >
+          明细
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            setTab('reconciliation');
+            setCursor(undefined);
+          }}
+          className={`px-3 py-1.5 rounded-lg text-[11px] ${
+            tab === 'reconciliation'
+              ? 'bg-white/15 text-white'
+              : 'bg-white/5 text-gray-400 hover:text-gray-200'
+          }`}
+        >
+          对账
+        </button>
+      </div>
+
+      {tab === 'events' && summary ? (
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
           <div className="rounded-xl border border-[#2e2e32] bg-[#121214] p-3">
             <p className="text-[10px] text-gray-500">事件数</p>
@@ -189,6 +232,62 @@ const AdminUsagePanel: React.FC = () => {
 
       {error ? <p className="text-[11px] text-red-400">{error}</p> : null}
 
+      {tab === 'reconciliation' ? (
+        <div className="rounded-xl border border-[#2e2e32] overflow-hidden">
+          <div className="px-3 py-2 border-b border-[#2e2e32] text-[10px] text-gray-500 flex justify-between">
+            <span>共 {reconciliationEvents} 条事件 · {reconciliation.length} 个 SKU</span>
+            {loading ? <span>加载中…</span> : null}
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-[11px]">
+              <thead>
+                <tr className="text-left text-gray-500 border-b border-[#2e2e32]">
+                  <th className="px-3 py-2 font-medium">SKU</th>
+                  <th className="px-3 py-2 font-medium">事件</th>
+                  <th className="px-3 py-2 font-medium">积分扣费</th>
+                  <th className="px-3 py-2 font-medium">USD 估算</th>
+                  <th className="px-3 py-2 font-medium">USD→积分</th>
+                  <th className="px-3 py-2 font-medium">偏差 %</th>
+                  <th className="px-3 py-2 font-medium">均积分/次</th>
+                </tr>
+              </thead>
+              <tbody>
+                {reconciliation.map((row) => (
+                  <tr
+                    key={row.billingSku}
+                    className={`border-b border-[#2e2e32]/60 ${row.flagged ? 'bg-red-500/10' : 'hover:bg-white/[0.02]'}`}
+                  >
+                    <td className="px-3 py-2">
+                      <div className="text-gray-300 font-mono text-[10px]">{row.billingSku}</div>
+                      {row.displayName ? <div className="text-gray-500 text-[10px]">{row.displayName}</div> : null}
+                    </td>
+                    <td className="px-3 py-2 text-gray-400">{row.eventCount}</td>
+                    <td className="px-3 py-2 text-amber-400">{fmtCredits(row.creditsCharged)}</td>
+                    <td className="px-3 py-2 text-gray-400">${row.costUsdEst.toFixed(4)}</td>
+                    <td className="px-3 py-2 text-gray-400">{fmtCredits(row.creditsFromUsd)}</td>
+                    <td className={`px-3 py-2 ${row.flagged ? 'text-red-400 font-medium' : 'text-gray-400'}`}>
+                      {row.variancePct != null ? `${row.variancePct}%` : '—'}
+                    </td>
+                    <td className="px-3 py-2 text-gray-400">
+                      {row.avgCreditsPerEvent}
+                      {row.imageFloor != null ? (
+                        <span className="text-[10px] text-gray-600 ml-1">floor {row.imageFloor}</span>
+                      ) : null}
+                    </td>
+                  </tr>
+                ))}
+                {!loading && reconciliation.length === 0 ? (
+                  <tr>
+                    <td colSpan={7} className="px-3 py-8 text-center text-gray-500">
+                      所选时间范围内暂无用量
+                    </td>
+                  </tr>
+                ) : null}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ) : (
       <div className="rounded-xl border border-[#2e2e32] overflow-hidden">
         <div className="px-3 py-2 border-b border-[#2e2e32] text-[10px] text-gray-500 flex justify-between">
           <span>共 {total} 条</span>
@@ -220,6 +319,7 @@ const AdminUsagePanel: React.FC = () => {
           </div>
         ) : null}
       </div>
+      )}
 
       <ObservabilityTraceDrawer correlationId={traceTaskId} onClose={() => setTraceTaskId(null)} />
     </div>

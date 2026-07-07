@@ -46,13 +46,22 @@ import {
   creditsExceededUserMessage,
   dispatchCreditsBalanceChanged,
   isCreditsExceededError,
-  proxyGateJobKindForWorkflowBranch,
 } from '../shared/credits';
-import { assertWorkflowCreditsPrecheck } from '../services/proxyCreditsGate';
+import {
+  creditOverridesFromTaskLike,
+  isSubmitBlockedForPlatformPlan,
+  planQuickComposeRoutes,
+  planWorkflowActionRoutes,
+  requiresPlatformCredits,
+} from '../services/aiBillingGate';
 import { fetchCreditBalance } from '../services/creditsApi';
-import { getUserApiKey } from '../services/settingsStore';
-import { dispatchCreditsConsumedNotice } from '../services/unifiedAiSoftNotice';
+import {
+  emitWorkflowTaskReceiptNotice,
+  resolveAvailableBalance,
+} from '../services/workflowTaskReceiptNotice';
+import { fetchServerMinCreditsForSteps } from '../services/usageQuoteGate';
 import { useCreditBalance } from '../hooks/useCreditBalance';
+import { useUsageQuoteForSteps } from '../hooks/useUsageQuoteForSteps';
 import WorkflowZeroBalanceBanner from './WorkflowZeroBalanceBanner';
 import { DEFAULT_MODEL_TEXT } from '../services/modelRegistry/constants';
 import { detectCutImageBoxes, FALLBACK_CUT_IMAGE_PRESET, FULL_IMAGE_BOX } from '../services/cutImageExecution';
@@ -71,7 +80,21 @@ import {
   getCapabilityEngine,
   isImageProcessPreset,
 } from '../services/capabilityExecutor';
+import {
+  isGeminiAsyncPollTimeoutError,
+  type GeminiAsyncRecoveredDetail,
+} from '../services/geminiAsyncJobRecovery';
+import {
+  extractGeminiProxyImageDataUrl,
+  retryAllRecoverableGeminiJobs,
+} from '../services/unifiedAiGateway';
+import {
+  applyGeminiRecoveredToWorkflowTask,
+  GEMINI_ASYNC_RECOVERED_EVENT,
+  scheduleWorkflowGeminiAsyncRecovery,
+} from '../services/workflowGeminiAsyncRecovery';
 import { overrideSkipUnderstandFromUnderstandEnabled } from '../services/workflowUnderstandOverride';
+import { isWorkspaceCompanionDirectorySourceOfTruth } from '../services/workspaceCloudSync';
 import {
   getQuickComposePlainModule,
   QUICK_COMPOSE_PLAIN_I2I_ACTION_ID,
@@ -521,7 +544,13 @@ function emitWorkflowTaskFailure(
 
 function formatWorkflowRunTaskErrorMessage(err: unknown, taskLabel: string): string {
   if (isCreditsExceededError(err)) {
-    return `[${taskLabel}] ${creditsExceededUserMessage()}`;
+    const msg =
+      err instanceof Error && err.message.trim() ? err.message : creditsExceededUserMessage();
+    return `[${taskLabel}] ${msg}`;
+  }
+  if (isGeminiAsyncPollTimeoutError(err)) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return `[${taskLabel}] ${msg}`;
   }
   const msg = err instanceof Error ? err.message : safeUnknownToString(err);
   return `[${taskLabel}] ${msg}`;
@@ -810,6 +839,7 @@ const WorkflowSection: React.FC<{
   }, [capabilityTextModel]);
   const pendingRef = React.useRef(pending);
   pendingRef.current = pending;
+  const geminiRecoveryTasksRef = React.useRef<Map<string, WorkflowPendingTask>>(new Map());
   const assetsRef = React.useRef(assets);
   assetsRef.current = assets;
   const onLogRef = React.useRef(onLog);
@@ -2665,10 +2695,37 @@ ${lineSvg}
 
   const addToPending = useCallback(
     (assetId: string, actionType: string, options?: WorkflowPendingTaskOptions) => {
-      const task = makePendingTaskForAsset(assetId, actionType, options);
-      if (task) setPending((prev) => [...prev, task]);
+      void (async () => {
+        const mod = getModule(actionType);
+        const branch = classifyWorkflowRunTaskBranch({ actionType, module: mod ?? null });
+        const overrides = creditOverridesFromTaskLike(options);
+        const plan = planWorkflowActionRoutes(actionType, mod ?? null, {
+          capabilitySet:
+            branch === 'branch_capability_set'
+              ? getSet(actionType.slice(SET_ACTION_PREFIX.length)) ?? null
+              : null,
+          presets: actionModules,
+          overrides,
+        });
+        if (requiresPlatformCredits(plan)) {
+          const serverMin = await fetchServerMinCreditsForSteps(plan);
+          const block = isSubmitBlockedForPlatformPlan(
+            plan,
+            preferenceScope,
+            creditBalance,
+            creditBalanceLoading,
+            { minCreditsOverride: serverMin }
+          );
+          if (block.blocked) {
+            onLog?.('warn', block.reason ?? creditsExceededUserMessage());
+            return;
+          }
+        }
+        const task = makePendingTaskForAsset(assetId, actionType, options);
+        if (task) setPending((prev) => [...prev, task]);
+      })();
     },
-    [makePendingTaskForAsset, setPending]
+    [makePendingTaskForAsset, setPending, getModule, getSet, actionModules, onLog, preferenceScope, creditBalance, creditBalanceLoading]
   );
 
   const addWorkflowTextAsset = useCallback((initialText?: string): string => {
@@ -2744,6 +2801,7 @@ ${lineSvg}
     videoUrl?: string;
     videoMime?: string;
     vgpSteps?: VgpGenStepCapture[];
+    geminiRecoveryJobId?: string;
   }> => {
     const runAudit = appendWorkflowAuditEvent({
       level: 'info',
@@ -2896,24 +2954,6 @@ ${lineSvg}
     const runTaskBranch = classifyWorkflowRunTaskBranch({ actionType, module });
     const actionLabel = getTaskLogLabel(task);
 
-    const aiProxyBranch =
-      runTaskBranch === 'branch_capability_set' ||
-      runTaskBranch === 'branch_generate_3d' ||
-      runTaskBranch === 'branch_preset_execute_capability';
-    if (aiProxyBranch && !getUserApiKey()?.trim()) {
-      try {
-        const jobKind = proxyGateJobKindForWorkflowBranch(runTaskBranch, module);
-        await assertWorkflowCreditsPrecheck(jobKind);
-      } catch (err: unknown) {
-        const full = formatWorkflowRunTaskErrorMessage(err, actionLabel);
-        setAssetError(task.assetId, full);
-        auditRunFail(WORKFLOW_AUDIT_CODES.RUN_TASK_EXECUTE, 'warn', full, {
-          error: err instanceof Error ? err.message : String(err),
-        });
-        return { image: null };
-      }
-    }
-
     switch (runTaskBranch) {
       case 'branch_capability_set': {
         const set = getSet(actionType.slice(SET_ACTION_PREFIX.length));
@@ -2942,8 +2982,7 @@ ${lineSvg}
           },
         }));
         try {
-          try {
-            const result = await executeCapabilitySet(set, resolvedInputImage ?? '', {
+          const result = await executeCapabilitySet(set, resolvedInputImage ?? '', {
               presets: actionModules,
               textModelRegistryId: capabilityTextModel,
               companionProjectId: workspaceProjectChrome?.activeProjectId?.trim() || undefined,
@@ -2983,16 +3022,24 @@ ${lineSvg}
             return result.kind === 'image'
               ? { image: result.image, vgpSteps: result.vgpSteps }
               : { image: null };
-          } catch (err: unknown) {
-            const taskLabel = getActionLabel(actionType);
-            const msg = err instanceof Error ? err.message : safeUnknownToString(err);
-            const full = isCreditsExceededError(err)
-              ? formatWorkflowRunTaskErrorMessage(err, taskLabel)
-              : `[${taskLabel}] 能力集合执行异常：${msg}`;
+        } catch (err: unknown) {
+          if (isGeminiAsyncPollTimeoutError(err)) {
+            const full = formatWorkflowRunTaskErrorMessage(err, actionLabel);
             setAssetError(task.assetId, full);
-            auditRunFail(WORKFLOW_AUDIT_CODES.RUN_TASK_CAPABILITY_SET_EXCEPTION, 'error', full, { error: msg }, msg);
-            return { image: null };
+            auditRunFail(WORKFLOW_AUDIT_CODES.RUN_TASK_EXECUTE, 'warn', full, {
+              error: err.message,
+              retryable: true,
+              geminiJobId: err.jobId,
+            });
+            return { image: null, geminiRecoveryJobId: err.jobId };
           }
+          const msg = err instanceof Error ? err.message : safeUnknownToString(err);
+          const full = isCreditsExceededError(err)
+            ? formatWorkflowRunTaskErrorMessage(err, actionLabel)
+            : `[${actionLabel}] 能力集合执行异常：${msg}`;
+          setAssetError(task.assetId, full);
+          auditRunFail(WORKFLOW_AUDIT_CODES.RUN_TASK_CAPABILITY_SET_EXCEPTION, 'error', full, { error: msg }, msg);
+          return { image: null };
         } finally {
           clearSetRunUi();
         }
@@ -3120,6 +3167,16 @@ ${lineSvg}
           }
           return { image: out.image, vgpSteps: out.vgpSteps };
         } catch (err: unknown) {
+          if (isGeminiAsyncPollTimeoutError(err)) {
+            const full = formatWorkflowRunTaskErrorMessage(err, actionLabel);
+            setAssetError(task.assetId, full);
+            auditRunFail(WORKFLOW_AUDIT_CODES.RUN_TASK_CAPABILITY_EXCEPTION, 'warn', full, {
+              error: err.message,
+              retryable: true,
+              geminiJobId: err.jobId,
+            });
+            return { image: null, geminiRecoveryJobId: err.jobId };
+          }
           const msg = err instanceof Error ? err.message : safeUnknownToString(err);
           const full = isCreditsExceededError(err)
             ? formatWorkflowRunTaskErrorMessage(err, actionLabel)
@@ -3164,11 +3221,151 @@ ${lineSvg}
     onLog,
     setAssetError,
     workspaceProjectChrome?.activeProjectId,
+    preferenceScope,
   ]);
   const runTaskRef = useRef(runTask);
   useEffect(() => {
     runTaskRef.current = runTask;
   }, [runTask]);
+
+  useEffect(() => {
+    const onRecovered = (ev: Event) => {
+      const detail = (ev as CustomEvent<GeminiAsyncRecoveredDetail>).detail;
+      if (!detail?.jobId) return;
+      const task =
+        geminiRecoveryTasksRef.current.get(detail.jobId) ??
+        (detail.workflowTaskId
+          ? Array.from(geminiRecoveryTasksRef.current.values()).find((t) => t.id === detail.workflowTaskId)
+          : undefined);
+      if (!task) return;
+      const applied = applyGeminiRecoveredToWorkflowTask({
+        detail,
+        task,
+        extractImage: extractGeminiProxyImageDataUrl,
+      });
+      if (!applied.applied) return;
+      geminiRecoveryTasksRef.current.delete(detail.jobId);
+      setAssetError(task.assetId, null);
+      const label = getTaskLogLabel(task);
+      if (applied.text) {
+        setAssets((prev) =>
+          prev.map((a) => {
+            if (a.id !== task.assetId) return a;
+            const baseId = task.actionType;
+            const hasAnyText = Object.keys(a.textResults || {}).some((k) => baseActionId(k) === baseId);
+            const tKey = hasAnyText ? makeVersionKey(baseId) : baseId;
+            return {
+              ...a,
+              textResults: { ...(a.textResults || {}), [tKey]: applied.text! },
+              resultOrder: [...(a.resultOrder || []), tKey],
+              resultMeta: {
+                ...(a.resultMeta || {}),
+                [tKey]: {
+                  executedAt: Date.now(),
+                  ...(task.displayStepLabel ? { displayStepLabel: task.displayStepLabel } : {}),
+                },
+              },
+              displayKey: tKey,
+              hiddenInGrid: a.groupId ? a.hiddenInGrid : false,
+            };
+          })
+        );
+      } else if (applied.image) {
+        const result = applied.image;
+        flushSync(() => {
+          setAssets((prev) =>
+            prev.map((a) => {
+              if (a.id !== task.assetId) return a;
+              const baseId = task.actionType;
+              const hasAnyVersion =
+                Object.keys(a.results || {}).some((k) => baseActionId(k) === baseId) ||
+                (a.resultOrder || []).some((k) => baseActionId(k) === baseId);
+              const key = hasAnyVersion ? makeVersionKey(baseId) : baseId;
+              const tagList = buildWorkflowImageTags({
+                actionLabel: label,
+                actionId: baseActionId(task.actionType),
+                presetInstruction: getModule(task.actionType)?.instruction,
+                promptOverride: task.promptOverride,
+                inputText: task.inputText,
+              });
+              let next: WorkflowAsset = {
+                ...a,
+                results: { ...a.results, [key]: result },
+                resultOrder: [...(a.resultOrder || []), key],
+                resultMeta: {
+                  ...(a.resultMeta || {}),
+                  [key]: {
+                    executedAt: Date.now(),
+                    ...(task.displayStepLabel ? { displayStepLabel: task.displayStepLabel } : {}),
+                    ...buildWorkflowStepResultMetaInputSnapshots(task, null),
+                  },
+                },
+                imageTags: { ...(a.imageTags || {}), [key]: tagList },
+                imageTagStage: { ...(a.imageTagStage || {}), [key]: 'coarse' as const },
+                displayKey: key,
+                hiddenInGrid: a.groupId ? a.hiddenInGrid : false,
+              };
+              const hadOverride = task.promptOverride != null && task.promptOverride.trim() !== '';
+              next = applyVgpAfterSuccessfulGen(next, {
+                resultKey: key,
+                vgpSteps: [],
+                semanticSummary: hadOverride ? `${label}（用户微调）` : label,
+                hadPromptOverride: hadOverride,
+                inputSourceDisplayKey: task.inputSourceDisplayKey,
+                userPromptRecord: buildWorkflowTaskUserPromptRecordForMetadata(task, getModule),
+              });
+              return next;
+            })
+          );
+        });
+        const after = assetsRef.current.find((x) => x.id === task.assetId);
+        if (after && parseDataUrlToBlob(result)) {
+          if (isWorkflowTextAsset(after)) {
+            void loadImageIntrinsicSize(result).then((dim) => {
+              if (dim) applyIntrinsicAspectToAsset(task.assetId, dim.w, dim.h);
+            });
+          } else {
+            const order = after.resultOrder || [];
+            const lastKey = order[order.length - 1];
+            if (lastKey && String(after.results?.[lastKey] || '') === String(result)) {
+              scheduleCompanionPersistResult(task.assetId, lastKey, result);
+            }
+          }
+        }
+      }
+      void (async () => {
+        dispatchCreditsBalanceChanged();
+      })();
+      setCompletedTaskIds((prev) => new Set(prev).add(task.id));
+      onLog?.('info', `[${label}] 云端任务已恢复并完成`);
+      if (preferenceScope) {
+        void emitWorkflowTaskReceiptNotice({
+          taskId: task.id,
+          taskLabel: label,
+          onLog,
+        });
+      }
+    };
+    window.addEventListener(GEMINI_ASYNC_RECOVERED_EVENT, onRecovered);
+    void retryAllRecoverableGeminiJobs();
+    const onFocus = () => {
+      void retryAllRecoverableGeminiJobs();
+    };
+    window.addEventListener('focus', onFocus);
+    return () => {
+      window.removeEventListener(GEMINI_ASYNC_RECOVERED_EVENT, onRecovered);
+      window.removeEventListener('focus', onFocus);
+    };
+  }, [
+    applyIntrinsicAspectToAsset,
+    getModule,
+    getTaskLogLabel,
+    onLog,
+    scheduleCompanionPersistResult,
+    setAssetError,
+    setAssets,
+    preferenceScope,
+  ]);
 
   const moveGroupItemsToUpperLevel = useCallback(
     (groupAssetId: string, itemIndexes: number[]) => {
@@ -3238,11 +3435,48 @@ ${lineSvg}
 
   const BASE_MAX_CONCURRENCY = getWorkflowMaxConcurrency();
 
+  const buildWorkflowCreditsSteps = useCallback(
+    (tasks: WorkflowPendingTask[]) => {
+      const steps = [];
+      for (const task of tasks) {
+        const mod = getModule(task.actionType);
+        const branch = classifyWorkflowRunTaskBranch({ actionType: task.actionType, module: mod ?? null });
+        steps.push(
+          ...planWorkflowActionRoutes(task.actionType, mod ?? null, {
+            capabilitySet:
+              branch === 'branch_capability_set'
+                ? getSet(task.actionType.slice(SET_ACTION_PREFIX.length)) ?? null
+                : null,
+            presets: actionModules,
+            overrides: creditOverridesFromTaskLike(task),
+          })
+        );
+      }
+      return steps;
+    },
+    [getModule, getSet, actionModules]
+  );
+
   const executePending = useCallback(
     async (overridePending?: WorkflowPendingTask[]) => {
       const queue = overridePending ? [...overridePending] : [...pendingRef.current];
       // 允许在 cut_image 弹窗确认后用 overridePending 继续执行剩余任务
       if (queue.length === 0 || (executing && !overridePending)) return;
+      const queueCreditsPlan = buildWorkflowCreditsSteps(queue);
+      if (requiresPlatformCredits(queueCreditsPlan)) {
+        const serverMin = await fetchServerMinCreditsForSteps(queueCreditsPlan);
+        const block = isSubmitBlockedForPlatformPlan(
+          queueCreditsPlan,
+          preferenceScope,
+          creditBalance,
+          creditBalanceLoading,
+          { minCreditsOverride: serverMin }
+        );
+        if (block.blocked) {
+          onLog?.('warn', block.reason ?? creditsExceededUserMessage());
+          return;
+        }
+      }
       const maxInputChars = maxWorkflowPendingInputTextChars(queue);
       if (maxInputChars >= WORKFLOW_TEXT_CONFIRM_CHARS) {
         const ok = window.confirm(
@@ -3281,9 +3515,22 @@ ${lineSvg}
         batchGroup?: { key: string; expected: number }
       ) => {
         let balanceBeforeTask: number | null = null;
-        if (!getUserApiKey()?.trim() && preferenceScope) {
+        const taskModForCredits = getModule(task.actionType);
+        const taskBranchForCredits = classifyWorkflowRunTaskBranch({
+          actionType: task.actionType,
+          module: taskModForCredits ?? null,
+        });
+        const taskPlan = planWorkflowActionRoutes(task.actionType, taskModForCredits ?? null, {
+          capabilitySet:
+            taskBranchForCredits === 'branch_capability_set'
+              ? getSet(task.actionType.slice(SET_ACTION_PREFIX.length)) ?? null
+              : null,
+          presets: actionModules,
+          overrides: creditOverridesFromTaskLike(task),
+        });
+        if (requiresPlatformCredits(taskPlan) && preferenceScope) {
           try {
-            balanceBeforeTask = (await fetchCreditBalance()).balance;
+            balanceBeforeTask = resolveAvailableBalance(await fetchCreditBalance());
           } catch {
             balanceBeforeTask = null;
           }
@@ -3292,15 +3539,13 @@ ${lineSvg}
           if (opts?.auditSuccess !== false && !cancelledTaskIdsRef.current.has(t.id)) {
             appendWorkflowRunTaskSuccessAudit({ task: t });
             dispatchCreditsBalanceChanged();
-            if (balanceBeforeTask != null) {
-              void fetchCreditBalance()
-                .then((res) => {
-                  const delta = balanceBeforeTask! - res.balance;
-                  if (delta > 0) dispatchCreditsConsumedNotice(delta);
-                })
-                .catch(() => {
-                  /* ignore */
-                });
+            if (requiresPlatformCredits(taskPlan) && preferenceScope) {
+              void emitWorkflowTaskReceiptNotice({
+                taskId: t.id,
+                taskLabel: getTaskLogLabel(t),
+                balanceBeforeAvailable: balanceBeforeTask,
+                onLog: (level, message, detail) => onLogRef.current?.(level, message, detail),
+              });
             }
           }
           setCompletedTaskIds((prev) => new Set(prev).add(t.id));
@@ -3457,10 +3702,22 @@ ${lineSvg}
             }
           } else {
             onLog?.('info', `${logBatch} ${taskLabel} 执行中…`);
-            const { image: result, text: textResult, videoUrl: videoResultUrl, vgpSteps } = await runTaskRef.current(
-              task,
-              batchGroup
-            );
+            const {
+              image: result,
+              text: textResult,
+              videoUrl: videoResultUrl,
+              vgpSteps,
+              geminiRecoveryJobId,
+            } = await runTaskRef.current(task, batchGroup);
+            if (geminiRecoveryJobId) {
+              geminiRecoveryTasksRef.current.set(geminiRecoveryJobId, task);
+              scheduleWorkflowGeminiAsyncRecovery(task, geminiRecoveryJobId);
+              onLog?.(
+                'info',
+                `${logBatch} ${taskLabel} 仍在云端处理，完成后将自动写入结果（任务 ${geminiRecoveryJobId}）`
+              );
+              return;
+            }
             const videoUrl = videoResultUrl != null && String(videoResultUrl).trim() !== '' ? String(videoResultUrl).trim() : null;
             if (textResult != null && textResult !== '') {
               setAssets((prev) =>
@@ -3715,9 +3972,15 @@ ${lineSvg}
       capabilityTextModel,
       getTaskLogLabel,
       getModule,
+      getSet,
+      actionModules,
       setAssetError,
       scheduleCompanionPersistResult,
       workspaceProjectChrome?.activeProjectId,
+      buildWorkflowCreditsSteps,
+      preferenceScope,
+      creditBalance,
+      creditBalanceLoading,
     ]
   );
 
@@ -3890,7 +4153,7 @@ ${lineSvg}
     reuseAssetId?: string;
   };
 
-  const submitQuickCompose = useCallback((invoke?: QuickComposeSubmitInvokeOptions) => {
+  const submitQuickComposeImpl = useCallback((invoke?: QuickComposeSubmitInvokeOptions) => {
     const maxRefs = getQuickComposeMaxRefs();
     const resolved = resolveQuickComposeReferences({
       segments: quickComposeSegmentsRef.current,
@@ -4379,6 +4642,54 @@ ${lineSvg}
     executePending,
     buildPendingTaskFromAssetSnapshot,
   ]);
+
+  const resolveQuickComposeMod = useCallback(
+    (presetId: string) =>
+      actionModules.find((m) => m.id === presetId) ??
+      capabilityPresets.find((p) => p.id === presetId) ??
+      null,
+    [actionModules, capabilityPresets]
+  );
+
+  const quickComposePlan = useMemo(
+    () =>
+      planQuickComposeRoutes({
+        mode: quickComposeMode,
+        promptCards: quickComposePromptCards,
+        resolveModule: resolveQuickComposeMod,
+        imageModelRegistryId: quickComposeImageModel,
+        textModelRegistryId: quickComposeTextModel,
+      }),
+    [quickComposeMode, quickComposePromptCards, resolveQuickComposeMod, quickComposeImageModel, quickComposeTextModel]
+  );
+
+  const quickComposeCreditsBypass = !requiresPlatformCredits(quickComposePlan);
+
+  const { serverMinCredits: quickComposeServerMin, quoteLoading: quickComposeQuoteLoading } =
+    useUsageQuoteForSteps(quickComposeCreditsBypass ? [] : quickComposePlan);
+
+  const quickComposeSubmitGate = quickComposeCreditsBypass
+    ? { blocked: false as const, estimatedMinCredits: 0 }
+    : isSubmitBlockedForPlatformPlan(
+        quickComposePlan,
+        preferenceScope,
+        creditBalance,
+        creditBalanceLoading || quickComposeQuoteLoading,
+        { minCreditsOverride: quickComposeServerMin }
+      );
+  const quickComposeSubmitDisabled = quickComposeSubmitGate.blocked;
+  const quickComposeSubmitDisabledReason = quickComposeSubmitGate.reason;
+
+  const submitQuickCompose = useCallback(
+    (invoke?: QuickComposeSubmitInvokeOptions) => {
+      if (quickComposeSubmitDisabled) {
+        onLog?.('warn', quickComposeSubmitDisabledReason ?? creditsExceededUserMessage());
+        return;
+      }
+      submitQuickComposeImpl(invoke);
+    },
+    [quickComposeSubmitDisabled, quickComposeSubmitDisabledReason, onLog, submitQuickComposeImpl]
+  );
 
   const submitLightboxQuickCompose = useCallback(() => {
     const id = lightboxAssetIdRef.current;
@@ -9985,7 +10296,8 @@ ${lineSvg}
           title: '功能区',
           desc: '基础能力与复合能力',
           actions: (
-            <div className="flex items-center gap-1.5 whitespace-nowrap">
+            <div className="flex flex-col items-end gap-1 whitespace-nowrap">
+              <div className="flex items-center gap-1.5">
               <button
                 type="button"
                 onClick={() => executePending()}
@@ -10028,6 +10340,7 @@ ${lineSvg}
                   )}
                 </div>
               )}
+              </div>
             </div>
           ),
               } as const,
@@ -10201,6 +10514,7 @@ ${lineSvg}
     executingQueueDoneCount,
     executePending,
     pending,
+    creditBalance,
     currentGroupAsset,
     selectedAssetIds,
     selectedGroupItemKeys,
@@ -10258,7 +10572,11 @@ ${lineSvg}
                     void workspaceProjectChrome.onBackToProjectList();
                   }}
                   className={WORKFLOW_TOPBAR_ICON_BTN}
-                  title="返回项目列表（将先同步到云端）"
+                  title={
+                    isWorkspaceCompanionDirectorySourceOfTruth()
+                      ? '返回项目列表'
+                      : '返回项目列表（将先同步到云端）'
+                  }
                   aria-label="返回项目列表"
                 >
                   <svg aria-hidden viewBox="0 0 20 20" className="h-3 w-3" fill="none">
@@ -10402,6 +10720,7 @@ ${lineSvg}
                 onOpenWorkflowComposer: openUnifiedComposer,
                 workflowComposeSearchQuery: quickComposeDraft,
                 sidebarLinkHoverPresetIds,
+                creditBalance,
               })}
             </div>
           ) : (
@@ -12538,6 +12857,8 @@ ${lineSvg}
             pasteAssetRefZone="reference"
             maxMentions={quickComposeMaxReferenceImages}
             onSubmit={() => void submitLightboxQuickCompose()}
+            submitDisabled={quickComposeSubmitDisabled}
+            submitDisabledReason={quickComposeSubmitDisabledReason}
             showGenImageSettings={quickComposeShowGenImageSettings}
             showGenTextSettings={quickComposeShowGenTextSettings}
             allowBatchCount={quickComposeAllowBatchCount}
@@ -12781,6 +13102,7 @@ ${lineSvg}
             onLog={onLog}
             getPartialTestInputImage={getComposerPartialTestInputImage}
             assetCandidates={composerAssetCandidates}
+            creditBalance={creditBalance}
           />
         </Suspense>
       ))}
@@ -13184,6 +13506,8 @@ ${lineSvg}
             onReorderDropSlot={reorderQuickComposeDropSlot}
             maxMentions={quickComposeMaxReferenceImages}
             onSubmit={submitQuickCompose}
+            submitDisabled={quickComposeSubmitDisabled}
+            submitDisabledReason={quickComposeSubmitDisabledReason}
             showGenImageSettings={quickComposeShowGenImageSettings}
             showGenTextSettings={quickComposeShowGenTextSettings}
             allowBatchCount={quickComposeAllowBatchCount}

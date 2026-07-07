@@ -31,6 +31,7 @@ export type UsageEventInput = {
   jobKind?: string;
   costUsdEst?: number | null;
   costConfidence?: UsageCostConfidence;
+  creditsCharged?: number | null;
   status?: UsageEventStatus;
   meta?: Record<string, unknown>;
 };
@@ -44,6 +45,8 @@ export type PriceCatalogEntry = {
   /** 生图 SKU 的图像输出 token 单价（USD / 1M）；缺省回退 outputPer1m */
   imageOutputPer1m?: number;
   perUnit?: number;
+  /** Admin 运营档位；优先于 perUnit×CREDITS_PER_USD */
+  userCreditsPerUnit?: number | null;
   vendorSkuRef?: string;
   displayName?: string;
   markupPct?: number;

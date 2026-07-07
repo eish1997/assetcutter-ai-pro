@@ -38,9 +38,9 @@ describe('third-party channel metering', () => {
       usageMetadata: { promptTokenCount: 200, candidatesTokenCount: 800 },
     });
     const drafts = splitMeterReadingToDrafts(reading);
-    expect(drafts).toHaveLength(2);
-    expect(drafts[0]!.idempotencySuffix).toBe(':in');
-    expect(drafts[1]!.idempotencySuffix).toBe(':out');
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0]!.meterKind).toBe('image');
+    expect(drafts[0]!.meta).toMatchObject({ flatRate: true, promptTokenCount: 200 });
   });
 
   it('falls back to output_image for toapis when no usage metadata', () => {

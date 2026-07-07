@@ -22,7 +22,13 @@ export function useCreditBalance(userId: string | null | undefined): CreditBalan
     setLoading(true);
     try {
       const res = await fetchCreditBalance();
-      setBalance(typeof res.balance === 'number' ? res.balance : 0);
+      const available =
+        typeof res.available === 'number'
+          ? res.available
+          : typeof res.balance === 'number'
+            ? res.balance
+            : 0;
+      setBalance(available);
     } catch {
       setBalance(null);
     } finally {

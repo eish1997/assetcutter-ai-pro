@@ -4,6 +4,12 @@ import type {
   CapabilitySetNode,
   CapabilitySetEdge,
 } from '../types';
+import {
+  planCapabilityModuleRoutes,
+  planCapabilitySetRoutes,
+  sumPlatformMinCredits,
+  type CapabilityCreditOverrides,
+} from './aiBillingGate';
 import { mergePrimaryAndReferenceImageUrls } from './quickComposeMention';
 import { maxReferenceImagesForImageModel } from '../types';
 import {
@@ -1066,6 +1072,21 @@ export function validateCapabilitySetGraph(set: CapabilitySet, presets: CustomAp
   }
 
   return null;
+}
+
+/** 能力集合内 AI 节点数 × 单步价目表上限（先预扣费，避免分段执行中途积分不足） */
+export function estimateCapabilitySetCredits(set: CapabilitySet, presets: CustomAppModule[]): number {
+  return sumPlatformMinCredits(planCapabilitySetRoutes(set, presets));
+}
+
+/** 单能力预设先预扣估算（图生图/变体等含理解步时叠加 understand + image） */
+export function estimateSingleCapabilityPrecharge(
+  module: CustomAppModule | null | undefined,
+  _branch: string,
+  overrides?: CapabilityCreditOverrides
+): number {
+  if (!module) return sumPlatformMinCredits([]);
+  return sumPlatformMinCredits(planCapabilityModuleRoutes(module, overrides));
 }
 
 /**

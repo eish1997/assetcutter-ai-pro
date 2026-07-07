@@ -1,6 +1,8 @@
+import type { BillingDecision } from '../shared/billingDecision';
 import type { UsageEventInput } from '../shared/usageBilling';
+import { CREDITS_EXCEEDED_CODE } from '../shared/credits';
 import { apiUrl } from './apiBase';
-import { requestJson } from './httpClient';
+import { HttpRequestError, requestJson } from './httpClient';
 import { peekCorrelationContext } from './observability/correlationContext';
 
 function logUsageSyncFailure(err: unknown): void {
@@ -11,6 +13,19 @@ function logUsageSyncFailure(err: unknown): void {
   } catch {
     /* ignore */
   }
+}
+
+/** L2：非 platform 路由清空估算并标 BYOK（与 pipeline.buildMeteredUsageEvents 一致）。 */
+export function applyByokFromBillingDecision(
+  input: UsageEventInput,
+  billingDecision?: BillingDecision
+): UsageEventInput {
+  if (!billingDecision || billingDecision.routeKind === 'platform') return input;
+  return {
+    ...input,
+    costUsdEst: null,
+    meta: { ...(input.meta || {}), byok: true },
+  };
 }
 
 /** 仅当调用方显式标记 meta.byok 时清空估算；勿因「设置里存了 Key」误判本站代理路径。 */
@@ -64,8 +79,13 @@ export async function recordUsageEventAwait(input: UsageEventInput): Promise<voi
   const idempotencyKey = String(input.idempotencyKey || '').trim();
   if (!idempotencyKey) return;
   const payload = withByokMeta(mergeContext(input));
-  await requestJson(apiUrl('/api/usage/events'), {
-    method: 'POST',
-    body: JSON.stringify({ events: [payload] }),
-  }).catch(logUsageSyncFailure);
+  try {
+    await requestJson(apiUrl('/api/usage/events'), {
+      method: 'POST',
+      body: JSON.stringify({ events: [payload] }),
+    });
+  } catch (e) {
+    if (e instanceof HttpRequestError && e.code === CREDITS_EXCEEDED_CODE) throw e;
+    logUsageSyncFailure(e);
+  }
 }

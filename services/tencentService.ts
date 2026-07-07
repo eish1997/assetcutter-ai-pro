@@ -5,6 +5,7 @@
  */
 
 import { getTencentCreds } from './settingsStore';
+import { hasTencentSessionCredentials } from './platformAiPath';
 import { emitMeteredUsage } from './observability/metering/pipeline';
 import { meterReadingFromTask } from './observability/metering/adapters/task';
 import { resolveBillingSkuForTencent3dTask } from './usageBillingSku';
@@ -16,6 +17,10 @@ function emitTencent3dTaskMetered(
 ): void {
   const id = String(jobId || '').trim();
   if (!id) return;
+  const mergedMeta: Record<string, unknown> = { ...extraMeta };
+  if (hasTencentSessionCredentials()) {
+    mergedMeta.byok = true;
+  }
   emitMeteredUsage({
     reading: meterReadingFromTask({ provider: 'tencent-hunyuan', modality: '3d' }),
     registryId: module === 'rapid' ? 'tencent-hunyuan-3d-rapid' : 'tencent-hunyuan-3d-pro',
@@ -24,7 +29,7 @@ function emitTencent3dTaskMetered(
     requestId: id,
     upstreamTaskId: id,
     jobKind: 'workflow_generate_3d',
-    extraMeta,
+    extraMeta: Object.keys(mergedMeta).length ? mergedMeta : undefined,
   });
 }
 

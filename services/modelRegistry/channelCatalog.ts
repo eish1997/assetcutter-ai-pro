@@ -68,6 +68,13 @@ export const CHANNEL_CATALOG: readonly ChannelCatalogRow[] = [
     keyPlaceholder: "ToAPIs API Key（与 Gemini 路径共用）",
     hint: "中转站 OpenAI 兼容路径。",
   },
+  {
+    channel: "volcengine-jimeng",
+    label: "火山引擎 · 即梦（站点代理）",
+    family: "volcengine-jimeng",
+    needsApiKey: false,
+    hint: "由 auth-api /api/jimeng 转发；需 VOLCENGINE_* 与 JIMENG_API_ENABLED。",
+  },
 ] as const;
 
 export const CHANNEL_IDS: readonly ChannelId[] = CHANNEL_CATALOG.map((r) => r.channel);
@@ -99,6 +106,7 @@ const WIRING_SUPPLIER_OUTLET_LABELS: Partial<Record<ChannelId, string>> = {
   "toapis-openai": "ToAPIs · OpenAI 形态",
   vectorengine: "VectorEngine",
   "openai-official": "OpenAI 官方",
+  "volcengine-jimeng": "火山引擎 · 即梦",
 };
 
 export function outletDisplayLabelForWiring(channel: ChannelId): string {

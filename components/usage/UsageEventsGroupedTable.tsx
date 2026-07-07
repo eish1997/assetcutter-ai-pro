@@ -2,9 +2,13 @@ import React from 'react';
 import type { UsageEventRow } from '../../services/adminClient';
 import {
   fmtUsageEventCredits,
+  fmtUsageEventCreditsTitle,
   fmtUsageGroupCredits,
   groupUsageEventsByTask,
+  presentationLabelForEvent,
+  sumUsageEventsCredits,
 } from '../../services/usageApi';
+import UsageTaskReceiptPanel from './UsageTaskReceiptPanel';
 
 type UsageEventsGroupedTableProps = {
   events: UsageEventRow[];
@@ -17,6 +21,8 @@ type UsageEventsGroupedTableProps = {
   traceTaskHref?: (taskId: string) => string | null;
   /** 管理端：打开 Trace 侧栏 */
   onOpenTrace?: (taskId: string) => void;
+  /** 从积分流水跳转时高亮对应 usage 行 */
+  highlightEventId?: string | null;
 };
 
 function shortId(id: string, max = 10): string {
@@ -35,9 +41,17 @@ const UsageEventsGroupedTable: React.FC<UsageEventsGroupedTableProps> = ({
   showConfidence = false,
   traceTaskHref,
   onOpenTrace,
+  highlightEventId = null,
 }) => {
   const groups = React.useMemo(() => groupUsageEventsByTask(events), [events]);
   const colCount = 4 + (showUser ? 1 : 0) + (showProvider ? 1 : 0);
+  const [expandedReceiptTaskId, setExpandedReceiptTaskId] = React.useState<string | null>(null);
+
+  const toggleReceipt = (taskId: string) => {
+    const tid = String(taskId || '').trim();
+    if (!tid || tid === '—') return;
+    setExpandedReceiptTaskId((prev) => (prev === tid ? null : tid));
+  };
 
   return (
     <table className="w-full text-[11px]">
@@ -55,10 +69,18 @@ const UsageEventsGroupedTable: React.FC<UsageEventsGroupedTableProps> = ({
         {groups.map((group) => {
           const rowSpan = group.events.length;
           const multi = rowSpan > 1;
-          return group.events.map((ev, idx) => (
+          const canShowReceipt =
+            group.displayTaskId && group.displayTaskId !== '—' && !group.displayTaskId.startsWith('__singleton__');
+          const receiptOpen = canShowReceipt && expandedReceiptTaskId === group.displayTaskId;
+          const groupCreditsTotal = sumUsageEventsCredits(group.events);
+          return (
+            <React.Fragment key={group.groupId}>
+              {group.events.map((ev, idx) => (
             <tr
               key={ev.id}
-              className={`border-b border-[#2e2e32]/50 ${multi ? 'bg-white/[0.01]' : ''}`}
+              className={`border-b border-[#2e2e32]/50 ${multi ? 'bg-white/[0.01]' : ''} ${
+                highlightEventId && ev.id === highlightEventId ? 'bg-amber-500/10 ring-1 ring-inset ring-amber-500/35' : ''
+              }`}
             >
               {idx === 0 ? (
                 <td
@@ -77,6 +99,20 @@ const UsageEventsGroupedTable: React.FC<UsageEventsGroupedTableProps> = ({
                   <p className="text-[9px] text-amber-400/90 mt-1">
                     合计 {fmtUsageGroupCredits(group.events)}
                   </p>
+                  {canShowReceipt ? (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        toggleReceipt(group.displayTaskId);
+                      }}
+                      className={`text-[9px] mt-1 block ${
+                        receiptOpen ? 'text-amber-300' : 'text-gray-400 hover:text-gray-200'
+                      }`}
+                    >
+                      {receiptOpen ? '收起小票 ▲' : '任务小票 ▼'}
+                    </button>
+                  ) : null}
                   {traceTaskHref && group.displayTaskId && group.displayTaskId !== '—' ? (
                     <div className="flex flex-wrap gap-2 mt-1">
                       {onOpenTrace ? (
@@ -108,8 +144,13 @@ const UsageEventsGroupedTable: React.FC<UsageEventsGroupedTableProps> = ({
               {showUser ? (
                 <td className="px-3 py-2 text-gray-300">{ev.username || ev.userId}</td>
               ) : null}
-              <td className="px-3 py-2 text-gray-300 font-mono text-[10px]">{ev.billingSku}</td>
-              <td className="px-3 py-2 text-amber-300/90 tabular-nums text-right">
+              <td className="px-3 py-2 text-gray-300 text-[10px]" title={ev.billingSku}>
+                {presentationLabelForEvent(ev)}
+              </td>
+              <td
+                className="px-3 py-2 text-amber-300/90 tabular-nums text-right"
+                title={fmtUsageEventCreditsTitle(ev)}
+              >
                 {fmtUsageEventCredits(ev)}
                 {showConfidence ? (
                   <span className="block text-[8px] text-gray-600 font-normal">({ev.costConfidence})</span>
@@ -117,7 +158,19 @@ const UsageEventsGroupedTable: React.FC<UsageEventsGroupedTableProps> = ({
               </td>
               {showProvider ? <td className="px-3 py-2 text-gray-500">{ev.provider}</td> : null}
             </tr>
-          ));
+              ))}
+              {receiptOpen ? (
+                <tr className="border-b border-[#2e2e32]/50 bg-[#0f0f0f]/40">
+                  <td colSpan={colCount} className="px-3 py-2">
+                    <UsageTaskReceiptPanel
+                      taskId={group.displayTaskId}
+                      expectedTotal={groupCreditsTotal > 0 ? groupCreditsTotal : null}
+                    />
+                  </td>
+                </tr>
+              ) : null}
+            </React.Fragment>
+          );
         })}
         {!loading && events.length === 0 ? (
           <tr>

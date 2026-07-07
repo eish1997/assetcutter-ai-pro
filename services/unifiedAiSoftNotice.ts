@@ -1,5 +1,5 @@
 /**
- * `workflow*` 经 `unifiedAiGateway.traceUnifiedAiCall` 捕获的非「公平拒绝」类限流/繁忙错误，
+ * `workflow*` 经 `unifiedAiGateway.runMeteredAiCall` 捕获的非「公平拒绝」类限流/繁忙错误，
  * 通过 CustomEvent 交给根组件浮层（与 `geminiProxyFairnessError` 的公平拒绝事件分离）。
  */
 
@@ -40,10 +40,20 @@ export function dispatchUnifiedAiSoftNotice(detail: AcUnifiedAiSoftNoticeDetail)
   }
 }
 
-export function dispatchCreditsConsumedNotice(credits: number): void {
+export function dispatchCreditsConsumedNotice(
+  credits: number,
+  receipt?: { lines?: Array<{ label: string; credits: number }> } | null
+): void {
   if (!Number.isFinite(credits) || credits <= 0) return;
+  let message = `本次 −${Math.floor(credits).toLocaleString('zh-CN')} 积分`;
+  const lines = (receipt?.lines ?? []).filter((l) => l.credits > 0);
+  if (lines.length === 1) {
+    message += `（${lines[0].label}）`;
+  } else if (lines.length > 1 && lines.length <= 3) {
+    message += `（${lines.map((l) => l.label).join('、')}）`;
+  }
   dispatchUnifiedAiSoftNotice({
-    kind: "credits_consumed",
-    message: `本次 −${Math.floor(credits).toLocaleString("zh-CN")} 积分`,
+    kind: 'credits_consumed',
+    message,
   });
 }

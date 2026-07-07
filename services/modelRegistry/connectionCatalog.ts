@@ -7,7 +7,8 @@ export type AiConnectionId =
   | "toapis"
   | "vectorengine"
   | "openai-official"
-  | "gemini-aistudio";
+  | "gemini-aistudio"
+  | "volcengine-jimeng";
 
 export type AiConnectionCatalogRow = {
   id: AiConnectionId;
@@ -17,6 +18,8 @@ export type AiConnectionCatalogRow = {
   outletHint: string;
   channels: readonly ChannelId[];
   credentialKind: "site" | "api-key" | "api-key-base-url" | "multi-path";
+  /** W0：不在设置页展示 */
+  hidden?: boolean;
 };
 
 export const AI_CONNECTION_CATALOG: readonly AiConnectionCatalogRow[] = [
@@ -59,6 +62,15 @@ export const AI_CONNECTION_CATALOG: readonly AiConnectionCatalogRow[] = [
     outletHint: "binding 指向此处的 SKU 走 AI Studio 直连",
     channels: ["gemini-aistudio"],
     credentialKind: "api-key",
+  },
+  {
+    id: "volcengine-jimeng",
+    title: "火山引擎 · 即梦",
+    subtitle: "站点统一 AK；W0 不在设置页展示",
+    outletHint: "binding 可将 jimeng 图类 SKU 接到此站点输出口",
+    channels: ["volcengine-jimeng"],
+    credentialKind: "site",
+    hidden: true,
   },
 ] as const;
 
