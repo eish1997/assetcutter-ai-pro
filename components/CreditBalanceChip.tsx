@@ -4,6 +4,7 @@ import {
   CREDITS_LOW_BALANCE_THRESHOLD,
   fmtCredits,
   fmtCreditsSidebar,
+  fmtPromoExpiryHint,
 } from '../shared/credits';
 import { navigateToSettingsSection } from '../services/navigateSettings';
 import { useCreditBalance } from '../hooks/useCreditBalance';
@@ -30,10 +31,12 @@ export const CreditBalanceChip: React.FC<CreditBalanceChipProps> = ({
   const hook = useCreditBalance(user?.id);
   const loading = loadingOverride ?? hook.loading;
   const balance = balanceOverride !== undefined ? balanceOverride : hook.balance;
+  const promoHint = fmtPromoExpiryHint(hook.promoRemaining, hook.nearestPromoExpiry);
 
   if (!user) return null;
 
   const label = loading ? '…' : fmtCreditsSidebar(balance);
+  const promoSuffix = promoHint ? ` · ${promoHint}` : '';
   const title =
     loading
       ? '加载积分余额…'
@@ -42,8 +45,8 @@ export const CreditBalanceChip: React.FC<CreditBalanceChipProps> = ({
         : balance <= 0
           ? `积分已用完（${fmtCredits(balance)}），点击查看用量与说明`
           : balance < CREDITS_LOW_BALANCE_THRESHOLD
-            ? `积分偏低：${fmtCredits(balance)}，点击查看用量`
-            : `剩余 AI 积分 ${fmtCredits(balance)}`;
+            ? `积分偏低：${fmtCredits(balance)}${promoSuffix}，点击查看用量`
+            : `剩余 AI 积分 ${fmtCredits(balance)}${promoSuffix}`;
 
   const clickable = !loading && balance != null && balance < CREDITS_LOW_BALANCE_THRESHOLD;
 

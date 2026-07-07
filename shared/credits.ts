@@ -83,7 +83,13 @@ export function platformAiLoginRequiredMessage(): string {
   return '请先登录后再使用 AI 生成。';
 }
 
-export type CreditLedgerKind = 'grant' | 'admin_deduct' | 'consume' | 'refund';
+export type CreditLedgerKind =
+  | 'grant'
+  | 'admin_deduct'
+  | 'consume'
+  | 'refund'
+  | 'promo_grant'
+  | 'promo_expire';
 
 export type CreditBalance = {
   balance: number;
@@ -92,6 +98,12 @@ export type CreditBalance = {
   lifetimeGranted: number;
   lifetimeSpent: number;
   updatedAt?: string;
+  /** 未过期活动桶剩余（优先消耗） */
+  promoRemaining?: number;
+  /** 永久积分 ≈ balance − promoRemaining */
+  permanentBalance?: number;
+  /** 最近一批活动积分到期时间（ISO） */
+  nearestPromoExpiry?: string | null;
 };
 
 export type CreditLedgerEntry = {
@@ -132,7 +144,28 @@ const LEDGER_KIND_LABELS: Record<CreditLedgerKind, string> = {
   admin_deduct: '扣回',
   consume: '消耗',
   refund: '退款',
+  promo_grant: '活动赠送',
+  promo_expire: '活动到期清零',
 };
+
+/** 活动积分到期日（zh-CN 短日期，如 7/15） */
+export function fmtPromoExpiryDate(iso: string | null | undefined): string {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  return d.toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' });
+}
+
+/** Chip / 侧栏：活动积分与最近到期提示 */
+export function fmtPromoExpiryHint(
+  promoRemaining: number | null | undefined,
+  nearestExpiry: string | null | undefined
+): string {
+  if (!promoRemaining || promoRemaining <= 0 || !nearestExpiry) return '';
+  const date = fmtPromoExpiryDate(nearestExpiry);
+  if (!date) return '';
+  return `活动 ${fmtCredits(promoRemaining)} · ${date} 到期`;
+}
 
 export function creditLedgerKindLabel(kind: CreditLedgerKind | string): string {
   return LEDGER_KIND_LABELS[kind as CreditLedgerKind] || kind;

@@ -33,6 +33,9 @@ export type AdminUserCredits = {
   lifetimeGranted: number;
   lifetimeSpent: number;
   updatedAt?: string;
+  promoRemaining?: number;
+  permanentBalance?: number;
+  nearestPromoExpiry?: string | null;
 };
 
 export type AdminUserDetailResponse = {
@@ -315,6 +318,125 @@ export async function batchAdjustAdminCredits(opts: { csv?: string; dryRun?: boo
   }>(apiUrl('/api/admin/credits/batch-adjust'), {
     method: 'POST',
     body: JSON.stringify(opts),
+  });
+}
+
+export type AdminPromoCampaignSummary = {
+  campaignId: string;
+  lotCount: number;
+  userCount: number;
+  totalGranted: number;
+  activeRemaining: number;
+  expiredAmount: number;
+  nearestExpiry: string | null;
+  lastGrantAt: string | null;
+};
+
+export type AdminPromoLotRow = {
+  id: string;
+  userId: string;
+  username?: string;
+  campaignId: string;
+  amount: number;
+  remaining: number;
+  status: string;
+  expiresAt: string | null;
+  note: string | null;
+  createdBy: string | null;
+  createdAt: string | null;
+  expiredAt?: string | null;
+};
+
+export async function fetchAdminPromoSummary() {
+  return requestJson<{ enabled: boolean; campaigns: AdminPromoCampaignSummary[] }>(
+    apiUrl('/api/admin/credits/promo-summary'),
+    { cache: 'no-store' }
+  );
+}
+
+export async function fetchAdminPromoLots(opts?: {
+  campaignId?: string;
+  userId?: string;
+  status?: string;
+  limit?: number;
+}) {
+  const params = new URLSearchParams();
+  if (opts?.campaignId) params.set('campaignId', opts.campaignId);
+  if (opts?.userId) params.set('userId', opts.userId);
+  if (opts?.status) params.set('status', opts.status);
+  if (opts?.limit) params.set('limit', String(opts.limit));
+  const qs = params.toString();
+  return requestJson<{ enabled: boolean; lots: AdminPromoLotRow[]; limit: number }>(
+    apiUrl(`/api/admin/credits/promo-lots${qs ? `?${qs}` : ''}`),
+    { cache: 'no-store' }
+  );
+}
+
+export async function batchPromoGrantAdminCredits(opts: {
+  rows?: Array<{
+    username: string;
+    delta: number;
+    note: string;
+    expiresAt: string;
+    campaignId?: string;
+  }>;
+  csv?: string;
+  dryRun?: boolean;
+}) {
+  return requestJson<{
+    ok: boolean;
+    dryRun?: boolean;
+    successCount: number;
+    skipped: number;
+    failed: number;
+    results: Array<{
+      username: string;
+      userId?: string;
+      delta?: number;
+      note?: string;
+      expiresAt?: string;
+      campaignId?: string;
+      status: string;
+      balanceAfter?: number;
+      lotId?: string;
+      error?: string;
+    }>;
+  }>(apiUrl('/api/admin/credits/promo-batch'), {
+    method: 'POST',
+    body: JSON.stringify(opts),
+  });
+}
+
+export async function grantAdminPromoCredits(body: {
+  username?: string;
+  userId?: string;
+  amount: number;
+  note: string;
+  expiresAt: string;
+  campaignId?: string;
+}) {
+  return requestJson<{
+    ok: boolean;
+    balanceAfter: number;
+    lotId: string;
+    ledgerId: string;
+    duplicate?: boolean;
+    balance?: AdminUserCredits;
+  }>(apiUrl('/api/admin/credits/promo-grant'), {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+}
+
+export async function revokeAdminPromoLot(lotId: string, note?: string) {
+  return requestJson<{
+    ok: boolean;
+    balanceAfter?: number;
+    revokedAmount?: number;
+    userId?: string;
+  }>(apiUrl(`/api/admin/credits/promo-lots/${encodeURIComponent(lotId)}/revoke`), {
+    method: 'POST',
+    body: JSON.stringify({ note: note || '管理员撤销' }),
   });
 }
 
@@ -619,6 +741,16 @@ export type AdminSystemStatusPayload = {
         geminiProxyInFlight: number;
       } | null;
       vertex?: unknown;
+    };
+    promoSweep?: {
+      enabled: boolean;
+      lastRunAt: string | null;
+      lastOk: boolean | null;
+      consecutiveFailures: number;
+      lastError: string | null;
+      lastExpiredLots: number;
+      lastCreditsExpired: number;
+      alertThreshold: number;
     };
   };
   config: {

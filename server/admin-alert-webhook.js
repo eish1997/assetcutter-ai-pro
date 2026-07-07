@@ -133,6 +133,7 @@ export async function sendAdminAlertWebhookTest() {
 }
 
 const lastLoginFailedAlertAt = { ts: 0 };
+const lastPromoSweepAlertAt = { ts: 0 };
 
 /** 登录失败审计后调用；超阈值且已启用 webhook 时 POST 一次（冷却 15 分钟） */
 export async function maybeNotifyLoginFailedAlert() {
@@ -157,5 +158,32 @@ export async function maybeNotifyLoginFailedAlert() {
     lastLoginFailedAlertAt.ts = now;
   } catch (e) {
     console.warn('[admin-alert-webhook] notify failed:', e instanceof Error ? e.message : String(e));
+  }
+}
+
+/**
+ * 活动积分 sweep 连续失败告警（冷却 15 分钟）。
+ * @param {{ consecutiveFailures: number, threshold: number, error: string, lastRunAt: string }} payload
+ */
+export async function maybeNotifyPromoSweepFailure(payload) {
+  const config = await loadConfig();
+  if (!config.enabled || !config.url) return;
+  const now = Date.now();
+  if (now - lastPromoSweepAlertAt.ts < 15 * 60 * 1000) return;
+  try {
+    validateAlertWebhookUrl(config.url);
+    await postWebhook(config.url, {
+      event: 'credits.promo_sweep.failure',
+      service: 'auth-api',
+      at: new Date().toISOString(),
+      consecutiveFailures: payload.consecutiveFailures,
+      threshold: payload.threshold,
+      lastRunAt: payload.lastRunAt,
+      error: payload.error,
+      message: `活动积分到期 sweep 连续失败 ${payload.consecutiveFailures} 次（阈值 ${payload.threshold}）：${payload.error}`,
+    });
+    lastPromoSweepAlertAt.ts = now;
+  } catch (e) {
+    console.warn('[admin-alert-webhook] promo sweep notify failed:', e instanceof Error ? e.message : String(e));
   }
 }

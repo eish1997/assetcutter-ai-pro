@@ -4,6 +4,7 @@
 import crypto from 'crypto';
 import { findUserByLogin } from './auth-store.js';
 import { adjustCredits } from './credit-store.js';
+import { looksLikePromoExpiresAt } from './credits-promo-grant.js';
 
 export function parseCreditsBatchCsvLine(line) {
   const parts = String(line || '')
@@ -12,6 +13,15 @@ export function parseCreditsBatchCsvLine(line) {
   if (parts.length < 3) return null;
   const username = parts[0];
   const delta = Math.floor(Number(parts[1]));
+
+  if (parts.length >= 4 && looksLikePromoExpiresAt(parts[3])) {
+    const note = parts[2];
+    const expiresAt = parts[3];
+    const campaignId = (parts[4] || 'default').trim() || 'default';
+    if (!username || !Number.isFinite(delta) || delta <= 0 || !note) return null;
+    return { type: 'promo', username, delta, note, expiresAt, campaignId };
+  }
+
   const note = parts.slice(2).join(',').trim();
   if (!username || !Number.isFinite(delta) || delta === 0 || !note) return null;
   return { username, delta, note };
@@ -107,7 +117,7 @@ export function parseCreditsBatchCsv(rawCsv) {
     const line = lines[i];
     if (i === 0 && /^username\s*,/i.test(line)) continue;
     const row = parseCreditsBatchCsvLine(line);
-    if (row) rows.push(row);
+    if (row && row.type !== 'promo') rows.push(row);
   }
   return rows;
 }

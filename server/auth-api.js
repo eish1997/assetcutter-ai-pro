@@ -38,6 +38,10 @@ import {
 } from './admin-alert-webhook.js';
 import { buildAdminSystemStatus } from './admin-system-status.js';
 import {
+  recordPromoSweepFailure,
+  recordPromoSweepSuccess,
+} from './credit-promo-sweep-monitor.js';
+import {
   createStaffInvite,
   listStaffInvites,
   revokeStaffInvite,
@@ -131,11 +135,16 @@ import {
   getCreditBalance,
   getCreditBalancesForUsers,
   isCreditsBillingEnabled,
+  isPromoLotsEnabled,
   listCreditLedger,
   precheckCredits,
   prechargeCredits,
+  promoExpireSweep,
   reserveCredits,
   releaseCreditReserve,
+  revokePromoLot,
+  summarizePromoCampaigns,
+  listPromoLots,
   validateActiveCreditReserve,
   CREDITS_EXCEEDED_CODE,
   CreditsExceededError,
@@ -151,6 +160,12 @@ import {
   signCreditsGatePayload,
 } from './credits-gate-hmac.js';
 import { parseCreditsBatchCsv, runCreditsBatchAdjust } from './credits-batch-adjust.js';
+import {
+  grantPromoToUser,
+  parsePromoExpiresAt,
+  parsePromoGrantCsv,
+  runPromoGrantBatch,
+} from './credits-promo-grant.js';
 import {
   insertUsageEvents,
   listUsageEventsForAdmin,
@@ -224,8 +239,24 @@ function startStoreInit() {
   });
   return storeInitPromise;
 }
+
+function startPromoExpireSweep() {
+  if (!isPromoLotsEnabled()) return;
+  const ms =
+    Number.isFinite(CREDITS_PROMO_SWEEP_MS) && CREDITS_PROMO_SWEEP_MS > 0 ? CREDITS_PROMO_SWEEP_MS : 900000;
+  setInterval(async () => {
+    try {
+      const result = await promoExpireSweep();
+      recordPromoSweepSuccess(result);
+    } catch (e) {
+      await recordPromoSweepFailure(e);
+    }
+  }, ms);
+  console.log(`[credit-promo-sweep] interval=${ms}ms`);
+}
 const COOKIE_NAME = 'ac_session';
 const SESSION_TTL_MS = Number(process.env.AUTH_SESSION_TTL_MS || 1000 * 60 * 60 * 24 * 7);
+const CREDITS_PROMO_SWEEP_MS = Number(process.env.CREDITS_PROMO_SWEEP_MS || 900000);
 const IS_PROD = String(process.env.NODE_ENV || '').toLowerCase() === 'production';
 const COOKIE_SAME_SITE = String(process.env.AUTH_COOKIE_SAMESITE || (IS_PROD ? 'none' : 'lax')).trim().toLowerCase();
 const COOKIE_SECURE = String(process.env.AUTH_COOKIE_SECURE || (IS_PROD ? 'true' : 'false')).trim().toLowerCase() === 'true';
@@ -1809,6 +1840,199 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (path === '/api/admin/credits/promo-summary' && req.method === 'GET') {
+      const staff = await requirePermission(req, res, PERMISSIONS.CREDITS_WRITE);
+      if (!staff) return;
+      if (!isPromoLotsEnabled()) {
+        json(res, 200, { enabled: false, campaigns: [] });
+        return;
+      }
+      const campaigns = await summarizePromoCampaigns();
+      json(res, 200, { enabled: true, campaigns });
+      return;
+    }
+
+    if (path === '/api/admin/credits/promo-lots' && req.method === 'GET') {
+      const staff = await requirePermission(req, res, PERMISSIONS.CREDITS_WRITE);
+      if (!staff) return;
+      if (!isPromoLotsEnabled()) {
+        json(res, 200, { enabled: false, lots: [], limit: 0 });
+        return;
+      }
+      const u = new URL(req.url || '/', 'http://local');
+      const lots = await listPromoLots({
+        campaignId: u.searchParams.get('campaignId') || '',
+        userId: u.searchParams.get('userId') || '',
+        status: u.searchParams.get('status') || '',
+        limit: u.searchParams.get('limit') || 50,
+      });
+      const userIds = [...new Set(lots.map((lot) => lot.userId).filter(Boolean))];
+      const usernameById = {};
+      for (const id of userIds) {
+        const row = await findUserById(id);
+        if (row?.username) usernameById[id] = row.username;
+      }
+      json(res, 200, {
+        enabled: true,
+        limit: lots.length,
+        lots: lots.map((lot) => ({ ...lot, username: usernameById[lot.userId] || '' })),
+      });
+      return;
+    }
+
+    if (path === '/api/admin/credits/promo-grant' && req.method === 'POST') {
+      const staff = await requirePermission(req, res, PERMISSIONS.CREDITS_WRITE);
+      if (!staff) return;
+      if (!isPromoLotsEnabled()) {
+        json(res, 400, { error: '促销积分 lot 未启用' });
+        return;
+      }
+      const actor = staff.user;
+      const body = await readBody(req);
+      let targetUserId = String(body?.userId || '').trim() || null;
+      const username = String(body?.username || '').trim();
+      if (!targetUserId && username) {
+        const userRow = await findUserByLogin(username);
+        if (!userRow) {
+          json(res, 404, { error: '用户不存在' });
+          return;
+        }
+        targetUserId = userRow.id;
+      }
+      if (!targetUserId) {
+        json(res, 400, { error: '请提供 userId 或 username' });
+        return;
+      }
+      const amount = body?.amount ?? body?.delta;
+      const note = body?.note;
+      const campaignId = body?.campaignId;
+      const idempotencyKey = String(req.headers['idempotency-key'] || body?.idempotencyKey || '').trim() || null;
+      try {
+        const result = await grantPromoToUser(targetUserId, amount, {
+          note,
+          expiresAt: body?.expiresAt,
+          campaignId,
+          createdBy: actor.id,
+          idempotencyKey,
+        });
+        await createAuditLog({
+          actorUserId: actor.id,
+          actorIdentifier: actor.username,
+          action: 'admin.promo_credits_grant',
+          targetUserId,
+          meta: {
+            amount: Math.floor(Number(amount)),
+            balanceAfter: result.balanceAfter,
+            note: String(note || '').trim(),
+            expiresAt: parsePromoExpiresAt(body?.expiresAt),
+            campaignId: String(campaignId || 'default').trim() || 'default',
+            lotId: result.lotId,
+            ledgerId: result.ledgerId,
+            duplicate: !!result.duplicate,
+          },
+          ip: getClientIp(req),
+          userAgent: req.headers['user-agent'],
+        });
+        json(res, 200, { ok: true, ...result, balance: await getCreditBalance(targetUserId) });
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        json(res, 400, { error: message });
+      }
+      return;
+    }
+
+    if (path === '/api/admin/credits/promo-batch' && req.method === 'POST') {
+      const staff = await requirePermission(req, res, PERMISSIONS.CREDITS_WRITE);
+      if (!staff) return;
+      if (!isPromoLotsEnabled()) {
+        json(res, 400, { error: '促销积分 lot 未启用' });
+        return;
+      }
+      const actor = staff.user;
+      const body = await readBody(req);
+      const dryRun = Boolean(body?.dryRun);
+      let rows = Array.isArray(body?.rows) ? body.rows : null;
+      if (!rows && typeof body?.csv === 'string') {
+        rows = parsePromoGrantCsv(body.csv);
+      }
+      if (!rows?.length) {
+        json(res, 400, { error: '请提供 rows 或 csv' });
+        return;
+      }
+      if (rows.length > 500) {
+        json(res, 400, { error: '单次最多 500 行' });
+        return;
+      }
+      const result = await runPromoGrantBatch(rows, { dryRun, createdBy: actor.id });
+      if (!dryRun) {
+        await createAuditLog({
+          actorUserId: actor.id,
+          actorIdentifier: actor.username,
+          action: 'admin.promo_credits_batch',
+          targetUserId: null,
+          meta: {
+            successCount: result.successCount,
+            failed: result.failed,
+            skipped: result.skipped,
+            rowCount: rows.length,
+          },
+          ip: getClientIp(req),
+          userAgent: req.headers['user-agent'],
+        });
+      }
+      json(res, 200, { ok: true, dryRun, ...result });
+      return;
+    }
+
+    if (path.startsWith('/api/admin/credits/promo-lots/') && req.method === 'POST') {
+      const staff = await requirePermission(req, res, PERMISSIONS.CREDITS_WRITE);
+      if (!staff) return;
+      if (!isPromoLotsEnabled()) {
+        json(res, 400, { error: '促销积分 lot 未启用' });
+        return;
+      }
+      const actor = staff.user;
+      const rest = path.slice('/api/admin/credits/promo-lots/'.length);
+      const segments = rest.split('/').filter(Boolean);
+      const lotId = decodeURIComponent(segments[0] || '');
+      if (!lotId || lotId.includes('..') || segments.length !== 2 || segments[1] !== 'revoke') {
+        json(res, 404, { error: 'Not found' });
+        return;
+      }
+      const body = await readBody(req);
+      const note = body?.note;
+      try {
+        const result = await revokePromoLot(lotId, {
+          note,
+          createdBy: actor.id,
+        });
+        await createAuditLog({
+          actorUserId: actor.id,
+          actorIdentifier: actor.username,
+          action: 'admin.promo_credits_revoke',
+          targetUserId: result.userId || null,
+          meta: {
+            lotId,
+            note: String(note || '').trim(),
+            balanceAfter: result.balanceAfter,
+            revokedAmount: result.revokedAmount,
+            duplicate: !!result.duplicate,
+          },
+          ip: getClientIp(req),
+          userAgent: req.headers['user-agent'],
+        });
+        json(res, 200, {
+          ok: true,
+          ...result,
+          balance: result.userId ? await getCreditBalance(result.userId) : undefined,
+        });
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        json(res, 400, { error: message });
+      }
+      return;
+    }
+
     if (path === '/api/admin/credits/batch-adjust' && req.method === 'POST') {
       const staff = await requirePermission(req, res, PERMISSIONS.CREDITS_WRITE);
       if (!staff) return;
@@ -1869,7 +2093,41 @@ const server = http.createServer(async (req, res) => {
         const delta = body?.delta;
         const note = body?.note;
         const idempotencyKey = String(req.headers['idempotency-key'] || body?.idempotencyKey || '').trim() || null;
+        const expiresAtRaw = body?.expiresAt;
+        const campaignId = body?.campaignId;
+        const d = Math.floor(Number(delta));
         try {
+          if (expiresAtRaw && d > 0 && isPromoLotsEnabled()) {
+            const result = await grantPromoToUser(targetId, d, {
+              note,
+              expiresAt: expiresAtRaw,
+              campaignId,
+              createdBy: actor.id,
+              idempotencyKey,
+            });
+            await createAuditLog({
+              actorUserId: actor.id,
+              actorIdentifier: actor.username,
+              action: 'admin.promo_credits_grant',
+              targetUserId: targetId,
+              meta: {
+                amount: d,
+                balanceAfter: result.balanceAfter,
+                note: String(note || '').trim(),
+                expiresAt: parsePromoExpiresAt(expiresAtRaw),
+                campaignId: String(campaignId || 'default').trim() || 'default',
+                lotId: result.lotId,
+                ledgerId: result.ledgerId,
+                duplicate: !!result.duplicate,
+                via: 'users.credits.adjust',
+              },
+              ip: getClientIp(req),
+              userAgent: req.headers['user-agent'],
+            });
+            json(res, 200, { ok: true, ...result, balance: await getCreditBalance(targetId) });
+            return;
+          }
+
           const result = await adjustCredits(targetId, delta, {
             note,
             createdBy: actor.id,
@@ -3099,8 +3357,9 @@ server.listen(PORT, BIND_HOST, () => {
   console.log(`[auth-api] http://${BIND_HOST}:${PORT}${isR2Configured() ? ' (R2 /api/r2 enabled)' : ''}`);
   console.log(`[bridge-relay] ws://${BIND_HOST}:${PORT}/ws/bridge auth=${BRIDGE_REQUIRE_AUTH ? 'required' : 'disabled'}`);
   console.log(
-    `[billing] usage=${isUsageBillingEnabled() ? 'on' : 'off'} credits=${isCreditsBillingEnabled() ? 'on' : 'off'}`
+    `[billing] usage=${isUsageBillingEnabled() ? 'on' : 'off'} credits=${isCreditsBillingEnabled() ? 'on' : 'off'} promoLots=${isPromoLotsEnabled() ? 'on' : 'off'}`
   );
   startStoreInit();
+  startPromoExpireSweep();
 });
 

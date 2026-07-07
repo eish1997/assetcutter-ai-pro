@@ -234,6 +234,7 @@ const AdminAuditLogsPanel = React.lazy(() => import('./components/admin/AdminAud
 const AdminTaskEventsPanel = React.lazy(() => import('./components/admin/AdminTaskEventsPanel'));
 const AdminUsagePanel = React.lazy(() => import('./components/admin/AdminUsagePanel'));
 const AdminPriceCatalogPanel = React.lazy(() => import('./components/admin/AdminPriceCatalogPanel'));
+const AdminPromoCreditsPanel = React.lazy(() => import('./components/admin/AdminPromoCreditsPanel'));
 const AdminCapabilityPresetsPanel = React.lazy(() => import('./components/admin/AdminCapabilityPresetsPanel'));
 const AdminSystemStatusPanel = React.lazy(() => import('./components/admin/AdminSystemStatusPanel'));
 const AdminStaffInvitesPanel = React.lazy(() => import('./components/admin/AdminStaffInvitesPanel'));
@@ -425,6 +426,8 @@ const AdminAppShell: React.FC = () => {
             <AdminTaskEventsPanel />
           ) : pathname === '/admin/usage' ? (
             <AdminUsagePanel />
+          ) : pathname === '/admin/promo-credits' ? (
+            <AdminPromoCreditsPanel />
           ) : pathname === '/admin/price-catalog' ? (
             <AdminPriceCatalogPanel />
           ) : pathname === '/admin/capability-presets' ? (

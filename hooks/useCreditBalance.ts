@@ -4,6 +4,9 @@ import { CREDITS_BALANCE_CHANGED_EVENT } from '../shared/credits';
 
 export type CreditBalanceState = {
   balance: number | null;
+  promoRemaining: number | null;
+  permanentBalance: number | null;
+  nearestPromoExpiry: string | null;
   loading: boolean;
   reload: () => Promise<void>;
 };
@@ -11,11 +14,17 @@ export type CreditBalanceState = {
 /** 登录用户 AI 积分余额；监听 focus 与任务完成后的刷新事件 */
 export function useCreditBalance(userId: string | null | undefined): CreditBalanceState {
   const [balance, setBalance] = useState<number | null>(null);
+  const [promoRemaining, setPromoRemaining] = useState<number | null>(null);
+  const [permanentBalance, setPermanentBalance] = useState<number | null>(null);
+  const [nearestPromoExpiry, setNearestPromoExpiry] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
   const reload = useCallback(async () => {
     if (!userId) {
       setBalance(null);
+      setPromoRemaining(null);
+      setPermanentBalance(null);
+      setNearestPromoExpiry(null);
       setLoading(false);
       return;
     }
@@ -29,8 +38,14 @@ export function useCreditBalance(userId: string | null | undefined): CreditBalan
             ? res.balance
             : 0;
       setBalance(available);
+      setPromoRemaining(typeof res.promoRemaining === 'number' ? res.promoRemaining : null);
+      setPermanentBalance(typeof res.permanentBalance === 'number' ? res.permanentBalance : null);
+      setNearestPromoExpiry(res.nearestPromoExpiry ?? null);
     } catch {
       setBalance(null);
+      setPromoRemaining(null);
+      setPermanentBalance(null);
+      setNearestPromoExpiry(null);
     } finally {
       setLoading(false);
     }
@@ -39,6 +54,9 @@ export function useCreditBalance(userId: string | null | undefined): CreditBalan
   useEffect(() => {
     if (!userId) {
       setBalance(null);
+      setPromoRemaining(null);
+      setPermanentBalance(null);
+      setNearestPromoExpiry(null);
       setLoading(false);
       return;
     }
@@ -62,5 +80,5 @@ export function useCreditBalance(userId: string | null | undefined): CreditBalan
     };
   }, [userId, reload]);
 
-  return { balance, loading, reload };
+  return { balance, promoRemaining, permanentBalance, nearestPromoExpiry, loading, reload };
 }

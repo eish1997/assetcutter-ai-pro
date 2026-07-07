@@ -1,6 +1,8 @@
 import { isR2Configured } from './r2-storage-handlers.js';
 import { listCompanionArtifacts } from './companion-artifacts-store.js';
 import { resolveGeminiFairnessConfigSource } from './gemini-fairness-config-store.js';
+import { getPromoSweepMonitorState } from './credit-promo-sweep-monitor.js';
+import { isPromoLotsEnabled } from './credit-store.js';
 
 async function fetchGeminiProxyHealth() {
   const base = String(process.env.GEMINI_PROXY_HEALTH_URL || process.env.GEMINI_PROXY_BASE_URL || '')
@@ -57,6 +59,7 @@ export async function buildAdminSystemStatus() {
     services: {
       authApi: { ok: true, service: 'auth-api', port: Number(process.env.PORT || 9100) },
       geminiProxy,
+      promoSweep: getPromoSweepMonitorState(),
     },
     config: {
       flags: [
@@ -66,6 +69,7 @@ export async function buildAdminSystemStatus() {
         flag('AUTH_COOKIE_DOMAIN', process.env.AUTH_COOKIE_DOMAIN),
         flag('TRIPO_PROXY / HTTPS_PROXY', process.env.TRIPO_PROXY || process.env.HTTPS_PROXY),
         flag('SCRIPT_HUB API (DATABASE_URL for hub)', process.env.DATABASE_URL),
+        flag('CREDITS_PROMO_LOTS_ENABLED', isPromoLotsEnabled()),
       ],
       trialGeminiDailyLimit: Number(process.env.TRIAL_GEMINI_DAILY_LIMIT || 60),
       geminiFairnessConfigSource: resolveGeminiFairnessConfigSource(),

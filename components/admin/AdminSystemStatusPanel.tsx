@@ -111,6 +111,7 @@ const AdminSystemStatusPanel: React.FC = () => {
   }
 
   const gp = status?.services.geminiProxy;
+  const ps = status?.services.promoSweep;
 
   return (
     <div className="space-y-4">
@@ -155,6 +156,34 @@ const AdminSystemStatusPanel: React.FC = () => {
                       {gp.url}
                     </dd>
                   </div>
+                ) : null}
+                {ps?.enabled ? (
+                  <>
+                    <div className="flex justify-between gap-4 pt-2 border-t border-[#252528]">
+                      <dt className="text-gray-500 shrink-0">活动积分 sweep</dt>
+                      <dd className={statusClass(ps.lastOk !== false)}>
+                        {ps.lastOk === false
+                          ? `异常 · 连续失败 ${ps.consecutiveFailures}/${ps.alertThreshold}`
+                          : ps.lastRunAt
+                            ? '正常'
+                            : '尚未运行'}
+                      </dd>
+                    </div>
+                    {ps.lastRunAt ? (
+                      <div className="flex justify-between gap-4">
+                        <dt className="text-gray-500 shrink-0">最近 sweep</dt>
+                        <dd className="text-gray-500 text-right">{new Date(ps.lastRunAt).toLocaleString()}</dd>
+                      </div>
+                    ) : null}
+                    {ps.lastError ? (
+                      <div className="flex justify-between gap-4">
+                        <dt className="text-gray-500 shrink-0">最近错误</dt>
+                        <dd className="text-red-400/90 text-right truncate max-w-[60%]" title={ps.lastError}>
+                          {ps.lastError}
+                        </dd>
+                      </div>
+                    ) : null}
+                  </>
                 ) : null}
               </dl>
               {gp?.metrics ? (

@@ -20,7 +20,7 @@ import {
 import { CustomDropdown } from '../ui/CustomDropdown';
 import UsageEventsGroupedTable from '../usage/UsageEventsGroupedTable';
 import { fetchCreditBalance, fetchCreditLedger } from '../../services/creditsApi';
-import { fmtCredits, creditLedgerKindLabel, type CreditBalance, type CreditLedgerEntry } from '../../shared/credits';
+import { fmtCredits, creditLedgerKindLabel, fmtPromoExpiryDate, type CreditBalance, type CreditLedgerEntry } from '../../shared/credits';
 
 const PAGE_SIZE = 40;
 
@@ -316,11 +316,24 @@ const UsageSettingsPanel: React.FC<{
               ) : null}
               <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 px-4 py-3">
                 <p className="text-[10px] text-gray-500">剩余 AI 积分</p>
-                <p className="text-xl font-semibold text-amber-400/95 mt-0.5">{fmtCredits(creditBalance.balance)}</p>
+                <p className="text-xl font-semibold text-amber-400/95 mt-0.5">
+                  {fmtCredits(creditBalance.available ?? creditBalance.balance)}
+                </p>
+                {creditBalance.promoRemaining != null && creditBalance.promoRemaining > 0 ? (
+                  <p className="text-[10px] text-amber-200/75 mt-1 leading-relaxed">
+                    含活动积分 {fmtCredits(creditBalance.promoRemaining)}
+                    {creditBalance.nearestPromoExpiry
+                      ? `，最早一批 ${fmtPromoExpiryDate(creditBalance.nearestPromoExpiry)} 到期`
+                      : ''}
+                    {creditBalance.permanentBalance != null && creditBalance.permanentBalance > 0
+                      ? ` · 永久 ${fmtCredits(creditBalance.permanentBalance)}`
+                      : ''}
+                  </p>
+                ) : null}
                 <p className="text-[10px] text-gray-600 mt-1">
                   累计消耗 {fmtCredits(creditBalance.lifetimeSpent)}
                   {last7dCredits != null ? ` · 近 7 天 ${fmtCredits(last7dCredits)}` : ''}
-                  {' · 额度由管理员发放'}
+                  {' · 活动积分到期后自动清零，永久积分由管理员发放'}
                 </p>
               </div>
             </>

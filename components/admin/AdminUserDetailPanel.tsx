@@ -9,9 +9,13 @@ import {
   updateAdminUser,
   adjustAdminUserCredits,
   fetchAdminUserCreditLedger,
+  fetchAdminPromoLots,
+  grantAdminPromoCredits,
+  revokeAdminPromoLot,
   type AdminUserCredits,
   type AdminUserLastLogin,
   type AdminUserSession,
+  type AdminPromoLotRow,
   type TaskExecutionEvent,
 } from '../../services/adminClient';
 import { fetchAdminRoles, type AdminRoleRow } from '../../services/adminRolesClient';
@@ -29,9 +33,15 @@ import {
   taskEventLevelDot,
   taskEventSummary,
 } from '../../services/taskEventSummary';
-import { fmtCredits, creditLedgerKindLabel, type CreditLedgerEntry } from '../../shared/credits';
+import { fmtCredits, creditLedgerKindLabel, fmtPromoExpiryDate, type CreditLedgerEntry } from '../../shared/credits';
 import { CustomDropdown } from '../ui/CustomDropdown';
 import { useAdminStaff } from './AdminStaffContext';
+import {
+  PROMO_EXPIRY_PRESETS,
+  defaultPromoCustomExpiryLocal,
+  previewPromoExpiresAt,
+  resolvePromoExpiresAt,
+} from './promoGrantFormHelpers';
 
 type DetailTab = 'audit' | 'tasks';
 
@@ -78,10 +88,16 @@ const AdminUserDetailPanel: React.FC<Props> = ({ userId }) => {
   const [credits, setCredits] = React.useState<AdminUserCredits | null>(null);
   const [creditDelta, setCreditDelta] = React.useState('');
   const [creditNote, setCreditNote] = React.useState('');
-  const [creditModal, setCreditModal] = React.useState<'grant' | 'deduct' | null>(null);
+  const [creditModal, setCreditModal] = React.useState<'grant' | 'deduct' | 'promo' | null>(null);
   const [creditLedger, setCreditLedger] = React.useState<CreditLedgerEntry[]>([]);
   const [creditLedgerCursor, setCreditLedgerCursor] = React.useState<string | null>(null);
   const [creditLedgerLoading, setCreditLedgerLoading] = React.useState(false);
+  const [promoLots, setPromoLots] = React.useState<AdminPromoLotRow[]>([]);
+  const [promoLotsLoading, setPromoLotsLoading] = React.useState(false);
+  const [promoCampaignId, setPromoCampaignId] = React.useState('');
+  const [promoExpiryPreset, setPromoExpiryPreset] = React.useState('+30d');
+  const [promoCustomExpiry, setPromoCustomExpiry] = React.useState(defaultPromoCustomExpiryLocal);
+  const [revokingPromoLotId, setRevokingPromoLotId] = React.useState('');
 
   const loadCreditLedger = React.useCallback(
     async (opts?: { append?: boolean; cursor?: string | null }) => {
@@ -140,6 +156,23 @@ const AdminUserDetailPanel: React.FC<Props> = ({ userId }) => {
   React.useEffect(() => {
     void loadCreditLedger();
   }, [loadCreditLedger]);
+
+  const loadPromoLots = React.useCallback(async () => {
+    if (!userId) return;
+    setPromoLotsLoading(true);
+    try {
+      const res = await fetchAdminPromoLots({ userId, limit: 20 });
+      setPromoLots(res.enabled ? res.lots : []);
+    } catch {
+      setPromoLots([]);
+    } finally {
+      setPromoLotsLoading(false);
+    }
+  }, [userId]);
+
+  React.useEffect(() => {
+    void loadPromoLots();
+  }, [loadPromoLots]);
 
   React.useEffect(() => {
     if (!canRoleWrite) return;
@@ -269,7 +302,7 @@ const AdminUserDetailPanel: React.FC<Props> = ({ userId }) => {
   };
 
   const handleCreditAdjust = async () => {
-    if (!user || !creditModal) return;
+    if (!user || !creditModal || creditModal === 'promo') return;
     if (blockIfRolePreview(isRolePreview)) return;
     const n = Math.floor(Number(creditDelta));
     if (!Number.isFinite(n) || n < 1) {
@@ -301,6 +334,65 @@ const AdminUserDetailPanel: React.FC<Props> = ({ userId }) => {
       setSaving(false);
     }
   };
+
+  const handlePromoGrant = async () => {
+    if (!user || creditModal !== 'promo') return;
+    if (blockIfRolePreview(isRolePreview)) return;
+    const n = Math.floor(Number(creditDelta));
+    if (!Number.isFinite(n) || n < 1) {
+      setError('请输入至少 1 的整数');
+      return;
+    }
+    const note = creditNote.trim();
+    if (!note) {
+      setError('备注必填');
+      return;
+    }
+    setSaving(true);
+    setError('');
+    try {
+      const expiresAt = resolvePromoExpiresAt(promoExpiryPreset, promoCustomExpiry);
+      const res = await grantAdminPromoCredits({
+        userId: user.id,
+        amount: n,
+        note,
+        expiresAt,
+        campaignId: promoCampaignId.trim() || 'default',
+      });
+      if (res.balance) setCredits(res.balance);
+      else if (credits) setCredits({ ...credits, balance: res.balanceAfter });
+      setCreditModal(null);
+      setCreditDelta('');
+      setCreditNote('');
+      setPromoCampaignId('');
+      void loadCreditLedger();
+      void loadPromoLots();
+      void loadUser();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '活动积分发放失败');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleRevokePromoLot = async (lot: AdminPromoLotRow) => {
+    if (blockIfRolePreview(isRolePreview)) return;
+    if (!window.confirm(`撤销活动积分 ${fmtCredits(lot.remaining)}？`)) return;
+    setRevokingPromoLotId(lot.id);
+    setError('');
+    try {
+      await revokeAdminPromoLot(lot.id, '管理员撤销');
+      void loadUser();
+      void loadPromoLots();
+      void loadCreditLedger();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '撤销失败');
+    } finally {
+      setRevokingPromoLotId('');
+    }
+  };
+
+  const promoExpiryPreview = previewPromoExpiresAt(promoExpiryPreset, promoCustomExpiry);
 
   if (loading && !user) {
     return <div className="rounded-2xl border border-[#2e2e32] bg-[#121214] p-6 text-[11px] text-gray-400">加载用户详情…</div>;
@@ -400,6 +492,14 @@ const AdminUserDetailPanel: React.FC<Props> = ({ userId }) => {
                 <p className="mt-2 text-[11px] text-gray-200">
                   余额 {fmtCredits(credits.balance)} · 累计消耗 {fmtCredits(credits.lifetimeSpent)}
                 </p>
+                {credits.promoRemaining != null && credits.promoRemaining > 0 ? (
+                  <p className="mt-1 text-[10px] text-amber-200/75">
+                    活动 {fmtCredits(credits.promoRemaining)}
+                    {credits.nearestPromoExpiry
+                      ? ` · ${fmtPromoExpiryDate(credits.nearestPromoExpiry)} 到期`
+                      : ''}
+                  </p>
+                ) : null}
                 <p className="mt-1 text-[10px] text-gray-500">累计发放 {fmtCredits(credits.lifetimeGranted)}</p>
               </>
             ) : (
@@ -454,14 +554,23 @@ const AdminUserDetailPanel: React.FC<Props> = ({ userId }) => {
 
       <div id="admin-user-credits" className="scroll-mt-4 rounded-2xl border border-[#2e2e32] bg-[#121214] p-4 space-y-3">
         <h3 className="text-[11px] font-semibold text-gray-300">AI 积分</h3>
-        <div className="grid gap-2 sm:grid-cols-3 text-[11px]">
+        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4 text-[11px]">
           <div>
             <p className="text-[10px] text-gray-500">当前余额</p>
             <p className="mt-1 text-lg font-semibold text-amber-400/95">{fmtCredits(credits?.balance ?? 0)}</p>
           </div>
           <div>
-            <p className="text-[10px] text-gray-500">累计发放</p>
-            <p className="mt-1 text-white">{fmtCredits(credits?.lifetimeGranted ?? 0)}</p>
+            <p className="text-[10px] text-gray-500">活动积分</p>
+            <p className="mt-1 text-white">{fmtCredits(credits?.promoRemaining ?? 0)}</p>
+            {credits?.nearestPromoExpiry ? (
+              <p className="text-[10px] text-gray-500 mt-0.5">
+                最近到期 {fmtPromoExpiryDate(credits.nearestPromoExpiry)}
+              </p>
+            ) : null}
+          </div>
+          <div>
+            <p className="text-[10px] text-gray-500">永久积分</p>
+            <p className="mt-1 text-white">{fmtCredits(credits?.permanentBalance ?? credits?.balance ?? 0)}</p>
           </div>
           <div>
             <p className="text-[10px] text-gray-500">累计消耗</p>
@@ -480,7 +589,22 @@ const AdminUserDetailPanel: React.FC<Props> = ({ userId }) => {
               }}
               className="px-3 py-2 rounded-xl border border-[#3b6fb8] bg-[#1e3a5f] text-[10px] text-blue-200 disabled:opacity-40"
             >
-              发放积分
+              发放永久积分
+            </button>
+            <button
+              type="button"
+              disabled={saving}
+              onClick={() => {
+                setCreditModal('promo');
+                setCreditDelta('');
+                setCreditNote('');
+                setPromoCampaignId('');
+                setPromoExpiryPreset('+30d');
+                setPromoCustomExpiry(defaultPromoCustomExpiryLocal());
+              }}
+              className="px-3 py-2 rounded-xl border border-amber-700/40 bg-amber-950/30 text-[10px] text-amber-200 disabled:opacity-40"
+            >
+              发放活动积分
             </button>
             <button
               type="button"
@@ -503,7 +627,13 @@ const AdminUserDetailPanel: React.FC<Props> = ({ userId }) => {
         ) : null}
         {creditModal ? (
           <div className="rounded-xl border border-[#343438] bg-[#0f0f0f] p-3 space-y-2">
-            <p className="text-[10px] text-gray-400">{creditModal === 'grant' ? '发放积分' : '扣回积分'}</p>
+            <p className="text-[10px] text-gray-400">
+              {creditModal === 'grant'
+                ? '发放永久积分'
+                : creditModal === 'promo'
+                  ? '发放活动积分（限时）'
+                  : '扣回积分'}
+            </p>
             <input
               type="number"
               min={1}
@@ -519,11 +649,41 @@ const AdminUserDetailPanel: React.FC<Props> = ({ userId }) => {
               placeholder="备注（必填）"
               className="w-full rounded-xl border border-[#343438] bg-[#1c1c22] px-3 py-2 text-[11px] text-white outline-none focus:border-[#3b82f6]"
             />
+            {creditModal === 'promo' ? (
+              <>
+                <input
+                  type="text"
+                  value={promoCampaignId}
+                  onChange={(e) => setPromoCampaignId(e.target.value)}
+                  placeholder="活动 ID（可选，默认 default）"
+                  className="w-full rounded-xl border border-[#343438] bg-[#1c1c22] px-3 py-2 text-[11px] text-white outline-none focus:border-[#3b82f6]"
+                />
+                <CustomDropdown
+                  value={promoExpiryPreset}
+                  options={[...PROMO_EXPIRY_PRESETS]}
+                  onChange={(v) => setPromoExpiryPreset(v)}
+                  ariaLabel="活动积分有效期"
+                />
+                {promoExpiryPreset === 'custom' ? (
+                  <input
+                    type="datetime-local"
+                    value={promoCustomExpiry}
+                    onChange={(e) => setPromoCustomExpiry(e.target.value)}
+                    className="w-full rounded-xl border border-[#343438] bg-[#1c1c22] px-3 py-2 text-[11px] text-white outline-none focus:border-[#3b82f6]"
+                  />
+                ) : null}
+                {promoExpiryPreview ? (
+                  <p className="text-[10px] text-gray-500">预计到期：{promoExpiryPreview}</p>
+                ) : null}
+              </>
+            ) : null}
             <div className="flex gap-2">
               <button
                 type="button"
                 disabled={saving}
-                onClick={() => void handleCreditAdjust()}
+                onClick={() =>
+                  void (creditModal === 'promo' ? handlePromoGrant() : handleCreditAdjust())
+                }
                 className="px-3 py-2 rounded-xl border border-[#3b6fb8] bg-[#1e3a5f] text-[10px] text-blue-200 disabled:opacity-40"
               >
                 确认
@@ -539,6 +699,57 @@ const AdminUserDetailPanel: React.FC<Props> = ({ userId }) => {
             </div>
           </div>
         ) : null}
+        <div className="space-y-2 pt-1">
+          <div className="flex items-center justify-between gap-2">
+            <h4 className="text-[10px] font-semibold uppercase tracking-wider text-gray-500">活动积分桶</h4>
+            {promoLotsLoading ? <span className="text-[10px] text-gray-600">加载中…</span> : null}
+          </div>
+          {promoLots.length ? (
+            <div className="overflow-x-auto rounded-xl border border-[#252528]">
+              <table className="w-full text-[10px]">
+                <thead className="bg-[#151518] text-gray-500">
+                  <tr>
+                    <th className="text-left px-3 py-2 font-normal">活动</th>
+                    <th className="text-right px-3 py-2 font-normal">剩余</th>
+                    <th className="text-left px-3 py-2 font-normal">到期</th>
+                    <th className="text-left px-3 py-2 font-normal">状态</th>
+                    {canCreditsWrite ? <th className="text-right px-3 py-2 font-normal">操作</th> : null}
+                  </tr>
+                </thead>
+                <tbody>
+                  {promoLots.map((lot) => (
+                    <tr key={lot.id} className="border-t border-[#252528]">
+                      <td className="px-3 py-2 text-gray-400 font-mono">{lot.campaignId}</td>
+                      <td className="px-3 py-2 text-right text-emerald-400/90">{fmtCredits(lot.remaining)}</td>
+                      <td className="px-3 py-2 text-gray-400">
+                        {lot.expiresAt ? fmtPromoExpiryDate(lot.expiresAt) : '—'}
+                      </td>
+                      <td className="px-3 py-2 text-gray-500">{lot.status}</td>
+                      {canCreditsWrite ? (
+                        <td className="px-3 py-2 text-right">
+                          {lot.status === 'active' && lot.remaining > 0 ? (
+                            <button
+                              type="button"
+                              disabled={revokingPromoLotId === lot.id}
+                              onClick={() => void handleRevokePromoLot(lot)}
+                              className="text-rose-300/90 hover:text-rose-200 disabled:opacity-50"
+                            >
+                              {revokingPromoLotId === lot.id ? '…' : '撤销'}
+                            </button>
+                          ) : (
+                            <span className="text-gray-600">—</span>
+                          )}
+                        </td>
+                      ) : null}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <p className="text-[10px] text-gray-600">暂无活动积分桶</p>
+          )}
+        </div>
         <div className="space-y-2 pt-1">
           <div className="flex items-center justify-between gap-2">
             <h4 className="text-[10px] font-semibold uppercase tracking-wider text-gray-500">积分流水</h4>
