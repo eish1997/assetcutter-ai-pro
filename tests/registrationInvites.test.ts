@@ -40,20 +40,14 @@ describe('registration-invites helpers', () => {
 
   it('reads registration mode from env', () => {
     const prevMode = process.env.REGISTRATION_MODE;
-    const prevNode = process.env.NODE_ENV;
+    delete process.env.REGISTRATION_MODE;
+    expect(getRegistrationMode()).toBe('invite_only');
     process.env.REGISTRATION_MODE = 'invite_only';
     expect(getRegistrationMode()).toBe('invite_only');
     process.env.REGISTRATION_MODE = 'open';
     expect(getRegistrationMode()).toBe('open');
-    delete process.env.REGISTRATION_MODE;
-    process.env.NODE_ENV = 'production';
-    expect(getRegistrationMode()).toBe('invite_only');
-    process.env.NODE_ENV = 'development';
-    expect(getRegistrationMode()).toBe('open');
     if (prevMode === undefined) delete process.env.REGISTRATION_MODE;
     else process.env.REGISTRATION_MODE = prevMode;
-    if (prevNode === undefined) delete process.env.NODE_ENV;
-    else process.env.NODE_ENV = prevNode;
   });
 });
 

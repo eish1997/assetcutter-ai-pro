@@ -11,11 +11,9 @@ const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 
 export function getRegistrationMode() {
   const raw = String(process.env.REGISTRATION_MODE || '').trim().toLowerCase();
-  if (raw === 'invite_only') return 'invite_only';
   if (raw === 'open') return 'open';
-  /** 生产默认邀请制；避免 Render Blueprint 未 Sync 时仍开放注册 */
-  if (String(process.env.NODE_ENV || '').toLowerCase() === 'production') return 'invite_only';
-  return 'open';
+  /** 默认邀请制；仅显式 REGISTRATION_MODE=open 时开放注册 */
+  return 'invite_only';
 }
 
 /** 去掉空格/连字符并大写，用于 lookup */

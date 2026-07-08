@@ -51,8 +51,7 @@ const AuthGate: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [submitting, setSubmitting] = React.useState(false);
 
   const inviteRequired = policy?.inviteRequired === true;
-  const showRegistrationInviteField =
-    mode === 'register' && !initialStaffInvite && (inviteRequired || Boolean(inviteCode.trim()));
+  const showRegistrationInviteField = mode === 'register' && !initialStaffInvite;
 
   React.useEffect(() => {
     let cancelled = false;
@@ -61,7 +60,8 @@ const AuthGate: React.FC<{ children: React.ReactNode }> = ({ children }) => {
         if (!cancelled) setPolicy(p);
       })
       .catch(() => {
-        if (!cancelled) setPolicy({ mode: 'open', inviteRequired: false });
+        /** 策略拉取失败时按邀请制处理，避免误开放注册 */
+        if (!cancelled) setPolicy({ mode: 'invite_only', inviteRequired: true });
       });
     return () => {
       cancelled = true;
