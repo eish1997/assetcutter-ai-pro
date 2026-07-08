@@ -18,11 +18,17 @@ import {
   labelForTextModelRegistryId,
   shortLabelForTextModelRegistryId,
 } from '../services/modelRegistry/textModels';
-import { WORKFLOW_QUICK_COMPOSE_BAR_SHELL } from './workflow/workflowSectionUiConstants';
+import {
+  WORKFLOW_QUICK_COMPOSE_BAR_SHELL,
+  WORKFLOW_QUICK_COMPOSE_DOCKED_WIDTH_CLASS,
+} from './workflow/workflowSectionUiConstants';
 import QuickComposeDropTray from './workflow/QuickComposeDropTray';
 import QuickComposeMentionField, {
   type QuickComposeMentionFieldHandle,
 } from './workflow/QuickComposeMentionField';
+import QuickComposeChatDock, {
+  type QuickComposeChatDockProps,
+} from './workflow/quickComposeChat/QuickComposeChatDock';
 import type {
   QuickComposeDropSlot,
   QuickComposeDropZone,
@@ -100,7 +106,9 @@ export type WorkspaceQuickComposeBarProps = {
   onReorderDropSlot?: (assetId: string, zone: QuickComposeDropZone, toIndex: number) => void;
   /** 参考图（@ 引用）数量上限 */
   maxMentions: number;
-  /** 积分不足等：禁用提交按钮与输入 */
+  /** 积分不足等：禁用 composer 输入（不含空 draft） */
+  inputDisabled?: boolean;
+  /** 积分不足、空 draft、或助手进行中：禁用发送 */
   submitDisabled?: boolean;
   submitDisabledReason?: string;
   /** 平台代付路径：提交按钮旁展示预估最低消耗（单行文案，优先用 creditsEstimateSteps） */
@@ -126,9 +134,25 @@ export type WorkspaceQuickComposeBarProps = {
   pasteAssetRefZone?: QuickComposeDropZone;
   /** 仅 lightbox：隐藏主图区（当前画面即主图） */
   hideMainDropZone?: boolean;
+  /** 展开态：portal 到外层右侧挂载点（工作区 / 大图左右分栏） */
+  expandedDockHostRef?: React.RefObject<HTMLDivElement | null>;
+  /** 内嵌展开态变化（供外层收窄主区域） */
+  onInputExpandedChange?: (expanded: boolean) => void;
   promptCards: WorkspaceQuickComposePromptCard[];
   onRemovePromptCard: (key: string) => void;
+  /**
+   * 展开 dock 且提供时：右侧内嵌区渲染 `QuickComposeChatDock`（对话线程 + composer），
+   * 替代 mention 大输入区；未提供时保持原有 dock 布局（fallback）。
+   */
+  chatDockProps?: Pick<
+    QuickComposeChatDockProps,
+    'messages' | 'onRetryMessage' | 'threadEmptyTitle' | 'threadEmptyHint' | 'minimizeDisabled' | 'className'
+  >;
 };
+
+export type WorkspaceQuickComposeChatDockProps = NonNullable<
+  WorkspaceQuickComposeBarProps['chatDockProps']
+>;
 
 /** 参考常见生图产品：主比例一行 */
 const QC_ASPECT_PRIMARY = ['16:9', '4:3', '1:1', '3:4', '9:16'] as const;
@@ -181,6 +205,7 @@ export default function WorkspaceQuickComposeBar({
   onReorderDropSlot,
   maxMentions,
   onSubmit,
+  inputDisabled: inputDisabledProp,
   submitDisabled = false,
   submitDisabledReason,
   submitEstimateLabel,
@@ -195,8 +220,11 @@ export default function WorkspaceQuickComposeBar({
   onPasteAssetRefs,
   pasteAssetRefZone = 'main',
   hideMainDropZone = false,
+  expandedDockHostRef,
+  onInputExpandedChange,
   promptCards,
   onRemovePromptCard,
+  chatDockProps,
 }: WorkspaceQuickComposeBarProps) {
   const mentions = useMemo(() => mentionsFromSegments(segments), [segments]);
   const mentionFieldRef = useRef<QuickComposeMentionFieldHandle | null>(null);
@@ -266,6 +294,26 @@ export default function WorkspaceQuickComposeBar({
   }, [inputExpanded]);
 
   const isLightbox = placement === 'lightbox';
+  const isLightboxInlineChatExpanded = inputExpanded && isLightbox && Boolean(chatDockProps);
+  const isWorkspaceDockedExpanded =
+    inputExpanded && expandedDockHostRef?.current != null && !isLightbox;
+
+  useLayoutEffect(() => {
+    onInputExpandedChange?.(inputExpanded);
+  }, [inputExpanded, onInputExpandedChange]);
+
+  const [dockHostRev, setDockHostRev] = useState(0);
+  useLayoutEffect(() => {
+    if (!isWorkspaceDockedExpanded) return;
+    if (!expandedDockHostRef?.current) return;
+    setDockHostRev((n) => n + 1);
+  }, [isWorkspaceDockedExpanded, expandedDockHostRef]);
+
+  const collapseInputExpanded = useCallback(() => {
+    const r = barRef.current?.getBoundingClientRect();
+    collapseAnchorBottomRef.current = r != null && r.height > 0 ? r.bottom : null;
+    setInputExpanded(false);
+  }, []);
 
   const modeLockedByInputPresets = inputPresetsActive;
   const modeChipCls = (active: boolean) =>
@@ -475,10 +523,10 @@ export default function WorkspaceQuickComposeBar({
   }, [position, resetToDefaultPosition, visible, placement]);
 
   useLayoutEffect(() => {
-    if (!visible || placement !== 'lightbox') return;
+    if (!visible || placement !== 'lightbox' || isWorkspaceDockedExpanded || isLightboxInlineChatExpanded) return;
     if (lightboxAnchorClient) return;
     resetToDefaultPosition();
-  }, [visible, placement, lightboxAnchorClient, lightboxLayoutResetNonce, resetToDefaultPosition]);
+  }, [visible, placement, lightboxAnchorClient, lightboxLayoutResetNonce, resetToDefaultPosition, isWorkspaceDockedExpanded, isLightboxInlineChatExpanded]);
 
   const lightboxAnchorRef = useRef(lightboxAnchorClient);
   lightboxAnchorRef.current = lightboxAnchorClient;
@@ -528,7 +576,7 @@ export default function WorkspaceQuickComposeBar({
 
   const syncExpandedBarViewport = useCallback(() => {
     const el = barRef.current;
-    if (!el || !inputExpanded) {
+    if (!el || !inputExpanded || isWorkspaceDockedExpanded || isLightboxInlineChatExpanded) {
       setComposeTextMaxHeightPx(undefined);
       return;
     }
@@ -571,7 +619,7 @@ export default function WorkspaceQuickComposeBar({
       }
       return clamped;
     });
-  }, [inputExpanded, placement, applyLightboxBarToAnchor, clampPositionToViewport]);
+  }, [inputExpanded, placement, applyLightboxBarToAnchor, clampPositionToViewport, isWorkspaceDockedExpanded, isLightboxInlineChatExpanded]);
 
   useEffect(() => {
     if (!dragging) return;
@@ -660,7 +708,7 @@ export default function WorkspaceQuickComposeBar({
   }, [settingsOpen]);
 
   useLayoutEffect(() => {
-    if (!visible) return;
+    if (!visible || isWorkspaceDockedExpanded || isLightboxInlineChatExpanded) return;
     const el = barRef.current;
     if (!el) return;
     const vw = window.innerWidth;
@@ -699,10 +747,10 @@ export default function WorkspaceQuickComposeBar({
     }
 
     clampPositionToViewport();
-  }, [inputExpanded, visible, clampPositionToViewport, syncExpandedBarViewport]);
+  }, [inputExpanded, visible, clampPositionToViewport, syncExpandedBarViewport, isWorkspaceDockedExpanded, isLightboxInlineChatExpanded]);
 
   useLayoutEffect(() => {
-    if (!visible || !inputExpanded) return;
+    if (!visible || !inputExpanded || isWorkspaceDockedExpanded || isLightboxInlineChatExpanded) return;
     const el = barRef.current;
     if (!el) return;
     syncExpandedBarViewport();
@@ -710,14 +758,14 @@ export default function WorkspaceQuickComposeBar({
     const ro = new ResizeObserver(() => syncExpandedBarViewport());
     ro.observe(el);
     return () => ro.disconnect();
-  }, [visible, inputExpanded, syncExpandedBarViewport, segments]);
+  }, [visible, inputExpanded, syncExpandedBarViewport, segments, isWorkspaceDockedExpanded, isLightboxInlineChatExpanded]);
 
   useEffect(() => {
-    if (!visible || !inputExpanded) return;
+    if (!visible || !inputExpanded || isWorkspaceDockedExpanded || isLightboxInlineChatExpanded) return;
     const onResize = () => syncExpandedBarViewport();
     window.addEventListener('resize', onResize);
     return () => window.removeEventListener('resize', onResize);
-  }, [visible, inputExpanded, syncExpandedBarViewport]);
+  }, [visible, inputExpanded, syncExpandedBarViewport, isWorkspaceDockedExpanded, isLightboxInlineChatExpanded]);
 
   useEffect(() => {
     if (!visible) return;
@@ -800,8 +848,9 @@ export default function WorkspaceQuickComposeBar({
       </span>
     ) : null;
 
-  const disabled = submitDisabled;
-  const disabledTitle = submitDisabled ? submitDisabledReason : undefined;
+  const inputDisabled = inputDisabledProp === true;
+  const controlsDisabled = inputDisabled;
+  const submitDisabledTitle = submitDisabled ? submitDisabledReason : undefined;
   const trimmedOverride = placeholderOverride?.trim();
   const placeholder = trimmedOverride
     ? trimmedOverride
@@ -952,7 +1001,7 @@ export default function WorkspaceQuickComposeBar({
           <button
             key={m}
             type="button"
-            disabled={disabled || modeLockedByInputPresets}
+            disabled={controlsDisabled || modeLockedByInputPresets}
             onClick={() => {
               if (modeLockedByInputPresets) return;
               onComposeModeChange(m);
@@ -970,7 +1019,7 @@ export default function WorkspaceQuickComposeBar({
       <button
         ref={settingsTriggerRef}
         type="button"
-        disabled={disabled}
+        disabled={controlsDisabled}
         onClick={() => setSettingsOpen((o) => !o)}
         className={`${QUICK_COMPOSE_PILL_TRIGGER} max-w-[min(11rem,36vw)] overflow-hidden text-left`}
         title="生成参数"
@@ -1115,31 +1164,50 @@ export default function WorkspaceQuickComposeBar({
         )
       : null;
 
-  const barPositionStyle: React.CSSProperties | undefined = position
-    ? { left: `${position.left}px`, top: `${position.top}px`, userSelect: dragging ? 'none' : 'auto' }
-    : isLightbox
-      ? { visibility: 'hidden' as const }
-      : undefined;
+  const barPositionStyle: React.CSSProperties | undefined =
+    isWorkspaceDockedExpanded || isLightboxInlineChatExpanded
+      ? undefined
+      : position
+        ? { left: `${position.left}px`, top: `${position.top}px`, userSelect: dragging ? 'none' : 'auto' }
+        : isLightbox
+          ? { visibility: 'hidden' as const }
+          : undefined;
 
-  return (
-    <>
+  const dockHostEl = expandedDockHostRef?.current ?? null;
+  const dockTitle = isLightbox ? '大图快捷生成' : '快捷生成';
+  const useChatDock = Boolean(
+    inputExpanded && (chatDockProps || isWorkspaceDockedExpanded || isLightboxInlineChatExpanded)
+  );
+
+  const barShell = (
       <div
         ref={barRef}
         data-workflow-quick-compose-bar
-        className={`pointer-events-auto fixed max-w-[96vw] px-2 ${
-          inputExpanded
-            ? 'w-[min(28rem,calc(100vw-1.5rem))]'
-            : 'w-[min(44rem,calc(100vw-1.5rem))]'
-        } ${isLightbox ? 'z-[2500]' : 'z-[1600]'}`}
+        data-ac-block-workflow-marquee
+        data-workflow-quick-compose-docked={isWorkspaceDockedExpanded || isLightboxInlineChatExpanded ? '' : undefined}
+        className={
+          isWorkspaceDockedExpanded
+            ? useChatDock
+              ? 'pointer-events-auto flex h-full min-h-0 w-full flex-col'
+              : `pointer-events-auto flex h-full min-h-0 w-full flex-col border-l border-white/[0.08] bg-[#0f0f12] px-3 py-3`
+            : isLightboxInlineChatExpanded
+              ? `pointer-events-auto fixed right-0 top-0 bottom-0 z-[2500] flex flex-col ${WORKFLOW_QUICK_COMPOSE_DOCKED_WIDTH_CLASS}`
+              : `pointer-events-auto fixed max-w-[96vw] px-2 w-[min(44rem,calc(100vw-1.5rem))] ${isLightbox ? 'z-[2500]' : 'z-[1600]'}`
+        }
         style={barPositionStyle}
         onClick={isLightbox ? (e) => e.stopPropagation() : undefined}
         onWheel={isLightbox ? (e) => e.stopPropagation() : undefined}
         onPasteCapture={(e) => handlePasteAssetRefs(e, pasteRefZone)}
         {...(isLightbox ? ({ 'data-image-preview-no-wheel': '' } as const) : {})}
       >
-        {/* 预设卡片 / 主图·参考图区：叠在药丸上方；主图与参考图左右并排 */}
-        <div className="relative min-w-0 overflow-visible">
-          {hasDropZones ? (
+        <div
+          className={`relative min-w-0 ${
+            isWorkspaceDockedExpanded || isLightboxInlineChatExpanded
+              ? 'flex min-h-0 flex-1 flex-col overflow-hidden'
+              : 'overflow-visible'
+          }`}
+        >
+          {!isWorkspaceDockedExpanded && !isLightboxInlineChatExpanded && hasDropZones ? (
             <div
               className="pointer-events-auto absolute bottom-full left-0 right-0 z-[1] mb-2 flex flex-col items-center gap-2 px-0.5"
               data-quick-compose-above
@@ -1207,7 +1275,7 @@ export default function WorkspaceQuickComposeBar({
                       <QuickComposeDropTray
                         zone="main"
                         slots={mainDropSlots}
-                        disabled={disabled}
+                        disabled={false}
                         onRemoveSlot={onRemoveMainDropSlot}
                         onReorderSlot={
                           onReorderDropSlot
@@ -1238,7 +1306,7 @@ export default function WorkspaceQuickComposeBar({
                       <QuickComposeDropTray
                         zone="reference"
                         slots={referenceDropSlots}
-                        disabled={disabled}
+                        disabled={false}
                         onRemoveSlot={onRemoveReferenceDropSlot}
                         onReorderSlot={
                           onReorderDropSlot
@@ -1264,105 +1332,158 @@ export default function WorkspaceQuickComposeBar({
           ) : null}
 
           {inputExpanded ? (
-            <div
-              className={`flex max-h-[calc(100dvh-16px)] flex-col gap-2 overflow-hidden px-2 py-2 ${WORKFLOW_QUICK_COMPOSE_BAR_SHELL}`}
-              role="search"
-            >
-              <div className="flex min-h-0 min-w-0 flex-1 items-stretch gap-1.5">
-                <QuickComposeMentionField
-                  ref={mentionFieldRef}
-                  segments={segments}
-                  onSegmentsChange={onSegmentsChange}
-                  mentionCandidates={mentionCandidates}
-                  maxMentions={maxMentions}
-                  placeholder={placeholder}
-                  disabled={disabled}
-                  multiline
-                  rows={8}
-                  multilineMaxHeightPx={composeTextMaxHeightPx}
-                  ariaLabel={isLightbox ? '大图预览快捷生成描述' : '快捷生成描述'}
-                  onSubmit={onSubmit}
-                  onDragOver={handleComposeInputDragOver}
-                  onDrop={(e) => handleComposeInputDrop(e, 'main')}
-                />
-                <button
-                  type="button"
-                  disabled={disabled}
-                  onClick={() => {
-                    const r = barRef.current?.getBoundingClientRect();
-                    collapseAnchorBottomRef.current = r != null && r.height > 0 ? r.bottom : null;
-                    setInputExpanded(false);
-                  }}
-                  className="mt-0.5 grid h-8 w-8 shrink-0 place-items-center rounded-md text-gray-400 outline-none transition-colors hover:bg-white/[0.08] hover:text-white disabled:opacity-35 focus-visible:ring-2 focus-visible:ring-blue-500/50"
-                  title="收起为单行"
-                  aria-label="收起输入区"
-                  aria-pressed
-                >
-                  <Minimize2 className="h-4 w-4" strokeWidth={2.2} aria-hidden />
-                </button>
-              </div>
-
-              <div className="flex min-w-0 flex-wrap items-center justify-between gap-x-2 gap-y-1.5 border-t border-white/[0.06] pt-2">
-                <div className="flex min-w-0 flex-wrap items-center gap-2">
-                  <button
-                    type="button"
-                    disabled={disabled}
-                    onDoubleClick={() => {
-                      dragOffsetRef.current = null;
-                      setDragging(false);
-                      resetToDefaultPosition();
-                    }}
-                    onPointerDown={(e) => {
-                      const rect = barRef.current?.getBoundingClientRect();
-                      if (!rect) return;
-                      dragOffsetRef.current = { x: e.clientX - rect.left, y: e.clientY - rect.top };
-                      setSettingsOpen(false);
-                      setDragging(true);
-                    }}
-                    className="flex h-9 w-7 shrink-0 cursor-grab items-center justify-center rounded-md text-gray-400 outline-none transition-colors hover:bg-white/[0.08] hover:text-white active:cursor-grabbing disabled:opacity-35 focus-visible:ring-2 focus-visible:ring-blue-500/50"
-                    title="拖动输入框（双击回到默认位置）"
-                    aria-label="拖动输入框"
-                  >
-                    <span className="select-none text-xs leading-none">⋮⋮</span>
-                  </button>
-                  {isLightbox ? (
-                    <div
-                      className="grid h-9 w-9 shrink-0 place-items-center rounded-md text-gray-400"
-                      title="输入 @ 可引用当前画面或其它资产"
+            useChatDock ? (
+              <QuickComposeChatDock
+                title={dockTitle}
+                onMinimize={collapseInputExpanded}
+                minimizeDisabled={chatDockProps?.minimizeDisabled}
+                className={chatDockProps?.className}
+                messages={chatDockProps?.messages ?? []}
+                onRetryMessage={chatDockProps?.onRetryMessage}
+                threadEmptyTitle={chatDockProps?.threadEmptyTitle ?? '开始对话'}
+                threadEmptyHint={
+                  chatDockProps?.threadEmptyHint ??
+                  '输入描述并发送，生成结果会出现在助手消息中'
+                }
+                segments={segments}
+                onSegmentsChange={onSegmentsChange}
+                mentionCandidates={mentionCandidates}
+                maxMentions={maxMentions}
+                placeholder={placeholder}
+                mainDropSlots={mainDropSlots}
+                referenceDropSlots={referenceDropSlots}
+                onRemoveMainDropSlot={onRemoveMainDropSlot}
+                onRemoveReferenceDropSlot={onRemoveReferenceDropSlot}
+                onMoveDropSlot={onMoveDropSlot}
+                onReorderDropSlot={onReorderDropSlot}
+                hideMainDropZone={hideMainDropZone}
+                onComposeInputDragOver={handleComposeInputDragOver}
+                onComposeInputDrop={handleComposeInputDrop}
+                onDropSlotClick={handleDropSlotClick}
+                promptCards={promptCards}
+                onRemovePromptCard={onRemovePromptCard}
+                inputDisabled={inputDisabled}
+                submitDisabled={submitDisabled}
+                submitDisabledReason={submitDisabledReason}
+                onSubmit={onSubmit}
+                composeMode={composeMode}
+                onComposeModeChange={onComposeModeChange}
+                modeLockedByInputPresets={inputPresetsActive}
+                genControls={genActionControls}
+              />
+            ) : isWorkspaceDockedExpanded ? (
+                <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden" role="search">
+                  <div className="flex shrink-0 items-center justify-between gap-2 pr-1">
+                    <span className="text-[10px] font-black uppercase tracking-wide text-gray-400">
+                      {dockTitle}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={collapseInputExpanded}
+                      className="grid h-8 w-8 shrink-0 place-items-center rounded-md text-gray-400 outline-none transition-colors hover:bg-white/[0.08] hover:text-white focus-visible:ring-2 focus-visible:ring-blue-500/50"
+                      title="收起为底部输入条"
+                      aria-label="收起输入区"
+                      aria-pressed
                     >
-                      <ImageIcon className="h-[1.125rem] w-[1.125rem]" strokeWidth={2.2} aria-hidden />
+                      <Minimize2 className="h-4 w-4" strokeWidth={2.2} aria-hidden />
+                    </button>
+                  </div>
+                  <div className="min-h-0 flex-1 overflow-y-auto overscroll-y-contain no-scrollbar">
+                    <div className="flex flex-col gap-3 pr-1">
+                      {hasDropZones ? (
+                        <div className="flex flex-col gap-2">
+                          {promptCards.length > 0 ? (
+                            <div className="flex flex-wrap items-center gap-2">
+                              {promptCards.map((c) => (
+                                <div
+                                  key={c.key}
+                                  className={`group inline-flex max-w-full min-w-0 shrink-0 items-center gap-1.5 px-2.5 py-1.5 ${WORKFLOW_QUICK_COMPOSE_BAR_SHELL}`}
+                                  title={c.instruction.trim() ? c.instruction : c.label}
+                                >
+                                  <span className="min-w-0 truncate text-[13px] text-gray-100">{c.label}</span>
+                                  <button
+                                    type="button"
+                                    onClick={() => onRemovePromptCard(c.key)}
+                                    className="grid h-7 w-7 shrink-0 place-items-center rounded-full text-gray-400 outline-none transition-colors hover:bg-white/[0.08] hover:text-white focus-visible:ring-2 focus-visible:ring-blue-500/50"
+                                    aria-label={`移除 ${c.label}`}
+                                  >
+                                    <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden>
+                                      <path d="M18 6 6 18M6 6l12 12" />
+                                    </svg>
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+                          ) : null}
+                          {showSplitDropZones ? (
+                            <div className={`grid gap-x-0 gap-y-1 px-0.5 py-1 ${splitDropZoneGridCols}`}>
+                              {showMainDropColumn ? (
+                                hasMainDropSlots ? (
+                                  <span className="justify-self-center px-1.5 text-[9px] font-semibold text-gray-500">主图（待修改）</span>
+                                ) : (
+                                  <div className="px-1.5" aria-hidden />
+                                )
+                              ) : null}
+                              {showZoneDivider ? <div className="pointer-events-none" aria-hidden /> : null}
+                              {showReferenceDropColumn ? (
+                                <span className="justify-self-center px-1.5 text-[9px] font-semibold text-gray-500">
+                                  {hideMainDropZone ? '参考图（当前图为主图）' : '参考图'}
+                                </span>
+                              ) : null}
+                              {showMainDropColumn ? (
+                                <div data-quick-compose-drop-zone="main" className="inline-flex w-fit max-w-full shrink-0 justify-self-center px-1.5" {...bindQuickComposeDropZone('main')}>
+                                  <QuickComposeDropTray zone="main" slots={mainDropSlots} disabled={false} onRemoveSlot={onRemoveMainDropSlot} onReorderSlot={onReorderDropSlot ? (assetId, toIndex) => onReorderDropSlot(assetId, 'main', toIndex) : undefined} onMoveSlotToZone={onMoveDropSlot ? (assetId) => onMoveDropSlot(assetId, 'reference') : undefined} onSlotClick={handleDropSlotClick} onStashCaret={() => mentionFieldRef.current?.stashCaretBeforeBlur()} emptyHint="拖入主图" />
+                                </div>
+                              ) : null}
+                              {showZoneDivider ? (
+                                <div className="pointer-events-none mx-auto h-[2px] w-full max-w-[12rem] justify-self-center rounded-full bg-white/35 shadow-[0_0_6px_rgba(255,255,255,0.12)]" aria-hidden />
+                              ) : null}
+                              {showReferenceDropColumn ? (
+                                <div data-quick-compose-drop-zone="reference" className="inline-flex w-fit max-w-full shrink-0 justify-self-center px-1.5" {...bindQuickComposeDropZone('reference')}>
+                                  <QuickComposeDropTray zone="reference" slots={referenceDropSlots} disabled={false} onRemoveSlot={onRemoveReferenceDropSlot} onReorderSlot={onReorderDropSlot ? (assetId, toIndex) => onReorderDropSlot(assetId, 'reference', toIndex) : undefined} onMoveSlotToZone={onMoveDropSlot && showMainDropColumn ? (assetId) => onMoveDropSlot(assetId, 'main') : undefined} onSlotClick={handleDropSlotClick} onStashCaret={() => mentionFieldRef.current?.stashCaretBeforeBlur()} emptyHint={hideMainDropZone ? '粘贴或 @ 引用其它资产' : '拖入参考图'} />
+                                </div>
+                              ) : null}
+                            </div>
+                          ) : null}
+                        </div>
+                      ) : null}
+                      <QuickComposeMentionField
+                        ref={mentionFieldRef}
+                        segments={segments}
+                        onSegmentsChange={onSegmentsChange}
+                        mentionCandidates={mentionCandidates}
+                        maxMentions={maxMentions}
+                        placeholder={placeholder}
+                        disabled={inputDisabled}
+                        multiline
+                        rows={10}
+                        ariaLabel={isLightbox ? '大图预览快捷生成描述' : '快捷生成描述'}
+                        onSubmit={onSubmit}
+                        onDragOver={handleComposeInputDragOver}
+                        onDrop={(e) => handleComposeInputDrop(e, 'main')}
+                      />
                     </div>
-                  ) : null}
+                  </div>
+                  <div className="flex shrink-0 flex-col gap-2 border-t border-white/[0.06] pt-3 pr-1">
+                    <div className="flex flex-wrap items-center gap-2">{genActionControls}</div>
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      {creditsEstimateUi}
+                      <button
+                        type="button"
+                        disabled={submitDisabled}
+                        onClick={onSubmit}
+                        className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-white text-[#0a0a0c] shadow-md outline-none transition-transform hover:scale-[1.03] active:scale-[0.98] disabled:opacity-35 focus-visible:ring-2 focus-visible:ring-blue-500/55"
+                        title={submitDisabledTitle ?? '加入队列并执行'}
+                        aria-label={submitDisabledTitle ?? '加入队列并执行'}
+                      >
+                        <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                          <path d="M5 12h14M13 5l7 7-7 7" />
+                        </svg>
+                      </button>
+                    </div>
+                  </div>
                 </div>
-
-                <div className="flex flex-wrap items-center justify-end gap-3">
-                  {genActionControls}
-                  {creditsEstimateUi}
-
-                  <button
-                    type="button"
-                    disabled={disabled}
-                    onClick={onSubmit}
-                    className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-white text-[#0a0a0c] shadow-md outline-none transition-transform hover:scale-[1.03] active:scale-[0.98] disabled:opacity-35 focus-visible:ring-2 focus-visible:ring-blue-500/55"
-                    title={disabledTitle ?? '加入队列并执行'}
-                    aria-label={disabledTitle ?? '加入队列并执行'}
-                  >
-                    <svg
-                      viewBox="0 0 24 24"
-                      className="h-5 w-5"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth={2.2}
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      aria-hidden
-                    >
-                      <path d="M5 12h14M13 5l7 7-7 7" />
-                    </svg>
-                  </button>
-                </div>
-              </div>
-            </div>
+              ) : null
           ) : (
             <div
               className={`flex items-center gap-2 px-2 py-1.5 ${WORKFLOW_QUICK_COMPOSE_BAR_SHELL}`}
@@ -1370,7 +1491,6 @@ export default function WorkspaceQuickComposeBar({
             >
               <button
                 type="button"
-                disabled={disabled}
                 onDoubleClick={() => {
                   dragOffsetRef.current = null;
                   setDragging(false);
@@ -1405,7 +1525,7 @@ export default function WorkspaceQuickComposeBar({
                 mentionCandidates={mentionCandidates}
                 maxMentions={maxMentions}
                 placeholder={placeholder}
-                disabled={disabled}
+                disabled={inputDisabled}
                 ariaLabel={isLightbox ? '大图预览快捷生成描述' : '快捷生成描述'}
                 onSubmit={onSubmit}
                 onDragOver={handleComposeInputDragOver}
@@ -1414,13 +1534,13 @@ export default function WorkspaceQuickComposeBar({
 
               <button
                 type="button"
-                disabled={disabled}
                 onClick={() => {
                   const r = barRef.current?.getBoundingClientRect();
                   expandAnchorBottomRef.current = r != null && r.height > 0 ? r.bottom : null;
+                  setSettingsOpen(false);
                   setInputExpanded(true);
                 }}
-                className="grid h-9 w-8 shrink-0 place-items-center rounded-md text-gray-400 outline-none transition-colors hover:bg-white/[0.08] hover:text-white disabled:opacity-35 focus-visible:ring-2 focus-visible:ring-blue-500/50"
+                className="grid h-9 w-8 shrink-0 place-items-center rounded-md text-gray-400 outline-none transition-colors hover:bg-white/[0.08] hover:text-white focus-visible:ring-2 focus-visible:ring-blue-500/50"
                 title="展开多行（条宽变窄）；多行时 Ctrl+Enter 提交"
                 aria-label="展开输入区"
                 aria-pressed={false}
@@ -1434,11 +1554,11 @@ export default function WorkspaceQuickComposeBar({
 
                 <button
                   type="button"
-                  disabled={disabled}
+                  disabled={submitDisabled}
                   onClick={onSubmit}
                   className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-white text-[#0a0a0c] shadow-md outline-none transition-transform hover:scale-[1.03] active:scale-[0.98] disabled:opacity-35 focus-visible:ring-2 focus-visible:ring-blue-500/55"
-                  title={disabledTitle ?? '加入队列并执行'}
-                  aria-label={disabledTitle ?? '加入队列并执行'}
+                  title={submitDisabledTitle ?? '加入队列并执行'}
+                  aria-label={submitDisabledTitle ?? '加入队列并执行'}
                 >
                   <svg
                     viewBox="0 0 24 24"
@@ -1458,6 +1578,13 @@ export default function WorkspaceQuickComposeBar({
           )}
         </div>
       </div>
+  );
+
+  return (
+    <>
+      {isWorkspaceDockedExpanded && dockHostEl && typeof document !== 'undefined'
+        ? createPortal(barShell, dockHostEl)
+        : barShell}
       {settingsPanel}
     </>
   );

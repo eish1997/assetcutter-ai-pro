@@ -119,6 +119,11 @@ function normalizeGenerate3DPreset(input: NonNullable<CustomAppModule['generate3
   return out;
 }
 
+/** 内置预设：未显式 `skipUnderstand: false` 时继承种子默认（避免 R2/本地旧 JSON 缺字段仍走理解步） */
+const SEED_SKIP_UNDERSTAND_BY_ID: Record<string, true> = {
+  style_transfer: true,
+};
+
 export function normalizeCapabilityPreset(input: CustomAppModule, index: number): CustomAppModule {
   const rawCat = String(input.category ?? '');
   const bundleDir =
@@ -140,7 +145,9 @@ export function normalizeCapabilityPreset(input: CustomAppModule, index: number)
   const enabled = input.enabled !== false;
   const order = typeof input.order === 'number' ? input.order : index;
   const instruction = typeof input.instruction === 'string' ? input.instruction : '';
-  const skipUnderstand = input.skipUnderstand === true;
+  const skipUnderstand =
+    input.skipUnderstand === true ||
+    (input.skipUnderstand !== false && SEED_SKIP_UNDERSTAND_BY_ID[input.id] === true);
   const requirePromptOnTextDrop = input.requirePromptOnTextDrop === true;
   const rawGear = (input as CustomAppModule).imageGear;
   const rawModel = (input as CustomAppModule).imageModelRegistryId;
@@ -297,7 +304,7 @@ const DEFAULT_PRESETS: CustomAppModule[] = [
     instruction: '短视频，平滑镜头运动，电影感光效，高细节。',
   },
   { id: 'split_component', label: '拆分组件', category: 'image_process', processor: 'split_component', engine: 'builtin', enabled: true, order: 0, instruction: '' },
-  { id: 'style_transfer', label: '转风格', category: 'image_to_image', engine: 'gen_image', enabled: true, order: 1, instruction: 'Convert this image to a consistent artistic style: stylized digital art, clean lines, modern flat design. Keep the same composition and main subjects.' },
+  { id: 'style_transfer', label: '转风格', category: 'image_to_image', engine: 'gen_image', enabled: true, order: 1, skipUnderstand: true, instruction: 'Convert this image to a consistent artistic style: stylized digital art, clean lines, modern flat design. Keep the same composition and main subjects.' },
   { id: 'multi_view', label: '生成多视角', category: 'image_to_image', engine: 'gen_image', enabled: true, order: 2, instruction: 'Generate a clean front view of the main object in this image, centered on white or neutral background, orthographic style, suitable as a reference sheet view.' },
   {
     id: 'cut_image',

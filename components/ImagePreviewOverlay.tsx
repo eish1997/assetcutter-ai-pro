@@ -209,6 +209,15 @@ export type ImagePreviewOverlayProps = {
   model3dDisplayMode?: Model3DDisplayMode;
   /** 右侧占位宽度（如常驻侧栏），用于将主图居中到左侧可用区域 */
   contentRightInset?: string;
+  /**
+   * 与 `contentRightInset` 配套的右纵列（缩略图条 / 快捷侧栏）。
+   * 提供时主预览区与右列 flex 分栏，侧栏参与布局而非叠在画面上。
+   */
+  rightRail?: React.ReactNode;
+  /**
+   * 全屏壳右侧留白（与 App 级快捷侧栏同宽），预览不覆盖该区域。
+   */
+  shellRightGutter?: string;
   /** 左侧占位宽度（如 VGP 步骤节点图），与 contentRightInset 一起约束 centerSlot 可用区域 */
   contentLeftInset?: string;
   /**
@@ -337,6 +346,8 @@ export function ImagePreviewOverlay({
   model3dDisplayMode = 'material',
   contentRightInset = '0px',
   contentLeftInset = '0px',
+  rightRail,
+  shellRightGutter,
   shellZIndexClassName,
   backdropImageSrc,
   placeholderImageSrc,
@@ -1334,6 +1345,7 @@ export function ImagePreviewOverlay({
             : LIGHTBOX_BACKDROP_CLASS[lightboxBackdropId]
         }
         backdropImageSrc={backdropImageSrc}
+        shellRightGutter={shellRightGutter}
       >
         <PreviewImageLoadingState placeholderSrc={placeholderImageSrc} label="预览加载中…" />
         {children}
@@ -1341,22 +1353,24 @@ export function ImagePreviewOverlay({
     );
   }
 
+  const useSplitLayout = rightRail != null && contentRightInset !== '0px';
+
   const useFrameLock = Boolean(!centerSlot && innerLayoutStableKey && lockedDominant);
   const shellStyle: React.CSSProperties = {
-    left: `calc((100% - ${contentRightInset}) / 2)`,
+    left: useSplitLayout ? '50%' : `calc((100% - ${contentRightInset}) / 2)`,
     transform: `translate(-50%, -50%) translate(${offset.x}px, ${offset.y}px) scale(${scale})`,
     transformOrigin: 'center center',
   };
   const panoFlatStackStyle: React.CSSProperties = {
-    left: `calc((100% - ${contentRightInset}) / 2)`,
+    left: useSplitLayout ? '50%' : `calc((100% - ${contentRightInset}) / 2)`,
     top: '50%',
     transform: 'translate(-50%, -50%)',
     zIndex: 6,
   };
   const lockedImgStyle: React.CSSProperties | undefined = useFrameLock && lockedDominant
     ? lockedDominant.axis === 'width'
-      ? { width: `${lockedDominant.size}px`, height: 'auto', maxWidth: '92vw', maxHeight: '88vh' }
-      : { height: `${lockedDominant.size}px`, width: 'auto', maxWidth: '92vw', maxHeight: '88vh' }
+      ? { width: `${lockedDominant.size}px`, height: 'auto', maxWidth: useSplitLayout ? '100%' : '92vw', maxHeight: '88vh' }
+      : { height: `${lockedDominant.size}px`, width: 'auto', maxWidth: useSplitLayout ? '100%' : '92vw', maxHeight: '88vh' }
     : undefined;
 
   const innerRotateStyle: React.CSSProperties = {
@@ -1371,19 +1385,8 @@ export function ImagePreviewOverlay({
   const flatPrimaryImgRevealClass =
     panoAnnotationBridge || splitStretchEnabled ? '' : flatImageVisibleClass;
 
-  return (
-    <PreviewShell
-      open={open}
-      onClose={onClose}
-      focusKey={resetKey}
-      zIndexClassName={shellZIndexClassName ?? 'z-[2000]'}
-      backdropTintClassName={
-        backdropImageSrc
-          ? LIGHTBOX_BACKDROP_OVER_LIST_CLASS[lightboxBackdropId]
-          : LIGHTBOX_BACKDROP_CLASS[lightboxBackdropId]
-      }
-      backdropImageSrc={backdropImageSrc}
-    >
+  const mainStageContent = (
+    <>
         {showPrimaryImageLoading ? (
           <PreviewImageLoadingState placeholderSrc={placeholderImageSrc} />
         ) : null}
@@ -1482,9 +1485,11 @@ export function ImagePreviewOverlay({
                     ? `calc(max(1rem, env(safe-area-inset-left, 0px)) + ${contentLeftInset} + 0.75rem)`
                     : 'max(1rem, env(safe-area-inset-left, 0px))',
                 right:
-                  contentRightInset !== '0px'
-                    ? `calc(1rem + ${contentRightInset} + 0.75rem)`
-                    : 'max(1rem, env(safe-area-inset-right, 0px))',
+                  useSplitLayout
+                    ? 'max(1rem, env(safe-area-inset-right, 0px))'
+                    : contentRightInset !== '0px'
+                      ? `calc(1rem + ${contentRightInset} + 0.75rem)`
+                      : 'max(1rem, env(safe-area-inset-right, 0px))',
                 transform: 'translateY(-50%)',
               }}
             >
@@ -1529,7 +1534,7 @@ export function ImagePreviewOverlay({
                                 ? 'cursor-grab active:cursor-grabbing'
                                 : 'cursor-zoom-in'
                       }`
-                    : `block max-h-[88vh] max-w-[92vw] object-contain rounded-xl select-none ${flatPrimaryImgRevealClass} ${
+                    : `block max-h-[88vh] ${useSplitLayout ? 'max-w-full' : 'max-w-[92vw]'} object-contain rounded-xl select-none ${flatPrimaryImgRevealClass} ${
                         panoAnnotationBridge
                           ? 'pointer-events-none cursor-default opacity-0'
                           : splitStretchEnabled
@@ -1801,6 +1806,42 @@ export function ImagePreviewOverlay({
             }}
           />
         ) : null}
+    </>
+  );
+
+  return (
+    <PreviewShell
+      open={open}
+      onClose={onClose}
+      focusKey={resetKey}
+      zIndexClassName={shellZIndexClassName ?? 'z-[2000]'}
+      backdropTintClassName={
+        backdropImageSrc
+          ? LIGHTBOX_BACKDROP_OVER_LIST_CLASS[lightboxBackdropId]
+          : LIGHTBOX_BACKDROP_CLASS[lightboxBackdropId]
+      }
+      backdropImageSrc={backdropImageSrc}
+      shellRightGutter={shellRightGutter}
+    >
+      {useSplitLayout ? (
+        <div className="flex h-full w-full min-h-0">
+          <div
+            className="relative min-h-0 min-w-0 flex-1 overflow-hidden"
+            data-lightbox-main-stage
+          >
+            {mainStageContent}
+          </div>
+          <div
+            className="relative flex h-full shrink-0 flex-col overflow-hidden"
+            style={{ width: contentRightInset }}
+            data-lightbox-right-rail
+          >
+            {!uiHidden ? rightRail : null}
+          </div>
+        </div>
+      ) : (
+        mainStageContent
+      )}
     </PreviewShell>
   );
 }

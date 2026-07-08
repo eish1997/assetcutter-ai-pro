@@ -18,6 +18,7 @@
       "engine": "gen_image",
       "enabled": true,
       "order": 1,
+      "skipUnderstand": true,
       "instruction": "识别图片中的物体，quixel资产库效果，灰色背景。",
       "imageGear": "pro",
       "imageAspectRatio": "1:1",

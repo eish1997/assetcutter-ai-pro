@@ -1,11 +1,28 @@
 /** Shared retry classification for gemini-proxy (429/503/504 etc.). */
 
-export function isRetryable(e) {
+export function isUpstreamRateLimitError(e) {
   const msg = String((e && e.message) || e);
-  if (/429|503|504|overloaded|UNAVAILABLE|DEADLINE_EXCEEDED|Deadline expired|500|INTERNAL|Internal error|high demand|try again later|The operation was cancelled|operation was canceled|CANCELLED/i.test(msg)) return true;
+  if (/too many requests/i.test(msg)) return true;
+  if (/\bRESOURCE_EXHAUSTED\b/i.test(msg)) return true;
   const code = e && e.code;
   const status = e && e.status;
-  if (code === 504 || code === 503 || code === 429 || status === 'DEADLINE_EXCEEDED' || status === 'UNAVAILABLE') return true;
+  if (code === 429 || status === 'RESOURCE_EXHAUSTED') return true;
+  try {
+    const j = typeof msg === 'string' && msg.startsWith('{') ? JSON.parse(msg) : null;
+    if (j?.error?.code === 429 || j?.error?.status === 'RESOURCE_EXHAUSTED') return true;
+  } catch {
+    /* ignore */
+  }
+  return /\b429\b/.test(msg) && !/rate_limited/i.test(msg);
+}
+
+export function isRetryable(e) {
+  const msg = String((e && e.message) || e);
+  if (isUpstreamRateLimitError(e)) return true;
+  if (/503|504|overloaded|UNAVAILABLE|DEADLINE_EXCEEDED|Deadline expired|500|INTERNAL|Internal error|high demand|try again later|The operation was cancelled|operation was canceled|CANCELLED/i.test(msg)) return true;
+  const code = e && e.code;
+  const status = e && e.status;
+  if (code === 504 || code === 503 || status === 'DEADLINE_EXCEEDED' || status === 'UNAVAILABLE') return true;
   try {
     const j = typeof msg === 'string' && msg.startsWith('{') ? JSON.parse(msg) : null;
     if (j?.error?.code === 504 || j?.error?.code === 503 || j?.error?.status === 'DEADLINE_EXCEEDED' || j?.error?.status === 'UNAVAILABLE') return true;
@@ -13,4 +30,21 @@ export function isRetryable(e) {
     /* ignore */
   }
   return false;
+}
+
+/** 429 用更长退避、更少次数；503 等仍用指数退避。 */
+export function geminiProxyRetryDelayMs(err, attempt) {
+  if (isUpstreamRateLimitError(err)) {
+    return Math.min(120_000, 60_000 + Math.max(0, attempt) * 30_000);
+  }
+  return Math.min(30_000, 5000 * Math.pow(2, Math.max(0, attempt)));
+}
+
+export function geminiProxyMaxAttempts(err, overloadMaxAttempts) {
+  if (isUpstreamRateLimitError(err)) {
+    const n = Number(process.env.GEMINI_PROXY_RATE_LIMIT_RETRIES);
+    const retries = Number.isFinite(n) && n >= 0 ? Math.floor(n) : 0;
+    return retries + 1;
+  }
+  return overloadMaxAttempts;
 }

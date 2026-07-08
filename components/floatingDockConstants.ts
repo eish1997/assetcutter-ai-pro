@@ -17,6 +17,9 @@ export const RIGHT_DOCK_LOG_PANEL_Z_INDEX = 10099;
 
 export const RIGHT_DOCK_RIGHT = 'right-6';
 
+/** 侧栏 composer 底边留白，避开右下角运行日志 FAB（48px + bottom-6） */
+export const RIGHT_DOCK_COMPOSER_SAFE_BOTTOM_CLASS = 'pb-[5.25rem]';
+
 /** 弹出面板下沿：紧贴日志 FAB 顶之上（inset + FAB + gap） */
 export const RIGHT_DOCK_PANEL_BOTTOM = 'bottom-[5.25rem]';
 

@@ -297,6 +297,8 @@ export function useWorkflowMarquee({
       if (showArchived) return;
       if ((e.target as Element).closest('[data-workflow-toolbar]')) return;
       if ((e.target as Element).closest('[data-workflow-card]')) return;
+      if ((e.target as Element).closest('[data-ac-block-workflow-marquee]')) return;
+      if ((e.target as Element).closest('[data-workflow-quick-compose-bar], [data-workflow-quick-compose-dock-host], [data-workflow-quick-compose-chat-dock]')) return;
       if ((e.target as Element).closest('button, [role="button"], a, input, select, textarea, label')) return;
       if ((e.target as Element).closest('[data-workflow-sidebar], [data-workflow-preset], [data-workflow-outline]')) return;
       e.preventDefault();

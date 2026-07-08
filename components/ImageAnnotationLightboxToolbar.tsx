@@ -35,6 +35,7 @@ import {
   TITLE_ROW_STEPPER_VALUE,
   WORKFLOW_IMAGE_PREVIEW_RAIL,
   WORKFLOW_IMAGE_PREVIEW_RAIL_DIVIDER,
+  resolveLightboxToolbarCenterRightGutterPx,
 } from './workflow/workflowSectionUiConstants';
 import type { ImagePreviewLayoutMode } from './preview';
 import {
@@ -73,11 +74,12 @@ function clampBarToViewport(
   pos: { left: number; top: number },
   el: HTMLElement | null,
   vw: number,
-  vh: number
+  vh: number,
+  rightGutterPx = 0
 ): { left: number; top: number } {
   const w = el?.offsetWidth ?? 320;
   const h = el?.offsetHeight ?? 48;
-  const maxL = Math.max(VIEW_MARGIN, vw - w - VIEW_MARGIN);
+  const maxL = Math.max(VIEW_MARGIN, vw - rightGutterPx - w - VIEW_MARGIN);
   const maxT = Math.max(VIEW_MARGIN, vh - h - VIEW_MARGIN);
   return {
     left: Math.max(VIEW_MARGIN, Math.min(maxL, pos.left)),
@@ -267,6 +269,11 @@ export type ImageAnnotationLightboxToolbarProps = {
     setResizeWriteBackPopOpen: React.Dispatch<React.SetStateAction<boolean>>;
     imageResizeWriteBackAvailable: boolean;
   } | null;
+  /**
+   * 预览区右侧占位：工具条默认居中于扣除 App 快捷侧栏或缩略图条后的区域。
+   */
+  composeDockExpanded?: boolean;
+  lightboxChromeReady?: boolean;
 };
 
 /**
@@ -293,7 +300,18 @@ export function ImageAnnotationLightboxToolbar({
   samSegment,
   removeBg,
   canvasAdjust,
+  composeDockExpanded = false,
+  lightboxChromeReady = false,
 }: ImageAnnotationLightboxToolbarProps) {
+  const resolveRightGutterPx = useCallback(
+    () =>
+      resolveLightboxToolbarCenterRightGutterPx({
+        composeDockExpanded,
+        chromeReady: lightboxChromeReady,
+      }),
+    [composeDockExpanded, lightboxChromeReady]
+  );
+
   const colorInputRef = useRef<HTMLInputElement | null>(null);
   const barRef = useRef<HTMLDivElement | null>(null);
   const dragOffsetRef = useRef<{ x: number; y: number } | null>(null);
@@ -308,6 +326,7 @@ export function ImageAnnotationLightboxToolbar({
   const resetToDefaultPosition = useCallback(() => {
     const vw = window.innerWidth;
     const vh = window.innerHeight;
+    const gutter = resolveRightGutterPx();
     requestAnimationFrame(() => {
       const el = barRef.current;
       const w = el?.offsetWidth ?? 360;
@@ -315,21 +334,26 @@ export function ImageAnnotationLightboxToolbar({
       setPosition(
         clampBarToViewport(
           {
-            left: Math.max(VIEW_MARGIN, (vw - w) / 2),
+            left: Math.max(VIEW_MARGIN, (vw - gutter - w) / 2),
             top: VIEW_MARGIN,
           },
           el,
           vw,
-          vh
+          vh,
+          gutter
         )
       );
     });
-  }, []);
+  }, [resolveRightGutterPx]);
 
   useLayoutEffect(() => {
     if (position !== null) return;
     resetToDefaultPosition();
   }, [position, resetToDefaultPosition]);
+
+  useLayoutEffect(() => {
+    resetToDefaultPosition();
+  }, [composeDockExpanded, lightboxChromeReady, resetToDefaultPosition]);
 
   /** 菜单打开或主栏移动后：下方空间更大则向下展开，否则向上，减少贴顶/贴底时溢出 */
   useLayoutEffect(() => {
@@ -358,7 +382,13 @@ export function ImageAnnotationLightboxToolbar({
       const vw = window.innerWidth;
       const vh = window.innerHeight;
       setPosition(
-        clampBarToViewport({ left: e.clientX - off.x, top: e.clientY - off.y }, barRef.current, vw, vh)
+        clampBarToViewport(
+          { left: e.clientX - off.x, top: e.clientY - off.y },
+          barRef.current,
+          vw,
+          vh,
+          resolveRightGutterPx()
+        )
       );
     };
     const onUp = () => {
@@ -371,18 +401,27 @@ export function ImageAnnotationLightboxToolbar({
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
     };
-  }, [dragging]);
+  }, [dragging, resolveRightGutterPx]);
 
   useEffect(() => {
     const onResize = () => {
       setPosition((prev) => {
         if (!prev) return prev;
-        return clampBarToViewport(prev, barRef.current, window.innerWidth, window.innerHeight);
+        return clampBarToViewport(
+          prev,
+          barRef.current,
+          window.innerWidth,
+          window.innerHeight,
+          resolveLightboxToolbarCenterRightGutterPx({
+            composeDockExpanded,
+            chromeReady: lightboxChromeReady,
+          })
+        );
       });
     };
     window.addEventListener('resize', onResize);
     return () => window.removeEventListener('resize', onResize);
-  }, []);
+  }, [composeDockExpanded, lightboxChromeReady]);
 
   const toggleMenu = useCallback((key: AnnotationToolbarMenuKey) => {
     setOpenMenu((prev) => (prev === key ? null : key));

@@ -61,7 +61,7 @@ export default function WorkflowLightboxAssetThumbStrip({
     <>
       <div
         className={[
-          'pointer-events-auto absolute right-0 top-0 bottom-0 z-[8] flex shrink-0 flex-col',
+          'pointer-events-auto relative flex h-full w-full shrink-0 flex-col',
           WORKFLOW_LIGHTBOX_ASSET_THUMB_STRIP_WIDTH_CLASS,
           'min-w-[3.5rem] max-w-[3.5rem] w-[3.5rem]',
           'border-l border-white/10 bg-[#0a0a0c]/88 shadow-[-4px_0_24px_rgba(0,0,0,0.38)] backdrop-blur-[2px]',

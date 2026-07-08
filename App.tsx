@@ -75,6 +75,7 @@ import {
   RIGHT_DOCK_RIGHT,
 } from './components/floatingDockConstants';
 import { isWorkflowEditableTarget } from './components/workflow/workflowDomUtils';
+import { WORKFLOW_QUICK_COMPOSE_DOCKED_WIDTH_CLASS } from './components/workflow/workflowSectionUiConstants';
 import KeyboardShortcutsModal from './components/KeyboardShortcutsModal';
 import { AC_NAVIGATE_SETTINGS_EVENT } from './services/navigateSettings';
 import { ProgressivePreviewImage } from './components/ProgressivePreviewImage';
@@ -2684,6 +2685,16 @@ const MainApp: React.FC = () => {
   const [arenaFirstVisit, setArenaFirstVisit] = useState(() => !localStorage.getItem('ac_arena_visited'));
 
   const { mainScrollRef, showBackToTop, scrollToTop } = useMainScrollBackToTop();
+  const quickComposeWorkspaceDockHostRef = useRef<HTMLDivElement | null>(null);
+  const [workspaceQuickComposeExpanded, setWorkspaceQuickComposeExpanded] = useState(false);
+  const handleWorkspaceQuickComposeExpandedChange = useCallback((expanded: boolean) => {
+    setWorkspaceQuickComposeExpanded((prev) => (prev === expanded ? prev : expanded));
+  }, []);
+  useEffect(() => {
+    if (mode !== AppMode.WORKFLOW || !activeWorkspaceProjectId) {
+      setWorkspaceQuickComposeExpanded(false);
+    }
+  }, [mode, activeWorkspaceProjectId]);
   const isWorkflowMarqueeWheelActive = mode === AppMode.WORKFLOW && !!activeWorkspaceProjectId;
   const tryDisableCapabilityPresetById = useCallback((id: string): boolean => {
     if (!id || id.startsWith('set:')) return false;
@@ -4900,7 +4911,8 @@ const MainApp: React.FC = () => {
         </div>
       )}
 
-      <main className="flex-1 flex flex-col h-[100dvh] overflow-hidden">
+      <main className="flex min-w-0 flex-1 flex-row h-[100dvh] overflow-hidden">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
         <div
           ref={mainScrollRef}
           className={`flex-1 min-h-0 no-scrollbar touch-pan-y ${
@@ -4970,6 +4982,9 @@ const MainApp: React.FC = () => {
                     <WorkflowSection
                       key={workflowSectionLoadAttempt}
                       quickComposeShellActive={mode === AppMode.WORKFLOW}
+                      quickComposeWorkspaceDockHostRef={quickComposeWorkspaceDockHostRef}
+                      workspaceQuickComposeExpanded={workspaceQuickComposeExpanded}
+                      onWorkspaceQuickComposeExpandedChange={handleWorkspaceQuickComposeExpandedChange}
                       textModelRegistryId={config.modelText}
                       capabilityPresets={capabilityPresets}
                       capabilitySets={capabilitySets}
@@ -6261,6 +6276,19 @@ const MainApp: React.FC = () => {
             )}
           </div>
         </div>
+        </div>
+        {mode === AppMode.WORKFLOW && activeWorkspaceProjectId ? (
+          <div
+            ref={quickComposeWorkspaceDockHostRef}
+            className={`relative z-[2600] flex h-full min-h-0 shrink-0 self-stretch flex-col pointer-events-auto ${
+              workspaceQuickComposeExpanded
+                ? WORKFLOW_QUICK_COMPOSE_DOCKED_WIDTH_CLASS
+                : 'w-0 min-w-0 overflow-hidden'
+            }`}
+            data-workflow-quick-compose-dock-host
+            data-ac-block-workflow-marquee
+          />
+        ) : null}
       </main>
 
       {showBackToTop && (

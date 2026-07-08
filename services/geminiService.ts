@@ -906,6 +906,7 @@ async function bulkProxyGenerateContentSync(args: {
   const aiBackendExtra = bulkUsesVertexBackend(bindingRegistryId, role) ? { aiBackend: "vertex" as const } : {};
   const gateCredits = proxyGateMinCreditsForJob(jobKind);
   let skipReleaseOnFinally = false;
+  let frozenCreditsReserveKey: string | null = null;
   try {
     const syncUrl = bulkApiUrl("/proxy/gemini/generate-content");
     assertDevBulkCreditsAuthAligned(syncUrl);
@@ -916,14 +917,20 @@ async function bulkProxyGenerateContentSync(args: {
       estimatedCredits: gateCredits,
       ...aiBackendExtra,
     });
-    const postSync = async () =>
-      bulkFetchOrExplain(syncUrl, {
+    const postSync = async () => {
+      const admissionHeaders = await bulkProxyAdmissionHeaders(gateCredits);
+      if (!frozenCreditsReserveKey) {
+        frozenCreditsReserveKey =
+          admissionHeaders['X-AC-Credits-Reserve']?.trim() || getLastCreditsReserveKey();
+      }
+      return bulkFetchOrExplain(syncUrl, {
         method: "POST",
-        headers: { "Content-Type": "application/json", ...(await bulkProxyAdmissionHeaders(gateCredits)) },
+        headers: { "Content-Type": "application/json", ...admissionHeaders },
         body: createBody,
         signal: abortSignal,
         cache: "no-store",
       });
+    };
     let res = await postSync();
     let text = await res.text();
     if (!res.ok && isCreditsReserveInvalidProxyError(res.status, text || "")) {
@@ -951,7 +958,7 @@ async function bulkProxyGenerateContentSync(args: {
       proxyResult: delivered,
       usageMetadata: delivered.usageMetadata,
       jobKind,
-      creditsReserveKey: getLastCreditsReserveKey(),
+      creditsReserveKey: frozenCreditsReserveKey ?? getLastCreditsReserveKey(),
     };
     if (peekCreditsPrechargeSession()) {
       await emitGeminiProxyMeteredUsage(meterArgs);
@@ -1927,8 +1934,16 @@ function errorStringForRetry(err: unknown): string {
   }
 }
 
+function isUpstreamRateLimitError(err: unknown): boolean {
+  const raw = errorStringForRetry(err);
+  if (!raw || isCreditsOrGateErrorText(raw)) return false;
+  const mapped = mapRateLimitErrorText(raw);
+  return Boolean(mapped && mapped.includes('Google/Vertex'));
+}
+
 /** SDK 常以 code/status 抛出，不一定带 503 字符串 */
 function isRetryableError(err: unknown): boolean {
+  if (isUpstreamRateLimitError(err)) return false;
   if (err != null && typeof err === "object") {
     const e = err as Record<string, unknown>;
     const code = e.code;
@@ -1967,9 +1982,9 @@ const IMAGE_GEN_RETRIES_ON_OVERLOAD = 8;
 /** 工作流/能力（如转风格）调用 understand 时传入，不跳过理解、专抗 503 高峰 */
 export const CAPABILITY_UNDERSTAND_RETRY_OPTIONS: GeminiRequestOptions = {
   timeoutMs: 90_000,
-  retries: 4,
-  retryDelayMs: 2500,
-  maxRetryDelayMs: 12_000,
+  retries: 1,
+  retryDelayMs: 3000,
+  maxRetryDelayMs: 8000,
   requestPhase: '理解',
 };
 const BULK_PROXY_UNDERSTAND_TIMEOUT_MS = 120_000;
@@ -2027,6 +2042,9 @@ async function callWithRetry<T>(
       return await withGeminiRequestControl(apiFn, options);
     } catch (err) {
       if (isAbortError(err)) throw err;
+      if (isUpstreamRateLimitError(err)) {
+        throw err;
+      }
       if (!(isRetryableError(err) && retries > 0)) {
         throw err;
       }
@@ -2180,7 +2198,7 @@ export function userFacingRateLimitMessage(kind: 'upstream' | 'site' = 'upstream
   if (kind === 'site') {
     return '生图在本站公平队列中受限，请等待约 10～30 秒后清空队列、单次重试。';
   }
-  return 'Google/Vertex 生图配额或 RPM 触顶（非积分不足）。请等待 1～3 分钟后单次重试。';
+  return 'Google/Vertex 生图配额或 RPM 触顶（非积分不足）。系统已停止连点式自动重试；请等待 2～5 分钟后单次重试，或减少队列并发、快捷栏改用「直发」跳过理解步。';
 }
 
 function isCreditsOrGateErrorText(raw: string): boolean {
@@ -2654,7 +2672,7 @@ export async function understandImageEditIntent(
         requestPhase: options?.requestPhase ?? '理解',
         retries:
           options?.retries ??
-          (effectiveBulkBase() ? 10 : 3),
+          (effectiveBulkBase() ? 1 : 3),
         retryDelayMs: options?.retryDelayMs ?? (effectiveBulkBase() ? 6000 : 2000),
         ...overrideOptions,
       }

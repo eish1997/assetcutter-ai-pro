@@ -115,6 +115,31 @@ export const WORKFLOW_LIGHTBOX_RIGHT_PANEL_TAB_INSET = '2.25rem';
 export const WORKFLOW_LIGHTBOX_ASSET_THUMB_STRIP_WIDTH_CLASS = 'w-14';
 export const WORKFLOW_LIGHTBOX_ASSET_THUMB_STRIP_INSET = '3.5rem';
 
+/** 工作区 / 大图内嵌快捷生成侧栏宽度（与画卷列同量级，挤压主区域） */
+export const WORKFLOW_QUICK_COMPOSE_DOCKED_WIDTH_CLASS = 'w-[min(28rem,30vw)]';
+/** 展开侧栏时主区域右侧 inset（缩略图条不再单独预留，与侧栏同宽） */
+export const WORKFLOW_QUICK_COMPOSE_DOCKED_INSET = 'min(28rem, 30vw)';
+export const WORKFLOW_LIGHTBOX_COMPOSE_DOCKED_INSET = WORKFLOW_QUICK_COMPOSE_DOCKED_INSET;
+
+/** 与 `WORKFLOW_QUICK_COMPOSE_DOCKED_WIDTH_CLASS` / `shellRightGutter` 一致的像素宽度 */
+export function resolveWorkflowQuickComposeDockedWidthPx(
+  viewportWidth = typeof window !== 'undefined' ? window.innerWidth : 1280
+): number {
+  return Math.min(28 * 16, viewportWidth * 0.3);
+}
+
+/** 大图标注条默认居中：扣除 App 快捷侧栏或内嵌缩略图条占位（px） */
+export function resolveLightboxToolbarCenterRightGutterPx(opts: {
+  composeDockExpanded: boolean;
+  chromeReady: boolean;
+  viewportWidth?: number;
+}): number {
+  const vw = opts.viewportWidth ?? (typeof window !== 'undefined' ? window.innerWidth : 1280);
+  if (opts.composeDockExpanded) return resolveWorkflowQuickComposeDockedWidthPx(vw);
+  if (opts.chromeReady) return 56;
+  return 0;
+}
+
 /** 大图预览左侧 VGP 步骤节点图占位（与 `WorkflowStepNodeGraphOverlay` 最大宽度 22rem 对齐） */
 export const WORKFLOW_LIGHTBOX_VGP_GRAPH_LEFT_INSET = 'min(22rem, 28vw)';
 

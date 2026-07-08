@@ -22,6 +22,11 @@ export type PreviewShellProps = {
   backdropTintClassName?: string;
   /** 遮罩下的静态底图（如工作流列表卸载前的截图） */
   backdropImageSrc?: string | null;
+  /**
+   * 全屏壳右侧留白（如工作区快捷侧栏），预览遮罩不覆盖该区域。
+   * 例：`min(28rem, 30vw)`；未设时仍为 `inset-0` 全屏。
+   */
+  shellRightGutter?: string;
 };
 
 /**
@@ -37,6 +42,7 @@ export const PreviewShell = forwardRef<HTMLDivElement, PreviewShellProps>(functi
     zIndexClassName = 'z-[2000]',
     backdropTintClassName = 'bg-black/72 backdrop-blur-sm',
     backdropImageSrc,
+    shellRightGutter,
   },
   ref
 ) {
@@ -104,7 +110,8 @@ export const PreviewShell = forwardRef<HTMLDivElement, PreviewShellProps>(functi
       tabIndex={-1}
       role="dialog"
       aria-modal
-      className={`fixed inset-0 ${zIndexClassName} animate-in fade-in outline-none`}
+      className={`fixed ${shellRightGutter ? 'top-0 left-0 bottom-0' : 'inset-0'} ${zIndexClassName} animate-in fade-in outline-none`}
+      style={shellRightGutter ? { right: shellRightGutter } : undefined}
       data-ac-esc-sink
       data-ac-block-workflow-marquee
       onKeyDownCapture={(e) => {

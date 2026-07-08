@@ -988,8 +988,22 @@ export async function executeCapability(
         ? `${actionLabel}：准备生图（已跳过理解）…`
         : `${actionLabel}：理解图片与提示词中（若失败多为网关超时或模型不可用）…`
     );
-    const prompt = await resolveGenImagePrompt(preset, refs, userT, ctx);
-    if (!prompt) return { ok: false, kind: 'none', error: '该能力为生图执行方式，但未填写预设提示词或理解未返回有效指令', durationMs: Date.now() - start };
+    let prompt: string | null;
+    try {
+      prompt = await resolveGenImagePrompt(preset, refs, userT, ctx);
+    } catch (e) {
+      const msg = normalizeApiErrorMessage(e);
+      logCapabilityRawError(ctx, actionLabel, e, msg);
+      return { ok: false, kind: 'none', error: `[理解步] ${msg}`, durationMs: Date.now() - start };
+    }
+    if (!prompt) {
+      return {
+        ok: false,
+        kind: 'none',
+        error: '该能力为生图执行方式，但未填写预设提示词或理解未返回有效指令',
+        durationMs: Date.now() - start,
+      };
+    }
     const augmented = prompt;
     ctx.onLog?.('info', `[${actionLabel}] 生图中…`, undefined);
     emitCapabilityRunProgress(ctx, `${actionLabel}：生图中（可能较慢）…`);
@@ -1000,12 +1014,18 @@ export async function executeCapability(
       ...(opts?.batchGroupExpected ? { batchGroupExpected: opts.batchGroupExpected } : {}),
     };
     let result: string;
-    if (refs.length >= 2) {
-      ctx.onLog?.('info', `[${actionLabel}] 多参考图生图中（${refs.length} 张）…`, undefined);
-      emitCapabilityRunProgress(ctx, `${actionLabel}：多参考图生图中（${refs.length} 张）…`);
-      result = await workflowGenerateImageMultiRefs(refs, augmented, modelId, imageOptions);
-    } else {
-      result = await workflowGenerateImage(refs[0]!, augmented, modelId, imageOptions, undefined, undefined, batchOpts);
+    try {
+      if (refs.length >= 2) {
+        ctx.onLog?.('info', `[${actionLabel}] 多参考图生图中（${refs.length} 张）…`, undefined);
+        emitCapabilityRunProgress(ctx, `${actionLabel}：多参考图生图中（${refs.length} 张）…`);
+        result = await workflowGenerateImageMultiRefs(refs, augmented, modelId, imageOptions);
+      } else {
+        result = await workflowGenerateImage(refs[0]!, augmented, modelId, imageOptions, undefined, undefined, batchOpts);
+      }
+    } catch (e) {
+      const msg = normalizeApiErrorMessage(e);
+      logCapabilityRawError(ctx, actionLabel, e, msg);
+      return { ok: false, kind: 'none', error: `[生图步] ${msg}`, durationMs: Date.now() - start };
     }
     return {
       ok: true,

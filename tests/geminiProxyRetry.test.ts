@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { isRetryable } from '../server/gemini-proxy-retry.js';
+import {
+  geminiProxyMaxAttempts,
+  geminiProxyRetryDelayMs,
+  isRetryable,
+  isUpstreamRateLimitError,
+} from '../server/gemini-proxy-retry.js';
 
 describe('gemini-proxy-retry isRetryable', () => {
   it('returns true for 429/503/504 message patterns', () => {
@@ -27,5 +32,20 @@ describe('gemini-proxy-retry isRetryable', () => {
     expect(isRetryable(new Error('400 Bad Request'))).toBe(false);
     expect(isRetryable(new Error('401 Unauthorized'))).toBe(false);
     expect(isRetryable(new Error('Missing model or contents'))).toBe(false);
+  });
+});
+
+describe('gemini-proxy-retry upstream 429 plan', () => {
+  it('detects upstream rate limit errors', () => {
+    expect(isUpstreamRateLimitError(new Error('Too Many Requests'))).toBe(true);
+    expect(isUpstreamRateLimitError(new Error('RESOURCE_EXHAUSTED'))).toBe(true);
+    expect(isUpstreamRateLimitError(new Error('rate_limited'))).toBe(false);
+  });
+
+  it('uses fewer attempts and longer delay for upstream 429', () => {
+    const err = new Error('Too Many Requests');
+    expect(geminiProxyMaxAttempts(err, 15)).toBe(1);
+    expect(geminiProxyRetryDelayMs(err, 0)).toBe(60_000);
+    expect(geminiProxyRetryDelayMs(err, 1)).toBe(90_000);
   });
 });

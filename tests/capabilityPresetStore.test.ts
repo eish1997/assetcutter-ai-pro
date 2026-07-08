@@ -112,3 +112,21 @@ describe('enforceBuiltinImageProcessPresets', () => {
     expect((cut as { cutMode?: string } | undefined)?.cutMode).toBeUndefined();
   });
 });
+
+describe('normalizeCapabilityPreset: skipUnderstand seed defaults', () => {
+  it('style_transfer 缺字段时默认直发（skipUnderstand）', () => {
+    const normalized = normalizeCapabilityPreset(
+      makeBasePreset({ id: 'style_transfer', label: '转风格' }),
+      0
+    );
+    expect(normalized.skipUnderstand).toBe(true);
+  });
+
+  it('style_transfer 显式 skipUnderstand:false 时保留理解步', () => {
+    const normalized = normalizeCapabilityPreset(
+      makeBasePreset({ id: 'style_transfer', label: '转风格', skipUnderstand: false }),
+      0
+    );
+    expect(normalized.skipUnderstand).toBe(false);
+  });
+});

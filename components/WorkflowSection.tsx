@@ -252,10 +252,7 @@ import {
 import { captureWorkflowListScrollSnapshot, pickWorkflowCardPlaceholderSrc } from '../services/workflowListPaneSnapshot';
 import { WorkflowLightboxInstantShell } from './workflow/WorkflowLightboxInstantShell';
 import { prefetchWorkflowLightboxImage } from '../services/workflowLightboxPrefetch';
-import {
-  WORKFLOW_OUTLINE_SIDEBAR_WIDTH_PX,
-  resolveWorkflowFunctionSidebarLayout,
-} from '../services/workflowFunctionSidebarLayout';
+import { resolveWorkflowFunctionSidebarLayout } from '../services/workflowFunctionSidebarLayout';
 import { applyRootWorkflowAssetReorder } from '../services/workflowRootAssetReorder';
 import { reorderManualGroupItemIndexes } from '../services/workflowGroupItemReorder';
 import { copyWorkflowAssetIdToClipboard, copyWorkflowAssetOriginalImageToClipboard } from '../services/workflowAssetClipboard';
@@ -273,7 +270,6 @@ import {
   workflowAssetLightboxRasterEligible,
   workflowAssetToInputText,
   workflowPresetAcceptsTextCardDrag,
-  workflowTextAssetOutlineLabel,
 } from '../services/workflowTextAsset';
 import {
   createEmptyStoryboardTableAsset,
@@ -281,7 +277,6 @@ import {
   isWorkflowStoryboardTableAsset,
   normalizeStoryboardTableOnAsset,
   storyboardTableCoverImage,
-  storyboardTableOutlineLabel,
 } from '../services/storyboardTableAsset';
 import StoryboardTablePanel from './storyboard/StoryboardTablePanel';
 import StoryboardTableGridCard from './storyboard/StoryboardTableGridCard';
@@ -378,14 +373,12 @@ import {
   WORKFLOW_LIGHTBOX_BOTTOM_RAIL,
   WORKFLOW_LIGHTBOX_VGP_GRAPH_LEFT_INSET,
   WORKFLOW_LIGHTBOX_ASSET_THUMB_STRIP_INSET,
+  WORKFLOW_LIGHTBOX_COMPOSE_DOCKED_INSET,
   WORKFLOW_IMAGE_PREVIEW_RAIL,
   WORKFLOW_IMAGE_PREVIEW_RAIL_DIVIDER,
   WORKFLOW_CARD_DISMISS_ICON_BTN,
 } from './workflow/workflowSectionUiConstants';
-import {
-  sortRootWorkflowAssetsNewestFirst,
-  workflowOutlineExpandableGroupIds,
-} from './workflow/workflowOutlineUtils';
+import { sortRootWorkflowAssetsNewestFirst } from './workflow/workflowOutlineUtils';
 import {
   getGroupCoverImage,
   getGroupMemberIds,
@@ -444,6 +437,26 @@ import {
   stripCurrentViewFromQuickComposeSegments,
   workflowAssetMentionLabel,
 } from '../services/quickComposeMention';
+import type {
+  QuickComposeChatMessageView,
+  QuickComposeThread,
+  QuickComposeThreadMessage,
+  QuickComposeThreadScope,
+} from '../types/quickComposeThread';
+import {
+  formatQuickComposeTurnContextForPromptOverride,
+  patchQuickComposeThreadMessageStatuses,
+} from '../services/quickComposeTurnContext';
+import {
+  collectQuickComposeAttachmentAssetIds,
+  mapQuickComposeThreadMessagesToChatViews,
+} from '../services/quickComposeChatView';
+import {
+  createQuickComposeThread,
+  loadQuickComposeThread,
+  saveQuickComposeThread,
+  type QuickComposeThreadStoreKey,
+} from '../services/quickComposeThreadStore';
 import { buildWorkflowComposerSeedFromTwoPresets } from './workflow/buildWorkflowComposerSeed';
 import type { CapabilityAssetCandidate } from './CapabilitySetCanvas';
 import { BUILTIN_IMAGE_PROCESS_IDS } from '../services/capabilityPresetStore';
@@ -752,6 +765,21 @@ function isWorkflowInternalSamMaskDisplayKey(dk: string | undefined | null): boo
   return String(dk || '').trim().startsWith('ac_internal_sam_');
 }
 
+export type QuickComposeChatDockHandlers = {
+  messages: QuickComposeChatMessageView[];
+  threadTitle: string;
+  /** Credits blocked — disables typing; does not block attachment drag */
+  isInputDisabled: boolean;
+  /** Credits / empty draft / in-flight assistant — disables send only */
+  isSendDisabled: boolean;
+  onSend: () => void;
+  onRetry: (messageId: string) => void;
+};
+
+function quickComposeLightboxSessionKey(asset: WorkflowAsset): string {
+  return `${asset.id}:${String(asset.displayKey || 'original').trim() || 'original'}`;
+}
+
 const WorkflowSection: React.FC<{
   capabilityPresets: CustomAppModule[];
   capabilitySets?: CapabilitySet[];
@@ -803,6 +831,14 @@ const WorkflowSection: React.FC<{
    * 否则切到设置等页面时条仍会盖在最上层。
    */
   quickComposeShellActive?: boolean;
+  /** App 级右侧侧栏挂载点（工作区 / 大图共用展开态 portal 目标） */
+  quickComposeWorkspaceDockHostRef?: React.RefObject<HTMLDivElement | null>;
+  /** 工作区快捷栏展开态（供 App 挤压布局；大图预览壳层同步留白） */
+  workspaceQuickComposeExpanded?: boolean;
+  /** 工作区快捷栏展开态变化 */
+  onWorkspaceQuickComposeExpandedChange?: (expanded: boolean) => void;
+  /** 快捷栏展开态聊天 dock（workspace / lightbox 分线程） */
+  onQuickComposeChatDockHandlersChange?: (handlers: QuickComposeChatDockHandlers | null) => void;
 }> = ({
   capabilityPresets,
   capabilitySets: capabilitySetsProp = [],
@@ -824,6 +860,10 @@ const WorkflowSection: React.FC<{
   onboardingKey = null,
   workspaceProjectChrome,
   quickComposeShellActive = true,
+  quickComposeWorkspaceDockHostRef,
+  workspaceQuickComposeExpanded = false,
+  onWorkspaceQuickComposeExpandedChange,
+  onQuickComposeChatDockHandlersChange,
 }) => {
   const { balance: creditBalance, loading: creditBalanceLoading } = useCreditBalance(preferenceScope);
   const assets = useMemo(() => (Array.isArray(assetsProp) ? assetsProp : []), [assetsProp]);
@@ -1207,6 +1247,54 @@ const WorkflowSection: React.FC<{
     }
   }, [lightboxAssetId]);
 
+  const [workspaceQuickComposeThread, setWorkspaceQuickComposeThread] = useState<QuickComposeThread | null>(
+    null
+  );
+  const [lightboxQuickComposeThread, setLightboxQuickComposeThread] = useState<QuickComposeThread | null>(
+    null
+  );
+  const workspaceQuickComposeThreadRef = useRef<QuickComposeThread | null>(null);
+  const lightboxQuickComposeThreadRef = useRef<QuickComposeThread | null>(null);
+  /** 防止连点/Enter 重复入队（thread ref 异步更新前的窗口期） */
+  const quickComposeChatSendGuardRef = useRef(false);
+  useEffect(() => {
+    workspaceQuickComposeThreadRef.current = workspaceQuickComposeThread;
+  }, [workspaceQuickComposeThread]);
+  useEffect(() => {
+    lightboxQuickComposeThreadRef.current = lightboxQuickComposeThread;
+  }, [lightboxQuickComposeThread]);
+
+  const activeWorkspaceProjectId = String(workspaceProjectChrome?.activeProjectId || '').trim();
+  useEffect(() => {
+    if (!activeWorkspaceProjectId) {
+      setWorkspaceQuickComposeThread(null);
+      return;
+    }
+    const key: QuickComposeThreadStoreKey = {
+      userId: preferenceScope,
+      workspaceProjectId: activeWorkspaceProjectId,
+      scope: 'workspace',
+    };
+    setWorkspaceQuickComposeThread(loadQuickComposeThread(key) ?? createQuickComposeThread(key));
+  }, [activeWorkspaceProjectId, preferenceScope]);
+
+  useEffect(() => {
+    const assetId = String(lightboxAssetId || '').trim();
+    if (!assetId || !activeWorkspaceProjectId) {
+      setLightboxQuickComposeThread(null);
+      return;
+    }
+    const asset = assets.find((a) => a.id === assetId);
+    if (!asset) return;
+    const key: QuickComposeThreadStoreKey = {
+      userId: preferenceScope,
+      workspaceProjectId: activeWorkspaceProjectId,
+      scope: 'lightbox',
+      lightboxSessionKey: quickComposeLightboxSessionKey(asset),
+    };
+    setLightboxQuickComposeThread(loadQuickComposeThread(key) ?? createQuickComposeThread(key));
+  }, [lightboxAssetId, activeWorkspaceProjectId, preferenceScope, assets]);
+
   const [archivedDetailAssetId, setArchivedDetailAssetId] = useState<string | null>(null);
   const [executing, setExecuting] = useState(false);
   const [executingQueue, setExecutingQueue] = useState<{ total: number; tasks: WorkflowPendingTask[] } | null>(null);
@@ -1371,9 +1459,6 @@ const WorkflowSection: React.FC<{
   const groupGridRef = useRef<HTMLDivElement>(null);
   const workspaceViewportRef = useRef<HTMLDivElement>(null);
   const workspaceTrackRef = useRef<HTMLDivElement>(null);
-  const outlineScrollRef = useRef<HTMLDivElement>(null);
-  /** 大纲：有 id 表示该组折叠子项；默认全展开 */
-  const [outlineCollapsedIds, setOutlineCollapsedIds] = useState<Set<string>>(() => new Set());
   const centerScrollRef = useRef<HTMLDivElement>(null);
   const listPaneRef = useRef<HTMLDivElement>(null);
   const presetScrollRef = useRef<HTMLDivElement>(null);
@@ -1455,23 +1540,12 @@ const WorkflowSection: React.FC<{
       const listCol = list.parentElement;
       const listColRect = listCol?.getBoundingClientRect();
       if (!listColRect) return false;
-      const outlineEl = outlineScrollRef.current;
       const listCanUp = list.scrollTop > 0;
       const listCanDown = list.scrollTop + list.clientHeight < list.scrollHeight - 1;
       if (origin === 'gutter') {
         const y = e.clientY;
         if (y < listColRect.top || y > listColRect.bottom) return false;
         if (!listCanUp && !listCanDown) return false;
-        e.preventDefault();
-        e.stopPropagation();
-        list.scrollTop += dy;
-        return true;
-      }
-      if (t?.closest('[data-workflow-outline]')) {
-        if (!outlineEl) return false;
-        const oUp = outlineEl.scrollTop > 0;
-        const oDown = outlineEl.scrollTop + outlineEl.clientHeight < outlineEl.scrollHeight - 1;
-        if ((dy < 0 && oUp) || (dy > 0 && oDown)) return false;
         e.preventDefault();
         e.stopPropagation();
         list.scrollTop += dy;
@@ -1581,12 +1655,10 @@ const WorkflowSection: React.FC<{
   );
   const functionSidebarWidth = functionSidebarLayout.functionSidebarWidthPx;
   const showFunctionSidebar = functionSidebarLayout.mode !== 'hidden';
-  const outlineSidebarWidth = WORKFLOW_OUTLINE_SIDEBAR_WIDTH_PX;
   const paneWidth = Math.max(320, workspaceViewportWidth || 0);
   const listPaneWidth = Math.max(320, paneWidth - functionSidebarWidth);
   const presetPaneWidth = listPaneWidth;
-  const trackTotalWidth =
-    listPaneWidth + functionSidebarWidth + presetPaneWidth + outlineSidebarWidth;
+  const trackTotalWidth = listPaneWidth + functionSidebarWidth + presetPaneWidth;
   const assetListMarqueeActive = quickComposeShellActive && !showArchived;
   const marqueeStartRef = useRef(false);
   const prevShowFunctionSidebarRef = useRef(showFunctionSidebar);
@@ -1609,13 +1681,13 @@ const WorkflowSection: React.FC<{
     const prev = prevShowFunctionSidebarRef.current;
     prevShowFunctionSidebarRef.current = showFunctionSidebar;
     if (!showFunctionSidebar) {
-      if (Math.round(workspacePane) === 1) {
-        snapWorkspacePaneToNode(0);
+      if (Math.round(workspacePane) === 0) {
+        snapWorkspacePaneToNode(1);
       }
       return;
     }
-    if (!prev && Math.round(workspacePane) === 0) {
-      snapWorkspacePaneToNode(1);
+    if (!prev && Math.round(workspacePane) === 1) {
+      snapWorkspacePaneToNode(0);
     }
   }, [showFunctionSidebar, workspacePane, snapWorkspacePaneToNode]);
   /** 供 document wheel capture 读取：按住空格时不拦截滚轮，以便滚动资产列表 */
@@ -1654,7 +1726,7 @@ const WorkflowSection: React.FC<{
       window.requestAnimationFrame(emitJump);
       window.setTimeout(emitJump, 220);
     }
-    snapWorkspacePaneToNode(2);
+    snapWorkspacePaneToNode(1);
   }, [snapWorkspacePaneToNode]);
   const jumpToCapabilitySet = useCallback(
     (setId: string) => {
@@ -1668,7 +1740,7 @@ const WorkflowSection: React.FC<{
         window.requestAnimationFrame(emitJump);
         window.setTimeout(emitJump, 220);
       }
-      snapWorkspacePaneToNode(2);
+      snapWorkspacePaneToNode(1);
     },
     [snapWorkspacePaneToNode]
   );
@@ -1711,17 +1783,6 @@ const WorkflowSection: React.FC<{
     setSelectedAssetIds,
     setSelectedGroupItemKeys,
   });
-
-  const toggleOutlineGroupCollapsed = useCallback((groupId: string, e: React.MouseEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setOutlineCollapsedIds((prev) => {
-      const n = new Set(prev);
-      if (n.has(groupId)) n.delete(groupId);
-      else n.add(groupId);
-      return n;
-    });
-  }, []);
 
   const addWorkflowStoryboardTableAsset = useCallback(
     (title?: string): string => {
@@ -1953,53 +2014,6 @@ const WorkflowSection: React.FC<{
       storyboardRedrawPresets,
       workspaceProjectChrome?.activeProjectId,
     ]
-  );
-
-  const navigateOutlineToAsset = useCallback(
-    (asset: WorkflowAsset) => {
-      if (isWorkflowStoryboardTableAsset(asset)) {
-        setGroupFilterId(null);
-        setSelectedGroupItemKeys(new Set());
-        setSelectedRootAssetIds(new Set([asset.id]));
-        openStoryboardTablePanel(asset.id);
-        requestAnimationFrame(() => {
-          cardRefs.current.get(asset.id)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
-        });
-        return;
-      }
-      if (asset.isGroup === true) {
-        setGroupFilterId(asset.id);
-        setSelectedGroupItemKeys(new Set());
-        setSelectedRootAssetIds(new Set());
-        return;
-      }
-      // 如果资产属于某个组，先进入该组
-      if (asset.groupId) {
-        const group = assets.find((a) => a.id === asset.groupId);
-        if (group) {
-          setGroupFilterId(group.id);
-        }
-      }
-      setSelectedGroupItemKeys(new Set());
-      setSelectedRootAssetIds(new Set([asset.id]));
-      requestAnimationFrame(() => {
-        cardRefs.current.get(asset.id)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
-      });
-    },
-    [assets, openStoryboardTablePanel, setSelectedRootAssetIds]
-  );
-
-  const navigateOutlineToGroupItem = useCallback(
-    (group: WorkflowAsset, itemIndex: number) => {
-      // 进入组视图
-      setGroupFilterId(group.id);
-      setSelectedRootAssetIds(new Set());
-      setSelectedGroupItemKeys(new Set([`${group.id}::${itemIndex}`]));
-      requestAnimationFrame(() => {
-        cardRefs.current.get(`${group.id}::${itemIndex}`)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
-      });
-    },
-    [setSelectedRootAssetIds]
   );
 
   const [assetErrors, setAssetErrors] = useState<Map<string, string>>(new Map());
@@ -4165,6 +4179,8 @@ ${lineSvg}
   type QuickComposeSubmitInvokeOptions = {
     overrideImageDataUrls?: string[];
     overrideUserText?: string;
+    /** 伪多轮上下文 + 当前句（由 quickComposeTurnContext 生成） */
+    pseudoMultiTurnPrompt?: string;
     /** 带参考图时即使底部为「文」也走图/3D 链路（大图预览提交） */
     preferImagePipelineWhenImagesAttached?: boolean;
     /** 为 true 时不重置底部快捷栏文案与附图 */
@@ -4175,7 +4191,7 @@ ${lineSvg}
     reuseAssetId?: string;
   };
 
-  const submitQuickComposeImpl = useCallback((invoke?: QuickComposeSubmitInvokeOptions) => {
+  const submitQuickComposeImpl = useCallback((invoke?: QuickComposeSubmitInvokeOptions): string[] => {
     const maxRefs = getQuickComposeMaxRefs();
     const resolved = resolveQuickComposeReferences({
       segments: quickComposeSegmentsRef.current,
@@ -4207,6 +4223,9 @@ ${lineSvg}
     const promptText = buildQuickComposePromptOverride(userPrompt, resolved.referenceContextBlock);
     const userText = (
       invoke?.overrideUserText !== undefined ? invoke.overrideUserText.trim() : promptText
+    ).trim();
+    const effectiveUserText = (
+      invoke?.pseudoMultiTurnPrompt?.trim() || userText
     ).trim();
     const composeMode =
       invoke?.preferImagePipelineWhenImagesAttached && imgsAll.length > 0 && quickComposeMode === 'text'
@@ -4261,7 +4280,7 @@ ${lineSvg}
       }
       if (cardRows.length === 0) {
         onLog?.('warn', '底部快捷栏：没有可用的预设卡片可执行');
-        return;
+        return [];
       }
 
       let totalPlanned = 0;
@@ -4275,7 +4294,7 @@ ${lineSvg}
         typeof window !== 'undefined' &&
         !window.confirm(`将创建 ${totalPlanned} 条队列任务，是否继续？`)
       ) {
-        return;
+        return [];
       }
 
       const newAssets: WorkflowAsset[] = [];
@@ -4288,7 +4307,7 @@ ${lineSvg}
         const taskOverrides = buildQuickComposeGenOverrides(m);
 
         if (mainUrls.length === 0) {
-          const pieceText = buildQuickComposePromptOverride(userPrompt, '', ins);
+          const pieceText = buildQuickComposePromptOverride(effectiveUserText, '', ins);
           if (!pieceText && referenceUrls.length === 0) {
             onLog?.('warn', `底部快捷栏：跳过「${m.label}」（无提示词且无参考图）`);
             continue;
@@ -4325,7 +4344,7 @@ ${lineSvg}
         }
 
         for (const mainUrl of mainUrls) {
-          const built = buildQuickComposeTaskPromptOverride(userPrompt, mainUrl, referenceUrls, maxRef, ins);
+          const built = buildQuickComposeTaskPromptOverride(effectiveUserText, mainUrl, referenceUrls, maxRef, ins);
           const { primary, references, promptOverride } = built;
           if (!primary) {
             onLog?.('warn', `底部快捷栏：跳过「${m.label}」（主图无可用图片）`);
@@ -4381,7 +4400,7 @@ ${lineSvg}
 
       if (newTasks.length === 0) {
         onLog?.('warn', '底部快捷栏：未能创建任何任务（请检查能力与提示词）');
-        return;
+        return [];
       }
       setAssets((prev) => [...prev, ...newAssets]);
       if (executing) {
@@ -4396,17 +4415,17 @@ ${lineSvg}
       }
       setQuickComposePromptCards([]);
       onLog?.('info', `底部快捷栏：已加入 ${newTasks.length} 条执行队列`);
-      return;
+      return newTasks.map((t) => t.id);
     }
 
     /** 无拖入预设：按快捷条「文 / 图 / 3D」内置逻辑，不读侧栏默认能力或「上次预设」 */
     const plainLog: WorkflowPendingTask['logContext'] = 'quick_compose_bar_plain';
-    const plainText = userText;
+    const plainText = effectiveUserText;
 
-    const runPlainBatch = (newAssets: WorkflowAsset[], newTasks: WorkflowPendingTask[]) => {
+    const runPlainBatch = (newAssets: WorkflowAsset[], newTasks: WorkflowPendingTask[]): string[] => {
       if (newTasks.length === 0) {
         onLog?.('warn', '底部快捷栏：无法创建任务');
-        return;
+        return [];
       }
       setAssets((prev) => [...prev, ...newAssets]);
       if (executing) {
@@ -4421,16 +4440,17 @@ ${lineSvg}
       }
       setQuickComposePromptCards([]);
       onLog?.('info', '底部快捷栏：已加入执行队列');
+      return newTasks.map((t) => t.id);
     };
 
     if (composeMode === 'text') {
       if (imgsAll.length > 0) {
         onLog?.('warn', '底部快捷栏：「文」模式请以 @ 引用文字资产，或切换到「图」');
-        return;
+        return [];
       }
       if (!plainText) {
         onLog?.('warn', '底部快捷栏：请输入文字');
-        return;
+        return [];
       }
       const plainMod = getQuickComposePlainModule(QUICK_COMPOSE_PLAIN_TEXT_ACTION_ID)!;
       const taskOverrides = buildQuickComposeGenOverrides(plainMod);
@@ -4440,7 +4460,7 @@ ${lineSvg}
         typeof window !== 'undefined' &&
         !window.confirm(`当前生成数量为 ${countN}，将创建大量任务，是否继续？`)
       ) {
-        return;
+        return [];
       }
       const body = clampWorkflowTextBody(plainText);
       const newAssets: WorkflowAsset[] = [];
@@ -4467,8 +4487,7 @@ ${lineSvg}
         });
         if (task) newTasks.push(task);
       }
-      runPlainBatch(newAssets, newTasks);
-      return;
+      return runPlainBatch(newAssets, newTasks);
     }
 
     if (composeMode === '3d') {
@@ -4478,11 +4497,11 @@ ${lineSvg}
         null;
       if (!mod3d) {
         onLog?.('warn', '底部快捷栏：未找到已启用的「生成3D」能力，请先在能力区添加并启用');
-        return;
+        return [];
       }
       if (imgsAll.length === 0) {
         onLog?.('warn', '底部快捷栏：生成 3D 请 @ 引用图片资产');
-        return;
+        return [];
       }
       const first = imgsAll[0]!;
       const taskOverrides = buildQuickComposeGenOverrides(mod3d);
@@ -4508,8 +4527,7 @@ ${lineSvg}
         ...taskOverrides,
         logContext: plainLog,
       };
-      runPlainBatch([newAsset], [newTask]);
-      return;
+      return runPlainBatch([newAsset], [newTask]);
     }
 
     /* composeMode === 'image' */
@@ -4522,13 +4540,13 @@ ${lineSvg}
       typeof window !== 'undefined' &&
       !window.confirm(`当前生成数量为 ${countN}，将创建大量任务，是否继续？`)
     ) {
-      return;
+      return [];
     }
 
     if (imgsAll.length === 0) {
       if (!plainText) {
         onLog?.('warn', '底部快捷栏：文生图请输入画面描述');
-        return;
+        return [];
       }
       const body = clampWorkflowTextBody(plainText);
       const newAssets: WorkflowAsset[] = [];
@@ -4555,8 +4573,7 @@ ${lineSvg}
         });
         if (task) newTasks.push(task);
       }
-      runPlainBatch(newAssets, newTasks);
-      return;
+      return runPlainBatch(newAssets, newTasks);
     }
 
     const maxRef = maxReferenceImagesForImageModel(plainImgMod.imageModelRegistryId ?? plainImgMod.imageGear);
@@ -4568,7 +4585,7 @@ ${lineSvg}
       typeof window !== 'undefined' &&
       !window.confirm(`当前将创建 ${totalPlainPlanned} 条队列任务，是否继续？`)
     ) {
-      return;
+      return [];
     }
 
     const reuseId = invoke?.reuseAssetId?.trim();
@@ -4576,9 +4593,9 @@ ${lineSvg}
       const exist = assetsRef.current.find((a) => a.id === reuseId);
       if (!exist || !assetLightboxRasterEligible(exist)) {
         onLog?.('warn', '底部快捷栏：无法将任务挂到指定资产');
-        return;
+        return [];
       }
-      const built = buildQuickComposeTaskPromptOverride(userPrompt, plainMainUrls[0]!, plainRefUrls, maxRef);
+      const built = buildQuickComposeTaskPromptOverride(effectiveUserText, plainMainUrls[0]!, plainRefUrls, maxRef);
       const { primary, references, promptOverride } = built;
       const newTasks: WorkflowPendingTask[] = [];
       for (let i = 0; i < countN; i += 1) {
@@ -4607,12 +4624,12 @@ ${lineSvg}
       }
       setQuickComposePromptCards([]);
       onLog?.('info', '底部快捷栏：已加入执行队列');
-      return;
+      return newTasks.map((t) => t.id);
     }
     const newAssets: WorkflowAsset[] = [];
     const newTasks: WorkflowPendingTask[] = [];
     for (const mainUrl of plainMainUrls) {
-      const built = buildQuickComposeTaskPromptOverride(userPrompt, mainUrl, plainRefUrls, maxRef);
+      const built = buildQuickComposeTaskPromptOverride(effectiveUserText, mainUrl, plainRefUrls, maxRef);
       const { primary, references, promptOverride } = built;
       if (!primary) continue;
       for (let i = 0; i < countN; i += 1) {
@@ -4643,7 +4660,7 @@ ${lineSvg}
         });
       }
     }
-    runPlainBatch(newAssets, newTasks);
+    return runPlainBatch(newAssets, newTasks);
   }, [
     quickComposeMode,
     quickComposePromptCards,
@@ -4672,6 +4689,49 @@ ${lineSvg}
       null,
     [actionModules, capabilityPresets]
   );
+
+  useEffect(() => {
+    const syncThread = (
+      thread: QuickComposeThread | null,
+      setThread: React.Dispatch<React.SetStateAction<QuickComposeThread | null>>
+    ) => {
+      if (!thread) return;
+      const nextMessages = patchQuickComposeThreadMessageStatuses(thread, {
+        pending,
+        executingQueue,
+        activeTaskIds,
+        completedTaskIds,
+        assetErrors,
+        cancelledTaskIds: cancelledTaskIdsRef.current,
+        resolveModule: resolveQuickComposeMod,
+      });
+      if (nextMessages === thread.messages) return;
+      setThread((prev) => {
+        if (!prev || prev.id !== thread.id) return prev;
+        const next = { ...prev, messages: nextMessages, updatedAt: Date.now() };
+        const storeKey: QuickComposeThreadStoreKey = {
+          userId: preferenceScope,
+          workspaceProjectId: prev.workspaceProjectId,
+          scope: prev.scope,
+          ...(prev.lightboxSessionKey ? { lightboxSessionKey: prev.lightboxSessionKey } : {}),
+        };
+        saveQuickComposeThread(storeKey, next);
+        return next;
+      });
+    };
+    syncThread(workspaceQuickComposeThread, setWorkspaceQuickComposeThread);
+    syncThread(lightboxQuickComposeThread, setLightboxQuickComposeThread);
+  }, [
+    workspaceQuickComposeThread,
+    lightboxQuickComposeThread,
+    pending,
+    executingQueue,
+    activeTaskIds,
+    completedTaskIds,
+    assetErrors,
+    preferenceScope,
+    resolveQuickComposeMod,
+  ]);
 
   const quickComposeCreditOverrides = useMemo(
     () =>
@@ -4719,14 +4779,241 @@ ${lineSvg}
   const quickComposeSubmitDisabledReason = quickComposeSubmitGate.reason;
 
   const submitQuickCompose = useCallback(
-    (invoke?: QuickComposeSubmitInvokeOptions) => {
+    (invoke?: QuickComposeSubmitInvokeOptions): string[] => {
       if (quickComposeSubmitDisabled) {
         onLog?.('warn', quickComposeSubmitDisabledReason ?? creditsExceededUserMessage());
-        return;
+        return [];
       }
-      submitQuickComposeImpl(invoke);
+      return submitQuickComposeImpl(invoke);
     },
     [quickComposeSubmitDisabled, quickComposeSubmitDisabledReason, onLog, submitQuickComposeImpl]
+  );
+
+  const getQuickComposeThreadStoreKey = useCallback(
+    (scope: QuickComposeThreadScope): QuickComposeThreadStoreKey | null => {
+      if (!activeWorkspaceProjectId) return null;
+      if (scope === 'workspace') {
+        return {
+          userId: preferenceScope,
+          workspaceProjectId: activeWorkspaceProjectId,
+          scope: 'workspace',
+        };
+      }
+      const assetId = String(lightboxAssetIdRef.current || '').trim();
+      const asset = assetsRef.current.find((a) => a.id === assetId);
+      if (!asset) return null;
+      return {
+        userId: preferenceScope,
+        workspaceProjectId: activeWorkspaceProjectId,
+        scope: 'lightbox',
+        lightboxSessionKey: quickComposeLightboxSessionKey(asset),
+      };
+    },
+    [activeWorkspaceProjectId, preferenceScope]
+  );
+
+  const updateQuickComposeThread = useCallback(
+    (
+      scope: QuickComposeThreadScope,
+      updater: (prev: QuickComposeThread) => QuickComposeThread
+    ) => {
+      const storeKey = getQuickComposeThreadStoreKey(scope);
+      const apply = (prev: QuickComposeThread | null): QuickComposeThread | null => {
+        if (!prev || !storeKey) return prev;
+        const next = updater(prev);
+        saveQuickComposeThread(storeKey, next);
+        return next;
+      };
+      if (scope === 'workspace') {
+        setWorkspaceQuickComposeThread((prev) => {
+          const next = apply(prev);
+          if (next) workspaceQuickComposeThreadRef.current = next;
+          return next;
+        });
+      } else {
+        setLightboxQuickComposeThread((prev) => {
+          const next = apply(prev);
+          if (next) lightboxQuickComposeThreadRef.current = next;
+          return next;
+        });
+      }
+    },
+    [getQuickComposeThreadStoreKey]
+  );
+
+  const quickComposeThreadHasInFlightAssistant = useCallback((thread: QuickComposeThread | null) => {
+    if (!thread) return false;
+    return thread.messages.some(
+      (m) =>
+        m.role === 'assistant' &&
+        m.status != null &&
+        m.status !== 'done' &&
+        m.status !== 'error'
+    );
+  }, []);
+
+  const appendQuickComposeThreadTurn = useCallback(
+    (
+      scope: QuickComposeThreadScope,
+      userText: string,
+      taskIds: string[],
+      assetIds?: string[],
+      assistantPreviewText = '已提交，等待结果…'
+    ) => {
+      const trimmed = userText.trim();
+      if (!trimmed) return;
+      const now = Date.now();
+      const normalizedAssetIds = assetIds?.map((id) => id.trim()).filter(Boolean);
+      const userMessage: QuickComposeThreadMessage = {
+        id: uuid(),
+        role: 'user',
+        text: trimmed,
+        timestamp: now,
+        status: 'submitted',
+        ...(normalizedAssetIds?.length ? { assetIds: normalizedAssetIds } : {}),
+      };
+      const assistantMessage: QuickComposeThreadMessage = {
+        id: uuid(),
+        role: 'assistant',
+        text: assistantPreviewText,
+        timestamp: now + 1,
+        status: taskIds.length > 0 ? 'queued' : 'error',
+        taskIds,
+        ...(taskIds.length === 0 ? { errorMessage: '未能创建任务' } : {}),
+      };
+      updateQuickComposeThread(scope, (prev) => ({
+        ...prev,
+        messages: [...prev.messages, userMessage, assistantMessage],
+        updatedAt: Date.now(),
+      }));
+    },
+    [updateQuickComposeThread]
+  );
+
+  const submitQuickComposeWithThread = useCallback(
+    (scope: QuickComposeThreadScope, invoke?: QuickComposeSubmitInvokeOptions): string[] => {
+      const thread =
+        scope === 'workspace'
+          ? workspaceQuickComposeThreadRef.current
+          : lightboxQuickComposeThreadRef.current;
+      if (!thread) return [];
+      if (quickComposeThreadHasInFlightAssistant(thread)) return [];
+      const resolved = resolveQuickComposeReferences({
+        segments: quickComposeSegmentsRef.current,
+        mainDropSlots: quickComposeMainDropSlotsRef.current,
+        referenceDropSlots: quickComposeReferenceDropSlotsRef.current,
+        assets: assetsRef.current,
+        getAssetDisplayImage,
+        maxRefs: getQuickComposeMaxRefs(),
+      });
+      const promptText = buildQuickComposePromptOverride(
+        resolved.userPrompt,
+        resolved.referenceContextBlock
+      );
+      const currentUserText = (invoke?.overrideUserText ?? promptText).trim();
+      if (!currentUserText) return [];
+      const pseudoMultiTurnPrompt = formatQuickComposeTurnContextForPromptOverride(
+        thread.messages,
+        currentUserText
+      );
+      const taskIds = submitQuickCompose({
+        ...invoke,
+        pseudoMultiTurnPrompt,
+        overrideUserText: currentUserText,
+      });
+      const attachmentAssetIds = collectQuickComposeAttachmentAssetIds({
+        segments: quickComposeSegmentsRef.current,
+        mainDropSlots: quickComposeMainDropSlotsRef.current,
+        referenceDropSlots: quickComposeReferenceDropSlotsRef.current,
+        lightboxAssetId: lightboxAssetIdRef.current,
+      });
+      appendQuickComposeThreadTurn(scope, currentUserText, taskIds, attachmentAssetIds);
+      return taskIds;
+    },
+    [
+      appendQuickComposeThreadTurn,
+      getAssetDisplayImage,
+      getQuickComposeMaxRefs,
+      submitQuickCompose,
+    ]
+  );
+
+  const handleQuickComposeChatSend = useCallback(() => {
+    if (quickComposeChatSendGuardRef.current) return;
+    const inLightbox = Boolean(lightboxAssetIdRef.current);
+    const scope: QuickComposeThreadScope = inLightbox ? 'lightbox' : 'workspace';
+    const thread =
+      scope === 'workspace'
+        ? workspaceQuickComposeThreadRef.current
+        : lightboxQuickComposeThreadRef.current;
+    if (!thread) return;
+    if (quickComposeThreadHasInFlightAssistant(thread)) return;
+    quickComposeChatSendGuardRef.current = true;
+    try {
+      if (inLightbox) {
+        submitQuickComposeWithThread(scope, { skipPromptCards: true });
+        return;
+      }
+      submitQuickComposeWithThread(scope);
+    } finally {
+      quickComposeChatSendGuardRef.current = false;
+    }
+  }, [quickComposeThreadHasInFlightAssistant, submitQuickComposeWithThread]);
+
+  const handleQuickComposeChatRetry = useCallback(
+    (messageId: string) => {
+      if (quickComposeChatSendGuardRef.current) return;
+      const inLightbox = Boolean(lightboxAssetIdRef.current);
+      const scope: QuickComposeThreadScope = inLightbox ? 'lightbox' : 'workspace';
+      const thread =
+        scope === 'workspace'
+          ? workspaceQuickComposeThreadRef.current
+          : lightboxQuickComposeThreadRef.current;
+      if (!thread || quickComposeThreadHasInFlightAssistant(thread)) return;
+      const assistantIdx = thread.messages.findIndex((m) => m.id === messageId);
+      if (assistantIdx <= 0) return;
+      const assistant = thread.messages[assistantIdx];
+      if (!assistant || assistant.role !== 'assistant') return;
+      let userText = '';
+      for (let i = assistantIdx - 1; i >= 0; i -= 1) {
+        const m = thread.messages[i];
+        if (m?.role === 'user') {
+          userText = m.text.trim();
+          break;
+        }
+      }
+      if (!userText) return;
+      quickComposeChatSendGuardRef.current = true;
+      try {
+        updateQuickComposeThread(scope, (prev) => ({
+          ...prev,
+          messages: prev.messages.filter((m) => m.id !== messageId),
+          updatedAt: Date.now(),
+        }));
+        const priorMessages = thread.messages.slice(0, assistantIdx - 1);
+        const pseudoMultiTurnPrompt = formatQuickComposeTurnContextForPromptOverride(priorMessages, userText);
+        const taskIds = submitQuickCompose({
+          pseudoMultiTurnPrompt,
+          overrideUserText: userText,
+          ...(inLightbox ? { skipPromptCards: true } : {}),
+        });
+        const attachmentAssetIds = collectQuickComposeAttachmentAssetIds({
+          segments: quickComposeSegmentsRef.current,
+          mainDropSlots: quickComposeMainDropSlotsRef.current,
+          referenceDropSlots: quickComposeReferenceDropSlotsRef.current,
+          lightboxAssetId: lightboxAssetIdRef.current,
+        });
+        appendQuickComposeThreadTurn(scope, userText, taskIds, attachmentAssetIds);
+      } finally {
+        quickComposeChatSendGuardRef.current = false;
+      }
+    },
+    [
+      appendQuickComposeThreadTurn,
+      quickComposeThreadHasInFlightAssistant,
+      submitQuickCompose,
+      updateQuickComposeThread,
+    ]
   );
 
   const submitLightboxQuickCompose = useCallback(() => {
@@ -5582,194 +5869,6 @@ ${lineSvg}
       })
       .sort((a, b) => b.createdAt - a.createdAt);
   }, [assets, showAllInGroup, visibleAssets]);
-
-  const outlineExpandableGroupIds = useMemo(
-    () => workflowOutlineExpandableGroupIds(assets, visibleAssets),
-    [assets, visibleAssets]
-  );
-
-  const expandOutlineAll = useCallback(() => {
-    setOutlineCollapsedIds(new Set());
-  }, []);
-
-  const collapseOutlineAll = useCallback(() => {
-    setOutlineCollapsedIds(new Set(outlineExpandableGroupIds));
-  }, [outlineExpandableGroupIds]);
-
-  const outlineTreeRows = useMemo(() => {
-    const rows: React.ReactElement[] = [];
-    const visit = (
-      a: WorkflowAsset,
-      depth: number,
-      parent: WorkflowAsset | null,
-      indexInParent: number | null,
-      visited: Set<string>
-    ) => {
-      if (visited.has(a.id)) return;
-      visited.add(a.id);
-
-      // 获取标签
-      const label = isWorkflowStoryboardTableAsset(a)
-        ? storyboardTableOutlineLabel(a)
-        : isWorkflowTextAsset(a)
-        ? workflowTextAssetOutlineLabel(a)
-        : a.groupLabel ||
-          (isGroupAsset(a) ? (a.groupKind === 'manual' ? '组' : '切割') : null) ||
-          `图片 ${a.id.slice(0, 8)}`;
-
-      // 获取子成员 ID 列表
-      const childIds = getGroupMemberIds(a);
-      const hasChildren = childIds.length > 0;
-      const expanded = !hasChildren || !outlineCollapsedIds.has(a.id);
-      const isSel =
-        parent != null && indexInParent != null
-          ? selectedGroupItemKeys.has(`${parent.id}::${indexInParent}`)
-          : selectedAssetIds.has(a.id) && !groupFilterId;
-
-      rows.push(
-        <div
-          key={`ol-${a.id}-d${depth}-p${parent?.id ?? 'root'}i${indexInParent ?? -1}`}
-          className="flex items-stretch gap-0.5 min-w-0"
-          style={{ paddingLeft: depth * 10 }}
-        >
-          {hasChildren ? (
-            <button
-              type="button"
-              aria-expanded={expanded}
-              aria-label={expanded ? '折叠子项' : '展开子项'}
-              onClick={(e) => toggleOutlineGroupCollapsed(a.id, e)}
-              className="shrink-0 w-5 h-7 flex items-center justify-center rounded-md text-gray-400 hover:bg-white/10 hover:text-white outline-none focus-visible:ring-1 focus-visible:ring-blue-500/50"
-            >
-              <span className="text-[9px] font-bold leading-none" aria-hidden>
-                {expanded ? '▼' : '▶'}
-              </span>
-            </button>
-          ) : (
-            <span className="shrink-0 w-5 h-7" aria-hidden />
-          )}
-          <button
-            type="button"
-            draggable
-            onDragStart={(e) => {
-              e.stopPropagation();
-              try {
-                const payload: AcWorkflowExportPayload = { mode: 'roots', assetIds: [a.id] };
-                e.dataTransfer.setData(DT_AC_WORKFLOW_EXPORT, JSON.stringify(payload));
-                e.dataTransfer.effectAllowed = 'copy';
-              } catch {
-                /* ignore */
-              }
-            }}
-            onClick={() => {
-              navigateOutlineToAsset(a);
-            }}
-            className={`flex-1 min-w-0 text-left rounded-lg px-2 py-1.5 text-[9px] border transition-colors truncate ${
-              isSel ? 'border-blue-500 bg-[#152642] text-blue-200' : 'border-white/[0.06] bg-[#141416] text-gray-300 hover:bg-white/[0.06]'
-            }`}
-          >
-            {a.archived ? <span className="text-gray-500 mr-1">已归</span> : null}
-            {label}
-            {hasChildren ? (
-              <span className="text-gray-500 ml-1 tabular-nums font-mono text-[8px]">({childIds.length})</span>
-            ) : null}
-          </button>
-        </div>
-      );
-
-      if (!hasChildren || !expanded) return;
-
-      // 遍历子成员
-      childIds.forEach((childId, idx) => {
-        const child = assets.find((x) => x.id === childId);
-        if (!child) {
-          rows.push(
-            <div
-              key={`ol-miss-${a.id}-${idx}`}
-              className="text-[8px] text-amber-600/90 pl-2 py-0.5"
-              style={{ paddingLeft: (depth + 1) * 10 + 20 }}
-            >
-              引用缺失 #{idx + 1}
-            </div>
-          );
-          return;
-        }
-        // 新版结构：子成员直接是资产
-        if (isGroupAsset(child)) {
-          // 子成员也是组，递归遍历
-          visit(child, depth + 1, a, idx, visited);
-        } else {
-          // 普通资产卡片
-          const gk = `${a.id}::${idx}`;
-          const sel = selectedGroupItemKeys.has(gk);
-          rows.push(
-            <div
-              key={`ol-${a.id}-slot-${idx}`}
-              className="flex items-stretch gap-0.5 min-w-0"
-              style={{ paddingLeft: (depth + 1) * 10 }}
-            >
-              <span className="shrink-0 w-5 h-7" aria-hidden />
-              <button
-                type="button"
-                draggable
-                onDragStart={(e) => {
-                  e.stopPropagation();
-                  try {
-                    const payload: AcWorkflowExportPayload = {
-                      mode: 'groupItems',
-                      items: [{ parentId: a.id, index: idx }],
-                    };
-                    e.dataTransfer.setData(DT_AC_WORKFLOW_EXPORT, JSON.stringify(payload));
-                    e.dataTransfer.effectAllowed = 'copy';
-                  } catch {
-                    /* ignore */
-                  }
-                }}
-                onClick={() => {
-                  navigateOutlineToGroupItem(a, idx);
-                }}
-                className={`flex-1 min-w-0 text-left rounded-lg px-2 py-1.5 text-[9px] border transition-colors truncate ${
-                  sel ? 'border-blue-500 bg-[#152642] text-blue-200' : 'border-white/[0.06] bg-[#141416] text-gray-300 hover:bg-white/[0.06]'
-                }`}
-              >
-                <span className="text-gray-500 mr-1">图</span>子项 {idx + 1}
-              </button>
-            </div>
-          );
-        }
-      });
-
-      // 旧版 cutImageGroup 中的纯字符串项（已废弃，但仍兼容）
-      const legacyStringItems = a.cutImageGroup?.filter((item): item is string => typeof item === 'string') ?? [];
-      legacyStringItems.forEach((_item, idx) => {
-        rows.push(
-          <div
-            key={`ol-legacy-${a.id}-${idx}`}
-            className="flex items-stretch gap-0.5 min-w-0"
-            style={{ paddingLeft: (depth + 1) * 10 }}
-          >
-            <span className="shrink-0 w-5 h-7" aria-hidden />
-            <div className="flex-1 min-w-0 text-left rounded-lg px-2 py-1.5 text-[9px] border border-white/[0.06] bg-[#141416] text-gray-500 truncate">
-              <span className="text-gray-500 mr-1">图</span>legacy #{idx + 1}
-            </div>
-          </div>
-        );
-      });
-    };
-
-    const seen = new Set<string>();
-    visibleAssets.forEach((root) => visit(root, 0, null, null, seen));
-    return rows;
-  }, [
-    assets,
-    visibleAssets,
-    outlineCollapsedIds,
-    selectedAssetIds,
-    selectedGroupItemKeys,
-    groupFilterId,
-    navigateOutlineToAsset,
-    navigateOutlineToGroupItem,
-    toggleOutlineGroupCollapsed,
-  ]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -10146,41 +10245,9 @@ ${lineSvg}
     ]
   );
 
-  const activePaneNode = Math.max(0, Math.min(2, Math.round(workspacePane)));
+  const activePaneNode = Math.max(0, Math.min(1, Math.round(workspacePane)));
   const topTitleColumns = useMemo(() => {
-    const outlineExpandDisabled =
-      outlineExpandableGroupIds.size === 0 || outlineCollapsedIds.size === 0;
-    const outlineCollapseDisabled =
-      outlineExpandableGroupIds.size === 0 ||
-      [...outlineExpandableGroupIds].every((id) => outlineCollapsedIds.has(id));
-
-    /** 工作区同屏时：资产树大纲 */
-    const outlineWorkflowTopBarColumn = {
-      title: '大纲',
-      desc: '窄栏与功能区同宽；与工作区同屏时在视口右侧',
-      actions: (
-        <div className="flex flex-wrap items-center gap-1.5 whitespace-nowrap">
-          <button
-            type="button"
-            onClick={expandOutlineAll}
-            disabled={outlineExpandDisabled}
-            className={TITLE_ROW_BTN_NEUTRAL}
-          >
-            展开
-          </button>
-          <button
-            type="button"
-            onClick={collapseOutlineAll}
-            disabled={outlineCollapseDisabled}
-            className={TITLE_ROW_BTN_NEUTRAL}
-          >
-            折叠
-          </button>
-        </div>
-      ),
-    };
-
-    if (activePaneNode === 0 || activePaneNode === 1) {
+    if (activePaneNode === 0) {
       const selectableCount = visibleAssets.filter(
         (a) => !isGroupAsset(a) && !pending.some((t) => t.assetId === a.id)
       ).length;
@@ -10385,7 +10452,6 @@ ${lineSvg}
             ]
           : []),
       ];
-      if (activePaneNode === 0) return [workspaceAndFunctionCols[0]!, outlineWorkflowTopBarColumn];
       if (!showFunctionSidebar) return [workspaceAndFunctionCols[0]!];
       return [workspaceAndFunctionCols[1]!, workspaceAndFunctionCols[0]!];
     }
@@ -10568,10 +10634,6 @@ ${lineSvg}
     capabilityPresetTypeFilter,
     capabilityPresetColumnCount,
     currentGroupMemberIds,
-    outlineCollapsedIds,
-    outlineExpandableGroupIds,
-    expandOutlineAll,
-    collapseOutlineAll,
     storyboardExportRunning,
     storyboardExportPct,
     storyboardExportTitle,
@@ -10584,12 +10646,196 @@ ${lineSvg}
     parseWorkflowDragSource(draggingAssetIds, draggingGroupItems),
     showArchived
   );
+  const quickComposeInLightbox = Boolean(
+    lightboxAsset && !showArchived && lightboxRasterChrome && !lightboxUiHidden
+  );
+  const handleQuickComposeInputExpandedChange = useCallback(
+    (expanded: boolean) => {
+      onWorkspaceQuickComposeExpandedChange?.(expanded);
+    },
+    [onWorkspaceQuickComposeExpandedChange]
+  );
+  const quickComposeBarVisible =
+    !promptTweakModal &&
+    (quickComposeInLightbox || (quickComposeShellActive && !lightboxAsset));
+
+  const activeQuickComposeThread = quickComposeInLightbox
+    ? lightboxQuickComposeThread
+    : workspaceQuickComposeThread;
+
+  /** 积分加载中仍允许输入；仅登录/余额已确认不足时禁用输入 */
+  const quickComposeChatDockInputDisabled = quickComposeCreditsBypass
+    ? false
+    : !String(preferenceScope ?? '').trim()
+      ? quickComposeSubmitDisabled
+      : creditBalance != null && quickComposeSubmitDisabled;
+
+  const quickComposeChatDockSubmitDisabled =
+    quickComposeSubmitDisabled ||
+    !quickComposeDraft.trim() ||
+    quickComposeThreadHasInFlightAssistant(activeQuickComposeThread);
+
+  const quickComposeChatDockHandlers = useMemo((): QuickComposeChatDockHandlers | null => {
+    if (!quickComposeBarVisible) return null;
+    const threadTitle = quickComposeInLightbox
+      ? (() => {
+          const asset = lightboxAssetId
+            ? assets.find((a) => a.id === lightboxAssetId)
+            : null;
+          return asset ? workflowAssetMentionLabel(asset) : '大图预览';
+        })()
+      : workspaceProjectChrome?.activeProjectName || '工作区';
+    const messages: QuickComposeChatMessageView[] = activeQuickComposeThread
+      ? mapQuickComposeThreadMessagesToChatViews(activeQuickComposeThread.messages, {
+          assets,
+          pending,
+          executingQueue,
+          getAssetDisplayImage,
+          getAssetLabel: workflowAssetMentionLabel,
+        })
+      : [];
+    return {
+      messages,
+      threadTitle,
+      isInputDisabled: quickComposeChatDockInputDisabled,
+      isSendDisabled: quickComposeChatDockSubmitDisabled,
+      onSend: handleQuickComposeChatSend,
+      onRetry: handleQuickComposeChatRetry,
+    };
+  }, [
+    activeQuickComposeThread,
+    quickComposeBarVisible,
+    quickComposeInLightbox,
+    quickComposeChatDockInputDisabled,
+    quickComposeChatDockSubmitDisabled,
+    handleQuickComposeChatSend,
+    handleQuickComposeChatRetry,
+    quickComposeCreditsBypass,
+    preferenceScope,
+    creditBalance,
+    lightboxAssetId,
+    assets,
+    pending,
+    executingQueue,
+    getAssetDisplayImage,
+    workspaceProjectChrome?.activeProjectName,
+  ]);
+
+  useEffect(() => {
+    onQuickComposeChatDockHandlersChange?.(quickComposeChatDockHandlers);
+    return () => {
+      onQuickComposeChatDockHandlersChange?.(null);
+    };
+  }, [onQuickComposeChatDockHandlersChange, quickComposeChatDockHandlers]);
+
+  const quickComposeBarCommonProps = useMemo(
+    () => ({
+      visible: quickComposeBarVisible,
+      placement: (quickComposeInLightbox ? 'lightbox' : 'floating') as 'lightbox' | 'floating',
+      composeMode: quickComposeMode,
+      onComposeModeChange: setQuickComposeMode,
+      inputPresetsActive: quickComposeInLightbox ? false : quickComposePromptCards.length > 0,
+      segments: quickComposeSegments,
+      onSegmentsChange: setQuickComposeSegmentsTracked,
+      mentionCandidates: quickComposeMentionCandidates,
+      mainDropSlots: quickComposeMainDropSlots,
+      referenceDropSlots: quickComposeReferenceDropSlots,
+      onRemoveMainDropSlot: removeQuickComposeMainDropSlot,
+      onRemoveReferenceDropSlot: removeQuickComposeReferenceDropSlot,
+      onMoveDropSlot: moveQuickComposeDropSlot,
+      onReorderDropSlot: reorderQuickComposeDropSlot,
+      hideMainDropZone: quickComposeInLightbox,
+      pasteAssetRefZone: quickComposeInLightbox ? ('reference' as const) : undefined,
+      maxMentions: quickComposeMaxReferenceImages,
+      onSubmit: quickComposeChatDockHandlers
+        ? quickComposeChatDockHandlers.onSend
+        : quickComposeInLightbox
+          ? () => void submitLightboxQuickCompose()
+          : submitQuickCompose,
+      inputDisabled: quickComposeChatDockHandlers?.isInputDisabled ?? quickComposeSubmitDisabled,
+      submitDisabled: quickComposeChatDockHandlers?.isSendDisabled ?? quickComposeSubmitDisabled,
+      submitDisabledReason: quickComposeSubmitDisabledReason,
+      creditsEstimateSteps: quickComposeCreditsBypass ? undefined : quickComposePlan,
+      creditBalance,
+      showGenImageSettings: quickComposeShowGenImageSettings,
+      showGenTextSettings: quickComposeShowGenTextSettings,
+      allowBatchCount: quickComposeAllowBatchCount,
+      onComposeInputCapabilityDrop: quickComposeInLightbox ? undefined : onQuickComposeInputCapabilityDrop,
+      onComposeInputWorkflowDrop: quickComposeInLightbox ? undefined : handleQuickComposeWorkflowDrop,
+      onPasteAssetRefs: handleQuickComposePasteAssetRefs,
+      promptCards: quickComposeInLightbox ? [] : quickComposePromptCards,
+      onRemovePromptCard: (key: string) =>
+        setQuickComposePromptCards((prev) => prev.filter((c) => c.key !== key)),
+      genSettings: {
+        imageModelRegistryId: quickComposeImageModel,
+        onImageModelRegistryId: setQuickComposeImageModel,
+        textModelRegistryId: quickComposeTextModel,
+        onTextModelRegistryId: setQuickComposeTextModel,
+        aspectRatio: quickComposeAspect,
+        onAspectRatio: setQuickComposeAspect,
+        imageSize: quickComposeSize,
+        onImageSize: setQuickComposeSize,
+        count: quickComposeCount,
+        onCount: setQuickComposeCount,
+        understand: quickComposeUnderstand,
+        onUnderstand: setQuickComposeUnderstand,
+      },
+      placeholderOverride: quickComposeInLightbox
+        ? '描述修改意图；需要时可 @ 当前画面或其它资产'
+        : undefined,
+      chatDockProps: quickComposeChatDockHandlers
+        ? {
+            messages: quickComposeChatDockHandlers.messages,
+            onRetryMessage: quickComposeChatDockHandlers.onRetry,
+            threadEmptyTitle: '开始对话',
+            threadEmptyHint: '输入描述并发送，生成结果会出现在助手消息中',
+            minimizeDisabled: false,
+          }
+        : undefined,
+    }),
+    [
+      quickComposeBarVisible,
+      quickComposeInLightbox,
+      quickComposeMode,
+      quickComposePromptCards,
+      quickComposeSegments,
+      quickComposeMentionCandidates,
+      quickComposeMainDropSlots,
+      quickComposeReferenceDropSlots,
+      removeQuickComposeMainDropSlot,
+      removeQuickComposeReferenceDropSlot,
+      moveQuickComposeDropSlot,
+      reorderQuickComposeDropSlot,
+      quickComposeMaxReferenceImages,
+      submitLightboxQuickCompose,
+      submitQuickCompose,
+      quickComposeSubmitDisabled,
+      quickComposeSubmitDisabledReason,
+      quickComposeCreditsBypass,
+      quickComposePlan,
+      creditBalance,
+      quickComposeShowGenImageSettings,
+      quickComposeShowGenTextSettings,
+      quickComposeAllowBatchCount,
+      onQuickComposeInputCapabilityDrop,
+      handleQuickComposeWorkflowDrop,
+      handleQuickComposePasteAssetRefs,
+      quickComposeImageModel,
+      quickComposeTextModel,
+      quickComposeAspect,
+      quickComposeSize,
+      quickComposeCount,
+      quickComposeUnderstand,
+      quickComposeChatDockHandlers,
+    ]
+  );
 
   return (
     <>
     <WorkflowSpaceMarqueeChrome
       active={spaceMarqueeEnabled && assetListMarqueeActive}
       listPaneRef={listPaneRef}
+      sidebarExcludeRef={quickComposeWorkspaceDockHostRef}
       workspacePane={workspacePane}
       onMarqueePointerDown={beginSpaceMarqueePointerDrag}
       onDimWheel={applyWheelToAssetListWhileSpaceMarquee}
@@ -10597,8 +10843,8 @@ ${lineSvg}
     {!showArchived && assetListMarqueeActive ? (
       <WorkflowMarqueeOverlay rectRef={marqueeOverlayElRef} />
     ) : null}
-    <div className="flex h-full min-h-0 flex-col gap-2">
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-2">
+    <div className="flex h-full min-h-0 min-w-0 flex-col gap-2">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-2 overflow-hidden">
       <div className={`flex flex-col items-stretch gap-1.5 shrink-0 ${WORKFLOW_EDGE_GUTTER}`}>
         <div className="py-0.5" onWheelCapture={handlePaneWheel} data-workflow-topbar>
           <div className="flex min-h-7 items-center gap-1.5">
@@ -10669,13 +10915,12 @@ ${lineSvg}
             <div
               className="flex shrink-0 items-center gap-0.5"
               role="group"
-              aria-label="卷轴分档：1 能力+功能区 2 功能区+工作区 3 工作区+大纲"
+              aria-label="卷轴分档：1 能力+功能区 2 功能区+工作区"
             >
               {(
                 [
-                  { pane: 2 as const, k: '1', t: '能力 + 功能区' },
-                  { pane: 1 as const, k: '2', t: '功能区 + 工作区' },
-                  { pane: 0 as const, k: '3', t: '工作区 + 大纲' },
+                  { pane: 1 as const, k: '1', t: '能力 + 功能区' },
+                  { pane: 0 as const, k: '2', t: '功能区 + 工作区' },
                 ] as const
               ).map(({ pane, k, t }) => {
                 const on = Math.round(workspacePane) === pane;
@@ -10716,7 +10961,7 @@ ${lineSvg}
             <div
               className="h-full rounded-full bg-blue-500/40 transition-[width] duration-150 ease-out"
               style={{
-                width: `${Math.max(0, Math.min(100, ((2 - workspacePane) / 2) * 100))}%`,
+                width: `${Math.max(0, Math.min(100, (1 - workspacePane) * 100))}%`,
               }}
             />
           </div>
@@ -10728,7 +10973,7 @@ ${lineSvg}
         loading={creditBalanceLoading}
       />
 
-      <div className="flex-1 min-h-0 flex flex-col overflow-hidden min-w-0">
+      <div className="flex flex-1 min-h-0 min-w-0 flex-col overflow-hidden">
         <div
           ref={workspaceViewportRef}
           className="flex-1 min-h-0 overflow-hidden"
@@ -10739,7 +10984,7 @@ ${lineSvg}
             className={`flex h-full min-h-0 items-stretch overflow-hidden motion-reduce:transition-none${workspaceSnapping ? ' will-change-transform' : ''}`}
             style={{ width: `${trackTotalWidth}px` }}
           >
-        {/* 从左到右：能力预设 | 功能区 | 工作区 | 大纲（前两列锁在同一 flex 行内，避免被压成上下叠） */}
+        {/* 从左到右：能力预设 | 功能区 | 工作区 */}
         <div
           className="flex h-full min-h-0 max-h-full shrink-0 flex-row flex-nowrap self-stretch overflow-hidden"
           style={{ width: `${presetPaneWidth + functionSidebarWidth}px` }}
@@ -10826,7 +11071,7 @@ ${lineSvg}
             jumpToCapabilitySet={jumpToCapabilitySet}
             onDropPresetFromEditor={handleActivatePresetFromEditorDrop}
             onDropPresetAction={handlePresetActionDrop}
-            topActionMode={activePaneNode === 2 ? 'capabilityPreset' : 'asset'}
+            topActionMode={activePaneNode === 1 ? 'capabilityPreset' : 'asset'}
             onComposeCapabilities={handleComposeCapabilities}
             linkedComposeSearchQuery={quickComposeDraft}
             onLinkHoverPresetIds={setSidebarLinkHoverPresetIds}
@@ -12111,31 +12356,8 @@ ${lineSvg}
         </div>
 
         </div>
-        <div
-          data-workflow-outline
-          className="h-full min-h-0 max-h-full shrink-0 flex flex-col overflow-hidden pr-3 min-w-0"
-          style={{ width: `${outlineSidebarWidth}px` }}
-        >
-          <div
-            ref={outlineScrollRef}
-            data-workflow-scroll-port="outline"
-            className="workflow-scroll-port flex h-0 flex-1 min-w-0 min-h-0 overflow-y-auto overscroll-y-contain no-scrollbar flex flex-col gap-0.5 px-3 pt-2 pb-2"
-          >
-            {visibleAssets.length === 0 ? (
-              <div className="my-3 flex flex-col items-center rounded-xl bg-white/[0.03] px-4 py-6 text-center ring-1 ring-white/[0.06]">
-                <p className="text-[9px] font-black uppercase tracking-wide text-gray-500">大纲为空</p>
-                <p className="mt-1.5 max-w-[14rem] text-[8px] leading-relaxed text-gray-600">
-                  导入图片或使用能力生成后，根资产将按层级显示在此
-                </p>
-              </div>
-            ) : !lightboxAssetId ? (
-              outlineTreeRows
-            ) : null}
-          </div>
         </div>
         </div>
-        </div>
-      </div>
       </div>
 
       {storyboardPanelAsset && !showArchived && (
@@ -12251,8 +12473,27 @@ ${lineSvg}
             lightboxRasterChrome ? handleLightboxPreviewLayoutChange : undefined
           }
           onUiHiddenChange={handleLightboxUiHiddenChange}
+          shellRightGutter={
+            workspaceQuickComposeExpanded ? WORKFLOW_LIGHTBOX_COMPOSE_DOCKED_INSET : undefined
+          }
           contentRightInset={
             lightboxChromeReady ? WORKFLOW_LIGHTBOX_ASSET_THUMB_STRIP_INSET : '0px'
+          }
+          rightRail={
+            lightboxChromeReady && !lightboxUiHidden ? (
+              <WorkflowLightboxAssetThumbStrip
+                assets={lightboxList}
+                activeAssetId={lightboxAsset.id}
+                onSelectAsset={handleLightboxStripSelect}
+                getPreviewSrc={getLightboxPreviewImageSrc}
+                canCopyImage={canWorkflowAssetCopyImage}
+                onCopyImage={handleWorkflowAssetCopyImage}
+                onCopyId={handleWorkflowAssetCopyId}
+                onAddToComposeInput={handleWorkflowAssetAddToComposeInput}
+                canAddToComposeInput={canWorkflowAssetAddToComposeInput}
+                getMediaVariant={(asset) => (workflowResultUsesVideoPreview(asset) ? 'video' : 'image')}
+              />
+            ) : undefined
           }
           contentLeftInset={
             lightboxChromeReady &&
@@ -12415,20 +12656,8 @@ ${lineSvg}
         >
           {lightboxChromeReady ? (
           <>
-          <WorkflowLightboxAssetThumbStrip
-            assets={lightboxList}
-            activeAssetId={lightboxAsset.id}
-            onSelectAsset={handleLightboxStripSelect}
-            getPreviewSrc={getLightboxPreviewImageSrc}
-            canCopyImage={canWorkflowAssetCopyImage}
-            onCopyImage={handleWorkflowAssetCopyImage}
-            onCopyId={handleWorkflowAssetCopyId}
-            onAddToComposeInput={handleWorkflowAssetAddToComposeInput}
-            canAddToComposeInput={canWorkflowAssetAddToComposeInput}
-            getMediaVariant={(asset) => (workflowResultUsesVideoPreview(asset) ? 'video' : 'image')}
-          />
           <WorkflowLightboxDetailEdgePanel
-            edgeRightClassName="right-14"
+            edgeRightClassName="right-0"
             heightfieldToolbarHostRef={lightboxHeightfieldToolbarHostRef}
             heightfieldToolbarHostClassName={
               lightboxRasterChrome && lightboxPreviewLayout === 'heightfield'
@@ -12755,7 +12984,19 @@ ${lineSvg}
         !lightboxUiHidden &&
         typeof document !== 'undefined' &&
         createPortal(
-          <div className="pointer-events-none fixed inset-0 z-[2400]">
+          <div
+            className="pointer-events-none fixed z-[2400]"
+            style={{
+              top: 0,
+              left: 0,
+              bottom: 0,
+              right: workspaceQuickComposeExpanded
+                ? WORKFLOW_LIGHTBOX_COMPOSE_DOCKED_INSET
+                : lightboxChromeReady
+                  ? WORKFLOW_LIGHTBOX_ASSET_THUMB_STRIP_INSET
+                  : 0,
+            }}
+          >
             <ImageAnnotationLightboxToolbar
               tool={lightboxOverlayTool}
               onToolChange={applyLightboxToolChange}
@@ -12862,66 +13103,13 @@ ${lineSvg}
                   : undefined
               }
               canvasAdjust={lightboxAnnotationCanvasAdjust}
+              composeDockExpanded={workspaceQuickComposeExpanded}
+              lightboxChromeReady={lightboxChromeReady}
             />
           </div>,
           document.body
         )}
 
-      {lightboxAsset &&
-        !showArchived &&
-        lightboxRasterChrome &&
-        !lightboxUiHidden &&
-        typeof document !== 'undefined' &&
-        createPortal(
-          <WorkspaceQuickComposeBar
-            visible
-            placement="lightbox"
-            lightboxAnchorClient={lightboxQuickComposeAnchor}
-            lightboxLayoutResetNonce={lightboxQuickComposeLayoutNonce}
-            placeholderOverride="描述修改意图；需要时可 @ 当前画面或其它资产"
-            composeMode={quickComposeMode}
-            onComposeModeChange={setQuickComposeMode}
-            inputPresetsActive={false}
-            segments={quickComposeSegments}
-            onSegmentsChange={setQuickComposeSegmentsTracked}
-            mentionCandidates={quickComposeMentionCandidates}
-            mainDropSlots={quickComposeMainDropSlots}
-            referenceDropSlots={quickComposeReferenceDropSlots}
-            onRemoveMainDropSlot={removeQuickComposeMainDropSlot}
-            onRemoveReferenceDropSlot={removeQuickComposeReferenceDropSlot}
-            onMoveDropSlot={moveQuickComposeDropSlot}
-            onReorderDropSlot={reorderQuickComposeDropSlot}
-            hideMainDropZone
-            pasteAssetRefZone="reference"
-            maxMentions={quickComposeMaxReferenceImages}
-            onSubmit={() => void submitLightboxQuickCompose()}
-            submitDisabled={quickComposeSubmitDisabled}
-            submitDisabledReason={quickComposeSubmitDisabledReason}
-            creditsEstimateSteps={quickComposeCreditsBypass ? undefined : quickComposePlan}
-            creditBalance={creditBalance}
-            showGenImageSettings={quickComposeShowGenImageSettings}
-            showGenTextSettings={quickComposeShowGenTextSettings}
-            allowBatchCount={quickComposeAllowBatchCount}
-            onPasteAssetRefs={handleQuickComposePasteAssetRefs}
-            promptCards={[]}
-            onRemovePromptCard={() => {}}
-            genSettings={{
-              imageModelRegistryId: quickComposeImageModel,
-              onImageModelRegistryId: setQuickComposeImageModel,
-              textModelRegistryId: quickComposeTextModel,
-              onTextModelRegistryId: setQuickComposeTextModel,
-              aspectRatio: quickComposeAspect,
-              onAspectRatio: setQuickComposeAspect,
-              imageSize: quickComposeSize,
-              onImageSize: setQuickComposeSize,
-              count: quickComposeCount,
-              onCount: setQuickComposeCount,
-              understand: quickComposeUnderstand,
-              onUnderstand: setQuickComposeUnderstand,
-            }}
-          />,
-          document.body
-        )}
 
       {lightboxRembgInstallModalOpen &&
         typeof document !== 'undefined' &&
@@ -13525,55 +13713,16 @@ ${lineSvg}
           }}
         />
       )}
+      </div>
     </div>
     {typeof document !== 'undefined'
       ? createPortal(
           <WorkspaceQuickComposeBar
-            visible={
-              quickComposeShellActive && !lightboxAsset && !promptTweakModal
-            }
-            composeMode={quickComposeMode}
-            onComposeModeChange={setQuickComposeMode}
-            inputPresetsActive={quickComposePromptCards.length > 0}
-            segments={quickComposeSegments}
-            onSegmentsChange={setQuickComposeSegmentsTracked}
-            mentionCandidates={quickComposeMentionCandidates}
-            mainDropSlots={quickComposeMainDropSlots}
-            referenceDropSlots={quickComposeReferenceDropSlots}
-            onRemoveMainDropSlot={removeQuickComposeMainDropSlot}
-            onRemoveReferenceDropSlot={removeQuickComposeReferenceDropSlot}
-            onMoveDropSlot={moveQuickComposeDropSlot}
-            onReorderDropSlot={reorderQuickComposeDropSlot}
-            maxMentions={quickComposeMaxReferenceImages}
-            onSubmit={submitQuickCompose}
-            submitDisabled={quickComposeSubmitDisabled}
-            submitDisabledReason={quickComposeSubmitDisabledReason}
-            creditsEstimateSteps={quickComposeCreditsBypass ? undefined : quickComposePlan}
-            creditBalance={creditBalance}
-            showGenImageSettings={quickComposeShowGenImageSettings}
-            showGenTextSettings={quickComposeShowGenTextSettings}
-            allowBatchCount={quickComposeAllowBatchCount}
-            onComposeInputCapabilityDrop={onQuickComposeInputCapabilityDrop}
-            onComposeInputWorkflowDrop={handleQuickComposeWorkflowDrop}
-            onPasteAssetRefs={handleQuickComposePasteAssetRefs}
-            promptCards={quickComposePromptCards}
-            onRemovePromptCard={(key) =>
-              setQuickComposePromptCards((prev) => prev.filter((c) => c.key !== key))
-            }
-            genSettings={{
-              imageModelRegistryId: quickComposeImageModel,
-              onImageModelRegistryId: setQuickComposeImageModel,
-              textModelRegistryId: quickComposeTextModel,
-              onTextModelRegistryId: setQuickComposeTextModel,
-              aspectRatio: quickComposeAspect,
-              onAspectRatio: setQuickComposeAspect,
-              imageSize: quickComposeSize,
-              onImageSize: setQuickComposeSize,
-              count: quickComposeCount,
-              onCount: setQuickComposeCount,
-              understand: quickComposeUnderstand,
-              onUnderstand: setQuickComposeUnderstand,
-            }}
+            {...quickComposeBarCommonProps}
+            lightboxAnchorClient={quickComposeInLightbox ? lightboxQuickComposeAnchor : null}
+            lightboxLayoutResetNonce={quickComposeInLightbox ? lightboxQuickComposeLayoutNonce : 0}
+            expandedDockHostRef={quickComposeWorkspaceDockHostRef}
+            onInputExpandedChange={handleQuickComposeInputExpandedChange}
           />,
           document.body
         )

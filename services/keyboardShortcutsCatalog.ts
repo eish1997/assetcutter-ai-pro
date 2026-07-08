@@ -47,7 +47,7 @@ const WORKFLOW_CANVAS: KeyboardShortcutsSection = {
     { keys: 'Alt + 拖动', description: '框选时从当前选择中减选' },
     { keys: 'Q / E', description: '鼠标悬停资产卡片时，切换上一张 / 下一张预览' },
     { keys: 'W（按住）', description: '鼠标悬停资产卡片时，居中放大卡片' },
-    { keys: '1 / 2 / 3', description: '切换画卷分档：能力+功能 / 功能+工作区 / 工作区+大纲' },
+    { keys: '1 / 2', description: '切换画卷分档：能力+功能 / 功能+工作区' },
     { keys: '0', description: '切换到最左档（同 1）' },
   ],
 };

@@ -39,7 +39,12 @@ import {
   estimatedCreditsFromProxyBody,
   isGeminiProxyCreditsGateEnabled,
 } from './gemini-proxy-credits-gate.js';
-import { isRetryable } from './gemini-proxy-retry.js';
+import {
+  geminiProxyMaxAttempts,
+  geminiProxyRetryDelayMs,
+  isRetryable,
+  isUpstreamRateLimitError,
+} from './gemini-proxy-retry.js';
 
 /** 与 auth-api 一致：本地访问 Google API 常需 TRIPO_PROXY / HTTPS_PROXY（见 .env.local） */
 const GEMINI_OUTBOUND_PROXY = String(
@@ -684,10 +689,11 @@ async function runGeminiAsyncJob(jobId) {
     if (!job) return;
     if (!isFairnessEnabled()) job.status = 'running';
     const { model, contents, config, useVertex } = job;
-    const GEMINI_PROXY_MAX_ATTEMPTS = Number(process.env.GEMINI_PROXY_RETRIES) || 15;
+    const overloadMaxAttempts = Number(process.env.GEMINI_PROXY_RETRIES) || 15;
     const startedAt = Date.now();
     let lastErr;
-    for (let attempt = 0; attempt < GEMINI_PROXY_MAX_ATTEMPTS; attempt++) {
+    let attempt = 0;
+    for (;;) {
       try {
         if (Date.now() - startedAt > GEMINI_ASYNC_JOB_MAX_WAIT_MS) {
           throw new Error(`Gemini 异步任务最大等待超时（>${GEMINI_ASYNC_JOB_MAX_WAIT_MS}ms）`);
@@ -703,11 +709,16 @@ async function runGeminiAsyncJob(jobId) {
         return;
       } catch (e) {
         lastErr = e;
-        const shouldRetry = attempt < GEMINI_PROXY_MAX_ATTEMPTS - 1 && isRetryable(e);
+        const maxAttempts = geminiProxyMaxAttempts(e, overloadMaxAttempts);
+        const shouldRetry = attempt < maxAttempts - 1 && isRetryable(e);
         if (!shouldRetry) break;
-        const delay = Math.min(30_000, 5000 * Math.pow(2, attempt));
-        console.warn(`[gemini-proxy] async retry id=${jobId} attempt=${attempt + 1} delay=${delay}ms`);
+        const delay = geminiProxyRetryDelayMs(e, attempt);
+        const kind = isUpstreamRateLimitError(e) ? 'upstream_rate_limit' : 'overload';
+        console.warn(
+          `[gemini-proxy] async retry id=${jobId} kind=${kind} attempt=${attempt + 1}/${maxAttempts - 1} delay=${delay}ms`
+        );
         await sleep(delay);
+        attempt += 1;
       }
     }
     const j = geminiAsyncJobs.get(jobId);
@@ -859,10 +870,11 @@ function createGeminiAsyncBatchJob(normalizedItems, useVertex, fairnessKey) {
 }
 
 async function runGeminiWithRetries(model, contents, config, useVertex) {
-  const GEMINI_PROXY_MAX_ATTEMPTS = Number(process.env.GEMINI_PROXY_RETRIES) || 15;
+  const overloadMaxAttempts = Number(process.env.GEMINI_PROXY_RETRIES) || 15;
   const startedAt = Date.now();
   let lastErr;
-  for (let attempt = 0; attempt < GEMINI_PROXY_MAX_ATTEMPTS; attempt++) {
+  let attempt = 0;
+  for (;;) {
     try {
       if (Date.now() - startedAt > GEMINI_ASYNC_JOB_MAX_WAIT_MS) {
         throw new Error(`Gemini 异步任务最大等待超时（>${GEMINI_ASYNC_JOB_MAX_WAIT_MS}ms）`);
@@ -872,10 +884,11 @@ async function runGeminiWithRetries(model, contents, config, useVertex) {
       );
     } catch (e) {
       lastErr = e;
-      const shouldRetry = attempt < GEMINI_PROXY_MAX_ATTEMPTS - 1 && isRetryable(e);
+      const maxAttempts = geminiProxyMaxAttempts(e, overloadMaxAttempts);
+      const shouldRetry = attempt < maxAttempts - 1 && isRetryable(e);
       if (!shouldRetry) break;
-      const delay = Math.min(30_000, 5000 * Math.pow(2, attempt));
-      await sleep(delay);
+      await sleep(geminiProxyRetryDelayMs(e, attempt));
+      attempt += 1;
     }
   }
   throw lastErr instanceof Error ? lastErr : new Error(formatErrorDetail(lastErr));
