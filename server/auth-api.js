@@ -457,7 +457,11 @@ function applyCors(req, res) {
   res.setHeader('Access-Control-Allow-Credentials', 'true');
   /** 须含 PATCH：管理后台 updateAdminUser、部分客户端会发 PATCH */
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PATCH,PUT,DELETE,OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-CSRF-Token');
+  /** gemini-proxy 中继 POST 须带积分/公平性头；与 server/gemini-proxy-api.js 对齐 */
+  res.setHeader(
+    'Access-Control-Allow-Headers',
+    'Content-Type, X-CSRF-Token, X-AC-Fairness-Key, X-AC-Fairness-Signature, X-AC-Client-Ip, X-AC-Credits-Reserve, X-AC-Credits-Gate-Signature'
+  );
 }
 
 function isAllowedOrigin(origin) {

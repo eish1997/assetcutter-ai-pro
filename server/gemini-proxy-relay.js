@@ -21,15 +21,23 @@ const SKIP_REQ_HEADERS = new Set([
 
 const SKIP_RESP_HEADERS = new Set(['content-encoding', 'transfer-encoding', 'content-length', 'connection']);
 
+/** 与 render.yaml / VITE_BULK_IMAGE_API 默认一致；Render 未注入 GEMINI_PROXY_* 时避免误连 127.0.0.1:9002 */
+const DEFAULT_PRODUCTION_GEMINI_PROXY_UPSTREAM = 'https://assetcutter-gemini-proxy.onrender.com';
+
+function defaultGeminiProxyUpstream() {
+  const isProd = String(process.env.NODE_ENV || '').toLowerCase() === 'production';
+  return isProd ? DEFAULT_PRODUCTION_GEMINI_PROXY_UPSTREAM : 'http://127.0.0.1:9002';
+}
+
 export function geminiProxyUpstreamBase() {
   const raw = String(
     process.env.GEMINI_PROXY_UPSTREAM_URL ||
       process.env.GEMINI_PROXY_HEALTH_URL ||
-      'http://127.0.0.1:9002'
+      defaultGeminiProxyUpstream()
   )
     .trim()
     .replace(/\/+$/, '');
-  return raw || 'http://127.0.0.1:9002';
+  return raw || defaultGeminiProxyUpstream();
 }
 
 /** auth-api 可能设全局 TRIPO_PROXY/HTTPS_PROXY；loopback 须直连，否则 relay 报 fetch failed */

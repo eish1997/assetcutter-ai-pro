@@ -219,8 +219,11 @@ function shouldRelayBulkViaAuthApi(baseResolved: string): boolean {
     if (bulkOrigin === window.location.origin) return false;
     const authBase = readViteEnvTrim("VITE_AUTH_API_BASE_URL");
     if (authBase) return true;
-    /** 与线上一致：bulk 在 Render、页面在其它 Origin 时走 auth-api 中继（dev 下 Vite 将 /api 代理到本机 auth-api） */
-    return isDefaultRemoteBulkOrigin(baseResolved);
+    /** 无 auth 绝对地址时勿走相对 /api/gemini-proxy（Vercel 等静态站无此路由）；本地 dev 由 Vite 反代到 auth-api */
+    if (import.meta.env.DEV && isLocalDevPage()) {
+      return isDefaultRemoteBulkOrigin(baseResolved);
+    }
+    return false;
   } catch {
     return false;
   }

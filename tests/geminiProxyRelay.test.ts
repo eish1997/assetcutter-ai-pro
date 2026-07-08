@@ -12,6 +12,20 @@ describe('gemini-proxy-relay', () => {
     if (prevHealth !== undefined) process.env.GEMINI_PROXY_HEALTH_URL = prevHealth;
   });
 
+  it('uses production default upstream when NODE_ENV=production and env unset', () => {
+    const prevNode = process.env.NODE_ENV;
+    const prev = process.env.GEMINI_PROXY_UPSTREAM_URL;
+    const prevHealth = process.env.GEMINI_PROXY_HEALTH_URL;
+    process.env.NODE_ENV = 'production';
+    delete process.env.GEMINI_PROXY_UPSTREAM_URL;
+    delete process.env.GEMINI_PROXY_HEALTH_URL;
+    expect(geminiProxyUpstreamBase()).toBe('https://assetcutter-gemini-proxy.onrender.com');
+    if (prevNode !== undefined) process.env.NODE_ENV = prevNode;
+    else delete process.env.NODE_ENV;
+    if (prev !== undefined) process.env.GEMINI_PROXY_UPSTREAM_URL = prev;
+    if (prevHealth !== undefined) process.env.GEMINI_PROXY_HEALTH_URL = prevHealth;
+  });
+
   it('prefers GEMINI_PROXY_UPSTREAM_URL over health url', () => {
     const prev = process.env.GEMINI_PROXY_UPSTREAM_URL;
     const prevHealth = process.env.GEMINI_PROXY_HEALTH_URL;
