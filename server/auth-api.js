@@ -529,6 +529,9 @@ function assertCsrf(req, res) {
   if (pathOnly === '/api/credits/ledger') return true;
   if (pathOnly === '/api/auth/credits-gate') return true;
   if (pathOnly === '/api/auth/credits-proxy-bundle') return true;
+  /** 跨域 SPA 读不到 auth 域 ac_csrf；由 requireAuth + assertWriteOrigin 约束 */
+  if (pathOnly === '/api/auth/credits-precharge') return true;
+  if (pathOnly === '/api/auth/credits-release') return true;
   if (pathOnly === '/api/internal/credits/precheck') return true;
   if (pathOnly === '/api/internal/credits/validate-reserve') return true;
   /** 伴侣 Agent：partition Cookie 无法带 X-CSRF-Token，由 requireAgentAuth + 会话 Cookie 约束 */
