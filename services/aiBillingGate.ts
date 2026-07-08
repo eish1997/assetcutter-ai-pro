@@ -3,6 +3,8 @@
  */
 import type { CapabilitySet, CustomAppModule } from '../types';
 import {
+  creditsBalanceLoadingMessage,
+  creditsBalanceUnavailableMessage,
   creditsExceededUserMessage,
   fmtCredits,
   CREDITS_EXCEEDED_CODE,
@@ -406,11 +408,11 @@ export function isSubmitBlockedForPlatformPlan(
   if (!userId?.trim()) {
     return { blocked: true, reason: platformAiLoginRequiredMessage(), estimatedMinCredits: min };
   }
-  if (loading) {
-    return { blocked: true, reason: creditsExceededUserMessage(undefined, min), estimatedMinCredits: min };
+  if (loading && balance == null) {
+    return { blocked: true, reason: creditsBalanceLoadingMessage(), estimatedMinCredits: min };
   }
   if (balance == null) {
-    return { blocked: true, reason: creditsExceededUserMessage(undefined, min), estimatedMinCredits: min };
+    return { blocked: true, reason: creditsBalanceUnavailableMessage(), estimatedMinCredits: min };
   }
   if (balance < min) {
     return { blocked: true, reason: creditsExceededUserMessage(balance, min), estimatedMinCredits: min };

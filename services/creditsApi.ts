@@ -13,6 +13,17 @@ export async function fetchCreditBalance() {
   return requestJson<CreditBalance & { userId?: string }>(apiUrl('/api/credits/balance'), { cache: 'no-store' });
 }
 
+/** 工作区入队/开跑前拉最新可用余额；失败返回 null（由闸门区分「读不到」与「真不足」） */
+export async function fetchAvailableCreditsForGate(): Promise<number | null> {
+  try {
+    const bal = await fetchCreditBalance();
+    const available = Number(bal?.available ?? bal?.balance);
+    return Number.isFinite(available) ? available : null;
+  } catch {
+    return null;
+  }
+}
+
 /** 登录用户积分预检；余额缺失或不足时 fail-closed */
 export async function assertCreditBalanceAtLeast(min: number): Promise<void> {
   const required = Math.max(1, Math.floor(Number(min) || 1));

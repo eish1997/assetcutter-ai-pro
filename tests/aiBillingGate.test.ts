@@ -271,6 +271,19 @@ describe('aiBillingGate', () => {
     expect(isSubmitBlockedForPlatformPlan(steps, 'u1', min, false).blocked).toBe(false);
   });
 
+  it('isSubmitBlockedForPlatformPlan does not block while loading if balance already known', () => {
+    const steps = planCapabilityModuleRoutes({
+      id: 't2i',
+      label: '文生图',
+      category: 'text_to_image',
+      engine: 'gen_text',
+      instruction: 'test',
+    });
+    const min = sumPlatformMinCredits(steps);
+    expect(isSubmitBlockedForPlatformPlan(steps, 'u1', min + 100, true).blocked).toBe(false);
+    expect(isSubmitBlockedForPlatformPlan(steps, 'u1', null, true).blocked).toBe(true);
+  });
+
   it('assertAiGateForSteps no-ops for BYOK-only plans', async () => {
     vi.mocked(isPlatformMeteredGeminiPath).mockReturnValue(false);
     const steps = planCapabilityModuleRoutes({

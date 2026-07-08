@@ -4,6 +4,8 @@
  */
 import type { CustomAppModule } from '../types';
 import {
+  creditsBalanceLoadingMessage,
+  creditsBalanceUnavailableMessage,
   creditsExceededUserMessage,
   platformAiLoginRequiredMessage,
   proxyGateJobKindForWorkflowBranch,
@@ -91,11 +93,11 @@ export function isPlatformAiSubmitBlocked(
   if (!userId?.trim()) {
     return { blocked: true, reason: platformAiLoginRequiredMessage(), estimatedMinCredits: min };
   }
-  if (loading) {
-    return { blocked: true, reason: creditsExceededUserMessage(), estimatedMinCredits: min };
+  if (loading && balance == null) {
+    return { blocked: true, reason: creditsBalanceLoadingMessage(), estimatedMinCredits: min };
   }
   if (balance == null) {
-    return { blocked: true, reason: creditsExceededUserMessage(), estimatedMinCredits: min };
+    return { blocked: true, reason: creditsBalanceUnavailableMessage(), estimatedMinCredits: min };
   }
   const available = balance;
   if (available < min) {

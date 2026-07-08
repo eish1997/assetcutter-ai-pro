@@ -79,6 +79,16 @@ export function creditsExceededUserMessage(available?: number, required?: number
   return base;
 }
 
+/** 余额请求进行中且尚无缓存值时（勿误报「积分不足」） */
+export function creditsBalanceLoadingMessage(): string {
+  return '正在读取积分余额，请稍候再试。';
+}
+
+/** 已登录但 balance API 失败（跨域 Cookie / 会话过期），与真「余额不足」区分 */
+export function creditsBalanceUnavailableMessage(): string {
+  return '无法读取积分余额，请重新登录或在「设置 → AI 用量」刷新；若仍失败请检查网络能否访问 auth-api。';
+}
+
 export function platformAiLoginRequiredMessage(): string {
   return '请先登录后再使用 AI 生成。';
 }

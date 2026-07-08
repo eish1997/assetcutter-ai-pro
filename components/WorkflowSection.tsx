@@ -53,13 +53,14 @@ import {
   planQuickComposeRoutes,
   planWorkflowActionRoutes,
   requiresPlatformCredits,
+  sumPlatformMinCredits,
 } from '../services/aiBillingGate';
-import { fetchCreditBalance } from '../services/creditsApi';
+import { fetchAvailableCreditsForGate, fetchCreditBalance } from '../services/creditsApi';
 import {
   emitWorkflowTaskReceiptNotice,
   resolveAvailableBalance,
 } from '../services/workflowTaskReceiptNotice';
-import { fetchServerMinCreditsForSteps } from '../services/usageQuoteGate';
+import { fetchMaxServerMinCreditsForStepsList, fetchServerMinCreditsForSteps } from '../services/usageQuoteGate';
 import { useCreditBalance } from '../hooks/useCreditBalance';
 import { useUsageQuoteForSteps } from '../hooks/useUsageQuoteForSteps';
 import WorkflowZeroBalanceBanner from './WorkflowZeroBalanceBanner';
@@ -2710,11 +2711,13 @@ ${lineSvg}
         });
         if (requiresPlatformCredits(plan)) {
           const serverMin = await fetchServerMinCreditsForSteps(plan);
+          const balanceForGate =
+            preferenceScope != null ? await fetchAvailableCreditsForGate() : creditBalance;
           const block = isSubmitBlockedForPlatformPlan(
             plan,
             preferenceScope,
-            creditBalance,
-            creditBalanceLoading,
+            balanceForGate,
+            balanceForGate == null && creditBalanceLoading,
             { minCreditsOverride: serverMin }
           );
           if (block.blocked) {
@@ -3465,13 +3468,31 @@ ${lineSvg}
       if (queue.length === 0 || (executing && !overridePending)) return;
       const queueCreditsPlan = buildWorkflowCreditsSteps(queue);
       if (requiresPlatformCredits(queueCreditsPlan)) {
-        const serverMin = await fetchServerMinCreditsForSteps(queueCreditsPlan);
+        const perTaskPlans = queue.map((task) => {
+          const mod = getModule(task.actionType);
+          const branch = classifyWorkflowRunTaskBranch({ actionType: task.actionType, module: mod ?? null });
+          return planWorkflowActionRoutes(task.actionType, mod ?? null, {
+            capabilitySet:
+              branch === 'branch_capability_set'
+                ? getSet(task.actionType.slice(SET_ACTION_PREFIX.length)) ?? null
+                : null,
+            presets: actionModules,
+            overrides: creditOverridesFromTaskLike(task),
+          });
+        });
+        const serverMin = await fetchMaxServerMinCreditsForStepsList(perTaskPlans);
+        const clientMaxMin = perTaskPlans.reduce(
+          (max, steps) => Math.max(max, sumPlatformMinCredits(steps)),
+          0
+        );
+        const balanceForGate =
+          preferenceScope != null ? await fetchAvailableCreditsForGate() : creditBalance;
         const block = isSubmitBlockedForPlatformPlan(
           queueCreditsPlan,
           preferenceScope,
-          creditBalance,
-          creditBalanceLoading,
-          { minCreditsOverride: serverMin }
+          balanceForGate,
+          balanceForGate == null && creditBalanceLoading,
+          { minCreditsOverride: serverMin ?? clientMaxMin }
         );
         if (block.blocked) {
           onLog?.('warn', block.reason ?? creditsExceededUserMessage());
