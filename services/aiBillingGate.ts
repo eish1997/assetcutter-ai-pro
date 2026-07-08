@@ -23,6 +23,11 @@ import { pickBinding } from './modelRegistry/pickBinding';
 import type { ChannelId } from './modelRegistry/types';
 import { isPlatformMeteredGeminiPath, isPlatformMeteredJobKind } from './platformAiPath';
 import { classifyWorkflowRunTaskBranch } from './workflowRunTaskBranch';
+import {
+  getQuickComposePlainModule,
+  QUICK_COMPOSE_PLAIN_T2I_ACTION_ID,
+  QUICK_COMPOSE_PLAIN_TEXT_ACTION_ID,
+} from './quickComposePlainPresets';
 
 export type CapabilityCreditOverrides = {
   overrideImageModelRegistryId?: string | null;
@@ -242,16 +247,42 @@ export function planWorkflowActionRoutes(
   return [];
 }
 
+function quickComposeRouteOverrides(
+  params: {
+    imageModelRegistryId?: string | null;
+    textModelRegistryId?: string | null;
+    overrides?: CapabilityCreditOverrides;
+  }
+): CapabilityCreditOverrides | undefined {
+  const ov = creditOverridesFromTaskLike(params.overrides);
+  const merged: CapabilityCreditOverrides = {
+    ...ov,
+    ...(params.imageModelRegistryId != null && String(params.imageModelRegistryId).trim()
+      ? { overrideImageModelRegistryId: params.imageModelRegistryId }
+      : {}),
+    ...(params.textModelRegistryId != null && String(params.textModelRegistryId).trim()
+      ? { overrideTextModelRegistryId: params.textModelRegistryId }
+      : {}),
+  };
+  return creditOverridesFromTaskLike(merged);
+}
+
 export function planQuickComposeRoutes(params: {
   mode: 'text' | 'image' | '3d';
   promptCards: ReadonlyArray<{ presetId: string }>;
   resolveModule: (presetId: string) => CustomAppModule | null | undefined;
   imageModelRegistryId?: string | null;
   textModelRegistryId?: string | null;
+  /** 与入队任务一致：理解开关 → overrideSkipUnderstand */
+  overrides?: CapabilityCreditOverrides;
 }): AiBillingRouteStep[] {
+  const routeOverrides = quickComposeRouteOverrides(params);
+
   if (params.promptCards.length === 0) {
     if (params.mode === '3d') return [resolveJobKindBillingStep('workflow_generate_3d')];
     if (params.mode === 'image') {
+      const plainMod = getQuickComposePlainModule(QUICK_COMPOSE_PLAIN_T2I_ACTION_ID);
+      if (plainMod) return planCapabilityModuleRoutes(plainMod, routeOverrides);
       const imageId = resolveImageModelRegistryId(
         coerceImageModelRegistryId(params.imageModelRegistryId ?? undefined)
       );
@@ -263,6 +294,8 @@ export function planQuickComposeRoutes(params: {
         }),
       ];
     }
+    const plainMod = getQuickComposePlainModule(QUICK_COMPOSE_PLAIN_TEXT_ACTION_ID);
+    if (plainMod) return planCapabilityModuleRoutes(plainMod, routeOverrides);
     const textId = coerceTextModelRegistryId(
       String(params.textModelRegistryId || DEFAULT_MODEL_TEXT).trim() || DEFAULT_MODEL_TEXT
     );
@@ -278,7 +311,7 @@ export function planQuickComposeRoutes(params: {
   for (const card of params.promptCards) {
     const mod = params.resolveModule(card.presetId);
     if (!mod) continue;
-    steps.push(...planWorkflowActionRoutes(mod.id, mod));
+    steps.push(...planCapabilityModuleRoutes(mod, routeOverrides));
   }
   return steps;
 }

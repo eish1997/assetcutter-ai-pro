@@ -29,8 +29,9 @@ import {
   WorkflowVideoNotAvailableError,
   type GeminiImageBatchGroupOptions,
 } from './unifiedAiGateway';
-import { DEFAULT_MODEL_TEXT } from './modelRegistry/constants';
-import { coerceTextModelRegistryId, textModelFamily } from './modelRegistry/textModels';
+import { textModelFamily } from './modelRegistry/textModels';
+import { resolveTextModelForPreset, resolveTextModelFromContext } from './capabilityTextModel';
+export { resolveTextModelForPreset } from './capabilityTextModel';
 import {
   clampWorkflowTextForSend,
   resolveWorkflowTextSendLimit,
@@ -42,8 +43,6 @@ import {
   submitCompanionHostBundleProbeJob,
 } from './companionClient/compute';
 import { getCompanionLocalBaseUrl, normalizeCompanionBaseUrl } from './companionLocalPrefs';
-import { naturalSizeFromImageDataUrl, runSamSegmentFromDataUrl } from './lightboxSamSegment';
-import { runLightboxRembgFromDataUrl } from './lightboxRembg';
 import {
   readRemoveBgParams,
   resolveImageProcessorId,
@@ -121,21 +120,9 @@ export type CapabilityExecuteResult =
       failedNodeId?: string;
     };
 
-function effectiveCapabilityTextModel(ctx: CapabilityExecuteContext): string {
-  const t = (ctx.textModelRegistryId || '').trim();
-  return t || DEFAULT_MODEL_TEXT;
-}
-
-/** 预设绑定文字模型优先，否则回退执行上下文（全局默认） */
-export function resolveTextModelForPreset(preset: CustomAppModule, ctx: CapabilityExecuteContext): string {
-  const presetModel = (preset.textModelRegistryId || '').trim();
-  if (presetModel) return coerceTextModelRegistryId(presetModel);
-  return effectiveCapabilityTextModel(ctx);
-}
-
 /** 文本侧 upstream model id（经 pickBinding / resolve） */
 export function resolveTextModelIdFromContext(ctx: CapabilityExecuteContext): string {
-  return resolveUpstreamTextModelId(effectiveCapabilityTextModel(ctx));
+  return resolveUpstreamTextModelId(resolveTextModelFromContext(ctx));
 }
 
 function parseInlineForLlm(input: string): { mimeType: string; data: string } {
@@ -524,7 +511,20 @@ async function executeGenTextPath(
     return { ok: true, kind: 'text', text: out, durationMs: Date.now() - start };
   } catch (e) {
     const msg = normalizeApiErrorMessage(e);
+    logCapabilityRawError(ctx, actionLabel, e, msg);
     return { ok: false, kind: 'none', error: msg, durationMs: Date.now() - start };
+  }
+}
+
+function logCapabilityRawError(
+  ctx: CapabilityExecuteContext,
+  actionLabel: string,
+  e: unknown,
+  normalizedMsg: string
+): void {
+  const rawMsg = e instanceof Error ? e.message : String(e);
+  if (rawMsg && rawMsg !== normalizedMsg) {
+    ctx.onLog?.('warn', `[${actionLabel}] 原始错误`, rawMsg.slice(0, 500));
   }
 }
 
@@ -577,6 +577,7 @@ async function executeCompanionSamSegmentCapability(
     const p = parseInlineForLlm(dataUrl);
     dataUrl = `data:${p.mimeType};base64,${p.data}`;
   }
+  const { naturalSizeFromImageDataUrl, runSamSegmentFromDataUrl } = await import('./lightboxSamSegment');
   const size = await naturalSizeFromImageDataUrl(dataUrl);
   if (!size) {
     return { ok: false, kind: 'none', error: '无法读取图像尺寸', durationMs: Date.now() - start };
@@ -649,6 +650,7 @@ async function executeCompanionRembgCapability(
   ctx.onLog?.('info', `[${actionLabel}] 本机去背景（rembg）…`, undefined);
   emitCapabilityRunProgress(ctx, `${actionLabel}：本机去背景中…`);
   const rembgParams = readRemoveBgParams(preset);
+  const { runLightboxRembgFromDataUrl } = await import('./lightboxRembg');
   const run = await runLightboxRembgFromDataUrl({
     projectId,
     assetId,
@@ -833,6 +835,7 @@ export async function executeCapability(
   opts?: ExecuteCapabilityOptions
 ): Promise<CapabilityExecuteResult> {
   const start = Date.now();
+  const actionLabel = preset.label || preset.id;
   const inputText = opts?.inputText;
   try {
     if (preset.category === 'generate_3d') {
@@ -859,7 +862,6 @@ export async function executeCapability(
     }
 
     const engine = getCapabilityEngine(preset);
-    const actionLabel = preset.label || preset.id;
 
     if (engine === 'gen_text') {
       const extra = opts?.inputImages?.filter((s) => hasUsableImageBase64(s)) ?? [];
@@ -1013,7 +1015,17 @@ export async function executeCapability(
       vgpSteps: [makeVgpCapture(preset, augmented, modelId)],
     };
   } catch (e) {
+    if (e instanceof RangeError || /maximum call stack size exceeded/i.test(String((e as Error)?.message ?? e))) {
+      try {
+        if (import.meta.env.DEV) {
+          console.error('[assetcutter] 能力执行栈溢出（请把完整 stack 发给开发）', e);
+        }
+      } catch {
+        /* ignore */
+      }
+    }
     const msg = normalizeApiErrorMessage(e);
+    logCapabilityRawError(ctx, actionLabel, e, msg);
     return { ok: false, kind: 'none', error: msg, durationMs: Date.now() - start };
   }
 }

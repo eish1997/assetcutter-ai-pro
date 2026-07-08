@@ -5,7 +5,8 @@ import type {
 } from '../types';
 import { ensureShotCharacterFieldOnRow, isShotCharacterFieldLabel, shouldRetainShotCharacterParseField } from './storyboardShotCharacters';
 import { preserveStoryboardRowFrameFields } from './storyboardTableAsset';
-import { resolveTextModelForPreset, type CapabilityExecuteContext } from './capabilityExecutor';
+import { resolveTextModelForPreset } from './capabilityTextModel';
+import type { CapabilityExecuteContext } from './capabilityExecutor';
 import { runStoryboardLlmAudited } from './storyboardTaskAuditEvents';
 import { STORYBOARD_BULK_LLM_REQUEST_OPTIONS } from './storyboardTableBulkAiDetect';
 import { workflowChat } from './unifiedAiGateway';

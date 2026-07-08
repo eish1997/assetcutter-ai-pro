@@ -4673,6 +4673,14 @@ ${lineSvg}
     [actionModules, capabilityPresets]
   );
 
+  const quickComposeCreditOverrides = useMemo(
+    () =>
+      quickComposeUnderstand
+        ? { overrideSkipUnderstand: overrideSkipUnderstandFromUnderstandEnabled(true) }
+        : undefined,
+    [quickComposeUnderstand]
+  );
+
   const quickComposePlan = useMemo(
     () =>
       planQuickComposeRoutes({
@@ -4681,8 +4689,16 @@ ${lineSvg}
         resolveModule: resolveQuickComposeMod,
         imageModelRegistryId: quickComposeImageModel,
         textModelRegistryId: quickComposeTextModel,
+        overrides: quickComposeCreditOverrides,
       }),
-    [quickComposeMode, quickComposePromptCards, resolveQuickComposeMod, quickComposeImageModel, quickComposeTextModel]
+    [
+      quickComposeMode,
+      quickComposePromptCards,
+      resolveQuickComposeMod,
+      quickComposeImageModel,
+      quickComposeTextModel,
+      quickComposeCreditOverrides,
+    ]
   );
 
   const quickComposeCreditsBypass = !requiresPlatformCredits(quickComposePlan);
@@ -12881,6 +12897,8 @@ ${lineSvg}
             onSubmit={() => void submitLightboxQuickCompose()}
             submitDisabled={quickComposeSubmitDisabled}
             submitDisabledReason={quickComposeSubmitDisabledReason}
+            creditsEstimateSteps={quickComposeCreditsBypass ? undefined : quickComposePlan}
+            creditBalance={creditBalance}
             showGenImageSettings={quickComposeShowGenImageSettings}
             showGenTextSettings={quickComposeShowGenTextSettings}
             allowBatchCount={quickComposeAllowBatchCount}
@@ -13530,6 +13548,8 @@ ${lineSvg}
             onSubmit={submitQuickCompose}
             submitDisabled={quickComposeSubmitDisabled}
             submitDisabledReason={quickComposeSubmitDisabledReason}
+            creditsEstimateSteps={quickComposeCreditsBypass ? undefined : quickComposePlan}
+            creditBalance={creditBalance}
             showGenImageSettings={quickComposeShowGenImageSettings}
             showGenTextSettings={quickComposeShowGenTextSettings}
             allowBatchCount={quickComposeAllowBatchCount}

@@ -206,9 +206,10 @@ function blobToDataUrl(blob: Blob): Promise<string> {
  * 将画布上可能出现的原图串（data / blob / http / 旧版裸 base64）规范为 data URL，供伴侣 PUT。
  * http 受 CORS 限制可能失败，返回 null。
  */
-export async function imageSrcToDataUrlForCompanion(src: string): Promise<string | null> {
+export async function imageSrcToDataUrlForCompanion(src: string, depth = 0): Promise<string | null> {
   const s = String(src || '').trim();
   if (!s) return null;
+  if (depth > 8) return null;
   if (parseDataUrlToBlob(s)) return s;
   if (/^blob:/i.test(s)) {
     try {
@@ -226,7 +227,7 @@ export async function imageSrcToDataUrlForCompanion(src: string): Promise<string
   if (!/^https?:\/\//i.test(s) && !s.startsWith('/')) {
     const resolved = resolveCapabilityPreviewSrc(s);
     if (resolved && resolved !== s) {
-      return imageSrcToDataUrlForCompanion(resolved);
+      return imageSrcToDataUrlForCompanion(resolved, depth + 1);
     }
   }
   /** 工作区持久化瘦身后的 `original` / 结果槽位可能是站内 `/api/...`（非绝对 URL），执行前须拉取为 data URL */

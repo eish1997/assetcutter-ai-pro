@@ -29,6 +29,34 @@ export function clearLastCreditsReserveKey(): void {
   clearCreditsProxyHeaderCache();
 }
 
+const FAIRNESS_HEADER_KEY = 'X-AC-Fairness-Key';
+
+/** gate 已预扣时返回缓存的 proxy 准入头（不含 fairness）；estimate 不匹配则 null */
+export function getCachedCreditsProxyHeaders(estimatedCredits: number): Record<string, string> | null {
+  const min = Math.max(1, Math.floor(Number(estimatedCredits) || 1));
+  if (lastCreditsProxyHeaders && lastCreditsProxyEstimate === min && getLastCreditsReserveKey()) {
+    return { ...lastCreditsProxyHeaders };
+  }
+  return null;
+}
+
+/** 将 gate 取得的完整准入头写入模块缓存，供 bulk 复用 */
+export function markCreditsProxyHeadersFromGate(
+  headers: Record<string, string>,
+  estimatedCredits: number
+): void {
+  const min = Math.max(1, Math.floor(Number(estimatedCredits) || 1));
+  const reserveKey = headers['X-AC-Credits-Reserve']?.trim() || null;
+  if (!reserveKey) return;
+  const proxyHeaders: Record<string, string> = {};
+  for (const [k, v] of Object.entries(headers)) {
+    if (k !== FAIRNESS_HEADER_KEY) proxyHeaders[k] = v;
+  }
+  setLastCreditsReserveKey(reserveKey);
+  lastCreditsProxyHeaders = proxyHeaders;
+  lastCreditsProxyEstimate = min;
+}
+
 type CreditsProxyBundleResponse = {
   ok?: boolean;
   disabled?: boolean;
@@ -63,8 +91,11 @@ export async function getCreditsProxyRequestHeaders(
   if (existingKey && lastCreditsProxyHeaders && lastCreditsProxyEstimate === min) {
     return { ...fallback, ...lastCreditsProxyHeaders };
   }
-  if (existingKey && !lastCreditsProxyHeaders) {
+  if (existingKey && lastCreditsProxyEstimate !== null && lastCreditsProxyEstimate !== min) {
+    await releaseCreditsProxyReserve();
+  } else if (existingKey && !lastCreditsProxyHeaders) {
     lastCreditsReserveKey = null;
+    clearCreditsProxyHeaderCache();
   }
   try {
     const res = await requestJson<CreditsProxyBundleResponse>(

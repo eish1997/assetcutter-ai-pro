@@ -30,7 +30,14 @@ import {
 import type { UsageGeminiMetadata } from "../shared/usageBilling";
 import { proxyGateMinCreditsForJob } from "../shared/credits";
 import { apiUrl, devUsesRemoteAuthViaViteProxy, resolvedAuthApiBaseUrl } from "./apiBase";
-import { getCreditsProxyRequestHeaders, getLastCreditsReserveKey, clearLastCreditsReserveKey, releaseCreditsProxyReserve } from "./creditsProxyBridge";
+import {
+  getCachedCreditsProxyHeaders,
+  getCreditsProxyRequestHeaders,
+  getLastCreditsReserveKey,
+  clearLastCreditsReserveKey,
+  releaseCreditsProxyReserve,
+} from "./creditsProxyBridge";
+import { getGeminiFairnessRequestHeaders } from "./geminiFairnessBridge";
 import { peekCreditsPrechargeSession } from "./creditsPrechargeSession";
 import {
   GeminiAsyncPollTimeoutError,
@@ -670,7 +677,8 @@ async function fetchGeminiAsyncPollStep(
     return { kind: "completed", result: j.result as GeminiAsyncDelivered };
   }
   if (j.status === "failed") {
-    return { kind: "failed", error: j.error || "Gemini 任务失败" };
+    const rawErr = j.error || "Gemini 任务失败";
+    return { kind: "failed", error: rawErr };
   }
   handleGeminiAsyncPollWaitState(jobId, j, tracker);
   return { kind: "pending" };
@@ -681,6 +689,7 @@ async function finalizeGeminiAsyncDelivery(args: {
   model: string;
   bindingRegistryId: string;
   delivered: GeminiAsyncDelivered;
+  creditsReserveKey?: string | null;
 }): Promise<GeminiAsyncDelivered> {
   const imageRole = isLikelyImageRegistryId(args.bindingRegistryId);
   const useVertex = bulkUsesVertexBackend(args.bindingRegistryId, imageRole ? "image" : "text");
@@ -692,6 +701,7 @@ async function finalizeGeminiAsyncDelivery(args: {
     proxyResult: args.delivered,
     usageMetadata: args.delivered.usageMetadata,
     jobKind: imageRole ? "workflow_image" : "workflow_chat",
+    creditsReserveKey: args.creditsReserveKey ?? getLastCreditsReserveKey(),
   };
   if (peekCreditsPrechargeSession()) {
     await emitGeminiProxyMeteredUsage(meterArgs);
@@ -766,6 +776,7 @@ export async function resumeGeminiAsyncJob(
         model: job.model,
         bindingRegistryId: job.registryId,
         delivered: step.result,
+        creditsReserveKey: job.prechargeKey,
       });
       dispatchGeminiAsyncRecovered({
         jobId,
@@ -820,6 +831,11 @@ function isCreditsReserveInvalidProxyError(status: number, text: string): boolea
 }
 
 async function bulkProxyAdmissionHeaders(estimatedCredits: number): Promise<Record<string, string>> {
+  const fallback = getGeminiFairnessRequestHeaders();
+  const cached = getCachedCreditsProxyHeaders(estimatedCredits);
+  if (cached) {
+    return { ...fallback, ...cached };
+  }
   return getCreditsProxyRequestHeaders(estimatedCredits);
 }
 
@@ -831,9 +847,11 @@ async function emitGeminiProxyMeteredUsage(args: {
   usageMetadata?: UsageGeminiMetadata | null;
   proxyResult?: unknown;
   jobKind?: string;
+  creditsReserveKey?: string | null;
 }): Promise<void> {
   const registryId = (args.registryId || args.model || "").trim();
   if (!registryId) return;
+  const reserveKey = (args.creditsReserveKey ?? getLastCreditsReserveKey())?.trim() || null;
   await emitMeteredUsageAwait({
     reading: meterReadingFromGeminiProxy({
       registryId,
@@ -845,10 +863,7 @@ async function emitGeminiProxyMeteredUsage(args: {
     idempotencyPrefix: `gemini-async:${args.jobId}`,
     requestId: args.jobId,
     jobKind: args.jobKind,
-    extraMeta: (() => {
-      const key = getLastCreditsReserveKey();
-      return key ? { creditsReserveKey: key } : undefined;
-    })(),
+    extraMeta: reserveKey ? { creditsReserveKey: reserveKey } : undefined,
   });
 }
 
@@ -866,10 +881,91 @@ function settleGeminiProxyMeteredUsageAfterDelivery(args: Parameters<typeof emit
     requestId: args.jobId,
     jobKind: args.jobKind,
     extraMeta: (() => {
-      const key = getLastCreditsReserveKey();
+      const key = (args.creditsReserveKey ?? getLastCreditsReserveKey())?.trim();
       return key ? { creditsReserveKey: key } : undefined;
     })(),
   });
+}
+
+async function bulkProxyGenerateContentSync(args: {
+  model: string;
+  contents: unknown;
+  config?: Record<string, unknown>;
+  registryId?: string;
+  jobKind?: string;
+  role?: "text" | "image";
+}): Promise<{ text?: string; candidates?: unknown[]; usageMetadata?: UsageGeminiMetadata | null }> {
+  const config = (args.config || {}) as Record<string, unknown>;
+  const abortSignal = config.abortSignal as AbortSignal | undefined;
+  const safeConfig = { ...(stripMeteringConfigKeys(config) || {}) };
+  delete (safeConfig as { abortSignal?: AbortSignal }).abortSignal;
+
+  const role = args.role ?? "text";
+  const jobKind = args.jobKind ?? (role === "text" ? "workflow_understand" : "workflow_text_to_image");
+  const bindingRegistryId =
+    resolveMeteringRegistryId({ model: args.model, config }) || (args.registryId || args.model || "").trim();
+  const aiBackendExtra = bulkUsesVertexBackend(bindingRegistryId, role) ? { aiBackend: "vertex" as const } : {};
+  const gateCredits = proxyGateMinCreditsForJob(jobKind);
+  let skipReleaseOnFinally = false;
+  try {
+    const syncUrl = bulkApiUrl("/proxy/gemini/generate-content");
+    assertDevBulkCreditsAuthAligned(syncUrl);
+    const createBody = JSON.stringify({
+      model: args.model,
+      contents: args.contents,
+      config: safeConfig,
+      estimatedCredits: gateCredits,
+      ...aiBackendExtra,
+    });
+    const postSync = async () =>
+      bulkFetchOrExplain(syncUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...(await bulkProxyAdmissionHeaders(gateCredits)) },
+        body: createBody,
+        signal: abortSignal,
+        cache: "no-store",
+      });
+    let res = await postSync();
+    let text = await res.text();
+    if (!res.ok && isCreditsReserveInvalidProxyError(res.status, text || "")) {
+      clearLastCreditsReserveKey();
+      res = await postSync();
+      text = await res.text();
+    }
+    if (!res.ok) {
+      const raw = (text || "").trim();
+      const fairnessErr = tryParseGeminiProxyFairnessRejected(res.status, raw);
+      if (fairnessErr) throwFairnessRejected(fairnessErr);
+      throw new Error(parseBulkProxyCreateError(res.status, raw, syncUrl));
+    }
+    let delivered: { text?: string; candidates?: unknown[]; usageMetadata?: UsageGeminiMetadata | null };
+    try {
+      delivered = JSON.parse(text) as typeof delivered;
+    } catch {
+      throw new Error("同步代理响应无效");
+    }
+    const meterArgs = {
+      jobId: `sync:${Date.now()}`,
+      model: args.model,
+      registryId: bindingRegistryId,
+      useVertex: bulkUsesVertexBackend(bindingRegistryId, role),
+      proxyResult: delivered,
+      usageMetadata: delivered.usageMetadata,
+      jobKind,
+      creditsReserveKey: getLastCreditsReserveKey(),
+    };
+    if (peekCreditsPrechargeSession()) {
+      await emitGeminiProxyMeteredUsage(meterArgs);
+    } else {
+      settleGeminiProxyMeteredUsageAfterDelivery(meterArgs);
+    }
+    skipReleaseOnFinally = true;
+    return delivered;
+  } finally {
+    if (!skipReleaseOnFinally && !peekCreditsPrechargeSession()) {
+      await releaseCreditsProxyReserve();
+    }
+  }
 }
 
 async function bulkProxyGenerateContentAsync(args: {
@@ -957,6 +1053,7 @@ async function bulkProxyGenerateContentAsync(args: {
   }
   if (!jobId) throw new Error("未返回 jobId");
   dispatchGeminiQueueHint({ kind: "job_submitted", jobId, createStatus });
+  const asyncReserveKey = getLastCreditsReserveKey();
   registerGeminiAsyncJobForRecovery({
     jobId,
     model: args.model,
@@ -977,6 +1074,7 @@ async function bulkProxyGenerateContentAsync(args: {
         model: args.model,
         bindingRegistryId,
         delivered: step.result,
+        creditsReserveKey: asyncReserveKey,
       });
     }
     if (step.kind === "failed") {
@@ -1300,7 +1398,23 @@ function withStrippedClientConfig(client: GeminiClientLike): GeminiClientLike {
   };
 }
 
-function createBulkProxyGeminiClient(): GeminiClientLike {
+function createBulkProxyGeminiTextClient(): GeminiClientLike {
+  return {
+    models: {
+      async generateContent(args) {
+        return bulkProxyGenerateContentSync({
+          model: args.model,
+          contents: args.contents,
+          config: stripMeteringConfigKeys((args.config || {}) as Record<string, unknown>) || {},
+          role: "text",
+          jobKind: "workflow_understand",
+        });
+      },
+    },
+  };
+}
+
+function createBulkProxyGeminiImageClient(): GeminiClientLike {
   return {
     models: {
       async generateContent(args) {
@@ -1318,13 +1432,13 @@ function geminiImageBulkProxyConfigured(): boolean {
   return Boolean(BULK_BASE || effectiveBulkBase());
 }
 
-function getClientForChannel(channel: ChannelId): GeminiClientLike {
+function getClientForChannel(channel: ChannelId, role: "text" | "image" = "text"): GeminiClientLike {
   switch (channel) {
     case "vertex-proxy":
       if (!geminiImageBulkProxyConfigured()) {
         throw new Error("Vertex 代理未配置：需站点 VITE_BULK_IMAGE_API_VERTEX 或 VITE_BULK_IMAGE_API。");
       }
-      return createBulkProxyGeminiClient();
+      return role === "image" ? createBulkProxyGeminiImageClient() : createBulkProxyGeminiTextClient();
     case "gemini-aistudio": {
       const apiKey = getUserApiKey();
       if (!apiKey?.trim()) {
@@ -1373,7 +1487,7 @@ function getClientForChannel(channel: ChannelId): GeminiClientLike {
 function getAIForImageModel(registryId: string): GeminiClientLike {
   const id = coerceImageModelRegistryId(registryId);
   const picked = pickBinding(id, "image");
-  if (picked) return getClientForChannel(picked.channel);
+  if (picked) return getClientForChannel(picked.channel, "image");
   const route = imageModelProviderRoute(id);
   if (route === "openai") {
     const k = getOpenaiApiKey();
@@ -1387,7 +1501,7 @@ function getAIForImageModel(registryId: string): GeminiClientLike {
     return withStrippedClientConfig(new GoogleGenAI({ apiKey }) as unknown as GeminiClientLike);
   }
   if (geminiImageBulkProxyConfigured()) {
-    return createBulkProxyGeminiClient();
+    return createBulkProxyGeminiImageClient();
   }
   throw new Error(
     "使用 Gemini 生图模型需先在设置中填写 Gemini API Key，或配置 Vertex 代理（VITE_BULK_IMAGE_API）。"
@@ -1398,10 +1512,10 @@ function getAIForImageModel(registryId: string): GeminiClientLike {
 export function getClientForTask(registryId: string, role: "text" | "image" = "text"): GeminiClientLike {
   const id = (registryId || "").trim() || DEFAULT_MODEL_TEXT;
   const picked = pickBinding(id, role);
-  if (picked) return getClientForChannel(picked.channel);
+  if (picked) return getClientForChannel(picked.channel, role);
   if (role === "image") return getAIForImageModel(id);
   if (geminiImageBulkProxyConfigured()) {
-    return createBulkProxyGeminiClient();
+    return createBulkProxyGeminiTextClient();
   }
   throw new Error(
     "无可用文本通道：请在设置 → API 供应商中启用 Vertex / ToAPIs 等通道并填写密钥。"
@@ -2062,9 +2176,71 @@ function parseGoogleStyleErrorPayload(raw: string): { code?: number; status?: st
   return null;
 }
 
+/** 429 / 限流类错误 → 工作区可读文案 */
+export function userFacingRateLimitMessage(kind: 'upstream' | 'site' = 'upstream'): string {
+  if (kind === 'site') {
+    return '生图在本站公平队列中受限，请等待约 10～30 秒后清空队列、单次重试。';
+  }
+  return 'Google/Vertex 生图配额或 RPM 触顶（非积分不足）。请等待 1～3 分钟后单次重试。';
+}
+
+function isCreditsOrGateErrorText(raw: string): boolean {
+  return /CREDITS_RESERVE_INVALID|CREDITS_EXCEEDED|CREDITS_BUNDLE|CREDITS_GATE|积分预扣|积分不足|积分准入|LOGIN_REQUIRED|请先登录/i.test(
+    raw
+  );
+}
+
+export function mapRateLimitErrorText(raw: string): string | null {
+  const t = (raw || '').trim();
+  if (!t || isCreditsOrGateErrorText(t)) return null;
+  if (/too many requests/i.test(t)) return userFacingRateLimitMessage('upstream');
+  if (/\bHTTP\s*429\b/i.test(t) || /\bstatus\s*429\b/i.test(t)) return userFacingRateLimitMessage('upstream');
+  if (/"code"\s*:\s*429\b/.test(t) || /\berror\.code\s*[=:]\s*429\b/i.test(t)) {
+    return userFacingRateLimitMessage('upstream');
+  }
+  if (/\bRESOURCE_EXHAUSTED\b/i.test(t) || /\bresource_exhausted\b/i.test(t)) {
+    return userFacingRateLimitMessage('upstream');
+  }
+  if (/\brate_limited\b/i.test(t)) return userFacingRateLimitMessage('site');
+  if (/请求过于频繁/.test(t) && !/用量上报|登录尝试|注册|邀请码/.test(t)) {
+    return userFacingRateLimitMessage('site');
+  }
+  if (/\brate limit\b/i.test(t)) return userFacingRateLimitMessage('upstream');
+  return null;
+}
+
 /** 将 API 返回的原始错误转为用户可读的简短说明（用于界面展示） */
 export function normalizeApiErrorMessage(err: unknown): string {
   const raw = String((err as any)?.message ?? err);
+  if (/maximum call stack size exceeded/i.test(raw)) {
+    return '执行时发生内部栈溢出（多为模块循环依赖或图片过大）。请硬刷新页面后重试；若仍失败请打开浏览器控制台查看 stack 并反馈。';
+  }
+  if (/CREDITS_RESERVE_INVALID|积分预扣无效|积分预扣.*过期/i.test(raw)) {
+    return '积分预扣已失效或已被上一轮任务占用，请刷新页面后单次重试（勿连点队列）。';
+  }
+  if (/CREDITS_EXCEEDED|积分不足/i.test(raw)) {
+    return raw.length < 120 && /积分不足/.test(raw) ? raw : '积分不足，无法完成本次 AI 任务。';
+  }
+  if (/CREDITS_BUNDLE_INVALID|CREDITS_BUNDLE_UNAVAILABLE|积分预扣未返回|无法连接.*积分/.test(raw)) {
+    return raw.length < 160 ? raw : '无法连接积分预扣服务，请确认已登录且 auth-api 可用后重试。';
+  }
+  const rateLimit = mapRateLimitErrorText(raw);
+  if (rateLimit) {
+    try {
+      if (import.meta.env.DEV && raw !== rateLimit) {
+        console.warn('[assetcutter] 限流类错误映射（原始）：', raw.slice(0, 400));
+      }
+    } catch {
+      /* ignore */
+    }
+    const excerpt =
+      raw && raw !== rateLimit && raw.length < 220
+        ? `（原始：${raw}）`
+        : raw && raw !== rateLimit
+          ? `（原始：${raw.slice(0, 120)}…）`
+          : '';
+    return rateLimit + excerpt;
+  }
   const vertexUser = userMessageForVertexProxyNotReady(raw);
   if (vertexUser) {
     try {

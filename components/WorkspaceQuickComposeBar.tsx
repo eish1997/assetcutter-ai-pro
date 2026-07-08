@@ -30,6 +30,8 @@ import type {
   QuickComposeSegment,
 } from '../services/quickComposeMention';
 import { mentionsFromSegments, mergeQuickComposeDropSlotsForMentions, newQuickComposeTextSegment } from '../services/quickComposeMention';
+import type { AiBillingRouteStep } from '../services/aiBillingGate';
+import TaskCreditsEstimate from './usage/TaskCreditsEstimate';
 import { parseWorkflowAssetIdsFromClipboardData } from '../services/workflowDragPipeline';
 import {
   clampQuickComposeBarPosition,
@@ -101,8 +103,11 @@ export type WorkspaceQuickComposeBarProps = {
   /** 积分不足等：禁用提交按钮与输入 */
   submitDisabled?: boolean;
   submitDisabledReason?: string;
-  /** 平台代付路径：提交按钮旁展示预估最低消耗 */
+  /** 平台代付路径：提交按钮旁展示预估最低消耗（单行文案，优先用 creditsEstimateSteps） */
   submitEstimateLabel?: string;
+  /** 分步积分预估（理解 + 生图等）；有值时在提交按钮旁展示 TaskCreditsEstimate */
+  creditsEstimateSteps?: AiBillingRouteStep[];
+  creditBalance?: number | null;
   onSubmit: () => void;
   genSettings: WorkspaceQuickComposeGenSettings;
   /** 展示档位 / 比例 / 输出尺寸（生图引擎） */
@@ -179,6 +184,8 @@ export default function WorkspaceQuickComposeBar({
   submitDisabled = false,
   submitDisabledReason,
   submitEstimateLabel,
+  creditsEstimateSteps,
+  creditBalance,
   genSettings,
   showGenImageSettings,
   showGenTextSettings,
@@ -782,6 +789,17 @@ export default function WorkspaceQuickComposeBar({
 
   if (!visible) return null;
 
+  const creditsEstimateUi =
+    creditsEstimateSteps && creditsEstimateSteps.length > 0 ? (
+      <div className="max-w-[min(100%,14rem)] shrink">
+        <TaskCreditsEstimate steps={creditsEstimateSteps} balance={creditBalance} compact />
+      </div>
+    ) : submitEstimateLabel ? (
+      <span className="text-[9px] tabular-nums text-amber-400/80" title="按任务类型的保守预估值，实际扣费以上游用量为准">
+        {submitEstimateLabel}
+      </span>
+    ) : null;
+
   const disabled = submitDisabled;
   const disabledTitle = submitDisabled ? submitDisabledReason : undefined;
   const trimmedOverride = placeholderOverride?.trim();
@@ -1319,11 +1337,7 @@ export default function WorkspaceQuickComposeBar({
 
                 <div className="flex flex-wrap items-center justify-end gap-3">
                   {genActionControls}
-                  {submitEstimateLabel ? (
-                    <span className="text-[9px] tabular-nums text-amber-400/80" title="按任务类型的保守预估值，实际扣费以上游用量为准">
-                      {submitEstimateLabel}
-                    </span>
-                  ) : null}
+                  {creditsEstimateUi}
 
                   <button
                     type="button"
@@ -1416,11 +1430,7 @@ export default function WorkspaceQuickComposeBar({
 
               <div className="ml-2 flex shrink-0 items-center gap-3">
                 {genActionControls}
-                {submitEstimateLabel ? (
-                  <span className="text-[9px] tabular-nums text-amber-400/80" title="按任务类型的保守预估值，实际扣费以上游用量为准">
-                    {submitEstimateLabel}
-                  </span>
-                ) : null}
+                {creditsEstimateUi}
 
                 <button
                   type="button"

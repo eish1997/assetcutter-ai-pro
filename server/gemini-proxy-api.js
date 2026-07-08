@@ -39,6 +39,7 @@ import {
   estimatedCreditsFromProxyBody,
   isGeminiProxyCreditsGateEnabled,
 } from './gemini-proxy-credits-gate.js';
+import { isRetryable } from './gemini-proxy-retry.js';
 
 /** 与 auth-api 一致：本地访问 Google API 常需 TRIPO_PROXY / HTTPS_PROXY（见 .env.local） */
 const GEMINI_OUTBOUND_PROXY = String(
@@ -881,21 +882,6 @@ async function runGeminiWithRetries(model, contents, config, useVertex) {
 }
 
 
-function isRetryable(e) {
-  const msg = String((e && e.message) || e);
-  if (/429|503|504|overloaded|UNAVAILABLE|DEADLINE_EXCEEDED|Deadline expired|500|INTERNAL|Internal error|high demand|try again later|The operation was cancelled|operation was canceled|CANCELLED/i.test(msg)) return true;
-  const code = e && e.code;
-  const status = e && e.status;
-  if (code === 504 || code === 503 || code === 429 || status === 'DEADLINE_EXCEEDED' || status === 'UNAVAILABLE') return true;
-  try {
-    const j = typeof msg === 'string' && msg.startsWith('{') ? JSON.parse(msg) : null;
-    if (j?.error?.code === 504 || j?.error?.code === 503 || j?.error?.status === 'DEADLINE_EXCEEDED' || j?.error?.status === 'UNAVAILABLE') return true;
-  } catch {
-    /* ignore */
-  }
-  return false;
-}
-
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
@@ -1158,18 +1144,12 @@ const server = http.createServer(async (req, res) => {
         if (syncFairnessKey) {
           await fairnessSyncEnter(syncFairnessKey);
           try {
-            response = await withGeminiProxySlot(() =>
-              useVertex
-                ? proxyVertexGenerateContent(model, contents, config)
-                : proxyGenerateContent(model, contents, config)
-            );
+            response = await runGeminiWithRetries(model, contents, config, useVertex);
           } finally {
             fairnessSyncLeave(syncFairnessKey);
           }
         } else {
-          response = useVertex
-            ? await proxyVertexGenerateContent(model, contents, config)
-            : await proxyGenerateContent(model, contents, config);
+          response = await runGeminiWithRetries(model, contents, config, useVertex);
         }
         sendJson(res, 200, response);
       } catch (e) {

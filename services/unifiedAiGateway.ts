@@ -58,6 +58,7 @@ import { emitMeteredUsageAfterDelivery } from "./observability/metering/pipeline
 import { meterReadingFromTask } from "./observability/metering/adapters/task";
 import { resolveBillingSkuForWorkflowVideo, resolveBillingSkuForJimeng } from "./usageBillingSku";
 import { gateBeforeUpstream } from "./aiDispatchGate";
+import { markCreditsProxyHeadersFromGate } from "./creditsProxyBridge";
 import type { BillingDecision } from "../shared/billingDecision";
 import { peekCorrelationContext } from "./observability/correlationContext";
 import {
@@ -178,6 +179,10 @@ async function runMeteredAiCall<T>(
       hasTencentCreds: params.hasTencentCreds,
       scopeKey: ctx.correlationId,
     });
+    const pr = billingDecision.platformReserve;
+    if (pr?.proxyAdmissionHeaders && pr.estimatedCredits) {
+      markCreditsProxyHeadersFromGate(pr.proxyAdmissionHeaders, pr.estimatedCredits);
+    }
     const out = await fn({ billingDecision });
     outcome = "success";
     if (debug) console.info(`[unified-ai] ${kind} ok ${Math.round(nowMs() - t0)}ms`, fields);

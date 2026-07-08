@@ -46,10 +46,10 @@ export function naturalSizeFromImageDataUrl(dataUrl: string): Promise<{ w: numbe
 
 function arrayBufferToDataUrl(buf: ArrayBuffer, mime: string): string {
   const bytes = new Uint8Array(buf);
-  let bin = '';
   const chunk = 0x8000;
+  let bin = '';
   for (let i = 0; i < bytes.length; i += chunk) {
-    bin += String.fromCharCode(...bytes.subarray(i, i + chunk));
+    bin += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk) as unknown as number[]);
   }
   return `data:${mime};base64,${btoa(bin)}`;
 }

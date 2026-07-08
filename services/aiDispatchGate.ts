@@ -14,6 +14,7 @@ import { prechargePlatformCredits, releaseCreditReserve } from './creditsApi';
 import {
   getLastCreditsReserveKey,
   getCreditsProxyRequestHeaders,
+  markCreditsProxyHeadersFromGate,
   releaseCreditsProxyReserve,
 } from './creditsProxyBridge';
 import { adoptCreditsPrechargeSession } from './creditsPrechargeSession';
@@ -62,11 +63,12 @@ export async function acquirePlatformReserve(
   const scope = String(scopeKey || '').trim();
 
   if (decision.channel === 'vertex-proxy') {
-    await getCreditsProxyRequestHeaders(min);
+    const proxyAdmissionHeaders = await getCreditsProxyRequestHeaders(min);
     const key = getLastCreditsReserveKey() || '';
     return {
       reserveKey: key,
       estimatedCredits: min,
+      proxyAdmissionHeaders,
       release: async (outcome) => {
         if (outcome === 'failed') {
           await releaseCreditsProxyReserve();
@@ -158,6 +160,10 @@ export async function runMeteredAiCallShell<T>(
   fn: (ctx: { billingDecision: BillingDecision }) => Promise<T>
 ): Promise<T> {
   const billingDecision = await gateBeforeUpstream(params);
+  const pr = billingDecision.platformReserve;
+  if (pr?.proxyAdmissionHeaders && pr.estimatedCredits > 0) {
+    markCreditsProxyHeadersFromGate(pr.proxyAdmissionHeaders, pr.estimatedCredits);
+  }
   let outcome: 'success' | 'failed' = 'success';
   try {
     return await fn({ billingDecision });

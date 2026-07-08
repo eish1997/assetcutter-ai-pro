@@ -196,6 +196,20 @@ describe('aiBillingGate', () => {
     expect(requiresPlatformCredits(steps)).toBe(false);
   });
 
+  it('planQuickComposeRoutes image mode adds understand when overrideSkipUnderstand false', () => {
+    const steps = planQuickComposeRoutes({
+      mode: 'image',
+      promptCards: [],
+      resolveModule: () => null,
+      imageModelRegistryId: 'gemini-3-pro-image',
+      textModelRegistryId: 'gemini-3-flash',
+      overrides: { overrideSkipUnderstand: false },
+    });
+    expect(steps.some((s) => s.jobKind === 'workflow_understand')).toBe(true);
+    expect(steps.some((s) => s.jobKind === 'workflow_text_to_image')).toBe(true);
+    expect(steps).toHaveLength(2);
+  });
+
   it('planQuickComposeRoutes empty cards respects BYOK text model', () => {
     vi.mocked(isPlatformMeteredGeminiPath).mockReturnValue(false);
     const steps = planQuickComposeRoutes({
