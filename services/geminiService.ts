@@ -168,16 +168,6 @@ function redirectVertexAwayFromUnconfiguredProxy(base: string): string {
   return vertexFallbackBulkBase();
 }
 
-function isDefaultRemoteBulkOrigin(base: string): boolean {
-  if (!base || base === BULK_SAME_ORIGIN_MARKER) return false;
-  try {
-    const normalized = /^https?:\/\//i.test(base) ? base : `https://${base}`;
-    return new URL(normalized).origin === DEFAULT_GEMINI_BULK_PROXY_ORIGIN;
-  } catch {
-    return false;
-  }
-}
-
 /** Vertex 且配置了 `VITE_BULK_IMAGE_API_VERTEX` 时走专用代理根；否则与试用相同用 `VITE_BULK_IMAGE_API`。 */
 function effectiveBulkBase(): string {
   let base: string;
@@ -212,18 +202,15 @@ function isLocalDevPage(): boolean {
 function shouldRelayBulkViaAuthApi(baseResolved: string): boolean {
   if (typeof window === "undefined") return false;
   if (!baseResolved || baseResolved === BULK_SAME_ORIGIN_MARKER) return false;
+  const authBase = readViteEnvTrim("VITE_AUTH_API_BASE_URL");
+  /** 仅当显式配置了 auth 绝对地址时才中继；否则 Vercel/本地走直连或 Vite dev 转发 */
+  if (!authBase) return false;
   try {
     const bulkOrigin = new URL(
       /^https?:\/\//i.test(baseResolved) ? baseResolved : `https://${baseResolved}`
     ).origin;
     if (bulkOrigin === window.location.origin) return false;
-    const authBase = readViteEnvTrim("VITE_AUTH_API_BASE_URL");
-    if (authBase) return true;
-    /** 无 auth 绝对地址时勿走相对 /api/gemini-proxy（Vercel 等静态站无此路由）；本地 dev 由 Vite 反代到 auth-api */
-    if (import.meta.env.DEV && isLocalDevPage()) {
-      return isDefaultRemoteBulkOrigin(baseResolved);
-    }
-    return false;
+    return true;
   } catch {
     return false;
   }
@@ -233,17 +220,18 @@ function bulkApiUrl(path: string): string {
   const baseResolved = effectiveBulkBase();
   if (!baseResolved) return path;
   const p = path.startsWith("/") ? path : `/${path}`;
-  if (shouldRelayBulkViaAuthApi(baseResolved)) {
-    return apiUrl(`/api/gemini-proxy${p}`);
-  }
   if (baseResolved === BULK_SAME_ORIGIN_MARKER) {
     return p;
   }
+  /** 本地 npm run dev：优先 Vite /__ac-bulk-forward，无需本机 auth-api（见 .env.development） */
   if (import.meta.env.DEV && isLocalDevPage()) {
     const idx = bulkForwardOriginIndex(baseResolved, bulkDevForwardOrigins());
     if (idx >= 0) {
       return `${AC_BULK_FORWARD_PREFIX}/${idx}${p}`;
     }
+  }
+  if (shouldRelayBulkViaAuthApi(baseResolved)) {
+    return apiUrl(`/api/gemini-proxy${p}`);
   }
   const base = baseResolved.replace(/\/$/, "");
   return `${base}${p}`;
@@ -1822,6 +1810,7 @@ function shouldFallbackUnderstandToBrowserGemini(error: unknown): boolean {
     msg.includes("GEMINI_TIMEOUT") ||
     msg.includes("请求超时") ||
     msg.includes("Failed to fetch") ||
+    msg.includes("fetch failed") ||
     msg.includes("NetworkError") ||
     msg.includes("503") ||
     msg.includes("504") ||
@@ -1856,7 +1845,7 @@ async function callWithRetry<T>(
           ? "GEMINI_OVERLOADED"
           : /500|INTERNAL|Internal error/i.test(raw)
             ? "GEMINI_INTERNAL"
-            : /Failed to fetch|NetworkError|ECONNRESET|ETIMEDOUT/i.test(raw)
+            : /Failed to fetch|fetch failed|NetworkError|ECONNRESET|ETIMEDOUT/i.test(raw)
               ? "GEMINI_NETWORK"
               : "GEMINI_UNKNOWN");
       console.warn(
@@ -2014,7 +2003,7 @@ export function normalizeApiErrorMessage(err: unknown): string {
     return compact.length > 140 ? compact.slice(0, 140) + "…" : compact;
   }
   /** 浏览器 fetch 失败时 message 多为纯「Failed to fetch」，未必带「TypeError:」前缀 */
-  if (/failed to fetch|networkerror|load failed/i.test(raw)) {
+  if (/failed to fetch|fetch failed|networkerror|load failed/i.test(raw)) {
     try {
       if (import.meta.env.DEV) {
         console.warn(
