@@ -73,7 +73,10 @@ Vercel 一般能自动识别 Vite 项目，你只需确认：
 
 在 **Environment Variables** 区域：
 
-1. **试用 / Vertex 生图（必配，与 Render 线上一致）**  
+1. **auth-api 与生图中继（必配，与 Render 线上一致）**  
+   - `VITE_AUTH_API_BASE_URL` = `https://assetcutter-auth-api.onrender.com`  
+   - 仓库内 `.env.production` 已含上述默认值；**若 Vercel 面板未配置会使用该默认**。生图请求经 auth-api 转发，避免浏览器直连 `*.onrender.com` 在某些网络下 `fetch failed`。
+2. **试用 / Vertex 生图（必配，与 Render 线上一致）**  
    - `VITE_BULK_IMAGE_API` = `https://assetcutter-gemini-proxy.onrender.com`  
    - `VITE_BULK_IMAGE_API_VERTEX` = `https://assetcutter-gemini-proxy.onrender.com`  
    - 仓库内 `.env.production` 已含上述默认值；**若 Vercel 面板里曾填过 `same-origin` 或前端自己的域名，请删掉或改成上面地址**，否则会覆盖默认值并导致其它电脑报 **405**。  
