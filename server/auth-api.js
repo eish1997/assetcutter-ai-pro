@@ -191,6 +191,7 @@ import {
   submitJimengTask,
 } from './jimeng-visual-api.js';
 import { assertJimengCreditsGate } from './jimeng-credits-gate.js';
+import { relayGeminiProxyRequest } from './gemini-proxy-relay.js';
 import { listPublicPriceCatalog } from './pricing-engine.js';
 import { buildUsageReceipt, quoteJobKinds } from './pricing-read-model.js';
 import {
@@ -511,6 +512,7 @@ function assertCsrf(req, res) {
   if (pathOnly === '/api/companion-artifacts/resolve-download') return true;
   if (pathOnly.startsWith('/api/tripo')) return true;
   if (pathOnly.startsWith('/api/jimeng')) return true;
+  if (pathOnly.startsWith('/api/gemini-proxy')) return true;
   if (pathOnly === '/api/auth/trial-gemini/consume') return true;
   if (pathOnly === '/api/workflow/task-events') return true;
   if (pathOnly === '/api/usage/events') return true;
@@ -3082,6 +3084,12 @@ const server = http.createServer(async (req, res) => {
           };
         },
       });
+      return;
+    }
+
+    if (path.startsWith('/api/gemini-proxy/') || path === '/api/gemini-proxy') {
+      const upstreamPath = path.slice('/api/gemini-proxy'.length) || '/';
+      await relayGeminiProxyRequest(req, res, upstreamPath);
       return;
     }
 

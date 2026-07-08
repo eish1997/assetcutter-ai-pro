@@ -51,13 +51,29 @@ const ENABLE_TOAPIS_FALLBACK = String(process.env.ENABLE_TOAPIS_FALLBACK || '').
 const TOAPIS_IMAGE_POLL_MS = Number(process.env.TOAPIS_IMAGE_POLL_MS) || 3000;
 const TOAPIS_IMAGE_MAX_WAIT_MS = Number(process.env.TOAPIS_IMAGE_MAX_WAIT_MS) || 600_000;
 
-const DEFAULT_ALLOWED_ORIGINS = ['http://localhost:3000', 'http://127.0.0.1:3000', 'http://localhost:5173', 'http://127.0.0.1:5173'];
+/** 本地 dev + 已知生产前端 Origin；与 `AUTH_ALLOWED_ORIGINS` 对齐，避免仅配 auth 却漏配 gemini-proxy */
+const BUILTIN_PROXY_ALLOWED_ORIGINS = [
+  'http://localhost:3000',
+  'http://127.0.0.1:3000',
+  'http://localhost:5173',
+  'http://127.0.0.1:5173',
+  'https://app.adrazzo.com',
+  'https://scripts.adrazzo.com',
+  'https://assetcutter-ai-pro.vercel.app',
+  'https://assetcutter-web.onrender.com',
+];
 
 function parseAllowedOrigins() {
   const raw = (process.env.PROXY_ALLOWED_ORIGINS || '').trim();
-  if (!raw) return new Set(DEFAULT_ALLOWED_ORIGINS);
   if (raw === '*') return null;
-  return new Set(raw.split(',').map((s) => s.trim()).filter(Boolean));
+  const merged = new Set(BUILTIN_PROXY_ALLOWED_ORIGINS);
+  if (raw) {
+    for (const s of raw.split(',')) {
+      const t = s.trim();
+      if (t) merged.add(t);
+    }
+  }
+  return merged;
 }
 
 const allowedOrigins = parseAllowedOrigins();

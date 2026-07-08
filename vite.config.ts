@@ -246,6 +246,10 @@ export default defineConfig(({ mode }) => {
             target: 'http://127.0.0.1:9100',
             changeOrigin: true,
           },
+          '/api/gemini-proxy': {
+            target: 'http://127.0.0.1:9100',
+            changeOrigin: true,
+          },
           '/api/tripo/upload': {
             target: 'http://127.0.0.1:9100',
             changeOrigin: true,

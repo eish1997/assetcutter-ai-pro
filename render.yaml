@@ -25,7 +25,7 @@ services:
       # 浏览器直连本代理时接受登录态 X-AC-Fairness-Key（公网无 HMAC 时的生产默认）
       - key: GEMINI_FAIRNESS_TRUST_CLIENT_KEY_HEADER
         value: "true"
-      # 逗号分隔；须含所有前端 Origin（如 app.adrazzo.com、assetcutter-web.onrender.com、*.vercel.app 预览需逐条或 Dashboard 用 * 排障）
+      # 逗号分隔；与 BUILTIN_PROXY_ALLOWED_ORIGINS（含 app.adrazzo.com 等）合并，勿只配 Vercel 漏自定义域
       - key: PROXY_ALLOWED_ORIGINS
         sync: false
       # Vertex（设置页选 Vertex 时必填，与前端 VITE_BULK_IMAGE_API 指向的**本服务**一致）
@@ -71,6 +71,9 @@ services:
           property: connectionString
       # Dashboard 拉取 gemini-proxy /healthz.fairness（勿浏览器直打 proxy）
       - key: GEMINI_PROXY_HEALTH_URL
+        value: https://assetcutter-gemini-proxy.onrender.com
+      # auth-api /api/gemini-proxy/* 转发目标（默认同 HEALTH_URL）
+      - key: GEMINI_PROXY_UPSTREAM_URL
         value: https://assetcutter-gemini-proxy.onrender.com
       # 工作区云同步（R2）：与 auth 同源挂载 /api/r2，无需单独 R2 服务
       - key: R2_ACCOUNT_ID

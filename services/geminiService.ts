@@ -29,6 +29,7 @@ import {
 } from "./observability/metering/resolveBillingSku";
 import type { UsageGeminiMetadata } from "../shared/usageBilling";
 import { proxyGateMinCreditsForJob } from "../shared/credits";
+import { apiUrl } from "./apiBase";
 import { getCreditsProxyRequestHeaders, getLastCreditsReserveKey, releaseCreditsProxyReserve } from "./creditsProxyBridge";
 import { peekCreditsPrechargeSession } from "./creditsPrechargeSession";
 import {
@@ -167,6 +168,16 @@ function redirectVertexAwayFromUnconfiguredProxy(base: string): string {
   return vertexFallbackBulkBase();
 }
 
+function isDefaultRemoteBulkOrigin(base: string): boolean {
+  if (!base || base === BULK_SAME_ORIGIN_MARKER) return false;
+  try {
+    const normalized = /^https?:\/\//i.test(base) ? base : `https://${base}`;
+    return new URL(normalized).origin === DEFAULT_GEMINI_BULK_PROXY_ORIGIN;
+  } catch {
+    return false;
+  }
+}
+
 /** Vertex 且配置了 `VITE_BULK_IMAGE_API_VERTEX` 时走专用代理根；否则与试用相同用 `VITE_BULK_IMAGE_API`。 */
 function effectiveBulkBase(): string {
   let base: string;
@@ -198,10 +209,30 @@ function isLocalDevPage(): boolean {
   }
 }
 
+function shouldRelayBulkViaAuthApi(baseResolved: string): boolean {
+  if (typeof window === "undefined") return false;
+  if (!baseResolved || baseResolved === BULK_SAME_ORIGIN_MARKER) return false;
+  try {
+    const bulkOrigin = new URL(
+      /^https?:\/\//i.test(baseResolved) ? baseResolved : `https://${baseResolved}`
+    ).origin;
+    if (bulkOrigin === window.location.origin) return false;
+    const authBase = readViteEnvTrim("VITE_AUTH_API_BASE_URL");
+    if (authBase) return true;
+    /** 与线上一致：bulk 在 Render、页面在其它 Origin 时走 auth-api 中继（dev 下 Vite 将 /api 代理到本机 auth-api） */
+    return isDefaultRemoteBulkOrigin(baseResolved);
+  } catch {
+    return false;
+  }
+}
+
 function bulkApiUrl(path: string): string {
   const baseResolved = effectiveBulkBase();
   if (!baseResolved) return path;
   const p = path.startsWith("/") ? path : `/${path}`;
+  if (shouldRelayBulkViaAuthApi(baseResolved)) {
+    return apiUrl(`/api/gemini-proxy${p}`);
+  }
   if (baseResolved === BULK_SAME_ORIGIN_MARKER) {
     return p;
   }
@@ -321,7 +352,23 @@ function parseBulkProxyErrorBody(text: string): string {
 
 function isBrowserFetchNetworkError(e: unknown): boolean {
   const m = (e instanceof Error ? e.message : String(e ?? "")).toLowerCase();
-  return m.includes("failed to fetch") || m.includes("networkerror") || m.includes("load failed");
+  return (
+    m.includes("failed to fetch") ||
+    m.includes("fetch failed") ||
+    m.includes("networkerror") ||
+    m.includes("load failed")
+  );
+}
+
+function bulkFetchNetworkUserMessage(): string {
+  const originHint =
+    typeof window !== "undefined" && window.location?.origin
+      ? `（当前站点 ${window.location.origin}；若直连 gemini-proxy，须加入 PROXY_ALLOWED_ORIGINS）`
+      : "";
+  if (usesVertexProxyForImage()) {
+    return `Vertex 生图服务暂时连不上，请检查网络或稍后再试。若使用公网代理，请确认本机可访问该地址。${originHint}`;
+  }
+  return `无法连接生图服务，请检查网络后重试。${originHint}`;
 }
 
 /** 不把端口/env 细节写进工作区日志；仅开发环境打到控制台 */
@@ -346,12 +393,7 @@ async function bulkFetchOrExplain(input: RequestInfo | URL, init?: RequestInit):
   } catch (e) {
     if (isBrowserFetchNetworkError(e)) {
       warnDevBulkImageNetwork("生图代理");
-      if (usesVertexProxyForImage()) {
-        throw new Error(
-          "Vertex 生图服务暂时连不上，请检查网络或稍后再试。若使用公网代理，请确认本机可访问该地址。"
-        );
-      }
-      throw new Error("无法连接生图服务，请检查网络后重试。");
+      throw new Error(bulkFetchNetworkUserMessage());
     }
     throw e;
   }
