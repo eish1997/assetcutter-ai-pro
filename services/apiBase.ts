@@ -5,12 +5,28 @@ function trimSlash(input: string) {
 /** 与 `.env.production` / render.yaml assetcutter-web 一致；Vercel 面板误设空字符串时会覆盖 env 文件 */
 export const DEFAULT_PRODUCTION_AUTH_API_BASE = 'https://assetcutter-auth-api.onrender.com';
 
+/**
+ * Vercel 静态站（含自定义域）经 vercel.json 将 `/api/*` 反代到 auth-api，与本地 Vite 同源反代等效。
+ */
+export function staticHostUsesSameOriginApiRelay(): boolean {
+  try {
+    if (!import.meta.env.PROD || typeof window === 'undefined') return false;
+    const h = window.location.hostname.toLowerCase();
+    return h.endsWith('.vercel.app') || h === 'app.adrazzo.com';
+  } catch {
+    return false;
+  }
+}
+
 /** 构建期/运行时 auth 根：显式 env 优先；生产构建无 env 时回退默认 Render auth-api */
 export function resolvedAuthApiBaseUrl(): string {
   const fromEnv = String(import.meta.env?.VITE_AUTH_API_BASE_URL || '').trim();
+  if (fromEnv.toLowerCase() === 'same-origin') return '';
   try {
     /** 本地 dev：走 Vite 同源 /api 反代到 VITE_AUTH_API_BASE_URL，避免浏览器跨域 CORS */
     if (import.meta.env.DEV && !import.meta.env.PROD && fromEnv) return '';
+    /** Vercel + vercel.json：走同源 /api 反代 */
+    if (staticHostUsesSameOriginApiRelay()) return '';
   } catch {
     /* ignore */
   }
@@ -34,6 +50,15 @@ export function devUsesRemoteAuthViaViteProxy(): boolean {
   } catch {
     return false;
   }
+}
+
+/** 生图/积分可走 auth 中继（绝对 URL 或同源 /api 反代） */
+export function authApiRelayConfigured(): boolean {
+  return (
+    devUsesRemoteAuthViaViteProxy() ||
+    Boolean(resolvedAuthApiBaseUrl()) ||
+    staticHostUsesSameOriginApiRelay()
+  );
 }
 
 export function apiUrl(path: string) {

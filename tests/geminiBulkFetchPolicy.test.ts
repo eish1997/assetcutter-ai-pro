@@ -28,6 +28,15 @@ describe('resolveBulkFetchCredentials', () => {
     ).toBe('include');
   });
 
+  it('uses include for Vercel same-origin /api relay paths', () => {
+    vi.stubGlobal('window', {
+      location: { origin: 'https://assetcutter-ai-pro.vercel.app' },
+    });
+    expect(
+      resolveBulkFetchCredentials('/api/gemini-proxy/proxy/gemini/async')
+    ).toBe('include');
+  });
+
   it('uses omit for direct cross-origin gemini-proxy (7525000 credentialed CORS regression)', () => {
     expect(
       resolveBulkFetchCredentials(`${proxyBase}/proxy/gemini/async`)

@@ -29,7 +29,7 @@ import {
 } from "./observability/metering/resolveBillingSku";
 import type { UsageGeminiMetadata } from "../shared/usageBilling";
 import { proxyGateMinCreditsForJob } from "../shared/credits";
-import { apiUrl, devUsesRemoteAuthViaViteProxy, resolvedAuthApiBaseUrl } from "./apiBase";
+import { apiUrl, authApiRelayConfigured, devUsesRemoteAuthViaViteProxy, resolvedAuthApiBaseUrl } from "./apiBase";
 import {
   getCachedCreditsProxyHeaders,
   getCreditsProxyRequestHeaders,
@@ -209,8 +209,7 @@ function isLocalDevPage(): boolean {
 function shouldRelayBulkViaAuthApi(baseResolved: string): boolean {
   if (typeof window === "undefined") return false;
   if (!baseResolved || baseResolved === BULK_SAME_ORIGIN_MARKER) return false;
-  const authConfigured = Boolean(resolvedAuthApiBaseUrl()) || devUsesRemoteAuthViaViteProxy();
-  if (!authConfigured) return false;
+  if (!authApiRelayConfigured()) return false;
   try {
     const bulkOrigin = new URL(
       /^https?:\/\//i.test(baseResolved) ? baseResolved : `https://${baseResolved}`
