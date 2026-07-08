@@ -474,7 +474,12 @@ function isAllowedOrigin(origin) {
 function assertWriteOrigin(req, res) {
   const method = String(req.method || '').toUpperCase();
   if (method === 'GET' || method === 'HEAD' || method === 'OPTIONS') return true;
+  const pathOnly = ((req.url || '/').split('?')[0] || '/').replace(/\/+$/, '') || '/';
   const origin = String(req.headers.origin || '');
+  /** gemini-proxy 等同源/loopback 服务 server-to-server 调用 credits-gate，无浏览器 Origin */
+  const serverSideCreditsPath =
+    pathOnly === '/api/auth/credits-gate' || pathOnly.startsWith('/api/internal/credits/');
+  if (serverSideCreditsPath && !origin) return true;
   if (isAllowedOrigin(origin)) return true;
   json(res, 403, { error: 'Origin not allowed' });
   return false;

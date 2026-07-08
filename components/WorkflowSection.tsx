@@ -552,7 +552,8 @@ function formatWorkflowRunTaskErrorMessage(err: unknown, taskLabel: string): str
     const msg = err instanceof Error ? err.message : String(err);
     return `[${taskLabel}] ${msg}`;
   }
-  const msg = err instanceof Error ? err.message : safeUnknownToString(err);
+  const msg =
+    err instanceof Error ? normalizeApiErrorMessage(err) : normalizeApiErrorMessage(String(err));
   return `[${taskLabel}] ${msg}`;
 }
 

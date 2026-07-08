@@ -37,6 +37,11 @@ services:
       - key: GOOGLE_APPLICATION_CREDENTIALS_JSON
         sync: false
       # 可选：GEMINI_API_KEYS、ENABLE_TOAPIS_FALLBACK、TOAPIS_API_KEY 等，见 README 与 docs/VERTEX_AI_INTEGRATION.md
+      # 与 auth-api INTERNAL_API_SECRET 相同；gemini-proxy 校验浏览器 X-AC-Credits-Reserve 时回调 auth-api
+      - key: GEMINI_PROXY_CREDITS_INTERNAL_SECRET
+        sync: false
+      - key: AUTH_API_BASE
+        value: https://assetcutter-auth-api.onrender.com
 
   - type: web
     name: assetcutter-auth-api

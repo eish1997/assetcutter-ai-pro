@@ -2,10 +2,24 @@ function trimSlash(input: string) {
   return input.replace(/\/+$/, '');
 }
 
-export function apiUrl(path: string) {
+/** 与 `.env.production` / render.yaml assetcutter-web 一致；Vercel 面板误设空字符串时会覆盖 env 文件 */
+export const DEFAULT_PRODUCTION_AUTH_API_BASE = 'https://assetcutter-auth-api.onrender.com';
+
+/** 构建期/运行时 auth 根：显式 env 优先；生产构建无 env 时回退默认 Render auth-api */
+export function resolvedAuthApiBaseUrl(): string {
   const fromEnv = String(import.meta.env?.VITE_AUTH_API_BASE_URL || '').trim();
-  if (!fromEnv) return path;
-  const base = trimSlash(fromEnv);
+  if (fromEnv) return trimSlash(fromEnv);
+  try {
+    if (import.meta.env.PROD) return DEFAULT_PRODUCTION_AUTH_API_BASE;
+  } catch {
+    /* ignore */
+  }
+  return '';
+}
+
+export function apiUrl(path: string) {
+  const base = resolvedAuthApiBaseUrl();
+  if (!base) return path;
   return `${base}${path.startsWith('/') ? path : `/${path}`}`;
 }
 

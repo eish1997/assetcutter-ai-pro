@@ -29,7 +29,7 @@ import {
 } from "./observability/metering/resolveBillingSku";
 import type { UsageGeminiMetadata } from "../shared/usageBilling";
 import { proxyGateMinCreditsForJob } from "../shared/credits";
-import { apiUrl } from "./apiBase";
+import { apiUrl, resolvedAuthApiBaseUrl } from "./apiBase";
 import { getCreditsProxyRequestHeaders, getLastCreditsReserveKey, releaseCreditsProxyReserve } from "./creditsProxyBridge";
 import { peekCreditsPrechargeSession } from "./creditsPrechargeSession";
 import {
@@ -202,18 +202,57 @@ function isLocalDevPage(): boolean {
 function shouldRelayBulkViaAuthApi(baseResolved: string): boolean {
   if (typeof window === "undefined") return false;
   if (!baseResolved || baseResolved === BULK_SAME_ORIGIN_MARKER) return false;
-  const authBase = readViteEnvTrim("VITE_AUTH_API_BASE_URL");
-  /** 仅当显式配置了 auth 绝对地址时才中继；否则 Vercel/本地走直连或 Vite dev 转发 */
+  const authBase = resolvedAuthApiBaseUrl();
+  /** 生产默认 auth 根 → 生图走 /api/gemini-proxy 中继（Cookie 随请求转发，避免浏览器直连 onrender） */
   if (!authBase) return false;
   try {
     const bulkOrigin = new URL(
       /^https?:\/\//i.test(baseResolved) ? baseResolved : `https://${baseResolved}`
     ).origin;
     if (bulkOrigin === window.location.origin) return false;
+    const authOrigin = new URL(
+      /^https?:\/\//i.test(authBase) ? authBase : `https://${authBase}`
+    ).origin;
+    if (authOrigin === window.location.origin) return false;
     return true;
   } catch {
     return false;
   }
+}
+
+/** 7525000 起 bulk 默认 credentials:include；直连跨域 gemini-proxy 会触发 credentialed CORS 预检失败 → fetch failed */
+export function resolveBulkFetchCredentials(
+  input: RequestInfo | URL,
+  init?: RequestInit
+): RequestCredentials {
+  if (init?.credentials) return init.credentials;
+  const urlStr =
+    typeof input === "string"
+      ? input
+      : input instanceof URL
+        ? input.href
+        : input instanceof Request
+          ? input.url
+          : String(input);
+  if (typeof window === "undefined") return "same-origin";
+  try {
+    if (urlStr.startsWith("/") && !urlStr.startsWith("//")) return "include";
+    if (urlStr.startsWith(window.location.origin)) return "include";
+  } catch {
+    /* ignore */
+  }
+  const authBase = resolvedAuthApiBaseUrl();
+  if (authBase) {
+    try {
+      const authOrigin = new URL(
+        /^https?:\/\//i.test(authBase) ? authBase : `https://${authBase}`
+      ).origin;
+      if (urlStr.startsWith(authOrigin)) return "include";
+    } catch {
+      /* ignore */
+    }
+  }
+  return "omit";
 }
 
 function bulkApiUrl(path: string): string {
@@ -379,7 +418,7 @@ async function bulkFetchOrExplain(input: RequestInfo | URL, init?: RequestInit):
   try {
     return await fetch(input, {
       ...init,
-      credentials: init?.credentials ?? 'include',
+      credentials: resolveBulkFetchCredentials(input, init),
     });
   } catch (e) {
     if (isBrowserFetchNetworkError(e)) {

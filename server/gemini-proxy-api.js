@@ -12,6 +12,7 @@ import fs from 'fs';
 import http from 'http';
 import os from 'os';
 import path from 'path';
+import { ProxyAgent, setGlobalDispatcher } from 'undici';
 import { GoogleGenAI } from '@google/genai';
 import {
   GEMINI_PROXY_MAX_BODY_BYTES as MAX_BODY_BYTES,
@@ -38,6 +39,18 @@ import {
   estimatedCreditsFromProxyBody,
   isGeminiProxyCreditsGateEnabled,
 } from './gemini-proxy-credits-gate.js';
+
+/** 与 auth-api 一致：本地访问 Google API 常需 TRIPO_PROXY / HTTPS_PROXY（见 .env.local） */
+const GEMINI_OUTBOUND_PROXY = String(
+  process.env.TRIPO_PROXY || process.env.HTTPS_PROXY || process.env.HTTP_PROXY || ''
+).trim();
+if (GEMINI_OUTBOUND_PROXY) {
+  try {
+    setGlobalDispatcher(new ProxyAgent(GEMINI_OUTBOUND_PROXY));
+  } catch (e) {
+    console.warn('[gemini-proxy-api] outbound proxy init failed:', e instanceof Error ? e.message : e);
+  }
+}
 
 /** 监听端口：优先专用变量，避免与 .env.local 里给 ai3d 等用的通用 `PORT` 冲突 */
 const PORT =
@@ -78,8 +91,20 @@ function parseAllowedOrigins() {
 
 const allowedOrigins = parseAllowedOrigins();
 
+function isDevLoopbackOrigin(origin) {
+  if (String(process.env.NODE_ENV || '').toLowerCase() === 'production') return false;
+  try {
+    const h = new URL(origin).hostname.toLowerCase();
+    return h === 'localhost' || h === '127.0.0.1' || h === '::1';
+  } catch {
+    return false;
+  }
+}
+
 function applyCors(req, res) {
-  const origin = req.headers.origin;
+  const rawOrigin = req.headers.origin;
+  /** Node/undici 跨域 fetch 可能送 Origin: null（opaque origin），不应按字面量拒掉 */
+  const origin = rawOrigin && String(rawOrigin).toLowerCase() !== 'null' ? rawOrigin : '';
   /** 前端 bulkFetch 使用 credentials:include（积分 Cookie / fairness）；须回显 Origin 且允许凭据，否则浏览器报 Failed to fetch */
   const allowCredentialsForOrigin = () => {
     res.setHeader('Access-Control-Allow-Credentials', 'true');
@@ -101,6 +126,15 @@ function applyCors(req, res) {
     res.setHeader('Vary', 'Origin');
     allowCredentialsForOrigin();
     return true;
+  }
+  if (isDevLoopbackOrigin(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Vary', 'Origin');
+    allowCredentialsForOrigin();
+    return true;
+  }
+  if (String(process.env.GEMINI_PROXY_DEBUG_CORS || '').trim() === '1') {
+    console.warn('[gemini-proxy-api] CORS reject', { rawOrigin, origin, allowed: [...(allowedOrigins || [])] });
   }
   return false;
 }
@@ -878,17 +912,30 @@ function sendBodyReadError(res, e) {
 async function applyCreditsGateOrReject(req, res, parsed, fallbackCredits) {
   if (!isGeminiProxyCreditsGateEnabled()) return true;
   const est = estimatedCreditsFromProxyBody(parsed, fallbackCredits);
-  const gate = await assertGeminiProxyCreditsGate(req, est);
-  if (gate.ok) return true;
-  sendJson(res, gate.status, gate.body);
-  return false;
+  try {
+    const gate = await assertGeminiProxyCreditsGate(req, est);
+    if (gate.ok) return true;
+    sendJson(res, gate.status, gate.body);
+    return false;
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.error('[gemini-proxy] credits gate error:', msg);
+    sendJson(res, 503, { error: '积分准入服务暂不可用', detail: msg });
+    return false;
+  }
 }
 
 const GEMINI_ASYNC_PATH = '/proxy/gemini/async';
 const GEMINI_ASYNC_BATCH_PATH = '/proxy/gemini/async-batch';
 
 const server = http.createServer(async (req, res) => {
+  if (String(process.env.GEMINI_PROXY_DEBUG_CORS || '').trim() === '1' && req.method === 'POST') {
+    console.warn('[gemini-proxy-api] POST', req.url, 'origin=', req.headers.origin);
+  }
   const corsOk = applyCors(req, res);
+  if (String(process.env.GEMINI_PROXY_DEBUG_CORS || '').trim() === '1' && req.method === 'POST') {
+    console.warn('[gemini-proxy-api] corsOk=', corsOk, 'origin=', JSON.stringify(req.headers.origin));
+  }
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-AC-Fairness-Key, X-AC-Fairness-Signature, X-AC-Client-Ip, X-AC-Credits-Reserve, X-AC-Credits-Gate-Signature');
   res.setHeader('Access-Control-Max-Age', '86400');

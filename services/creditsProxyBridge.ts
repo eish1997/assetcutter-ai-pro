@@ -4,7 +4,7 @@
 import { dispatchCreditsBalanceChanged } from '../shared/credits';
 import { apiUrl } from './apiBase';
 import { getGeminiFairnessRequestHeaders } from './geminiFairnessBridge';
-import { requestJson } from './httpClient';
+import { HttpRequestError, requestJson } from './httpClient';
 import { peekCreditsPrechargeSession } from './creditsPrechargeSession';
 
 let lastCreditsReserveKey: string | null = null;
@@ -27,6 +27,23 @@ type CreditsProxyBundleResponse = {
   headers?: Record<string, string>;
   reserveKey?: string;
 };
+
+function isCreditsBundleNetworkError(msg: string): boolean {
+  return /failed to fetch|fetch failed|networkerror|load failed|econnrefused|network request failed/i.test(
+    msg
+  );
+}
+
+function creditsBundleUnavailableMessage(): string {
+  try {
+    if (import.meta.env.DEV) {
+      return '无法连接 auth-api 积分预扣服务。请运行 npm run dev:auth-backend（9100），或注释 .env.local 中的 VITE_AUTH_API_BASE_URL 后重启 npm run dev。';
+    }
+  } catch {
+    /* ignore */
+  }
+  return '无法连接积分服务，请检查网络或稍后重试。';
+}
 
 /** 生图/异步 proxy 提交前获取准入头（含预扣 reserveKey）。 */
 export async function getCreditsProxyRequestHeaders(
@@ -59,10 +76,22 @@ export async function getCreditsProxyRequestHeaders(
       return fallback;
     }
     lastCreditsReserveKey = res.reserveKey?.trim() || null;
+    if (!lastCreditsReserveKey) {
+      throw new HttpRequestError(
+        '积分预扣未返回 reserveKey，请确认 auth-api 已部署最新版。',
+        503,
+        'CREDITS_BUNDLE_INVALID'
+      );
+    }
     return { ...fallback, ...(res.headers || {}) };
-  } catch {
+  } catch (e) {
     lastCreditsReserveKey = null;
-    return fallback;
+    if (e instanceof HttpRequestError) throw e;
+    const msg = e instanceof Error ? e.message : String(e);
+    if (isCreditsBundleNetworkError(msg)) {
+      throw new HttpRequestError(creditsBundleUnavailableMessage(), 503, 'CREDITS_BUNDLE_UNAVAILABLE');
+    }
+    throw e;
   }
 }
 

@@ -1,12 +1,20 @@
 /**
  * gemini-proxy 服务端积分准入：HMAC 预扣、session Cookie、或内部密钥 + user id。
  */
+import { Agent, fetch as undiciFetch } from 'undici';
 import { CREDITS_EXCEEDED_CODE } from './credits-math.js';
 import {
   creditsGateHmacEnabled,
   verifyCreditsGateSignature,
   verifyFairnessKeySignature,
 } from './credits-gate-hmac.js';
+
+/** gemini-proxy 可能设全局 HTTPS_PROXY；auth-api loopback 须直连（见 gemini-proxy-relay.js） */
+const authApiDirectDispatcher = new Agent();
+
+async function authApiFetch(url, init) {
+  return undiciFetch(url, { ...init, dispatcher: authApiDirectDispatcher });
+}
 
 export function isGeminiProxyCreditsGateEnabled() {
   const raw = String(process.env.GEMINI_PROXY_CREDITS_GATE ?? 'true').trim().toLowerCase();
@@ -39,7 +47,7 @@ async function readJsonSafe(res) {
 
 async function precheckViaSessionCookie(cookieHeader, estimatedCredits, reserveKey) {
   const url = `${authApiBase()}/api/auth/credits-gate`;
-  const res = await fetch(url, {
+  const res = await authApiFetch(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -63,7 +71,7 @@ async function validateReserveViaInternal(userId, reserveKey, estimatedCredits) 
     return { ok: false, status: 503, data: { error: 'internal credits validate unavailable' } };
   }
   const url = `${authApiBase()}/api/internal/credits/validate-reserve`;
-  const res = await fetch(url, {
+  const res = await authApiFetch(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -87,7 +95,7 @@ async function precheckViaInternalUserId(userId, estimatedCredits, reserveKey) {
     return { ok: false, status: 503, data: { error: 'internal credits precheck unavailable' } };
   }
   const url = `${authApiBase()}/api/internal/credits/precheck`;
-  const res = await fetch(url, {
+  const res = await authApiFetch(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
