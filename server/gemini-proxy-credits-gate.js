@@ -22,7 +22,9 @@ export function isGeminiProxyCreditsGateEnabled() {
 }
 
 function authApiBase() {
-  return String(process.env.AUTH_API_BASE || process.env.AUTH_API_INTERNAL_URL || 'http://127.0.0.1:9100')
+  const isProd = String(process.env.NODE_ENV || '').toLowerCase() === 'production';
+  const fallback = isProd ? 'https://assetcutter-auth-api.onrender.com' : 'http://127.0.0.1:9100';
+  return String(process.env.AUTH_API_BASE || process.env.AUTH_API_INTERNAL_URL || fallback)
     .trim()
     .replace(/\/+$/, '');
 }
