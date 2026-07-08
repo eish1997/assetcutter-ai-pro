@@ -54,6 +54,21 @@ async function readRequestBodyBuffer(req: IncomingMessage): Promise<Buffer> {
   return chunks.length ? Buffer.concat(chunks) : Buffer.alloc(0);
 }
 
+function resolveDevAuthApiProxyTarget(env: Record<string, string | undefined>): string {
+  const raw = String(env.VITE_AUTH_API_BASE_URL || '').trim();
+  if (raw && /^https?:\/\//i.test(raw)) return raw.replace(/\/+$/, '');
+  return 'http://127.0.0.1:9100';
+}
+
+function devAuthApiProxyOptions(env: Record<string, string | undefined>) {
+  const target = resolveDevAuthApiProxyTarget(env);
+  const remote = !/^https?:\/\/(127\.0\.0\.1|localhost):9100\/?$/i.test(target);
+  return {
+    target,
+    changeOrigin: true,
+    ...(remote ? { cookieDomainRewrite: { '*': '' } } : {}),
+  };
+}
 /** 本地 Vite 反代出站（OpenAI / VectorEngine 等）：读 OPENAI_PROXY → HTTPS_PROXY → HTTP_PROXY → TRIPO_PROXY */
 function resolveDevOutboundProxyUrl(
   ...sources: Array<Record<string, string | undefined> | NodeJS.ProcessEnv>
@@ -200,32 +215,25 @@ export default defineConfig(({ mode }) => {
     } as Record<string, string | undefined>);
     const outboundProxyUrl = resolveDevOutboundProxyUrl(process.env, fromFile);
     const outboundProxyAgent = outboundProxyUrl ? new HttpsProxyAgent(outboundProxyUrl) : undefined;
+    const authApiProxy = devAuthApiProxyOptions({
+      ...fromFile,
+      VITE_AUTH_API_BASE_URL: process.env.VITE_AUTH_API_BASE_URL ?? fromFile.VITE_AUTH_API_BASE_URL,
+    });
+    if (authApiProxy.target !== 'http://127.0.0.1:9100') {
+      console.log(`[vite] /api/* → ${authApiProxy.target}（VITE_AUTH_API_BASE_URL）`);
+    }
     return {
       root: path.resolve(__dirname),
       server: {
         port: 3000,
         host: '0.0.0.0',
         proxy: {
-          '/api/auth': {
-            target: 'http://127.0.0.1:9100',
-            changeOrigin: true,
-          },
-          '/api/admin': {
-            target: 'http://127.0.0.1:9100',
-            changeOrigin: true,
-          },
-          '/api/companion-artifacts': {
-            target: 'http://127.0.0.1:9100',
-            changeOrigin: true,
-          },
-          '/api/bridge': {
-            target: 'http://127.0.0.1:9100',
-            changeOrigin: true,
-          },
+          '/api/auth': authApiProxy,
+          '/api/admin': authApiProxy,
+          '/api/companion-artifacts': authApiProxy,
+          '/api/bridge': authApiProxy,
           '/api/r2': {
-            /** 生产与本地推荐：R2 路由挂在 auth-api（9100）同源 Cookie；独立 9003 仅用于 npm run dev:r2-api / start:r2-api */
-            target: 'http://127.0.0.1:9100',
-            changeOrigin: true,
+            ...authApiProxy,
             configure(proxy) {
               proxy.on('error', (err, _req, res) => {
                 const msg =
@@ -242,37 +250,16 @@ export default defineConfig(({ mode }) => {
               });
             },
           },
-          '/api/tripo': {
-            target: 'http://127.0.0.1:9100',
-            changeOrigin: true,
-          },
-          '/api/gemini-proxy': {
-            target: 'http://127.0.0.1:9100',
-            changeOrigin: true,
-          },
-          '/api/tripo/upload': {
-            target: 'http://127.0.0.1:9100',
-            changeOrigin: true,
-          },
-          '/api/debug': {
-            target: 'http://127.0.0.1:9100',
-            changeOrigin: true,
-          },
+          '/api/tripo': authApiProxy,
+          '/api/gemini-proxy': authApiProxy,
+          '/api/tripo/upload': authApiProxy,
+          '/api/debug': authApiProxy,
           /** 用户用量记账（Phase 0/1）：summary / events / export */
-          '/api/usage': {
-            target: 'http://127.0.0.1:9100',
-            changeOrigin: true,
-          },
+          '/api/usage': authApiProxy,
           /** 统一积分制：余额 / 流水 */
-          '/api/credits': {
-            target: 'http://127.0.0.1:9100',
-            changeOrigin: true,
-          },
+          '/api/credits': authApiProxy,
           /** 工作流任务执行上报（管理端任务执行页） */
-          '/api/workflow': {
-            target: 'http://127.0.0.1:9100',
-            changeOrigin: true,
-          },
+          '/api/workflow': authApiProxy,
           '/seam-repair-api': {
             target: 'http://127.0.0.1:8008',
             changeOrigin: true,

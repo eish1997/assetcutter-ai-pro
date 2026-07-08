@@ -8,6 +8,12 @@ export const DEFAULT_PRODUCTION_AUTH_API_BASE = 'https://assetcutter-auth-api.on
 /** 构建期/运行时 auth 根：显式 env 优先；生产构建无 env 时回退默认 Render auth-api */
 export function resolvedAuthApiBaseUrl(): string {
   const fromEnv = String(import.meta.env?.VITE_AUTH_API_BASE_URL || '').trim();
+  try {
+    /** 本地 dev：走 Vite 同源 /api 反代到 VITE_AUTH_API_BASE_URL，避免浏览器跨域 CORS */
+    if (import.meta.env.DEV && !import.meta.env.PROD && fromEnv) return '';
+  } catch {
+    /* ignore */
+  }
   if (fromEnv) return trimSlash(fromEnv);
   try {
     if (import.meta.env.PROD) return DEFAULT_PRODUCTION_AUTH_API_BASE;
@@ -15,6 +21,19 @@ export function resolvedAuthApiBaseUrl(): string {
     /* ignore */
   }
   return '';
+}
+
+/** dev 且配置了 VITE_AUTH_API_BASE_URL（经 Vite 反代云端 auth） */
+export function devUsesRemoteAuthViaViteProxy(): boolean {
+  try {
+    return (
+      import.meta.env.DEV &&
+      !import.meta.env.PROD &&
+      Boolean(String(import.meta.env?.VITE_AUTH_API_BASE_URL || '').trim())
+    );
+  } catch {
+    return false;
+  }
 }
 
 export function apiUrl(path: string) {

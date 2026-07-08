@@ -29,8 +29,8 @@ import {
 } from "./observability/metering/resolveBillingSku";
 import type { UsageGeminiMetadata } from "../shared/usageBilling";
 import { proxyGateMinCreditsForJob } from "../shared/credits";
-import { apiUrl, resolvedAuthApiBaseUrl } from "./apiBase";
-import { getCreditsProxyRequestHeaders, getLastCreditsReserveKey, releaseCreditsProxyReserve } from "./creditsProxyBridge";
+import { apiUrl, devUsesRemoteAuthViaViteProxy, resolvedAuthApiBaseUrl } from "./apiBase";
+import { getCreditsProxyRequestHeaders, getLastCreditsReserveKey, clearLastCreditsReserveKey, releaseCreditsProxyReserve } from "./creditsProxyBridge";
 import { peekCreditsPrechargeSession } from "./creditsPrechargeSession";
 import {
   GeminiAsyncPollTimeoutError,
@@ -202,18 +202,19 @@ function isLocalDevPage(): boolean {
 function shouldRelayBulkViaAuthApi(baseResolved: string): boolean {
   if (typeof window === "undefined") return false;
   if (!baseResolved || baseResolved === BULK_SAME_ORIGIN_MARKER) return false;
-  const authBase = resolvedAuthApiBaseUrl();
-  /** 生产默认 auth 根 → 生图走 /api/gemini-proxy 中继（Cookie 随请求转发，避免浏览器直连 onrender） */
-  if (!authBase) return false;
+  const authConfigured = Boolean(resolvedAuthApiBaseUrl()) || devUsesRemoteAuthViaViteProxy();
+  if (!authConfigured) return false;
   try {
     const bulkOrigin = new URL(
       /^https?:\/\//i.test(baseResolved) ? baseResolved : `https://${baseResolved}`
     ).origin;
     if (bulkOrigin === window.location.origin) return false;
-    const authOrigin = new URL(
-      /^https?:\/\//i.test(authBase) ? authBase : `https://${authBase}`
-    ).origin;
-    if (authOrigin === window.location.origin) return false;
+    if (resolvedAuthApiBaseUrl()) {
+      const authOrigin = new URL(
+        /^https?:\/\//i.test(resolvedAuthApiBaseUrl()) ? resolvedAuthApiBaseUrl() : `https://${resolvedAuthApiBaseUrl()}`
+      ).origin;
+      if (authOrigin === window.location.origin) return false;
+    }
     return true;
   } catch {
     return false;
@@ -262,18 +263,37 @@ function bulkApiUrl(path: string): string {
   if (baseResolved === BULK_SAME_ORIGIN_MARKER) {
     return p;
   }
-  /** 本地 npm run dev：优先 Vite /__ac-bulk-forward，无需本机 auth-api（见 .env.development） */
+  /** 与线上一致：已配置跨域 auth-api 时走 /api/gemini-proxy 中继（Cookie + 积分头一并转发） */
+  if (shouldRelayBulkViaAuthApi(baseResolved)) {
+    return apiUrl(`/api/gemini-proxy${p}`);
+  }
+  /** 本地 npm run dev：无 auth 中继时经 Vite /__ac-bulk-forward 转发（须与云端 auth 登录对齐，见 assertDevBulkCreditsAuthAligned） */
   if (import.meta.env.DEV && isLocalDevPage()) {
     const idx = bulkForwardOriginIndex(baseResolved, bulkDevForwardOrigins());
     if (idx >= 0) {
       return `${AC_BULK_FORWARD_PREFIX}/${idx}${p}`;
     }
   }
-  if (shouldRelayBulkViaAuthApi(baseResolved)) {
-    return apiUrl(`/api/gemini-proxy${p}`);
-  }
   const base = baseResolved.replace(/\/$/, "");
   return `${base}${p}`;
+}
+
+function bulkUsesDevForward(requestUrl: string): boolean {
+  try {
+    const u = typeof requestUrl === "string" ? requestUrl : String(requestUrl);
+    return u.includes(`${AC_BULK_FORWARD_PREFIX}/`);
+  } catch {
+    return false;
+  }
+}
+
+/** 本地登录 + dev bulk-forward 到 Render 时，云端 proxy 无法识别本机 session */
+function assertDevBulkCreditsAuthAligned(requestUrl: string): void {
+  if (!import.meta.env.DEV || !bulkUsesDevForward(requestUrl)) return;
+  if (resolvedAuthApiBaseUrl() || devUsesRemoteAuthViaViteProxy()) return;
+  throw new Error(
+    "本地登录与 Render 生图代理不匹配：云端会提示「请先登录」。请在 .env.local 设置 VITE_AUTH_API_BASE_URL=https://assetcutter-auth-api.onrender.com，重启 npm run dev 后重新登录。"
+  );
 }
 
 /** Render 等对长连接常限 10～15s：走后端异步 job + 轮询，避免 503/504 */
@@ -792,6 +812,13 @@ export async function retryAllRecoverableGeminiJobs(): Promise<void> {
   }
 }
 
+function isCreditsReserveInvalidProxyError(status: number, text: string): boolean {
+  if (status !== 403) return false;
+  const raw = (text || "").trim();
+  if (/CREDITS_RESERVE_INVALID/i.test(raw)) return true;
+  return /积分预扣无效|积分预扣.*过期/i.test(raw);
+}
+
 async function bulkProxyAdmissionHeaders(estimatedCredits: number): Promise<Record<string, string>> {
   return getCreditsProxyRequestHeaders(estimatedCredits);
 }
@@ -871,19 +898,32 @@ async function bulkProxyGenerateContentAsync(args: {
   const gateCredits = proxyGateMinCreditsForJob("workflow_text_to_image");
   let skipReleaseOnFinally = false;
   try {
-  const create = await bulkFetchCreateWithFairnessRetry(bulkApiUrl("/proxy/gemini/async"), {
+  const asyncCreateUrl = bulkApiUrl("/proxy/gemini/async");
+  assertDevBulkCreditsAuthAligned(asyncCreateUrl);
+  const createBody = JSON.stringify({
+    model: args.model,
+    contents: args.contents,
+    config: safeConfig,
+    estimatedCredits: gateCredits,
+    ...aiBackendExtra,
+  });
+  let create = await bulkFetchCreateWithFairnessRetry(asyncCreateUrl, {
     method: "POST",
     headers: { "Content-Type": "application/json", ...(await bulkProxyAdmissionHeaders(gateCredits)) },
-    body: JSON.stringify({
-      model: args.model,
-      contents: args.contents,
-      config: safeConfig,
-      estimatedCredits: gateCredits,
-      ...aiBackendExtra,
-    }),
+    body: createBody,
     signal: abortSignal,
     cache: "no-store",
   });
+  if (!create.ok && isCreditsReserveInvalidProxyError(create.status, create.text || "")) {
+    clearLastCreditsReserveKey();
+    create = await bulkFetchCreateWithFairnessRetry(asyncCreateUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...(await bulkProxyAdmissionHeaders(gateCredits)) },
+      body: createBody,
+      signal: abortSignal,
+      cache: "no-store",
+    });
+  }
   if (!create.ok) {
     const raw = (create.text || "").trim();
     const parsedMsg = parseBulkProxyErrorBody(raw);
