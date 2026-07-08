@@ -64,6 +64,9 @@ services:
         value: none
       - key: AUTH_COOKIE_SECURE
         value: "true"
+      # 邀请制注册：须管理端生成的一次性码 AC-XXXX-XXXX 或链接 ?invite=
+      - key: REGISTRATION_MODE
+        value: invite_only
       - key: AUTH_ADMIN_EMAIL
         sync: false
       - key: AUTH_ADMIN_PASSWORD
