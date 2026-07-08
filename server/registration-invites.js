@@ -10,8 +10,12 @@ const DATA_PATH = path.resolve(process.cwd(), 'server/data/registration-invites.
 const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 
 export function getRegistrationMode() {
-  const raw = String(process.env.REGISTRATION_MODE || 'open').trim().toLowerCase();
-  return raw === 'invite_only' ? 'invite_only' : 'open';
+  const raw = String(process.env.REGISTRATION_MODE || '').trim().toLowerCase();
+  if (raw === 'invite_only') return 'invite_only';
+  if (raw === 'open') return 'open';
+  /** 生产默认邀请制；避免 Render Blueprint 未 Sync 时仍开放注册 */
+  if (String(process.env.NODE_ENV || '').toLowerCase() === 'production') return 'invite_only';
+  return 'open';
 }
 
 /** 去掉空格/连字符并大写，用于 lookup */
