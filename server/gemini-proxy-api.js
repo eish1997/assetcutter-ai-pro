@@ -64,10 +64,15 @@ const allowedOrigins = parseAllowedOrigins();
 
 function applyCors(req, res) {
   const origin = req.headers.origin;
+  /** 前端 bulkFetch 使用 credentials:include（积分 Cookie / fairness）；须回显 Origin 且允许凭据，否则浏览器报 Failed to fetch */
+  const allowCredentialsForOrigin = () => {
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+  };
   if (allowedOrigins === null) {
     if (origin) {
       res.setHeader('Access-Control-Allow-Origin', origin);
       res.setHeader('Vary', 'Origin');
+      allowCredentialsForOrigin();
     } else res.setHeader('Access-Control-Allow-Origin', '*');
     return true;
   }
@@ -78,6 +83,7 @@ function applyCors(req, res) {
   if (allowedOrigins.has(origin)) {
     res.setHeader('Access-Control-Allow-Origin', origin);
     res.setHeader('Vary', 'Origin');
+    allowCredentialsForOrigin();
     return true;
   }
   return false;
