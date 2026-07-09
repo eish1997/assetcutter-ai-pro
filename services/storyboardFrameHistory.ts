@@ -14,7 +14,7 @@ import {
   resolveStoryboardFrameDisplaySrc,
   storyboardRowHasFrameRef,
 } from './storyboardFrameImageUrl';
-import { resolveStoryboardRowFrameDataUrl } from './storyboardTableRedraw';
+import { resolveStoryboardRowFrameDataUrl } from './storyboardRowFrameDataUrl';
 import { putWorkflowResultImageToCompanion } from './workflowCompanionAssets';
 
 export const STORYBOARD_FRAME_HISTORY_LIMIT = 12;

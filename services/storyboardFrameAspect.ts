@@ -1,5 +1,5 @@
 import type { StoryboardTableRow } from '../types';
-import { resolveStoryboardRowFrameDataUrl } from './storyboardTableRedraw';
+import { resolveStoryboardRowFrameDataUrl } from './storyboardRowFrameDataUrl';
 
 const ASPECT_CANDIDATES: Array<{ label: string; ratio: number }> = [
   { label: '16:9', ratio: 16 / 9 },

@@ -1,25 +1,27 @@
 import type { CustomAppModule, StoryboardParseFieldDef, StoryboardTableRow } from '../types';
 import { coerceImageModelRegistryId } from './modelRegistry/imageModels';
 import { compileRedrawPrompt } from './storyboardTableParse';
-import {
-  executeStoryboardCollageRedraw,
-} from './storyboardFeedbackSheetRedraw';
 import { capabilityUsesGenImageEngine, getCapabilityEngine } from './capabilityEngineKind';
 import type { CapabilityExecuteContext } from './capabilityExecutor';
 import { auditStoryboardGenFromCtx } from './storyboardTaskAuditEvents';
 import {
-  fetchWorkflowOriginalFromCompanionAsObjectUrl,
-  imageSrcToDataUrlForCompanion,
-} from './workflowCompanionAssets';
-import {
-  resolveStoryboardRowFrameDisplaySrc,
   storyboardRowHasFrameRef,
 } from './storyboardFrameImageUrl';
 import { isStoryboardFeedbackRedrawEligible } from './storyboardEditEligibility';
 import {
   STORYBOARD_ROLE_REPLACE_DEFAULT_PRESET_ID,
   getBuiltinStoryboardRoleReplacePreset,
-} from './storyboardRoleReplaceRedraw';
+  getBuiltinStoryboardFeedbackCollagePreset,
+  STORYBOARD_FEEDBACK_COLLAGE_DEFAULT_PRESET_ID,
+  DEFAULT_STORYBOARD_FEEDBACK_COLLAGE_INSTRUCTION,
+} from './storyboardBuiltinPresets';
+
+export {
+  getBuiltinStoryboardFeedbackCollagePreset,
+  STORYBOARD_FEEDBACK_COLLAGE_DEFAULT_PRESET_ID,
+  DEFAULT_STORYBOARD_FEEDBACK_COLLAGE_INSTRUCTION,
+} from './storyboardBuiltinPresets';
+export { resolveStoryboardRowFrameDataUrl } from './storyboardRowFrameDataUrl';
 
 export { isStoryboardFeedbackRedrawEligible };
 
@@ -30,20 +32,6 @@ export const STORYBOARD_EDIT_REDRAW_PRESET_KEY = 'ac_storyboard_edit_redraw_pres
 export const STORYBOARD_EDIT_REDRAW_MODEL_KEY = 'ac_storyboard_edit_redraw_model_v1';
 /** 编辑页拼图改图（批量/单镜有图）选用的图生图能力预设 */
 export const STORYBOARD_EDIT_FEEDBACK_COLLAGE_PRESET_KEY = 'ac_storyboard_edit_feedback_collage_preset_v1';
-/** 内置拼图改图能力预设 id（与 capability-seed / enforce 合并一致） */
-export const STORYBOARD_FEEDBACK_COLLAGE_DEFAULT_PRESET_ID = 'storyboard_collage_redraw_v1';
-
-/** 分镜拼图改图预设默认提示词（能力页展示；运行时与本次拼图镜头说明拼接） */
-export const DEFAULT_STORYBOARD_FEEDBACK_COLLAGE_INSTRUCTION = `你是分镜拼图改图助手（无需阅读分镜表文字）。
-
-输入为分镜插画拼图（每格仅插画与格线，无画面描述/对白等文字条）。用户消息仅含各格的「修改反馈」。
-
-按反馈修改对应格内画面；整体画风、线稿/上色方式、笔触与色彩氛围须与输入图保持一致。
-
-硬性要求：
-- 保持与输入相同的格数、格线、排列顺序与整体尺寸；
-- 每格输出只能是修改后的插画；
-- 禁止添加任何文字说明条、Scene Info、Dialogue 或边框。`;
 
 /** 编辑页拼图改图选用的生图 registryId */
 export const STORYBOARD_EDIT_FEEDBACK_COLLAGE_MODEL_KEY = 'ac_storyboard_edit_feedback_collage_model_v1';
@@ -104,20 +92,6 @@ export function pickStoryboardEditRedrawPreset(
   const useImageRef = !opts?.forceTextToImage && storyboardRowHasFrameRef(row);
   const category = useImageRef ? 'image_to_image' : 'text_to_image';
   return list.find((p) => p.category === category) ?? list[0] ?? null;
-}
-
-/** 拼图改图可选能力：已启用的图生图预设 */
-export function getBuiltinStoryboardFeedbackCollagePreset(): CustomAppModule {
-  return {
-    id: STORYBOARD_FEEDBACK_COLLAGE_DEFAULT_PRESET_ID,
-    label: '分镜拼图改图',
-    category: 'image_to_image',
-    engine: 'gen_image',
-    enabled: true,
-    order: 0,
-    instruction: DEFAULT_STORYBOARD_FEEDBACK_COLLAGE_INSTRUCTION,
-    imageGear: 'pro',
-  };
 }
 
 export function listStoryboardFeedbackCollageRedrawPresets(
@@ -188,58 +162,6 @@ export function resolveStoryboardFeedbackCollagePreset(
 /** @deprecated 使用 resolveStoryboardFeedbackCollagePreset */
 export function pickStoryboardFeedbackRedrawPreset(presets: CustomAppModule[]): CustomAppModule | null {
   return resolveStoryboardFeedbackCollagePreset(presets, null);
-}
-
-async function resolveRowFrameImage(
-  frameImage: string,
-  companionBaseUrl: string,
-  companionProjectId: string
-): Promise<{ ok: true; dataUrl: string } | { ok: false; error: string }> {
-  const trimmed = String(frameImage || '').trim();
-  if (!trimmed) {
-    return { ok: false, error: '当前镜头没有参考图' };
-  }
-  const normalized = await imageSrcToDataUrlForCompanion(trimmed);
-  if (normalized) return { ok: true, dataUrl: normalized };
-  if (!companionBaseUrl.trim() || !companionProjectId.trim()) {
-    return { ok: false, error: '参考图无法解析，请重新上传或连接本机伴侣' };
-  }
-  return { ok: false, error: '参考图无法加载，请在本镜重新上传' };
-}
-
-export async function resolveStoryboardRowFrameDataUrl(
-  row: StoryboardTableRow,
-  companionBaseUrl: string,
-  companionProjectId: string
-): Promise<{ ok: true; dataUrl: string } | { ok: false; error: string }> {
-  const direct = String(row.frameImage || '').trim();
-  if (direct) {
-    return resolveRowFrameImage(direct, companionBaseUrl, companionProjectId);
-  }
-
-  const display = resolveStoryboardRowFrameDisplaySrc(row);
-  if (display) {
-    const normalized = await imageSrcToDataUrlForCompanion(display);
-    if (normalized) return { ok: true, dataUrl: normalized };
-  }
-
-  const companionKey = String(row.frameImageCompanionKey || '').trim();
-  if (companionKey) {
-    const base = String(companionBaseUrl || '').trim();
-    const pid = String(companionProjectId || '').trim();
-    if (!base || !pid) {
-      return { ok: false, error: '参考图在本地伴侣中，请连接本机伴侣后重试' };
-    }
-    const got = await fetchWorkflowOriginalFromCompanionAsObjectUrl(base, pid, companionKey);
-    if (got.ok === false) {
-      return { ok: false, error: '参考图无法从伴侣加载，请重新上传' };
-    }
-    const resolved = await resolveRowFrameImage(got.objectUrl, base, pid);
-    URL.revokeObjectURL(got.objectUrl);
-    return resolved;
-  }
-
-  return { ok: false, error: '当前镜头没有参考图' };
 }
 
 export type StoryboardRowRedrawArgs = {
@@ -328,6 +250,7 @@ export async function executeStoryboardRowRedraw(
     if (!feedback) {
       return { ok: false, error: '拼图改图请先填写修改反馈' };
     }
+    const { executeStoryboardCollageRedraw } = await import('./storyboardFeedbackSheetRedraw');
     const collageOutcome = await executeStoryboardCollageRedraw({
       preset: collageCap,
       rows: [row],

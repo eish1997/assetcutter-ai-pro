@@ -9,6 +9,7 @@ import {
   isWorkflowTextAsset,
 } from './workflowAssetKind';
 import { workflowModelSlotMayNeedCompanionHydrate, isWorkflowModelUrlReadable } from './workflowModelBlob';
+import { normalizeDataUrlForVisionApi } from './workflowImageDataUrlCompress';
 
 /** 与 `storyboardNamedAssetImage.StoryboardNamedAssetImageFields` 同形；内联避免 companion 模块环 */
 type StoryboardNamedAssetImageFields = {
@@ -842,7 +843,10 @@ export async function resolveCapabilityInputImageForExecute(opts: {
   const trimmed = String(inputImage || '').trim();
 
   const normalized = await imageSrcToDataUrlForCompanion(trimmed);
-  if (normalized) return { ok: true, dataUrl: normalized };
+  if (normalized) {
+    const compressed = await normalizeDataUrlForVisionApi(normalized);
+    return { ok: true, dataUrl: compressed };
+  }
 
   if (!asset || !projectId || !base) {
     return {
@@ -856,14 +860,20 @@ export async function resolveCapabilityInputImageForExecute(opts: {
     const key = String(asset.originalCompanionKey || '').trim();
     if (key) {
       const u = await fetchCompanionAssetAsDataUrl(base, projectId, key);
-      if (u) return { ok: true, dataUrl: u };
+      if (u) {
+        const compressed = await normalizeDataUrlForVisionApi(u);
+        return { ok: true, dataUrl: compressed };
+      }
     }
   } else {
     const rck = asset.resultsCompanionKeys || {};
     const rk = String(rck[dk] || '').trim();
     if (rk) {
       const u = await fetchCompanionAssetAsDataUrl(base, projectId, rk);
-      if (u) return { ok: true, dataUrl: u };
+      if (u) {
+        const compressed = await normalizeDataUrlForVisionApi(u);
+        return { ok: true, dataUrl: compressed };
+      }
     }
   }
 

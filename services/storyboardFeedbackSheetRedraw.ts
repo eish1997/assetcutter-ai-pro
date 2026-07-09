@@ -1,5 +1,5 @@
 import type { CustomAppModule, StoryboardParseFieldDef, StoryboardTableRow } from '../types';
-import { formatStoryboardShotNo } from './storyboardTableAsset';
+import { formatStoryboardShotNo } from './storyboardShotNoFormat';
 import { coerceImageModelRegistryId } from './modelRegistry/imageModels';
 import { capabilityUsesGenImageEngine, getCapabilityEngine } from './capabilityEngineKind';
 import type { CapabilityExecuteContext } from './capabilityExecutor';

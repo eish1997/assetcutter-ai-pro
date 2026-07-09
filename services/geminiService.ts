@@ -41,6 +41,11 @@ import { getGeminiFairnessRequestHeaders } from "./geminiFairnessBridge";
 import { peekCreditsPrechargeSession } from "./creditsPrechargeSession";
 import { AiPipelineStepError, detectPipelineStepFromMessage, isAiPipelineStepError, logAiPipelineDev } from "./aiPipelineStepError";
 import {
+  dataUrlPayloadBytes,
+  MAX_WORKFLOW_VISION_IMAGE_BYTES,
+  normalizeDataUrlForVisionApi,
+} from "./workflowImageDataUrlCompress";
+import {
   getEnvelopeProxyAdmissionHeaders,
   getActiveAiTaskEnvelopeRequestHeaders,
   isAiTaskEnvelopeActive,
@@ -1680,7 +1685,7 @@ function extractDiagCode(raw: string): GeminiDiagCode | null {
   return (m?.[1] as GeminiDiagCode) || null;
 }
 
-const MAX_IMAGE_BYTES_PER_REQUEST = 2 * 1024 * 1024;
+const MAX_IMAGE_BYTES_PER_REQUEST = MAX_WORKFLOW_VISION_IMAGE_BYTES;
 
 function parseInlineImageData(input: string): { mimeType: string; data: string } {
   const raw = (input || "").trim();
@@ -1701,49 +1706,19 @@ function base64Bytes(base64: string): number {
   return Math.floor((raw.length * 3) / 4) - padding;
 }
 
-function hasCanvasCompressSupport(): boolean {
-  return typeof window !== "undefined" && typeof document !== "undefined";
-}
-
-async function compressDataUrlToJpegMaxBytes(dataUrl: string, maxBytes: number): Promise<string> {
-  if (!hasCanvasCompressSupport()) return dataUrl;
-  return new Promise((resolve) => {
-    const img = new Image();
-    img.onload = () => {
-      try {
-        const canvas = document.createElement("canvas");
-        canvas.width = img.naturalWidth || img.width;
-        canvas.height = img.naturalHeight || img.height;
-        const ctx = canvas.getContext("2d");
-        if (!ctx) {
-          resolve(dataUrl);
-          return;
-        }
-        ctx.drawImage(img, 0, 0);
-        let quality = 0.9;
-        let next = canvas.toDataURL("image/jpeg", quality);
-        while (quality > 0.45 && base64Bytes(parseInlineImageData(next).data) > maxBytes) {
-          quality = Number((quality - 0.1).toFixed(2));
-          next = canvas.toDataURL("image/jpeg", quality);
-        }
-        resolve(next);
-      } catch {
-        resolve(dataUrl);
-      }
-    };
-    img.onerror = () => resolve(dataUrl);
-    img.src = dataUrl;
-  });
-}
 
 async function prepareInlineImageData(input: string): Promise<{ mimeType: string; data: string }> {
   const parsed = parseInlineImageData(input);
   if (!parsed.data) return parsed;
   if (base64Bytes(parsed.data) <= MAX_IMAGE_BYTES_PER_REQUEST) return parsed;
   const raw = (input || "").trim();
-  if (!/^data:[^;,]+;base64,/i.test(raw)) return parsed;
-  const compressedDataUrl = await compressDataUrlToJpegMaxBytes(raw, MAX_IMAGE_BYTES_PER_REQUEST);
-  const compressedParsed = parseInlineImageData(compressedDataUrl);
+  const normalized = await normalizeDataUrlForVisionApi(raw, MAX_IMAGE_BYTES_PER_REQUEST);
+  const compressedParsed = parseInlineImageData(normalized);
+  if (dataUrlPayloadBytes(normalized) > MAX_IMAGE_BYTES_PER_REQUEST) {
+    throw new Error(
+      `检测用图仍超过 ${Math.round(MAX_IMAGE_BYTES_PER_REQUEST / (1024 * 1024))}MB，请缩小原图后重试`
+    );
+  }
   if (base64Bytes(compressedParsed.data) >= base64Bytes(parsed.data)) return parsed;
   return compressedParsed;
 }

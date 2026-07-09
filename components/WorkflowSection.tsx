@@ -79,9 +79,8 @@ import { coerceTextModelRegistryId } from '../services/modelRegistry/textModels'
 import {
   executeCapability,
   executeCapabilitySet,
-  getCapabilityEngine,
-  isImageProcessPreset,
 } from '../services/capabilityExecutor';
+import { getCapabilityEngine, isImageProcessPreset } from '../services/capabilityEngineKind';
 import {
   isGeminiAsyncPollTimeoutError,
   type GeminiAsyncRecoveredDetail,

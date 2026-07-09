@@ -38,6 +38,7 @@ import { formatPipelineStepProgress, planCapabilityPipelineSteps } from './aiPip
 import { shouldRunCapabilityUnderstand } from './workflowUnderstandOverride';
 import { textModelFamily } from './modelRegistry/textModels';
 import { resolveTextModelForPreset, resolveTextModelFromContext } from './capabilityTextModel';
+import { normalizeDataUrlForVisionApi } from './workflowImageDataUrlCompress';
 export { resolveTextModelForPreset } from './capabilityTextModel';
 import {
   clampWorkflowTextForSend,
@@ -56,7 +57,11 @@ import {
   type ImageProcessorId,
 } from './capabilityProcessors/imageProcessProcessors';
 import { getCapabilityEngine } from './capabilityEngineKind';
-export { getCapabilityEngine, capabilityUsesGenImageEngine } from './capabilityEngineKind';
+export {
+  getCapabilityEngine,
+  capabilityUsesGenImageEngine,
+  isImageProcessPreset,
+} from './capabilityEngineKind';
 
 export type CapabilityRunProgressMeta = {
   /** 能力集合画布节点 id，用于把进度归到具体卡片 */
@@ -187,12 +192,6 @@ function makeVgpCapture(
     aspectRatio: preset.imageAspectRatio,
     imageSize: preset.imageSize,
   };
-}
-
-/** 图像处理：独立类目，或旧版 image_to_image + builtin */
-export function isImageProcessPreset(preset: CustomAppModule): boolean {
-  if (preset.category === 'image_process') return true;
-  return preset.category === 'image_to_image' && getCapabilityEngine(preset) === 'builtin';
 }
 
 export function resolveImageModelIdFromPreset(preset: Pick<CustomAppModule, 'imageModelRegistryId' | 'imageGear'>): string {
@@ -677,10 +676,11 @@ async function executeSplitComponentCapability(
 ): Promise<CapabilityExecuteResult> {
   const engine = getCapabilityEngine(preset);
   const actionLabel = preset.label || preset.id;
+  const visionInput = await normalizeDataUrlForVisionApi(inputImageBase64);
   ctx.onLog?.('info', `[${actionLabel}] 识别物体中…`, undefined);
   emitCapabilityRunProgress(ctx, `${actionLabel}：检测物体中（视觉模型，可能需数十秒）…`);
   const boxes = await detectObjectsInImage(
-    inputImageBase64,
+    visionInput,
     resolveTextModelForPreset(preset, ctx),
     DEFAULT_PROMPTS.detect_blocks
   );
@@ -693,7 +693,7 @@ async function executeSplitComponentCapability(
     return currentArea > bestArea ? current : best;
   });
   const img = new Image();
-  img.src = inputImageBase64;
+  img.src = visionInput;
   await new Promise<void>((res, rej) => {
     img.onload = () => res();
     img.onerror = rej;

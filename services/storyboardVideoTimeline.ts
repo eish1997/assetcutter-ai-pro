@@ -1,5 +1,5 @@
 import type { StoryboardParseFieldDef, StoryboardTableRow } from '../types';
-import { formatStoryboardShotNo } from './storyboardTableAsset';
+import { formatStoryboardShotNo } from './storyboardShotNoFormat';
 import { pickPrimaryVisualField } from './storyboardTableParse';
 import { resolveStoryboardFrameDisplaySrc } from './storyboardFrameImageUrl';
 

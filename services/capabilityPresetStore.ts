@@ -4,12 +4,9 @@ import {
   getBuiltinStoryboardFeedbackCollagePreset,
   STORYBOARD_FEEDBACK_COLLAGE_DEFAULT_PRESET_ID,
   DEFAULT_STORYBOARD_FEEDBACK_COLLAGE_INSTRUCTION,
-} from './storyboardTableRedraw';
-import {
-  STORYBOARD_ROLE_REPLACE_DEFAULT_PRESET_ID,
-  DEFAULT_STORYBOARD_ROLE_REPLACE_INSTRUCTION,
   getBuiltinStoryboardRoleReplacePreset,
-} from './storyboardRoleReplaceRedraw';
+  STORYBOARD_ROLE_REPLACE_DEFAULT_PRESET_ID,
+} from './storyboardBuiltinPresets';
 import { readLocalString, removeLocalKey, writeLocalJson } from './clientPersist';
 import { normalizeCapabilityPreviewUrlForPersist } from './capabilityPreviewUrl';
 import { syncImageProcessProcessorFields } from './capabilityProcessors/imageProcessProcessors';

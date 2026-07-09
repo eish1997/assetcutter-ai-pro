@@ -18,10 +18,20 @@ import {
 import type { FeedbackCollageLayout } from './storyboardFeedbackCollageSplit';
 import { storyboardRowHasFrameRef } from './storyboardFrameImageUrl';
 import { resolveStoryboardRowFrameAspectRatio } from './storyboardFrameAspect';
+import { resolveStoryboardRowFrameDataUrl } from './storyboardRowFrameDataUrl';
+import { type StoryboardRowRedrawResult } from './storyboardTableRedraw';
 import {
-  resolveStoryboardRowFrameDataUrl,
-  type StoryboardRowRedrawResult,
-} from './storyboardTableRedraw';
+  STORYBOARD_ROLE_REPLACE_DEFAULT_PRESET_ID,
+  DEFAULT_STORYBOARD_ROLE_REPLACE_INSTRUCTION,
+  getBuiltinStoryboardRoleReplacePreset,
+} from './storyboardBuiltinPresets';
+
+export {
+  STORYBOARD_ROLE_REPLACE_DEFAULT_PRESET_ID,
+  DEFAULT_STORYBOARD_ROLE_REPLACE_INSTRUCTION,
+  getBuiltinStoryboardRoleReplacePreset,
+} from './storyboardBuiltinPresets';
+
 import {
   resolveStoryboardNamedAssetImageDataUrl,
   storyboardNamedAssetHasImageRef,
@@ -29,16 +39,6 @@ import {
 import { isStoryboardRoleReplaceEligible } from './storyboardEditEligibility';
 
 export { isStoryboardRoleReplaceEligible };
-
-export const STORYBOARD_ROLE_REPLACE_DEFAULT_PRESET_ID = 'storyboard_role_replace_v1';
-export const DEFAULT_STORYBOARD_ROLE_REPLACE_INSTRUCTION = `你是分镜角色替换助手（多图参考，无需阅读任何分镜文字）。
-
-参考图 1：当前镜头分镜图（画风、构图、姿态、表情、动作的唯一样板）。
-参考图 2 起：角色资产参考图（仅提供被替换人物的外貌/造型）。
-
-按用户消息中的位置清单，把参考图 1 里对应位置的人物外貌换成相应参考图的角色造型；姿态、表情、动作、景别、背景与整体画风必须与参考图 1 一致。未列入清单的区域不要改动。
-
-禁止：改动作/表情、重绘场景、添加文字或边框、输出多格画面。`;
 
 export type StoryboardRoleReplaceMarkPlan = {
   mark: StoryboardFrameRoleMark;
@@ -52,18 +52,6 @@ export type StoryboardRoleReplacePlan = {
   marks: StoryboardRoleReplaceMarkPlan[];
   referenceImages: string[];
 };
-
-export function getBuiltinStoryboardRoleReplacePreset(): CustomAppModule {
-  return {
-    id: STORYBOARD_ROLE_REPLACE_DEFAULT_PRESET_ID,
-    label: '分镜角色替换改图',
-    category: 'image_to_image',
-    engine: 'gen_image',
-    enabled: true,
-    instruction: DEFAULT_STORYBOARD_ROLE_REPLACE_INSTRUCTION,
-    imageGear: 'pro',
-  };
-}
 
 export function resolveRoleAssetForMark(
   mark: StoryboardFrameRoleMark,

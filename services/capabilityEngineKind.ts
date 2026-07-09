@@ -31,3 +31,8 @@ export function getCapabilityEngine(preset: CustomAppModule): 'gen_image' | 'gen
 export function capabilityUsesGenImageEngine(preset: CustomAppModule): boolean {
   return getCapabilityEngine(preset) === 'gen_image';
 }
+
+export function isImageProcessPreset(preset: CustomAppModule): boolean {
+  if (preset.category === 'image_process') return true;
+  return preset.category === 'image_to_image' && getCapabilityEngine(preset) === 'builtin';
+}

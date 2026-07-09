@@ -7,11 +7,11 @@ import {
   mergeStoryboardCatalogToStandardFieldLabels,
   normalizeFieldCatalog,
   normalizeShotFieldsRecord,
-  formatStoryboardNumericShotNo,
   normalizeStoryboardShotNoInput,
   STORYBOARD_PARSE_DEFAULT_PRESET_ID,
   STORYBOARD_OPTIMIZE_DEFAULT_PRESET_ID,
 } from './storyboardTableParse';
+import { formatStoryboardShotNo } from './storyboardShotNoFormat';
 import { normalizeStoryboardFrameHistory } from './storyboardFrameHistory';
 import {
   backfillStoryboardGeneratedImageHistory,
@@ -479,9 +479,7 @@ export function computeStoryboardTableStats(doc: StoryboardTableDoc): Storyboard
   };
 }
 
-export function formatStoryboardShotNo(index: number): string {
-  return formatStoryboardNumericShotNo(String(Math.max(0, index) + 1));
-}
+export { formatStoryboardShotNo } from './storyboardShotNoFormat';
 
 export function duplicateStoryboardRow(source: StoryboardTableRow, index: number): StoryboardTableRow {
   return createStoryboardTableRow(
