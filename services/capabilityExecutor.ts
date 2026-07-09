@@ -56,7 +56,10 @@ import {
   resolveImageProcessorId,
   type ImageProcessorId,
 } from './capabilityProcessors/imageProcessProcessors';
-import { getCapabilityEngine } from './capabilityEngineKind';
+import {
+  getCapabilityEngine,
+  isImageProcessPreset,
+} from './capabilityEngineKind';
 export {
   getCapabilityEngine,
   capabilityUsesGenImageEngine,
