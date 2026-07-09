@@ -1,12 +1,8 @@
 import type { CustomAppModule, StoryboardParseFieldDef, StoryboardTableRow } from '../types';
 import { formatStoryboardShotNo } from './storyboardTableAsset';
 import { coerceImageModelRegistryId } from './modelRegistry/imageModels';
-import {
-  capabilityUsesGenImageEngine,
-  executeCapability,
-  getCapabilityEngine,
-  type CapabilityExecuteContext,
-} from './capabilityExecutor';
+import { capabilityUsesGenImageEngine, getCapabilityEngine } from './capabilityEngineKind';
+import type { CapabilityExecuteContext } from './capabilityExecutor';
 import { auditStoryboardGenFromCtx, resolveStoryboardCollageAuditOperation, type StoryboardTaskOperation } from './storyboardTaskAuditEvents';
 import {
   computeStoryboardMosaicGrid,
@@ -306,6 +302,7 @@ export async function executeStoryboardCollageRedraw(
   const label = preset.label || preset.id;
   ctx.onLog?.('info', `分镜表 · ${label} · ${chunkLabel} 改图中…`);
 
+  const { executeCapability } = await import('./capabilityExecutor');
   const result = await executeCapability(preset, collage.dataUrl, ctx, { inputText });
   const operation = resolveStoryboardCollageAuditOperation({
     auditOperation: args.auditOperation,

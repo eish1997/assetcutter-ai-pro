@@ -2589,6 +2589,7 @@ export async function detectObjectsInImage(base64Image: string, model = DEFAULT_
     const ai = getAI();
     const prompt = customPrompt || DEFAULT_PROMPTS.detect_single;
     const resolvedModel = resolveUpstreamTextModelId(model);
+    const inline = await prepareInlineImageData(base64Image);
     const response = await ai.models.generateContent({
       model: resolvedModel,
       contents: [
@@ -2596,7 +2597,7 @@ export async function detectObjectsInImage(base64Image: string, model = DEFAULT_
           role: 'user' as const,
           parts: [
             { text: prompt },
-            { inlineData: { mimeType: 'image/jpeg', data: base64Image.split(',')[1] || base64Image } },
+            { inlineData: { mimeType: inline.mimeType || 'image/jpeg', data: inline.data } },
           ],
         },
       ],

@@ -1,5 +1,5 @@
 import type { CustomAppModule } from '../../types';
-import { getCapabilityEngine } from '../capabilityExecutor';
+import { getCapabilityEngine } from '../capabilityEngineKind';
 import { normalizeGenerate3DPresetForRun } from '../generate3d/normalizePreset';
 
 export const ASSET_SET_PANEL_PREFS_KEY = 'ac_asset_set_panel_prefs_v1';

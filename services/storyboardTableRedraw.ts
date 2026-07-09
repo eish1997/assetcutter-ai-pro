@@ -4,12 +4,8 @@ import { compileRedrawPrompt } from './storyboardTableParse';
 import {
   executeStoryboardCollageRedraw,
 } from './storyboardFeedbackSheetRedraw';
-import {
-  capabilityUsesGenImageEngine,
-  executeCapability,
-  getCapabilityEngine,
-  type CapabilityExecuteContext,
-} from './capabilityExecutor';
+import { capabilityUsesGenImageEngine, getCapabilityEngine } from './capabilityEngineKind';
+import type { CapabilityExecuteContext } from './capabilityExecutor';
 import { auditStoryboardGenFromCtx } from './storyboardTaskAuditEvents';
 import {
   fetchWorkflowOriginalFromCompanionAsObjectUrl,
@@ -362,6 +358,7 @@ export async function executeStoryboardRowRedraw(
   const label = textPresetForRun.label || textPresetForRun.id;
   ctx.onLog?.('info', `分镜表 · ${label} · 镜头 ${row.shotNo || row.index + 1} 重绘中…`);
 
+  const { executeCapability } = await import('./capabilityExecutor');
   const result = await executeCapability(textPresetForRun, '', ctx, {
     inputText,
     rejectTextTruncation: true,

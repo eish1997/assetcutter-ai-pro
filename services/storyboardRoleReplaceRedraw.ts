@@ -6,12 +6,8 @@ import type {
 } from '../types';
 import type { CustomAppModule } from '../types';
 import { coerceImageModelRegistryId } from './modelRegistry/imageModels';
-import {
-  capabilityUsesGenImageEngine,
-  executeCapability,
-  getCapabilityEngine,
-  type CapabilityExecuteContext,
-} from './capabilityExecutor';
+import { capabilityUsesGenImageEngine, getCapabilityEngine } from './capabilityEngineKind';
+import type { CapabilityExecuteContext } from './capabilityExecutor';
 import { auditStoryboardGenFromCtx } from './storyboardTaskAuditEvents';
 import { chunkStoryboardRowsByCount, type StoryboardSheetGenTask } from './storyboardTableSheetGen';
 import { computeStoryboardMosaicGrid } from './storyboardFrameStripMerge';
@@ -405,6 +401,7 @@ export async function executeStoryboardRoleReplaceRow(
   const refCount = planned.plan.referenceImages.length;
   ctx.onLog?.('info', `分镜表 · ${label} · ${shotLabel} 多图参考替换（${refCount} 张）…`);
 
+  const { executeCapability } = await import('./capabilityExecutor');
   const result = await executeCapability(preset, planned.plan.referenceImages[0]!, ctx, {
     inputText,
     inputImages: planned.plan.referenceImages,
@@ -505,6 +502,7 @@ export async function executeStoryboardRoleReplaceCollageBatch(
     `分镜表 · ${label} · ${chunkLabel} 拼图替换（${referenceImages.length} 张参考）…`
   );
 
+  const { executeCapability } = await import('./capabilityExecutor');
   const result = await executeCapability(preset, collage.dataUrl, ctx, {
     inputText,
     inputImages: referenceImages,

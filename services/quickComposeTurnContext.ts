@@ -5,7 +5,7 @@
 import type { QuickComposeMessageStatus, QuickComposeThreadMessage } from '../types/quickComposeThread';
 import type { WorkflowPendingTask } from '../types';
 import type { CustomAppModule } from '../types';
-import { getCapabilityEngine } from './capabilityExecutor';
+import { getCapabilityEngine } from './capabilityEngineKind';
 
 export const DEFAULT_QUICK_COMPOSE_TURN_MAX_ROUNDS = 3;
 

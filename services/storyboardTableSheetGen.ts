@@ -1,12 +1,8 @@
 import type { CustomAppModule, StoryboardParseFieldDef, StoryboardTableRow } from '../types';
 import { applyStoryboardBulkImport, parseStoryboardBulkText, type StoryboardBulkTextMode } from './storyboardTableBulkImport';
 import { compileRedrawPrompt } from './storyboardTableParse';
-import {
-  capabilityUsesGenImageEngine,
-  executeCapability,
-  getCapabilityEngine,
-  type CapabilityExecuteContext,
-} from './capabilityExecutor';
+import { capabilityUsesGenImageEngine, getCapabilityEngine } from './capabilityEngineKind';
+import type { CapabilityExecuteContext } from './capabilityExecutor';
 import { auditStoryboardGenFromCtx } from './storyboardTaskAuditEvents';
 import {
   WORKFLOW_IMAGE_GEN_PROMPT_OFFICIAL_MAX_CHARS,
@@ -706,6 +702,7 @@ export async function executeStoryboardSheetGen(
   const label = preset.label || preset.id;
   ctx.onLog?.('info', `分镜表 · ${label} · ${chunkLabel} 生图中…`);
 
+  const { executeCapability } = await import('./capabilityExecutor');
   const result = await executeCapability(preset, inputImage, ctx, {
     inputText,
     rejectTextTruncation: true,
