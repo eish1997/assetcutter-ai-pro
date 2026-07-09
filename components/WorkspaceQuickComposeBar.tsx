@@ -35,8 +35,6 @@ import type {
   QuickComposeSegment,
 } from '../services/quickComposeMention';
 import { mentionsFromSegments, mergeQuickComposeDropSlotsForMentions, newQuickComposeTextSegment } from '../services/quickComposeMention';
-import type { AiBillingRouteStep } from '../services/aiBillingGate';
-import TaskCreditsEstimate from './usage/TaskCreditsEstimate';
 import { parseWorkflowAssetIdsFromClipboardData } from '../services/workflowDragPipeline';
 import {
   clampQuickComposeBarPosition,
@@ -110,11 +108,6 @@ export type WorkspaceQuickComposeBarProps = {
   /** 积分不足、空 draft、或助手进行中：禁用发送 */
   submitDisabled?: boolean;
   submitDisabledReason?: string;
-  /** 平台代付路径：提交按钮旁展示预估最低消耗（单行文案，优先用 creditsEstimateSteps） */
-  submitEstimateLabel?: string;
-  /** 分步积分预估（理解 + 生图等）；有值时在提交按钮旁展示 TaskCreditsEstimate */
-  creditsEstimateSteps?: AiBillingRouteStep[];
-  creditBalance?: number | null;
   onSubmit: () => void;
   genSettings: WorkspaceQuickComposeGenSettings;
   /** 展示档位 / 比例 / 输出尺寸（生图引擎） */
@@ -207,9 +200,6 @@ export default function WorkspaceQuickComposeBar({
   inputDisabled: inputDisabledProp,
   submitDisabled = false,
   submitDisabledReason,
-  submitEstimateLabel,
-  creditsEstimateSteps,
-  creditBalance,
   genSettings,
   showGenImageSettings,
   showGenTextSettings,
@@ -845,17 +835,6 @@ export default function WorkspaceQuickComposeBar({
   }, [visible, genSettings.imageModelRegistryId, genSettings.imageSize, genSettings.onImageSize, imageSizeOptions]);
 
   if (!visible) return null;
-
-  const creditsEstimateUi =
-    creditsEstimateSteps && creditsEstimateSteps.length > 0 ? (
-      <div className="max-w-[min(100%,14rem)] shrink">
-        <TaskCreditsEstimate steps={creditsEstimateSteps} balance={creditBalance} compact />
-      </div>
-    ) : submitEstimateLabel ? (
-      <span className="text-[9px] tabular-nums text-amber-400/80" title="按任务类型的保守预估值，实际扣费以上游用量为准">
-        {submitEstimateLabel}
-      </span>
-    ) : null;
 
   const inputDisabled = inputDisabledProp === true;
   const controlsDisabled = inputDisabled;
@@ -1543,8 +1522,7 @@ export default function WorkspaceQuickComposeBar({
                   </div>
                   <div className="flex shrink-0 flex-col gap-2 border-t border-white/[0.06] pt-3 pr-1">
                     <div className="flex flex-wrap items-center gap-2">{genActionControls}</div>
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      {creditsEstimateUi}
+                    <div className="flex flex-wrap items-center justify-end gap-2">
                       <button
                         type="button"
                         disabled={submitDisabled}
@@ -1627,7 +1605,6 @@ export default function WorkspaceQuickComposeBar({
 
               <div className="ml-2 flex shrink-0 items-center gap-3">
                 {genActionControls}
-                {creditsEstimateUi}
 
                 <button
                   type="button"
