@@ -4,23 +4,16 @@ import type { CapabilityExecuteContext } from './capabilityExecutor';
 import { auditStoryboardTaskOutcome, storyboardAssetIdFromCtx } from './storyboardTaskAuditEvents';
 import { workflowChat } from './unifiedAiGateway';
 import {
+  STORYBOARD_BULK_LLM_REQUEST_OPTIONS,
+  STORYBOARD_BULK_LLM_TIMEOUT_MS,
+} from './storyboardTableBulkLlmConstants';
+import {
   parseStoryboardBulkText,
   type StoryboardBulkParseResult,
   type StoryboardBulkTextMode,
 } from './storyboardTableBulkImport';
 
-/**
- * 分镜 bulk LLM 走站点 gemini-async 代理（排队 + 轮询），默认 45s 客户端超时会误杀长输出任务。
- * 与 `GEMINI_ASYNC_CLIENT_MAX_POLL_MS`（300s）对齐上限。
- */
-export const STORYBOARD_BULK_LLM_TIMEOUT_MS = 300_000;
-
-export const STORYBOARD_BULK_LLM_REQUEST_OPTIONS = {
-  responseMimeType: 'application/json' as const,
-  timeoutMs: STORYBOARD_BULK_LLM_TIMEOUT_MS,
-  requestPhase: '分镜批量',
-  retries: 1,
-};
+export { STORYBOARD_BULK_LLM_REQUEST_OPTIONS, STORYBOARD_BULK_LLM_TIMEOUT_MS } from './storyboardTableBulkLlmConstants';
 
 export const DEFAULT_STORYBOARD_BULK_NORMALIZE_INSTRUCTION = `你是分镜表导入预处理助手。用户会粘贴任意格式的文本。
 

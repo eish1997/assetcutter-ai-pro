@@ -3,11 +3,19 @@ import type { WorkflowProjectBundle } from './workspaceProjectStore';
 import { fetchCompanionAssetBlob, putCompanionAsset } from './companionClient/storage';
 import { normalizeCompanionBaseUrl } from './companionLocalPrefs';
 import { mapSiteR2PathToFetchUrl, resolveCapabilityPreviewSrc } from './capabilityPreviewUrl';
-import { isWorkflowTextAsset } from './workflowTextAsset';
-import { isWorkflowStoryboardTableAsset } from './storyboardTableAsset';
-import { isWorkflowAssetSetAsset } from './assetSet/assetSetAsset';
-import type { StoryboardNamedAssetImageFields } from './storyboardNamedAssetImage';
+import {
+  isWorkflowAssetSetAsset,
+  isWorkflowStoryboardTableAsset,
+  isWorkflowTextAsset,
+} from './workflowAssetKind';
 import { workflowModelSlotMayNeedCompanionHydrate, isWorkflowModelUrlReadable } from './workflowModelBlob';
+
+/** 与 `storyboardNamedAssetImage.StoryboardNamedAssetImageFields` 同形；内联避免 companion 模块环 */
+type StoryboardNamedAssetImageFields = {
+  image?: string;
+  imageCompanionKey?: string;
+  imageObjectKey?: string;
+};
 
 export function sanitizeCompanionPathSegment(s: string): string {
   return String(s || '')

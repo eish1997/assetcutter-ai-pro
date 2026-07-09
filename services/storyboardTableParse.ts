@@ -8,7 +8,7 @@ import { preserveStoryboardRowFrameFields } from './storyboardTableAsset';
 import { resolveTextModelForPreset } from './capabilityTextModel';
 import type { CapabilityExecuteContext } from './capabilityExecutor';
 import { runStoryboardLlmAudited } from './storyboardTaskAuditEvents';
-import { STORYBOARD_BULK_LLM_REQUEST_OPTIONS } from './storyboardTableBulkAiDetect';
+import { STORYBOARD_BULK_LLM_REQUEST_OPTIONS } from './storyboardTableBulkLlmConstants';
 import { workflowChat } from './unifiedAiGateway';
 
 export const STORYBOARD_PARSE_PRESET_KEY = 'ac_storyboard_parse_preset_v1';
