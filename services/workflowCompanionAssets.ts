@@ -813,13 +813,8 @@ export async function fetchCompanionAssetAsDataUrl(
   if (res.ok === false) return null;
   const u8 = new Uint8Array(res.data);
   const mime = sniffImageMimeFromBytes(u8);
-  const chunk = 0x8000;
-  let binary = '';
-  for (let i = 0; i < u8.length; i += chunk) {
-    binary += String.fromCharCode.apply(null, u8.subarray(i, i + chunk) as unknown as number[]);
-  }
-  const b64 = btoa(binary);
-  return `data:${mime};base64,${b64}`;
+  const blob = new Blob([res.data], { type: mime });
+  return blobToDataUrl(blob);
 }
 
 /**

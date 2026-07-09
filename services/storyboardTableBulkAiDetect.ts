@@ -1,5 +1,6 @@
 import type { CustomAppModule } from '../types';
-import { resolveTextModelForPreset, type CapabilityExecuteContext } from './capabilityExecutor';
+import { resolveTextModelForPreset } from './capabilityTextModel';
+import type { CapabilityExecuteContext } from './capabilityExecutor';
 import { auditStoryboardTaskOutcome, storyboardAssetIdFromCtx } from './storyboardTaskAuditEvents';
 import { workflowChat } from './unifiedAiGateway';
 import {
