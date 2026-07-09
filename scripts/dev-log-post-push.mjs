@@ -5,7 +5,8 @@
  *   node --env-file=.env.local scripts/dev-log-post-push.mjs --rewrite
  * Skip: SKIP_DEV_LOG=1
  *
- * Summary style: human work bullets (what changed), NOT "N files (foo.tsx)".
+ * Summary style: plain Chinese for non-developers (what changed + how it feels).
+ * Prefer Chinese; keep only short product words. NOT "N files (foo.tsx)".
  */
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -53,8 +54,8 @@ function shortSha(sha) {
   return String(sha || '').slice(0, 7);
 }
 
-/** Strip conventional-commit prefix for display */
-function humanizeSubject(subject) {
+/** Strip conventional-commit prefix */
+function stripCommitPrefix(subject) {
   const s = String(subject || '').trim();
   if (!s) return '';
   const m = s.match(
@@ -63,11 +64,38 @@ function humanizeSubject(subject) {
   return m ? String(m[3]).trim() : s;
 }
 
+/** Map common English commit subjects → plain Chinese feel. */
+function plainFromSubject(subject) {
+  const raw = stripCommitPrefix(subject);
+  if (!raw) return '';
+  const lower = raw.toLowerCase();
+  const rules = [
+    [/richer thermal receipt|thermal receipt|work-style summar/i, '开发日志小票更好看了，摘要也更白话'],
+    [/compose-style dropdown|dropdowns? and r2-backed|dropdown/i, '下拉菜单外观和底部输入栏统一了，看着更整齐'],
+    [/dev log|dev-log/i, '开发日志能按天查看，也能导出日结小票'],
+    [/credit|积分|reserve_invalid|precharge/i, '积分扣费更稳了，少出现莫名失败'],
+    [/429|rate limit|too many requests/i, '高峰时生图少一点立刻失败，会多等一会儿再试'],
+    [/chunk|lazy|equirect|preview/i, '大图预览切换全景、3D 时更不容易打不开'],
+    [/workspace|小盒子|justified/i, '工作区布局和切换更顺手了'],
+    [/readme|docs|交接/i, '说明文档有更新'],
+  ];
+  for (const [re, zh] of rules) {
+    if (re.test(lower) || re.test(raw)) return zh;
+  }
+  // Prefer Chinese-heavy subjects as-is; soften dense English
+  const latin = (raw.replace(/[^A-Za-z]/g, '').length || 0) / Math.max(raw.length, 1);
+  if (latin > 0.45) return '界面与使用体验有一处改进';
+  return raw
+    .replace(/\bUI\b/g, '界面')
+    .replace(/\bpill\b/gi, '小标签')
+    .replace(/\bchip\b/gi, '小标签');
+}
+
 /**
- * Work-oriented bullets (confirmed product style), not file-count inventory.
- * Priority: commit subjects → area themes from paths → one stats line.
+ * Plain Chinese bullets for non-developers (what changed + feel).
+ * No file-count inventory; no long English phrases.
  */
-function buildWorkSummaryBullets(nameStats, commits, stats) {
+function buildWorkSummaryBullets(nameStats, commits, _stats) {
   const bullets = [];
   const seen = new Set();
   const pushUnique = (line) => {
@@ -78,7 +106,7 @@ function buildWorkSummaryBullets(nameStats, commits, stats) {
   };
 
   for (const c of commits) {
-    const h = humanizeSubject(c.subject);
+    const h = plainFromSubject(c.subject);
     if (h) pushUnique(h);
     if (bullets.length >= 6) break;
   }
@@ -90,36 +118,31 @@ function buildWorkSummaryBullets(nameStats, commits, stats) {
 
   if (bullets.length < 6) {
     if (has(/CustomDropdown|DropdownSelect|DROPDOWN_/)) {
-      pushUnique('下拉视觉统一为全局输入框族（compose chip / settings 分轨）');
+      pushUnique('下拉菜单外观和底部输入栏统一了，看着更整齐');
     }
     if (has(/WorkflowSidebarColumn|SIDEBAR_COMPOSE_CHIP|SIDEBAR_FILTER_CHIP/)) {
-      pushUnique('功能区组头与筛选标签改为快捷栏同款 pill');
+      pushUnique('左侧功能区的小按钮、筛选标签，和底部输入栏一个风格了');
     }
     if (has(/WorkspaceQuickComposeBar/)) {
-      pushUnique('快捷栏模型选项与下拉常量对齐');
+      pushUnique('底部输入栏的选项样式更统一了');
     }
-    if (has(/dev-log|DevLogSection|devLog/)) {
-      pushUnique('开发日志：push 后总结上传 R2，时间轴与小票导出');
+    if (has(/devLogReceiptExport|devLogPlainSummary/)) {
+      pushUnique('开发日志小票更好看了，本日总结也更白话');
+    } else if (has(/dev-log|DevLogSection|devLog/)) {
+      pushUnique('开发日志能按天查看，也能导出日结小票');
+    }
+    if (has(/lazyImportWithRetry|PreviewViewerErrorBoundary|vercel\.json/)) {
+      pushUnique('大图预览切换全景、3D 时更不容易打不开');
     }
     if (has(/^server\/auth-api/)) {
-      pushUnique('auth-api 增加开发日志读取接口');
+      pushUnique('后台能读到开发日志记录了');
     }
-    if (has(/^docs\/|^\.cursor\//)) {
-      pushUnique('交接文档与 Cursor 规范同步');
+    if (has(/^docs\/|^\.cursor\//) && bullets.length < 5) {
+      pushUnique('内部交接说明也跟着更新了');
     }
   }
 
-  const n = stats?.filesChanged || files.length;
-  if (n > 0) {
-    pushUnique(
-      `共触及 ${n} 个文件` +
-        (stats?.insertions || stats?.deletions
-          ? `（+${stats.insertions || 0} / −${stats.deletions || 0}）`
-          : '')
-    );
-  }
-
-  if (!bullets.length) pushUnique('本次推送无可用摘要（空 diff 或 tip 已对齐）');
+  if (!bullets.length) pushUnique('这次推送没有需要写进小票的改动说明');
   return bullets.slice(0, 8);
 }
 

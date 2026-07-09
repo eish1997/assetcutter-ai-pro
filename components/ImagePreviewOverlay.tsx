@@ -2,6 +2,7 @@ import React, { Suspense, forwardRef, useCallback, useEffect, useLayoutEffect, u
 import {
   getLazyImagePreviewViewer,
   PreviewShell,
+  PreviewViewerErrorBoundary,
   PreviewViewerFallback,
   PreviewImageLoadingState,
   previewPolicyForMode,
@@ -317,9 +318,11 @@ const PanoEquirectLazyView = forwardRef<
 >(function PanoEquirectLazyView(props, ref) {
     if (!LazyImageEquirectViewer) return null;
     return (
-      <Suspense fallback={<PreviewViewerFallback label="全景模块加载中…" />}>
-        <LazyImageEquirectViewer {...props} ref={ref} />
-      </Suspense>
+      <PreviewViewerErrorBoundary mode="image.equirect" label="全景">
+        <Suspense fallback={<PreviewViewerFallback label="全景模块加载中…" />}>
+          <LazyImageEquirectViewer {...props} ref={ref} />
+        </Suspense>
+      </PreviewViewerErrorBoundary>
     );
   }
 );
@@ -1434,13 +1437,15 @@ export function ImagePreviewOverlay({
             className="absolute inset-0 z-[5] min-h-[200px]"
             onWheel={(e) => e.stopPropagation()}
           >
-            <Suspense fallback={<PreviewViewerFallback label="全景模块加载中…" />}>
-              <LazyImageEquirectViewer
-                imageSrc={imageSrc!}
-                className="h-full w-full rounded-none border-0"
-                panoPreserveViewKey={innerLayoutStableKey?.trim() || undefined}
-              />
-            </Suspense>
+            <PreviewViewerErrorBoundary mode="image.equirect" label="全景">
+              <Suspense fallback={<PreviewViewerFallback label="全景模块加载中…" />}>
+                <LazyImageEquirectViewer
+                  imageSrc={imageSrc!}
+                  className="h-full w-full rounded-none border-0"
+                  panoPreserveViewKey={innerLayoutStableKey?.trim() || undefined}
+                />
+              </Suspense>
+            </PreviewViewerErrorBoundary>
           </div>
         ) : null}
         {panoAnnotationBridge ? (
@@ -1487,27 +1492,31 @@ export function ImagePreviewOverlay({
 
         {!centerSlot && hasModel3DMode && previewLayout === 'model3d' ? (
           <div ref={webglPreviewHostRef} className="absolute inset-0 z-[5] min-h-0" onWheel={(e) => e.stopPropagation()}>
-            <Suspense fallback={<PreviewViewerFallback label="3D 模块加载中…" />}>
-              <LazyImageModel3DViewer
-                imageSrc={imageSrc!}
-                modelSrc={previewModelSrc ?? undefined}
-                modelFileName={modelFileName}
-                model3dDisplayMode={model3dDisplayMode}
-                className="h-full w-full min-h-0"
-              />
-            </Suspense>
+            <PreviewViewerErrorBoundary mode="image.model3d" label="3D">
+              <Suspense fallback={<PreviewViewerFallback label="3D 模块加载中…" />}>
+                <LazyImageModel3DViewer
+                  imageSrc={imageSrc!}
+                  modelSrc={previewModelSrc ?? undefined}
+                  modelFileName={modelFileName}
+                  model3dDisplayMode={model3dDisplayMode}
+                  className="h-full w-full min-h-0"
+                />
+              </Suspense>
+            </PreviewViewerErrorBoundary>
           </div>
         ) : null}
 
         {!centerSlot && hasHeightfieldMode && previewLayout === 'heightfield' ? (
           <div ref={webglPreviewHostRef} className="absolute inset-0 z-[5] min-h-0" onWheel={(e) => e.stopPropagation()}>
-            <Suspense fallback={<PreviewViewerFallback label="高度 3D 模块加载中…" />}>
-              <LazyImageHeightfieldViewer
-                imageSrc={imageSrc!}
-                className="h-full w-full min-h-0"
-                toolbarPortalEl={!uiHidden ? heightfieldToolbarHostEl : null}
-              />
-            </Suspense>
+            <PreviewViewerErrorBoundary mode="image.heightfield" label="高度 3D">
+              <Suspense fallback={<PreviewViewerFallback label="高度 3D 模块加载中…" />}>
+                <LazyImageHeightfieldViewer
+                  imageSrc={imageSrc!}
+                  className="h-full w-full min-h-0"
+                  toolbarPortalEl={!uiHidden ? heightfieldToolbarHostEl : null}
+                />
+              </Suspense>
+            </PreviewViewerErrorBoundary>
           </div>
         ) : null}
 

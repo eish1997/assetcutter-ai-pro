@@ -2,6 +2,7 @@
  * 预览 Viewer 注册表：按 mode 懒加载 React 组件，后续新增 3D / 点云 / 视频在此注册即可。
  */
 import { lazy, type ComponentType, type LazyExoticComponent } from 'react';
+import { importWithChunkRetry } from '../../services/lazyImportWithRetry';
 
 /** 与懒加载 Viewer 对齐的最小 props（图片类）；其它类型可另建 registry 或扩展联合类型 */
 export type Model3DDisplayMode = 'material' | 'clay' | 'wire' | 'normal';
@@ -48,6 +49,15 @@ export function registerImagePreviewLoader(mode: string, loader: Loader): void {
   lazyImageCache.delete(mode);
 }
 
+/** Drop cached lazy() so the next get recreates the import promise (after chunk miss). */
+export function resetLazyImagePreviewViewer(mode?: string): void {
+  if (mode) {
+    lazyImageCache.delete(mode);
+    return;
+  }
+  lazyImageCache.clear();
+}
+
 /**
  * 返回该 mode 对应的懒加载组件；未注册则返回 null（由壳层走内联或其它分支）。
  */
@@ -58,7 +68,7 @@ export function getLazyImagePreviewViewer(
   if (!load) return null;
   let cached = lazyImageCache.get(mode);
   if (!cached) {
-    cached = lazy(load);
+    cached = lazy(() => importWithChunkRetry(load));
     lazyImageCache.set(mode, cached);
   }
   return cached;

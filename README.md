@@ -11,7 +11,8 @@ AI-assisted asset workflow workbench (workspace, capability presets, experimenta
 - [x] Experimental: seam repair, PBR texture generation, prompt arena
 - [x] Admin console (`/admin`) for staff ops
 - [x] Compose-style dropdowns / sidebar chips (aligned with quick compose bar)
-- [x] Dev log (staff): post-push work summary to R2, timeline, thermal receipt PNG (`dev-log:rewrite` to refresh tip)
+- [x] Dev log (staff): plain-language day receipt + post-push R2 timeline (`dev-log:rewrite` to refresh tip)
+- [x] Production lazy-chunk recovery: exclude `/assets` from SPA rewrite; retry/reload on stale preview chunks
 - [x] Upstream Gemini/Vertex 429: limited long-backoff retries (proxy + client); understand mode lowers image batch concurrency
 - [x] Task-envelope credits: sum-of-steps precharge + clear stale reserve after settle (avoids CREDITS_RESERVE_INVALID)
 - [ ] Removed: standalone dialog page, texture pattern extract page, prompt-effect analysis page
@@ -21,7 +22,7 @@ AI-assisted asset workflow workbench (workspace, capability presets, experimenta
 - **Workspace**: main asset canvas + function sidebar; content slot switches assets ↔ presets
 - **Settings**: API keys, sync, companion
 - **Admin** (staff): opens `/admin`
-- **Dev log** (staff, below Admin): R2 push summaries; day thermal receipt PNG; `npm run dev-log:post-push` / `dev-log:rewrite`
+- **Dev log** (staff, below Admin): R2 push summaries in plain Chinese; day thermal receipt PNG; `npm run dev-log:post-push` / `dev-log:rewrite`
 - **Experimental**: seam repair, generate texture, prompt arena
 
 ## Run

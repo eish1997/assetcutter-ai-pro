@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { fetchDevLogDay, fetchDevLogIndex } from '../services/devLogClient';
 import { downloadDevLogReceiptPng, buildDevLogReceiptText } from '../services/devLogReceiptExport';
+import { humanizeDevLogBullet } from '../services/devLogPlainSummary';
 import type { DevLogEntry, DevLogIndex } from '../types/devLog';
 import { HttpRequestError } from '../services/httpClient';
 
@@ -213,11 +214,14 @@ export default function DevLogSection() {
                       </span>
                     </div>
                     <ul className="mt-2 space-y-1">
-                      {(e.summaryBullets || []).map((b) => (
-                        <li key={b} className="text-[10px] leading-relaxed text-gray-300">
-                          · {b}
-                        </li>
-                      ))}
+                      {(e.summaryBullets || []).map((b) => {
+                        const plain = humanizeDevLogBullet(b) || b;
+                        return (
+                          <li key={b} className="text-[10px] leading-relaxed text-gray-300">
+                            · {plain}
+                          </li>
+                        );
+                      })}
                     </ul>
                     <p className="mt-2 text-[8px] text-gray-600">
                       文件 {e.stats?.filesChanged ?? 0} · +{e.stats?.insertions ?? 0} / −

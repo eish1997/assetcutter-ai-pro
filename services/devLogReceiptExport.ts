@@ -1,5 +1,6 @@
 import type { DevLogEntry } from '../types/devLog';
 import { buildDayReceiptSummary } from './devLogClient';
+import { humanizeDevLogBullet } from './devLogPlainSummary';
 
 const RECEIPT_W = 340;
 const PAD_X = 22;
@@ -87,7 +88,8 @@ export function buildDevLogReceiptText(dayKey: string, entries: DevLogEntry[]): 
     lines.push(`#${idx + 1}  ${formatTime(e.pushedAt)}`);
     lines.push(`    ${shortSha(e.fromSha) || '∅'} → ${shortSha(e.toSha)}`);
     for (const b of (e.summaryBullets || []).slice(0, 6)) {
-      for (const w of wrapText(`    · ${b}`, W)) lines.push(w);
+      const plain = humanizeDevLogBullet(b) || b;
+      for (const w of wrapText(`    · ${plain}`, W)) lines.push(w);
     }
     const st = e.stats;
     if (st) {
@@ -162,7 +164,7 @@ function buildDrawCommands(dayKey: string, entries: DevLogEntry[]): DrawCmd[] {
     });
     cmds.push({ t: 'gap', h: 6 });
     for (const b of (e.summaryBullets || []).slice(0, 6)) {
-      cmds.push({ t: 'bullet', text: b });
+      cmds.push({ t: 'bullet', text: humanizeDevLogBullet(b) || b });
       cmds.push({ t: 'gap', h: 3 });
     }
     const st = e.stats;
@@ -211,17 +213,53 @@ function fontStack(weight: string, size: number) {
   return `${weight} ${size}px "IBM Plex Mono", "Cascadia Mono", "Sarasa Mono SC", "Noto Sans Mono CJK SC", "Consolas", monospace`;
 }
 
-function drawPaperGrain(ctx: CanvasRenderingContext2D, w: number, h: number) {
-  const img = ctx.createImageData(w, h);
+const JAG_STEP = 10;
+const JAG_AMP = 10;
+
+/** Shared serrated silhouette; top/bottom teeth align on the same x grid. */
+function buildJaggedPaperPath(
+  ctx: CanvasRenderingContext2D,
+  w: number,
+  h: number,
+  amp: number,
+  step: number
+) {
+  ctx.beginPath();
+  ctx.moveTo(0, amp);
+  for (let x = 0; x < w; x += step) {
+    const mid = Math.min(x + step / 2, w);
+    const end = Math.min(x + step, w);
+    ctx.lineTo(mid, 0);
+    ctx.lineTo(end, amp);
+  }
+  ctx.lineTo(w, h - amp);
+  for (let x = w; x > 0; x -= step) {
+    const mid = Math.max(x - step / 2, 0);
+    const end = Math.max(x - step, 0);
+    ctx.lineTo(mid, h);
+    ctx.lineTo(end, h - amp);
+  }
+  ctx.closePath();
+}
+
+/** Grain via drawImage so clip + translate apply (putImageData ignores both). */
+function makePaperGrainCanvas(w: number, h: number): HTMLCanvasElement {
+  const c = document.createElement('canvas');
+  c.width = w;
+  c.height = h;
+  const g = c.getContext('2d');
+  if (!g) return c;
+  const img = g.createImageData(w, h);
   const d = img.data;
   for (let i = 0; i < d.length; i += 4) {
-    const n = (Math.random() * 18) | 0;
-    d[i] = 245 - n;
-    d[i + 1] = 242 - n;
-    d[i + 2] = 232 - n;
+    const n = (Math.random() * 14) | 0;
+    d[i] = 252 - n;
+    d[i + 1] = 250 - n;
+    d[i + 2] = 244 - n;
     d[i + 3] = 255;
   }
-  ctx.putImageData(img, 0, 0);
+  g.putImageData(img, 0, 0);
+  return c;
 }
 
 function measureCommands(ctx: CanvasRenderingContext2D, cmds: DrawCmd[]): number {
@@ -381,87 +419,68 @@ export async function downloadDevLogReceiptPng(dayKey: string, entries: DevLogEn
   const mctx = measureCanvas.getContext('2d');
   if (!mctx) throw new Error('无法创建画布');
 
-  const jagged = 10;
   const bodyH = measureCommands(mctx, cmds);
   const topPad = 18;
   const bottomPad = 16;
-  const paperH = jagged + topPad + bodyH + bottomPad + jagged;
-  const shadowPad = 16;
+  const paperH = JAG_AMP + topPad + bodyH + bottomPad + JAG_AMP;
+  const margin = 28;
   const canvas = document.createElement('canvas');
-  canvas.width = RECEIPT_W + shadowPad * 2;
-  canvas.height = paperH + shadowPad * 2;
+  canvas.width = RECEIPT_W + margin * 2;
+  canvas.height = paperH + margin * 2;
   const ctx = canvas.getContext('2d');
   if (!ctx) throw new Error('无法创建画布');
 
-  // Backdrop
-  ctx.fillStyle = '#121214';
+  // White page backdrop
+  ctx.fillStyle = '#ffffff';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-  // Soft shadow
-  ctx.fillStyle = 'rgba(0,0,0,0.45)';
-  ctx.fillRect(shadowPad + 4, shadowPad + 6, RECEIPT_W, paperH);
+  const paperX = margin;
+  const paperY = margin;
 
-  // Paper body with grain
-  const paperX = shadowPad;
-  const paperY = shadowPad;
+  // Soft drop shadow following the jagged silhouette (no hard rect bars)
   ctx.save();
-  ctx.translate(paperX, paperY);
-
-  // Clip to jagged paper silhouette
-  ctx.beginPath();
-  // top jagged
-  ctx.moveTo(0, jagged);
-  for (let x = 0; x <= RECEIPT_W; x += 10) {
-    ctx.lineTo(x + 5, 0);
-    ctx.lineTo(x + 10, jagged);
-  }
-  // right + bottom jagged
-  ctx.lineTo(RECEIPT_W, paperH - jagged);
-  for (let x = RECEIPT_W; x >= 0; x -= 10) {
-    ctx.lineTo(x - 5, paperH);
-    ctx.lineTo(x - 10, paperH - jagged);
-  }
-  ctx.closePath();
-  ctx.clip();
-
-  drawPaperGrain(ctx, RECEIPT_W, paperH);
-
-  // Slight warm wash
-  ctx.fillStyle = 'rgba(255, 248, 230, 0.35)';
-  ctx.fillRect(0, 0, RECEIPT_W, paperH);
-
-  // Inner content
-  ctx.textBaseline = 'top';
-  paintCommands(ctx, cmds, jagged + topPad);
-
-  // Edge darken
-  const edgeGrad = ctx.createLinearGradient(0, 0, 0, paperH);
-  edgeGrad.addColorStop(0, 'rgba(0,0,0,0.06)');
-  edgeGrad.addColorStop(0.05, 'rgba(0,0,0,0)');
-  edgeGrad.addColorStop(0.95, 'rgba(0,0,0,0)');
-  edgeGrad.addColorStop(1, 'rgba(0,0,0,0.08)');
-  ctx.fillStyle = edgeGrad;
-  ctx.fillRect(0, 0, RECEIPT_W, paperH);
-
+  ctx.translate(paperX + 3, paperY + 5);
+  buildJaggedPaperPath(ctx, RECEIPT_W, paperH, JAG_AMP, JAG_STEP);
+  ctx.shadowColor = 'rgba(0, 0, 0, 0.22)';
+  ctx.shadowBlur = 18;
+  ctx.shadowOffsetX = 0;
+  ctx.shadowOffsetY = 0;
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.14)';
+  ctx.fill();
   ctx.restore();
 
-  // Redraw jagged silhouette stroke for crisp edge
+  // Paper body
   ctx.save();
   ctx.translate(paperX, paperY);
-  ctx.strokeStyle = 'rgba(0,0,0,0.12)';
+  buildJaggedPaperPath(ctx, RECEIPT_W, paperH, JAG_AMP, JAG_STEP);
+  ctx.clip();
+
+  const grain = makePaperGrainCanvas(RECEIPT_W, paperH);
+  ctx.drawImage(grain, 0, 0);
+
+  // Warm wash (clipped)
+  ctx.fillStyle = 'rgba(255, 248, 230, 0.28)';
+  ctx.fillRect(0, 0, RECEIPT_W, paperH);
+
+  ctx.textBaseline = 'top';
+  paintCommands(ctx, cmds, JAG_AMP + topPad);
+
+  // Soft edge vignette inside paper only
+  const edgeGrad = ctx.createLinearGradient(0, 0, 0, paperH);
+  edgeGrad.addColorStop(0, 'rgba(0,0,0,0.05)');
+  edgeGrad.addColorStop(0.04, 'rgba(0,0,0,0)');
+  edgeGrad.addColorStop(0.96, 'rgba(0,0,0,0)');
+  edgeGrad.addColorStop(1, 'rgba(0,0,0,0.06)');
+  ctx.fillStyle = edgeGrad;
+  ctx.fillRect(0, 0, RECEIPT_W, paperH);
+  ctx.restore();
+
+  // Crisp serrated outline (same path as fill/clip)
+  ctx.save();
+  ctx.translate(paperX, paperY);
+  buildJaggedPaperPath(ctx, RECEIPT_W, paperH, JAG_AMP, JAG_STEP);
+  ctx.strokeStyle = 'rgba(0, 0, 0, 0.1)';
   ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.moveTo(0, jagged);
-  for (let x = 0; x <= RECEIPT_W; x += 10) {
-    ctx.lineTo(x + 5, 0);
-    ctx.lineTo(x + 10, jagged);
-  }
-  ctx.lineTo(RECEIPT_W, paperH - jagged);
-  for (let x = RECEIPT_W; x >= 0; x -= 10) {
-    ctx.lineTo(x - 5, paperH);
-    ctx.lineTo(x - 10, paperH - jagged);
-  }
-  ctx.closePath();
   ctx.stroke();
   ctx.restore();
 

@@ -9,16 +9,16 @@ const sample: DevLogEntry = {
   pushedAt: '2026-07-09T12:00:00.000Z',
   fromSha: 'aaaaaaaa',
   toSha: 'bbbbbbbb',
-  summaryBullets: ['UI 下拉：对齐全局输入框', '功能区组头改 pill'],
+  summaryBullets: ['下拉菜单外观和底部输入栏统一了', '左侧功能区小按钮更好认了'],
   commits: [{ sha: 'bbbbbbbb', subject: 'style: unify dropdown chips' }],
   stats: { filesChanged: 14, insertions: 100, deletions: 40 },
 };
 
 describe('devLog receipt', () => {
-  it('builds day summary without duplicates', () => {
+  it('builds plain day summary without duplicates', () => {
     const bullets = buildDayReceiptSummary([sample, { ...sample, id: 'x2' }]);
-    expect(bullets[0]).toContain('UI 下拉');
-    expect(bullets.filter((b) => b.includes('UI 下拉')).length).toBe(1);
+    expect(bullets[0]).toContain('下拉');
+    expect(bullets.filter((b) => b.includes('下拉')).length).toBe(1);
   });
 
   it('renders thermal-like text receipt', () => {
@@ -28,5 +28,6 @@ describe('devLog receipt', () => {
     expect(text).toContain('笔数');
     expect(text).toContain('aaaaaaa');
     expect(text).toContain('NO.');
+    expect(text).toContain('【本日总结】');
   });
 });

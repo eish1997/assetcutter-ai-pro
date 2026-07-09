@@ -70,11 +70,7 @@ import { WORKFLOW_QUICK_COMPOSE_DOCKED_WIDTH_CLASS } from './components/workflow
 import KeyboardShortcutsModal from './components/KeyboardShortcutsModal';
 import { AC_NAVIGATE_SETTINGS_EVENT } from './services/navigateSettings';
 import { SiteImage } from './components/SiteImage';
-import {
-  getLazyImagePreviewViewer,
-  PreviewViewerFallback,
-  previewPolicyForMode,
-} from './components/preview';
+import { armChunkReloadRecovery, importWithChunkRetry } from './services/lazyImportWithRetry';
 import {
   loadWorkspaceProjects,
   saveWorkspaceProjects,
@@ -197,36 +193,36 @@ const WORKSPACE_LITE_STRUCTURE_DEBOUNCE_MS = readWorkspaceLiteStructureDebounceM
 const WORKSPACE_IMPORT_LEGACY_COMPANION_ORPHANS =
   String(import.meta.env.VITE_WORKSPACE_IMPORT_LEGACY_COMPANION_ORPHANS || '').trim().toLowerCase() === 'true';
 
-/** 对话大图预览全景模式：与工作区 ImagePreviewOverlay 同 registry chunk */
-const LazyDialogTempEquirectViewer = getLazyImagePreviewViewer('image.equirect');
+const lazyChunk = <T extends { default: React.ComponentType<any> }>(loader: () => Promise<T>) =>
+  React.lazy(() => importWithChunkRetry(loader));
 
-const CapabilityPresetSection = React.lazy(() => import('./components/CapabilityPresetSection'));
-const WorkflowComposerOverlay = React.lazy(() => import('./components/WorkflowComposerOverlay'));
-const PromptArenaSection = React.lazy(() => import('./components/PromptArenaSection'));
-const SeamRepairSection = React.lazy(() => import('./components/SeamRepairSection'));
-const GenerateTextureSection = React.lazy(() => import('./components/GenerateTextureSection'));
-const SettingsSection = React.lazy(() => import('./components/SettingsSection'));
-const DevLogSection = React.lazy(() => import('./components/DevLogSection'));
-const AdminStaffProvider = React.lazy(() => import('./components/admin/AdminStaffContext'));
-const AdminRolePreviewBridge = React.lazy(() => import('./components/admin/AdminRolePreviewBridge'));
-const AdminLayout = React.lazy(() => import('./components/admin/AdminLayout'));
-const AdminRouteGuard = React.lazy(() => import('./components/admin/AdminRouteGuard'));
-const AdminDefaultRedirect = React.lazy(() => import('./components/admin/AdminDefaultRedirect'));
-const AdminDashboardPanel = React.lazy(() => import('./components/admin/AdminDashboardPanel'));
-const AdminRolesMatrixPanel = React.lazy(() => import('./components/admin/AdminRolesMatrixPanel'));
-const AdminUsersPanel = React.lazy(() => import('./components/admin/AdminUsersPanel'));
-const AdminUserDetailPanel = React.lazy(() => import('./components/admin/AdminUserDetailPanel'));
-const AdminAuditLogsPanel = React.lazy(() => import('./components/admin/AdminAuditLogsPanel'));
-const AdminTaskEventsPanel = React.lazy(() => import('./components/admin/AdminTaskEventsPanel'));
-const AdminUsagePanel = React.lazy(() => import('./components/admin/AdminUsagePanel'));
-const AdminPriceCatalogPanel = React.lazy(() => import('./components/admin/AdminPriceCatalogPanel'));
-const AdminPromoCreditsPanel = React.lazy(() => import('./components/admin/AdminPromoCreditsPanel'));
-const AdminCapabilityPresetsPanel = React.lazy(() => import('./components/admin/AdminCapabilityPresetsPanel'));
-const AdminSystemStatusPanel = React.lazy(() => import('./components/admin/AdminSystemStatusPanel'));
-const AdminStaffInvitesPanel = React.lazy(() => import('./components/admin/AdminStaffInvitesPanel'));
-const AdminRegistrationInvitesPanel = React.lazy(() => import('./components/admin/AdminRegistrationInvitesPanel'));
-const AdminCompanionArtifactsPanel = React.lazy(() => import('./components/admin/AdminCompanionArtifactsPanel'));
-const AdminGeminiFairnessPanel = React.lazy(() => import('./components/admin/AdminGeminiFairnessPanel'));
+const CapabilityPresetSection = lazyChunk(() => import('./components/CapabilityPresetSection'));
+const WorkflowComposerOverlay = lazyChunk(() => import('./components/WorkflowComposerOverlay'));
+const PromptArenaSection = lazyChunk(() => import('./components/PromptArenaSection'));
+const SeamRepairSection = lazyChunk(() => import('./components/SeamRepairSection'));
+const GenerateTextureSection = lazyChunk(() => import('./components/GenerateTextureSection'));
+const SettingsSection = lazyChunk(() => import('./components/SettingsSection'));
+const DevLogSection = lazyChunk(() => import('./components/DevLogSection'));
+const AdminStaffProvider = lazyChunk(() => import('./components/admin/AdminStaffContext'));
+const AdminRolePreviewBridge = lazyChunk(() => import('./components/admin/AdminRolePreviewBridge'));
+const AdminLayout = lazyChunk(() => import('./components/admin/AdminLayout'));
+const AdminRouteGuard = lazyChunk(() => import('./components/admin/AdminRouteGuard'));
+const AdminDefaultRedirect = lazyChunk(() => import('./components/admin/AdminDefaultRedirect'));
+const AdminDashboardPanel = lazyChunk(() => import('./components/admin/AdminDashboardPanel'));
+const AdminRolesMatrixPanel = lazyChunk(() => import('./components/admin/AdminRolesMatrixPanel'));
+const AdminUsersPanel = lazyChunk(() => import('./components/admin/AdminUsersPanel'));
+const AdminUserDetailPanel = lazyChunk(() => import('./components/admin/AdminUserDetailPanel'));
+const AdminAuditLogsPanel = lazyChunk(() => import('./components/admin/AdminAuditLogsPanel'));
+const AdminTaskEventsPanel = lazyChunk(() => import('./components/admin/AdminTaskEventsPanel'));
+const AdminUsagePanel = lazyChunk(() => import('./components/admin/AdminUsagePanel'));
+const AdminPriceCatalogPanel = lazyChunk(() => import('./components/admin/AdminPriceCatalogPanel'));
+const AdminPromoCreditsPanel = lazyChunk(() => import('./components/admin/AdminPromoCreditsPanel'));
+const AdminCapabilityPresetsPanel = lazyChunk(() => import('./components/admin/AdminCapabilityPresetsPanel'));
+const AdminSystemStatusPanel = lazyChunk(() => import('./components/admin/AdminSystemStatusPanel'));
+const AdminStaffInvitesPanel = lazyChunk(() => import('./components/admin/AdminStaffInvitesPanel'));
+const AdminRegistrationInvitesPanel = lazyChunk(() => import('./components/admin/AdminRegistrationInvitesPanel'));
+const AdminCompanionArtifactsPanel = lazyChunk(() => import('./components/admin/AdminCompanionArtifactsPanel'));
+const AdminGeminiFairnessPanel = lazyChunk(() => import('./components/admin/AdminGeminiFairnessPanel'));
 /** 主内容区滚动容器 ref，用于全局回到顶部 */
 function useMainScrollBackToTop() {
   const [mainScrollEl, setMainScrollEl] = useState<HTMLDivElement | null>(null);
@@ -441,9 +437,13 @@ const MainApp: React.FC = () => {
   const { balance: creditBalance } = useCreditBalance(user?.id ?? null);
   const [workflowSectionLoadAttempt, setWorkflowSectionLoadAttempt] = useState(0);
   const WorkflowSection = useMemo(
-    () => React.lazy(() => import('./components/workflow/workflowSectionLazyBoot')),
+    () => React.lazy(() => importWithChunkRetry(() => import('./components/workflow/workflowSectionLazyBoot'))),
     [workflowSectionLoadAttempt],
   );
+
+  useEffect(() => {
+    armChunkReloadRecovery();
+  }, []);
 
   const [mode, setMode] = useState<AppMode>(AppMode.WORKFLOW);
   const [settingsScrollTarget, setSettingsScrollTarget] = useState<string | null>(null);
