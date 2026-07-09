@@ -17,6 +17,11 @@ import {
   markCreditsProxyHeadersFromGate,
   releaseCreditsProxyReserve,
 } from './creditsProxyBridge';
+import {
+  getEnvelopePlatformGateCredits,
+  getEnvelopeProxyAdmissionHeaders,
+  isAiTaskEnvelopeActive,
+} from './aiTaskEnvelope';
 import { adoptCreditsPrechargeSession } from './creditsPrechargeSession';
 import { getGeminiFairnessUserId } from './geminiFairnessBridge';
 import { HttpRequestError } from './httpClient';
@@ -63,6 +68,21 @@ export async function acquirePlatformReserve(
   const scope = String(scopeKey || '').trim();
 
   if (decision.channel === 'vertex-proxy') {
+    const envelopeHeaders = getEnvelopeProxyAdmissionHeaders(min);
+    if (envelopeHeaders) {
+      const envCredits = getEnvelopePlatformGateCredits() ?? min;
+      return {
+        reserveKey: envelopeHeaders['X-AC-Credits-Reserve'] || getLastCreditsReserveKey() || '',
+        estimatedCredits: Math.max(min, envCredits),
+        proxyAdmissionHeaders: envelopeHeaders,
+        release: async (outcome) => {
+          // 信封整包预扣由 finalizeAiTaskEnvelopeCredits 统一释放，单步失败勿拆掉
+          if (outcome === 'failed' && !isAiTaskEnvelopeActive()) {
+            await releaseCreditsProxyReserve();
+          }
+        },
+      };
+    }
     const proxyAdmissionHeaders = await getCreditsProxyRequestHeaders(min);
     const key = getLastCreditsReserveKey() || '';
     return {

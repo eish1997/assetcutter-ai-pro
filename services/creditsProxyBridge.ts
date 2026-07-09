@@ -31,10 +31,15 @@ export function clearLastCreditsReserveKey(): void {
 
 const FAIRNESS_HEADER_KEY = 'X-AC-Fairness-Key';
 
-/** gate 已预扣时返回缓存的 proxy 准入头（不含 fairness）；estimate 不匹配则 null */
+/** gate 已预扣时返回缓存的 proxy 准入头（不含 fairness）；缓存额度 ≥ 请求额度即可复用 */
 export function getCachedCreditsProxyHeaders(estimatedCredits: number): Record<string, string> | null {
   const min = Math.max(1, Math.floor(Number(estimatedCredits) || 1));
-  if (lastCreditsProxyHeaders && lastCreditsProxyEstimate === min && getLastCreditsReserveKey()) {
+  if (
+    lastCreditsProxyHeaders &&
+    lastCreditsProxyEstimate != null &&
+    lastCreditsProxyEstimate >= min &&
+    getLastCreditsReserveKey()
+  ) {
     return { ...lastCreditsProxyHeaders };
   }
   return null;
@@ -52,8 +57,13 @@ export function markCreditsProxyHeadersFromGate(
   for (const [k, v] of Object.entries(headers)) {
     if (k !== FAIRNESS_HEADER_KEY) proxyHeaders[k] = v;
   }
+  const sameKey = getLastCreditsReserveKey() === reserveKey;
   setLastCreditsReserveKey(reserveKey);
   lastCreditsProxyHeaders = proxyHeaders;
+  // 同 key 时勿把整包 estimate 缩成单步（否则下一步会误判并释放预扣）
+  if (sameKey && lastCreditsProxyEstimate != null && lastCreditsProxyEstimate > min) {
+    return;
+  }
   lastCreditsProxyEstimate = min;
 }
 
@@ -88,10 +98,16 @@ export async function getCreditsProxyRequestHeaders(
   const fallback = getGeminiFairnessRequestHeaders();
   const min = Math.max(1, Math.floor(Number(estimatedCredits) || 1));
   const existingKey = getLastCreditsReserveKey();
-  if (existingKey && lastCreditsProxyHeaders && lastCreditsProxyEstimate === min) {
+  // 整包预扣（更大 estimate）可覆盖后续单步；勿因 149→15 误释放
+  if (
+    existingKey &&
+    lastCreditsProxyHeaders &&
+    lastCreditsProxyEstimate != null &&
+    lastCreditsProxyEstimate >= min
+  ) {
     return { ...fallback, ...lastCreditsProxyHeaders };
   }
-  if (existingKey && lastCreditsProxyEstimate !== null && lastCreditsProxyEstimate !== min) {
+  if (existingKey && lastCreditsProxyEstimate != null && lastCreditsProxyEstimate < min) {
     await releaseCreditsProxyReserve();
   } else if (existingKey && !lastCreditsProxyHeaders) {
     lastCreditsReserveKey = null;

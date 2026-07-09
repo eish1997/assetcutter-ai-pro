@@ -28,10 +28,26 @@ describe('creditsProxyBridge cache', () => {
       'X-AC-Credits-Reserve': 'rk-test-1',
       'X-AC-Credits-Signature': 'sig-abc',
     });
-    expect(mod.getCachedCreditsProxyHeaders(10)).toBeNull();
+    // 整包额度可覆盖更小的单步请求
+    expect(mod.getCachedCreditsProxyHeaders(10)?.['X-AC-Credits-Reserve']).toBe('rk-test-1');
   });
 
-  it('getCreditsProxyRequestHeaders releases stale reserve when estimate changes', async () => {
+  it('does not shrink envelope estimate when remaking same reserve key', async () => {
+    const mod = await import('../services/creditsProxyBridge');
+    mod.clearLastCreditsReserveKey();
+    mod.markCreditsProxyHeadersFromGate(
+      { 'X-AC-Credits-Reserve': 'rk-env', 'X-AC-Credits-Gate-Signature': 'sig' },
+      149
+    );
+    mod.markCreditsProxyHeadersFromGate(
+      { 'X-AC-Credits-Reserve': 'rk-env', 'X-AC-Credits-Gate-Signature': 'sig' },
+      15
+    );
+    const headers = await mod.getCreditsProxyRequestHeaders(134);
+    expect(headers['X-AC-Credits-Reserve']).toBe('rk-env');
+  });
+
+  it('getCreditsProxyRequestHeaders upgrades when request exceeds cached estimate', async () => {
     vi.doMock('../services/httpClient', () => ({
       requestJson: vi.fn().mockResolvedValue({
         ok: true,

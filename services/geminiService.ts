@@ -973,10 +973,8 @@ async function bulkProxyGenerateContentSync(args: {
     });
     const postSync = async () => {
       const admissionHeaders = await bulkProxyAdmissionHeaders(gateCredits);
-      if (!frozenCreditsReserveKey) {
-        frozenCreditsReserveKey =
-          admissionHeaders['X-AC-Credits-Reserve']?.trim() || getLastCreditsReserveKey();
-      }
+      frozenCreditsReserveKey =
+        admissionHeaders['X-AC-Credits-Reserve']?.trim() || getLastCreditsReserveKey();
       return bulkFetchOrExplain(syncUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json", ...admissionHeaders },
@@ -986,16 +984,23 @@ async function bulkProxyGenerateContentSync(args: {
       });
     };
     let res = await postSync();
-    const text = await res.text();
+    let text = await res.text();
     if (!res.ok && isCreditsReserveInvalidProxyError(res.status, text || "")) {
+      // 上一任务结算后偶发复用失效预扣：清缓存后强制新 bundle 再试一次
       clearLastCreditsReserveKey();
-      logAiPipelineDev('error', {
-        step: 'credits_gate',
-        code: 'CREDITS_RESERVE_INVALID',
-        raw: text,
-        reserveKey: getLastCreditsReserveKey(),
-      });
-      throwCreditsReserveInvalid('credits_gate', text || '');
+      frozenCreditsReserveKey = null;
+      res = await postSync();
+      text = await res.text();
+      if (!res.ok && isCreditsReserveInvalidProxyError(res.status, text || "")) {
+        clearLastCreditsReserveKey();
+        logAiPipelineDev('error', {
+          step: 'credits_gate',
+          code: 'CREDITS_RESERVE_INVALID',
+          raw: text,
+          reserveKey: getLastCreditsReserveKey(),
+        });
+        throwCreditsReserveInvalid('credits_gate', text || '');
+      }
     }
     if (!res.ok) {
       const rawFail = (text || "").trim();
@@ -1074,22 +1079,28 @@ async function bulkProxyGenerateContentAsync(args: {
     estimatedCredits: gateCredits,
     ...aiBackendExtra,
   });
-  let create = await bulkFetchCreateWithFairnessRetry(asyncCreateUrl, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", ...(await bulkProxyAdmissionHeaders(gateCredits)) },
-    body: createBody,
-    signal: abortSignal,
-    cache: "no-store",
-  });
+  const postAsyncCreate = async () =>
+    bulkFetchCreateWithFairnessRetry(asyncCreateUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...(await bulkProxyAdmissionHeaders(gateCredits)) },
+      body: createBody,
+      signal: abortSignal,
+      cache: "no-store",
+    });
+  let create = await postAsyncCreate();
   if (!create.ok && isCreditsReserveInvalidProxyError(create.status, create.text || "")) {
     clearLastCreditsReserveKey();
-    logAiPipelineDev('error', {
-      step: 'credits_gate',
-      code: 'CREDITS_RESERVE_INVALID',
-      raw: create.text,
-      reserveKey: getLastCreditsReserveKey(),
-    });
-    throwCreditsReserveInvalid('credits_gate', create.text || '');
+    create = await postAsyncCreate();
+    if (!create.ok && isCreditsReserveInvalidProxyError(create.status, create.text || "")) {
+      clearLastCreditsReserveKey();
+      logAiPipelineDev('error', {
+        step: 'credits_gate',
+        code: 'CREDITS_RESERVE_INVALID',
+        raw: create.text,
+        reserveKey: getLastCreditsReserveKey(),
+      });
+      throwCreditsReserveInvalid('credits_gate', create.text || '');
+    }
   }
   if (!create.ok) {
     const raw = (create.text || "").trim();
