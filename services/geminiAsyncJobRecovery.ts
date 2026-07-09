@@ -62,6 +62,35 @@ export function isGeminiAsyncPollTimeoutError(err: unknown): err is GeminiAsyncP
   return false;
 }
 
+/** create 后短时内 poll 404：覆盖 Render free 冷启动/瞬时重启；超时后才判失败 */
+export const GEMINI_ASYNC_JOB_NOT_FOUND_GRACE_MS = 45_000;
+
+export function isGeminiAsyncJobNotFoundPoll(status: number, bodyText: string): boolean {
+  if (status !== 404) return false;
+  const raw = String(bodyText || '').trim();
+  if (/Job not found or expired/i.test(raw)) return true;
+  try {
+    const j = JSON.parse(raw) as { error?: unknown };
+    return /Job not found or expired/i.test(String(j.error || ''));
+  } catch {
+    return false;
+  }
+}
+
+export function geminiAsyncJobNotFoundUserMessage(): string {
+  return (
+    '生图任务在代理上已丢失（常见于 Render 冷启动/重启，或 create/poll 打到不同实例）。' +
+    '请重新运行一次；本地稳定调试可在 .env.local 设 VITE_BULK_IMAGE_API=same-origin 并 npm run dev:gemini-proxy。'
+  );
+}
+
+/** create 后 ageMs 内对 job-not-found 继续轮询；未知创建时间则不宽限 */
+export function shouldGraceRetryGeminiAsyncJobNotFound(createdAt: number | null | undefined): boolean {
+  const t = Number(createdAt);
+  if (!Number.isFinite(t) || t <= 0) return false;
+  return Date.now() - t < GEMINI_ASYNC_JOB_NOT_FOUND_GRACE_MS;
+}
+
 type JobsPayload = { version: 1; jobs: PendingGeminiAsyncJob[] };
 
 function jobsStorageKey(): string {

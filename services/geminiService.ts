@@ -54,11 +54,14 @@ import {
   GeminiAsyncPollTimeoutError,
   dispatchGeminiAsyncRecovered,
   expireStaleGeminiAsyncJobs,
+  geminiAsyncJobNotFoundUserMessage,
   getPendingGeminiAsyncJob,
+  isGeminiAsyncJobNotFoundPoll,
   isGeminiAsyncPollTimeoutError,
   listPendingGeminiAsyncJobs,
   markGeminiAsyncJobRecoverable,
   removePendingGeminiAsyncJob,
+  shouldGraceRetryGeminiAsyncJobNotFound,
   touchGeminiAsyncJobPoll,
   upsertPendingGeminiAsyncJob,
 } from "./geminiAsyncJobRecovery";
@@ -674,7 +677,28 @@ async function fetchGeminiAsyncPollStep(
     const pt = (pollText || "").trim();
     const fe = tryParseGeminiProxyFairnessRejected(pollRes.status, pt);
     if (fe) throwFairnessRejected(fe);
-    throw new Error(parseBulkProxyErrorBody(pt) || `轮询失败（${pollRes.status}）`);
+    if (isGeminiAsyncJobNotFoundPoll(pollRes.status, pt)) {
+      const createdAt = getPendingGeminiAsyncJob(jobId)?.createdAt;
+      if (shouldGraceRetryGeminiAsyncJobNotFound(createdAt)) {
+        logAiPipelineDev("error", {
+          step: "image_poll",
+          code: "ASYNC_JOB_NOT_FOUND_GRACE",
+          jobId,
+          raw: pt,
+        });
+        return { kind: "pending" };
+      }
+      throw new AiPipelineStepError(
+        "image_poll",
+        "ASYNC_JOB_NOT_FOUND",
+        geminiAsyncJobNotFoundUserMessage()
+      );
+    }
+    throw new AiPipelineStepError(
+      "image_poll",
+      "ASYNC_POLL_HTTP",
+      parseBulkProxyErrorBody(pt) || `轮询失败（${pollRes.status}）`
+    );
   }
   let j: GeminiAsyncPollBody;
   try {
@@ -1214,7 +1238,18 @@ async function bulkProxyGenerateContentBatchAsync(args: {
       const pt = (pollText || "").trim();
       const fe = tryParseGeminiProxyFairnessRejected(pollRes.status, pt);
       if (fe) throwFairnessRejected(fe);
-      throw new Error(parseBulkProxyErrorBody(pt) || `批量任务轮询失败（${pollRes.status}）`);
+      if (isGeminiAsyncJobNotFoundPoll(pollRes.status, pt)) {
+        throw new AiPipelineStepError(
+          "image_poll",
+          "ASYNC_JOB_NOT_FOUND",
+          geminiAsyncJobNotFoundUserMessage()
+        );
+      }
+      throw new AiPipelineStepError(
+        "image_poll",
+        "ASYNC_POLL_HTTP",
+        parseBulkProxyErrorBody(pt) || `批量任务轮询失败（${pollRes.status}）`
+      );
     }
     let j: GeminiAsyncPollBody;
     try {

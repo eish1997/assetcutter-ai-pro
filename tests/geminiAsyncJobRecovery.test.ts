@@ -29,13 +29,17 @@ vi.mock('../services/creditsApi', () => ({
 
 import {
   expireStaleGeminiAsyncJobs,
+  GEMINI_ASYNC_JOB_NOT_FOUND_GRACE_MS,
   GEMINI_PENDING_JOB_TTL_MS,
   GeminiAsyncPollTimeoutError,
+  geminiAsyncJobNotFoundUserMessage,
   getPendingGeminiAsyncJob,
+  isGeminiAsyncJobNotFoundPoll,
   isGeminiAsyncPollTimeoutError,
   listPendingGeminiAsyncJobs,
   markGeminiAsyncJobRecoverable,
   removePendingGeminiAsyncJob,
+  shouldGraceRetryGeminiAsyncJobNotFound,
   upsertPendingGeminiAsyncJob,
 } from '../services/geminiAsyncJobRecovery';
 
@@ -80,6 +84,18 @@ describe('geminiAsyncJobRecovery', () => {
     expect(err.jobId).toBe('job-x');
     expect(err.recoverable).toBe(true);
     expect(isGeminiAsyncPollTimeoutError({ code: 'GEMINI_ASYNC_POLL_TIMEOUT' })).toBe(true);
+  });
+
+  it('detects Job not found poll and grace window', () => {
+    expect(isGeminiAsyncJobNotFoundPoll(404, '{"error":"Job not found or expired"}')).toBe(true);
+    expect(isGeminiAsyncJobNotFoundPoll(404, 'other')).toBe(false);
+    expect(isGeminiAsyncJobNotFoundPoll(500, 'Job not found or expired')).toBe(false);
+    expect(shouldGraceRetryGeminiAsyncJobNotFound(Date.now())).toBe(true);
+    expect(
+      shouldGraceRetryGeminiAsyncJobNotFound(Date.now() - GEMINI_ASYNC_JOB_NOT_FOUND_GRACE_MS - 1)
+    ).toBe(false);
+    expect(shouldGraceRetryGeminiAsyncJobNotFound(null)).toBe(false);
+    expect(geminiAsyncJobNotFoundUserMessage()).toMatch(/冷启动|same-origin/);
   });
 
   it('removePendingGeminiAsyncJob clears record', () => {
