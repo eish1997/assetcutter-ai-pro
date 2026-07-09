@@ -14,10 +14,8 @@
 | 变量                                           | 必填             | 说明                                                                                                                                                                  |
 | -------------------------------------------- | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `VERTEX_PROJECT_ID` 或 `GOOGLE_CLOUD_PROJECT` | 选 Vertex 时必填   | GCP 项目 ID。                                                                                                                                                          |
-| `VERTEX_LOCATION` / `GOOGLE_CLOUD_LOCATION` | 否              | 默认 **`us-central1`**（区域 Agent Platform：`{region}-aiplatform.googleapis.com`，对应 Console「Agent Platform API」）。`global` 会走全球 express 端点，Console 常记为「Gemini for Google Cloud API」且易 429。预览生图若必须 global：设 `VERTEX_ALLOW_GLOBAL_ENDPOINT=true` 且 `VERTEX_LOCATION=global`。 |
-| `VERTEX_AIPLATFORM_REGIONAL_ONLY`            | 否              | 默认 `true`。为 `true` 时未显式允许则把 `global` 降为 `us-central1`。 |
-| `VERTEX_ALLOW_GLOBAL_ENDPOINT`               | 否              | 默认 `false`。仅预览模型需要 `global` 时设为 `true`。 |
-| `VERTEX_API_VERSION`                         | 否              | 默认 `v1beta1`（预览能力）。可设 `v1` 走稳定 Agent Platform REST。 |
+| `VERTEX_LOCATION` / `GOOGLE_CLOUD_LOCATION` | 否              | 默认 **`us-central1`**（[Agent Platform 区域端点](https://docs.cloud.google.com/gemini-enterprise-agent-platform/resources/locations)）。加积分只改浏览器→auth-api 中继，Google 侧仍为 `aiBackend:vertex` + ADC。 |
+| `VERTEX_API_VERSION`                         | 否              | 默认 **`v1`**（与官方生图 REST 一致）。预览能力若需可设 `v1beta1`。 |
 | ADC                                          | 选 Vertex 时必填   | 任选一：`GOOGLE_APPLICATION_CREDENTIALS` 指向服务账号 JSON 文件路径；**或**（Render 等）将整段 JSON 粘贴到 `GOOGLE_APPLICATION_CREDENTIALS_JSON`（别名 `GCP_SERVICE_ACCOUNT_JSON` / `GOOGLE_SERVICE_ACCOUNT_JSON`），代理启动时会写入临时文件并设置 ADC。GCE/Cloud Run 等可用内置身份。作用域需能调用 Vertex AI。                                                                           |
 | `GEMINI_API_KEY`                             | 非 Vertex 请求仍需要 | 仅当请求**未**带 `aiBackend: "vertex"` 时，代理仍走 AI Studio Key。可同时配置：同一代理既服务 Key 用户又服务 Vertex。                                                                               |
 | `GEMINI_FAIRNESS_ENABLED`                    | 否              | 默认 `false`。为 `true` 时启用 **公平排队 / 每用户限流**（内存态，**单副本**有效）。详见 **[Gemini代理-公平排队与每用户限流.md](./Gemini代理-公平排队与每用户限流.md)**。 |
@@ -41,18 +39,21 @@
 
 设置页选择 **Vertex AI（GCP · 经本站代理）** 后，所有 `generateContent` 均走上述代理，且自动附带 `aiBackend: "vertex"`。用户**不需要**在浏览器填写 GCP 密钥。
 
-## 4. 生图模型 ID（与 Vertex 文档一致）
+## 4. 生图模型 ID 与 Agent Platform 请求配置
 
-站内 `types.ts` 中三个生图模型与 Vertex **Model ID 一致**，代理**不做改名映射**：
+站内 model id 与 [Gemini Enterprise Agent Platform](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/capabilities/image-generation) **Model ID 一致**，代理不做改名。
 
+**生图必填**（官方）：`config.responseModalities: ["TEXT", "IMAGE"]`。本站于 `buildGeminiConfig`（前端）与 `mergeAgentPlatformImageConfig`（代理）自动注入。
+
+**区域**：`gemini-3.1-flash-image`、`gemini-2.5-flash-image` 等在 [Deployments and endpoints](https://docs.cloud.google.com/gemini-enterprise-agent-platform/resources/locations) 列出 **us-central1** 可用；勿为生图整站设 `global`（Console 会计入 Gemini for Google Cloud API）。
 
 | 站内 ID                            | Vertex Model ID                           |
 | -------------------------------- | ----------------------------------------- |
 | `gemini-2.5-flash-image`         | `gemini-2.5-flash-image`（GA）              |
 | `gemini-3.1-flash-image`         | `gemini-3.1-flash-image`（GA，**默认**）   |
 | `gemini-3-pro-image`             | `gemini-3-pro-image`（GA）                  |
-| `gemini-3.1-flash-image-preview` | `gemini-3.1-flash-image-preview`（Preview，仅 global） |
-| `gemini-3-pro-image-preview`     | `gemini-3-pro-image-preview`（Preview，仅 global）     |
+| `gemini-3.1-flash-image-preview` | `gemini-3.1-flash-image-preview`（Preview） |
+| `gemini-3-pro-image-preview`     | `gemini-3-pro-image-preview`（Preview）     |
 
 
 参考：[Google models 总览](https://docs.cloud.google.com/vertex-ai/generative-ai/docs/learn/models) 及各模型专页。

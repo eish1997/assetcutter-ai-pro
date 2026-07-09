@@ -52,7 +52,7 @@ export const DIALOG_IMAGE_REGISTRY = [
 
 export type DialogImageModelRegistryId = (typeof DIALOG_IMAGE_REGISTRY)[number]["registryId"];
 
-/** 默认生图 registryId（与旧「标准档」一致） */
+/** 默认生图 registryId */
 export const DEFAULT_IMAGE_MODEL_REGISTRY_ID: DialogImageModelRegistryId = "gemini-3.1-flash-image";
 
 /** 可选生图模型（展示名 -> registryId） */
@@ -134,7 +134,7 @@ const LEGACY_IMAGE_REGISTRY_ALIASES: Record<string, DialogImageModelRegistryId> 
   "gpt-image-1": "gpt-image-1.5",
   "dall-e-3": "gpt-image-1.5",
   "dall-e-2": "gpt-image-1.5",
-  /** 旧 preview 默认 → GA（区域 Agent Platform / us-central1） */
+  /** 旧 preview id 读入时仍映射到 GA（同名能力，非换模型降级） */
   "gemini-3.1-flash-image-preview": "gemini-3.1-flash-image",
   "gemini-3-pro-image-preview": "gemini-3-pro-image",
 };

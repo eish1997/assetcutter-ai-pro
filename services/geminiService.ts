@@ -1777,6 +1777,13 @@ function isAbortError(error: unknown): boolean {
   return error instanceof Error && error.name === 'AbortError';
 }
 
+function isAgentPlatformImageModelId(registryId: string): boolean {
+  const m = (registryId || '').trim().toLowerCase();
+  if (!m) return false;
+  if (m.includes('flash-image') || m.includes('pro-image') || m.includes('lite-image')) return true;
+  return /-image$/.test(m);
+}
+
 function buildGeminiConfig<T extends Record<string, unknown>>(
   config: T,
   signal: AbortSignal,
@@ -1788,8 +1795,12 @@ function buildGeminiConfig<T extends Record<string, unknown>>(
     timeout: timeoutMs,
   };
   const registryId = (meteringRegistryId || '').trim();
+  const withImageModalities =
+    registryId && isAgentPlatformImageModelId(registryId) && !config.responseModalities
+      ? ({ ...config, responseModalities: ['TEXT', 'IMAGE'] as const } as T)
+      : config;
   return {
-    ...config,
+    ...withImageModalities,
     ...(registryId ? { __meteringRegistryId: registryId } : {}),
     abortSignal: signal,
     httpOptions: nextHttpOptions,

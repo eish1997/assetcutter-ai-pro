@@ -258,7 +258,7 @@ function isAdcLikelyConfigured() {
 
 function vertexConfigGuideMessage() {
   return (
-    'Vertex 生图尚未就绪：请在运行本代理的环境中配置 Google Cloud 项目（环境变量 VERTEX_PROJECT_ID 或 GOOGLE_CLOUD_PROJECT）、区域（默认 us-central1 走 Agent Platform 区域端点；预览模型可设 VERTEX_ALLOW_GLOBAL_ENDPOINT=true + VERTEX_LOCATION=global），并完成应用默认凭据 ADC。' +
+    'Vertex 生图尚未就绪：请在运行本代理的环境中配置 Google Cloud 项目（VERTEX_PROJECT_ID 或 GOOGLE_CLOUD_PROJECT）、区域（默认 us-central1 / Agent Platform API；Gemini 3.x 生图由代理 hybrid 切 global），并完成 ADC。' +
     ' 可将服务账号 JSON 写入 GOOGLE_APPLICATION_CREDENTIALS_JSON（或设置 GOOGLE_APPLICATION_CREDENTIALS 指向密钥文件）。完整说明见仓库 docs/VERTEX_AI_INTEGRATION.md。'
   );
 }
@@ -303,21 +303,40 @@ function ensureAdcFromJsonEnv() {
 
 ensureAdcFromJsonEnv();
 
-/** Vertex 使用 ADC；lazy 单例见 vertex-genai-client.js（默认区域 Agent Platform） */
+/** Vertex ADC + Agent Platform 区域端点（VERTEX_LOCATION，默认 us-central1） */
 function getVertexAI() {
   return getVertexGenAIClient();
+}
+
+function isImageGenerationModel(model) {
+  const m = String(model || '').toLowerCase();
+  if (m.includes('flash-image') || m.includes('pro-image')) return true;
+  if (m.includes('lite-image')) return true;
+  return /-image$/.test(m) && !m.includes('flash-preview') && !m.includes('pro-preview');
+}
+
+/** 官方生图必填 responseModalities TEXT+IMAGE：https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/capabilities/image-generation */
+function mergeAgentPlatformImageConfig(model, config) {
+  if (!isImageGenerationModel(model)) return config;
+  const next = { ...(config || {}) };
+  if (!next.responseModalities && !next.response_modalities) {
+    next.responseModalities = ['TEXT', 'IMAGE'];
+  }
+  return next;
 }
 
 async function proxyVertexGenerateContent(model, contents, config) {
   const safeConfig = { ...(config || {}) };
   if (safeConfig.abortSignal) delete safeConfig.abortSignal;
+  delete safeConfig.__meteringRegistryId;
   const timeout = Math.max(
     Number(safeConfig?.httpOptions?.timeout) || IMAGE_REQUEST_TIMEOUT_MS,
     VERTEX_IMAGE_REQUEST_TIMEOUT_MS
   );
+  const withImageConfig = mergeAgentPlatformImageConfig(model, safeConfig);
   const mergedConfig = {
-    ...safeConfig,
-    httpOptions: { ...(safeConfig.httpOptions || {}), timeout },
+    ...withImageConfig,
+    httpOptions: { ...(withImageConfig.httpOptions || {}), timeout },
   };
   const ai = getVertexAI();
   const response = await ai.models.generateContent({
@@ -333,12 +352,6 @@ async function proxyVertexGenerateContent(model, contents, config) {
 
 function isGeminiNetworkError(detail) {
   return /fetch failed|UND_ERR_CONNECT_TIMEOUT|connect timeout|ENETUNREACH|ECONNRESET|ETIMEDOUT/i.test(detail);
-}
-
-function isImageGenerationModel(model) {
-  const m = String(model || '').toLowerCase();
-  if (m.includes('flash-image') || m.includes('pro-image')) return true;
-  return /-image$/.test(m) && !m.includes('flash-preview') && !m.includes('pro-preview');
 }
 
 function parseContents(contents) {
@@ -1215,7 +1228,7 @@ server.listen(PORT, BIND_HOST, async () => {
   if (vOk) {
     const route = describeVertexAgentPlatformRoute();
     console.log(
-      `[gemini-proxy-api] Vertex project=${vp} location=${route.location} host=${route.apiHost} apiVersion=${route.apiVersion} regionalOnly=${route.regionalAgentPlatformOnly}${route.coercedFromGlobal ? ' (coerced from global)' : ''}`
+      `[gemini-proxy-api] Vertex project=${vp} location=${route.location} host=${route.apiHost} apiVersion=${route.apiVersion} agentPlatform=${route.agentPlatformRegional ? 'regional' : 'global'}`
     );
   } else {
     console.log(`[gemini-proxy-api] Vertex project: (unset)  configured=false`);

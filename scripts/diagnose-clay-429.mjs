@@ -191,7 +191,7 @@ async function step4ImageCreate(relayHeaders) {
         ],
       },
     ],
-    config: { responseModalities: ['IMAGE'] },
+    config: { responseModalities: ['TEXT', 'IMAGE'] },
     estimatedCredits: 134,
     aiBackend: 'vertex',
   });

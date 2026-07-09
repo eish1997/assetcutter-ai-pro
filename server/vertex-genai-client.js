@@ -1,70 +1,43 @@
 /**
- * Vertex / Agent Platform 客户端：强制区域 aiplatform 端点，避免 global 走 Console 里的
- * 「Gemini for Google Cloud API」计量线（用户侧 429 高发）。
+ * Vertex / Gemini Enterprise Agent Platform 客户端（@google/genai + ADC）。
  *
- * SDK 路由（@google/genai）：
- * - location=global 或 apiKey → https://aiplatform.googleapis.com/
- * - location=us-central1 等 → https://us-central1-aiplatform.googleapis.com/
+ * 官方：https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/capabilities/image-generation
+ * - location 默认 us-central1 → {region}-aiplatform.googleapis.com（Console「Agent Platform API」）
+ * - 生图需 config.responseModalities: ['TEXT','IMAGE']（见 gemini-proxy-api / buildGeminiConfig）
+ * - REST 建议 v1（GenerateContent on publishers/google/models）
  */
 import { GoogleGenAI } from '@google/genai';
 
 const DEFAULT_REGIONAL_LOCATION = 'us-central1';
-const GLOBAL_LOCATION = 'global';
-
-function envBool(name, defaultTrue = false) {
-  const v = String(process.env[name] ?? '').trim().toLowerCase();
-  if (!v) return defaultTrue;
-  if (v === '0' || v === 'false' || v === 'no' || v === 'off') return false;
-  return v === '1' || v === 'true' || v === 'yes' || v === 'on';
-}
-
-/** 默认 true：仅走区域 Agent Platform API（{region}-aiplatform.googleapis.com） */
-export function vertexAgentPlatformRegionalOnly() {
-  return envBool('VERTEX_AIPLATFORM_REGIONAL_ONLY', true);
-}
-
-export function vertexAllowGlobalEndpoint() {
-  return envBool('VERTEX_ALLOW_GLOBAL_ENDPOINT', false);
-}
 
 export function vertexProjectIdFromEnv() {
   return (process.env.VERTEX_PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT || '').trim();
 }
 
+/** Agent Platform 生图/GA 模型推荐 v1；可用 VERTEX_API_VERSION 覆盖 */
 export function vertexApiVersionFromEnv() {
-  const raw = String(process.env.VERTEX_API_VERSION || 'v1beta1').trim();
-  return raw || 'v1beta1';
+  const raw = String(process.env.VERTEX_API_VERSION || 'v1').trim();
+  return raw || 'v1';
 }
 
-/**
- * 解析 Vertex location。regional-only 时把 global 降为 us-central1（预览模型需显式 VERTEX_ALLOW_GLOBAL_ENDPOINT=true）。
- * @returns {{ location: string, coercedFromGlobal: boolean }}
- */
 export function resolveVertexLocationFromEnv() {
-  const raw = (process.env.VERTEX_LOCATION || process.env.GOOGLE_CLOUD_LOCATION || '').trim();
-  let location = raw || (vertexAgentPlatformRegionalOnly() ? DEFAULT_REGIONAL_LOCATION : GLOBAL_LOCATION);
-
-  if (
-    location === GLOBAL_LOCATION &&
-    vertexAgentPlatformRegionalOnly() &&
-    !vertexAllowGlobalEndpoint()
-  ) {
-    return { location: DEFAULT_REGIONAL_LOCATION, coercedFromGlobal: true };
-  }
-
-  return { location, coercedFromGlobal: false };
+  const location = (
+    process.env.VERTEX_LOCATION ||
+    process.env.GOOGLE_CLOUD_LOCATION ||
+    DEFAULT_REGIONAL_LOCATION
+  ).trim() || DEFAULT_REGIONAL_LOCATION;
+  return { location };
 }
 
-/** @returns {string} aiplatform 主机名（无 scheme） */
 export function vertexAgentPlatformHost(location) {
   const loc = String(location || '').trim() || DEFAULT_REGIONAL_LOCATION;
-  if (loc === GLOBAL_LOCATION) return 'aiplatform.googleapis.com';
+  if (loc === 'global') return 'aiplatform.googleapis.com';
   return `${loc}-aiplatform.googleapis.com`;
 }
 
 export function describeVertexAgentPlatformRoute() {
   const project = vertexProjectIdFromEnv();
-  const { location, coercedFromGlobal } = resolveVertexLocationFromEnv();
+  const { location } = resolveVertexLocationFromEnv();
   const apiVersion = vertexApiVersionFromEnv();
   const host = vertexAgentPlatformHost(location);
   return {
@@ -73,42 +46,43 @@ export function describeVertexAgentPlatformRoute() {
     apiVersion,
     apiHost: host,
     baseUrl: `https://${host}/`,
-    regionalAgentPlatformOnly: vertexAgentPlatformRegionalOnly(),
-    allowGlobalEndpoint: vertexAllowGlobalEndpoint(),
-    coercedFromGlobal,
-    usesGlobalExpressEndpoint: location === GLOBAL_LOCATION,
+    agentPlatformRegional: location !== 'global',
   };
 }
 
-let cachedClient = null;
-let cachedClientKey = '';
+/** @type {Map<string, import('@google/genai').GoogleGenAI>} */
+const clientCache = new Map();
 
-/**
- * 单例 Vertex GenAI 客户端（ADC + 区域 Agent Platform）。
- * @returns {import('@google/genai').GoogleGenAI}
- */
-export function getVertexGenAIClient() {
+export function getVertexGenAIClientForLocation(locationOverride) {
   const project = vertexProjectIdFromEnv();
   if (!project) {
     throw new Error('Vertex: set VERTEX_PROJECT_ID or GOOGLE_CLOUD_PROJECT');
   }
-  const { location } = resolveVertexLocationFromEnv();
+  const { location: envLocation } = resolveVertexLocationFromEnv();
+  const location =
+    locationOverride != null && String(locationOverride).trim()
+      ? String(locationOverride).trim()
+      : envLocation;
   const apiVersion = vertexApiVersionFromEnv();
   const cacheKey = `${project}\0${location}\0${apiVersion}`;
-  if (cachedClient && cachedClientKey === cacheKey) return cachedClient;
+  const cached = clientCache.get(cacheKey);
+  if (cached) return cached;
 
-  cachedClient = new GoogleGenAI({
+  const client = new GoogleGenAI({
     vertexai: true,
     project,
     location,
     apiVersion,
   });
-  cachedClientKey = cacheKey;
-  return cachedClient;
+  clientCache.set(cacheKey, client);
+  return client;
+}
+
+export function getVertexGenAIClient() {
+  return getVertexGenAIClientForLocation();
 }
 
 /** @internal */
 export function resetVertexGenAIClientForTests() {
-  cachedClient = null;
-  cachedClientKey = '';
+  clientCache.clear();
 }

@@ -13,7 +13,7 @@ bootstrapGlobalAgent();
 
 const SERVICE_ACCOUNT_PATH = process.argv[2] || process.env.GOOGLE_APPLICATION_CREDENTIALS;
 const VERTEX_PROJECT_ID = process.env.VERTEX_PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT || '';
-const VERTEX_LOCATION = process.env.VERTEX_LOCATION || 'global';
+const VERTEX_LOCATION = process.env.VERTEX_LOCATION || 'us-central1';
 
 console.log('========================================');
 console.log('Vertex AI 凭证和调用路径诊断');
