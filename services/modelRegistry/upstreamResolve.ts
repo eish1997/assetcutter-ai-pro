@@ -37,8 +37,12 @@ export function resolveUpstreamModelIdForProvider(
   }
 
   if (provider === "antigravity") {
-    if (ml.includes("gemini-3.1-flash-image-preview")) return "gemini-3.1-flash-image";
-    if (ml.includes("gemini-3-pro-image-preview")) return "gemini-3-pro-image";
+    if (ml.includes("gemini-3.1-flash-image-preview") || ml.includes("gemini-3.1-flash-image")) {
+      return "gemini-3.1-flash-image";
+    }
+    if (ml.includes("gemini-3-pro-image-preview") || ml.includes("gemini-3-pro-image")) {
+      return "gemini-3-pro-image";
+    }
     return m;
   }
   if (provider === "vectorengine") {

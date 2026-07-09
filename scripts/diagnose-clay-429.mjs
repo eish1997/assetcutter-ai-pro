@@ -181,7 +181,7 @@ async function step3Understand(relayHeaders) {
 async function step4ImageCreate(relayHeaders) {
   console.log('\n[Step 4/6] image_create — async create');
   const createBody = JSON.stringify({
-    model: 'gemini-3-pro-image-preview',
+    model: 'gemini-3.1-flash-image',
     contents: [
       {
         role: 'user',

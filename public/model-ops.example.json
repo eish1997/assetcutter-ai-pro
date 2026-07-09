@@ -1,23 +1,23 @@
 {
   "version": 1,
   "imageRegistryAllowlist": null,
-  "imageModelPreference": ["gemini-3.1-flash-image-preview", "gemini-2.5-flash-image", "gemini-3-pro-image-preview"],
+  "imageModelPreference": ["gemini-3.1-flash-image", "gemini-2.5-flash-image", "gemini-3-pro-image"],
   "bindingOverrides": [
     {
-      "bindingId": "gemini-3.1-flash-image-preview:vertex-proxy:image",
+      "bindingId": "gemini-3.1-flash-image:vertex-proxy:image",
       "enabled": true,
       "priority": 10
     },
     {
-      "bindingId": "gemini-3.1-flash-image-preview:toapis-gemini:image",
+      "bindingId": "gemini-3.1-flash-image:toapis-gemini:image",
       "enabled": false
     }
   ],
   "wiringEdges": [
     {
-      "edgeId": "gemini-3.1-flash-image-preview:vertex-proxy:image",
+      "edgeId": "gemini-3.1-flash-image:vertex-proxy:image",
       "from": { "supplierId": "vertex-site", "outletId": "vertex-proxy" },
-      "to": { "hubInId": "gemini-3.1-flash-image-preview:image" },
+      "to": { "hubInId": "gemini-3.1-flash-image:image" },
       "priority": 10,
       "enabled": true
     }

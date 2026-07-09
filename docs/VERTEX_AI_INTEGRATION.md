@@ -14,7 +14,10 @@
 | 变量                                           | 必填             | 说明                                                                                                                                                                  |
 | -------------------------------------------- | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `VERTEX_PROJECT_ID` 或 `GOOGLE_CLOUD_PROJECT` | 选 Vertex 时必填   | GCP 项目 ID。                                                                                                                                                          |
-| `VERTEX_LOCATION`                            | 否              | 默认 `global`。预览版生图模型文档推荐使用 **global**；若你的账号/政策要求区域端点，可改为如 `us-central1`（需与 [官方区域说明](https://docs.cloud.google.com/vertex-ai/generative-ai/docs/learn/locations) 一致）。 |
+| `VERTEX_LOCATION` / `GOOGLE_CLOUD_LOCATION` | 否              | 默认 **`us-central1`**（区域 Agent Platform：`{region}-aiplatform.googleapis.com`，对应 Console「Agent Platform API」）。`global` 会走全球 express 端点，Console 常记为「Gemini for Google Cloud API」且易 429。预览生图若必须 global：设 `VERTEX_ALLOW_GLOBAL_ENDPOINT=true` 且 `VERTEX_LOCATION=global`。 |
+| `VERTEX_AIPLATFORM_REGIONAL_ONLY`            | 否              | 默认 `true`。为 `true` 时未显式允许则把 `global` 降为 `us-central1`。 |
+| `VERTEX_ALLOW_GLOBAL_ENDPOINT`               | 否              | 默认 `false`。仅预览模型需要 `global` 时设为 `true`。 |
+| `VERTEX_API_VERSION`                         | 否              | 默认 `v1beta1`（预览能力）。可设 `v1` 走稳定 Agent Platform REST。 |
 | ADC                                          | 选 Vertex 时必填   | 任选一：`GOOGLE_APPLICATION_CREDENTIALS` 指向服务账号 JSON 文件路径；**或**（Render 等）将整段 JSON 粘贴到 `GOOGLE_APPLICATION_CREDENTIALS_JSON`（别名 `GCP_SERVICE_ACCOUNT_JSON` / `GOOGLE_SERVICE_ACCOUNT_JSON`），代理启动时会写入临时文件并设置 ADC。GCE/Cloud Run 等可用内置身份。作用域需能调用 Vertex AI。                                                                           |
 | `GEMINI_API_KEY`                             | 非 Vertex 请求仍需要 | 仅当请求**未**带 `aiBackend: "vertex"` 时，代理仍走 AI Studio Key。可同时配置：同一代理既服务 Key 用户又服务 Vertex。                                                                               |
 | `GEMINI_FAIRNESS_ENABLED`                    | 否              | 默认 `false`。为 `true` 时启用 **公平排队 / 每用户限流**（内存态，**单副本**有效）。详见 **[Gemini代理-公平排队与每用户限流.md](./Gemini代理-公平排队与每用户限流.md)**。 |
@@ -46,8 +49,10 @@
 | 站内 ID                            | Vertex Model ID                           |
 | -------------------------------- | ----------------------------------------- |
 | `gemini-2.5-flash-image`         | `gemini-2.5-flash-image`（GA）              |
-| `gemini-3.1-flash-image-preview` | `gemini-3.1-flash-image-preview`（Preview） |
-| `gemini-3-pro-image-preview`     | `gemini-3-pro-image-preview`（Preview）     |
+| `gemini-3.1-flash-image`         | `gemini-3.1-flash-image`（GA，**默认**）   |
+| `gemini-3-pro-image`             | `gemini-3-pro-image`（GA）                  |
+| `gemini-3.1-flash-image-preview` | `gemini-3.1-flash-image-preview`（Preview，仅 global） |
+| `gemini-3-pro-image-preview`     | `gemini-3-pro-image-preview`（Preview，仅 global）     |
 
 
 参考：[Google models 总览](https://docs.cloud.google.com/vertex-ai/generative-ai/docs/learn/models) 及各模型专页。

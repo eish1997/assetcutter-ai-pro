@@ -77,6 +77,8 @@ const DEFAULT_TEXT_MODEL_MAP: Record<string, string> = {
 /** 本站内部生图模型 → ToAPIs 图像异步接口 model */
 const DEFAULT_IMAGE_MODEL_MAP: Record<string, string> = {
   'gemini-2.5-flash-image': 'gemini-2.5-flash-image-preview',
+  'gemini-3-pro-image': 'gemini-3-pro-image',
+  'gemini-3.1-flash-image': 'gemini-3.1-flash-image',
   'gemini-3-pro-image-preview': 'gemini-3-pro-image-preview',
   'gemini-3.1-flash-image-preview': 'gemini-3.1-flash-image-preview',
 };

@@ -33,6 +33,12 @@ import {
   parseFairnessTaskEnvelope,
   getDiskOverrideInt,
 } from './gemini-proxy-fairness.js';
+import {
+  describeVertexAgentPlatformRoute,
+  getVertexGenAIClient,
+  resolveVertexLocationFromEnv,
+  vertexProjectIdFromEnv,
+} from './vertex-genai-client.js';
 import { initGeminiFairnessConfigLoader, resolveGeminiFairnessConfigSource } from './gemini-fairness-config-store.js';
 import { extractUsageMetadata } from './gemini-proxy-usage.js';
 import {
@@ -207,11 +213,11 @@ function normalizeSecret(v) {
 }
 
 function vertexProjectId() {
-  return (process.env.VERTEX_PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT || '').trim();
+  return vertexProjectIdFromEnv();
 }
 
 function vertexLocation() {
-  return (process.env.VERTEX_LOCATION || process.env.GOOGLE_CLOUD_LOCATION || 'global').trim();
+  return resolveVertexLocationFromEnv().location;
 }
 
 function isVertexConfigured() {
@@ -252,7 +258,7 @@ function isAdcLikelyConfigured() {
 
 function vertexConfigGuideMessage() {
   return (
-    'Vertex 生图尚未就绪：请在运行本代理的环境中配置 Google Cloud 项目（环境变量 VERTEX_PROJECT_ID 或 GOOGLE_CLOUD_PROJECT）、区域（可选 VERTEX_LOCATION，默认 global），并完成应用默认凭据 ADC。' +
+    'Vertex 生图尚未就绪：请在运行本代理的环境中配置 Google Cloud 项目（环境变量 VERTEX_PROJECT_ID 或 GOOGLE_CLOUD_PROJECT）、区域（默认 us-central1 走 Agent Platform 区域端点；预览模型可设 VERTEX_ALLOW_GLOBAL_ENDPOINT=true + VERTEX_LOCATION=global），并完成应用默认凭据 ADC。' +
     ' 可将服务账号 JSON 写入 GOOGLE_APPLICATION_CREDENTIALS_JSON（或设置 GOOGLE_APPLICATION_CREDENTIALS 指向密钥文件）。完整说明见仓库 docs/VERTEX_AI_INTEGRATION.md。'
   );
 }
@@ -297,22 +303,9 @@ function ensureAdcFromJsonEnv() {
 
 ensureAdcFromJsonEnv();
 
-/** Vertex 使用 ADC；lazy 按 project+location 重建 */
-let vertexAiClient = null;
-let vertexAiClientCacheKey = '';
-
+/** Vertex 使用 ADC；lazy 单例见 vertex-genai-client.js（默认区域 Agent Platform） */
 function getVertexAI() {
-  const project = vertexProjectId();
-  if (!project) {
-    throw new Error('Vertex: set VERTEX_PROJECT_ID or GOOGLE_CLOUD_PROJECT');
-  }
-  const location = vertexLocation();
-  const key = `${project}\0${location}`;
-  if (!vertexAiClient || vertexAiClientCacheKey !== key) {
-    vertexAiClient = new GoogleGenAI({ vertexai: true, project, location });
-    vertexAiClientCacheKey = key;
-  }
-  return vertexAiClient;
+  return getVertexGenAIClient();
 }
 
 async function proxyVertexGenerateContent(model, contents, config) {
@@ -1191,6 +1184,7 @@ const server = http.createServer(async (req, res) => {
         configured: isVertexConfigured(),
         location: isVertexConfigured() ? vertexLocation() : null,
         adcLikelyConfigured: isAdcLikelyConfigured(),
+        route: isVertexConfigured() ? describeVertexAgentPlatformRoute() : null,
       },
     });
     return;
@@ -1218,7 +1212,14 @@ server.listen(PORT, BIND_HOST, async () => {
   console.log(`[gemini-proxy-api] GEMINI_FAIRNESS_CONFIG_SOURCE=${resolveGeminiFairnessConfigSource()}`);
   const vp = vertexProjectId();
   const vOk = isVertexConfigured();
-  console.log(`[gemini-proxy-api] Vertex project: ${vp || '(unset)'}  configured=${vOk}  location=${vOk ? vertexLocation() : '—'}`);
+  if (vOk) {
+    const route = describeVertexAgentPlatformRoute();
+    console.log(
+      `[gemini-proxy-api] Vertex project=${vp} location=${route.location} host=${route.apiHost} apiVersion=${route.apiVersion} regionalOnly=${route.regionalAgentPlatformOnly}${route.coercedFromGlobal ? ' (coerced from global)' : ''}`
+    );
+  } else {
+    console.log(`[gemini-proxy-api] Vertex project: (unset)  configured=false`);
+  }
   if (!vOk) {
     console.warn(
       '[gemini-proxy-api] Vertex is not configured (VERTEX_PROJECT_ID / GOOGLE_CLOUD_PROJECT empty). Requests with aiBackend:vertex will return 500. Set project id + ADC on this service — see docs/VERTEX_AI_INTEGRATION.md'

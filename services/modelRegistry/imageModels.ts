@@ -13,14 +13,26 @@ export const DIALOG_IMAGE_REGISTRY = [
     providerRoute: "gemini" as const,
   },
   {
-    registryId: "gemini-3.1-flash-image-preview",
+    registryId: "gemini-3.1-flash-image",
     label: "Gemini 3.1 Flash Image",
     maxReferenceImages: 10,
     providerRoute: "gemini" as const,
   },
   {
-    registryId: "gemini-3-pro-image-preview",
+    registryId: "gemini-3-pro-image",
     label: "Gemini 3 Pro Image",
+    maxReferenceImages: 10,
+    providerRoute: "gemini" as const,
+  },
+  {
+    registryId: "gemini-3.1-flash-image-preview",
+    label: "Gemini 3.1 Flash Image (Preview)",
+    maxReferenceImages: 10,
+    providerRoute: "gemini" as const,
+  },
+  {
+    registryId: "gemini-3-pro-image-preview",
+    label: "Gemini 3 Pro Image (Preview)",
     maxReferenceImages: 10,
     providerRoute: "gemini" as const,
   },
@@ -41,7 +53,7 @@ export const DIALOG_IMAGE_REGISTRY = [
 export type DialogImageModelRegistryId = (typeof DIALOG_IMAGE_REGISTRY)[number]["registryId"];
 
 /** 默认生图 registryId（与旧「标准档」一致） */
-export const DEFAULT_IMAGE_MODEL_REGISTRY_ID: DialogImageModelRegistryId = "gemini-3.1-flash-image-preview";
+export const DEFAULT_IMAGE_MODEL_REGISTRY_ID: DialogImageModelRegistryId = "gemini-3.1-flash-image";
 
 /** 可选生图模型（展示名 -> registryId） */
 export const DIALOG_IMAGE_MODELS = DIALOG_IMAGE_REGISTRY.map((e) => ({
@@ -52,8 +64,8 @@ export const DIALOG_IMAGE_MODELS = DIALOG_IMAGE_REGISTRY.map((e) => ({
 /** @deprecated 仅用于旧 preset / 任务字段 `imageGear` 迁移 */
 export const LEGACY_IMAGE_GEAR_TO_REGISTRY: Record<string, DialogImageModelRegistryId> = {
   fast: "gemini-2.5-flash-image",
-  standard: "gemini-3.1-flash-image-preview",
-  pro: "gemini-3-pro-image-preview",
+  standard: "gemini-3.1-flash-image",
+  pro: "gemini-3-pro-image",
 };
 
 /** @deprecated 旧档位 id；新代码请用 registryId */
@@ -68,9 +80,9 @@ export const DIALOG_IMAGE_GEARS = [
   {
     id: "standard" as const,
     label: "Gemini 3.1 Flash Image",
-    modelId: "gemini-3.1-flash-image-preview" as const,
+    modelId: "gemini-3.1-flash-image" as const,
   },
-  { id: "pro" as const, label: "Gemini 3 Pro Image", modelId: "gemini-3-pro-image-preview" as const },
+  { id: "pro" as const, label: "Gemini 3 Pro Image", modelId: "gemini-3-pro-image" as const },
 ] as const;
 
 const REGISTERED_IMAGE_IDS = new Set<string>(DIALOG_IMAGE_REGISTRY.map((e) => e.registryId));
@@ -104,8 +116,10 @@ export function labelForImageModelRegistryId(registryId: string): string {
 /** 快捷输入条等窄位 UI 用的短标签（完整名见 `labelForImageModelRegistryId`） */
 const SHORT_IMAGE_MODEL_LABELS: Partial<Record<DialogImageModelRegistryId, string>> = {
   "gemini-2.5-flash-image": "2.5",
-  "gemini-3.1-flash-image-preview": "3.1",
-  "gemini-3-pro-image-preview": "Pro",
+  "gemini-3.1-flash-image": "3.1",
+  "gemini-3-pro-image": "Pro",
+  "gemini-3.1-flash-image-preview": "3.1p",
+  "gemini-3-pro-image-preview": "Prop",
   "gpt-image-1.5": "1.5",
   "gpt-image-2": "2",
 };
@@ -120,14 +134,17 @@ const LEGACY_IMAGE_REGISTRY_ALIASES: Record<string, DialogImageModelRegistryId> 
   "gpt-image-1": "gpt-image-1.5",
   "dall-e-3": "gpt-image-1.5",
   "dall-e-2": "gpt-image-1.5",
+  /** 旧 preview 默认 → GA（区域 Agent Platform / us-central1） */
+  "gemini-3.1-flash-image-preview": "gemini-3.1-flash-image",
+  "gemini-3-pro-image-preview": "gemini-3-pro-image",
 };
 
 /** 旧 gear id 或 registryId → 合法 registryId */
 export function coerceImageModelRegistryId(raw?: string | null): DialogImageModelRegistryId {
   const s = (raw || "").trim();
+  const fromLegacyAlias = LEGACY_IMAGE_REGISTRY_ALIASES[s];
+  if (fromLegacyAlias) return fromLegacyAlias;
   if (s && isRegisteredImageModelId(s)) return s as DialogImageModelRegistryId;
-  const fromLegacy = LEGACY_IMAGE_REGISTRY_ALIASES[s];
-  if (fromLegacy) return fromLegacy;
   const fromGear = LEGACY_IMAGE_GEAR_TO_REGISTRY[s];
   if (fromGear) return fromGear;
   return DEFAULT_IMAGE_MODEL_REGISTRY_ID;

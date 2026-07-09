@@ -59,10 +59,10 @@ describe("modelRegistry resolve", () => {
   });
 
   it("registered image ids resolve by model-bound provider, not global aiProvider", () => {
-    expect(resolveUpstreamImageModelIdForRegistry("gemini-3-pro-image-preview")).toBe("gemini-3-pro-image-preview");
+    expect(resolveUpstreamImageModelIdForRegistry("gemini-3-pro-image-preview")).toBe("gemini-3-pro-image");
     expect(resolveUpstreamImageModelIdForRegistry("gpt-image-1.5")).toBe("gpt-image-1.5");
     expect(resolveUpstreamImageModelIdForRegistry("gpt-image-2")).toBe("gpt-image-2");
-    expect(resolveUpstreamImageModelId("gemini-3-pro-image-preview")).toBe("gemini-3-pro-image-preview");
+    expect(resolveUpstreamImageModelId("gemini-3-pro-image-preview")).toBe("gemini-3-pro-image");
     expect(resolveUpstreamImageModelId("gpt-image-1")).toBe("gpt-image-1.5");
   });
 });

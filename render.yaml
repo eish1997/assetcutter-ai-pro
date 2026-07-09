@@ -33,7 +33,9 @@ services:
       - key: VERTEX_PROJECT_ID
         sync: false
       - key: VERTEX_LOCATION
-        value: global
+        value: us-central1
+      # 默认 VERTEX_AIPLATFORM_REGIONAL_ONLY=true：走 {region}-aiplatform.googleapis.com（Console「Agent Platform API」）
+      # 预览生图仅 global 时：VERTEX_LOCATION=global + VERTEX_ALLOW_GLOBAL_ENDPOINT=true
       # 服务账号 JSON：Dashboard 粘贴整段 JSON 到 GOOGLE_APPLICATION_CREDENTIALS_JSON（或本机路径式 GOOGLE_APPLICATION_CREDENTIALS）
       - key: GOOGLE_APPLICATION_CREDENTIALS_JSON
         sync: false

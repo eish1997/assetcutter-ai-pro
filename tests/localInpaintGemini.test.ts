@@ -124,8 +124,8 @@ describe('coerceImageModelRegistryId', () => {
     const std = coerceImageModelRegistryId('standard');
     const pro = coerceImageModelRegistryId('pro');
     expect(fast).toBe('gemini-2.5-flash-image');
-    expect(std).toBe('gemini-3.1-flash-image-preview');
-    expect(pro).toBe('gemini-3-pro-image-preview');
+    expect(std).toBe('gemini-3.1-flash-image');
+    expect(pro).toBe('gemini-3-pro-image');
     expect(coerceImageModelRegistryId('bogus')).toBe(std);
   });
 });
