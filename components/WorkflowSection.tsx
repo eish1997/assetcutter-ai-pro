@@ -5926,10 +5926,15 @@ ${lineSvg}
         return;
       }
 
-      if (typeof document !== 'undefined' && document.querySelector('[data-ac-block-workflow-marquee]')) return;
-      /** 仅让出真正的可编辑区；不要用 isGlobalUploadBlockedTarget(e.target)，否则焦点在顶部 Tab 等按钮上时，在列表里粘贴会被误拦截 */
+      /**
+       * 仅让出「焦点所在」的可编辑区 / 快捷栏 / 遮罩面板。
+       * 禁止用 document.querySelector('[data-ac-block-workflow-marquee]')：
+       * 底部快捷栏常驻该属性，会误伤资产列表粘贴文本/图片。
+       */
       const active = document.activeElement;
       if (active && isWorkflowEditableTarget(active)) return;
+      if (active?.closest('[data-workflow-quick-compose-bar]')) return;
+      if (active?.closest('[data-ac-block-workflow-marquee]')) return;
       const files = collectImageFilesFromClipboardItems(e.clipboardData?.items);
       if (files.length) {
         e.preventDefault();

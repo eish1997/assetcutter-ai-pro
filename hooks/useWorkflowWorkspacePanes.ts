@@ -176,7 +176,9 @@ export function useWorkflowWorkspacePanes({
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.code !== 'Space') return;
       if (isWorkflowEditableTarget(e.target)) return;
-      if (typeof document !== 'undefined' && document.querySelector('[data-ac-block-workflow-marquee]')) return;
+      const active = typeof document !== 'undefined' ? document.activeElement : null;
+      /** 勿用全局 querySelector：快捷栏常驻 data-ac-block-workflow-marquee，会误禁空格框选 */
+      if (active?.closest('[data-ac-block-workflow-marquee]')) return;
       if (typeof document !== 'undefined' && !document.querySelector('[data-workflow-asset-list]')) return;
       e.preventDefault();
       setSpaceMarqueeEnabled(true);
@@ -203,7 +205,8 @@ export function useWorkflowWorkspacePanes({
       if (e.repeat) return;
       if (e.ctrlKey || e.altKey || e.metaKey) return;
       if (isWorkflowEditableTarget(e.target)) return;
-      if (typeof document !== 'undefined' && document.querySelector('[data-ac-block-workflow-marquee]')) return;
+      const active = typeof document !== 'undefined' ? document.activeElement : null;
+      if (active?.closest('[data-ac-block-workflow-marquee]')) return;
 
       /** 与卷轴从左到右一致：1 能力+功能区、2 功能区+工作区；0 同 1（最左） */
       const paneByCode: Record<string, number> = {
