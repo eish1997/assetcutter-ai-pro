@@ -1461,7 +1461,6 @@ const WorkflowSection: React.FC<{
   const gridRef = useRef<HTMLDivElement>(null);
   const groupGridRef = useRef<HTMLDivElement>(null);
   const workspaceViewportRef = useRef<HTMLDivElement>(null);
-  const workspaceTrackRef = useRef<HTMLDivElement>(null);
   const centerScrollRef = useRef<HTMLDivElement>(null);
   const listPaneRef = useRef<HTMLDivElement>(null);
   const presetScrollRef = useRef<HTMLDivElement>(null);
@@ -1658,41 +1657,18 @@ const WorkflowSection: React.FC<{
   );
   const functionSidebarWidth = functionSidebarLayout.functionSidebarWidthPx;
   const showFunctionSidebar = functionSidebarLayout.mode !== 'hidden';
-  const paneWidth = Math.max(320, workspaceViewportWidth || 0);
-  const listPaneWidth = Math.max(320, paneWidth - functionSidebarWidth);
-  const presetPaneWidth = listPaneWidth;
-  const trackTotalWidth = listPaneWidth + functionSidebarWidth + presetPaneWidth;
-  const assetListMarqueeActive = quickComposeShellActive && !showArchived;
   const marqueeStartRef = useRef(false);
-  const prevShowFunctionSidebarRef = useRef(showFunctionSidebar);
   const {
     workspacePane,
-    setWorkspacePane: _setWorkspacePane,
     snapWorkspacePaneToNode,
-    workspaceSnapping,
     handlePaneWheel,
     spaceMarqueeEnabled,
-    workspaceViewportTouchHandlers,
   } = useWorkflowWorkspacePanes({
-    workspaceTrackRef,
     registerPaneWheelHandler,
-    listPaneWidth,
-    sidebarWidth: functionSidebarWidth,
-    enableSpaceMarquee: assetListMarqueeActive,
+    enableSpaceMarquee: quickComposeShellActive && !showArchived,
   });
-  useEffect(() => {
-    const prev = prevShowFunctionSidebarRef.current;
-    prevShowFunctionSidebarRef.current = showFunctionSidebar;
-    if (!showFunctionSidebar) {
-      if (Math.round(workspacePane) === 0) {
-        snapWorkspacePaneToNode(1);
-      }
-      return;
-    }
-    if (!prev && Math.round(workspacePane) === 1) {
-      snapWorkspacePaneToNode(0);
-    }
-  }, [showFunctionSidebar, workspacePane, snapWorkspacePaneToNode]);
+  const assetListMarqueeActive =
+    quickComposeShellActive && !showArchived && Math.round(workspacePane) === 0;
   /** 供 document wheel capture 读取：按住空格时不拦截滚轮，以便滚动资产列表 */
   const spaceMarqueeEnabledRef = useRef(false);
   useLayoutEffect(() => {
@@ -7754,7 +7730,8 @@ ${lineSvg}
   const rootJustifiedLayout = useWorkflowJustifiedLayout(rootCanvasLayoutItems, gridRef, {
     gap: WORKFLOW_ASSET_GRID_GAP_PX,
     targetRowHeight: justifiedTargetRowHeight,
-    remeasureKey: lightboxAssetId ?? 'list',
+    /** 小盒子切回资产页时须重绑 ResizeObserver（grid 曾被 hidden，宽度可能未更新） */
+    remeasureKey: `${lightboxAssetId ?? 'list'}:${Math.round(workspacePane)}`,
   });
 
   const groupCanvasLayoutItems = useMemo(() => {
@@ -7809,7 +7786,7 @@ ${lineSvg}
   const groupJustifiedLayout = useWorkflowJustifiedLayout(groupCanvasLayoutItems, groupGridRef, {
     gap: WORKFLOW_ASSET_GRID_GAP_PX,
     targetRowHeight: justifiedTargetRowHeight,
-    remeasureKey: lightboxAssetId ?? 'list',
+    remeasureKey: `${lightboxAssetId ?? 'list'}:${Math.round(workspacePane)}`,
   });
 
   const mergeThumbUnlockKeys = useCallback((prev: Set<string>, keys: Iterable<string>) => {
@@ -10612,7 +10589,7 @@ ${lineSvg}
       if (!showFunctionSidebar) return [workspaceAndFunctionCols[0]!];
       return [workspaceAndFunctionCols[1]!, workspaceAndFunctionCols[0]!];
     }
-    /** 能力 + 功能区同屏：顶栏不重复「功能区 / 一键执行」（一键执行仅在「功能区 + 工作区」档显示） */
+    /** 小盒子预设页：顶栏显示能力预设工具；功能区仍在左侧大盒子中 */
     return [
       {
         title: '能力预设',
@@ -11067,12 +11044,12 @@ ${lineSvg}
             <div
               className="flex shrink-0 items-center gap-0.5"
               role="group"
-              aria-label="卷轴分档：1 能力+功能区 2 功能区+工作区"
+              aria-label="内容区分档：1 能力预设 2 资产列表"
             >
               {(
                 [
-                  { pane: 1 as const, k: '1', t: '能力 + 功能区' },
-                  { pane: 0 as const, k: '2', t: '功能区 + 工作区' },
+                  { pane: 1 as const, k: '1', t: '能力预设' },
+                  { pane: 0 as const, k: '2', t: '资产列表' },
                 ] as const
               ).map(({ pane, k, t }) => {
                 const on = Math.round(workspacePane) === pane;
@@ -11129,44 +11106,12 @@ ${lineSvg}
         <div
           ref={workspaceViewportRef}
           className="flex-1 min-h-0 overflow-hidden"
-          {...workspaceViewportTouchHandlers}
         >
-          <div
-            ref={workspaceTrackRef}
-            className={`flex h-full min-h-0 items-stretch overflow-hidden motion-reduce:transition-none${workspaceSnapping ? ' will-change-transform' : ''}`}
-            style={{ width: `${trackTotalWidth}px` }}
-          >
-        {/* 从左到右：能力预设 | 功能区 | 工作区 */}
-        <div
-          className="flex h-full min-h-0 max-h-full shrink-0 flex-row flex-nowrap self-stretch overflow-hidden"
-          style={{ width: `${presetPaneWidth + functionSidebarWidth}px` }}
-        >
-        <div
-          className={`h-full min-h-0 shrink-0 flex flex-col overflow-hidden border-r border-white/[0.05] pl-3 pr-0`}
-          style={{ width: `${presetPaneWidth}px` }}
-          data-workflow-preset-column
-        >
-          {capabilityPresetPanel ? (
-            <div
-              data-workflow-preset
-              className="flex flex-col flex-1 min-h-0 overflow-hidden rounded-xl bg-transparent py-2 pr-3"
-            >
-              {cloneCapabilityPresetPanelWithScrollRef(capabilityPresetPanel, presetScrollRef, {
-                onOpenWorkflowComposer: openUnifiedComposer,
-                workflowComposeSearchQuery: quickComposeDraft,
-                sidebarLinkHoverPresetIds,
-                creditBalance,
-              })}
-            </div>
-          ) : (
-            <div className="flex-1 min-h-0 rounded-xl border border-dashed border-white/10 bg-white/[0.02] flex items-center justify-center text-[9px] text-gray-600">
-              未挂载能力预设
-            </div>
-          )}
-        </div>
+          {/* 大盒子：功能区 + 小盒子（资产列表 ↔ 预设） */}
+          <div className="flex h-full min-h-0 w-full items-stretch overflow-hidden">
         {showFunctionSidebar ? (
         <div
-          className="flex h-full min-h-0 max-h-full self-stretch min-w-0 flex-col overflow-hidden"
+          className="flex h-full min-h-0 max-h-full shrink-0 self-stretch min-w-0 flex-col overflow-hidden"
           style={{ width: `${functionSidebarWidth}px`, minWidth: `${functionSidebarWidth}px` }}
           data-workflow-function-sidebar
         >
@@ -11233,12 +11178,19 @@ ${lineSvg}
           </div>
         </div>
         ) : null}
-        </div>
+        {/* 小盒子：资产列表 ↔ 能力预设 */}
         <div
           ref={listPaneRef}
-          data-workflow-asset-list
-          className="relative min-w-0 min-h-0 h-full max-h-full self-stretch flex flex-col shrink-0 overflow-hidden"
-          style={{ width: `${listPaneWidth}px` }}
+          data-workflow-content-slot
+          {...(activePaneNode === 0 ? { 'data-workflow-asset-list': true } : {})}
+          className="relative min-w-0 min-h-0 h-full max-h-full flex-1 self-stretch flex flex-col overflow-hidden"
+        >
+        {/* 资产页保持占位测量（勿 display:none，否则 justified 宽度变 0 → opacity-0）；预设页叠在上方 */}
+        <div
+          className={`relative min-h-0 min-w-0 h-full max-h-full w-full flex-1 flex-col overflow-hidden ${
+            activePaneNode === 0 ? 'flex' : 'pointer-events-none invisible flex'
+          }`}
+          aria-hidden={activePaneNode !== 0}
         >
         {lightboxAssetId && lightboxListBackdropUrl ? (
           <div className="pointer-events-none absolute inset-0 z-0 overflow-hidden" aria-hidden>
@@ -12506,9 +12458,33 @@ ${lineSvg}
           </>
           ) : null}
         </div>
-
         </div>
+        {activePaneNode === 1 ? (
+          <div
+            data-workflow-preset-column
+            className="absolute inset-0 z-[1] flex h-full min-h-0 w-full flex-col overflow-hidden bg-[#0a0a0c] pl-3 pr-0"
+          >
+            {capabilityPresetPanel ? (
+              <div
+                data-workflow-preset
+                className="flex flex-col flex-1 min-h-0 overflow-hidden rounded-xl bg-transparent py-2 pr-3"
+              >
+                {cloneCapabilityPresetPanelWithScrollRef(capabilityPresetPanel, presetScrollRef, {
+                  onOpenWorkflowComposer: openUnifiedComposer,
+                  workflowComposeSearchQuery: quickComposeDraft,
+                  sidebarLinkHoverPresetIds,
+                  creditBalance,
+                })}
+              </div>
+            ) : (
+              <div className="flex-1 min-h-0 rounded-xl border border-dashed border-white/10 bg-white/[0.02] flex items-center justify-center text-[9px] text-gray-600">
+                未挂载能力预设
+              </div>
+            )}
+          </div>
+        ) : null}
         </div>
+          </div>
         </div>
       </div>
 

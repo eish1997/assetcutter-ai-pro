@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useLayoutEffect, useState as useLocalState } from 'react';
 import { createPortal } from 'react-dom';
-import { AppMode, ArenaStepEntry, ArenaCurrentStep, ArenaTimelineBlock, WinningSnippet } from '../types';
+import { ArenaStepEntry, ArenaCurrentStep, ArenaTimelineBlock, WinningSnippet } from '../types';
 import {
   dialogGenerateImage,
   generateArenaPrompts,
@@ -163,14 +163,12 @@ export type PromptArenaSectionProps = {
   setArenaSnippets: (v: WinningSnippet[]) => void;
   arenaFirstVisit: boolean;
   setArenaFirstVisit: (v: boolean) => void;
-  setMode: (m: AppMode) => void;
   addTask: (type: string, label: string) => string;
   updateTask: (id: string, patch: { status?: string; progress?: number; error?: string }) => void;
   addGlobalLog: (module: string, level: 'info' | 'warn' | 'error', message: string, detail?: string) => void;
   onFileUpload: (e: React.ChangeEvent<HTMLInputElement>, callback: (base64: string) => void) => void;
   modelText: string;
   promptEdit: string;
-  dialogModel: string;
   arenaImageModel: string;
   setArenaImageModel: (v: string) => void;
 };
@@ -241,14 +239,12 @@ const PromptArenaSection: React.FC<PromptArenaSectionProps> = (props) => {
     setArenaSnippets,
     arenaFirstVisit,
     setArenaFirstVisit,
-    setMode,
     addTask,
     updateTask,
     addGlobalLog,
     onFileUpload,
     modelText,
     promptEdit,
-    dialogModel: _dialogModel,
     arenaImageModel,
     setArenaImageModel,
   } = props;
@@ -1066,15 +1062,12 @@ const PromptArenaSection: React.FC<PromptArenaSectionProps> = (props) => {
       </aside>
 
       <div className="flex-1 flex flex-col gap-4 min-w-0">
-        <div className="flex items-center justify-between gap-4 flex-wrap">
-          <button onClick={() => setMode(AppMode.ADMIN)} className="px-4 py-2 rounded-xl bg-[#1c1c22] border border-[#2e2e32] text-[9px] font-black uppercase hover:bg-[#2e2e36] transition-all">看效果分析</button>
-          {arenaFirstVisit && (
-            <div className="flex-1 flex items-center justify-between gap-2 px-4 py-2 rounded-xl bg-[#152642] border border-[#4b6a9e] text-[10px] text-blue-300">
-              <span>用自然语言描述想要的效果，过程在时间轴中展开，可回顾每步输入输出与结果；右侧为进度地图可跳转。</span>
-              <button onClick={() => { setArenaFirstVisit(false); localStorage.setItem('ac_arena_visited', '1'); }} className="text-blue-400 hover:text-white">收起</button>
-            </div>
-          )}
-        </div>
+        {arenaFirstVisit ? (
+          <div className="flex items-center justify-between gap-2 px-4 py-2 rounded-xl bg-[#152642] border border-[#4b6a9e] text-[10px] text-blue-300">
+            <span>用自然语言描述想要的效果，过程在时间轴中展开，可回顾每步输入输出与结果；右侧为进度地图可跳转。</span>
+            <button onClick={() => { setArenaFirstVisit(false); localStorage.setItem('ac_arena_visited', '1'); }} className="text-blue-400 hover:text-white">收起</button>
+          </div>
+        ) : null}
 
         <section className="glass p-4 rounded-2xl border border-[#252528] shrink-0">
           <div className="mb-3 flex flex-wrap items-center justify-between gap-2">

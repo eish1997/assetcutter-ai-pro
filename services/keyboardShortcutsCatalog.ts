@@ -17,11 +17,8 @@ export type KeyboardShortcutsPageId =
   | 'workflow-lightbox'
   | 'workflow-lightbox-annotate'
   | 'settings'
-  | 'dialog'
-  | 'texture'
   | 'seam-repair'
   | 'pbr-texture'
-  | 'admin'
   | 'arena';
 
 export type KeyboardShortcutsPage = {
@@ -84,11 +81,8 @@ const PAGE_SECTIONS: Record<KeyboardShortcutsPageId, KeyboardShortcutsSection[]>
   'workflow-lightbox': [WORKFLOW_LIGHTBOX],
   'workflow-lightbox-annotate': [WORKFLOW_LIGHTBOX, WORKFLOW_LIGHTBOX_ANNOTATE],
   settings: [],
-  dialog: [],
-  texture: [],
   'seam-repair': [],
   'pbr-texture': [],
-  admin: [],
   arena: [],
 };
 
@@ -99,11 +93,8 @@ const PAGE_TITLES: Record<KeyboardShortcutsPageId, string> = {
   'workflow-lightbox': '大图预览',
   'workflow-lightbox-annotate': '大图预览 · 标注',
   settings: '设置',
-  dialog: '对话',
-  texture: '提取花纹',
   'seam-repair': '贴图修缝',
   'pbr-texture': '生成贴图',
-  admin: '提示词效果',
   arena: '提示词擂台',
 };
 
@@ -128,11 +119,8 @@ export function resolveKeyboardShortcutsPage(
   }
   const modeMap: Partial<Record<AppMode, KeyboardShortcutsPageId>> = {
     SETTINGS: 'settings',
-    DIALOG: 'dialog',
-    TEXTURE: 'texture',
     SEAM_REPAIR: 'seam-repair',
     PBR_TEXTURE: 'pbr-texture',
-    ADMIN: 'admin',
     ARENA: 'arena',
   };
   return modeMap[args.mode] ?? 'global';

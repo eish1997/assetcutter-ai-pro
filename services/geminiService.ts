@@ -1891,26 +1891,6 @@ export const DEFAULT_PROMPTS = {
       Maintain the core object's geometry, scale, and lighting consistency.
       Ensure the output is high-definition, sharp, and free of artifacts.
       Instruction: {instruction}`,
-  texture_pattern: `[纹理花纹平面提取协议 - 严格执行]
-      1. **核心目标**：仅提取并“展平”图像中的装饰性图案、纹理或Logo。
-      2. **形变纠正（展平）**：必须消除由于物体表面曲率（如花瓶的圆周、布料的褶皱）引起的透视缩短 and 弯曲。将图案像“剥皮”或“UV展开”一样平铺在正交的平面坐标系中。
-      3. **彻底剔除载体**：严禁出现任何关于原物体的轮廓、边缘、体积感、高光或阴影。输出结果不应让人看出它是从什么形状的物体上提取 of 提取的。
-      4. **线稿转换**：输出高精细度的黑白灰线稿。背景必须为纯黑色 (#000000)，图案为白色或深浅不一的灰色。
-      5. **智能修复与补全**：分析图案的对称性和循环规律，自动修复被切断或遮挡的线条，补全为一个完整、对称、美观的图案单元。
-      6. **风格要求**：工业级 Stencil/Line-art 风格，线条边缘锐利，无杂点，无任何3D材质感。`,
-  texture_tileable: `[智能无缝平铺引擎协议 - 深度增强]
-      1. **纹理结构解构**：深入分析输入图像的微观纹理单元及其宏观排列逻辑。识别其核心的重复模式（Pattern Unit）。
-      2. **内容精炼**：智能识别并彻底剔除多余的杂质、阴影、光斑或非规律性的干扰元素。只保留最具代表性的纹理核心。
-      3. **逻辑重组与组合**：将提取出的核心单元进行规律性的平铺重组。如果当前纹理单元存在方向性，请根据视觉美学逻辑自动旋转、翻转或错位排列这些元素，以打破单调感并增强衔接自然度。
-      4. **无缝衔接合成**：在合成过程中，确保四个边缘的像素能够完美闭环对接。在无限平铺时，不得出现任何视觉断层或明显的接缝线。
-      5. **输出规格**：生成一张完全展平、无透视畸变、光影中和的正方形 2K 贴图。`,
-  texture_pbr: `SYNTHESIZE PBR MATERIAL MAP: {mapType}.
-      Based on the input image, generate a professional {mapType} map.
-      Normal Map: Standard tangent space (purple/blue).
-      Roughness: Grayscale where white is rough and black is smooth.
-      Height: Grayscale depth map.
-      Metalness: Grayscale binary mask.
-      Output ONLY the specified map as a high-fidelity texture.`,
   dialog_understand: `You are an assistant that interprets the user's request. The user may have provided an image or only text.
 - If the user provided an image: they may want (A) to describe/identify/answer a question about the image, or (B) to edit/modify/generate a new image from it.
 - If the user provided NO image (text only): they may want to generate an image from the description (e.g. "画一只猫", "生成星空图", "a sunset over mountains"). In that case set shouldGenerateImage true and put the full image description in English in "instruction".
@@ -1926,8 +1906,6 @@ Return their bounding boxes in normalized coordinates [ymin, xmin, ymax, xmax] (
 Return as a JSON array of objects with 'id', 'label', and 'box_2d' keys.`,
   /** 切割图片用：识别大块内容区域（版面分块），不要识别每个小物体 */
   detect_blocks: `Identify the major content blocks or layout sections in this image (e.g. separate panels, diagram sections, distinct views, large coherent regions). Do NOT detect every small object (tiles, doors, figures); only return 3-12 bounding boxes for the main blocks that a human would use to "cut the image into separate pictures". Each block should be one logical unit (one view, one panel, one diagram). Return as a JSON array of objects with 'id', 'label', and 'box_2d' keys. Coordinates: [ymin, xmin, ymax, xmax] normalized 0-1000.`,
-  dialog_title: `用 2～4 个中文字概括成会话标题。**优先以画面中的物体、主体或场景命名**（如：大门、人物、建筑、星空），不要以操作描述命名。
-只输出标题文字，不要标点、不要解释、不要引号。`,
   /** 擂台：首轮写稿 — N=2/3/4 共用；具体 N 在请求用户段中给出 */
   arena_writer: `You are a prompt engineer for an image-generation model. The user has already uploaded ONE image and will give a short natural language description of what they want. Each prompt you output will be sent to the image model TOGETHER with that same uploaded image. Therefore every prompt MUST be an instruction to modify, transform, or edit THAT image (e.g. "transform this image into...", "based on this image, make it more...", "restyle the image to..."). Do NOT output standalone text-to-image prompts that describe a new scene from scratch and ignore the uploaded image.
 
@@ -1965,14 +1943,7 @@ Output ONLY a valid JSON object with keys (both strings):
 - "prompt": the new English image-generation prompt (one line).
 No markdown, no code fence, no other text.`,
   /** 结构化复现：将一条生图提示词拆成主体/场景/风格/修饰，见 PROMPT_SCORING_DESIGN §6.1 */
-  parse_structured: `You are an expert at analyzing image-generation prompts. Given one English prompt, split it into four parts (output ONLY a valid JSON object, no markdown):
-- "subject": the main object, character, or scene being depicted (what to draw). Keep the core description here.
-- "scene": setting/background (e.g. studio, outdoors, neutral grey background, in a room).
-- "style": artistic or technical style (e.g. concept art, cinematic, PBR, photorealistic, orthographic, game asset, model sheet, in the style of X).
-- "modifiers": camera/lighting/quality terms (e.g. close-up, 4k, HDR, sharp, detailed).
-
-Use empty string "" for any part that is absent. Preserve original wording; do not translate. Output ONLY the JSON object with keys subject, scene, style, modifiers.`,
-  /** 工作流能力：根据图片识别主体描述（变量部分），用于与固定提示词拼接后生图 */
+/** 工作流能力：根据图片识别主体描述（变量部分），用于与固定提示词拼接后生图 */
   describe_subject: `Look at this image. Output ONLY a short English phrase describing the main subject or object in the image (what the image shows as the primary focus: object type, shape, posture, key visual traits). Do NOT include style, background, lighting, or quality terms. One line only, no period at the end. Example: "a ceramic vase with floral pattern" or "a character in armor holding a sword".`
 };
 
@@ -1980,19 +1951,6 @@ Use empty string "" for any part that is absent. Preserve original wording; do n
 export function getEditPrompt(instruction: string, customTemplate?: string): string {
   const template = customTemplate || DEFAULT_PROMPTS.edit;
   return template.replace(/\{instruction\}/g, instruction);
-}
-
-/** 提取花纹：收口函数，返回实际使用的完整 prompt；业务代码不直接拼字符串。 */
-export function getTexturePrompt(
-  type: 'pattern' | 'tileable' | 'pbr',
-  mapType = '',
-  customTemplates?: { pattern?: string; tileable?: string; pbr?: string }
-): string {
-  let t =
-    customTemplates?.[type] ||
-    (type === 'pattern' ? DEFAULT_PROMPTS.texture_pattern : type === 'tileable' ? DEFAULT_PROMPTS.texture_tileable : DEFAULT_PROMPTS.texture_pbr);
-  if (type === 'pbr') t = t.replace(/\{mapType\}/g, mapType);
-  return t;
 }
 
 function errorStringForRetry(err: unknown): string {
@@ -2675,39 +2633,6 @@ export async function describeImageSubject(
   return text;
 }
 
-export async function processTexture(base64Image, type: 'pattern' | 'tileable' | 'pbr', mapType = '', model = 'gemini-2.5-flash-image', customPrompt?: string, options?: GeminiRequestOptions) {
-  // 贴图生成属于高成本/可能计费请求，失败后不自动重放，避免重复生成。
-  return callWithRetry(async (signal) => {
-    const ai = getAIForImageModel(model);
-    let prompt = customPrompt || '';
-    
-    if (type === 'pattern') prompt = prompt || DEFAULT_PROMPTS.texture_pattern;
-    if (type === 'tileable') prompt = prompt || DEFAULT_PROMPTS.texture_tileable;
-    if (type === 'pbr') prompt = (prompt || DEFAULT_PROMPTS.texture_pbr).replace('{mapType}', mapType);
-
-    const timeoutMs = options?.timeoutMs ?? GEMINI_IMAGE_REQUEST_TIMEOUT_MS;
-    const imageModel = resolveUpstreamImageModelIdForRegistry(model);
-    const response = await ai.models.generateContent({
-      model: imageModel,
-      contents: [
-        {
-          role: 'user' as const,
-          parts: [
-            { inlineData: { mimeType: 'image/jpeg', data: base64Image.split(',')[1] || base64Image } },
-            { text: prompt },
-          ],
-        },
-      ],
-      config: buildGeminiConfig({}, signal, timeoutMs, model)
-    });
-
-    for (const part of response.candidates?.[0]?.content?.parts || []) {
-      if (part.inlineData) return `data:image/png;base64,${part.inlineData.data}`;
-    }
-    throw new Error(`Texture processing (${type}) failed`);
-  }, { ...options, timeoutMs: options?.timeoutMs ?? GEMINI_IMAGE_REQUEST_TIMEOUT_MS, retries: 0 });
-}
-
 // ---------- 对话式生图模块 ----------
 
 /**
@@ -2878,76 +2803,6 @@ export async function dialogGenerateImage(
   });
 }
 
-/**
- * 单次请求多图：与 dialogGenerateImage 同一请求体，但解析响应中所有 inlineData 返回 string[]。
- * 当 API 支持单次多图时一次可返回多张；否则通常为 1 张。用于批量出图执行器按批请求。
- */
-export async function dialogGenerateImages(
-  imageBase64: string | null,
-  instruction: string,
-  _numImages = 1,
-  model = 'gemini-2.5-flash-image',
-  options?: { aspectRatio?: string; imageSize?: string },
-  customSystemPrompt?: string,
-  abortSignal?: AbortSignal,
-  requestOptions?: Omit<GeminiRequestOptions, 'abortSignal'>
-): Promise<string[]> {
-  const baseTimeout = requestOptions?.timeoutMs ?? GEMINI_IMAGE_REQUEST_TIMEOUT_MS;
-  const useBulkImageQueue = shouldUseBulkImageBatchQueueForModel(model);
-  const controlTimeoutMs = effectiveImageGenControlTimeoutMs(baseTimeout, useBulkImageQueue, model);
-  return callWithRetry(async (signal) => {
-    const ai = getAIForImageModel(model);
-    const isTextToImage = !imageBase64;
-    const systemInstruction = (customSystemPrompt || (isTextToImage ? DEFAULT_PROMPTS.dialog_text_to_image : DEFAULT_PROMPTS.edit)).replace('{instruction}', instruction);
-    const timeoutMs = imageGenTimeoutMsForModel(model, baseTimeout);
-    const config: { systemInstruction: string; imageConfig?: { aspectRatio?: string; imageSize?: string } } = {
-      systemInstruction
-    };
-    if (options?.aspectRatio || options?.imageSize) {
-      config.imageConfig = {};
-      if (options.aspectRatio) config.imageConfig.aspectRatio = options.aspectRatio;
-      if (options.imageSize) config.imageConfig.imageSize = options.imageSize;
-    }
-    const sourceImage = imageBase64 || "";
-    const inlineImage = !isTextToImage ? await prepareInlineImageData(sourceImage) : null;
-    const parts: Array<{ text: string } | { inlineData: { mimeType: string; data: string } }> = isTextToImage
-      ? [{ text: instruction }]
-      : [
-          { inlineData: inlineImage! },
-          { text: instruction }
-        ];
-    if (!isTextToImage) {
-      const first = parts[0] as { inlineData?: { mimeType: string; data: string } };
-      if (!first.inlineData?.data) {
-        throw new Error(buildDiagMessage("INPUT_IMAGE_EMPTY", "输入图片为空或 base64 无效"));
-      }
-    }
-    const resolvedImageModel = resolveUpstreamImageModelIdForRegistry(model);
-    const response = await ai.models.generateContent({
-      model: resolvedImageModel,
-      contents: [{ role: 'user' as const, parts }],
-      config: buildGeminiConfig(config, signal, timeoutMs, model)
-    });
-    const out = collectInlineImagesFromGeminiResponse(response);
-    if (out.length === 0) {
-      const textPart = response.candidates?.[0]?.content?.parts?.find((p: { text?: string }) => p.text);
-      const hint = textPart?.text?.slice(0, 120) ? `（模型返回了文字: ${String(textPart.text).slice(0, 120)}…）` : '（当前模型可能不支持图像输出）';
-      throw new Error(buildDiagMessage("NO_INLINE_IMAGE_FOUND", `生图未返回图片${hint}`));
-    }
-    return out;
-  }, {
-    ...requestOptions,
-    abortSignal,
-    timeoutMs: controlTimeoutMs,
-    requestPhase: requestOptions?.requestPhase ?? '生图',
-    retries: requestOptions?.retries ?? IMAGE_GEN_RETRIES_ON_OVERLOAD,
-    retryDelayMs: requestOptions?.retryDelayMs ?? IMAGE_GEN_RETRY_DELAY_MS,
-  });
-}
-
-/**
- * 多图 + 提示词生图：将多张参考图与一条指令一起发给模型，生成最终图（用于能力集合中多分支汇聚到生图模型）。
- */
 export async function dialogGenerateImageMulti(
   imagesBase64: string[],
   instruction: string,
@@ -3004,41 +2859,6 @@ export async function dialogGenerateImageMulti(
   });
 }
 
-/**
- * 根据用户首条描述（及可选图片）生成简短会话标题，优先以物体/主体命名。
- * @param imageBase64 可选；有图时结合画面内容命名（如「大门」「人物」）
- */
-export async function generateSessionTitle(
-  userText: string,
-  model = DEFAULT_MODEL_TEXT,
-  customPrompt?: string,
-  imageBase64?: string | null,
-  options?: GeminiRequestOptions
-): Promise<string> {
-  const text = (userText || '').trim().slice(0, 200);
-  if (!text && !imageBase64) return '';
-  const prompt = (customPrompt || DEFAULT_PROMPTS.dialog_title) + (text ? '\n\n用户描述：' + text : '\n\n请根据图片内容命名。');
-  const parts: Array<{ text: string } | { inlineData: { mimeType: string; data: string } }> = [{ text: prompt }];
-  if (imageBase64) {
-    const data = imageBase64.split(',')[1] || imageBase64;
-    parts.unshift({ inlineData: { mimeType: 'image/jpeg', data } });
-  }
-  const resolvedModel = resolveUpstreamTextModelId(model);
-  const raw = await callWithRetry(async (signal) => {
-    const ai = getAI();
-    const response = await ai.models.generateContent({
-      model: resolvedModel,
-      contents: [{ role: 'user' as const, parts }],
-      config: buildGeminiConfig({}, signal, options?.timeoutMs ?? GEMINI_REQUEST_TIMEOUT_MS, model)
-    });
-    const out = response.text?.trim();
-    if (!out) throw new Error('Empty title response');
-    return out;
-  }, options);
-  return (raw || '').replace(/["""'']/g, '').trim().slice(0, 8);
-}
-
-/** 纯文字对话：根据历史消息 + 新用户消息，返回助手文本回复 */
 export async function getDialogTextResponse(
   contents: Array<{ role: 'user' | 'model'; parts: Array<{ text: string } | { inlineData: { mimeType: string; data: string } }> }>,
   model = DEFAULT_MODEL_TEXT,
@@ -3079,8 +2899,8 @@ export async function getDialogTextResponse(
 }
 
 const SITE_ASSISTANT_SYSTEM = `You are the in-app assistant for AssetCutter AI Pro, a web app for intelligent asset production. You help users with:
-- How to use features: 对话 (upload image + describe → AI generates image), 贴图 (pattern extract / seam repair / PBR texture generation), 生成3D (Tencent Hunyuan 3D, not yet launched), 仓库 (asset library), 工作流, 能力, 提示词效果 / 提示词擂台.
-- Troubleshooting: e.g. "贴图修缝" needs Python backend or Pyodide; 对话/提取花纹/生成贴图 need Gemini API Key saved in Settings.
+- How to use features: 工作流 (compose / generate), 贴图修缝 / 生成贴图, 生成3D, 能力预设, 提示词擂台, 设置.
+- Troubleshooting: e.g. "贴图修缝" needs Python backend or Pyodide; 生成贴图 / 工作流生图 need Gemini API Key saved in Settings.
 - Other questions about the product. Reply in the same language as the user. Be concise and helpful.`;
 
 /** 网站助手：根据用户提问 + 可选历史对话，返回助手回复（带系统角色） */
@@ -3361,47 +3181,6 @@ export async function generateNewChallenger(
   }
 }
 
-/** 结构化复现：用 LLM 将生图提示词解析为主体/场景/风格/修饰。见 PROMPT_SCORING_DESIGN §6.1 */
-export async function parsePromptStructured(
-  prompt: string,
-  model = DEFAULT_MODEL_TEXT,
-  options?: GeminiRequestOptions
-): Promise<{ subject: string; scene: string; style: string; modifiers: string }> {
-  const resolvedModel = resolveUpstreamTextModelId(model);
-  const raw = await callWithRetry(async (signal) => {
-    const ai = getAI();
-    const response = await ai.models.generateContent({
-      model: resolvedModel,
-      contents: [
-        {
-          role: 'user' as const,
-          parts: [
-            { text: DEFAULT_PROMPTS.parse_structured },
-            { text: `Prompt to analyze:\n${(prompt || '').trim().slice(0, 3000)}` },
-          ],
-        },
-      ],
-      config: buildGeminiConfig({ responseMimeType: 'application/json' }, signal, options?.timeoutMs ?? GEMINI_REQUEST_TIMEOUT_MS, model)
-    });
-    const text = response.text?.trim();
-    if (!text) throw new Error('Empty parse structured response');
-    return text;
-  }, options);
-  try {
-    const cleaned = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
-    const obj = JSON.parse(cleaned);
-    return {
-      subject: typeof obj.subject === 'string' ? obj.subject.trim() : '',
-      scene: typeof obj.scene === 'string' ? obj.scene.trim() : '',
-      style: typeof obj.style === 'string' ? obj.style.trim() : '',
-      modifiers: typeof obj.modifiers === 'string' ? obj.modifiers.trim() : ''
-    };
-  } catch (e) {
-    throw new Error('Failed to parse structured prompt: ' + String(e));
-  }
-}
-
-/** 将英文/混合文本翻译为简体中文（保留原有结构与项目符号） */
 export async function translateToChinese(
   text: string,
   model = DEFAULT_MODEL_TEXT,

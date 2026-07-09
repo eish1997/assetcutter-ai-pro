@@ -62,7 +62,7 @@ export type WorkflowSpaceMarqueeChromeProps = {
   listPaneRef: React.RefObject<HTMLElement | null>;
   /** 快捷栏对话侧栏：框选暗区不覆盖、不拦截点击 */
   sidebarExcludeRef?: React.RefObject<HTMLElement | null>;
-  /** 卷轴 pane 变化时需重算列表在视口中的位置 */
+  /** 小盒子页切换时需重算列表在视口中的位置 */
   workspacePane: number;
   /** 在暗区或列表区内按下以开始框选 */
   onMarqueePointerDown: (

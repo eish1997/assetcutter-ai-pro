@@ -4,7 +4,7 @@
  * **分层**
  * - `sessionStorage`：仅当前标签页；可丢、偏临时（如瀑布卡片比例缓存）。
  * - `localStorage`：设备级偏好与缓存；**按账号隔离**时用 `scopedStorageKey`（`…__guest` / `…__u_${scope}`）。
- * - **工作区画布 / 项目 / 对话**：业务编排仍在 `workspaceProjectStore`、`dialogSessionStore` 等模块；其对 local 的读写须经本文件的 API（含 `writeLocalStringOrThrow` 等），云同步另见 `workspaceCloudSync`。
+ * - **工作区画布 / 项目**：业务编排仍在 `workspaceProjectStore` 等模块；其对 local 的读写须经本文件的 API（含 `writeLocalStringOrThrow` 等），云同步另见 `workspaceCloudSync`。
  *
  * **约定**
  * - 所有读写经本模块的 safe 包装（try/catch、无 window 时短路）。

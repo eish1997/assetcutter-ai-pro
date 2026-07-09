@@ -55,7 +55,6 @@ const STORAGE_KEY_OPENAI_BASE_URL = 'ac_openai_base_url';
 const STORAGE_KEY_VECTORENGINE_API_KEY = 'ac_vectorengine_api_key';
 const STORAGE_KEY_VECTORENGINE_BASE_URL = 'ac_vectorengine_base_url';
 const STORAGE_KEY_TRIPO_API_KEY = 'ac_tripo_api_key';
-const STORAGE_KEY_DIALOG_SKIP_UNDERSTAND = 'ac_dialog_skip_understand';
 const STORAGE_KEY_WORKSPACE_AUTO_SYNC = 'ac_workspace_auto_sync';
 const STORAGE_KEY_DEBUG_CLIENT_LOG_PERSIST = 'ac_debug_client_log_persist';
 
@@ -354,15 +353,6 @@ export function isAiInvocationReady(): boolean {
     return enabledChannels.some((ch) => isChannelReady(ch));
   }
   return bulkImageProxyConfigured() || Boolean(getUserApiKey()?.trim());
-}
-
-/** 对话生图：是否跳过“理解意图”步骤，直接使用用户提示词调用生图模型 */
-export function getDialogSkipUnderstand(): boolean {
-  return readLocalFlag(STORAGE_KEY_DIALOG_SKIP_UNDERSTAND);
-}
-
-export function setDialogSkipUnderstand(value: boolean): void {
-  writeLocalFlag(STORAGE_KEY_DIALOG_SKIP_UNDERSTAND, value);
 }
 
 /** 工作区：是否启用自动云同步（默认开启） */

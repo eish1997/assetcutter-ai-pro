@@ -25,7 +25,6 @@ export type WorkspaceUserCloudConfig = {
   capabilityPresetRecords?: CapabilityCloudRecord<CustomAppModule>[];
   capabilitySetRecords?: CapabilityCloudRecord<CapabilitySet>[];
   settings: {
-    dialogSkipUnderstand: boolean;
     workspaceAutoSyncEnabled: boolean;
     enabledChannels: ChannelId[];
     geminiApiKey: string;
@@ -245,7 +244,6 @@ export async function fetchWorkspaceUserCloudConfig(
           ? setRecordsFromCloud
           : capabilitySets.map((s) => ({ id: s.id, updatedAt: fallbackUpdatedAt, value: s })),
       settings: {
-        dialogSkipUnderstand: parsed.settings?.dialogSkipUnderstand === true,
         workspaceAutoSyncEnabled: parsed.settings?.workspaceAutoSyncEnabled !== false,
         enabledChannels: resolveEnabledChannelsFromCloud(parsed.settings?.enabledChannels),
         geminiApiKey: String(parsed.settings?.geminiApiKey || ''),
@@ -285,7 +283,6 @@ export async function pushWorkspaceUserCloudConfig(
     ),
     capabilitySetRecords: normalizeRecords<CapabilitySet>(input.capabilitySetRecords, Date.now()),
     settings: {
-      dialogSkipUnderstand: input.settings.dialogSkipUnderstand === true,
       workspaceAutoSyncEnabled: input.settings.workspaceAutoSyncEnabled !== false,
       enabledChannels: resolveEnabledChannelsFromCloud(input.settings.enabledChannels),
       geminiApiKey: String(input.settings.geminiApiKey || ''),

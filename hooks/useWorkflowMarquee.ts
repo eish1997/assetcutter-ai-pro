@@ -292,8 +292,8 @@ export function useWorkflowMarquee({
   const handleMarqueeMouseDown = useCallback(
     (e: ReactMouseEvent) => {
       if (spaceMarqueeEnabled) return;
-      const pn = Math.round(workspacePane);
-      if (pn !== 0 && pn !== 1) return;
+      /** 仅资产列表页（小盒子 pane=0）可框选；预设页不框选 */
+      if (Math.round(workspacePane) !== 0) return;
       if (showArchived) return;
       if ((e.target as Element).closest('[data-workflow-toolbar]')) return;
       if ((e.target as Element).closest('[data-workflow-card]')) return;
@@ -303,7 +303,7 @@ export function useWorkflowMarquee({
       if ((e.target as Element).closest('[data-workflow-sidebar], [data-workflow-preset], [data-workflow-outline]')) return;
       e.preventDefault();
       e.stopPropagation();
-      startMarqueeDrag(e.clientX, e.clientY, pn);
+      startMarqueeDrag(e.clientX, e.clientY, 0);
     },
     [showArchived, spaceMarqueeEnabled, startMarqueeDrag, workspacePane]
   );
@@ -317,7 +317,8 @@ export function useWorkflowMarquee({
   const beginSpaceMarqueePointerDrag = useCallback(
     (clientX: number, clientY: number, pointerId: number, captureEl: HTMLElement) => {
       if (showArchived) return;
-      startMarqueeDrag(clientX, clientY, Math.round(workspacePane), {
+      if (Math.round(workspacePane) !== 0) return;
+      startMarqueeDrag(clientX, clientY, 0, {
         el: captureEl,
         pointerId,
       });

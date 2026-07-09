@@ -21,21 +21,18 @@ import {
   CAPABILITY_UNDERSTAND_RETRY_OPTIONS,
   dialogGenerateImage as dialogGenerateImageRaw,
   dialogGenerateImageMulti as dialogGenerateImageMultiRaw,
-  dialogGenerateImages as dialogGenerateImagesRaw,
   getDialogTextResponse as getDialogTextResponseRaw,
   understandImageEditIntent as understandImageEditIntentRaw,
   getSiteAssistantResponse as getSiteAssistantResponseRaw,
   getSiteAssistantResponseStream as getSiteAssistantResponseStreamRaw,
   detectObjectsInImage as detectObjectsInImageRaw,
   describeImageSubject as describeImageSubjectRaw,
-  processTexture as processTextureRaw,
   generatePBRTexture as generatePBRTextureRaw,
   generateArenaABPrompts as generateArenaABPromptsRaw,
   generateArenaPrompts as generateArenaPromptsRaw,
   optimizeLoserPrompt as optimizeLoserPromptRaw,
   generateNewChallenger as generateNewChallengerRaw,
   translateToChinese as translateToChineseRaw,
-  generateSessionTitle as generateSessionTitleRaw,
   analyzeStoryboardSheetStructureInImage as analyzeStoryboardSheetStructureInImageRaw,
   type GeminiImageBatchGroupOptions,
   type GeminiRequestOptions,
@@ -233,8 +230,6 @@ export {
   DEFAULT_PROMPTS,
   normalizeApiErrorMessage,
   getGeminiImageBatchBoxSizeForCurrentProvider,
-  getTexturePrompt,
-  parsePromptStructured,
   buildStoryboardSheetStructureAnalysisPrompt,
   getEditPrompt,
   withGeminiRequestControl,
@@ -448,22 +443,6 @@ export async function describeImageSubject(
   );
 }
 
-/** @kind workflow_image_edit — 贴图处理（经 gate） */
-export async function processTexture(
-  base64Image: Parameters<typeof processTextureRaw>[0],
-  type: Parameters<typeof processTextureRaw>[1],
-  mapType?: Parameters<typeof processTextureRaw>[2],
-  model?: Parameters<typeof processTextureRaw>[3],
-  customPrompt?: Parameters<typeof processTextureRaw>[4],
-  options?: Parameters<typeof processTextureRaw>[5]
-): ReturnType<typeof processTextureRaw> {
-  const resolvedModel = model != null && model !== "" ? String(model) : "gemini-2.5-flash-image";
-  return runMeteredAiCall(
-    { kind: "workflow_image_edit", registryId: resolvedModel, role: "image", debugFields: () => ({ registryId: resolvedModel }) },
-    () => processTextureRaw(base64Image, type, mapType, model, customPrompt, options)
-  );
-}
-
 /** @kind workflow_image_edit — PBR 贴图生成（经 gate） */
 export async function generatePBRTexture(
   functionalMaps: Parameters<typeof generatePBRTextureRaw>[0],
@@ -537,30 +516,6 @@ export async function translateToChinese(
   return runMeteredAiCall(
     { kind: "workflow_chat", registryId: resolvedModel, role: "text", debugFields: () => ({ registryId: resolvedModel }) },
     () => translateToChineseRaw(...args)
-  );
-}
-
-/** @kind workflow_chat — 会话标题（经 gate） */
-export async function generateSessionTitle(
-  ...args: Parameters<typeof generateSessionTitleRaw>
-): ReturnType<typeof generateSessionTitleRaw> {
-  const model = args[1];
-  const resolvedModel = model != null && model !== "" ? String(model) : undefined;
-  return runMeteredAiCall(
-    { kind: "workflow_chat", registryId: resolvedModel, role: "text", debugFields: () => ({ registryId: resolvedModel }) },
-    () => generateSessionTitleRaw(...args)
-  );
-}
-
-/** @kind workflow_text_to_image — 对话批量生图（经 gate） */
-export async function dialogGenerateImages(
-  ...args: Parameters<typeof dialogGenerateImagesRaw>
-): ReturnType<typeof dialogGenerateImagesRaw> {
-  const model = args[3];
-  const resolvedModel = model != null && model !== "" ? String(model) : undefined;
-  return runMeteredAiCall(
-    { kind: "workflow_text_to_image", registryId: resolvedModel, role: "image", debugFields: () => ({ registryId: resolvedModel }) },
-    () => dialogGenerateImagesRaw(...args)
   );
 }
 

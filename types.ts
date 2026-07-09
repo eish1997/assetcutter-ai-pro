@@ -15,11 +15,8 @@ export { PLAN_SCHEMA_VERSION } from './types/planner';
 
 export const AppMode = {
   LAB: 'LAB',
-  TEXTURE: 'TEXTURE',
   LIBRARY: 'LIBRARY',
-  DIALOG: 'DIALOG',
   GENERATE_3D: 'GENERATE_3D',
-  ADMIN: 'ADMIN',
   /** 提示词擂台：快速 A/B 对比测试 + 获胜片段库 */
   ARENA: 'ARENA',
   /** 商店：远程模板包（GitHub Pages）安装/更新/回滚 */
@@ -97,14 +94,6 @@ export type StoreCatalogItem = {
   minAppVersion?: string;
 };
 
-export const AppStep = {
-  T_PATTERN: 'T_PATTERN',
-  T_TILE: 'T_TILE',
-  T_PBR: 'T_PBR'
-} as const;
-
-export type AppStep = keyof typeof AppStep;
-
 export type BoundingBox = {
   id: string;
   label: string;
@@ -177,7 +166,7 @@ export type TaskStatus = 'PENDING' | 'RUNNING' | 'SUCCESS' | 'FAILED';
 
 export type AppTask = {
   id: string;
-  type: 'TEXTURE_GEN' | 'DIALOG_GEN' | 'GENERATE_3D';
+  type: 'DIALOG_GEN' | 'GENERATE_3D';
   label: string;
   status: TaskStatus;
   progress: number;
@@ -193,46 +182,11 @@ export type SystemConfig = {
   modelPro: string;
   customPromptSuffix: string;
   prompts: {
-    /** 对话生图编辑指令用（经 unifiedAiGateway / dialogGenerateImage） */
+    /** 生图编辑指令用（经 unifiedAiGateway / dialogGenerateImage，擂台等） */
     edit?: string;
-    texture_pattern: string;
-    texture_tileable: string;
-    texture_pbr: string;
-    dialog_understand: string;
   };
 };
 
-// ---------- 生成记录与评分（ac_generation_records，仅通过 recordStore 读写） ----------
-/** 生成来源：对话生图 / 提取花纹 */
-export type GenerationSource = 'dialog' | 'texture';
-
-/** 输出图引用，可扩展（一期：libraryId 或 dialogRef；二期可增加 url、thumbnail 等） */
-export type OutputImageRef = string | { type: string; value: string };
-
-export type GenerationRecord = {
-  id: string;
-  source: GenerationSource;
-  timestamp: number;
-  fullPrompt: string;
-  instruction?: string;
-  userPrompt?: string;
-  textureType?: 'pattern' | 'tileable' | 'pbr';
-  textureMapType?: string;
-  inputImageRef?: string;
-  outputImageRef: OutputImageRef;
-  libraryItemId?: string;
-  model?: string;
-  options?: Record<string, string>;
-  sessionId: string;
-  messageId: string;
-  versionIndex: number;
-  userScore?: number;
-  userScoreAt?: number;
-  modelScore?: number;
-  modelScoreReason?: string;
-};
-
-// ---------- 对话式生图模块 ----------
 /** 支持的画面比例（Gemini imageConfig.aspectRatio） */
 export const SUPPORTED_ASPECT_RATIOS = [
   { value: '1:1', label: '1:1' },
@@ -245,12 +199,6 @@ export const SUPPORTED_ASPECT_RATIOS = [
   { value: '21:9', label: '21:9' },
 ] as const;
 
-/** 对话生图：比例选项（「自适应」= 不传 aspectRatio/imageSize，由输入图与模型决定） */
-export const DIALOG_ASPECT_RATIO_OPTIONS = [
-  { value: 'adaptive', label: '自适应' },
-  ...SUPPORTED_ASPECT_RATIOS,
-] as const;
-
 /** 支持的输出尺寸（Gemini imageConfig.imageSize） */
 export const SUPPORTED_IMAGE_SIZES = [
   { value: '1K', label: '1K' },
@@ -258,68 +206,7 @@ export const SUPPORTED_IMAGE_SIZES = [
   { value: '4K', label: '4K' },
 ] as const;
 
-/** 单次生成结果的版本（含元数据） */
-export type DialogMessageVersion = {
-  /** 内存或本地未上传时存在；已上传 R2 后持久化可仅存 key，加载时再 hydrate */
-  resultImageBase64?: string;
-  /** 登录且云同步时上传至 R2 的对象键（users/…/dialogs/…） */
-  resultImageObjectKey?: string;
-  understoodPrompt?: string;
-  timestamp: number;
-  width?: number;
-  height?: number;
-  /** 该版本识别到的物体框，切换版本不丢失 */
-  detectedBoxes?: BoundingBox[];
-  /** 关联的生成记录 id，用于评分时 O(1) 更新 */
-  generationRecordId?: string;
-};
-
-/** 单条对话会话（多标签页用） */
-export type DialogSession = {
-  id: string;
-  messages: DialogMessage[];
-  /** 根据首条用户内容自动生成的简短标题，如「大门」「星空背景」 */
-  title?: string;
-  createdAt: number;
-  updatedAt: number;
-  /** 是否已归档（归档后归入「已归档」区，可折叠） */
-  archived?: boolean;
-};
-
-export type DialogMessage = {
-  id: string;
-  role: 'user' | 'assistant';
-  text: string;
-  imageBase64?: string;
-  /** 当前用户消息附带的多张输入图，首图仍兼容写入 imageBase64 */
-  inputImages?: string[];
-  /** @deprecated 使用 versions 最后一版；兼容旧数据 */
-  resultImageBase64?: string;
-  /** @deprecated 使用 versions 最后一版；兼容旧数据 */
-  resultImageObjectKey?: string;
-  /** @deprecated 使用 versions 最后一版；兼容旧数据 */
-  understoodPrompt?: string;
-  timestamp: number;
-  /** 生成结果版本历史，最新在末尾 */
-  versions?: DialogMessageVersion[];
-};
-
-/** 对话临时库单项：生图结果或识别物体裁剪图，随会话删除而清理；可带提示词便于加入当前输入 */
-export type DialogTempItem = {
-  id: string;
-  data: string;
-  sourceSessionId: string;
-  sourceMessageId?: string;
-  sourceType: 'generated' | 'object_crop' | 'user_input';
-  label?: string;
-  /** 用户当条描述（生图时），用于「加入当前对话」回填输入框 */
-  userPrompt?: string;
-  /** 理解后的英文指令（生图时），用于「加入当前对话」回填 */
-  understoodPrompt?: string;
-  timestamp: number;
-};
-
-/** 对话生图模型列表 / 参考图上限 — 源自 `services/modelRegistry/imageModels.ts`（单一数据源） */
+/** 生图模型列表 / 参考图上限 — 源自 `services/modelRegistry/imageModels.ts`（单一数据源） */
 export {
   DIALOG_IMAGE_GEARS,
   DIALOG_IMAGE_MODEL_MAX_REFERENCE_IMAGES,

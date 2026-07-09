@@ -4,7 +4,6 @@ import {
   workflowChat,
   createTripoTask,
   getDialogTextResponse,
-  processTexture,
   detectObjectsInImage,
   DEFAULT_PROMPTS,
   WorkflowVideoNotAvailableError,
@@ -30,7 +29,6 @@ describe("unifiedAiGateway", () => {
 
   it("exports metered dialog wrappers", () => {
     expect(typeof getDialogTextResponse).toBe("function");
-    expect(typeof processTexture).toBe("function");
     expect(typeof detectObjectsInImage).toBe("function");
   });
 

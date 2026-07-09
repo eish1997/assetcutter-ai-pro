@@ -38,7 +38,6 @@ export const GLOBAL_LOG_MODULE_ORDER = [
   '工作区',
   '能力',
   '生成3D',
-  '提取花纹',
   '贴图修缝',
   '生成贴图',
   'AI代理',

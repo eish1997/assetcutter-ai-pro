@@ -30,6 +30,7 @@ import {
   TITLE_ROW_STEPPER_SHELL,
   TITLE_ROW_STEPPER_VALUE,
   TITLE_ROW_STEPPER_BTN,
+  WORKFLOW_EDGE_GUTTER,
 } from './workflow/workflowSectionUiConstants';
 import { uuid } from './workflow/workflowIds';
 import TencentGenerate3DPresetFields from './capability/TencentGenerate3DPresetFields';
@@ -58,11 +59,19 @@ import { CustomDropdown, DROPDOWN_TRIGGER_COMPACT } from './ui/CustomDropdown';
 import { CapabilityPresetTagsEditor } from './ui/CapabilityPresetTagsEditor';
 import AppIcon from './ui/AppIcon';
 import { useEffectiveImageModelRows } from '../hooks/useEffectiveImageGearRows';
+import { useWorkflowJustifiedLayout } from '../hooks/useWorkflowJustifiedLayout';
+import {
+  WORKFLOW_ASSET_GRID_GAP_PX,
+  workflowJustifiedTargetRowHeight,
+} from '../services/workflowJustifiedLayout';
 
 const CAPABILITY_SETS_VERSION = 1;
 const CAPABILITY_PRESET_COLUMNS_KEY = 'ac_capability_preset_columns_v1';
 const CAPABILITY_PRESET_COLUMNS_MIN = 2;
 const CAPABILITY_PRESET_COLUMNS_MAX = 6;
+/** 文生文 / 无预览占位卡的默认宽高比（与资产文字卡观感接近） */
+const PRESET_TEXT_CARD_ASPECT = 1.55;
+const PRESET_SET_CARD_ASPECT = 1.2;
 const DRAG_SCROLL_EDGE_PX = 64;
 const DRAG_SCROLL_MAX_STEP_PX = 24;
 
@@ -178,11 +187,13 @@ const CapabilityPresetSection: React.FC<{
       typeof parsed === 'number' ? normalizeCapabilityPresetColumnCount(parsed) : null
     )
   );
-  /** 与工作区顶栏步进器同一套列数；过窄时可拖宽能力预设列或调低列数 */
-  const presetMasonryColumnCount = useMemo(
-    () => normalizeCapabilityPresetColumnCount(presetColumnCount),
+  /** 与工作区顶栏步进器同一套列数 → justified 目标行高（与资产列表同算法） */
+  const presetJustifiedTargetRowHeight = useMemo(
+    () => workflowJustifiedTargetRowHeight(normalizeCapabilityPresetColumnCount(presetColumnCount)),
     [presetColumnCount]
   );
+  const presetGridRef = useRef<HTMLDivElement>(null);
+  const setGridRef = useRef<HTMLDivElement>(null);
   const sidebarLinkHoverPresetIdSet = useMemo(() => {
     if (!embeddedInWorkflow || !sidebarLinkHoverPresetIds?.length) return null;
     return new Set(sidebarLinkHoverPresetIds);
@@ -1291,6 +1302,34 @@ const CapabilityPresetSection: React.FC<{
     return sets.filter((s) => keywordsMatchCapabilityLabelId(composeSearchKeywords, s.label, s.id));
   }, [sets, embeddedInWorkflow, composeSearchKeywords]);
 
+  const presetJustifiedLayoutItems = useMemo(
+    () =>
+      displayPresets.map((p) => ({
+        id: p.id,
+        aspectRatio:
+          p.category === 'text_to_text'
+            ? PRESET_TEXT_CARD_ASPECT
+            : cardAspectByPresetId[p.id] && cardAspectByPresetId[p.id]! > 0
+              ? cardAspectByPresetId[p.id]!
+              : 1,
+      })),
+    [displayPresets, cardAspectByPresetId]
+  );
+  const setJustifiedLayoutItems = useMemo(
+    () => displaySets.map((s) => ({ id: s.id, aspectRatio: PRESET_SET_CARD_ASPECT })),
+    [displaySets]
+  );
+  const presetJustifiedLayout = useWorkflowJustifiedLayout(presetJustifiedLayoutItems, presetGridRef, {
+    gap: WORKFLOW_ASSET_GRID_GAP_PX,
+    targetRowHeight: presetJustifiedTargetRowHeight,
+    remeasureKey: `${viewMode}:${displayPresets.length}:${presetColumnCount}`,
+  });
+  const setJustifiedLayout = useWorkflowJustifiedLayout(setJustifiedLayoutItems, setGridRef, {
+    gap: WORKFLOW_ASSET_GRID_GAP_PX,
+    targetRowHeight: presetJustifiedTargetRowHeight,
+    remeasureKey: `sets:${displaySets.length}:${presetColumnCount}`,
+  });
+
   const displayUninstalledPresetItems = useMemo(() => {
     if (composeSearchKeywords.length === 0) return effectiveUninstalledPresetItems;
     return effectiveUninstalledPresetItems.filter((rp) => presetMatchesComposeSearch(rp.preset));
@@ -1478,63 +1517,86 @@ const CapabilityPresetSection: React.FC<{
                 : '暂无可展示的能力集合。'}
             </div>
           ) : (
-            <div
-              className="[column-gap:0.75rem] [column-fill:_balance]"
-              style={{ columnCount: presetMasonryColumnCount }}
-            >
-              {displaySets.map((s) => (
-                <button
-                  type="button"
-                  key={s.id}
-                  ref={(el) => {
-                    setCardRefs.current[s.id] = el;
-                  }}
-                  onClick={() => openEditSet(s)}
-                  className={`inline-block align-top mb-3 w-full break-inside-avoid rounded-2xl bg-[#16161a] ring-1 ring-white/[0.07] overflow-hidden text-left hover:ring-blue-400/40 transition-colors group ${
-                    locatePulseSetId === s.id ? 'ac-capability-preset-locate ring-2 ring-blue-400/70' : ''
-                  }`}
-                >
-                  <div className="relative w-full bg-[#0f0f10] flex items-center justify-center min-h-[7rem]">
-                    <div className="h-full w-full flex flex-col items-center justify-center gap-1 text-gray-600">
-                      <AppIcon name="image" className="w-10 h-10 opacity-70" />
-                      <span className="text-[8px] font-black uppercase tracking-wide text-gray-500">能力集合</span>
-                    </div>
-                    <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 to-transparent p-2">
-                      <div className="text-[10px] font-black text-white break-words line-clamp-2 leading-tight">{s.label}</div>
-                      <div className="mt-1 flex items-center gap-1.5 flex-wrap">
-                        <span className="px-2 py-0.5 rounded text-[8px] font-black uppercase bg-[#26262c]/95 text-gray-300">
-                          组合流程
-                        </span>
-                        <span className="px-2 py-0.5 rounded text-[8px] font-black uppercase bg-[#1e3558]/95 text-blue-300">
-                          可复用
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-                  <div className="p-2 border-t border-[#2a2a32] bg-[#141418] flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        openEditSet(s);
-                      }}
-                      className="px-3 py-1.5 rounded-lg bg-[#26262c] text-[9px] font-black uppercase hover:bg-[#383842]"
+            <div className={`min-h-0 min-w-0 ${WORKFLOW_EDGE_GUTTER}`}>
+              <div
+                ref={setGridRef}
+                className={`relative w-full ${setJustifiedLayout.ready ? '' : 'opacity-0'}`}
+                style={{
+                  height: setJustifiedLayout.ready ? setJustifiedLayout.totalHeight : undefined,
+                  ['--wf-card-gap' as string]: `${WORKFLOW_ASSET_GRID_GAP_PX}px`,
+                }}
+              >
+                {displaySets.map((s) => {
+                  const layoutBox = setJustifiedLayout.boxById.get(s.id);
+                  return (
+                    <div
+                      key={s.id}
+                      className="absolute min-w-0"
+                      style={
+                        layoutBox
+                          ? {
+                              left: layoutBox.left,
+                              top: layoutBox.top,
+                              width: layoutBox.width,
+                              height: layoutBox.height,
+                            }
+                          : undefined
+                      }
                     >
-                      编辑
-                    </button>
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        removeSet(s.id);
-                      }}
-                      className="px-3 py-1.5 rounded-lg bg-[#4a1c1c] text-red-400 text-[9px] font-black uppercase hover:bg-[#5a2222]"
-                    >
-                      删除
-                    </button>
-                  </div>
-                </button>
-              ))}
+                      <button
+                        type="button"
+                        ref={(el) => {
+                          setCardRefs.current[s.id] = el;
+                        }}
+                        onClick={() => openEditSet(s)}
+                        className={`flex h-full w-full flex-col overflow-hidden rounded-2xl bg-[#16161a] ring-1 ring-white/[0.07] text-left hover:ring-blue-400/40 transition-colors group ${
+                          locatePulseSetId === s.id ? 'ac-capability-preset-locate ring-2 ring-blue-400/70' : ''
+                        }`}
+                      >
+                        <div className="relative min-h-0 flex-1 w-full bg-[#0f0f10] flex items-center justify-center">
+                          <div className="h-full w-full flex flex-col items-center justify-center gap-1 text-gray-600">
+                            <AppIcon name="image" className="w-10 h-10 opacity-70" />
+                            <span className="text-[8px] font-black uppercase tracking-wide text-gray-500">能力集合</span>
+                          </div>
+                          <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 to-transparent p-2">
+                            <div className="text-[10px] font-black text-white break-words line-clamp-2 leading-tight">{s.label}</div>
+                            <div className="mt-1 flex items-center gap-1.5 flex-wrap">
+                              <span className="px-2 py-0.5 rounded text-[8px] font-black uppercase bg-[#26262c]/95 text-gray-300">
+                                组合流程
+                              </span>
+                              <span className="px-2 py-0.5 rounded text-[8px] font-black uppercase bg-[#1e3558]/95 text-blue-300">
+                                可复用
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+                        <div className="shrink-0 p-2 border-t border-[#2a2a32] bg-[#141418] flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              openEditSet(s);
+                            }}
+                            className="px-3 py-1.5 rounded-lg bg-[#26262c] text-[9px] font-black uppercase hover:bg-[#383842]"
+                          >
+                            编辑
+                          </button>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              removeSet(s.id);
+                            }}
+                            className="px-3 py-1.5 rounded-lg bg-[#4a1c1c] text-red-400 text-[9px] font-black uppercase hover:bg-[#5a2222]"
+                          >
+                            删除
+                          </button>
+                        </div>
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
             </div>
           )}
         </div>
@@ -2056,10 +2118,15 @@ const CapabilityPresetSection: React.FC<{
           </div>
         ) : (
           <>
-            <div
-              className="[column-gap:0.75rem] [column-fill:_balance]"
-              style={{ columnCount: presetMasonryColumnCount }}
-            >
+            <div className={`min-h-0 min-w-0 ${WORKFLOW_EDGE_GUTTER}`}>
+              <div
+                ref={presetGridRef}
+                className={`relative w-full ${presetJustifiedLayout.ready ? '' : 'opacity-0'}`}
+                style={{
+                  height: presetJustifiedLayout.ready ? presetJustifiedLayout.totalHeight : undefined,
+                  ['--wf-card-gap' as string]: `${WORKFLOW_ASSET_GRID_GAP_PX}px`,
+                }}
+              >
               {displayPresets.map((p) => {
                 const src = getCardPreviewSrc(p);
                 const categoryLabel =
@@ -2074,9 +2141,23 @@ const CapabilityPresetSection: React.FC<{
                   !isDraggingThis &&
                   Boolean(sidebarLinkHoverPresetIdSet && !sidebarLinkHoverPresetIdSet.has(p.id));
                 const showCloudBadge = isCloudCapabilityPreset(p.id, cloudPresetIds);
+                const layoutBox = presetJustifiedLayout.boxById.get(p.id);
                 return (
-                  <button
+                  <div
                     key={p.id}
+                    className="absolute min-w-0"
+                    style={
+                      layoutBox
+                        ? {
+                            left: layoutBox.left,
+                            top: layoutBox.top,
+                            width: layoutBox.width,
+                            height: layoutBox.height,
+                          }
+                        : undefined
+                    }
+                  >
+                  <button
                     type="button"
                     draggable={embeddedInWorkflow}
                     onDragStart={
@@ -2121,7 +2202,7 @@ const CapabilityPresetSection: React.FC<{
                       if (!getGeneratedPreviewThumbSrc(p) || !getOriginalPreviewThumbSrc(p)) return;
                       setPreviewSplitRatio((prev) => ({ ...prev, [p.id]: 0.5 }));
                     }}
-                    className={`relative inline-block align-top mb-3 w-full break-inside-avoid rounded-2xl border bg-[#16161a] overflow-hidden text-left transition-[colors,opacity,filter] duration-150 group ${
+                    className={`relative flex h-full w-full flex-col overflow-hidden rounded-2xl border bg-[#16161a] text-left transition-[colors,opacity,filter] duration-150 group ${
                       locatePulsePresetId === p.id ? 'ac-capability-preset-locate ring-2 ring-blue-400/70 border-blue-400/50' : ''
                     } ${
                       draggingPresetId === p.id
@@ -2133,7 +2214,7 @@ const CapabilityPresetSection: React.FC<{
                   >
                     {showCloudBadge ? <CapabilityCloudBadge className="absolute top-1.5 right-1.5 z-[3]" /> : null}
                     {isTextToTextPreset ? (
-                      <div className="p-2.5 min-h-[4.5rem] flex flex-col justify-between gap-1.5">
+                      <div className="p-2.5 min-h-0 flex-1 flex flex-col justify-between gap-1.5">
                         <div className="text-[10px] font-black text-white break-words line-clamp-2 leading-tight">{p.label}</div>
                         <div className="flex items-center gap-1.5 flex-wrap">
                           <span className="px-2 py-0.5 rounded text-[8px] font-black uppercase bg-[#26262c]/95 text-gray-300">{categoryLabel}</span>
@@ -2143,10 +2224,7 @@ const CapabilityPresetSection: React.FC<{
                         </div>
                       </div>
                     ) : (
-                      <div
-                        className="relative w-full bg-[#0f0f10] flex justify-center"
-                        style={{ aspectRatio: `${cardAspectByPresetId[p.id] ?? 1}` }}
-                      >
+                      <div className="relative min-h-0 flex-1 w-full bg-[#0f0f10] flex justify-center overflow-hidden">
                         {(() => {
                           const originalThumb = getOriginalPreviewThumbSrc(p);
                           const generatedThumb = getGeneratedPreviewThumbSrc(p);
@@ -2165,13 +2243,13 @@ const CapabilityPresetSection: React.FC<{
                                 <CapabilityPreviewImg
                                   src={originalThumb}
                                   alt=""
-                                  className="absolute inset-0 h-full w-full min-h-[5rem] object-contain"
+                                  className="absolute inset-0 h-full w-full object-cover"
                                   onIntrinsicSize={(w, h) => onPresetCardIntrinsicSize(p.id, w, h)}
                                 />
                                 <CapabilityPreviewImg
                                   src={generatedThumb}
                                   alt=""
-                                  className="absolute inset-0 h-full w-full min-h-[5rem] object-contain"
+                                  className="absolute inset-0 h-full w-full object-cover"
                                   onIntrinsicSize={(w, h) => onPresetCardIntrinsicSize(p.id, w, h)}
                                   style={{ clipPath: `polygon(${topCut}% 0%, 100% 0%, 100% 100%, ${bottomCut}% 100%)` }}
                                 />
@@ -2191,13 +2269,13 @@ const CapabilityPresetSection: React.FC<{
                               <CapabilityPreviewImg
                                 src={src}
                                 alt=""
-                                className="h-full w-full min-h-[5rem] object-contain"
+                                className="h-full w-full object-cover"
                                 onIntrinsicSize={(w, h) => onPresetCardIntrinsicSize(p.id, w, h)}
                               />
                             );
                           }
                           return (
-                            <div className="h-full min-h-[5rem] w-full flex flex-col items-center justify-center gap-1 text-gray-600">
+                            <div className="h-full w-full flex flex-col items-center justify-center gap-1 text-gray-600">
                               <AppIcon name={iconName} className="w-10 h-10 opacity-75" />
                               <span className="text-[8px] font-black uppercase tracking-wide text-gray-500">预览</span>
                             </div>
@@ -2215,8 +2293,10 @@ const CapabilityPresetSection: React.FC<{
                       </div>
                     )}
                   </button>
+                  </div>
                 );
               })}
+              </div>
             </div>
 
             {displayUninstalledPresetItems.length > 0 && (

@@ -1,6 +1,9 @@
 import type { CSSProperties } from 'react';
 
-/** 顶栏双列 grid：随 `activePaneNode` 与列宽对齐当前视口内两列标题（0=功能区+工作区，1=能力+功能区） */
+/**
+ * 顶栏双列 grid（遗留辅助；当前顶栏为 flex 流式标题）。
+ * 语义：0 = 小盒子资产页，1 = 小盒子预设页。
+ */
 export function workflowTopTitleGridStyle(
   activePaneNode: number,
   listPaneWidth: number,
