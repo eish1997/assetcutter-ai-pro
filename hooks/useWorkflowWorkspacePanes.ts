@@ -175,10 +175,13 @@ export function useWorkflowWorkspacePanes({
     if (!enableSpaceMarquee) return;
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.code !== 'Space') return;
+      /**
+       * 仅在真正输入时让出。勿用 data-ac-block-workflow-marquee：
+       * 快捷栏常驻该属性，且点击资产列表后焦点常仍留在栏上，会误禁空格框选。
+       * 指针命中栏/遮罩的拦截由 WorkflowSpaceMarqueeChrome 的 target.closest 负责。
+       */
       if (isWorkflowEditableTarget(e.target)) return;
-      const active = typeof document !== 'undefined' ? document.activeElement : null;
-      /** 勿用全局 querySelector：快捷栏常驻 data-ac-block-workflow-marquee，会误禁空格框选 */
-      if (active?.closest('[data-ac-block-workflow-marquee]')) return;
+      if (isWorkflowEditableTarget(document.activeElement)) return;
       if (typeof document !== 'undefined' && !document.querySelector('[data-workflow-asset-list]')) return;
       e.preventDefault();
       setSpaceMarqueeEnabled(true);
@@ -205,8 +208,7 @@ export function useWorkflowWorkspacePanes({
       if (e.repeat) return;
       if (e.ctrlKey || e.altKey || e.metaKey) return;
       if (isWorkflowEditableTarget(e.target)) return;
-      const active = typeof document !== 'undefined' ? document.activeElement : null;
-      if (active?.closest('[data-ac-block-workflow-marquee]')) return;
+      if (isWorkflowEditableTarget(document.activeElement)) return;
 
       /** 与卷轴从左到右一致：1 能力+功能区、2 功能区+工作区；0 同 1（最左） */
       const paneByCode: Record<string, number> = {
