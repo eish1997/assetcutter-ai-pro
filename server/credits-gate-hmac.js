@@ -97,12 +97,26 @@ function verifyMac(payload, sigHeader) {
 }
 
 /**
- * @param {{ userId: string, estimatedCredits: number, reserveKey: string, sigHeader: string }} args
+ * @param {{
+ *   userId: string,
+ *   estimatedCredits: number,
+ *   reserveKey: string,
+ *   sigHeader: string,
+ *   signedEstimatedCredits?: number | null,
+ * }} args
+ * 整包预扣按 sum 签名后，单步请求的 estimatedCredits 可能更小：
+ * 若提供 signedEstimatedCredits 且 requestEst ≤ signedEst，则用 signedEst 验签。
  */
 export function verifyCreditsGateSignature(args) {
   const fairnessKey = fairnessKeyForUserId(args.userId);
   const reserveKey = String(args.reserveKey || '').trim();
-  const estimatedCredits = Math.max(1, Math.floor(Number(args.estimatedCredits) || 1));
+  const requestEst = Math.max(1, Math.floor(Number(args.estimatedCredits) || 1));
+  let estimatedCredits = requestEst;
+  if (args.signedEstimatedCredits != null && Number.isFinite(Number(args.signedEstimatedCredits))) {
+    const signedEst = Math.max(1, Math.floor(Number(args.signedEstimatedCredits)));
+    if (requestEst > signedEst) return { ok: false, error: 'credits_gate_auth_failed' };
+    estimatedCredits = signedEst;
+  }
   if (!fairnessKey || !reserveKey) return { ok: false, error: 'credits_gate_auth_failed' };
   const payload = `${fairnessKey}\n${estimatedCredits}\n${reserveKey}\n`;
   const raw = String(args.sigHeader || '').trim();
@@ -130,5 +144,8 @@ export function creditsProxyHeadersFromSigned(signed) {
   if (signed.fairnessSignature) headers['X-AC-Fairness-Signature'] = signed.fairnessSignature;
   if (signed.reserveKey) headers['X-AC-Credits-Reserve'] = signed.reserveKey;
   if (signed.creditsGateSignature) headers['X-AC-Credits-Gate-Signature'] = signed.creditsGateSignature;
+  if (signed.estimatedCredits != null) {
+    headers['X-AC-Credits-Gate-Estimate'] = String(signed.estimatedCredits);
+  }
   return headers;
 }

@@ -144,12 +144,15 @@ export async function assertGeminiProxyCreditsGate(req, estimatedCredits = 50) {
   const reserveKey = String(req.headers['x-ac-credits-reserve'] || '').trim();
   const gateSig = String(req.headers['x-ac-credits-gate-signature'] || '').trim();
   const fairnessSig = String(req.headers['x-ac-fairness-signature'] || '').trim();
+  const gateEstimateRaw = String(req.headers['x-ac-credits-gate-estimate'] || '').trim();
+  const signedEstimatedCredits = gateEstimateRaw ? Number(gateEstimateRaw) : undefined;
   const userId = userIdFromFairnessKey(fairnessKey);
 
   if (userId && reserveKey && gateSig && creditsGateHmacEnabled()) {
     const sigOk = verifyCreditsGateSignature({
       userId,
       estimatedCredits: est,
+      signedEstimatedCredits: Number.isFinite(signedEstimatedCredits) ? signedEstimatedCredits : undefined,
       reserveKey,
       sigHeader: gateSig,
     });

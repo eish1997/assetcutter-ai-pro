@@ -11,6 +11,7 @@ AI-assisted asset workflow workbench (workspace, capability presets, experimenta
 - [x] Experimental: seam repair, PBR texture generation, prompt arena
 - [x] Admin console (`/admin`) for staff ops
 - [x] Upstream Gemini/Vertex 429: limited long-backoff retries (proxy + client); understand mode lowers image batch concurrency
+- [x] Task-envelope credits: sum-of-steps precharge + clear stale reserve after settle (avoids CREDITS_RESERVE_INVALID)
 - [ ] Removed: standalone dialog page, texture pattern extract page, prompt-effect analysis page
 
 ## Sidebar / pages

@@ -460,7 +460,7 @@ function applyCors(req, res) {
   /** gemini-proxy 中继 POST 须带积分/公平性头；与 server/gemini-proxy-api.js 对齐 */
   res.setHeader(
     'Access-Control-Allow-Headers',
-    'Content-Type, X-CSRF-Token, X-AC-Fairness-Key, X-AC-Fairness-Signature, X-AC-Client-Ip, X-AC-Credits-Reserve, X-AC-Credits-Gate-Signature, X-AC-Task-Envelope'
+    'Content-Type, X-CSRF-Token, X-AC-Fairness-Key, X-AC-Fairness-Signature, X-AC-Client-Ip, X-AC-Credits-Reserve, X-AC-Credits-Gate-Signature, X-AC-Credits-Gate-Estimate, X-AC-Task-Envelope'
   );
 }
 

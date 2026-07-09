@@ -3,8 +3,9 @@
  * 与 gemini-proxy 公平限流「单用户单请求」对齐；整包复用同一 proxy 预扣头。
  */
 import type { AiBillingRouteStep } from './aiBillingGate';
-import { maxPlatformStepMinCredits, requiresPlatformCredits } from './aiBillingGate';
+import { requiresPlatformCredits, sumPlatformMinCredits } from './aiBillingGate';
 import {
+  clearLastCreditsReserveKey,
   getCreditsProxyRequestHeaders,
   markCreditsProxyHeadersFromGate,
   releaseCreditsProxyReserve,
@@ -25,6 +26,8 @@ export function beginAiTaskEnvelope(taskId: string): void {
   const id = String(taskId || '').trim();
   if (!id) return;
   activeEnvelopeId = id;
+  // 上一任务成功结算后预扣已 finalized；勿把失效 reserveKey 带进新信封
+  clearLastCreditsReserveKey();
   clearEnvelopeProxyState();
 }
 
@@ -58,17 +61,17 @@ export function isAiTaskBusy(): boolean {
   return isAiTaskEnvelopeActive();
 }
 
-/** 任务开跑前一次性取 bundle（按步骤 max min），供理解+生图复用 */
+/** 任务开跑前一次性取 bundle（按各 platform 步 min 之和），供理解+生图复用同一预扣 */
 export async function prepareAiTaskEnvelopeCredits(steps: AiBillingRouteStep[]): Promise<number | null> {
   if (!activeEnvelopeId || !requiresPlatformCredits(steps)) return null;
-  const maxMin = maxPlatformStepMinCredits(steps);
-  if (maxMin <= 0) return null;
+  const totalMin = sumPlatformMinCredits(steps);
+  if (totalMin <= 0) return null;
   const fairness = getGeminiFairnessRequestHeaders();
-  const proxyHeaders = await getCreditsProxyRequestHeaders(maxMin);
-  envelopePlatformGateCredits = maxMin;
+  const proxyHeaders = await getCreditsProxyRequestHeaders(totalMin);
+  envelopePlatformGateCredits = totalMin;
   envelopeProxyHeaders = { ...proxyHeaders };
-  markCreditsProxyHeadersFromGate({ ...fairness, ...proxyHeaders }, maxMin);
-  return maxMin;
+  markCreditsProxyHeadersFromGate({ ...fairness, ...proxyHeaders }, totalMin);
+  return totalMin;
 }
 
 /** geminiService 准入头：信封内复用整包预扣（estimatedCredits ≤ 整包 max 时） */
@@ -84,10 +87,12 @@ export function getEnvelopePlatformGateCredits(): number | null {
   return envelopePlatformGateCredits;
 }
 
-/** 任务结束：失败时释放孤儿预扣；成功由 metering 结算，仅清缓存 */
+/** 任务结束：失败时释放孤儿预扣；成功由 metering 结算，清本地预扣缓存避免下一任务复用 */
 export async function finalizeAiTaskEnvelopeCredits(outcome: 'success' | 'failed'): Promise<void> {
   if (outcome === 'failed' && !peekCreditsPrechargeSession()) {
     await releaseCreditsProxyReserve();
+  } else {
+    clearLastCreditsReserveKey();
   }
   clearEnvelopeProxyState();
 }

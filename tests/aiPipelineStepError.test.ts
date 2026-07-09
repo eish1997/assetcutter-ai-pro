@@ -18,9 +18,11 @@ vi.mock('../services/creditsProxyBridge', () => ({
   getCreditsProxyRequestHeaders: vi.fn(async (n: number) => ({
     'X-AC-Credits-Reserve': `proxy:test-${n}`,
     'X-AC-Credits-Gate-Signature': 'sig',
+    'X-AC-Credits-Gate-Estimate': String(n),
   })),
   markCreditsProxyHeadersFromGate: vi.fn(),
   releaseCreditsProxyReserve: vi.fn(async () => {}),
+  clearLastCreditsReserveKey: vi.fn(),
 }));
 
 vi.mock('../services/creditsPrechargeSession', () => ({
@@ -31,7 +33,7 @@ vi.mock('../services/geminiFairnessBridge', () => ({
   getGeminiFairnessRequestHeaders: vi.fn(() => ({ 'X-AC-Fairness-Key': 'user:u1' })),
 }));
 
-import { getCreditsProxyRequestHeaders, releaseCreditsProxyReserve } from '../services/creditsProxyBridge';
+import { getCreditsProxyRequestHeaders, releaseCreditsProxyReserve, clearLastCreditsReserveKey } from '../services/creditsProxyBridge';
 
 describe('aiPipelineStepError', () => {
   it('formats step label prefix once', () => {
@@ -67,17 +69,18 @@ describe('aiTaskEnvelope', () => {
     expect(getActiveAiTaskEnvelopeId()).toBeNull();
   });
 
-  it('prepareAiTaskEnvelopeCredits fetches bundle once for max step', async () => {
+  it('prepareAiTaskEnvelopeCredits fetches bundle once for sum of steps', async () => {
     beginAiTaskEnvelope('task-credits');
-    const max = await prepareAiTaskEnvelopeCredits([
+    const total = await prepareAiTaskEnvelopeCredits([
       { kind: 'platform', minCredits: 15, jobKind: 'workflow_understand' } as any,
       { kind: 'platform', minCredits: 134, jobKind: 'workflow_text_to_image' } as any,
     ]);
-    expect(max).toBe(134);
+    expect(total).toBe(149);
     expect(getCreditsProxyRequestHeaders).toHaveBeenCalledTimes(1);
-    expect(getCreditsProxyRequestHeaders).toHaveBeenCalledWith(134);
+    expect(getCreditsProxyRequestHeaders).toHaveBeenCalledWith(149);
     const headers = getEnvelopeProxyAdmissionHeaders(15);
-    expect(headers?.['X-AC-Credits-Reserve']).toBe('proxy:test-134');
+    expect(headers?.['X-AC-Credits-Reserve']).toBe('proxy:test-149');
+    expect(getEnvelopeProxyAdmissionHeaders(134)?.['X-AC-Credits-Reserve']).toBe('proxy:test-149');
     endAiTaskEnvelope('task-credits');
   });
 
@@ -91,13 +94,14 @@ describe('aiTaskEnvelope', () => {
     endAiTaskEnvelope('task-fail');
   });
 
-  it('finalize success does not release', async () => {
+  it('finalize success clears reserve cache without release', async () => {
     beginAiTaskEnvelope('task-ok');
     await prepareAiTaskEnvelopeCredits([
       { kind: 'platform', minCredits: 134, jobKind: 'workflow_text_to_image' } as any,
     ]);
     await finalizeAiTaskEnvelopeCredits('success');
     expect(releaseCreditsProxyReserve).not.toHaveBeenCalled();
+    expect(clearLastCreditsReserveKey).toHaveBeenCalled();
     endAiTaskEnvelope('task-ok');
   });
 });

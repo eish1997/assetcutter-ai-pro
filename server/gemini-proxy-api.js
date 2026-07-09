@@ -943,7 +943,7 @@ const server = http.createServer(async (req, res) => {
     console.warn('[gemini-proxy-api] corsOk=', corsOk, 'origin=', JSON.stringify(req.headers.origin));
   }
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-AC-Fairness-Key, X-AC-Fairness-Signature, X-AC-Client-Ip, X-AC-Credits-Reserve, X-AC-Credits-Gate-Signature, X-AC-Task-Envelope');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-AC-Fairness-Key, X-AC-Fairness-Signature, X-AC-Client-Ip, X-AC-Credits-Reserve, X-AC-Credits-Gate-Signature, X-AC-Credits-Gate-Estimate, X-AC-Task-Envelope');
   res.setHeader('Access-Control-Max-Age', '86400');
 
   if (req.method === 'OPTIONS') {

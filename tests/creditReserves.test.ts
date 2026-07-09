@@ -117,6 +117,27 @@ describe('credits-gate-hmac', () => {
     expect(ok.ok).toBe(true);
   });
 
+  it('accepts step estimate when signed envelope estimate is larger', () => {
+    const reserveKey = `proxy:${crypto.randomUUID()}`;
+    const signed = signCreditsGatePayload({ userId: 'u1', estimatedCredits: 149, reserveKey });
+    const ok = verifyCreditsGateSignature({
+      userId: 'u1',
+      estimatedCredits: 15,
+      signedEstimatedCredits: 149,
+      reserveKey,
+      sigHeader: signed!.creditsGateSignature,
+    });
+    expect(ok.ok).toBe(true);
+    const tooHigh = verifyCreditsGateSignature({
+      userId: 'u1',
+      estimatedCredits: 200,
+      signedEstimatedCredits: 149,
+      reserveKey,
+      sigHeader: signed!.creditsGateSignature,
+    });
+    expect(tooHigh.ok).toBe(false);
+  });
+
   it('rejects tampered reserve key', () => {
     const signed = signCreditsGatePayload({
       userId: 'u1',

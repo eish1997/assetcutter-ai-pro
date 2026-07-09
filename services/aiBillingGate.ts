@@ -466,7 +466,7 @@ function maxPlatformStepMin(steps: AiBillingRouteStep[]): number {
   return max;
 }
 
-/** 整包任务 proxy 预扣：取各 platform 步 max（与 assertAiGateForSteps 一致） */
+/** 整包任务 UI/余额预检：取各 platform 步 max；信封 proxy 预扣见 sumPlatformMinCredits */
 export function maxPlatformStepMinCredits(steps: AiBillingRouteStep[]): number {
   return maxPlatformStepMin(steps);
 }
