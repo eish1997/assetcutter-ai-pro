@@ -206,6 +206,7 @@ const PromptArenaSection = React.lazy(() => import('./components/PromptArenaSect
 const SeamRepairSection = React.lazy(() => import('./components/SeamRepairSection'));
 const GenerateTextureSection = React.lazy(() => import('./components/GenerateTextureSection'));
 const SettingsSection = React.lazy(() => import('./components/SettingsSection'));
+const DevLogSection = React.lazy(() => import('./components/DevLogSection'));
 const AdminStaffProvider = React.lazy(() => import('./components/admin/AdminStaffContext'));
 const AdminRolePreviewBridge = React.lazy(() => import('./components/admin/AdminRolePreviewBridge'));
 const AdminLayout = React.lazy(() => import('./components/admin/AdminLayout'));
@@ -3111,6 +3112,26 @@ const MainApp: React.FC = () => {
                   </svg>
                 </SidebarIconButton>
               ) : null}
+              {showAdminEntry ? (
+                <SidebarIconButton
+                  active={mode === AppMode.DEV_LOG}
+                  label="开发日志"
+                  onClick={() => {
+                    setMode(AppMode.DEV_LOG);
+                    setIsSidebarOpen(false);
+                  }}
+                >
+                  <svg viewBox="0 0 20 20" className="w-4 h-4" fill="none" aria-hidden>
+                    <path
+                      d="M5 3.5h10v13H5v-13Z M7.5 6.5h5 M7.5 9.5h5 M7.5 12.5h3"
+                      stroke="currentColor"
+                      strokeWidth="1.6"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                </SidebarIconButton>
+              ) : null}
 
               <button
                 type="button"
@@ -3500,6 +3521,11 @@ const MainApp: React.FC = () => {
                   modelText={config.modelText}
                   onModelTextChange={handleModelTextChange}
                 />
+              </Suspense>
+            )}
+            {mode === AppMode.DEV_LOG && showAdminEntry && (
+              <Suspense fallback={<LazySectionFallback label="开发日志" />}>
+                <DevLogSection />
               </Suspense>
             )}
             {(activeWorkspaceProjectId || mode === AppMode.WORKFLOW) && mode === AppMode.WORKFLOW && (

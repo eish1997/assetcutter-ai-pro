@@ -3,6 +3,37 @@ import { createPortal } from 'react-dom';
 
 type Option = { value: string; label: string; disabled?: boolean; title?: string };
 
+/** 与全局输入框 / 快捷栏同族的默认触发器 */
+export const DROPDOWN_TRIGGER_DEFAULT =
+  'bg-white/[0.05] ring-1 ring-white/[0.08] rounded-xl px-4 py-3 text-[11px] text-left text-gray-200 flex items-center justify-between outline-none transition-colors hover:bg-white/[0.1] focus-visible:ring-2 focus-visible:ring-blue-500/45';
+
+/** 表单内联紧凑触发器（能力编辑等） */
+export const DROPDOWN_TRIGGER_COMPACT =
+  'bg-white/[0.05] ring-1 ring-white/[0.08] rounded-xl px-3 py-2 text-[10px] text-left text-gray-200 flex items-center justify-between outline-none transition-colors hover:bg-white/[0.1] focus-visible:ring-2 focus-visible:ring-blue-500/45 min-w-[5rem]';
+
+/** 展开列表表面（与快捷栏模型弹层一致） */
+export const DROPDOWN_LIST_SURFACE =
+  'border border-white/10 bg-[#0f0f12] shadow-xl ring-1 ring-white/[0.05]';
+
+/**
+ * 列表项 chip（与 `WorkspaceQuickComposeBar` 模型选项同款）。
+ * compose 默认用此形态，而非扁平行。
+ */
+export const DROPDOWN_OPTION_CHIP_BASE =
+  'w-full rounded-md px-2 py-1 text-left text-[9px] font-semibold ring-1 transition-colors';
+export const DROPDOWN_OPTION_CHIP_IDLE = `${DROPDOWN_OPTION_CHIP_BASE} bg-white/[0.04] text-gray-300 ring-white/[0.07] hover:bg-white/[0.08]`;
+export const DROPDOWN_OPTION_CHIP_ACTIVE = `${DROPDOWN_OPTION_CHIP_BASE} bg-white/[0.16] text-white ring-white/[0.22]`;
+export const DROPDOWN_OPTION_CHIP_DISABLED = `${DROPDOWN_OPTION_CHIP_BASE} cursor-not-allowed bg-white/[0.02] text-gray-600 ring-white/[0.05]`;
+
+/** 设置页专用：保留旧实色边框触发器 */
+export const DROPDOWN_TRIGGER_SETTINGS =
+  'bg-[#1c1c22] border border-[#2e2e32] rounded-xl px-3 py-2 text-[10px] text-left flex items-center justify-between outline-none focus:border-blue-500 hover:bg-[#2e2e36] transition-colors min-w-[5rem]';
+
+/** 设置页专用：旧列表表面 */
+export const DROPDOWN_LIST_SETTINGS = 'border border-[#2e2e32] bg-[#0f0f0f] shadow-xl';
+
+type DropdownTone = 'compose' | 'settings';
+
 type CustomDropdownProps = {
   options: Option[];
   value: string;
@@ -10,6 +41,11 @@ type CustomDropdownProps = {
   disabled?: boolean;
   placeholder?: string;
   triggerClassName?: string;
+  /**
+   * `compose`（默认）：全局输入框族视觉。
+   * `settings`：设置页旧实色边框 / 蓝底选中（仅设置页使用）。
+   */
+  tone?: DropdownTone;
   /** 自定义触发区（如头像）；提供时不再渲染默认「标签 + ▼」 */
   renderTrigger?: (ctx: { open: boolean }) => React.ReactNode;
   /**
@@ -30,9 +66,28 @@ type CustomDropdownProps = {
   listDensity?: 'default' | 'compact';
   /** 下拉列表最小宽度（px）；窄触发器但需展示长文案时使用 */
   listMinWidth?: number;
-  /** 覆盖列表容器 `border`/`background` 等（不传则保持默认实色 `#0f0f0f`） */
+  /** 覆盖列表容器 `border`/`background` 等（不传则按 tone 默认） */
   listClassName?: string;
 };
+
+function defaultTriggerClass(tone: DropdownTone): string {
+  return tone === 'settings' ? DROPDOWN_TRIGGER_SETTINGS : DROPDOWN_TRIGGER_DEFAULT;
+}
+
+function defaultListSurface(tone: DropdownTone): string {
+  return tone === 'settings' ? DROPDOWN_LIST_SETTINGS : DROPDOWN_LIST_SURFACE;
+}
+
+function composeOptionChipClass(selected: boolean, disabled: boolean | undefined): string {
+  if (disabled) return DROPDOWN_OPTION_CHIP_DISABLED;
+  return selected ? DROPDOWN_OPTION_CHIP_ACTIVE : DROPDOWN_OPTION_CHIP_IDLE;
+}
+
+function settingsItemClass(selected: boolean, disabled: boolean | undefined): string {
+  if (disabled) return 'text-gray-600 cursor-not-allowed opacity-60';
+  if (selected) return 'bg-[#264670] text-blue-300';
+  return 'text-white hover:bg-[#2e2e36]';
+}
 
 /** 深色主题下拉组件：触发器 + Portal 到 body 的列表与遮罩，规范见 .cursor/rules/dropdown-ui-style.mdc */
 export function CustomDropdown({
@@ -41,7 +96,8 @@ export function CustomDropdown({
   onChange,
   disabled = false,
   placeholder = '默认',
-  triggerClassName = 'bg-[#1c1c22] border border-[#2e2e32] rounded-xl px-4 py-3 text-[11px] text-left flex items-center justify-between outline-none focus:border-blue-500 hover:bg-[#2e2e36] transition-colors',
+  tone = 'compose',
+  triggerClassName,
   renderTrigger,
   renderListItem,
   triggerAriaLabel,
@@ -60,6 +116,7 @@ export function CustomDropdown({
   } | null>(null);
   const triggerRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLUListElement>(null);
+  const resolvedTriggerClass = triggerClassName ?? defaultTriggerClass(tone);
 
   useLayoutEffect(() => {
     if (disabled) setOpen(false);
@@ -183,10 +240,17 @@ export function CustomDropdown({
 
   const label = value ? options.find((o) => o.value === value)?.label ?? value : placeholder;
 
-  const listSurfaceClass =
-    listClassName ?? 'border border-[#2e2e32] bg-[#0f0f0f]';
-  const listPy = listDensity === 'compact' ? 'py-0.5' : 'py-1';
-  const itemPad = listDensity === 'compact' ? 'px-2 py-1.5' : 'px-3 py-2';
+  const listSurfaceClass = listClassName ?? defaultListSurface(tone);
+  const isCompose = tone === 'compose';
+  /** compose：与快捷栏模型弹层同款内边距 + 纵向 gap；settings / compact 保持紧凑扁平 */
+  const listLayoutClass = isCompose
+    ? listDensity === 'compact'
+      ? 'flex flex-col gap-0.5 p-1'
+      : 'flex flex-col gap-1 p-1.5'
+    : listDensity === 'compact'
+      ? 'py-0.5'
+      : 'py-1';
+  const settingsItemPad = listDensity === 'compact' ? 'px-2 py-1.5' : 'px-3 py-2';
   const listItemWrapClass = listMinWidth != null ? 'whitespace-nowrap' : '';
 
   const portalContent =
@@ -203,7 +267,7 @@ export function CustomDropdown({
         {listPosition && (
           <ul
             ref={listRef}
-            className={`fixed overflow-y-auto rounded-xl shadow-xl text-white ${listPy} ${listSurfaceClass}`}
+            className={`fixed overflow-y-auto rounded-xl text-white ${listLayoutClass} ${listSurfaceClass}`}
             data-prevent-wheel-scroll
             data-ac-dropdown-list
             style={{
@@ -216,32 +280,34 @@ export function CustomDropdown({
               zIndex: portalZIndex.list,
             }}
           >
-            {options.map((opt) => (
-              <li key={opt.value === '' ? '__empty__' : opt.value}>
-                <button
-                  type="button"
-                  disabled={opt.disabled}
-                  title={opt.title}
-                  aria-label={opt.title ?? opt.label}
-                  onClick={() => {
-                    if (opt.disabled) return;
-                    onChange(opt.value);
-                    setOpen(false);
-                  }}
-                  className={`w-full ${listItemWrapClass} ${itemPad} text-[10px] transition-colors ${
+            {options.map((opt) => {
+              const selected = value === opt.value;
+              const itemClass = isCompose
+                ? `${composeOptionChipClass(selected, opt.disabled)} ${listItemWrapClass} ${
+                    renderListItem ? 'flex items-center justify-center' : ''
+                  }`
+                : `w-full ${listItemWrapClass} ${settingsItemPad} text-[10px] transition-colors ${
                     renderListItem ? 'flex items-center justify-center' : 'text-left'
-                  } ${
-                    opt.disabled
-                      ? 'text-gray-600 cursor-not-allowed opacity-60'
-                      : value === opt.value
-                        ? 'bg-[#264670] text-blue-300'
-                        : 'text-white hover:bg-[#2e2e36]'
-                  }`}
-                >
-                  {renderListItem ? renderListItem(opt) : opt.label}
-                </button>
-              </li>
-            ))}
+                  } ${settingsItemClass(selected, opt.disabled)}`;
+              return (
+                <li key={opt.value === '' ? '__empty__' : opt.value}>
+                  <button
+                    type="button"
+                    disabled={opt.disabled}
+                    title={opt.title}
+                    aria-label={opt.title ?? opt.label}
+                    onClick={() => {
+                      if (opt.disabled) return;
+                      onChange(opt.value);
+                      setOpen(false);
+                    }}
+                    className={itemClass}
+                  >
+                    {renderListItem ? renderListItem(opt) : opt.label}
+                  </button>
+                </li>
+              );
+            })}
           </ul>
         )}
       </>
@@ -257,7 +323,7 @@ export function CustomDropdown({
         aria-expanded={open}
         aria-label={triggerAriaLabel}
         onClick={() => !disabled && setOpen((p) => !p)}
-        className={`${triggerClassName} ${disabled ? 'opacity-40 cursor-not-allowed pointer-events-none' : ''}`}
+        className={`${resolvedTriggerClass} ${disabled ? 'opacity-40 cursor-not-allowed pointer-events-none' : ''}`}
       >
         {renderTrigger ? (
           renderTrigger({ open })
@@ -272,8 +338,3 @@ export function CustomDropdown({
     </div>
   );
 }
-
-/** 表单内联时使用的紧凑触发器样式 */
-export const DROPDOWN_TRIGGER_COMPACT =
-  'bg-[#1c1c22] border border-[#2e2e32] rounded-xl px-3 py-2 text-[10px] text-left flex items-center justify-between outline-none focus:border-blue-500 hover:bg-[#2e2e36] transition-colors min-w-[5rem]';
-

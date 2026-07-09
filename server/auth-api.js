@@ -83,6 +83,12 @@ import {
   COMPANION_DISTRIBUTION_PREFIX,
 } from './r2-storage-handlers.js';
 import {
+  isDevLogR2Configured,
+  readDevLogDayEntries,
+  readDevLogEntry,
+  readDevLogIndex,
+} from './dev-log-r2.js';
+import {
   addCompanionArtifact,
   deleteCompanionArtifact,
   getCompanionArtifactById,
@@ -1433,6 +1439,72 @@ const server = http.createServer(async (req, res) => {
           workspaceUsedBytes: getWorkspaceUsedBytes(payload.user.id),
         },
       });
+      return;
+    }
+
+    if (path === '/api/admin/dev-log/index' && req.method === 'GET') {
+      const staff = await requireStaff(req, res);
+      if (!staff) return;
+      if (!isDevLogR2Configured()) {
+        json(res, 503, { error: 'R2 未配置，无法读取开发日志' });
+        return;
+      }
+      try {
+        json(res, 200, await readDevLogIndex());
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        json(res, 500, { error: message });
+      }
+      return;
+    }
+
+    if (path === '/api/admin/dev-log/day' && req.method === 'GET') {
+      const staff = await requireStaff(req, res);
+      if (!staff) return;
+      if (!isDevLogR2Configured()) {
+        json(res, 503, { error: 'R2 未配置，无法读取开发日志' });
+        return;
+      }
+      const u = new URL(req.url || '/', 'http://local');
+      const dayKey = String(u.searchParams.get('dayKey') || '').trim();
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(dayKey)) {
+        json(res, 400, { error: '缺少或非法 dayKey' });
+        return;
+      }
+      try {
+        json(res, 200, { dayKey, entries: await readDevLogDayEntries(dayKey) });
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        json(res, 500, { error: message });
+      }
+      return;
+    }
+
+    if (path === '/api/admin/dev-log/entry' && req.method === 'GET') {
+      const staff = await requireStaff(req, res);
+      if (!staff) return;
+      if (!isDevLogR2Configured()) {
+        json(res, 503, { error: 'R2 未配置，无法读取开发日志' });
+        return;
+      }
+      const u = new URL(req.url || '/', 'http://local');
+      const dayKey = String(u.searchParams.get('dayKey') || '').trim();
+      const entryId = String(u.searchParams.get('entryId') || '').trim();
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(dayKey) || !entryId) {
+        json(res, 400, { error: '缺少 dayKey 或 entryId' });
+        return;
+      }
+      try {
+        const entry = await readDevLogEntry(dayKey, entryId);
+        if (!entry) {
+          json(res, 404, { error: '条目不存在' });
+          return;
+        }
+        json(res, 200, { entry });
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        json(res, 500, { error: message });
+      }
       return;
     }
 

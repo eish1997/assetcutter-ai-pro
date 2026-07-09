@@ -58,7 +58,11 @@ import {
   saveCompanionJobTerminalEvent,
 } from '../services/companionJobTerminalStore';
 import { companionJobStatusHuman } from '../services/companionJobStatusHuman';
-import { CustomDropdown, DROPDOWN_TRIGGER_COMPACT } from './ui/CustomDropdown';
+import {
+  CustomDropdown,
+  DROPDOWN_LIST_SETTINGS,
+  DROPDOWN_TRIGGER_SETTINGS,
+} from './ui/CustomDropdown';
 import { useEffectiveTextModelRows } from '../hooks/useEffectiveTextModelRows';
 import { coerceTextModelRegistryId, labelForTextModelRegistryId } from '../services/modelRegistry/textModels';
 import type { AuthUser } from '../services/authClient';
@@ -1150,6 +1154,7 @@ const SettingsSection: React.FC<{
                 <div className="rounded-lg border border-[#2e2e32] bg-[#16161a] p-3 space-y-2">
                   <p className="text-gray-300 font-semibold">平面局部重绘贴回</p>
                   <CustomDropdown
+                    tone="settings"
                     value={flatInpaintComposite}
                     options={(
                       ['fit_dest', 'upscale_canvas', 'detail_enhance'] as FlatLocalInpaintCompositeStrategy[]
@@ -1162,7 +1167,8 @@ const SettingsSection: React.FC<{
                       setFlatInpaintComposite(next);
                       writeFlatLocalInpaintCompositeStrategy(preferenceScope, next);
                     }}
-                    triggerClassName={`${DROPDOWN_TRIGGER_COMPACT} w-full max-w-md`}
+                    triggerClassName={`${DROPDOWN_TRIGGER_SETTINGS} w-full max-w-md`}
+                    listClassName={DROPDOWN_LIST_SETTINGS}
                   />
                   <p className="text-[9px] text-gray-500 leading-relaxed">
                     {FLAT_LOCAL_INPAINT_COMPOSITE_LABELS[flatInpaintComposite].hint}
@@ -1473,6 +1479,7 @@ const SettingsSection: React.FC<{
                         </button>
                       </div>
                       <CustomDropdown
+                        tone="settings"
                         value={hostBundleSelectedDir}
                         onChange={setHostBundleSelectedDir}
                         disabled={hostBundleRows.length === 0}
@@ -1485,6 +1492,7 @@ const SettingsSection: React.FC<{
                         ]}
                         placeholder="请选择…"
                         triggerClassName="w-full max-w-lg bg-[#101014] border border-[#2e2e32] rounded-lg px-3 py-2 text-[11px] text-left text-gray-200 flex items-center justify-between outline-none focus:border-blue-500 hover:bg-[#16161a] transition-colors disabled:opacity-50"
+                        listClassName={DROPDOWN_LIST_SETTINGS}
                       />
                       <p className="text-[9px] text-gray-600">
                         {activeWorkspaceProjectId?.trim()
@@ -1735,6 +1743,7 @@ const SettingsSection: React.FC<{
                         默认文字模型
                       </span>
                       <CustomDropdown
+                        tone="settings"
                         options={effectiveTextModelRows.map((g) => ({
                           value: g.registryId,
                           label: g.label,
@@ -1747,7 +1756,8 @@ const SettingsSection: React.FC<{
                           if (row?.disabled) return;
                           onModelTextChange(coerceTextModelId(v));
                         }}
-                        triggerClassName={DROPDOWN_TRIGGER_COMPACT}
+                        triggerClassName={DROPDOWN_TRIGGER_SETTINGS}
+                        listClassName={DROPDOWN_LIST_SETTINGS}
                       />
                       <p className="text-[8px] text-gray-600 leading-relaxed">
                         工作流文生文/图生文、对话、擂台等未单独指定模型时使用（当前：

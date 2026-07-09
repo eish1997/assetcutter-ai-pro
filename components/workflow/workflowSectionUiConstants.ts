@@ -33,6 +33,23 @@ export const TITLE_ROW_QUEUE_CHIP = `${TOP_CTRL_H} flex items-center gap-1.5 rou
 
 export const TITLE_ROW_DROPDOWN_TRIGGER = `${TOP_CTRL_H} min-w-[4.75rem] px-2 inline-flex items-center justify-center rounded-md bg-white/[0.05] ring-1 ring-white/[0.06] text-[8px] font-black text-gray-200 hover:bg-white/[0.09] outline-none focus-visible:ring-2 focus-visible:ring-blue-500/45`;
 
+/**
+ * 功能区组头「覆 / 数 / 模 / 比…」与快捷栏 pill 同族：圆角 md + ring，非圆形实色边框。
+ */
+export const SIDEBAR_COMPOSE_CHIP_BASE =
+  'inline-flex h-6 min-h-6 max-h-6 w-6 shrink-0 items-center justify-center rounded-md text-[9px] font-black leading-none ring-1 outline-none transition-colors box-border';
+export const SIDEBAR_COMPOSE_CHIP_IDLE = `${SIDEBAR_COMPOSE_CHIP_BASE} bg-white/[0.06] text-gray-300 ring-white/[0.08] hover:bg-white/[0.1]`;
+export const SIDEBAR_COMPOSE_CHIP_ACTIVE = `${SIDEBAR_COMPOSE_CHIP_BASE} bg-white text-[#0a0a0c] ring-white`;
+/** 自定义数量编辑中的胶囊（与 ACTIVE 同色阶，可横向伸展） */
+export const SIDEBAR_COMPOSE_CHIP_EDITING =
+  'h-6 min-h-6 max-h-6 inline-flex shrink-0 items-center gap-1 rounded-md bg-white/[0.16] px-1 text-[9px] font-black text-white ring-1 ring-white/[0.22]';
+
+/** 功能区搜索框下方：全部 / 云端 / 我的 / 标签 */
+export const SIDEBAR_FILTER_CHIP_BASE =
+  'px-2 py-0.5 rounded-md text-[8px] font-black transition-colors ring-1 outline-none';
+export const SIDEBAR_FILTER_CHIP_IDLE = `${SIDEBAR_FILTER_CHIP_BASE} bg-white/[0.06] text-gray-400 ring-white/[0.08] hover:bg-white/[0.1] hover:text-gray-300`;
+export const SIDEBAR_FILTER_CHIP_ACTIVE = `${SIDEBAR_FILTER_CHIP_BASE} bg-white text-[#0a0a0c] ring-white`;
+
 /** 画布 / 仓库卡片默认外沿（非选中、非组强调） */
 export const WORKFLOW_CARD_SURFACE_IDLE = 'ring-1 ring-inset ring-white/[0.08] border-0';
 

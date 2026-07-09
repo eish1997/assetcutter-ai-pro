@@ -31,6 +31,8 @@ export const AppMode = {
   PBR_TEXTURE: 'PBR_TEXTURE',
   /** 设置：API 密钥等 */
   SETTINGS: 'SETTINGS',
+  /** 开发日志：push 后 R2 时间轴与小票导出（staff） */
+  DEV_LOG: 'DEV_LOG',
 } as const;
 
 /** 对比选择记录（ac_ab_choices），仅通过 abChoiceStore 读写 */

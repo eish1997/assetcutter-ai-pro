@@ -117,8 +117,14 @@ git config --global https.proxy http://127.0.0.1:7890
 
 - Preserve user changes. Never reset, checkout, or revert unrelated work unless
   the user explicitly asks.
+- After a successful `git push`, run the dev-log post-push flow (summarize since
+  last tip and upload to R2). Do not commit dev-log JSON into the repo. Skip only
+  if the user says so or `SKIP_DEV_LOG=1`. Receipt export prefers PNG (thermal
+  style). Entry: sidebar below Admin.
 
-Source: `.cursor/rules/git-push.mdc`
+Sources:
+- `.cursor/rules/git-push.mdc`
+- `.cursor/rules/dev-log-r2.mdc`
 
 ## Session Notes
 

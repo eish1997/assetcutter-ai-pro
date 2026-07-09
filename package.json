@@ -67,7 +67,8 @@
     "companion-desktop:dist:win": "npm run dist:win --prefix companion-desktop",
     "companion-desktop:dist:portable": "npm run dist:portable --prefix companion-desktop",
     "companion-desktop:dist:retry": "powershell -NoProfile -ExecutionPolicy Bypass -File \"scripts/companion-desktop-dist.ps1\" -Target both -Retries 3",
-    "companion-desktop:release:check": "powershell -NoProfile -ExecutionPolicy Bypass -File \"scripts/companion-desktop-release-check.ps1\""
+    "companion-desktop:release:check": "powershell -NoProfile -ExecutionPolicy Bypass -File \"scripts/companion-desktop-release-check.ps1\"",
+    "dev-log:post-push": "node --env-file=.env.local scripts/dev-log-post-push.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.926.0",

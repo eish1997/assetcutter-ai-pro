@@ -42,6 +42,9 @@ server/data/auth-db.test.json
 .cursor/hooks/loop-state.json
 .cursor/hooks/autopilot.runtime.json
 
+# Dev log tip cache (R2 is source of truth)
+.cache/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

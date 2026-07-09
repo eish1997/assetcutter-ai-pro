@@ -37,7 +37,15 @@ import {
   workflowDropDragLeave,
 } from '../../services/workflowDropHighlight';
 import { dragTransferHasPlainText } from './workflowSectionHelpers';
-import { SET_ACTION_PREFIX, WORKFLOW_EDGE_GUTTER } from './workflowSectionUiConstants';
+import {
+  SET_ACTION_PREFIX,
+  SIDEBAR_COMPOSE_CHIP_ACTIVE,
+  SIDEBAR_COMPOSE_CHIP_EDITING,
+  SIDEBAR_COMPOSE_CHIP_IDLE,
+  SIDEBAR_FILTER_CHIP_ACTIVE,
+  SIDEBAR_FILTER_CHIP_IDLE,
+  WORKFLOW_EDGE_GUTTER,
+} from './workflowSectionUiConstants';
 import { uuid } from './workflowIds';
 import type { CapabilityCategoryGroup } from './workflowCapabilityGroups';
 import {
@@ -1383,7 +1391,7 @@ export function WorkflowSidebarColumn({
           onChange={(e) => setSidebarCapabilitySearch(e.target.value)}
           placeholder="搜索功能…"
           autoComplete="off"
-          className="w-full rounded-lg border border-white/[0.08] bg-white/[0.04] px-2.5 py-1.5 text-[10px] text-gray-200 placeholder:text-gray-500 outline-none focus:border-blue-500/45 focus:ring-1 focus:ring-blue-500/30"
+          className="w-full rounded-md bg-white/[0.05] px-2.5 py-1.5 text-[10px] text-gray-200 ring-1 ring-white/[0.08] outline-none placeholder:text-gray-500 focus-visible:ring-2 focus-visible:ring-blue-500/45"
         />
         {linkedComposeActive ? (
           <p className="mt-0.5 text-[8px] text-gray-600 leading-tight">与底部快捷栏输入联动筛选；清空底部输入后恢复仅按上方搜索。</p>
@@ -1395,10 +1403,10 @@ export function WorkflowSidebarColumn({
               setSelectedOriginFilter(null);
               setSelectedPresetTag(null);
             }}
-            className={`px-2 py-0.5 rounded-md text-[8px] font-black uppercase border transition-colors ${
+            className={`uppercase ${
               selectedOriginFilter == null && selectedPresetTag == null
-                ? 'border-blue-500/60 bg-blue-950/35 text-blue-200'
-                : 'border-white/[0.08] bg-white/[0.03] text-gray-400 hover:bg-white/[0.06] hover:text-gray-300'
+                ? SIDEBAR_FILTER_CHIP_ACTIVE
+                : SIDEBAR_FILTER_CHIP_IDLE
             }`}
           >
             全部
@@ -1409,11 +1417,7 @@ export function WorkflowSidebarColumn({
               setSelectedOriginFilter('cloud');
               setSelectedPresetTag(null);
             }}
-            className={`px-2 py-0.5 rounded-md text-[8px] font-black border transition-colors ${
-              selectedOriginFilter === 'cloud'
-                ? 'border-sky-500/45 bg-sky-950/30 text-sky-200/90'
-                : 'border-white/[0.08] bg-white/[0.03] text-gray-400 hover:bg-white/[0.06] hover:text-gray-300'
-            }`}
+            className={selectedOriginFilter === 'cloud' ? SIDEBAR_FILTER_CHIP_ACTIVE : SIDEBAR_FILTER_CHIP_IDLE}
           >
             云端
           </button>
@@ -1423,11 +1427,7 @@ export function WorkflowSidebarColumn({
               setSelectedOriginFilter('mine');
               setSelectedPresetTag(null);
             }}
-            className={`px-2 py-0.5 rounded-md text-[8px] font-black border transition-colors ${
-              selectedOriginFilter === 'mine'
-                ? 'border-blue-500/60 bg-blue-950/35 text-blue-200'
-                : 'border-white/[0.08] bg-white/[0.03] text-gray-400 hover:bg-white/[0.06] hover:text-gray-300'
-            }`}
+            className={selectedOriginFilter === 'mine' ? SIDEBAR_FILTER_CHIP_ACTIVE : SIDEBAR_FILTER_CHIP_IDLE}
           >
             我的
           </button>
@@ -1439,11 +1439,7 @@ export function WorkflowSidebarColumn({
                 setSelectedOriginFilter(null);
                 setSelectedPresetTag((prev) => (prev === tag ? null : tag));
               }}
-              className={`px-2 py-0.5 rounded-md text-[8px] font-black border transition-colors ${
-                selectedPresetTag === tag
-                  ? 'border-blue-500/60 bg-blue-950/35 text-blue-200'
-                  : 'border-[#314767] bg-[#182235] text-blue-200/90 hover:border-blue-400/45'
-              }`}
+              className={selectedPresetTag === tag ? SIDEBAR_FILTER_CHIP_ACTIVE : SIDEBAR_FILTER_CHIP_IDLE}
             >
               {tag}
             </button>
@@ -1502,7 +1498,7 @@ export function WorkflowSidebarColumn({
                       <>
                         {favoriteIsCountCustomEditing ? (
                           <div
-                            className="h-6 rounded-full border border-blue-500 text-blue-200 bg-blue-950/35 inline-flex items-center px-1 gap-1"
+                            className={SIDEBAR_COMPOSE_CHIP_EDITING}
                             title="输入数量后点✓确认"
                           >
                             <input
@@ -1522,7 +1518,7 @@ export function WorkflowSidebarColumn({
                             <button
                               type="button"
                               onClick={applyFavoriteCustomCount}
-                              className="text-[9px] leading-none font-black text-blue-300 hover:text-blue-100"
+                              className="text-[9px] leading-none font-black text-white/80 hover:text-white"
                               title="确认数量"
                             >
                               ✓
@@ -1554,11 +1550,7 @@ export function WorkflowSidebarColumn({
                             renderTrigger={() => (
                               <span
                                 title={favoriteCountChanged ? `生成数量：${favoriteCountValue} 张` : '生成数量：1 张（默认）'}
-                                className={`w-6 h-6 rounded-full border inline-flex items-center justify-center leading-none text-[9px] font-black ${
-                                  favoriteCountChanged
-                                    ? 'border-blue-500 text-blue-300 bg-blue-950/35'
-                                    : 'border-[#3a3a40] text-gray-300 bg-[#1a1a20]'
-                                }`}
+                                className={favoriteCountChanged ? SIDEBAR_COMPOSE_CHIP_ACTIVE : SIDEBAR_COMPOSE_CHIP_IDLE}
                               >
                                 {favoriteCountChanged ? String(favoriteCountValue) : '数'}
                               </span>
@@ -1598,11 +1590,7 @@ export function WorkflowSidebarColumn({
                                     ? `文字模型：${labelForTextModelRegistryId(favoriteCfg.textModelRegistryId ?? '')}`
                                     : '文字模型：默认'
                                 }
-                                className={`w-6 h-6 rounded-full border inline-flex items-center justify-center leading-none text-[9px] font-black ${
-                                  favoriteTextModelChanged
-                                    ? 'border-emerald-500 text-emerald-300 bg-emerald-950/35'
-                                    : 'border-[#3a3a40] text-gray-300 bg-[#1a1a20]'
-                                }`}
+                                className={favoriteTextModelChanged ? SIDEBAR_COMPOSE_CHIP_ACTIVE : SIDEBAR_COMPOSE_CHIP_IDLE}
                               >
                                 {favoriteTextModelText}
                               </span>
@@ -1623,11 +1611,7 @@ export function WorkflowSidebarColumn({
                                   },
                                 }))
                               }
-                              className={`shrink-0 w-6 h-6 rounded-full border inline-flex items-center justify-center leading-none text-[9px] font-black ${
-                                groupOverrideByCategory[FAVORITE_GROUP_KEY]?.enabled
-                                  ? 'border-blue-500 text-blue-300 bg-blue-950/35'
-                                  : 'border-[#3a3a40] text-gray-300 bg-[#1a1a20]'
-                              }`}
+                              className={groupOverrideByCategory[FAVORITE_GROUP_KEY]?.enabled ? SIDEBAR_COMPOSE_CHIP_ACTIVE : SIDEBAR_COMPOSE_CHIP_IDLE}
                             >
                               覆
                             </button>
@@ -1665,11 +1649,7 @@ export function WorkflowSidebarColumn({
                                       ? `模型：${labelForImageModelRegistryId(favoriteCfg.imageModelRegistryId ?? favoriteCfg.imageGear ?? '')}`
                                       : '模型：默认'
                                   }
-                                  className={`w-6 h-6 rounded-full border inline-flex items-center justify-center leading-none text-[9px] font-black ${
-                                    favoriteModelChanged
-                                      ? 'border-blue-500 text-blue-300 bg-blue-950/35'
-                                      : 'border-[#3a3a40] text-gray-300 bg-[#1a1a20]'
-                                  }`}
+                                  className={favoriteModelChanged ? SIDEBAR_COMPOSE_CHIP_ACTIVE : SIDEBAR_COMPOSE_CHIP_IDLE}
                                 >
                                   {favoriteModelText}
                                 </span>
@@ -1692,11 +1672,7 @@ export function WorkflowSidebarColumn({
                               renderTrigger={() => (
                                 <span
                                   title={favoriteRatioChanged ? `比例：${favoriteCfg.imageAspectRatio}` : '比例：默认'}
-                                  className={`w-6 h-6 rounded-full border inline-flex items-center justify-center leading-none text-[9px] font-black ${
-                                    favoriteRatioChanged
-                                      ? 'border-blue-500 text-blue-300 bg-blue-950/35'
-                                      : 'border-[#3a3a40] text-gray-300 bg-[#1a1a20]'
-                                  }`}
+                                  className={favoriteRatioChanged ? SIDEBAR_COMPOSE_CHIP_ACTIVE : SIDEBAR_COMPOSE_CHIP_IDLE}
                                 >
                                   {favoriteRatioText}
                                 </span>
@@ -1719,11 +1695,7 @@ export function WorkflowSidebarColumn({
                               renderTrigger={() => (
                                 <span
                                   title={favoriteSizeChanged ? `尺寸：${favoriteCfg.imageSize}` : '尺寸：默认'}
-                                  className={`w-6 h-6 rounded-full border inline-flex items-center justify-center leading-none text-[9px] font-black ${
-                                    favoriteSizeChanged
-                                      ? 'border-blue-500 text-blue-300 bg-blue-950/35'
-                                      : 'border-[#3a3a40] text-gray-300 bg-[#1a1a20]'
-                                  }`}
+                                  className={favoriteSizeChanged ? SIDEBAR_COMPOSE_CHIP_ACTIVE : SIDEBAR_COMPOSE_CHIP_IDLE}
                                 >
                                   {favoriteSizeText}
                                 </span>
@@ -1745,11 +1717,7 @@ export function WorkflowSidebarColumn({
                                   };
                                 })
                               }
-                              className={`shrink-0 w-6 h-6 rounded-full border inline-flex items-center justify-center leading-none text-[9px] font-black ${
-                                groupOverrideByCategory[FAVORITE_GROUP_KEY]?.understand !== false
-                                  ? 'border-blue-500 text-blue-300 bg-blue-950/35'
-                                  : 'border-[#3a3a40] text-gray-300 bg-[#1a1a20]'
-                              } disabled:opacity-50`}
+                              className={`${groupOverrideByCategory[FAVORITE_GROUP_KEY]?.understand !== false ? SIDEBAR_COMPOSE_CHIP_ACTIVE : SIDEBAR_COMPOSE_CHIP_IDLE} disabled:opacity-50`}
                             >
                               解
                             </button>
@@ -2074,7 +2042,7 @@ export function WorkflowSidebarColumn({
                         <>
                       {isCountCustomEditing ? (
                         <div
-                          className="h-6 rounded-full border border-blue-500 text-blue-200 bg-blue-950/35 inline-flex items-center px-1 gap-1"
+                          className={SIDEBAR_COMPOSE_CHIP_EDITING}
                           title="输入数量后点✓确认"
                         >
                           <input
@@ -2094,7 +2062,7 @@ export function WorkflowSidebarColumn({
                           <button
                             type="button"
                             onClick={applyCustomCount}
-                            className="text-[9px] leading-none font-black text-blue-300 hover:text-blue-100"
+                            className="text-[9px] leading-none font-black text-white/80 hover:text-white"
                             title="确认数量"
                           >
                             ✓
@@ -2126,9 +2094,7 @@ export function WorkflowSidebarColumn({
                           renderTrigger={() => (
                             <span
                               title={countChanged ? `生成数量：${countValue} 张` : '生成数量：1 张（默认）'}
-                              className={`w-6 h-6 rounded-full border inline-flex items-center justify-center leading-none text-[9px] font-black ${
-                                countChanged ? 'border-blue-500 text-blue-300 bg-blue-950/35' : 'border-[#3a3a40] text-gray-300 bg-[#1a1a20]'
-                              }`}
+                              className={countChanged ? SIDEBAR_COMPOSE_CHIP_ACTIVE : SIDEBAR_COMPOSE_CHIP_IDLE}
                             >
                               {countChanged ? String(countValue) : '数'}
                             </span>
@@ -2168,11 +2134,7 @@ export function WorkflowSidebarColumn({
                                   ? `文字模型：${labelForTextModelRegistryId(cfg.textModelRegistryId ?? '')}`
                                   : '文字模型：默认'
                               }
-                              className={`w-6 h-6 rounded-full border inline-flex items-center justify-center leading-none text-[9px] font-black ${
-                                textModelChanged
-                                  ? 'border-emerald-500 text-emerald-300 bg-emerald-950/35'
-                                  : 'border-[#3a3a40] text-gray-300 bg-[#1a1a20]'
-                              }`}
+                              className={textModelChanged ? SIDEBAR_COMPOSE_CHIP_ACTIVE : SIDEBAR_COMPOSE_CHIP_IDLE}
                             >
                               {textModelChipText}
                             </span>
@@ -2193,7 +2155,7 @@ export function WorkflowSidebarColumn({
                                 },
                               }))
                             }
-                            className={`shrink-0 w-6 h-6 rounded-full border inline-flex items-center justify-center leading-none text-[9px] font-black ${groupOverrideByCategory[category.id]?.enabled ? 'border-blue-500 text-blue-300 bg-blue-950/35' : 'border-[#3a3a40] text-gray-300 bg-[#1a1a20]'}`}
+                            className={groupOverrideByCategory[category.id]?.enabled ? SIDEBAR_COMPOSE_CHIP_ACTIVE : SIDEBAR_COMPOSE_CHIP_IDLE}
                           >
                             覆
                           </button>
@@ -2231,9 +2193,7 @@ export function WorkflowSidebarColumn({
                                     ? `模型：${labelForImageModelRegistryId(cfg.imageModelRegistryId ?? cfg.imageGear ?? '')}`
                                     : '模型：默认'
                                 }
-                                className={`w-6 h-6 rounded-full border inline-flex items-center justify-center leading-none text-[9px] font-black ${
-                                  modelChanged ? 'border-blue-500 text-blue-300 bg-blue-950/35' : 'border-[#3a3a40] text-gray-300 bg-[#1a1a20]'
-                                }`}
+                                className={modelChanged ? SIDEBAR_COMPOSE_CHIP_ACTIVE : SIDEBAR_COMPOSE_CHIP_IDLE}
                               >
                                 {modelText}
                               </span>
@@ -2253,9 +2213,7 @@ export function WorkflowSidebarColumn({
                             renderTrigger={() => (
                               <span
                                 title={ratioChanged ? `比例：${cfg.imageAspectRatio}` : '比例：默认'}
-                                className={`w-6 h-6 rounded-full border inline-flex items-center justify-center leading-none text-[9px] font-black ${
-                                  ratioChanged ? 'border-blue-500 text-blue-300 bg-blue-950/35' : 'border-[#3a3a40] text-gray-300 bg-[#1a1a20]'
-                                }`}
+                                className={ratioChanged ? SIDEBAR_COMPOSE_CHIP_ACTIVE : SIDEBAR_COMPOSE_CHIP_IDLE}
                               >
                                 {ratioText}
                               </span>
@@ -2275,9 +2233,7 @@ export function WorkflowSidebarColumn({
                             renderTrigger={() => (
                               <span
                                 title={sizeChanged ? `尺寸：${cfg.imageSize}` : '尺寸：默认'}
-                                className={`w-6 h-6 rounded-full border inline-flex items-center justify-center leading-none text-[9px] font-black ${
-                                  sizeChanged ? 'border-blue-500 text-blue-300 bg-blue-950/35' : 'border-[#3a3a40] text-gray-300 bg-[#1a1a20]'
-                                }`}
+                                className={sizeChanged ? SIDEBAR_COMPOSE_CHIP_ACTIVE : SIDEBAR_COMPOSE_CHIP_IDLE}
                               >
                                 {sizeText}
                               </span>
@@ -2299,7 +2255,7 @@ export function WorkflowSidebarColumn({
                                 };
                               })
                             }
-                            className={`shrink-0 w-6 h-6 rounded-full border inline-flex items-center justify-center leading-none text-[9px] font-black ${groupOverrideByCategory[category.id]?.understand !== false ? 'border-blue-500 text-blue-300 bg-blue-950/35' : 'border-[#3a3a40] text-gray-300 bg-[#1a1a20]'} disabled:opacity-50`}
+                            className={`${groupOverrideByCategory[category.id]?.understand !== false ? SIDEBAR_COMPOSE_CHIP_ACTIVE : SIDEBAR_COMPOSE_CHIP_IDLE} disabled:opacity-50`}
                           >
                             解
                           </button>

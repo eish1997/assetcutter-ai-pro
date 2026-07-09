@@ -17,7 +17,7 @@ import {
   resolveAuditTimeRange,
   type AuditTimePreset,
 } from '../../services/auditLogTimeRange';
-import { CustomDropdown } from '../ui/CustomDropdown';
+import { CustomDropdown, DROPDOWN_LIST_SETTINGS } from '../ui/CustomDropdown';
 import UsageEventsGroupedTable from '../usage/UsageEventsGroupedTable';
 import { fetchCreditBalance, fetchCreditLedger } from '../../services/creditsApi';
 import { fmtCredits, creditLedgerKindLabel, fmtPromoExpiryDate, type CreditBalance, type CreditLedgerEntry } from '../../shared/credits';
@@ -495,10 +495,12 @@ const UsageSettingsPanel: React.FC<{
         <label className="text-[10px] text-gray-500 flex flex-col gap-1">
           时间
           <CustomDropdown
+            tone="settings"
             value={draft.timePreset}
             options={AUDIT_TIME_PRESETS.map((p) => ({ value: p.id, label: p.label }))}
             onChange={(v) => setDraft((d) => ({ ...d, timePreset: v as AuditTimePreset }))}
             triggerClassName="bg-white/5 border border-[#2e2e32] rounded-lg px-2 py-1.5 text-[11px] text-gray-200 min-w-[120px]"
+            listClassName={DROPDOWN_LIST_SETTINGS}
           />
         </label>
         <label className="text-[10px] text-gray-500 flex flex-col gap-1">

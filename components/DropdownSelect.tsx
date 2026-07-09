@@ -1,7 +1,12 @@
 /**
- * 自定义下拉（与生图模块「生图模型」一致：深色底、选中项蓝底、▲/▼）
+ * 自定义下拉（与全局输入框 / CustomDropdown compose 视觉一致）
  */
 import React, { useState, useRef, useEffect } from 'react';
+import {
+  DROPDOWN_LIST_SURFACE,
+  DROPDOWN_OPTION_CHIP_ACTIVE,
+  DROPDOWN_OPTION_CHIP_IDLE,
+} from './ui/CustomDropdown';
 
 export interface DropdownOption {
   value: string;
@@ -15,7 +20,7 @@ interface DropdownSelectProps {
   placeholder?: string;
   className?: string;
   buttonClassName?: string;
-  /** 与生图模块一致：小号紧凑样式 */
+  /** 小号紧凑样式 */
   compact?: boolean;
 }
 
@@ -51,7 +56,7 @@ const DropdownSelect: React.FC<DropdownSelectProps> = ({
       <button
         type="button"
         onClick={() => setOpen((p) => !p)}
-        className={`w-full bg-[#1c1c22] border border-[#2e2e32] rounded-xl ${pad} ${textSize} text-left flex items-center justify-between outline-none focus:border-blue-500 hover:bg-[#2e2e36] transition-colors text-white ${buttonClassName}`}
+        className={`w-full bg-white/[0.05] ring-1 ring-white/[0.08] rounded-xl ${pad} ${textSize} text-left flex items-center justify-between outline-none transition-colors hover:bg-white/[0.1] focus-visible:ring-2 focus-visible:ring-blue-500/45 text-gray-200 ${buttonClassName}`}
       >
         <span className="truncate">{displayLabel}</span>
         <span className="text-gray-500 shrink-0 ml-2">{open ? '▲' : '▼'}</span>
@@ -59,7 +64,9 @@ const DropdownSelect: React.FC<DropdownSelectProps> = ({
       {open && (
         <>
           <div className="fixed inset-0 z-[1002]" aria-hidden onClick={() => setOpen(false)} />
-          <ul className="absolute top-full left-0 right-0 mt-1 z-[1003] max-h-56 overflow-y-auto rounded-xl border border-[#2e2e32] bg-[#0f0f0f] shadow-xl py-1 text-white list-none">
+          <ul
+            className={`absolute top-full left-0 right-0 mt-1 z-[1003] max-h-56 overflow-y-auto rounded-xl p-1.5 flex flex-col gap-1 text-white list-none ${DROPDOWN_LIST_SURFACE}`}
+          >
             {options.map((opt) => (
               <li key={opt.value}>
                 <button
@@ -68,7 +75,7 @@ const DropdownSelect: React.FC<DropdownSelectProps> = ({
                     onChange(opt.value);
                     setOpen(false);
                   }}
-                  className={`w-full ${pad} text-left ${textSize} transition-colors ${value === opt.value ? 'bg-[#264670] text-blue-300' : 'text-white hover:bg-[#2e2e36]'}`}
+                  className={value === opt.value ? DROPDOWN_OPTION_CHIP_ACTIVE : DROPDOWN_OPTION_CHIP_IDLE}
                 >
                   {opt.label}
                 </button>

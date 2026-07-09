@@ -866,7 +866,7 @@ const AdminUserDetailPanel: React.FC<Props> = ({ userId }) => {
                   { value: '', label: '普通用户' },
                   ...roles.map((r) => ({ value: r.id, label: r.displayName })),
                 ]}
-                triggerClassName="w-full bg-white/5 border border-[#2e2e32] rounded-xl px-3 py-2 text-[11px] text-left flex items-center justify-between outline-none hover:bg-[#2e2e36]"
+                triggerClassName="w-full bg-white/[0.05] ring-1 ring-white/[0.08] rounded-xl px-3 py-2 text-[11px] text-left text-gray-200 flex items-center justify-between outline-none hover:bg-white/[0.1] focus-visible:ring-2 focus-visible:ring-blue-500/45"
               />
             </div>
           ) : null}

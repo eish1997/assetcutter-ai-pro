@@ -119,7 +119,7 @@ const AdminStaffInvitesPanel: React.FC = () => {
                 value={staffRoleId}
                 onChange={setStaffRoleId}
                 options={roleOptions}
-                triggerClassName="w-full bg-[#0a0a0b] border border-[#2e2e32] rounded-lg px-3 py-2 text-[11px] text-left text-gray-200 flex items-center justify-between outline-none focus:border-blue-500 hover:bg-[#121214] transition-colors"
+                triggerClassName="w-full bg-white/[0.05] ring-1 ring-white/[0.08] rounded-lg px-3 py-2 text-[11px] text-left text-gray-200 flex items-center justify-between outline-none transition-colors hover:bg-white/[0.1] focus-visible:ring-2 focus-visible:ring-blue-500/45"
               />
             </div>
           </div>

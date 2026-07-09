@@ -2,6 +2,10 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { StoryboardSheetPreviewItem } from '../../services/storyboardSheetPreview';
 import { sheetPreviewVersionLabel } from '../../services/storyboardSheetPreviewHistory';
+import {
+  DROPDOWN_OPTION_CHIP_ACTIVE,
+  DROPDOWN_OPTION_CHIP_IDLE,
+} from '../ui/CustomDropdown';
 
 type Props = {
   preview: StoryboardSheetPreviewItem;
@@ -84,7 +88,7 @@ export default function StoryboardSheetPreviewVersionMenu({
             <>
               <div className="fixed inset-0 z-[2184]" aria-hidden onClick={() => setOpen(false)} />
               <ul
-                className="fixed z-[2185] max-h-40 min-w-[7rem] overflow-y-auto rounded-xl border border-[#2e2e32] bg-[#0f0f0f] py-1 shadow-xl"
+                className="fixed z-[2185] max-h-40 min-w-[7rem] overflow-y-auto rounded-xl border border-white/10 bg-[#0f0f12] p-1.5 flex flex-col gap-1 shadow-xl ring-1 ring-white/[0.05]"
                 style={{ top: pos.top, left: pos.left }}
                 onClick={(event) => event.stopPropagation()}
               >
@@ -101,11 +105,9 @@ export default function StoryboardSheetPreviewVersionMenu({
                         onSelectVersion(preview.id, entry.id);
                         setOpen(false);
                       }}
-                      className={`w-full px-2.5 py-1.5 text-left text-[9px] transition-colors ${
-                        entry.active
-                          ? 'bg-[#264670] text-blue-300'
-                          : 'text-gray-200 hover:bg-[#2e2e36]'
-                      }`}
+                      className={
+                        entry.active ? DROPDOWN_OPTION_CHIP_ACTIVE : DROPDOWN_OPTION_CHIP_IDLE
+                      }
                     >
                       {entry.label}
                       {entry.active ? ' · 当前' : ''}

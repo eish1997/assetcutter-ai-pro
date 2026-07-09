@@ -21,6 +21,11 @@ import {
   WORKFLOW_QUICK_COMPOSE_BAR_SHELL,
   WORKFLOW_QUICK_COMPOSE_DOCKED_WIDTH_CLASS,
 } from './workflow/workflowSectionUiConstants';
+import {
+  DROPDOWN_OPTION_CHIP_ACTIVE,
+  DROPDOWN_OPTION_CHIP_DISABLED,
+  DROPDOWN_OPTION_CHIP_IDLE,
+} from './ui/CustomDropdown';
 import QuickComposeDropTray from './workflow/QuickComposeDropTray';
 import QuickComposeMentionField, {
   type QuickComposeMentionFieldHandle,
@@ -930,13 +935,7 @@ export default function WorkspaceQuickComposeBar({
   ) : null;
 
   const modelOptionChipCls = (on: boolean, disabled?: boolean) =>
-    `w-full rounded-md px-2 py-1 text-left text-[9px] font-semibold ring-1 transition-colors ${
-      disabled
-        ? 'cursor-not-allowed bg-white/[0.02] text-gray-600 ring-white/[0.05]'
-        : on
-          ? 'bg-white/[0.16] text-white ring-white/[0.22]'
-          : 'bg-white/[0.04] text-gray-300 ring-white/[0.07] hover:bg-white/[0.08]'
-    }`;
+    disabled ? DROPDOWN_OPTION_CHIP_DISABLED : on ? DROPDOWN_OPTION_CHIP_ACTIVE : DROPDOWN_OPTION_CHIP_IDLE;
 
   const openGenParamsPanel = () => {
     setPanelAnchor('params');
