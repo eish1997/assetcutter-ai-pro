@@ -24,8 +24,9 @@ describe('devLog receipt', () => {
   it('renders thermal-like text receipt', () => {
     const text = buildDevLogReceiptText('2026-07-09', [sample]);
     expect(text).toContain('AssetCutter · DEV LOG');
-    expect(text).toContain('日结小票');
+    expect(text).toContain('日 结 小 票');
     expect(text).toContain('笔数');
     expect(text).toContain('aaaaaaa');
+    expect(text).toContain('NO.');
   });
 });
