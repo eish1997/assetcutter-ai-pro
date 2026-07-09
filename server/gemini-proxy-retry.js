@@ -17,7 +17,8 @@ export function isUpstreamRateLimitError(e) {
 }
 
 export function isRetryable(e) {
-  if (isUpstreamRateLimitError(e)) return false;
+  // 上游 429 可重试，但次数由 geminiProxyMaxAttempts 严格限制（默认仅 2 次、长退避）
+  if (isUpstreamRateLimitError(e)) return true;
   const msg = String((e && e.message) || e);
   if (/503|504|overloaded|UNAVAILABLE|DEADLINE_EXCEEDED|Deadline expired|500|INTERNAL|Internal error|high demand|try again later|The operation was cancelled|operation was canceled|CANCELLED/i.test(msg)) return true;
   const code = e && e.code;
@@ -35,7 +36,8 @@ export function isRetryable(e) {
 /** 429 用更长退避、更少次数；503 等仍用指数退避。 */
 export function geminiProxyRetryDelayMs(err, attempt) {
   if (isUpstreamRateLimitError(err)) {
-    return Math.min(120_000, 60_000 + Math.max(0, attempt) * 30_000);
+    // ~35s → 60s → 85s（上限 90s），避免连点打穿共享配额
+    return Math.min(90_000, 35_000 + Math.max(0, attempt) * 25_000);
   }
   return Math.min(30_000, 5000 * Math.pow(2, Math.max(0, attempt)));
 }
@@ -43,7 +45,8 @@ export function geminiProxyRetryDelayMs(err, attempt) {
 export function geminiProxyMaxAttempts(err, overloadMaxAttempts) {
   if (isUpstreamRateLimitError(err)) {
     const n = Number(process.env.GEMINI_PROXY_RATE_LIMIT_RETRIES);
-    const retries = Number.isFinite(n) && n >= 0 ? Math.floor(n) : 0;
+    // 默认 2 次重试（共 3 次尝试）；设 0 可关闭上游 429 重试
+    const retries = Number.isFinite(n) && n >= 0 ? Math.floor(n) : 2;
     return retries + 1;
   }
   return overloadMaxAttempts;

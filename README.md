@@ -10,6 +10,7 @@ AI-assisted asset workflow workbench (workspace, capability presets, experimenta
 - [x] Capability sets and workflow composer
 - [x] Experimental: seam repair, PBR texture generation, prompt arena
 - [x] Admin console (`/admin`) for staff ops
+- [x] Upstream Gemini/Vertex 429: limited long-backoff retries (proxy + client); understand mode lowers image batch concurrency
 - [ ] Removed: standalone dialog page, texture pattern extract page, prompt-effect analysis page
 
 ## Sidebar / pages
@@ -26,4 +27,4 @@ npm install
 npm run dev
 ```
 
-See `.env.example` for environment variables.
+See `.env.example` for environment variables (including `GEMINI_PROXY_RATE_LIMIT_RETRIES`, `VITE_WORKFLOW_UNDERSTAND_IMAGE_CONCURRENCY`).

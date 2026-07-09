@@ -726,6 +726,10 @@ async function executeSplitComponentCapability(
         durationMs: Date.now() - start,
       };
     }
+    if (shouldRunCapabilityUnderstand(preset, { userText: (inputText || '').trim() })) {
+      await new Promise<void>((r) => setTimeout(r, 1500));
+      ctx.onLog?.('info', `[${actionLabel}] 理解完成，准备生图…`, undefined);
+    }
     ctx.onLog?.('info', `[${actionLabel}] 生图中…`, undefined);
     emitCapabilityRunProgress(ctx, `${actionLabel}：生图中…`);
     const modelId = resolveImageModelIdFromPreset(preset);
@@ -1009,6 +1013,11 @@ export async function executeCapability(
         error: '该能力为生图执行方式，但未填写预设提示词或理解未返回有效指令',
         durationMs: Date.now() - start,
       };
+    }
+    if (runUnderstand) {
+      // 理解刚打完上游，短间隔再开生图，降低同任务连打 RPM
+      await new Promise<void>((r) => setTimeout(r, 1500));
+      ctx.onLog?.('info', `[${actionLabel}] 理解完成，准备生图…`, undefined);
     }
     const augmented = prompt;
     ctx.onLog?.('info', `[${actionLabel}] 生图中…`, undefined);

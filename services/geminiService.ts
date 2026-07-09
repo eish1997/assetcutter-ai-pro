@@ -1971,7 +1971,20 @@ function isUpstreamRateLimitError(err: unknown): boolean {
   return Boolean(mapped && mapped.includes('Google/Vertex'));
 }
 
-/** SDK 常以 code/status 抛出，不一定带 503 字符串 */
+/** 上游 429 客户端有限重试：走 bulk 时 proxy 已退避，客户端再补 1 次；直连 SDK 可 2 次 */
+function upstreamRateLimitClientRetries(): number {
+  try {
+    return effectiveBulkBase() ? 1 : 2;
+  } catch {
+    return 2;
+  }
+}
+
+function upstreamRateLimitRetryDelayMs(attempt: number): number {
+  return Math.min(90_000, 35_000 + Math.max(0, attempt) * 25_000);
+}
+
+/** SDK 常以 code/status 抛出，不一定带 503 字符串（上游 429 由 callWithRetry 单独预算，不走本函数） */
 function isRetryableError(err: unknown): boolean {
   if (isUpstreamRateLimitError(err)) return false;
   if (err != null && typeof err === "object") {
@@ -2068,6 +2081,8 @@ async function callWithRetry<T>(
   const maxRetryDelayMs = options?.maxRetryDelayMs ?? 15_000;
   const maxAttempts = retries + 1;
   let currentAttempt = 1;
+  let rateLimitRetriesLeft = upstreamRateLimitClientRetries();
+  let rateLimitAttempt = 0;
 
   for (;;) {
     try {
@@ -2075,7 +2090,20 @@ async function callWithRetry<T>(
     } catch (err) {
       if (isAbortError(err)) throw err;
       if (isUpstreamRateLimitError(err)) {
-        throw err;
+        if (rateLimitRetriesLeft <= 0) throw err;
+        const waitMs = upstreamRateLimitRetryDelayMs(rateLimitAttempt);
+        const phase = options?.requestPhase ? `（${options.requestPhase}）` : '';
+        console.warn(
+          buildDiagMessage(
+            'GEMINI_RATE_LIMIT',
+            `Google/Vertex RPM 触顶${phase}，正在退避重试`,
+            `约 ${Math.ceil(waitMs / 1000)} 秒后重试（剩余 ${rateLimitRetriesLeft} 次）`
+          )
+        );
+        await sleepWithAbort(waitMs, options?.abortSignal);
+        rateLimitRetriesLeft -= 1;
+        rateLimitAttempt += 1;
+        continue;
       }
       if (!(isRetryableError(err) && retries > 0)) {
         throw err;
@@ -2225,13 +2253,13 @@ function parseGoogleStyleErrorPayload(raw: string): { code?: number; status?: st
   return null;
 }
 
-/** 429 / 限流类错误 → 工作区可读文案 */
+/** 429 / 限流类错误 → 工作区可读文案（重试耗尽后） */
 export function userFacingRateLimitMessage(kind: 'upstream' | 'site' = 'upstream'): string {
   if (kind === 'site') {
     return '生图在本站公平队列中受限，请等待约 10～30 秒后清空队列、单次重试。';
   }
   let msg =
-    'Google/Vertex API 配额或 RPM 触顶（非积分不足）。系统已停止连点式自动重试；请等待 2～5 分钟后单次重试，或减少队列并发；生图可在快捷栏选「直发」跳过理解步。';
+    'Google/Vertex API 配额或 RPM 触顶（非积分不足）。已自动退避重试仍未恢复；请等待 1～3 分钟后单次重试，或减少队列并发；生图可在快捷栏选「直发」跳过理解步。';
   try {
     if (import.meta.env.DEV && isLocalDevPage()) {
       msg +=

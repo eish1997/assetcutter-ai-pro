@@ -94,7 +94,7 @@ import {
   GEMINI_ASYNC_RECOVERED_EVENT,
   scheduleWorkflowGeminiAsyncRecovery,
 } from '../services/workflowGeminiAsyncRecovery';
-import { overrideSkipUnderstandFromUnderstandEnabled } from '../services/workflowUnderstandOverride';
+import { overrideSkipUnderstandFromUnderstandEnabled, shouldRunCapabilityUnderstand } from '../services/workflowUnderstandOverride';
 import { isWorkspaceCompanionDirectorySourceOfTruth } from '../services/workspaceCloudSync';
 import {
   getQuickComposePlainModule,
@@ -103,7 +103,10 @@ import {
   QUICK_COMPOSE_PLAIN_TEXT_ACTION_ID,
 } from '../services/quickComposePlainPresets';
 import { classifyWorkflowRunTaskBranch } from '../services/workflowRunTaskBranch';
-import { getWorkflowMaxConcurrency } from '../services/workflowConcurrency';
+import {
+  getWorkflowMaxConcurrency,
+  getWorkflowUnderstandImageConcurrency,
+} from '../services/workflowConcurrency';
 import {
   applyVgpAfterSuccessfulGen,
   attachInitialVgpToNewAsset,
@@ -3560,10 +3563,11 @@ ${lineSvg}
       setExecuting(true);
       setExecutingQueue({ total: queue.length, tasks: [...queue] });
       const workflowMaxConcurrency = getWorkflowMaxConcurrency();
-      const imageBatchWorkers = getGeminiImageBatchBoxSizeForCurrentProvider();
+      const imageBatchWorkersDirect = getGeminiImageBatchBoxSizeForCurrentProvider();
+      const imageBatchWorkersUnderstand = getWorkflowUnderstandImageConcurrency();
       onLog?.(
         'info',
-        `开始执行队列（${queue.length} 项，常规并发 ${workflowMaxConcurrency}，生图理解并发 ${imageBatchWorkers}）`
+        `开始执行队列（${queue.length} 项，常规并发 ${workflowMaxConcurrency}，生图直发并发 ${imageBatchWorkersDirect}，生图理解并发 ${imageBatchWorkersUnderstand}）`
       );
       onLog?.(
         'info',
@@ -3571,7 +3575,7 @@ ${lineSvg}
       );
 
       const total = queue.length;
-      const logBatch = `[${total}项·常规≤${workflowMaxConcurrency}/生图理解≤${imageBatchWorkers}]`;
+      const logBatch = `[${total}项·常规≤${workflowMaxConcurrency}/直发≤${imageBatchWorkersDirect}/理解≤${imageBatchWorkersUnderstand}]`;
 
       const processTask = async (
         task: WorkflowPendingTask,
@@ -3983,6 +3987,18 @@ ${lineSvg}
             const mod = getModule(leadTask.actionType);
             return !!mod && getCapabilityEngine(mod) === 'gen_image';
           })();
+          const leadRunsUnderstand = (() => {
+            if (!leadTaskIsGenImage || !leadTask) return false;
+            const mod = getModule(leadTask.actionType);
+            if (!mod) return false;
+            return shouldRunCapabilityUnderstand(mod, {
+              overrideSkipUnderstand: leadTask.overrideSkipUnderstand,
+              userText: leadTask.inputText,
+            });
+          })();
+          const imageBatchWorkers = leadRunsUnderstand
+            ? imageBatchWorkersUnderstand
+            : imageBatchWorkersDirect;
           const chunkSize = leadTaskIsGenImage ? imageBatchWorkers : BASE_MAX_CONCURRENCY;
           const chunk = queue.slice(i, i + chunkSize);
           const genImageTasks = chunk.filter((task) => {

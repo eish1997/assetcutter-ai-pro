@@ -7,10 +7,10 @@ import {
 } from '../server/gemini-proxy-retry.js';
 
 describe('gemini-proxy-retry isRetryable', () => {
-  it('returns false for upstream 429 (no retry amplification)', () => {
-    expect(isRetryable(new Error('429 Too Many Requests'))).toBe(false);
-    expect(isRetryable(new Error('Too Many Requests'))).toBe(false);
-    expect(isRetryable({ message: 'upstream', code: 429 })).toBe(false);
+  it('returns true for upstream 429 (limited by geminiProxyMaxAttempts)', () => {
+    expect(isRetryable(new Error('429 Too Many Requests'))).toBe(true);
+    expect(isRetryable(new Error('Too Many Requests'))).toBe(true);
+    expect(isRetryable({ message: 'upstream', code: 429 })).toBe(true);
   });
 
   it('returns true for 503/504 message patterns', () => {
@@ -48,8 +48,10 @@ describe('gemini-proxy-retry upstream 429 plan', () => {
 
   it('uses fewer attempts and longer delay for upstream 429', () => {
     const err = new Error('Too Many Requests');
-    expect(geminiProxyMaxAttempts(err, 15)).toBe(1);
-    expect(geminiProxyRetryDelayMs(err, 0)).toBe(60_000);
-    expect(geminiProxyRetryDelayMs(err, 1)).toBe(90_000);
+    // 默认 GEMINI_PROXY_RATE_LIMIT_RETRIES=2 → 共 3 次尝试
+    expect(geminiProxyMaxAttempts(err, 15)).toBe(3);
+    expect(geminiProxyRetryDelayMs(err, 0)).toBe(35_000);
+    expect(geminiProxyRetryDelayMs(err, 1)).toBe(60_000);
+    expect(geminiProxyRetryDelayMs(err, 2)).toBe(85_000);
   });
 });
