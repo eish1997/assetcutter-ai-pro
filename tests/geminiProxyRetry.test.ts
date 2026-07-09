@@ -7,15 +7,19 @@ import {
 } from '../server/gemini-proxy-retry.js';
 
 describe('gemini-proxy-retry isRetryable', () => {
-  it('returns true for 429/503/504 message patterns', () => {
-    expect(isRetryable(new Error('429 Too Many Requests'))).toBe(true);
+  it('returns false for upstream 429 (no retry amplification)', () => {
+    expect(isRetryable(new Error('429 Too Many Requests'))).toBe(false);
+    expect(isRetryable(new Error('Too Many Requests'))).toBe(false);
+    expect(isRetryable({ message: 'upstream', code: 429 })).toBe(false);
+  });
+
+  it('returns true for 503/504 message patterns', () => {
     expect(isRetryable(new Error('503 Service Unavailable'))).toBe(true);
     expect(isRetryable(new Error('504 Gateway Timeout'))).toBe(true);
     expect(isRetryable(new Error('Resource exhausted, high demand, try again later'))).toBe(true);
   });
 
-  it('returns true for numeric code/status fields', () => {
-    expect(isRetryable({ message: 'upstream', code: 429 })).toBe(true);
+  it('returns true for numeric code/status fields (non-429)', () => {
     expect(isRetryable({ message: 'upstream', status: 'UNAVAILABLE' })).toBe(true);
     expect(isRetryable({ message: 'upstream', status: 'DEADLINE_EXCEEDED' })).toBe(true);
   });

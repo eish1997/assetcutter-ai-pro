@@ -129,4 +129,33 @@ describe('normalizeCapabilityPreset: skipUnderstand seed defaults', () => {
     );
     expect(normalized.skipUnderstand).toBe(false);
   });
+
+  it('白模等有 instruction 的图生图预设缺字段时默认直发', () => {
+    const normalized = normalizeCapabilityPreset(
+      makeBasePreset({
+        id: '842d3d6e19',
+        label: '白模',
+        category: 'image_to_image',
+        engine: 'gen_image',
+        instruction: '将图片转成传统3D游戏影视流程中的白模效果图，灰色背景。',
+      }),
+      0
+    );
+    expect(normalized.skipUnderstand).toBe(true);
+  });
+
+  it('图生图显式 skipUnderstand:false 时仍走理解步', () => {
+    const normalized = normalizeCapabilityPreset(
+      makeBasePreset({
+        id: '842d3d6e19',
+        label: '白模',
+        category: 'image_to_image',
+        engine: 'gen_image',
+        instruction: '白模提示词',
+        skipUnderstand: false,
+      }),
+      0
+    );
+    expect(normalized.skipUnderstand).toBe(false);
+  });
 });

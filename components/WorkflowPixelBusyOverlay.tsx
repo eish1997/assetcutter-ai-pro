@@ -320,7 +320,11 @@ const WorkflowPixelBusyOverlay: React.FC<{
           }`}
           style={{ textShadow: '0 0 24px rgba(0,0,0,0.85)' }}
         >
-          {executing ? '执行中' : '排队中'}
+          {executing
+            ? progressDetail && /^步骤\s+\d+\/\d+/.test(progressDetail)
+              ? progressDetail.split('·')[0]?.trim() || '执行中'
+              : '执行中'
+            : '排队中'}
         </span>
         {showElapsed ? (
           <span

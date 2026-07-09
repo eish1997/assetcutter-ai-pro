@@ -70,6 +70,14 @@ function normalizeMessage(raw: unknown): QuickComposeThreadMessage | null {
       : undefined;
   const assetIds = isStringArray(m.assetIds) ? m.assetIds.filter(Boolean) : undefined;
   const taskIds = isStringArray(m.taskIds) ? m.taskIds.filter(Boolean) : undefined;
+  const taskAssetById =
+    m.taskAssetById && typeof m.taskAssetById === 'object' && !Array.isArray(m.taskAssetById)
+      ? Object.fromEntries(
+          Object.entries(m.taskAssetById as Record<string, unknown>).filter(
+            ([k, v]) => typeof k === 'string' && k.trim() && typeof v === 'string' && v.trim()
+          )
+        )
+      : undefined;
   const errorMessage = typeof m.errorMessage === 'string' ? m.errorMessage : undefined;
   return {
     id,
@@ -78,6 +86,7 @@ function normalizeMessage(raw: unknown): QuickComposeThreadMessage | null {
     timestamp,
     ...(assetIds?.length ? { assetIds } : {}),
     ...(taskIds?.length ? { taskIds } : {}),
+    ...(taskAssetById && Object.keys(taskAssetById).length ? { taskAssetById } : {}),
     ...(status ? { status } : {}),
     ...(errorMessage ? { errorMessage } : {}),
   };
@@ -196,9 +205,9 @@ export function updateQuickComposeThreadMessage(
   key: QuickComposeThreadStoreKey,
   messageId: string,
   patch: Partial<
-    Pick<
+      Pick<
       QuickComposeThreadMessage,
-      'text' | 'status' | 'assetIds' | 'taskIds' | 'errorMessage'
+      'text' | 'status' | 'assetIds' | 'taskIds' | 'taskAssetById' | 'errorMessage'
     >
   >
 ): QuickComposeThread | null {

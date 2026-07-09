@@ -124,6 +124,22 @@ const SEED_SKIP_UNDERSTAND_BY_ID: Record<string, true> = {
   style_transfer: true,
 };
 
+/** 图生图且已有固定 instruction → 默认直发（只 1 次生图），除非显式 `skipUnderstand: false` */
+function resolveSkipUnderstandDefault(
+  input: CustomAppModule,
+  category: CustomAppModule['category'],
+  engine: CustomAppModule['engine'] | undefined,
+  instruction: string
+): boolean {
+  if (input.skipUnderstand === true) return true;
+  if (input.skipUnderstand === false) return false;
+  if (SEED_SKIP_UNDERSTAND_BY_ID[input.id] === true) return true;
+  if (category === 'image_to_image' && engine === 'gen_image' && instruction.trim().length > 0) {
+    return true;
+  }
+  return false;
+}
+
 export function normalizeCapabilityPreset(input: CustomAppModule, index: number): CustomAppModule {
   const rawCat = String(input.category ?? '');
   const bundleDir =
@@ -145,9 +161,7 @@ export function normalizeCapabilityPreset(input: CustomAppModule, index: number)
   const enabled = input.enabled !== false;
   const order = typeof input.order === 'number' ? input.order : index;
   const instruction = typeof input.instruction === 'string' ? input.instruction : '';
-  const skipUnderstand =
-    input.skipUnderstand === true ||
-    (input.skipUnderstand !== false && SEED_SKIP_UNDERSTAND_BY_ID[input.id] === true);
+  const skipUnderstand = resolveSkipUnderstandDefault(input, category, engine, instruction);
   const requirePromptOnTextDrop = input.requirePromptOnTextDrop === true;
   const rawGear = (input as CustomAppModule).imageGear;
   const rawModel = (input as CustomAppModule).imageModelRegistryId;

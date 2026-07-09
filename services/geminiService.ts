@@ -39,6 +39,12 @@ import {
 } from "./creditsProxyBridge";
 import { getGeminiFairnessRequestHeaders } from "./geminiFairnessBridge";
 import { peekCreditsPrechargeSession } from "./creditsPrechargeSession";
+import { AiPipelineStepError, detectPipelineStepFromMessage, isAiPipelineStepError, logAiPipelineDev } from "./aiPipelineStepError";
+import {
+  getEnvelopeProxyAdmissionHeaders,
+  getActiveAiTaskEnvelopeRequestHeaders,
+  isAiTaskEnvelopeActive,
+} from "./aiTaskEnvelope";
 import {
   GeminiAsyncPollTimeoutError,
   dispatchGeminiAsyncRecovered,
@@ -829,13 +835,32 @@ function isCreditsReserveInvalidProxyError(status: number, text: string): boolea
   return /积分预扣无效|积分预扣.*过期/i.test(raw);
 }
 
+function throwCreditsReserveInvalid(step: 'credits_gate' | 'credits_bundle', raw: string): never {
+  const detail = (raw || '').trim();
+  throw new AiPipelineStepError(
+    step,
+    'CREDITS_RESERVE_INVALID',
+    detail && /积分预扣/.test(detail)
+      ? detail
+      : '积分预扣无效或已过期，请刷新页面后单次重试（勿连点队列）'
+  );
+}
+
 async function bulkProxyAdmissionHeaders(estimatedCredits: number): Promise<Record<string, string>> {
-  const fallback = getGeminiFairnessRequestHeaders();
+  const fallback = {
+    ...getGeminiFairnessRequestHeaders(),
+    ...getActiveAiTaskEnvelopeRequestHeaders(),
+  };
+  const fromEnvelope = getEnvelopeProxyAdmissionHeaders(estimatedCredits);
+  if (fromEnvelope) {
+    return { ...fallback, ...fromEnvelope };
+  }
   const cached = getCachedCreditsProxyHeaders(estimatedCredits);
   if (cached) {
     return { ...fallback, ...cached };
   }
-  return getCreditsProxyRequestHeaders(estimatedCredits);
+  const proxyHeaders = await getCreditsProxyRequestHeaders(estimatedCredits);
+  return { ...fallback, ...proxyHeaders };
 }
 
 async function emitGeminiProxyMeteredUsage(args: {
@@ -932,13 +957,24 @@ async function bulkProxyGenerateContentSync(args: {
       });
     };
     let res = await postSync();
-    let text = await res.text();
+    const text = await res.text();
     if (!res.ok && isCreditsReserveInvalidProxyError(res.status, text || "")) {
       clearLastCreditsReserveKey();
-      res = await postSync();
-      text = await res.text();
+      logAiPipelineDev('error', {
+        step: 'credits_gate',
+        code: 'CREDITS_RESERVE_INVALID',
+        raw: text,
+        reserveKey: getLastCreditsReserveKey(),
+      });
+      throwCreditsReserveInvalid('credits_gate', text || '');
     }
     if (!res.ok) {
+      const rawFail = (text || "").trim();
+      logAiPipelineDev('error', {
+        step: 'understand',
+        raw: rawFail,
+        reserveKey: frozenCreditsReserveKey ?? getLastCreditsReserveKey(),
+      });
       const raw = (text || "").trim();
       const fairnessErr = tryParseGeminiProxyFairnessRejected(res.status, raw);
       if (fairnessErr) throwFairnessRejected(fairnessErr);
@@ -968,7 +1004,7 @@ async function bulkProxyGenerateContentSync(args: {
     skipReleaseOnFinally = true;
     return delivered;
   } finally {
-    if (!skipReleaseOnFinally && !peekCreditsPrechargeSession()) {
+    if (!skipReleaseOnFinally && !peekCreditsPrechargeSession() && !isAiTaskEnvelopeActive()) {
       await releaseCreditsProxyReserve();
     }
   }
@@ -1018,16 +1054,21 @@ async function bulkProxyGenerateContentAsync(args: {
   });
   if (!create.ok && isCreditsReserveInvalidProxyError(create.status, create.text || "")) {
     clearLastCreditsReserveKey();
-    create = await bulkFetchCreateWithFairnessRetry(asyncCreateUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", ...(await bulkProxyAdmissionHeaders(gateCredits)) },
-      body: createBody,
-      signal: abortSignal,
-      cache: "no-store",
+    logAiPipelineDev('error', {
+      step: 'credits_gate',
+      code: 'CREDITS_RESERVE_INVALID',
+      raw: create.text,
+      reserveKey: getLastCreditsReserveKey(),
     });
+    throwCreditsReserveInvalid('credits_gate', create.text || '');
   }
   if (!create.ok) {
     const raw = (create.text || "").trim();
+    logAiPipelineDev('error', {
+      step: 'image_create',
+      raw,
+      reserveKey: getLastCreditsReserveKey(),
+    });
     const parsedMsg = parseBulkProxyErrorBody(raw);
     if (/Use POST \/jobs/i.test(raw)) {
       const bulkHint =
@@ -1085,7 +1126,17 @@ async function bulkProxyGenerateContentAsync(args: {
     }
     if (step.kind === "failed") {
       removePendingGeminiAsyncJob(jobId);
-      throw new Error(step.error);
+      logAiPipelineDev('error', {
+        step: 'image_poll',
+        raw: step.error,
+        jobId,
+        reserveKey: asyncReserveKey,
+      });
+      throw new AiPipelineStepError(
+        'image_poll',
+        'ASYNC_JOB_FAILED',
+        step.error || '生图异步任务失败'
+      );
     }
     await sleepWithAbort(GEMINI_ASYNC_POLL_MS, abortSignal);
   }
@@ -1093,7 +1144,7 @@ async function bulkProxyGenerateContentAsync(args: {
   skipReleaseOnFinally = true;
   throw new GeminiAsyncPollTimeoutError(jobId, maxPollMs);
   } finally {
-    if (!skipReleaseOnFinally && !peekCreditsPrechargeSession()) {
+    if (!skipReleaseOnFinally && !peekCreditsPrechargeSession() && !isAiTaskEnvelopeActive()) {
       await releaseCreditsProxyReserve();
     }
   }
@@ -1213,7 +1264,7 @@ async function bulkProxyGenerateContentBatchAsync(args: {
   }
   throw new Error(`等待 Gemini 批量结果超时（>${GEMINI_ASYNC_CLIENT_MAX_POLL_MS}ms），请稍后重试`);
   } finally {
-    if (!peekCreditsPrechargeSession()) {
+    if (!peekCreditsPrechargeSession() && !isAiTaskEnvelopeActive()) {
       await releaseCreditsProxyReserve();
     }
   }
@@ -1948,23 +1999,25 @@ function isRetryableError(err: unknown): boolean {
     const e = err as Record<string, unknown>;
     const code = e.code;
     const status = e.status;
-    if (code === 504 || code === 503 || code === 429 || code === 500) return true;
+    if (code === 429 || status === "RESOURCE_EXHAUSTED") return false;
+    if (code === 504 || code === 503 || code === 500) return true;
     if (status === "DEADLINE_EXCEEDED" || status === "UNAVAILABLE" || status === "RESOURCE_EXHAUSTED" || status === "INTERNAL") return true;
     if (typeof code === "string" && /UNAVAILABLE|RESOURCE_EXHAUSTED|DEADLINE_EXCEEDED/i.test(code)) return true;
     const nested = e.error;
     if (nested && typeof nested === "object") {
       const n = nested as Record<string, unknown>;
-      if (n.code === 504 || n.code === 503 || n.code === 429 || n.status === "DEADLINE_EXCEEDED" || n.status === "UNAVAILABLE") return true;
+      if (n.code === 429 || n.status === "RESOURCE_EXHAUSTED") return false;
+      if (n.code === 504 || n.code === 503 || n.status === "DEADLINE_EXCEEDED" || n.status === "UNAVAILABLE") return true;
     }
   }
   const msg = errorStringForRetry(err);
+  if (/too many requests/i.test(msg) || /\bRESOURCE_EXHAUSTED\b/i.test(msg)) return false;
   return (
     msg.includes("504") ||
     msg.includes("DEADLINE_EXCEEDED") ||
     msg.includes("Deadline expired") ||
     msg.includes("503") ||
     msg.includes("overloaded") ||
-    msg.includes("429") ||
     msg.includes("UNAVAILABLE") ||
     msg.includes("high demand") ||
     msg.includes("500") ||
@@ -2198,7 +2251,17 @@ export function userFacingRateLimitMessage(kind: 'upstream' | 'site' = 'upstream
   if (kind === 'site') {
     return '生图在本站公平队列中受限，请等待约 10～30 秒后清空队列、单次重试。';
   }
-  return 'Google/Vertex 生图配额或 RPM 触顶（非积分不足）。系统已停止连点式自动重试；请等待 2～5 分钟后单次重试，或减少队列并发、快捷栏改用「直发」跳过理解步。';
+  let msg =
+    'Google/Vertex API 配额或 RPM 触顶（非积分不足）。系统已停止连点式自动重试；请等待 2～5 分钟后单次重试，或减少队列并发；生图可在快捷栏选「直发」跳过理解步。';
+  try {
+    if (import.meta.env.DEV && isLocalDevPage()) {
+      msg +=
+        ' 本地 dev 默认经 Render 共享 gemini-proxy（与他人共用 Google 配额）；若仅自己调试仍频繁 429，可在 .env.local 设 VITE_BULK_IMAGE_API=same-origin 并本机 npm run dev:gemini-proxy（需 VERTEX_PROJECT_ID）。';
+    }
+  } catch {
+    /* ignore */
+  }
+  return msg;
 }
 
 function isCreditsOrGateErrorText(raw: string): boolean {
@@ -2210,6 +2273,11 @@ function isCreditsOrGateErrorText(raw: string): boolean {
 export function mapRateLimitErrorText(raw: string): string | null {
   const t = (raw || '').trim();
   if (!t || isCreditsOrGateErrorText(t)) return null;
+  if (detectPipelineStepFromMessage(t)) return null;
+  /** UUID / reserveKey 中含 429 子串，非 Google 限流 */
+  if (/proxy:[0-9a-f-]{20,}/i.test(t) && !/too many requests|resource_exhausted|rate_limited/i.test(t)) {
+    return null;
+  }
   if (/too many requests/i.test(t)) return userFacingRateLimitMessage('upstream');
   if (/\bHTTP\s*429\b/i.test(t) || /\bstatus\s*429\b/i.test(t)) return userFacingRateLimitMessage('upstream');
   if (/"code"\s*:\s*429\b/.test(t) || /\berror\.code\s*[=:]\s*429\b/i.test(t)) {
@@ -2228,7 +2296,9 @@ export function mapRateLimitErrorText(raw: string): string | null {
 
 /** 将 API 返回的原始错误转为用户可读的简短说明（用于界面展示） */
 export function normalizeApiErrorMessage(err: unknown): string {
+  if (isAiPipelineStepError(err)) return err.message;
   const raw = String((err as any)?.message ?? err);
+  if (detectPipelineStepFromMessage(raw)) return raw;
   if (/maximum call stack size exceeded/i.test(raw)) {
     return '执行时发生内部栈溢出（多为模块循环依赖或图片过大）。请硬刷新页面后重试；若仍失败请打开浏览器控制台查看 stack 并反馈。';
   }
@@ -2243,6 +2313,7 @@ export function normalizeApiErrorMessage(err: unknown): string {
   }
   const rateLimit = mapRateLimitErrorText(raw);
   if (rateLimit) {
+    logAiPipelineDev('map', { raw, mapped: rateLimit });
     try {
       if (import.meta.env.DEV && raw !== rateLimit) {
         console.warn('[assetcutter] 限流类错误映射（原始）：', raw.slice(0, 400));

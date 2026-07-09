@@ -17,8 +17,8 @@ export function isUpstreamRateLimitError(e) {
 }
 
 export function isRetryable(e) {
+  if (isUpstreamRateLimitError(e)) return false;
   const msg = String((e && e.message) || e);
-  if (isUpstreamRateLimitError(e)) return true;
   if (/503|504|overloaded|UNAVAILABLE|DEADLINE_EXCEEDED|Deadline expired|500|INTERNAL|Internal error|high demand|try again later|The operation was cancelled|operation was canceled|CANCELLED/i.test(msg)) return true;
   const code = e && e.code;
   const status = e && e.status;

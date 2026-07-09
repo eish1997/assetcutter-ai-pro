@@ -212,6 +212,18 @@ const keyState = new Map();
 /** jobId -> fairnessKey */
 const jobFairnessKey = new Map();
 
+/** jobId -> task envelope id（同 envelope 多步共享 1 个用户并发槽） */
+const jobEnvelopeId = new Map();
+
+/**
+ * envelopeId -> { fairnessKey, active, runningLease, lastTouch }
+ * active：任务信封仍开放（步间）；runningLease：已占用 st.running 名额
+ */
+const envelopeState = new Map();
+
+const ENVELOPE_ID_RE = /^[a-zA-Z0-9:_-]{1,128}$/;
+const ENVELOPE_TTL_MS = 20 * 60_000;
+
 /** Round-robin: ordered keys with queue.length > 0 */
 const ringKeys = [];
 const ringIndexRef = { i: 0 };
@@ -257,36 +269,121 @@ function removeKeyFromRingIfEmpty(key) {
   }
 }
 
+function normalizeTaskEnvelopeId(raw) {
+  const id = String(raw || '').trim();
+  if (!id || id.length > 128) return null;
+  if (!ENVELOPE_ID_RE.test(id)) return null;
+  return id;
+}
+
+/**
+ * @param {import('http').IncomingMessage} req
+ * @returns {string | null}
+ */
+export function parseFairnessTaskEnvelope(req) {
+  if (!req || !req.headers) return null;
+  return normalizeTaskEnvelopeId(req.headers['x-ac-task-envelope']);
+}
+
+function sweepStaleEnvelopes(now = Date.now()) {
+  for (const [id, rec] of envelopeState.entries()) {
+    if (now - rec.lastTouch > ENVELOPE_TTL_MS) envelopeState.delete(id);
+  }
+}
+
+function getEnvelopeRec(envelopeId) {
+  if (!envelopeId) return null;
+  return envelopeState.get(envelopeId) || null;
+}
+
+function isEnvelopeContinuation(envelopeId, fairnessKey) {
+  const rec = getEnvelopeRec(envelopeId);
+  return Boolean(rec && rec.active && rec.fairnessKey === fairnessKey);
+}
+
+function envelopeTouch(envelopeId, fairnessKey) {
+  const now = Date.now();
+  sweepStaleEnvelopes(now);
+  let rec = envelopeState.get(envelopeId);
+  if (!rec) {
+    rec = { fairnessKey, active: true, runningLease: false, lastTouch: now };
+    envelopeState.set(envelopeId, rec);
+    return rec;
+  }
+  if (rec.fairnessKey !== fairnessKey) return null;
+  rec.active = true;
+  rec.lastTouch = now;
+  return rec;
+}
+
+function envelopeEndTask(envelopeId) {
+  if (!envelopeId) return;
+  envelopeState.delete(envelopeId);
+}
+
+function envelopeClearRunningLease(envelopeId, keepActive = true) {
+  const rec = getEnvelopeRec(envelopeId);
+  if (!rec) return false;
+  const had = rec.runningLease;
+  rec.runningLease = false;
+  if (!keepActive) rec.active = false;
+  rec.lastTouch = Date.now();
+  if (!rec.active && !rec.runningLease) envelopeState.delete(envelopeId);
+  return had;
+}
+
+function envelopeSetRunningLease(envelopeId, fairnessKey) {
+  const rec = envelopeTouch(envelopeId, fairnessKey);
+  if (!rec) return false;
+  rec.runningLease = true;
+  return true;
+}
+
+function envelopeHasRunningLease(envelopeId, fairnessKey) {
+  const rec = getEnvelopeRec(envelopeId);
+  return Boolean(rec && rec.fairnessKey === fairnessKey && rec.runningLease);
+}
+
 /**
  * 提交前：RPM + 排队深度 + 全站队列上限。通过则入队并记 submitLog。
+ * 同 task envelope 的后续步跳过 RPM / 用户排队深度（共享整包 1 槽）。
  * @returns {{ ok: true } | { ok: false, status: number, error: string, retryAfterSec?: number }}
  */
-export function fairnessTryEnqueue(jobId, fairnessKey, costWeight = 1) {
+export function fairnessTryEnqueue(jobId, fairnessKey, costWeight = 1, envelopeId = null) {
   if (!isFairnessEnabled()) return { ok: true };
+
+  const envId = normalizeTaskEnvelopeId(envelopeId);
+  const continuation = envId ? isEnvelopeContinuation(envId, fairnessKey) : false;
 
   const w = Math.max(1, Math.min(20, Number(costWeight) || 1));
   const now = Date.now();
   const lim = limitsForKey(fairnessKey);
   const st = getState(fairnessKey);
 
-  pruneSubmitLog(st, now);
-  const rpmUsed = submitWeightInWindow(st, now);
-  if (rpmUsed + w > lim.submitRpm) {
-    return { ok: false, status: 429, error: 'rate_limited', retryAfterSec: 12, reason: 'user_rpm' };
-  }
+  if (!continuation) {
+    pruneSubmitLog(st, now);
+    const rpmUsed = submitWeightInWindow(st, now);
+    if (rpmUsed + w > lim.submitRpm) {
+      return { ok: false, status: 429, error: 'rate_limited', retryAfterSec: 12, reason: 'user_rpm' };
+    }
 
-  const depth = st.queue.length + st.running;
-  if (depth >= lim.maxQueued) {
-    return { ok: false, status: 429, error: 'rate_limited', retryAfterSec: 5, reason: 'user_queue_depth' };
+    const depth = st.queue.length + st.running;
+    if (depth >= lim.maxQueued) {
+      return { ok: false, status: 429, error: 'rate_limited', retryAfterSec: 5, reason: 'user_queue_depth' };
+    }
   }
 
   if (totalGlobalQueued() >= globalQueueMax()) {
     return { ok: false, status: 503, error: 'queue_overflow', retryAfterSec: 30, reason: 'global_queue_overflow' };
   }
 
-  st.submitLog.push({ t: now, w });
+  if (!continuation) {
+    st.submitLog.push({ t: now, w });
+  }
+  if (envId) envelopeTouch(envId, fairnessKey);
   st.queue.push(jobId);
   jobFairnessKey.set(jobId, fairnessKey);
+  if (envId) jobEnvelopeId.set(jobId, envId);
   ensureKeyInRing(fairnessKey);
 
   console.log(
@@ -294,6 +391,8 @@ export function fairnessTryEnqueue(jobId, fairnessKey, costWeight = 1) {
       event: 'fairness_enqueue',
       jobId,
       fairnessKeyHash: hashKeyForLog(fairnessKey),
+      taskEnvelope: envId || undefined,
+      continuation: continuation || undefined,
       reason: 'ok',
       globalQueuedApprox: totalGlobalQueued(),
     })
@@ -314,6 +413,7 @@ export function fairnessAbandonEnqueue(jobId) {
     if (st.submitLog.length) st.submitLog.pop();
   }
   jobFairnessKey.delete(jobId);
+  jobEnvelopeId.delete(jobId);
   if (st) removeKeyFromRingIfEmpty(key);
 }
 
@@ -373,17 +473,21 @@ export function fairnessOnAsyncJobFinished(jobId) {
   if (!isFairnessEnabled()) return;
   const key = jobFairnessKey.get(jobId);
   if (!key) return;
+  const envId = jobEnvelopeId.get(jobId);
   jobFairnessKey.delete(jobId);
+  jobEnvelopeId.delete(jobId);
   const st = keyState.get(key);
   if (!st) return;
   st.running = Math.max(0, st.running - 1);
   removeKeyFromRingIfEmpty(key);
+  if (envId) envelopeEndTask(envId);
 
   console.log(
     JSON.stringify({
       event: 'fairness_release',
       jobId,
       fairnessKeyHash: hashKeyForLog(key),
+      taskEnvelope: envId || undefined,
       runningForKey: st.running,
     })
   );
@@ -479,6 +583,7 @@ export function fairnessHealthSnapshot() {
     globalQueuedApprox,
     keysWithQueued: [...keyState.entries()].filter(([, s]) => s.queue.length > 0).length,
     ringKeys: ringKeys.length,
+    activeTaskEnvelopes: envelopeState.size,
     configSource,
     diskConfigPath: configSource === 'disk' ? geminiFairnessDiskPath() : null,
     persistedKeysLoaded: persistedKeys.length,
@@ -486,22 +591,28 @@ export function fairnessHealthSnapshot() {
 }
 
 /** 同步路径：阻塞直到取得该 key 的一个「运行名额」，与异步共用 running 计数 */
-export function fairnessSyncEnter(fairnessKey) {
-  if (!isFairnessEnabled()) return Promise.resolve();
+export function fairnessSyncEnter(fairnessKey, envelopeId = null) {
+  if (!isFairnessEnabled()) return Promise.resolve({ acquiredRunning: false });
+  const envId = normalizeTaskEnvelopeId(envelopeId);
+  if (envId && envelopeHasRunningLease(envId, fairnessKey)) {
+    return Promise.resolve({ acquiredRunning: false });
+  }
   const lim = limitsForKey(fairnessKey);
   const st = getState(fairnessKey);
   return new Promise((resolve) => {
     function tryEnter() {
       if (st.running < lim.maxInFlight) {
         st.running += 1;
+        if (envId) envelopeSetRunningLease(envId, fairnessKey);
         console.log(
           JSON.stringify({
             event: 'fairness_sync_enter',
             fairnessKeyHash: hashKeyForLog(fairnessKey),
+            taskEnvelope: envId || undefined,
             runningForKey: st.running,
           })
         );
-        resolve();
+        resolve({ acquiredRunning: true });
         return;
       }
       setTimeout(tryEnter, 25);
@@ -510,16 +621,29 @@ export function fairnessSyncEnter(fairnessKey) {
   });
 }
 
-export function fairnessSyncLeave(fairnessKey) {
+export function fairnessSyncLeave(fairnessKey, envelopeId = null, acquiredRunning = true) {
   if (!isFairnessEnabled()) return;
+  const envId = normalizeTaskEnvelopeId(envelopeId);
   const st = keyState.get(fairnessKey);
   if (!st) return;
-  st.running = Math.max(0, st.running - 1);
+  if (acquiredRunning) st.running = Math.max(0, st.running - 1);
+  if (envId) envelopeClearRunningLease(envId, true);
   console.log(
     JSON.stringify({
       event: 'fairness_sync_leave',
       fairnessKeyHash: hashKeyForLog(fairnessKey),
+      taskEnvelope: envId || undefined,
       runningForKey: st.running,
     })
   );
+}
+
+/** @internal 单测重置内存态 */
+export function resetFairnessStateForTests() {
+  keyState.clear();
+  jobFairnessKey.clear();
+  jobEnvelopeId.clear();
+  envelopeState.clear();
+  ringKeys.length = 0;
+  ringIndexRef.i = 0;
 }

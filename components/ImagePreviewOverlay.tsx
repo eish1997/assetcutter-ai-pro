@@ -727,14 +727,41 @@ export function ImagePreviewOverlay({
     [flatNavigateCanvasOk]
   );
 
-  useLayoutEffect(() => {
-    setPrimaryImageReady(false);
-    if (!open || centerSlot || !imageSrc?.trim()) return;
+  const splitLayoutActive = rightRail != null && contentRightInset !== '0px';
+
+  const syncPrimaryImageReadyFromDom = useCallback((): boolean => {
+    if (!open || centerSlot || !imageSrc?.trim()) return false;
     const im = imgRef.current;
     if (im?.complete && im.naturalWidth > 0 && im.naturalHeight > 0) {
       setPrimaryImageReady(true);
+      return true;
     }
-  }, [open, centerSlot, imageSrc, resetKey]);
+    return false;
+  }, [open, centerSlot, imageSrc]);
+
+  useLayoutEffect(() => {
+    setPrimaryImageReady(false);
+    if (!open || centerSlot || !imageSrc?.trim()) return;
+    syncPrimaryImageReadyFromDom();
+  }, [open, centerSlot, imageSrc, resetKey, syncPrimaryImageReadyFromDom]);
+
+  /** split 布局切换会 remount `<img>`，缓存命中时可能不再触发 onLoad */
+  useLayoutEffect(() => {
+    if (!open || centerSlot || !imageSrc?.trim()) return;
+    if (!syncPrimaryImageReadyFromDom()) {
+      const raf = requestAnimationFrame(() => syncPrimaryImageReadyFromDom());
+      return () => cancelAnimationFrame(raf);
+    }
+    return undefined;
+  }, [
+    open,
+    centerSlot,
+    imageSrc,
+    resetKey,
+    splitLayoutActive,
+    flatAnnotationColumnOutsidePanoStack,
+    syncPrimaryImageReadyFromDom,
+  ]);
 
   useLayoutEffect(() => {
     if (!open || !centerSlot) return;
@@ -1298,22 +1325,17 @@ export function ImagePreviewOverlay({
 
   /**
    * 某些浏览器在缓存命中时可能出现 onLoad 未按预期触发，
-   * 这里在 src 变更后主动读取 complete 图片的固有尺寸兜底。
+   * split 布局切换 remount 时亦同；complete 检查见 syncPrimaryImageReadyFromDom。
    */
-  useEffect(() => {
-    if (!open || centerSlot || !imageSrc?.trim()) return;
-    const im = imgRef.current;
-    if (!im) return;
-    if (!im.complete) return;
-    const nw = im.naturalWidth;
-    const nh = im.naturalHeight;
-    if (!nw || !nh) return;
-    setPrimaryImageReady(true);
-    if (!innerLayoutStableKey) return;
-    const next = lockByOriginalDominantAxis(nw, nh);
-    setLockedDominant((prev) => prev ?? next);
-  }, [open, centerSlot, imageSrc, innerLayoutStableKey, resetKey]);
 
+  const hasImage = Boolean(imageSrc && imageSrc.trim());
+  const showPrimaryImageLoading = Boolean(
+    open &&
+      hasImage &&
+      !centerSlot &&
+      !primaryImageReady &&
+      flatAnnotationColumnOutsidePanoStack
+  );
   const handleImgLoadGeneral = useCallback(
     (e: React.SyntheticEvent<HTMLImageElement>) => {
       const im = e.currentTarget;
@@ -1326,8 +1348,21 @@ export function ImagePreviewOverlay({
     [handleImgLoad]
   );
 
-  const hasImage = Boolean(imageSrc && imageSrc.trim());
-  const showPrimaryImageLoading = Boolean(open && hasImage && !centerSlot && !primaryImageReady);
+  const handleImgErrorGeneral = useCallback(
+    (e: React.SyntheticEvent<HTMLImageElement>) => {
+      try {
+        if (import.meta.env.DEV) {
+          const failedSrc = e.currentTarget.currentSrc || e.currentTarget.src;
+          console.warn('[assetcutter] 大图预览主图加载失败', failedSrc.slice(0, 240));
+        }
+      } catch {
+        /* ignore */
+      }
+      setPrimaryImageReady(true);
+    },
+    []
+  );
+
   const flatImageVisibleClass = primaryImageReady
     ? 'opacity-100 transition-opacity duration-200 ease-out'
     : 'opacity-0 pointer-events-none';
@@ -1353,7 +1388,7 @@ export function ImagePreviewOverlay({
     );
   }
 
-  const useSplitLayout = rightRail != null && contentRightInset !== '0px';
+  const useSplitLayout = splitLayoutActive;
 
   const useFrameLock = Boolean(!centerSlot && innerLayoutStableKey && lockedDominant);
   const shellStyle: React.CSSProperties = {
@@ -1431,6 +1466,7 @@ export function ImagePreviewOverlay({
                     style={{ width: 1, height: 1 }}
                     onContextMenu={(e) => e.preventDefault()}
                     onLoad={handleImgLoadGeneral}
+                    onError={handleImgErrorGeneral}
                     ref={imgRef}
                   />
                   {flatImageOverlay && !uiHidden ? (
@@ -1551,6 +1587,7 @@ export function ImagePreviewOverlay({
                 draggable={false}
                 onContextMenu={(e) => e.preventDefault()}
                 onLoad={handleImgLoadGeneral}
+                onError={handleImgErrorGeneral}
                 onDoubleClick={
                   panoAnnotationBridge || suppressFlatImageInteraction
                     ? undefined
@@ -1826,13 +1863,13 @@ export function ImagePreviewOverlay({
       {useSplitLayout ? (
         <div className="flex h-full w-full min-h-0">
           <div
-            className="relative min-h-0 min-w-0 flex-1 overflow-hidden"
+            className="relative min-h-0 min-w-0 flex-1 h-full overflow-hidden"
             data-lightbox-main-stage
           >
             {mainStageContent}
           </div>
           <div
-            className="relative flex h-full shrink-0 flex-col overflow-hidden"
+            className="relative flex h-full min-h-0 shrink-0 flex-col overflow-hidden"
             style={{ width: contentRightInset }}
             data-lightbox-right-rail
           >

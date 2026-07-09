@@ -42,8 +42,8 @@ export default function QuickComposeChatDock({
       data-ac-block-workflow-marquee
       aria-label={title}
     >
-      <header className="flex shrink-0 items-center justify-between gap-2 border-b border-white/[0.06] px-3 py-2.5">
-        <h2 className="min-w-0 truncate text-[10px] font-black uppercase tracking-wide text-gray-400">
+      <header className="flex shrink-0 items-center justify-between gap-2 border-b border-white/[0.06] bg-[#0f0f12] px-3 py-2.5">
+        <h2 className="min-w-0 truncate text-[11px] font-black tracking-wide text-gray-300">
           {title}
         </h2>
         {onMinimize ? (

@@ -30,6 +30,7 @@ import {
   fairnessSyncEnter,
   fairnessSyncLeave,
   fairnessQueueMetaForJob,
+  parseFairnessTaskEnvelope,
   getDiskOverrideInt,
 } from './gemini-proxy-fairness.js';
 import { initGeminiFairnessConfigLoader, resolveGeminiFairnessConfigSource } from './gemini-fairness-config-store.js';
@@ -741,7 +742,7 @@ function parseCostWeightFromBody(parsed) {
   return 1;
 }
 
-function createGeminiAsyncJob(model, contents, config, useVertex, fairnessKey, costWeight) {
+function createGeminiAsyncJob(model, contents, config, useVertex, fairnessKey, costWeight, envelopeId = null) {
   sweepGeminiAsyncJobs();
   const id = `gasync-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
   if (isFairnessEnabled()) {
@@ -756,7 +757,7 @@ function createGeminiAsyncJob(model, contents, config, useVertex, fairnessKey, c
       result: null,
       error: null,
     });
-    const enq = fairnessTryEnqueue(id, fairnessKey, costWeight);
+    const enq = fairnessTryEnqueue(id, fairnessKey, costWeight, envelopeId);
     if (!enq.ok) {
       geminiAsyncJobs.delete(id);
       return { type: 'reject', info: enq };
@@ -831,7 +832,7 @@ async function runGeminiAsyncBatchJobBody(jobId) {
   }
 }
 
-function createGeminiAsyncBatchJob(normalizedItems, useVertex, fairnessKey) {
+function createGeminiAsyncBatchJob(normalizedItems, useVertex, fairnessKey, envelopeId = null) {
   sweepGeminiAsyncJobs();
   const id = `gasync-batch-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
   const n = normalizedItems.length;
@@ -847,7 +848,7 @@ function createGeminiAsyncBatchJob(normalizedItems, useVertex, fairnessKey) {
       result: null,
       error: null,
     });
-    const enq = fairnessTryEnqueue(id, fairnessKey, costWeight);
+    const enq = fairnessTryEnqueue(id, fairnessKey, costWeight, envelopeId);
     if (!enq.ok) {
       geminiAsyncJobs.delete(id);
       return { type: 'reject', info: enq };
@@ -936,7 +937,7 @@ const server = http.createServer(async (req, res) => {
     console.warn('[gemini-proxy-api] corsOk=', corsOk, 'origin=', JSON.stringify(req.headers.origin));
   }
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-AC-Fairness-Key, X-AC-Fairness-Signature, X-AC-Client-Ip, X-AC-Credits-Reserve, X-AC-Credits-Gate-Signature');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-AC-Fairness-Key, X-AC-Fairness-Signature, X-AC-Client-Ip, X-AC-Credits-Reserve, X-AC-Credits-Gate-Signature, X-AC-Task-Envelope');
   res.setHeader('Access-Control-Max-Age', '86400');
 
   if (req.method === 'OPTIONS') {
@@ -995,7 +996,8 @@ const server = http.createServer(async (req, res) => {
         fairnessKey = fr.key;
       }
       const costWeight = parseCostWeightFromBody(parsed);
-      const cr = createGeminiAsyncJob(model, contents, config, useVertex, fairnessKey, costWeight);
+      const taskEnvelopeId = parseFairnessTaskEnvelope(req);
+      const cr = createGeminiAsyncJob(model, contents, config, useVertex, fairnessKey, costWeight, taskEnvelopeId);
       if (cr.type === 'reject') {
         sendFairnessReject(res, cr.info);
         return;
@@ -1060,7 +1062,8 @@ const server = http.createServer(async (req, res) => {
         }
         fairnessKey = fr.key;
       }
-      const cr = createGeminiAsyncBatchJob(normalizedItems, useVertex, fairnessKey);
+      const taskEnvelopeId = parseFairnessTaskEnvelope(req);
+      const cr = createGeminiAsyncBatchJob(normalizedItems, useVertex, fairnessKey, taskEnvelopeId);
       if (cr.type === 'reject') {
         sendFairnessReject(res, cr.info);
         return;
@@ -1155,11 +1158,12 @@ const server = http.createServer(async (req, res) => {
       try {
         let response;
         if (syncFairnessKey) {
-          await fairnessSyncEnter(syncFairnessKey);
+          const taskEnvelopeId = parseFairnessTaskEnvelope(req);
+          const syncSlot = await fairnessSyncEnter(syncFairnessKey, taskEnvelopeId);
           try {
             response = await runGeminiWithRetries(model, contents, config, useVertex);
           } finally {
-            fairnessSyncLeave(syncFairnessKey);
+            fairnessSyncLeave(syncFairnessKey, taskEnvelopeId, syncSlot.acquiredRunning);
           }
         } else {
           response = await runGeminiWithRetries(model, contents, config, useVertex);

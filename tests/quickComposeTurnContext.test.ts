@@ -4,8 +4,11 @@ import {
   buildPseudoMultiTurnPromptBlock,
   extractQuickComposeTurnRounds,
   formatQuickComposeTurnContextForPromptOverride,
+  QUICK_COMPOSE_ORPHAN_TASK_ERROR,
+  resolveQuickComposeAssistantMessageStatus,
 } from '../services/quickComposeTurnContext';
 import type { QuickComposeThreadMessage } from '../types/quickComposeThread';
+import type { WorkflowPendingTask } from '../types';
 
 function msg(
   partial: Partial<QuickComposeThreadMessage> & Pick<QuickComposeThreadMessage, 'role' | 'text'>
@@ -79,5 +82,61 @@ describe('quickComposeTurnContext', () => {
 
   it('formatQuickComposeTurnContextForPromptOverride without history returns current only', () => {
     expect(formatQuickComposeTurnContextForPromptOverride([], 'solo prompt')).toBe('solo prompt');
+  });
+});
+
+describe('resolveQuickComposeAssistantMessageStatus', () => {
+  const emptyRuntime = {
+    pending: [] as WorkflowPendingTask[],
+    executingQueue: null as { tasks: WorkflowPendingTask[] } | null,
+    activeTaskIds: new Set<string>(),
+    completedTaskIds: new Set<string>(),
+    assetErrors: new Map<string, string>(),
+    cancelledTaskIds: new Set<string>(),
+    resolveModule: () => null,
+  };
+
+  it('marks orphaned task ids as error when no runtime queue entry', () => {
+    const status = resolveQuickComposeAssistantMessageStatus({
+      ...emptyRuntime,
+      taskIds: ['task-gone'],
+      taskAssetById: { 'task-gone': 'asset-1' },
+    });
+    expect(status).toBe('error');
+  });
+
+  it('uses persisted taskAssetById to detect assetErrors after batch reset', () => {
+    const status = resolveQuickComposeAssistantMessageStatus({
+      ...emptyRuntime,
+      taskIds: ['task-1'],
+      taskAssetById: { 'task-1': 'asset-1' },
+      assetErrors: new Map([['asset-1', '429 Too Many Requests']]),
+    });
+    expect(status).toBe('error');
+  });
+
+  it('returns done when completedTaskIds contains all tasks without errors', () => {
+    const status = resolveQuickComposeAssistantMessageStatus({
+      ...emptyRuntime,
+      taskIds: ['task-1'],
+      completedTaskIds: new Set(['task-1']),
+      taskAssetById: { 'task-1': 'asset-1' },
+    });
+    expect(status).toBe('done');
+  });
+
+  it('returns error for empty taskIds', () => {
+    expect(
+      resolveQuickComposeAssistantMessageStatus({
+        ...emptyRuntime,
+        taskIds: [],
+      })
+    ).toBe('error');
+  });
+});
+
+describe('QUICK_COMPOSE_ORPHAN_TASK_ERROR', () => {
+  it('is a user-facing retry hint', () => {
+    expect(QUICK_COMPOSE_ORPHAN_TASK_ERROR).toContain('重试');
   });
 });

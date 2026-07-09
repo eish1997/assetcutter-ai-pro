@@ -29,6 +29,13 @@ import {
   WorkflowVideoNotAvailableError,
   type GeminiImageBatchGroupOptions,
 } from './unifiedAiGateway';
+import {
+  formatAiPipelineStepError,
+  isAiPipelineStepError,
+  type AiPipelineStep,
+} from './aiPipelineStepError';
+import { formatPipelineStepProgress, planCapabilityPipelineSteps } from './aiPipelineStepPlan';
+import { shouldRunCapabilityUnderstand } from './workflowUnderstandOverride';
 import { textModelFamily } from './modelRegistry/textModels';
 import { resolveTextModelForPreset, resolveTextModelFromContext } from './capabilityTextModel';
 export { resolveTextModelForPreset } from './capabilityTextModel';
@@ -52,6 +59,9 @@ import {
 export type CapabilityRunProgressMeta = {
   /** 能力集合画布节点 id，用于把进度归到具体卡片 */
   nodeId?: string;
+  /** P2：串行步骤序号（1-based） */
+  stepIndex?: number;
+  stepTotal?: number;
 };
 
 export type CapabilityExecuteContext = {
@@ -146,9 +156,17 @@ function hasUsableImageBase64(input: string): boolean {
   return false;
 }
 
-function emitCapabilityRunProgress(ctx: CapabilityExecuteContext, message: string) {
-  const nid = ctx.runProgressNodeId;
-  ctx.onRunProgress?.(message, nid ? { nodeId: nid } : undefined);
+function emitCapabilityRunProgress(
+  ctx: CapabilityExecuteContext,
+  message: string,
+  meta?: CapabilityRunProgressMeta
+) {
+  const nid = meta?.nodeId ?? ctx.runProgressNodeId;
+  const line =
+    meta?.stepIndex != null && meta?.stepTotal != null && meta.stepTotal > 1
+      ? formatPipelineStepProgress(meta.stepIndex, meta.stepTotal, message)
+      : message;
+  ctx.onRunProgress?.(line, nid ? { ...meta, nodeId: nid } : meta);
 }
 
 function makeVgpCapture(
@@ -242,7 +260,7 @@ async function resolveCapabilityPrompt(
     refs.filter((s) => hasUsableImageBase64(s)).length
   );
   if (!presetPrompt && !ut) return null;
-  if (preset.skipUnderstand === true) {
+  if (!shouldRunCapabilityUnderstand(preset)) {
     ctx.onLog?.('info', `[${preset.label || preset.id}] 未启用理解，提示词直发生图`, undefined);
     return [presetPrompt, ut].filter(Boolean).join('\n\n').trim() || null;
   }
@@ -272,7 +290,7 @@ async function resolveGenImagePrompt(
   ctx: CapabilityExecuteContext
 ): Promise<string | null> {
   const ut = (userText || '').trim();
-  if (preset.skipUnderstand === true) {
+  if (!shouldRunCapabilityUnderstand(preset, { userText: ut })) {
     const directPrompt = [(preset.instruction || '').trim(), ut].filter(Boolean).join('\n\n').trim();
     return directPrompt || null;
   }
@@ -306,7 +324,7 @@ async function resolveTextOnlyImagePrompt(
   const ut = skipTextClamp
     ? String(userText || '').trim()
     : clampInputTextForSend(userText || '', textSendBudgetKind, preset, ctx, 0);
-  if (preset.skipUnderstand === true) {
+  if (!shouldRunCapabilityUnderstand(preset, { userText: ut })) {
     const merged = [presetPrompt, ut].filter(Boolean).join('\n\n').trim();
     return merged || null;
   }
@@ -526,6 +544,11 @@ function logCapabilityRawError(
   if (rawMsg && rawMsg !== normalizedMsg) {
     ctx.onLog?.('warn', `[${actionLabel}] 原始错误`, rawMsg.slice(0, 500));
   }
+}
+
+function capabilityStepErrorMessage(step: AiPipelineStep, e: unknown): string {
+  if (isAiPipelineStepError(e)) return e.message;
+  return formatAiPipelineStepError(step, normalizeApiErrorMessage(e));
 }
 
 export type ExecuteCapabilityOptions = {
@@ -982,19 +1005,27 @@ export async function executeCapability(
       };
     }
 
-    emitCapabilityRunProgress(
-      ctx,
-      preset.skipUnderstand === true
-        ? `${actionLabel}：准备生图（已跳过理解）…`
-        : `${actionLabel}：理解图片与提示词中（若失败多为网关超时或模型不可用）…`
+    const runUnderstand = shouldRunCapabilityUnderstand(preset, { userText: userT });
+    const pipelineSteps = planCapabilityPipelineSteps(preset, { runUnderstand });
+    const stepTotal = pipelineSteps.length;
+    let stepIndex = 0;
+    const emitStep = (message: string) => {
+      stepIndex += 1;
+      emitCapabilityRunProgress(ctx, message, { stepIndex, stepTotal });
+    };
+
+    emitStep(
+      runUnderstand
+        ? `${actionLabel}：理解图片与提示词中…`
+        : `${actionLabel}：准备生图（直发）…`
     );
     let prompt: string | null;
     try {
       prompt = await resolveGenImagePrompt(preset, refs, userT, ctx);
     } catch (e) {
-      const msg = normalizeApiErrorMessage(e);
+      const msg = capabilityStepErrorMessage('understand', e);
       logCapabilityRawError(ctx, actionLabel, e, msg);
-      return { ok: false, kind: 'none', error: `[理解步] ${msg}`, durationMs: Date.now() - start };
+      return { ok: false, kind: 'none', error: msg, durationMs: Date.now() - start };
     }
     if (!prompt) {
       return {
@@ -1006,7 +1037,7 @@ export async function executeCapability(
     }
     const augmented = prompt;
     ctx.onLog?.('info', `[${actionLabel}] 生图中…`, undefined);
-    emitCapabilityRunProgress(ctx, `${actionLabel}：生图中（可能较慢）…`);
+    emitStep(`${actionLabel}：生图中（可能较慢）…`);
     const modelId = resolveImageModelIdFromPreset(preset);
     const imageOptions = (preset.imageAspectRatio || preset.imageSize) ? { aspectRatio: preset.imageAspectRatio, imageSize: preset.imageSize } : undefined;
     const batchOpts = {
@@ -1017,15 +1048,15 @@ export async function executeCapability(
     try {
       if (refs.length >= 2) {
         ctx.onLog?.('info', `[${actionLabel}] 多参考图生图中（${refs.length} 张）…`, undefined);
-        emitCapabilityRunProgress(ctx, `${actionLabel}：多参考图生图中（${refs.length} 张）…`);
+        emitStep(`${actionLabel}：多参考图生图中（${refs.length} 张）…`);
         result = await workflowGenerateImageMultiRefs(refs, augmented, modelId, imageOptions);
       } else {
         result = await workflowGenerateImage(refs[0]!, augmented, modelId, imageOptions, undefined, undefined, batchOpts);
       }
     } catch (e) {
-      const msg = normalizeApiErrorMessage(e);
+      const msg = capabilityStepErrorMessage('image_create', e);
       logCapabilityRawError(ctx, actionLabel, e, msg);
-      return { ok: false, kind: 'none', error: `[生图步] ${msg}`, durationMs: Date.now() - start };
+      return { ok: false, kind: 'none', error: msg, durationMs: Date.now() - start };
     }
     return {
       ok: true,

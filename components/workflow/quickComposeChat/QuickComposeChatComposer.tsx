@@ -136,7 +136,7 @@ export default function QuickComposeChatComposer({
 
   return (
     <div
-      className={`relative z-[10] flex shrink-0 flex-col gap-2 border-t border-white/[0.06] px-3 pt-2 ${RIGHT_DOCK_COMPOSER_SAFE_BOTTOM_CLASS} pointer-events-auto`}
+      className={`relative z-[10] flex shrink-0 flex-col gap-2 border-t border-white/[0.06] bg-[#0f0f12] px-3 pt-2 ${RIGHT_DOCK_COMPOSER_SAFE_BOTTOM_CLASS} pointer-events-auto`}
       data-quick-compose-chat-composer
     >
       {hasDropContent ? (
@@ -161,7 +161,7 @@ export default function QuickComposeChatComposer({
           </button>
 
           {attachmentExpanded ? (
-            <div className={`flex flex-col gap-2 px-0.5 py-1 ${WORKFLOW_QUICK_COMPOSE_BAR_SHELL}`}>
+            <div className={`flex flex-col gap-2 px-2 py-1.5 ${WORKFLOW_QUICK_COMPOSE_BAR_SHELL}`}>
               {promptCards.length > 0 && onRemovePromptCard ? (
                 <div className="flex flex-wrap items-center gap-2 px-2 pt-2">
                   {promptCards.map((c) => (
@@ -269,10 +269,12 @@ export default function QuickComposeChatComposer({
       ) : null}
 
       {genControls ? (
-        <div className="flex flex-wrap items-center gap-2 pr-0.5">{genControls}</div>
+        <div className={`shrink-0 ${WORKFLOW_QUICK_COMPOSE_BAR_SHELL}`}>
+          <div className="flex flex-wrap items-center gap-2 px-2 py-1.5">{genControls}</div>
+        </div>
       ) : null}
 
-      <div className={`relative min-h-[3.5rem] ${WORKFLOW_QUICK_COMPOSE_BAR_SHELL} px-2 py-1.5 pr-12`}>
+      <div className={`relative min-h-[3.5rem] shrink-0 ${WORKFLOW_QUICK_COMPOSE_BAR_SHELL} px-2 py-1.5 pr-12`}>
         <QuickComposeMentionField
           ref={mentionFieldRef}
           segments={segments}

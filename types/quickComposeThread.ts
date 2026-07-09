@@ -21,6 +21,8 @@ export type QuickComposeThreadMessage = {
   assetIds?: string[];
   /** 关联的 pending / 任务 id */
   taskIds?: string[];
+  /** taskId → 产出资产 id（持久化，便于任务出队后对齐错误态） */
+  taskAssetById?: Record<string, string>;
   /** 助手消息处理状态（用户消息通常为 submitted） */
   status?: QuickComposeMessageStatus;
   timestamp: number;

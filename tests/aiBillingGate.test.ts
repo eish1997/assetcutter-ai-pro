@@ -52,6 +52,7 @@ import {
   resolveJobKindBillingStep,
   resolveRegistryBillingStep,
   sumPlatformMinCredits,
+  maxPlatformStepMinCredits,
   fmtPlanStepsBreakdown,
   fmtCreditsEstimateFooter,
 } from '../services/aiBillingGate';
@@ -253,6 +254,21 @@ describe('aiBillingGate', () => {
     ];
     await assertAiGateForSteps(steps, { userId: 'u1', scopeKey: 'scope-1' });
     expect(prechargePlatformCredits).toHaveBeenCalledWith(steps[0]!.minCredits, 'scope-1');
+  });
+
+  it('maxPlatformStepMinCredits uses max platform step not sum', () => {
+    const withUnderstand = planCapabilityModuleRoutes({
+      id: 'variant',
+      label: '变体',
+      category: 'image_to_image',
+      engine: 'gen_image',
+      instruction: 'test',
+      skipUnderstand: false,
+    });
+    expect(sumPlatformMinCredits(withUnderstand)).toBeGreaterThan(maxPlatformStepMinCredits(withUnderstand));
+    expect(maxPlatformStepMinCredits(withUnderstand)).toBe(
+      Math.max(...withUnderstand.filter((s) => s.kind === 'platform').map((s) => s.minCredits))
+    );
   });
 
   it('isSubmitBlockedForPlatformPlan honors minCreditsOverride', () => {

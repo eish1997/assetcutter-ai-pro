@@ -9,7 +9,6 @@ import {
   DT_AC_CAPABILITY_FROM_EDITOR,
   DT_AC_WORKFLOW_EXPORT,
 } from '../services/workflowDragPipeline';
-import { CustomDropdown } from './ui/CustomDropdown';
 import {
   labelForImageModelRegistryId,
   shortLabelForImageModelRegistryId,
@@ -231,7 +230,10 @@ export default function WorkspaceQuickComposeBar({
   const barRef = useRef<HTMLDivElement>(null);
   const dragOffsetRef = useRef<{ x: number; y: number } | null>(null);
   const settingsTriggerRef = useRef<HTMLButtonElement>(null);
+  const modelTriggerRef = useRef<HTMLButtonElement>(null);
+  const textModelTriggerRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
+  const [panelAnchor, setPanelAnchor] = useState<'model' | 'textModel' | 'params'>('params');
   /** 展开输入区前记录条形容器底边（视口 Y），用于增高时固定底边、向上延伸 */
   const expandAnchorBottomRef = useRef<number | null>(null);
   /** 收起前记录底边，用于变矮时固定底边、向上收合（与展开对称） */
@@ -650,10 +652,17 @@ export default function WorkspaceQuickComposeBar({
     };
   }, [dragging, inputExpanded, syncExpandedBarViewport]);
 
+  const activeGenPanelTriggerRef =
+    panelAnchor === 'model'
+      ? modelTriggerRef
+      : panelAnchor === 'textModel'
+        ? textModelTriggerRef
+        : settingsTriggerRef;
+
   useLayoutEffect(() => {
     if (!settingsOpen || typeof window === 'undefined') return;
     const measure = () => {
-      const tr = settingsTriggerRef.current;
+      const tr = activeGenPanelTriggerRef.current;
       if (!tr) return;
       const rect = tr.getBoundingClientRect();
       const anchorX = rect.left + rect.width / 2;
@@ -679,7 +688,7 @@ export default function WorkspaceQuickComposeBar({
       cancelAnimationFrame(rafId);
       window.removeEventListener('resize', measure);
     };
-  }, [settingsOpen, position]);
+  }, [settingsOpen, position, panelAnchor]);
 
   /** 关闭时清空，避免下次打开用旧坐标先渲染一帧再纠正（观感像闪屏） */
   useEffect(() => {
@@ -896,66 +905,64 @@ export default function WorkspaceQuickComposeBar({
   const textModelFullLabel = labelForTextModelRegistryId(genSettings.textModelRegistryId);
 
   const modelPickerControl = showGenImageSettings ? (
-    <CustomDropdown
-      options={effectiveModelRows.map((g) => ({
-        value: g.registryId,
-        label: g.label,
-        disabled: g.disabled,
-        title: g.disabled ? g.disabledReason : undefined,
-      }))}
-      value={genSettings.imageModelRegistryId}
-      onChange={(v) => {
-        const row = effectiveModelRows.find((g) => g.registryId === v);
-        if (row && !row.disabled) {
-          genSettings.onImageModelRegistryId(v);
-          const allowed = imageSizeSelectOptionsForRegistryModel(v).map((s) => s.value);
-          if (genSettings.imageSize && !allowed.includes(genSettings.imageSize)) {
-            genSettings.onImageSize('');
-          }
-        }
+    <button
+      ref={modelTriggerRef}
+      type="button"
+      disabled={controlsDisabled}
+      onClick={() => {
+        setPanelAnchor('model');
+        setSettingsOpen((open) => (open && panelAnchor === 'model' ? false : true));
       }}
-      triggerClassName={`${QUICK_COMPOSE_PILL_TRIGGER} font-bold text-gray-300`}
-      portalZIndex={{ backdrop: 2602, list: 2603 }}
-      triggerAriaLabel={`生图模型：${modelFullLabel}`}
-      listMinWidth={176}
-      renderTrigger={({ open }) => (
-        <>
-          <span className="tabular-nums font-semibold text-gray-200" title={modelFullLabel}>
-            {modelShortLabel}
-          </span>
-          <span className="shrink-0 text-[7px] leading-none text-gray-600">{open ? '▲' : '▼'}</span>
-        </>
-      )}
-    />
+      className={`${QUICK_COMPOSE_PILL_TRIGGER} font-bold text-gray-300`}
+      title={`生图模型：${modelFullLabel}`}
+      aria-expanded={settingsOpen && panelAnchor === 'model'}
+      aria-haspopup="dialog"
+    >
+      <span className="tabular-nums font-semibold text-gray-200" title={modelFullLabel}>
+        {modelShortLabel}
+      </span>
+      <span className="shrink-0 text-[7px] leading-none text-gray-600">
+        {settingsOpen && panelAnchor === 'model' ? '▲' : '▼'}
+      </span>
+    </button>
   ) : null;
 
   const textModelPickerControl = showGenTextSettings ? (
-    <CustomDropdown
-      options={effectiveTextModelRows.map((g) => ({
-        value: g.registryId,
-        label: g.label,
-        disabled: g.disabled,
-        title: g.disabled ? g.disabledReason : undefined,
-      }))}
-      value={genSettings.textModelRegistryId}
-      onChange={(v) => {
-        const row = effectiveTextModelRows.find((g) => g.registryId === v);
-        if (row && !row.disabled) genSettings.onTextModelRegistryId(v);
+    <button
+      ref={textModelTriggerRef}
+      type="button"
+      disabled={controlsDisabled}
+      onClick={() => {
+        setPanelAnchor('textModel');
+        setSettingsOpen((open) => (open && panelAnchor === 'textModel' ? false : true));
       }}
-      triggerClassName={`${QUICK_COMPOSE_PILL_TRIGGER} font-bold text-emerald-300/90`}
-      portalZIndex={{ backdrop: 2602, list: 2603 }}
-      triggerAriaLabel={`文字模型：${textModelFullLabel}`}
-      listMinWidth={176}
-      renderTrigger={({ open }) => (
-        <>
-          <span className="tabular-nums font-semibold text-emerald-200/90" title={textModelFullLabel}>
-            {textModelShortLabel}
-          </span>
-          <span className="shrink-0 text-[7px] leading-none text-gray-600">{open ? '▲' : '▼'}</span>
-        </>
-      )}
-    />
+      className={`${QUICK_COMPOSE_PILL_TRIGGER} font-bold text-emerald-300/90`}
+      title={`文字模型：${textModelFullLabel}`}
+      aria-expanded={settingsOpen && panelAnchor === 'textModel'}
+      aria-haspopup="dialog"
+    >
+      <span className="tabular-nums font-semibold text-emerald-200/90" title={textModelFullLabel}>
+        {textModelShortLabel}
+      </span>
+      <span className="shrink-0 text-[7px] leading-none text-gray-600">
+        {settingsOpen && panelAnchor === 'textModel' ? '▲' : '▼'}
+      </span>
+    </button>
   ) : null;
+
+  const modelOptionChipCls = (on: boolean, disabled?: boolean) =>
+    `w-full rounded-md px-2 py-1 text-left text-[9px] font-semibold ring-1 transition-colors ${
+      disabled
+        ? 'cursor-not-allowed bg-white/[0.02] text-gray-600 ring-white/[0.05]'
+        : on
+          ? 'bg-white/[0.16] text-white ring-white/[0.22]'
+          : 'bg-white/[0.04] text-gray-300 ring-white/[0.07] hover:bg-white/[0.08]'
+    }`;
+
+  const openGenParamsPanel = () => {
+    setPanelAnchor('params');
+    setSettingsOpen((open) => (open && panelAnchor === 'params' ? false : true));
+  };
 
   const genParamsSummary = (
     <>
@@ -1020,14 +1027,16 @@ export default function WorkspaceQuickComposeBar({
         ref={settingsTriggerRef}
         type="button"
         disabled={controlsDisabled}
-        onClick={() => setSettingsOpen((o) => !o)}
+        onClick={openGenParamsPanel}
         className={`${QUICK_COMPOSE_PILL_TRIGGER} max-w-[min(11rem,36vw)] overflow-hidden text-left`}
         title="生成参数"
-        aria-expanded={settingsOpen}
+        aria-expanded={settingsOpen && panelAnchor === 'params'}
         aria-haspopup="dialog"
       >
         {genParamsSummary}
-        <span className="ml-px shrink-0 text-[7px] leading-none text-gray-600">{settingsOpen ? '▲' : '▼'}</span>
+        <span className="ml-px shrink-0 text-[7px] leading-none text-gray-600">
+          {settingsOpen && panelAnchor === 'params' ? '▲' : '▼'}
+        </span>
       </button>
     </div>
   );
@@ -1045,9 +1054,77 @@ export default function WorkspaceQuickComposeBar({
                 transform: panelPos.transform,
               }}
               role="dialog"
-              aria-label="本次生成参数"
+              aria-label={
+                panelAnchor === 'model'
+                  ? '选择生图模型'
+                  : panelAnchor === 'textModel'
+                    ? '选择文字模型'
+                    : '本次生成参数'
+              }
             >
-              {showGenImageSettings ? (
+              {panelAnchor === 'model' && showGenImageSettings ? (
+                <div className="table-row">
+                  <div className="table-cell w-full min-w-0 p-0 align-middle">
+                    <div className="flex flex-col gap-1">
+                      {effectiveModelRows.map((g) => (
+                        <button
+                          key={g.registryId}
+                          type="button"
+                          disabled={g.disabled}
+                          title={g.disabled ? g.disabledReason : g.label}
+                          onClick={() => {
+                            if (g.disabled) return;
+                            genSettings.onImageModelRegistryId(g.registryId);
+                            const allowed = imageSizeSelectOptionsForRegistryModel(g.registryId).map(
+                              (s) => s.value
+                            );
+                            if (genSettings.imageSize && !allowed.includes(genSettings.imageSize)) {
+                              genSettings.onImageSize('');
+                            }
+                            setSettingsOpen(false);
+                          }}
+                          className={modelOptionChipCls(
+                            genSettings.imageModelRegistryId === g.registryId,
+                            g.disabled
+                          )}
+                        >
+                          {g.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+
+              {panelAnchor === 'textModel' && showGenTextSettings ? (
+                <div className="table-row">
+                  <div className="table-cell w-full min-w-0 p-0 align-middle">
+                    <div className="flex flex-col gap-1">
+                      {effectiveTextModelRows.map((g) => (
+                        <button
+                          key={g.registryId}
+                          type="button"
+                          disabled={g.disabled}
+                          title={g.disabled ? g.disabledReason : g.label}
+                          onClick={() => {
+                            if (g.disabled) return;
+                            genSettings.onTextModelRegistryId(g.registryId);
+                            setSettingsOpen(false);
+                          }}
+                          className={modelOptionChipCls(
+                            genSettings.textModelRegistryId === g.registryId,
+                            g.disabled
+                          )}
+                        >
+                          {g.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+
+              {panelAnchor === 'params' && showGenImageSettings ? (
                 <>
                   <div className="table-row">
                     <div className="table-cell p-0 align-middle">
@@ -1123,7 +1200,7 @@ export default function WorkspaceQuickComposeBar({
                 </>
               ) : null}
 
-              {allowBatchCount ? (
+              {panelAnchor === 'params' && allowBatchCount ? (
                 <div className="table-row">
                   <div className="table-cell w-full min-w-0 p-0 align-middle">
                     <div className="flex min-w-0 w-full flex-nowrap items-stretch gap-1">
@@ -1142,7 +1219,7 @@ export default function WorkspaceQuickComposeBar({
                 </div>
               ) : null}
 
-              {mentions.length > 0 ? (
+              {panelAnchor === 'params' && mentions.length > 0 ? (
                 <div className="table-row">
                   <div className="table-cell p-0 align-middle">
                     <button

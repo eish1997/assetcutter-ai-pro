@@ -7,7 +7,6 @@ import React, {
   useLayoutEffect,
   Suspense,
   lazy,
-  startTransition,
 } from 'react';
 import { useWorkflowWorkspacePanes } from '../hooks/useWorkflowWorkspacePanes';
 import { useWorkflowMarquee } from '../hooks/useWorkflowMarquee';
@@ -42,6 +41,8 @@ import {
   workflowGenerateImage,
   getTencentCredsFromEnv,
 } from '../services/unifiedAiGateway';
+import { beginAiTaskEnvelope, endAiTaskEnvelope, finalizeAiTaskEnvelopeCredits, isAiTaskBusy, prepareAiTaskEnvelopeCredits } from '../services/aiTaskEnvelope';
+import { detectPipelineStepFromMessage } from '../services/aiPipelineStepError';
 import {
   creditsExceededUserMessage,
   dispatchCreditsBalanceChanged,
@@ -568,6 +569,7 @@ function formatWorkflowRunTaskErrorMessage(err: unknown, taskLabel: string): str
   }
   const msg =
     err instanceof Error ? normalizeApiErrorMessage(err) : normalizeApiErrorMessage(String(err));
+  if (detectPipelineStepFromMessage(msg)) return msg;
   return `[${taskLabel}] ${msg}`;
 }
 
@@ -1257,6 +1259,8 @@ const WorkflowSection: React.FC<{
   const lightboxQuickComposeThreadRef = useRef<QuickComposeThread | null>(null);
   /** 防止连点/Enter 重复入队（thread ref 异步更新前的窗口期） */
   const quickComposeChatSendGuardRef = useRef(false);
+  /** 最近一次 submitQuickCompose 创建的 taskId→assetId，供对话线程持久化 */
+  const lastQuickComposeTaskAssetByIdRef = useRef<Record<string, string>>({});
   useEffect(() => {
     workspaceQuickComposeThreadRef.current = workspaceQuickComposeThread;
   }, [workspaceQuickComposeThread]);
@@ -1883,9 +1887,7 @@ const WorkflowSection: React.FC<{
         beginLightboxBoot();
         window.requestAnimationFrame(() => {
           if (lightboxOpenGenRef.current !== openGen) return;
-          startTransition(() => {
-            setLightboxOverlayMounted(true);
-          });
+          setLightboxOverlayMounted(true);
         });
       });
     },
@@ -2837,7 +2839,24 @@ ${lineSvg}
       correlationId: task.id,
       auditEventId: runAudit.id,
     });
+    beginAiTaskEnvelope(task.id);
+    let envelopeOutcome: 'success' | 'failed' = 'success';
     try {
+    const taskModForEnvelope = getModule(task.actionType);
+    const branchForEnvelope = classifyWorkflowRunTaskBranch({
+      actionType: task.actionType,
+      module: taskModForEnvelope ?? null,
+    });
+    await prepareAiTaskEnvelopeCredits(
+      planWorkflowActionRoutes(task.actionType, taskModForEnvelope ?? null, {
+        capabilitySet:
+          branchForEnvelope === 'branch_capability_set'
+            ? getSet(task.actionType.slice(SET_ACTION_PREFIX.length)) ?? null
+            : null,
+        presets: actionModules,
+        overrides: creditOverridesFromTaskLike(task),
+      })
+    );
     const { actionType, inputImage, inputText } = task;
     const auditRunFail = (
       code: string,
@@ -2846,6 +2865,7 @@ ${lineSvg}
       detail?: Record<string, unknown>,
       logDetail?: string
     ) => {
+      envelopeOutcome = 'failed';
       emitWorkflowTaskFailure(onLog, task, { code, level, message, detail, logDetail });
     };
     const prefetched = String(task.clientPrefetchedImageResult || '').trim();
@@ -3125,6 +3145,11 @@ ${lineSvg}
           });
           return { image: null };
         }
+        const assetId = task.assetId;
+        setCapabilitySetRunByAssetId((prev) => ({
+          ...prev,
+          [assetId]: { taskId: task.id, progressLine: '步骤 1/1 · 准备执行…', latestImage: null },
+        }));
         try {
           const presetBase =
             task.promptOverride != null && task.promptOverride.trim() !== ''
@@ -3163,6 +3188,13 @@ ${lineSvg}
               companionProjectId: workspaceProjectChrome?.activeProjectId?.trim() || undefined,
               workflowAssetId: task.assetId,
               workflowSourceDisplayKey: task.inputSourceDisplayKey,
+              onRunProgress: (line) => {
+                setCapabilitySetRunByAssetId((prev) => {
+                  const cur = prev[assetId];
+                  if (cur?.taskId !== task.id) return prev;
+                  return { ...prev, [assetId]: { ...cur, progressLine: line } };
+                });
+              },
             },
             {
               inputText,
@@ -3183,6 +3215,13 @@ ${lineSvg}
           if (out.kind === 'video') {
             return { image: null, videoUrl: out.videoUrl, videoMime: out.mimeType, vgpSteps: out.vgpSteps };
           }
+          if (out.kind === 'image' && out.image) {
+            setCapabilitySetRunByAssetId((prev) => {
+              const cur = prev[assetId];
+              if (cur?.taskId !== task.id) return prev;
+              return { ...prev, [assetId]: { ...cur, latestImage: out.image! } };
+            });
+          }
           return { image: out.image, vgpSteps: out.vgpSteps };
         } catch (err: unknown) {
           if (isGeminiAsyncPollTimeoutError(err)) {
@@ -3195,13 +3234,24 @@ ${lineSvg}
             });
             return { image: null, geminiRecoveryJobId: err.jobId };
           }
-          const msg = err instanceof Error ? err.message : safeUnknownToString(err);
-          const full = isCreditsExceededError(err)
-            ? formatWorkflowRunTaskErrorMessage(err, actionLabel)
-            : `[${actionLabel}] 失败：${msg}`;
+          envelopeOutcome = 'failed';
+          const msg = normalizeApiErrorMessage(err);
+          const full = detectPipelineStepFromMessage(msg)
+            ? msg
+            : isCreditsExceededError(err)
+              ? formatWorkflowRunTaskErrorMessage(err, actionLabel)
+              : `[${actionLabel}] 失败：${msg}`;
           setAssetError(task.assetId, full);
           auditRunFail(WORKFLOW_AUDIT_CODES.RUN_TASK_CAPABILITY_EXCEPTION, 'error', full, { error: msg }, msg);
           return { image: null };
+        } finally {
+          setCapabilitySetRunByAssetId((prev) => {
+            const cur = prev[assetId];
+            if (cur?.taskId !== task.id) return prev;
+            const next = { ...prev };
+            delete next[assetId];
+            return next;
+          });
         }
       }
       case 'branch_cut_image': {
@@ -3226,6 +3276,8 @@ ${lineSvg}
       }
     }
     } finally {
+      await finalizeAiTaskEnvelopeCredits(envelopeOutcome);
+      endAiTaskEnvelope(task.id);
       clearCorrelationContext();
     }
   }, [
@@ -4189,9 +4241,22 @@ ${lineSvg}
     skipPromptCards?: boolean;
     /** 大图预览等：任务挂在该已有图片资产上，不新建隐藏卡片 */
     reuseAssetId?: string;
+    /** 侧栏对话等：无附图时强制走「文」内置链路，避免误触文生图 RPM */
+    preferTextPipelineWhenNoImagesAttached?: boolean;
   };
 
   const submitQuickComposeImpl = useCallback((invoke?: QuickComposeSubmitInvokeOptions): string[] => {
+    if (isAiTaskBusy()) {
+      onLog?.('warn', '当前有 AI 任务执行中，请等待完成后再发送');
+      return [];
+    }
+    const rememberTaskAssetById = (tasks: WorkflowPendingTask[]) => {
+      const map: Record<string, string> = {};
+      for (const t of tasks) {
+        if (t.id && t.assetId) map[t.id] = t.assetId;
+      }
+      lastQuickComposeTaskAssetByIdRef.current = map;
+    };
     const maxRefs = getQuickComposeMaxRefs();
     const resolved = resolveQuickComposeReferences({
       segments: quickComposeSegmentsRef.current,
@@ -4228,11 +4293,13 @@ ${lineSvg}
       invoke?.pseudoMultiTurnPrompt?.trim() || userText
     ).trim();
     const composeMode =
-      invoke?.preferImagePipelineWhenImagesAttached && imgsAll.length > 0 && quickComposeMode === 'text'
-        ? 'image'
-        : imgsAll.length > 0 && quickComposeMode === 'text'
+      invoke?.preferTextPipelineWhenNoImagesAttached && imgsAll.length === 0
+        ? 'text'
+        : invoke?.preferImagePipelineWhenImagesAttached && imgsAll.length > 0 && quickComposeMode === 'text'
           ? 'image'
-          : quickComposeMode;
+          : imgsAll.length > 0 && quickComposeMode === 'text'
+            ? 'image'
+            : quickComposeMode;
 
     const resolveQuickComposeMod = (presetId: string) =>
       actionModules.find((m) => m.id === presetId) ?? capabilityPresets.find((p) => p.id === presetId) ?? null;
@@ -4249,12 +4316,15 @@ ${lineSvg}
           o.overrideImageSize = quickComposeSize;
         }
         if (quickComposeUnderstand) {
-          o.overrideSkipUnderstand = overrideSkipUnderstandFromUnderstandEnabled(true);
+          const hasFixedInstruction = String(m.instruction || '').trim().length > 0;
+          if (!hasFixedInstruction) {
+            o.overrideSkipUnderstand = overrideSkipUnderstandFromUnderstandEnabled(true);
+          }
         }
       }
       if (
         (eng === 'gen_text' || m.category === 'text_to_text' || m.category === 'image_to_text') &&
-        quickComposeMode === 'text'
+        composeMode === 'text'
       ) {
         o.overrideTextModelRegistryId = coerceTextModelRegistryId(quickComposeTextModel);
       }
@@ -4268,7 +4338,13 @@ ${lineSvg}
     };
 
     /** 多张预设卡片：每张单独入队（各自 presetId + instruction；输入框文案拼到每一条） */
-    if (quickComposePromptCards.length > 0 && !invoke?.skipPromptCards) {
+    const skipPromptCardsForPlainText =
+      invoke?.preferTextPipelineWhenNoImagesAttached === true && imgsAll.length === 0;
+    if (
+      quickComposePromptCards.length > 0 &&
+      !invoke?.skipPromptCards &&
+      !skipPromptCardsForPlainText
+    ) {
       const cardRows: Array<{ card: WorkspaceQuickComposePromptCard; mod: CustomAppModule }> = [];
       for (const card of quickComposePromptCards) {
         const m = resolveQuickComposeMod(card.presetId);
@@ -4400,8 +4476,10 @@ ${lineSvg}
 
       if (newTasks.length === 0) {
         onLog?.('warn', '底部快捷栏：未能创建任何任务（请检查能力与提示词）');
+        lastQuickComposeTaskAssetByIdRef.current = {};
         return [];
       }
+      rememberTaskAssetById(newTasks);
       setAssets((prev) => [...prev, ...newAssets]);
       if (executing) {
         setPending((prev) => [...prev, ...newTasks]);
@@ -4425,8 +4503,10 @@ ${lineSvg}
     const runPlainBatch = (newAssets: WorkflowAsset[], newTasks: WorkflowPendingTask[]): string[] => {
       if (newTasks.length === 0) {
         onLog?.('warn', '底部快捷栏：无法创建任务');
+        lastQuickComposeTaskAssetByIdRef.current = {};
         return [];
       }
+      rememberTaskAssetById(newTasks);
       setAssets((prev) => [...prev, ...newAssets]);
       if (executing) {
         setPending((prev) => [...prev, ...newTasks]);
@@ -4858,7 +4938,8 @@ ${lineSvg}
       userText: string,
       taskIds: string[],
       assetIds?: string[],
-      assistantPreviewText = '已提交，等待结果…'
+      assistantPreviewText = '已提交，等待结果…',
+      taskAssetById?: Record<string, string>
     ) => {
       const trimmed = userText.trim();
       if (!trimmed) return;
@@ -4872,6 +4953,13 @@ ${lineSvg}
         status: 'submitted',
         ...(normalizedAssetIds?.length ? { assetIds: normalizedAssetIds } : {}),
       };
+      const normalizedTaskAssetById = taskAssetById
+        ? Object.fromEntries(
+            taskIds
+              .map((id) => [id, taskAssetById[id]] as const)
+              .filter(([, assetId]) => typeof assetId === 'string' && assetId.trim())
+          )
+        : undefined;
       const assistantMessage: QuickComposeThreadMessage = {
         id: uuid(),
         role: 'assistant',
@@ -4879,6 +4967,9 @@ ${lineSvg}
         timestamp: now + 1,
         status: taskIds.length > 0 ? 'queued' : 'error',
         taskIds,
+        ...(normalizedTaskAssetById && Object.keys(normalizedTaskAssetById).length
+          ? { taskAssetById: normalizedTaskAssetById }
+          : {}),
         ...(taskIds.length === 0 ? { errorMessage: '未能创建任务' } : {}),
       };
       updateQuickComposeThread(scope, (prev) => ({
@@ -4921,13 +5012,25 @@ ${lineSvg}
         pseudoMultiTurnPrompt,
         overrideUserText: currentUserText,
       });
+      const taskAssetById = Object.fromEntries(
+        taskIds
+          .map((id) => [id, lastQuickComposeTaskAssetByIdRef.current[id]] as const)
+          .filter(([, assetId]) => typeof assetId === 'string' && assetId.trim())
+      );
       const attachmentAssetIds = collectQuickComposeAttachmentAssetIds({
         segments: quickComposeSegmentsRef.current,
         mainDropSlots: quickComposeMainDropSlotsRef.current,
         referenceDropSlots: quickComposeReferenceDropSlotsRef.current,
         lightboxAssetId: lightboxAssetIdRef.current,
       });
-      appendQuickComposeThreadTurn(scope, currentUserText, taskIds, attachmentAssetIds);
+      appendQuickComposeThreadTurn(
+        scope,
+        currentUserText,
+        taskIds,
+        attachmentAssetIds,
+        undefined,
+        taskAssetById
+      );
       return taskIds;
     },
     [
@@ -4937,6 +5040,31 @@ ${lineSvg}
       submitQuickCompose,
     ]
   );
+
+  const quickComposeHasAttachedImages = useCallback((): boolean => {
+    const maxRefs = getQuickComposeMaxRefs();
+    const resolved = resolveQuickComposeReferences({
+      segments: quickComposeSegmentsRef.current,
+      mainDropSlots: quickComposeMainDropSlotsRef.current,
+      referenceDropSlots: quickComposeReferenceDropSlotsRef.current,
+      assets: assetsRef.current,
+      getAssetDisplayImage,
+      maxRefs,
+    });
+    const queues = resolveQuickComposeImageQueues({
+      mainDropSlots: quickComposeMainDropSlotsRef.current,
+      referenceDropSlots: quickComposeReferenceDropSlotsRef.current,
+      assets: assetsRef.current,
+      getAssetDisplayImage,
+      maxRefs,
+    });
+    const hasUrl = (s: string) => String(s || '').trim().length > 0;
+    return (
+      queues.mainUrls.some(hasUrl) ||
+      queues.referenceUrls.some(hasUrl) ||
+      resolved.refs.some(hasUrl)
+    );
+  }, [getAssetDisplayImage, getQuickComposeMaxRefs]);
 
   const handleQuickComposeChatSend = useCallback(() => {
     if (quickComposeChatSendGuardRef.current) return;
@@ -4948,17 +5076,25 @@ ${lineSvg}
         : lightboxQuickComposeThreadRef.current;
     if (!thread) return;
     if (quickComposeThreadHasInFlightAssistant(thread)) return;
+    if (isAiTaskBusy()) {
+      onLog?.('warn', '当前有 AI 任务执行中，请等待完成后再发送');
+      return;
+    }
     quickComposeChatSendGuardRef.current = true;
     try {
-      if (inLightbox) {
-        submitQuickComposeWithThread(scope, { skipPromptCards: true });
-        return;
-      }
-      submitQuickComposeWithThread(scope);
+      submitQuickComposeWithThread(scope, {
+        skipPromptCards: true,
+        /** 侧栏纯文字对话：无 @/拖图时强制文生文，避免默认「图」模式误触 Vertex 文生图 RPM */
+        preferTextPipelineWhenNoImagesAttached: !quickComposeHasAttachedImages(),
+      });
     } finally {
       quickComposeChatSendGuardRef.current = false;
     }
-  }, [quickComposeThreadHasInFlightAssistant, submitQuickComposeWithThread]);
+  }, [
+    quickComposeHasAttachedImages,
+    quickComposeThreadHasInFlightAssistant,
+    submitQuickComposeWithThread,
+  ]);
 
   const handleQuickComposeChatRetry = useCallback(
     (messageId: string) => {
@@ -4995,21 +5131,38 @@ ${lineSvg}
         const taskIds = submitQuickCompose({
           pseudoMultiTurnPrompt,
           overrideUserText: userText,
-          ...(inLightbox ? { skipPromptCards: true } : {}),
+          skipPromptCards: true,
+          preferTextPipelineWhenNoImagesAttached: !quickComposeHasAttachedImages(),
+          ...(inLightbox ? {} : {}),
         });
+        const taskAssetById = Object.fromEntries(
+          taskIds
+            .map((id) => [id, lastQuickComposeTaskAssetByIdRef.current[id]] as const)
+            .filter(([, assetId]) => typeof assetId === 'string' && assetId.trim())
+        );
         const attachmentAssetIds = collectQuickComposeAttachmentAssetIds({
           segments: quickComposeSegmentsRef.current,
           mainDropSlots: quickComposeMainDropSlotsRef.current,
           referenceDropSlots: quickComposeReferenceDropSlotsRef.current,
           lightboxAssetId: lightboxAssetIdRef.current,
         });
-        appendQuickComposeThreadTurn(scope, userText, taskIds, attachmentAssetIds);
+        appendQuickComposeThreadTurn(
+          scope,
+          userText,
+          taskIds,
+          attachmentAssetIds,
+          undefined,
+          taskAssetById
+        );
       } finally {
         quickComposeChatSendGuardRef.current = false;
       }
     },
     [
       appendQuickComposeThreadTurn,
+      getAssetDisplayImage,
+      getQuickComposeMaxRefs,
+      quickComposeHasAttachedImages,
       quickComposeThreadHasInFlightAssistant,
       submitQuickCompose,
       updateQuickComposeThread,

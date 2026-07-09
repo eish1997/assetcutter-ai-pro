@@ -101,9 +101,22 @@ function taskNeedsUnderstandPhase(task: WorkflowPendingTask, module: CustomAppMo
   return getCapabilityEngine(module) === 'gen_image';
 }
 
+/** 关联 task 已从运行时队列消失且无法判定成功时的助手消息错误文案 */
+export const QUICK_COMPOSE_ORPHAN_TASK_ERROR = '任务已结束或失败，请重试';
+
+function taskAssetIdForHint(
+  taskId: string,
+  taskAssetById?: Readonly<Record<string, string>>
+): string | undefined {
+  const assetId = taskAssetById?.[taskId];
+  return assetId?.trim() || undefined;
+}
+
 /** 根据关联 taskIds 推导助手消息状态 */
 export function resolveQuickComposeAssistantMessageStatus(args: {
   taskIds: string[];
+  /** 持久化在助手消息上的 taskId→assetId，用于任务已出队后仍能对齐 assetErrors */
+  taskAssetById?: Readonly<Record<string, string>>;
   pending: WorkflowPendingTask[];
   executingQueue: { tasks: WorkflowPendingTask[] } | null;
   activeTaskIds: ReadonlySet<string>;
@@ -114,6 +127,7 @@ export function resolveQuickComposeAssistantMessageStatus(args: {
 }): QuickComposeMessageStatus {
   const {
     taskIds,
+    taskAssetById,
     pending,
     executingQueue,
     activeTaskIds,
@@ -122,21 +136,32 @@ export function resolveQuickComposeAssistantMessageStatus(args: {
     cancelledTaskIds,
     resolveModule,
   } = args;
-  if (taskIds.length === 0) return 'queued';
+  if (taskIds.length === 0) return 'error';
 
   let anyActive = false;
   let anyUnderstanding = false;
   let allCompleted = true;
   let anyError = false;
+  let anyStale = false;
 
   for (const taskId of taskIds) {
     if (cancelledTaskIds.has(taskId)) {
       anyError = true;
       continue;
     }
+    const hintedAssetId = taskAssetIdForHint(taskId, taskAssetById);
+    const hintedAssetErr = hintedAssetId ? assetErrors.get(hintedAssetId) : undefined;
     const task = findTaskById(taskId, pending, executingQueue);
     if (!task) {
-      if (!completedTaskIds.has(taskId)) allCompleted = false;
+      if (hintedAssetErr) {
+        anyError = true;
+        continue;
+      }
+      if (completedTaskIds.has(taskId)) {
+        continue;
+      }
+      anyStale = true;
+      allCompleted = false;
       continue;
     }
     const assetErr = assetErrors.get(task.assetId);
@@ -153,6 +178,7 @@ export function resolveQuickComposeAssistantMessageStatus(args: {
   }
 
   if (anyError) return 'error';
+  if (anyStale && !anyActive && !anyUnderstanding) return 'error';
   if (allCompleted) return 'done';
   if (anyUnderstanding) return 'understanding';
   if (anyActive) return 'running';
@@ -169,6 +195,7 @@ export function patchQuickComposeThreadMessageStatuses(
     const status = resolveQuickComposeAssistantMessageStatus({
       ...args,
       taskIds: m.taskIds,
+      taskAssetById: m.taskAssetById,
     });
     let errorMessage: string | undefined;
     if (status === 'error') {
@@ -181,8 +208,16 @@ export function patchQuickComposeThreadMessageStatuses(
             break;
           }
         }
+        const hintedAssetId = taskAssetIdForHint(taskId, m.taskAssetById);
+        if (hintedAssetId) {
+          const err = args.assetErrors.get(hintedAssetId);
+          if (err) {
+            errorMessage = err;
+            break;
+          }
+        }
       }
-      errorMessage = errorMessage ?? m.errorMessage;
+      errorMessage = errorMessage ?? m.errorMessage ?? QUICK_COMPOSE_ORPHAN_TASK_ERROR;
     }
     if (m.status === status && m.errorMessage === errorMessage) return m;
     changed = true;

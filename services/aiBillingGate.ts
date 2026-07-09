@@ -466,6 +466,11 @@ function maxPlatformStepMin(steps: AiBillingRouteStep[]): number {
   return max;
 }
 
+/** 整包任务 proxy 预扣：取各 platform 步 max（与 assertAiGateForSteps 一致） */
+export function maxPlatformStepMinCredits(steps: AiBillingRouteStep[]): number {
+  return maxPlatformStepMin(steps);
+}
+
 /**
  * 执行层单步 reserve（经 unifiedAiGateway / proxyCreditsGate）。
  * UI 入队须只用 {@link isSubmitBlockedForPlatformPlan}，勿传任务级 precharge。
