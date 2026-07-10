@@ -30,9 +30,9 @@ import QuickComposeDropTray from './workflow/QuickComposeDropTray';
 import QuickComposeMentionField, {
   type QuickComposeMentionFieldHandle,
 } from './workflow/QuickComposeMentionField';
-import QuickComposeChatDock, {
-  type QuickComposeChatDockProps,
-} from './workflow/quickComposeChat/QuickComposeChatDock';
+import ProjectAgentDock, {
+  type ProjectAgentDockProps,
+} from './project-agent/ProjectAgentDock';
 import type {
   QuickComposeDropSlot,
   QuickComposeDropZone,
@@ -142,7 +142,7 @@ export type WorkspaceQuickComposeBarProps = {
    * 替代 mention 大输入区；未提供时保持原有 dock 布局（fallback）。
    */
   chatDockProps?: Pick<
-    QuickComposeChatDockProps,
+    ProjectAgentDockProps,
     'messages' | 'onRetryMessage' | 'threadEmptyTitle' | 'threadEmptyHint' | 'minimizeDisabled' | 'className'
   >;
 };
@@ -1229,7 +1229,7 @@ export default function WorkspaceQuickComposeBar({
           : undefined;
 
   const dockHostEl = expandedDockHostRef?.current ?? null;
-  const dockTitle = isLightbox ? '大图快捷生成' : '快捷生成';
+  const dockTitle = isLightbox ? '大图 · 项目 Agent' : '项目 Agent';
   const useChatDock = Boolean(
     inputExpanded && (chatDockProps || isWorkspaceDockedExpanded || isLightboxInlineChatExpanded)
   );
@@ -1388,17 +1388,17 @@ export default function WorkspaceQuickComposeBar({
 
           {inputExpanded ? (
             useChatDock ? (
-              <QuickComposeChatDock
+              <ProjectAgentDock
                 title={dockTitle}
                 onMinimize={collapseInputExpanded}
                 minimizeDisabled={chatDockProps?.minimizeDisabled}
                 className={chatDockProps?.className}
                 messages={chatDockProps?.messages ?? []}
                 onRetryMessage={chatDockProps?.onRetryMessage}
-                threadEmptyTitle={chatDockProps?.threadEmptyTitle ?? '开始对话'}
+                threadEmptyTitle={chatDockProps?.threadEmptyTitle ?? '跟项目里的 Agent 说话'}
                 threadEmptyHint={
                   chatDockProps?.threadEmptyHint ??
-                  '输入描述并发送，生成结果会出现在助手消息中'
+                  '发送后会先给出计划，再在画布出活'
                 }
                 segments={segments}
                 onSegmentsChange={onSegmentsChange}

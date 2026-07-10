@@ -442,24 +442,32 @@ import {
 } from '../services/quickComposeMention';
 import type {
   QuickComposeChatMessageView,
-  QuickComposeThread,
   QuickComposeThreadMessage,
   QuickComposeThreadScope,
 } from '../types/quickComposeThread';
 import {
-  formatQuickComposeTurnContextForPromptOverride,
   patchQuickComposeThreadMessageStatuses,
 } from '../services/quickComposeTurnContext';
 import {
   collectQuickComposeAttachmentAssetIds,
   mapQuickComposeThreadMessagesToChatViews,
 } from '../services/quickComposeChatView';
+import { buildProjectAgentIntent } from '../services/projectAgent/intent';
+import { createProjectAgentRuntime, type ProjectAgentRuntime } from '../services/projectAgent/runtime';
 import {
-  createQuickComposeThread,
-  loadQuickComposeThread,
-  saveQuickComposeThread,
-  type QuickComposeThreadStoreKey,
-} from '../services/quickComposeThreadStore';
+  loadOrCreateProjectAgentThread,
+  saveProjectAgentThread,
+  type ProjectAgentThread,
+  type ProjectAgentThreadStoreKey,
+} from '../services/projectAgent/threadStore';
+import { createWorkflowProjectAgentHostPort } from './project-agent/createWorkflowProjectAgentHostPort';
+import { mapPlanToQuickComposeInvoke } from './project-agent/mapPlanToQuickComposeInvoke';
+import type {
+  AgentPlannedTool,
+  AgentSurfaceContext,
+  ProjectAgentExecutePlanResult,
+  ProjectAgentIntent,
+} from '../types/projectAgent';
 import { buildWorkflowComposerSeedFromTwoPresets } from './workflow/buildWorkflowComposerSeed';
 import type { CapabilityAssetCandidate } from './CapabilitySetCanvas';
 import { BUILTIN_IMAGE_PROCESS_IDS } from '../services/capabilityPresetStore';
@@ -779,10 +787,6 @@ export type QuickComposeChatDockHandlers = {
   onSend: () => void;
   onRetry: (messageId: string) => void;
 };
-
-function quickComposeLightboxSessionKey(asset: WorkflowAsset): string {
-  return `${asset.id}:${String(asset.displayKey || 'original').trim() || 'original'}`;
-}
 
 const WorkflowSection: React.FC<{
   capabilityPresets: CustomAppModule[];
@@ -1251,55 +1255,38 @@ const WorkflowSection: React.FC<{
     }
   }, [lightboxAssetId]);
 
-  const [workspaceQuickComposeThread, setWorkspaceQuickComposeThread] = useState<QuickComposeThread | null>(
+  /** Phase 2 / P5: one project Agent thread (lightbox only changes surface context). */
+  const [workspaceQuickComposeThread, setWorkspaceQuickComposeThread] = useState<ProjectAgentThread | null>(
     null
   );
-  const [lightboxQuickComposeThread, setLightboxQuickComposeThread] = useState<QuickComposeThread | null>(
-    null
-  );
-  const workspaceQuickComposeThreadRef = useRef<QuickComposeThread | null>(null);
-  const lightboxQuickComposeThreadRef = useRef<QuickComposeThread | null>(null);
+  const workspaceQuickComposeThreadRef = useRef<ProjectAgentThread | null>(null);
   /** 防止连点/Enter 重复入队（thread ref 异步更新前的窗口期） */
   const quickComposeChatSendGuardRef = useRef(false);
   /** 最近一次 submitQuickCompose 创建的 taskId→assetId，供对话线程持久化 */
   const lastQuickComposeTaskAssetByIdRef = useRef<Record<string, string>>({});
+  const projectAgentRuntimeRef = useRef<ProjectAgentRuntime | null>(null);
+  const submitLightboxQuickComposeRef = useRef<() => string[]>([]);
   useEffect(() => {
     workspaceQuickComposeThreadRef.current = workspaceQuickComposeThread;
   }, [workspaceQuickComposeThread]);
-  useEffect(() => {
-    lightboxQuickComposeThreadRef.current = lightboxQuickComposeThread;
-  }, [lightboxQuickComposeThread]);
 
   const activeWorkspaceProjectId = String(workspaceProjectChrome?.activeProjectId || '').trim();
+  const getProjectAgentThreadKey = useCallback((): ProjectAgentThreadStoreKey | null => {
+    if (!activeWorkspaceProjectId) return null;
+    return { userId: preferenceScope, workspaceProjectId: activeWorkspaceProjectId };
+  }, [activeWorkspaceProjectId, preferenceScope]);
+
   useEffect(() => {
     if (!activeWorkspaceProjectId) {
       setWorkspaceQuickComposeThread(null);
       return;
     }
-    const key: QuickComposeThreadStoreKey = {
+    const key: ProjectAgentThreadStoreKey = {
       userId: preferenceScope,
       workspaceProjectId: activeWorkspaceProjectId,
-      scope: 'workspace',
     };
-    setWorkspaceQuickComposeThread(loadQuickComposeThread(key) ?? createQuickComposeThread(key));
+    setWorkspaceQuickComposeThread(loadOrCreateProjectAgentThread(key));
   }, [activeWorkspaceProjectId, preferenceScope]);
-
-  useEffect(() => {
-    const assetId = String(lightboxAssetId || '').trim();
-    if (!assetId || !activeWorkspaceProjectId) {
-      setLightboxQuickComposeThread(null);
-      return;
-    }
-    const asset = assets.find((a) => a.id === assetId);
-    if (!asset) return;
-    const key: QuickComposeThreadStoreKey = {
-      userId: preferenceScope,
-      workspaceProjectId: activeWorkspaceProjectId,
-      scope: 'lightbox',
-      lightboxSessionKey: quickComposeLightboxSessionKey(asset),
-    };
-    setLightboxQuickComposeThread(loadQuickComposeThread(key) ?? createQuickComposeThread(key));
-  }, [lightboxAssetId, activeWorkspaceProjectId, preferenceScope, assets]);
 
   const [archivedDetailAssetId, setArchivedDetailAssetId] = useState<string | null>(null);
   const [executing, setExecuting] = useState(false);
@@ -4234,6 +4221,10 @@ ${lineSvg}
     reuseAssetId?: string;
     /** 侧栏对话等：无附图时强制走「文」内置链路，避免误触文生图 RPM */
     preferTextPipelineWhenNoImagesAttached?: boolean;
+    /** Phase 2 Agent：强制 compose 模态（覆盖底部芯片） */
+    forceComposeMode?: WorkspaceQuickComposeComposeMode;
+    /** Phase 2 Agent：覆盖预设卡片列表（按 plan 执行） */
+    presetCardsOverride?: WorkspaceQuickComposePromptCard[];
   };
 
   const submitQuickComposeImpl = useCallback((invoke?: QuickComposeSubmitInvokeOptions): string[] => {
@@ -4284,13 +4275,14 @@ ${lineSvg}
       invoke?.pseudoMultiTurnPrompt?.trim() || userText
     ).trim();
     const composeMode =
-      invoke?.preferTextPipelineWhenNoImagesAttached && imgsAll.length === 0
+      invoke?.forceComposeMode ??
+      (invoke?.preferTextPipelineWhenNoImagesAttached && imgsAll.length === 0
         ? 'text'
         : invoke?.preferImagePipelineWhenImagesAttached && imgsAll.length > 0 && quickComposeMode === 'text'
           ? 'image'
           : imgsAll.length > 0 && quickComposeMode === 'text'
             ? 'image'
-            : quickComposeMode;
+            : quickComposeMode);
 
     const resolveQuickComposeMod = (presetId: string) =>
       actionModules.find((m) => m.id === presetId) ?? capabilityPresets.find((p) => p.id === presetId) ?? null;
@@ -4331,13 +4323,14 @@ ${lineSvg}
     /** 多张预设卡片：每张单独入队（各自 presetId + instruction；输入框文案拼到每一条） */
     const skipPromptCardsForPlainText =
       invoke?.preferTextPipelineWhenNoImagesAttached === true && imgsAll.length === 0;
+    const effectivePromptCards = invoke?.presetCardsOverride ?? quickComposePromptCards;
     if (
-      quickComposePromptCards.length > 0 &&
+      effectivePromptCards.length > 0 &&
       !invoke?.skipPromptCards &&
       !skipPromptCardsForPlainText
     ) {
       const cardRows: Array<{ card: WorkspaceQuickComposePromptCard; mod: CustomAppModule }> = [];
-      for (const card of quickComposePromptCards) {
+      for (const card of effectivePromptCards) {
         const m = resolveQuickComposeMod(card.presetId);
         if (!m || m.disabled) {
           onLog?.('warn', `底部快捷栏：跳过无效预设「${card.label}」(${card.presetId})`);
@@ -4762,39 +4755,30 @@ ${lineSvg}
   );
 
   useEffect(() => {
-    const syncThread = (
-      thread: QuickComposeThread | null,
-      setThread: React.Dispatch<React.SetStateAction<QuickComposeThread | null>>
-    ) => {
-      if (!thread) return;
-      const nextMessages = patchQuickComposeThreadMessageStatuses(thread, {
-        pending,
-        executingQueue,
-        activeTaskIds,
-        completedTaskIds,
-        assetErrors,
-        cancelledTaskIds: cancelledTaskIdsRef.current,
-        resolveModule: resolveQuickComposeMod,
-      });
-      if (nextMessages === thread.messages) return;
-      setThread((prev) => {
-        if (!prev || prev.id !== thread.id) return prev;
-        const next = { ...prev, messages: nextMessages, updatedAt: Date.now() };
-        const storeKey: QuickComposeThreadStoreKey = {
-          userId: preferenceScope,
-          workspaceProjectId: prev.workspaceProjectId,
-          scope: prev.scope,
-          ...(prev.lightboxSessionKey ? { lightboxSessionKey: prev.lightboxSessionKey } : {}),
-        };
-        saveQuickComposeThread(storeKey, next);
-        return next;
-      });
-    };
-    syncThread(workspaceQuickComposeThread, setWorkspaceQuickComposeThread);
-    syncThread(lightboxQuickComposeThread, setLightboxQuickComposeThread);
+    const thread = workspaceQuickComposeThread;
+    if (!thread) return;
+    const nextMessages = patchQuickComposeThreadMessageStatuses(thread, {
+      pending,
+      executingQueue,
+      activeTaskIds,
+      completedTaskIds,
+      assetErrors,
+      cancelledTaskIds: cancelledTaskIdsRef.current,
+      resolveModule: resolveQuickComposeMod,
+    });
+    if (nextMessages === thread.messages) return;
+    setWorkspaceQuickComposeThread((prev) => {
+      if (!prev || prev.id !== thread.id) return prev;
+      const next: ProjectAgentThread = { ...prev, messages: nextMessages, updatedAt: Date.now() };
+      const storeKey: ProjectAgentThreadStoreKey = {
+        userId: preferenceScope,
+        workspaceProjectId: prev.workspaceProjectId,
+      };
+      saveProjectAgentThread(storeKey, next);
+      return next;
+    });
   }, [
     workspaceQuickComposeThread,
-    lightboxQuickComposeThread,
     pending,
     executingQueue,
     activeTaskIds,
@@ -4860,59 +4844,21 @@ ${lineSvg}
     [quickComposeSubmitDisabled, quickComposeSubmitDisabledReason, onLog, submitQuickComposeImpl]
   );
 
-  const getQuickComposeThreadStoreKey = useCallback(
-    (scope: QuickComposeThreadScope): QuickComposeThreadStoreKey | null => {
-      if (!activeWorkspaceProjectId) return null;
-      if (scope === 'workspace') {
-        return {
-          userId: preferenceScope,
-          workspaceProjectId: activeWorkspaceProjectId,
-          scope: 'workspace',
-        };
-      }
-      const assetId = String(lightboxAssetIdRef.current || '').trim();
-      const asset = assetsRef.current.find((a) => a.id === assetId);
-      if (!asset) return null;
-      return {
-        userId: preferenceScope,
-        workspaceProjectId: activeWorkspaceProjectId,
-        scope: 'lightbox',
-        lightboxSessionKey: quickComposeLightboxSessionKey(asset),
-      };
-    },
-    [activeWorkspaceProjectId, preferenceScope]
-  );
-
-  const updateQuickComposeThread = useCallback(
-    (
-      scope: QuickComposeThreadScope,
-      updater: (prev: QuickComposeThread) => QuickComposeThread
-    ) => {
-      const storeKey = getQuickComposeThreadStoreKey(scope);
-      const apply = (prev: QuickComposeThread | null): QuickComposeThread | null => {
+  const updateProjectAgentThread = useCallback(
+    (updater: (prev: ProjectAgentThread) => ProjectAgentThread) => {
+      const storeKey = getProjectAgentThreadKey();
+      setWorkspaceQuickComposeThread((prev) => {
         if (!prev || !storeKey) return prev;
         const next = updater(prev);
-        saveQuickComposeThread(storeKey, next);
+        saveProjectAgentThread(storeKey, next);
+        workspaceQuickComposeThreadRef.current = next;
         return next;
-      };
-      if (scope === 'workspace') {
-        setWorkspaceQuickComposeThread((prev) => {
-          const next = apply(prev);
-          if (next) workspaceQuickComposeThreadRef.current = next;
-          return next;
-        });
-      } else {
-        setLightboxQuickComposeThread((prev) => {
-          const next = apply(prev);
-          if (next) lightboxQuickComposeThreadRef.current = next;
-          return next;
-        });
-      }
+      });
     },
-    [getQuickComposeThreadStoreKey]
+    [getProjectAgentThreadKey]
   );
 
-  const quickComposeThreadHasInFlightAssistant = useCallback((thread: QuickComposeThread | null) => {
+  const quickComposeThreadHasInFlightAssistant = useCallback((thread: ProjectAgentThread | null) => {
     if (!thread) return false;
     return thread.messages.some(
       (m) =>
@@ -4923,65 +4869,137 @@ ${lineSvg}
     );
   }, []);
 
-  const appendQuickComposeThreadTurn = useCallback(
+  const buildQuickComposeAgentSurface = useCallback((): AgentSurfaceContext => {
+    const lb = String(lightboxAssetIdRef.current || '').trim();
+    if (lb) {
+      const asset = assetsRef.current.find((a) => a.id === lb);
+      const displayKey = String(asset?.displayKey || 'full');
+      const hasLocalEdit = Boolean(lightboxOverlayDraft?.localEdit);
+      return { kind: 'lightbox', assetId: lb, displayKey, hasLocalEdit };
+    }
+    const selected = [...selectedAssetIds].filter((id) => Boolean(id));
+    if (selected.length) return { kind: 'canvas', selectedAssetIds: selected };
+    return { kind: 'none' };
+  }, [lightboxOverlayDraft, selectedAssetIds]);
+
+  const executeAgentPlan = useCallback(
     (
-      scope: QuickComposeThreadScope,
-      userText: string,
-      taskIds: string[],
-      assetIds?: string[],
-      assistantPreviewText = '已提交，等待结果…',
-      taskAssetById?: Record<string, string>
-    ) => {
-      const trimmed = userText.trim();
-      if (!trimmed) return;
-      const now = Date.now();
-      const normalizedAssetIds = assetIds?.map((id) => id.trim()).filter(Boolean);
-      const userMessage: QuickComposeThreadMessage = {
-        id: uuid(),
-        role: 'user',
-        text: trimmed,
-        timestamp: now,
-        status: 'submitted',
-        ...(normalizedAssetIds?.length ? { assetIds: normalizedAssetIds } : {}),
-      };
-      const normalizedTaskAssetById = taskAssetById
-        ? Object.fromEntries(
-            taskIds
-              .map((id) => [id, taskAssetById[id]] as const)
-              .filter(([, assetId]) => typeof assetId === 'string' && assetId.trim())
-          )
-        : undefined;
-      const assistantMessage: QuickComposeThreadMessage = {
-        id: uuid(),
-        role: 'assistant',
-        text: assistantPreviewText,
-        timestamp: now + 1,
-        status: taskIds.length > 0 ? 'queued' : 'error',
-        taskIds,
-        ...(normalizedTaskAssetById && Object.keys(normalizedTaskAssetById).length
-          ? { taskAssetById: normalizedTaskAssetById }
+      intent: ProjectAgentIntent,
+      plan: AgentPlannedTool[]
+    ): ProjectAgentExecutePlanResult => {
+      if (!plan.length) {
+        return { taskIds: [], errorMessage: 'Empty plan' };
+      }
+      const mapped = mapPlanToQuickComposeInvoke(
+        intent,
+        plan,
+        (presetId) => {
+          const mod =
+            actionModules.find((m) => m.id === presetId) ??
+            capabilityPresets.find((p) => p.id === presetId) ??
+            null;
+          if (!mod) return null;
+          return {
+            label: mod.label || presetId,
+            instruction: String(mod.instruction ?? '').trim(),
+          };
+        },
+        () => uuid()
+      );
+      if (mapped.errorMessage && !mapped.useLightboxLocalEdit && !mapped.presetCardsOverride) {
+        return { taskIds: [], errorMessage: mapped.errorMessage };
+      }
+      if (mapped.useLightboxLocalEdit) {
+        const ids = submitLightboxQuickComposeRef.current() || [];
+        const taskAssetById = Object.fromEntries(
+          ids
+            .map((id) => [id, lastQuickComposeTaskAssetByIdRef.current[id]] as const)
+            .filter(([, assetId]) => typeof assetId === 'string' && assetId.trim())
+        );
+        return {
+          taskIds: ids,
+          ...(Object.keys(taskAssetById).length ? { taskAssetById } : {}),
+          ...(ids.length === 0 ? { errorMessage: '未能创建局部重绘任务' } : {}),
+        };
+      }
+
+      const invoke: QuickComposeSubmitInvokeOptions = {
+        overrideUserText: mapped.overrideUserText,
+        skipPromptCards: mapped.skipPromptCards,
+        ...(mapped.forceComposeMode ? { forceComposeMode: mapped.forceComposeMode } : {}),
+        ...(mapped.preferTextPipelineWhenNoImagesAttached
+          ? { preferTextPipelineWhenNoImagesAttached: true }
           : {}),
-        ...(taskIds.length === 0 ? { errorMessage: '未能创建任务' } : {}),
+        ...(mapped.presetCardsOverride ? { presetCardsOverride: mapped.presetCardsOverride } : {}),
       };
-      updateQuickComposeThread(scope, (prev) => ({
-        ...prev,
-        messages: [...prev.messages, userMessage, assistantMessage],
-        updatedAt: Date.now(),
-      }));
+
+      const taskIds = submitQuickCompose(invoke);
+      const taskAssetById = Object.fromEntries(
+        taskIds
+          .map((id) => [id, lastQuickComposeTaskAssetByIdRef.current[id]] as const)
+          .filter(([, assetId]) => typeof assetId === 'string' && assetId.trim())
+      );
+      return {
+        taskIds,
+        ...(Object.keys(taskAssetById).length ? { taskAssetById } : {}),
+        ...(taskIds.length === 0 ? { errorMessage: mapped.errorMessage || '未能创建任务' } : {}),
+      };
     },
-    [updateQuickComposeThread]
+    [actionModules, capabilityPresets, submitQuickCompose]
   );
 
+  const projectAgentHostPort = useMemo(
+    () =>
+      createWorkflowProjectAgentHostPort({
+        enqueueTasks: (tasks) => {
+          if (!tasks.length) return [];
+          setPending((prev) => [...prev, ...tasks]);
+          return tasks.map((t) => t.id).filter(Boolean);
+        },
+        getQueueSnapshot: () => ({
+          pending: [...pendingRef.current],
+          executing: executingQueue?.tasks ? [...executingQueue.tasks] : [],
+          assetErrors: Object.fromEntries(assetErrors.entries()),
+        }),
+        resolveAssetDisplay: (assetId) => {
+          const asset = assetsRef.current.find((a) => a.id === assetId);
+          if (!asset) return {};
+          return {
+            previewSrc: getAssetDisplayImage(asset) || undefined,
+            label: workflowAssetMentionLabel(asset),
+          };
+        },
+        reportSurfaceContext: buildQuickComposeAgentSurface,
+        executePlan: executeAgentPlan,
+      }),
+    [assetErrors, buildQuickComposeAgentSurface, executeAgentPlan, executingQueue, getAssetDisplayImage, setPending]
+  );
+
+  useEffect(() => {
+    projectAgentRuntimeRef.current = createProjectAgentRuntime(projectAgentHostPort);
+  }, [projectAgentHostPort]);
+
   const submitQuickComposeWithThread = useCallback(
-    (scope: QuickComposeThreadScope, invoke?: QuickComposeSubmitInvokeOptions): string[] => {
-      const thread =
-        scope === 'workspace'
-          ? workspaceQuickComposeThreadRef.current
-          : lightboxQuickComposeThreadRef.current;
-      if (!thread) return [];
+    async (
+      _scope: QuickComposeThreadScope,
+      invoke?: QuickComposeSubmitInvokeOptions
+    ): Promise<string[]> => {
+      void _scope;
+      const thread = workspaceQuickComposeThreadRef.current;
+      const storeKey = getProjectAgentThreadKey();
+      const runtime = projectAgentRuntimeRef.current;
+      if (!thread || !storeKey || !runtime) return [];
       if (quickComposeThreadHasInFlightAssistant(thread)) return [];
+
       const resolved = resolveQuickComposeReferences({
         segments: quickComposeSegmentsRef.current,
+        mainDropSlots: quickComposeMainDropSlotsRef.current,
+        referenceDropSlots: quickComposeReferenceDropSlotsRef.current,
+        assets: assetsRef.current,
+        getAssetDisplayImage,
+        maxRefs: getQuickComposeMaxRefs(),
+      });
+      const queues = resolveQuickComposeImageQueues({
         mainDropSlots: quickComposeMainDropSlotsRef.current,
         referenceDropSlots: quickComposeReferenceDropSlotsRef.current,
         assets: assetsRef.current,
@@ -4993,42 +5011,99 @@ ${lineSvg}
         resolved.referenceContextBlock
       );
       const currentUserText = (invoke?.overrideUserText ?? promptText).trim();
-      if (!currentUserText) return [];
-      const pseudoMultiTurnPrompt = formatQuickComposeTurnContextForPromptOverride(
-        thread.messages,
-        currentUserText
+      const skipCards = invoke?.skipPromptCards === true;
+      const presetIds = (
+        skipCards ? [] : quickComposePromptCards.map((c) => c.presetId)
+      ).filter(Boolean);
+      if (!currentUserText && presetIds.length === 0) return [];
+
+      const primaryUrl = queues.mainUrls[0] || resolved.refs[0] || '';
+      const mainAssetId =
+        primaryUrl
+          ? assetsRef.current.find((a) => getAssetDisplayImage(a) === primaryUrl)?.id
+          : lightboxAssetIdRef.current || undefined;
+      const hasEnabled3dPreset = Boolean(
+        actionModules.some((m) => m.category === 'generate_3d' && m.enabled !== false) ||
+          capabilityPresets.some((m) => m.category === 'generate_3d' && m.enabled !== false)
       );
-      const taskIds = submitQuickCompose({
-        ...invoke,
-        pseudoMultiTurnPrompt,
-        overrideUserText: currentUserText,
+      const intent = buildProjectAgentIntent({
+        text: currentUserText,
+        mode: quickComposeMode,
+        presetIds,
+        surface: buildQuickComposeAgentSurface(),
+        mainAssetId: mainAssetId || undefined,
+        hasEnabled3dPreset,
+        textModel: quickComposeTextModel,
+        imageSettings: {
+          model: quickComposeImageModel,
+          aspectRatio: quickComposeAspect,
+          size: quickComposeSize,
+          count: quickComposeCount,
+          understandingEnabled: quickComposeUnderstand,
+        },
       });
-      const taskAssetById = Object.fromEntries(
-        taskIds
-          .map((id) => [id, lastQuickComposeTaskAssetByIdRef.current[id]] as const)
-          .filter(([, assetId]) => typeof assetId === 'string' && assetId.trim())
-      );
+
+      const result = await runtime.submitTurn({
+        turnId: uuid(),
+        threadId: thread.id,
+        workspaceProjectId: storeKey.workspaceProjectId,
+        intent,
+      });
+
       const attachmentAssetIds = collectQuickComposeAttachmentAssetIds({
         segments: quickComposeSegmentsRef.current,
         mainDropSlots: quickComposeMainDropSlotsRef.current,
         referenceDropSlots: quickComposeReferenceDropSlotsRef.current,
         lightboxAssetId: lightboxAssetIdRef.current,
       });
-      appendQuickComposeThreadTurn(
-        scope,
-        currentUserText,
-        taskIds,
-        attachmentAssetIds,
-        undefined,
-        taskAssetById
-      );
-      return taskIds;
+      const now = Date.now();
+      const userMessage: QuickComposeThreadMessage = {
+        id: uuid(),
+        role: 'user',
+        text: currentUserText || result.planText || '(空)',
+        timestamp: now,
+        status: 'submitted',
+        ...(attachmentAssetIds.length ? { assetIds: attachmentAssetIds } : {}),
+      };
+      const failed = !result.ok || result.taskIds.length === 0;
+      const assistantMessage: QuickComposeThreadMessage = {
+        id: uuid(),
+        role: 'assistant',
+        text: result.planText || result.errorMessage || '计划：已提交',
+        timestamp: now + 1,
+        status: failed ? 'error' : 'queued',
+        taskIds: result.taskIds,
+        ...(result.taskAssetById && Object.keys(result.taskAssetById).length
+          ? { taskAssetById: result.taskAssetById }
+          : {}),
+        ...(failed
+          ? { errorMessage: result.errorMessage?.trim() || '未能创建任务' }
+          : {}),
+      };
+      updateProjectAgentThread((prev) => ({
+        ...prev,
+        messages: [...prev.messages, userMessage, assistantMessage],
+        updatedAt: Date.now(),
+      }));
+      return result.taskIds;
     },
     [
-      appendQuickComposeThreadTurn,
+      actionModules,
+      buildQuickComposeAgentSurface,
+      capabilityPresets,
       getAssetDisplayImage,
+      getProjectAgentThreadKey,
       getQuickComposeMaxRefs,
-      submitQuickCompose,
+      quickComposeAspect,
+      quickComposeCount,
+      quickComposeImageModel,
+      quickComposeMode,
+      quickComposePromptCards,
+      quickComposeSize,
+      quickComposeTextModel,
+      quickComposeUnderstand,
+      quickComposeThreadHasInFlightAssistant,
+      updateProjectAgentThread,
     ]
   );
 
@@ -5059,12 +5134,7 @@ ${lineSvg}
 
   const handleQuickComposeChatSend = useCallback(() => {
     if (quickComposeChatSendGuardRef.current) return;
-    const inLightbox = Boolean(lightboxAssetIdRef.current);
-    const scope: QuickComposeThreadScope = inLightbox ? 'lightbox' : 'workspace';
-    const thread =
-      scope === 'workspace'
-        ? workspaceQuickComposeThreadRef.current
-        : lightboxQuickComposeThreadRef.current;
+    const thread = workspaceQuickComposeThreadRef.current;
     if (!thread) return;
     if (quickComposeThreadHasInFlightAssistant(thread)) return;
     if (isAiTaskBusy()) {
@@ -5072,17 +5142,20 @@ ${lineSvg}
       return;
     }
     quickComposeChatSendGuardRef.current = true;
-    try {
-      submitQuickComposeWithThread(scope, {
-        skipPromptCards: true,
-        /** 侧栏纯文字对话：无 @/拖图时强制文生文，避免默认「图」模式误触 Vertex 文生图 RPM */
-        preferTextPipelineWhenNoImagesAttached: !quickComposeHasAttachedImages(),
-      });
-    } finally {
-      quickComposeChatSendGuardRef.current = false;
-    }
+    void (async () => {
+      try {
+        // Include prompt cards when present (A+C); otherwise plan from mode chip.
+        await submitQuickComposeWithThread('workspace', {
+          ...(quickComposePromptCards.length === 0 ? { skipPromptCards: true } : {}),
+          preferTextPipelineWhenNoImagesAttached: !quickComposeHasAttachedImages(),
+        });
+      } finally {
+        quickComposeChatSendGuardRef.current = false;
+      }
+    })();
   }, [
     quickComposeHasAttachedImages,
+    quickComposePromptCards.length,
     quickComposeThreadHasInFlightAssistant,
     submitQuickComposeWithThread,
   ]);
@@ -5090,12 +5163,7 @@ ${lineSvg}
   const handleQuickComposeChatRetry = useCallback(
     (messageId: string) => {
       if (quickComposeChatSendGuardRef.current) return;
-      const inLightbox = Boolean(lightboxAssetIdRef.current);
-      const scope: QuickComposeThreadScope = inLightbox ? 'lightbox' : 'workspace';
-      const thread =
-        scope === 'workspace'
-          ? workspaceQuickComposeThreadRef.current
-          : lightboxQuickComposeThreadRef.current;
+      const thread = workspaceQuickComposeThreadRef.current;
       if (!thread || quickComposeThreadHasInFlightAssistant(thread)) return;
       const assistantIdx = thread.messages.findIndex((m) => m.id === messageId);
       if (assistantIdx <= 0) return;
@@ -5111,66 +5179,42 @@ ${lineSvg}
       }
       if (!userText) return;
       quickComposeChatSendGuardRef.current = true;
-      try {
-        updateQuickComposeThread(scope, (prev) => ({
-          ...prev,
-          messages: prev.messages.filter((m) => m.id !== messageId),
-          updatedAt: Date.now(),
-        }));
-        const priorMessages = thread.messages.slice(0, assistantIdx - 1);
-        const pseudoMultiTurnPrompt = formatQuickComposeTurnContextForPromptOverride(priorMessages, userText);
-        const taskIds = submitQuickCompose({
-          pseudoMultiTurnPrompt,
-          overrideUserText: userText,
-          skipPromptCards: true,
-          preferTextPipelineWhenNoImagesAttached: !quickComposeHasAttachedImages(),
-          ...(inLightbox ? {} : {}),
-        });
-        const taskAssetById = Object.fromEntries(
-          taskIds
-            .map((id) => [id, lastQuickComposeTaskAssetByIdRef.current[id]] as const)
-            .filter(([, assetId]) => typeof assetId === 'string' && assetId.trim())
-        );
-        const attachmentAssetIds = collectQuickComposeAttachmentAssetIds({
-          segments: quickComposeSegmentsRef.current,
-          mainDropSlots: quickComposeMainDropSlotsRef.current,
-          referenceDropSlots: quickComposeReferenceDropSlotsRef.current,
-          lightboxAssetId: lightboxAssetIdRef.current,
-        });
-        appendQuickComposeThreadTurn(
-          scope,
-          userText,
-          taskIds,
-          attachmentAssetIds,
-          undefined,
-          taskAssetById
-        );
-      } finally {
-        quickComposeChatSendGuardRef.current = false;
-      }
+      void (async () => {
+        try {
+          updateProjectAgentThread((prev) => ({
+            ...prev,
+            messages: prev.messages.filter((m) => m.id !== messageId),
+            updatedAt: Date.now(),
+          }));
+          await submitQuickComposeWithThread('workspace', {
+            overrideUserText: userText,
+            skipPromptCards: true,
+            preferTextPipelineWhenNoImagesAttached: !quickComposeHasAttachedImages(),
+          });
+        } finally {
+          quickComposeChatSendGuardRef.current = false;
+        }
+      })();
     },
     [
-      appendQuickComposeThreadTurn,
-      getAssetDisplayImage,
-      getQuickComposeMaxRefs,
       quickComposeHasAttachedImages,
       quickComposeThreadHasInFlightAssistant,
-      submitQuickCompose,
-      updateQuickComposeThread,
+      submitQuickComposeWithThread,
+      updateProjectAgentThread,
     ]
   );
 
-  const submitLightboxQuickCompose = useCallback(() => {
+  const submitLightboxQuickCompose = useCallback((): string[] => {
     const id = lightboxAssetIdRef.current;
     const asset = assetsRef.current.find((a) => a.id === id);
     if (!asset || !assetLightboxRasterEligible(asset)) {
       onLog?.('warn', '大图预览：当前无可提交的图像');
-      return;
+      return [];
     }
     const src = getLightboxPreviewImageSrc(asset).trim();
     if (!src) {
       onLog?.('warn', '大图预览：当前无可提交的图像');
-      return;
+      return [];
     }
 
     const doc = lightboxOverlayDraftRef.current;
@@ -5215,12 +5259,11 @@ ${lineSvg}
       !needsPanoLocalCapture &&
       !localEditSnapshot
     ) {
-      submitQuickCompose({
+      return submitQuickCompose({
         reuseAssetId: asset.id,
         overrideUserText: promptOverride,
         skipPromptCards: true,
       });
-      return;
     }
 
     /** 先同步清 UI，再立即入队，节点树才能马上进入「执行中」 */
@@ -5308,6 +5351,7 @@ ${lineSvg}
       ...(localEditSnapshot || needsPanoLocalCapture ? { displayStepLabel: '局部重绘' } : {}),
     };
 
+    lastQuickComposeTaskAssetByIdRef.current = { [taskId]: asset.id };
     if (executing) {
       setPending((prev) => [...prev, task]);
     } else {
@@ -5517,8 +5561,8 @@ ${lineSvg}
         rejectClient(e);
       }
     })();
-
     onLog?.('info', '大图预览：已入队（正在生成预览，结果写入当前卡片）');
+    return [taskId];
   }, [
     getLightboxPreviewImageSrc,
     onLog,
@@ -5542,6 +5586,10 @@ ${lineSvg}
     getAssetDisplayImage,
     getQuickComposeMaxRefs,
   ]);
+
+  useEffect(() => {
+    submitLightboxQuickComposeRef.current = submitLightboxQuickCompose;
+  }, [submitLightboxQuickCompose]);
 
   const cancelQueuedTaskInBatch = useCallback((taskId: string) => {
     if (!taskId) return;
@@ -10809,9 +10857,8 @@ ${lineSvg}
     !promptTweakModal &&
     (quickComposeInLightbox || (quickComposeShellActive && !lightboxAsset));
 
-  const activeQuickComposeThread = quickComposeInLightbox
-    ? lightboxQuickComposeThread
-    : workspaceQuickComposeThread;
+  // Phase 2 / P5: single project thread; lightbox only changes surface context chips
+  const activeQuickComposeThread = workspaceQuickComposeThread;
 
   /** 积分加载中仍允许输入；仅登录/余额已确认不足时禁用输入 */
   const quickComposeChatDockInputDisabled = quickComposeCreditsBypass
@@ -10935,8 +10982,8 @@ ${lineSvg}
         ? {
             messages: quickComposeChatDockHandlers.messages,
             onRetryMessage: quickComposeChatDockHandlers.onRetry,
-            threadEmptyTitle: '开始对话',
-            threadEmptyHint: '输入描述并发送，生成结果会出现在助手消息中',
+            threadEmptyTitle: '跟项目里的 Agent 说话',
+            threadEmptyHint: '发送后会先给出计划，再在画布出活',
             minimizeDisabled: false,
           }
         : undefined,

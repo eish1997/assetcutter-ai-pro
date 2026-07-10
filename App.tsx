@@ -66,7 +66,10 @@ import {
   RIGHT_DOCK_RIGHT,
 } from './components/floatingDockConstants';
 import { isWorkflowEditableTarget } from './components/workflow/workflowDomUtils';
-import { WORKFLOW_QUICK_COMPOSE_DOCKED_WIDTH_CLASS } from './components/workflow/workflowSectionUiConstants';
+import {
+  WORKFLOW_QUICK_COMPOSE_DOCKED_INSET,
+  WORKFLOW_QUICK_COMPOSE_DOCKED_WIDTH_CLASS,
+} from './components/workflow/workflowSectionUiConstants';
 import KeyboardShortcutsModal from './components/KeyboardShortcutsModal';
 import { AC_NAVIGATE_SETTINGS_EVENT } from './services/navigateSettings';
 import { SiteImage } from './components/SiteImage';
@@ -3483,7 +3486,19 @@ const MainApp: React.FC = () => {
         </div>
       )}
 
-      <main className="flex min-w-0 flex-1 flex-row h-[100dvh] overflow-hidden">
+      <main
+        className="flex min-w-0 flex-1 flex-row h-[100dvh] overflow-hidden"
+        style={
+          mode === AppMode.WORKFLOW && activeWorkspaceProjectId && workspaceQuickComposeExpanded
+            ? ({ ['--ac-agent-dock-inset' as string]: WORKFLOW_QUICK_COMPOSE_DOCKED_INSET } as React.CSSProperties)
+            : ({ ['--ac-agent-dock-inset' as string]: '0px' } as React.CSSProperties)
+        }
+        data-agent-dock-expanded={
+          mode === AppMode.WORKFLOW && activeWorkspaceProjectId && workspaceQuickComposeExpanded
+            ? 'true'
+            : 'false'
+        }
+      >
         <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
         <div
           ref={mainScrollRef}

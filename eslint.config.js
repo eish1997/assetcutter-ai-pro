@@ -141,4 +141,27 @@ export default [
       ],
     },
   },
+  // Project Agent — Runtime 禁止 import WorkflowSection（规格 §16.6）
+  {
+    files: ['services/projectAgent/**/*.{ts,tsx}'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            {
+              regex: String.raw`components\/WorkflowSection`,
+              message:
+                'services/projectAgent 禁止 import WorkflowSection；经 ProjectAgentHostPort 适配（规格 §16.6）。',
+            },
+            {
+              regex: String.raw`\/WorkflowSection(\.[cm]?[jt]sx?)?$`,
+              message:
+                'services/projectAgent 禁止 import WorkflowSection；经 ProjectAgentHostPort 适配（规格 §16.6）。',
+            },
+          ],
+        },
+      ],
+    },
+  },
 ];

@@ -45,7 +45,9 @@
 
 **生图必填**（官方）：`config.responseModalities: ["TEXT", "IMAGE"]`。本站于 `buildGeminiConfig`（前端）与 `mergeAgentPlatformImageConfig`（代理）自动注入。
 
-**区域**：`gemini-3.1-flash-image`、`gemini-2.5-flash-image` 等在 [Deployments and endpoints](https://docs.cloud.google.com/gemini-enterprise-agent-platform/resources/locations) 列出 **us-central1** 可用；勿为生图整站设 `global`（Console 会计入 Gemini for Google Cloud API）。
+**区域**：默认 `VERTEX_LOCATION=us-central1`（2.5 等走区域 Agent Platform）。**Gemini 3.x**（`gemini-3*` / `gemini-3.*`，含 `gemini-3-flash-preview`、`gemini-3-pro-image`）在本项目 us-central1 常返回 Publisher model 404，代理默认按模型改走 **`global`**（`VERTEX_GEMINI3_LOCATION`，可用 `VERTEX_AIPLATFORM_REGIONAL_ONLY=true` 强制全部区域）。Console 上 3.x 流量可能仍出现在「Gemini for Google Cloud API」。
+
+**线上核对**：`GET https://assetcutter-gemini-proxy.onrender.com/healthz` → `vertex.route`：`location` 应为 `us-central1`，`gemini3Location` 应为 `global`（除非关掉 hybrid）。
 
 | 站内 ID                            | Vertex Model ID                           |
 | -------------------------------- | ----------------------------------------- |
@@ -85,7 +87,7 @@
 | ------------------------------------------------------- | -------------------------------------------------- |
 | `Vertex: set VERTEX_PROJECT_ID or GOOGLE_CLOUD_PROJECT` | 代理未配置项目。                                           |
 | `403` / `PERMISSION_DENIED`                             | GCP 项目未开通 Vertex、计费、或服务账号权限不足。                     |
-| `404` / model not found                                 | `VERTEX_LOCATION` 与模型可用区域不一致，尝试 `global` 或文档列出的区域。 |
+| `404` / model not found                                 | 确认模型 id；Gemini 3 应走 global hybrid（见上）；或试 `VERTEX_GEMINI3_LOCATION` / 文档区域。 |
 | 前端提示未配置代理                                               | 未设置 `VITE_BULK_IMAGE_API`，或构建未包含该变量。               |
 
 

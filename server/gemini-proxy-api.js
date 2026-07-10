@@ -35,7 +35,7 @@ import {
 } from './gemini-proxy-fairness.js';
 import {
   describeVertexAgentPlatformRoute,
-  getVertexGenAIClient,
+  getVertexGenAIClientForModel,
   resolveVertexLocationFromEnv,
   vertexProjectIdFromEnv,
 } from './vertex-genai-client.js';
@@ -258,7 +258,7 @@ function isAdcLikelyConfigured() {
 
 function vertexConfigGuideMessage() {
   return (
-    'Vertex 生图尚未就绪：请在运行本代理的环境中配置 Google Cloud 项目（VERTEX_PROJECT_ID 或 GOOGLE_CLOUD_PROJECT）、区域（默认 us-central1 / Agent Platform API；Gemini 3.x 生图由代理 hybrid 切 global），并完成 ADC。' +
+    'Vertex 生图尚未就绪：请在运行本代理的环境中配置 Google Cloud 项目（VERTEX_PROJECT_ID 或 GOOGLE_CLOUD_PROJECT）、区域（默认 us-central1 / Agent Platform 区域端点；勿设 VERTEX_LOCATION=global，否则 Console 会计入 Gemini for Google Cloud API），并完成 ADC。' +
     ' 可将服务账号 JSON 写入 GOOGLE_APPLICATION_CREDENTIALS_JSON（或设置 GOOGLE_APPLICATION_CREDENTIALS 指向密钥文件）。完整说明见仓库 docs/VERTEX_AI_INTEGRATION.md。'
   );
 }
@@ -303,9 +303,9 @@ function ensureAdcFromJsonEnv() {
 
 ensureAdcFromJsonEnv();
 
-/** Vertex ADC + Agent Platform 区域端点（VERTEX_LOCATION，默认 us-central1） */
-function getVertexAI() {
-  return getVertexGenAIClient();
+/** Vertex ADC：按模型选区域（Gemini 3 默认 global，其余 VERTEX_LOCATION） */
+function getVertexAI(model) {
+  return getVertexGenAIClientForModel(model);
 }
 
 function isImageGenerationModel(model) {
@@ -338,7 +338,7 @@ async function proxyVertexGenerateContent(model, contents, config) {
     ...withImageConfig,
     httpOptions: { ...(withImageConfig.httpOptions || {}), timeout },
   };
-  const ai = getVertexAI();
+  const ai = getVertexAI(model);
   const response = await ai.models.generateContent({
     model: model || 'gemini-2.5-flash',
     contents,
@@ -1228,8 +1228,20 @@ server.listen(PORT, BIND_HOST, async () => {
   if (vOk) {
     const route = describeVertexAgentPlatformRoute();
     console.log(
-      `[gemini-proxy-api] Vertex project=${vp} location=${route.location} host=${route.apiHost} apiVersion=${route.apiVersion} agentPlatform=${route.agentPlatformRegional ? 'regional' : 'global'}`
+      `[gemini-proxy-api] Vertex project=${vp} location=${route.location} host=${route.apiHost} apiVersion=${route.apiVersion} agentPlatform=${route.agentPlatformRegional ? 'regional' : 'global'} gemini3Location=${route.gemini3Location}`
     );
+    if (route.gemini3UsesGlobal) {
+      console.log(
+        '[gemini-proxy-api] Gemini 3.x models use location=global (VERTEX_GEMINI3_LOCATION); set VERTEX_AIPLATFORM_REGIONAL_ONLY=true to force VERTEX_LOCATION for all models.'
+      );
+    }
+    if (route.location === 'global') {
+      console.warn(
+        '[gemini-proxy-api] VERTEX_LOCATION=global → host aiplatform.googleapis.com (express). ' +
+          'GCP Console often meters this under「Gemini for Google Cloud API」, not regional「Agent Platform API」. ' +
+          'Prefer VERTEX_LOCATION=us-central1 + Gemini-3 hybrid global (default). See docs/VERTEX_AI_INTEGRATION.md.'
+      );
+    }
   } else {
     console.log(`[gemini-proxy-api] Vertex project: (unset)  configured=false`);
   }

@@ -32,8 +32,16 @@ services:
       # Vertex（设置页选 Vertex 时必填，与前端 VITE_BULK_IMAGE_API 指向的**本服务**一致）
       - key: VERTEX_PROJECT_ID
         sync: false
+      # Vertex：必须 us-central1（Agent Platform 区域端点）。勿设 global——会走 aiplatform.googleapis.com，
+      # Console 计入「Gemini for Google Cloud API」且与区域配额分离。Dashboard 若仍为 global，Sync Blueprint 或手动改后 redeploy。
       - key: VERTEX_LOCATION
         value: us-central1
+      # 与 VERTEX_LOCATION 对齐；若 Dashboard 曾单独设 GOOGLE_CLOUD_LOCATION=global 会覆盖上面默认，故显式钉死
+      - key: GOOGLE_CLOUD_LOCATION
+        value: us-central1
+      # Agent Platform 生图 REST 用 v1
+      - key: VERTEX_API_VERSION
+        value: v1
       # 服务账号 JSON：Dashboard 粘贴整段 JSON 到 GOOGLE_APPLICATION_CREDENTIALS_JSON（或本机路径式 GOOGLE_APPLICATION_CREDENTIALS）
       - key: GOOGLE_APPLICATION_CREDENTIALS_JSON
         sync: false
