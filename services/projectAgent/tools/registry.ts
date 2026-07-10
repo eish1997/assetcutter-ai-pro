@@ -2,7 +2,8 @@ import type { ProjectAgentToolDefinition, ProjectAgentToolId } from '../../../ty
 import { PROJECT_AGENT_TOOL_IDS } from '../../../types/projectAgent';
 
 /**
- * P0 tool ACI registry (§16.2). Exactly the six frozen tool ids.
+ * Project Agent tool ACI registry (§16.2 + P1 invoke_expert).
+ * P0 media tools remain six; P1 adds one shared invoke_expert id (not per-expert).
  */
 export const PROJECT_AGENT_TOOL_REGISTRY: readonly ProjectAgentToolDefinition[] = [
   {
@@ -35,6 +36,12 @@ export const PROJECT_AGENT_TOOL_REGISTRY: readonly ProjectAgentToolDefinition[] 
     id: 'run_plain_3d',
     label: '生成3D',
     description: 'Quick 3D generation using an enabled generate_3d preset. Fails if none enabled.',
+  },
+  {
+    id: 'invoke_expert',
+    label: '调用专家',
+    description:
+      'Invoke a named Expert by expertId (§17). Loads Profile + Memory budget, returns Artifact ids. One tool id for all experts.',
   },
 ] as const;
 

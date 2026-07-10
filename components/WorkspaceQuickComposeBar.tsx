@@ -71,7 +71,7 @@ export type WorkspaceQuickComposePromptCard = {
   instruction: string;
 };
 
-export type WorkspaceQuickComposeComposeMode = 'text' | 'image' | '3d';
+export type WorkspaceQuickComposeComposeMode = 'text' | 'image' | '3d' | 'auto';
 
 export type WorkspaceQuickComposeBarProps = {
   visible: boolean;
@@ -143,7 +143,19 @@ export type WorkspaceQuickComposeBarProps = {
    */
   chatDockProps?: Pick<
     ProjectAgentDockProps,
-    'messages' | 'onRetryMessage' | 'threadEmptyTitle' | 'threadEmptyHint' | 'minimizeDisabled' | 'className'
+    | 'messages'
+    | 'onRetryMessage'
+    | 'onCancelMessage'
+    | 'onClearChat'
+    | 'onLoadEarlier'
+    | 'canLoadEarlier'
+    | 'onExportChat'
+    | 'threadEmptyTitle'
+    | 'threadEmptyHint'
+    | 'minimizeDisabled'
+    | 'className'
+    | 'expertStudio'
+    | 'onTryRunPrompt'
   >;
 };
 
@@ -322,20 +334,6 @@ export default function WorkspaceQuickComposeBar({
           : 'bg-white/[0.06] text-gray-300 ring-1 ring-white/[0.08] hover:bg-white/[0.1]'
     }`;
 
-  const dragHasCapabilityPreset = useCallback((e: React.DragEvent) => {
-    try {
-      const t = e.dataTransfer?.types;
-      if (!t) return false;
-      for (let i = 0; i < t.length; i++) {
-        const x = t[i];
-        if (x === DT_AC_CAPABILITY_FROM_EDITOR || x === DT_AC_CAPABILITY_ACTION) return true;
-      }
-    } catch {
-      /* ignore */
-    }
-    return false;
-  }, []);
-
   const dragHasWorkflowExport = useCallback((e: React.DragEvent) => {
     try {
       const t = e.dataTransfer?.types;
@@ -365,7 +363,9 @@ export default function WorkspaceQuickComposeBar({
 
   const handleComposeInputDragOver = useCallback(
     (e: React.DragEvent) => {
-      const allowCap = Boolean(onComposeInputCapabilityDrop) && dragHasCapabilityPreset(e);
+      // 与悬浮条一致：只要挂了能力/资产回调就允许放置。
+      // 部分浏览器 dragover 阶段不暴露自定义 MIME，不能靠 types 卡死。
+      const allowCap = Boolean(onComposeInputCapabilityDrop);
       const allowWf = Boolean(onComposeInputWorkflowDrop) && dragHasWorkflowExport(e);
       if (!allowCap && !allowWf) return;
       e.preventDefault();
@@ -376,31 +376,29 @@ export default function WorkspaceQuickComposeBar({
         /* ignore */
       }
     },
-    [
-      dragHasCapabilityPreset,
-      dragHasWorkflowExport,
-      onComposeInputCapabilityDrop,
-      onComposeInputWorkflowDrop,
-    ]
+    [dragHasWorkflowExport, onComposeInputCapabilityDrop, onComposeInputWorkflowDrop]
   );
 
   const handleComposeInputDrop = useCallback(
     (e: React.DragEvent, zone: QuickComposeDropZone = 'main') => {
-      if (onComposeInputCapabilityDrop && dragHasCapabilityPreset(e)) {
-        e.preventDefault();
-        e.stopPropagation();
-        const id = readDroppedCapabilityPresetId(e.dataTransfer);
-        if (id) onComposeInputCapabilityDrop(id);
-        return;
-      }
+      // 资产拖放优先
       if (onComposeInputWorkflowDrop && dragHasWorkflowExport(e)) {
         e.preventDefault();
         e.stopPropagation();
         onComposeInputWorkflowDrop(e, zone);
+        return;
+      }
+      // 与悬浮条一致：drop 时直接读 id，不依赖 types 门闩
+      if (onComposeInputCapabilityDrop) {
+        const id = readDroppedCapabilityPresetId(e.dataTransfer);
+        if (id) {
+          e.preventDefault();
+          e.stopPropagation();
+          onComposeInputCapabilityDrop(id);
+        }
       }
     },
     [
-      dragHasCapabilityPreset,
       dragHasWorkflowExport,
       onComposeInputCapabilityDrop,
       onComposeInputWorkflowDrop,
@@ -410,7 +408,7 @@ export default function WorkspaceQuickComposeBar({
 
   const handleMainZoneDragOver = useCallback(
     (e: React.DragEvent) => {
-      const allowCap = Boolean(onComposeInputCapabilityDrop) && dragHasCapabilityPreset(e);
+      const allowCap = Boolean(onComposeInputCapabilityDrop);
       const allowWf = Boolean(onComposeInputWorkflowDrop) && dragHasWorkflowExport(e);
       if (!allowCap && !allowWf) return;
       e.preventDefault();
@@ -421,18 +419,19 @@ export default function WorkspaceQuickComposeBar({
         /* ignore */
       }
     },
-    [dragHasCapabilityPreset, dragHasWorkflowExport, onComposeInputCapabilityDrop, onComposeInputWorkflowDrop]
+    [dragHasWorkflowExport, onComposeInputCapabilityDrop, onComposeInputWorkflowDrop]
   );
 
   const handlePresetOnlyDrop = useCallback(
     (e: React.DragEvent) => {
-      if (!onComposeInputCapabilityDrop || !dragHasCapabilityPreset(e)) return;
+      if (!onComposeInputCapabilityDrop) return;
+      const id = readDroppedCapabilityPresetId(e.dataTransfer);
+      if (!id) return;
       e.preventDefault();
       e.stopPropagation();
-      const id = readDroppedCapabilityPresetId(e.dataTransfer);
-      if (id) onComposeInputCapabilityDrop(id);
+      onComposeInputCapabilityDrop(id);
     },
-    [dragHasCapabilityPreset, onComposeInputCapabilityDrop, readDroppedCapabilityPresetId]
+    [onComposeInputCapabilityDrop, readDroppedCapabilityPresetId]
   );
 
   const bindQuickComposeDropZone = useCallback(
@@ -854,6 +853,9 @@ export default function WorkspaceQuickComposeBar({
         if (composeMode === 'text') {
           return '输入问题或指令（文模式请 @ 文字资产）';
         }
+        if (composeMode === 'auto') {
+          return '自动模式：按意图推断文/图/3D（可随时改芯片纠正）';
+        }
         return `想创作什么？输入 @ 引用参考图（最多 ${maxMentions} 张）`;
       })();
 
@@ -979,10 +981,10 @@ export default function WorkspaceQuickComposeBar({
         title={
           modeLockedByInputPresets
             ? '已拖入预设卡片，提交时以卡片能力为准（模式切换已锁定）'
-            : '快捷模式：文 · 图 · 3D（无拖入预设时使用）'
+            : '快捷模式：文 · 图 · 3D · 自动（无拖入预设时使用；自动可推断，芯片可覆盖）'
         }
       >
-        {(['text', 'image', '3d'] as const).map((m) => (
+        {(['text', 'image', '3d', 'auto'] as const).map((m) => (
           <button
             key={m}
             type="button"
@@ -993,7 +995,7 @@ export default function WorkspaceQuickComposeBar({
             }}
             className={modeChipCls(composeMode === m)}
           >
-            {m === 'text' ? '文' : m === 'image' ? '图' : '3D'}
+            {m === 'text' ? '文' : m === 'image' ? '图' : m === '3d' ? '3D' : '自动'}
           </button>
         ))}
       </div>
@@ -1388,44 +1390,98 @@ export default function WorkspaceQuickComposeBar({
 
           {inputExpanded ? (
             useChatDock ? (
-              <ProjectAgentDock
-                title={dockTitle}
-                onMinimize={collapseInputExpanded}
-                minimizeDisabled={chatDockProps?.minimizeDisabled}
-                className={chatDockProps?.className}
-                messages={chatDockProps?.messages ?? []}
-                onRetryMessage={chatDockProps?.onRetryMessage}
-                threadEmptyTitle={chatDockProps?.threadEmptyTitle ?? '跟项目里的 Agent 说话'}
-                threadEmptyHint={
-                  chatDockProps?.threadEmptyHint ??
-                  '发送后会先给出计划，再在画布出活'
-                }
-                segments={segments}
-                onSegmentsChange={onSegmentsChange}
-                mentionCandidates={mentionCandidates}
-                maxMentions={maxMentions}
-                placeholder={placeholder}
-                mainDropSlots={mainDropSlots}
-                referenceDropSlots={referenceDropSlots}
-                onRemoveMainDropSlot={onRemoveMainDropSlot}
-                onRemoveReferenceDropSlot={onRemoveReferenceDropSlot}
-                onMoveDropSlot={onMoveDropSlot}
-                onReorderDropSlot={onReorderDropSlot}
-                hideMainDropZone={hideMainDropZone}
-                onComposeInputDragOver={handleComposeInputDragOver}
-                onComposeInputDrop={handleComposeInputDrop}
-                onDropSlotClick={handleDropSlotClick}
-                promptCards={promptCards}
-                onRemovePromptCard={onRemovePromptCard}
-                inputDisabled={inputDisabled}
-                submitDisabled={submitDisabled}
-                submitDisabledReason={submitDisabledReason}
-                onSubmit={onSubmit}
-                composeMode={composeMode}
-                onComposeModeChange={onComposeModeChange}
-                modeLockedByInputPresets={inputPresetsActive}
-                genControls={genActionControls}
-              />
+              <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+                {/* 与悬浮条「上方预设区」同一套放置逻辑，避免侧栏 Dock 路径丢预设 */}
+                <div
+                  className="pointer-events-auto flex shrink-0 flex-col gap-1.5 border-b border-white/[0.06] px-3 py-2"
+                  data-quick-compose-dock-preset-strip
+                  onDragOver={handleMainZoneDragOver}
+                  onDrop={handlePresetOnlyDrop}
+                >
+                  {promptCards.length > 0 ? (
+                    <div className="flex flex-wrap items-center gap-2">
+                      {promptCards.map((c) => (
+                        <div
+                          key={c.key}
+                          className={`group inline-flex max-w-full min-w-0 shrink-0 items-center gap-1.5 px-2.5 py-1.5 ${WORKFLOW_QUICK_COMPOSE_BAR_SHELL}`}
+                          title={c.instruction.trim() ? c.instruction : c.label}
+                        >
+                          <span className="min-w-0 truncate text-[13px] text-gray-100">{c.label}</span>
+                          <button
+                            type="button"
+                            onClick={() => onRemovePromptCard(c.key)}
+                            className="grid h-7 w-7 shrink-0 place-items-center rounded-full text-gray-400 outline-none transition-colors hover:bg-white/[0.08] hover:text-white focus-visible:ring-2 focus-visible:ring-blue-500/50"
+                            aria-label={`移除 ${c.label}`}
+                          >
+                            <svg
+                              viewBox="0 0 24 24"
+                              className="h-3.5 w-3.5"
+                              fill="none"
+                              stroke="currentColor"
+                              strokeWidth="2.2"
+                              strokeLinecap="round"
+                              aria-hidden
+                            >
+                              <path d="M18 6 6 18M6 6l12 12" />
+                            </svg>
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="rounded-lg border border-dashed border-white/[0.1] px-2 py-2 text-center text-[10px] text-gray-500">
+                      拖入能力预设到此处（与底部悬浮条相同）
+                    </div>
+                  )}
+                </div>
+                <div className="min-h-0 flex-1 overflow-hidden">
+                  <ProjectAgentDock
+                    title={dockTitle}
+                    onMinimize={collapseInputExpanded}
+                    minimizeDisabled={chatDockProps?.minimizeDisabled}
+                    className={chatDockProps?.className}
+                    messages={chatDockProps?.messages ?? []}
+                    onRetryMessage={chatDockProps?.onRetryMessage}
+                    onCancelMessage={chatDockProps?.onCancelMessage}
+                    onClearChat={chatDockProps?.onClearChat}
+                    onLoadEarlier={chatDockProps?.onLoadEarlier}
+                    canLoadEarlier={chatDockProps?.canLoadEarlier}
+                    onExportChat={chatDockProps?.onExportChat}
+                    expertStudio={chatDockProps?.expertStudio}
+                    onTryRunPrompt={chatDockProps?.onTryRunPrompt}
+                    threadEmptyTitle={chatDockProps?.threadEmptyTitle ?? '跟项目里的 Agent 说话'}
+                    threadEmptyHint={
+                      chatDockProps?.threadEmptyHint ??
+                      '发送后会先给出计划，再在画布出活'
+                    }
+                    segments={segments}
+                    onSegmentsChange={onSegmentsChange}
+                    mentionCandidates={mentionCandidates}
+                    maxMentions={maxMentions}
+                    placeholder={placeholder}
+                    mainDropSlots={mainDropSlots}
+                    referenceDropSlots={referenceDropSlots}
+                    onRemoveMainDropSlot={onRemoveMainDropSlot}
+                    onRemoveReferenceDropSlot={onRemoveReferenceDropSlot}
+                    onMoveDropSlot={onMoveDropSlot}
+                    onReorderDropSlot={onReorderDropSlot}
+                    hideMainDropZone={hideMainDropZone}
+                    onComposeInputDragOver={handleComposeInputDragOver}
+                    onComposeInputDrop={handleComposeInputDrop}
+                    onDropSlotClick={handleDropSlotClick}
+                    promptCards={[]}
+                    onRemovePromptCard={onRemovePromptCard}
+                    inputDisabled={inputDisabled}
+                    submitDisabled={submitDisabled}
+                    submitDisabledReason={submitDisabledReason}
+                    onSubmit={onSubmit}
+                    composeMode={composeMode}
+                    onComposeModeChange={onComposeModeChange}
+                    modeLockedByInputPresets={inputPresetsActive}
+                    genControls={genActionControls}
+                  />
+                </div>
+              </div>
             ) : isWorkspaceDockedExpanded ? (
                 <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden" role="search">
                   <div className="flex shrink-0 items-center justify-between gap-2 pr-1">

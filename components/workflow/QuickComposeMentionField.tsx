@@ -820,11 +820,11 @@ const QuickComposeMentionField = forwardRef<QuickComposeMentionFieldHandle, Quic
             role="listbox"
           >
             {filtered.length === 0 ? (
-              <div className="px-3 py-2 text-[11px] text-gray-500">请先将资产拖入输入框，再输入 @ 选择</div>
+              <div className="px-3 py-2 text-[11px] text-gray-500">无匹配项</div>
             ) : (
               filtered.map((c, i) => (
                 <button
-                  key={`${c.kind}-${c.assetId ?? 'cv'}-${c.label}`}
+                  key={`${c.kind}-${c.assetId ?? c.expertId ?? 'cv'}-${c.label}`}
                   type="button"
                   className={`flex w-full items-center gap-2 px-2 py-1.5 text-left ${
                     i === pickerIndex ? 'bg-white/[0.12]' : 'hover:bg-white/[0.06]'
@@ -836,6 +836,9 @@ const QuickComposeMentionField = forwardRef<QuickComposeMentionFieldHandle, Quic
                   }}
                 >
                   <MentionThumb src={c.previewSrc} alt={c.label} size={32} />
+                  {c.kind === 'expert' ? (
+                    <span className="truncate text-[12px] text-gray-200">{c.label}</span>
+                  ) : null}
                 </button>
               ))
             )}

@@ -4,12 +4,16 @@
  */
 
 import type { QuickComposeThreadMessage } from '../../types/quickComposeThread';
-import { readLocalJson, scopedStorageKey, writeLocalJson } from '../clientPersist';
+import { readLocalJson, scopedStorageKey } from '../clientPersist';
 import {
   loadQuickComposeThread,
   QUICK_COMPOSE_THREAD_MAX_MESSAGES,
   type QuickComposeThreadStoreKey,
 } from '../quickComposeThreadStore';
+import {
+  saveProjectAgentThreadGuarded,
+  type SaveProjectAgentThreadGuardedResult,
+} from './persist/quotas';
 
 export const PROJECT_AGENT_THREAD_STORE_VERSION = 1 as const;
 /** Spec §17.10 / §18 — local hot window. */
@@ -53,6 +57,74 @@ function isStringArray(x: unknown): x is string[] {
   return Array.isArray(x) && x.every((i) => typeof i === 'string');
 }
 
+function normalizePlanSteps(
+  raw: unknown
+): QuickComposeThreadMessage['planSteps'] | undefined {
+  if (!Array.isArray(raw) || !raw.length) return undefined;
+  const out: NonNullable<QuickComposeThreadMessage['planSteps']> = [];
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue;
+    const row = item as { label?: unknown; toolId?: unknown };
+    const label = typeof row.label === 'string' ? row.label.trim() : '';
+    if (!label) continue;
+    const toolId = typeof row.toolId === 'string' ? row.toolId.trim() : undefined;
+    out.push(toolId ? { label, toolId } : { label });
+  }
+  return out.length ? out : undefined;
+}
+
+const CHILD_RUN_STATUSES = new Set([
+  'queued',
+  'running',
+  'done',
+  'error',
+  'cancelled',
+]);
+
+function normalizeChildRuns(
+  raw: unknown
+): QuickComposeThreadMessage['childRuns'] | undefined {
+  if (!Array.isArray(raw) || !raw.length) return undefined;
+  const out: NonNullable<QuickComposeThreadMessage['childRuns']> = [];
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue;
+    const row = item as Record<string, unknown>;
+    const id = typeof row.id === 'string' ? row.id.trim() : '';
+    const label = typeof row.label === 'string' ? row.label.trim() : '';
+    const kind = row.kind === 'expert' || row.kind === 'tool' ? row.kind : null;
+    const status =
+      typeof row.status === 'string' && CHILD_RUN_STATUSES.has(row.status)
+        ? (row.status as NonNullable<QuickComposeThreadMessage['childRuns']>[number]['status'])
+        : null;
+    const startedAt =
+      typeof row.startedAt === 'number' && Number.isFinite(row.startedAt) ? row.startedAt : null;
+    if (!id || !label || !kind || !status || startedAt == null) continue;
+    const run: NonNullable<QuickComposeThreadMessage['childRuns']>[number] = {
+      id,
+      kind,
+      label,
+      status,
+      startedAt,
+    };
+    if (typeof row.expertId === 'string' && row.expertId.trim()) run.expertId = row.expertId.trim();
+    if (typeof row.toolId === 'string' && row.toolId.trim()) run.toolId = row.toolId.trim();
+    if (isStringArray(row.taskIds) && row.taskIds.some(Boolean)) {
+      run.taskIds = row.taskIds.filter(Boolean);
+    }
+    if (isStringArray(row.artifactIds) && row.artifactIds.some(Boolean)) {
+      run.artifactIds = row.artifactIds.filter(Boolean);
+    }
+    if (typeof row.errorMessage === 'string' && row.errorMessage.trim()) {
+      run.errorMessage = row.errorMessage;
+    }
+    if (typeof row.endedAt === 'number' && Number.isFinite(row.endedAt)) {
+      run.endedAt = row.endedAt;
+    }
+    out.push(run);
+  }
+  return out.length ? out : undefined;
+}
+
 function normalizeMessage(raw: unknown): QuickComposeThreadMessage | null {
   if (!raw || typeof raw !== 'object') return null;
   const m = raw as Partial<QuickComposeThreadMessage>;
@@ -82,6 +154,9 @@ function normalizeMessage(raw: unknown): QuickComposeThreadMessage | null {
         ) as Record<string, string>)
       : undefined;
   const errorMessage = typeof m.errorMessage === 'string' ? m.errorMessage : undefined;
+  const resultText = typeof m.resultText === 'string' ? m.resultText : undefined;
+  const planSteps = normalizePlanSteps(m.planSteps);
+  const childRuns = normalizeChildRuns(m.childRuns);
   return {
     id,
     role,
@@ -92,6 +167,9 @@ function normalizeMessage(raw: unknown): QuickComposeThreadMessage | null {
     ...(taskAssetById && Object.keys(taskAssetById).length ? { taskAssetById } : {}),
     ...(status ? { status } : {}),
     ...(errorMessage ? { errorMessage } : {}),
+    ...(resultText?.trim() ? { resultText: resultText.trim() } : {}),
+    ...(planSteps?.length ? { planSteps } : {}),
+    ...(childRuns?.length ? { childRuns } : {}),
   };
 }
 
@@ -164,16 +242,31 @@ export function loadProjectAgentThread(key: ProjectAgentThreadStoreKey): Project
   return migrateFromLegacyWorkspace(key);
 }
 
-export function saveProjectAgentThread(key: ProjectAgentThreadStoreKey, thread: ProjectAgentThread): void {
+export function saveProjectAgentThread(
+  key: ProjectAgentThreadStoreKey,
+  thread: ProjectAgentThread
+): SaveProjectAgentThreadGuardedResult {
   const trimmed: ProjectAgentThread = {
     ...thread,
     messages: trimProjectAgentThreadMessages(thread.messages),
     updatedAt: Date.now(),
   };
-  writeLocalJson(projectAgentThreadStorageKey(key), {
-    version: PROJECT_AGENT_THREAD_STORE_VERSION,
-    ...trimmed,
-  });
+  try {
+    const result = saveProjectAgentThreadGuarded(key, trimmed);
+    if (!result.ok) {
+      console.warn('[projectAgent] thread persist quota exceeded after trim', {
+        workspaceProjectId: key.workspaceProjectId,
+      });
+    }
+    return result;
+  } catch (e) {
+    // Node / SSR: no localStorage — same soft skip as former writeLocalJson
+    if (e instanceof Error && /localStorage unavailable/i.test(e.message)) {
+      return { ok: true, thread: trimmed };
+    }
+    console.warn('[projectAgent] thread persist failed', e);
+    return { ok: false, reason: 'quota' };
+  }
 }
 
 export function loadOrCreateProjectAgentThread(key: ProjectAgentThreadStoreKey): ProjectAgentThread {

@@ -10,6 +10,7 @@ import type {
 } from '../types/quickComposeThread';
 import type { QuickComposeDropSlot, QuickComposeSegment } from './quickComposeMention';
 import { mentionsFromSegments } from './quickComposeMention';
+import { resolveWorkflowAssetLatestTextResult } from './quickComposeTurnContext';
 
 export type QuickComposeChatViewContext = {
   assets: WorkflowAsset[];
@@ -55,12 +56,35 @@ function resolveResultThumb(
     return undefined;
   }
   for (const taskId of message.taskIds) {
+    const mappedId = message.taskAssetById?.[taskId];
     const task = findTaskById(taskId, ctx.pending, ctx.executingQueue);
-    if (!task) continue;
-    const asset = resolveAssetById(ctx.assets, task.assetId);
+    const assetId = (mappedId || task?.assetId || '').trim();
+    if (!assetId) continue;
+    const asset = resolveAssetById(ctx.assets, assetId);
     if (!asset) continue;
+    // 文生文结果走 displayResultText，不在此塞图缩略
+    if (asset.assetKind === 'text' || resolveWorkflowAssetLatestTextResult(asset)) continue;
     const thumb = assetThumb(asset, ctx.getAssetDisplayImage, ctx.getAssetLabel);
     if (thumb) return thumb;
+  }
+  return undefined;
+}
+
+function resolveDisplayResultText(
+  message: QuickComposeThreadMessage,
+  ctx: QuickComposeChatViewContext
+): string | undefined {
+  if (message.role !== 'assistant' || message.status !== 'done') return undefined;
+  const stored = typeof message.resultText === 'string' ? message.resultText.trim() : '';
+  if (stored) return stored;
+  if (!message.taskIds?.length) return undefined;
+  for (const taskId of message.taskIds) {
+    const mappedId = message.taskAssetById?.[taskId];
+    const task = findTaskById(taskId, ctx.pending, ctx.executingQueue);
+    const assetId = (mappedId || task?.assetId || '').trim();
+    if (!assetId) continue;
+    const text = resolveWorkflowAssetLatestTextResult(resolveAssetById(ctx.assets, assetId));
+    if (text) return text;
   }
   return undefined;
 }
@@ -86,10 +110,12 @@ export function mapQuickComposeThreadMessageToChatView(
 ): QuickComposeChatMessageView {
   const attachmentThumbs = resolveAttachmentThumbs(message, ctx);
   const resultThumb = resolveResultThumb(message, ctx);
+  const displayResultText = resolveDisplayResultText(message, ctx);
   return {
     ...message,
     ...(attachmentThumbs ? { attachmentThumbs } : {}),
     ...(resultThumb ? { resultThumb } : {}),
+    ...(displayResultText ? { displayResultText } : {}),
   };
 }
 

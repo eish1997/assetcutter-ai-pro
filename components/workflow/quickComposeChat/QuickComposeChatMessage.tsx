@@ -1,20 +1,27 @@
-import React from 'react';
-import { Loader2, RotateCcw } from 'lucide-react';
+import React, { useMemo } from 'react';
+import { RotateCcw } from 'lucide-react';
 import type {
   QuickComposeChatMessageView,
   QuickComposeMessageAttachmentThumb,
-  QuickComposeMessageStatus,
 } from '../../../types/quickComposeThread';
+import { deriveAssistantTimeline } from '../../../services/projectAgent/assistantTimeline';
+import { QUICK_COMPOSE_CANCELLED_MESSAGE } from '../../../services/quickComposeTurnContext';
 import { WORKFLOW_QUICK_COMPOSE_BAR_SHELL } from '../workflowSectionUiConstants';
+import {
+  ERROR_FALLBACK,
+  isRunningAssistantStatus,
+} from './chatUiCopy';
+import AssistantMarkdown from './AssistantMarkdown';
+import AssistantTurnTimeline from './AssistantTurnTimeline';
+import ChildRunProgressCards from './ChildRunProgressCards';
+import type { AgentChildRun } from '../../../types/projectAgent';
 
 export type QuickComposeChatMessageProps = {
   message: QuickComposeChatMessageView;
   onRetry?: (messageId: string) => void;
+  /** §16.1 / 3A：取消进行中的助手 turn */
+  onCancel?: (messageId: string) => void;
 };
-
-function isRunningStatus(status: QuickComposeMessageStatus | undefined): boolean {
-  return status === 'queued' || status === 'understanding' || status === 'running';
-}
 
 function ChatThumb({
   item,
@@ -60,15 +67,41 @@ function AttachmentThumbRow({ items }: { items: QuickComposeMessageAttachmentThu
   );
 }
 
+function looksLikePlanLine(text: string): boolean {
+  return /^计划[：:]/.test(text.trim());
+}
+
 /**
  * Gemini-style chat bubble for quick compose sidebar (user / assistant).
+ * Done turns prefer result body; plan stays as light meta (ChatGPT/Gemini-like continuity).
  */
-export default function QuickComposeChatMessage({ message, onRetry }: QuickComposeChatMessageProps) {
+export default function QuickComposeChatMessage({
+  message,
+  onRetry,
+  onCancel,
+}: QuickComposeChatMessageProps) {
   const isUser = message.role === 'user';
-  const isRunning = message.role === 'assistant' && isRunningStatus(message.status);
+  const isRunning = message.role === 'assistant' && isRunningAssistantStatus(message.status);
   const isError = message.status === 'error';
-  const text = message.text?.trim();
+  const isDone = message.status === 'done';
+  const planOrText = message.text?.trim() || '';
+  const resultBody = message.displayResultText?.trim() || '';
   const attachments = message.attachmentThumbs ?? [];
+  const isCancelled =
+    isError && (message.errorMessage || '').trim() === QUICK_COMPOSE_CANCELLED_MESSAGE;
+
+  const timeline = useMemo(() => deriveAssistantTimeline(message), [message]);
+
+  const showResultAsPrimary = Boolean(isDone && resultBody);
+  const showPlanAsMeta =
+    Boolean(planOrText) &&
+    (showResultAsPrimary || isRunning || (isDone && message.resultThumb && looksLikePlanLine(planOrText)));
+  const showPlainText =
+    Boolean(planOrText) &&
+    !showResultAsPrimary &&
+    !(isDone && message.resultThumb && looksLikePlanLine(planOrText)) &&
+    // P0.5-d：有时间线时计划句改由时间线步骤展示，避免重复
+    !(timeline && looksLikePlanLine(planOrText));
 
   const bubbleShell = isUser
     ? 'rounded-2xl rounded-br-md bg-blue-600/20 text-gray-100 ring-1 ring-blue-400/25'
@@ -76,38 +109,56 @@ export default function QuickComposeChatMessage({ message, onRetry }: QuickCompo
 
   return (
     <div className={`flex w-full ${isUser ? 'justify-end' : 'justify-start'}`}>
-      <div className={`flex max-w-[min(100%,20rem)] min-w-0 flex-col gap-2 px-3 py-2.5 ${bubbleShell}`}>
+      <div className={`flex max-w-[min(100%,22rem)] min-w-0 flex-col gap-1.5 px-3 py-2.5 ${bubbleShell}`}>
         {attachments.length > 0 ? <AttachmentThumbRow items={attachments} /> : null}
 
-        {text ? <p className="whitespace-pre-wrap break-words text-[13px] leading-relaxed">{text}</p> : null}
-
-        {isRunning ? (
-          <div className="flex items-center gap-2 text-[11px] text-gray-400">
-            <Loader2 className="h-3.5 w-3.5 animate-spin text-blue-400/90" strokeWidth={2.2} aria-hidden />
-            <span>
-              {message.status === 'understanding'
-                ? '理解中…'
-                : message.status === 'queued'
-                  ? '排队中…'
-                  : '生成中…'}
-            </span>
-          </div>
+        {showPlanAsMeta ? (
+          <p className="text-[10px] font-medium leading-snug text-gray-500">{planOrText}</p>
         ) : null}
 
-        {message.status === 'done' && message.resultThumb ? (
-          <div className="flex flex-col gap-1.5">
-            <ChatThumb item={message.resultThumb} size={120} className="rounded-xl" />
+        {showResultAsPrimary ? <AssistantMarkdown text={resultBody} /> : null}
+
+        {showPlainText ? (
+          isUser ? (
+            <p className="whitespace-pre-wrap break-words text-[13px] leading-relaxed">{planOrText}</p>
+          ) : (
+            <AssistantMarkdown text={planOrText} />
+          )
+        ) : null}
+
+        {timeline && !isUser ? (
+          <AssistantTurnTimeline
+            model={timeline}
+            compact={!isRunning}
+            onCancel={isRunning && onCancel ? () => onCancel(message.id) : undefined}
+          />
+        ) : null}
+
+        {!isUser && message.childRuns?.length ? (
+          <ChildRunProgressCards
+            childRuns={message.childRuns as AgentChildRun[]}
+            compact={!isRunning}
+          />
+        ) : null}
+
+        {isDone && message.resultThumb ? (
+          <div className="flex flex-col gap-1.5 pt-0.5">
+            <ChatThumb item={message.resultThumb} size={140} className="rounded-xl" />
           </div>
         ) : null}
 
         {isError ? (
-          <div className="flex flex-col gap-2">
-            {message.errorMessage ? (
-              <p className="text-[11px] leading-snug text-red-300/95">{message.errorMessage}</p>
-            ) : (
-              <p className="text-[11px] leading-snug text-red-300/95">生成失败</p>
-            )}
-            {onRetry ? (
+          <div className="flex flex-col gap-2 pt-0.5">
+            <p
+              className={`text-[11px] leading-snug ${
+                isCancelled ? 'text-gray-400' : 'text-red-300/95'
+              }`}
+            >
+              {isCancelled
+                ? QUICK_COMPOSE_CANCELLED_MESSAGE
+                : message.errorMessage?.trim() || ERROR_FALLBACK}
+            </p>
+            {!isCancelled && onRetry ? (
               <button
                 type="button"
                 onClick={() => onRetry(message.id)}

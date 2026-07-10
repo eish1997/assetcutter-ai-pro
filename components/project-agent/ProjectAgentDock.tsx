@@ -4,6 +4,10 @@
  */
 
 import React from 'react';
+import {
+  PROJECT_AGENT_EMPTY_HINT,
+  PROJECT_AGENT_EMPTY_TITLE,
+} from '../workflow/quickComposeChat/chatUiCopy';
 import QuickComposeChatDock, {
   type QuickComposeChatDockProps,
 } from '../workflow/quickComposeChat/QuickComposeChatDock';
@@ -13,8 +17,8 @@ export type ProjectAgentDockProps = QuickComposeChatDockProps;
 export default function ProjectAgentDock(props: ProjectAgentDockProps) {
   const {
     title = '项目 Agent',
-    threadEmptyTitle = '跟项目里的 Agent 说话',
-    threadEmptyHint = '发送后会先给出计划，再在画布出活',
+    threadEmptyTitle = PROJECT_AGENT_EMPTY_TITLE,
+    threadEmptyHint = PROJECT_AGENT_EMPTY_HINT,
     ...rest
   } = props;
   return (

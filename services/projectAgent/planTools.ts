@@ -5,6 +5,8 @@
 
 import type { AgentPlanResult, AgentPlannedTool, ProjectAgentIntent } from '../../types/projectAgent';
 import { PROJECT_AGENT_MAX_TOOL_STEPS } from '../../types/projectAgent';
+import { resolveComposerMode } from './autoMode';
+import { getExpertProfile, resolveExpertByMention } from './experts/registry';
 import { getToolDefinition } from './tools/registry';
 
 function labelFor(toolId: AgentPlannedTool['toolId']): string {
@@ -13,6 +15,33 @@ function labelFor(toolId: AgentPlannedTool['toolId']): string {
 
 function step(toolId: AgentPlannedTool['toolId'], args?: Record<string, unknown>): AgentPlannedTool {
   return { toolId, label: labelFor(toolId), ...(args ? { args } : {}) };
+}
+
+/** Collect expertIds from mentions (kind:expert) and @alias tokens in text. */
+function collectExpertIds(intent: ProjectAgentIntent): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  const push = (raw: string, label?: string) => {
+    const profile =
+      getExpertProfile(raw) ??
+      resolveExpertByMention(raw) ??
+      (label ? resolveExpertByMention(label) : null);
+    if (!profile || seen.has(profile.expertId)) return;
+    seen.add(profile.expertId);
+    out.push(profile.expertId);
+  };
+
+  for (const m of intent.mentions) {
+    if (m.kind !== 'expert') continue;
+    push(m.id, m.label);
+  }
+
+  const atRe = /@([^\s@，。,.;!?？！]+)/g;
+  let match: RegExpExecArray | null;
+  while ((match = atRe.exec(intent.text)) !== null) {
+    push(match[1] || '');
+  }
+  return out;
 }
 
 function hasMainImage(intent: ProjectAgentIntent): boolean {
@@ -70,9 +99,27 @@ function collectPresetIds(intent: ProjectAgentIntent): string[] {
 export function planTools(intent: ProjectAgentIntent): AgentPlanResult {
   const presetIds = collectPresetIds(intent);
 
+  // P23: mode==='auto' → resolve to text|image|3d for routing only.
+  // Trace / intentSnapshot keep the original chip value ('auto') so the user's
+  // choice remains auditable; resolved mode is not written back onto intent.
+  const mode = intent.mode === 'auto' ? resolveComposerMode(intent) : intent.mode;
+
   // Priority 1: explicit presets (each card → one run_preset)
   if (presetIds.length > 0) {
     const plan = presetIds.map((presetId) => step('run_preset', { presetId }));
+    if (plan.length > PROJECT_AGENT_MAX_TOOL_STEPS) {
+      return {
+        ok: false,
+        errorMessage: `Plan exceeds max ${PROJECT_AGENT_MAX_TOOL_STEPS} tool steps`,
+      };
+    }
+    return { ok: true, plan };
+  }
+
+  // Priority 1b: @expert / mention kind:expert → invoke_expert (same pipe for all experts)
+  const expertIds = collectExpertIds(intent);
+  if (expertIds.length > 0) {
+    const plan = expertIds.map((expertId) => step('invoke_expert', { expertId }));
     if (plan.length > PROJECT_AGENT_MAX_TOOL_STEPS) {
       return {
         ok: false,
@@ -102,7 +149,7 @@ export function planTools(intent: ProjectAgentIntent): AgentPlanResult {
   }
 
   // Mode 3D
-  if (intent.mode === '3d') {
+  if (mode === '3d') {
     if (!intent.hasEnabled3dPreset) {
       return { ok: false, errorMessage: 'No enabled 3D preset available' };
     }
@@ -118,7 +165,7 @@ export function planTools(intent: ProjectAgentIntent): AgentPlanResult {
   }
 
   // Mode image
-  if (intent.mode === 'image') {
+  if (mode === 'image') {
     if (!textNonEmpty(intent) && !hasAnyRef(intent)) {
       return { ok: false, errorMessage: 'Empty text and no image reference' };
     }

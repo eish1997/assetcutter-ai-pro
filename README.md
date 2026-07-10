@@ -15,7 +15,7 @@ AI-assisted asset workflow workbench (workspace, capability presets, experimenta
 - [x] Production lazy-chunk recovery: exclude `/assets` from SPA rewrite; retry/reload on stale preview chunks
 - [x] Upstream Gemini/Vertex 429: limited long-backoff retries (proxy + client); understand mode lowers image batch concurrency
 - [x] Task-envelope credits: sum-of-steps precharge + clear stale reserve after settle (avoids CREDITS_RESERVE_INVALID)
-- [x] Project Agent (P0c→U1): dock + `submitTurn` / plan template; one hot thread per project
+- [x] Project Agent (U1→U4): dock chat, @experts (real LLM), auto mode, child-run cards, export/cold-load; optimistic send while expert LLM runs
 - [x] Vertex route: default `us-central1`; Gemini 3.x models hybrid to `global` (avoids regional Publisher 404)
 - [ ] Removed: standalone dialog page, texture pattern extract page, prompt-effect analysis page
 

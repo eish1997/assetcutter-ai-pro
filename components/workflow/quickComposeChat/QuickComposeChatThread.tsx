@@ -1,10 +1,15 @@
 import React, { useEffect, useRef } from 'react';
 import type { QuickComposeChatMessageView } from '../../../types/quickComposeThread';
+import {
+  PROJECT_AGENT_EMPTY_HINT,
+  PROJECT_AGENT_EMPTY_TITLE,
+} from './chatUiCopy';
 import QuickComposeChatMessage from './QuickComposeChatMessage';
 
 export type QuickComposeChatThreadProps = {
   messages: QuickComposeChatMessageView[];
   onRetryMessage?: (messageId: string) => void;
+  onCancelMessage?: (messageId: string) => void;
   emptyStateTitle?: string;
   emptyStateHint?: string;
 };
@@ -15,8 +20,9 @@ export type QuickComposeChatThreadProps = {
 export default function QuickComposeChatThread({
   messages,
   onRetryMessage,
-  emptyStateTitle = '快捷生成',
-  emptyStateHint = '在下方输入描述或 @ 引用资产，开始对话式生成。',
+  onCancelMessage,
+  emptyStateTitle = PROJECT_AGENT_EMPTY_TITLE,
+  emptyStateHint = PROJECT_AGENT_EMPTY_HINT,
 }: QuickComposeChatThreadProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -24,7 +30,7 @@ export default function QuickComposeChatThread({
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
-  }, [messages.length, lastMessage?.id, lastMessage?.status]);
+  }, [messages.length, lastMessage?.id, lastMessage?.status, lastMessage?.displayResultText]);
 
   return (
     <div
@@ -35,14 +41,27 @@ export default function QuickComposeChatThread({
       aria-relevant="additions"
     >
       {messages.length === 0 ? (
-        <div className="flex h-full min-h-[12rem] flex-col items-center justify-center gap-2 px-6 text-center">
-          <p className="text-[11px] font-black uppercase tracking-wide text-gray-500">{emptyStateTitle}</p>
+        <div
+          className="flex h-full min-h-[12rem] flex-col items-center justify-center gap-2.5 px-6 text-center"
+          data-chat-empty-state
+        >
+          <p className="text-[11px] font-black uppercase tracking-wide text-gray-500">
+            {emptyStateTitle}
+          </p>
           <p className="max-w-[16rem] text-[12px] leading-relaxed text-gray-600">{emptyStateHint}</p>
+          <p className="max-w-[16rem] text-[10px] leading-relaxed text-gray-700">
+            试试描述想生成的画面，或输入 @ 点名专家
+          </p>
         </div>
       ) : (
-        <div className="flex flex-col gap-3 px-3 py-3">
+        <div className="flex flex-col gap-2.5 px-3 py-3">
           {messages.map((msg) => (
-            <QuickComposeChatMessage key={msg.id} message={msg} onRetry={onRetryMessage} />
+            <QuickComposeChatMessage
+              key={msg.id}
+              message={msg}
+              onRetry={onRetryMessage}
+              onCancel={onCancelMessage}
+            />
           ))}
           <div ref={bottomRef} className="h-px shrink-0" aria-hidden />
         </div>

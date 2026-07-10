@@ -72,6 +72,7 @@ import {
 } from './components/workflow/workflowSectionUiConstants';
 import KeyboardShortcutsModal from './components/KeyboardShortcutsModal';
 import { AC_NAVIGATE_SETTINGS_EVENT } from './services/navigateSettings';
+import { flushProjectAgentBackupRetryQueue } from './services/projectAgent';
 import { SiteImage } from './components/SiteImage';
 import { armChunkReloadRecovery, importWithChunkRetry } from './services/lazyImportWithRetry';
 import {
@@ -440,7 +441,7 @@ const MainApp: React.FC = () => {
   const { balance: creditBalance } = useCreditBalance(user?.id ?? null);
   const [workflowSectionLoadAttempt, setWorkflowSectionLoadAttempt] = useState(0);
   const WorkflowSection = useMemo(
-    () => React.lazy(() => importWithChunkRetry(() => import('./components/workflow/workflowSectionLazyBoot'))),
+    () => React.lazy(() => importWithChunkRetry(() => import('./components/workflow/workflowSectionLazyBoot0710'))),
     [workflowSectionLoadAttempt],
   );
 
@@ -1182,6 +1183,12 @@ const MainApp: React.FC = () => {
 
   useEffect(() => {
     let visFlushTimer: number | null = null;
+    /** 项目 Agent 云备份失败重试队列：回前台 / 恢复联网时排空；失败吞掉不挡 UI */
+    const flushAgentBackupRetry = () => {
+      void flushProjectAgentBackupRetryQueue().catch(() => {
+        /* ignore */
+      });
+    };
     const onVis = () => {
       if (document.visibilityState === 'hidden') {
         /** 系统「另存为」、文件选择等会短暂 hidden：立即 flush 易与下载/序列化竞态并加重卡顿；关签前仍有 pagehide 兜底 */
@@ -1195,15 +1202,21 @@ const MainApp: React.FC = () => {
           window.clearTimeout(visFlushTimer);
           visFlushTimer = null;
         }
+        if (document.visibilityState === 'visible') {
+          flushAgentBackupRetry();
+        }
       }
     };
     const onHide = () => flushProjectPersistence();
+    const onOnline = () => flushAgentBackupRetry();
     document.addEventListener('visibilitychange', onVis);
     window.addEventListener('pagehide', onHide);
+    window.addEventListener('online', onOnline);
     return () => {
       if (visFlushTimer != null) window.clearTimeout(visFlushTimer);
       document.removeEventListener('visibilitychange', onVis);
       window.removeEventListener('pagehide', onHide);
+      window.removeEventListener('online', onOnline);
     };
   }, [flushProjectPersistence]);
 

@@ -94,13 +94,57 @@ const ROUTE_CASES: AgentRouteCase[] = [
     expectToolIds: [],
     expectError: true,
   },
+  {
+    id: 'mention_expert_invoke',
+    intent: baseIntent({
+      mode: 'text',
+      text: '@prompt_smith 写提示词',
+    }),
+    expectToolIds: ['invoke_expert'],
+    expectForbiddenToolIds: ['run_plain_text'],
+  },
+  {
+    id: 'mention_expert_kind',
+    intent: baseIntent({
+      mode: 'image',
+      text: '优化',
+      mentions: [{ kind: 'expert', id: 'expert.brief_outliner', label: '大纲分镜专家' }],
+    }),
+    expectToolIds: ['invoke_expert'],
+    expectForbiddenToolIds: ['run_plain_t2i', 'run_plain_i2i'],
+  },
+  {
+    id: 'mode_auto_text',
+    intent: baseIntent({ mode: 'auto', text: '写一句旁白' }),
+    expectToolIds: ['run_plain_text'],
+  },
+  {
+    id: 'mode_auto_i2i',
+    intent: baseIntent({ mode: 'auto', text: '换成雨天', mainAssetId: 'asset-1' }),
+    expectToolIds: ['run_plain_i2i'],
+  },
+  {
+    id: 'mode_auto_3d',
+    intent: baseIntent({
+      mode: 'auto',
+      text: '生成3d角色',
+      hasEnabled3dPreset: true,
+    }),
+    expectToolIds: ['run_plain_3d'],
+  },
+  {
+    id: 'mode_auto_explicit_image_chip_unchanged',
+    intent: baseIntent({ mode: 'image', text: '一只猫' }),
+    expectToolIds: ['run_plain_t2i'],
+  },
 ];
 
 describe('projectAgent tool registry', () => {
-  it('has exactly six tools matching frozen ids', () => {
+  it('has tools matching frozen ids (P0 media + invoke_expert)', () => {
     assertRegistryComplete();
-    expect(PROJECT_AGENT_TOOL_REGISTRY).toHaveLength(6);
+    expect(PROJECT_AGENT_TOOL_REGISTRY).toHaveLength(PROJECT_AGENT_TOOL_IDS.length);
     expect(PROJECT_AGENT_TOOL_REGISTRY.map((t) => t.id).sort()).toEqual([...PROJECT_AGENT_TOOL_IDS].sort());
+    expect(PROJECT_AGENT_TOOL_IDS).toContain('invoke_expert');
   });
 });
 

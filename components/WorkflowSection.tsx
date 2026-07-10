@@ -76,6 +76,7 @@ import {
   DEFAULT_IMAGE_MODEL_REGISTRY_ID,
 } from '../services/modelRegistry/imageModels';
 import { coerceTextModelRegistryId } from '../services/modelRegistry/textModels';
+import { getDialogTextResponse } from '../services/geminiService';
 import {
   executeCapability,
   executeCapabilitySet,
@@ -424,12 +425,14 @@ import WorkspaceQuickComposeBar, {
   type WorkspaceQuickComposePromptCard,
 } from './WorkspaceQuickComposeBar';
 import type { QuickComposeDropSlot, QuickComposeDropZone, QuickComposeMention, QuickComposeSegment } from '../services/quickComposeMention';
+import { composerHasSendableContent } from '../services/quickComposeSendGate';
 import {
   buildQuickComposePromptOverride,
   buildQuickComposeTaskPromptOverride,
   draftFromSegments,
   ensureQuickComposeEditableBoundaries,
   listDropSlotMentionCandidates,
+  listExpertMentionCandidates,
   mentionsFromSegments,
   newQuickComposeTextSegment,
   renumberQuickComposeMainDropSlotLabels,
@@ -447,22 +450,66 @@ import type {
 } from '../types/quickComposeThread';
 import {
   patchQuickComposeThreadMessageStatuses,
+  resolvePlainTextPromptForModel,
 } from '../services/quickComposeTurnContext';
 import {
   collectQuickComposeAttachmentAssetIds,
   mapQuickComposeThreadMessagesToChatViews,
 } from '../services/quickComposeChatView';
 import { buildProjectAgentIntent } from '../services/projectAgent/intent';
-import { createProjectAgentRuntime, type ProjectAgentRuntime } from '../services/projectAgent/runtime';
+import { planTools } from '../services/projectAgent/planTools';
+import { formatPlanTemplate } from '../services/projectAgent/planTemplate';
+import { resolveComposerMode } from '../services/projectAgent/autoMode';
 import {
+  buildChildRunsFromPlan,
+  patchChildRunsFromTasks,
+} from '../services/projectAgent/childRuns';
+import {
+  createProjectAgentRuntime,
+  PROJECT_AGENT_CANCELLED_MESSAGE,
+  type ProjectAgentRuntime,
+} from '../services/projectAgent/runtime';
+import {
+  archiveAndResetProjectAgentThread,
   loadOrCreateProjectAgentThread,
   saveProjectAgentThread,
   type ProjectAgentThread,
   type ProjectAgentThreadStoreKey,
 } from '../services/projectAgent/threadStore';
+import {
+  cancelPendingProjectAgentHotBackup,
+  hydrateProjectAgentThreadFromCloud,
+  scheduleProjectAgentThreadArchiveBackup,
+  scheduleProjectAgentThreadBackup,
+} from '../services/projectAgent/threadCloudSync';
+import { maybeCompactProjectAgentThread } from '../services/projectAgent/compaction';
+import {
+  downloadProjectAgentThreadSlimJson,
+  hasEarlierMessagesLocal,
+  loadEarlierMessagesIntoHot,
+  saveLocalThreadArchive,
+  stashMessagesDroppedFromHot,
+} from '../services/projectAgent';
+import { invokeExpert } from '../services/projectAgent/experts/invoke';
+import {
+  applyExpertProfilePatch,
+  getExpertProfile,
+  listExpertProfiles,
+} from '../services/projectAgent/experts/registry';
+import {
+  applyConfirmedMemoryProposal,
+  detectExpertTuneProposals,
+} from '../services/projectAgent/experts/tuneProtocol';
 import { createWorkflowProjectAgentHostPort } from './project-agent/createWorkflowProjectAgentHostPort';
 import { mapPlanToQuickComposeInvoke } from './project-agent/mapPlanToQuickComposeInvoke';
+import {
+  PROJECT_AGENT_EMPTY_HINT,
+  PROJECT_AGENT_EMPTY_TITLE,
+  resolveComposerSubmitDisabledReason,
+} from './workflow/quickComposeChat/chatUiCopy';
 import type {
+  AgentChildRun,
+  AgentMentionRef,
   AgentPlannedTool,
   AgentSurfaceContext,
   ProjectAgentExecutePlanResult,
@@ -786,6 +833,8 @@ export type QuickComposeChatDockHandlers = {
   isSendDisabled: boolean;
   onSend: () => void;
   onRetry: (messageId: string) => void;
+  /** §16.1 / 3A：取消进行中的助手 turn（跳过关联 task） */
+  onCancel: (messageId: string) => void;
 };
 
 const WorkflowSection: React.FC<{
@@ -1262,6 +1311,8 @@ const WorkflowSection: React.FC<{
   const workspaceQuickComposeThreadRef = useRef<ProjectAgentThread | null>(null);
   /** 防止连点/Enter 重复入队（thread ref 异步更新前的窗口期） */
   const quickComposeChatSendGuardRef = useRef(false);
+  /** 清空对话时递增；进行中的 submit 在 await 后若 generation 变了则勿追加消息 */
+  const quickComposeClearGenerationRef = useRef(0);
   /** 最近一次 submitQuickCompose 创建的 taskId→assetId，供对话线程持久化 */
   const lastQuickComposeTaskAssetByIdRef = useRef<Record<string, string>>({});
   const projectAgentRuntimeRef = useRef<ProjectAgentRuntime | null>(null);
@@ -1285,7 +1336,44 @@ const WorkflowSection: React.FC<{
       userId: preferenceScope,
       workspaceProjectId: activeWorkspaceProjectId,
     };
-    setWorkspaceQuickComposeThread(loadOrCreateProjectAgentThread(key));
+    const local = loadOrCreateProjectAgentThread(key);
+    try {
+      maybeCompactProjectAgentThread(key, local);
+    } catch {
+      /* compaction best-effort */
+    }
+    setWorkspaceQuickComposeThread(local);
+    let cancelled = false;
+    void (async () => {
+      try {
+        const hydrated = await hydrateProjectAgentThreadFromCloud(
+          { userId: preferenceScope, workspaceProjectId: activeWorkspaceProjectId },
+          local,
+          { getFreshLocal: () => workspaceQuickComposeThreadRef.current }
+        );
+        if (cancelled || !hydrated) return;
+        // Avoid clobbering in-flight send / clear-chat that advanced past hydrate (review P0).
+        const current = workspaceQuickComposeThreadRef.current;
+        if (current) {
+          const currentTs = Number(current.updatedAt) || 0;
+          const hydratedTs = Number(hydrated.updatedAt) || 0;
+          if (currentTs > hydratedTs) return;
+          // Clear/new chat: new thread id while hydrate was in flight — keep local.
+          if (current.id !== hydrated.id && currentTs >= hydratedTs) return;
+        }
+        try {
+          maybeCompactProjectAgentThread(key, hydrated);
+        } catch {
+          /* compaction best-effort */
+        }
+        setWorkspaceQuickComposeThread(hydrated);
+      } catch {
+        /* keep local — hydrate must not break open-project */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [activeWorkspaceProjectId, preferenceScope]);
 
   const [archivedDetailAssetId, setArchivedDetailAssetId] = useState<string | null>(null);
@@ -1300,6 +1388,8 @@ const WorkflowSection: React.FC<{
   const [completedTaskIds, setCompletedTaskIds] = useState<Set<string>>(new Set());
   /** 批处理已开始后用户从卡片取消「排队中」项：worker 仍会从本地 queue shift，此处跳过执行 */
   const cancelledTaskIdsRef = useRef<Set<string>>(new Set());
+  /** 执行中任务的 AbortController：侧栏/队列取消时 abort，尽量停掉本机 fetch/重试 */
+  const taskAbortControllersRef = useRef<Map<string, AbortController>>(new Map());
   const [draggingAssetIds, setDraggingAssetIds] = useState<string[] | null>(null);
   const draggingAssetIdsRef = useRef<string[] | null>(null);
   /** 侧栏拖拽态样式：同步置位，避免 rAF 延迟 state 导致拖放中不重绘 */
@@ -1311,6 +1401,9 @@ const WorkflowSection: React.FC<{
   }, []);
   const [draggingActionFromFavorite, setDraggingActionFromFavorite] = useState(false);
   const [actionDroppedInFavorite, setActionDroppedInFavorite] = useState(false);
+  /** 常用拖放进行中 / 刚结束：禁止 removeActionFromFavorite（防 dragEnd 后幽灵 click 点到 ×） */
+  const favoriteDragActiveRef = useRef(false);
+  const favoriteRemoveSuppressUntilRef = useRef(0);
   const [favoriteDropActive, setFavoriteDropActive] = useState(false);
   type LocalComposerSession = { id: string; initialSet: CapabilitySet | null; sessionKey: number };
   const [composerSessions, setComposerSessions] = useState<LocalComposerSession[]>([]);
@@ -1403,6 +1496,7 @@ const WorkflowSection: React.FC<{
   const getQuickComposeMaxRefs = useCallback(() => {
     if (quickComposeMode === 'text') return 10;
     if (quickComposeMode === '3d') return 1;
+    // image | auto：按生图模型上限（自动挡可能落到图）
     return maxReferenceImagesForImageModel(quickComposeImageModel);
   }, [quickComposeMode, quickComposeImageModel]);
   const [showAllInGroup, setShowAllInGroup] = useState(false);
@@ -2773,7 +2867,14 @@ ${lineSvg}
     const task = pending.find((t) => t.id === taskId);
     setPending((prev) => prev.filter((t) => t.id !== taskId));
     if (task) {
-      setAssets((prev) => prev.map((x) => (x.id === task.assetId ? { ...x, hiddenInGrid: false } : x)));
+      setAssets((prev) =>
+        prev.map((x) => {
+          if (x.id !== task.assetId) return x;
+          // 对话文生文保持不入格
+          if (x.assetKind === 'text' && x.hiddenInGrid) return x;
+          return { ...x, hiddenInGrid: false };
+        })
+      );
     }
   }, [pending, setAssets, setPending]);
 
@@ -2991,6 +3092,7 @@ ${lineSvg}
               companionProjectId: workspaceProjectChrome?.activeProjectId?.trim() || undefined,
               workflowAssetId: task.assetId,
               workflowSourceDisplayKey: task.inputSourceDisplayKey,
+              abortSignal: taskAbortControllersRef.current.get(task.id)?.signal,
               onLog,
               onRunProgress: (line) => {
                 setCapabilitySetRunByAssetId((prev) => {
@@ -3007,8 +3109,15 @@ ${lineSvg}
                 });
               },
             });
+            if (cancelledTaskIdsRef.current.has(task.id)) {
+              return { image: null };
+            }
             if (result.ok === false) {
               const msg = `[${getActionLabel(actionType)}] ${result.error}`;
+              if (/请求已取消|AbortError|aborted/i.test(result.error)) {
+                cancelledTaskIdsRef.current.add(task.id);
+                return { image: null };
+              }
               setAssetError(task.assetId, msg);
               auditRunFail(WORKFLOW_AUDIT_CODES.RUN_TASK_CAPABILITY_SET_REJECTED, 'warn', msg, {
                 error: result.error,
@@ -3026,6 +3135,9 @@ ${lineSvg}
               ? { image: result.image, vgpSteps: result.vgpSteps }
               : { image: null };
         } catch (err: unknown) {
+          if (cancelledTaskIdsRef.current.has(task.id)) {
+            return { image: null };
+          }
           if (isGeminiAsyncPollTimeoutError(err)) {
             const full = formatWorkflowRunTaskErrorMessage(err, actionLabel);
             setAssetError(task.assetId, full);
@@ -3037,6 +3149,10 @@ ${lineSvg}
             return { image: null, geminiRecoveryJobId: err.jobId };
           }
           const msg = err instanceof Error ? err.message : safeUnknownToString(err);
+          if (/请求已取消|AbortError|aborted/i.test(msg)) {
+            cancelledTaskIdsRef.current.add(task.id);
+            return { image: null };
+          }
           const full = isCreditsExceededError(err)
             ? formatWorkflowRunTaskErrorMessage(err, actionLabel)
             : `[${actionLabel}] 能力集合执行异常：${msg}`;
@@ -3153,6 +3269,7 @@ ${lineSvg}
               companionProjectId: workspaceProjectChrome?.activeProjectId?.trim() || undefined,
               workflowAssetId: task.assetId,
               workflowSourceDisplayKey: task.inputSourceDisplayKey,
+              abortSignal: taskAbortControllersRef.current.get(task.id)?.signal,
               onRunProgress: (line) => {
                 setCapabilitySetRunByAssetId((prev) => {
                   const cur = prev[assetId];
@@ -3167,8 +3284,15 @@ ${lineSvg}
               ...(batchGroup ? { batchGroupKey: batchGroup.key, batchGroupExpected: batchGroup.expected } : {}),
             }
           );
+          if (cancelledTaskIdsRef.current.has(task.id)) {
+            return { image: null };
+          }
           if (out.ok === false) {
             const msg = `[${actionLabel}] ${out.error}`;
+            if (/请求已取消|AbortError|aborted/i.test(out.error)) {
+              cancelledTaskIdsRef.current.add(task.id);
+              return { image: null };
+            }
             setAssetError(task.assetId, msg);
             auditRunFail(WORKFLOW_AUDIT_CODES.RUN_TASK_CAPABILITY_REJECTED, 'warn', msg, { error: out.error });
             return { image: null };
@@ -3189,6 +3313,9 @@ ${lineSvg}
           }
           return { image: out.image, vgpSteps: out.vgpSteps };
         } catch (err: unknown) {
+          if (cancelledTaskIdsRef.current.has(task.id)) {
+            return { image: null };
+          }
           if (isGeminiAsyncPollTimeoutError(err)) {
             const full = formatWorkflowRunTaskErrorMessage(err, actionLabel);
             setAssetError(task.assetId, full);
@@ -3201,6 +3328,10 @@ ${lineSvg}
           }
           envelopeOutcome = 'failed';
           const msg = normalizeApiErrorMessage(err);
+          if (/请求已取消|AbortError|aborted/i.test(msg)) {
+            cancelledTaskIdsRef.current.add(task.id);
+            return { image: null };
+          }
           const full = detectPipelineStepFromMessage(msg)
             ? msg
             : isCreditsExceededError(err)
@@ -3301,7 +3432,13 @@ ${lineSvg}
                 },
               },
               displayKey: tKey,
-              hiddenInGrid: a.groupId ? a.hiddenInGrid : false,
+              // 对话文生文资产保持 hidden；组内子项保留原值；其余生成完成后入格
+              hiddenInGrid:
+                a.assetKind === 'text' && a.hiddenInGrid
+                  ? true
+                  : a.groupId
+                    ? a.hiddenInGrid
+                    : false,
             };
           })
         );
@@ -3545,6 +3682,14 @@ ${lineSvg}
       // 新一轮批处理前清空已完成任务标记；本批快照已写入 queue，始终清空 pending（含递归续跑），避免完成后仍误判「在队列内」
       setCompletedTaskIds(new Set());
       cancelledTaskIdsRef.current = new Set();
+      for (const ac of taskAbortControllersRef.current.values()) {
+        try {
+          ac.abort();
+        } catch {
+          /* ignore */
+        }
+      }
+      taskAbortControllersRef.current = new Map();
       setPending([]);
       setActiveTaskIds(new Set());
       setExecuting(true);
@@ -3607,7 +3752,13 @@ ${lineSvg}
         if (cancelledTaskIdsRef.current.has(task.id)) {
           return;
         }
+        const taskAbort = new AbortController();
+        taskAbortControllersRef.current.set(task.id, taskAbort);
         setActiveTaskIds((prev) => new Set(prev).add(task.id));
+        const isTaskCancelled = () => cancelledTaskIdsRef.current.has(task.id);
+        const skipCancelledWrite = () => {
+          markTaskCompleted(task, { auditSuccess: false });
+        };
         try {
           const taskLabel = getTaskLogLabel(task);
 
@@ -3669,6 +3820,10 @@ ${lineSvg}
                 visionTextModel: capabilityTextModel,
                 timeoutMs: WORKFLOW_CUT_DETECT_TIMEOUT_MS,
               });
+              if (isTaskCancelled()) {
+                skipCancelledWrite();
+                return;
+              }
               if (cutDetectWarn) {
                 const full = `[${taskLabel}] ${cutDetectWarn}`;
                 onLog?.('warn', full);
@@ -3692,6 +3847,10 @@ ${lineSvg}
                   message: msg,
                 });
                 markTaskCompleted(task, { auditSuccess: false });
+                return;
+              }
+              if (isTaskCancelled()) {
+                skipCancelledWrite();
                 return;
               }
               setAssetError(task.assetId, null);
@@ -3763,7 +3922,15 @@ ${lineSvg}
               vgpSteps,
               geminiRecoveryJobId,
             } = await runTaskRef.current(task, batchGroup);
+            if (isTaskCancelled()) {
+              skipCancelledWrite();
+              return;
+            }
             if (geminiRecoveryJobId) {
+              if (isTaskCancelled()) {
+                skipCancelledWrite();
+                return;
+              }
               geminiRecoveryTasksRef.current.set(geminiRecoveryJobId, task);
               scheduleWorkflowGeminiAsyncRecovery(task, geminiRecoveryJobId);
               onLog?.(
@@ -3774,6 +3941,10 @@ ${lineSvg}
             }
             const videoUrl = videoResultUrl != null && String(videoResultUrl).trim() !== '' ? String(videoResultUrl).trim() : null;
             if (textResult != null && textResult !== '') {
+              if (isTaskCancelled()) {
+                skipCancelledWrite();
+                return;
+              }
               setAssets((prev) =>
                 prev.map((a) => {
                   if (a.id !== task.assetId) return a;
@@ -3795,12 +3966,22 @@ ${lineSvg}
                     resultOrder: nextOrder,
                     resultMeta: nextMeta,
                     displayKey: tKey,
-                    hiddenInGrid: a.groupId ? a.hiddenInGrid : false,
+                    // 对话文生文资产保持 hidden；组内子项保留原值；其余生成完成后入格
+                    hiddenInGrid:
+                      a.assetKind === 'text' && a.hiddenInGrid
+                        ? true
+                        : a.groupId
+                          ? a.hiddenInGrid
+                          : false,
                   };
                   return next;
                 })
               );
             } else if (videoUrl) {
+              if (isTaskCancelled()) {
+                skipCancelledWrite();
+                return;
+              }
               flushSync(() => {
                 setAssets((prev) =>
                   prev.map((a) => {
@@ -3854,6 +4035,10 @@ ${lineSvg}
               });
               markTaskCompleted(task);
             } else {
+              if (isTaskCancelled()) {
+                skipCancelledWrite();
+                return;
+              }
               const delegatedGenerate3D =
                 !result &&
                 classifyWorkflowRunTaskBranch({
@@ -3943,19 +4128,34 @@ ${lineSvg}
             }
           }
         } catch (e) {
-          const msg = e instanceof Error ? e.message : safeUnknownToString(e);
-          const label = getTaskLogLabel(task);
-          const full = `${logBatch} ${label} 失败：${msg}`;
-          setAssetError(task.assetId, msg);
-          emitWorkflowTaskFailure(onLog, task, {
-            code: WORKFLOW_AUDIT_CODES.RUN_TASK_PROCESS_EXCEPTION,
-            level: 'error',
-            message: full,
-            detail: { error: msg },
-            logDetail: msg,
-          });
-          setCompletedTaskIds((prev) => new Set(prev).add(task.id));
+          if (isTaskCancelled()) {
+            skipCancelledWrite();
+          } else {
+            const msg = e instanceof Error ? e.message : safeUnknownToString(e);
+            const aborted =
+              /请求已取消|The operation was aborted|AbortError/i.test(msg) ||
+              (typeof DOMException !== 'undefined' &&
+                e instanceof DOMException &&
+                e.name === 'AbortError');
+            if (aborted) {
+              cancelledTaskIdsRef.current.add(task.id);
+              skipCancelledWrite();
+            } else {
+              const label = getTaskLogLabel(task);
+              const full = `${logBatch} ${label} 失败：${msg}`;
+              setAssetError(task.assetId, msg);
+              emitWorkflowTaskFailure(onLog, task, {
+                code: WORKFLOW_AUDIT_CODES.RUN_TASK_PROCESS_EXCEPTION,
+                level: 'error',
+                message: full,
+                detail: { error: msg },
+                logDetail: msg,
+              });
+              setCompletedTaskIds((prev) => new Set(prev).add(task.id));
+            }
+          }
         } finally {
+          taskAbortControllersRef.current.delete(task.id);
           setActiveTaskIds((prev) => {
             const next = new Set(prev);
             next.delete(task.id);
@@ -4015,7 +4215,16 @@ ${lineSvg}
         const msg = e instanceof Error ? e.message : safeUnknownToString(e);
         onLog?.('error', `队列执行异常：${msg}`);
       } finally {
-        cancelledTaskIdsRef.current = new Set();
+        // 勿在此清空 cancelledTaskIdsRef：批结束后状态 effect 仍需识别用户取消，
+        // 否则会把「已取消」推成 done/orphan。新批开始时（上方）已会清空。
+        for (const ac of taskAbortControllersRef.current.values()) {
+          try {
+            ac.abort();
+          } catch {
+            /* ignore */
+          }
+        }
+        taskAbortControllersRef.current = new Map();
         setExecuting(false);
         setExecutingQueue(null);
         setActiveTaskIds(new Set());
@@ -4158,9 +4367,9 @@ ${lineSvg}
       }
       const task = makePendingTaskForAsset(targetAsset.id, trimmed, undefined);
       if (!task) return;
-      if (executing) {
-        setPending((prev) => [task, ...prev]);
-      } else {
+      // 闲时也先入 pending：executePending 积分闸门 await 期间状态 effect 才能找到 task，避免闪「任务已结束或失败」
+      setPending((prev) => [task, ...prev.filter((t) => t.id !== task.id)]);
+      if (!executing) {
         void executePending([task, ...pendingRef.current]);
       }
     },
@@ -4197,6 +4406,8 @@ ${lineSvg}
         return;
       }
       const ins = String(mod.instruction ?? '').trim();
+      // 标记拖放已消费：从功能区拖出时勿按「拖出即移除」删收藏（复制到对话）
+      setActionDroppedInFavorite(true);
       setQuickComposePromptCards((prev) => [
         ...prev,
         { key: uuid(), presetId: trimmed, label: mod.label, instruction: ins },
@@ -4206,11 +4417,29 @@ ${lineSvg}
     [actionModules, capabilityPresets, onLog]
   );
 
+  const buildQuickComposeAgentSurface = useCallback((): AgentSurfaceContext => {
+    const lb = String(lightboxAssetIdRef.current || '').trim();
+    if (lb) {
+      const asset = assetsRef.current.find((a) => a.id === lb);
+      const displayKey = String(asset?.displayKey || 'full');
+      const hasLocalEdit = Boolean(lightboxOverlayDraft?.localEdit);
+      return { kind: 'lightbox', assetId: lb, displayKey, hasLocalEdit };
+    }
+    const selected = [...selectedAssetIds].filter((id) => Boolean(id));
+    if (selected.length) return { kind: 'canvas', selectedAssetIds: selected };
+    return { kind: 'none' };
+  }, [lightboxOverlayDraft, selectedAssetIds]);
+
   type QuickComposeSubmitInvokeOptions = {
     overrideImageDataUrls?: string[];
     overrideUserText?: string;
     /** 伪多轮上下文 + 当前句（由 quickComposeTurnContext 生成） */
     pseudoMultiTurnPrompt?: string;
+    /**
+     * Agent 路径：runtime 已把 B 层写入 overrideUserText，文工具勿再 format 伪多轮。
+     * 非 Agent 路径保持默认 false（仍注入近期轮次）。
+     */
+    skipThreadContextInject?: boolean;
     /** 带参考图时即使底部为「文」也走图/3D 链路（大图预览提交） */
     preferImagePipelineWhenImagesAttached?: boolean;
     /** 为 true 时不重置底部快捷栏文案与附图 */
@@ -4274,7 +4503,7 @@ ${lineSvg}
     const effectiveUserText = (
       invoke?.pseudoMultiTurnPrompt?.trim() || userText
     ).trim();
-    const composeMode =
+    let composeMode: WorkspaceQuickComposeComposeMode =
       invoke?.forceComposeMode ??
       (invoke?.preferTextPipelineWhenNoImagesAttached && imgsAll.length === 0
         ? 'text'
@@ -4283,6 +4512,30 @@ ${lineSvg}
           : imgsAll.length > 0 && quickComposeMode === 'text'
             ? 'image'
             : quickComposeMode);
+    // P23：自动挡在入队前解析为具体模态（Agent 路径通常已 forceComposeMode）
+    if (composeMode === 'auto') {
+      if (imgsAll.length > 0) {
+        composeMode = 'image';
+      } else {
+        const hasEnabled3dPreset = Boolean(
+          actionModules.some((m) => m.category === 'generate_3d' && m.enabled !== false) ||
+            capabilityPresets.some((m) => m.category === 'generate_3d' && m.enabled !== false)
+        );
+        composeMode = resolveComposerMode(
+          buildProjectAgentIntent({
+            text: effectiveUserText,
+            mode: 'auto',
+            hasEnabled3dPreset,
+            surface: buildQuickComposeAgentSurface(),
+            ...(quickComposeMainDropSlotsRef.current[0]?.assetId
+              ? { mainAssetId: quickComposeMainDropSlotsRef.current[0]!.assetId }
+              : lightboxAssetIdRef.current
+                ? { mainAssetId: String(lightboxAssetIdRef.current).trim() }
+                : {}),
+          })
+        );
+      }
+    }
 
     const resolveQuickComposeMod = (presetId: string) =>
       actionModules.find((m) => m.id === presetId) ?? capabilityPresets.find((p) => p.id === presetId) ?? null;
@@ -4465,9 +4718,9 @@ ${lineSvg}
       }
       rememberTaskAssetById(newTasks);
       setAssets((prev) => [...prev, ...newAssets]);
-      if (executing) {
-        setPending((prev) => [...prev, ...newTasks]);
-      } else {
+      // 闲时也先入 pending：挡住 executePending 积分闸门 await 窗口内的 orphan 误报
+      setPending((prev) => [...prev, ...newTasks]);
+      if (!executing) {
         void executePending([...newTasks, ...pendingRef.current]);
       }
       if (!invoke?.preserveBottomBarDraft) {
@@ -4492,9 +4745,9 @@ ${lineSvg}
       }
       rememberTaskAssetById(newTasks);
       setAssets((prev) => [...prev, ...newAssets]);
-      if (executing) {
-        setPending((prev) => [...prev, ...newTasks]);
-      } else {
+      // 闲时也先入 pending：挡住 executePending 积分闸门 await 窗口内的 orphan 误报
+      setPending((prev) => [...prev, ...newTasks]);
+      if (!executing) {
         void executePending([...newTasks, ...pendingRef.current]);
       }
       if (!invoke?.preserveBottomBarDraft) {
@@ -4526,7 +4779,16 @@ ${lineSvg}
       ) {
         return [];
       }
-      const body = clampWorkflowTextBody(plainText);
+      // 文工具：非 Agent 注入近期轮次；Agent 已由 runtime B 层写入 override，勿双注入
+      const priorThreadMessages = workspaceQuickComposeThreadRef.current?.messages ?? [];
+      const currentTurnText = userText.trim() || plainText;
+      const textForModel = resolvePlainTextPromptForModel({
+        currentTurnText,
+        priorMessages: priorThreadMessages,
+        pseudoMultiTurnPrompt: invoke?.pseudoMultiTurnPrompt,
+        skipThreadContextInject: invoke?.skipThreadContextInject,
+      });
+      const body = clampWorkflowTextBody(textForModel);
       const newAssets: WorkflowAsset[] = [];
       const newTasks: WorkflowPendingTask[] = [];
       for (let i = 0; i < countN; i += 1) {
@@ -4538,7 +4800,7 @@ ${lineSvg}
           results: {},
           resultOrder: [],
           archived: false,
-          hiddenInGrid: false,
+          hiddenInGrid: true,
           createdAt: Date.now(),
           assetKind: 'text',
           textTitle: '',
@@ -4676,9 +4938,11 @@ ${lineSvg}
           logContext: plainLog,
         });
       }
-      if (executing) {
-        setPending((prev) => [...prev, ...newTasks]);
-      } else {
+      if (newTasks.length === 0) return [];
+      rememberTaskAssetById(newTasks);
+      // 闲时也先入 pending：挡住 executePending 积分闸门 await 窗口内的 orphan 误报
+      setPending((prev) => [...prev, ...newTasks]);
+      if (!executing) {
         void executePending([...newTasks, ...pendingRef.current]);
       }
       if (!invoke?.preserveBottomBarDraft) {
@@ -4744,6 +5008,7 @@ ${lineSvg}
     executing,
     executePending,
     buildPendingTaskFromAssetSnapshot,
+    buildQuickComposeAgentSurface,
   ]);
 
   const resolveQuickComposeMod = useCallback(
@@ -4757,7 +5022,7 @@ ${lineSvg}
   useEffect(() => {
     const thread = workspaceQuickComposeThread;
     if (!thread) return;
-    const nextMessages = patchQuickComposeThreadMessageStatuses(thread, {
+    const statusCtx = {
       pending,
       executingQueue,
       activeTaskIds,
@@ -4765,8 +5030,25 @@ ${lineSvg}
       assetErrors,
       cancelledTaskIds: cancelledTaskIdsRef.current,
       resolveModule: resolveQuickComposeMod,
+      resolveAssetById: (assetId: string) =>
+        assetsRef.current.find((a) => a.id === assetId) ?? null,
+      assetCatalogEmpty: assets.length === 0,
+    };
+    const statusPatched = patchQuickComposeThreadMessageStatuses(thread, statusCtx);
+    let childRunsChanged = false;
+    const nextMessages = statusPatched.map((m) => {
+      if (!m.childRuns?.length) return m;
+      const childRuns = patchChildRunsFromTasks(m.childRuns as AgentChildRun[], {
+        ...statusCtx,
+        taskAssetById: m.taskAssetById,
+        messageStatus: m.status,
+        messageErrorMessage: m.errorMessage,
+      });
+      if (childRuns === m.childRuns) return m;
+      childRunsChanged = true;
+      return { ...m, childRuns };
     });
-    if (nextMessages === thread.messages) return;
+    if (statusPatched === thread.messages && !childRunsChanged) return;
     setWorkspaceQuickComposeThread((prev) => {
       if (!prev || prev.id !== thread.id) return prev;
       const next: ProjectAgentThread = { ...prev, messages: nextMessages, updatedAt: Date.now() };
@@ -4774,7 +5056,29 @@ ${lineSvg}
         userId: preferenceScope,
         workspaceProjectId: prev.workspaceProjectId,
       };
-      saveProjectAgentThread(storeKey, next);
+      const persist = saveProjectAgentThread(storeKey, next);
+      if (!persist.ok) {
+        onLog?.('warn', '本地存储空间不足，对话未能完整保存');
+        scheduleProjectAgentThreadBackup(
+          { userId: storeKey.userId, workspaceProjectId: storeKey.workspaceProjectId },
+          next
+        );
+        return next;
+      }
+      const persisted = persist.thread;
+      if (persisted.messages.length !== next.messages.length) {
+        onLog?.('warn', '本地存储空间不足，已裁剪对话…');
+        stashMessagesDroppedFromHot(storeKey, next.messages, persisted.messages);
+        scheduleProjectAgentThreadBackup(
+          { userId: storeKey.userId, workspaceProjectId: storeKey.workspaceProjectId },
+          persisted
+        );
+        return persisted;
+      }
+      scheduleProjectAgentThreadBackup(
+        { userId: storeKey.userId, workspaceProjectId: storeKey.workspaceProjectId },
+        persisted
+      );
       return next;
     });
   }, [
@@ -4784,8 +5088,11 @@ ${lineSvg}
     activeTaskIds,
     completedTaskIds,
     assetErrors,
+    // 资产 hydrate / 文结果写入后需重算，避免默认打开误报红、结果不回写
+    assets,
     preferenceScope,
     resolveQuickComposeMod,
+    onLog,
   ]);
 
   const quickComposeCreditOverrides = useMemo(
@@ -4796,25 +5103,47 @@ ${lineSvg}
     [quickComposeUnderstand]
   );
 
-  const quickComposePlan = useMemo(
-    () =>
-      planQuickComposeRoutes({
-        mode: quickComposeMode,
-        promptCards: quickComposePromptCards,
-        resolveModule: resolveQuickComposeMod,
-        imageModelRegistryId: quickComposeImageModel,
-        textModelRegistryId: quickComposeTextModel,
-        overrides: quickComposeCreditOverrides,
-      }),
-    [
-      quickComposeMode,
-      quickComposePromptCards,
-      resolveQuickComposeMod,
-      quickComposeImageModel,
-      quickComposeTextModel,
-      quickComposeCreditOverrides,
-    ]
-  );
+  const quickComposePlan = useMemo(() => {
+    const modeForBilling: 'text' | 'image' | '3d' =
+      quickComposeMode === 'auto'
+        ? resolveComposerMode(
+            buildProjectAgentIntent({
+              text: quickComposeDraft,
+              mode: 'auto',
+              mainAssetId: quickComposeMainDropSlots[0]?.assetId,
+              referenceAssetIds: quickComposeReferenceDropSlots
+                .map((s) => s.assetId)
+                .filter((id): id is string => Boolean(id?.trim())),
+              hasEnabled3dPreset: Boolean(
+                actionModules.some((m) => m.category === 'generate_3d' && m.enabled !== false) ||
+                  capabilityPresets.some((m) => m.category === 'generate_3d' && m.enabled !== false)
+              ),
+              surface: buildQuickComposeAgentSurface(),
+            })
+          )
+        : quickComposeMode;
+    return planQuickComposeRoutes({
+      mode: modeForBilling,
+      promptCards: quickComposePromptCards,
+      resolveModule: resolveQuickComposeMod,
+      imageModelRegistryId: quickComposeImageModel,
+      textModelRegistryId: quickComposeTextModel,
+      overrides: quickComposeCreditOverrides,
+    });
+  }, [
+    quickComposeMode,
+    quickComposeDraft,
+    quickComposeMainDropSlots,
+    quickComposeReferenceDropSlots,
+    actionModules,
+    capabilityPresets,
+    quickComposePromptCards,
+    resolveQuickComposeMod,
+    quickComposeImageModel,
+    quickComposeTextModel,
+    quickComposeCreditOverrides,
+    buildQuickComposeAgentSurface,
+  ]);
 
   const quickComposeCreditsBypass = !requiresPlatformCredits(quickComposePlan);
 
@@ -4850,12 +5179,51 @@ ${lineSvg}
       setWorkspaceQuickComposeThread((prev) => {
         if (!prev || !storeKey) return prev;
         const next = updater(prev);
-        saveProjectAgentThread(storeKey, next);
+        const persist = saveProjectAgentThread(storeKey, next);
+        if (!persist.ok) {
+          onLog?.('warn', '本地存储空间不足，对话未能完整保存');
+          workspaceQuickComposeThreadRef.current = next;
+          scheduleProjectAgentThreadBackup(
+            { userId: storeKey.userId, workspaceProjectId: storeKey.workspaceProjectId },
+            next
+          );
+          try {
+            maybeCompactProjectAgentThread(storeKey, next);
+          } catch {
+            /* ignore */
+          }
+          return next;
+        }
+        const persisted = persist.thread;
+        if (persisted.messages.length !== next.messages.length) {
+          onLog?.('warn', '本地存储空间不足，已裁剪对话…');
+          stashMessagesDroppedFromHot(storeKey, next.messages, persisted.messages);
+          workspaceQuickComposeThreadRef.current = persisted;
+          scheduleProjectAgentThreadBackup(
+            { userId: storeKey.userId, workspaceProjectId: storeKey.workspaceProjectId },
+            persisted
+          );
+          try {
+            maybeCompactProjectAgentThread(storeKey, persisted);
+          } catch {
+            /* ignore */
+          }
+          return persisted;
+        }
         workspaceQuickComposeThreadRef.current = next;
+        scheduleProjectAgentThreadBackup(
+          { userId: storeKey.userId, workspaceProjectId: storeKey.workspaceProjectId },
+          persisted
+        );
+        try {
+          maybeCompactProjectAgentThread(storeKey, persisted);
+        } catch {
+          /* ignore */
+        }
         return next;
       });
     },
-    [getProjectAgentThreadKey]
+    [getProjectAgentThreadKey, onLog]
   );
 
   const quickComposeThreadHasInFlightAssistant = useCallback((thread: ProjectAgentThread | null) => {
@@ -4869,24 +5237,11 @@ ${lineSvg}
     );
   }, []);
 
-  const buildQuickComposeAgentSurface = useCallback((): AgentSurfaceContext => {
-    const lb = String(lightboxAssetIdRef.current || '').trim();
-    if (lb) {
-      const asset = assetsRef.current.find((a) => a.id === lb);
-      const displayKey = String(asset?.displayKey || 'full');
-      const hasLocalEdit = Boolean(lightboxOverlayDraft?.localEdit);
-      return { kind: 'lightbox', assetId: lb, displayKey, hasLocalEdit };
-    }
-    const selected = [...selectedAssetIds].filter((id) => Boolean(id));
-    if (selected.length) return { kind: 'canvas', selectedAssetIds: selected };
-    return { kind: 'none' };
-  }, [lightboxOverlayDraft, selectedAssetIds]);
-
   const executeAgentPlan = useCallback(
-    (
+    async (
       intent: ProjectAgentIntent,
       plan: AgentPlannedTool[]
-    ): ProjectAgentExecutePlanResult => {
+    ): Promise<ProjectAgentExecutePlanResult> => {
       if (!plan.length) {
         return { taskIds: [], errorMessage: 'Empty plan' };
       }
@@ -4906,6 +5261,106 @@ ${lineSvg}
         },
         () => uuid()
       );
+
+      const expertIds =
+        mapped.invokeExpertIds ??
+        (mapped.invokeExpertId ? [mapped.invokeExpertId] : []);
+      if (expertIds.length > 0) {
+        const storeKey = getProjectAgentThreadKey();
+        const userId = storeKey?.userId?.trim() || 'guest';
+        const workspaceProjectId =
+          storeKey?.workspaceProjectId?.trim() || activeWorkspaceProjectId || 'workspace';
+        const threadId = workspaceQuickComposeThreadRef.current?.id || 'thread';
+        const turnBase = Date.now();
+        const textSegments: string[] = [];
+        const artifactIds: string[] = [];
+
+        for (let i = 0; i < expertIds.length; i++) {
+          const expertId = expertIds[i]!;
+          const displayName =
+            getExpertProfile(expertId)?.displayName?.trim() || expertId;
+          const inv = await invokeExpert({
+            expertId,
+            userText: intent.text,
+            turnId: `expert-${turnBase}-${i}`,
+            threadId,
+            workspaceProjectId,
+            userId,
+            textModel: coerceTextModelRegistryId(
+              (quickComposeTextModel || '').trim() || DEFAULT_MODEL_TEXT
+            ),
+            generateText: async ({ system, user, model }) => {
+              const prompt = `${system}\n\n${user}`;
+              return getDialogTextResponse(
+                [{ role: 'user', parts: [{ text: prompt }] }],
+                coerceTextModelRegistryId(
+                  (model || quickComposeTextModel || '').trim() || DEFAULT_MODEL_TEXT
+                )
+              );
+            },
+          });
+          if (!inv.ok) {
+            return {
+              taskIds: [],
+              ...(textSegments.length ? { resultText: textSegments.join('\n\n') } : {}),
+              ...(artifactIds.length ? { artifactIds } : {}),
+              errorMessage:
+                inv.errorMessage || `专家「${displayName}」调用失败`,
+            };
+          }
+          if (inv.artifactIds.length) artifactIds.push(...inv.artifactIds);
+          const body = (inv.text || '').trim();
+          textSegments.push(
+            expertIds.length > 1
+              ? `【${displayName}】\n${body}`
+              : body
+          );
+
+          // §17.9 tune three-layer: confirm before Memory/Profile write; skill → Studio
+          const proposals = detectExpertTuneProposals(intent, expertId, {
+            userId,
+            workspaceProjectId,
+          });
+          for (const proposal of proposals) {
+            if (proposal.kind === 'memory' && proposal.memoryDraft) {
+              if (window.confirm('将这条偏好记入专家记忆？')) {
+                applyConfirmedMemoryProposal(proposal);
+              }
+            } else if (proposal.kind === 'profilePatch' && proposal.profilePatch) {
+              const patch = proposal.profilePatch;
+              const diffLines: string[] = [];
+              if (patch.mission) diffLines.push(`使命 → ${patch.mission}`);
+              if (patch.taboos?.length) {
+                diffLines.push(`禁区 → ${patch.taboos.join('、')}`);
+              }
+              if (patch.styleRules?.length) {
+                diffLines.push(`风格 → ${patch.styleRules.join('、')}`);
+              }
+              const diff =
+                diffLines.length > 0 ? `\n${diffLines.join('\n')}` : '';
+              if (
+                window.confirm(
+                  `确认更新「${displayName}」人设？${diff}`
+                )
+              ) {
+                applyExpertProfilePatch(expertId, patch);
+              }
+            } else if (proposal.kind === 'skillRequest') {
+              onLog?.(
+                'info',
+                '技能申请已记录，请在专家工作室确认'
+              );
+            }
+          }
+        }
+
+        return {
+          taskIds: [],
+          resultText: textSegments.join('\n\n'),
+          artifactIds,
+        };
+      }
+
       if (mapped.errorMessage && !mapped.useLightboxLocalEdit && !mapped.presetCardsOverride) {
         return { taskIds: [], errorMessage: mapped.errorMessage };
       }
@@ -4926,6 +5381,8 @@ ${lineSvg}
       const invoke: QuickComposeSubmitInvokeOptions = {
         overrideUserText: mapped.overrideUserText,
         skipPromptCards: mapped.skipPromptCards,
+        /** runtime maybeInjectAssembledContext 已写入 intent.text，勿再伪多轮 */
+        skipThreadContextInject: true,
         ...(mapped.forceComposeMode ? { forceComposeMode: mapped.forceComposeMode } : {}),
         ...(mapped.preferTextPipelineWhenNoImagesAttached
           ? { preferTextPipelineWhenNoImagesAttached: true }
@@ -4945,7 +5402,46 @@ ${lineSvg}
         ...(taskIds.length === 0 ? { errorMessage: mapped.errorMessage || '未能创建任务' } : {}),
       };
     },
-    [actionModules, capabilityPresets, submitQuickCompose]
+    [
+      actionModules,
+      activeWorkspaceProjectId,
+      capabilityPresets,
+      getProjectAgentThreadKey,
+      onLog,
+      quickComposeTextModel,
+      submitQuickCompose,
+    ]
+  );
+
+  const cancelQueuedTaskInBatch = useCallback((taskId: string) => {
+    if (!taskId) return;
+    cancelledTaskIdsRef.current.add(taskId);
+    const ac = taskAbortControllersRef.current.get(taskId);
+    if (ac) {
+      try {
+        ac.abort();
+      } catch {
+        /* ignore */
+      }
+      taskAbortControllersRef.current.delete(taskId);
+    }
+    setCompletedTaskIds((prev) => new Set(prev).add(taskId));
+    setPending((prev) => prev.filter((t) => t.id !== taskId));
+    setActiveTaskIds((prev) => {
+      if (!prev.has(taskId)) return prev;
+      const next = new Set(prev);
+      next.delete(taskId);
+      return next;
+    });
+  }, [setPending]);
+
+  const cancelProjectAgentTasks = useCallback(
+    (taskIds: string[]) => {
+      for (const id of taskIds) {
+        if (id) cancelQueuedTaskInBatch(id);
+      }
+    },
+    [cancelQueuedTaskInBatch]
   );
 
   const projectAgentHostPort = useMemo(
@@ -4971,8 +5467,20 @@ ${lineSvg}
         },
         reportSurfaceContext: buildQuickComposeAgentSurface,
         executePlan: executeAgentPlan,
+        cancelTasks: cancelProjectAgentTasks,
+        getThread: () => workspaceQuickComposeThreadRef.current,
+        getThreadStoreKey: () => getProjectAgentThreadKey(),
       }),
-    [assetErrors, buildQuickComposeAgentSurface, executeAgentPlan, executingQueue, getAssetDisplayImage, setPending]
+    [
+      assetErrors,
+      buildQuickComposeAgentSurface,
+      cancelProjectAgentTasks,
+      executeAgentPlan,
+      executingQueue,
+      getAssetDisplayImage,
+      getProjectAgentThreadKey,
+      setPending,
+    ]
   );
 
   useEffect(() => {
@@ -4990,6 +5498,9 @@ ${lineSvg}
       const runtime = projectAgentRuntimeRef.current;
       if (!thread || !storeKey || !runtime) return [];
       if (quickComposeThreadHasInFlightAssistant(thread)) return [];
+
+      const submittedThreadId = thread.id;
+      const clearGenerationAtSubmit = quickComposeClearGenerationRef.current;
 
       const resolved = resolveQuickComposeReferences({
         segments: quickComposeSegmentsRef.current,
@@ -5015,7 +5526,19 @@ ${lineSvg}
       const presetIds = (
         skipCards ? [] : quickComposePromptCards.map((c) => c.presetId)
       ).filter(Boolean);
-      if (!currentUserText && presetIds.length === 0) return [];
+      const agentMentions: AgentMentionRef[] = mentionsFromSegments(
+        quickComposeSegmentsRef.current
+      ).flatMap((m) => {
+        if (m.kind === 'expert') {
+          return [{ kind: 'expert' as const, id: m.expertId, label: m.label }];
+        }
+        if (m.kind === 'asset') {
+          return [{ kind: 'asset' as const, id: m.assetId, label: m.label }];
+        }
+        return [];
+      });
+      const hasExpertMention = agentMentions.some((m) => m.kind === 'expert');
+      if (!currentUserText && presetIds.length === 0 && !hasExpertMention) return [];
 
       const primaryUrl = queues.mainUrls[0] || resolved.refs[0] || '';
       const mainAssetId =
@@ -5030,6 +5553,7 @@ ${lineSvg}
         text: currentUserText,
         mode: quickComposeMode,
         presetIds,
+        mentions: agentMentions,
         surface: buildQuickComposeAgentSurface(),
         mainAssetId: mainAssetId || undefined,
         hasEnabled3dPreset,
@@ -5043,13 +5567,7 @@ ${lineSvg}
         },
       });
 
-      const result = await runtime.submitTurn({
-        turnId: uuid(),
-        threadId: thread.id,
-        workspaceProjectId: storeKey.workspaceProjectId,
-        intent,
-      });
-
+      // 先落气泡再 await（专家真 LLM 等可能较慢，避免「点了没反应」）
       const attachmentAssetIds = collectQuickComposeAttachmentAssetIds({
         segments: quickComposeSegmentsRef.current,
         mainDropSlots: quickComposeMainDropSlotsRef.current,
@@ -5057,32 +5575,186 @@ ${lineSvg}
         lightboxAssetId: lightboxAssetIdRef.current,
       });
       const now = Date.now();
+      const presetLabels = (
+        skipCards ? [] : quickComposePromptCards.map((c) => c.label.trim()).filter(Boolean)
+      );
+      const expertLabels = agentMentions
+        .filter((m) => m.kind === 'expert')
+        .map((m) => (m.label || m.id).trim())
+        .filter(Boolean);
+      const plannedPreview = planTools(intent);
+      const previewPlan = plannedPreview.ok ? plannedPreview.plan : [];
+      const previewPlanText = plannedPreview.ok
+        ? formatPlanTemplate(previewPlan)
+        : '计划：处理中…';
+      const userVisibleText = (() => {
+        const base = currentUserText.trim();
+        if (presetLabels.length === 0) {
+          if (base) return base;
+          if (expertLabels.length) return `@${expertLabels.join(' @')}`;
+          return previewPlanText || '(空)';
+        }
+        const tag =
+          presetLabels.length === 1
+            ? `使用能力：${presetLabels[0]}`
+            : `使用能力：${presetLabels.join('、')}`;
+        return base ? `${base}\n${tag}` : tag;
+      })();
+      const assistantPlanText = (() => {
+        if (presetLabels.length === 1) return `计划：运行「${presetLabels[0]}」`;
+        if (presetLabels.length > 1) return `计划：运行预设×${presetLabels.length}`;
+        return previewPlanText || '计划：已提交';
+      })();
+      const userMessageId = uuid();
+      const assistantMessageId = uuid();
+      const shouldAttachChildRuns =
+        previewPlan.length > 1 || previewPlan.some((p) => p.toolId === 'invoke_expert');
+      const optimisticChildRuns = shouldAttachChildRuns
+        ? buildChildRunsFromPlan(previewPlan, {
+            parentMessageId: assistantMessageId,
+            now: now + 1,
+          })
+        : undefined;
       const userMessage: QuickComposeThreadMessage = {
-        id: uuid(),
+        id: userMessageId,
         role: 'user',
-        text: currentUserText || result.planText || '(空)',
+        text: userVisibleText,
         timestamp: now,
         status: 'submitted',
         ...(attachmentAssetIds.length ? { assetIds: attachmentAssetIds } : {}),
       };
-      const failed = !result.ok || result.taskIds.length === 0;
-      const assistantMessage: QuickComposeThreadMessage = {
-        id: uuid(),
+      const optimisticAssistant: QuickComposeThreadMessage = {
+        id: assistantMessageId,
         role: 'assistant',
-        text: result.planText || result.errorMessage || '计划：已提交',
+        text: assistantPlanText,
         timestamp: now + 1,
-        status: failed ? 'error' : 'queued',
-        taskIds: result.taskIds,
-        ...(result.taskAssetById && Object.keys(result.taskAssetById).length
-          ? { taskAssetById: result.taskAssetById }
+        status: 'running',
+        ...(previewPlan.length
+          ? {
+              planSteps: previewPlan.map((p) => ({
+                label: String(p.label || '').trim() || p.toolId,
+                toolId: p.toolId,
+              })),
+            }
           : {}),
-        ...(failed
-          ? { errorMessage: result.errorMessage?.trim() || '未能创建任务' }
-          : {}),
+        ...(optimisticChildRuns?.length ? { childRuns: optimisticChildRuns } : {}),
       };
       updateProjectAgentThread((prev) => ({
         ...prev,
-        messages: [...prev.messages, userMessage, assistantMessage],
+        messages: [...prev.messages, userMessage, optimisticAssistant],
+        updatedAt: Date.now(),
+      }));
+      // 立刻清空输入，让用户感知已发送（intent 已快照，不依赖 segments）
+      setQuickComposeSegmentsTracked([newQuickComposeTextSegment('')]);
+
+      let result: Awaited<ReturnType<typeof runtime.submitTurn>>;
+      try {
+        result = await runtime.submitTurn({
+          turnId: uuid(),
+          threadId: thread.id,
+          workspaceProjectId: storeKey.workspaceProjectId,
+          intent,
+        });
+      } catch (err) {
+        const msg =
+          err instanceof Error && err.message.trim()
+            ? err.message.trim()
+            : '专家调用异常';
+        updateProjectAgentThread((prev) => ({
+          ...prev,
+          messages: prev.messages.map((m) =>
+            m.id === assistantMessageId
+              ? {
+                  ...m,
+                  status: 'error' as const,
+                  errorMessage: msg,
+                  text: msg,
+                }
+              : m
+          ),
+          updatedAt: Date.now(),
+        }));
+        onLog?.('error', msg);
+        return [];
+      }
+
+      // 清空对话竞态：await 期间若已清空，勿把消息写回新热线程
+      const clearedDuringSubmit =
+        clearGenerationAtSubmit !== quickComposeClearGenerationRef.current ||
+        workspaceQuickComposeThreadRef.current?.id !== submittedThreadId;
+      if (clearedDuringSubmit) {
+        const orphanTaskIds = (result.taskIds ?? []).filter(Boolean);
+        if (orphanTaskIds.length) {
+          runtime.cancelInFlight({ taskIds: orphanTaskIds });
+          cancelProjectAgentTasks(orphanTaskIds);
+        }
+        return [];
+      }
+
+      const failed =
+        !result.ok ||
+        (result.taskIds.length === 0 && !String(result.resultText || '').trim());
+      const immediateResult = String(result.resultText || '').trim();
+      const assistantStatus = failed ? 'error' : immediateResult ? 'done' : 'queued';
+      const assistantError = failed
+        ? result.errorMessage?.trim() || '未能创建任务'
+        : undefined;
+      const finalPlan = result.plan?.length ? result.plan : previewPlan;
+      const finalPlanText = (() => {
+        if (presetLabels.length === 1) return `计划：运行「${presetLabels[0]}」`;
+        if (presetLabels.length > 1) return `计划：运行预设×${presetLabels.length}`;
+        return result.planText || result.errorMessage || assistantPlanText;
+      })();
+      let childRuns =
+        (finalPlan.length > 1 || finalPlan.some((p) => p.toolId === 'invoke_expert'))
+          ? buildChildRunsFromPlan(finalPlan, {
+              parentMessageId: assistantMessageId,
+              taskIds: result.taskIds,
+              now: Date.now(),
+            })
+          : undefined;
+      if (childRuns?.length && (failed || immediateResult)) {
+        childRuns = patchChildRunsFromTasks(childRuns, {
+          pending: [],
+          executingQueue: null,
+          activeTaskIds: new Set(),
+          completedTaskIds: new Set(),
+          assetErrors: new Map(),
+          cancelledTaskIds: new Set(),
+          resolveModule: () => null,
+          messageStatus: assistantStatus,
+          messageErrorMessage: assistantError,
+          now: Date.now(),
+        });
+      }
+      updateProjectAgentThread((prev) => ({
+        ...prev,
+        messages: prev.messages.map((m) => {
+          if (m.id !== assistantMessageId) return m;
+          const next: QuickComposeThreadMessage = {
+            ...m,
+            text: failed ? result.errorMessage || finalPlanText : finalPlanText,
+            status: assistantStatus,
+            taskIds: result.taskIds,
+            ...(finalPlan.length
+              ? {
+                  planSteps: finalPlan.map((p) => ({
+                    label: String(p.label || '').trim() || p.toolId,
+                    toolId: p.toolId,
+                  })),
+                }
+              : {}),
+            ...(childRuns?.length ? { childRuns } : {}),
+            ...(result.taskAssetById && Object.keys(result.taskAssetById).length
+              ? { taskAssetById: result.taskAssetById }
+              : {}),
+          };
+          if (immediateResult) next.resultText = immediateResult;
+          else delete next.resultText;
+          if (assistantError) next.errorMessage = assistantError;
+          else delete next.errorMessage;
+          return next;
+        }),
         updatedAt: Date.now(),
       }));
       return result.taskIds;
@@ -5090,6 +5762,7 @@ ${lineSvg}
     [
       actionModules,
       buildQuickComposeAgentSurface,
+      cancelProjectAgentTasks,
       capabilityPresets,
       getAssetDisplayImage,
       getProjectAgentThreadKey,
@@ -5103,6 +5776,8 @@ ${lineSvg}
       quickComposeTextModel,
       quickComposeUnderstand,
       quickComposeThreadHasInFlightAssistant,
+      onLog,
+      setQuickComposeSegmentsTracked,
       updateProjectAgentThread,
     ]
   );
@@ -5173,7 +5848,12 @@ ${lineSvg}
       for (let i = assistantIdx - 1; i >= 0; i -= 1) {
         const m = thread.messages[i];
         if (m?.role === 'user') {
-          userText = m.text.trim();
+          // 去掉「使用能力：」展示行，重放用户原句（§16.1 整 turn 重放）
+          userText = m.text
+            .split('\n')
+            .filter((line) => !/^使用能力[：:]/.test(line.trim()))
+            .join('\n')
+            .trim();
           break;
         }
       }
@@ -5181,14 +5861,10 @@ ${lineSvg}
       quickComposeChatSendGuardRef.current = true;
       void (async () => {
         try {
-          updateProjectAgentThread((prev) => ({
-            ...prev,
-            messages: prev.messages.filter((m) => m.id !== messageId),
-            updatedAt: Date.now(),
-          }));
+          // §16.1：保留失败气泡；新 turnId；尽量带上当前仍挂着的预设卡
           await submitQuickComposeWithThread('workspace', {
             overrideUserText: userText,
-            skipPromptCards: true,
+            ...(quickComposePromptCards.length === 0 ? { skipPromptCards: true } : {}),
             preferTextPipelineWhenNoImagesAttached: !quickComposeHasAttachedImages(),
           });
         } finally {
@@ -5198,11 +5874,142 @@ ${lineSvg}
     },
     [
       quickComposeHasAttachedImages,
+      quickComposePromptCards.length,
       quickComposeThreadHasInFlightAssistant,
       submitQuickComposeWithThread,
-      updateProjectAgentThread,
     ]
   );
+
+  const handleQuickComposeChatCancel = useCallback(
+    (messageId: string) => {
+      const thread = workspaceQuickComposeThreadRef.current;
+      if (!thread) return;
+      const assistant = thread.messages.find((m) => m.id === messageId);
+      if (!assistant || assistant.role !== 'assistant') return;
+      if (
+        assistant.status === 'done' ||
+        assistant.status === 'error' ||
+        assistant.status == null
+      ) {
+        return;
+      }
+      const taskIds = (assistant.taskIds ?? []).filter(Boolean);
+      const runtime = projectAgentRuntimeRef.current;
+      runtime?.cancelInFlight({ taskIds });
+      cancelProjectAgentTasks(taskIds);
+      updateProjectAgentThread((prev) => ({
+        ...prev,
+        messages: prev.messages.map((m) =>
+          m.id === messageId
+            ? {
+                ...m,
+                status: 'error' as const,
+                errorMessage: PROJECT_AGENT_CANCELLED_MESSAGE,
+              }
+            : m
+        ),
+        updatedAt: Date.now(),
+      }));
+      onLog?.('info', '项目 Agent：已取消当前回合');
+    },
+    [cancelProjectAgentTasks, onLog, updateProjectAgentThread]
+  );
+
+  /** P25：清空/新开 = 确认 → 取消 in-flight → 取消 pending 热备份 → 归档 → 空热 backup */
+  const handleQuickComposeClearChat = useCallback(() => {
+    const key = getProjectAgentThreadKey();
+    if (!key) return;
+    if (
+      !window.confirm('清空当前对话？旧对话将归档，并开始新的对话。')
+    ) {
+      return;
+    }
+    const syncKey = {
+      userId: key.userId,
+      workspaceProjectId: key.workspaceProjectId,
+    };
+
+    // 1) 取消当前 in-flight（与 handleQuickComposeChatCancel 同逻辑；马上 archive 故不标气泡）
+    const hot = workspaceQuickComposeThreadRef.current;
+    if (hot) {
+      const inFlightTaskIds = hot.messages
+        .filter(
+          (m) =>
+            m.role === 'assistant' &&
+            m.status != null &&
+            m.status !== 'done' &&
+            m.status !== 'error'
+        )
+        .flatMap((m) => m.taskIds ?? [])
+        .filter(Boolean);
+      if (inFlightTaskIds.length) {
+        projectAgentRuntimeRef.current?.cancelInFlight({ taskIds: inFlightTaskIds });
+        cancelProjectAgentTasks(inFlightTaskIds);
+      }
+    }
+
+    // 2) 取消 debounce 中的旧热备份，避免清空后把旧线程写回 thread-hot.json
+    cancelPendingProjectAgentHotBackup(syncKey);
+
+    // 3) 若有进行中的 send，递增 generation，让 submit 在 await 后跳过追加
+    if (quickComposeChatSendGuardRef.current) {
+      quickComposeClearGenerationRef.current += 1;
+    }
+
+    // 4) archiveAndReset → set state
+    const { archived, next } = archiveAndResetProjectAgentThread(key);
+    // 本机归档快照：供「加载更早」拼冷段（云 list 不做）
+    saveLocalThreadArchive(key, archived);
+    workspaceQuickComposeThreadRef.current = next;
+    setWorkspaceQuickComposeThread(next);
+
+    // 5) 归档云备份
+    scheduleProjectAgentThreadArchiveBackup(syncKey, archived);
+    // 6) 立刻 schedule 空热备份（debounce 可，但必须 schedule）
+    scheduleProjectAgentThreadBackup(syncKey, next);
+
+    // 7) onLog
+    onLog?.('info', '项目 Agent：已清空对话并归档');
+  }, [cancelProjectAgentTasks, getProjectAgentThreadKey, onLog]);
+
+  /** Phase 5C：从本机归档/冷袋拼更早消息进热线程（仍受 80 条热窗口） */
+  const handleQuickComposeLoadEarlier = useCallback(() => {
+    const key = getProjectAgentThreadKey();
+    if (!key) return;
+    const hot = workspaceQuickComposeThreadRef.current;
+    if (!hot) return;
+    if (!hasEarlierMessagesLocal(key, hot)) {
+      onLog?.('info', '项目 Agent：没有可加载的更早消息');
+      return;
+    }
+    const { thread, candidateCount } = loadEarlierMessagesIntoHot(key, hot);
+    const persist = saveProjectAgentThread(key, thread);
+    const next = persist.ok ? persist.thread : thread;
+    if (persist.ok && persist.thread.messages.length < thread.messages.length) {
+      stashMessagesDroppedFromHot(key, thread.messages, persist.thread.messages);
+    }
+    workspaceQuickComposeThreadRef.current = next;
+    setWorkspaceQuickComposeThread(next);
+    scheduleProjectAgentThreadBackup(
+      { userId: key.userId, workspaceProjectId: key.workspaceProjectId },
+      next
+    );
+    onLog?.(
+      'info',
+      `项目 Agent：已尝试加载更早消息（候选 ${candidateCount} 条，热窗口保留 ${next.messages.length} 条）`
+    );
+  }, [getProjectAgentThreadKey, onLog]);
+
+  /** Phase 5C：导出当前热线程瘦 JSON（无媒体字节） */
+  const handleQuickComposeExportChat = useCallback(() => {
+    const hot = workspaceQuickComposeThreadRef.current;
+    if (!hot) {
+      onLog?.('warn', '项目 Agent：当前无对话可导出');
+      return;
+    }
+    downloadProjectAgentThreadSlimJson(hot, hot.workspaceProjectId);
+    onLog?.('info', '项目 Agent：已导出对话 JSON');
+  }, [onLog]);
 
   const submitLightboxQuickCompose = useCallback((): string[] => {
     const id = lightboxAssetIdRef.current;
@@ -5352,9 +6159,9 @@ ${lineSvg}
     };
 
     lastQuickComposeTaskAssetByIdRef.current = { [taskId]: asset.id };
-    if (executing) {
-      setPending((prev) => [...prev, task]);
-    } else {
+    // 闲时也先入 pending：挡住 executePending 积分闸门 await 窗口内的 orphan 误报
+    setPending((prev) => [...prev.filter((t) => t.id !== taskId), task]);
+    if (!executing) {
       void executePending([task, ...pendingRef.current]);
     }
 
@@ -5590,12 +6397,6 @@ ${lineSvg}
   useEffect(() => {
     submitLightboxQuickComposeRef.current = submitLightboxQuickCompose;
   }, [submitLightboxQuickCompose]);
-
-  const cancelQueuedTaskInBatch = useCallback((taskId: string) => {
-    if (!taskId) return;
-    cancelledTaskIdsRef.current.add(taskId);
-    setCompletedTaskIds((prev) => new Set(prev).add(taskId));
-  }, []);
 
   const addImagesFromFiles = useCallback((files: File[]) => {
     const imageFiles = files.filter((f) => f.type.startsWith('image/')).slice(0, 50);
@@ -5918,19 +6719,25 @@ ${lineSvg}
   useEffect(() => {
     writeLocalJson(favoriteStorageKey, favoriteActionIds);
   }, [favoriteActionIds, favoriteStorageKey]);
-  /** 能力被禁用或复合能力被删后，从常用功能里剔除无效 id */
+  /** 能力被禁用或复合能力被删后，从常用功能里剔除无效 id（目录未 hydrate 时勿清空） */
   useEffect(() => {
-    setFavoriteActionIds((prev) =>
-      prev.filter((id) => {
+    if (!capabilityPresets.length && !capabilitySets.length) return;
+    setFavoriteActionIds((prev) => {
+      const next = prev.filter((id) => {
         if (id.startsWith(SET_ACTION_PREFIX)) {
           const sid = id.slice(SET_ACTION_PREFIX.length);
           return capabilitySets.some((s) => s.id === sid);
         }
-        const p = capabilityPresets.find((m) => m.id === id);
-        return p != null && p.enabled !== false;
-      })
-    );
-  }, [capabilityPresets, capabilitySets]);
+        const p =
+          actionModules.find((m) => m.id === id) ?? capabilityPresets.find((m) => m.id === id);
+        // 目录短暂缺项时保留，避免误清空；仅明确 disabled 才剔除
+        if (!p) return true;
+        return p.enabled !== false;
+      });
+      if (next.length === prev.length && next.every((id, i) => id === prev[i])) return prev;
+      return next;
+    });
+  }, [capabilityPresets, capabilitySets, actionModules]);
   const collectImageFilesFromClipboardItems = useCallback((items?: DataTransferItemList | null) => {
     if (!items?.length) return [] as File[];
     const files: File[] = [];
@@ -6032,10 +6839,12 @@ ${lineSvg}
   ]);
 
   const visibleAssets = useMemo(() => {
-    const base = assets.filter((a) => !a.archived && !a.inRepository);
+    const base = assets.filter((a) => !a.archived && !a.inRepository && !a.hiddenInGrid);
     // 组筛选模式：显示该组成员
     if (groupFilterId) {
-      const group = base.find((a) => a.id === groupFilterId);
+      const group = assets.find(
+        (a) => a.id === groupFilterId && !a.archived && !a.inRepository
+      );
       if (group) {
         // 新版 isGroup 卡片：用 assetIds + groupId 关联
         if (isGroupAsset(group)) {
@@ -6050,6 +6859,7 @@ ${lineSvg}
     // 正常模式：显示所有根资产
     // 组本身没有 groupId，所以 !a.groupId 会包含组
     // 组的子成员有 groupId，所以 !a.groupId 会排除它们
+    // hiddenInGrid（如侧栏文生文载体）不入格
     return sortRootWorkflowAssetsNewestFirst(
       base.filter((a) => !a.groupId)
     );
@@ -8664,7 +9474,7 @@ ${lineSvg}
 
   /** 仅用于参考图上限、生图参数条：与当前「图」模式档位一致 */
   const quickComposeModule = useMemo((): CustomAppModule | null => {
-    if (quickComposeMode !== 'image') return null;
+    if (quickComposeMode !== 'image' && quickComposeMode !== 'auto') return null;
     const base = getQuickComposePlainModule(QUICK_COMPOSE_PLAIN_T2I_ACTION_ID);
     if (!base) return null;
     return {
@@ -8692,6 +9502,13 @@ ${lineSvg}
         currentViewPreviewSrc: lightboxCurrentViewPreviewSrc || undefined,
         mainDropSlots: quickComposeMainDropSlots,
         referenceDropSlots: quickComposeReferenceDropSlots,
+        extraCandidates: listExpertMentionCandidates(
+          quickComposeMentions,
+          listExpertProfiles().map((p) => ({
+            expertId: p.expertId,
+            displayName: p.displayName,
+          }))
+        ),
       }),
     [
       quickComposeMainDropSlots,
@@ -8853,10 +9670,13 @@ ${lineSvg}
     []
   );
 
-  const quickComposeShowGenImageSettings = quickComposeMode === 'image';
-  const quickComposeShowGenTextSettings = quickComposeMode === 'text';
+  const quickComposeShowGenImageSettings =
+    quickComposeMode === 'image' || quickComposeMode === 'auto';
+  const quickComposeShowGenTextSettings =
+    quickComposeMode === 'text' || quickComposeMode === 'auto';
 
-  const quickComposeAllowBatchCount = quickComposeMode === 'text' || quickComposeMode === 'image';
+  const quickComposeAllowBatchCount =
+    quickComposeMode === 'text' || quickComposeMode === 'image' || quickComposeMode === 'auto';
 
   useEffect(() => {
     if (!quickComposeAllowBatchCount) setQuickComposeCount(1);
@@ -8866,7 +9686,10 @@ ${lineSvg}
     const saved = readLocalJson<WorkspaceQuickComposeComposeMode | ''>(
       quickComposeModeStorageKey,
       '',
-      (parsed) => (parsed === 'text' || parsed === 'image' || parsed === '3d' ? parsed : null)
+      (parsed) =>
+        parsed === 'text' || parsed === 'image' || parsed === '3d' || parsed === 'auto'
+          ? parsed
+          : null
     );
     if (saved) setQuickComposeMode(saved);
   }, [quickComposeModeStorageKey]);
@@ -9668,7 +10491,19 @@ ${lineSvg}
   );
 
   const removeActionFromFavorite = useCallback((actionId: string) => {
+    if (favoriteDragActiveRef.current) return;
+    if (Date.now() < favoriteRemoveSuppressUntilRef.current) return;
     setFavoriteActionIds((prev) => prev.filter((id) => id !== actionId));
+  }, []);
+
+  const onFavoriteDragLifecycle = useCallback((phase: 'start' | 'end') => {
+    if (phase === 'start') {
+      favoriteDragActiveRef.current = true;
+      return;
+    }
+    favoriteDragActiveRef.current = false;
+    // dragEnd 后浏览器常补发 click；若落在「移出常用 ×」上会误删
+    favoriteRemoveSuppressUntilRef.current = Date.now() + 700;
   }, []);
   const toggleSectionCollapsed = useCallback((sectionId: string) => {
     setCollapsedSectionIds((prev) => ({ ...prev, [sectionId]: !prev[sectionId] }));
@@ -10867,10 +11702,23 @@ ${lineSvg}
       ? quickComposeSubmitDisabled
       : creditBalance != null && quickComposeSubmitDisabled;
 
+  const quickComposeHasSendableContent = composerHasSendableContent({
+    draft: quickComposeDraft,
+    segments: quickComposeSegments,
+    promptCardCount: quickComposeInLightbox ? 0 : quickComposePromptCards.length,
+  });
+
   const quickComposeChatDockSubmitDisabled =
     quickComposeSubmitDisabled ||
-    !quickComposeDraft.trim() ||
+    !quickComposeHasSendableContent ||
     quickComposeThreadHasInFlightAssistant(activeQuickComposeThread);
+
+  const quickComposeChatDockSubmitDisabledReason = resolveComposerSubmitDisabledReason({
+    threadBusy: quickComposeThreadHasInFlightAssistant(activeQuickComposeThread),
+    creditsBlocked: quickComposeSubmitDisabled,
+    creditsReason: quickComposeSubmitDisabledReason,
+    draftEmpty: !quickComposeHasSendableContent,
+  });
 
   const quickComposeChatDockHandlers = useMemo((): QuickComposeChatDockHandlers | null => {
     if (!quickComposeBarVisible) return null;
@@ -10898,6 +11746,7 @@ ${lineSvg}
       isSendDisabled: quickComposeChatDockSubmitDisabled,
       onSend: handleQuickComposeChatSend,
       onRetry: handleQuickComposeChatRetry,
+      onCancel: handleQuickComposeChatCancel,
     };
   }, [
     activeQuickComposeThread,
@@ -10907,6 +11756,7 @@ ${lineSvg}
     quickComposeChatDockSubmitDisabled,
     handleQuickComposeChatSend,
     handleQuickComposeChatRetry,
+    handleQuickComposeChatCancel,
     quickComposeCreditsBypass,
     preferenceScope,
     creditBalance,
@@ -10951,7 +11801,9 @@ ${lineSvg}
           : submitQuickCompose,
       inputDisabled: quickComposeChatDockHandlers?.isInputDisabled ?? quickComposeSubmitDisabled,
       submitDisabled: quickComposeChatDockHandlers?.isSendDisabled ?? quickComposeSubmitDisabled,
-      submitDisabledReason: quickComposeSubmitDisabledReason,
+      submitDisabledReason: quickComposeChatDockHandlers
+        ? quickComposeChatDockSubmitDisabledReason
+        : quickComposeSubmitDisabledReason,
       showGenImageSettings: quickComposeShowGenImageSettings,
       showGenTextSettings: quickComposeShowGenTextSettings,
       allowBatchCount: quickComposeAllowBatchCount,
@@ -10982,9 +11834,35 @@ ${lineSvg}
         ? {
             messages: quickComposeChatDockHandlers.messages,
             onRetryMessage: quickComposeChatDockHandlers.onRetry,
-            threadEmptyTitle: '跟项目里的 Agent 说话',
-            threadEmptyHint: '发送后会先给出计划，再在画布出活',
+            onCancelMessage: quickComposeChatDockHandlers.onCancel,
+            onClearChat: handleQuickComposeClearChat,
+            onLoadEarlier: handleQuickComposeLoadEarlier,
+            canLoadEarlier: Boolean(
+              activeWorkspaceProjectId &&
+                preferenceScope != null &&
+                activeQuickComposeThread &&
+                hasEarlierMessagesLocal(
+                  {
+                    userId: preferenceScope,
+                    workspaceProjectId: activeWorkspaceProjectId,
+                  },
+                  activeQuickComposeThread
+                )
+            ),
+            onExportChat: handleQuickComposeExportChat,
+            threadEmptyTitle: PROJECT_AGENT_EMPTY_TITLE,
+            threadEmptyHint: PROJECT_AGENT_EMPTY_HINT,
             minimizeDisabled: false,
+            expertStudio:
+              preferenceScope && activeWorkspaceProjectId
+                ? {
+                    userId: preferenceScope,
+                    workspaceProjectId: activeWorkspaceProjectId,
+                  }
+                : null,
+            onTryRunPrompt: (text: string) => {
+              setQuickComposeSegmentsTracked([newQuickComposeTextSegment(text)]);
+            },
           }
         : undefined,
     }),
@@ -11006,6 +11884,7 @@ ${lineSvg}
       submitQuickCompose,
       quickComposeSubmitDisabled,
       quickComposeSubmitDisabledReason,
+      quickComposeChatDockSubmitDisabledReason,
       quickComposeShowGenImageSettings,
       quickComposeShowGenTextSettings,
       quickComposeAllowBatchCount,
@@ -11019,6 +11898,12 @@ ${lineSvg}
       quickComposeCount,
       quickComposeUnderstand,
       quickComposeChatDockHandlers,
+      handleQuickComposeClearChat,
+      handleQuickComposeLoadEarlier,
+      handleQuickComposeExportChat,
+      preferenceScope,
+      activeWorkspaceProjectId,
+      setQuickComposeSegmentsTracked,
     ]
   );
 
@@ -11224,6 +12109,7 @@ ${lineSvg}
             setDraggingActionFromFavorite={setDraggingActionFromFavorite}
             setActionDroppedInFavorite={setActionDroppedInFavorite}
             removeActionFromFavorite={removeActionFromFavorite}
+            onFavoriteDragLifecycle={onFavoriteDragLifecycle}
             setHoverPreview={setHoverPreview}
             handleDropToModuleAction={handleDropToModuleAction}
             handleDropToSetAction={handleDropToSetAction}

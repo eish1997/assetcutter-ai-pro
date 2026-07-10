@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { formatPlanTemplate } from '../services/projectAgent/planTemplate';
 import { buildProjectAgentIntent } from '../services/projectAgent/intent';
-import { createProjectAgentRuntime } from '../services/projectAgent/runtime';
+import {
+  createProjectAgentRuntime,
+  PROJECT_AGENT_CANCELLED_MESSAGE,
+  PROJECT_AGENT_DUPLICATE_TURN_ID_MESSAGE,
+} from '../services/projectAgent/runtime';
 import { createMemoryHostPort } from '../services/projectAgent/host/memoryHostPort';
 import {
   PROJECT_AGENT_THREAD_MAX_MESSAGES,
@@ -137,6 +141,99 @@ describe('createProjectAgentRuntime.submitTurn', () => {
     const first = await p1;
     expect(first.ok).toBe(true);
   });
+
+  it('rejects duplicate turnId after completion (§16.5)', async () => {
+    const mem = createMemoryHostPort();
+    const host = {
+      ...mem,
+      executePlan: () => ({ taskIds: ['t-done'] }),
+    };
+    const runtime = createProjectAgentRuntime(host);
+    const intent = buildProjectAgentIntent({ mode: 'text', text: 'once' });
+    const first = await runtime.submitTurn({
+      turnId: 'same-turn-id',
+      threadId: 'th',
+      workspaceProjectId: 'p',
+      intent,
+    });
+    expect(first.ok).toBe(true);
+    const dup = await runtime.submitTurn({
+      turnId: 'same-turn-id',
+      threadId: 'th',
+      workspaceProjectId: 'p',
+      intent,
+    });
+    expect(dup.ok).toBe(false);
+    expect(dup.errorMessage).toBe(PROJECT_AGENT_DUPLICATE_TURN_ID_MESSAGE);
+  });
+
+  it('cancelInFlight during executePlan returns cancelled and calls host.cancelTasks', async () => {
+    const mem = createMemoryHostPort();
+    const cancelled: string[] = [];
+    let release!: () => void;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const host = {
+      ...mem,
+      executePlan: async () => {
+        await gate;
+        return { taskIds: ['cancel-me'] };
+      },
+      cancelTasks: (ids: string[]) => {
+        cancelled.push(...ids);
+        mem.cancelTasks?.(ids);
+      },
+    };
+    const runtime = createProjectAgentRuntime(host);
+    const intent = buildProjectAgentIntent({ mode: 'image', text: '慢任务' });
+    const p = runtime.submitTurn({
+      turnId: 'cancel-turn-1',
+      threadId: 'th',
+      workspaceProjectId: 'p',
+      intent,
+    });
+    expect(runtime.getTurnState().status).toBe('executing');
+    runtime.cancelInFlight();
+    release();
+    const result = await p;
+    expect(result.ok).toBe(false);
+    expect(result.errorMessage).toBe(PROJECT_AGENT_CANCELLED_MESSAGE);
+    expect(result.taskIds).toEqual(['cancel-me']);
+    expect(cancelled).toContain('cancel-me');
+    // 取消后可再提交新 turn
+    const next = await runtime.submitTurn({
+      turnId: 'after-cancel',
+      threadId: 'th',
+      workspaceProjectId: 'p',
+      intent,
+    });
+    expect(next.ok).toBe(true);
+  });
+
+  it('cancelInFlight after done still cancels lastTaskIds via host', async () => {
+    const mem = createMemoryHostPort();
+    const cancelled: string[] = [];
+    const host = {
+      ...mem,
+      executePlan: () => ({ taskIds: ['queued-media'] }),
+      cancelTasks: (ids: string[]) => {
+        cancelled.push(...ids);
+      },
+    };
+    const runtime = createProjectAgentRuntime(host);
+    const intent = buildProjectAgentIntent({ mode: 'image', text: '图' });
+    await runtime.submitTurn({
+      turnId: 'post-done-cancel',
+      threadId: 'th',
+      workspaceProjectId: 'p',
+      intent,
+    });
+    expect(runtime.getLastTaskIds()).toEqual(['queued-media']);
+    const { cancelledTaskIds } = runtime.cancelInFlight();
+    expect(cancelledTaskIds).toEqual(['queued-media']);
+    expect(cancelled).toEqual(['queued-media']);
+  });
 });
 
 describe('createProjectAgentThread helpers', () => {
@@ -191,5 +288,22 @@ describe('mapPlanToQuickComposeInvoke', () => {
     if (!lbPlan.ok) return;
     const lbInv = mapPlanToQuickComposeInvoke(lbIntent, lbPlan.plan, resolve, key);
     expect(lbInv.useLightboxLocalEdit).toBe(true);
+  });
+
+  it('maps multiple invoke_expert steps to invokeExpertIds', () => {
+    const intent = buildProjectAgentIntent({
+      mode: 'text',
+      text: '双专家',
+      mentions: [
+        { kind: 'expert', id: 'expert.prompt_smith', label: '提示词专家' },
+        { kind: 'expert', id: 'expert.brief_outliner', label: '大纲分镜专家' },
+      ],
+    });
+    const planned = planTools(intent);
+    expect(planned.ok).toBe(true);
+    if (!planned.ok) return;
+    const mapped = mapPlanToQuickComposeInvoke(intent, planned.plan, () => null, () => 'k');
+    expect(mapped.invokeExpertIds?.length).toBeGreaterThan(1);
+    expect(mapped.invokeExpertId).toBe(mapped.invokeExpertIds?.[0]);
   });
 });

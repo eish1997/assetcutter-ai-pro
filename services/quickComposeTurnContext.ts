@@ -3,11 +3,14 @@
  */
 
 import type { QuickComposeMessageStatus, QuickComposeThreadMessage } from '../types/quickComposeThread';
-import type { WorkflowPendingTask } from '../types';
+import type { WorkflowAsset, WorkflowPendingTask } from '../types';
 import type { CustomAppModule } from '../types';
 import { getCapabilityEngine } from './capabilityEngineKind';
 
 export const DEFAULT_QUICK_COMPOSE_TURN_MAX_ROUNDS = 3;
+
+/** 用户取消 turn 后气泡固定文案（勿被迟到 assetErrors / 429 覆盖） */
+export const QUICK_COMPOSE_CANCELLED_MESSAGE = '已取消';
 
 export type QuickComposeTurnRound = {
   user: QuickComposeThreadMessage;
@@ -23,7 +26,11 @@ function formatRoleLine(role: 'user' | 'assistant', text: string): string {
 function formatRound(round: QuickComposeTurnRound): string {
   const lines = [formatRoleLine('user', round.user.text)];
   if (round.assistant) {
-    const assistantLine = formatRoleLine('assistant', round.assistant.text);
+    // 文生文终态正文在 resultText；计划句在 text — 注入模型时优先正文
+    const assistantBody =
+      (typeof round.assistant.resultText === 'string' && round.assistant.resultText.trim()) ||
+      round.assistant.text;
+    const assistantLine = formatRoleLine('assistant', assistantBody);
     if (assistantLine) lines.push(assistantLine);
   }
   return lines.filter(Boolean).join('\n');
@@ -86,6 +93,30 @@ export function formatQuickComposeTurnContextForPromptOverride(
   return `${history}\n\n${current}`;
 }
 
+/**
+ * 文工具入模本文：pseudo 优先；Agent 已注入 B 层时 skip 伪多轮；否则可选注入近期轮次。
+ */
+export function resolvePlainTextPromptForModel(opts: {
+  currentTurnText: string;
+  priorMessages: QuickComposeThreadMessage[];
+  pseudoMultiTurnPrompt?: string;
+  skipThreadContextInject?: boolean;
+  maxRounds?: number;
+}): string {
+  const current = opts.currentTurnText.trim();
+  const pseudo = opts.pseudoMultiTurnPrompt?.trim();
+  if (pseudo) return pseudo;
+  if (opts.skipThreadContextInject) return current;
+  if (opts.priorMessages.length > 0) {
+    return formatQuickComposeTurnContextForPromptOverride(
+      opts.priorMessages,
+      current,
+      opts.maxRounds
+    );
+  }
+  return current;
+}
+
 function findTaskById(
   taskId: string,
   pending: WorkflowPendingTask[],
@@ -112,6 +143,41 @@ function taskAssetIdForHint(
   return assetId?.trim() || undefined;
 }
 
+/** 任务已出队后：资产上是否已有成功产出（文/图），用于避免误报「任务已结束或失败」。 */
+export function workflowAssetHasSuccessfulOutput(asset: WorkflowAsset | null | undefined): boolean {
+  if (!asset) return false;
+  const textResults = asset.textResults;
+  if (textResults && typeof textResults === 'object') {
+    for (const v of Object.values(textResults)) {
+      if (typeof v === 'string' && v.trim()) return true;
+    }
+  }
+  const results = asset.results;
+  if (results && typeof results === 'object') {
+    for (const v of Object.values(results)) {
+      if (typeof v === 'string' && v.trim()) return true;
+    }
+  }
+  return false;
+}
+
+/** 从资产取最新文生文结果（供对话气泡回写）。 */
+export function resolveWorkflowAssetLatestTextResult(asset: WorkflowAsset | null | undefined): string {
+  if (!asset) return '';
+  const order = Array.isArray(asset.resultOrder) ? asset.resultOrder : [];
+  const textResults = asset.textResults || {};
+  for (let i = order.length - 1; i >= 0; i -= 1) {
+    const key = String(order[i] || '').trim();
+    if (!key) continue;
+    const body = textResults[key];
+    if (typeof body === 'string' && body.trim()) return body.trim();
+  }
+  for (const body of Object.values(textResults)) {
+    if (typeof body === 'string' && body.trim()) return body.trim();
+  }
+  return '';
+}
+
 /** 根据关联 taskIds 推导助手消息状态 */
 export function resolveQuickComposeAssistantMessageStatus(args: {
   taskIds: string[];
@@ -124,6 +190,13 @@ export function resolveQuickComposeAssistantMessageStatus(args: {
   assetErrors: ReadonlyMap<string, string>;
   cancelledTaskIds: ReadonlySet<string>;
   resolveModule: (actionType: string) => CustomAppModule | null;
+  /** 可选：任务出队后用资产产出判定成功（刷新/重载后 completedTaskIds 为空） */
+  resolveAssetById?: (assetId: string) => WorkflowAsset | null | undefined;
+  /**
+   * 资产目录是否仍为空（初始 hydrate 中）。
+   * 为 true 时，hinted 资产尚未解析到不标 orphan，避免默认打开误报红。
+   */
+  assetCatalogEmpty?: boolean;
 }): QuickComposeMessageStatus {
   const {
     taskIds,
@@ -135,6 +208,8 @@ export function resolveQuickComposeAssistantMessageStatus(args: {
     assetErrors,
     cancelledTaskIds,
     resolveModule,
+    resolveAssetById,
+    assetCatalogEmpty,
   } = args;
   if (taskIds.length === 0) return 'error';
 
@@ -159,6 +234,19 @@ export function resolveQuickComposeAssistantMessageStatus(args: {
       }
       if (completedTaskIds.has(taskId)) {
         continue;
+      }
+      if (hintedAssetId && resolveAssetById) {
+        const asset = resolveAssetById(hintedAssetId);
+        if (asset == null) {
+          // 目录仍空：多半是 hydrate 中；目录已有其它资产仍找不到 → 按 orphan
+          if (assetCatalogEmpty) {
+            allCompleted = false;
+            anyActive = true;
+            continue;
+          }
+        } else if (workflowAssetHasSuccessfulOutput(asset)) {
+          continue;
+        }
       }
       anyStale = true;
       allCompleted = false;
@@ -185,6 +273,46 @@ export function resolveQuickComposeAssistantMessageStatus(args: {
   return 'queued';
 }
 
+function resolveAssistantResultText(
+  message: QuickComposeThreadMessage,
+  resolveAssetById?: (assetId: string) => WorkflowAsset | null | undefined
+): string | undefined {
+  const existing = typeof message.resultText === 'string' ? message.resultText.trim() : '';
+  if (existing) return existing;
+  if (!resolveAssetById || !message.taskIds?.length) return undefined;
+  for (const taskId of message.taskIds) {
+    const assetId = taskAssetIdForHint(taskId, message.taskAssetById);
+    if (!assetId) continue;
+    const text = resolveWorkflowAssetLatestTextResult(resolveAssetById(assetId));
+    if (text) return text;
+  }
+  return undefined;
+}
+
+function assistantTurnIsUserCancelled(
+  taskIds: string[],
+  cancelledTaskIds: ReadonlySet<string>,
+  activeTaskIds: ReadonlySet<string>,
+  pending: WorkflowPendingTask[],
+  executingQueue: { tasks: WorkflowPendingTask[] } | null
+): boolean {
+  if (taskIds.length === 0) return false;
+  const cancelled = taskIds.filter((id) => cancelledTaskIds.has(id));
+  if (cancelled.length === 0) return false;
+  if (cancelled.length === taskIds.length) return true;
+  // 部分取消：若其余 task 已不在跑，整 turn 视为用户取消（保留「已取消」）
+  return !taskIds.some((id) => {
+    if (cancelledTaskIds.has(id)) return false;
+    if (activeTaskIds.has(id)) return true;
+    return Boolean(findTaskById(id, pending, executingQueue));
+  });
+}
+
+/** 气泡已标「已取消」时粘性保留，避免批结束清空 cancelled 后被推成 done/orphan。 */
+export function isQuickComposeCancelledErrorMessage(errorMessage: string | undefined): boolean {
+  return (errorMessage || '').trim() === QUICK_COMPOSE_CANCELLED_MESSAGE;
+}
+
 export function patchQuickComposeThreadMessageStatuses(
   thread: { messages: QuickComposeThreadMessage[] },
   args: Omit<Parameters<typeof resolveQuickComposeAssistantMessageStatus>[0], 'taskIds'>
@@ -192,6 +320,12 @@ export function patchQuickComposeThreadMessageStatuses(
   let changed = false;
   const next = thread.messages.map((m) => {
     if (m.role !== 'assistant' || !m.taskIds?.length) return m;
+
+    // 用户取消粘性：不依赖 cancelledTaskIdsRef 是否仍存活（批 finally / 刷新后可能已空）
+    if (m.status === 'error' && isQuickComposeCancelledErrorMessage(m.errorMessage)) {
+      return m;
+    }
+
     const status = resolveQuickComposeAssistantMessageStatus({
       ...args,
       taskIds: m.taskIds,
@@ -199,33 +333,59 @@ export function patchQuickComposeThreadMessageStatuses(
     });
     let errorMessage: string | undefined;
     if (status === 'error') {
-      for (const taskId of m.taskIds) {
-        const task = findTaskById(taskId, args.pending, args.executingQueue);
-        if (task) {
-          const err = args.assetErrors.get(task.assetId);
-          if (err) {
-            errorMessage = err;
-            break;
+      const userCancelled = assistantTurnIsUserCancelled(
+        m.taskIds,
+        args.cancelledTaskIds,
+        args.activeTaskIds,
+        args.pending,
+        args.executingQueue
+      );
+      if (userCancelled) {
+        // 迟到 429 / assetErrors 不得盖掉「已取消」
+        errorMessage =
+          (m.errorMessage && m.errorMessage.trim()) || QUICK_COMPOSE_CANCELLED_MESSAGE;
+      } else {
+        for (const taskId of m.taskIds) {
+          const task = findTaskById(taskId, args.pending, args.executingQueue);
+          if (task) {
+            const err = args.assetErrors.get(task.assetId);
+            if (err) {
+              errorMessage = err;
+              break;
+            }
+          }
+          const hintedAssetId = taskAssetIdForHint(taskId, m.taskAssetById);
+          if (hintedAssetId) {
+            const err = args.assetErrors.get(hintedAssetId);
+            if (err) {
+              errorMessage = err;
+              break;
+            }
           }
         }
-        const hintedAssetId = taskAssetIdForHint(taskId, m.taskAssetById);
-        if (hintedAssetId) {
-          const err = args.assetErrors.get(hintedAssetId);
-          if (err) {
-            errorMessage = err;
-            break;
-          }
-        }
+        errorMessage = errorMessage ?? m.errorMessage ?? QUICK_COMPOSE_ORPHAN_TASK_ERROR;
       }
-      errorMessage = errorMessage ?? m.errorMessage ?? QUICK_COMPOSE_ORPHAN_TASK_ERROR;
     }
-    if (m.status === status && m.errorMessage === errorMessage) return m;
+    const resultText =
+      status === 'done' ? resolveAssistantResultText(m, args.resolveAssetById) : m.resultText;
+    const nextError = status === 'error' ? errorMessage : undefined;
+    const nextResult = resultText?.trim() || undefined;
+    if (
+      m.status === status &&
+      m.errorMessage === nextError &&
+      (m.resultText || undefined) === nextResult
+    ) {
+      return m;
+    }
     changed = true;
-    return {
+    const patched: QuickComposeThreadMessage = {
       ...m,
       status,
-      ...(status === 'error' && errorMessage ? { errorMessage } : {}),
     };
+    if (nextError) patched.errorMessage = nextError;
+    else delete patched.errorMessage;
+    if (nextResult) patched.resultText = nextResult;
+    return patched;
   });
   return changed ? next : thread.messages;
 }

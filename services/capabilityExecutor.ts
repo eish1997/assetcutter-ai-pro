@@ -107,6 +107,8 @@ export type CapabilityExecuteContext = {
   workflowAssetId?: string;
   /** 与 `WorkflowPendingTask.inputSourceDisplayKey` 一致；缺省按 original */
   workflowSourceDisplayKey?: string;
+  /** 取消执行：透传到 gateway / gemini fetch 与退避 sleep */
+  abortSignal?: AbortSignal;
 };
 
 export type CapabilityExecuteResult =
@@ -216,6 +218,39 @@ function refsForUnderstand(refs: string[]): string | string[] | null {
   return usable[0]!;
 }
 
+function throwIfCapabilityAborted(ctx: CapabilityExecuteContext): void {
+  if (ctx.abortSignal?.aborted) {
+    throw new Error('请求已取消');
+  }
+}
+
+function mergeAbortIntoRequestOptions<T extends { abortSignal?: AbortSignal }>(
+  base: T | undefined,
+  ctx: CapabilityExecuteContext
+): T | { abortSignal: AbortSignal } | undefined {
+  if (!ctx.abortSignal) return base;
+  return { ...(base as object), abortSignal: ctx.abortSignal } as T & { abortSignal: AbortSignal };
+}
+
+async function sleepUnlessAborted(ms: number, signal?: AbortSignal): Promise<void> {
+  if (!signal) {
+    await new Promise<void>((r) => setTimeout(r, ms));
+    return;
+  }
+  if (signal.aborted) throw new Error('请求已取消');
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new Error('请求已取消'));
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
 /**
  * 工作流生图：先将预设与用户说明交给文字模型理解（多参考图时传全图），再拿理解结果调用生图模型。
  */
@@ -238,6 +273,7 @@ async function resolveCapabilityPrompt(
     ctx.onLog?.('info', `[${preset.label || preset.id}] 未启用理解，提示词直发生图`, undefined);
     return [presetPrompt, ut].filter(Boolean).join('\n\n').trim() || null;
   }
+  throwIfCapabilityAborted(ctx);
   ctx.onLog?.('info', `[${preset.label || preset.id}] 理解图片与提示词中…`, undefined);
   const combined = clampInputTextForSend(
     [presetPrompt, ut].filter(Boolean).join('\n\n'),
@@ -251,8 +287,9 @@ async function resolveCapabilityPrompt(
     combined,
     resolveTextModelForPreset(preset, ctx),
     undefined,
-    CAPABILITY_UNDERSTAND_RETRY_OPTIONS
+    mergeAbortIntoRequestOptions(CAPABILITY_UNDERSTAND_RETRY_OPTIONS, ctx)
   );
+  throwIfCapabilityAborted(ctx);
   const understood = (instruction || '').trim();
   return understood.length > 0 ? understood : null;
 }
@@ -303,6 +340,7 @@ async function resolveTextOnlyImagePrompt(
     return merged || null;
   }
   ctx.onLog?.('info', `[${preset.label || preset.id}] 整理文生图提示词中…`, undefined);
+  throwIfCapabilityAborted(ctx);
   const fused = await workflowChat(
     [
       {
@@ -314,7 +352,8 @@ async function resolveTextOnlyImagePrompt(
         ],
       },
     ],
-    resolveTextModelForPreset(preset, ctx)
+    resolveTextModelForPreset(preset, ctx),
+    mergeAbortIntoRequestOptions(undefined, ctx)
   );
   const out = (fused || '').trim();
   return out.length > 0 ? out : null;
@@ -392,6 +431,7 @@ async function executeGenerateVideoPath(
     promptFinal = [presetInstr, userT].filter(Boolean).join('\n\n').trim();
   } else {
     ctx.onLog?.('info', `[${actionLabel}] 整理生视频提示词…`, undefined);
+    throwIfCapabilityAborted(ctx);
     const fused = await workflowChat(
       [
         {
@@ -403,7 +443,8 @@ async function executeGenerateVideoPath(
           ],
         },
       ],
-      resolveTextModelForPreset(preset, ctx)
+      resolveTextModelForPreset(preset, ctx),
+      mergeAbortIntoRequestOptions(undefined, ctx)
     );
     promptFinal = (fused || '').trim();
   }
@@ -497,7 +538,12 @@ async function executeGenTextPath(
     .join('\n\n');
   parts.push({ text: body });
   try {
-    const text = await workflowChat([{ role: 'user', parts }], resolveTextModelForPreset(preset, ctx));
+    throwIfCapabilityAborted(ctx);
+    const text = await workflowChat(
+      [{ role: 'user', parts }],
+      resolveTextModelForPreset(preset, ctx),
+      mergeAbortIntoRequestOptions(undefined, ctx)
+    );
     const out = (text || '').trim();
     if (!out) return { ok: false, kind: 'none', error: '文字模型未返回内容', durationMs: Date.now() - start };
     return { ok: true, kind: 'text', text: out, durationMs: Date.now() - start };
@@ -682,10 +728,12 @@ async function executeSplitComponentCapability(
   const visionInput = await normalizeDataUrlForVisionApi(inputImageBase64);
   ctx.onLog?.('info', `[${actionLabel}] 识别物体中…`, undefined);
   emitCapabilityRunProgress(ctx, `${actionLabel}：检测物体中（视觉模型，可能需数十秒）…`);
+  throwIfCapabilityAborted(ctx);
   const boxes = await detectObjectsInImage(
     visionInput,
     resolveTextModelForPreset(preset, ctx),
-    DEFAULT_PROMPTS.detect_blocks
+    DEFAULT_PROMPTS.detect_blocks,
+    mergeAbortIntoRequestOptions(undefined, ctx)
   );
   if (!boxes.length) {
     return { ok: false, kind: 'none', error: '未识别到区域', durationMs: Date.now() - start };
@@ -727,20 +775,29 @@ async function executeSplitComponentCapability(
       };
     }
     if (shouldRunCapabilityUnderstand(preset, { userText: (inputText || '').trim() })) {
-      await new Promise<void>((r) => setTimeout(r, 1500));
+      await sleepUnlessAborted(1500, ctx.abortSignal);
       ctx.onLog?.('info', `[${actionLabel}] 理解完成，准备生图…`, undefined);
     }
     ctx.onLog?.('info', `[${actionLabel}] 生图中…`, undefined);
     emitCapabilityRunProgress(ctx, `${actionLabel}：生图中…`);
+    throwIfCapabilityAborted(ctx);
     const modelId = resolveImageModelIdFromPreset(preset);
     const imageOptions =
       preset.imageAspectRatio || preset.imageSize
         ? { aspectRatio: preset.imageAspectRatio, imageSize: preset.imageSize }
         : undefined;
-    const result = await workflowGenerateImage(cropped, prompt, modelId, imageOptions, undefined, undefined, {
-      ...(opts?.batchGroupKey ? { batchGroupKey: opts.batchGroupKey } : {}),
-      ...(opts?.batchGroupExpected ? { batchGroupExpected: opts.batchGroupExpected } : {}),
-    });
+    const result = await workflowGenerateImage(
+      cropped,
+      prompt,
+      modelId,
+      imageOptions,
+      undefined,
+      ctx.abortSignal,
+      {
+        ...(opts?.batchGroupKey ? { batchGroupKey: opts.batchGroupKey } : {}),
+        ...(opts?.batchGroupExpected ? { batchGroupExpected: opts.batchGroupExpected } : {}),
+      }
+    );
     return {
       ok: true,
       kind: 'image',
@@ -840,6 +897,7 @@ export async function executeCapability(
   const actionLabel = preset.label || preset.id;
   const inputText = opts?.inputText;
   try {
+    throwIfCapabilityAborted(ctx);
     if (preset.category === 'generate_3d') {
       return { ok: false, kind: 'none', error: '生成3D 请在工作流中拖图到能力框提交', durationMs: Date.now() - start };
     }
@@ -941,6 +999,7 @@ export async function executeCapability(
         };
       }
       ctx.onLog?.('info', `[${actionLabel}] 文生图中…`, undefined);
+      throwIfCapabilityAborted(ctx);
       const modelId = resolveImageModelIdFromPreset(preset);
       const imageOptions =
         preset.imageAspectRatio || preset.imageSize
@@ -952,7 +1011,7 @@ export async function executeCapability(
         modelId,
         imageOptions,
         opts?.imageSystemPrompt,
-        undefined,
+        ctx.abortSignal,
         {
           ...(opts?.batchGroupKey ? { batchGroupKey: opts.batchGroupKey } : {}),
           ...(opts?.batchGroupExpected ? { batchGroupExpected: opts.batchGroupExpected } : {}),
@@ -1016,12 +1075,13 @@ export async function executeCapability(
     }
     if (runUnderstand) {
       // 理解刚打完上游，短间隔再开生图，降低同任务连打 RPM
-      await new Promise<void>((r) => setTimeout(r, 1500));
+      await sleepUnlessAborted(1500, ctx.abortSignal);
       ctx.onLog?.('info', `[${actionLabel}] 理解完成，准备生图…`, undefined);
     }
     const augmented = prompt;
     ctx.onLog?.('info', `[${actionLabel}] 生图中…`, undefined);
     emitStep(`${actionLabel}：生图中（可能较慢）…`);
+    throwIfCapabilityAborted(ctx);
     const modelId = resolveImageModelIdFromPreset(preset);
     const imageOptions = (preset.imageAspectRatio || preset.imageSize) ? { aspectRatio: preset.imageAspectRatio, imageSize: preset.imageSize } : undefined;
     const batchOpts = {
@@ -1033,9 +1093,23 @@ export async function executeCapability(
       if (refs.length >= 2) {
         ctx.onLog?.('info', `[${actionLabel}] 多参考图生图中（${refs.length} 张）…`, undefined);
         emitStep(`${actionLabel}：多参考图生图中（${refs.length} 张）…`);
-        result = await workflowGenerateImageMultiRefs(refs, augmented, modelId, imageOptions);
+        result = await workflowGenerateImageMultiRefs(
+          refs,
+          augmented,
+          modelId,
+          imageOptions,
+          ctx.abortSignal
+        );
       } else {
-        result = await workflowGenerateImage(refs[0]!, augmented, modelId, imageOptions, undefined, undefined, batchOpts);
+        result = await workflowGenerateImage(
+          refs[0]!,
+          augmented,
+          modelId,
+          imageOptions,
+          undefined,
+          ctx.abortSignal,
+          batchOpts
+        );
       }
     } catch (e) {
       const msg = capabilityStepErrorMessage('image_create', e);
@@ -1215,6 +1289,7 @@ export async function executeCapabilitySet(
 ): Promise<CapabilityExecuteResult> {
   const start = Date.now();
   const { presets, onLog } = ctx;
+  throwIfCapabilityAborted(ctx);
   const setVgpSteps: VgpGenStepCapture[] = [];
   const validationError = validateCapabilitySetGraph(set, presets);
   if (validationError) {
@@ -1304,7 +1379,14 @@ export async function executeCapabilitySet(
           const modelId = resolveImageModelIdFromPreset(preset);
           const imageOptions = (preset.imageAspectRatio || preset.imageSize) ? { aspectRatio: preset.imageAspectRatio, imageSize: preset.imageSize } : undefined;
           try {
-            const result = await workflowGenerateImageMultiRefs(images, instruction, modelId, imageOptions);
+            throwIfCapabilityAborted(ctx);
+            const result = await workflowGenerateImageMultiRefs(
+              images,
+              instruction,
+              modelId,
+              imageOptions,
+              ctx.abortSignal
+            );
             outputs.set(n.id, result);
             recordNodeImage(n.id, result);
             lastImage = result;

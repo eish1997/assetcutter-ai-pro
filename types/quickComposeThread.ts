@@ -23,10 +23,37 @@ export type QuickComposeThreadMessage = {
   taskIds?: string[];
   /** taskId → 产出资产 id（持久化，便于任务出队后对齐错误态） */
   taskAssetById?: Record<string, string>;
+  /**
+   * 助手终态正文（文生文等）：计划句仍在 `text`，模型输出写这里。
+   * 不存图片 base64。
+   */
+  resultText?: string;
   /** 助手消息处理状态（用户消息通常为 submitted） */
   status?: QuickComposeMessageStatus;
   timestamp: number;
   errorMessage?: string;
+  /**
+   * P0.5-d：计划步骤瘦快照（对齐 AgentTurnTrace.plan 的 label/toolId）。
+   * 仅文案 id，无媒体字节；缺省时 UI 可从 `text` 计划句回退解析。
+   */
+  planSteps?: { label: string; toolId?: string }[];
+  /**
+   * U4 / P2：子 run 进度卡（agents-as-tools）。瘦快照，无媒体字节。
+   * 类型见 `types/projectAgent.AgentChildRun`（运行时以结构兼容写入）。
+   */
+  childRuns?: Array<{
+    id: string;
+    kind: 'expert' | 'tool';
+    label: string;
+    expertId?: string;
+    toolId?: string;
+    status: 'queued' | 'running' | 'done' | 'error' | 'cancelled';
+    taskIds?: string[];
+    artifactIds?: string[];
+    errorMessage?: string;
+    startedAt: number;
+    endedAt?: number;
+  }>;
 };
 
 /** @deprecated Prefer `QuickComposeThreadMessage`; kept for WorkflowSection / chat UI imports. */
@@ -46,6 +73,8 @@ export type QuickComposeMessageAttachmentThumb = {
 export type QuickComposeChatMessageView = QuickComposeThreadMessage & {
   attachmentThumbs?: QuickComposeMessageAttachmentThumb[];
   resultThumb?: QuickComposeMessageAttachmentThumb;
+  /** 运行时解析的文生文结果（优先 message.resultText） */
+  displayResultText?: string;
 };
 
 export type QuickComposeThread = {

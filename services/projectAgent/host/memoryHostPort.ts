@@ -61,6 +61,15 @@ export function createMemoryHostPort(options: MemoryHostPortOptions = {}): Proje
       }
       return { taskIds };
     },
+    cancelTasks(taskIds: string[]) {
+      const drop = new Set(taskIds.map((id) => id.trim()).filter(Boolean));
+      for (let i = pending.length - 1; i >= 0; i -= 1) {
+        if (drop.has(pending[i]!.id)) pending.splice(i, 1);
+      }
+      for (let i = executing.length - 1; i >= 0; i -= 1) {
+        if (drop.has(executing[i]!.id)) executing.splice(i, 1);
+      }
+    },
     emitArtifact(a: AgentArtifactDraft): string {
       artifactSeq += 1;
       const id = `mem-art-${artifactSeq}`;

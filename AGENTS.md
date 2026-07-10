@@ -117,14 +117,18 @@ git config --global https.proxy http://127.0.0.1:7890
 
 - Preserve user changes. Never reset, checkout, or revert unrelated work unless
   the user explicitly asks.
-- After a successful `git push`, run the dev-log post-push flow (summarize since
-  last tip and upload to R2). Do not commit dev-log JSON into the repo. Skip only
-  if the user says so or `SKIP_DEV_LOG=1`. Receipt export prefers PNG (thermal
-  style). Entry: sidebar below Admin.
+- After a successful `git push`, **immediately** run `npm run dev-log:post-push`
+  (summarize since last tip and upload to R2). Do not claim the push task is done
+  until post-push has been attempted. Do not commit dev-log JSON into the repo.
+  Skip only if the user says so or `SKIP_DEV_LOG=1`. A Cursor hook
+  (`.cursor/hooks/dev-log-after-push.mjs`) also auto-runs after successful push;
+  still verify or re-run if unsure. Receipt export prefers PNG (thermal style).
+  Entry: sidebar below Admin.
 
 Sources:
-- `.cursor/rules/git-push.mdc`
-- `.cursor/rules/dev-log-r2.mdc`
+- `.cursor/rules/git-push.mdc` (`alwaysApply`)
+- `.cursor/rules/dev-log-r2.mdc` (`alwaysApply`)
+- `.cursor/hooks.json` → `afterShellExecution`
 
 ## Session Notes
 

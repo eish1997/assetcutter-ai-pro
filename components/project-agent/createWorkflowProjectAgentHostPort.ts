@@ -10,6 +10,8 @@ import type {
   ProjectAgentExecutePlanResult,
   ProjectAgentHostPort,
   ProjectAgentHostQueueSnapshot,
+  ProjectAgentHostThread,
+  ProjectAgentHostThreadStoreKey,
   ProjectAgentIntent,
 } from '../../types/projectAgent';
 
@@ -26,6 +28,11 @@ export type WorkflowProjectAgentHostDeps = {
     intent: ProjectAgentIntent,
     plan: AgentPlannedTool[]
   ) => ProjectAgentExecutePlanResult | Promise<ProjectAgentExecutePlanResult>;
+  /** §16.1 / 3A：取消仍在队列中的 task */
+  cancelTasks?: (taskIds: string[]) => void;
+  /** Optional hot thread for runtime B-layer assembly (§18.5). */
+  getThread?: () => ProjectAgentHostThread | null;
+  getThreadStoreKey?: () => ProjectAgentHostThreadStoreKey | null;
 };
 
 export function createWorkflowProjectAgentHostPort(
@@ -37,5 +44,8 @@ export function createWorkflowProjectAgentHostPort(
     resolveAssetDisplay: deps.resolveAssetDisplay,
     reportSurfaceContext: deps.reportSurfaceContext,
     executePlan: deps.executePlan,
+    ...(deps.cancelTasks ? { cancelTasks: deps.cancelTasks } : {}),
+    ...(deps.getThread ? { getThread: deps.getThread } : {}),
+    ...(deps.getThreadStoreKey ? { getThreadStoreKey: deps.getThreadStoreKey } : {}),
   };
 }

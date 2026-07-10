@@ -17,6 +17,10 @@ export type QuickComposeInvokeFromPlan = {
   presetCardsOverride?: WorkspaceQuickComposePromptCard[];
   /** Host should call lightbox local-edit pipeline instead of submitQuickCompose. */
   useLightboxLocalEdit?: boolean;
+  /** Host should call invokeExpert for each id (same pipe; may be multiple @experts). */
+  invokeExpertIds?: string[];
+  /** @deprecated use invokeExpertIds — kept for one-release compat */
+  invokeExpertId?: string;
   errorMessage?: string;
 };
 
@@ -44,6 +48,21 @@ export function mapPlanToQuickComposeInvoke(
       overrideUserText: intent.text,
       skipPromptCards: true,
       useLightboxLocalEdit: true,
+    };
+  }
+  if (first.toolId === 'invoke_expert') {
+    const ids: string[] = [];
+    for (const step of plan) {
+      if (step.toolId !== 'invoke_expert') break;
+      const expertId = String(step.args?.expertId ?? '').trim();
+      if (expertId) ids.push(expertId);
+    }
+    return {
+      overrideUserText: intent.text,
+      skipPromptCards: true,
+      invokeExpertIds: ids,
+      invokeExpertId: ids[0],
+      ...(ids.length ? {} : { errorMessage: 'invoke_expert missing expertId' }),
     };
   }
 

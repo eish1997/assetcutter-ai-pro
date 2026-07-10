@@ -342,6 +342,8 @@ export type WorkflowSidebarColumnProps = {
   setDraggingActionFromFavorite: Dispatch<SetStateAction<boolean>>;
   setActionDroppedInFavorite: Dispatch<SetStateAction<boolean>>;
   removeActionFromFavorite: (actionId: string) => void;
+  /** 常用区拖放起止：用于抑制 dragEnd 后幽灵 click 误删 */
+  onFavoriteDragLifecycle?: (phase: 'start' | 'end') => void;
   setHoverPreview: Dispatch<SetStateAction<{ mod: CustomAppModule; x: number; y: number } | null>>;
   handleDropToModuleAction: (
     mod: CustomAppModule,
@@ -433,6 +435,7 @@ export function WorkflowSidebarColumn({
   setDraggingActionFromFavorite,
   setActionDroppedInFavorite,
   removeActionFromFavorite,
+  onFavoriteDragLifecycle,
   setHoverPreview,
   handleDropToModuleAction,
   handleDropToSetAction,
@@ -1784,14 +1787,14 @@ export function WorkflowSidebarColumn({
                         <div
                           key={`fav-${entry.id}`}
                           data-capability-hover-id={entry.kind === 'module' ? entry.mod?.id : undefined}
-                          className={sidebarDropCardSurfaceClass(
+                          className={`group relative ${sidebarDropCardSurfaceClass(
                             entry.kind === 'module' ? entry.mod.category : 'set',
                             entry.kind === 'module'
                               ? moduleSupportsDraggedPayload(entry.mod, draggedPayload)
                               : true,
                             sidebarLocateFlashClass(entry.id),
                             hasTweakSlot ? 'col-span-2' : 'col-span-1'
-                          )}
+                          )}`}
                           draggable
                           onMouseEnter={(e) => {
                             if (entry.kind === 'module' && entry.mod) {
@@ -1822,18 +1825,19 @@ export function WorkflowSidebarColumn({
                               e.dataTransfer.setData(DT_AC_CAPABILITY_ACTION, entry.id);
                               e.dataTransfer.setData(DT_AC_CAPABILITY_ACTION_SOURCE, 'favorite');
                               e.dataTransfer.setData('text/plain', entry.id);
-                              e.dataTransfer.effectAllowed = 'copyMove';
+                              // copy：拖到对话/画布是复制使用，不再「拖出即删」
+                              e.dataTransfer.effectAllowed = 'copy';
                             } catch {
                               /* ignore */
                             }
                             updateDraggingActionId(entry.id);
                             setDraggingActionFromFavorite(true);
                             setActionDroppedInFavorite(false);
+                            onFavoriteDragLifecycle?.('start');
                           }}
                           onDragEnd={() => {
-                            if (draggingActionFromFavorite && !actionDroppedInFavorite) {
-                              removeActionFromFavorite(entry.id);
-                            }
+                            // 绝不在 dragEnd 移出常用；并抑制随后的幽灵 click
+                            onFavoriteDragLifecycle?.('end');
                             updateDraggingActionId(null);
                             setDraggingActionFromFavorite(false);
                             setActionDroppedInFavorite(false);
@@ -1849,12 +1853,18 @@ export function WorkflowSidebarColumn({
                             }`}
                             title={
                               entry.kind === 'module'
-                                ? '双击定位左侧预设'
+                                ? '拖到输入框使用；双击定位左侧预设；Shift+双击移出常用'
                                 : entry.kind === 'set'
-                                  ? '双击定位左侧能力集合'
+                                  ? '拖到输入框使用；双击定位左侧能力集合；Shift+双击移出常用'
                                   : undefined
                             }
                             onDoubleClick={(e) => {
+                              if (e.shiftKey) {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                removeActionFromFavorite(entry.id);
+                                return;
+                              }
                               if (entry.kind === 'module' && entry.mod) onLocatePresetDoubleClick(entry.mod, e);
                               else if (entry.kind === 'set' && entry.set) onLocateSetDoubleClick(entry.set, e);
                             }}

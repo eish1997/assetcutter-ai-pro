@@ -5,7 +5,8 @@ export const QUICK_COMPOSE_CURRENT_VIEW_LABEL = '当前画面';
 
 export type QuickComposeMention =
   | { id: string; kind: 'asset'; assetId: string; label: string; previewSrc?: string }
-  | { id: string; kind: 'current_view'; label: typeof QUICK_COMPOSE_CURRENT_VIEW_LABEL; previewSrc?: string };
+  | { id: string; kind: 'current_view'; label: typeof QUICK_COMPOSE_CURRENT_VIEW_LABEL; previewSrc?: string }
+  | { id: string; kind: 'expert'; expertId: string; label: string; previewSrc?: string };
 
 /** 拖入输入区、按顺序送模的参考图（无需 @） */
 export type QuickComposeDropSlot = {
@@ -17,8 +18,9 @@ export type QuickComposeDropSlot = {
 };
 
 export type QuickComposeMentionCandidate = {
-  kind: 'asset' | 'current_view';
+  kind: 'asset' | 'current_view' | 'expert';
   assetId?: string;
+  expertId?: string;
   label: string;
   previewSrc?: string;
   disabled?: boolean;
@@ -443,7 +445,7 @@ export function mergeQuickComposeDropSlotsForMentions(
   return out;
 }
 
-/** @ 候选：已拖入主/参考区的资产 + 可选「当前画面」 */
+/** @ 候选：已拖入主/参考区的资产 + 可选「当前画面」+ 专家 */
 export function listDropSlotMentionCandidates(
   dropSlots: QuickComposeDropSlot[],
   mentions: QuickComposeMention[],
@@ -452,6 +454,8 @@ export function listDropSlotMentionCandidates(
     currentViewPreviewSrc?: string;
     mainDropSlots?: QuickComposeDropSlot[];
     referenceDropSlots?: QuickComposeDropSlot[];
+    /** Extra candidates (e.g. experts) appended after image slots */
+    extraCandidates?: QuickComposeMentionCandidate[];
   }
 ): QuickComposeMentionCandidate[] {
   const slots =
@@ -460,6 +464,11 @@ export function listDropSlotMentionCandidates(
       : dropSlots;
   const mentionedIds = new Set(
     mentions.filter((m): m is Extract<QuickComposeMention, { kind: 'asset' }> => m.kind === 'asset').map((m) => m.assetId)
+  );
+  const mentionedExpertIds = new Set(
+    mentions
+      .filter((m): m is Extract<QuickComposeMention, { kind: 'expert' }> => m.kind === 'expert')
+      .map((m) => m.expertId)
   );
   const out: QuickComposeMentionCandidate[] = [];
   if (options?.includeCurrentView && !mentions.some((m) => m.kind === 'current_view')) {
@@ -478,7 +487,42 @@ export function listDropSlotMentionCandidates(
       previewSrc: s.previewSrc,
     });
   }
+  for (const c of options?.extraCandidates ?? []) {
+    if (c.kind === 'expert') {
+      const eid = (c.expertId || '').trim();
+      if (!eid || mentionedExpertIds.has(eid)) continue;
+      out.push(c);
+      continue;
+    }
+    out.push(c);
+  }
   return out;
+}
+
+/** Built-in expert @ candidates (kind:expert). */
+export function listExpertMentionCandidates(
+  mentions: QuickComposeMention[] = [],
+  profiles?: Array<{ expertId: string; displayName: string }>
+): QuickComposeMentionCandidate[] {
+  const mentioned = new Set(
+    mentions
+      .filter((m): m is Extract<QuickComposeMention, { kind: 'expert' }> => m.kind === 'expert')
+      .map((m) => m.expertId)
+  );
+  const list =
+    profiles ??
+    // Lazy import avoided — callers may pass listExpertProfiles(); fallback ids for pure tests.
+    [
+      { expertId: 'expert.prompt_smith', displayName: '提示词专家' },
+      { expertId: 'expert.brief_outliner', displayName: '大纲分镜专家' },
+    ];
+  return list
+    .filter((p) => p.expertId && !mentioned.has(p.expertId))
+    .map((p) => ({
+      kind: 'expert' as const,
+      expertId: p.expertId,
+      label: p.displayName,
+    }));
 }
 
 export function listQuickComposeMentionCandidates(
@@ -514,6 +558,18 @@ export function createQuickComposeMention(
       id: `cv-${Date.now()}`,
       kind: 'current_view',
       label: quickComposeImageMentionLabel(ordinal),
+      previewSrc: candidate.previewSrc,
+    };
+  }
+  if (candidate.kind === 'expert') {
+    const expertId = (candidate.expertId || '').trim();
+    if (!expertId) return null;
+    if (existing.some((m) => m.kind === 'expert' && m.expertId === expertId)) return null;
+    return {
+      id: `ex-${expertId}-${Date.now()}`,
+      kind: 'expert',
+      expertId,
+      label: candidate.label || expertId,
       previewSrc: candidate.previewSrc,
     };
   }
@@ -662,6 +718,10 @@ function resolveQuickComposeFromSegments(
       imageContextIndex += 1;
       continue;
     }
+    if (m.kind === 'expert') {
+      // Expert mentions are routed by planTools; not image refs.
+      continue;
+    }
     const asset = assetById.get(m.assetId);
     if (!asset) {
       warnings.push(`未找到资产「${m.label}」，已跳过`);
@@ -762,6 +822,10 @@ function resolveQuickComposeReferencesFromDraft(
         )
       );
       imageContextIndex += 1;
+      continue;
+    }
+    if (m.kind === 'expert') {
+      // Expert mentions are routed by planTools; not image refs.
       continue;
     }
     const asset = assetById.get(m.assetId);
