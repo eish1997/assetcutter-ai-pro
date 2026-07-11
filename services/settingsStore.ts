@@ -79,25 +79,31 @@ function purgeLegacyAiProviderStorageOnce(): void {
   removeLocalKey(STORAGE_KEY_ENABLED_AI_PROVIDERS_LEGACY);
 }
 
-function bulkImageProxyConfigured(): boolean {
+function viteEnvValue(name: string): string | undefined {
+  try {
+    const nodeEnv = typeof process !== 'undefined' ? process.env?.[name] : undefined;
+    if (nodeEnv !== undefined) return nodeEnv;
+  } catch {
+    /* ignore */
+  }
   try {
     const env = typeof import.meta !== 'undefined' ? (import.meta as { env?: Record<string, string | undefined> }).env : undefined;
-    const bulk = env?.VITE_BULK_IMAGE_API;
-    return Boolean(bulk && String(bulk).trim());
+    return env?.[name];
   } catch {
-    return false;
+    return undefined;
   }
 }
 
+function bulkImageProxyConfigured(): boolean {
+  const bulk = viteEnvValue('VITE_BULK_IMAGE_API');
+  return Boolean(bulk && String(bulk).trim());
+}
+
 function bulkImageVertexProxyConfigured(): boolean {
-  try {
-    const env = typeof import.meta !== 'undefined' ? (import.meta as { env?: Record<string, string | undefined> }).env : undefined;
-    const bulk = env?.VITE_BULK_IMAGE_API;
-    const bulkVertex = env?.VITE_BULK_IMAGE_API_VERTEX;
-    return Boolean((bulk && String(bulk).trim()) || (bulkVertex && String(bulkVertex).trim()));
-  } catch {
-    return false;
-  }
+  if (String(viteEnvValue('VITE_DISABLE_VERTEX_SITE_PROXY') || '').trim().toLowerCase() === 'true') return false;
+  const bulk = viteEnvValue('VITE_BULK_IMAGE_API');
+  const bulkVertex = viteEnvValue('VITE_BULK_IMAGE_API_VERTEX');
+  return Boolean((bulk && String(bulk).trim()) || (bulkVertex && String(bulkVertex).trim()));
 }
 
 export function isVertexSiteProxyConfigured(): boolean {

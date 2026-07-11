@@ -21,6 +21,14 @@ function envBool(name, defaultTrue = false) {
   return v === 'true' || v === '1' || v === 'yes' || v === 'on';
 }
 
+function isProductionRuntime() {
+  return String(process.env.NODE_ENV || '').trim().toLowerCase() === 'production';
+}
+
+export function defaultGeminiAsyncProxyMaxConcurrent() {
+  return isProductionRuntime() ? 2 : 4;
+}
+
 function persistedConfigSnapshot() {
   touchGeminiFairnessConfigCacheIfStale();
   if (resolveGeminiFairnessConfigSource() === 'env_only') return {};
@@ -45,7 +53,7 @@ function trustClientFairnessKeyHeader() {
 }
 
 export function isFairnessEnabled() {
-  return envBool('GEMINI_FAIRNESS_ENABLED', false);
+  return envBool('GEMINI_FAIRNESS_ENABLED', isProductionRuntime());
 }
 
 function isStrict() {
@@ -548,7 +556,12 @@ export function fairnessQueueMetaForJob(jobId, jobStatus) {
     globalRunning += s.running;
   }
 
-  const globalCap = getDiskOverrideInt('GEMINI_ASYNC_PROXY_MAX_CONCURRENT', 4, 1, 64);
+  const globalCap = getDiskOverrideInt(
+    'GEMINI_ASYNC_PROXY_MAX_CONCURRENT',
+    defaultGeminiAsyncProxyMaxConcurrent(),
+    1,
+    64
+  );
   const globalQueuedApprox = globalQueued + globalRunning;
   /** 粗估：每槽约 45s，考虑全站排队超出并发部分 */
   const backlogSlots = Math.max(0, globalQueuedApprox - globalCap);

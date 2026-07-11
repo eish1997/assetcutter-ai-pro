@@ -20,6 +20,7 @@ import {
   readBodyUtf8,
 } from './http-limits.js';
 import {
+  defaultGeminiAsyncProxyMaxConcurrent,
   isFairnessEnabled,
   resolveFairnessKey,
   fairnessTryEnqueue,
@@ -615,7 +616,12 @@ async function proxyGenerateContent(model, contents, config) {
 const GEMINI_ASYNC_JOB_TTL_MS = Number(process.env.GEMINI_ASYNC_JOB_TTL_MS) || 60 * 60 * 1000;
 const geminiAsyncJobs = new Map();
 function getGeminiAsyncProxyMaxConcurrent() {
-  return getDiskOverrideInt('GEMINI_ASYNC_PROXY_MAX_CONCURRENT', 4, 1, 64);
+  return getDiskOverrideInt(
+    'GEMINI_ASYNC_PROXY_MAX_CONCURRENT',
+    defaultGeminiAsyncProxyMaxConcurrent(),
+    1,
+    64
+  );
 }
 
 let geminiProxyInFlight = 0;

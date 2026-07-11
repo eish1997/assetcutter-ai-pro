@@ -32,6 +32,7 @@ server/data/companion-artifacts.json
 server/data/auth-db.test.json
 *.local
 .env
+.env*.local
 
 # Cursor 本地配置（规则、skills），可不提交；允许提交 Agent Autopilot hooks
 .cursor/*

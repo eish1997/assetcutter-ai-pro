@@ -95,7 +95,7 @@
 
 | 组件 | 行为 |
 | --- | --- |
-| `server/gemini-proxy-api.js` | 异步单任务 / 批量异步在真正调用前使用 **`withGeminiProxySlot`**，全局并发由 **`GEMINI_ASYNC_PROXY_MAX_CONCURRENT`**（默认 4）控制；**同步** `POST /proxy/gemini/generate-content` 在 Vertex 路径上 **不经过** 该槽（若不做改造则存在绕过风险）。 |
+| `server/gemini-proxy-api.js` | 异步单任务 / 批量异步在真正调用前使用 **`withGeminiProxySlot`**，全局并发由 **`GEMINI_ASYNC_PROXY_MAX_CONCURRENT`**（生产默认 2，本地/测试默认 4）控制；**同步** `POST /proxy/gemini/generate-content` 在 Vertex 路径上 **不经过** 该槽（若不做改造则存在绕过风险）。 |
 | `services/geminiService.ts` | 对代理发起 `POST /proxy/gemini/async`、`async-batch`；Vertex 时 body 带 **`aiBackend: "vertex"`**。 |
 | 试用额度 | **`consumeTrialGeminiSlotBeforeProxyOrThrow`**（经 **auth-api** 扣日配额）与 Vertex **正交**；Vertex 全站公平队列 **不能** 替代试用配额，二者叠加。 |
 
@@ -291,9 +291,9 @@ Vertex 官方以 **TPM** 为主计量；应用侧无精确 tokenizer 时可用 *
 
 | 变量 | 默认建议 | 说明 |
 | --- | --- | --- |
-| `GEMINI_FAIRNESS_ENABLED` | `true`（实现后） | `false` 时关闭公平队列与每用户限流，仅保留现有行为；**紧急回滚**，见 §10.2。 |
+| `GEMINI_FAIRNESS_ENABLED` | 生产默认 `true`，本地/测试默认 `false` | `false` 时关闭公平队列与每用户限流，仅保留现有行为；**紧急回滚**，见 §10.2。 |
 | `GEMINI_FAIRNESS_CONFIG_SOURCE` | `db` 或空 | `env_only`：忽略管理员 UI 持久化，仅用 env/默认；用于排障或双源冲突时强制单源。 |
-| `GEMINI_ASYNC_PROXY_MAX_CONCURRENT` | `4` | 全局 Vertex+非 Vertex 共用或拆变量见 §5.1 |
+| `GEMINI_ASYNC_PROXY_MAX_CONCURRENT` | 生产默认 `2`，本地/测试默认 `4` | 全局 Vertex+非 Vertex 共用或拆变量见 §5.1；429 多时先降，排队明显但 429 少时再升。 |
 | `VERTEX_PROXY_MAX_CONCURRENT` | 空=回退到全局 | 可选：仅 Vertex 使用独立槽 |
 | `GEMINI_FAIRNESS_USER_MAX_IN_FLIGHT` | `2` | 每 fairness key 占用全局槽上限 |
 | `GEMINI_FAIRNESS_USER_MAX_QUEUED` | `5` | 每 key 未开始任务数上限 |
@@ -396,7 +396,7 @@ Vertex 官方以 **TPM** 为主计量；应用侧无精确 tokenizer 时可用 *
 
 | 参数项 | 建议首版值 | 调参方向（经验规则） |
 | --- | --- | --- |
-| 全站同时执行（全局槽） | `4`（`GEMINI_ASYNC_PROXY_MAX_CONCURRENT`） | 429 **少**、排队长 → 可试 **5～8**；429 **多** → **先降**或先查 GCP |
+| 全站同时执行（全局槽） | 生产默认 `2`，本地/测试默认 `4`（`GEMINI_ASYNC_PROXY_MAX_CONCURRENT`） | 429 **少**、排队长 → 可逐步上调；429 **多** → **先降**或先查 GCP |
 | 每用户占用全局槽上限（登录） | `2` | 生图慢且堆积 → 改为 **1** |
 | 每用户未开始队列深度（登录） | `5` | 内存或轮询压力大 → **3** |
 | 每用户提交 RPM（登录） | `30` | 误伤正常用户则略升；刷接口则略降 |

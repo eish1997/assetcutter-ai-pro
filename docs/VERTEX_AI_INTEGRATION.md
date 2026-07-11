@@ -18,7 +18,7 @@
 | `VERTEX_API_VERSION`                         | 否              | 默认 **`v1`**（与官方生图 REST 一致）。预览能力若需可设 `v1beta1`。 |
 | ADC                                          | 选 Vertex 时必填   | 任选一：`GOOGLE_APPLICATION_CREDENTIALS` 指向服务账号 JSON 文件路径；**或**（Render 等）将整段 JSON 粘贴到 `GOOGLE_APPLICATION_CREDENTIALS_JSON`（别名 `GCP_SERVICE_ACCOUNT_JSON` / `GOOGLE_SERVICE_ACCOUNT_JSON`），代理启动时会写入临时文件并设置 ADC。GCE/Cloud Run 等可用内置身份。作用域需能调用 Vertex AI。                                                                           |
 | `GEMINI_API_KEY`                             | 非 Vertex 请求仍需要 | 仅当请求**未**带 `aiBackend: "vertex"` 时，代理仍走 AI Studio Key。可同时配置：同一代理既服务 Key 用户又服务 Vertex。                                                                               |
-| `GEMINI_FAIRNESS_ENABLED`                    | 否              | 默认 `false`。为 `true` 时启用 **公平排队 / 每用户限流**（内存态，**单副本**有效）。详见 **[Gemini代理-公平排队与每用户限流.md](./Gemini代理-公平排队与每用户限流.md)**。 |
+| `GEMINI_FAIRNESS_ENABLED`                    | 否              | 生产环境默认 `true`，本地/测试默认 `false`；显式设为 `false` 可紧急回滚。启用时使用 **公平排队 / 每用户限流**（内存态，**单副本**有效）。详见 **[Gemini代理-公平排队与每用户限流.md](./Gemini代理-公平排队与每用户限流.md)**。 |
 | `GEMINI_PROXY_FAIRNESS_HMAC_SECRET`          | 否              | 非空时要求 `X-AC-Fairness-Signature`（与 `X-AC-Fairness-Key` 配套），公网直连代理时防伪造。内网可信转发可仅传 Key。 |
 | `GEMINI_FAIRNESS_CONFIG_PATH`                | 否              | 磁盘覆盖配置路径，默认 `server/data/gemini-fairness-config.json`；**gemini-proxy** 约 3s 重读；与 **auth-api** 管理接口写同一路径。 |
 | `GEMINI_FAIRNESS_TRUST_CLIENT_KEY_HEADER`    | 否              | 为 `true` 且无 HMAC、非内网 relay 时，可接受浏览器自带的 **`X-AC-Fairness-Key`**（公网慎用，优先 HMAC 或 BFF）。 |
