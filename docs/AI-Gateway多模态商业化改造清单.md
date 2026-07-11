@@ -2,6 +2,18 @@
 
 > 目标：保留当前可用产品，逐步把「Gemini 图片代理」演进成统一 AI 任务平台。原则是前端入口统一、计费与审计统一、执行按模态拆分、每个阶段都可独立上线和回退。
 
+## 2026-07-11 Phase 1 进展
+
+- 已新增服务端最小骨架：`server/ai-gateway/`。
+- 已有统一 `AiJob` 草稿、provider route、`gemini-proxy` adapter request plan。
+- 已新增内存态样板接口：`POST /ai-gateway/jobs`、`GET /ai-gateway/jobs/:id`；只创建/查询 job plan，不实际调用上游生成。
+- 已新增持久化 job store：Postgres 表 `ai_gateway_jobs`，JSON 兜底字段 `aiGatewayJobs`；migration `server/migrations/017_ai_gateway_jobs.sql`。
+- 已新增 credits gate 预留层：默认 `AI_GATEWAY_CREDITS_GATE=plan`，只把估算积分与 gate 状态写入 job metadata；显式 `check` 才调用现有 gate。
+- `/healthz` 已包含 `aiGateway`：可查看 execution 是否切流、jobStore 来源、credits gate 模式和样板路由。
+- 当前不接管现有生产生成流量；现有 `gemini-proxy` 仍是稳定生产入口。
+- 音乐、视频、3D 目前只进入统一模态定义，不会误路由到 `gemini-proxy`。
+- 下一步：选择普通文生图做第一条灰度迁移；切执行前必须显式设置 `AI_GATEWAY_EXECUTION_ENABLED=true`。
+
 ## 0. 目标架构
 
 ```text

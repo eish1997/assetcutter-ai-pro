@@ -1,0 +1,43 @@
+import { AiGatewayValidationError } from '../job.js';
+
+export const GEMINI_PROXY_ASYNC_PATH = '/proxy/gemini/async';
+
+function requireValue(value, field) {
+  if (value == null || value === '') {
+    throw new AiGatewayValidationError(`Gemini proxy adapter requires ${field}`, 'AI_GATEWAY_ADAPTER_INPUT_INVALID');
+  }
+  return value;
+}
+
+export function buildGeminiProxyAsyncRequest(job, route) {
+  if (route?.adapterId !== 'gemini-proxy') {
+    throw new AiGatewayValidationError(`Unsupported adapter for Gemini proxy: ${route?.adapterId || ''}`);
+  }
+
+  const input = job.input || {};
+  const model = requireValue(job.model || input.model, 'model');
+  const contents = requireValue(input.contents, 'input.contents');
+  const body = {
+    model,
+    contents,
+    config: input.config && typeof input.config === 'object' ? input.config : {},
+  };
+
+  if (route.upstreamBackend === 'vertex') {
+    body.aiBackend = 'vertex';
+  }
+  if (input.costWeight != null) {
+    body.costWeight = input.costWeight;
+  }
+
+  return {
+    method: 'POST',
+    path: GEMINI_PROXY_ASYNC_PATH,
+    body,
+    headers: {
+      'content-type': 'application/json',
+      'x-ac-task-envelope': job.id,
+      'x-ac-correlation-id': job.correlationId,
+    },
+  };
+}

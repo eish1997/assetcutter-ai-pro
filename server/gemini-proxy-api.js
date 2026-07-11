@@ -14,6 +14,8 @@ import os from 'os';
 import path from 'path';
 import { ProxyAgent, setGlobalDispatcher } from 'undici';
 import { GoogleGenAI } from '@google/genai';
+import { handleAiGatewayRequest } from './ai-gateway/http-handler.js';
+import { aiGatewayHealthSnapshot } from './ai-gateway/health.js';
 import {
   GEMINI_PROXY_MAX_BODY_BYTES as MAX_BODY_BYTES,
   BODY_TOO_LARGE_MESSAGE,
@@ -967,6 +969,10 @@ const server = http.createServer(async (req, res) => {
 
   const path = (req.url || '/').split('?')[0];
 
+  if (path === '/ai-gateway/jobs' || path.startsWith('/ai-gateway/jobs/')) {
+    if (await handleAiGatewayRequest(req, res)) return;
+  }
+
   if (path === GEMINI_ASYNC_PATH && req.method === 'POST') {
     try {
       const body = await readBodyUtf8(req, MAX_BODY_BYTES);
@@ -1199,6 +1205,7 @@ const server = http.createServer(async (req, res) => {
       geminiAsyncJobs: geminiAsyncJobs.size,
       geminiProxyInFlight,
       fairness: fairnessHealthSnapshot(),
+      aiGateway: aiGatewayHealthSnapshot(),
       vertex: {
         configured: isVertexConfigured(),
         location: isVertexConfigured() ? vertexLocation() : null,
@@ -1211,7 +1218,7 @@ const server = http.createServer(async (req, res) => {
 
   sendJson(res, 404, {
     error:
-      'Not found. POST /proxy/gemini/async or /proxy/gemini/async-batch (body optional aiBackend:vertex) + GET /proxy/gemini/async/:jobId or /proxy/gemini/async-batch/:jobId; POST /proxy/gemini/generate-content; GET /healthz',
+      'Not found. POST /ai-gateway/jobs + GET /ai-gateway/jobs/:jobId; POST /proxy/gemini/async or /proxy/gemini/async-batch (body optional aiBackend:vertex) + GET /proxy/gemini/async/:jobId or /proxy/gemini/async-batch/:jobId; POST /proxy/gemini/generate-content; GET /healthz',
   });
 });
 
