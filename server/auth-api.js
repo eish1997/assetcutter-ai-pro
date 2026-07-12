@@ -199,10 +199,12 @@ import {
 import { assertJimengCreditsGate } from './jimeng-credits-gate.js';
 import { relayGeminiProxyRequest } from './gemini-proxy-relay.js';
 import {
+  cancelAuthAiGatewayJob,
   createAuthAiGatewayJob,
   getAuthAiGatewayJob,
   listAuthAiGatewayJobs,
   mapAuthAiGatewayError,
+  retryAuthAiGatewayJob,
 } from './ai-gateway/auth-api-handler.js';
 import { listPublicPriceCatalog } from './pricing-engine.js';
 import { buildUsageReceipt, quoteJobKinds } from './pricing-read-model.js';
@@ -2620,6 +2622,30 @@ const server = http.createServer(async (req, res) => {
       }
       const result = await getAuthAiGatewayJob(jobId, user);
       json(res, result.status, result.body);
+      return;
+    }
+
+    if (path.startsWith('/api/ai/jobs/') && req.method === 'POST') {
+      const user = await requireAuth(req, res);
+      if (!user) return;
+      const parts = path.slice('/api/ai/jobs/'.length).split('/');
+      const jobId = decodeURIComponent(parts[0] || '');
+      const action = parts[1] || '';
+      if (!jobId || (action !== 'cancel' && action !== 'retry')) {
+        json(res, 404, { error: 'AI_JOB_ACTION_NOT_FOUND' });
+        return;
+      }
+      try {
+        const body = action === 'retry' ? await readBody(req) : {};
+        const result =
+          action === 'cancel'
+            ? await cancelAuthAiGatewayJob(jobId, user)
+            : await retryAuthAiGatewayJob(jobId, user, body);
+        json(res, result.status, result.body);
+      } catch (error) {
+        const mapped = mapAuthAiGatewayError(error);
+        json(res, mapped.status, mapped.body);
+      }
       return;
     }
 

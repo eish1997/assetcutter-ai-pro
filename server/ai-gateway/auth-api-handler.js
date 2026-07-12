@@ -5,6 +5,8 @@ import { AiGatewayRouteError } from './provider-router.js';
 
 const DEFAULT_LIST_LIMIT = 20;
 const MAX_LIST_LIMIT = 100;
+const CANCELLABLE_STATUSES = new Set(['created', 'queued', 'running']);
+const RETRYABLE_STATUSES = new Set(['failed', 'cancelled']);
 
 function clampListLimit(value) {
   return Math.min(MAX_LIST_LIMIT, Math.max(1, Math.floor(Number(value) || DEFAULT_LIST_LIMIT)));
@@ -123,3 +125,66 @@ export async function getAuthAiGatewayJob(id, user, options = {}) {
   return { status: 200, body: publicAuthAiJobDetail(plan) };
 }
 
+export async function cancelAuthAiGatewayJob(id, user, options = {}) {
+  const store = options.store || persistentAiGatewayJobStore;
+  const plan = await store.get(id);
+  if (!plan) return { status: 404, body: { error: 'AI_GATEWAY_JOB_NOT_FOUND', message: 'Job not found or expired' } };
+  if (!options.admin && String(plan.job.userId || '') !== String(user.id || '')) {
+    return { status: 404, body: { error: 'AI_GATEWAY_JOB_NOT_FOUND', message: 'Job not found or expired' } };
+  }
+  if (plan.job.status === 'cancelled') return { status: 200, body: publicAuthAiJobDetail(plan) };
+  if (!CANCELLABLE_STATUSES.has(plan.job.status)) {
+    return {
+      status: 409,
+      body: { error: 'AI_GATEWAY_JOB_NOT_CANCELLABLE', message: `Job status ${plan.job.status} cannot be cancelled` },
+    };
+  }
+
+  const cancelledAt = new Date().toISOString();
+  const next = await store.update(id, {
+    status: 'cancelled',
+    metadata: { cancelledByUserId: user.id, cancelledAt },
+    error: { code: 'AI_GATEWAY_JOB_CANCELLED', message: 'Job cancelled' },
+  });
+  return { status: 200, body: publicAuthAiJobDetail(next) };
+}
+
+export async function retryAuthAiGatewayJob(id, user, body = {}, options = {}) {
+  const store = options.store || persistentAiGatewayJobStore;
+  const original = await store.get(id);
+  if (!original) return { status: 404, body: { error: 'AI_GATEWAY_JOB_NOT_FOUND', message: 'Job not found or expired' } };
+  if (!options.admin && String(original.job.userId || '') !== String(user.id || '')) {
+    return { status: 404, body: { error: 'AI_GATEWAY_JOB_NOT_FOUND', message: 'Job not found or expired' } };
+  }
+  if (!RETRYABLE_STATUSES.has(original.job.status)) {
+    return {
+      status: 409,
+      body: { error: 'AI_GATEWAY_JOB_NOT_RETRYABLE', message: `Job status ${original.job.status} cannot be retried` },
+    };
+  }
+
+  const raw = body && typeof body === 'object' ? body : {};
+  const metadata = original.job.metadata && typeof original.job.metadata === 'object' ? original.job.metadata : {};
+  const retryPlan = await store.put(
+    createAiGatewayJobPlan({
+      id: raw.id,
+      modality: original.job.modality,
+      capability: original.job.capability,
+      provider: original.job.provider,
+      model: original.job.model,
+      userId: original.job.userId || user.id,
+      correlationId: raw.correlationId,
+      input: original.job.input || {},
+      metadata: {
+        ...metadata,
+        ...(raw.metadata && typeof raw.metadata === 'object' ? raw.metadata : {}),
+        retryOfJobId: original.job.id,
+        retryOfCorrelationId: original.job.correlationId,
+        retryOfStatus: original.job.status,
+        retryCreatedByUserId: user.id,
+        authApiFacade: true,
+      },
+    })
+  );
+  return { status: 202, body: publicAuthAiJobDetail(retryPlan) };
+}

@@ -9,10 +9,12 @@ vi.mock('../services/apiBase', () => ({
 }));
 
 import {
+  cancelMyAiJob,
   createAiJob,
   getMyAiJob,
   listAdminAiJobs,
   listMyAiJobs,
+  retryMyAiJob,
 } from '../services/aiJobsClient';
 import { requestJson } from '../services/httpClient';
 
@@ -61,6 +63,19 @@ describe('aiJobsClient', () => {
     expect(requestJson).not.toHaveBeenCalled();
   });
 
+  it('cancels and retries my jobs through auth-api actions', async () => {
+    await cancelMyAiJob('aijob action');
+    expect(requestJson).toHaveBeenCalledWith('https://auth.example/api/ai/jobs/aijob%20action/cancel', {
+      method: 'POST',
+    });
+
+    await retryMyAiJob('aijob action', { id: 'aijob_retry' });
+    expect(requestJson).toHaveBeenCalledWith('https://auth.example/api/ai/jobs/aijob%20action/retry', {
+      method: 'POST',
+      body: JSON.stringify({ id: 'aijob_retry' }),
+    });
+  });
+
   it('lists admin job summaries through auth-api', async () => {
     await listAdminAiJobs({ limit: 0 });
     expect(requestJson).toHaveBeenCalledWith('https://auth.example/api/admin/ai/jobs?limit=20', {
@@ -68,4 +83,3 @@ describe('aiJobsClient', () => {
     });
   });
 });
-

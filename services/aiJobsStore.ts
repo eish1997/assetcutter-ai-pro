@@ -1,5 +1,5 @@
 import type { AiJobDetail, AiJobSummary } from './aiJobsClient';
-import { getMyAiJob, listMyAiJobs } from './aiJobsClient';
+import { cancelMyAiJob, getMyAiJob, listMyAiJobs, retryMyAiJob, type RetryAiJobInput } from './aiJobsClient';
 
 export type AiJobsState = {
   items: AiJobSummary[];
@@ -111,6 +111,57 @@ export async function refreshMyAiJob(jobId: string) {
   }
 }
 
+export async function cancelAiJob(jobId: string) {
+  const id = String(jobId || '').trim();
+  if (!id) throw new Error('Invalid AI job id');
+  setState({
+    refreshingJobIds: { ...state.refreshingJobIds, [id]: true },
+    error: null,
+  });
+  try {
+    const detail = await cancelMyAiJob(id);
+    const { [id]: _done, ...refreshingJobIds } = state.refreshingJobIds;
+    setState({
+      items: state.items.map((item) => (item.id === id ? detail.job : item)),
+      byId: mergeSummary(detail.job, state.byId),
+      detailsById: { ...state.detailsById, [id]: detail },
+      refreshingJobIds,
+      error: null,
+    });
+    return detail;
+  } catch (error) {
+    const { [id]: _done, ...refreshingJobIds } = state.refreshingJobIds;
+    setState({ refreshingJobIds, error: errorMessage(error) });
+    throw error;
+  }
+}
+
+export async function retryAiJob(jobId: string, input: RetryAiJobInput = {}) {
+  const id = String(jobId || '').trim();
+  if (!id) throw new Error('Invalid AI job id');
+  setState({
+    refreshingJobIds: { ...state.refreshingJobIds, [id]: true },
+    error: null,
+  });
+  try {
+    const detail = await retryMyAiJob(id, input);
+    const { [id]: _done, ...refreshingJobIds } = state.refreshingJobIds;
+    const items = [detail.job, ...state.items.filter((item) => item.id !== detail.job.id)].slice(0, state.limit || 20);
+    setState({
+      items,
+      byId: mergeSummary(detail.job, state.byId),
+      detailsById: { ...state.detailsById, [detail.job.id]: detail },
+      refreshingJobIds,
+      error: null,
+    });
+    return detail;
+  } catch (error) {
+    const { [id]: _done, ...refreshingJobIds } = state.refreshingJobIds;
+    setState({ refreshingJobIds, error: errorMessage(error) });
+    throw error;
+  }
+}
+
 export function upsertAiJobSummary(summary: AiJobSummary) {
   const byId = mergeSummary(summary, state.byId);
   const existingIndex = state.items.findIndex((item) => item.id === summary.id);
@@ -125,4 +176,3 @@ export function resetAiJobsStateForTests() {
   state = EMPTY_STATE;
   emit();
 }
-

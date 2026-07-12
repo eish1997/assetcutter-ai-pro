@@ -76,6 +76,12 @@ export type CreateAiJobInput = {
   input: Record<string, unknown>;
 };
 
+export type RetryAiJobInput = {
+  id?: string;
+  correlationId?: string;
+  metadata?: Record<string, unknown>;
+};
+
 function clampLimit(limit?: number) {
   const n = Math.floor(Number(limit) || 20);
   return Math.min(100, Math.max(1, n));
@@ -104,6 +110,23 @@ export function getMyAiJob(jobId: string) {
   });
 }
 
+export function cancelMyAiJob(jobId: string) {
+  const id = String(jobId || '').trim();
+  if (!id) throw new Error('Invalid AI job id');
+  return requestJson<AiJobDetail>(apiUrl(`/api/ai/jobs/${encodeURIComponent(id)}/cancel`), {
+    method: 'POST',
+  });
+}
+
+export function retryMyAiJob(jobId: string, input: RetryAiJobInput = {}) {
+  const id = String(jobId || '').trim();
+  if (!id) throw new Error('Invalid AI job id');
+  return requestJson<AiJobDetail>(apiUrl(`/api/ai/jobs/${encodeURIComponent(id)}/retry`), {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+}
+
 export function listAdminAiJobs(options: { limit?: number } = {}) {
   const params = new URLSearchParams();
   params.set('limit', String(clampLimit(options.limit)));
@@ -111,4 +134,3 @@ export function listAdminAiJobs(options: { limit?: number } = {}) {
     cache: 'no-store',
   });
 }
-

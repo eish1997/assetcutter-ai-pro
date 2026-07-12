@@ -2,16 +2,20 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AiJobDetail, AiJobSummary } from '../services/aiJobsClient';
 
 vi.mock('../services/aiJobsClient', () => ({
+  cancelMyAiJob: vi.fn(),
   listMyAiJobs: vi.fn(),
   getMyAiJob: vi.fn(),
+  retryMyAiJob: vi.fn(),
 }));
 
-import { getMyAiJob, listMyAiJobs } from '../services/aiJobsClient';
+import { cancelMyAiJob, getMyAiJob, listMyAiJobs, retryMyAiJob } from '../services/aiJobsClient';
 import {
+  cancelAiJob,
   getAiJobsSnapshot,
   refreshMyAiJob,
   refreshMyAiJobs,
   resetAiJobsStateForTests,
+  retryAiJob,
   subscribeAiJobs,
   upsertAiJobSummary,
 } from '../services/aiJobsStore';
@@ -56,6 +60,8 @@ describe('aiJobsStore', () => {
     resetAiJobsStateForTests();
     vi.mocked(listMyAiJobs).mockReset();
     vi.mocked(getMyAiJob).mockReset();
+    vi.mocked(cancelMyAiJob).mockReset();
+    vi.mocked(retryMyAiJob).mockReset();
   });
 
   it('refreshes recent jobs and indexes them by id', async () => {
@@ -109,5 +115,23 @@ describe('aiJobsStore', () => {
 
     expect(listener).toHaveBeenCalledTimes(1);
   });
-});
 
+  it('updates local state after cancel and prepends retry jobs', async () => {
+    upsertAiJobSummary(makeSummary('aijob_store_cancel', 'running'));
+    const cancelled = makeDetail('aijob_store_cancel', 'cancelled');
+    vi.mocked(cancelMyAiJob).mockResolvedValueOnce(cancelled);
+
+    await cancelAiJob('aijob_store_cancel');
+    expect(cancelMyAiJob).toHaveBeenCalledWith('aijob_store_cancel');
+    expect(getAiJobsSnapshot().byId.aijob_store_cancel.status).toBe('cancelled');
+
+    const retry = makeDetail('aijob_store_retry', 'created');
+    vi.mocked(retryMyAiJob).mockResolvedValueOnce(retry);
+    await retryAiJob('aijob_store_cancel', { id: 'aijob_store_retry' });
+
+    const snap = getAiJobsSnapshot();
+    expect(retryMyAiJob).toHaveBeenCalledWith('aijob_store_cancel', { id: 'aijob_store_retry' });
+    expect(snap.items[0].id).toBe('aijob_store_retry');
+    expect(snap.detailsById.aijob_store_retry.job.id).toBe('aijob_store_retry');
+  });
+});
