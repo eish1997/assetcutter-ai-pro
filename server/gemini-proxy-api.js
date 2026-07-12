@@ -43,6 +43,7 @@ import {
   vertexProjectIdFromEnv,
 } from './vertex-genai-client.js';
 import { initGeminiFairnessConfigLoader, resolveGeminiFairnessConfigSource } from './gemini-fairness-config-store.js';
+import { geminiProxyThrottleSnapshot, waitForGeminiUpstreamThrottle } from './gemini-proxy-throttle.js';
 import { extractUsageMetadata } from './gemini-proxy-usage.js';
 import {
   assertGeminiProxyCreditsGate,
@@ -648,9 +649,10 @@ function releaseGeminiProxySlot() {
   if (next) next();
 }
 
-async function withGeminiProxySlot(fn) {
+async function withGeminiProxySlot(fn, throttle = {}) {
   await acquireGeminiProxySlot();
   try {
+    await waitForGeminiUpstreamThrottle(throttle);
     return await fn();
   } finally {
     releaseGeminiProxySlot();
@@ -713,8 +715,10 @@ async function runGeminiAsyncJob(jobId) {
         if (Date.now() - startedAt > GEMINI_ASYNC_JOB_MAX_WAIT_MS) {
           throw new Error(`Gemini 异步任务最大等待超时（>${GEMINI_ASYNC_JOB_MAX_WAIT_MS}ms）`);
         }
-        const result = await withGeminiProxySlot(() =>
-          useVertex ? proxyVertexGenerateContent(model, contents, config) : proxyGenerateContent(model, contents, config)
+        const result = await withGeminiProxySlot(
+          () =>
+            useVertex ? proxyVertexGenerateContent(model, contents, config) : proxyGenerateContent(model, contents, config),
+          { useVertex, model, config }
         );
         const j = geminiAsyncJobs.get(jobId);
         if (!j) return;
@@ -894,8 +898,9 @@ async function runGeminiWithRetries(model, contents, config, useVertex) {
       if (Date.now() - startedAt > GEMINI_ASYNC_JOB_MAX_WAIT_MS) {
         throw new Error(`Gemini 异步任务最大等待超时（>${GEMINI_ASYNC_JOB_MAX_WAIT_MS}ms）`);
       }
-      return await withGeminiProxySlot(() =>
-        useVertex ? proxyVertexGenerateContent(model, contents, config) : proxyGenerateContent(model, contents, config)
+      return await withGeminiProxySlot(
+        () => (useVertex ? proxyVertexGenerateContent(model, contents, config) : proxyGenerateContent(model, contents, config)),
+        { useVertex, model, config }
       );
     } catch (e) {
       lastErr = e;
@@ -1205,6 +1210,7 @@ const server = http.createServer(async (req, res) => {
       geminiAsyncJobs: geminiAsyncJobs.size,
       geminiProxyInFlight,
       fairness: fairnessHealthSnapshot(),
+      throttle: geminiProxyThrottleSnapshot(),
       aiGateway: aiGatewayHealthSnapshot(),
       vertex: {
         configured: isVertexConfigured(),

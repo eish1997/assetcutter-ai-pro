@@ -22,6 +22,7 @@
 | `GEMINI_PROXY_FAIRNESS_HMAC_SECRET`          | 否              | 非空时要求 `X-AC-Fairness-Signature`（与 `X-AC-Fairness-Key` 配套），公网直连代理时防伪造。内网可信转发可仅传 Key。 |
 | `GEMINI_FAIRNESS_CONFIG_PATH`                | 否              | 磁盘覆盖配置路径，默认 `server/data/gemini-fairness-config.json`；**gemini-proxy** 约 3s 重读；与 **auth-api** 管理接口写同一路径。 |
 | `GEMINI_FAIRNESS_TRUST_CLIENT_KEY_HEADER`    | 否              | 为 `true` 且无 HMAC、非内网 relay 时，可接受浏览器自带的 **`X-AC-Fairness-Key`**（公网慎用，优先 HMAC 或 BFF）。 |
+| `GEMINI_VERTEX_IMAGE_MIN_INTERVAL_MS`         | 否              | Vertex 图片生图请求启动间隔；生产默认 `65000`，本地/测试默认 `0`。用于保护低 RPM 配额，避免连续线稿/白模任务打穿上游。 |
 
 
 - **管理端**：站点 **`/admin/gemini-fairness`**（管理员）经 auth-api **`GET` / `PUT` / `DELETE`** **`/api/admin/gemini-fairness-config`** 读写或清空上述 JSON（仅白名单数值键；**PUT 与磁盘已有项合并**；**DELETE** 写 `{}`）。
