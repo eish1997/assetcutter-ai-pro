@@ -55,6 +55,10 @@ describe('server AI gateway job planning', () => {
         model: 'gemini-3-pro-image-preview',
         aiBackend: 'vertex',
         costWeight: 2,
+        fairnessMeta: {
+          aiGatewayTraceJobId: 'aijob_test_1',
+          costWeight: 2,
+        },
       },
     });
   });

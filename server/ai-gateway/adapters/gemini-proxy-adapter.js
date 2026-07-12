@@ -21,6 +21,10 @@ export function buildGeminiProxyAsyncRequest(job, route) {
     model,
     contents,
     config: input.config && typeof input.config === 'object' ? input.config : {},
+    fairnessMeta: {
+      ...(input.fairnessMeta && typeof input.fairnessMeta === 'object' ? input.fairnessMeta : {}),
+      aiGatewayTraceJobId: job.id,
+    },
   };
 
   if (route.upstreamBackend === 'vertex') {
@@ -28,6 +32,7 @@ export function buildGeminiProxyAsyncRequest(job, route) {
   }
   if (input.costWeight != null) {
     body.costWeight = input.costWeight;
+    body.fairnessMeta.costWeight = input.costWeight;
   }
 
   return {

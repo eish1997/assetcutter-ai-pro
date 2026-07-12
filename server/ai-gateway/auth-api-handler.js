@@ -3,6 +3,7 @@ import { AiGatewayValidationError, createAiGatewayJobPlan } from './index.js';
 import { persistentAiGatewayJobStore } from './persistent-job-store.js';
 import { AiGatewayRouteError } from './provider-router.js';
 import { settleAiGatewayJobCredits, settlementMetadataPatch } from './settlement.js';
+import { startAiGatewayJobExecution } from './executor.js';
 
 const DEFAULT_LIST_LIMIT = 20;
 const MAX_LIST_LIMIT = 100;
@@ -105,7 +106,13 @@ export async function createAuthAiGatewayJob(req, body, user, options = {}) {
       authApiFacade: true,
     },
   };
-  const plan = await store.put(createAiGatewayJobPlan(planInput));
+  let plan = await store.put(createAiGatewayJobPlan(planInput));
+  const execution = await startAiGatewayJobExecution(plan, {
+    store,
+    fetchImpl: options.fetchImpl,
+    timeoutMs: options.executionStartTimeoutMs,
+  });
+  plan = execution.plan || plan;
   return { status: 202, body: publicAuthAiJobDetail(plan) };
 }
 

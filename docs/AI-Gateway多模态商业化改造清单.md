@@ -15,12 +15,13 @@
 - 已新增持久化 job store：Postgres 表 `ai_gateway_jobs`，JSON 兜底字段 `aiGatewayJobs`；migration `server/migrations/017_ai_gateway_jobs.sql`、`018_ai_gateway_job_lifecycle.sql`。
 - 已新增 credits gate 预留层：默认 `AI_GATEWAY_CREDITS_GATE=plan`，只把估算积分与 gate 状态写入 job metadata；显式 `check` 才调用现有 gate。
 - 已新增 Gateway reserve/finalize 最小闭环：显式 `AI_GATEWAY_CREDITS_GATE=reserve` 时，auth-api 创建 job 会 reserve 估算积分；job `succeeded` 时按估算积分扣除并释放占用，`failed/cancelled` 时释放占用。默认仍不影响现有线上旧链路。
+- 已新增 Gateway 执行灰度 handoff：显式 `AI_GATEWAY_EXECUTION_ENABLED=true` 时，`POST /api/ai/jobs` 会把 image/text job 交给 `gemini-proxy` 的 `/proxy/gemini/async`，并通过 `fairnessMeta.aiGatewayTraceJobId` 复用旧链路写回 `queued/running/succeeded/failed`。
 - `/healthz` 已包含 `aiGateway`：可查看 execution 是否切流、jobStore 来源、credits gate 模式和样板路由。
 - 已新增普通文生图/图生图灰度 trace：前端 Vertex 图片代理在真实 `/proxy/gemini/async` 前尽力创建 `/ai-gateway/jobs` 记录；失败不阻断生图，真实生成仍走旧链路。
 - 已接入旧链路单任务状态回写：`/proxy/gemini/async` 可根据 `fairnessMeta.aiGatewayTraceJobId` 将 trace job 推进到 `queued`、`running`、`succeeded`、`failed`。
 - 当前不接管现有生产生成流量；现有 `gemini-proxy` 仍是稳定生产入口。
 - 音乐、视频、3D 目前只进入统一模态定义，不会误路由到 `gemini-proxy`。
-- 当前仍未完成：前端任务 UI/刷新恢复界面、基于 usage event 的精确结算/退差、上游硬取消/重试执行接管、Gateway 直接执行开关。
+- 当前仍未完成：前端任务 UI/刷新恢复界面、基于 usage event 的精确结算/退差、上游硬取消、前端生产入口切到 Gateway。
 - 下一步主线：先把图片单任务闭环做完整，再迁移更多图片能力；切执行前必须显式设置 `AI_GATEWAY_EXECUTION_ENABLED=true`。
 
 ## 0. 目标架构
@@ -126,8 +127,8 @@ type AiJob = {
 
 当前拆解：
 
-- 已完成：job 草稿、路由计划、Postgres/JSON 持久化、单任务创建/读取/列表、生命周期状态更新、用户软取消、失败/取消 job 重试创建、Gateway reserve/finalize 最小闭环、旧链路单任务 trace 状态回写、`auth-api` 用户门面与管理员只读概要、前端 `aiJobsClient`、前端 `aiJobsStore/useAiJobs`、管理后台 `/admin/ai-jobs` 只读视图。
-- 未完成：基于 usage event 的精确结算/退差、上游硬取消/重试执行接管、前端用户任务 UI/刷新恢复界面、管理员详情/筛选视图。
+- 已完成：job 草稿、路由计划、Postgres/JSON 持久化、单任务创建/读取/列表、生命周期状态更新、用户软取消、失败/取消 job 重试创建、Gateway reserve/finalize 最小闭环、Gateway → gemini-proxy 执行 handoff 灰度开关、旧链路单任务 trace 状态写回、`auth-api` 用户门面与管理员只读概要、前端 `aiJobsClient`、前端 `aiJobsStore/useAiJobs`、管理后台 `/admin/ai-jobs` 只读视图。
+- 未完成：基于 usage event 的精确结算/退差、上游硬取消、前端用户任务 UI/刷新恢复界面、管理员详情/筛选视图、生产入口切流。
 - Phase 1 出口：图片单任务在不切主执行流的前提下，能完整记录 `created -> queued/running -> succeeded/failed`，并具备权限与计费接入点。
 
 ## 4. Phase 2：AI Gateway 包住现有 Gemini Proxy
@@ -148,6 +149,11 @@ type AiJob = {
 - Adapter 调用现有 `/proxy/gemini/async` 或 `/generate-content`。
 - poll 结果写回 `ai_jobs`。
 - 保留旧前端入口作为回退。
+
+当前拆解：
+
+- 已完成：`AI_GATEWAY_EXECUTION_ENABLED=true` 时，auth-api 创建 job 后会 handoff 到 `gemini-proxy` async；proxy 负责排队、执行和状态写回。
+- 未完成：前端生产文生图入口切到 `/api/ai/jobs`；Gateway 自身轮询/worker 化；上游硬取消；精确 usage event 结算。
 
 验收：
 
