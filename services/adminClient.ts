@@ -1,6 +1,7 @@
 import type { CreditLedgerEntry } from '../shared/credits';
 import type { AuthUser } from './authClient';
 import { apiUrl, r2ApiUrl } from './apiBase';
+import type { AiJobsListResponse } from './aiJobsClient';
 import { HttpRequestError, requestJson } from './httpClient';
 
 type UsersResponse = { users: AuthUser[]; total?: number; page?: number; pageSize?: number };
@@ -621,6 +622,15 @@ export async function fetchTaskExecutionEvents(query: TaskEventsQuery = {}) {
   return requestJson<TaskEventsResponse>(apiUrl(`/api/admin/task-events?${params.toString()}`));
 }
 
+export async function fetchAdminAiJobs(query: { limit?: number } = {}) {
+  const params = new URLSearchParams();
+  if (query.limit != null) params.set('limit', String(query.limit));
+  const qs = params.toString();
+  return requestJson<AiJobsListResponse>(apiUrl(`/api/admin/ai/jobs${qs ? `?${qs}` : ''}`), {
+    cache: 'no-store',
+  });
+}
+
 export type UsageEventRow = {
   id: string;
   idempotencyKey: string;
@@ -955,4 +965,3 @@ export async function fetchUsageReconciliation(query: { from?: string; to?: stri
     { cache: 'no-store' }
   );
 }
-
