@@ -84,6 +84,11 @@ import {
   usesVertexProxyForText,
 } from "./modelRegistry/bindingRuntime";
 import {
+  buildAiGatewayImageJobTraceBody,
+  extractAiGatewayTraceJobId,
+  isAiGatewayJobTraceEnabled,
+} from "./aiGatewayTrace";
+import {
   resolveUpstreamImageModelId,
   resolveUpstreamImageModelIdForRegistry,
   resolveUpstreamModelId,
@@ -1044,6 +1049,61 @@ async function bulkProxyGenerateContentSync(args: {
   }
 }
 
+async function createAiGatewayImageJobTrace(args: {
+  model: string;
+  contents: unknown;
+  config?: Record<string, unknown>;
+  registryId?: string;
+  estimatedCredits: number;
+  useVertex: boolean;
+  abortSignal?: AbortSignal;
+}): Promise<string | null> {
+  if (!isAiGatewayJobTraceEnabled(args.useVertex)) return null;
+  try {
+    const url = bulkApiUrl('/ai-gateway/jobs');
+    assertDevBulkCreditsAuthAligned(url);
+    const response = await bulkFetchOrExplain(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(
+        buildAiGatewayImageJobTraceBody({
+          model: args.model,
+          contents: args.contents,
+          config: args.config,
+          registryId: args.registryId,
+          estimatedCredits: args.estimatedCredits,
+          useVertex: args.useVertex,
+        })
+      ),
+      signal: args.abortSignal,
+      cache: 'no-store',
+    });
+    const text = await response.text();
+    if (!response.ok) {
+      logAiPipelineDev('warn', {
+        step: 'image_create',
+        code: 'AI_GATEWAY_TRACE_FAILED',
+        status: response.status,
+        raw: text,
+      });
+      return null;
+    }
+    try {
+      return extractAiGatewayTraceJobId(JSON.parse(text));
+    } catch {
+      return null;
+    }
+  } catch (error) {
+    if (isAbortError(error)) throw error;
+    logAiPipelineDev('warn', {
+      step: 'image_create',
+      code: 'AI_GATEWAY_TRACE_ERROR',
+      raw: String((error as Error)?.message || error),
+    });
+    return null;
+  }
+}
+
 async function bulkProxyGenerateContentAsync(args: {
   model: string;
   contents: unknown;
@@ -1063,7 +1123,8 @@ async function bulkProxyGenerateContentAsync(args: {
   await ensureGeminiProxySessionHint();
 
   const bindingRegistryId = resolveMeteringRegistryId({ model: args.model, config }) || (args.registryId || args.model || "").trim();
-  const aiBackendExtra = bulkUsesVertexBackend(bindingRegistryId, "image")
+  const useVertexBackend = bulkUsesVertexBackend(bindingRegistryId, "image");
+  const aiBackendExtra = useVertexBackend
     ? { aiBackend: "vertex" as const }
     : {};
 
@@ -1072,11 +1133,21 @@ async function bulkProxyGenerateContentAsync(args: {
   try {
   const asyncCreateUrl = bulkApiUrl("/proxy/gemini/async");
   assertDevBulkCreditsAuthAligned(asyncCreateUrl);
+  const aiGatewayTraceJobId = await createAiGatewayImageJobTrace({
+    model: args.model,
+    contents: args.contents,
+    config: safeConfig,
+    registryId: bindingRegistryId,
+    estimatedCredits: gateCredits,
+    useVertex: useVertexBackend,
+    abortSignal,
+  });
   const createBody = JSON.stringify({
     model: args.model,
     contents: args.contents,
     config: safeConfig,
     estimatedCredits: gateCredits,
+    ...(aiGatewayTraceJobId ? { fairnessMeta: { aiGatewayTraceJobId } } : {}),
     ...aiBackendExtra,
   });
   const postAsyncCreate = async () =>

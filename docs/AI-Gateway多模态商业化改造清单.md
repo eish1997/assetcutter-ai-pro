@@ -10,9 +10,10 @@
 - 已新增持久化 job store：Postgres 表 `ai_gateway_jobs`，JSON 兜底字段 `aiGatewayJobs`；migration `server/migrations/017_ai_gateway_jobs.sql`。
 - 已新增 credits gate 预留层：默认 `AI_GATEWAY_CREDITS_GATE=plan`，只把估算积分与 gate 状态写入 job metadata；显式 `check` 才调用现有 gate。
 - `/healthz` 已包含 `aiGateway`：可查看 execution 是否切流、jobStore 来源、credits gate 模式和样板路由。
+- 已新增普通文生图/图生图灰度 trace：前端 Vertex 图片代理在真实 `/proxy/gemini/async` 前尽力创建 `/ai-gateway/jobs` 记录；失败不阻断生图，真实生成仍走旧链路。
 - 当前不接管现有生产生成流量；现有 `gemini-proxy` 仍是稳定生产入口。
 - 音乐、视频、3D 目前只进入统一模态定义，不会误路由到 `gemini-proxy`。
-- 下一步：选择普通文生图做第一条灰度迁移；切执行前必须显式设置 `AI_GATEWAY_EXECUTION_ENABLED=true`。
+- 下一步：观察 trace job 与 observability 是否能稳定关联；切执行前必须显式设置 `AI_GATEWAY_EXECUTION_ENABLED=true`。
 
 ## 0. 目标架构
 
