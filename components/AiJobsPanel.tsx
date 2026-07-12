@@ -56,8 +56,8 @@ const AiJobsPanel: React.FC<AiJobsPanelProps> = ({ open, signedIn, onClose, onRe
 
   React.useEffect(() => {
     if (!open || !signedIn) return;
-    if (state.lastLoadedAt == null && !state.loading) void load();
-  }, [load, open, signedIn, state.lastLoadedAt, state.loading]);
+    if (state.lastLoadedAt == null && !state.loading && !state.error) void load();
+  }, [load, open, signedIn, state.error, state.lastLoadedAt, state.loading]);
 
   const runAction = React.useCallback(async (action: () => Promise<unknown>) => {
     setActionError('');

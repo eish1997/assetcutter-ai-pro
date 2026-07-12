@@ -3157,16 +3157,6 @@ const MainApp: React.FC = () => {
               <SidebarIconButton active={mode === AppMode.SETTINGS} label="设置" onClick={() => { setMode(AppMode.SETTINGS); setIsSidebarOpen(false); }}>
                 <svg viewBox="0 0 20 20" className="w-4 h-4" fill="none" aria-hidden><circle cx="10" cy="10" r="2.5" stroke="currentColor" strokeWidth="1.6"/><path d="M10 3v2.1M10 14.9V17M17 10h-2.1M5.1 10H3M14.9 5.1l-1.5 1.5M6.6 13.4l-1.5 1.5M14.9 14.9l-1.5-1.5M6.6 6.6 5.1 5.1" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"/></svg>
               </SidebarIconButton>
-              <SidebarIconButton
-                active={aiJobsPanelOpen}
-                label="AI 任务"
-                onClick={() => {
-                  setAiJobsPanelOpen((v) => !v);
-                  setIsSidebarOpen(false);
-                }}
-              >
-                <AppIcon name="package" className="w-4 h-4" />
-              </SidebarIconButton>
               {showAdminEntry ? (
                 <SidebarIconButton active={false} label="管理后台" onClick={() => { navigateAdmin('/admin'); setIsSidebarOpen(false); }}>
                   <svg viewBox="0 0 20 20" className="w-4 h-4" fill="none" aria-hidden>
@@ -3253,6 +3243,25 @@ const MainApp: React.FC = () => {
       {typeof document !== 'undefined'
         ? createPortal(
             <>
+              <div
+                className={`fixed ${RIGHT_DOCK_LOG_BOTTOM} right-[5rem] flex items-center justify-center`}
+                style={{ zIndex: RIGHT_DOCK_LOG_Z_INDEX }}
+              >
+                <button
+                  type="button"
+                  onClick={() => setAiJobsPanelOpen((v) => !v)}
+                  className={`relative w-12 h-12 rounded-full shadow-lg flex items-center justify-center transition-all outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50 motion-reduce:transition-none ${
+                    aiJobsPanelOpen
+                      ? 'bg-[#1a3354] ring-2 ring-blue-500/45 text-blue-200'
+                      : 'bg-[#16161a] ring-1 ring-white/[0.1] text-gray-200 hover:bg-[#1f1f24] hover:ring-blue-500/35'
+                  }`}
+                  title={aiJobsPanelOpen ? '关闭 AI 任务' : '打开 AI 任务'}
+                  aria-label={aiJobsPanelOpen ? '关闭 AI 任务' : '打开 AI 任务'}
+                >
+                  <AppIcon name="package" className="w-5 h-5" />
+                </button>
+              </div>
+
               <div
                 className={`fixed ${RIGHT_DOCK_LOG_BOTTOM} ${RIGHT_DOCK_RIGHT} flex items-center justify-center`}
                 style={{ zIndex: RIGHT_DOCK_LOG_Z_INDEX }}

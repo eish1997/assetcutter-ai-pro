@@ -78,6 +78,18 @@ describe('aiJobsStore', () => {
     expect(state.lastLoadedAt).toBeTruthy();
   });
 
+  it('treats malformed list payloads as an empty list', async () => {
+    vi.mocked(listMyAiJobs).mockResolvedValue({ limit: 20 } as any);
+
+    await expect(refreshMyAiJobs()).resolves.toEqual([]);
+
+    const state = getAiJobsSnapshot();
+    expect(state.loading).toBe(false);
+    expect(state.error).toBeNull();
+    expect(state.items).toEqual([]);
+    expect(state.byId).toEqual({});
+  });
+
   it('stores refresh errors without clearing existing items', async () => {
     const item = makeSummary('aijob_store_keep', 'running');
     upsertAiJobSummary(item);

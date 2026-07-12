@@ -43,6 +43,10 @@ function mergeSummary(summary: AiJobSummary, prev: Record<string, AiJobSummary>)
   return { ...prev, [summary.id]: summary };
 }
 
+function normalizeItems(items: unknown): AiJobSummary[] {
+  return Array.isArray(items) ? items.filter((item): item is AiJobSummary => Boolean(item && typeof item === 'object' && 'id' in item)) : [];
+}
+
 function indexItems(items: AiJobSummary[]) {
   return items.reduce<Record<string, AiJobSummary>>((acc, item) => {
     acc[item.id] = item;
@@ -64,16 +68,17 @@ export async function refreshMyAiJobs(options: { limit?: number } = {}) {
   setState({ loading: true, error: null, limit });
   try {
     const res = await listMyAiJobs({ limit });
-    const byId = { ...state.byId, ...indexItems(res.items) };
+    const items = normalizeItems(res?.items);
+    const byId = { ...state.byId, ...indexItems(items) };
     setState({
-      items: res.items,
+      items,
       byId,
       loading: false,
       error: null,
       lastLoadedAt: Date.now(),
       limit: res.limit || limit,
     });
-    return res.items;
+    return items;
   } catch (error) {
     setState({ loading: false, error: errorMessage(error) });
     throw error;
