@@ -11,6 +11,7 @@
 - 已新增前端读取 client：`services/aiJobsClient.ts`，统一封装创建、读取我的任务、读取管理员任务概要。
 - 已新增前端状态入口：`services/aiJobsStore.ts` + `hooks/useAiJobs.ts`，统一缓存最近任务、单个任务详情、加载与错误状态。
 - 已新增用户侧 `AI 任务` 面板：普通用户可在主侧栏查看最近任务、刷新单任务、软取消运行中任务、重试失败/取消任务。
+- 已新增用户侧成功任务回填入口：任务中心会从 job `output/artifacts` 识别图片、视频、模型链接，并将可恢复产物回填为工作区资产卡，资产元数据保留 `aiGatewayJobId` 便于反查。
 - 已新增取消/重试 API 契约：`POST /api/ai/jobs/:id/cancel` 软取消当前用户 job，`POST /api/ai/jobs/:id/retry` 基于失败/取消 job 创建新 job，并保留 retry 来源元数据。
 - 已新增管理后台只读入口：`/admin/ai-jobs`，展示最近 AI Gateway 任务的状态、模型/能力、用户、路由、Trace/Proxy、积分门禁与错误信息。
 - 已新增持久化 job store：Postgres 表 `ai_gateway_jobs`，JSON 兜底字段 `aiGatewayJobs`；migration `server/migrations/017_ai_gateway_jobs.sql`、`018_ai_gateway_job_lifecycle.sql`。
@@ -22,7 +23,7 @@
 - 已接入旧链路单任务状态回写：`/proxy/gemini/async` 可根据 `fairnessMeta.aiGatewayTraceJobId` 将 trace job 推进到 `queued`、`running`、`succeeded`、`failed`。
 - 当前不接管现有生产生成流量；现有 `gemini-proxy` 仍是稳定生产入口。
 - 音乐、视频、3D 目前只进入统一模态定义，不会误路由到 `gemini-proxy`。
-- 当前仍未完成：生成结果一键回填工作区、基于 usage event 的精确结算/退差、上游硬取消、前端生产入口切到 Gateway。
+- 当前仍未完成：回填产物持久化到云对象/本地伴侣、基于 usage event 的精确结算/退差、上游硬取消、前端生产入口切到 Gateway。
 - 下一步主线：先把图片单任务闭环做完整，再迁移更多图片能力；切执行前必须显式设置 `AI_GATEWAY_EXECUTION_ENABLED=true`。
 
 ## 0. 目标架构
@@ -129,7 +130,7 @@ type AiJob = {
 当前拆解：
 
 - 已完成：job 草稿、路由计划、Postgres/JSON 持久化、单任务创建/读取/列表、生命周期状态更新、用户软取消、失败/取消 job 重试创建、Gateway reserve/finalize 最小闭环、Gateway → gemini-proxy 执行 handoff 灰度开关、旧链路单任务 trace 状态写回、`auth-api` 用户门面与管理员只读概要、前端 `aiJobsClient`、前端 `aiJobsStore/useAiJobs`、管理后台 `/admin/ai-jobs` 只读视图。
-- 未完成：基于 usage event 的精确结算/退差、上游硬取消、生成结果一键回填工作区、管理员详情/筛选视图、生产入口切流。
+- 未完成：基于 usage event 的精确结算/退差、上游硬取消、回填产物持久化到云对象/本地伴侣、管理员详情/筛选视图、生产入口切流。
 - Phase 1 出口：图片单任务在不切主执行流的前提下，能完整记录 `created -> queued/running -> succeeded/failed`，并具备权限、计费接入点和用户侧基础恢复入口。
 
 ## 4. Phase 2：AI Gateway 包住现有 Gemini Proxy

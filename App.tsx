@@ -74,6 +74,7 @@ import KeyboardShortcutsModal from './components/KeyboardShortcutsModal';
 import { AC_NAVIGATE_SETTINGS_EVENT } from './services/navigateSettings';
 import { flushProjectAgentBackupRetryQueue } from './services/projectAgent';
 import { SiteImage } from './components/SiteImage';
+import type { RestorableAiJobArtifact } from './services/aiJobArtifacts';
 import { armChunkReloadRecovery, importWithChunkRetry } from './services/lazyImportWithRetry';
 import {
   loadWorkspaceProjects,
@@ -2593,6 +2594,53 @@ const MainApp: React.FC = () => {
     return newItems;
   };
 
+  const buildAiJobModelPlaceholder = (label: string) => {
+    const safeLabel = String(label || 'AI model').replace(/[<>&"]/g, '');
+    return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(
+      `<svg xmlns="http://www.w3.org/2000/svg" width="960" height="640" viewBox="0 0 960 640"><rect width="960" height="640" fill="#111827"/><path d="M480 126 672 236v168L480 514 288 404V236l192-110Z" fill="#1f2937" stroke="#60a5fa" stroke-width="18"/><path d="M288 236 480 348l192-112M480 348v166" stroke="#93c5fd" stroke-width="14" fill="none"/><text x="480" y="584" fill="#dbeafe" font-family="Arial,sans-serif" font-size="34" text-anchor="middle">${safeLabel}</text></svg>`
+    )}`;
+  };
+
+  const handleRestoreAiJobArtifacts = useCallback(
+    async (jobId: string, artifacts: RestorableAiJobArtifact[]) => {
+      const restorable = artifacts.filter((artifact) => artifact.kind === 'image' || artifact.kind === 'video' || artifact.kind === 'model3d');
+      if (!restorable.length) throw new Error('未找到可回填产物');
+      const now = Date.now();
+      const newAssets: WorkflowAsset[] = restorable.map((artifact, index) => {
+        const id = `wf_aijob_${now}_${index}_${Math.random().toString(36).slice(2, 8)}`;
+        const resultKey = artifact.kind === 'video' ? 'ai_job_video' : artifact.kind === 'model3d' ? 'ai_job_model3d' : 'ai_job_image';
+        const original = artifact.kind === 'model3d' ? buildAiJobModelPlaceholder(artifact.label) : artifact.url;
+        return {
+          id,
+          assetKind: 'image',
+          original,
+          displayKey: artifact.kind === 'image' ? 'original' : resultKey,
+          results: artifact.kind === 'image' ? {} : { [resultKey]: original },
+          modelUrls: artifact.kind === 'model3d' ? [artifact.url] : undefined,
+          stepModelUrls: artifact.kind === 'model3d' ? { [resultKey]: [artifact.url] } : undefined,
+          stepModelFormats: artifact.kind === 'model3d' ? { [resultKey]: [artifact.url.toLowerCase().includes('.fbx') ? 'fbx' : 'glb'] } : undefined,
+          resultOrder: artifact.kind === 'image' ? [] : [resultKey],
+          resultMeta: {
+            [resultKey]: {
+              executedAt: now,
+              displayStepLabel: 'AI 任务回填',
+              mediaKind: artifact.kind === 'video' ? 'video' : artifact.kind === 'model3d' ? 'model3d' : 'image',
+              aiGatewayJobId: jobId,
+            },
+          },
+          groupId: null,
+          archived: false,
+          hiddenInGrid: false,
+          createdAt: now,
+        } satisfies WorkflowAsset;
+      });
+      setWorkflowAssets((prev) => [...newAssets, ...prev]);
+      setMode(AppMode.WORKFLOW);
+      addGlobalLog('AI 任务', 'info', `已回填 ${newAssets.length} 个产物到工作区`, jobId);
+    },
+    [addGlobalLog]
+  );
+
   const addGenerate3DLog = useCallback((level: 'info' | 'warn' | 'error', message: string, detail?: unknown) => {
     const detailStr = detail !== undefined ? (typeof detail === 'string' ? detail : JSON.stringify(detail, null, 2)) : undefined;
     addGlobalLog('生成3D', level, message, detailStr);
@@ -3085,7 +3133,12 @@ const MainApp: React.FC = () => {
         />
       )}
       <Suspense fallback={null}>
-        <AiJobsPanel open={aiJobsPanelOpen} signedIn={Boolean(user)} onClose={() => setAiJobsPanelOpen(false)} />
+        <AiJobsPanel
+          open={aiJobsPanelOpen}
+          signedIn={Boolean(user)}
+          onClose={() => setAiJobsPanelOpen(false)}
+          onRestoreArtifacts={handleRestoreAiJobArtifacts}
+        />
       </Suspense>
 
       <div

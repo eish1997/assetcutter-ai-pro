@@ -627,6 +627,8 @@ export type WorkflowAsset = {
       skipUnderstandSnapshot?: boolean;
       /** 标签精修等扩展字段（可选） */
       semanticSummary?: string;
+      /** AI Gateway job id：用于从工作区结果反查统一任务中心 */
+      aiGatewayJobId?: string;
     }
   >;
   /** 文字能力（gen_text）等产生的文本结果，key 与 resultOrder 中步骤 id 对齐 */

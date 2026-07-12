@@ -2,6 +2,8 @@ import React from 'react';
 import { createPortal } from 'react-dom';
 import { useAiJobs } from '../hooks/useAiJobs';
 import type { AiJobStatus } from '../services/aiJobsClient';
+import type { RestorableAiJobArtifact } from '../services/aiJobArtifacts';
+import { extractRestorableAiJobArtifacts } from '../services/aiJobArtifacts';
 import {
   aiJobCreditsLabel,
   aiJobModelLabel,
@@ -19,6 +21,7 @@ type AiJobsPanelProps = {
   open: boolean;
   signedIn: boolean;
   onClose: () => void;
+  onRestoreArtifacts?: (jobId: string, artifacts: RestorableAiJobArtifact[]) => Promise<void> | void;
 };
 
 function formatDate(value: string | null | undefined): string {
@@ -36,9 +39,10 @@ const StatusBadge: React.FC<{ status: AiJobStatus }> = ({ status }) => (
   </span>
 );
 
-const AiJobsPanel: React.FC<AiJobsPanelProps> = ({ open, signedIn, onClose }) => {
+const AiJobsPanel: React.FC<AiJobsPanelProps> = ({ open, signedIn, onClose, onRestoreArtifacts }) => {
   const state = useAiJobs();
   const [actionError, setActionError] = React.useState('');
+  const [restoredJobIds, setRestoredJobIds] = React.useState<Record<string, boolean>>({});
 
   const load = React.useCallback(async () => {
     if (!signedIn) return;
@@ -63,6 +67,25 @@ const AiJobsPanel: React.FC<AiJobsPanelProps> = ({ open, signedIn, onClose }) =>
       setActionError(error instanceof Error ? error.message : '操作失败');
     }
   }, []);
+
+  const restoreArtifacts = React.useCallback(
+    async (jobId: string) => {
+      if (!onRestoreArtifacts) return;
+      setActionError('');
+      try {
+        const detail = await refreshMyAiJob(jobId);
+        const artifacts = extractRestorableAiJobArtifacts(detail);
+        if (!artifacts.length) {
+          throw new Error('未找到可回填产物');
+        }
+        await onRestoreArtifacts(jobId, artifacts);
+        setRestoredJobIds((prev) => ({ ...prev, [jobId]: true }));
+      } catch (error) {
+        setActionError(error instanceof Error ? error.message : '回填失败');
+      }
+    },
+    [onRestoreArtifacts]
+  );
 
   if (!open || typeof document === 'undefined') return null;
 
@@ -186,6 +209,18 @@ const AiJobsPanel: React.FC<AiJobsPanelProps> = ({ open, signedIn, onClose }) =>
                           className="h-7 rounded-lg border border-emerald-500/35 bg-emerald-900/15 px-2 text-[10px] text-emerald-200 transition-colors hover:bg-emerald-900/30 disabled:cursor-not-allowed disabled:opacity-50"
                         >
                           重试
+                        </button>
+                      ) : null}
+                      {job.status === 'succeeded' && onRestoreArtifacts ? (
+                        <button
+                          type="button"
+                          disabled={busy}
+                          onClick={() => {
+                            void restoreArtifacts(job.id);
+                          }}
+                          className="h-7 rounded-lg border border-blue-500/35 bg-blue-900/15 px-2 text-[10px] text-blue-200 transition-colors hover:bg-blue-900/30 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          {restoredJobIds[job.id] ? '已回填' : '回填'}
                         </button>
                       ) : null}
                     </div>
