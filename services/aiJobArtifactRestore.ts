@@ -18,6 +18,7 @@ export type BuildAiJobRestoreAssetsOptions = {
   cloudUserId?: string | null;
   cloudUsername?: string | null;
   cloudProjectId?: string | null;
+  cloudAssetPersistenceEnabled?: boolean;
   companionBaseUrl?: string;
   companionProjectId?: string;
 };
@@ -125,7 +126,7 @@ export async function buildAiJobRestoreAssets(
   const now = options.now ?? Date.now();
   const cloudUserId = String(options.cloudUserId || '').trim();
   const cloudProjectId = String(options.cloudProjectId || '').trim();
-  const canUseCloud = Boolean(cloudUserId && cloudProjectId);
+  const canUseCloud = Boolean(options.cloudAssetPersistenceEnabled && cloudUserId && cloudProjectId);
   const base = String(options.companionBaseUrl || '').trim();
   const projectId = String(options.companionProjectId || '').trim();
   const canUseCompanion = Boolean(base && projectId && projectId !== 'default');

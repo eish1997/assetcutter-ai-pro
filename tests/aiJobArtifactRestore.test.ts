@@ -76,7 +76,31 @@ describe('aiJobArtifactRestore', () => {
     expect(result.assets[0]!.originalCompanionKey).toBe('wf-orig-a');
   });
 
-  it('persists image artifacts to R2 when cloud context is available', async () => {
+  it('keeps asset persistence on companion by default even when cloud context is available', async () => {
+    workflowCompanionAssetsMock.imageSrcToDataUrlForCompanion.mockResolvedValue('data:image/png;base64,abc');
+    workflowCompanionAssetsMock.putWorkflowOriginalImageToCompanion.mockResolvedValue({
+      ok: true,
+      key: 'wf-orig-cloud-default',
+    });
+
+    const result = await buildAiJobRestoreAssets({
+      jobId: 'aijob_3',
+      artifacts: [imageArtifact()],
+      now: 3000,
+      cloudUserId: 'user_1',
+      cloudUsername: 'alice',
+      cloudProjectId: 'project_1',
+      companionBaseUrl: 'http://127.0.0.1:17373',
+      companionProjectId: 'project_1',
+    });
+
+    expect(result.persistedCount).toBe(1);
+    expect(result.assets[0]!.originalCompanionKey).toBe('wf-orig-cloud-default');
+    expect(result.assets[0]!.originalObjectKey).toBeUndefined();
+    expect(httpClientMock.requestJson).not.toHaveBeenCalled();
+  });
+
+  it('persists image artifacts to R2 only when explicitly enabled', async () => {
     const blob = new Blob([new Uint8Array([1, 2, 3])], { type: 'image/png' });
     workflowCompanionAssetsMock.imageSrcToDataUrlForCompanion.mockResolvedValue('data:image/png;base64,abc');
     workflowCompanionAssetsMock.parseDataUrlToBlob.mockReturnValue({ blob, mime: 'image/png' });
@@ -92,6 +116,7 @@ describe('aiJobArtifactRestore', () => {
       cloudUserId: 'user_1',
       cloudUsername: 'alice',
       cloudProjectId: 'project_1',
+      cloudAssetPersistenceEnabled: true,
       companionBaseUrl: 'http://127.0.0.1:17373',
       companionProjectId: 'project_1',
     });

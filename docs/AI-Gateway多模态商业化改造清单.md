@@ -13,7 +13,7 @@
 - 已新增用户侧 `AI 任务` 面板：普通用户可在主侧栏查看最近任务、刷新单任务、软取消运行中任务、重试失败/取消任务。
 - 已新增用户侧成功任务回填入口：任务中心会从 job `output/artifacts` 识别图片、视频、模型链接，并将可恢复产物回填为工作区资产卡，资产元数据保留 `aiGatewayJobId` 便于反查。
 - 已新增回填产物本地伴侣持久化：连接本地伴侣且项目有效时，回填图片/视频/模型会写入工作区 companion 对象键；未连接时仍退回链接级回填，不阻塞恢复。
-- 已新增回填产物 R2 云对象持久化：登录用户和工作区项目有效时，回填优先上传到 R2 并写入 `originalObjectKey` / `resultsObjectKeys` / R2 模型 URL；R2 失败再回退本地伴侣或链接级回填。
+- 已保留回填产物 R2 云对象持久化能力，但默认关闭；当前商业化策略是资产类大文件优先本地伴侣存储，云端暂只承载用户配置、任务记录、轻量同步数据。
 - 已新增取消/重试 API 契约：`POST /api/ai/jobs/:id/cancel` 软取消当前用户 job，`POST /api/ai/jobs/:id/retry` 基于失败/取消 job 创建新 job，并保留 retry 来源元数据。
 - 已新增管理后台只读入口：`/admin/ai-jobs`，展示最近 AI Gateway 任务的状态、模型/能力、用户、路由、Trace/Proxy、积分门禁与错误信息。
 - 已新增持久化 job store：Postgres 表 `ai_gateway_jobs`，JSON 兜底字段 `aiGatewayJobs`；migration `server/migrations/017_ai_gateway_jobs.sql`、`018_ai_gateway_job_lifecycle.sql`。
