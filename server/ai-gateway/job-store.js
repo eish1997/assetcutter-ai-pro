@@ -31,6 +31,14 @@ export function createInMemoryAiJobStore(options = {}) {
       entry.touchedAt = now;
       return entry.plan;
     },
+    list(options = {}, now = Date.now()) {
+      prune(now);
+      const limit = Math.min(100, Math.max(1, Math.floor(Number(options.limit) || 20)));
+      return Array.from(jobs.values())
+        .reverse()
+        .slice(0, limit)
+        .map((entry) => entry.plan);
+    },
     size(now = Date.now()) {
       prune(now);
       return jobs.size;

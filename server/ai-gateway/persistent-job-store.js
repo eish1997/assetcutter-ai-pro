@@ -1,6 +1,12 @@
 import { readDb, writeDb, USE_POSTGRES, getPool, ensurePostgres } from '../auth-store.js';
 
 const MAX_JSON_JOBS = 10000;
+const DEFAULT_LIST_LIMIT = 20;
+const MAX_LIST_LIMIT = 100;
+
+function clampListLimit(value) {
+  return Math.min(MAX_LIST_LIMIT, Math.max(1, Math.floor(Number(value) || DEFAULT_LIST_LIMIT)));
+}
 
 function safeJsonParse(value, fallback) {
   if (value == null) return fallback;
@@ -151,6 +157,23 @@ export function createPersistentAiJobStore() {
       const db = readDb();
       const row = Array.isArray(db.aiGatewayJobs) ? db.aiGatewayJobs.find((item) => item.id === key) : null;
       return row ? rowToPlan(row) : null;
+    },
+
+    async list(options = {}) {
+      const limit = clampListLimit(options.limit);
+      if (USE_POSTGRES) {
+        await ensureAiGatewayJobsStore();
+        const res = await getPool().query('SELECT * FROM ai_gateway_jobs ORDER BY created_at DESC LIMIT $1', [limit]);
+        return res.rows.map(rowToPlan);
+      }
+
+      const db = readDb();
+      const rows = Array.isArray(db.aiGatewayJobs) ? db.aiGatewayJobs : [];
+      return rows
+        .slice()
+        .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')))
+        .slice(0, limit)
+        .map(rowToPlan);
     },
   };
 }

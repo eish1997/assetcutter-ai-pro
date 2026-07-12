@@ -72,6 +72,49 @@ describe('AI gateway HTTP job sample', () => {
     expect(getRes.json().job.id).toBe('aijob_http_1');
   });
 
+  it('lists recent job summaries without exposing large inputs', async () => {
+    const store = createInMemoryAiJobStore();
+    await handleAiGatewayRequest(
+      makeReq('POST', '/ai-gateway/jobs', {
+        id: 'aijob_http_old',
+        modality: 'image',
+        model: 'gemini-3-pro-image-preview',
+        input: { contents: [{ role: 'user', parts: [{ text: 'old prompt' }] }] },
+      }),
+      makeRes(),
+      { store }
+    );
+    await handleAiGatewayRequest(
+      makeReq('POST', '/ai-gateway/jobs', {
+        id: 'aijob_http_new',
+        modality: 'image',
+        model: 'gemini-3-pro-image-preview',
+        metadata: { traceOnly: true, legacyPath: '/proxy/gemini/async' },
+        input: { contents: [{ role: 'user', parts: [{ text: 'new prompt' }] }] },
+      }),
+      makeRes(),
+      { store }
+    );
+
+    const listRes = makeRes();
+    await handleAiGatewayRequest(makeReq('GET', '/ai-gateway/jobs?limit=1'), listRes, { store });
+
+    expect(listRes.statusCode).toBe(200);
+    expect(listRes.json()).toMatchObject({
+      limit: 1,
+      items: [
+        {
+          id: 'aijob_http_new',
+          traceOnly: true,
+          legacyPath: '/proxy/gemini/async',
+          route: { providerId: 'vertex-gemini', adapterId: 'gemini-proxy' },
+        },
+      ],
+    });
+    expect(listRes.json().items[0]).not.toHaveProperty('input');
+    expect(listRes.json().items[0]).not.toHaveProperty('adapterRequest');
+  });
+
   it('rejects unsupported modalities without creating a job', async () => {
     const store = createInMemoryAiJobStore();
     const res = makeRes();

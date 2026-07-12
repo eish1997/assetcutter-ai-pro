@@ -14,6 +14,7 @@ export function aiGatewayHealthSnapshot() {
     creditsGateMode: aiGatewayCreditsGateMode(),
     routes: {
       createJob: 'POST /ai-gateway/jobs',
+      listJobs: 'GET /ai-gateway/jobs?limit=20',
       getJob: 'GET /ai-gateway/jobs/:id',
     },
     adapters: ['gemini-proxy'],

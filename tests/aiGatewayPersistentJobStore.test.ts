@@ -54,5 +54,9 @@ describe('persistent AI gateway job store', () => {
         path: '/proxy/gemini/async',
       },
     });
+
+    const listed = await store.list({ limit: 10 });
+    expect(listed).toHaveLength(1);
+    expect(listed[0].job.id).toBe('aijob_persist_1');
   });
 });
