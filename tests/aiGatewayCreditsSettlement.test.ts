@@ -80,6 +80,38 @@ describe('AI gateway credits settlement', () => {
     expect((await validateActiveCreditReserve(user.id, reserveKey)).ok).toBe(false);
   });
 
+  it('charges actual usage credits when job usage is available', async () => {
+    const store = createInMemoryAiJobStore();
+    const created = await createAuthAiGatewayJob({}, imageJobBody('aijob_settle_actual', 30), user, { store });
+    const reserveKey = created.body.job.creditsGate.reserveKey;
+    expect((await getCreditBalance(user.id)).reserved).toBe(30);
+
+    const settled = await updateAiGatewayJobStatus(
+      'aijob_settle_actual',
+      {
+        status: 'succeeded',
+        metadata: {
+          usage: {
+            creditsCharged: 12,
+          },
+        },
+      },
+      { store }
+    );
+
+    expect(settled.job.metadata.creditsGate).toMatchObject({
+      reserveKey,
+      settlementAction: 'charged',
+      settledCredits: 12,
+      estimatedCredits: 30,
+      settlementSource: 'job_usage',
+    });
+    const balance = await getCreditBalance(user.id);
+    expect(balance.balance).toBe(88);
+    expect(balance.reserved).toBe(0);
+    expect((await validateActiveCreditReserve(user.id, reserveKey)).ok).toBe(false);
+  });
+
   it('releases reserved credits when the job fails', async () => {
     const store = createInMemoryAiJobStore();
     const created = await createAuthAiGatewayJob({}, imageJobBody('aijob_settle_failed', 40), user, { store });

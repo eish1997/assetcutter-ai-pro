@@ -5,6 +5,7 @@ import {
   releaseCreditReserve,
 } from '../credit-store.js';
 import { getPool, readDb, USE_POSTGRES, writeDb } from '../auth-store.js';
+import { listUsageEventsByCorrelationId } from '../usage-billing-store.js';
 
 const TERMINAL_STATUSES = new Set(['succeeded', 'failed', 'cancelled']);
 
@@ -17,6 +18,63 @@ function creditsGateFromPlan(plan) {
 function settlementAlreadyDone(plan) {
   const gate = creditsGateFromPlan(plan);
   return Boolean(gate?.settledAt || gate?.releasedAt);
+}
+
+function positiveInt(value) {
+  const n = Math.floor(Number(value));
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+function collectCreditsFromUnknown(value, out, depth = 0) {
+  if (depth > 5 || value == null) return;
+  if (Array.isArray(value)) {
+    for (const item of value) collectCreditsFromUnknown(item, out, depth + 1);
+    return;
+  }
+  if (typeof value !== 'object') return;
+  const obj = value;
+  for (const key of ['creditsCharged', 'credits_charged', 'actualCredits', 'actual_credits', 'settledCredits']) {
+    const credits = positiveInt(obj[key]);
+    if (credits > 0) out.push(credits);
+  }
+  for (const child of Object.values(obj)) {
+    collectCreditsFromUnknown(child, out, depth + 1);
+  }
+}
+
+export function actualCreditsFromAiGatewayPlan(plan) {
+  const job = plan?.job;
+  const found = [];
+  collectCreditsFromUnknown(job?.metadata?.usage, found);
+  collectCreditsFromUnknown(job?.metadata?.metering, found);
+  collectCreditsFromUnknown(job?.metadata?.billing, found);
+  collectCreditsFromUnknown(job?.output, found);
+  collectCreditsFromUnknown(job?.artifacts, found);
+  if (!found.length) return { credits: 0, source: null };
+  return { credits: found.reduce((sum, n) => sum + n, 0), source: 'job_usage' };
+}
+
+async function actualCreditsFromUsageEvents(job) {
+  const correlationId = String(job?.correlationId || '').trim();
+  if (!correlationId) return { credits: 0, source: null, eventCount: 0 };
+  try {
+    const { events } = await listUsageEventsByCorrelationId(correlationId, { limit: 100 });
+    const chargeable = events.filter((event) => String(event.status || 'succeeded') !== 'failed');
+    const credits = chargeable.reduce((sum, event) => sum + positiveInt(event.creditsCharged), 0);
+    return credits > 0
+      ? { credits, source: 'usage_events', eventCount: chargeable.length }
+      : { credits: 0, source: null, eventCount: events.length };
+  } catch {
+    return { credits: 0, source: null, eventCount: 0 };
+  }
+}
+
+async function resolveSettlementCredits(plan, estimatedCredits) {
+  const fromEvents = await actualCreditsFromUsageEvents(plan?.job);
+  if (fromEvents.credits > 0) return fromEvents;
+  const fromJob = actualCreditsFromAiGatewayPlan(plan);
+  if (fromJob.credits > 0) return { ...fromJob, eventCount: 0 };
+  return { credits: estimatedCredits, source: 'estimated', eventCount: 0 };
 }
 
 export async function settleAiGatewayJobCredits(plan) {
@@ -37,8 +95,18 @@ export async function settleAiGatewayJobCredits(plan) {
   }
 
   if (job.status === 'succeeded') {
-    const result = await consumeAiGatewayReserve(userId, reserveKey, estimatedCredits, job.id);
-    return { settled: true, action: 'charged', reserveKey, credits: estimatedCredits, result };
+    const actual = await resolveSettlementCredits(plan, estimatedCredits);
+    const result = await consumeAiGatewayReserve(userId, reserveKey, actual.credits, job.id);
+    return {
+      settled: true,
+      action: 'charged',
+      reserveKey,
+      credits: actual.credits,
+      estimatedCredits,
+      settlementSource: actual.source,
+      usageEventCount: actual.eventCount,
+      result,
+    };
   }
 
   const result = await releaseCreditReserve(userId, reserveKey, { fullVoid: true });
@@ -88,6 +156,9 @@ export function settlementMetadataPatch(plan, settlement) {
         settledAt: now,
         settlementAction: 'charged',
         settledCredits: settlement.credits,
+        estimatedCredits: settlement.estimatedCredits ?? gate.estimatedCredits,
+        settlementSource: settlement.settlementSource || 'estimated',
+        usageEventCount: settlement.usageEventCount || 0,
       },
     };
   }
