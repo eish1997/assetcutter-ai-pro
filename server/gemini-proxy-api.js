@@ -14,7 +14,7 @@ import os from 'os';
 import path from 'path';
 import { ProxyAgent, setGlobalDispatcher } from 'undici';
 import { GoogleGenAI } from '@google/genai';
-import { handleAiGatewayRequest } from './ai-gateway/http-handler.js';
+import { handleAiGatewayRequest, updateAiGatewayJobStatus } from './ai-gateway/http-handler.js';
 import { aiGatewayHealthSnapshot } from './ai-gateway/health.js';
 import {
   GEMINI_PROXY_MAX_BODY_BYTES as MAX_BODY_BYTES,
@@ -713,6 +713,13 @@ async function runGeminiAsyncJob(jobId) {
     const job = geminiAsyncJobs.get(jobId);
     if (!job) return;
     if (!isFairnessEnabled()) job.status = 'running';
+    await updateAiGatewayTraceJob(job.aiGatewayTraceJobId, {
+      status: 'running',
+      metadata: {
+        proxyJobId: jobId,
+        proxyStatus: 'running',
+      },
+    });
     const { model, contents, config, useVertex } = job;
     const overloadMaxAttempts = Number(process.env.GEMINI_PROXY_RETRIES) || 15;
     const startedAt = Date.now();
@@ -733,6 +740,13 @@ async function runGeminiAsyncJob(jobId) {
         j.status = 'completed';
         j.result = result;
         j.updatedAt = Date.now();
+        await updateAiGatewayTraceJob(j.aiGatewayTraceJobId, {
+          status: 'succeeded',
+          metadata: {
+            proxyJobId: jobId,
+            proxyStatus: 'completed',
+          },
+        });
         return;
       } catch (e) {
         lastErr = e;
@@ -753,6 +767,14 @@ async function runGeminiAsyncJob(jobId) {
     j.status = 'failed';
     j.error = formatErrorDetail(lastErr);
     j.updatedAt = Date.now();
+    await updateAiGatewayTraceJob(j.aiGatewayTraceJobId, {
+      status: 'failed',
+      error: { code: 'GEMINI_PROXY_ASYNC_FAILED', message: j.error },
+      metadata: {
+        proxyJobId: jobId,
+        proxyStatus: 'failed',
+      },
+    });
     console.error(`[gemini-proxy] async failed id=${jobId} error=${j.error}`);
   } finally {
     fairnessOnAsyncJobFinished(jobId);
@@ -768,7 +790,23 @@ function parseCostWeightFromBody(parsed) {
   return 1;
 }
 
-function createGeminiAsyncJob(model, contents, config, useVertex, fairnessKey, costWeight, envelopeId = null) {
+function parseAiGatewayTraceJobId(parsed) {
+  const fm = parsed && parsed.fairnessMeta;
+  if (!fm || typeof fm !== 'object') return null;
+  const id = typeof fm.aiGatewayTraceJobId === 'string' ? fm.aiGatewayTraceJobId.trim() : '';
+  return id || null;
+}
+
+async function updateAiGatewayTraceJob(traceJobId, patch) {
+  if (!traceJobId) return;
+  try {
+    await updateAiGatewayJobStatus(traceJobId, patch);
+  } catch (e) {
+    console.warn('[gemini-proxy] ai-gateway trace update failed:', e instanceof Error ? e.message : String(e));
+  }
+}
+
+function createGeminiAsyncJob(model, contents, config, useVertex, fairnessKey, costWeight, envelopeId = null, aiGatewayTraceJobId = null) {
   sweepGeminiAsyncJobs();
   const id = `gasync-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
   if (isFairnessEnabled()) {
@@ -780,6 +818,7 @@ function createGeminiAsyncJob(model, contents, config, useVertex, fairnessKey, c
       contents,
       config,
       useVertex,
+      aiGatewayTraceJobId,
       result: null,
       error: null,
     });
@@ -799,6 +838,7 @@ function createGeminiAsyncJob(model, contents, config, useVertex, fairnessKey, c
     contents,
     config,
     useVertex,
+    aiGatewayTraceJobId,
     result: null,
     error: null,
   });
@@ -963,7 +1003,7 @@ const server = http.createServer(async (req, res) => {
   if (String(process.env.GEMINI_PROXY_DEBUG_CORS || '').trim() === '1' && req.method === 'POST') {
     console.warn('[gemini-proxy-api] corsOk=', corsOk, 'origin=', JSON.stringify(req.headers.origin));
   }
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-AC-Fairness-Key, X-AC-Fairness-Signature, X-AC-Client-Ip, X-AC-Credits-Reserve, X-AC-Credits-Gate-Signature, X-AC-Credits-Gate-Estimate, X-AC-Task-Envelope');
   res.setHeader('Access-Control-Max-Age', '86400');
 
@@ -1028,11 +1068,28 @@ const server = http.createServer(async (req, res) => {
       }
       const costWeight = parseCostWeightFromBody(parsed);
       const taskEnvelopeId = parseFairnessTaskEnvelope(req);
-      const cr = createGeminiAsyncJob(model, contents, config, useVertex, fairnessKey, costWeight, taskEnvelopeId);
+      const aiGatewayTraceJobId = parseAiGatewayTraceJobId(parsed);
+      const cr = createGeminiAsyncJob(
+        model,
+        contents,
+        config,
+        useVertex,
+        fairnessKey,
+        costWeight,
+        taskEnvelopeId,
+        aiGatewayTraceJobId
+      );
       if (cr.type === 'reject') {
         sendFairnessReject(res, cr.info);
         return;
       }
+      await updateAiGatewayTraceJob(aiGatewayTraceJobId, {
+        status: 'queued',
+        metadata: {
+          proxyJobId: cr.id,
+          proxyStatus: isFairnessEnabled() ? 'queued' : 'pending',
+        },
+      });
       sendJson(res, 202, { jobId: cr.id, status: isFairnessEnabled() ? 'queued' : 'pending' });
     } catch (e) {
       sendBodyReadError(res, e);

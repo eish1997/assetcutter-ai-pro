@@ -58,5 +58,22 @@ describe('persistent AI gateway job store', () => {
     const listed = await store.list({ limit: 10 });
     expect(listed).toHaveLength(1);
     expect(listed[0].job.id).toBe('aijob_persist_1');
+
+    await store.update('aijob_persist_1', {
+      status: 'failed',
+      error: { code: 'UPSTREAM_FAILED', message: 'provider failed' },
+      metadata: { proxyJobId: 'gasync_persist_1' },
+    });
+
+    const updated = await store.get('aijob_persist_1');
+    expect(updated).toMatchObject({
+      job: {
+        id: 'aijob_persist_1',
+        status: 'failed',
+        error: { code: 'UPSTREAM_FAILED', message: 'provider failed' },
+        metadata: { proxyJobId: 'gasync_persist_1' },
+      },
+    });
+    expect(updated.job.finishedAt).toBeTruthy();
   });
 });

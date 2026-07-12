@@ -50,6 +50,8 @@ function publicJobSummary(plan) {
     correlationId: plan.job.correlationId,
     createdAt: plan.job.createdAt,
     updatedAt: plan.job.updatedAt,
+    startedAt: plan.job.startedAt || null,
+    finishedAt: plan.job.finishedAt || null,
     route: route
       ? {
           providerId: route.providerId || null,
@@ -60,7 +62,14 @@ function publicJobSummary(plan) {
       : null,
     traceOnly: Boolean(metadata.traceOnly),
     legacyPath: metadata.legacyPath || null,
+    proxyJobId: metadata.proxyJobId || null,
     creditsGate: metadata.creditsGate || null,
+    error: plan.job.error
+      ? {
+          code: plan.job.error.code || null,
+          message: plan.job.error.message || String(plan.job.error),
+        }
+      : null,
   };
 }
 
@@ -73,6 +82,26 @@ function mapGatewayError(err) {
   }
   const message = err instanceof Error ? err.message : String(err);
   return { status: 500, body: { error: 'AI_GATEWAY_INTERNAL_ERROR', message } };
+}
+
+async function readJsonBody(req) {
+  const raw = await readBodyUtf8(req, API_JSON_BODY_MAX_BYTES);
+  if (!raw) return {};
+  try {
+    return JSON.parse(raw);
+  } catch {
+    throw new AiGatewayValidationError('Invalid JSON body', 'AI_GATEWAY_INVALID_JSON');
+  }
+}
+
+export async function updateAiGatewayJobStatus(id, patch, options = {}) {
+  const store = options.store || persistentAiGatewayJobStore;
+  if (typeof store.update !== 'function') {
+    const existing = await store.get(id);
+    if (!existing) return null;
+    return store.put({ ...existing, job: { ...existing.job, ...patch } });
+  }
+  return store.update(id, patch, options);
 }
 
 export async function handleAiGatewayRequest(req, res, options = {}) {
@@ -133,6 +162,28 @@ export async function handleAiGatewayRequest(req, res, options = {}) {
     }
     sendJson(res, 200, publicJobPlan(plan));
     return true;
+  }
+
+  if (path.startsWith(`${AI_GATEWAY_JOBS_PATH}/`) && req.method === 'PATCH') {
+    try {
+      const id = decodeURIComponent(path.slice(`${AI_GATEWAY_JOBS_PATH}/`.length)).split('/')[0];
+      const patch = await readJsonBody(req);
+      const plan = await updateAiGatewayJobStatus(id, patch, { store });
+      if (!plan) {
+        sendJson(res, 404, { error: 'AI_GATEWAY_JOB_NOT_FOUND', message: 'Job not found or expired' });
+        return true;
+      }
+      sendJson(res, 200, publicJobPlan(plan));
+      return true;
+    } catch (err) {
+      if ((err && err.message) === BODY_TOO_LARGE_MESSAGE) {
+        sendJson(res, 413, { error: 'AI_GATEWAY_BODY_TOO_LARGE', message: BODY_TOO_LARGE_MESSAGE });
+        return true;
+      }
+      const mapped = mapGatewayError(err);
+      sendJson(res, mapped.status, mapped.body);
+      return true;
+    }
   }
 
   return false;

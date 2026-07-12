@@ -16,6 +16,7 @@ export function aiGatewayHealthSnapshot() {
       createJob: 'POST /ai-gateway/jobs',
       listJobs: 'GET /ai-gateway/jobs?limit=20',
       getJob: 'GET /ai-gateway/jobs/:id',
+      updateJobStatus: 'PATCH /ai-gateway/jobs/:id',
     },
     adapters: ['gemini-proxy'],
     modalities: ['text', 'image', 'music', 'video', 'model3d'],

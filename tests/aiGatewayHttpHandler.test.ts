@@ -115,6 +115,48 @@ describe('AI gateway HTTP job sample', () => {
     expect(listRes.json().items[0]).not.toHaveProperty('adapterRequest');
   });
 
+  it('updates job lifecycle status for trace write-back', async () => {
+    const store = createInMemoryAiJobStore();
+    await handleAiGatewayRequest(
+      makeReq('POST', '/ai-gateway/jobs', {
+        id: 'aijob_http_lifecycle',
+        modality: 'image',
+        model: 'gemini-3-pro-image-preview',
+        input: { contents: [{ role: 'user', parts: [{ text: 'lifecycle prompt' }] }] },
+      }),
+      makeRes(),
+      { store }
+    );
+
+    const patchRes = makeRes();
+    await handleAiGatewayRequest(
+      makeReq('PATCH', '/ai-gateway/jobs/aijob_http_lifecycle', {
+        status: 'succeeded',
+        metadata: { proxyJobId: 'gasync_1', proxyStatus: 'completed' },
+      }),
+      patchRes,
+      { store }
+    );
+
+    expect(patchRes.statusCode).toBe(200);
+    expect(patchRes.json()).toMatchObject({
+      job: {
+        id: 'aijob_http_lifecycle',
+        status: 'succeeded',
+        metadata: { proxyJobId: 'gasync_1', proxyStatus: 'completed' },
+      },
+    });
+    expect(patchRes.json().job.finishedAt).toBeTruthy();
+
+    const listRes = makeRes();
+    await handleAiGatewayRequest(makeReq('GET', '/ai-gateway/jobs?limit=1'), listRes, { store });
+    expect(listRes.json().items[0]).toMatchObject({
+      id: 'aijob_http_lifecycle',
+      status: 'succeeded',
+      proxyJobId: 'gasync_1',
+    });
+  });
+
   it('rejects unsupported modalities without creating a job', async () => {
     const store = createInMemoryAiJobStore();
     const res = makeRes();

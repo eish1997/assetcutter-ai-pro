@@ -1,3 +1,5 @@
+import { applyAiJobStatusPatch } from './job.js';
+
 const DEFAULT_TTL_MS = 60 * 60 * 1000;
 const DEFAULT_MAX_JOBS = 500;
 
@@ -30,6 +32,14 @@ export function createInMemoryAiJobStore(options = {}) {
       if (!entry) return null;
       entry.touchedAt = now;
       return entry.plan;
+    },
+    update(id, patch, options = {}, now = Date.now()) {
+      prune(now);
+      const entry = jobs.get(id);
+      if (!entry) return null;
+      const plan = applyAiJobStatusPatch(entry.plan, patch, options);
+      jobs.set(id, { plan, touchedAt: now });
+      return plan;
     },
     list(options = {}, now = Date.now()) {
       prune(now);
