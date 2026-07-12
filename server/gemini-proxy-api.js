@@ -43,6 +43,7 @@ import {
   vertexProjectIdFromEnv,
 } from './vertex-genai-client.js';
 import { initGeminiFairnessConfigLoader, resolveGeminiFairnessConfigSource } from './gemini-fairness-config-store.js';
+import { beginGeminiProxyUpstreamCall, geminiProxyObservabilitySnapshot } from './gemini-proxy-observability.js';
 import { geminiProxyThrottleSnapshot, waitForGeminiUpstreamThrottle } from './gemini-proxy-throttle.js';
 import { extractUsageMetadata } from './gemini-proxy-usage.js';
 import {
@@ -651,9 +652,16 @@ function releaseGeminiProxySlot() {
 
 async function withGeminiProxySlot(fn, throttle = {}) {
   await acquireGeminiProxySlot();
+  let span = null;
   try {
     await waitForGeminiUpstreamThrottle(throttle);
-    return await fn();
+    span = beginGeminiProxyUpstreamCall(throttle);
+    const result = await fn();
+    span.end();
+    return result;
+  } catch (e) {
+    span?.end({ error: e });
+    throw e;
   } finally {
     releaseGeminiProxySlot();
   }
@@ -1211,6 +1219,7 @@ const server = http.createServer(async (req, res) => {
       geminiProxyInFlight,
       fairness: fairnessHealthSnapshot(),
       throttle: geminiProxyThrottleSnapshot(),
+      observability: geminiProxyObservabilitySnapshot(),
       aiGateway: aiGatewayHealthSnapshot(),
       vertex: {
         configured: isVertexConfigured(),

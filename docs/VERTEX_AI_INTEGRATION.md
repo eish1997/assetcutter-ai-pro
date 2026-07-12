@@ -27,6 +27,7 @@
 
 - **管理端**：站点 **`/admin/gemini-fairness`**（管理员）经 auth-api **`GET` / `PUT` / `DELETE`** **`/api/admin/gemini-fairness-config`** 读写或清空上述 JSON（仅白名单数值键；**PUT 与磁盘已有项合并**；**DELETE** 写 `{}`）。
 - **前端**：代理 JSON **`error: rate_limited` / `queue_overflow`** → **`throwFairnessRejected`** + 顶栏；经 **`workflow*`** 的 Google/上游 **429、RESOURCE_EXHAUSTED、503 过载**等 → **`ac:unified-ai-soft-notice`**（**`unifiedAiSoftNotice.ts`**，同栏展示、按类节流）；对话等直连 **`getDialogTextResponse`** 仍以页面内错误为主。
+- **观测**：`GET /healthz` 包含 `observability`，展示最近窗口内上游调用数、Vertex 图片调用数、429 数、节流等待次数/均值、按 model 聚合的失败与 429。
 
 无需在仓库中提交密钥文件；Render/Vercel 等用 Dashboard 注入或 Secret。
 

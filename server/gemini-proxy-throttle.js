@@ -1,3 +1,5 @@
+import { recordGeminiProxyThrottleWait } from './gemini-proxy-observability.js';
+
 const FALSEY = new Set(['', '0', 'false', 'no', 'off']);
 
 let throttleTail = Promise.resolve();
@@ -62,6 +64,7 @@ export async function waitForGeminiUpstreamThrottle(args = {}) {
     const waitMs = Math.max(0, lastVertexImageStartAt + minIntervalMs - nowFn());
     if (waitMs > 0) {
       console.warn(`[gemini-proxy] vertex image throttle wait=${waitMs}ms minInterval=${minIntervalMs}ms`);
+      recordGeminiProxyThrottleWait({ waitMs, minIntervalMs });
       await sleepFn(waitMs);
     }
     lastVertexImageStartAt = nowFn();
