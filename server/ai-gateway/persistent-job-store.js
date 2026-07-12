@@ -194,9 +194,12 @@ export function createPersistentAiJobStore() {
 
     async list(options = {}) {
       const limit = clampListLimit(options.limit);
+      const userId = String(options.userId || '').trim();
       if (USE_POSTGRES) {
         await ensureAiGatewayJobsStore();
-        const res = await getPool().query('SELECT * FROM ai_gateway_jobs ORDER BY created_at DESC LIMIT $1', [limit]);
+        const res = userId
+          ? await getPool().query('SELECT * FROM ai_gateway_jobs WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2', [userId, limit])
+          : await getPool().query('SELECT * FROM ai_gateway_jobs ORDER BY created_at DESC LIMIT $1', [limit]);
         return res.rows.map(rowToPlan);
       }
 
@@ -204,6 +207,7 @@ export function createPersistentAiJobStore() {
       const rows = Array.isArray(db.aiGatewayJobs) ? db.aiGatewayJobs : [];
       return rows
         .slice()
+        .filter((row) => !userId || String(row.userId || '') === userId)
         .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')))
         .slice(0, limit)
         .map(rowToPlan);

@@ -198,6 +198,12 @@ import {
 } from './jimeng-visual-api.js';
 import { assertJimengCreditsGate } from './jimeng-credits-gate.js';
 import { relayGeminiProxyRequest } from './gemini-proxy-relay.js';
+import {
+  createAuthAiGatewayJob,
+  getAuthAiGatewayJob,
+  listAuthAiGatewayJobs,
+  mapAuthAiGatewayError,
+} from './ai-gateway/auth-api-handler.js';
 import { listPublicPriceCatalog } from './pricing-engine.js';
 import { buildUsageReceipt, quoteJobKinds } from './pricing-read-model.js';
 import {
@@ -538,6 +544,7 @@ function assertCsrf(req, res) {
   /** 跨域 SPA 读不到 auth 域 ac_csrf；由 requireAuth + assertWriteOrigin 约束 */
   if (pathOnly === '/api/auth/credits-precharge') return true;
   if (pathOnly === '/api/auth/credits-release') return true;
+  if (pathOnly === '/api/ai/jobs' || pathOnly.startsWith('/api/ai/jobs/')) return true;
   if (pathOnly === '/api/internal/credits/precheck') return true;
   if (pathOnly === '/api/internal/credits/validate-reserve') return true;
   /** 伴侣 Agent：partition Cookie 无法带 X-CSRF-Token，由 requireAgentAuth + 会话 Cookie 约束 */
@@ -2428,6 +2435,15 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (path === '/api/admin/ai/jobs' && req.method === 'GET') {
+      const staff = await requirePermission(req, res, PERMISSIONS.TASK_EVENTS_READ);
+      if (!staff) return;
+      const u = new URL(req.url || '/', 'http://local');
+      const result = await listAuthAiGatewayJobs(staff.user, { limit: u.searchParams.get('limit') || 20 }, { admin: true });
+      json(res, result.status, result.body);
+      return;
+    }
+
     if (path === '/api/admin/observability/trace' && req.method === 'GET') {
       const staff = await requirePermission(req, res, PERMISSIONS.USAGE_READ);
       if (!staff) return;
@@ -2568,6 +2584,42 @@ const server = http.createServer(async (req, res) => {
         const msg = error instanceof Error ? error.message : String(error);
         json(res, msg.includes('不存在') ? 404 : 400, { error: msg });
       }
+      return;
+    }
+
+    if (path === '/api/ai/jobs' && req.method === 'POST') {
+      const user = await requireAuth(req, res);
+      if (!user) return;
+      try {
+        const body = await readBody(req);
+        const result = await createAuthAiGatewayJob(req, body, user);
+        json(res, result.status, result.body);
+      } catch (error) {
+        const mapped = mapAuthAiGatewayError(error);
+        json(res, mapped.status, mapped.body);
+      }
+      return;
+    }
+
+    if (path === '/api/ai/jobs' && req.method === 'GET') {
+      const user = await requireAuth(req, res);
+      if (!user) return;
+      const u = new URL(req.url || '/', 'http://local');
+      const result = await listAuthAiGatewayJobs(user, { limit: u.searchParams.get('limit') || 20 });
+      json(res, result.status, result.body);
+      return;
+    }
+
+    if (path.startsWith('/api/ai/jobs/') && req.method === 'GET') {
+      const user = await requireAuth(req, res);
+      if (!user) return;
+      const jobId = decodeURIComponent(path.slice('/api/ai/jobs/'.length).split('/')[0] || '');
+      if (!jobId) {
+        json(res, 400, { error: '缺少 jobId' });
+        return;
+      }
+      const result = await getAuthAiGatewayJob(jobId, user);
+      json(res, result.status, result.body);
       return;
     }
 

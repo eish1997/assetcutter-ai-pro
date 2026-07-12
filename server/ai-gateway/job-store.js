@@ -44,8 +44,10 @@ export function createInMemoryAiJobStore(options = {}) {
     list(options = {}, now = Date.now()) {
       prune(now);
       const limit = Math.min(100, Math.max(1, Math.floor(Number(options.limit) || 20)));
+      const userId = String(options.userId || '').trim();
       return Array.from(jobs.values())
         .reverse()
+        .filter((entry) => !userId || String(entry.plan?.job?.userId || '') === userId)
         .slice(0, limit)
         .map((entry) => entry.plan);
     },

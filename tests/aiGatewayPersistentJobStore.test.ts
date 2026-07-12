@@ -59,6 +59,22 @@ describe('persistent AI gateway job store', () => {
     expect(listed).toHaveLength(1);
     expect(listed[0].job.id).toBe('aijob_persist_1');
 
+    const otherPlan = createAiGatewayJobPlan(
+      {
+        id: 'aijob_persist_2',
+        modality: 'image',
+        model: 'gemini-3-pro-image-preview',
+        userId: 'user_2',
+        input: {
+          contents: [{ role: 'user', parts: [{ text: 'other user' }] }],
+        },
+      },
+      { nowIso: '2026-07-11T00:01:00.000Z' }
+    );
+    await store.put(otherPlan);
+    const userOnly = await store.list({ limit: 10, userId: 'user_1' });
+    expect(userOnly.map((item) => item.job.id)).toEqual(['aijob_persist_1']);
+
     await store.update('aijob_persist_1', {
       status: 'failed',
       error: { code: 'UPSTREAM_FAILED', message: 'provider failed' },
