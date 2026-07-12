@@ -65,4 +65,44 @@ describe('AI gateway settlement usage extraction', () => {
       },
     });
   });
+
+  it('prices gateway usage events from proxy usage metadata before falling back to estimates', () => {
+    const built = buildAiGatewayUsageEvent({
+      job: {
+        id: 'aijob_usage_tokens',
+        status: 'succeeded',
+        modality: 'text',
+        capability: 'text.generate',
+        userId: 'user_1',
+        correlationId: 'corr_tokens',
+        model: 'gemini-2.5-flash',
+        input: {},
+        metadata: {
+          proxyJobId: 'gasync_tokens',
+          usage: {
+            usageMetadata: { promptTokenCount: 100, candidatesTokenCount: 200, totalTokenCount: 300 },
+          },
+          creditsGate: { mode: 'reserve', estimatedCredits: 30, reserveAmount: 30 },
+        },
+      },
+      route: { providerId: 'vertex-gemini' },
+    });
+
+    expect(built).toMatchObject({
+      credits: 1,
+      source: 'usage_metadata',
+      event: {
+        billingSku: 'llm.gemini.flash',
+        meterKind: 'token',
+        quantityIn: 100,
+        quantityOut: 200,
+        quantity: 300,
+        creditsCharged: 1,
+        meta: {
+          settlementSource: 'usage_metadata',
+          usageMetadata: { promptTokenCount: 100, candidatesTokenCount: 200, totalTokenCount: 300 },
+        },
+      },
+    });
+  });
 });

@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
+  buildAiGatewayTraceSuccessMetadata,
   extractUsageMetadata,
   extractUsageMetadataFromProxyResult,
-} from '../shared/extractUsageMetadata.js';
+} from '../server/gemini-proxy-usage.js';
 
 describe('extractUsageMetadata', () => {
   it('extracts nested usageMetadata', () => {
@@ -29,5 +30,19 @@ describe('extractUsageMetadata', () => {
 
   it('returns null when empty', () => {
     expect(extractUsageMetadata({})).toBeNull();
+  });
+
+  it('builds AI gateway success metadata with extracted usage', () => {
+    expect(
+      buildAiGatewayTraceSuccessMetadata('gasync_1', {
+        usageMetadata: { promptTokenCount: 11, candidatesTokenCount: 7, totalTokenCount: 18 },
+      })
+    ).toEqual({
+      proxyJobId: 'gasync_1',
+      proxyStatus: 'completed',
+      usage: {
+        usageMetadata: { promptTokenCount: 11, candidatesTokenCount: 7, totalTokenCount: 18 },
+      },
+    });
   });
 });
