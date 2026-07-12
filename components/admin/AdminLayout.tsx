@@ -16,6 +16,7 @@ function NavButton({
   currentPath,
   onNavigate,
 }: {
+  key?: React.Key;
   label: string;
   path: string;
   currentPath: string;
@@ -126,4 +127,3 @@ const AdminLayout: React.FC<AdminLayoutProps> = ({ children, currentPath, onNavi
 };
 
 export default AdminLayout;
-

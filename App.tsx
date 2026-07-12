@@ -218,6 +218,7 @@ const AdminUsersPanel = lazyChunk(() => import('./components/admin/AdminUsersPan
 const AdminUserDetailPanel = lazyChunk(() => import('./components/admin/AdminUserDetailPanel'));
 const AdminAuditLogsPanel = lazyChunk(() => import('./components/admin/AdminAuditLogsPanel'));
 const AdminTaskEventsPanel = lazyChunk(() => import('./components/admin/AdminTaskEventsPanel'));
+const AdminAiJobsPanel = lazyChunk(() => import('./components/admin/AdminAiJobsPanel'));
 const AdminUsagePanel = lazyChunk(() => import('./components/admin/AdminUsagePanel'));
 const AdminPriceCatalogPanel = lazyChunk(() => import('./components/admin/AdminPriceCatalogPanel'));
 const AdminPromoCreditsPanel = lazyChunk(() => import('./components/admin/AdminPromoCreditsPanel'));
@@ -403,6 +404,8 @@ const AdminAppShell: React.FC = () => {
             <AdminAuditLogsPanel />
           ) : pathname === '/admin/task-events' ? (
             <AdminTaskEventsPanel />
+          ) : pathname === '/admin/ai-jobs' ? (
+            <AdminAiJobsPanel />
           ) : pathname === '/admin/usage' ? (
             <AdminUsagePanel />
           ) : pathname === '/admin/promo-credits' ? (

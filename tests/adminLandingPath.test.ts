@@ -13,4 +13,8 @@ describe('resolveAdminLandingPath', () => {
   it('仅有 users.read 时落在用户页', () => {
     expect(resolveAdminLandingPath([PERMISSIONS.USERS_READ])).toBe('/admin/users');
   });
+
+  it('仅有 task_events.read 时可落到任务执行页', () => {
+    expect(resolveAdminLandingPath([PERMISSIONS.TASK_EVENTS_READ])).toBe('/admin/task-events');
+  });
 });

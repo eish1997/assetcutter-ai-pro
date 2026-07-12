@@ -114,6 +114,7 @@ const AdminDashboardPanel: React.FC = () => {
           </div>
 
           <div className="flex flex-wrap gap-2">
+            {can(PERMISSIONS.TASK_EVENTS_READ) ? <QuickLink label="AI 任务" path="/admin/ai-jobs" /> : null}
             {can(PERMISSIONS.SYSTEM_STATUS_READ) ? <QuickLink label="系统状态" path="/admin/system-status" /> : null}
             {can(PERMISSIONS.USERS_ROLE_WRITE) ? <QuickLink label="成员邀请" path="/admin/staff-invites" /> : null}
             {can(PERMISSIONS.REGISTRATION_INVITES_WRITE) ? (

@@ -64,6 +64,7 @@ export const ADMIN_NAV_ITEMS = [
   { label: '用户管理', path: '/admin/users', permission: PERMISSIONS.USERS_READ },
   { label: '审计日志', path: '/admin/audit-logs', permission: PERMISSIONS.AUDIT_READ },
   { label: '任务执行', path: '/admin/task-events', permission: PERMISSIONS.TASK_EVENTS_READ },
+  { label: 'AI 任务', path: '/admin/ai-jobs', permission: PERMISSIONS.TASK_EVENTS_READ },
   { label: 'AI 用量', path: '/admin/usage', permission: PERMISSIONS.USAGE_READ },
   { label: '活动积分', path: '/admin/promo-credits', permission: PERMISSIONS.CREDITS_WRITE },
   { label: '价目表', path: '/admin/price-catalog', permission: PERMISSIONS.USAGE_READ },

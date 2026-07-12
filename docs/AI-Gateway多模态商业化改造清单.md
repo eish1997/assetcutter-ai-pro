@@ -10,6 +10,7 @@
 - 已新增 `auth-api` 门面：`POST /api/ai/jobs`、`GET /api/ai/jobs`、`GET /api/ai/jobs/:id`；普通用户只能读自己的 job，管理员可通过 `GET /api/admin/ai/jobs` 读最近概要。
 - 已新增前端读取 client：`services/aiJobsClient.ts`，统一封装创建、读取我的任务、读取管理员任务概要。
 - 已新增前端状态入口：`services/aiJobsStore.ts` + `hooks/useAiJobs.ts`，统一缓存最近任务、单个任务详情、加载与错误状态；当前尚未接具体 UI。
+- 已新增管理后台只读入口：`/admin/ai-jobs`，展示最近 AI Gateway 任务的状态、模型/能力、用户、路由、Trace/Proxy、积分门禁与错误信息。
 - 已新增持久化 job store：Postgres 表 `ai_gateway_jobs`，JSON 兜底字段 `aiGatewayJobs`；migration `server/migrations/017_ai_gateway_jobs.sql`、`018_ai_gateway_job_lifecycle.sql`。
 - 已新增 credits gate 预留层：默认 `AI_GATEWAY_CREDITS_GATE=plan`，只把估算积分与 gate 状态写入 job metadata；显式 `check` 才调用现有 gate。
 - `/healthz` 已包含 `aiGateway`：可查看 execution 是否切流、jobStore 来源、credits gate 模式和样板路由。
@@ -123,8 +124,8 @@ type AiJob = {
 
 当前拆解：
 
-- 已完成：job 草稿、路由计划、Postgres/JSON 持久化、单任务创建/读取/列表、生命周期状态更新、旧链路单任务 trace 状态回写、`auth-api` 用户门面与管理员只读概要、前端 `aiJobsClient`、前端 `aiJobsStore/useAiJobs`。
-- 未完成：真实积分 reserve/finalize、取消/重试语义、前端任务 UI/刷新恢复界面、完整管理员视图。
+- 已完成：job 草稿、路由计划、Postgres/JSON 持久化、单任务创建/读取/列表、生命周期状态更新、旧链路单任务 trace 状态回写、`auth-api` 用户门面与管理员只读概要、前端 `aiJobsClient`、前端 `aiJobsStore/useAiJobs`、管理后台 `/admin/ai-jobs` 只读视图。
+- 未完成：真实积分 reserve/finalize、取消/重试语义、前端用户任务 UI/刷新恢复界面、管理员详情/筛选视图。
 - Phase 1 出口：图片单任务在不切主执行流的前提下，能完整记录 `created -> queued/running -> succeeded/failed`，并具备权限与计费接入点。
 
 ## 4. Phase 2：AI Gateway 包住现有 Gemini Proxy
