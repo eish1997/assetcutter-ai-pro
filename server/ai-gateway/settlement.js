@@ -56,16 +56,16 @@ export function actualCreditsFromAiGatewayPlan(plan) {
 
 async function actualCreditsFromUsageEvents(job) {
   const correlationId = String(job?.correlationId || '').trim();
-  if (!correlationId) return { credits: 0, source: null, eventCount: 0 };
+  if (!correlationId) return { credits: 0, source: null, eventCount: 0, usageEventId: null };
   try {
     const { events } = await listUsageEventsByCorrelationId(correlationId, { limit: 100 });
     const chargeable = events.filter((event) => String(event.status || 'succeeded') !== 'failed');
     const credits = chargeable.reduce((sum, event) => sum + positiveInt(event.creditsCharged), 0);
     return credits > 0
-      ? { credits, source: 'usage_events', eventCount: chargeable.length }
-      : { credits: 0, source: null, eventCount: events.length };
+      ? { credits, source: 'usage_events', eventCount: chargeable.length, usageEventId: chargeable[0]?.id || null }
+      : { credits: 0, source: null, eventCount: events.length, usageEventId: null };
   } catch {
-    return { credits: 0, source: null, eventCount: 0 };
+    return { credits: 0, source: null, eventCount: 0, usageEventId: null };
   }
 }
 
@@ -96,7 +96,10 @@ export async function settleAiGatewayJobCredits(plan) {
 
   if (job.status === 'succeeded') {
     const actual = await resolveSettlementCredits(plan, estimatedCredits);
-    const result = await consumeAiGatewayReserve(userId, reserveKey, actual.credits, job.id);
+    const result = await consumeAiGatewayReserve(userId, reserveKey, actual.credits, {
+      jobId: job.id,
+      usageEventId: actual.usageEventId || job.id,
+    });
     return {
       settled: true,
       action: 'charged',
@@ -105,6 +108,7 @@ export async function settleAiGatewayJobCredits(plan) {
       estimatedCredits,
       settlementSource: actual.source,
       usageEventCount: actual.eventCount,
+      usageEventId: actual.usageEventId || null,
       result,
     };
   }
@@ -113,7 +117,9 @@ export async function settleAiGatewayJobCredits(plan) {
   return { settled: true, action: 'released', reserveKey, result };
 }
 
-async function consumeAiGatewayReserve(userId, reserveKey, credits, jobId) {
+async function consumeAiGatewayReserve(userId, reserveKey, credits, usageRef) {
+  const jobId = String(usageRef?.jobId || usageRef || '').trim();
+  const usageEventId = String(usageRef?.usageEventId || jobId).trim();
   const idempotencyKey = `aijob:settle:${jobId}`.slice(0, 200);
   if (USE_POSTGRES) {
     await ensureCreditStore();
@@ -121,7 +127,7 @@ async function consumeAiGatewayReserve(userId, reserveKey, credits, jobId) {
     try {
       await client.query('BEGIN');
       const result = await consumeCreditsInTx(client, userId, credits, {
-        usageEventId: jobId,
+        usageEventId,
         idempotencyKey,
         reserveKey,
       });
@@ -137,7 +143,7 @@ async function consumeAiGatewayReserve(userId, reserveKey, credits, jobId) {
 
   const db = readDb();
   const result = consumeCreditsJson(db, userId, credits, {
-    usageEventId: jobId,
+    usageEventId,
     idempotencyKey,
     reserveKey,
   });
@@ -159,6 +165,7 @@ export function settlementMetadataPatch(plan, settlement) {
         estimatedCredits: settlement.estimatedCredits ?? gate.estimatedCredits,
         settlementSource: settlement.settlementSource || 'estimated',
         usageEventCount: settlement.usageEventCount || 0,
+        usageEventId: settlement.usageEventId || null,
       },
     };
   }

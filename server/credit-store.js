@@ -2199,6 +2199,7 @@ export function shouldChargeCreditsForEvent(ev) {
     }
   }
   if (meta?.byok === true) return false;
+  if (meta?.externalCreditSettlement === true) return false;
   return creditsForEvent(ev) > 0;
 }
 

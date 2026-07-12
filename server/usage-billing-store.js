@@ -108,6 +108,8 @@ function normalizeEventInput(userId, raw, catalogVersion = null) {
         costUsdEst = quote.costUsdEst;
       }
     }
+  } else if (clientCreditsValid && meta?.externalCreditSettlement === true) {
+    creditsCharged = Math.floor(Number(clientCredits));
   }
 
   return {

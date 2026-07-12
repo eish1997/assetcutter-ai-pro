@@ -6,6 +6,7 @@ import {
 import { createInMemoryAiJobStore } from '../server/ai-gateway/job-store.js';
 import { updateAiGatewayJobStatus } from '../server/ai-gateway/http-handler.js';
 import { adjustCredits, getCreditBalance, validateActiveCreditReserve } from '../server/credit-store.js';
+import { listUsageEventsForAdmin } from '../server/usage-billing-store.js';
 import { resolveAuthDbFileForTests } from './helpers/authDbTestPath.js';
 
 const DB_FILE = resolveAuthDbFileForTests();
@@ -24,6 +25,7 @@ function resetCreditJson() {
   db.creditBalances = {};
   db.creditLedger = [];
   db.creditReserves = [];
+  db.usageEvents = [];
   db.aiGatewayJobs = [];
   fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2), 'utf8');
 }
@@ -104,8 +106,21 @@ describe('AI gateway credits settlement', () => {
       settlementAction: 'charged',
       settledCredits: 12,
       estimatedCredits: 30,
-      settlementSource: 'job_usage',
+      settlementSource: 'usage_events',
+      usageEventCount: 1,
     });
+    const usage = await listUsageEventsForAdmin({ correlationId: settled.job.correlationId, limit: 10 });
+    expect(usage.events).toHaveLength(1);
+    expect(usage.events[0]).toMatchObject({
+      billingSku: 'image.gemini.pro',
+      creditsCharged: 12,
+      upstreamTaskId: settled.job.correlationId,
+      meta: {
+        aiGatewayJobId: 'aijob_settle_actual',
+        externalCreditSettlement: true,
+      },
+    });
+    expect(settled.job.metadata.creditsGate.usageEventId).toBe(usage.events[0].id);
     const balance = await getCreditBalance(user.id);
     expect(balance.balance).toBe(88);
     expect(balance.reserved).toBe(0);

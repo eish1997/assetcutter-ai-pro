@@ -4,6 +4,7 @@ import { AiGatewayValidationError, createAiGatewayJobPlan } from './index.js';
 import { persistentAiGatewayJobStore } from './persistent-job-store.js';
 import { AiGatewayRouteError } from './provider-router.js';
 import { settleAiGatewayJobCredits, settlementMetadataPatch } from './settlement.js';
+import { recordAiGatewayUsageEvent } from './usage-event.js';
 
 export const AI_GATEWAY_JOBS_PATH = '/ai-gateway/jobs';
 const DEFAULT_LIST_LIMIT = 20;
@@ -106,6 +107,10 @@ export async function updateAiGatewayJobStatus(id, patch, options = {}) {
     plan = await store.update(id, patch, options);
   }
   if (!plan) return null;
+  if (plan.job?.status === 'succeeded') {
+    const recordUsageEvent = options.recordUsageEvent || recordAiGatewayUsageEvent;
+    await recordUsageEvent(plan);
+  }
   const settlement = await settleAiGatewayJobCredits(plan);
   const metadata = settlementMetadataPatch(plan, settlement);
   if (Object.keys(metadata).length) {
