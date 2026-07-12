@@ -1,0 +1,128 @@
+import type { AiJobDetail, AiJobSummary } from './aiJobsClient';
+import { getMyAiJob, listMyAiJobs } from './aiJobsClient';
+
+export type AiJobsState = {
+  items: AiJobSummary[];
+  byId: Record<string, AiJobSummary>;
+  detailsById: Record<string, AiJobDetail>;
+  loading: boolean;
+  refreshingJobIds: Record<string, boolean>;
+  error: string | null;
+  lastLoadedAt: number | null;
+  limit: number;
+};
+
+const EMPTY_STATE: AiJobsState = Object.freeze({
+  items: [],
+  byId: {},
+  detailsById: {},
+  loading: false,
+  refreshingJobIds: {},
+  error: null,
+  lastLoadedAt: null,
+  limit: 20,
+});
+
+let state: AiJobsState = EMPTY_STATE;
+const listeners = new Set<() => void>();
+
+function emit() {
+  listeners.forEach((fn) => fn());
+}
+
+function setState(patch: Partial<AiJobsState>) {
+  state = { ...state, ...patch };
+  emit();
+}
+
+function errorMessage(error: unknown) {
+  return String((error as Error)?.message || error || '请求失败');
+}
+
+function mergeSummary(summary: AiJobSummary, prev: Record<string, AiJobSummary>) {
+  return { ...prev, [summary.id]: summary };
+}
+
+function indexItems(items: AiJobSummary[]) {
+  return items.reduce<Record<string, AiJobSummary>>((acc, item) => {
+    acc[item.id] = item;
+    return acc;
+  }, {});
+}
+
+export function getAiJobsSnapshot(): AiJobsState {
+  return state;
+}
+
+export function subscribeAiJobs(listener: () => void) {
+  listeners.add(listener);
+  return () => listeners.delete(listener);
+}
+
+export async function refreshMyAiJobs(options: { limit?: number } = {}) {
+  const limit = Math.min(100, Math.max(1, Math.floor(Number(options.limit) || state.limit || 20)));
+  setState({ loading: true, error: null, limit });
+  try {
+    const res = await listMyAiJobs({ limit });
+    const byId = { ...state.byId, ...indexItems(res.items) };
+    setState({
+      items: res.items,
+      byId,
+      loading: false,
+      error: null,
+      lastLoadedAt: Date.now(),
+      limit: res.limit || limit,
+    });
+    return res.items;
+  } catch (error) {
+    setState({ loading: false, error: errorMessage(error) });
+    throw error;
+  }
+}
+
+export async function refreshMyAiJob(jobId: string) {
+  const id = String(jobId || '').trim();
+  if (!id) throw new Error('Invalid AI job id');
+  setState({
+    refreshingJobIds: { ...state.refreshingJobIds, [id]: true },
+    error: null,
+  });
+  try {
+    const detail = await getMyAiJob(id);
+    const byId = mergeSummary(detail.job, state.byId);
+    const existingIndex = state.items.findIndex((item) => item.id === id);
+    const items =
+      existingIndex >= 0
+        ? state.items.map((item) => (item.id === id ? detail.job : item))
+        : [detail.job, ...state.items].slice(0, state.limit || 20);
+    const { [id]: _done, ...refreshingJobIds } = state.refreshingJobIds;
+    setState({
+      items,
+      byId,
+      detailsById: { ...state.detailsById, [id]: detail },
+      refreshingJobIds,
+      error: null,
+    });
+    return detail;
+  } catch (error) {
+    const { [id]: _done, ...refreshingJobIds } = state.refreshingJobIds;
+    setState({ refreshingJobIds, error: errorMessage(error) });
+    throw error;
+  }
+}
+
+export function upsertAiJobSummary(summary: AiJobSummary) {
+  const byId = mergeSummary(summary, state.byId);
+  const existingIndex = state.items.findIndex((item) => item.id === summary.id);
+  const items =
+    existingIndex >= 0
+      ? state.items.map((item) => (item.id === summary.id ? summary : item))
+      : [summary, ...state.items].slice(0, state.limit || 20);
+  setState({ items, byId });
+}
+
+export function resetAiJobsStateForTests() {
+  state = EMPTY_STATE;
+  emit();
+}
+
