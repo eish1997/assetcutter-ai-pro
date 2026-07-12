@@ -47,4 +47,9 @@ describe('AI gateway credits gate planning', () => {
     expect(estimateAiGatewayJobCredits({ input: { costWeight: 2 } })).toBe(2);
     expect(estimateAiGatewayJobCredits({})).toBe(50);
   });
+
+  it('recognizes reserve mode separately from proxy precheck mode', () => {
+    process.env.AI_GATEWAY_CREDITS_GATE = 'reserve';
+    expect(aiGatewayCreditsGateMode()).toBe('reserve');
+  });
 });

@@ -2,6 +2,7 @@ import { evaluateAiGatewayCreditsGate } from './credits-gate.js';
 import { AiGatewayValidationError, createAiGatewayJobPlan } from './index.js';
 import { persistentAiGatewayJobStore } from './persistent-job-store.js';
 import { AiGatewayRouteError } from './provider-router.js';
+import { settleAiGatewayJobCredits, settlementMetadataPatch } from './settlement.js';
 
 const DEFAULT_LIST_LIMIT = 20;
 const MAX_LIST_LIMIT = 100;
@@ -90,7 +91,7 @@ export async function createAuthAiGatewayJob(req, body, user, options = {}) {
   const store = options.store || persistentAiGatewayJobStore;
   const evaluateCreditsGate = options.evaluateCreditsGate || evaluateAiGatewayCreditsGate;
   const raw = body && typeof body === 'object' ? body : {};
-  const gate = await evaluateCreditsGate(req, raw);
+  const gate = await evaluateCreditsGate(req, raw, { userId: user.id });
   if (!gate.ok) {
     return { status: gate.status || 403, body: gate.body || { error: 'AI_GATEWAY_CREDITS_GATE_FAILED' } };
   }
@@ -146,7 +147,10 @@ export async function cancelAuthAiGatewayJob(id, user, options = {}) {
     metadata: { cancelledByUserId: user.id, cancelledAt },
     error: { code: 'AI_GATEWAY_JOB_CANCELLED', message: 'Job cancelled' },
   });
-  return { status: 200, body: publicAuthAiJobDetail(next) };
+  const settlement = await settleAiGatewayJobCredits(next);
+  const metadata = settlementMetadataPatch(next, settlement);
+  const settled = Object.keys(metadata).length ? await store.update(id, { metadata }) : next;
+  return { status: 200, body: publicAuthAiJobDetail(settled) };
 }
 
 export async function retryAuthAiGatewayJob(id, user, body = {}, options = {}) {

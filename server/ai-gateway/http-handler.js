@@ -3,6 +3,7 @@ import { evaluateAiGatewayCreditsGate } from './credits-gate.js';
 import { AiGatewayValidationError, createAiGatewayJobPlan } from './index.js';
 import { persistentAiGatewayJobStore } from './persistent-job-store.js';
 import { AiGatewayRouteError } from './provider-router.js';
+import { settleAiGatewayJobCredits, settlementMetadataPatch } from './settlement.js';
 
 export const AI_GATEWAY_JOBS_PATH = '/ai-gateway/jobs';
 const DEFAULT_LIST_LIMIT = 20;
@@ -96,12 +97,21 @@ async function readJsonBody(req) {
 
 export async function updateAiGatewayJobStatus(id, patch, options = {}) {
   const store = options.store || persistentAiGatewayJobStore;
+  let plan;
   if (typeof store.update !== 'function') {
     const existing = await store.get(id);
     if (!existing) return null;
-    return store.put({ ...existing, job: { ...existing.job, ...patch } });
+    plan = await store.put({ ...existing, job: { ...existing.job, ...patch } });
+  } else {
+    plan = await store.update(id, patch, options);
   }
-  return store.update(id, patch, options);
+  if (!plan) return null;
+  const settlement = await settleAiGatewayJobCredits(plan);
+  const metadata = settlementMetadataPatch(plan, settlement);
+  if (Object.keys(metadata).length) {
+    plan = await store.update(id, { metadata }, options);
+  }
+  return plan;
 }
 
 export async function handleAiGatewayRequest(req, res, options = {}) {
