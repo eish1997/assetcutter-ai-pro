@@ -207,6 +207,7 @@ const SeamRepairSection = lazyChunk(() => import('./components/SeamRepairSection
 const GenerateTextureSection = lazyChunk(() => import('./components/GenerateTextureSection'));
 const SettingsSection = lazyChunk(() => import('./components/SettingsSection'));
 const DevLogSection = lazyChunk(() => import('./components/DevLogSection'));
+const AiJobsPanel = lazyChunk(() => import('./components/AiJobsPanel'));
 const AdminStaffProvider = lazyChunk(() => import('./components/admin/AdminStaffContext'));
 const AdminRolePreviewBridge = lazyChunk(() => import('./components/admin/AdminRolePreviewBridge'));
 const AdminLayout = lazyChunk(() => import('./components/admin/AdminLayout'));
@@ -912,6 +913,7 @@ const MainApp: React.FC = () => {
     isFilterDefault: isGlobalLogFilterDefault,
   } = useGlobalLogFilter(globalLogs, globalLogPreferenceScope);
   const [globalLogOpen, setGlobalLogOpen] = useState(false);
+  const [aiJobsPanelOpen, setAiJobsPanelOpen] = useState(false);
   const globalLogOpenRef = useRef(globalLogOpen);
   useEffect(() => {
     globalLogOpenRef.current = globalLogOpen;
@@ -3082,6 +3084,9 @@ const MainApp: React.FC = () => {
           onSaved={() => setAiInvocationStatusRev((n) => n + 1)}
         />
       )}
+      <Suspense fallback={null}>
+        <AiJobsPanel open={aiJobsPanelOpen} signedIn={Boolean(user)} onClose={() => setAiJobsPanelOpen(false)} />
+      </Suspense>
 
       <div
         className={`fixed left-3 top-4 bottom-4 z-[1001] w-14 flex flex-col transition-all ${isSidebarOpen ? 'opacity-100' : 'opacity-100'}`}
@@ -3123,6 +3128,16 @@ const MainApp: React.FC = () => {
               </SidebarIconButton>
               <SidebarIconButton active={mode === AppMode.SETTINGS} label="设置" onClick={() => { setMode(AppMode.SETTINGS); setIsSidebarOpen(false); }}>
                 <svg viewBox="0 0 20 20" className="w-4 h-4" fill="none" aria-hidden><circle cx="10" cy="10" r="2.5" stroke="currentColor" strokeWidth="1.6"/><path d="M10 3v2.1M10 14.9V17M17 10h-2.1M5.1 10H3M14.9 5.1l-1.5 1.5M6.6 13.4l-1.5 1.5M14.9 14.9l-1.5-1.5M6.6 6.6 5.1 5.1" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"/></svg>
+              </SidebarIconButton>
+              <SidebarIconButton
+                active={aiJobsPanelOpen}
+                label="AI 任务"
+                onClick={() => {
+                  setAiJobsPanelOpen((v) => !v);
+                  setIsSidebarOpen(false);
+                }}
+              >
+                <AppIcon name="package" className="w-4 h-4" />
               </SidebarIconButton>
               {showAdminEntry ? (
                 <SidebarIconButton active={false} label="管理后台" onClick={() => { navigateAdmin('/admin'); setIsSidebarOpen(false); }}>

@@ -1,60 +1,26 @@
 import React from 'react';
 import { fetchAdminAiJobs } from '../../services/adminClient';
 import type { AiJobStatus, AiJobSummary } from '../../services/aiJobsClient';
+import {
+  aiJobCreditsLabel,
+  aiJobModelLabel,
+  aiJobRouteLabel,
+  aiJobStatusLabel,
+  aiJobStatusTone,
+  aiJobTraceLabel,
+} from '../../services/aiJobDisplay';
+export {
+  aiJobCreditsLabel,
+  aiJobRouteLabel,
+  aiJobStatusLabel,
+  aiJobStatusTone,
+} from '../../services/aiJobDisplay';
 
 const PAGE_SIZE = 50;
-
-const STATUS_LABELS: Record<AiJobStatus, string> = {
-  created: '已创建',
-  queued: '排队中',
-  running: '运行中',
-  succeeded: '成功',
-  failed: '失败',
-  cancelled: '已取消',
-};
-
-const STATUS_TONES: Record<AiJobStatus, string> = {
-  created: 'border-gray-600/70 bg-gray-700/20 text-gray-300',
-  queued: 'border-blue-500/40 bg-blue-500/10 text-blue-200',
-  running: 'border-amber-500/40 bg-amber-500/10 text-amber-200',
-  succeeded: 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200',
-  failed: 'border-red-500/40 bg-red-500/10 text-red-200',
-  cancelled: 'border-zinc-500/60 bg-zinc-600/20 text-zinc-300',
-};
-
-export function aiJobStatusLabel(status: AiJobStatus): string {
-  return STATUS_LABELS[status] ?? status;
-}
-
-export function aiJobStatusTone(status: AiJobStatus): string {
-  return STATUS_TONES[status] ?? STATUS_TONES.created;
-}
-
-export function aiJobRouteLabel(job: AiJobSummary): string {
-  const route = job.route;
-  return route?.providerId || route?.adapterId || job.provider || route?.upstreamBackend || '未定';
-}
-
-export function aiJobCreditsLabel(job: AiJobSummary): string {
-  const gate = job.creditsGate;
-  if (!gate) return '未记录';
-  const amount = Number.isFinite(gate.estimatedCredits) ? gate.estimatedCredits : null;
-  const mode = gate.mode || (gate.enabled ? 'enabled' : 'disabled');
-  return amount == null ? mode : `${amount} / ${mode}`;
-}
 
 function formatDate(value: string | null | undefined): string {
   if (!value) return '-';
   return new Date(value).toLocaleString();
-}
-
-function jobModelLabel(job: AiJobSummary): string {
-  const parts = [job.capability, job.model].filter(Boolean);
-  return parts.length ? parts.join(' · ') : job.modality;
-}
-
-function jobTraceLabel(job: AiJobSummary): string {
-  return job.proxyJobId || job.correlationId || job.id;
 }
 
 const StatusBadge: React.FC<{ status: AiJobStatus }> = ({ status }) => (
@@ -136,12 +102,12 @@ const AdminAiJobsPanel: React.FC = () => {
                         <StatusBadge status={job.status} />
                       </td>
                       <td className="px-3 py-2">
-                        <div className="text-gray-200">{jobModelLabel(job)}</div>
+                        <div className="text-gray-200">{aiJobModelLabel(job)}</div>
                         <div className="mt-0.5 text-[10px] text-gray-600">{job.modality}</div>
                       </td>
                       <td className="px-3 py-2 text-gray-400 font-mono text-[10px] break-all">{job.userId || '-'}</td>
                       <td className="px-3 py-2 text-gray-300">{aiJobRouteLabel(job)}</td>
-                      <td className="px-3 py-2 text-gray-500 font-mono text-[10px] break-all">{jobTraceLabel(job)}</td>
+                      <td className="px-3 py-2 text-gray-500 font-mono text-[10px] break-all">{aiJobTraceLabel(job)}</td>
                       <td className="px-3 py-2 text-gray-400">{aiJobCreditsLabel(job)}</td>
                       <td className="px-3 py-2 text-red-300/80 max-w-[240px] truncate" title={job.error?.message || ''}>
                         {job.error?.message || '-'}
@@ -157,7 +123,7 @@ const AdminAiJobsPanel: React.FC = () => {
                 <article key={job.id} className="p-4 space-y-3">
                   <div className="flex items-start justify-between gap-3">
                     <div>
-                      <p className="text-[11px] text-gray-200">{jobModelLabel(job)}</p>
+                      <p className="text-[11px] text-gray-200">{aiJobModelLabel(job)}</p>
                       <p className="mt-1 text-[10px] text-gray-600">{formatDate(job.createdAt)}</p>
                     </div>
                     <StatusBadge status={job.status} />
@@ -177,7 +143,7 @@ const AdminAiJobsPanel: React.FC = () => {
                     </div>
                     <div>
                       <dt className="text-gray-600">Trace</dt>
-                      <dd className="mt-0.5 text-gray-500 font-mono break-all">{jobTraceLabel(job)}</dd>
+                      <dd className="mt-0.5 text-gray-500 font-mono break-all">{aiJobTraceLabel(job)}</dd>
                     </div>
                   </dl>
                   {job.error?.message ? <p className="text-[10px] text-red-300/80 break-words">{job.error.message}</p> : null}
