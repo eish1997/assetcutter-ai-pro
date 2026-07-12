@@ -1,5 +1,7 @@
 import type { WorkflowAsset } from '../types';
 import type { RestorableAiJobArtifact } from './aiJobArtifacts';
+import { r2ApiUrl } from './apiBase';
+import { requestJson } from './httpClient';
 import {
   fetchWorkflowModelFromCompanionAsObjectUrl,
   imageSrcToDataUrlForCompanion,
@@ -13,6 +15,9 @@ export type BuildAiJobRestoreAssetsOptions = {
   jobId: string;
   artifacts: RestorableAiJobArtifact[];
   now?: number;
+  cloudUserId?: string | null;
+  cloudUsername?: string | null;
+  cloudProjectId?: string | null;
   companionBaseUrl?: string;
   companionProjectId?: string;
 };
@@ -22,6 +27,39 @@ export type BuildAiJobRestoreAssetsResult = {
   persistedCount: number;
   failedPersistCount: number;
 };
+
+type UploadUrlResponse = { uploadUrl: string; objectKey: string };
+
+function mimeToExt(mime: string, fallback = 'bin'): string {
+  const m = String(mime || '').split(';')[0]!.trim().toLowerCase();
+  if (m.includes('png')) return 'png';
+  if (m.includes('jpeg') || m.includes('jpg')) return 'jpg';
+  if (m.includes('webp')) return 'webp';
+  if (m.includes('gif')) return 'gif';
+  if (m.includes('svg')) return 'svg';
+  if (m.includes('mp4')) return 'mp4';
+  if (m.includes('webm')) return 'webm';
+  if (m.includes('gltf-binary')) return 'glb';
+  if (m.includes('gltf')) return 'gltf';
+  return fallback;
+}
+
+function sanitizePathSegment(s: string, fallback = 'x'): string {
+  return (
+    String(s || '')
+      .trim()
+      .replace(/[^a-zA-Z0-9_.-]/g, '_')
+      .replace(/_+/g, '_')
+      .replace(/^_+|_+$/g, '')
+      .slice(0, 96) || fallback
+  );
+}
+
+function userStorageDirName(userId: string, username?: string | null): string {
+  const uid = sanitizePathSegment(userId, 'user');
+  const name = sanitizePathSegment(username || '', '');
+  return name ? `${name}-${uid}` : uid;
+}
 
 export function aiJobArtifactResultKey(kind: RestorableAiJobArtifact['kind']): string {
   if (kind === 'video') return 'ai_job_video';
@@ -52,10 +90,42 @@ async function fetchArtifactBlob(url: string): Promise<Blob | null> {
   }
 }
 
+async function uploadBlobToR2(objectKey: string, blob: Blob): Promise<string> {
+  const contentType = (blob.type && blob.type.split(';')[0]!.trim()) || 'application/octet-stream';
+  const { uploadUrl } = await requestJson<UploadUrlResponse>(r2ApiUrl('/upload-url'), {
+    method: 'POST',
+    body: JSON.stringify({ objectKey, contentType, contentLength: blob.size, expiresIn: 900 }),
+  });
+  const put = await fetch(uploadUrl, {
+    method: 'PUT',
+    headers: { 'Content-Type': contentType },
+    body: blob,
+  });
+  if (!put.ok) throw new Error(`R2 PUT failed (${put.status})`);
+  await requestJson<{ ok?: boolean }>(r2ApiUrl('/register-upload'), {
+    method: 'POST',
+    body: JSON.stringify({ objectKey }),
+  });
+  return objectKey;
+}
+
+async function uploadDataUrlToR2(objectKey: string, dataUrl: string): Promise<string | null> {
+  const parsed = parseDataUrlToBlob(dataUrl);
+  if (!parsed) return null;
+  return uploadBlobToR2(objectKey, parsed.blob);
+}
+
+function r2ObjectSitePath(objectKey: string): string {
+  return `/api/r2/objects/${objectKey}`;
+}
+
 export async function buildAiJobRestoreAssets(
   options: BuildAiJobRestoreAssetsOptions
 ): Promise<BuildAiJobRestoreAssetsResult> {
   const now = options.now ?? Date.now();
+  const cloudUserId = String(options.cloudUserId || '').trim();
+  const cloudProjectId = String(options.cloudProjectId || '').trim();
+  const canUseCloud = Boolean(cloudUserId && cloudProjectId);
   const base = String(options.companionBaseUrl || '').trim();
   const projectId = String(options.companionProjectId || '').trim();
   const canUseCompanion = Boolean(base && projectId && projectId !== 'default');
@@ -96,9 +166,26 @@ export async function buildAiJobRestoreAssets(
       createdAt: now,
     };
 
-    if (canUseCompanion) {
-      if (artifact.kind === 'image') {
-        const dataUrl = await imageSrcToDataUrlForCompanion(artifact.url);
+    if (artifact.kind === 'image') {
+      const dataUrl = await imageSrcToDataUrlForCompanion(artifact.url);
+      if (canUseCloud && dataUrl) {
+        try {
+          const parsed = parseDataUrlToBlob(dataUrl);
+          const ext = mimeToExt(parsed?.mime || artifact.mimeType || 'image/png', 'png');
+          const key = `users/${userStorageDirName(cloudUserId, options.cloudUsername)}/workspace/projects/${sanitizePathSegment(cloudProjectId, 'project')}/assets/${id}/original.${ext}`;
+          const objectKey = await uploadDataUrlToR2(key, dataUrl);
+          if (objectKey) {
+            asset.original = '';
+            asset.originalObjectKey = objectKey;
+            persistedCount += 1;
+            assets.push(asset);
+            continue;
+          }
+        } catch {
+          failedPersistCount += 1;
+        }
+      }
+      if (canUseCompanion) {
         if (dataUrl) {
           const put = await putWorkflowOriginalImageToCompanion(base, projectId, id, dataUrl);
           if (put.ok) {
@@ -111,8 +198,27 @@ export async function buildAiJobRestoreAssets(
         } else {
           failedPersistCount += 1;
         }
-      } else if (artifact.kind === 'video') {
-        const dataUrl = await imageSrcToDataUrlForCompanion(artifact.url);
+      }
+    } else if (artifact.kind === 'video') {
+      const dataUrl = await imageSrcToDataUrlForCompanion(artifact.url);
+      if (canUseCloud && dataUrl) {
+        try {
+          const parsed = parseDataUrlToBlob(dataUrl);
+          const ext = mimeToExt(parsed?.mime || artifact.mimeType || 'video/mp4', 'mp4');
+          const key = `users/${userStorageDirName(cloudUserId, options.cloudUsername)}/workspace/projects/${sanitizePathSegment(cloudProjectId, 'project')}/assets/${id}/results/${resultKey}.${ext}`;
+          const objectKey = await uploadDataUrlToR2(key, dataUrl);
+          if (objectKey) {
+            asset.results = {};
+            asset.resultsObjectKeys = { [resultKey]: objectKey };
+            persistedCount += 1;
+            assets.push(asset);
+            continue;
+          }
+        } catch {
+          failedPersistCount += 1;
+        }
+      }
+      if (canUseCompanion) {
         if (dataUrl) {
           const put = await putWorkflowResultImageToCompanion(base, projectId, id, resultKey, dataUrl);
           if (put.ok) {
@@ -125,8 +231,29 @@ export async function buildAiJobRestoreAssets(
         } else {
           failedPersistCount += 1;
         }
-      } else if (artifact.kind === 'model3d') {
-        const blob = await fetchArtifactBlob(artifact.url);
+      }
+    } else if (artifact.kind === 'model3d') {
+      const blob = await fetchArtifactBlob(artifact.url);
+      if (canUseCloud && blob) {
+        try {
+          const ext = artifact.url.toLowerCase().includes('.fbx')
+            ? 'fbx'
+            : artifact.url.toLowerCase().includes('.gltf')
+              ? 'gltf'
+              : mimeToExt(blob.type || artifact.mimeType || 'model/gltf-binary', 'glb');
+          const key = `users/${userStorageDirName(cloudUserId, options.cloudUsername)}/workspace/projects/${sanitizePathSegment(cloudProjectId, 'project')}/assets/${id}/models/model-0.${ext}`;
+          const objectKey = await uploadBlobToR2(key, blob);
+          const sitePath = r2ObjectSitePath(objectKey);
+          asset.modelUrls = [sitePath];
+          asset.stepModelUrls = { [resultKey]: [sitePath] };
+          persistedCount += 1;
+          assets.push(asset);
+          continue;
+        } catch {
+          failedPersistCount += 1;
+        }
+      }
+      if (canUseCompanion) {
         if (blob) {
           const put = await putWorkflowModelBlobToCompanion(base, projectId, id, 0, blob, artifact.url);
           if (put.ok) {

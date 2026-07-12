@@ -9,8 +9,12 @@ const workflowCompanionAssetsMock = vi.hoisted(() => ({
   putWorkflowOriginalImageToCompanion: vi.fn(),
   putWorkflowResultImageToCompanion: vi.fn(),
 }));
+const httpClientMock = vi.hoisted(() => ({
+  requestJson: vi.fn(),
+}));
 
 vi.mock('../services/workflowCompanionAssets', () => workflowCompanionAssetsMock);
+vi.mock('../services/httpClient', () => httpClientMock);
 
 const { buildAiJobRestoreAssets } = await import('../services/aiJobArtifactRestore');
 
@@ -28,6 +32,7 @@ function imageArtifact(overrides: Partial<RestorableAiJobArtifact> = {}): Restor
 describe('aiJobArtifactRestore', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.stubGlobal('fetch', vi.fn());
   });
 
   it('builds restorable workspace assets without requiring companion persistence', async () => {
@@ -69,5 +74,32 @@ describe('aiJobArtifactRestore', () => {
     expect(result.failedPersistCount).toBe(0);
     expect(result.assets[0]!.original).toBe('data:image/png;base64,abc');
     expect(result.assets[0]!.originalCompanionKey).toBe('wf-orig-a');
+  });
+
+  it('persists image artifacts to R2 when cloud context is available', async () => {
+    const blob = new Blob([new Uint8Array([1, 2, 3])], { type: 'image/png' });
+    workflowCompanionAssetsMock.imageSrcToDataUrlForCompanion.mockResolvedValue('data:image/png;base64,abc');
+    workflowCompanionAssetsMock.parseDataUrlToBlob.mockReturnValue({ blob, mime: 'image/png' });
+    httpClientMock.requestJson
+      .mockResolvedValueOnce({ uploadUrl: 'https://upload.example.com/put', objectKey: 'ignored' })
+      .mockResolvedValueOnce({ ok: true });
+    vi.mocked(fetch).mockResolvedValue({ ok: true } as Response);
+
+    const result = await buildAiJobRestoreAssets({
+      jobId: 'aijob_3',
+      artifacts: [imageArtifact()],
+      now: 3000,
+      cloudUserId: 'user_1',
+      cloudUsername: 'alice',
+      cloudProjectId: 'project_1',
+      companionBaseUrl: 'http://127.0.0.1:17373',
+      companionProjectId: 'project_1',
+    });
+
+    expect(result.persistedCount).toBe(1);
+    expect(result.failedPersistCount).toBe(0);
+    expect(result.assets[0]!.original).toBe('');
+    expect(result.assets[0]!.originalObjectKey).toContain('users/alice-user_1/workspace/projects/project_1/assets/');
+    expect(workflowCompanionAssetsMock.putWorkflowOriginalImageToCompanion).not.toHaveBeenCalled();
   });
 });

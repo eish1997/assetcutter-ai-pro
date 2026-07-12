@@ -2600,6 +2600,9 @@ const MainApp: React.FC = () => {
       const restored = await buildAiJobRestoreAssets({
         jobId,
         artifacts,
+        cloudUserId: user?.id,
+        cloudUsername: user?.username,
+        cloudProjectId: activeWorkspaceProjectId,
         companionBaseUrl: getCompanionLocalBaseUrl(),
         companionProjectId: String(activeWorkspaceProjectId || '').trim() || 'default',
       });
@@ -2613,7 +2616,7 @@ const MainApp: React.FC = () => {
       const failedMessage = restored.failedPersistCount > 0 ? `，${restored.failedPersistCount} 个持久化失败` : '';
       addGlobalLog('AI 任务', 'info', `已回填 ${restored.assets.length} 个产物到工作区${persistMessage}${failedMessage}`, jobId);
     },
-    [activeWorkspaceProjectId, addGlobalLog]
+    [activeWorkspaceProjectId, addGlobalLog, user?.id, user?.username]
   );
 
   const addGenerate3DLog = useCallback((level: 'info' | 'warn' | 'error', message: string, detail?: unknown) => {
