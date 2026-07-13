@@ -38,9 +38,18 @@ function routeMatchesJob(route, job) {
   return route.capabilities.some((cap) => cap.endsWith('.generate') && job.capability === `${job.modality}.generate`);
 }
 
-export function resolveAiProviderRoute(job, routes = DEFAULT_AI_PROVIDER_ROUTES) {
+export function resolveAiProviderRoute(job, routes = DEFAULT_AI_PROVIDER_ROUTES, options = {}) {
+  const disabledProviders = new Set(Array.isArray(options.disabledProviders) ? options.disabledProviders : []);
+  const disabledModels = new Set(Array.isArray(options.disabledModels) ? options.disabledModels : []);
+  if (job.model && disabledModels.has(job.model)) {
+    throw new AiGatewayRouteError(
+      `AI model is paused by ops control: ${job.model}`,
+      'AI_GATEWAY_MODEL_PAUSED'
+    );
+  }
   const candidates = routes
     .filter((route) => routeMatchesJob(route, job))
+    .filter((route) => !disabledProviders.has(route.providerId))
     .sort((a, b) => Number(a.priority || 100) - Number(b.priority || 100));
 
   const route = candidates[0];

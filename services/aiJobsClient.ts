@@ -106,6 +106,28 @@ export type AiGatewayOpsSummary = {
   byModel: AiGatewayOpsGroup[];
 };
 
+export type AiGatewayOpsModelOverride = {
+  from: string;
+  to: string;
+  enabled: boolean;
+  reason: string | null;
+};
+
+export type AiGatewayOpsControlConfig = {
+  disabledProviders: string[];
+  disabledModels: string[];
+  modelOverrides: AiGatewayOpsModelOverride[];
+  updatedAt?: string | null;
+  updatedByUserId?: string | null;
+  path?: string | null;
+  storage?: string | null;
+};
+
+export type AiGatewayOpsControlResponse = {
+  ok?: boolean;
+  config: AiGatewayOpsControlConfig;
+};
+
 export type CreateAiJobInput = {
   id?: string;
   modality: AiJobModality | '3d' | 'audio';

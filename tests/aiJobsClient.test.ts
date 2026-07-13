@@ -16,6 +16,11 @@ import {
   listMyAiJobs,
   retryMyAiJob,
 } from '../services/aiJobsClient';
+import {
+  clearAdminAiGatewayOpsControl,
+  fetchAdminAiGatewayOpsControl,
+  saveAdminAiGatewayOpsControl,
+} from '../services/adminClient';
 import { requestJson } from '../services/httpClient';
 
 describe('aiJobsClient', () => {
@@ -80,6 +85,30 @@ describe('aiJobsClient', () => {
     await listAdminAiJobs({ limit: 0 });
     expect(requestJson).toHaveBeenCalledWith('https://auth.example/api/admin/ai/jobs?limit=20', {
       cache: 'no-store',
+    });
+  });
+
+  it('reads and writes AI Gateway ops-control through admin auth-api', async () => {
+    await fetchAdminAiGatewayOpsControl();
+    expect(requestJson).toHaveBeenCalledWith('https://auth.example/api/admin/ai-gateway/ops-control', {
+      cache: 'no-store',
+    });
+
+    await saveAdminAiGatewayOpsControl({
+      disabledProviders: ['vertex-gemini'],
+      disabledModels: ['gemini-pro'],
+    });
+    expect(requestJson).toHaveBeenCalledWith('https://auth.example/api/admin/ai-gateway/ops-control', {
+      method: 'PUT',
+      body: JSON.stringify({
+        disabledProviders: ['vertex-gemini'],
+        disabledModels: ['gemini-pro'],
+      }),
+    });
+
+    await clearAdminAiGatewayOpsControl();
+    expect(requestJson).toHaveBeenCalledWith('https://auth.example/api/admin/ai-gateway/ops-control', {
+      method: 'DELETE',
     });
   });
 });

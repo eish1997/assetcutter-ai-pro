@@ -76,4 +76,68 @@ describe('server AI gateway job planning', () => {
     expect(plan.route.providerId).toBe('gemini-aistudio');
     expect(plan.adapterRequest.body.aiBackend).toBeUndefined();
   });
+
+  it('uses ops control to pause providers and fall back to the next route', () => {
+    const plan = createAiGatewayJobPlan(
+      {
+        modality: 'image',
+        model: 'gemini-3-pro-image-preview',
+        input: { contents: [{ role: 'user', parts: [{ text: 'fallback' }] }] },
+      },
+      {
+        opsControl: {
+          disabledProviders: ['vertex-gemini'],
+          disabledModels: [],
+          modelOverrides: [],
+        },
+      }
+    );
+
+    expect(plan.route.providerId).toBe('gemini-aistudio');
+    expect(plan.adapterRequest.body.aiBackend).toBeUndefined();
+  });
+
+  it('uses ops control to pause a model or override it before routing', () => {
+    expect(() =>
+      createAiGatewayJobPlan(
+        {
+          modality: 'image',
+          model: 'gemini-3-pro-image-preview',
+          input: { contents: [{ role: 'user', parts: [{ text: 'blocked' }] }] },
+        },
+        {
+          opsControl: {
+            disabledProviders: [],
+            disabledModels: ['gemini-3-pro-image-preview'],
+            modelOverrides: [],
+          },
+        }
+      )
+    ).toThrow(AiGatewayRouteError);
+
+    const plan = createAiGatewayJobPlan(
+      {
+        modality: 'image',
+        model: 'gemini-3-pro-image-preview',
+        input: { contents: [{ role: 'user', parts: [{ text: 'downgrade' }] }] },
+      },
+      {
+        opsControl: {
+          disabledProviders: [],
+          disabledModels: [],
+          modelOverrides: [
+            { from: 'gemini-3-pro-image-preview', to: 'gemini-3-flash-image', enabled: true, reason: 'quota' },
+          ],
+        },
+      }
+    );
+
+    expect(plan.job.model).toBe('gemini-3-flash-image');
+    expect(plan.job.metadata.opsControl.modelOverride).toMatchObject({
+      from: 'gemini-3-pro-image-preview',
+      to: 'gemini-3-flash-image',
+      reason: 'quota',
+    });
+    expect(plan.adapterRequest.body.model).toBe('gemini-3-flash-image');
+  });
 });

@@ -1,7 +1,7 @@
 import type { CreditLedgerEntry } from '../shared/credits';
 import type { AuthUser } from './authClient';
 import { apiUrl, r2ApiUrl } from './apiBase';
-import type { AiGatewayOpsSummary, AiJobsListResponse } from './aiJobsClient';
+import type { AiGatewayOpsControlConfig, AiGatewayOpsControlResponse, AiGatewayOpsSummary, AiJobsListResponse } from './aiJobsClient';
 import { HttpRequestError, requestJson } from './httpClient';
 
 type UsersResponse = { users: AuthUser[]; total?: number; page?: number; pageSize?: number };
@@ -639,6 +639,25 @@ export async function fetchAdminAiJobsSummary(query: { limit?: number } = {}) {
     apiUrl(`/api/admin/ai/jobs/summary${qs ? `?${qs}` : ''}`),
     { cache: 'no-store' }
   );
+}
+
+export async function fetchAdminAiGatewayOpsControl() {
+  return requestJson<AiGatewayOpsControlResponse>(apiUrl('/api/admin/ai-gateway/ops-control'), {
+    cache: 'no-store',
+  });
+}
+
+export async function saveAdminAiGatewayOpsControl(config: Partial<AiGatewayOpsControlConfig>) {
+  return requestJson<AiGatewayOpsControlResponse>(apiUrl('/api/admin/ai-gateway/ops-control'), {
+    method: 'PUT',
+    body: JSON.stringify(config),
+  });
+}
+
+export async function clearAdminAiGatewayOpsControl() {
+  return requestJson<AiGatewayOpsControlResponse>(apiUrl('/api/admin/ai-gateway/ops-control'), {
+    method: 'DELETE',
+  });
 }
 
 export type UsageEventRow = {

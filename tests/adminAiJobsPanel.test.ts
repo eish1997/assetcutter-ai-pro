@@ -6,6 +6,10 @@ import {
   aiJobStatusTone,
   formatAiGatewayDuration,
   formatAiGatewayRate,
+  listToText,
+  overridesToText,
+  textToList,
+  textToOverrides,
 } from '../components/admin/AdminAiJobsPanel';
 import type { AiJobSummary } from '../services/aiJobsClient';
 
@@ -77,5 +81,23 @@ describe('AdminAiJobsPanel helpers', () => {
     expect(formatAiGatewayDuration(650)).toBe('650ms');
     expect(formatAiGatewayDuration(12_300)).toBe('12s');
     expect(formatAiGatewayDuration(180_000)).toBe('3m');
+  });
+
+  it('formats AI Gateway ops-control textarea values', () => {
+    expect(listToText(['vertex-gemini', 'gemini-aistudio'])).toBe('vertex-gemini\ngemini-aistudio');
+    expect(textToList('vertex-gemini, vertex-gemini\n gemini-aistudio ')).toEqual([
+      'vertex-gemini',
+      'gemini-aistudio',
+    ]);
+    expect(
+      overridesToText({
+        disabledProviders: [],
+        disabledModels: [],
+        modelOverrides: [{ from: 'pro', to: 'flash', enabled: true, reason: 'quota' }],
+      })
+    ).toBe('pro => flash # quota');
+    expect(textToOverrides('pro => flash # quota\nbad line')).toEqual([
+      { from: 'pro', to: 'flash', enabled: true, reason: 'quota' },
+    ]);
   });
 });

@@ -1,6 +1,21 @@
 import React from 'react';
-import { fetchAdminAiJobs, fetchAdminAiJobsSummary } from '../../services/adminClient';
-import type { AiGatewayOpsGroup, AiGatewayOpsSummary, AiJobStatus, AiJobSummary } from '../../services/aiJobsClient';
+import {
+  clearAdminAiGatewayOpsControl,
+  fetchAdminAiGatewayOpsControl,
+  fetchAdminAiJobs,
+  fetchAdminAiJobsSummary,
+  saveAdminAiGatewayOpsControl,
+} from '../../services/adminClient';
+import type {
+  AiGatewayOpsControlConfig,
+  AiGatewayOpsGroup,
+  AiGatewayOpsSummary,
+  AiJobStatus,
+  AiJobSummary,
+} from '../../services/aiJobsClient';
+import { PERMISSIONS } from '../../services/adminPermissions';
+import { blockIfRolePreview } from '../../services/adminRolePreview';
+import { useAdminStaff } from './AdminStaffContext';
 import {
   aiJobCreditsLabel,
   aiJobModelLabel,
@@ -17,6 +32,40 @@ export {
 } from '../../services/aiJobDisplay';
 
 const PAGE_SIZE = 50;
+
+export function listToText(values: string[] | null | undefined): string {
+  return Array.isArray(values) ? values.join('\n') : '';
+}
+
+export function textToList(value: string): string[] {
+  return Array.from(
+    new Set(
+      String(value || '')
+        .split(/[\n,]/)
+        .map((item) => item.trim())
+        .filter(Boolean)
+    )
+  );
+}
+
+export function overridesToText(config: AiGatewayOpsControlConfig | null): string {
+  return (config?.modelOverrides || [])
+    .filter((item) => item?.from && item?.to)
+    .map((item) => `${item.from} => ${item.to}${item.reason ? ` # ${item.reason}` : ''}`)
+    .join('\n');
+}
+
+export function textToOverrides(value: string): AiGatewayOpsControlConfig['modelOverrides'] {
+  return String(value || '')
+    .split(/\n/)
+    .map((line) => {
+      const [pair, reasonRaw] = line.split('#');
+      const [from, to] = String(pair || '').split('=>').map((part) => part.trim());
+      if (!from || !to) return null;
+      return { from, to, enabled: true, reason: reasonRaw?.trim() || null };
+    })
+    .filter(Boolean) as AiGatewayOpsControlConfig['modelOverrides'];
+}
 
 function formatDate(value: string | null | undefined): string {
   if (!value) return '-';
@@ -88,27 +137,82 @@ const OpsGroupTable: React.FC<{ title: string; groups: AiGatewayOpsGroup[] }> = 
 };
 
 const AdminAiJobsPanel: React.FC = () => {
+  const { can, isRolePreview } = useAdminStaff();
+  const canWriteOps = can(PERMISSIONS.GEMINI_FAIRNESS_WRITE);
   const [jobs, setJobs] = React.useState<AiJobSummary[]>([]);
   const [summary, setSummary] = React.useState<AiGatewayOpsSummary | null>(null);
+  const [opsControl, setOpsControl] = React.useState<AiGatewayOpsControlConfig | null>(null);
+  const [disabledProvidersText, setDisabledProvidersText] = React.useState('');
+  const [disabledModelsText, setDisabledModelsText] = React.useState('');
+  const [modelOverridesText, setModelOverridesText] = React.useState('');
+  const [savingOps, setSavingOps] = React.useState(false);
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState('');
+  const [message, setMessage] = React.useState('');
 
   const load = React.useCallback(async () => {
     setLoading(true);
     setError('');
     try {
-      const [res, ops] = await Promise.all([
+      const [res, ops, control] = await Promise.all([
         fetchAdminAiJobs({ limit: PAGE_SIZE }),
         fetchAdminAiJobsSummary({ limit: 100 }),
+        fetchAdminAiGatewayOpsControl(),
       ]);
       setJobs(res.items);
       setSummary(ops);
+      setOpsControl(control.config);
+      setDisabledProvidersText(listToText(control.config.disabledProviders));
+      setDisabledModelsText(listToText(control.config.disabledModels));
+      setModelOverridesText(overridesToText(control.config));
     } catch (err) {
       setError(err instanceof Error ? err.message : '加载失败');
     } finally {
       setLoading(false);
     }
   }, []);
+
+  const saveOpsControl = React.useCallback(async () => {
+    if (blockIfRolePreview(isRolePreview)) return;
+    setSavingOps(true);
+    setError('');
+    setMessage('');
+    try {
+      const saved = await saveAdminAiGatewayOpsControl({
+        disabledProviders: textToList(disabledProvidersText),
+        disabledModels: textToList(disabledModelsText),
+        modelOverrides: textToOverrides(modelOverridesText),
+      });
+      setOpsControl(saved.config);
+      setMessage('AI Gateway 运营控制已保存');
+      void load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '保存失败');
+    } finally {
+      setSavingOps(false);
+    }
+  }, [disabledModelsText, disabledProvidersText, isRolePreview, load, modelOverridesText]);
+
+  const clearOpsControl = React.useCallback(async () => {
+    if (blockIfRolePreview(isRolePreview)) return;
+    if (!window.confirm('清空 AI Gateway provider/model 暂停和模型替换规则？')) return;
+    setSavingOps(true);
+    setError('');
+    setMessage('');
+    try {
+      const cleared = await clearAdminAiGatewayOpsControl();
+      setOpsControl(cleared.config);
+      setDisabledProvidersText('');
+      setDisabledModelsText('');
+      setModelOverridesText('');
+      setMessage('AI Gateway 运营控制已清空');
+      void load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '清空失败');
+    } finally {
+      setSavingOps(false);
+    }
+  }, [isRolePreview, load]);
 
   React.useEffect(() => {
     void load();
@@ -135,6 +239,7 @@ const AdminAiJobsPanel: React.FC = () => {
       </div>
 
       {error ? <p className="text-[11px] text-red-400">{error}</p> : null}
+      {message ? <p className="text-[11px] text-emerald-300">{message}</p> : null}
 
       {summary ? (
         <>
@@ -160,6 +265,74 @@ const AdminAiJobsPanel: React.FC = () => {
             <OpsGroupTable title="Model health" groups={summary.byModel} />
           </div>
         </>
+      ) : null}
+
+      {opsControl ? (
+        <div className="rounded-2xl border border-[#2e2e32] bg-[#121214] p-4">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <h3 className="text-[11px] font-bold text-gray-200">Gateway ops control</h3>
+              <p className="mt-1 text-[10px] text-gray-600">
+                {opsControl.storage || 'disk'}
+                {opsControl.updatedAt ? ` / ${new Date(opsControl.updatedAt).toLocaleString()}` : ''}
+              </p>
+            </div>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                disabled={!canWriteOps || savingOps}
+                onClick={() => {
+                  void saveOpsControl();
+                }}
+                className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-[10px] text-emerald-100 disabled:opacity-40"
+              >
+                保存控制
+              </button>
+              <button
+                type="button"
+                disabled={!canWriteOps || savingOps}
+                onClick={() => {
+                  void clearOpsControl();
+                }}
+                className="rounded-xl border border-[#2e2e32] bg-[#1c1c22] px-3 py-2 text-[10px] text-gray-300 disabled:opacity-40"
+              >
+                清空
+              </button>
+            </div>
+          </div>
+          <div className="mt-4 grid gap-3 lg:grid-cols-3">
+            <label className="block">
+              <span className="text-[10px] text-gray-500">Paused providers</span>
+              <textarea
+                value={disabledProvidersText}
+                onChange={(ev) => setDisabledProvidersText(ev.target.value)}
+                disabled={!canWriteOps || savingOps}
+                className="mt-1 h-24 w-full resize-none rounded-xl border border-[#2e2e32] bg-[#0a0a0c] px-3 py-2 font-mono text-[11px] text-gray-100 outline-none disabled:opacity-40"
+                placeholder="vertex-gemini"
+              />
+            </label>
+            <label className="block">
+              <span className="text-[10px] text-gray-500">Paused models</span>
+              <textarea
+                value={disabledModelsText}
+                onChange={(ev) => setDisabledModelsText(ev.target.value)}
+                disabled={!canWriteOps || savingOps}
+                className="mt-1 h-24 w-full resize-none rounded-xl border border-[#2e2e32] bg-[#0a0a0c] px-3 py-2 font-mono text-[11px] text-gray-100 outline-none disabled:opacity-40"
+                placeholder="gemini-3-pro-image"
+              />
+            </label>
+            <label className="block">
+              <span className="text-[10px] text-gray-500">Model overrides</span>
+              <textarea
+                value={modelOverridesText}
+                onChange={(ev) => setModelOverridesText(ev.target.value)}
+                disabled={!canWriteOps || savingOps}
+                className="mt-1 h-24 w-full resize-none rounded-xl border border-[#2e2e32] bg-[#0a0a0c] px-3 py-2 font-mono text-[11px] text-gray-100 outline-none disabled:opacity-40"
+                placeholder="gemini-3-pro-image => gemini-3-flash-image # fallback"
+              />
+            </label>
+          </div>
+        </div>
       ) : null}
 
       <div className="rounded-2xl border border-[#2e2e32] bg-[#121214] overflow-hidden">

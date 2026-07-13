@@ -190,6 +190,12 @@ import {
   writeGeminiFairnessConfig,
 } from './gemini-fairness-config-store.js';
 import {
+  clearAiGatewayOpsControlConfig,
+  normalizeAiGatewayOpsControlConfig,
+  readAiGatewayOpsControlConfig,
+  writeAiGatewayOpsControlConfig,
+} from './ai-gateway/ops-control.js';
+import {
   getJimengStatusResponse,
   isJimengServiceAvailable,
   jimengNotConfiguredBody,
@@ -2444,6 +2450,32 @@ const server = http.createServer(async (req, res) => {
       const u = new URL(req.url || '/', 'http://local');
       const result = await summarizeAuthAiGatewayJobs(staff.user, { limit: u.searchParams.get('limit') || 100 }, { admin: true });
       json(res, result.status, result.body);
+      return;
+    }
+
+    if (path === '/api/admin/ai-gateway/ops-control' && req.method === 'GET') {
+      const staff = await requirePermission(req, res, PERMISSIONS.TASK_EVENTS_READ);
+      if (!staff) return;
+      const config = await readAiGatewayOpsControlConfig();
+      json(res, 200, { ok: true, config });
+      return;
+    }
+
+    if (path === '/api/admin/ai-gateway/ops-control' && req.method === 'PUT') {
+      const staff = await requirePermission(req, res, PERMISSIONS.GEMINI_FAIRNESS_WRITE);
+      if (!staff) return;
+      const body = await readBody(req);
+      const config = normalizeAiGatewayOpsControlConfig(body);
+      const saved = await writeAiGatewayOpsControlConfig(config, { updatedByUserId: staff.user.id });
+      json(res, 200, { ok: true, config: saved });
+      return;
+    }
+
+    if (path === '/api/admin/ai-gateway/ops-control' && req.method === 'DELETE') {
+      const staff = await requirePermission(req, res, PERMISSIONS.GEMINI_FAIRNESS_WRITE);
+      if (!staff) return;
+      const saved = await clearAiGatewayOpsControlConfig({ updatedByUserId: staff.user.id });
+      json(res, 200, { ok: true, config: saved });
       return;
     }
 
