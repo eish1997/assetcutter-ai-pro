@@ -111,6 +111,7 @@ export async function createAuthAiGatewayJob(req, body, user, options = {}) {
     store,
     fetchImpl: options.fetchImpl,
     timeoutMs: options.executionStartTimeoutMs,
+    cookieHeader: req?.headers?.cookie,
   });
   plan = execution.plan || plan;
   return { status: 202, body: publicAuthAiJobDetail(plan) };

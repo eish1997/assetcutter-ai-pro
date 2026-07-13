@@ -49,7 +49,12 @@ describe('AI gateway execution handoff', () => {
     const store = createInMemoryAiJobStore();
     const fetchImpl = vi.fn().mockResolvedValue(proxyResponse({ jobId: 'gasync_exec_1', status: 'queued' }));
 
-    const result = await createAuthAiGatewayJob({}, imageJobBody('aijob_exec_start'), user, { store, fetchImpl });
+    const result = await createAuthAiGatewayJob(
+      { headers: { cookie: 'ac_session=session_1; ac_csrf=csrf_1' } },
+      imageJobBody('aijob_exec_start'),
+      user,
+      { store, fetchImpl }
+    );
 
     expect(result.status).toBe(202);
     expect(result.body.job).toMatchObject({
@@ -61,6 +66,7 @@ describe('AI gateway execution handoff', () => {
     const [url, init] = fetchImpl.mock.calls[0];
     expect(String(url)).toContain('/proxy/gemini/async');
     expect(init.headers).toMatchObject({
+      Cookie: 'ac_session=session_1; ac_csrf=csrf_1',
       'x-ac-task-envelope': 'aijob_exec_start',
       'X-AC-Fairness-Key': 'user:user_exec_1',
     });

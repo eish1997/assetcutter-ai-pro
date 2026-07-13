@@ -13,10 +13,14 @@ function creditsGate(plan) {
   return metadata.creditsGate && typeof metadata.creditsGate === 'object' ? metadata.creditsGate : null;
 }
 
-function executionHeaders(plan) {
+function executionHeaders(plan, options = {}) {
   const headers = {
     ...(plan.adapterRequest?.headers && typeof plan.adapterRequest.headers === 'object' ? plan.adapterRequest.headers : {}),
   };
+  const cookieHeader = String(options.cookieHeader || '').trim();
+  if (cookieHeader && !headers.Cookie && !headers.cookie) {
+    headers.Cookie = cookieHeader;
+  }
   const userId = String(plan.job?.userId || '').trim();
   const fairnessKey = fairnessKeyForUserId(userId);
   if (fairnessKey) {
@@ -59,7 +63,7 @@ export async function startAiGatewayJobExecution(plan, options = {}) {
   try {
     const response = await fetchImpl(targetUrl, {
       method: plan.adapterRequest.method || 'POST',
-      headers: executionHeaders(plan),
+      headers: executionHeaders(plan, options),
       body: JSON.stringify(plan.adapterRequest.body || {}),
       signal: AbortSignal.timeout(Number(options.timeoutMs || process.env.AI_GATEWAY_EXECUTION_START_TIMEOUT_MS || 30_000)),
     });
