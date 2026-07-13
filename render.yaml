@@ -51,6 +51,9 @@ services:
         sync: false
       - key: AUTH_API_BASE
         value: https://assetcutter-auth-api.onrender.com
+      # AI Gateway image execution gray gate; kept in proxy healthz for deployment verification.
+      - key: AI_GATEWAY_EXECUTION_ENABLED
+        value: "true"
 
   - type: web
     name: assetcutter-auth-api
@@ -92,6 +95,9 @@ services:
       # auth-api /api/gemini-proxy/* 转发目标（默认同 HEALTH_URL）
       - key: GEMINI_PROXY_UPSTREAM_URL
         value: https://assetcutter-gemini-proxy.onrender.com
+      # AI Gateway execution handoff: /api/ai/jobs can submit image/text jobs to gemini-proxy.
+      - key: AI_GATEWAY_EXECUTION_ENABLED
+        value: "true"
       # 工作区云同步（R2）：与 auth 同源挂载 /api/r2，无需单独 R2 服务
       - key: R2_ACCOUNT_ID
         sync: false
@@ -137,6 +143,9 @@ services:
         value: "2"
       - key: VITE_GEMINI_IMAGE_BATCH_BOX_SIZE_VERTEX
         value: "2"
+      # Frontend gray gate: Vertex image jobs try /api/ai/jobs first, then fall back to legacy proxy.
+      - key: VITE_AI_GATEWAY_IMAGE_EXECUTION
+        value: vertex
 
 databases:
   - name: assetcutter-auth-db
