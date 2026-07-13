@@ -64,6 +64,48 @@ export type AiJobsListResponse = {
   limit: number;
 };
 
+export type AiGatewayOpsGroup = {
+  key: string;
+  total: number;
+  statusCounts: Record<AiJobStatus, number>;
+  errorCounts: {
+    rate_limited: number;
+    auth: number;
+    credits: number;
+    timeout: number;
+    upstream: number;
+  };
+  active: number;
+  succeeded: number;
+  failed: number;
+  cancelled: number;
+  avgDurationMs: number | null;
+  maxDurationMs: number | null;
+  failureRate: number;
+  rateLimitRate: number;
+};
+
+export type AiGatewayOpsSummary = {
+  generatedAt: string;
+  sampleSize: number;
+  limit: number;
+  window: {
+    firstCreatedAt: string | null;
+    lastCreatedAt: string | null;
+  };
+  totals: {
+    total: number;
+    active: number;
+    terminal: number;
+    statusCounts: Record<AiJobStatus, number>;
+    errorCounts: AiGatewayOpsGroup['errorCounts'];
+    failureRate: number;
+    rateLimitRate: number;
+  };
+  byProvider: AiGatewayOpsGroup[];
+  byModel: AiGatewayOpsGroup[];
+};
+
 export type CreateAiJobInput = {
   id?: string;
   modality: AiJobModality | '3d' | 'audio';

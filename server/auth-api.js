@@ -205,6 +205,7 @@ import {
   listAuthAiGatewayJobs,
   mapAuthAiGatewayError,
   retryAuthAiGatewayJob,
+  summarizeAuthAiGatewayJobs,
 } from './ai-gateway/auth-api-handler.js';
 import { listPublicPriceCatalog } from './pricing-engine.js';
 import { buildUsageReceipt, quoteJobKinds } from './pricing-read-model.js';
@@ -2434,6 +2435,15 @@ const server = http.createServer(async (req, res) => {
         result.redacted = true;
       }
       json(res, 200, result);
+      return;
+    }
+
+    if (path === '/api/admin/ai/jobs/summary' && req.method === 'GET') {
+      const staff = await requirePermission(req, res, PERMISSIONS.TASK_EVENTS_READ);
+      if (!staff) return;
+      const u = new URL(req.url || '/', 'http://local');
+      const result = await summarizeAuthAiGatewayJobs(staff.user, { limit: u.searchParams.get('limit') || 100 }, { admin: true });
+      json(res, result.status, result.body);
       return;
     }
 

@@ -4,6 +4,7 @@ import { persistentAiGatewayJobStore } from './persistent-job-store.js';
 import { AiGatewayRouteError } from './provider-router.js';
 import { settleAiGatewayJobCredits, settlementMetadataPatch } from './settlement.js';
 import { startAiGatewayJobExecution } from './executor.js';
+import { buildAiGatewayOpsSummary } from './observability.js';
 
 const DEFAULT_LIST_LIMIT = 20;
 const MAX_LIST_LIMIT = 100;
@@ -127,6 +128,13 @@ export async function listAuthAiGatewayJobs(user, query = {}, options = {}) {
   const limit = clampListLimit(query.limit);
   const plans = await store.list({ limit, userId: options.admin ? undefined : user.id });
   return { status: 200, body: { items: plans.map(publicAuthAiJobSummary), limit } };
+}
+
+export async function summarizeAuthAiGatewayJobs(_user, query = {}, options = {}) {
+  const store = options.store || persistentAiGatewayJobStore;
+  const limit = clampListLimit(query.limit || 100);
+  const plans = await store.list({ limit });
+  return { status: 200, body: buildAiGatewayOpsSummary(plans, { limit }) };
 }
 
 export async function getAuthAiGatewayJob(id, user, options = {}) {

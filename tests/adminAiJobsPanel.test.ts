@@ -4,6 +4,8 @@ import {
   aiJobRouteLabel,
   aiJobStatusLabel,
   aiJobStatusTone,
+  formatAiGatewayDuration,
+  formatAiGatewayRate,
 } from '../components/admin/AdminAiJobsPanel';
 import type { AiJobSummary } from '../services/aiJobsClient';
 
@@ -67,5 +69,13 @@ describe('AdminAiJobsPanel helpers', () => {
       )
     ).toBe('25 / reserve');
     expect(aiJobCreditsLabel(makeJob())).toBe('未记录');
+  });
+
+  it('formats AI Gateway operator summary values', () => {
+    expect(formatAiGatewayRate(0.234)).toBe('23%');
+    expect(formatAiGatewayRate(2)).toBe('100%');
+    expect(formatAiGatewayDuration(650)).toBe('650ms');
+    expect(formatAiGatewayDuration(12_300)).toBe('12s');
+    expect(formatAiGatewayDuration(180_000)).toBe('3m');
   });
 });

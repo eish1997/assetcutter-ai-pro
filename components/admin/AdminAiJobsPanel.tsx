@@ -1,6 +1,6 @@
 import React from 'react';
-import { fetchAdminAiJobs } from '../../services/adminClient';
-import type { AiJobStatus, AiJobSummary } from '../../services/aiJobsClient';
+import { fetchAdminAiJobs, fetchAdminAiJobsSummary } from '../../services/adminClient';
+import type { AiGatewayOpsGroup, AiGatewayOpsSummary, AiJobStatus, AiJobSummary } from '../../services/aiJobsClient';
 import {
   aiJobCreditsLabel,
   aiJobModelLabel,
@@ -23,14 +23,73 @@ function formatDate(value: string | null | undefined): string {
   return new Date(value).toLocaleString();
 }
 
+export function formatAiGatewayRate(value: number | null | undefined): string {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return '0%';
+  return `${Math.round(Math.max(0, Math.min(1, n)) * 100)}%`;
+}
+
+export function formatAiGatewayDuration(ms: number | null | undefined): string {
+  const n = Number(ms);
+  if (!Number.isFinite(n) || n <= 0) return '-';
+  if (n < 1000) return `${Math.round(n)}ms`;
+  if (n < 60_000) return `${Math.round(n / 1000)}s`;
+  return `${Math.round(n / 60_000)}m`;
+}
+
 const StatusBadge: React.FC<{ status: AiJobStatus }> = ({ status }) => (
   <span className={`inline-flex rounded-full border px-2 py-0.5 text-[10px] ${aiJobStatusTone(status)}`}>
     {aiJobStatusLabel(status)}
   </span>
 );
 
+const SummaryCard: React.FC<{ label: string; value: string | number; hint?: string; danger?: boolean }> = ({
+  label,
+  value,
+  hint,
+  danger,
+}) => (
+  <div className="rounded-xl border border-[#2e2e32] bg-[#121214] px-4 py-3">
+    <div className="text-[10px] text-gray-500">{label}</div>
+    <div className={`mt-1 text-[18px] font-black ${danger ? 'text-red-200' : 'text-gray-100'}`}>{value}</div>
+    {hint ? <div className="mt-1 text-[10px] text-gray-600">{hint}</div> : null}
+  </div>
+);
+
+const OpsGroupTable: React.FC<{ title: string; groups: AiGatewayOpsGroup[] }> = ({ title, groups }) => {
+  if (!groups.length) return null;
+  return (
+    <div className="rounded-2xl border border-[#2e2e32] bg-[#121214] overflow-hidden">
+      <div className="border-b border-[#252528] px-4 py-3 text-[11px] font-bold text-gray-300">{title}</div>
+      <div className="divide-y divide-[#252528]">
+        {groups.slice(0, 5).map((group) => (
+          <div key={group.key} className="grid grid-cols-[1fr_auto_auto_auto] gap-3 px-4 py-2 text-[10px]">
+            <div className="min-w-0">
+              <div className="truncate text-gray-200" title={group.key}>{group.key}</div>
+              <div className="mt-0.5 text-gray-600">active {group.active} / total {group.total}</div>
+            </div>
+            <div className="text-right text-gray-400">
+              <div>{formatAiGatewayRate(group.failureRate)}</div>
+              <div className="mt-0.5 text-gray-600">fail</div>
+            </div>
+            <div className="text-right text-amber-200">
+              <div>{group.errorCounts.rate_limited}</div>
+              <div className="mt-0.5 text-gray-600">429</div>
+            </div>
+            <div className="text-right text-gray-400">
+              <div>{formatAiGatewayDuration(group.avgDurationMs)}</div>
+              <div className="mt-0.5 text-gray-600">avg</div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};
+
 const AdminAiJobsPanel: React.FC = () => {
   const [jobs, setJobs] = React.useState<AiJobSummary[]>([]);
+  const [summary, setSummary] = React.useState<AiGatewayOpsSummary | null>(null);
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState('');
 
@@ -38,8 +97,12 @@ const AdminAiJobsPanel: React.FC = () => {
     setLoading(true);
     setError('');
     try {
-      const res = await fetchAdminAiJobs({ limit: PAGE_SIZE });
+      const [res, ops] = await Promise.all([
+        fetchAdminAiJobs({ limit: PAGE_SIZE }),
+        fetchAdminAiJobsSummary({ limit: 100 }),
+      ]);
       setJobs(res.items);
+      setSummary(ops);
     } catch (err) {
       setError(err instanceof Error ? err.message : '加载失败');
     } finally {
@@ -72,6 +135,32 @@ const AdminAiJobsPanel: React.FC = () => {
       </div>
 
       {error ? <p className="text-[11px] text-red-400">{error}</p> : null}
+
+      {summary ? (
+        <>
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+            <SummaryCard label="Recent sample" value={summary.sampleSize} hint={`limit ${summary.limit}`} />
+            <SummaryCard label="Active" value={summary.totals.active} hint="created / queued / running" />
+            <SummaryCard
+              label="Failure rate"
+              value={formatAiGatewayRate(summary.totals.failureRate)}
+              hint={`${summary.totals.statusCounts.failed} failed`}
+              danger={summary.totals.failureRate >= 0.2}
+            />
+            <SummaryCard
+              label="429 share"
+              value={formatAiGatewayRate(summary.totals.rateLimitRate)}
+              hint={`${summary.totals.errorCounts.rate_limited} rate limited`}
+              danger={summary.totals.errorCounts.rate_limited > 0}
+            />
+            <SummaryCard label="Succeeded" value={summary.totals.statusCounts.succeeded} hint="terminal success" />
+          </div>
+          <div className="grid gap-3 lg:grid-cols-2">
+            <OpsGroupTable title="Provider health" groups={summary.byProvider} />
+            <OpsGroupTable title="Model health" groups={summary.byModel} />
+          </div>
+        </>
+      ) : null}
 
       <div className="rounded-2xl border border-[#2e2e32] bg-[#121214] overflow-hidden">
         {loading ? (

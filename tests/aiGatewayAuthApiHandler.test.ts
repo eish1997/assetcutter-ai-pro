@@ -1,10 +1,11 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   cancelAuthAiGatewayJob,
   createAuthAiGatewayJob,
   getAuthAiGatewayJob,
   listAuthAiGatewayJobs,
   retryAuthAiGatewayJob,
+  summarizeAuthAiGatewayJobs,
 } from '../server/ai-gateway/auth-api-handler.js';
 import { createInMemoryAiJobStore } from '../server/ai-gateway/job-store.js';
 
@@ -20,6 +21,17 @@ function imageJobBody(id, text = 'product render') {
 }
 
 describe('AI gateway auth-api facade', () => {
+  const previousExecution = process.env.AI_GATEWAY_EXECUTION_ENABLED;
+
+  beforeEach(() => {
+    process.env.AI_GATEWAY_EXECUTION_ENABLED = 'false';
+  });
+
+  afterEach(() => {
+    if (previousExecution === undefined) delete process.env.AI_GATEWAY_EXECUTION_ENABLED;
+    else process.env.AI_GATEWAY_EXECUTION_ENABLED = previousExecution;
+  });
+
   it('creates a user-owned job and hides provider request bodies from the auth response', async () => {
     const store = createInMemoryAiJobStore();
     const user = { id: 'user_1', username: 'alice' };
@@ -58,6 +70,24 @@ describe('AI gateway auth-api facade', () => {
 
     const adminList = await listAuthAiGatewayJobs(alice, { limit: 10 }, { store, admin: true });
     expect(adminList.body.items.map((item) => item.id)).toEqual(['aijob_auth_bob', 'aijob_auth_alice']);
+  });
+
+  it('summarizes recent admin jobs for operator health checks', async () => {
+    const store = createInMemoryAiJobStore();
+    const alice = { id: 'user_1', username: 'alice' };
+    await createAuthAiGatewayJob({}, imageJobBody('aijob_auth_ops_ok'), alice, { store });
+    await createAuthAiGatewayJob({}, imageJobBody('aijob_auth_ops_429'), alice, { store });
+    await store.update('aijob_auth_ops_ok', { status: 'succeeded' });
+    await store.update('aijob_auth_ops_429', {
+      status: 'failed',
+      error: { code: 'UPSTREAM_429', message: 'Too Many Requests' },
+    });
+
+    const summary = await summarizeAuthAiGatewayJobs(alice, { limit: 10 }, { store, admin: true });
+    expect(summary.status).toBe(200);
+    expect(summary.body.sampleSize).toBe(2);
+    expect(summary.body.totals.statusCounts.failed).toBe(1);
+    expect(summary.body.totals.errorCounts.rate_limited).toBe(1);
   });
 
   it('does not reveal another user job by id', async () => {

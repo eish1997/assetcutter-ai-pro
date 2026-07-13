@@ -1,7 +1,7 @@
 import type { CreditLedgerEntry } from '../shared/credits';
 import type { AuthUser } from './authClient';
 import { apiUrl, r2ApiUrl } from './apiBase';
-import type { AiJobsListResponse } from './aiJobsClient';
+import type { AiGatewayOpsSummary, AiJobsListResponse } from './aiJobsClient';
 import { HttpRequestError, requestJson } from './httpClient';
 
 type UsersResponse = { users: AuthUser[]; total?: number; page?: number; pageSize?: number };
@@ -629,6 +629,16 @@ export async function fetchAdminAiJobs(query: { limit?: number } = {}) {
   return requestJson<AiJobsListResponse>(apiUrl(`/api/admin/ai/jobs${qs ? `?${qs}` : ''}`), {
     cache: 'no-store',
   });
+}
+
+export async function fetchAdminAiJobsSummary(query: { limit?: number } = {}) {
+  const params = new URLSearchParams();
+  if (query.limit != null) params.set('limit', String(query.limit));
+  const qs = params.toString();
+  return requestJson<AiGatewayOpsSummary>(
+    apiUrl(`/api/admin/ai/jobs/summary${qs ? `?${qs}` : ''}`),
+    { cache: 'no-store' }
+  );
 }
 
 export type UsageEventRow = {

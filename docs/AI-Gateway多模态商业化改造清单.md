@@ -16,6 +16,7 @@
 - 已保留回填产物 R2 云对象持久化能力，但默认关闭；当前商业化策略是资产类大文件优先本地伴侣存储，云端暂只承载用户配置、任务记录、轻量同步数据。
 - 已新增取消/重试 API 契约：`POST /api/ai/jobs/:id/cancel` 软取消当前用户 job，`POST /api/ai/jobs/:id/retry` 基于失败/取消 job 创建新 job，并保留 retry 来源元数据。
 - 已新增管理后台只读入口：`/admin/ai-jobs`，展示最近 AI Gateway 任务的状态、模型/能力、用户、路由、Trace/Proxy、积分门禁与错误信息。
+- 已新增 Gateway 生产观测第一段：`GET /api/admin/ai/jobs/summary` 聚合最近任务的 active、失败率、429 占比、provider/model 健康排行和平均耗时；`/admin/ai-jobs` 顶部展示运营总览，用于快速判断是否某个模型或供应商异常。
 - 已新增持久化 job store：Postgres 表 `ai_gateway_jobs`，JSON 兜底字段 `aiGatewayJobs`；migration `server/migrations/017_ai_gateway_jobs.sql`、`018_ai_gateway_job_lifecycle.sql`。
 - 已新增 credits gate 预留层：默认 `AI_GATEWAY_CREDITS_GATE=plan`，只把估算积分与 gate 状态写入 job metadata；显式 `check` 才调用现有 gate。
 - 已新增 Gateway reserve/finalize 最小闭环：显式 `AI_GATEWAY_CREDITS_GATE=reserve` 时，auth-api 创建 job 会 reserve 估算积分；job `succeeded` 时按估算积分扣除并释放占用，`failed/cancelled` 时释放占用。默认仍不影响现有线上旧链路。
@@ -31,8 +32,8 @@
 - 已接入旧链路单任务状态回写：`/proxy/gemini/async` 可根据 `fairnessMeta.aiGatewayTraceJobId` 将 trace job 推进到 `queued`、`running`、`succeeded`、`failed`。
 - 默认接管 Vertex 图片生产入口，但保留旧 `gemini-proxy` 自动回退；显式关闭开关后，旧链路仍是稳定生产入口。
 - 音乐、视频、3D 目前只进入统一模态定义，不会误路由到 `gemini-proxy`。
-- 当前仍未完成：更多非 Gemini 执行器补齐真实用量字段、上游硬取消、视频/音乐/3D 的 worker/adapter 拆分、管理员详情/筛选视图。
-- 下一步主线：补 Gateway 生产观测与运营控制层，包括 provider/model 维度失败率、429/5xx 统计、队列长度与熔断/降级开关；若需回滚，设置 `AI_GATEWAY_EXECUTION_ENABLED=false` 或 `VITE_AI_GATEWAY_IMAGE_EXECUTION=false`。
+- 当前仍未完成：更多非 Gemini 执行器补齐真实用量字段、上游硬取消、视频/音乐/3D 的 worker/adapter 拆分、管理员详情/筛选视图、熔断/降级开关。
+- 下一步主线：在已有观测汇总基础上补运营控制开关，包括 provider/model 级手动暂停、降并发/降级、失败率或 429 触发的自动熔断建议；若需回滚，设置 `AI_GATEWAY_EXECUTION_ENABLED=false` 或 `VITE_AI_GATEWAY_IMAGE_EXECUTION=false`。
 
 ## 0. 目标架构
 
