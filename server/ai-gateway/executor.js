@@ -50,6 +50,84 @@ function parseProxyCreateResponse(text) {
   }
 }
 
+function pollDelay(ms) {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    if (typeof timer.unref === 'function') timer.unref();
+  });
+}
+
+function proxyPollUrl(plan, proxyJobId) {
+  const path = String(plan.adapterRequest?.path || '/proxy/gemini/async').replace(/\/+$/, '');
+  return `${geminiProxyUpstreamBase()}${path}/${encodeURIComponent(proxyJobId)}`;
+}
+
+async function settleIfNeeded(plan, store) {
+  if (!plan || !store?.update) return plan;
+  const settlement = await settleAiGatewayJobCredits(plan);
+  const settlementMetadata = settlementMetadataPatch(plan, settlement);
+  if (!Object.keys(settlementMetadata).length) return plan;
+  return store.update(plan.job.id, { metadata: settlementMetadata });
+}
+
+async function pollAiGatewayProxyJob(plan, proxyJobId, options = {}) {
+  const store = options.store;
+  if (!store?.update || !plan?.job?.id || !proxyJobId) return;
+  const fetchImpl = options.fetchImpl || undiciFetch;
+  const startedAt = Date.now();
+  const intervalMs = Math.max(1000, Number(options.pollIntervalMs || process.env.AI_GATEWAY_PROXY_POLL_INTERVAL_MS || 3000));
+  const timeoutMs = Math.max(intervalMs, Number(options.pollTimeoutMs || process.env.AI_GATEWAY_PROXY_POLL_TIMEOUT_MS || 660_000));
+  let current = plan;
+
+  while (Date.now() - startedAt < timeoutMs) {
+    await pollDelay(intervalMs);
+    try {
+      const response = await fetchImpl(proxyPollUrl(plan, proxyJobId), {
+        method: 'GET',
+        signal: AbortSignal.timeout(Number(options.pollRequestTimeoutMs || 15_000)),
+      });
+      const text = await response.text();
+      if (!response.ok) continue;
+      const body = JSON.parse(text || '{}');
+      const status = String(body.status || '').trim();
+      if (status === 'completed') {
+        current = await store.update(plan.job.id, {
+          status: 'succeeded',
+          output: body.result ?? null,
+          metadata: {
+            proxyJobId,
+            proxyStatus: 'completed',
+            gatewayExecution: { completedAt: new Date().toISOString() },
+          },
+        });
+        await settleIfNeeded(current, store);
+        return;
+      }
+      if (status === 'failed') {
+        current = await store.update(plan.job.id, {
+          status: 'failed',
+          error: { code: 'GEMINI_PROXY_ASYNC_FAILED', message: String(body.error || 'Gemini proxy job failed') },
+          metadata: {
+            proxyJobId,
+            proxyStatus: 'failed',
+            gatewayExecution: { failedAt: new Date().toISOString() },
+          },
+        });
+        await settleIfNeeded(current, store);
+        return;
+      }
+      if (status === 'running' || status === 'queued' || status === 'pending') {
+        current = await store.update(plan.job.id, {
+          status: status === 'running' ? 'running' : 'queued',
+          metadata: { proxyJobId, proxyStatus: status },
+        });
+      }
+    } catch {
+      // Polling is best-effort; the next panel refresh can still read the last known state.
+    }
+  }
+}
+
 export async function startAiGatewayJobExecution(plan, options = {}) {
   if (!isAiGatewayExecutionEnabled()) return { started: false, skipped: true, reason: 'execution_disabled', plan };
   if (!plan?.job?.id || !plan?.adapterRequest) {
@@ -86,6 +164,9 @@ export async function startAiGatewayJobExecution(plan, options = {}) {
     const next = store?.update
       ? await store.update(plan.job.id, { status: proxy.status === 'queued' ? 'queued' : 'running', metadata })
       : plan;
+    if (!options.disableBackgroundPoll) {
+      void pollAiGatewayProxyJob(next || plan, proxy.jobId, options);
+    }
     return { started: true, proxyJobId: proxy.jobId, proxyStatus: proxy.status, plan: next || plan };
   } catch (error) {
     const metadata = {

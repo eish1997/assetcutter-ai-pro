@@ -63,9 +63,9 @@ export function subscribeAiJobs(listener: () => void) {
   return () => listeners.delete(listener);
 }
 
-export async function refreshMyAiJobs(options: { limit?: number } = {}) {
+export async function refreshMyAiJobs(options: { limit?: number; background?: boolean } = {}) {
   const limit = Math.min(100, Math.max(1, Math.floor(Number(options.limit) || state.limit || 20)));
-  setState({ loading: true, error: null, limit });
+  setState({ loading: options.background ? state.loading : true, error: null, limit });
   try {
     const res = await listMyAiJobs({ limit });
     const items = normalizeItems(res?.items);

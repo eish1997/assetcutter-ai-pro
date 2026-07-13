@@ -15,6 +15,7 @@ import {
   canRetryAiJobStatus,
 } from '../services/aiJobDisplay';
 import { cancelAiJob, refreshMyAiJob, refreshMyAiJobs, retryAiJob } from '../services/aiJobsStore';
+import { RIGHT_DOCK_LOG_PANEL_Z_INDEX, RIGHT_DOCK_PANEL_BOTTOM } from './floatingDockConstants';
 import AppIcon from './ui/AppIcon';
 
 type AiJobsPanelProps = {
@@ -31,6 +32,10 @@ function formatDate(value: string | null | undefined): string {
 
 function isRefreshing(statusById: Record<string, boolean>, jobId: string): boolean {
   return Boolean(statusById[jobId]);
+}
+
+function isLiveStatus(status: AiJobStatus): boolean {
+  return status === 'created' || status === 'queued' || status === 'running';
 }
 
 const StatusBadge: React.FC<{ status: AiJobStatus }> = ({ status }) => (
@@ -58,6 +63,27 @@ const AiJobsPanel: React.FC<AiJobsPanelProps> = ({ open, signedIn, onClose, onRe
     if (!open || !signedIn) return;
     if (state.lastLoadedAt == null && !state.loading && !state.error) void load();
   }, [load, open, signedIn, state.error, state.lastLoadedAt, state.loading]);
+
+  React.useEffect(() => {
+    if (!open || !signedIn) return;
+    let cancelled = false;
+    const tick = async () => {
+      if (cancelled || (typeof document !== 'undefined' && document.hidden)) return;
+      try {
+        await refreshMyAiJobs({ limit: 20, background: true });
+      } catch {
+        // The visible error strip already reflects store errors; polling should stay quiet.
+      }
+    };
+    const intervalMs = state.items.some((job) => isLiveStatus(job.status)) ? 2500 : 8000;
+    const timer = window.setInterval(() => {
+      void tick();
+    }, intervalMs);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [open, signedIn, state.items]);
 
   const runAction = React.useCallback(async (action: () => Promise<unknown>) => {
     setActionError('');
@@ -91,19 +117,17 @@ const AiJobsPanel: React.FC<AiJobsPanelProps> = ({ open, signedIn, onClose, onRe
 
   const panel = (
     <div
-      className="fixed inset-0 z-[2100] bg-black/35 backdrop-blur-sm flex items-end justify-end p-3 sm:p-4"
+      className={`fixed ${RIGHT_DOCK_PANEL_BOTTOM} right-3 sm:right-[5rem] flex w-[min(400px,calc(100vw-1.5rem))] max-h-[min(54vh,440px)] flex-col overflow-hidden rounded-2xl border border-white/10 bg-[#0f0f0f] shadow-2xl`}
+      style={{ zIndex: RIGHT_DOCK_LOG_PANEL_Z_INDEX }}
       role="dialog"
       aria-label="AI 任务"
-      onMouseDown={(event) => {
-        if (event.target === event.currentTarget) onClose();
-      }}
     >
-      <div className="flex max-h-[min(760px,calc(100dvh-2rem))] w-[min(480px,calc(100vw-1.5rem))] flex-col overflow-hidden rounded-2xl border border-white/10 bg-[#0f0f0f] shadow-2xl">
-        <div className="shrink-0 border-b border-white/[0.06] bg-[#141416] px-4 py-3">
+      <div className="flex min-h-0 flex-col overflow-hidden">
+        <div className="shrink-0 border-b border-white/[0.06] bg-[#141416] px-3 py-2.5">
           <div className="flex items-center justify-between gap-3">
             <div>
-              <h2 className="text-[12px] font-black uppercase tracking-[0.18em] text-white">AI 任务</h2>
-              <p className="mt-1 text-[10px] text-gray-500">最近 20 条</p>
+              <h2 className="text-[11px] font-black uppercase tracking-[0.16em] text-white">AI 任务</h2>
+              <p className="mt-0.5 text-[9px] text-gray-500">最近 20 条</p>
             </div>
             <div className="flex items-center gap-2">
               <button
@@ -112,7 +136,7 @@ const AiJobsPanel: React.FC<AiJobsPanelProps> = ({ open, signedIn, onClose, onRe
                 onClick={() => {
                   void load();
                 }}
-                className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.05] px-2.5 text-[10px] text-gray-200 transition-colors hover:bg-white/[0.1] disabled:cursor-not-allowed disabled:opacity-50"
+                className="inline-flex h-7 items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.05] px-2 text-[10px] text-gray-200 transition-colors hover:bg-white/[0.1] disabled:cursor-not-allowed disabled:opacity-50"
               >
                 <AppIcon name="refresh" className="h-3.5 w-3.5" />
                 刷新
@@ -120,7 +144,7 @@ const AiJobsPanel: React.FC<AiJobsPanelProps> = ({ open, signedIn, onClose, onRe
               <button
                 type="button"
                 onClick={onClose}
-                className="flex h-8 w-8 items-center justify-center rounded-lg text-gray-400 transition-colors hover:bg-[#2e2e36] hover:text-white"
+                className="flex h-7 w-7 items-center justify-center rounded-lg text-gray-400 transition-colors hover:bg-[#2e2e36] hover:text-white"
                 aria-label="关闭 AI 任务"
               >
                 <AppIcon name="close" className="h-4 w-4" />
@@ -129,7 +153,7 @@ const AiJobsPanel: React.FC<AiJobsPanelProps> = ({ open, signedIn, onClose, onRe
           </div>
         </div>
 
-        <div className="min-h-0 flex-1 overflow-y-auto p-3 no-scrollbar">
+        <div className="min-h-0 flex-1 overflow-y-auto p-2 no-scrollbar">
           {!signedIn ? (
             <div className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-6 text-center text-[11px] text-gray-500">
               请先登录
@@ -143,46 +167,40 @@ const AiJobsPanel: React.FC<AiJobsPanelProps> = ({ open, signedIn, onClose, onRe
               暂无 AI 任务
             </div>
           ) : (
-            <div className="space-y-2">
+            <div className="space-y-1.5">
               {state.items.map((job) => {
                 const busy = isRefreshing(state.refreshingJobIds, job.id);
                 return (
-                  <article key={job.id} className="rounded-xl border border-white/[0.07] bg-[#141416] px-3 py-3">
-                    <div className="flex items-start justify-between gap-3">
+                  <article key={job.id} className="rounded-xl border border-white/[0.07] bg-[#141416] px-2.5 py-2">
+                    <div className="flex items-center justify-between gap-2">
                       <div className="min-w-0">
-                        <div className="truncate text-[11px] font-semibold text-gray-100">{aiJobModelLabel(job)}</div>
-                        <div className="mt-1 text-[10px] text-gray-500">{formatDate(job.updatedAt || job.createdAt)}</div>
+                        <div className="truncate text-[10px] font-semibold text-gray-100">{aiJobModelLabel(job)}</div>
+                        <div className="mt-0.5 text-[9px] text-gray-500">{formatDate(job.updatedAt || job.createdAt)}</div>
                       </div>
                       <StatusBadge status={job.status} />
                     </div>
 
-                    <dl className="mt-3 grid grid-cols-2 gap-2 text-[10px]">
-                      <div>
-                        <dt className="text-gray-600">路由</dt>
-                        <dd className="mt-0.5 truncate text-gray-300">{aiJobRouteLabel(job)}</dd>
-                      </div>
-                      <div>
-                        <dt className="text-gray-600">积分</dt>
-                        <dd className="mt-0.5 truncate text-gray-400">{aiJobCreditsLabel(job)}</dd>
-                      </div>
-                      <div className="col-span-2">
-                        <dt className="text-gray-600">Trace</dt>
-                        <dd className="mt-0.5 break-all font-mono text-[9px] text-gray-500">{aiJobTraceLabel(job)}</dd>
-                      </div>
+                    <dl className="mt-1.5 grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5 text-[9px]">
+                      <dt className="text-gray-600">路由</dt>
+                      <dd className="truncate text-gray-300">{aiJobRouteLabel(job)}</dd>
+                      <dt className="text-gray-600">积分</dt>
+                      <dd className="truncate text-gray-400">{aiJobCreditsLabel(job)}</dd>
+                      <dt className="text-gray-600">Trace</dt>
+                      <dd className="truncate font-mono text-gray-500">{aiJobTraceLabel(job)}</dd>
                     </dl>
 
                     {job.error?.message ? (
-                      <p className="mt-2 break-words text-[10px] leading-relaxed text-red-300/85">{job.error.message}</p>
+                      <p className="mt-1.5 line-clamp-2 break-words text-[9px] leading-relaxed text-red-300/85">{job.error.message}</p>
                     ) : null}
 
-                    <div className="mt-3 flex flex-wrap items-center gap-2">
+                    <div className="mt-2 flex flex-wrap items-center gap-1.5">
                       <button
                         type="button"
                         disabled={busy}
                         onClick={() => {
                           void runAction(() => refreshMyAiJob(job.id));
                         }}
-                        className="inline-flex h-7 items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.04] px-2 text-[10px] text-gray-300 transition-colors hover:bg-white/[0.09] disabled:cursor-not-allowed disabled:opacity-50"
+                        className="inline-flex h-6 items-center gap-1 rounded-lg border border-white/10 bg-white/[0.04] px-1.5 text-[9px] text-gray-300 transition-colors hover:bg-white/[0.09] disabled:cursor-not-allowed disabled:opacity-50"
                       >
                         <AppIcon name="refresh" className="h-3 w-3" />
                         {busy ? '处理中' : '刷新'}
@@ -194,7 +212,7 @@ const AiJobsPanel: React.FC<AiJobsPanelProps> = ({ open, signedIn, onClose, onRe
                           onClick={() => {
                             void runAction(() => cancelAiJob(job.id));
                           }}
-                          className="h-7 rounded-lg border border-amber-500/35 bg-amber-900/15 px-2 text-[10px] text-amber-200 transition-colors hover:bg-amber-900/30 disabled:cursor-not-allowed disabled:opacity-50"
+                          className="h-6 rounded-lg border border-amber-500/35 bg-amber-900/15 px-1.5 text-[9px] text-amber-200 transition-colors hover:bg-amber-900/30 disabled:cursor-not-allowed disabled:opacity-50"
                         >
                           取消
                         </button>
@@ -206,7 +224,7 @@ const AiJobsPanel: React.FC<AiJobsPanelProps> = ({ open, signedIn, onClose, onRe
                           onClick={() => {
                             void runAction(() => retryAiJob(job.id));
                           }}
-                          className="h-7 rounded-lg border border-emerald-500/35 bg-emerald-900/15 px-2 text-[10px] text-emerald-200 transition-colors hover:bg-emerald-900/30 disabled:cursor-not-allowed disabled:opacity-50"
+                          className="h-6 rounded-lg border border-emerald-500/35 bg-emerald-900/15 px-1.5 text-[9px] text-emerald-200 transition-colors hover:bg-emerald-900/30 disabled:cursor-not-allowed disabled:opacity-50"
                         >
                           重试
                         </button>
@@ -218,7 +236,7 @@ const AiJobsPanel: React.FC<AiJobsPanelProps> = ({ open, signedIn, onClose, onRe
                           onClick={() => {
                             void restoreArtifacts(job.id);
                           }}
-                          className="h-7 rounded-lg border border-blue-500/35 bg-blue-900/15 px-2 text-[10px] text-blue-200 transition-colors hover:bg-blue-900/30 disabled:cursor-not-allowed disabled:opacity-50"
+                          className="h-6 rounded-lg border border-blue-500/35 bg-blue-900/15 px-1.5 text-[9px] text-blue-200 transition-colors hover:bg-blue-900/30 disabled:cursor-not-allowed disabled:opacity-50"
                         >
                           {restoredJobIds[job.id] ? '已回填' : '回填'}
                         </button>
@@ -232,7 +250,7 @@ const AiJobsPanel: React.FC<AiJobsPanelProps> = ({ open, signedIn, onClose, onRe
         </div>
 
         {state.error || actionError ? (
-          <div className="shrink-0 border-t border-red-500/20 bg-red-950/20 px-4 py-2 text-[10px] text-red-200">
+          <div className="shrink-0 border-t border-red-500/20 bg-red-950/20 px-3 py-1.5 text-[9px] text-red-200">
             {actionError || state.error}
           </div>
         ) : null}
