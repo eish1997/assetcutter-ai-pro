@@ -3,6 +3,10 @@ import { geminiProxyUpstreamBase } from '../gemini-proxy-relay.js';
 import { creditsProxyHeadersFromSigned, fairnessKeyForUserId, signCreditsGatePayload } from '../credits-gate-hmac.js';
 import { isAiGatewayExecutionEnabled } from './health.js';
 import { settleAiGatewayJobCredits, settlementMetadataPatch } from './settlement.js';
+import {
+  extractAiGatewayArtifactsFromProxyResult,
+  sanitizeProxyResultForAiGatewayJob,
+} from '../gemini-proxy-usage.js';
 
 function publicErrorMessage(error) {
   return error instanceof Error ? error.message : String(error || 'AI Gateway execution failed');
@@ -75,7 +79,8 @@ async function pollAiGatewayProxyJob(plan, proxyJobId, options = {}) {
   if (!store?.update || !plan?.job?.id || !proxyJobId) return;
   const fetchImpl = options.fetchImpl || undiciFetch;
   const startedAt = Date.now();
-  const intervalMs = Math.max(1000, Number(options.pollIntervalMs || process.env.AI_GATEWAY_PROXY_POLL_INTERVAL_MS || 3000));
+  const intervalFloorMs = options.pollIntervalMs != null ? 1 : 1000;
+  const intervalMs = Math.max(intervalFloorMs, Number(options.pollIntervalMs || process.env.AI_GATEWAY_PROXY_POLL_INTERVAL_MS || 3000));
   const timeoutMs = Math.max(intervalMs, Number(options.pollTimeoutMs || process.env.AI_GATEWAY_PROXY_POLL_TIMEOUT_MS || 660_000));
   let current = plan;
 
@@ -91,9 +96,11 @@ async function pollAiGatewayProxyJob(plan, proxyJobId, options = {}) {
       const body = JSON.parse(text || '{}');
       const status = String(body.status || '').trim();
       if (status === 'completed') {
+        const result = body.result ?? null;
         current = await store.update(plan.job.id, {
           status: 'succeeded',
-          output: body.result ?? null,
+          output: sanitizeProxyResultForAiGatewayJob(result),
+          artifacts: extractAiGatewayArtifactsFromProxyResult(result),
           metadata: {
             proxyJobId,
             proxyStatus: 'completed',
@@ -165,7 +172,9 @@ export async function startAiGatewayJobExecution(plan, options = {}) {
       ? await store.update(plan.job.id, { status: proxy.status === 'queued' ? 'queued' : 'running', metadata })
       : plan;
     if (!options.disableBackgroundPoll) {
-      void pollAiGatewayProxyJob(next || plan, proxy.jobId, options);
+      const pollPromise = pollAiGatewayProxyJob(next || plan, proxy.jobId, options);
+      if (options.awaitBackgroundPoll) await pollPromise;
+      else void pollPromise;
     }
     return { started: true, proxyJobId: proxy.jobId, proxyStatus: proxy.status, plan: next || plan };
   } catch (error) {

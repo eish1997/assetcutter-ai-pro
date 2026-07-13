@@ -97,4 +97,50 @@ describe('AI gateway execution handoff', () => {
     const stored = await store.get('aijob_exec_fail');
     expect(stored.job.metadata.gatewayExecution.error).toContain('HTTP 502');
   });
+
+  it('polls proxy completion back into auth job store with redacted artifacts', async () => {
+    delete process.env.AI_GATEWAY_EXECUTION_ENABLED;
+    const store = createInMemoryAiJobStore();
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(proxyResponse({ jobId: 'gasync_done_1', status: 'queued' }))
+      .mockResolvedValueOnce(
+        proxyResponse({
+          status: 'completed',
+          result: {
+            candidates: [
+              {
+                content: {
+                  parts: [{ inlineData: { mimeType: 'image/png', data: 'QUJDRA==' } }],
+                },
+              },
+            ],
+          },
+        }, true, 200)
+      );
+
+    await createAuthAiGatewayJob({}, imageJobBody('aijob_exec_done'), user, {
+      store,
+      fetchImpl,
+      pollIntervalMs: 1,
+      pollTimeoutMs: 100,
+      awaitBackgroundPoll: true,
+    });
+
+    const stored = await store.get('aijob_exec_done');
+    expect(stored.job.status).toBe('succeeded');
+    expect(stored.job.artifacts).toEqual([
+      expect.objectContaining({ kind: 'image', mimeType: 'image/png', bytes: 4, inlineData: true }),
+    ]);
+    expect(JSON.stringify(stored.job.output)).not.toContain('QUJDRA==');
+    expect(stored.job.output).toMatchObject({
+      candidates: [
+        {
+          content: {
+            parts: [{ inlineData: { data: '[REDACTED_BASE64:4B]' } }],
+          },
+        },
+      ],
+    });
+  });
 });

@@ -112,6 +112,11 @@ export async function createAuthAiGatewayJob(req, body, user, options = {}) {
     fetchImpl: options.fetchImpl,
     timeoutMs: options.executionStartTimeoutMs,
     cookieHeader: req?.headers?.cookie,
+    pollIntervalMs: options.pollIntervalMs,
+    pollTimeoutMs: options.pollTimeoutMs,
+    pollRequestTimeoutMs: options.pollRequestTimeoutMs,
+    awaitBackgroundPoll: options.awaitBackgroundPoll,
+    disableBackgroundPoll: options.disableBackgroundPoll,
   });
   plan = execution.plan || plan;
   return { status: 202, body: publicAuthAiJobDetail(plan) };

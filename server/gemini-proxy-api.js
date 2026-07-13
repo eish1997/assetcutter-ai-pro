@@ -45,7 +45,12 @@ import {
 import { initGeminiFairnessConfigLoader, resolveGeminiFairnessConfigSource } from './gemini-fairness-config-store.js';
 import { beginGeminiProxyUpstreamCall, geminiProxyObservabilitySnapshot } from './gemini-proxy-observability.js';
 import { geminiProxyThrottleSnapshot, waitForGeminiUpstreamThrottle } from './gemini-proxy-throttle.js';
-import { buildAiGatewayTraceSuccessMetadata, extractUsageMetadata } from './gemini-proxy-usage.js';
+import {
+  buildAiGatewayTraceSuccessMetadata,
+  extractAiGatewayArtifactsFromProxyResult,
+  extractUsageMetadata,
+  sanitizeProxyResultForAiGatewayJob,
+} from './gemini-proxy-usage.js';
 import {
   assertGeminiProxyCreditsGate,
   estimatedCreditsFromProxyBody,
@@ -742,6 +747,8 @@ async function runGeminiAsyncJob(jobId) {
         j.updatedAt = Date.now();
         await updateAiGatewayTraceJob(j.aiGatewayTraceJobId, {
           status: 'succeeded',
+          output: sanitizeProxyResultForAiGatewayJob(result),
+          artifacts: extractAiGatewayArtifactsFromProxyResult(result),
           metadata: buildAiGatewayTraceSuccessMetadata(jobId, result),
         });
         return;

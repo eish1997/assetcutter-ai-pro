@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildAiGatewayTraceSuccessMetadata,
+  extractAiGatewayArtifactsFromProxyResult,
   extractUsageMetadata,
   extractUsageMetadataFromProxyResult,
+  sanitizeProxyResultForAiGatewayJob,
 } from '../server/gemini-proxy-usage.js';
 
 describe('extractUsageMetadata', () => {
@@ -43,6 +45,53 @@ describe('extractUsageMetadata', () => {
       usage: {
         usageMetadata: { promptTokenCount: 11, candidatesTokenCount: 7, totalTokenCount: 18 },
       },
+    });
+  });
+
+  it('extracts lightweight artifacts and redacts inline media payloads', () => {
+    const result = {
+      candidates: [
+        {
+          content: {
+            parts: [
+              {
+                inlineData: {
+                  mimeType: 'image/png',
+                  data: 'QUJDRA==',
+                },
+              },
+            ],
+          },
+        },
+      ],
+    };
+
+    expect(extractAiGatewayArtifactsFromProxyResult(result)).toEqual([
+      expect.objectContaining({
+        kind: 'image',
+        mimeType: 'image/png',
+        bytes: 4,
+        inlineData: true,
+      }),
+    ]);
+    expect(JSON.stringify(sanitizeProxyResultForAiGatewayJob(result))).not.toContain('QUJDRA==');
+    expect(sanitizeProxyResultForAiGatewayJob(result)).toMatchObject({
+      candidates: [
+        {
+          content: {
+            parts: [
+              {
+                inlineData: {
+                  mimeType: 'image/png',
+                  data: '[REDACTED_BASE64:4B]',
+                  bytes: 4,
+                  redacted: true,
+                },
+              },
+            ],
+          },
+        },
+      ],
     });
   });
 });
