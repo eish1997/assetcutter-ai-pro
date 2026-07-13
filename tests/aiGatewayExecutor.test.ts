@@ -85,7 +85,11 @@ describe('AI gateway execution handoff', () => {
     const store = createInMemoryAiJobStore();
     const fetchImpl = vi.fn().mockResolvedValue(proxyResponse({ error: 'proxy down' }, false, 502));
 
-    const result = await createAuthAiGatewayJob({}, imageJobBody('aijob_exec_fail'), user, { store, fetchImpl });
+    const result = await createAuthAiGatewayJob({}, imageJobBody('aijob_exec_fail'), user, {
+      store,
+      fetchImpl,
+      handoffRetries: 0,
+    });
 
     expect(result.body.job).toMatchObject({
       id: 'aijob_exec_fail',
@@ -96,6 +100,30 @@ describe('AI gateway execution handoff', () => {
     });
     const stored = await store.get('aijob_exec_fail');
     expect(stored.job.metadata.gatewayExecution.error).toContain('HTTP 502');
+  });
+
+  it('retries transient proxy handoff rate limits before failing the job', async () => {
+    process.env.AI_GATEWAY_EXECUTION_ENABLED = 'true';
+    const store = createInMemoryAiJobStore();
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(proxyResponse('Too Many Requests', false, 429))
+      .mockResolvedValueOnce(proxyResponse({ jobId: 'gasync_retry_1', status: 'queued' }));
+
+    const result = await createAuthAiGatewayJob({}, imageJobBody('aijob_exec_retry_429'), user, {
+      store,
+      fetchImpl,
+      handoffRetryDelayMs: 0,
+      handoffRetryJitterMs: 0,
+      handoffRetries: 1,
+    });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(result.body.job).toMatchObject({
+      id: 'aijob_exec_retry_429',
+      status: 'queued',
+      proxyJobId: 'gasync_retry_1',
+    });
   });
 
   it('polls proxy completion back into auth job store with redacted artifacts', async () => {

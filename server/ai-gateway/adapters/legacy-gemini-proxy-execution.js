@@ -2,6 +2,7 @@ import { fetch as undiciFetch } from 'undici';
 import { geminiProxyUpstreamBase } from '../../gemini-proxy-relay.js';
 import { creditsProxyHeadersFromSigned, fairnessKeyForUserId, signCreditsGatePayload } from '../../credits-gate-hmac.js';
 import { settleAiGatewayJobCredits, settlementMetadataPatch } from '../settlement.js';
+import { maybeAutoPauseAiGatewayProvider } from '../ops-control.js';
 import {
   extractAiGatewayArtifactsFromProxyResult,
   sanitizeProxyResultForAiGatewayJob,
@@ -58,6 +59,29 @@ function pollDelay(ms) {
     const timer = setTimeout(resolve, ms);
     if (typeof timer.unref === 'function') timer.unref();
   });
+}
+
+function isRetryableHandoffStatus(status) {
+  return status === 429 || status === 502 || status === 503 || status === 504;
+}
+
+function retryAfterMs(response) {
+  const raw = response?.headers?.get ? String(response.headers.get('retry-after') || '').trim() : '';
+  if (!raw) return 0;
+  const seconds = Number(raw);
+  if (Number.isFinite(seconds) && seconds >= 0) return Math.min(30_000, seconds * 1000);
+  const dateMs = Date.parse(raw);
+  if (Number.isFinite(dateMs)) return Math.min(30_000, Math.max(0, dateMs - Date.now()));
+  return 0;
+}
+
+async function handoffRetryDelay(attempt, response, options = {}) {
+  const configured = Number(options.handoffRetryDelayMs ?? process.env.AI_GATEWAY_PROXY_HANDOFF_RETRY_DELAY_MS ?? 2500);
+  const baseMs = Number.isFinite(configured) ? Math.max(0, configured) : 2500;
+  const jitterMs = Number(options.handoffRetryJitterMs ?? process.env.AI_GATEWAY_PROXY_HANDOFF_RETRY_JITTER_MS ?? 500);
+  const retryAfter = retryAfterMs(response);
+  const delayMs = Math.min(30_000, Math.max(retryAfter, baseMs * Math.max(1, attempt) + Math.floor(Math.random() * Math.max(0, jitterMs))));
+  if (delayMs > 0) await pollDelay(delayMs);
 }
 
 function proxyPollUrl(plan, proxyJobId) {
@@ -140,15 +164,22 @@ export async function startLegacyGeminiProxyExecution(plan, options = {}) {
   const targetUrl = `${geminiProxyUpstreamBase()}${plan.adapterRequest.path}`;
 
   try {
-    const response = await fetchImpl(targetUrl, {
-      method: plan.adapterRequest.method || 'POST',
-      headers: executionHeaders(plan, options),
-      body: JSON.stringify(plan.adapterRequest.body || {}),
-      signal: AbortSignal.timeout(Number(options.timeoutMs || process.env.AI_GATEWAY_EXECUTION_START_TIMEOUT_MS || 30_000)),
-    });
-    const text = await response.text();
-    if (!response.ok) {
-      throw new Error(`Gemini proxy rejected AI job handoff: HTTP ${response.status} ${text.slice(0, 300)}`);
+    const maxRetries = Math.max(0, Math.floor(Number(options.handoffRetries ?? process.env.AI_GATEWAY_PROXY_HANDOFF_RETRIES ?? 2)));
+    let response = null;
+    let text = '';
+    for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
+      response = await fetchImpl(targetUrl, {
+        method: plan.adapterRequest.method || 'POST',
+        headers: executionHeaders(plan, options),
+        body: JSON.stringify(plan.adapterRequest.body || {}),
+        signal: AbortSignal.timeout(Number(options.timeoutMs || process.env.AI_GATEWAY_EXECUTION_START_TIMEOUT_MS || 30_000)),
+      });
+      text = await response.text();
+      if (response.ok) break;
+      if (!isRetryableHandoffStatus(response.status) || attempt >= maxRetries) {
+        throw new Error(`Gemini proxy rejected AI job handoff: HTTP ${response.status} ${text.slice(0, 300)}`);
+      }
+      await handoffRetryDelay(attempt + 1, response, options);
     }
     const proxy = parseProxyCreateResponse(text);
     if (!proxy.jobId) throw new Error(`Gemini proxy did not return jobId: ${text.slice(0, 300)}`);
@@ -172,11 +203,19 @@ export async function startLegacyGeminiProxyExecution(plan, options = {}) {
     }
     return { started: true, upstreamJobId: proxy.jobId, proxyJobId: proxy.jobId, proxyStatus: proxy.status, plan: next || plan };
   } catch (error) {
+    const autoCircuit = await maybeAutoPauseAiGatewayProvider(plan, error).catch(() => null);
     const metadata = {
       gatewayExecution: {
         failedAt: new Date().toISOString(),
         error: publicErrorMessage(error),
         targetPath: plan.adapterRequest.path,
+        autoCircuit: autoCircuit
+          ? {
+              providerId: plan.route?.providerId || null,
+              updatedAt: autoCircuit.updatedAt || null,
+              disabledProviders: autoCircuit.disabledProviders || [],
+            }
+          : null,
       },
     };
     let next = store?.update

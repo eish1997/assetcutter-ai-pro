@@ -120,6 +120,9 @@ export async function createAuthAiGatewayJob(req, body, user, options = {}) {
     pollIntervalMs: options.pollIntervalMs,
     pollTimeoutMs: options.pollTimeoutMs,
     pollRequestTimeoutMs: options.pollRequestTimeoutMs,
+    handoffRetries: options.handoffRetries,
+    handoffRetryDelayMs: options.handoffRetryDelayMs,
+    handoffRetryJitterMs: options.handoffRetryJitterMs,
     awaitBackgroundPoll: options.awaitBackgroundPoll,
     disableBackgroundPoll: options.disableBackgroundPoll,
   });
