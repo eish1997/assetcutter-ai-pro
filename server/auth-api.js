@@ -197,6 +197,11 @@ import {
   writeAiGatewayOpsControlConfig,
 } from './ai-gateway/ops-control.js';
 import {
+  acquireProviderKey,
+  listProviderKeys,
+  saveProviderKeys,
+} from './ai-gateway/provider-key-store.js';
+import {
   getJimengStatusResponse,
   isJimengServiceAvailable,
   jimengNotConfiguredBody,
@@ -2529,11 +2534,63 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (path === '/api/admin/ai-gateway/provider-keys' && req.method === 'GET') {
+      const staff = await requirePermission(req, res, PERMISSIONS.AI_GATEWAY_KEYS_READ);
+      if (!staff) return;
+      const keys = await listProviderKeys();
+      json(res, 200, { ok: true, keys });
+      return;
+    }
+
+    if (path === '/api/admin/ai-gateway/provider-keys' && req.method === 'PUT') {
+      const staff = await requirePermission(req, res, PERMISSIONS.AI_GATEWAY_KEYS_WRITE);
+      if (!staff) return;
+      let body;
+      try {
+        body = await readBody(req);
+      } catch (err) {
+        json(res, 400, { error: err?.message || 'Invalid JSON' });
+        return;
+      }
+      const existing = await listProviderKeys({ includeSecrets: true });
+      const byId = new Map(existing.map((row) => [row.id, row]));
+      const rows = (Array.isArray(body?.keys) ? body.keys : [])
+        .filter((row) => !String(row?.id || '').startsWith('env_'))
+        .map((row) => {
+          const prev = byId.get(String(row?.id || '').trim());
+          return {
+            ...row,
+            secret: normalizeTrimmed(row?.secret) || prev?.secret || '',
+          };
+        });
+      const saved = await saveProviderKeys(rows, { updatedByUserId: staff.user.id });
+      await createAuditLog({
+        actorUserId: staff.user.id,
+        actorIdentifier: staff.user.username,
+        action: 'admin.ai_gateway_provider_keys_put',
+        meta: { keys: saved },
+        ip: getClientIp(req),
+        userAgent: req.headers['user-agent'],
+      });
+      json(res, 200, { ok: true, keys: saved });
+      return;
+    }
+
     if (path === '/api/admin/ai/jobs' && req.method === 'GET') {
       const staff = await requirePermission(req, res, PERMISSIONS.TASK_EVENTS_READ);
       if (!staff) return;
       const u = new URL(req.url || '/', 'http://local');
       const result = await listAuthAiGatewayJobs(staff.user, { limit: u.searchParams.get('limit') || 20 }, { admin: true });
+      json(res, result.status, result.body);
+      return;
+    }
+
+    const adminAiJobDetailMatch = path.match(/^\/api\/admin\/ai\/jobs\/([^/]+)$/);
+    if (adminAiJobDetailMatch && req.method === 'GET') {
+      const staff = await requirePermission(req, res, PERMISSIONS.TASK_EVENTS_READ);
+      if (!staff) return;
+      const jobId = decodeURIComponent(adminAiJobDetailMatch[1] || '').trim();
+      const result = await getAuthAiGatewayJob(jobId, staff.user, { admin: true });
       json(res, result.status, result.body);
       return;
     }
@@ -3524,6 +3581,63 @@ const server = http.createServer(async (req, res) => {
           hint: TRIPO_PROXY
             ? '已启用 TRIPO_PROXY，请检查代理是否可用'
             : '当前未配置 TRIPO_PROXY/HTTPS_PROXY；若网络受限请在 .env.local 配置 TRIPO_PROXY=http://127.0.0.1:7890',
+          ...(detail.code ? { code: detail.code } : {}),
+        });
+      }
+      return;
+    }
+
+    if (path === '/api/ai/provider-artifacts/tripo/fetch-file' && req.method === 'POST') {
+      const auth = await requireAuth(req, res);
+      if (!auth) return;
+      const body = await readBody(req);
+      const fileUrl = normalizeTrimmed(body.url);
+      if (!fileUrl) {
+        json(res, 400, { error: '缺少 url' });
+        return;
+      }
+      let parsed;
+      try {
+        parsed = new URL(fileUrl);
+      } catch {
+        json(res, 400, { error: 'url 非法' });
+        return;
+      }
+      const proto = String(parsed.protocol || '').toLowerCase();
+      if (proto !== 'https:' && proto !== 'http:') {
+        json(res, 400, { error: '仅支持 http/https url' });
+        return;
+      }
+      const key = await acquireProviderKey('tripo');
+      if (!key?.secret) {
+        json(res, 503, { error: 'AI_GATEWAY_PROVIDER_KEY_MISSING', message: 'No enabled Tripo API key in provider key pool' });
+        return;
+      }
+      try {
+        const upstreamResp = await fetch(fileUrl, {
+          method: 'GET',
+          headers: { Authorization: `Bearer ${key.secret}` },
+          signal: AbortSignal.timeout(TRIPO_TIMEOUT_MS),
+        });
+        if (!upstreamResp.ok) {
+          const data = await readJsonSafe(upstreamResp);
+          json(res, upstreamResp.status, data);
+          return;
+        }
+        const arrayBuffer = await upstreamResp.arrayBuffer();
+        const buf = Buffer.from(arrayBuffer);
+        const contentType = normalizeTrimmed(upstreamResp.headers.get('content-type') || '') || 'application/octet-stream';
+        res.writeHead(200, {
+          'Content-Type': contentType,
+          'Content-Length': String(buf.byteLength),
+          'Cache-Control': 'no-store',
+          'X-AC-Provider-Key-Id': key.id,
+        });
+        res.end(buf);
+      } catch (e) {
+        const detail = formatFetchError(e);
+        json(res, 502, {
+          error: `Tripo provider file fetch failed: ${detail.message}`,
           ...(detail.code ? { code: detail.code } : {}),
         });
       }

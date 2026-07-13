@@ -1,5 +1,5 @@
 import { evaluateAiGatewayCreditsGate } from './credits-gate.js';
-import { AiGatewayValidationError, createAiGatewayJobPlan } from './index.js';
+import { AiGatewayValidationError, cancelAiGatewayWorkerExecution, createAiGatewayJobPlan } from './index.js';
 import { persistentAiGatewayJobStore } from './persistent-job-store.js';
 import { AiGatewayRouteError } from './provider-router.js';
 import { settleAiGatewayJobCredits, settlementMetadataPatch } from './settlement.js';
@@ -20,7 +20,9 @@ function routeSummary(route) {
   if (!route || typeof route !== 'object') return null;
   return {
     providerId: route.providerId || null,
+    workerId: route.workerId || null,
     adapterId: route.adapterId || null,
+    legacyAdapterId: route.legacyAdapterId || null,
     channel: route.channel || null,
     upstreamBackend: route.upstreamBackend || null,
   };
@@ -165,9 +167,19 @@ export async function cancelAuthAiGatewayJob(id, user, options = {}) {
   }
 
   const cancelledAt = new Date().toISOString();
+  let workerCancel = null;
+  try {
+    workerCancel = await cancelAiGatewayWorkerExecution(plan, options);
+  } catch (err) {
+    workerCancel = {
+      cancelled: false,
+      mode: 'error',
+      reason: err instanceof Error ? err.message : String(err),
+    };
+  }
   const next = await store.update(id, {
     status: 'cancelled',
-    metadata: { cancelledByUserId: user.id, cancelledAt },
+    metadata: { cancelledByUserId: user.id, cancelledAt, workerCancel },
     error: { code: 'AI_GATEWAY_JOB_CANCELLED', message: 'Job cancelled' },
   });
   const settlement = await settleAiGatewayJobCredits(next);

@@ -105,6 +105,13 @@ export const MATRIX_COLUMNS = [
     write: PERMISSIONS.AI_GATEWAY_OPS_WRITE,
   },
   {
+    id: 'aiGatewayKeys',
+    label: 'AI Gateway Keys',
+    kind: 'rw',
+    read: PERMISSIONS.AI_GATEWAY_KEYS_READ,
+    write: PERMISSIONS.AI_GATEWAY_KEYS_WRITE,
+  },
+  {
     id: 'presetsPublish',
     label: '能力预设发布',
     kind: 'toggle',
@@ -212,6 +219,7 @@ export const AUDIT_ACTION_LABELS = {
   'admin.ai_gateway_ops_control_put': 'AI Gateway Ops 保存',
   'admin.ai_gateway_ops_control_action': 'AI Gateway Ops 一键动作',
   'admin.ai_gateway_ops_control_delete': 'AI Gateway Ops 清空',
+  'admin.ai_gateway_provider_keys_put': 'AI Gateway Provider Keys 保存',
   'admin.companion_artifact_presign_put': '伴侣预签名上传',
   'admin.companion_artifact_register': '伴侣发行登记',
   'admin.companion_artifact_delete': '伴侣删除',

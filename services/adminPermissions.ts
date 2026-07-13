@@ -22,6 +22,8 @@ export const PERMISSIONS = {
   GEMINI_FAIRNESS_STRICT: 'gemini_fairness.strict',
   AI_GATEWAY_OPS_READ: 'ai_gateway_ops.read',
   AI_GATEWAY_OPS_WRITE: 'ai_gateway_ops.write',
+  AI_GATEWAY_KEYS_READ: 'ai_gateway_keys.read',
+  AI_GATEWAY_KEYS_WRITE: 'ai_gateway_keys.write',
   PRESETS_PUBLISH: 'presets.publish',
   ROLES_READ: 'roles.read',
   ROLES_WRITE: 'roles.write',
@@ -76,5 +78,6 @@ export const ADMIN_NAV_ITEMS = [
   { label: '注册邀请码', path: '/admin/registration-invites', permission: PERMISSIONS.REGISTRATION_INVITES_WRITE },
   { label: '本地伴侣发行', path: '/admin/companion-artifacts', permission: PERMISSIONS.COMPANION_READ },
   { label: 'Gemini 公平限流', path: '/admin/gemini-fairness', permission: PERMISSIONS.GEMINI_FAIRNESS_READ },
+  { label: 'AI Key 池', path: '/admin/ai-provider-keys', permission: PERMISSIONS.AI_GATEWAY_KEYS_READ },
   { label: '角色与权限', path: '/admin/roles', permission: PERMISSIONS.ROLES_READ },
 ] as const;

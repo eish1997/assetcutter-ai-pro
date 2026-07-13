@@ -249,6 +249,36 @@ export function mergeAiGatewayOpsControlAction(input, action, { now = new Date()
   });
 }
 
+export function isAiGatewayAutoCircuitEnabled() {
+  const raw = String(process.env.AI_GATEWAY_AUTO_CIRCUIT_ENABLED || '').trim().toLowerCase();
+  if (!raw && (process.env.VITEST === 'true' || process.env.NODE_ENV === 'test')) return false;
+  if (!raw) return true;
+  return !['0', 'false', 'off', 'no'].includes(raw);
+}
+
+function autoCircuitErrorReason(error) {
+  const msg = error instanceof Error ? error.message : String(error || '');
+  if (/429|too many requests|resource_exhausted|rate.?limit|quota|rpm/i.test(msg)) return 'auto circuit: rate limited';
+  if (/HTTP 5\d\d|503|502|504|upstream|overload|unavailable|timeout/i.test(msg)) return 'auto circuit: upstream unstable';
+  return '';
+}
+
+export async function maybeAutoPauseAiGatewayProvider(plan, error, options = {}) {
+  if (!isAiGatewayAutoCircuitEnabled()) return null;
+  const provider = nonEmptyString(plan?.route?.providerId || plan?.job?.provider);
+  if (!provider) return null;
+  const reason = autoCircuitErrorReason(error);
+  if (!reason) return null;
+  const current = options.currentConfig || await readAiGatewayOpsControlConfig();
+  const ttlMinutes = Math.min(120, Math.max(5, Math.floor(Number(options.ttlMinutes || process.env.AI_GATEWAY_AUTO_CIRCUIT_TTL_MINUTES || 10))));
+  const next = mergeAiGatewayOpsControlAction(
+    current,
+    { kind: 'provider', key: provider, reason, ttlMinutes },
+    { updatedByUserId: 'system:auto-circuit' }
+  );
+  return writeAiGatewayOpsControlConfig(next, { updatedByUserId: 'system:auto-circuit' });
+}
+
 export function applyAiGatewayModelOverride(job, config = readAiGatewayOpsControlConfigSync()) {
   const model = nonEmptyString(job?.model);
   if (!model) return { job, applied: null };

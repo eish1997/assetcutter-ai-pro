@@ -68,6 +68,17 @@ describe('admin-matrix', () => {
     expect(permissionsToMatrix(writePerms, ADMIN_ROLE_SLUG).aiGatewayOps).toBe('write');
   });
 
+  it('AI Gateway provider key permission can be configured independently', () => {
+    const readPerms = matrixToPermissions({ aiGatewayKeys: 'read' }, ADMIN_ROLE_SLUG);
+    expect(readPerms).toContain(PERMISSIONS.AI_GATEWAY_KEYS_READ);
+    expect(readPerms).not.toContain(PERMISSIONS.AI_GATEWAY_KEYS_WRITE);
+
+    const writePerms = matrixToPermissions({ aiGatewayKeys: 'write' }, ADMIN_ROLE_SLUG);
+    expect(writePerms).toContain(PERMISSIONS.AI_GATEWAY_KEYS_READ);
+    expect(writePerms).toContain(PERMISSIONS.AI_GATEWAY_KEYS_WRITE);
+    expect(permissionsToMatrix(writePerms, ADMIN_ROLE_SLUG).aiGatewayKeys).toBe('write');
+  });
+
   it('super 无 credits.write 时前端仍允许发放', () => {
     expect(canGrantAdminCredits([], SUPER_ROLE_SLUG)).toBe(true);
     expect(canGrantAdminCredits([], 'admin')).toBe(false);

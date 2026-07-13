@@ -27,8 +27,12 @@ describe('admin-permissions', () => {
     expect(adminPerms).toContain(PERMISSIONS.COMPANION_DELETE);
     expect(adminPerms).toContain(PERMISSIONS.AI_GATEWAY_OPS_READ);
     expect(adminPerms).toContain(PERMISSIONS.AI_GATEWAY_OPS_WRITE);
+    expect(adminPerms).toContain(PERMISSIONS.AI_GATEWAY_KEYS_READ);
+    expect(adminPerms).toContain(PERMISSIONS.AI_GATEWAY_KEYS_WRITE);
     expect(DEFAULT_ROLE_PERMISSIONS[AUDITOR_ROLE_SLUG]).toContain(PERMISSIONS.AI_GATEWAY_OPS_READ);
     expect(DEFAULT_ROLE_PERMISSIONS[AUDITOR_ROLE_SLUG]).not.toContain(PERMISSIONS.AI_GATEWAY_OPS_WRITE);
+    expect(DEFAULT_ROLE_PERMISSIONS[AUDITOR_ROLE_SLUG]).not.toContain(PERMISSIONS.AI_GATEWAY_KEYS_READ);
+    expect(DEFAULT_ROLE_PERMISSIONS[AUDITOR_ROLE_SLUG]).not.toContain(PERMISSIONS.AI_GATEWAY_KEYS_WRITE);
   });
 
   it('filterPermissionsForRoleSlug 会剥离非 super 的 super-only 键', () => {

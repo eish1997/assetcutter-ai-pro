@@ -35,6 +35,14 @@ function publicJobPlan(plan) {
       headers: plan.adapterRequest.headers,
       body: plan.adapterRequest.body,
     },
+    workerRequest: plan.workerRequest
+      ? {
+          method: plan.workerRequest.method,
+          path: plan.workerRequest.path,
+          headers: plan.workerRequest.headers,
+          body: plan.workerRequest.body,
+        }
+      : null,
   };
 }
 
@@ -55,12 +63,14 @@ function publicJobSummary(plan) {
     startedAt: plan.job.startedAt || null,
     finishedAt: plan.job.finishedAt || null,
     route: route
-      ? {
-          providerId: route.providerId || null,
-          adapterId: route.adapterId || null,
-          channel: route.channel || null,
-          upstreamBackend: route.upstreamBackend || null,
-        }
+        ? {
+            providerId: route.providerId || null,
+            workerId: route.workerId || null,
+            adapterId: route.adapterId || null,
+            legacyAdapterId: route.legacyAdapterId || null,
+            channel: route.channel || null,
+            upstreamBackend: route.upstreamBackend || null,
+          }
       : null,
     traceOnly: Boolean(metadata.traceOnly),
     legacyPath: metadata.legacyPath || null,

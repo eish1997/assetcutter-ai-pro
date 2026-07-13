@@ -115,6 +115,7 @@ import { triggerImageDownload } from './services/imageDataUrl';
 import { downloadModelFromSource } from './services/downloadModelFile';
 import { persistWorkflow3dSlots } from './services/persistWorkflow3dSlots';
 import { preflightGenerate3dEnvironment } from './services/generate3d/preflightGenerate3d';
+import { AI_GATEWAY_TRIPO_PLATFORM_KEY } from './services/tripoService';
 import { patchWorkflowAssetsWith3dResultAndHydrate } from './services/workflow3dCompanionHydrate';
 import {
   getAiProviderToolbarLabel,
@@ -231,6 +232,7 @@ const AdminStaffInvitesPanel = lazyChunk(() => import('./components/admin/AdminS
 const AdminRegistrationInvitesPanel = lazyChunk(() => import('./components/admin/AdminRegistrationInvitesPanel'));
 const AdminCompanionArtifactsPanel = lazyChunk(() => import('./components/admin/AdminCompanionArtifactsPanel'));
 const AdminGeminiFairnessPanel = lazyChunk(() => import('./components/admin/AdminGeminiFairnessPanel'));
+const AdminProviderKeysPanel = lazyChunk(() => import('./components/admin/AdminProviderKeysPanel'));
 /** 主内容区滚动容器 ref，用于全局回到顶部 */
 function useMainScrollBackToTop() {
   const [mainScrollEl, setMainScrollEl] = useState<HTMLDivElement | null>(null);
@@ -427,6 +429,8 @@ const AdminAppShell: React.FC = () => {
             <AdminCompanionArtifactsPanel />
           ) : pathname === '/admin/gemini-fairness' ? (
             <AdminGeminiFairnessPanel />
+          ) : pathname === '/admin/ai-provider-keys' ? (
+            <AdminProviderKeysPanel />
           ) : (
             <AdminDashboardPanel />
           )}
@@ -2782,12 +2786,8 @@ const MainApp: React.FC = () => {
       }
       return;
     }
-    const tripoApiKey = getTripoApiKey();
-    if (!tripoApiKey) {
-      addGenerate3DLog('warn', '缺少 Tripo API Key，请在 API 密钥弹窗中先保存');
-      alert('缺少 Tripo API Key，请先在 API 密钥弹窗保存。');
-      return;
-    }
+    const tripoApiKey = getTripoApiKey() || AI_GATEWAY_TRIPO_PLATFORM_KEY;
+    const usingPlatformTripo = tripoApiKey === AI_GATEWAY_TRIPO_PLATFORM_KEY;
     const taskId = addTask('GENERATE_3D', `${preset.label}（Tripo）`);
     let tripoCatchTaskId = '';
     let tripoCatchResumedFromExisting = false;
@@ -2824,7 +2824,10 @@ const MainApp: React.FC = () => {
             )
           : undefined,
       };
-      addGenerate3DLog('info', `[工作流] Tripo 提交任务：${preset.label}`, tripoPayloadPreview);
+      addGenerate3DLog('info', `[工作流] Tripo 提交任务：${preset.label}`, {
+        ...tripoPayloadPreview,
+        route: usingPlatformTripo ? 'ai-gateway' : 'byok',
+      });
       updateTask(taskId, { status: 'RUNNING', progress: 10 });
       const forceNewTask = Boolean(options?.forceNewTask);
       if (forceNewTask) {
@@ -2836,7 +2839,11 @@ const MainApp: React.FC = () => {
               workflowAssetsRef.current.find((a) => a.id === task.assetId)?.resultMeta?.[task.actionType]?.tripoTaskId || ''
             ).trim()
           : '';
-      const { taskId: createdTripoId, resumed: resumedFromExistingTask } = await tripoWorkflowCreateOrResumeTaskId({
+      const {
+        taskId: createdTripoId,
+        resumed: resumedFromExistingTask,
+        aiGatewayJobId,
+      } = await tripoWorkflowCreateOrResumeTaskId({
         apiKey: tripoApiKey,
         preset,
         imageDataUrl: imageBase64,
@@ -2864,6 +2871,7 @@ const MainApp: React.FC = () => {
                 [task.actionType]: {
                   ...old,
                   tripoTaskId: createdTaskId,
+                  ...(aiGatewayJobId ? { aiGatewayJobId } : {}),
                   tripoLastError: undefined,
                   presetActionIdSnapshot: preset.id,
                   displayStepLabel: preset.label,
@@ -2891,6 +2899,7 @@ const MainApp: React.FC = () => {
       if (done.status !== 'success' || done.modelUrls.length === 0) {
         throw new Error('Tripo 任务未产出可下载模型');
       }
+      const finalTripoTaskId = done.taskId || createdTaskId;
       const { modelUrls, previewUrl } = extractTripoModelAndPreviewUrls(done);
       if (modelUrls.length === 0) {
         throw new Error('Tripo 任务完成但未识别到模型文件链接');
@@ -2902,7 +2911,7 @@ const MainApp: React.FC = () => {
       const persisted = await persistWorkflow3dSlots({
         provider: 'tripo',
         apiKey: tripoApiKey,
-        taskId: createdTaskId,
+        taskId: finalTripoTaskId,
         glbSourceUrls: modelUrls,
         previewUrl,
         assetId: workflowAssetId,
@@ -2938,7 +2947,7 @@ const MainApp: React.FC = () => {
           modelSourceName,
           localPreviewUrl,
           previewCompanionKey,
-          jobMeta: { tripoTaskId: createdTaskId, tripoLastError: undefined },
+          jobMeta: { tripoTaskId: finalTripoTaskId, ...(aiGatewayJobId ? { aiGatewayJobId } : {}), tripoLastError: undefined },
           companionBaseUrl: companionBase,
           companionProjectId,
           onLog: (level, message, detail) => addGenerate3DLog(level, message, detail),
@@ -2956,6 +2965,7 @@ const MainApp: React.FC = () => {
         modelCount: localModelUrls.length,
         hasPreview: Boolean(localPreviewUrl),
         companionProjectId,
+        route: usingPlatformTripo ? 'ai-gateway' : 'byok',
       });
       setTripoRecoveryContext(null);
       setTripoRecoveryActionRunning(null);

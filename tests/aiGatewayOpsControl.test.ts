@@ -1,12 +1,35 @@
-import { describe, expect, it } from 'vitest';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
+import { afterEach, describe, expect, it } from 'vitest';
 
 import {
   mergeAiGatewayOpsControlAction,
+  maybeAutoPauseAiGatewayProvider,
   normalizeAiGatewayOpsControlConfig,
   pruneExpiredAiGatewayOpsControlConfig,
 } from '../server/ai-gateway/ops-control.js';
 
 describe('AI Gateway ops control config', () => {
+  const prevPath = process.env.AI_GATEWAY_OPS_CONTROL_PATH;
+  const prevAuto = process.env.AI_GATEWAY_AUTO_CIRCUIT_ENABLED;
+  const tempFiles = new Set<string>();
+
+  afterEach(() => {
+    if (prevPath === undefined) delete process.env.AI_GATEWAY_OPS_CONTROL_PATH;
+    else process.env.AI_GATEWAY_OPS_CONTROL_PATH = prevPath;
+    if (prevAuto === undefined) delete process.env.AI_GATEWAY_AUTO_CIRCUIT_ENABLED;
+    else process.env.AI_GATEWAY_AUTO_CIRCUIT_ENABLED = prevAuto;
+    for (const file of tempFiles) {
+      try {
+        fs.rmSync(file, { force: true });
+      } catch {
+        // ignore temp cleanup failures
+      }
+    }
+    tempFiles.clear();
+  });
+
   it('normalizes provider/model pauses and model overrides', () => {
     expect(
       normalizeAiGatewayOpsControlConfig({
@@ -67,5 +90,25 @@ describe('AI Gateway ops control config', () => {
         createdByUserId: 'user_admin',
       },
     ]);
+  });
+
+  it('auto-pauses a provider on rate-limit handoff failure', async () => {
+    const file = path.join(os.tmpdir(), `ac-aig-ops-${Date.now()}-${Math.random().toString(36).slice(2)}.json`);
+    tempFiles.add(file);
+    process.env.AI_GATEWAY_OPS_CONTROL_PATH = file;
+    process.env.AI_GATEWAY_AUTO_CIRCUIT_ENABLED = 'true';
+
+    const config = await maybeAutoPauseAiGatewayProvider(
+      { route: { providerId: 'tripo' }, job: { provider: 'tripo' } },
+      new Error('HTTP 429 Too Many Requests'),
+      { ttlMinutes: 5 }
+    );
+
+    expect(config?.disabledProviders).toEqual(['tripo']);
+    expect(config?.disabledProviderRules?.[0]).toMatchObject({
+      provider: 'tripo',
+      reason: 'auto circuit: rate limited',
+      createdByUserId: 'system:auto-circuit',
+    });
   });
 });

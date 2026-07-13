@@ -1,5 +1,7 @@
 import { USE_POSTGRES } from '../auth-store.js';
 import { aiGatewayCreditsGateMode } from './credits-gate.js';
+import { isAiGatewayAutoCircuitEnabled, resolveAiGatewayOpsControlSource } from './ops-control.js';
+import { listAiGatewayWorkers } from './workers/registry.js';
 
 export function isAiGatewayExecutionEnabled() {
   const raw = String(process.env.AI_GATEWAY_EXECUTION_ENABLED || '').trim().toLowerCase();
@@ -13,6 +15,9 @@ export function aiGatewayHealthSnapshot() {
     enabled: true,
     executionEnabled: isAiGatewayExecutionEnabled(),
     jobStore: USE_POSTGRES ? 'postgres' : 'json',
+    providerKeyStore: USE_POSTGRES ? 'postgres' : 'json',
+    opsControlStore: resolveAiGatewayOpsControlSource(),
+    autoCircuitEnabled: isAiGatewayAutoCircuitEnabled(),
     creditsGateMode: aiGatewayCreditsGateMode(),
     routes: {
       createJob: 'POST /ai-gateway/jobs',
@@ -21,7 +26,9 @@ export function aiGatewayHealthSnapshot() {
       updateJobStatus: 'PATCH /ai-gateway/jobs/:id',
       executeViaAuthApi: 'POST /api/ai/jobs (AI_GATEWAY_EXECUTION_ENABLED=true)',
     },
-    adapters: ['gemini-proxy'],
+    workers: listAiGatewayWorkers(),
+    adapters: ['legacy-gemini-proxy', 'tripo-openapi'],
+    legacyAdapters: ['gemini-proxy'],
     modalities: ['text', 'image', 'music', 'video', 'model3d'],
   };
 }

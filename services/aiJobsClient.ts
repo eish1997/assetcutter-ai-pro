@@ -6,7 +6,9 @@ export type AiJobModality = 'text' | 'image' | 'music' | 'video' | 'model3d';
 
 export type AiJobRouteSummary = {
   providerId: string | null;
+  workerId?: string | null;
   adapterId: string | null;
+  legacyAdapterId?: string | null;
   channel: string | null;
   upstreamBackend: string | null;
 };

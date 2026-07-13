@@ -1,7 +1,8 @@
 import { fetchCompanionAssetBlob, fetchCompanionAssetForDownload } from './companionClient/storage';
 import { probeCompanionHealth } from './companionClient/probe';
 import { normalizeCompanionBaseUrl } from './companionLocalPrefs';
-import { resolveTripoProxyBase } from './tripoService';
+import { resolveTripoProxyBase, isAiGatewayTripoPlatformKey } from './tripoService';
+import { apiUrl } from './apiBase';
 import { isWorkflowModelUrlReadable } from './workflowModelBlob';
 import {
   showDownloadNotice,
@@ -50,10 +51,14 @@ function buildDownloadFilename(hint: string | undefined, url: string, mime: stri
 }
 
 async function fetchTripoFileBlob(apiKey: string, url: string): Promise<Blob> {
-  const r = await fetch(`${resolveTripoProxyBase()}/fetch-file`, {
+  const endpoint = isAiGatewayTripoPlatformKey(apiKey)
+    ? apiUrl('/api/ai/provider-artifacts/tripo/fetch-file')
+    : `${resolveTripoProxyBase()}/fetch-file`;
+  const body = isAiGatewayTripoPlatformKey(apiKey) ? { url } : { apiKey, url };
+  const r = await fetch(endpoint, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ apiKey, url }),
+    body: JSON.stringify(body),
   });
   if (!r.ok) {
     const txt = await r.text().catch(() => '');

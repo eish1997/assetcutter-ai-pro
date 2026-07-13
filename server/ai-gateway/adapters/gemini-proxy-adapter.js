@@ -10,7 +10,7 @@ function requireValue(value, field) {
 }
 
 export function buildGeminiProxyAsyncRequest(job, route) {
-  if (route?.adapterId !== 'gemini-proxy') {
+  if (route?.adapterId !== 'legacy-gemini-proxy' && route?.legacyAdapterId !== 'gemini-proxy') {
     throw new AiGatewayValidationError(`Unsupported adapter for Gemini proxy: ${route?.adapterId || ''}`);
   }
 

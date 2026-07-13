@@ -42,6 +42,12 @@ export type TripoTaskResult = {
   raw: unknown;
 };
 
+export const AI_GATEWAY_TRIPO_PLATFORM_KEY = '__AI_GATEWAY_TRIPO_PLATFORM__';
+
+export function isAiGatewayTripoPlatformKey(apiKey: string | null | undefined): boolean {
+  return String(apiKey || '').trim() === AI_GATEWAY_TRIPO_PLATFORM_KEY;
+}
+
 const TRIPO_ALLOWED_MODEL_VERSIONS = new Set([
   'P1-20260311',
   'v3.1-20260211',
@@ -222,10 +228,14 @@ export async function createTripoConvertModelTask(
 }
 
 export async function fetchTripoRemoteFileBlob(apiKey: string, url: string): Promise<Blob> {
-  const r = await fetch(`${resolveTripoProxyBase()}/fetch-file`, {
+  const endpoint = isAiGatewayTripoPlatformKey(apiKey)
+    ? apiUrl('/api/ai/provider-artifacts/tripo/fetch-file')
+    : `${resolveTripoProxyBase()}/fetch-file`;
+  const body = isAiGatewayTripoPlatformKey(apiKey) ? { url } : { apiKey: apiKey.trim(), url };
+  const r = await fetch(endpoint, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ apiKey: apiKey.trim(), url }),
+    body: JSON.stringify(body),
   });
   if (!r.ok) {
     const txt = await r.text().catch(() => '');

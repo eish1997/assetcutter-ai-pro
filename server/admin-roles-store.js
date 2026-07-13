@@ -63,6 +63,12 @@ async function upsertSystemRolePg(p, { slug, displayName, description, permissio
       `UPDATE admin_roles SET display_name = $2, description = $3, is_system = true, updated_at = $4 WHERE id = $1`,
       [roleId, displayName, description, ts]
     );
+    for (const key of permissions) {
+      await p.query(
+        'INSERT INTO role_permissions (role_id, permission_key) VALUES ($1,$2) ON CONFLICT DO NOTHING',
+        [roleId, key]
+      );
+    }
     return roleId;
   }
   roleId = crypto.randomUUID();
@@ -102,6 +108,16 @@ function upsertSystemRoleJson(db, { slug, displayName, description, permissions 
   row.description = description;
   row.isSystem = true;
   row.updatedAt = ts;
+  const existingPermissions = new Set(
+    db.rolePermissions
+      .filter((item) => item.roleId === row.id)
+      .map((item) => item.permissionKey)
+  );
+  for (const permissionKey of permissions) {
+    if (!existingPermissions.has(permissionKey)) {
+      db.rolePermissions.push({ roleId: row.id, permissionKey });
+    }
+  }
   return row.id;
 }
 

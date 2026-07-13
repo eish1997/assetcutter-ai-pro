@@ -92,4 +92,29 @@ describe('persistent AI gateway job store', () => {
     });
     expect(updated.job.finishedAt).toBeTruthy();
   });
+
+  it('redacts transient 3D image inputs from persisted job records', async () => {
+    const { createAiGatewayJobPlan } = await import('../server/ai-gateway/index.js');
+    const { createPersistentAiJobStore } = await import('../server/ai-gateway/persistent-job-store.js');
+    const store = createPersistentAiJobStore();
+    const plan = createAiGatewayJobPlan({
+      id: 'aijob_persist_3d',
+      modality: 'model3d',
+      input: {
+        type: 'image_to_model',
+        prompt: 'crate',
+        imageBase64DataUrl: 'data:image/png;base64,QUJDRA==',
+        multiviewImageBase64DataUrls: {
+          front: 'data:image/png;base64,RlJPTlQ=',
+        },
+      },
+    });
+
+    await store.put(plan);
+
+    const raw = JSON.stringify(mockDb.value.aiGatewayJobs[0]);
+    expect(raw).not.toContain('QUJDRA==');
+    expect(raw).not.toContain('RlJPTlQ=');
+    expect(raw).toContain('[REDACTED_MEDIA:');
+  });
 });

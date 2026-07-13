@@ -46,6 +46,39 @@ function rowToPlan(row) {
   };
 }
 
+function sanitizeAiGatewayJobInput(value) {
+  if (value == null || typeof value !== 'object') return value;
+  if (Array.isArray(value)) return value.map(sanitizeAiGatewayJobInput);
+  const out = {};
+  for (const [key, raw] of Object.entries(value)) {
+    if (/base64|dataurl|imageBase64DataUrl/i.test(key) && typeof raw === 'string') {
+      out[key] = raw ? `[REDACTED_MEDIA:${raw.length} chars]` : '';
+      continue;
+    }
+    if (key === 'multiviewImageBase64DataUrls' && raw && typeof raw === 'object') {
+      out[key] = Object.fromEntries(
+        Object.entries(raw).map(([slot, slotValue]) => [
+          slot,
+          typeof slotValue === 'string' && slotValue
+            ? `[REDACTED_MEDIA:${slotValue.length} chars]`
+            : slotValue,
+        ])
+      );
+      continue;
+    }
+    out[key] = sanitizeAiGatewayJobInput(raw);
+  }
+  return out;
+}
+
+function sanitizeAiGatewayAdapterRequest(value) {
+  if (!value || typeof value !== 'object') return value || {};
+  return {
+    ...value,
+    body: sanitizeAiGatewayJobInput(value.body || {}),
+  };
+}
+
 function planToJsonRow(plan) {
   return {
     id: plan.job.id,
@@ -56,12 +89,12 @@ function planToJsonRow(plan) {
     provider: plan.job.provider || null,
     model: plan.job.model || null,
     correlationId: plan.job.correlationId,
-    inputJson: JSON.stringify(plan.job.input || {}),
+    inputJson: JSON.stringify(sanitizeAiGatewayJobInput(plan.job.input || {})),
     outputJson: plan.job.output === undefined ? null : JSON.stringify(plan.job.output),
     artifactsJson: plan.job.artifacts === undefined ? null : JSON.stringify(plan.job.artifacts),
     metadataJson: JSON.stringify(plan.job.metadata || {}),
     routeJson: JSON.stringify(plan.route || {}),
-    adapterRequestJson: JSON.stringify(plan.adapterRequest || {}),
+    adapterRequestJson: JSON.stringify(sanitizeAiGatewayAdapterRequest(plan.adapterRequest || {})),
     errorJson: plan.job.error ? JSON.stringify(plan.job.error) : null,
     createdAt: plan.job.createdAt,
     updatedAt: plan.job.updatedAt,
@@ -144,10 +177,10 @@ export function createPersistentAiJobStore() {
             plan.job.provider || null,
             plan.job.model || null,
             plan.job.correlationId,
-            JSON.stringify(plan.job.input || {}),
+            JSON.stringify(sanitizeAiGatewayJobInput(plan.job.input || {})),
             JSON.stringify(plan.job.metadata || {}),
             JSON.stringify(plan.route || {}),
-            JSON.stringify(plan.adapterRequest || {}),
+            JSON.stringify(sanitizeAiGatewayAdapterRequest(plan.adapterRequest || {})),
             plan.job.output === undefined ? null : JSON.stringify(plan.job.output),
             plan.job.artifacts === undefined ? null : JSON.stringify(plan.job.artifacts),
             plan.job.error ? JSON.stringify(plan.job.error) : null,

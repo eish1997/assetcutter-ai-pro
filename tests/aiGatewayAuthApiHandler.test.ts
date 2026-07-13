@@ -120,6 +120,12 @@ describe('AI gateway auth-api facade', () => {
       status: 'cancelled',
       error: { code: 'AI_GATEWAY_JOB_CANCELLED' },
     });
+    const stored = await store.get('aijob_auth_cancel');
+    expect(stored?.job.metadata.workerCancel).toMatchObject({
+      cancelled: false,
+      mode: 'soft',
+      reason: 'legacy_adapter_cancel_not_supported',
+    });
   });
 
   it('creates a new user-owned job when retrying failed or cancelled jobs', async () => {

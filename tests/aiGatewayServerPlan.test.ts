@@ -17,7 +17,37 @@ describe('server AI gateway job planning', () => {
     });
 
     expect(() => createAiGatewayJobPlan({ modality: 'music', input: {} })).toThrow(AiGatewayRouteError);
-    expect(() => createAiGatewayJobPlan({ modality: 'model3d', input: {} })).toThrow(AiGatewayRouteError);
+    expect(() => createAiGatewayJobPlan({ modality: 'model3d', input: {} })).toThrow('Tripo text_to_model requires input.prompt');
+  });
+
+  it('plans model3d generation through Tripo OpenAPI', () => {
+    const plan = createAiGatewayJobPlan({
+      modality: 'model3d',
+      input: {
+        prompt: 'small low-poly sci-fi crate',
+        texture: true,
+        faceLimit: 12000,
+      },
+    });
+
+    expect(plan.route).toMatchObject({
+      providerId: 'tripo',
+      workerId: 'model3d-worker',
+      adapterId: 'tripo-openapi',
+      channel: 'tripo-openapi',
+      upstreamBackend: 'tripo',
+    });
+    expect(plan.workerRequest).toMatchObject({
+      method: 'POST',
+      path: '/task',
+      providerBaseUrl: 'https://api.tripo3d.ai/v2/openapi',
+      body: {
+        type: 'text_to_model',
+        prompt: 'small low-poly sci-fi crate',
+        texture: true,
+        face_limit: 12000,
+      },
+    });
   });
 
   it('plans image generation through the existing Vertex-backed gemini proxy by default', () => {
@@ -40,7 +70,9 @@ describe('server AI gateway job planning', () => {
 
     expect(plan.route).toMatchObject({
       providerId: 'vertex-gemini',
-      adapterId: 'gemini-proxy',
+      workerId: 'image-worker',
+      adapterId: 'legacy-gemini-proxy',
+      legacyAdapterId: 'gemini-proxy',
       channel: 'vertex-proxy',
       upstreamBackend: 'vertex',
     });
@@ -74,6 +106,7 @@ describe('server AI gateway job planning', () => {
     });
 
     expect(plan.route.providerId).toBe('gemini-aistudio');
+    expect(plan.route.workerId).toBe('text-worker');
     expect(plan.adapterRequest.body.aiBackend).toBeUndefined();
   });
 
@@ -94,6 +127,7 @@ describe('server AI gateway job planning', () => {
     );
 
     expect(plan.route.providerId).toBe('gemini-aistudio');
+    expect(plan.route.workerId).toBe('image-worker');
     expect(plan.adapterRequest.body.aiBackend).toBeUndefined();
   });
 

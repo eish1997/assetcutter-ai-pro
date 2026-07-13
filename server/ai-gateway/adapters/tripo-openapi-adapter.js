@@ -1,0 +1,326 @@
+import { fetch as undiciFetch } from 'undici';
+import { acquireProviderKey, recordProviderKeyError, recordProviderKeySuccess } from '../provider-key-store.js';
+import { AiGatewayValidationError } from '../job.js';
+
+export const TRIPO_OPENAPI_BASE_URL = 'https://api.tripo3d.ai/v2/openapi';
+
+function nonEmptyString(value) {
+  return typeof value === 'string' && value.trim() ? value.trim() : '';
+}
+
+function normalizeTaskStatus(value) {
+  const s = String(value || '').trim().toLowerCase();
+  if (s === 'queued' || s === 'pending' || s === 'created' || s === 'submitted') return 'queued';
+  if (s === 'running' || s === 'processing' || s === 'in_progress') return 'running';
+  if (s === 'success' || s === 'succeeded' || s === 'finished' || s === 'done') return 'succeeded';
+  if (s === 'failed' || s === 'error' || s === 'cancelled' || s === 'expired') return 'failed';
+  return 'running';
+}
+
+function extractTaskId(data) {
+  return (
+    nonEmptyString(data?.task_id) ||
+    nonEmptyString(data?.id) ||
+    nonEmptyString(data?.data?.task_id) ||
+    nonEmptyString(data?.data?.id)
+  );
+}
+
+function normalizeModelUrls(task) {
+  const out = [];
+  const push = (value, key = '') => {
+    const url = nonEmptyString(value);
+    if (!/^https?:\/\//i.test(url)) return;
+    const modelLikeKey = /(model|glb|gltf|fbx|obj|usdz|download)/i.test(key);
+    const modelLikeUrl = /\.(glb|gltf|fbx|obj|usdz|zip)(\?|#|$)/i.test(url);
+    if (!modelLikeKey && !modelLikeUrl) return;
+    if (!out.includes(url)) out.push(url);
+  };
+  const walk = (obj) => {
+    if (!obj || typeof obj !== 'object') return;
+    if (Array.isArray(obj)) {
+      obj.forEach(walk);
+      return;
+    }
+    for (const [key, value] of Object.entries(obj)) {
+      if (typeof value === 'string') push(value, key);
+      else walk(value);
+    }
+  };
+  walk(task);
+  return out;
+}
+
+function tripoErrorMessage(data, fallback = 'Tripo request failed') {
+  if (!data || typeof data !== 'object') return fallback;
+  return (
+    nonEmptyString(data.message) ||
+    nonEmptyString(data.msg) ||
+    nonEmptyString(data.detail) ||
+    nonEmptyString(data.error?.message) ||
+    nonEmptyString(data.error?.msg) ||
+    fallback
+  );
+}
+
+function parseDataUrlImage(dataUrl) {
+  const raw = nonEmptyString(dataUrl);
+  const m = /^data:([^;,]+);base64,(.+)$/i.exec(raw);
+  if (!m) return null;
+  const mime = m[1] || 'image/png';
+  const bytes = Buffer.from(m[2] || '', 'base64');
+  if (!bytes.byteLength) return null;
+  const ext = mime.includes('jpeg') || mime.includes('jpg') ? 'jpg' : mime.includes('webp') ? 'webp' : 'png';
+  return { mime, bytes, filename: `input.${ext}` };
+}
+
+async function uploadImageToTripo(apiKey, imageBase64DataUrl, options = {}) {
+  const parsed = parseDataUrlImage(imageBase64DataUrl);
+  if (!parsed) {
+    throw new AiGatewayValidationError('Tripo image task requires a valid imageBase64DataUrl', 'AI_GATEWAY_TRIPO_IMAGE_REQUIRED');
+  }
+  const fetchImpl = options.fetchImpl || undiciFetch;
+  const form = new FormData();
+  form.append('file', new Blob([parsed.bytes], { type: parsed.mime }), parsed.filename);
+  const response = await fetchImpl(`${TRIPO_OPENAPI_BASE_URL}/upload/sts`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${apiKey}` },
+    body: form,
+    signal: AbortSignal.timeout(Number(options.uploadTimeoutMs || process.env.AI_GATEWAY_TRIPO_UPLOAD_TIMEOUT_MS || 60_000)),
+  });
+  const data = await readJsonSafe(response);
+  if (!response.ok) {
+    throw new Error(`Tripo image upload rejected: HTTP ${response.status} ${tripoErrorMessage(data)}`);
+  }
+  const token =
+    nonEmptyString(data?.file_token) ||
+    nonEmptyString(data?.data?.file_token) ||
+    nonEmptyString(data?.image_token) ||
+    nonEmptyString(data?.data?.image_token);
+  if (!token) throw new Error('Tripo upload did not return file_token');
+  return { type: 'jpg', file_token: token };
+}
+
+function buildTripoTaskBody(job) {
+  const input = job?.input && typeof job.input === 'object' ? job.input : {};
+  const prompt = nonEmptyString(input.prompt) || nonEmptyString(input.text) || nonEmptyString(input.contents?.[0]?.parts?.[0]?.text);
+  const type = nonEmptyString(input.type) || 'text_to_model';
+  if (type === 'text_to_model' && !prompt) {
+    throw new AiGatewayValidationError('Tripo text_to_model requires input.prompt', 'AI_GATEWAY_TRIPO_PROMPT_REQUIRED');
+  }
+  const body = {
+    type,
+    ...(prompt ? { prompt } : {}),
+  };
+  const map = [
+    ['negativePrompt', 'negative_prompt'],
+    ['modelVersion', 'model_version'],
+    ['textureQuality', 'texture_quality'],
+    ['geometryQuality', 'geometry_quality'],
+    ['faceLimit', 'face_limit'],
+    ['smartLowPoly', 'smart_low_poly'],
+    ['generateParts', 'generate_parts'],
+    ['autoSize', 'auto_size'],
+    ['exportUv', 'export_uv'],
+    ['enableImageAutofix', 'enable_image_autofix'],
+    ['textureAlignment', 'texture_alignment'],
+    ['orientation', 'orientation'],
+  ];
+  for (const [from, to] of map) {
+    if (input[from] !== undefined && input[from] !== null && input[from] !== '') body[to] = input[from];
+  }
+  for (const key of ['texture', 'pbr', 'quad', 'compress']) {
+    if (input[key] !== undefined && input[key] !== null && input[key] !== '') body[key] = input[key];
+  }
+  if (type === 'image_to_model') {
+    if (nonEmptyString(input.imageUrl)) body.file = { type: 'url', url: nonEmptyString(input.imageUrl) };
+    else if (nonEmptyString(input.imageBase64DataUrl)) body.imageBase64DataUrl = input.imageBase64DataUrl;
+    else throw new AiGatewayValidationError('Tripo image_to_model requires image input', 'AI_GATEWAY_TRIPO_IMAGE_REQUIRED');
+  }
+  if (type === 'multiview_to_model') {
+    const slots = input.multiviewImageBase64DataUrls && typeof input.multiviewImageBase64DataUrls === 'object'
+      ? input.multiviewImageBase64DataUrls
+      : {};
+    if (!nonEmptyString(slots.front)) {
+      throw new AiGatewayValidationError('Tripo multiview_to_model requires front image', 'AI_GATEWAY_TRIPO_MULTIVIEW_FRONT_REQUIRED');
+    }
+    const count = ['front', 'left', 'back', 'right'].filter((slot) => nonEmptyString(slots[slot])).length;
+    if (count < 2) {
+      throw new AiGatewayValidationError('Tripo multiview_to_model requires at least two images', 'AI_GATEWAY_TRIPO_MULTIVIEW_MIN_REQUIRED');
+    }
+    body.multiviewImageBase64DataUrls = slots;
+  }
+  return body;
+}
+
+async function prepareTripoTaskBodyForUpstream(apiKey, body, options = {}) {
+  if (body.type === 'image_to_model' && body.imageBase64DataUrl) {
+    const { imageBase64DataUrl, ...rest } = body;
+    return { ...rest, file: await uploadImageToTripo(apiKey, imageBase64DataUrl, options) };
+  }
+  if (body.type === 'multiview_to_model') {
+    const slots = body.multiviewImageBase64DataUrls || {};
+    const files = [];
+    for (const slot of ['front', 'left', 'back', 'right']) {
+      files.push(nonEmptyString(slots[slot]) ? await uploadImageToTripo(apiKey, slots[slot], options) : { type: 'jpg' });
+    }
+    const { multiviewImageBase64DataUrls, ...rest } = body;
+    return { ...rest, files };
+  }
+  return body;
+}
+
+export function buildTripoWorkerRequest(job, route) {
+  if (route?.adapterId !== 'tripo-openapi') {
+    throw new AiGatewayValidationError(`Unsupported adapter for Tripo: ${route?.adapterId || ''}`);
+  }
+  return {
+    method: 'POST',
+    path: '/task',
+    providerBaseUrl: TRIPO_OPENAPI_BASE_URL,
+    body: buildTripoTaskBody(job),
+    headers: {
+      'content-type': 'application/json',
+      'x-ac-task-envelope': job.id,
+      'x-ac-correlation-id': job.correlationId,
+    },
+  };
+}
+
+async function readJsonSafe(response) {
+  const text = await response.text();
+  try {
+    return JSON.parse(text || '{}');
+  } catch {
+    return { message: text };
+  }
+}
+
+async function pollDelay(ms) {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    if (typeof timer.unref === 'function') timer.unref();
+  });
+}
+
+async function pollTripoTask(plan, taskId, apiKey, options = {}) {
+  const store = options.store;
+  if (!store?.update || !plan?.job?.id || !taskId) return;
+  const fetchImpl = options.fetchImpl || undiciFetch;
+  const intervalFloorMs = options.pollIntervalMs != null ? 1 : 3000;
+  const intervalMs = Math.max(intervalFloorMs, Number(options.pollIntervalMs || process.env.AI_GATEWAY_TRIPO_POLL_INTERVAL_MS || 5000));
+  const timeoutMs = Math.max(intervalMs, Number(options.pollTimeoutMs || process.env.AI_GATEWAY_TRIPO_POLL_TIMEOUT_MS || 900_000));
+  const startedAt = Date.now();
+
+  while (Date.now() - startedAt < timeoutMs) {
+    await pollDelay(intervalMs);
+    try {
+      const response = await fetchImpl(`${TRIPO_OPENAPI_BASE_URL}/task/${encodeURIComponent(taskId)}`, {
+        method: 'GET',
+        headers: { Authorization: `Bearer ${apiKey}` },
+        signal: AbortSignal.timeout(Number(options.pollRequestTimeoutMs || 30_000)),
+      });
+      const data = await readJsonSafe(response);
+      if (!response.ok) continue;
+      const status = normalizeTaskStatus(data?.status ?? data?.data?.status ?? data?.task?.status);
+      if (status === 'succeeded') {
+        const modelUrls = normalizeModelUrls(data);
+        await store.update(plan.job.id, {
+          status: 'succeeded',
+          output: {
+            provider: 'tripo',
+            taskId,
+            modelUrls,
+            raw: data,
+          },
+          artifacts: modelUrls.map((url) => ({
+            kind: 'model3d',
+            url,
+            source: 'tripo',
+            taskId,
+          })),
+          metadata: {
+            tripoTaskId: taskId,
+            upstreamTaskId: taskId,
+            gatewayExecution: { completedAt: new Date().toISOString() },
+          },
+        });
+        return;
+      }
+      if (status === 'failed') {
+        await store.update(plan.job.id, {
+          status: 'failed',
+          error: { code: 'TRIPO_TASK_FAILED', message: tripoErrorMessage(data, 'Tripo task failed') },
+          metadata: {
+            tripoTaskId: taskId,
+            upstreamTaskId: taskId,
+            gatewayExecution: { failedAt: new Date().toISOString() },
+          },
+        });
+        return;
+      }
+      await store.update(plan.job.id, {
+        status: status === 'queued' ? 'queued' : 'running',
+        metadata: { tripoTaskId: taskId, upstreamTaskId: taskId, tripoStatus: status },
+      });
+    } catch {
+      // Polling is best-effort; leave the last known state for admin retry/inspection.
+    }
+  }
+}
+
+export async function startTripoExecution(plan, options = {}) {
+  const key = await acquireProviderKey('tripo');
+  if (!key?.secret) {
+    throw new AiGatewayValidationError('No enabled Tripo API key in AI Gateway provider key pool', 'AI_GATEWAY_PROVIDER_KEY_MISSING');
+  }
+  const fetchImpl = options.fetchImpl || undiciFetch;
+  let upstreamBody;
+  try {
+    upstreamBody = await prepareTripoTaskBodyForUpstream(
+      key.secret,
+      plan.workerRequest?.body || plan.adapterRequest?.body || {},
+      options
+    );
+  } catch (error) {
+    recordProviderKeyError(key.id, error, { cooldownMs: 0 });
+    throw error;
+  }
+  const response = await fetchImpl(`${TRIPO_OPENAPI_BASE_URL}${plan.workerRequest?.path || plan.adapterRequest?.path || '/task'}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${key.secret}`,
+    },
+    body: JSON.stringify(upstreamBody),
+    signal: AbortSignal.timeout(Number(options.timeoutMs || process.env.AI_GATEWAY_TRIPO_START_TIMEOUT_MS || 45_000)),
+  });
+  const data = await readJsonSafe(response);
+  if (!response.ok) {
+    const err = new Error(`Tripo rejected AI job handoff: HTTP ${response.status} ${tripoErrorMessage(data)}`);
+    recordProviderKeyError(key.id, err, { cooldownMs: response.status === 429 || response.status >= 500 ? 60_000 : 0 });
+    throw err;
+  }
+  recordProviderKeySuccess(key.id);
+  const taskId = extractTaskId(data);
+  if (!taskId) throw new Error('Tripo did not return task_id');
+
+  const metadata = {
+    gatewayExecution: {
+      startedAt: new Date().toISOString(),
+      targetPath: plan.workerRequest?.path || plan.adapterRequest?.path || '/task',
+      providerKeyId: key.id,
+    },
+    tripoTaskId: taskId,
+    upstreamTaskId: taskId,
+  };
+  const next = options.store?.update
+    ? await options.store.update(plan.job.id, { status: 'queued', metadata })
+    : plan;
+  if (!options.disableBackgroundPoll) {
+    const pollPromise = pollTripoTask(next || plan, taskId, key.secret, options);
+    if (options.awaitBackgroundPoll) await pollPromise;
+    else void pollPromise;
+  }
+  return { started: true, upstreamJobId: taskId, tripoTaskId: taskId, plan: next || plan };
+}

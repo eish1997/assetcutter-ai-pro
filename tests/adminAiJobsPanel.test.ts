@@ -86,9 +86,9 @@ describe('AdminAiJobsPanel helpers', () => {
     expect(formatAiGatewayDuration(12_300)).toBe('12s');
     expect(formatAiGatewayDuration(180_000)).toBe('3m');
     expect(formatAiGatewayStorageLabel('postgres')).toBe('Postgres');
-    expect(formatAiGatewayStorageLabel('disk')).toBe('Disk JSON');
-    expect(formatAiGatewayExpiry('2026-07-13T11:00:00.000Z', Date.parse('2026-07-13T10:30:00.000Z'))).toBe('30m left');
-    expect(formatAiGatewayExpiry('2026-07-13T09:00:00.000Z', Date.parse('2026-07-13T10:30:00.000Z'))).toBe('expired');
+    expect(formatAiGatewayStorageLabel('disk')).toBe('本地 JSON');
+    expect(formatAiGatewayExpiry('2026-07-13T11:00:00.000Z', Date.parse('2026-07-13T10:30:00.000Z'))).toBe('剩余 30 分钟');
+    expect(formatAiGatewayExpiry('2026-07-13T09:00:00.000Z', Date.parse('2026-07-13T10:30:00.000Z'))).toBe('已过期');
   });
 
   it('formats AI Gateway ops-control textarea values', () => {

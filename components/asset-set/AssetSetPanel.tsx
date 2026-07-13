@@ -9,6 +9,7 @@ import { compressStoryboardFrameDataUrl } from '../storyboard/storyboardFrameIma
 import { executeCapability, getCapabilityEngine } from '../../services/capabilityExecutor';
 import { readLocalJson, writeLocalJson } from '../../services/clientPersist';
 import { getTripoApiKey } from '../../services/settingsStore';
+import { AI_GATEWAY_TRIPO_PLATFORM_KEY } from '../../services/tripoService';
 import {
   computeAssetSetStats,
   listAssetSet3dEligibleComponents,
@@ -762,11 +763,7 @@ export default function AssetSetPanel({
 
   const runOneComponent3d = useCallback(
     async (component: AssetSetComponent, options?: { forceNew?: boolean }) => {
-      const apiKey = getTripoApiKey();
-      if (!apiKey) {
-        onNotify?.('warn', '请先在设置中配置 Tripo API Key');
-        return false;
-      }
+      const apiKey = getTripoApiKey() || AI_GATEWAY_TRIPO_PLATFORM_KEY;
       const preset = pickAssetSet3dPreset(component.views, single3dPreset, multi3dPreset);
       if (!preset) {
         onNotify?.('warn', `组件 ${component.name ?? component.id}：无可用 3D 预设`);

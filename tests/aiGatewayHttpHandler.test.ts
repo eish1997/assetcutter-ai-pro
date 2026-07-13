@@ -62,8 +62,9 @@ describe('AI gateway HTTP job sample', () => {
           },
         },
       },
-      route: { providerId: 'vertex-gemini', adapterId: 'gemini-proxy' },
+      route: { providerId: 'vertex-gemini', workerId: 'image-worker', adapterId: 'legacy-gemini-proxy' },
       adapterRequest: { method: 'POST', path: '/proxy/gemini/async' },
+      workerRequest: { method: 'POST', path: '/proxy/gemini/async' },
     });
 
     const getRes = makeRes();
@@ -107,7 +108,7 @@ describe('AI gateway HTTP job sample', () => {
           id: 'aijob_http_new',
           traceOnly: true,
           legacyPath: '/proxy/gemini/async',
-          route: { providerId: 'vertex-gemini', adapterId: 'gemini-proxy' },
+          route: { providerId: 'vertex-gemini', workerId: 'image-worker', adapterId: 'legacy-gemini-proxy' },
         },
       ],
     });

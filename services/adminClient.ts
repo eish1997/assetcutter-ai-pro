@@ -6,6 +6,7 @@ import type {
   AiGatewayOpsControlConfig,
   AiGatewayOpsControlResponse,
   AiGatewayOpsSummary,
+  AiJobDetail,
   AiJobsListResponse,
 } from './aiJobsClient';
 import { HttpRequestError, requestJson } from './httpClient';
@@ -633,6 +634,14 @@ export async function fetchAdminAiJobs(query: { limit?: number } = {}) {
   if (query.limit != null) params.set('limit', String(query.limit));
   const qs = params.toString();
   return requestJson<AiJobsListResponse>(apiUrl(`/api/admin/ai/jobs${qs ? `?${qs}` : ''}`), {
+    cache: 'no-store',
+  });
+}
+
+export async function fetchAdminAiJob(jobId: string) {
+  const id = String(jobId || '').trim();
+  if (!id) throw new Error('Invalid AI job id');
+  return requestJson<AiJobDetail>(apiUrl(`/api/admin/ai/jobs/${encodeURIComponent(id)}`), {
     cache: 'no-store',
   });
 }

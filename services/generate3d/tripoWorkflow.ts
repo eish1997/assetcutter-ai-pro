@@ -1,7 +1,10 @@
 import { createTripoTask, getTripoTask, waitTripoTaskDone } from '../unifiedAiGateway';
+import { isAiGatewayTripoPlatformKey } from '../tripoService';
 import type { TripoCreateTaskInput, TripoTaskResult, TripoTaskType } from '../tripoService';
 import type { CustomAppModule } from '../../types';
 import { normalizeGenerate3DPresetForRun } from './normalizePreset';
+import { createAiJob, getMyAiJob, type AiJobDetail } from '../aiJobsClient';
+import { upsertAiJobSummary } from '../aiJobsStore';
 
 export function buildTripoCreateTaskInputFromPreset(params: {
   apiKey: string;
@@ -79,7 +82,7 @@ export async function tripoWorkflowCreateOrResumeTaskId(params: {
   multiviewImageDataUrls?: Partial<Record<'front' | 'back' | 'left' | 'right', string>>;
   existingTaskId?: string;
   forceNewTask?: boolean;
-}): Promise<{ taskId: string; resumed: boolean }> {
+}): Promise<{ taskId: string; resumed: boolean; aiGatewayJobId?: string }> {
   const forceNew = Boolean(params.forceNewTask);
   const existing = String(params.existingTaskId || '').trim();
   if (existing && !forceNew) {
@@ -91,8 +94,59 @@ export async function tripoWorkflowCreateOrResumeTaskId(params: {
     imageDataUrl: params.imageDataUrl,
     multiviewImageDataUrls: params.multiviewImageDataUrls,
   });
+  if (isAiGatewayTripoPlatformKey(params.apiKey)) {
+    const { apiKey: _apiKey, ...gatewayInput } = input;
+    const detail = await createAiJob({
+      modality: 'model3d',
+      capability: 'model3d.generate',
+      provider: 'tripo',
+      metadata: {
+        source: 'workflow_generate_3d',
+        taskType: input.type,
+      },
+      input: gatewayInput as unknown as Record<string, unknown>,
+    });
+    upsertAiJobSummary(detail.job);
+    return { taskId: detail.job.id, resumed: false, aiGatewayJobId: detail.job.id };
+  }
   const taskId = await createTripoTask(input);
   return { taskId, resumed: false };
+}
+
+function extractGatewayTripoTaskId(detail: AiJobDetail): string {
+  const output = detail.job.output as Record<string, unknown> | null | undefined;
+  const metadata = (detail.job as unknown as { metadata?: Record<string, unknown> }).metadata || {};
+  return (
+    String(output?.taskId || '').trim() ||
+    String(metadata.tripoTaskId || '').trim() ||
+    String(metadata.upstreamTaskId || '').trim() ||
+    detail.job.id
+  );
+}
+
+function gatewayDetailToTripoResult(detail: AiJobDetail): TripoTaskResult {
+  const status =
+    detail.job.status === 'succeeded'
+      ? 'success'
+      : detail.job.status === 'failed'
+        ? 'failed'
+        : detail.job.status === 'queued'
+          ? 'queued'
+          : detail.job.status === 'running'
+            ? 'running'
+            : 'unknown';
+  const output = detail.job.output as Record<string, unknown> | null | undefined;
+  const modelUrls = Array.isArray(output?.modelUrls)
+    ? output.modelUrls.map((url) => String(url || '').trim()).filter(Boolean)
+    : detail.job.artifacts
+        .map((artifact) => String(artifact.url || '').trim())
+        .filter(Boolean);
+  return {
+    taskId: extractGatewayTripoTaskId(detail),
+    status,
+    modelUrls,
+    raw: output?.raw || output || detail,
+  };
 }
 
 export async function tripoWorkflowPollUntilDone(params: {
@@ -106,6 +160,25 @@ export async function tripoWorkflowPollUntilDone(params: {
   intervalMs?: number;
 }): Promise<TripoTaskResult> {
   const { apiKey, taskId, normalizeApiErrorMessage } = params;
+  if (isAiGatewayTripoPlatformKey(apiKey)) {
+    const timeoutMs = params.timeoutMs ?? 8 * 60_000;
+    const intervalMs = params.intervalMs ?? 3000;
+    const startedAt = Date.now();
+    let lastStatus = '';
+    while (Date.now() - startedAt <= timeoutMs) {
+      const detail = await getMyAiJob(taskId);
+      upsertAiJobSummary(detail.job);
+      const result = gatewayDetailToTripoResult(detail);
+      if (result.status !== lastStatus) {
+        lastStatus = result.status;
+        if (result.status === 'queued') params.onTripoStatus?.('queued');
+        if (result.status === 'running') params.onTripoStatus?.('running');
+      }
+      if (result.status === 'success' || result.status === 'failed') return result;
+      await new Promise((r) => setTimeout(r, Math.max(1000, intervalMs)));
+    }
+    throw new Error('AI Gateway 3D task timed out');
+  }
   try {
     return await waitTripoTaskDone(apiKey, taskId, {
       timeoutMs: params.timeoutMs ?? 8 * 60_000,
