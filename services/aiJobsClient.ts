@@ -87,8 +87,9 @@ function clampLimit(limit?: number) {
   return Math.min(100, Math.max(1, n));
 }
 
-export function createAiJob(input: CreateAiJobInput) {
+export function createAiJob(input: CreateAiJobInput, init?: RequestInit) {
   return requestJson<AiJobDetail>(apiUrl('/api/ai/jobs'), {
+    ...init,
     method: 'POST',
     body: JSON.stringify(input),
   });

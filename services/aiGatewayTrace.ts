@@ -29,13 +29,25 @@ export function isAiGatewayJobTraceEnabled(useVertex?: boolean): boolean {
   return Boolean(useVertex);
 }
 
-export function buildAiGatewayImageJobTraceBody(input: AiGatewayTraceInput): Record<string, unknown> {
+export function isAiGatewayImageExecutionEnabled(useVertex?: boolean): boolean {
+  const raw = readEnv('VITE_AI_GATEWAY_IMAGE_EXECUTION');
+  if (/^(0|false|off|no)$/i.test(raw)) return false;
+  if (/^(1|true|on|yes)$/i.test(raw)) return true;
+  if (/^vertex$/i.test(raw)) return Boolean(useVertex);
+  return false;
+}
+
+export function buildAiGatewayImageJobBody(
+  input: AiGatewayTraceInput,
+  options: { traceOnly?: boolean } = {}
+): Record<string, unknown> {
+  const traceOnly = options.traceOnly !== false;
   const metadata: Record<string, unknown> = {
-    traceOnly: true,
     source: input.source || 'geminiService.bulkProxyGenerateContentAsync',
     legacyPath: '/proxy/gemini/async',
     useVertex: Boolean(input.useVertex),
   };
+  if (traceOnly) metadata.traceOnly = true;
   if (input.registryId) metadata.registryId = input.registryId;
   return {
     modality: 'image',
@@ -51,6 +63,10 @@ export function buildAiGatewayImageJobTraceBody(input: AiGatewayTraceInput): Rec
     },
     metadata,
   };
+}
+
+export function buildAiGatewayImageJobTraceBody(input: AiGatewayTraceInput): Record<string, unknown> {
+  return buildAiGatewayImageJobBody(input, { traceOnly: true });
 }
 
 export function extractAiGatewayTraceJobId(raw: unknown): string | null {

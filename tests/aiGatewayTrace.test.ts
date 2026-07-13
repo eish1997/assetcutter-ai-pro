@@ -1,16 +1,21 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  buildAiGatewayImageJobBody,
   buildAiGatewayImageJobTraceBody,
   extractAiGatewayTraceJobId,
+  isAiGatewayImageExecutionEnabled,
   isAiGatewayJobTraceEnabled,
 } from '../services/aiGatewayTrace';
 
 describe('aiGatewayTrace', () => {
   const prev = process.env.VITE_AI_GATEWAY_JOB_TRACE;
+  const prevExecution = process.env.VITE_AI_GATEWAY_IMAGE_EXECUTION;
 
   afterEach(() => {
     if (prev === undefined) delete process.env.VITE_AI_GATEWAY_JOB_TRACE;
     else process.env.VITE_AI_GATEWAY_JOB_TRACE = prev;
+    if (prevExecution === undefined) delete process.env.VITE_AI_GATEWAY_IMAGE_EXECUTION;
+    else process.env.VITE_AI_GATEWAY_IMAGE_EXECUTION = prevExecution;
   });
 
   it('defaults to tracing Vertex image jobs only', () => {
@@ -23,6 +28,18 @@ describe('aiGatewayTrace', () => {
 
     process.env.VITE_AI_GATEWAY_JOB_TRACE = 'true';
     expect(isAiGatewayJobTraceEnabled(false)).toBe(true);
+  });
+
+  it('keeps production image execution behind an explicit frontend gate', () => {
+    process.env.VITE_AI_GATEWAY_IMAGE_EXECUTION = '';
+    expect(isAiGatewayImageExecutionEnabled(true)).toBe(false);
+
+    process.env.VITE_AI_GATEWAY_IMAGE_EXECUTION = 'vertex';
+    expect(isAiGatewayImageExecutionEnabled(true)).toBe(true);
+    expect(isAiGatewayImageExecutionEnabled(false)).toBe(false);
+
+    process.env.VITE_AI_GATEWAY_IMAGE_EXECUTION = 'true';
+    expect(isAiGatewayImageExecutionEnabled(false)).toBe(true);
   });
 
   it('builds a trace-only image job body for the server AI gateway', () => {
@@ -57,5 +74,28 @@ describe('aiGatewayTrace', () => {
   it('extracts trace job ids from gateway responses', () => {
     expect(extractAiGatewayTraceJobId({ job: { id: 'aijob_1' } })).toBe('aijob_1');
     expect(extractAiGatewayTraceJobId({ job: {} })).toBeNull();
+  });
+
+  it('builds an executable image job body without trace-only metadata', () => {
+    const body = buildAiGatewayImageJobBody(
+      {
+        model: 'gemini-3.1-flash-image',
+        contents: [{ role: 'user', parts: [{ text: 'draw a lamp' }] }],
+        estimatedCredits: 50,
+        useVertex: true,
+      },
+      { traceOnly: false }
+    );
+
+    expect(body).toMatchObject({
+      modality: 'image',
+      capability: 'image.generate',
+      provider: 'vertex-gemini',
+      metadata: {
+        legacyPath: '/proxy/gemini/async',
+        useVertex: true,
+      },
+    });
+    expect((body.metadata as Record<string, unknown>).traceOnly).toBeUndefined();
   });
 });

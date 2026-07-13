@@ -88,6 +88,7 @@ import {
   extractAiGatewayTraceJobId,
   isAiGatewayJobTraceEnabled,
 } from "./aiGatewayTrace";
+import { createAiGatewayImageExecutionJob } from "./aiGatewayImageExecution";
 import {
   resolveUpstreamImageModelId,
   resolveUpstreamImageModelIdForRegistry,
@@ -1133,15 +1134,51 @@ async function bulkProxyGenerateContentAsync(args: {
   try {
   const asyncCreateUrl = bulkApiUrl("/proxy/gemini/async");
   assertDevBulkCreditsAuthAligned(asyncCreateUrl);
-  const aiGatewayTraceJobId = await createAiGatewayImageJobTrace({
-    model: args.model,
-    contents: args.contents,
-    config: safeConfig,
-    registryId: bindingRegistryId,
-    estimatedCredits: gateCredits,
-    useVertex: useVertexBackend,
-    abortSignal,
-  });
+  const gatewayExecution = await (async () => {
+    try {
+      return await createAiGatewayImageExecutionJob({
+        model: args.model,
+        contents: args.contents,
+        config: safeConfig,
+        registryId: bindingRegistryId,
+        estimatedCredits: gateCredits,
+        useVertex: useVertexBackend,
+        abortSignal,
+      });
+    } catch (error) {
+      if (isAbortError(error)) throw error;
+      logAiPipelineDev('warn', {
+        step: 'image_create',
+        code: 'AI_GATEWAY_EXECUTION_FALLBACK',
+        raw: String((error as Error)?.message || error),
+      });
+      return null;
+    }
+  })();
+  let aiGatewayTraceJobId: string | null = gatewayExecution?.aiGatewayJobId || null;
+  if (gatewayExecution && !gatewayExecution.proxyJobId) {
+    logAiPipelineDev('warn', {
+      step: 'image_create',
+      code: 'AI_GATEWAY_EXECUTION_NO_PROXY_JOB',
+      raw: `job=${gatewayExecution.aiGatewayJobId || ''}; status=${gatewayExecution.createStatus}`,
+    });
+  }
+  if (!aiGatewayTraceJobId) {
+    aiGatewayTraceJobId = await createAiGatewayImageJobTrace({
+      model: args.model,
+      contents: args.contents,
+      config: safeConfig,
+      registryId: bindingRegistryId,
+      estimatedCredits: gateCredits,
+      useVertex: useVertexBackend,
+      abortSignal,
+    });
+  }
+  let jobId = gatewayExecution?.proxyJobId || "";
+  let createStatus = gatewayExecution?.proxyJobId
+    ? `ai-gateway:${gatewayExecution.createStatus}`
+    : "";
+  if (!jobId) {
   const createBody = JSON.stringify({
     model: args.model,
     contents: args.contents,
@@ -1200,8 +1237,6 @@ async function bulkProxyGenerateContentAsync(args: {
       parseBulkProxyCreateError(create.status, raw, bulkApiUrl("/proxy/gemini/async"))
     );
   }
-  let jobId: string;
-  let createStatus: string;
   try {
     const parsed = parseAsyncCreateBody(create.text);
     jobId = parsed.jobId;
@@ -1210,6 +1245,8 @@ async function bulkProxyGenerateContentAsync(args: {
     throw new Error("异步任务响应无效");
   }
   if (!jobId) throw new Error("未返回 jobId");
+  }
+  if (!jobId) throw new Error("Missing async jobId");
   dispatchGeminiQueueHint({ kind: "job_submitted", jobId, createStatus });
   const asyncReserveKey = getLastCreditsReserveKey();
   registerGeminiAsyncJobForRecovery({
