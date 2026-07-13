@@ -1,9 +1,12 @@
 import { recordGeminiProxyThrottleWait } from './gemini-proxy-observability.js';
+import fs from 'fs';
+import path from 'path';
 
 const FALSEY = new Set(['', '0', 'false', 'no', 'off']);
 
 let throttleTail = Promise.resolve();
 let lastVertexImageStartAt = 0;
+let throttleStateLoaded = false;
 
 function isProductionRuntime() {
   return String(process.env.NODE_ENV || '').trim().toLowerCase() === 'production';
@@ -22,6 +25,44 @@ function envBool(name, defaultValue = false) {
   if (!raw) return defaultValue;
   if (FALSEY.has(raw)) return false;
   return raw === '1' || raw === 'true' || raw === 'yes' || raw === 'on';
+}
+
+function persistentThrottleEnabled() {
+  return envBool('GEMINI_VERTEX_IMAGE_THROTTLE_PERSIST', isProductionRuntime());
+}
+
+function throttleStatePath() {
+  const custom = String(process.env.GEMINI_VERTEX_IMAGE_THROTTLE_STATE_PATH || '').trim();
+  return custom
+    ? path.resolve(custom)
+    : path.resolve(process.cwd(), 'server/data/gemini-vertex-image-throttle-state.json');
+}
+
+function loadThrottleStateOnce() {
+  if (throttleStateLoaded) return;
+  throttleStateLoaded = true;
+  if (!persistentThrottleEnabled()) return;
+  try {
+    const raw = fs.readFileSync(throttleStatePath(), 'utf8');
+    const parsed = JSON.parse(raw || '{}');
+    const t = Math.floor(Number(parsed.lastVertexImageStartAt || 0));
+    if (Number.isFinite(t) && t > lastVertexImageStartAt) {
+      lastVertexImageStartAt = t;
+    }
+  } catch {
+    /* no persisted throttle state yet */
+  }
+}
+
+function persistThrottleState() {
+  if (!persistentThrottleEnabled()) return;
+  try {
+    const file = throttleStatePath();
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, `${JSON.stringify({ lastVertexImageStartAt })}\n`, 'utf8');
+  } catch (e) {
+    console.warn('[gemini-proxy] vertex image throttle state persist failed:', e instanceof Error ? e.message : String(e));
+  }
 }
 
 function isImageVertexCall(model, config) {
@@ -44,9 +85,11 @@ export function vertexImageMinIntervalMs() {
 }
 
 export function geminiProxyThrottleSnapshot() {
+  loadThrottleStateOnce();
   return {
     vertexImageMinIntervalMs: vertexImageMinIntervalMs(),
     vertexImageThrottleEnabled: envBool('GEMINI_VERTEX_IMAGE_THROTTLE_ENABLED', true),
+    vertexImageThrottlePersistEnabled: persistentThrottleEnabled(),
     lastVertexImageStartAt,
   };
 }
@@ -55,6 +98,7 @@ export async function waitForGeminiUpstreamThrottle(args = {}) {
   const useVertex = Boolean(args.useVertex);
   if (!useVertex || !isImageVertexCall(args.model, args.config)) return;
   if (!envBool('GEMINI_VERTEX_IMAGE_THROTTLE_ENABLED', true)) return;
+  loadThrottleStateOnce();
   const minIntervalMs = vertexImageMinIntervalMs();
   if (minIntervalMs <= 0) return;
   const nowFn = args.nowFn || Date.now;
@@ -68,6 +112,7 @@ export async function waitForGeminiUpstreamThrottle(args = {}) {
       await sleepFn(waitMs);
     }
     lastVertexImageStartAt = nowFn();
+    persistThrottleState();
   };
   const next = throttleTail.then(run, run);
   throttleTail = next.catch(() => {});
@@ -77,4 +122,5 @@ export async function waitForGeminiUpstreamThrottle(args = {}) {
 export function resetGeminiProxyThrottleForTests() {
   throttleTail = Promise.resolve();
   lastVertexImageStartAt = 0;
+  throttleStateLoaded = false;
 }

@@ -50,8 +50,8 @@ describe('gemini-proxy-retry upstream 429 plan', () => {
     const err = new Error('Too Many Requests');
     // 默认 GEMINI_PROXY_RATE_LIMIT_RETRIES=2 → 共 3 次尝试
     expect(geminiProxyMaxAttempts(err, 15)).toBe(3);
-    expect(geminiProxyRetryDelayMs(err, 0)).toBe(35_000);
-    expect(geminiProxyRetryDelayMs(err, 1)).toBe(60_000);
-    expect(geminiProxyRetryDelayMs(err, 2)).toBe(85_000);
+    expect(geminiProxyRetryDelayMs(err, 0)).toBe(65_000);
+    expect(geminiProxyRetryDelayMs(err, 1)).toBe(95_000);
+    expect(geminiProxyRetryDelayMs(err, 2)).toBe(125_000);
   });
 });

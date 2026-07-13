@@ -37,7 +37,7 @@ export function isRetryable(e) {
 export function geminiProxyRetryDelayMs(err, attempt) {
   if (isUpstreamRateLimitError(err)) {
     // ~35s → 60s → 85s（上限 90s），避免连点打穿共享配额
-    return Math.min(90_000, 35_000 + Math.max(0, attempt) * 25_000);
+    return Math.min(180_000, 65_000 + Math.max(0, attempt) * 30_000);
   }
   return Math.min(30_000, 5000 * Math.pow(2, Math.max(0, attempt)));
 }

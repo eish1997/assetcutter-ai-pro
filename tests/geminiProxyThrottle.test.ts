@@ -1,4 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
 import {
   geminiProxyThrottleSnapshot,
   resetGeminiProxyThrottleForTests,
@@ -10,6 +13,8 @@ describe('gemini proxy upstream throttle', () => {
   const prevNodeEnv = process.env.NODE_ENV;
   const prevMinInterval = process.env.GEMINI_VERTEX_IMAGE_MIN_INTERVAL_MS;
   const prevEnabled = process.env.GEMINI_VERTEX_IMAGE_THROTTLE_ENABLED;
+  const prevPersist = process.env.GEMINI_VERTEX_IMAGE_THROTTLE_PERSIST;
+  const prevStatePath = process.env.GEMINI_VERTEX_IMAGE_THROTTLE_STATE_PATH;
 
   afterEach(() => {
     if (prevNodeEnv === undefined) delete process.env.NODE_ENV;
@@ -18,6 +23,10 @@ describe('gemini proxy upstream throttle', () => {
     else process.env.GEMINI_VERTEX_IMAGE_MIN_INTERVAL_MS = prevMinInterval;
     if (prevEnabled === undefined) delete process.env.GEMINI_VERTEX_IMAGE_THROTTLE_ENABLED;
     else process.env.GEMINI_VERTEX_IMAGE_THROTTLE_ENABLED = prevEnabled;
+    if (prevPersist === undefined) delete process.env.GEMINI_VERTEX_IMAGE_THROTTLE_PERSIST;
+    else process.env.GEMINI_VERTEX_IMAGE_THROTTLE_PERSIST = prevPersist;
+    if (prevStatePath === undefined) delete process.env.GEMINI_VERTEX_IMAGE_THROTTLE_STATE_PATH;
+    else process.env.GEMINI_VERTEX_IMAGE_THROTTLE_STATE_PATH = prevStatePath;
     resetGeminiProxyThrottleForTests();
   });
 
@@ -69,5 +78,39 @@ describe('gemini proxy upstream throttle', () => {
     await waitForGeminiUpstreamThrottle({ useVertex: true, model: 'gemini-2.5-flash', config: {}, nowFn, sleepFn });
 
     expect(sleeps).toEqual([]);
+  });
+
+  it('persists the last Vertex image start across throttle resets', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ac-gemini-throttle-'));
+    process.env.GEMINI_VERTEX_IMAGE_THROTTLE_PERSIST = 'true';
+    process.env.GEMINI_VERTEX_IMAGE_THROTTLE_STATE_PATH = path.join(dir, 'state.json');
+    process.env.GEMINI_VERTEX_IMAGE_MIN_INTERVAL_MS = '100';
+    let now = 1000;
+    const sleeps: number[] = [];
+    const sleepFn = async (ms: number) => {
+      sleeps.push(ms);
+      now += ms;
+    };
+    const nowFn = () => now;
+
+    await waitForGeminiUpstreamThrottle({
+      useVertex: true,
+      model: 'gemini-3-pro-image-preview',
+      config: {},
+      nowFn,
+      sleepFn,
+    });
+    resetGeminiProxyThrottleForTests();
+
+    await waitForGeminiUpstreamThrottle({
+      useVertex: true,
+      model: 'gemini-3-pro-image-preview',
+      config: {},
+      nowFn,
+      sleepFn,
+    });
+
+    expect(sleeps).toEqual([100]);
+    expect(geminiProxyThrottleSnapshot().lastVertexImageStartAt).toBe(1100);
   });
 });
