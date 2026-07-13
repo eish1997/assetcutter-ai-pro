@@ -12,14 +12,14 @@ describe('AI gateway health snapshot', () => {
     else process.env.AI_GATEWAY_CREDITS_GATE = prevCreditsGate;
   });
 
-  it('reports dry-run job planning defaults', () => {
+  it('reports executable job defaults with an explicit off switch', () => {
     delete process.env.AI_GATEWAY_EXECUTION_ENABLED;
     delete process.env.AI_GATEWAY_CREDITS_GATE;
 
-    expect(isAiGatewayExecutionEnabled()).toBe(false);
+    expect(isAiGatewayExecutionEnabled()).toBe(true);
     expect(aiGatewayHealthSnapshot()).toMatchObject({
       enabled: true,
-      executionEnabled: false,
+      executionEnabled: true,
       creditsGateMode: 'plan',
       routes: {
         createJob: 'POST /ai-gateway/jobs',
@@ -30,5 +30,8 @@ describe('AI gateway health snapshot', () => {
       },
       adapters: ['gemini-proxy'],
     });
+
+    process.env.AI_GATEWAY_EXECUTION_ENABLED = 'false';
+    expect(isAiGatewayExecutionEnabled()).toBe(false);
   });
 });

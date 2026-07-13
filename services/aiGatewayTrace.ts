@@ -34,7 +34,7 @@ export function isAiGatewayImageExecutionEnabled(useVertex?: boolean): boolean {
   if (/^(0|false|off|no)$/i.test(raw)) return false;
   if (/^(1|true|on|yes)$/i.test(raw)) return true;
   if (/^vertex$/i.test(raw)) return Boolean(useVertex);
-  return false;
+  return Boolean(useVertex);
 }
 
 export function buildAiGatewayImageJobBody(

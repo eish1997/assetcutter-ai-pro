@@ -22,15 +22,15 @@
 - 已新增 Gateway 精确结算第一段：终态成功时优先按 usage event 或 job `metadata/output/artifacts` 里的真实 `creditsCharged/actualCredits` 结算；没有真实用量时才回退估算积分。
 - 已新增 Gateway 标准 usage event 第一段：`AI_GATEWAY_CREDITS_GATE=reserve` 且 job 成功终态时，Gateway 会写入带 `correlationId/aiGatewayJobId/proxyJobId/billingSku/settlementSource` 的标准 usage event；该事件标记 `externalCreditSettlement=true`，避免插入事件时二次扣分，实际扣分仍由 reserve finalize 完成。
 - 已新增 Gemini proxy 真实用量回写第一段：`/proxy/gemini/async` 成功后会把 `usageMetadata` 写回 AI Gateway job；Gateway 标准 usage event 会优先按该 token 用量和 SKU 计算积分，再回退到 job 显式 `creditsCharged/actualCredits` 或预估积分。
-- 已新增 Gateway 执行灰度 handoff：显式 `AI_GATEWAY_EXECUTION_ENABLED=true` 时，`POST /api/ai/jobs` 会把 image/text job 交给 `gemini-proxy` 的 `/proxy/gemini/async`，并通过 `fairnessMeta.aiGatewayTraceJobId` 复用旧链路写回 `queued/running/succeeded/failed`。
-- 已新增前端生产入口灰度切流：显式 `VITE_AI_GATEWAY_IMAGE_EXECUTION=vertex` 或 `true` 时，Vertex 图片生成会优先走 `POST /api/ai/jobs`；若 auth-api 未开启执行或未返回 `proxyJobId`，会复用该 job id 回退旧 `/proxy/gemini/async`，避免阻断生产生成。
+- 已新增 Gateway 执行灰度 handoff：默认开启，`POST /api/ai/jobs` 会把 image/text job 交给 `gemini-proxy` 的 `/proxy/gemini/async`，并通过 `fairnessMeta.aiGatewayTraceJobId` 复用旧链路写回 `queued/running/succeeded/failed`；显式 `AI_GATEWAY_EXECUTION_ENABLED=false` 可回滚为只建 job 不执行。
+- 已新增前端生产入口灰度切流：Vertex 图片生成默认优先走 `POST /api/ai/jobs`；若 auth-api 未开启执行或未返回 `proxyJobId`，会复用该 job id 回退旧 `/proxy/gemini/async`，避免阻断生产生成；显式 `VITE_AI_GATEWAY_IMAGE_EXECUTION=false` 可回滚旧入口。
 - `/healthz` 已包含 `aiGateway`：可查看 execution 是否切流、jobStore 来源、credits gate 模式和样板路由。
 - 已新增普通文生图/图生图灰度 trace：前端 Vertex 图片代理在真实 `/proxy/gemini/async` 前尽力创建 `/ai-gateway/jobs` 记录；失败不阻断生图，真实生成仍走旧链路。
 - 已接入旧链路单任务状态回写：`/proxy/gemini/async` 可根据 `fairnessMeta.aiGatewayTraceJobId` 将 trace job 推进到 `queued`、`running`、`succeeded`、`failed`。
-- 默认不接管现有生产生成流量；未显式开启前，现有 `gemini-proxy` 仍是稳定生产入口。
+- 默认接管 Vertex 图片生产入口，但保留旧 `gemini-proxy` 自动回退；显式关闭开关后，旧链路仍是稳定生产入口。
 - 音乐、视频、3D 目前只进入统一模态定义，不会误路由到 `gemini-proxy`。
 - 当前仍未完成：更多非 Gemini 执行器补齐真实用量字段、上游硬取消、入口灰度开关的线上小流量验证。
-- 下一步主线：先小流量验证图片单任务经 Gateway 创建、proxy 执行、usage 回写、积分结算的闭环，再迁移更多图片能力；切执行必须同时显式设置 `AI_GATEWAY_EXECUTION_ENABLED=true` 和 `VITE_AI_GATEWAY_IMAGE_EXECUTION=vertex`。
+- 下一步主线：先小流量验证图片单任务经 Gateway 创建、proxy 执行、usage 回写、积分结算的闭环，再迁移更多图片能力；若需回滚，设置 `AI_GATEWAY_EXECUTION_ENABLED=false` 或 `VITE_AI_GATEWAY_IMAGE_EXECUTION=false`。
 
 ## 0. 目标架构
 

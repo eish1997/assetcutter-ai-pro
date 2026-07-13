@@ -3,6 +3,8 @@ import { aiGatewayCreditsGateMode } from './credits-gate.js';
 
 export function isAiGatewayExecutionEnabled() {
   const raw = String(process.env.AI_GATEWAY_EXECUTION_ENABLED || '').trim().toLowerCase();
+  if (raw === '0' || raw === 'false' || raw === 'off' || raw === 'no') return false;
+  if (!raw) return true;
   return raw === '1' || raw === 'true' || raw === 'on' || raw === 'yes';
 }
 

@@ -32,8 +32,8 @@ describe('AI gateway execution handoff', () => {
     else process.env.AI_GATEWAY_EXECUTION_ENABLED = prevExecution;
   });
 
-  it('keeps auth-api job creation as planning-only when execution is disabled', async () => {
-    delete process.env.AI_GATEWAY_EXECUTION_ENABLED;
+  it('keeps auth-api job creation as planning-only when execution is explicitly disabled', async () => {
+    process.env.AI_GATEWAY_EXECUTION_ENABLED = 'false';
     const store = createInMemoryAiJobStore();
     const fetchImpl = vi.fn();
 
@@ -44,8 +44,8 @@ describe('AI gateway execution handoff', () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
-  it('hands image jobs to gemini-proxy when execution is explicitly enabled', async () => {
-    process.env.AI_GATEWAY_EXECUTION_ENABLED = 'true';
+  it('hands image jobs to gemini-proxy by default', async () => {
+    delete process.env.AI_GATEWAY_EXECUTION_ENABLED;
     const store = createInMemoryAiJobStore();
     const fetchImpl = vi.fn().mockResolvedValue(proxyResponse({ jobId: 'gasync_exec_1', status: 'queued' }));
 

@@ -30,8 +30,12 @@ describe('aiGatewayTrace', () => {
     expect(isAiGatewayJobTraceEnabled(false)).toBe(true);
   });
 
-  it('keeps production image execution behind an explicit frontend gate', () => {
+  it('defaults Vertex image execution on while keeping an explicit off switch', () => {
     process.env.VITE_AI_GATEWAY_IMAGE_EXECUTION = '';
+    expect(isAiGatewayImageExecutionEnabled(true)).toBe(true);
+    expect(isAiGatewayImageExecutionEnabled(false)).toBe(false);
+
+    process.env.VITE_AI_GATEWAY_IMAGE_EXECUTION = 'false';
     expect(isAiGatewayImageExecutionEnabled(true)).toBe(false);
 
     process.env.VITE_AI_GATEWAY_IMAGE_EXECUTION = 'vertex';

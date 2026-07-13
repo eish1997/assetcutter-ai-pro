@@ -16,8 +16,8 @@ describe('aiGatewayImageExecution', () => {
     else process.env.VITE_AI_GATEWAY_IMAGE_EXECUTION = prev;
   });
 
-  it('does not create auth-api jobs until the execution gate is enabled', async () => {
-    process.env.VITE_AI_GATEWAY_IMAGE_EXECUTION = '';
+  it('honors the explicit frontend execution off switch', async () => {
+    process.env.VITE_AI_GATEWAY_IMAGE_EXECUTION = 'false';
     await expect(
       createAiGatewayImageExecutionJob({
         model: 'gemini-3.1-flash-image',
