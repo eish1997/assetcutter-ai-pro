@@ -119,6 +119,7 @@ export type AiGatewayOpsControlConfig = {
   modelOverrides: AiGatewayOpsModelOverride[];
   updatedAt?: string | null;
   updatedByUserId?: string | null;
+  source?: string | null;
   path?: string | null;
   storage?: string | null;
 };

@@ -4,8 +4,10 @@ import {
   aiJobRouteLabel,
   aiJobStatusLabel,
   aiJobStatusTone,
+  buildAiGatewayOpsSuggestions,
   formatAiGatewayDuration,
   formatAiGatewayRate,
+  formatAiGatewayStorageLabel,
   listToText,
   overridesToText,
   textToList,
@@ -81,6 +83,8 @@ describe('AdminAiJobsPanel helpers', () => {
     expect(formatAiGatewayDuration(650)).toBe('650ms');
     expect(formatAiGatewayDuration(12_300)).toBe('12s');
     expect(formatAiGatewayDuration(180_000)).toBe('3m');
+    expect(formatAiGatewayStorageLabel('postgres')).toBe('Postgres');
+    expect(formatAiGatewayStorageLabel('disk')).toBe('Disk JSON');
   });
 
   it('formats AI Gateway ops-control textarea values', () => {
@@ -99,5 +103,44 @@ describe('AdminAiJobsPanel helpers', () => {
     expect(textToOverrides('pro => flash # quota\nbad line')).toEqual([
       { from: 'pro', to: 'flash', enabled: true, reason: 'quota' },
     ]);
+  });
+
+  it('builds AI Gateway ops suggestions without repeating existing pauses', () => {
+    const suggestions = buildAiGatewayOpsSuggestions(
+      {
+        generatedAt: '2026-07-13T00:00:00.000Z',
+        sampleSize: 3,
+        limit: 100,
+        window: { firstCreatedAt: null, lastCreatedAt: null },
+        totals: {
+          total: 3,
+          active: 0,
+          terminal: 3,
+          statusCounts: { created: 0, queued: 0, running: 0, succeeded: 1, failed: 2, cancelled: 0 },
+          errorCounts: { rate_limited: 1, auth: 0, credits: 0, timeout: 0, upstream: 1 },
+          failureRate: 0.66,
+          rateLimitRate: 0.5,
+        },
+        byProvider: [
+          {
+            key: 'vertex-gemini',
+            total: 2,
+            statusCounts: { created: 0, queued: 0, running: 0, succeeded: 0, failed: 2, cancelled: 0 },
+            errorCounts: { rate_limited: 1, auth: 0, credits: 0, timeout: 0, upstream: 1 },
+            active: 0,
+            succeeded: 0,
+            failed: 2,
+            cancelled: 0,
+            avgDurationMs: 1000,
+            maxDurationMs: 2000,
+            failureRate: 1,
+            rateLimitRate: 0.5,
+          },
+        ],
+        byModel: [],
+      },
+      { disabledProviders: ['vertex-gemini'], disabledModels: [], modelOverrides: [] }
+    );
+    expect(suggestions.map((item) => item.kind)).toEqual(['global']);
   });
 });

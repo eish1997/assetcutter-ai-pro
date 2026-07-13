@@ -5,6 +5,7 @@ import { AiGatewayRouteError } from './provider-router.js';
 import { settleAiGatewayJobCredits, settlementMetadataPatch } from './settlement.js';
 import { startAiGatewayJobExecution } from './executor.js';
 import { buildAiGatewayOpsSummary } from './observability.js';
+import { readAiGatewayOpsControlConfig } from './ops-control.js';
 
 const DEFAULT_LIST_LIMIT = 20;
 const MAX_LIST_LIMIT = 100;
@@ -107,7 +108,8 @@ export async function createAuthAiGatewayJob(req, body, user, options = {}) {
       authApiFacade: true,
     },
   };
-  let plan = await store.put(createAiGatewayJobPlan(planInput));
+  const opsControl = options.opsControl || await readAiGatewayOpsControlConfig();
+  let plan = await store.put(createAiGatewayJobPlan(planInput, { opsControl }));
   const execution = await startAiGatewayJobExecution(plan, {
     store,
     fetchImpl: options.fetchImpl,

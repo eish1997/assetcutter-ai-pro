@@ -2454,7 +2454,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (path === '/api/admin/ai-gateway/ops-control' && req.method === 'GET') {
-      const staff = await requirePermission(req, res, PERMISSIONS.TASK_EVENTS_READ);
+      const staff = await requirePermission(req, res, PERMISSIONS.AI_GATEWAY_OPS_READ);
       if (!staff) return;
       const config = await readAiGatewayOpsControlConfig();
       json(res, 200, { ok: true, config });
@@ -2462,19 +2462,43 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (path === '/api/admin/ai-gateway/ops-control' && req.method === 'PUT') {
-      const staff = await requirePermission(req, res, PERMISSIONS.GEMINI_FAIRNESS_WRITE);
+      const staff = await requirePermission(req, res, PERMISSIONS.AI_GATEWAY_OPS_WRITE);
       if (!staff) return;
-      const body = await readBody(req);
+      const existing = await readAiGatewayOpsControlConfig();
+      let body;
+      try {
+        body = await readBody(req);
+      } catch (err) {
+        json(res, 400, { error: err?.message || 'Invalid JSON' });
+        return;
+      }
       const config = normalizeAiGatewayOpsControlConfig(body);
       const saved = await writeAiGatewayOpsControlConfig(config, { updatedByUserId: staff.user.id });
+      await createAuditLog({
+        actorUserId: staff.user.id,
+        actorIdentifier: staff.user.username,
+        action: 'admin.ai_gateway_ops_control_put',
+        meta: { before: existing, after: saved },
+        ip: getClientIp(req),
+        userAgent: req.headers['user-agent'],
+      });
       json(res, 200, { ok: true, config: saved });
       return;
     }
 
     if (path === '/api/admin/ai-gateway/ops-control' && req.method === 'DELETE') {
-      const staff = await requirePermission(req, res, PERMISSIONS.GEMINI_FAIRNESS_WRITE);
+      const staff = await requirePermission(req, res, PERMISSIONS.AI_GATEWAY_OPS_WRITE);
       if (!staff) return;
+      const existing = await readAiGatewayOpsControlConfig();
       const saved = await clearAiGatewayOpsControlConfig({ updatedByUserId: staff.user.id });
+      await createAuditLog({
+        actorUserId: staff.user.id,
+        actorIdentifier: staff.user.username,
+        action: 'admin.ai_gateway_ops_control_delete',
+        meta: { before: existing, after: saved },
+        ip: getClientIp(req),
+        userAgent: req.headers['user-agent'],
+      });
       json(res, 200, { ok: true, config: saved });
       return;
     }

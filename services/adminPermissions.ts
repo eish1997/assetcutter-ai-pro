@@ -20,6 +20,8 @@ export const PERMISSIONS = {
   GEMINI_FAIRNESS_READ: 'gemini_fairness.read',
   GEMINI_FAIRNESS_WRITE: 'gemini_fairness.write',
   GEMINI_FAIRNESS_STRICT: 'gemini_fairness.strict',
+  AI_GATEWAY_OPS_READ: 'ai_gateway_ops.read',
+  AI_GATEWAY_OPS_WRITE: 'ai_gateway_ops.write',
   PRESETS_PUBLISH: 'presets.publish',
   ROLES_READ: 'roles.read',
   ROLES_WRITE: 'roles.write',

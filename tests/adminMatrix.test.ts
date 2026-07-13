@@ -57,6 +57,17 @@ describe('admin-matrix', () => {
     expect(perms).not.toContain(PERMISSIONS.SYSTEM_STATUS_READ);
   });
 
+  it('AI Gateway Ops permission can be configured independently', () => {
+    const readPerms = matrixToPermissions({ aiGatewayOps: 'read' }, ADMIN_ROLE_SLUG);
+    expect(readPerms).toContain(PERMISSIONS.AI_GATEWAY_OPS_READ);
+    expect(readPerms).not.toContain(PERMISSIONS.AI_GATEWAY_OPS_WRITE);
+
+    const writePerms = matrixToPermissions({ aiGatewayOps: 'write' }, ADMIN_ROLE_SLUG);
+    expect(writePerms).toContain(PERMISSIONS.AI_GATEWAY_OPS_READ);
+    expect(writePerms).toContain(PERMISSIONS.AI_GATEWAY_OPS_WRITE);
+    expect(permissionsToMatrix(writePerms, ADMIN_ROLE_SLUG).aiGatewayOps).toBe('write');
+  });
+
   it('super 无 credits.write 时前端仍允许发放', () => {
     expect(canGrantAdminCredits([], SUPER_ROLE_SLUG)).toBe(true);
     expect(canGrantAdminCredits([], 'admin')).toBe(false);

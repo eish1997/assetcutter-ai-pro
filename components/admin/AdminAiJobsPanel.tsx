@@ -86,6 +86,60 @@ export function formatAiGatewayDuration(ms: number | null | undefined): string {
   return `${Math.round(n / 60_000)}m`;
 }
 
+export function formatAiGatewayStorageLabel(storage: string | null | undefined): string {
+  const s = String(storage || '').toLowerCase();
+  if (s === 'postgres') return 'Postgres';
+  return 'Disk JSON';
+}
+
+export type AiGatewayOpsSuggestion = {
+  kind: 'global' | 'provider' | 'model';
+  key: string;
+  reason: string;
+  severity: 'warn' | 'danger';
+};
+
+export function buildAiGatewayOpsSuggestions(
+  summary: AiGatewayOpsSummary | null,
+  config: AiGatewayOpsControlConfig | null
+): AiGatewayOpsSuggestion[] {
+  if (!summary) return [];
+  const disabledProviders = new Set(config?.disabledProviders || []);
+  const disabledModels = new Set(config?.disabledModels || []);
+  const out: AiGatewayOpsSuggestion[] = [];
+  if (summary.totals.rateLimitRate >= 0.5 && summary.totals.errorCounts.rate_limited > 0) {
+    out.push({
+      kind: 'global',
+      key: 'rate-limit',
+      reason: `429 占失败 ${formatAiGatewayRate(summary.totals.rateLimitRate)}`,
+      severity: 'danger',
+    });
+  }
+  for (const group of summary.byProvider || []) {
+    if (disabledProviders.has(group.key)) continue;
+    if (group.errorCounts.rate_limited > 0 || group.failureRate >= 0.3) {
+      out.push({
+        kind: 'provider',
+        key: group.key,
+        reason: `失败 ${formatAiGatewayRate(group.failureRate)} / 429 ${group.errorCounts.rate_limited}`,
+        severity: group.errorCounts.rate_limited > 0 ? 'danger' : 'warn',
+      });
+    }
+  }
+  for (const group of summary.byModel || []) {
+    if (disabledModels.has(group.key)) continue;
+    if (group.errorCounts.rate_limited > 0 || group.failureRate >= 0.3) {
+      out.push({
+        kind: 'model',
+        key: group.key,
+        reason: `失败 ${formatAiGatewayRate(group.failureRate)} / 429 ${group.errorCounts.rate_limited}`,
+        severity: group.errorCounts.rate_limited > 0 ? 'danger' : 'warn',
+      });
+    }
+  }
+  return out.slice(0, 6);
+}
+
 const StatusBadge: React.FC<{ status: AiJobStatus }> = ({ status }) => (
   <span className={`inline-flex rounded-full border px-2 py-0.5 text-[10px] ${aiJobStatusTone(status)}`}>
     {aiJobStatusLabel(status)}
@@ -138,7 +192,7 @@ const OpsGroupTable: React.FC<{ title: string; groups: AiGatewayOpsGroup[] }> = 
 
 const AdminAiJobsPanel: React.FC = () => {
   const { can, isRolePreview } = useAdminStaff();
-  const canWriteOps = can(PERMISSIONS.GEMINI_FAIRNESS_WRITE);
+  const canWriteOps = can(PERMISSIONS.AI_GATEWAY_OPS_WRITE);
   const [jobs, setJobs] = React.useState<AiJobSummary[]>([]);
   const [summary, setSummary] = React.useState<AiGatewayOpsSummary | null>(null);
   const [opsControl, setOpsControl] = React.useState<AiGatewayOpsControlConfig | null>(null);
@@ -219,6 +273,10 @@ const AdminAiJobsPanel: React.FC = () => {
   }, [load]);
 
   const empty = !loading && jobs.length === 0;
+  const opsSuggestions = React.useMemo(
+    () => buildAiGatewayOpsSuggestions(summary, opsControl),
+    [opsControl, summary]
+  );
 
   return (
     <div className="space-y-4">
@@ -267,13 +325,29 @@ const AdminAiJobsPanel: React.FC = () => {
         </>
       ) : null}
 
+      {opsSuggestions.length ? (
+        <div className="rounded-2xl border border-amber-500/20 bg-amber-500/[0.06] p-4">
+          <div className="text-[11px] font-bold text-amber-100">Ops suggestions</div>
+          <div className="mt-2 grid gap-2 lg:grid-cols-2">
+            {opsSuggestions.map((item) => (
+              <div key={`${item.kind}:${item.key}`} className="rounded-xl border border-white/[0.07] bg-black/15 px-3 py-2">
+                <div className={item.severity === 'danger' ? 'text-[11px] text-red-100' : 'text-[11px] text-amber-100'}>
+                  {item.kind} / {item.key}
+                </div>
+                <div className="mt-1 text-[10px] text-gray-500">{item.reason}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
       {opsControl ? (
         <div className="rounded-2xl border border-[#2e2e32] bg-[#121214] p-4">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
               <h3 className="text-[11px] font-bold text-gray-200">Gateway ops control</h3>
               <p className="mt-1 text-[10px] text-gray-600">
-                {opsControl.storage || 'disk'}
+                {formatAiGatewayStorageLabel(opsControl.storage)}
                 {opsControl.updatedAt ? ` / ${new Date(opsControl.updatedAt).toLocaleString()}` : ''}
               </p>
             </div>

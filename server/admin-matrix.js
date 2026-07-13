@@ -98,6 +98,13 @@ export const MATRIX_COLUMNS = [
     superOnly: true,
   },
   {
+    id: 'aiGatewayOps',
+    label: 'AI Gateway Ops',
+    kind: 'rw',
+    read: PERMISSIONS.AI_GATEWAY_OPS_READ,
+    write: PERMISSIONS.AI_GATEWAY_OPS_WRITE,
+  },
+  {
     id: 'presetsPublish',
     label: '能力预设发布',
     kind: 'toggle',
@@ -202,6 +209,8 @@ export const AUDIT_ACTION_LABELS = {
   'admin.role_permissions_update': '角色权限变更',
   'admin.gemini_fairness_config_put': 'Gemini 限流保存',
   'admin.gemini_fairness_config_delete': 'Gemini 限流清空',
+  'admin.ai_gateway_ops_control_put': 'AI Gateway Ops 保存',
+  'admin.ai_gateway_ops_control_delete': 'AI Gateway Ops 清空',
   'admin.companion_artifact_presign_put': '伴侣预签名上传',
   'admin.companion_artifact_register': '伴侣发行登记',
   'admin.companion_artifact_delete': '伴侣删除',

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   ADMIN_ROLE_SLUG,
+  AUDITOR_ROLE_SLUG,
   DEFAULT_ROLE_PERMISSIONS,
   PERMISSIONS,
   SUPER_ONLY_PERMISSIONS,
@@ -24,6 +25,10 @@ describe('admin-permissions', () => {
     }
     expect(adminPerms).toContain(PERMISSIONS.USERS_WRITE);
     expect(adminPerms).toContain(PERMISSIONS.COMPANION_DELETE);
+    expect(adminPerms).toContain(PERMISSIONS.AI_GATEWAY_OPS_READ);
+    expect(adminPerms).toContain(PERMISSIONS.AI_GATEWAY_OPS_WRITE);
+    expect(DEFAULT_ROLE_PERMISSIONS[AUDITOR_ROLE_SLUG]).toContain(PERMISSIONS.AI_GATEWAY_OPS_READ);
+    expect(DEFAULT_ROLE_PERMISSIONS[AUDITOR_ROLE_SLUG]).not.toContain(PERMISSIONS.AI_GATEWAY_OPS_WRITE);
   });
 
   it('filterPermissionsForRoleSlug 会剥离非 super 的 super-only 键', () => {
