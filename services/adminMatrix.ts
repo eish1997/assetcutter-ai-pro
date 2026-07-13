@@ -185,6 +185,7 @@ export const AUDIT_ACTION_LABELS: Record<string, string> = {
   'admin.gemini_fairness_config_put': 'Gemini 限流保存',
   'admin.gemini_fairness_config_delete': 'Gemini 限流清空',
   'admin.ai_gateway_ops_control_put': 'AI Gateway Ops 保存',
+  'admin.ai_gateway_ops_control_action': 'AI Gateway Ops 一键动作',
   'admin.ai_gateway_ops_control_delete': 'AI Gateway Ops 清空',
   'admin.companion_artifact_presign_put': '伴侣预签名上传',
   'admin.companion_artifact_register': '伴侣发行登记',

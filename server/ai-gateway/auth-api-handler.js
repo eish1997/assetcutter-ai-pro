@@ -108,7 +108,7 @@ export async function createAuthAiGatewayJob(req, body, user, options = {}) {
       authApiFacade: true,
     },
   };
-  const opsControl = options.opsControl || await readAiGatewayOpsControlConfig();
+  const opsControl = options.opsControl || (await readAiGatewayOpsControlConfig());
   let plan = await store.put(createAiGatewayJobPlan(planInput, { opsControl }));
   const execution = await startAiGatewayJobExecution(plan, {
     store,
@@ -192,6 +192,7 @@ export async function retryAuthAiGatewayJob(id, user, body = {}, options = {}) {
 
   const raw = body && typeof body === 'object' ? body : {};
   const metadata = original.job.metadata && typeof original.job.metadata === 'object' ? original.job.metadata : {};
+  const opsControl = options.opsControl || await readAiGatewayOpsControlConfig();
   const retryPlan = await store.put(
     createAiGatewayJobPlan({
       id: raw.id,
@@ -211,6 +212,8 @@ export async function retryAuthAiGatewayJob(id, user, body = {}, options = {}) {
         retryCreatedByUserId: user.id,
         authApiFacade: true,
       },
+    }, {
+      opsControl,
     })
   );
   return { status: 202, body: publicAuthAiJobDetail(retryPlan) };

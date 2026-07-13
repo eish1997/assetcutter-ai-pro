@@ -191,6 +191,7 @@ import {
 } from './gemini-fairness-config-store.js';
 import {
   clearAiGatewayOpsControlConfig,
+  mergeAiGatewayOpsControlAction,
   normalizeAiGatewayOpsControlConfig,
   readAiGatewayOpsControlConfig,
   writeAiGatewayOpsControlConfig,
@@ -2479,6 +2480,31 @@ const server = http.createServer(async (req, res) => {
         actorIdentifier: staff.user.username,
         action: 'admin.ai_gateway_ops_control_put',
         meta: { before: existing, after: saved },
+        ip: getClientIp(req),
+        userAgent: req.headers['user-agent'],
+      });
+      json(res, 200, { ok: true, config: saved });
+      return;
+    }
+
+    if (path === '/api/admin/ai-gateway/ops-control/actions' && req.method === 'POST') {
+      const staff = await requirePermission(req, res, PERMISSIONS.AI_GATEWAY_OPS_WRITE);
+      if (!staff) return;
+      const existing = await readAiGatewayOpsControlConfig();
+      let body;
+      try {
+        body = await readBody(req);
+      } catch (err) {
+        json(res, 400, { error: err?.message || 'Invalid JSON' });
+        return;
+      }
+      const next = mergeAiGatewayOpsControlAction(existing, body, { updatedByUserId: staff.user.id });
+      const saved = await writeAiGatewayOpsControlConfig(next, { updatedByUserId: staff.user.id });
+      await createAuditLog({
+        actorUserId: staff.user.id,
+        actorIdentifier: staff.user.username,
+        action: 'admin.ai_gateway_ops_control_action',
+        meta: { action: body, before: existing, after: saved },
         ip: getClientIp(req),
         userAgent: req.headers['user-agent'],
       });

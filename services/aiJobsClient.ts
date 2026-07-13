@@ -111,11 +111,23 @@ export type AiGatewayOpsModelOverride = {
   to: string;
   enabled: boolean;
   reason: string | null;
+  expiresAt?: string | null;
+};
+
+export type AiGatewayOpsPauseRule = {
+  provider?: string;
+  model?: string;
+  reason: string | null;
+  expiresAt: string | null;
+  createdAt?: string | null;
+  createdByUserId?: string | null;
 };
 
 export type AiGatewayOpsControlConfig = {
   disabledProviders: string[];
   disabledModels: string[];
+  disabledProviderRules?: AiGatewayOpsPauseRule[];
+  disabledModelRules?: AiGatewayOpsPauseRule[];
   modelOverrides: AiGatewayOpsModelOverride[];
   updatedAt?: string | null;
   updatedByUserId?: string | null;
@@ -127,6 +139,13 @@ export type AiGatewayOpsControlConfig = {
 export type AiGatewayOpsControlResponse = {
   ok?: boolean;
   config: AiGatewayOpsControlConfig;
+};
+
+export type AiGatewayOpsControlActionInput = {
+  kind: 'provider' | 'model';
+  key: string;
+  reason?: string | null;
+  ttlMinutes?: number;
 };
 
 export type CreateAiJobInput = {

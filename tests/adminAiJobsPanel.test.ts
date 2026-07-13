@@ -4,8 +4,10 @@ import {
   aiJobRouteLabel,
   aiJobStatusLabel,
   aiJobStatusTone,
+  buildAiGatewayOpsRuleRows,
   buildAiGatewayOpsSuggestions,
   formatAiGatewayDuration,
+  formatAiGatewayExpiry,
   formatAiGatewayRate,
   formatAiGatewayStorageLabel,
   listToText,
@@ -85,6 +87,8 @@ describe('AdminAiJobsPanel helpers', () => {
     expect(formatAiGatewayDuration(180_000)).toBe('3m');
     expect(formatAiGatewayStorageLabel('postgres')).toBe('Postgres');
     expect(formatAiGatewayStorageLabel('disk')).toBe('Disk JSON');
+    expect(formatAiGatewayExpiry('2026-07-13T11:00:00.000Z', Date.parse('2026-07-13T10:30:00.000Z'))).toBe('30m left');
+    expect(formatAiGatewayExpiry('2026-07-13T09:00:00.000Z', Date.parse('2026-07-13T10:30:00.000Z'))).toBe('expired');
   });
 
   it('formats AI Gateway ops-control textarea values', () => {
@@ -142,5 +146,40 @@ describe('AdminAiJobsPanel helpers', () => {
       { disabledProviders: ['vertex-gemini'], disabledModels: [], modelOverrides: [] }
     );
     expect(suggestions.map((item) => item.kind)).toEqual(['global']);
+    expect(suggestions[0].actionable).toBe(false);
+  });
+
+  it('builds active ops rule rows for TTL visibility', () => {
+    expect(
+      buildAiGatewayOpsRuleRows({
+        disabledProviders: ['vertex-gemini'],
+        disabledModels: ['gemini-pro'],
+        disabledProviderRules: [{ provider: 'vertex-gemini', reason: '429', expiresAt: '2026-07-13T11:00:00.000Z' }],
+        disabledModelRules: [{ model: 'gemini-pro', reason: null, expiresAt: null }],
+        modelOverrides: [{ from: 'pro', to: 'flash', enabled: true, reason: 'fallback', expiresAt: '2026-07-13T12:00:00.000Z' }],
+      })
+    ).toEqual([
+      {
+        kind: 'provider',
+        key: 'vertex-gemini',
+        reason: '429',
+        expiresAt: '2026-07-13T11:00:00.000Z',
+        createdByUserId: null,
+      },
+      {
+        kind: 'model',
+        key: 'gemini-pro',
+        reason: null,
+        expiresAt: null,
+        createdByUserId: null,
+      },
+      {
+        kind: 'modelOverride',
+        key: 'pro => flash',
+        reason: 'fallback',
+        expiresAt: '2026-07-13T12:00:00.000Z',
+        createdByUserId: null,
+      },
+    ]);
   });
 });

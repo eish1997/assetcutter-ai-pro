@@ -17,6 +17,7 @@ import {
   retryMyAiJob,
 } from '../services/aiJobsClient';
 import {
+  applyAdminAiGatewayOpsAction,
   clearAdminAiGatewayOpsControl,
   fetchAdminAiGatewayOpsControl,
   saveAdminAiGatewayOpsControl,
@@ -109,6 +110,22 @@ describe('aiJobsClient', () => {
     await clearAdminAiGatewayOpsControl();
     expect(requestJson).toHaveBeenCalledWith('https://auth.example/api/admin/ai-gateway/ops-control', {
       method: 'DELETE',
+    });
+
+    await applyAdminAiGatewayOpsAction({
+      kind: 'provider',
+      key: 'vertex-gemini',
+      reason: '429 share',
+      ttlMinutes: 60,
+    });
+    expect(requestJson).toHaveBeenCalledWith('https://auth.example/api/admin/ai-gateway/ops-control/actions', {
+      method: 'POST',
+      body: JSON.stringify({
+        kind: 'provider',
+        key: 'vertex-gemini',
+        reason: '429 share',
+        ttlMinutes: 60,
+      }),
     });
   });
 });

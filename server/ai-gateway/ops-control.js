@@ -6,6 +6,8 @@ import { USE_POSTGRES, ensurePostgres, getPool } from '../auth-store.js';
 const DEFAULT_CONFIG = Object.freeze({
   disabledProviders: [],
   disabledModels: [],
+  disabledProviderRules: [],
+  disabledModelRules: [],
   modelOverrides: [],
 });
 const CONFIG_ROW_ID = 'default';
@@ -31,9 +33,83 @@ function uniqueStrings(values) {
   return out;
 }
 
+function futureIso(value, now = new Date()) {
+  const raw = nonEmptyString(value);
+  if (!raw) return null;
+  const time = Date.parse(raw);
+  if (!Number.isFinite(time) || time <= now.getTime()) return null;
+  return new Date(time).toISOString();
+}
+
+function normalizePauseRules(values, keyName, now = new Date()) {
+  const out = [];
+  const seen = new Set();
+  for (const value of Array.isArray(values) ? values : []) {
+    const row = value && typeof value === 'object' ? value : {};
+    const key = nonEmptyString(row[keyName] || row.key || row.id);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    out.push({
+      [keyName]: key,
+      reason: nonEmptyString(row.reason) || null,
+      expiresAt: futureIso(row.expiresAt, now),
+      createdAt: nonEmptyString(row.createdAt) || null,
+      createdByUserId: nonEmptyString(row.createdByUserId) || null,
+    });
+  }
+  return out;
+}
+
+function mergePauseRules(values, keyName) {
+  const out = [];
+  const seen = new Set();
+  for (const value of Array.isArray(values) ? values : []) {
+    const key = nonEmptyString(value?.[keyName]);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    out.push(value);
+  }
+  return out;
+}
+
+export function pruneExpiredAiGatewayOpsControlConfig(input, now = new Date()) {
+  const raw = input && typeof input === 'object' && !Array.isArray(input) ? input : {};
+  const nowMs = now.getTime();
+  const expired = [];
+  const keepRule = (kind) => (item) => {
+    const expiresAt = nonEmptyString(item?.expiresAt);
+    if (!expiresAt) return true;
+    const time = Date.parse(expiresAt);
+    if (!Number.isFinite(time) || time > nowMs) return true;
+    expired.push({ kind, key: item.provider || item.model || item.from || item.key || '', expiresAt });
+    return false;
+  };
+  return {
+    config: {
+      ...raw,
+      disabledProviderRules: (Array.isArray(raw.disabledProviderRules) ? raw.disabledProviderRules : []).filter(
+        keepRule('provider')
+      ),
+      disabledModelRules: (Array.isArray(raw.disabledModelRules) ? raw.disabledModelRules : []).filter(keepRule('model')),
+      modelOverrides: (Array.isArray(raw.modelOverrides) ? raw.modelOverrides : []).filter(keepRule('modelOverride')),
+    },
+    expired: expired.filter((item) => nonEmptyString(item.key)),
+  };
+}
+
 export function normalizeAiGatewayOpsControlConfig(input) {
   const raw = input && typeof input === 'object' && !Array.isArray(input) ? input : {};
-  const modelOverrides = (Array.isArray(raw.modelOverrides) ? raw.modelOverrides : [])
+  const now = new Date();
+  const pruned = pruneExpiredAiGatewayOpsControlConfig(raw, now).config;
+  const disabledProviderRules = mergePauseRules([
+    ...normalizePauseRules(pruned.disabledProviderRules, 'provider', now),
+    ...uniqueStrings(pruned.disabledProviders).map((provider) => ({ provider })),
+  ], 'provider').slice(0, 50);
+  const disabledModelRules = mergePauseRules([
+    ...normalizePauseRules(pruned.disabledModelRules, 'model', now),
+    ...uniqueStrings(pruned.disabledModels).map((model) => ({ model })),
+  ], 'model').slice(0, 100);
+  const modelOverrides = (Array.isArray(pruned.modelOverrides) ? pruned.modelOverrides : [])
     .map((item) => {
       const row = item && typeof item === 'object' ? item : {};
       const from = nonEmptyString(row.from);
@@ -44,13 +120,16 @@ export function normalizeAiGatewayOpsControlConfig(input) {
         to,
         enabled: row.enabled !== false,
         reason: nonEmptyString(row.reason) || null,
+        expiresAt: futureIso(row.expiresAt, now),
       };
     })
     .filter(Boolean)
     .slice(0, 50);
   return {
-    disabledProviders: uniqueStrings(raw.disabledProviders).slice(0, 50),
-    disabledModels: uniqueStrings(raw.disabledModels).slice(0, 100),
+    disabledProviders: uniqueStrings(disabledProviderRules.map((item) => item.provider)).slice(0, 50),
+    disabledModels: uniqueStrings(disabledModelRules.map((item) => item.model)).slice(0, 100),
+    disabledProviderRules,
+    disabledModelRules,
     modelOverrides,
   };
 }
@@ -96,14 +175,21 @@ export async function readAiGatewayOpsControlConfig() {
     );
     if (!res.rows[0]) return withMeta(DEFAULT_CONFIG, { source: 'db' });
     const row = res.rows[0];
-    const config = typeof row.config_json === 'object' ? row.config_json : JSON.parse(String(row.config_json || '{}'));
+    const rawConfig = typeof row.config_json === 'object' ? row.config_json : JSON.parse(String(row.config_json || '{}'));
+    const { config, expired } = pruneExpiredAiGatewayOpsControlConfig(rawConfig);
+    if (expired.length) {
+      return writeAiGatewayOpsControlConfig(config, { updatedByUserId: 'system:ops-control-expire' });
+    }
     return withMeta(config, {
       source: 'db',
       updatedAt: row.updated_at ? new Date(row.updated_at).toISOString() : null,
       updatedByUserId: row.updated_by_user_id || null,
     });
   }
-  return readAiGatewayOpsControlConfigSync();
+  const config = readAiGatewayOpsControlConfigSync();
+  const { config: pruned, expired } = pruneExpiredAiGatewayOpsControlConfig(config);
+  if (expired.length) return writeAiGatewayOpsControlConfig(pruned, { updatedByUserId: 'system:ops-control-expire' });
+  return config;
 }
 
 export async function writeAiGatewayOpsControlConfig(input, { updatedByUserId = null } = {}) {
@@ -134,6 +220,33 @@ export async function writeAiGatewayOpsControlConfig(input, { updatedByUserId = 
 
 export async function clearAiGatewayOpsControlConfig({ updatedByUserId = null } = {}) {
   return writeAiGatewayOpsControlConfig(DEFAULT_CONFIG, { updatedByUserId });
+}
+
+export function mergeAiGatewayOpsControlAction(input, action, { now = new Date(), defaultTtlMinutes = 60, updatedByUserId = null } = {}) {
+  const config = normalizeAiGatewayOpsControlConfig(input);
+  const kind = nonEmptyString(action?.kind);
+  const key = nonEmptyString(action?.key);
+  if (!key || !['provider', 'model'].includes(kind)) return config;
+  const ttl = Math.min(24 * 60, Math.max(5, Math.floor(Number(action?.ttlMinutes) || defaultTtlMinutes)));
+  const expiresAt = new Date(now.getTime() + ttl * 60_000).toISOString();
+  const reason = nonEmptyString(action?.reason) || 'ops suggestion';
+  const row = {
+    [kind]: key,
+    reason,
+    expiresAt,
+    createdAt: now.toISOString(),
+    createdByUserId: nonEmptyString(updatedByUserId) || null,
+  };
+  if (kind === 'provider') {
+    return normalizeAiGatewayOpsControlConfig({
+      ...config,
+      disabledProviderRules: [...(config.disabledProviderRules || []).filter((item) => item.provider !== key), row],
+    });
+  }
+  return normalizeAiGatewayOpsControlConfig({
+    ...config,
+    disabledModelRules: [...(config.disabledModelRules || []).filter((item) => item.model !== key), row],
+  });
 }
 
 export function applyAiGatewayModelOverride(job, config = readAiGatewayOpsControlConfigSync()) {

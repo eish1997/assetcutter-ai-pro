@@ -1,7 +1,13 @@
 import type { CreditLedgerEntry } from '../shared/credits';
 import type { AuthUser } from './authClient';
 import { apiUrl, r2ApiUrl } from './apiBase';
-import type { AiGatewayOpsControlConfig, AiGatewayOpsControlResponse, AiGatewayOpsSummary, AiJobsListResponse } from './aiJobsClient';
+import type {
+  AiGatewayOpsControlActionInput,
+  AiGatewayOpsControlConfig,
+  AiGatewayOpsControlResponse,
+  AiGatewayOpsSummary,
+  AiJobsListResponse,
+} from './aiJobsClient';
 import { HttpRequestError, requestJson } from './httpClient';
 
 type UsersResponse = { users: AuthUser[]; total?: number; page?: number; pageSize?: number };
@@ -657,6 +663,13 @@ export async function saveAdminAiGatewayOpsControl(config: Partial<AiGatewayOpsC
 export async function clearAdminAiGatewayOpsControl() {
   return requestJson<AiGatewayOpsControlResponse>(apiUrl('/api/admin/ai-gateway/ops-control'), {
     method: 'DELETE',
+  });
+}
+
+export async function applyAdminAiGatewayOpsAction(action: AiGatewayOpsControlActionInput) {
+  return requestJson<AiGatewayOpsControlResponse>(apiUrl('/api/admin/ai-gateway/ops-control/actions'), {
+    method: 'POST',
+    body: JSON.stringify(action),
   });
 }
 
