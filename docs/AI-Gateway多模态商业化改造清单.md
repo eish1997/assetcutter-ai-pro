@@ -23,6 +23,7 @@
 - 已新增 Gateway 标准 usage event 第一段：`AI_GATEWAY_CREDITS_GATE=reserve` 且 job 成功终态时，Gateway 会写入带 `correlationId/aiGatewayJobId/proxyJobId/billingSku/settlementSource` 的标准 usage event；该事件标记 `externalCreditSettlement=true`，避免插入事件时二次扣分，实际扣分仍由 reserve finalize 完成。
 - 已新增 Gemini proxy 真实用量回写第一段：`/proxy/gemini/async` 成功后会把 `usageMetadata` 写回 AI Gateway job；Gateway 标准 usage event 会优先按该 token 用量和 SKU 计算积分，再回退到 job 显式 `creditsCharged/actualCredits` 或预估积分。
 - 已新增 Gateway 轻量产物清单：Gemini inline 图片/视频结果写入 AI job 时会提取 `artifacts` 的 mime/bytes/sourcePath，并把 `output` 内的 base64 主体脱敏；任务记录可审计、可结算，但不把资产大文件存进云端 job store。
+- 已新增客户端结果绑定：Gemini inline 图片生成完成后，前端会把短暂内存中的图片结果与 `aiGatewayJobId` 绑定；工作流写入资产卡时把该 id 写入 `resultMeta`，真实图片仍走工作区/本地伴侣持久化，云端 job store 只保留轻量记录。
 - 已新增 Gateway 执行灰度 handoff：默认开启，`POST /api/ai/jobs` 会把 image/text job 交给 `gemini-proxy` 的 `/proxy/gemini/async`，并通过 `fairnessMeta.aiGatewayTraceJobId` 复用旧链路写回 `queued/running/succeeded/failed`；显式 `AI_GATEWAY_EXECUTION_ENABLED=false` 可回滚为只建 job 不执行。
 - 已新增前端生产入口灰度切流：Vertex 图片生成默认优先走 `POST /api/ai/jobs`；若 auth-api 未开启执行或未返回 `proxyJobId`，会复用该 job id 回退旧 `/proxy/gemini/async`，避免阻断生产生成；显式 `VITE_AI_GATEWAY_IMAGE_EXECUTION=false` 可回滚旧入口。
 - `/healthz` 已包含 `aiGateway`：可查看 execution 是否切流、jobStore 来源、credits gate 模式和样板路由。
@@ -30,8 +31,8 @@
 - 已接入旧链路单任务状态回写：`/proxy/gemini/async` 可根据 `fairnessMeta.aiGatewayTraceJobId` 将 trace job 推进到 `queued`、`running`、`succeeded`、`failed`。
 - 默认接管 Vertex 图片生产入口，但保留旧 `gemini-proxy` 自动回退；显式关闭开关后，旧链路仍是稳定生产入口。
 - 音乐、视频、3D 目前只进入统一模态定义，不会误路由到 `gemini-proxy`。
-- 当前仍未完成：更多非 Gemini 执行器补齐真实用量字段、上游硬取消、客户端/本地伴侣产物接管 Gateway artifact manifest。
-- 下一步主线：先小流量验证图片单任务经 Gateway 创建、proxy 执行、usage 回写、积分结算的闭环，再迁移更多图片能力；若需回滚，设置 `AI_GATEWAY_EXECUTION_ENABLED=false` 或 `VITE_AI_GATEWAY_IMAGE_EXECUTION=false`。
+- 当前仍未完成：更多非 Gemini 执行器补齐真实用量字段、上游硬取消、视频/音乐/3D 的 worker/adapter 拆分、管理员详情/筛选视图。
+- 下一步主线：补 Gateway 生产观测与运营控制层，包括 provider/model 维度失败率、429/5xx 统计、队列长度与熔断/降级开关；若需回滚，设置 `AI_GATEWAY_EXECUTION_ENABLED=false` 或 `VITE_AI_GATEWAY_IMAGE_EXECUTION=false`。
 
 ## 0. 目标架构
 

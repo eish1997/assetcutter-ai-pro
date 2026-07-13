@@ -90,6 +90,7 @@ import {
   extractGeminiProxyImageDataUrl,
   retryAllRecoverableGeminiJobs,
 } from '../services/unifiedAiGateway';
+import { consumeAiGatewayJobIdForImage } from '../services/aiGatewayImageResultRegistry';
 import {
   applyGeminiRecoveredToWorkflowTask,
   GEMINI_ASYNC_RECOVERED_EVENT,
@@ -3444,6 +3445,7 @@ ${lineSvg}
         );
       } else if (applied.image) {
         const result = applied.image;
+        const aiGatewayJobId = consumeAiGatewayJobIdForImage(result);
         flushSync(() => {
           setAssets((prev) =>
             prev.map((a) => {
@@ -3470,6 +3472,7 @@ ${lineSvg}
                     executedAt: Date.now(),
                     ...(task.displayStepLabel ? { displayStepLabel: task.displayStepLabel } : {}),
                     ...buildWorkflowStepResultMetaInputSnapshots(task, null),
+                    ...(aiGatewayJobId ? { aiGatewayJobId } : {}),
                   },
                 },
                 imageTags: { ...(a.imageTags || {}), [key]: tagList },
@@ -4039,6 +4042,7 @@ ${lineSvg}
                 skipCancelledWrite();
                 return;
               }
+              const aiGatewayJobId = result ? consumeAiGatewayJobIdForImage(result) : null;
               const delegatedGenerate3D =
                 !result &&
                 classifyWorkflowRunTaskBranch({
@@ -4067,6 +4071,7 @@ ${lineSvg}
                           ? { displayStepLabel: task.displayStepLabel }
                           : {}),
                         ...(result ? buildWorkflowStepResultMetaInputSnapshots(task, vgpSteps ?? null) : {}),
+                        ...(aiGatewayJobId ? { aiGatewayJobId } : {}),
                       },
                     };
                     const tagList =

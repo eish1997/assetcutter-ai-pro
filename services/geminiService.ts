@@ -89,6 +89,7 @@ import {
   isAiGatewayJobTraceEnabled,
 } from "./aiGatewayTrace";
 import { createAiGatewayImageExecutionJob } from "./aiGatewayImageExecution";
+import { rememberAiGatewayImageResult } from "./aiGatewayImageResultRegistry";
 import {
   resolveUpstreamImageModelId,
   resolveUpstreamImageModelIdForRegistry,
@@ -730,6 +731,7 @@ async function finalizeGeminiAsyncDelivery(args: {
   bindingRegistryId: string;
   delivered: GeminiAsyncDelivered;
   creditsReserveKey?: string | null;
+  aiGatewayJobId?: string | null;
 }): Promise<GeminiAsyncDelivered> {
   const imageRole = isLikelyImageRegistryId(args.bindingRegistryId);
   const useVertex = bulkUsesVertexBackend(args.bindingRegistryId, imageRole ? "image" : "text");
@@ -747,6 +749,10 @@ async function finalizeGeminiAsyncDelivery(args: {
     await emitGeminiProxyMeteredUsage(meterArgs);
   } else {
     settleGeminiProxyMeteredUsageAfterDelivery(meterArgs);
+  }
+  const imageResult = extractGeminiProxyImageDataUrl(args.delivered);
+  if (imageResult) {
+    rememberAiGatewayImageResult(imageResult, args.aiGatewayJobId);
   }
   return args.delivered;
 }
@@ -1270,6 +1276,7 @@ async function bulkProxyGenerateContentAsync(args: {
         bindingRegistryId,
         delivered: step.result,
         creditsReserveKey: asyncReserveKey,
+        aiGatewayJobId: aiGatewayTraceJobId,
       });
     }
     if (step.kind === "failed") {
