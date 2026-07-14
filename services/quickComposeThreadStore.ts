@@ -70,13 +70,13 @@ function normalizeMessage(raw: unknown): QuickComposeThreadMessage | null {
       : undefined;
   const assetIds = isStringArray(m.assetIds) ? m.assetIds.filter(Boolean) : undefined;
   const taskIds = isStringArray(m.taskIds) ? m.taskIds.filter(Boolean) : undefined;
-  const taskAssetById =
+  const taskAssetById: Record<string, string> | undefined =
     m.taskAssetById && typeof m.taskAssetById === 'object' && !Array.isArray(m.taskAssetById)
       ? Object.fromEntries(
           Object.entries(m.taskAssetById as Record<string, unknown>).filter(
             ([k, v]) => typeof k === 'string' && k.trim() && typeof v === 'string' && v.trim()
           )
-        )
+        ) as Record<string, string>
       : undefined;
   const errorMessage = typeof m.errorMessage === 'string' ? m.errorMessage : undefined;
   return {
@@ -92,7 +92,7 @@ function normalizeMessage(raw: unknown): QuickComposeThreadMessage | null {
   };
 }
 
-function normalizeThread(parsed: unknown, key: QuickComposeThreadStoreKey): QuickComposeThread | null {
+function normalizeThread(parsed: unknown, _key: QuickComposeThreadStoreKey): QuickComposeThread | null {
   if (!parsed || typeof parsed !== 'object') return null;
   const data = parsed as Partial<QuickComposeThread> & { version?: number };
   if (data.version !== QUICK_COMPOSE_THREAD_STORE_VERSION) return null;

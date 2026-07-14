@@ -2,7 +2,13 @@ import { describe, expect, it } from 'vitest';
 import {
   COMPOSER_BUSY_HINT,
   COMPOSER_EMPTY_DRAFT_REASON,
+  FAILURE_RECOVERY_RETRY_ACTION,
+  LIGHT_ACTION_CONFIRM_COPY,
+  quickComposeChatActionConfirmCopy,
+  quickComposeChatActionNeedsConfirm,
   resolveComposerSubmitDisabledReason,
+  resolveFailureRecoveryAction,
+  shouldHardBlockComposerCredits,
 } from '../components/workflow/quickComposeChat/chatUiCopy';
 import { parseInlineMarkdown, parseSafeMarkdown } from '../components/workflow/quickComposeChat/safeMarkdown';
 
@@ -47,6 +53,76 @@ describe('resolveComposerSubmitDisabledReason (P0.5-a)', () => {
         draftEmpty: false,
       })
     ).toBeUndefined();
+  });
+});
+
+describe('shouldHardBlockComposerCredits', () => {
+  it('keeps login and known insufficient balance as hard blocks', () => {
+    expect(
+      shouldHardBlockComposerCredits({
+        creditsBlocked: true,
+        creditsBypass: false,
+        userId: null,
+        balance: null,
+        balanceLoading: false,
+      })
+    ).toBe(true);
+
+    expect(
+      shouldHardBlockComposerCredits({
+        creditsBlocked: true,
+        creditsBypass: false,
+        userId: 'u1',
+        balance: 0,
+        balanceLoading: false,
+      })
+    ).toBe(true);
+  });
+
+  it('does not hard-block Agent chat when local balance service is unavailable', () => {
+    expect(
+      shouldHardBlockComposerCredits({
+        creditsBlocked: true,
+        creditsBypass: false,
+        userId: 'u1',
+        balance: null,
+        balanceLoading: false,
+      })
+    ).toBe(false);
+  });
+});
+
+describe('quick compose action fallback copy (Phase 1)', () => {
+  it('gives failed messages a recovery action', () => {
+    expect(resolveFailureRecoveryAction({ status: 'error', errorMessage: 'timeout' })).toEqual(
+      FAILURE_RECOVERY_RETRY_ACTION
+    );
+    expect(resolveFailureRecoveryAction({ status: 'done' })).toBeUndefined();
+  });
+
+  it('requires confirmation for cost and destructive actions', () => {
+    expect(quickComposeChatActionNeedsConfirm({ kind: 'generate', requiresCost: true })).toBe(true);
+    expect(quickComposeChatActionConfirmCopy({ kind: 'generate', costCredits: 1 })).toContain('额度');
+
+    expect(quickComposeChatActionNeedsConfirm({ kind: 'delete_asset', destructive: true })).toBe(true);
+    expect(quickComposeChatActionConfirmCopy({ kind: 'delete_asset', destructive: true })).toContain('修改或删除');
+
+    expect(
+      quickComposeChatActionConfirmCopy({
+        kind: 'save_memory',
+        requiresConfirmation: true,
+      })
+    ).toContain('记忆');
+
+    expect(quickComposeChatActionConfirmCopy({ kind: 'save_preset', requiresConfirmation: true })).toBe(
+      LIGHT_ACTION_CONFIRM_COPY
+    );
+  });
+
+  it('does not require confirmation for ordinary reply and open_panel actions', () => {
+    expect(quickComposeChatActionNeedsConfirm({ kind: 'reply' })).toBe(false);
+    expect(quickComposeChatActionConfirmCopy({ kind: 'reply' })).toBeUndefined();
+    expect(quickComposeChatActionNeedsConfirm({ kind: 'open_panel' })).toBe(false);
   });
 });
 

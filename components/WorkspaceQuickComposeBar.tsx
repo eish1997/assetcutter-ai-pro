@@ -145,7 +145,9 @@ export type WorkspaceQuickComposeBarProps = {
     ProjectAgentDockProps,
     | 'messages'
     | 'onRetryMessage'
+    | 'onMessageAction'
     | 'onCancelMessage'
+    | 'onOpenPanel'
     | 'onClearChat'
     | 'onLoadEarlier'
     | 'canLoadEarlier'
@@ -156,6 +158,15 @@ export type WorkspaceQuickComposeBarProps = {
     | 'className'
     | 'expertStudio'
     | 'onTryRunPrompt'
+    | 'contextSummary'
+    | 'memoryEntries'
+    | 'onToggleMemory'
+    | 'onDeleteMemory'
+    | 'skillEntries'
+    | 'onToggleSkill'
+    | 'onDeleteSkill'
+    | 'onInstallSampleSkill'
+    | 'onImportSkillPreview'
   >;
 };
 
@@ -1442,6 +1453,7 @@ export default function WorkspaceQuickComposeBar({
                     className={chatDockProps?.className}
                     messages={chatDockProps?.messages ?? []}
                     onRetryMessage={chatDockProps?.onRetryMessage}
+                    onMessageAction={chatDockProps?.onMessageAction}
                     onCancelMessage={chatDockProps?.onCancelMessage}
                     onClearChat={chatDockProps?.onClearChat}
                     onLoadEarlier={chatDockProps?.onLoadEarlier}
@@ -1449,6 +1461,15 @@ export default function WorkspaceQuickComposeBar({
                     onExportChat={chatDockProps?.onExportChat}
                     expertStudio={chatDockProps?.expertStudio}
                     onTryRunPrompt={chatDockProps?.onTryRunPrompt}
+                    contextSummary={chatDockProps?.contextSummary}
+                    skillEntries={chatDockProps?.skillEntries}
+                    onToggleSkill={chatDockProps?.onToggleSkill}
+                    onDeleteSkill={chatDockProps?.onDeleteSkill}
+                    onInstallSampleSkill={chatDockProps?.onInstallSampleSkill}
+                    onImportSkillPreview={chatDockProps?.onImportSkillPreview}
+                    memoryEntries={chatDockProps?.memoryEntries}
+                    onToggleMemory={chatDockProps?.onToggleMemory}
+                    onDeleteMemory={chatDockProps?.onDeleteMemory}
                     threadEmptyTitle={chatDockProps?.threadEmptyTitle ?? '跟项目里的 Agent 说话'}
                     threadEmptyHint={
                       chatDockProps?.threadEmptyHint ??

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { AiPipelineStepError } from '../services/aiPipelineStepError';
-import { mapRateLimitErrorText, normalizeApiErrorMessage } from '../services/geminiService';
+import { mapRateLimitErrorText, normalizeApiErrorMessage } from '../services/unifiedAiGateway';
 
 describe('mapRateLimitErrorText', () => {
   it('maps real Google 429 phrases', () => {
@@ -38,6 +38,13 @@ describe('normalizeApiErrorMessage', () => {
 
   it('maps real Too Many Requests via normalizeApiErrorMessage', () => {
     expect(normalizeApiErrorMessage('Too Many Requests')).toContain('Google/Vertex');
+  });
+
+  it('keeps login-required errors actionable', () => {
+    const msg = normalizeApiErrorMessage('{"code":"LOGIN_REQUIRED","error":"请先登录后再使用 AI 生成。"}');
+    expect(msg).toContain('请先登录后再使用 AI 生成');
+    expect(msg).not.toContain('Google/Vertex');
+    expect(msg).not.toContain('积分不足');
   });
 
   it('preserves AiPipelineStepError message', () => {

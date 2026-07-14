@@ -114,6 +114,27 @@ const ROUTE_CASES: AgentRouteCase[] = [
     expectForbiddenToolIds: ['run_plain_t2i', 'run_plain_i2i'],
   },
   {
+    id: 'skill_trigger_text',
+    intent: baseIntent({
+      mode: 'text',
+      text: '帮我写主图文案',
+      enabledSkills: [
+        {
+          id: 'skill.copy',
+          name: '文案助手',
+          description: '写文案',
+          triggers: ['写主图文案'],
+          toolIds: ['run_plain_text'],
+          permissionLevel: 'none',
+          source: 'local',
+          enabled: true,
+          createdAt: 1,
+        },
+      ],
+    }),
+    expectToolIds: ['run_plain_text'],
+  },
+  {
     id: 'mode_auto_text',
     intent: baseIntent({ mode: 'auto', text: '写一句旁白' }),
     expectToolIds: ['run_plain_text'],

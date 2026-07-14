@@ -20,6 +20,7 @@ import {
 import type { ProjectAgentThread } from './threadStore';
 import {
   applyPlanToTrace,
+  applyPlannerTrace,
   createEmptyTurnTrace,
   finalizeTurnTrace,
   serializeTurnTrace,
@@ -159,7 +160,8 @@ export function createProjectAgentRuntime(host: ProjectAgentHostPort): ProjectAg
         intent: input.intent,
       });
 
-      const planned = planTools(input.intent);
+      const planned = planTools(input.intent, { controlledPlanner: host.controlledPlanner });
+      trace = applyPlannerTrace(trace, planned.planner?.decisionTrace);
       if (planned.ok === false) {
         turnState = transitionTurn(turnState, {
           type: 'plan_fail',

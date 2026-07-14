@@ -1,5 +1,6 @@
 import type {
   AgentTurnTrace,
+  AgentPlannerDecisionTraceItem,
   ProjectAgentIntent,
   AgentPlannedTool,
   AgentTurnStatus,
@@ -40,6 +41,17 @@ export function applyPlanToTrace(trace: AgentTurnTrace, plan: AgentPlannedTool[]
       toolId: p.toolId,
       status: 'queued' as const,
     })),
+  };
+}
+
+export function applyPlannerTrace(
+  trace: AgentTurnTrace,
+  plannerTrace: readonly AgentPlannerDecisionTraceItem[] | undefined
+): AgentTurnTrace {
+  if (!plannerTrace?.length) return trace;
+  return {
+    ...trace,
+    plannerTrace: plannerTrace.map((item) => ({ ...item })),
   };
 }
 

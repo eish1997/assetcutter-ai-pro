@@ -291,6 +291,16 @@ export function retrieveExpertMemoriesForInject(
   };
 }
 
+export function formatExpertMemoriesForContext(entries: ExpertMemoryEntry[]): string {
+  return entries
+    .map((entry) => {
+      const expertId = String(entry.scope.expertId || '').trim();
+      const prefix = expertId ? `${expertId}/${entry.kind}` : entry.kind;
+      return `- [${prefix}] ${entry.text}`;
+    })
+    .join('\n');
+}
+
 /**
  * Test helper: wipe in-memory cache.
  * - no arg → clear all in-memory (localStorage kept — use for reload simulation)

@@ -85,16 +85,18 @@ export default function QuickComposeChatComposer({
   threadBusy = false,
   threadBusyHint,
   onSubmit,
-  attachmentStripDefaultExpanded = true,
+  attachmentStripDefaultExpanded = false,
   genControls,
 }: QuickComposeChatComposerProps) {
   const mentionFieldRef = useRef<QuickComposeMentionFieldHandle | null>(null);
   const [attachmentExpanded, setAttachmentExpanded] = useState(attachmentStripDefaultExpanded);
+  const [genControlsExpanded, setGenControlsExpanded] = useState(false);
+  const attachmentCount = mainDropSlots.length + referenceDropSlots.length;
 
   // 拖入能力预设后自动展开附件条，避免「拖进去了但看不见」
   useEffect(() => {
-    if (promptCards.length > 0) setAttachmentExpanded(true);
-  }, [promptCards.length]);
+    if (promptCards.length > 0 || attachmentCount > 0) setAttachmentExpanded(true);
+  }, [attachmentCount, promptCards.length]);
 
   const submitDisabledTitle = submitDisabled ? submitDisabledReason : undefined;
 
@@ -212,9 +214,9 @@ export default function QuickComposeChatComposer({
               <ChevronDown className="h-3 w-3" strokeWidth={2.2} aria-hidden />
             )}
             附件
-            {(mainDropSlots.length + referenceDropSlots.length) > 0 ? (
+            {attachmentCount > 0 ? (
               <span className="tabular-nums text-gray-600">
-                ({mainDropSlots.length + referenceDropSlots.length})
+                ({attachmentCount})
               </span>
             ) : null}
           </button>
@@ -304,8 +306,25 @@ export default function QuickComposeChatComposer({
       ) : null}
 
       {genControls ? (
-        <div className={`shrink-0 ${WORKFLOW_QUICK_COMPOSE_BAR_SHELL}`}>
-          <div className="flex flex-wrap items-center gap-2 px-2 py-1.5">{genControls}</div>
+        <div className="flex flex-col gap-1.5">
+          <button
+            type="button"
+            onClick={() => setGenControlsExpanded((v) => !v)}
+            className="inline-flex w-fit items-center gap-1 rounded-md px-1 py-0.5 text-[9px] font-semibold text-gray-500 outline-none transition-colors hover:bg-white/[0.06] hover:text-gray-300 focus-visible:ring-2 focus-visible:ring-blue-500/45"
+            aria-expanded={genControlsExpanded}
+          >
+            {genControlsExpanded ? (
+              <ChevronUp className="h-3 w-3" strokeWidth={2.2} aria-hidden />
+            ) : (
+              <ChevronDown className="h-3 w-3" strokeWidth={2.2} aria-hidden />
+            )}
+            参数
+          </button>
+          {genControlsExpanded ? (
+            <div className={`shrink-0 ${WORKFLOW_QUICK_COMPOSE_BAR_SHELL}`}>
+              <div className="flex flex-wrap items-center gap-2 px-2 py-1.5">{genControls}</div>
+            </div>
+          ) : null}
         </div>
       ) : null}
 

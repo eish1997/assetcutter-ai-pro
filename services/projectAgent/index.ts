@@ -27,6 +27,7 @@ export {
 } from './runtime/turnState';
 export {
   applyPlanToTrace,
+  applyPlannerTrace,
   createEmptyTurnTrace,
   finalizeTurnTrace,
   serializeTurnTrace,
@@ -120,6 +121,7 @@ export {
   clearExpertMemories,
   deleteExpertMemory,
   expertMemoryStorageKey,
+  formatExpertMemoriesForContext,
   listExpertMemories,
   retrieveExpertMemoriesForInject,
 } from './experts/memoryStore';
@@ -138,6 +140,52 @@ export {
   applyConfirmedMemoryProposal,
   detectExpertTuneProposals,
 } from './experts/tuneProtocol';
+export {
+  PROJECT_AGENT_KNOWLEDGE_INJECT_CHAR_BUDGET,
+  __resetProjectAgentKnowledgeForTests,
+  addProjectAgentKnowledge,
+  deleteProjectAgentKnowledge,
+  formatProjectAgentKnowledgeForContext,
+  listProjectAgentKnowledge,
+  projectAgentKnowledgeStorageKey,
+  retrieveProjectAgentKnowledgeForInject,
+  setProjectAgentKnowledgeEnabled,
+} from './knowledgeStore';
+
+export type {
+  AddProjectAgentKnowledgeInput,
+  ProjectAgentKnowledgeStoreKey,
+  RetrieveProjectAgentKnowledgeOptions,
+  RetrieveProjectAgentKnowledgeResult,
+} from './knowledgeStore';
+
+export {
+  __resetAgentSkillRegistryForTests,
+  agentSkillRegistryStorageKey,
+  deleteAgentSkill,
+  installAgentSkill,
+  listAgentSkills,
+  listEnabledAgentSkills,
+  previewAgentSkillImport,
+  resolveAgentSkillsForIntent,
+  setAgentSkillEnabled,
+} from './skillRegistry';
+
+export type {
+  AgentSkillImportInput,
+  AgentSkillRegistryScope,
+  InstallAgentSkillOptions,
+} from './skillRegistry';
+
+export {
+  createControlledPlan,
+  validateControlledPlan,
+} from './planner';
+
+export type {
+  ControlledPlannerResult,
+} from './planner';
+
 export {
   __resetProjectAgentArtifactsForTests,
   artifactTextForQuickCompose,

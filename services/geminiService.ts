@@ -2441,6 +2441,12 @@ export function normalizeApiErrorMessage(err: unknown): string {
   if (/CREDITS_EXCEEDED|积分不足/i.test(raw)) {
     return raw.length < 120 && /积分不足/.test(raw) ? raw : '积分不足，无法完成本次 AI 任务。';
   }
+  if (/LOGIN_REQUIRED|请先登录后再使用 AI 生成/i.test(raw)) {
+    if (import.meta.env.DEV && isLocalDevPage()) {
+      return '请先登录后再使用 AI 生成。本地调试时若已登录，请确认 .env.local 里的 AUTH_API_BASE 与 VITE_AUTH_API_BASE_URL 指向同一个 auth-api，并重启 npm run dev:gemini-proxy 后硬刷新页面。';
+    }
+    return '请先登录后再使用 AI 生成。';
+  }
   if (/CREDITS_BUNDLE_INVALID|CREDITS_BUNDLE_UNAVAILABLE|积分预扣未返回|无法连接.*积分/.test(raw)) {
     return raw.length < 160 ? raw : '无法连接积分预扣服务，请确认已登录且 auth-api 可用后重试。';
   }

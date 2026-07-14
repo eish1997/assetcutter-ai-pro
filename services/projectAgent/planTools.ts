@@ -3,10 +3,17 @@
  * Pure function — no React / WorkflowSection.
  */
 
-import type { AgentPlanResult, AgentPlannedTool, ProjectAgentIntent } from '../../types/projectAgent';
+import type {
+  AgentControlledPlanner,
+  AgentPlanResult,
+  AgentPlannedTool,
+  ProjectAgentIntent,
+} from '../../types/projectAgent';
 import { PROJECT_AGENT_MAX_TOOL_STEPS } from '../../types/projectAgent';
 import { resolveComposerMode } from './autoMode';
 import { getExpertProfile, resolveExpertByMention } from './experts/registry';
+import { createControlledPlan } from './planner';
+import { resolveAgentSkillsForIntent } from './skillRegistry';
 import { getToolDefinition } from './tools/registry';
 
 function labelFor(toolId: AgentPlannedTool['toolId']): string {
@@ -16,6 +23,10 @@ function labelFor(toolId: AgentPlannedTool['toolId']): string {
 function step(toolId: AgentPlannedTool['toolId'], args?: Record<string, unknown>): AgentPlannedTool {
   return { toolId, label: labelFor(toolId), ...(args ? { args } : {}) };
 }
+
+export type PlanToolsOptions = {
+  controlledPlanner?: AgentControlledPlanner;
+};
 
 /** Collect expertIds from mentions (kind:expert) and @alias tokens in text. */
 function collectExpertIds(intent: ProjectAgentIntent): string[] {
@@ -96,7 +107,28 @@ function collectPresetIds(intent: ProjectAgentIntent): string[] {
   return out;
 }
 
-export function planTools(intent: ProjectAgentIntent): AgentPlanResult {
+function collectSkillPlan(intent: ProjectAgentIntent): AgentPlannedTool[] {
+  const skills = resolveAgentSkillsForIntent({
+    text: intent.text,
+    mentions: intent.mentions,
+    skills: intent.enabledSkills ?? [],
+  });
+  const plan: AgentPlannedTool[] = [];
+  for (const skill of skills) {
+    for (const toolId of skill.toolIds) {
+      plan.push(
+        step(toolId, {
+          skillId: skill.id,
+          skillName: skill.name,
+          text: intent.text,
+        })
+      );
+    }
+  }
+  return plan;
+}
+
+function planToolsRuleFallback(intent: ProjectAgentIntent): AgentPlanResult {
   const presetIds = collectPresetIds(intent);
 
   // P23: mode==='auto' → resolve to text|image|3d for routing only.
@@ -114,6 +146,18 @@ export function planTools(intent: ProjectAgentIntent): AgentPlanResult {
       };
     }
     return { ok: true, plan };
+  }
+
+  // Priority 1a: enabled local skills. They are routing hints only and map to existing tool ids.
+  const skillPlan = collectSkillPlan(intent);
+  if (skillPlan.length > 0) {
+    if (skillPlan.length > PROJECT_AGENT_MAX_TOOL_STEPS) {
+      return {
+        ok: false,
+        errorMessage: `Plan exceeds max ${PROJECT_AGENT_MAX_TOOL_STEPS} tool steps`,
+      };
+    }
+    return { ok: true, plan: skillPlan };
   }
 
   // Priority 1b: @expert / mention kind:expert → invoke_expert (same pipe for all experts)
@@ -200,5 +244,47 @@ export function planTools(intent: ProjectAgentIntent): AgentPlanResult {
   return {
     ok: true,
     plan: [step('run_plain_text', { text: intent.text, textModel: intent.textModel })],
+  };
+}
+
+export function planTools(intent: ProjectAgentIntent, options: PlanToolsOptions = {}): AgentPlanResult {
+  const controlled = createControlledPlan(intent, options.controlledPlanner);
+  if (controlled.ok) {
+    return {
+      ok: true,
+      plan: controlled.output.plan,
+      planner: controlled.output,
+    };
+  }
+
+  const controlledFailure = controlled as Extract<typeof controlled, { ok: false }>;
+
+  if (controlledFailure.action === 'clarify') {
+    return {
+      ok: false,
+      errorMessage: controlledFailure.errorMessage,
+      clarifyMessage: controlledFailure.errorMessage,
+      planner: controlledFailure.output,
+    };
+  }
+
+  const fallback = planToolsRuleFallback(intent);
+  return {
+    ...fallback,
+    planner: {
+      ...controlledFailure.output,
+      source: 'rule_fallback',
+      plan: fallback.ok ? fallback.plan : [],
+      decisionTrace: [
+        ...controlledFailure.output.decisionTrace,
+        {
+          stage: 'fallback',
+          message:
+            fallback.ok || !('errorMessage' in fallback)
+              ? 'rule fallback produced a safe plan'
+              : fallback.errorMessage,
+        },
+      ],
+    },
   };
 }

@@ -21,6 +21,7 @@ export type BuildProjectAgentIntentInput = {
   imageSettings?: ProjectAgentIntent['imageSettings'];
   textModel?: string;
   hasEnabled3dPreset?: boolean;
+  enabledSkills?: ProjectAgentIntent['enabledSkills'];
 };
 
 export function buildProjectAgentIntent(input: BuildProjectAgentIntentInput): ProjectAgentIntent {
@@ -39,5 +40,6 @@ export function buildProjectAgentIntent(input: BuildProjectAgentIntentInput): Pr
     ...(typeof input.hasEnabled3dPreset === 'boolean'
       ? { hasEnabled3dPreset: input.hasEnabled3dPreset }
       : {}),
+    ...(input.enabledSkills?.length ? { enabledSkills: input.enabledSkills } : {}),
   };
 }

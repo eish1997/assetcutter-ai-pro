@@ -232,6 +232,7 @@ async function runMeteredAiCall<T>(
 
 export {
   DEFAULT_PROMPTS,
+  mapRateLimitErrorText,
   normalizeApiErrorMessage,
   getGeminiImageBatchBoxSizeForCurrentProvider,
   buildStoryboardSheetStructureAnalysisPrompt,

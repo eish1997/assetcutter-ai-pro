@@ -445,6 +445,7 @@ import {
   workflowAssetMentionLabel,
 } from '../services/quickComposeMention';
 import type {
+  AgentSuggestedAction,
   QuickComposeChatMessageView,
   QuickComposeThreadMessage,
   QuickComposeThreadScope,
@@ -484,11 +485,21 @@ import {
   scheduleProjectAgentThreadBackup,
 } from '../services/projectAgent/threadCloudSync';
 import { maybeCompactProjectAgentThread } from '../services/projectAgent/compaction';
+import { buildAgentVisibleContextSummary } from '../services/projectAgent/visibleContext';
 import {
+  addProjectAgentKnowledge,
+  deleteProjectAgentKnowledge,
+  deleteAgentSkill,
   downloadProjectAgentThreadSlimJson,
   hasEarlierMessagesLocal,
+  installAgentSkill,
+  listAgentSkills,
+  listEnabledAgentSkills,
+  listProjectAgentKnowledge,
   loadEarlierMessagesIntoHot,
   saveLocalThreadArchive,
+  setAgentSkillEnabled,
+  setProjectAgentKnowledgeEnabled,
   stashMessagesDroppedFromHot,
 } from '../services/projectAgent';
 import { invokeExpert } from '../services/projectAgent/experts/invoke';
@@ -506,7 +517,9 @@ import { mapPlanToQuickComposeInvoke } from './project-agent/mapPlanToQuickCompo
 import {
   PROJECT_AGENT_EMPTY_HINT,
   PROJECT_AGENT_EMPTY_TITLE,
+  quickComposeChatActionConfirmCopy,
   resolveComposerSubmitDisabledReason,
+  shouldHardBlockComposerCredits,
 } from './workflow/quickComposeChat/chatUiCopy';
 import type {
   AgentChildRun,
@@ -832,8 +845,10 @@ export type QuickComposeChatDockHandlers = {
   isInputDisabled: boolean;
   /** Credits / empty draft / in-flight assistant — disables send only */
   isSendDisabled: boolean;
+  contextSummary: ReturnType<typeof buildAgentVisibleContextSummary>;
   onSend: () => void;
   onRetry: (messageId: string) => void;
+  onAction: (messageId: string, action: AgentSuggestedAction) => void;
   /** §16.1 / 3A：取消进行中的助手 turn（跳过关联 task） */
   onCancel: (messageId: string) => void;
 };
@@ -1317,6 +1332,8 @@ const WorkflowSection: React.FC<{
   /** 最近一次 submitQuickCompose 创建的 taskId→assetId，供对话线程持久化 */
   const lastQuickComposeTaskAssetByIdRef = useRef<Record<string, string>>({});
   const projectAgentRuntimeRef = useRef<ProjectAgentRuntime | null>(null);
+  const [projectAgentMemoryRevision, setProjectAgentMemoryRevision] = useState(0);
+  const [projectAgentSkillRevision, setProjectAgentSkillRevision] = useState(0);
   const submitLightboxQuickComposeRef = useRef<() => string[]>([]);
   useEffect(() => {
     workspaceQuickComposeThreadRef.current = workspaceQuickComposeThread;
@@ -1327,6 +1344,112 @@ const WorkflowSection: React.FC<{
     if (!activeWorkspaceProjectId) return null;
     return { userId: preferenceScope, workspaceProjectId: activeWorkspaceProjectId };
   }, [activeWorkspaceProjectId, preferenceScope]);
+
+  const projectAgentMemoryEntries = useMemo(() => {
+    const key = getProjectAgentThreadKey();
+    if (!key) return [];
+    return listProjectAgentKnowledge(key);
+  }, [getProjectAgentThreadKey, projectAgentMemoryRevision]);
+
+  const refreshProjectAgentMemoryPanel = useCallback(() => {
+    setProjectAgentMemoryRevision((n) => n + 1);
+  }, []);
+
+  const handleProjectAgentToggleMemory = useCallback(
+    (memoryId: string, enabled: boolean) => {
+      const key = getProjectAgentThreadKey();
+      if (!key) return;
+      if (setProjectAgentKnowledgeEnabled(key, memoryId, enabled)) {
+        refreshProjectAgentMemoryPanel();
+        onLog?.('info', enabled ? '项目 Agent：已重新启用这条记忆' : '项目 Agent：已暂停这条记忆参与上下文');
+      }
+    },
+    [getProjectAgentThreadKey, onLog, refreshProjectAgentMemoryPanel]
+  );
+
+  const handleProjectAgentDeleteMemory = useCallback(
+    (memoryId: string) => {
+      const key = getProjectAgentThreadKey();
+      if (!key) return;
+      if (deleteProjectAgentKnowledge(key, memoryId)) {
+        refreshProjectAgentMemoryPanel();
+        onLog?.('info', '项目 Agent：已删除这条项目记忆');
+      }
+    },
+    [getProjectAgentThreadKey, onLog, refreshProjectAgentMemoryPanel]
+  );
+
+  const projectAgentSkillEntries = useMemo(() => {
+    const key = getProjectAgentThreadKey();
+    if (!key) return [];
+    return listAgentSkills(key);
+  }, [getProjectAgentThreadKey, projectAgentSkillRevision]);
+
+  const enabledProjectAgentSkills = useMemo(() => {
+    const key = getProjectAgentThreadKey();
+    if (!key) return [];
+    return listEnabledAgentSkills(key);
+  }, [getProjectAgentThreadKey, projectAgentSkillRevision]);
+
+  const refreshProjectAgentSkillPanel = useCallback(() => {
+    setProjectAgentSkillRevision((n) => n + 1);
+  }, []);
+
+  const handleProjectAgentToggleSkill = useCallback(
+    (skillId: string, enabled: boolean) => {
+      const key = getProjectAgentThreadKey();
+      if (!key) return;
+      if (setAgentSkillEnabled(key, skillId, enabled)) {
+        refreshProjectAgentSkillPanel();
+        onLog?.('info', enabled ? '项目 Agent：已启用这个 Skill' : '项目 Agent：已禁用这个 Skill');
+      }
+    },
+    [getProjectAgentThreadKey, onLog, refreshProjectAgentSkillPanel]
+  );
+
+  const handleProjectAgentDeleteSkill = useCallback(
+    (skillId: string) => {
+      const key = getProjectAgentThreadKey();
+      if (!key) return;
+      if (deleteAgentSkill(key, skillId)) {
+        refreshProjectAgentSkillPanel();
+        onLog?.('info', '项目 Agent：已删除这个 Skill');
+      }
+    },
+    [getProjectAgentThreadKey, onLog, refreshProjectAgentSkillPanel]
+  );
+
+  const handleProjectAgentInstallSampleSkill = useCallback(() => {
+    const key = getProjectAgentThreadKey();
+    if (!key) {
+      onLog?.('warn', '项目 Agent：请先登录并选择项目后再安装 Skill');
+      return;
+    }
+    const result = installAgentSkill(
+      key,
+      {
+        id: 'skill.product-shot-polish',
+        name: 'Product Shot Polish',
+        description: '把选中的商品图转成高级主图优化计划，并通过现有确认链路执行。',
+        triggers: ['高级主图', 'polish product shot', '商品图优化'],
+        toolIds: ['run_plain_text'],
+        source: 'local',
+        permissionLevel: 'none',
+      },
+      { confirmed: true }
+    );
+    if ('preview' in result) {
+      onLog?.('warn', `项目 Agent：Skill 安装失败：${result.preview.errors.join('；') || '需要确认'}`);
+      return;
+    }
+
+    refreshProjectAgentSkillPanel();
+    onLog?.('info', `项目 Agent：已安装 Skill「${result.skill.name}」`);
+  }, [getProjectAgentThreadKey, onLog, refreshProjectAgentSkillPanel]);
+
+  const handleProjectAgentImportSkillPreview = useCallback(() => {
+    onLog?.('info', '项目 Agent：外部 Skill 会先做工具白名单、危险指令和权限检查，确认前不会执行');
+  }, [onLog]);
 
   useEffect(() => {
     if (!activeWorkspaceProjectId) {
@@ -5166,6 +5289,13 @@ ${lineSvg}
       );
   const quickComposeSubmitDisabled = quickComposeSubmitGate.blocked;
   const quickComposeSubmitDisabledReason = quickComposeSubmitGate.reason;
+  const quickComposeChatCreditsHardBlocked = shouldHardBlockComposerCredits({
+    creditsBlocked: quickComposeSubmitDisabled,
+    creditsBypass: quickComposeCreditsBypass,
+    userId: preferenceScope,
+    balance: creditBalance,
+    balanceLoading: creditBalanceLoading || quickComposeQuoteLoading,
+  });
 
   const submitQuickCompose = useCallback(
     (invoke?: QuickComposeSubmitInvokeOptions): string[] => {
@@ -5562,6 +5692,7 @@ ${lineSvg}
         surface: buildQuickComposeAgentSurface(),
         mainAssetId: mainAssetId || undefined,
         hasEnabled3dPreset,
+        enabledSkills: enabledProjectAgentSkills,
         textModel: quickComposeTextModel,
         imageSettings: {
           model: quickComposeImageModel,
@@ -5769,6 +5900,7 @@ ${lineSvg}
       buildQuickComposeAgentSurface,
       cancelProjectAgentTasks,
       capabilityPresets,
+      enabledProjectAgentSkills,
       getAssetDisplayImage,
       getProjectAgentThreadKey,
       getQuickComposeMaxRefs,
@@ -5817,6 +5949,10 @@ ${lineSvg}
     const thread = workspaceQuickComposeThreadRef.current;
     if (!thread) return;
     if (quickComposeThreadHasInFlightAssistant(thread)) return;
+    if (quickComposeChatCreditsHardBlocked) {
+      onLog?.('warn', quickComposeSubmitDisabledReason ?? creditsExceededUserMessage());
+      return;
+    }
     if (isAiTaskBusy()) {
       onLog?.('warn', '当前有 AI 任务执行中，请等待完成后再发送');
       return;
@@ -5836,7 +5972,10 @@ ${lineSvg}
   }, [
     quickComposeHasAttachedImages,
     quickComposePromptCards.length,
+    quickComposeChatCreditsHardBlocked,
+    quickComposeSubmitDisabledReason,
     quickComposeThreadHasInFlightAssistant,
+    onLog,
     submitQuickComposeWithThread,
   ]);
 
@@ -5845,6 +5984,10 @@ ${lineSvg}
       if (quickComposeChatSendGuardRef.current) return;
       const thread = workspaceQuickComposeThreadRef.current;
       if (!thread || quickComposeThreadHasInFlightAssistant(thread)) return;
+      if (quickComposeChatCreditsHardBlocked) {
+        onLog?.('warn', quickComposeSubmitDisabledReason ?? creditsExceededUserMessage());
+        return;
+      }
       const assistantIdx = thread.messages.findIndex((m) => m.id === messageId);
       if (assistantIdx <= 0) return;
       const assistant = thread.messages[assistantIdx];
@@ -5880,8 +6023,68 @@ ${lineSvg}
     [
       quickComposeHasAttachedImages,
       quickComposePromptCards.length,
+      quickComposeChatCreditsHardBlocked,
+      quickComposeSubmitDisabledReason,
       quickComposeThreadHasInFlightAssistant,
+      onLog,
       submitQuickComposeWithThread,
+    ]
+  );
+
+  const handleQuickComposeChatAction = useCallback(
+    (messageId: string, action: AgentSuggestedAction) => {
+      const confirmCopy = quickComposeChatActionConfirmCopy({
+        kind: action.kind,
+        requiresConfirmation:
+          action.confirmLevel === 'light' ||
+          action.confirmLevel === 'cost' ||
+          action.confirmLevel === 'destructive',
+        requiresCost: action.confirmLevel === 'cost',
+        destructive: action.confirmLevel === 'destructive',
+        cost: action.costHint?.estimatedCredits,
+      });
+      if (confirmCopy && typeof window !== 'undefined' && !window.confirm(confirmCopy)) {
+        return;
+      }
+
+      if (action.kind === 'retry') {
+        handleQuickComposeChatRetry(messageId);
+        return;
+      }
+
+      if (action.kind === 'save_memory') {
+        onLog?.('info', `项目 Agent：已确认「${action.label}」，记忆写入将由服务层接入`);
+        return;
+      }
+
+      if (
+        action.kind === 'reply' ||
+        action.kind === 'preview' ||
+        action.kind === 'run' ||
+        action.kind === 'apply' ||
+        action.kind === 'save_preset'
+      ) {
+        const text = String(action.payload?.text ?? '').trim();
+        if (text) {
+          setQuickComposeSegmentsTracked([newQuickComposeTextSegment(text)]);
+          onLog?.('info', `项目 Agent：已填入「${action.label}」建议，可继续发送`);
+        }
+        return;
+      }
+
+      if (action.kind === 'open_panel') {
+        if (action.payload?.panel === 'memory') {
+          onLog?.('info', '项目 Agent：已打开记忆管理入口');
+        }
+        return;
+      }
+
+      onLog?.('info', `项目 Agent：动作「${action.label}」将在后续阶段接入`);
+    },
+    [
+      handleQuickComposeChatRetry,
+      onLog,
+      setQuickComposeSegmentsTracked,
     ]
   );
 
@@ -11704,8 +11907,8 @@ ${lineSvg}
   const quickComposeChatDockInputDisabled = quickComposeCreditsBypass
     ? false
     : !String(preferenceScope ?? '').trim()
-      ? quickComposeSubmitDisabled
-      : creditBalance != null && quickComposeSubmitDisabled;
+      ? quickComposeChatCreditsHardBlocked
+      : creditBalance != null && quickComposeChatCreditsHardBlocked;
 
   const quickComposeHasSendableContent = composerHasSendableContent({
     draft: quickComposeDraft,
@@ -11714,16 +11917,49 @@ ${lineSvg}
   });
 
   const quickComposeChatDockSubmitDisabled =
-    quickComposeSubmitDisabled ||
+    quickComposeChatCreditsHardBlocked ||
     !quickComposeHasSendableContent ||
     quickComposeThreadHasInFlightAssistant(activeQuickComposeThread);
 
   const quickComposeChatDockSubmitDisabledReason = resolveComposerSubmitDisabledReason({
     threadBusy: quickComposeThreadHasInFlightAssistant(activeQuickComposeThread),
-    creditsBlocked: quickComposeSubmitDisabled,
+    creditsBlocked: quickComposeChatCreditsHardBlocked,
     creditsReason: quickComposeSubmitDisabledReason,
     draftEmpty: !quickComposeHasSendableContent,
   });
+
+  const quickComposeVisibleContextSummary = useMemo(() => {
+    const selectedIds = [...selectedAssetIds].filter(Boolean);
+    const attachmentCount =
+      quickComposeMainDropSlots.length + quickComposeReferenceDropSlots.length;
+    const lb = String(lightboxAssetId || '').trim();
+    const lbAsset = lb ? assets.find((a) => a.id === lb) : null;
+    const projectName = workspaceProjectChrome?.activeProjectName || '工作区';
+    const surface = lb
+      ? {
+          kind: lightboxOverlayDraft?.localEdit ? ('local_edit' as const) : ('lightbox' as const),
+          targetId: lb,
+          title: lbAsset ? workflowAssetMentionLabel(lbAsset) : undefined,
+        }
+      : undefined;
+    return buildAgentVisibleContextSummary({
+      projectName,
+      ...(surface ? { surface } : {}),
+      selection: {
+        ids: selectedIds,
+        activeId: selectedIds[0],
+      },
+      attachmentCount,
+    });
+  }, [
+    assets,
+    lightboxAssetId,
+    lightboxOverlayDraft,
+    quickComposeMainDropSlots.length,
+    quickComposeReferenceDropSlots.length,
+    selectedAssetIds,
+    workspaceProjectChrome?.activeProjectName,
+  ]);
 
   const quickComposeChatDockHandlers = useMemo((): QuickComposeChatDockHandlers | null => {
     if (!quickComposeBarVisible) return null;
@@ -11742,6 +11978,7 @@ ${lineSvg}
           executingQueue,
           getAssetDisplayImage,
           getAssetLabel: workflowAssetMentionLabel,
+          selectedAssetIds: [...selectedAssetIds],
         })
       : [];
     return {
@@ -11749,8 +11986,10 @@ ${lineSvg}
       threadTitle,
       isInputDisabled: quickComposeChatDockInputDisabled,
       isSendDisabled: quickComposeChatDockSubmitDisabled,
+      contextSummary: quickComposeVisibleContextSummary,
       onSend: handleQuickComposeChatSend,
       onRetry: handleQuickComposeChatRetry,
+      onAction: handleQuickComposeChatAction,
       onCancel: handleQuickComposeChatCancel,
     };
   }, [
@@ -11761,7 +12000,9 @@ ${lineSvg}
     quickComposeChatDockSubmitDisabled,
     handleQuickComposeChatSend,
     handleQuickComposeChatRetry,
+    handleQuickComposeChatAction,
     handleQuickComposeChatCancel,
+    quickComposeVisibleContextSummary,
     quickComposeCreditsBypass,
     preferenceScope,
     creditBalance,
@@ -11770,6 +12011,7 @@ ${lineSvg}
     pending,
     executingQueue,
     getAssetDisplayImage,
+    selectedAssetIds,
     workspaceProjectChrome?.activeProjectName,
   ]);
 
@@ -11838,8 +12080,27 @@ ${lineSvg}
       chatDockProps: quickComposeChatDockHandlers
         ? {
             messages: quickComposeChatDockHandlers.messages,
+            contextSummary: quickComposeChatDockHandlers.contextSummary,
             onRetryMessage: quickComposeChatDockHandlers.onRetry,
+            onMessageAction: quickComposeChatDockHandlers.onAction,
             onCancelMessage: quickComposeChatDockHandlers.onCancel,
+            onOpenPanel: (panel) => {
+              if (panel === 'memory') {
+                refreshProjectAgentMemoryPanel();
+                onLog?.('info', '项目 Agent：已打开记忆管理入口');
+              } else if (panel === 'skills') {
+                refreshProjectAgentSkillPanel();
+                onLog?.('info', 'Project Agent：已打开 Skill 管理入口');
+              }
+            },
+            memoryEntries: projectAgentMemoryEntries,
+            onToggleMemory: handleProjectAgentToggleMemory,
+            onDeleteMemory: handleProjectAgentDeleteMemory,
+            skillEntries: projectAgentSkillEntries,
+            onToggleSkill: handleProjectAgentToggleSkill,
+            onDeleteSkill: handleProjectAgentDeleteSkill,
+            onInstallSampleSkill: handleProjectAgentInstallSampleSkill,
+            onImportSkillPreview: handleProjectAgentImportSkillPreview,
             onClearChat: handleQuickComposeClearChat,
             onLoadEarlier: handleQuickComposeLoadEarlier,
             canLoadEarlier: Boolean(
@@ -11893,9 +12154,17 @@ ${lineSvg}
       quickComposeShowGenImageSettings,
       quickComposeShowGenTextSettings,
       quickComposeAllowBatchCount,
+      projectAgentMemoryEntries,
+      projectAgentSkillEntries,
       onQuickComposeInputCapabilityDrop,
       handleQuickComposeWorkflowDrop,
       handleQuickComposePasteAssetRefs,
+      handleProjectAgentDeleteMemory,
+      handleProjectAgentToggleMemory,
+      handleProjectAgentDeleteSkill,
+      handleProjectAgentImportSkillPreview,
+      handleProjectAgentInstallSampleSkill,
+      handleProjectAgentToggleSkill,
       quickComposeImageModel,
       quickComposeTextModel,
       quickComposeAspect,
@@ -11906,6 +12175,9 @@ ${lineSvg}
       handleQuickComposeClearChat,
       handleQuickComposeLoadEarlier,
       handleQuickComposeExportChat,
+      refreshProjectAgentMemoryPanel,
+      refreshProjectAgentSkillPanel,
+      onLog,
       preferenceScope,
       activeWorkspaceProjectId,
       setQuickComposeSegmentsTracked,

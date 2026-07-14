@@ -61,6 +61,33 @@ export type AgentMentionRef = {
   label?: string;
 };
 
+export type AgentSkillPermissionLevel = 'none' | 'light' | 'cost' | 'destructive';
+
+export type AgentSkillSource = 'local' | 'imported' | 'preset' | 'expert';
+
+export type AgentSkill = {
+  id: string;
+  name: string;
+  description: string;
+  triggers: string[];
+  toolIds: ProjectAgentToolId[];
+  permissionLevel: AgentSkillPermissionLevel;
+  source: AgentSkillSource;
+  enabled: boolean;
+  createdAt: number;
+  updatedAt?: number;
+  deletedAt?: number;
+  safetyWarnings?: string[];
+};
+
+export type AgentSkillImportPreview = {
+  ok: boolean;
+  skill?: Omit<AgentSkill, 'createdAt' | 'updatedAt' | 'deletedAt' | 'enabled'>;
+  warnings: string[];
+  errors: string[];
+  requiresConfirmation: boolean;
+};
+
 /** Generation overrides — no media bytes. */
 export type AgentImageSettingsSummary = {
   model?: string;
@@ -87,6 +114,8 @@ export type ProjectAgentIntent = {
   textModel?: string;
   /** True when at least one enabled generate_3d preset exists in host catalog. */
   hasEnabled3dPreset?: boolean;
+  /** Enabled local Skill routing hints. Skills still resolve to existing whitelisted tool ids. */
+  enabledSkills?: AgentSkill[];
 };
 
 /** Turn machine (§16.1): terminal is done | error (cancel → error + reason cancelled). */
@@ -101,9 +130,55 @@ export type AgentPlannedTool = {
   args?: Record<string, unknown>;
 };
 
+export type AgentPlannerDecisionTraceItem = {
+  stage: 'candidate' | 'validate' | 'fallback' | 'clarify';
+  message: string;
+  toolId?: ProjectAgentToolId;
+  reason?: string;
+};
+
+export type AgentPlannerValidationIssue = {
+  code:
+    | 'empty_plan'
+    | 'unknown_tool'
+    | 'too_many_steps'
+    | 'missing_text'
+    | 'missing_asset'
+    | 'missing_preset'
+    | 'missing_3d_preset'
+    | 'missing_scope'
+    | 'invalid_args';
+  message: string;
+  stepIndex?: number;
+  toolId?: string;
+  severity: 'error' | 'warning';
+};
+
+export type AgentPlannerOutput = {
+  source: 'controlled' | 'rule_fallback';
+  plan: AgentPlannedTool[];
+  decisionTrace: AgentPlannerDecisionTraceItem[];
+  validationIssues: AgentPlannerValidationIssue[];
+};
+
+export type AgentControlledPlannerResult =
+  | {
+      ok: true;
+      plan: AgentPlannedTool[];
+      decisionTrace?: AgentPlannerDecisionTraceItem[];
+    }
+  | {
+      ok: false;
+      errorMessage?: string;
+      clarifyMessage?: string;
+      decisionTrace?: AgentPlannerDecisionTraceItem[];
+    };
+
+export type AgentControlledPlanner = (intent: ProjectAgentIntent) => AgentControlledPlannerResult;
+
 export type AgentPlanResult =
-  | { ok: true; plan: AgentPlannedTool[] }
-  | { ok: false; errorMessage: string };
+  | { ok: true; plan: AgentPlannedTool[]; planner?: AgentPlannerOutput }
+  | { ok: false; errorMessage: string; clarifyMessage?: string; planner?: AgentPlannerOutput };
 
 export type AgentTurnTrace = {
   turnId: string;
@@ -121,6 +196,7 @@ export type AgentTurnTrace = {
     surface: AgentSurfaceContext;
   };
   plan: { toolId: ProjectAgentToolId; label: string }[];
+  plannerTrace?: AgentPlannerDecisionTraceItem[];
   toolCalls: {
     id: string;
     toolId: ProjectAgentToolId;
@@ -183,6 +259,29 @@ export type ExpertMemoryEntry = {
   createdAt: number;
   deletedAt?: number;
 };
+
+export type ProjectAgentKnowledgeScope = {
+  userId: string;
+  workspaceProjectId: string;
+};
+
+export type ProjectAgentKnowledgeKind = 'preference' | 'brand_rule' | 'workflow' | 'style' | 'note';
+
+export type ProjectAgentKnowledgeEntry = {
+  id: string;
+  scope: ProjectAgentKnowledgeScope;
+  kind: ProjectAgentKnowledgeKind;
+  /** Short text only — no base64/media. */
+  text: string;
+  label?: string;
+  sourceTurnId?: string;
+  createdAt: number;
+  updatedAt?: number;
+  disabledAt?: number;
+  deletedAt?: number;
+};
+
+export type ProjectAgentSkillRegistryEntry = AgentSkill;
 
 /** Session-scoped L2 artifact (no media bytes). */
 export type ProjectAgentArtifact = {
@@ -260,6 +359,8 @@ export type ProjectAgentAssembledContext = {
   recentText: string;
   compactionSummary?: string;
   expertContext?: string;
+  projectKnowledge?: string;
+  projectKnowledgeIdsInjected?: string[];
   truncated: boolean;
 };
 
@@ -307,6 +408,11 @@ export type ProjectAgentHostPort = {
     intent: ProjectAgentIntent,
     plan: AgentPlannedTool[]
   ) => ProjectAgentExecutePlanResult | Promise<ProjectAgentExecutePlanResult>;
+  /**
+   * Optional Phase 5 controlled planner. planTools validates its output before
+   * execution and falls back to deterministic routing when unsafe.
+   */
+  controlledPlanner?: AgentControlledPlanner;
   /**
    * Optional hot thread for B-layer assembly in submitTurn (§18.5 / A23).
    * Runtime injects recentText/compactionSummary into text/expert intents only (§16.8).

@@ -12,6 +12,54 @@ export type QuickComposeMessageStatus =
 
 export type QuickComposeThreadMessageRole = 'user' | 'assistant';
 
+export type AgentSuggestedActionKind =
+  | 'reply'
+  | 'preview'
+  | 'run'
+  | 'apply'
+  | 'save_preset'
+  | 'save_memory'
+  | 'open_panel'
+  | 'retry'
+  | 'cancel';
+
+export type AgentSuggestedActionConfirmLevel =
+  | 'none'
+  | 'light'
+  | 'cost'
+  | 'destructive';
+
+export type AgentSuggestedActionTargetScope =
+  | 'current'
+  | 'selected'
+  | 'group'
+  | 'all';
+
+export type AgentSuggestedAction = {
+  id: string;
+  label: string;
+  kind: AgentSuggestedActionKind;
+  confirmLevel: AgentSuggestedActionConfirmLevel;
+  targetScope?: AgentSuggestedActionTargetScope;
+  costHint?: {
+    estimatedCredits?: number;
+    estimatedItems?: number;
+    mayExceedBalance?: boolean;
+  };
+  payload?: Record<string, unknown>;
+};
+
+export type AgentResultCardView = {
+  id: string;
+  kind: 'image' | 'text' | 'batch' | 'error';
+  title: string;
+  status: 'preview' | 'final' | 'failed' | 'partial';
+  assetIds?: string[];
+  taskIds?: string[];
+  summary?: string;
+  actions: AgentSuggestedAction[];
+};
+
 /** 线程内单条消息：仅引用 assetId / taskId，不存 base64。 */
 export type QuickComposeThreadMessage = {
   id: string;
@@ -75,6 +123,8 @@ export type QuickComposeChatMessageView = QuickComposeThreadMessage & {
   resultThumb?: QuickComposeMessageAttachmentThumb;
   /** 运行时解析的文生文结果（优先 message.resultText） */
   displayResultText?: string;
+  suggestedActions?: AgentSuggestedAction[];
+  resultCard?: AgentResultCardView;
 };
 
 export type QuickComposeThread = {

@@ -7,6 +7,11 @@ import {
   planNeedsConversationContext,
 } from '../services/projectAgent/contextAssembly';
 import {
+  __resetProjectAgentKnowledgeForTests,
+  addProjectAgentKnowledge,
+  setProjectAgentKnowledgeEnabled,
+} from '../services/projectAgent/knowledgeStore';
+import {
   loadProjectAgentCompaction,
   maybeCompactProjectAgentThread,
   PROJECT_AGENT_COMPACTION_KEEP_RECENT,
@@ -57,6 +62,7 @@ function makeThread(partial?: Partial<ProjectAgentThread>): ProjectAgentThread {
 
 beforeEach(() => {
   vi.stubGlobal('localStorage', createMemoryStorage());
+  __resetProjectAgentKnowledgeForTests();
 });
 
 afterEach(() => {
@@ -65,6 +71,7 @@ afterEach(() => {
   } catch {
     /* ignore */
   }
+  __resetProjectAgentKnowledgeForTests();
   vi.unstubAllGlobals();
 });
 
@@ -110,6 +117,34 @@ describe('assembleProjectAgentContext (pure)', () => {
     });
     expect(assembled.recentText).toContain('[omitted-base64]');
     expect(assembled.recentText).not.toMatch(/base64,[A-Za-z0-9+/]{20,}/i);
+  });
+
+  it('includes enabled project knowledge and skips disabled knowledge', () => {
+    const keep = addProjectAgentKnowledge({
+      scope: storeKey,
+      kind: 'style',
+      text: '后续主图统一使用高级灰背景',
+      label: '视觉风格',
+    });
+    const disabled = addProjectAgentKnowledge({
+      scope: storeKey,
+      kind: 'brand_rule',
+      text: '这条禁用后不应注入',
+    });
+    setProjectAgentKnowledgeEnabled(storeKey, disabled.id, false);
+
+    const assembled = assembleProjectAgentContext({
+      key: storeKey,
+      thread: makeThread(),
+      intent: buildProjectAgentIntent({ mode: 'text', text: '继续' }),
+    });
+    expect(assembled.projectKnowledge).toContain('高级灰背景');
+    expect(assembled.projectKnowledge).not.toContain('不应注入');
+    expect(assembled.projectKnowledgeIdsInjected).toEqual([keep.id]);
+
+    const prefix = formatAssembledContextPrefix(assembled);
+    expect(prefix).toContain('【项目知识】');
+    expect(prefix).toContain('高级灰背景');
   });
 
   it('planNeedsConversationContext only for text + expert', () => {

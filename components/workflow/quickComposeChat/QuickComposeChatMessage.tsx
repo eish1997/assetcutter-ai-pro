@@ -1,6 +1,7 @@
-import React, { useMemo } from 'react';
-import { RotateCcw } from 'lucide-react';
+import React, { useMemo, useState } from 'react';
+import { ChevronDown, ChevronUp, RotateCcw } from 'lucide-react';
 import type {
+  AgentSuggestedAction,
   QuickComposeChatMessageView,
   QuickComposeMessageAttachmentThumb,
 } from '../../../types/quickComposeThread';
@@ -17,8 +18,10 @@ import ChildRunProgressCards from './ChildRunProgressCards';
 import type { AgentChildRun } from '../../../types/projectAgent';
 
 export type QuickComposeChatMessageProps = {
+  key?: React.Key;
   message: QuickComposeChatMessageView;
   onRetry?: (messageId: string) => void;
+  onAction?: (messageId: string, action: AgentSuggestedAction) => void;
   /** §16.1 / 3A：取消进行中的助手 turn */
   onCancel?: (messageId: string) => void;
 };
@@ -28,6 +31,7 @@ function ChatThumb({
   size = 56,
   className = '',
 }: {
+  key?: React.Key;
   item: QuickComposeMessageAttachmentThumb;
   size?: number;
   className?: string;
@@ -78,8 +82,10 @@ function looksLikePlanLine(text: string): boolean {
 export default function QuickComposeChatMessage({
   message,
   onRetry,
+  onAction,
   onCancel,
 }: QuickComposeChatMessageProps) {
+  const [detailsOpen, setDetailsOpen] = useState(false);
   const isUser = message.role === 'user';
   const isRunning = message.role === 'assistant' && isRunningAssistantStatus(message.status);
   const isError = message.status === 'error';
@@ -87,6 +93,7 @@ export default function QuickComposeChatMessage({
   const planOrText = message.text?.trim() || '';
   const resultBody = message.displayResultText?.trim() || '';
   const attachments = message.attachmentThumbs ?? [];
+  const suggestedActions = message.suggestedActions ?? [];
   const isCancelled =
     isError && (message.errorMessage || '').trim() === QUICK_COMPOSE_CANCELLED_MESSAGE;
 
@@ -102,6 +109,9 @@ export default function QuickComposeChatMessage({
     !(isDone && message.resultThumb && looksLikePlanLine(planOrText)) &&
     // P0.5-d：有时间线时计划句改由时间线步骤展示，避免重复
     !(timeline && looksLikePlanLine(planOrText));
+
+  const hasDetails = Boolean((timeline && !isUser) || (!isUser && message.childRuns?.length));
+  const showDetails = isRunning || detailsOpen;
 
   const bubbleShell = isUser
     ? 'rounded-2xl rounded-br-md bg-blue-600/20 text-gray-100 ring-1 ring-blue-400/25'
@@ -126,7 +136,23 @@ export default function QuickComposeChatMessage({
           )
         ) : null}
 
-        {timeline && !isUser ? (
+        {!isUser && hasDetails && !isRunning ? (
+          <button
+            type="button"
+            onClick={() => setDetailsOpen((v) => !v)}
+            className="inline-flex w-fit items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-semibold text-gray-500 outline-none transition-colors hover:bg-white/[0.06] hover:text-gray-300 focus-visible:ring-2 focus-visible:ring-blue-500/45"
+            aria-expanded={detailsOpen}
+          >
+            {detailsOpen ? (
+              <ChevronUp className="h-3 w-3" strokeWidth={2.2} aria-hidden />
+            ) : (
+              <ChevronDown className="h-3 w-3" strokeWidth={2.2} aria-hidden />
+            )}
+            执行详情
+          </button>
+        ) : null}
+
+        {showDetails && timeline && !isUser ? (
           <AssistantTurnTimeline
             model={timeline}
             compact={!isRunning}
@@ -134,7 +160,7 @@ export default function QuickComposeChatMessage({
           />
         ) : null}
 
-        {!isUser && message.childRuns?.length ? (
+        {showDetails && !isUser && message.childRuns?.length ? (
           <ChildRunProgressCards
             childRuns={message.childRuns as AgentChildRun[]}
             compact={!isRunning}
@@ -168,6 +194,29 @@ export default function QuickComposeChatMessage({
                 重试
               </button>
             ) : null}
+          </div>
+        ) : null}
+
+        {!isUser && suggestedActions.length > 0 ? (
+          <div className="flex flex-wrap gap-1.5 pt-1" data-agent-suggested-actions>
+            {suggestedActions.map((a) => (
+              <button
+                key={a.id}
+                type="button"
+                onClick={() => {
+                  if (a.kind === 'open_panel') setDetailsOpen(true);
+                  if (a.kind === 'retry' && onRetry) {
+                    onRetry(message.id);
+                    return;
+                  }
+                  onAction?.(message.id, a);
+                }}
+                className="inline-flex min-h-7 max-w-full items-center rounded-md bg-white/[0.07] px-2 py-1 text-[10px] font-semibold text-gray-200 ring-1 ring-white/[0.09] outline-none transition-colors hover:bg-white/[0.12] hover:text-white focus-visible:ring-2 focus-visible:ring-blue-500/45"
+                title={a.label}
+              >
+                <span className="truncate">{a.label}</span>
+              </button>
+            ))}
           </div>
         ) : null}
       </div>

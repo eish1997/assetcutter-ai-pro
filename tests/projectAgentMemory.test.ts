@@ -12,7 +12,17 @@ import {
   listExpertMemories,
   retrieveExpertMemoriesForInject,
 } from '../services/projectAgent/experts/memoryStore';
-import type { ExpertMemoryScope } from '../types/projectAgent';
+import {
+  PROJECT_AGENT_KNOWLEDGE_INJECT_CHAR_BUDGET,
+  __resetProjectAgentKnowledgeForTests,
+  addProjectAgentKnowledge,
+  deleteProjectAgentKnowledge,
+  listProjectAgentKnowledge,
+  projectAgentKnowledgeStorageKey,
+  retrieveProjectAgentKnowledgeForInject,
+  setProjectAgentKnowledgeEnabled,
+} from '../services/projectAgent/knowledgeStore';
+import type { ExpertMemoryScope, ProjectAgentKnowledgeScope } from '../types/projectAgent';
 
 function createMemoryStorage(): Storage {
   const data = new Map<string, string>();
@@ -44,6 +54,11 @@ const scope: ExpertMemoryScope = {
   workspaceProjectId: 'proj-mem-1',
 };
 
+const knowledgeScope: ProjectAgentKnowledgeScope = {
+  userId: 'u-mem-test',
+  workspaceProjectId: 'proj-mem-1',
+};
+
 beforeEach(() => {
   Object.defineProperty(globalThis, 'localStorage', {
     value: createMemoryStorage(),
@@ -51,6 +66,7 @@ beforeEach(() => {
     writable: true,
   });
   __resetExpertMemoryStoreForTests();
+  __resetProjectAgentKnowledgeForTests();
 });
 
 describe('ExpertMemoryStore (4B / §17.6)', () => {
@@ -177,6 +193,112 @@ describe('ExpertMemoryStore (4B / §17.6)', () => {
       addExpertMemory({
         scope,
         kind: 'summary',
+        text: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB',
+      })
+    ).toThrow(/base64|media/i);
+  });
+});
+
+describe('ProjectAgentKnowledgeStore (Phase 3)', () => {
+  it('projectAgentKnowledgeStorageKey isolates by user + project', () => {
+    const key = projectAgentKnowledgeStorageKey(knowledgeScope);
+    const otherProject = projectAgentKnowledgeStorageKey({
+      ...knowledgeScope,
+      workspaceProjectId: 'proj-mem-2',
+    });
+    const otherUser = projectAgentKnowledgeStorageKey({
+      ...knowledgeScope,
+      userId: 'u-other',
+    });
+
+    expect(key).toContain('__u_u-mem-test');
+    expect(key).toContain('__p_proj-mem-1');
+    expect(otherProject).not.toBe(key);
+    expect(otherUser).not.toBe(key);
+  });
+
+  it('stores short project knowledge and survives reload', () => {
+    const saved = addProjectAgentKnowledge({
+      scope: knowledgeScope,
+      kind: 'brand_rule',
+      label: 'Brand rule',
+      text: 'Use clean skincare visuals and avoid heavy shadows.',
+      sourceTurnId: 'turn-k1',
+    });
+
+    expect(listProjectAgentKnowledge(knowledgeScope).map((entry) => entry.id)).toContain(saved.id);
+
+    __resetProjectAgentKnowledgeForTests();
+
+    const loaded = listProjectAgentKnowledge(knowledgeScope);
+    expect(loaded).toHaveLength(1);
+    expect(loaded[0]?.id).toBe(saved.id);
+    expect(loaded[0]?.label).toBe('Brand rule');
+    expect(loaded[0]?.sourceTurnId).toBe('turn-k1');
+  });
+
+  it('disabled and deleted project knowledge does not inject', () => {
+    const keep = addProjectAgentKnowledge({
+      scope: knowledgeScope,
+      kind: 'style',
+      text: 'Keep packaging background matte white.',
+      id: 'keep',
+    });
+    const disabled = addProjectAgentKnowledge({
+      scope: knowledgeScope,
+      kind: 'preference',
+      text: 'Prefer neon gradients.',
+      id: 'disabled',
+    });
+    const deleted = addProjectAgentKnowledge({
+      scope: knowledgeScope,
+      kind: 'note',
+      text: 'Temporary competitor reference.',
+      id: 'deleted',
+    });
+
+    expect(setProjectAgentKnowledgeEnabled(knowledgeScope, disabled.id, false)).toBe(true);
+    expect(deleteProjectAgentKnowledge(knowledgeScope, deleted.id)).toBe(true);
+
+    const listed = listProjectAgentKnowledge(knowledgeScope);
+    expect(listed.map((entry) => entry.id)).toEqual(expect.arrayContaining([keep.id, disabled.id]));
+    expect(listed.map((entry) => entry.id)).not.toContain(deleted.id);
+
+    const injected = retrieveProjectAgentKnowledgeForInject({ scope: knowledgeScope });
+    expect(injected.knowledgeIdsInjected).toEqual([keep.id]);
+    expect(injected.entries[0]?.text).toContain('matte white');
+
+    expect(setProjectAgentKnowledgeEnabled(knowledgeScope, disabled.id, true)).toBe(true);
+    const reinjected = retrieveProjectAgentKnowledgeForInject({ scope: knowledgeScope });
+    expect(reinjected.knowledgeIdsInjected).toEqual(expect.arrayContaining([keep.id, disabled.id]));
+  });
+
+  it('project knowledge injection respects budget and rejects media text', () => {
+    expect(PROJECT_AGENT_KNOWLEDGE_INJECT_CHAR_BUDGET).toBe(2400);
+    addProjectAgentKnowledge({
+      scope: knowledgeScope,
+      kind: 'note',
+      text: 'A'.repeat(70),
+    });
+    addProjectAgentKnowledge({
+      scope: knowledgeScope,
+      kind: 'note',
+      text: 'B'.repeat(70),
+    });
+
+    const result = retrieveProjectAgentKnowledgeForInject({
+      scope: knowledgeScope,
+      charBudget: 80,
+    });
+    expect(result.truncated).toBe(true);
+    const totalChars = result.entries.reduce((sum, entry) => sum + entry.text.length, 0);
+    expect(totalChars).toBeLessThanOrEqual(80);
+    expect(result.entries.length).toBe(1);
+
+    expect(() =>
+      addProjectAgentKnowledge({
+        scope: knowledgeScope,
+        kind: 'note',
         text: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB',
       })
     ).toThrow(/base64|media/i);

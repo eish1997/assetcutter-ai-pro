@@ -4,6 +4,7 @@
  */
 
 import type {
+  ExpertMemoryEntry,
   ProjectAgentAssembledContext,
   ProjectAgentIntent,
 } from '../../types/projectAgent';
@@ -18,6 +19,15 @@ import {
   PROJECT_AGENT_COMPACTION_KEEP_RECENT,
   type CompactionStoreKey,
 } from './compaction';
+import {
+  formatProjectAgentKnowledgeForContext,
+  retrieveProjectAgentKnowledgeForInject,
+} from './knowledgeStore';
+import {
+  EXPERT_MEMORY_INJECT_CHAR_BUDGET,
+  formatExpertMemoriesForContext,
+  retrieveExpertMemoriesForInject,
+} from './experts/memoryStore';
 
 export type AssembleProjectAgentContextInput = {
   key: CompactionStoreKey;
@@ -25,6 +35,8 @@ export type AssembleProjectAgentContextInput = {
   intent: ProjectAgentIntent;
   /** Optional pre-built expert context string from invoke path */
   expertContext?: string;
+  includeProjectKnowledge?: boolean;
+  includeExpertMemory?: boolean;
   recentRounds?: number;
 };
 
@@ -72,6 +84,47 @@ function formatIntentSignals(intent: ProjectAgentIntent): string {
   return bits.length ? `Intent: ${bits.join('; ')}` : '';
 }
 
+function getMentionedExpertIds(intent: ProjectAgentIntent): string[] {
+  const ids = new Set<string>();
+  for (const mention of intent.mentions ?? []) {
+    if (mention.kind !== 'expert') continue;
+    const id = String(mention.id || '').trim();
+    if (id) ids.add(id);
+  }
+  return [...ids];
+}
+
+function retrieveMentionedExpertMemory(input: AssembleProjectAgentContextInput): {
+  text?: string;
+  truncated: boolean;
+} {
+  if (input.includeExpertMemory === false) return { truncated: false };
+  const userId = String(input.key.userId ?? '').trim();
+  const workspaceProjectId = String(input.key.workspaceProjectId ?? '').trim();
+  if (!workspaceProjectId) return { truncated: false };
+
+  const expertIds = getMentionedExpertIds(input.intent);
+  if (!expertIds.length) return { truncated: false };
+
+  const entries: ExpertMemoryEntry[] = [];
+  let truncated = false;
+  const perExpertBudget = Math.max(
+    1,
+    Math.floor(EXPERT_MEMORY_INJECT_CHAR_BUDGET / expertIds.length)
+  );
+  for (const expertId of expertIds) {
+    const result = retrieveExpertMemoriesForInject({
+      scope: { userId, expertId, workspaceProjectId },
+      charBudget: perExpertBudget,
+    });
+    entries.push(...result.entries);
+    truncated = truncated || result.truncated;
+  }
+
+  const text = entries.length ? formatExpertMemoriesForContext(entries) : undefined;
+  return { text, truncated };
+}
+
 /**
  * B = compaction summary? + recent K rounds + intent signals + optional expertContext.
  * Must not embed base64 / full tool logs.
@@ -98,18 +151,41 @@ export function assembleProjectAgentContext(
     ? stripBase64(compaction.summaryText).slice(0, SUMMARY_CAP)
     : undefined;
 
-  const expertRaw = typeof input.expertContext === 'string' ? input.expertContext.trim() : '';
+  const expertMemory = retrieveMentionedExpertMemory(input);
+  const expertRawParts = [
+    typeof input.expertContext === 'string' ? input.expertContext.trim() : '',
+    expertMemory.text ?? '',
+  ].filter(Boolean);
+  const expertRaw = expertRawParts.join('\n');
   const expertContext = expertRaw ? stripBase64(expertRaw).slice(0, SUMMARY_CAP) : undefined;
+  const projectKnowledge =
+    input.includeProjectKnowledge === false
+      ? { entries: [], truncated: false, knowledgeIdsInjected: [] }
+      : retrieveProjectAgentKnowledgeForInject({
+          scope: {
+            userId: input.key.userId,
+            workspaceProjectId: input.key.workspaceProjectId,
+          },
+        });
+  const projectKnowledgeText = projectKnowledge.entries.length
+    ? stripBase64(formatProjectAgentKnowledgeForContext(projectKnowledge.entries)).slice(0, SUMMARY_CAP)
+    : undefined;
 
   const truncated =
     truncatedByWindow ||
     Boolean(compactionSummary) ||
-    Boolean(compaction?.coveredMessageIds?.length);
+    Boolean(compaction?.coveredMessageIds?.length) ||
+    expertMemory.truncated ||
+    projectKnowledge.truncated;
 
   return {
     recentText,
     ...(compactionSummary ? { compactionSummary } : {}),
     ...(expertContext ? { expertContext } : {}),
+    ...(projectKnowledgeText ? { projectKnowledge: projectKnowledgeText } : {}),
+    ...(projectKnowledge.knowledgeIdsInjected.length
+      ? { projectKnowledgeIdsInjected: projectKnowledge.knowledgeIdsInjected }
+      : {}),
     truncated,
   };
 }
@@ -138,6 +214,10 @@ export function formatAssembledContextPrefix(
   const parts: string[] = [];
   const summary = assembled.compactionSummary?.trim();
   if (summary) parts.push(`【更早摘要】\n${summary}`);
+  const expert = assembled.expertContext?.trim();
+  if (expert) parts.push(`【专家记忆】\n${expert}`);
+  const knowledge = assembled.projectKnowledge?.trim();
+  if (knowledge) parts.push(`【项目知识】\n${knowledge}`);
   const recent = String(assembled.recentText || '')
     .replace(/(?:\n\n)?Intent:[^\n]*\s*$/u, '')
     .trim();
