@@ -1,6 +1,6 @@
 import { USE_POSTGRES } from '../auth-store.js';
 import { aiGatewayCreditsGateMode } from './credits-gate.js';
-import { isAiGatewayAutoCircuitEnabled, resolveAiGatewayOpsControlSource } from './ops-control.js';
+import { aiGatewayAutoCircuitConfig, isAiGatewayAutoCircuitEnabled, resolveAiGatewayOpsControlSource } from './ops-control.js';
 import { listAiGatewayWorkers } from './workers/registry.js';
 
 export function isAiGatewayExecutionEnabled() {
@@ -18,6 +18,7 @@ export function aiGatewayHealthSnapshot() {
     providerKeyStore: USE_POSTGRES ? 'postgres' : 'json',
     opsControlStore: resolveAiGatewayOpsControlSource(),
     autoCircuitEnabled: isAiGatewayAutoCircuitEnabled(),
+    autoCircuit: aiGatewayAutoCircuitConfig(),
     creditsGateMode: aiGatewayCreditsGateMode(),
     routes: {
       createJob: 'POST /ai-gateway/jobs',

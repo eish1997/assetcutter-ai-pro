@@ -50,6 +50,7 @@ export type AiJobSummary = {
 
 export type AiJobDetail = {
   job: AiJobSummary & {
+    metadata?: Record<string, unknown>;
     output: unknown | null;
     artifacts: Array<Record<string, unknown>>;
   };

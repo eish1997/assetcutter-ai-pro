@@ -7,6 +7,7 @@ import {
   submitJimengTask,
 } from '../../jimeng-visual-api.js';
 import { finalizeAiGatewayTerminalPlan } from '../execution-finalize.js';
+import { buildProviderTaskUsage, collectByteSize } from '../execution-usage.js';
 
 export const JIMENG_VISUAL_DEFAULT_VIDEO_REGISTRY_ID = 'jimeng-video-ti2v-v30-pro';
 const JIMENG_PROVIDER_ID = 'volcengine-jimeng';
@@ -85,6 +86,7 @@ async function pollJimengVideoTask(plan, taskId, registryId, options = {}) {
   const intervalMs = Math.max(intervalFloorMs, Number(options.pollIntervalMs || process.env.AI_GATEWAY_JIMENG_POLL_INTERVAL_MS || 5000));
   const timeoutMs = Math.max(intervalMs, Number(options.pollTimeoutMs || process.env.AI_GATEWAY_JIMENG_POLL_TIMEOUT_MS || 900_000));
   const startedAt = Date.now();
+  const startedAtMs = Date.parse(plan.job?.startedAt || '') || startedAt;
 
   while (Date.now() - startedAt < timeoutMs) {
     await delay(intervalMs);
@@ -127,6 +129,20 @@ async function pollJimengVideoTask(plan, taskId, registryId, options = {}) {
         await finalizeAiGatewayTerminalPlan(failed, store);
         return;
       }
+      const completedAtMs = Date.now();
+      const outputBytes = collectByteSize(body.raw || body);
+      const usage = buildProviderTaskUsage(plan, {
+        provider: 'volcengine-jimeng',
+        upstreamTaskId: taskId,
+        billingSku: 'video.jimeng.task',
+        meterKind: 'second',
+        unit: 'second',
+        quantity: positiveNumber(plan.job?.input?.durationSeconds || plan.job?.input?.duration || body.duration || 1, 1),
+        outputBytes,
+        artifactCount: 1,
+        startedAtMs,
+        completedAtMs,
+      });
       const succeeded = await store.update(plan.job.id, {
         status: 'succeeded',
         output: {
@@ -134,6 +150,7 @@ async function pollJimengVideoTask(plan, taskId, registryId, options = {}) {
           taskId,
           registryId,
           videoUrl,
+          usage,
           raw: body.raw || body,
         },
         artifacts: [
@@ -143,13 +160,23 @@ async function pollJimengVideoTask(plan, taskId, registryId, options = {}) {
             source: 'volcengine-jimeng',
             taskId,
             registryId,
+            billing: {
+              actualCredits: usage.actualCredits,
+              settlementSource: usage.settlementSource,
+            },
           },
         ],
         metadata: {
           jimengTaskId: taskId,
           upstreamTaskId: taskId,
           jimengRegistryId: registryId,
-          gatewayExecution: { completedAt: new Date().toISOString() },
+          usage,
+          gatewayExecution: {
+            completedAt: new Date(completedAtMs).toISOString(),
+            durationMs: usage.durationMs,
+            outputBytes,
+            artifactCount: 1,
+          },
         },
       });
       await finalizeAiGatewayTerminalPlan(succeeded, store);
@@ -192,6 +219,18 @@ async function pollJimengVideoTask(plan, taskId, registryId, options = {}) {
     },
   });
   await finalizeAiGatewayTerminalPlan(failed, store);
+}
+
+export async function cancelJimengVideoExecution(plan) {
+  const metadata = plan?.job?.metadata && typeof plan.job.metadata === 'object' ? plan.job.metadata : {};
+  const upstreamTaskId = nonEmptyString(metadata.upstreamTaskId) || nonEmptyString(metadata.jimengTaskId);
+  return {
+    cancelled: false,
+    mode: 'soft',
+    reason: 'jimeng_hard_cancel_unavailable',
+    upstreamTaskId: upstreamTaskId || null,
+    provider: JIMENG_PROVIDER_ID,
+  };
 }
 
 export async function startJimengVideoExecution(plan, options = {}) {

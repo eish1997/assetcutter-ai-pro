@@ -198,11 +198,13 @@ import {
 } from './ai-gateway/ops-control.js';
 import {
   acquireProviderKey,
+  applyProviderKeyHealthAutomation,
   cooldownProviderKey,
   listProviderKeyHealthEvents,
   listProviderKeys,
   restoreProviderKey,
   saveProviderKeys,
+  summarizeProviderKeyHealth,
 } from './ai-gateway/provider-key-store.js';
 import {
   getJimengStatusResponse,
@@ -222,6 +224,7 @@ import {
   retryAuthAiGatewayJob,
   summarizeAuthAiGatewayJobs,
 } from './ai-gateway/auth-api-handler.js';
+import { buildAiGatewayTrendReport, refreshAiGatewayTrendSnapshot } from './ai-gateway/trend-report.js';
 import { listPublicPriceCatalog } from './pricing-engine.js';
 import { buildUsageReceipt, quoteJobKinds } from './pricing-read-model.js';
 import {
@@ -2457,7 +2460,16 @@ const server = http.createServer(async (req, res) => {
       const staff = await requirePermission(req, res, PERMISSIONS.TASK_EVENTS_READ);
       if (!staff) return;
       const u = new URL(req.url || '/', 'http://local');
-      const result = await summarizeAuthAiGatewayJobs(staff.user, { limit: u.searchParams.get('limit') || 100 }, { admin: true });
+      const result = await summarizeAuthAiGatewayJobs(staff.user, {
+        limit: u.searchParams.get('limit') || 100,
+        userId: u.searchParams.get('userId') || '',
+        status: u.searchParams.get('status') || '',
+        provider: u.searchParams.get('provider') || '',
+        model: u.searchParams.get('model') || '',
+        modality: u.searchParams.get('modality') || '',
+        capability: u.searchParams.get('capability') || '',
+        q: u.searchParams.get('q') || '',
+      }, { admin: true });
       json(res, result.status, result.body);
       return;
     }
@@ -2558,6 +2570,48 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (path === '/api/admin/ai-gateway/provider-key-health-summary' && req.method === 'GET') {
+      const staff = await requirePermission(req, res, PERMISSIONS.AI_GATEWAY_KEYS_READ);
+      if (!staff) return;
+      const u = new URL(req.url || '/', 'http://local');
+      const summary = await summarizeProviderKeyHealth({
+        windowHours: u.searchParams.get('windowHours') || 24,
+        keyId: u.searchParams.get('keyId') || '',
+        provider: u.searchParams.get('provider') || '',
+      });
+      json(res, 200, { ok: true, ...summary });
+      return;
+    }
+
+    if (path === '/api/admin/ai-gateway/provider-key-health-automation' && req.method === 'POST') {
+      const staff = await requirePermission(req, res, PERMISSIONS.AI_GATEWAY_KEYS_WRITE);
+      if (!staff) return;
+      let body;
+      try {
+        body = await readBody(req);
+      } catch (err) {
+        json(res, 400, { error: err?.message || 'Invalid JSON' });
+        return;
+      }
+      const result = await applyProviderKeyHealthAutomation({
+        windowHours: body?.windowHours || 24,
+        provider: body?.provider || '',
+        keyId: body?.keyId || '',
+        dryRun: body?.dryRun === true,
+      });
+      await createAuditLog({
+        actorUserId: staff.user.id,
+        actorIdentifier: staff.user.username,
+        action: 'admin.ai_gateway_provider_key_health_automation',
+        meta: { input: body, result: { dryRun: result.dryRun, actions: result.actions } },
+        ip: getClientIp(req),
+        userAgent: req.headers['user-agent'],
+      });
+      const keys = await listProviderKeys();
+      json(res, 200, { ...result, keys });
+      return;
+    }
+
     if (path === '/api/admin/ai-gateway/provider-keys' && req.method === 'PUT') {
       const staff = await requirePermission(req, res, PERMISSIONS.AI_GATEWAY_KEYS_WRITE);
       if (!staff) return;
@@ -2635,7 +2689,16 @@ const server = http.createServer(async (req, res) => {
       const staff = await requirePermission(req, res, PERMISSIONS.TASK_EVENTS_READ);
       if (!staff) return;
       const u = new URL(req.url || '/', 'http://local');
-      const result = await listAuthAiGatewayJobs(staff.user, { limit: u.searchParams.get('limit') || 20 }, { admin: true });
+      const result = await listAuthAiGatewayJobs(staff.user, {
+        limit: u.searchParams.get('limit') || 20,
+        userId: u.searchParams.get('userId') || '',
+        status: u.searchParams.get('status') || '',
+        provider: u.searchParams.get('provider') || '',
+        model: u.searchParams.get('model') || '',
+        modality: u.searchParams.get('modality') || '',
+        capability: u.searchParams.get('capability') || '',
+        q: u.searchParams.get('q') || '',
+      }, { admin: true });
       json(res, result.status, result.body);
       return;
     }
@@ -2715,6 +2778,39 @@ const server = http.createServer(async (req, res) => {
           to: u.searchParams.get('to') || '',
         });
         json(res, 200, report);
+      } catch (error) {
+        json(res, 500, { error: error instanceof Error ? error.message : String(error) });
+      }
+      return;
+    }
+
+    if (path === '/api/admin/ai-gateway/trends' && req.method === 'GET') {
+      const staff = await requirePermission(req, res, PERMISSIONS.USAGE_READ);
+      if (!staff) return;
+      const u = new URL(req.url || '/', 'http://local');
+      try {
+        const report = await buildAiGatewayTrendReport({
+          days: u.searchParams.get('days') || 7,
+        });
+        json(res, 200, report);
+      } catch (error) {
+        json(res, 500, { error: error instanceof Error ? error.message : String(error) });
+      }
+      return;
+    }
+
+    if (path === '/api/admin/ai-gateway/trend-snapshots/refresh' && req.method === 'POST') {
+      const staff = await requirePermission(req, res, PERMISSIONS.USAGE_READ);
+      if (!staff) return;
+      let body = {};
+      try {
+        body = await readBody(req);
+      } catch {
+        body = {};
+      }
+      try {
+        const snapshot = await refreshAiGatewayTrendSnapshot({ day: body?.day || '' });
+        json(res, 200, { ok: true, snapshot });
       } catch (error) {
         json(res, 500, { error: error instanceof Error ? error.message : String(error) });
       }

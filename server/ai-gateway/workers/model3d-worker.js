@@ -1,4 +1,4 @@
-import { buildTripoWorkerRequest, startTripoExecution } from '../adapters/tripo-openapi-adapter.js';
+import { buildTripoWorkerRequest, cancelTripoExecution, startTripoExecution } from '../adapters/tripo-openapi-adapter.js';
 import { assertWorkerSupportsAdapter } from './types.js';
 
 export const model3dWorker = Object.freeze({
@@ -15,8 +15,8 @@ export const model3dWorker = Object.freeze({
     assertWorkerSupportsAdapter(model3dWorker, plan?.route?.adapterId);
     return startTripoExecution(plan, options);
   },
-  async cancel() {
-    return { cancelled: false, mode: 'soft', reason: 'tripo_cancel_not_implemented' };
+  async cancel(plan, options = {}) {
+    return cancelTripoExecution(plan, options);
   },
   estimateCost() {
     return null;

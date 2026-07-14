@@ -109,6 +109,7 @@ export function buildAiGatewayUsageEvent(plan) {
   const usageMetadata = usageMetadataFromJob(job);
   const meterKind = usageMetadata ? 'token' : meterKindForModality(job.modality);
   const proxyJobId = text(job.metadata?.proxyJobId);
+  const upstreamTaskId = text(job.metadata?.upstreamTaskId) || text(job.metadata?.tripoTaskId) || text(job.metadata?.jimengTaskId) || correlationId;
   const model = text(job.model || job.input?.model);
   const imageOutput = job.modality === 'image';
   const resolved = resolveActualOrEstimatedCredits(plan, { billingSku, meterKind, usageMetadata, imageOutput });
@@ -127,12 +128,13 @@ export function buildAiGatewayUsageEvent(plan) {
     costUsdEst: resolved.costUsdEst ?? undefined,
     costConfidence: resolved.source === 'estimated' ? 'estimated' : 'exact',
     status: 'succeeded',
-    upstreamTaskId: correlationId,
-    requestId: proxyJobId || job.id,
+    upstreamTaskId,
+    requestId: proxyJobId || upstreamTaskId || job.id,
     jobKind: job.capability || `${job.modality}.generate`,
     creditsCharged: resolved.credits,
     meta: {
       taskId: correlationId,
+      upstreamTaskId,
       correlationId,
       aiGatewayJobId: job.id,
       proxyJobId: proxyJobId || undefined,

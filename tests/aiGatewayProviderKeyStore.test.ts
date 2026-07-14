@@ -4,6 +4,7 @@ import path from 'path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   acquireProviderKey,
+  applyProviderKeyHealthAutomation,
   cooldownProviderKey,
   listProviderKeyHealthEvents,
   listProviderKeys,
@@ -13,6 +14,7 @@ import {
   restoreProviderKey,
   resetProviderKeyRuntimeForTests,
   saveProviderKeys,
+  summarizeProviderKeyHealth,
 } from '../server/ai-gateway/provider-key-store.js';
 
 describe('AI gateway provider key store', () => {
@@ -312,6 +314,74 @@ describe('AI gateway provider key store', () => {
     expect(events[2]).toMatchObject({
       status: 503,
       retryable: true,
+    });
+  });
+
+  it('summarizes persisted provider key health events by key', async () => {
+    useTempStore();
+
+    await saveProviderKeys([
+      { id: 'key_summary_a', provider: 'tripo', label: 'Summary A', secret: 'tripo-a', enabled: true, priority: 1 },
+      { id: 'key_summary_b', provider: 'tripo', label: 'Summary B', secret: 'tripo-b', enabled: true, priority: 2 },
+    ]);
+
+    recordProviderKeySuccess('key_summary_a');
+    recordProviderKeyError('key_summary_a', new Error('HTTP 429 rate limit'), { status: 429 });
+    recordProviderKeyError('key_summary_a', new Error('HTTP 503 upstream busy'), { status: 503 });
+    cooldownProviderKey('key_summary_a', { minutes: 10, reason: 'manual summary cooldown' });
+    recordProviderKeySuccess('key_summary_b');
+
+    const report = await summarizeProviderKeyHealth({ windowHours: 24, provider: 'tripo' });
+    const item = report.summaries.find((row) => row.providerKeyId === 'key_summary_a');
+    const idleOrHealthy = report.summaries.find((row) => row.providerKeyId === 'key_summary_b');
+
+    expect(report.totals).toMatchObject({
+      successCount: 2,
+      errorCount: 2,
+      status429Count: 1,
+      status5xxCount: 1,
+      cooldownCount: 1,
+    });
+    expect(item).toMatchObject({
+      label: 'Summary A',
+      failureRate: 0.6667,
+      retryableFailureRate: 0.6667,
+      healthStatus: 'cooling_down',
+      lastErrorStatus: 503,
+    });
+    expect(idleOrHealthy).toMatchObject({
+      label: 'Summary B',
+      successCount: 1,
+      errorCount: 0,
+      healthStatus: 'healthy',
+    });
+  });
+
+  it('applies provider key health automation by cooling risky keys', async () => {
+    useTempStore();
+
+    await saveProviderKeys([
+      { id: 'key_auto_apply', provider: 'tripo', label: 'Auto Apply', secret: 'tripo-auto-apply', enabled: true, priority: 1 },
+    ]);
+
+    recordProviderKeyError('key_auto_apply', new Error('HTTP 429 rate limit'), { status: 429 });
+    recordProviderKeyError('key_auto_apply', new Error('HTTP 503 upstream busy'), { status: 503 });
+
+    const dryRun = await applyProviderKeyHealthAutomation({ windowHours: 24, dryRun: true });
+    expect(dryRun.actions).toHaveLength(1);
+    expect(dryRun.actions[0]).toMatchObject({
+      providerKeyId: 'key_auto_apply',
+      action: 'cooldown_key',
+      applied: false,
+    });
+    expect(await acquireProviderKey('tripo')).toMatchObject({ id: 'key_auto_apply' });
+
+    const applied = await applyProviderKeyHealthAutomation({ windowHours: 24 });
+    expect(applied.actions).toHaveLength(1);
+    expect(applied.actions[0]).toMatchObject({ applied: true });
+    expect(await acquireProviderKey('tripo')).toBeNull();
+    expect(applied.summary.summaries.find((row) => row.providerKeyId === 'key_auto_apply')).toMatchObject({
+      healthStatus: 'cooling_down',
     });
   });
 

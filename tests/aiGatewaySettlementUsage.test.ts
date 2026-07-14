@@ -105,4 +105,43 @@ describe('AI gateway settlement usage extraction', () => {
       },
     });
   });
+
+  it('uses real upstream task id for non-Gemini provider usage events', () => {
+    const built = buildAiGatewayUsageEvent({
+      job: {
+        id: 'aijob_usage_tripo',
+        status: 'succeeded',
+        modality: 'model3d',
+        capability: 'model3d.generate',
+        userId: 'user_1',
+        correlationId: 'corr_tripo',
+        input: {},
+        metadata: {
+          upstreamTaskId: 'tripo_task_123',
+          usage: {
+            billingSku: '3d.tripo.task',
+            actualCredits: 12,
+            upstreamTaskId: 'tripo_task_123',
+          },
+          creditsGate: { mode: 'reserve', estimatedCredits: 30, reserveAmount: 30 },
+        },
+      },
+      route: { providerId: 'tripo' },
+    });
+
+    expect(built).toMatchObject({
+      credits: 12,
+      source: 'job_usage',
+      event: {
+        provider: 'tripo',
+        upstreamTaskId: 'tripo_task_123',
+        requestId: 'tripo_task_123',
+        meta: {
+          taskId: 'corr_tripo',
+          upstreamTaskId: 'tripo_task_123',
+          correlationId: 'corr_tripo',
+        },
+      },
+    });
+  });
 });

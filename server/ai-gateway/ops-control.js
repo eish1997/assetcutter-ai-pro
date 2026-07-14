@@ -2,6 +2,7 @@ import fs from 'fs';
 import fsPromises from 'fs/promises';
 import path from 'path';
 import { USE_POSTGRES, ensurePostgres, getPool } from '../auth-store.js';
+import { buildAiGatewayOpsSummary } from './observability.js';
 
 const DEFAULT_CONFIG = Object.freeze({
   disabledProviders: [],
@@ -97,9 +98,9 @@ export function pruneExpiredAiGatewayOpsControlConfig(input, now = new Date()) {
   };
 }
 
-export function normalizeAiGatewayOpsControlConfig(input) {
+export function normalizeAiGatewayOpsControlConfig(input, options = {}) {
   const raw = input && typeof input === 'object' && !Array.isArray(input) ? input : {};
-  const now = new Date();
+  const now = options.now instanceof Date ? options.now : new Date();
   const pruned = pruneExpiredAiGatewayOpsControlConfig(raw, now).config;
   const disabledProviderRules = mergePauseRules([
     ...normalizePauseRules(pruned.disabledProviderRules, 'provider', now),
@@ -223,7 +224,7 @@ export async function clearAiGatewayOpsControlConfig({ updatedByUserId = null } 
 }
 
 export function mergeAiGatewayOpsControlAction(input, action, { now = new Date(), defaultTtlMinutes = 60, updatedByUserId = null } = {}) {
-  const config = normalizeAiGatewayOpsControlConfig(input);
+  const config = normalizeAiGatewayOpsControlConfig(input, { now });
   const kind = nonEmptyString(action?.kind);
   const key = nonEmptyString(action?.key);
   if (!key || !['provider', 'model'].includes(kind)) return config;
@@ -241,12 +242,12 @@ export function mergeAiGatewayOpsControlAction(input, action, { now = new Date()
     return normalizeAiGatewayOpsControlConfig({
       ...config,
       disabledProviderRules: [...(config.disabledProviderRules || []).filter((item) => item.provider !== key), row],
-    });
+    }, { now });
   }
   return normalizeAiGatewayOpsControlConfig({
     ...config,
     disabledModelRules: [...(config.disabledModelRules || []).filter((item) => item.model !== key), row],
-  });
+  }, { now });
 }
 
 export function isAiGatewayAutoCircuitEnabled() {
@@ -256,6 +257,32 @@ export function isAiGatewayAutoCircuitEnabled() {
   return !['0', 'false', 'off', 'no'].includes(raw);
 }
 
+export function aiGatewayAutoCircuitConfig(options = {}) {
+  const numberFrom = (key, fallback, min, max) => {
+    const camel = key.toLowerCase().replace(/_([a-z])/g, (_, ch) => ch.toUpperCase());
+    const value = options[key] ?? options[camel] ?? process.env[`AI_GATEWAY_AUTO_CIRCUIT_${key}`];
+    const n = Math.floor(Number(value));
+    if (!Number.isFinite(n)) return fallback;
+    return Math.max(min, Math.min(max, n));
+  };
+  const ratioFrom = (key, fallback) => {
+    const camel = key.toLowerCase().replace(/_([a-z])/g, (_, ch) => ch.toUpperCase());
+    const value = options[key] ?? options[camel] ?? process.env[`AI_GATEWAY_AUTO_CIRCUIT_${key}`];
+    const n = Number(value);
+    if (!Number.isFinite(n)) return fallback;
+    return Math.max(0, Math.min(1, n));
+  };
+  return {
+    enabled: options.enabled == null ? isAiGatewayAutoCircuitEnabled() : options.enabled !== false,
+    windowLimit: numberFrom('WINDOW_LIMIT', 20, 3, 100),
+    minTerminal: numberFrom('MIN_TERMINAL', 3, 1, 100),
+    minFailures: numberFrom('MIN_FAILURES', 2, 1, 100),
+    failureRate: ratioFrom('FAILURE_RATE', 0.6),
+    minRateLimited: numberFrom('MIN_RATE_LIMITED', 1, 1, 100),
+    ttlMinutes: numberFrom('TTL_MINUTES', 10, 5, 120),
+  };
+}
+
 function autoCircuitErrorReason(error) {
   const msg = error instanceof Error ? error.message : String(error || '');
   if (/429|too many requests|resource_exhausted|rate.?limit|quota|rpm/i.test(msg)) return 'auto circuit: rate limited';
@@ -263,20 +290,67 @@ function autoCircuitErrorReason(error) {
   return '';
 }
 
+export function evaluateAiGatewayProviderAutoCircuit(plans, provider, options = {}) {
+  const config = aiGatewayAutoCircuitConfig(options);
+  if (!config.enabled) return null;
+  const key = nonEmptyString(provider);
+  if (!key) return null;
+  const items = (Array.isArray(plans) ? plans : []).filter((plan) => {
+    const routeProvider = nonEmptyString(plan?.route?.providerId);
+    const jobProvider = nonEmptyString(plan?.job?.provider);
+    return routeProvider === key || jobProvider === key;
+  });
+  const summary = buildAiGatewayOpsSummary(items.slice(0, config.windowLimit), { limit: config.windowLimit });
+  const group = (summary.byProvider || []).find((item) => item.key === key);
+  if (!group) return null;
+  const terminal = group.succeeded + group.failed + group.cancelled;
+  if (terminal < config.minTerminal || group.failed < config.minFailures) return null;
+  const rateLimited = group.errorCounts.rate_limited || 0;
+  const shouldPauseForRateLimit = rateLimited >= config.minRateLimited;
+  const shouldPauseForFailureRate = group.failureRate >= config.failureRate;
+  if (!shouldPauseForRateLimit && !shouldPauseForFailureRate) return null;
+  const reason = shouldPauseForRateLimit
+    ? `auto circuit: ${rateLimited}/${group.failed} recent failures were rate limited`
+    : `auto circuit: recent failure rate ${Math.round(group.failureRate * 100)}%`;
+  return {
+    kind: 'provider',
+    key,
+    reason,
+    ttlMinutes: config.ttlMinutes,
+    stats: {
+      sampleSize: summary.sampleSize,
+      terminal,
+      failed: group.failed,
+      succeeded: group.succeeded,
+      cancelled: group.cancelled,
+      failureRate: group.failureRate,
+      rateLimitRate: group.rateLimitRate,
+      rateLimited,
+      windowLimit: config.windowLimit,
+    },
+  };
+}
+
 export async function maybeAutoPauseAiGatewayProvider(plan, error, options = {}) {
   if (!isAiGatewayAutoCircuitEnabled()) return null;
   const provider = nonEmptyString(plan?.route?.providerId || plan?.job?.provider);
   if (!provider) return null;
-  const reason = autoCircuitErrorReason(error);
-  if (!reason) return null;
+  const errorReason = autoCircuitErrorReason(error);
+  if (!errorReason) return null;
+  const action = evaluateAiGatewayProviderAutoCircuit(
+    [plan, ...(Array.isArray(options.recentPlans) ? options.recentPlans : [])],
+    provider,
+    options
+  );
+  if (!action) return null;
   const current = options.currentConfig || await readAiGatewayOpsControlConfig();
-  const ttlMinutes = Math.min(120, Math.max(5, Math.floor(Number(options.ttlMinutes || process.env.AI_GATEWAY_AUTO_CIRCUIT_TTL_MINUTES || 10))));
   const next = mergeAiGatewayOpsControlAction(
     current,
-    { kind: 'provider', key: provider, reason, ttlMinutes },
+    action,
     { updatedByUserId: 'system:auto-circuit' }
   );
-  return writeAiGatewayOpsControlConfig(next, { updatedByUserId: 'system:auto-circuit' });
+  const written = await writeAiGatewayOpsControlConfig(next, { updatedByUserId: 'system:auto-circuit' });
+  return { ...written, autoCircuitAction: action };
 }
 
 export function applyAiGatewayModelOverride(job, config = readAiGatewayOpsControlConfigSync()) {

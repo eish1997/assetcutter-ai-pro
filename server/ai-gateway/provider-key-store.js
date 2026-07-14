@@ -36,6 +36,11 @@ function clampEventsLimit(limit = 100) {
   return Math.max(1, Math.min(500, n));
 }
 
+function clampSummaryWindowHours(hours = 24) {
+  const n = Math.floor(Number(hours) || 24);
+  return Math.max(1, Math.min(24 * 30, n));
+}
+
 function maxStoredEvents() {
   const n = Math.floor(Number(process.env.AI_GATEWAY_PROVIDER_KEY_EVENTS_MAX || 5000));
   return Math.max(100, Math.min(100000, Number.isFinite(n) ? n : 5000));
@@ -540,6 +545,289 @@ export async function listProviderKeyHealthEvents(options = {}) {
     .filter((event) => !keyId || event.providerKeyId === keyId)
     .filter((event) => !provider || event.provider === provider)
     .slice(0, limit);
+}
+
+function emptyHealthSummaryBucket(row, windowHours) {
+  return {
+    providerKeyId: row.id || null,
+    provider: row.provider || null,
+    label: row.label || null,
+    windowHours,
+    totalEvents: 0,
+    successCount: 0,
+    errorCount: 0,
+    retryableErrorCount: 0,
+    status429Count: 0,
+    status5xxCount: 0,
+    cooldownCount: 0,
+    autoCooldownCount: 0,
+    manualCooldownCount: 0,
+    restoreCount: 0,
+    lastEventAt: null,
+    lastSuccessAt: null,
+    lastErrorAt: null,
+    lastCooldownAt: null,
+    lastCooldownUntil: null,
+    lastRestoreAt: null,
+    lastErrorMessage: null,
+    lastErrorStatus: null,
+    failureRate: 0,
+    retryableFailureRate: 0,
+    healthStatus: 'idle',
+    suggestedAction: null,
+    automation: {
+      recommended: false,
+      action: 'none',
+      ttlMinutes: 0,
+      reason: null,
+    },
+  };
+}
+
+function applyEventToHealthSummary(bucket, event) {
+  bucket.totalEvents += 1;
+  if (!bucket.lastEventAt || String(event.createdAt || '').localeCompare(bucket.lastEventAt) > 0) {
+    bucket.lastEventAt = event.createdAt || null;
+  }
+  if (event.type === 'success') {
+    bucket.successCount += 1;
+    if (!bucket.lastSuccessAt || String(event.createdAt || '').localeCompare(bucket.lastSuccessAt) > 0) {
+      bucket.lastSuccessAt = event.createdAt || null;
+    }
+  }
+  if (event.type === 'error') {
+    bucket.errorCount += 1;
+    if (event.retryable) bucket.retryableErrorCount += 1;
+    if (Number(event.status) === 429) bucket.status429Count += 1;
+    if (Number(event.status) >= 500) bucket.status5xxCount += 1;
+    if (!bucket.lastErrorAt || String(event.createdAt || '').localeCompare(bucket.lastErrorAt) > 0) {
+      bucket.lastErrorAt = event.createdAt || null;
+      bucket.lastErrorMessage = event.reason || event.message || null;
+      bucket.lastErrorStatus = event.status == null ? null : Number(event.status);
+    }
+  }
+  if (['cooldown', 'auto_cooldown', 'manual_cooldown'].includes(event.type)) {
+    bucket.cooldownCount += 1;
+    if (event.type === 'auto_cooldown') bucket.autoCooldownCount += 1;
+    if (event.type === 'manual_cooldown') bucket.manualCooldownCount += 1;
+    if (!bucket.lastCooldownAt || String(event.createdAt || '').localeCompare(bucket.lastCooldownAt) > 0) {
+      bucket.lastCooldownAt = event.createdAt || null;
+      bucket.lastCooldownUntil = event.cooldownUntil || null;
+    }
+  }
+  if (event.type === 'restore') {
+    bucket.restoreCount += 1;
+    if (!bucket.lastRestoreAt || String(event.createdAt || '').localeCompare(bucket.lastRestoreAt) > 0) {
+      bucket.lastRestoreAt = event.createdAt || null;
+    }
+  }
+}
+
+function finalizeHealthSummaryBucket(bucket) {
+  const attempts = bucket.successCount + bucket.errorCount;
+  const now = Date.now();
+  const cooldownUntilMs = bucket.lastCooldownUntil ? Date.parse(bucket.lastCooldownUntil) : 0;
+  const restoreAfterCooldown =
+    bucket.lastRestoreAt &&
+    bucket.lastCooldownAt &&
+    String(bucket.lastRestoreAt).localeCompare(String(bucket.lastCooldownAt)) > 0;
+  const activeCooldown = Number.isFinite(cooldownUntilMs) && cooldownUntilMs > now && !restoreAfterCooldown;
+  bucket.failureRate = attempts ? Number((bucket.errorCount / attempts).toFixed(4)) : 0;
+  bucket.retryableFailureRate = attempts ? Number((bucket.retryableErrorCount / attempts).toFixed(4)) : 0;
+  if (activeCooldown) {
+    bucket.healthStatus = 'cooling_down';
+    bucket.suggestedAction = 'check_or_restore';
+  } else if (bucket.status429Count > 0) {
+    bucket.healthStatus = 'rate_limited';
+    bucket.suggestedAction = 'lower_rpm_or_add_keys';
+  } else if (bucket.errorCount >= 3 || bucket.failureRate >= 0.5) {
+    bucket.healthStatus = 'degraded';
+    bucket.suggestedAction = 'check_provider_or_key';
+  } else if (bucket.errorCount > 0) {
+    bucket.healthStatus = 'warning';
+    bucket.suggestedAction = 'watch';
+  } else if (bucket.successCount > 0) {
+    bucket.healthStatus = 'healthy';
+    bucket.suggestedAction = null;
+  }
+  bucket.automation = recommendProviderKeyHealthAction(bucket);
+  return bucket;
+}
+
+function providerKeyAutomationConfig() {
+  const enabledRaw = String(process.env.AI_GATEWAY_PROVIDER_KEY_HEALTH_AUTOMATION || '').trim().toLowerCase();
+  const enabled = !['0', 'false', 'off', 'no'].includes(enabledRaw);
+  const minErrors = Math.max(1, Math.min(50, Math.floor(Number(process.env.AI_GATEWAY_PROVIDER_KEY_HEALTH_AUTOMATION_MIN_ERRORS || 2)) || 2));
+  const failureRate = Math.max(0.05, Math.min(1, Number(process.env.AI_GATEWAY_PROVIDER_KEY_HEALTH_AUTOMATION_FAILURE_RATE || 0.5) || 0.5));
+  const cooldownMinutes = Math.max(1, Math.min(1440, Math.floor(Number(process.env.AI_GATEWAY_PROVIDER_KEY_HEALTH_AUTOMATION_COOLDOWN_MINUTES || 15)) || 15));
+  return { enabled, minErrors, failureRate, cooldownMinutes };
+}
+
+function recommendProviderKeyHealthAction(bucket) {
+  const config = providerKeyAutomationConfig();
+  if (!config.enabled || !bucket.providerKeyId || bucket.healthStatus === 'cooling_down') {
+    return { recommended: false, action: 'none', ttlMinutes: 0, reason: null };
+  }
+  const enoughErrors = bucket.errorCount >= config.minErrors;
+  const rateLimited = bucket.status429Count >= 1 && enoughErrors;
+  const unstable =
+    enoughErrors &&
+    (bucket.failureRate >= config.failureRate || bucket.retryableFailureRate >= config.failureRate || bucket.status5xxCount >= config.minErrors);
+  if (!rateLimited && !unstable) {
+    return { recommended: false, action: 'none', ttlMinutes: 0, reason: null };
+  }
+  const reason = rateLimited
+    ? `Auto suggestion: ${bucket.status429Count} rate-limit errors in ${bucket.windowHours}h`
+    : `Auto suggestion: failure rate ${Math.round(bucket.failureRate * 100)}% in ${bucket.windowHours}h`;
+  return {
+    recommended: true,
+    action: 'cooldown_key',
+    ttlMinutes: config.cooldownMinutes,
+    reason,
+  };
+}
+
+async function readProviderKeyHealthEventsForSummary({ sinceIso, keyId, provider }) {
+  if (USE_POSTGRES) {
+    await ensureProviderKeyStore();
+    const where = ['created_at >= $1'];
+    const values = [sinceIso];
+    if (keyId) {
+      values.push(keyId);
+      where.push(`provider_key_id = $${values.length}`);
+    }
+    if (provider) {
+      values.push(provider);
+      where.push(`provider = $${values.length}`);
+    }
+    const res = await getPool().query(
+      `SELECT id, provider_key_id, provider, label, type, status, message, reason, retryable, cooldown_until, consecutive_error_count, auto_cooldown_count, created_at
+       FROM ai_gateway_provider_key_events
+       WHERE ${where.join(' AND ')}
+       ORDER BY created_at DESC`,
+      values
+    );
+    return res.rows.map((row) => publicEvent({
+      ...row,
+      cooldownUntil: row.cooldown_until ? new Date(row.cooldown_until).toISOString() : null,
+      createdAt: row.created_at ? new Date(row.created_at).toISOString() : null,
+    }));
+  }
+  return readDiskEvents()
+    .filter((event) => !sinceIso || String(event.createdAt || '').localeCompare(sinceIso) >= 0)
+    .filter((event) => !keyId || event.providerKeyId === keyId)
+    .filter((event) => !provider || event.provider === provider);
+}
+
+export async function summarizeProviderKeyHealth(options = {}) {
+  const windowHours = clampSummaryWindowHours(options.windowHours || 24);
+  const keyId = nonEmptyString(options.keyId);
+  const provider = nonEmptyString(options.provider);
+  const sinceIso = new Date(Date.now() - windowHours * 60 * 60 * 1000).toISOString();
+  const keys = (await listProviderKeys())
+    .filter((row) => !keyId || row.id === keyId)
+    .filter((row) => !provider || row.provider === provider);
+  const buckets = new Map();
+  for (const row of keys) {
+    buckets.set(row.id, emptyHealthSummaryBucket(row, windowHours));
+  }
+  const events = await readProviderKeyHealthEventsForSummary({ sinceIso, keyId, provider });
+  for (const event of events) {
+    const id = event.providerKeyId || `provider:${event.provider || 'unknown'}`;
+    if (!buckets.has(id)) {
+      buckets.set(id, emptyHealthSummaryBucket({
+        id,
+        provider: event.provider || provider || null,
+        label: event.label || event.providerKeyId || event.provider || id,
+      }, windowHours));
+    }
+    const bucket = buckets.get(id);
+    if (!bucket.provider && event.provider) bucket.provider = event.provider;
+    if (!bucket.label && event.label) bucket.label = event.label;
+    applyEventToHealthSummary(bucket, event);
+  }
+  const summaries = Array.from(buckets.values())
+    .map(finalizeHealthSummaryBucket)
+    .sort((a, b) => {
+      const risk = (item) =>
+        item.healthStatus === 'cooling_down' ? 5 :
+        item.healthStatus === 'rate_limited' ? 4 :
+        item.healthStatus === 'degraded' ? 3 :
+        item.healthStatus === 'warning' ? 2 :
+        item.healthStatus === 'healthy' ? 1 : 0;
+      return risk(b) - risk(a) || String(b.lastEventAt || '').localeCompare(String(a.lastEventAt || '')) || String(a.label || '').localeCompare(String(b.label || ''));
+    });
+  const totals = summaries.reduce((acc, item) => {
+    acc.totalEvents += item.totalEvents;
+    acc.successCount += item.successCount;
+    acc.errorCount += item.errorCount;
+    acc.retryableErrorCount += item.retryableErrorCount;
+    acc.status429Count += item.status429Count;
+    acc.status5xxCount += item.status5xxCount;
+    acc.cooldownCount += item.cooldownCount;
+    acc.autoCooldownCount += item.autoCooldownCount;
+    acc.manualCooldownCount += item.manualCooldownCount;
+    acc.restoreCount += item.restoreCount;
+    return acc;
+  }, {
+    windowHours,
+    totalEvents: 0,
+    successCount: 0,
+    errorCount: 0,
+    retryableErrorCount: 0,
+    status429Count: 0,
+    status5xxCount: 0,
+    cooldownCount: 0,
+    autoCooldownCount: 0,
+    manualCooldownCount: 0,
+    restoreCount: 0,
+  });
+  const attempts = totals.successCount + totals.errorCount;
+  totals.failureRate = attempts ? Number((totals.errorCount / attempts).toFixed(4)) : 0;
+  totals.retryableFailureRate = attempts ? Number((totals.retryableErrorCount / attempts).toFixed(4)) : 0;
+  return {
+    windowHours,
+    since: sinceIso,
+    generatedAt: new Date().toISOString(),
+    totals,
+    summaries,
+  };
+}
+
+export async function applyProviderKeyHealthAutomation(options = {}) {
+  const dryRun = options.dryRun === true;
+  const report = await summarizeProviderKeyHealth(options);
+  const actions = [];
+  for (const item of report.summaries) {
+    const automation = item.automation || {};
+    if (!automation.recommended || automation.action !== 'cooldown_key' || !item.providerKeyId) continue;
+    const action = {
+      providerKeyId: item.providerKeyId,
+      provider: item.provider,
+      label: item.label,
+      action: 'cooldown_key',
+      ttlMinutes: automation.ttlMinutes || 15,
+      reason: automation.reason || 'provider key health automation',
+      applied: false,
+    };
+    if (!dryRun) {
+      cooldownProviderKey(item.providerKeyId, {
+        minutes: action.ttlMinutes,
+        reason: action.reason,
+      });
+      action.applied = true;
+    }
+    actions.push(action);
+  }
+  const summary = dryRun || !actions.length ? report : await summarizeProviderKeyHealth(options);
+  return {
+    ok: true,
+    dryRun,
+    generatedAt: new Date().toISOString(),
+    windowHours: summary.windowHours,
+    actions,
+    summary,
+  };
 }
 
 export function recordProviderKeySuccess(id) {

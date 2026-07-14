@@ -6,6 +6,7 @@ import { createAiGatewayJobPlan } from '../server/ai-gateway/index.js';
 import { createInMemoryAiJobStore } from '../server/ai-gateway/job-store.js';
 import { saveProviderKeys } from '../server/ai-gateway/provider-key-store.js';
 import { startAiGatewayJobExecution } from '../server/ai-gateway/executor.js';
+import { cancelAiGatewayWorkerExecution } from '../server/ai-gateway/workers/registry.js';
 
 function jsonResponse(body: unknown, ok = true, status = 200) {
   return {
@@ -52,7 +53,7 @@ describe('Tripo OpenAPI AI gateway worker', () => {
     const plan = await store.put(createAiGatewayJobPlan({
       id: 'aijob_tripo_1',
       modality: 'model3d',
-      input: { prompt: 'small stylized crate', texture: true },
+      input: { prompt: 'small stylized crate', texture: true, estimatedCredits: 42 },
     }));
     const fetchImpl = vi
       .fn()
@@ -89,10 +90,42 @@ describe('Tripo OpenAPI AI gateway worker', () => {
     expect(stored.job.metadata).toMatchObject({
       tripoTaskId: 'tripo_task_1',
       upstreamTaskId: 'tripo_task_1',
+      usage: {
+        provider: 'tripo',
+        upstreamTaskId: 'tripo_task_1',
+        billingSku: '3d.tripo.task',
+        meterKind: 'task',
+        quantity: 1,
+        artifactCount: 1,
+      },
+      gatewayExecution: {
+        artifactCount: 1,
+      },
     });
     expect(stored.job.artifacts).toEqual([
-      expect.objectContaining({ kind: 'model3d', url: 'https://cdn.example.com/model.glb', source: 'tripo' }),
+      expect.objectContaining({
+        kind: 'model3d',
+        url: 'https://cdn.example.com/model.glb',
+        source: 'tripo',
+        billing: expect.objectContaining({ settlementSource: 'provider_task_usage' }),
+      }),
     ]);
+  });
+
+  it('returns an explicit soft-cancel result when Tripo hard cancel is unavailable', async () => {
+    const plan = createAiGatewayJobPlan({
+      id: 'aijob_tripo_cancel',
+      modality: 'model3d',
+      input: { prompt: 'crate' },
+      metadata: { tripoTaskId: 'tripo_task_cancel', upstreamTaskId: 'tripo_task_cancel' },
+    });
+
+    await expect(cancelAiGatewayWorkerExecution(plan)).resolves.toMatchObject({
+      cancelled: false,
+      mode: 'soft',
+      reason: 'tripo_hard_cancel_unavailable',
+      upstreamTaskId: 'tripo_task_cancel',
+    });
   });
 
   it('uploads image inputs before creating Tripo image_to_model tasks', async () => {

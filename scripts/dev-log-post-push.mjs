@@ -82,14 +82,11 @@ function plainFromSubject(subject) {
       /gemini-?3|vertex.*hybrid|publisher\s*404|global\s*hybrid|us-central1/i,
       '生图路由更稳了：新模型走全球通道，少出现「模型找不到」',
     ],
-    [/richer thermal receipt|thermal receipt|work-style summar/i, '开发日志小票更好看了，摘要也更白话'],
     [/compose-style dropdown|dropdowns? and r2-backed|dropdown/i, '下拉菜单外观和底部输入栏统一了，看着更整齐'],
-    [/dev log|dev-log/i, '开发日志能按天查看，也能导出日结小票'],
     [/credit|积分|reserve_invalid|precharge/i, '积分扣费更稳了，少出现莫名失败'],
     [/429|rate limit|too many requests/i, '高峰时生图少一点立刻失败，会多等一会儿再试'],
     [/chunk|lazy|equirect|preview/i, '大图预览切换全景、3D 时更不容易打不开'],
     [/workspace|小盒子|justified/i, '工作区布局和切换更顺手了'],
-    [/readme|docs|交接/i, '说明文档有更新'],
     [/ai\s*gateway|provider\s*key|worker|tripo|model3d|3d/i, 'AI Gateway、供应商 Key 池和多模态 worker 又往生产化推进了一步'],
   ];
   for (const [re, zh] of rules) {
@@ -110,7 +107,8 @@ function plainFallbackFromSubject(subject) {
     .replace(/\b(feat|fix|chore|docs|refactor|style|test|perf|build|ci)\b/gi, '')
     .replace(/\s{2,}/g, ' ')
     .trim();
-  if (!raw) return '这次改动已整理成开发记录，方便回看发生了什么';
+  if (!raw) return '';
+  if (/dev\s*log|dev-log|readme|docs|handoff|cursor|hook/i.test(raw)) return '';
   if (/ai\s*gateway|provider\s*key|worker|tripo|model\s*3d|3d/i.test(raw)) {
     return '这次主要推进 AI Gateway、供应商 Key 池和多模态 worker，让后续接 3D、视频、音乐时走统一任务链路';
   }
@@ -190,23 +188,12 @@ function buildWorkSummaryBullets(nameStats, commits, _stats) {
     if (has(/WorkspaceQuickComposeBar/) && !isAgentPack) {
       pushUnique('底部输入栏的选项样式更统一了');
     }
-    if (has(/devLogReceiptExport|devLogPlainSummary/)) {
-      pushUnique('开发日志小票更好看了，本日总结也更白话');
-    } else if (has(/dev-log|DevLogSection|devLog/)) {
-      pushUnique('开发日志能按天查看，也能导出日结小票');
-    }
     if (has(/lazyImportWithRetry|PreviewViewerErrorBoundary|vercel\.json/)) {
       pushUnique('大图预览切换全景、3D 时更不容易打不开');
     }
-    if (has(/^server\/auth-api/)) {
-      pushUnique('后台能读到开发日志记录了');
-    }
-    if (has(/^docs\/|^\.cursor\//) && bullets.length < 5) {
-      pushUnique('内部交接说明也跟着更新了');
-    }
   }
 
-  if (!bullets.length) pushUnique('这次推送没有需要写进小票的改动说明');
+  if (!bullets.length) pushUnique('这次主要是内部整理，没有需要写进平台更新的小票内容');
   return bullets.slice(0, 8);
 }
 

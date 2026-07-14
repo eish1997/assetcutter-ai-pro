@@ -4,6 +4,7 @@ import path from 'path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import {
+  evaluateAiGatewayProviderAutoCircuit,
   mergeAiGatewayOpsControlAction,
   maybeAutoPauseAiGatewayProvider,
   normalizeAiGatewayOpsControlConfig,
@@ -92,23 +93,82 @@ describe('AI Gateway ops control config', () => {
     ]);
   });
 
-  it('auto-pauses a provider on rate-limit handoff failure', async () => {
+  function plan(provider: string, status: string, message = '') {
+    return {
+      job: {
+        id: `job_${provider}_${status}_${Math.random().toString(36).slice(2)}`,
+        provider,
+        status,
+        modality: 'model3d',
+        capability: 'model3d.generate',
+        correlationId: 'corr',
+        createdAt: '2026-07-13T10:00:00.000Z',
+        updatedAt: '2026-07-13T10:01:00.000Z',
+        startedAt: '2026-07-13T10:00:00.000Z',
+        finishedAt: '2026-07-13T10:01:00.000Z',
+        error: message ? { code: 'UPSTREAM', message } : null,
+      },
+      route: { providerId: provider },
+    };
+  }
+
+  it('does not auto-pause a provider on one isolated handoff failure', async () => {
     const file = path.join(os.tmpdir(), `ac-aig-ops-${Date.now()}-${Math.random().toString(36).slice(2)}.json`);
     tempFiles.add(file);
     process.env.AI_GATEWAY_OPS_CONTROL_PATH = file;
     process.env.AI_GATEWAY_AUTO_CIRCUIT_ENABLED = 'true';
 
     const config = await maybeAutoPauseAiGatewayProvider(
-      { route: { providerId: 'tripo' }, job: { provider: 'tripo' } },
+      { route: { providerId: 'tripo' }, job: { provider: 'tripo', status: 'failed' } },
+      new Error('HTTP 429 Too Many Requests')
+    );
+
+    expect(config).toBeNull();
+  });
+
+  it('evaluates recent provider failures before recommending an auto pause', () => {
+    const action = evaluateAiGatewayProviderAutoCircuit(
+      [
+        plan('tripo', 'failed', 'HTTP 429 Too Many Requests'),
+        plan('tripo', 'failed', 'HTTP 503 upstream unavailable'),
+        plan('tripo', 'succeeded'),
+      ],
+      'tripo',
+      { enabled: true, minTerminal: 3, minFailures: 2, ttlMinutes: 15 }
+    );
+
+    expect(action).toMatchObject({
+      kind: 'provider',
+      key: 'tripo',
+      ttlMinutes: 15,
+      stats: {
+        terminal: 3,
+        failed: 2,
+        rateLimited: 1,
+      },
+    });
+  });
+
+  it('auto-pauses a provider when recent failures cross the circuit threshold', async () => {
+    const file = path.join(os.tmpdir(), `ac-aig-ops-${Date.now()}-${Math.random().toString(36).slice(2)}.json`);
+    tempFiles.add(file);
+    process.env.AI_GATEWAY_OPS_CONTROL_PATH = file;
+    process.env.AI_GATEWAY_AUTO_CIRCUIT_ENABLED = 'true';
+
+    const config = await maybeAutoPauseAiGatewayProvider(
+      plan('tripo', 'failed', 'HTTP 429 Too Many Requests'),
       new Error('HTTP 429 Too Many Requests'),
-      { ttlMinutes: 5 }
+      {
+        recentPlans: [plan('tripo', 'failed', 'HTTP 503 upstream unavailable'), plan('tripo', 'succeeded')],
+        ttlMinutes: 5,
+      }
     );
 
     expect(config?.disabledProviders).toEqual(['tripo']);
     expect(config?.disabledProviderRules?.[0]).toMatchObject({
       provider: 'tripo',
-      reason: 'auto circuit: rate limited',
       createdByUserId: 'system:auto-circuit',
     });
+    expect(config?.autoCircuitAction?.stats).toMatchObject({ terminal: 3, failed: 2 });
   });
 });

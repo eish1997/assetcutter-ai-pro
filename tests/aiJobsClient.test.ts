@@ -19,7 +19,11 @@ import {
 import {
   applyAdminAiGatewayOpsAction,
   clearAdminAiGatewayOpsControl,
+  fetchAiGatewayTrends,
+  fetchAdminAiJobs,
+  fetchAdminAiJobsSummary,
   fetchAdminAiGatewayOpsControl,
+  refreshAiGatewayTrendSnapshot,
   saveAdminAiGatewayOpsControl,
 } from '../services/adminClient';
 import { requestJson } from '../services/httpClient';
@@ -126,6 +130,44 @@ describe('aiJobsClient', () => {
         reason: '429 share',
         ttlMinutes: 60,
       }),
+    });
+  });
+
+  it('passes admin AI job filters through auth-api', async () => {
+    await fetchAdminAiJobs({
+      limit: 50,
+      status: 'failed',
+      userId: 'user 1',
+      provider: 'tripo',
+      model: 'model x',
+      modality: 'model3d',
+      capability: 'model3d.generate',
+      q: 'upstream',
+    });
+    expect(requestJson).toHaveBeenCalledWith(
+      'https://auth.example/api/admin/ai/jobs?limit=50&userId=user+1&status=failed&provider=tripo&model=model+x&modality=model3d&capability=model3d.generate&q=upstream',
+      { cache: 'no-store' }
+    );
+
+    await fetchAdminAiJobsSummary({ status: 'failed', provider: 'tripo' });
+    expect(requestJson).toHaveBeenCalledWith(
+      'https://auth.example/api/admin/ai/jobs/summary?status=failed&provider=tripo',
+      { cache: 'no-store' }
+    );
+  });
+
+  it('reads AI Gateway trend report through admin auth-api', async () => {
+    await fetchAiGatewayTrends({ days: 30 });
+    expect(requestJson).toHaveBeenCalledWith('https://auth.example/api/admin/ai-gateway/trends?days=30', {
+      cache: 'no-store',
+    });
+  });
+
+  it('refreshes AI Gateway trend snapshot through admin auth-api', async () => {
+    await refreshAiGatewayTrendSnapshot({ day: '2026-07-14' });
+    expect(requestJson).toHaveBeenCalledWith('https://auth.example/api/admin/ai-gateway/trend-snapshots/refresh', {
+      method: 'POST',
+      body: JSON.stringify({ day: '2026-07-14' }),
     });
   });
 });

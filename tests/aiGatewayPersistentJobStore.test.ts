@@ -117,4 +117,42 @@ describe('persistent AI gateway job store', () => {
     expect(raw).not.toContain('RlJPTlQ=');
     expect(raw).toContain('[REDACTED_MEDIA:');
   });
+
+  it('filters JSON fallback job lists by status, provider, modality, and keyword', async () => {
+    const { createAiGatewayJobPlan } = await import('../server/ai-gateway/index.js');
+    const { createPersistentAiJobStore } = await import('../server/ai-gateway/persistent-job-store.js');
+    const store = createPersistentAiJobStore();
+    const imagePlan = createAiGatewayJobPlan(
+      {
+        id: 'aijob_filter_image',
+        modality: 'image',
+        model: 'gemini-3-pro-image-preview',
+        userId: 'user_filter_1',
+        input: { contents: [{ role: 'user', parts: [{ text: 'filter image' }] }] },
+      },
+      { nowIso: '2026-07-11T00:00:00.000Z' }
+    );
+    const modelPlan = createAiGatewayJobPlan(
+      {
+        id: 'aijob_filter_model',
+        modality: 'model3d',
+        provider: 'tripo',
+        userId: 'user_filter_2',
+        input: { prompt: 'filter crate' },
+      },
+      { nowIso: '2026-07-11T00:01:00.000Z' }
+    );
+
+    await store.put(imagePlan);
+    await store.put(modelPlan);
+    await store.update('aijob_filter_model', {
+      status: 'failed',
+      error: { code: 'TRIPO_FAILED', message: 'tripo upstream failed' },
+    });
+
+    expect((await store.list({ limit: 10, status: 'failed' })).map((item) => item.job.id)).toEqual(['aijob_filter_model']);
+    expect((await store.list({ limit: 10, provider: 'tripo' })).map((item) => item.job.id)).toEqual(['aijob_filter_model']);
+    expect((await store.list({ limit: 10, modality: 'image' })).map((item) => item.job.id)).toEqual(['aijob_filter_image']);
+    expect((await store.list({ limit: 10, q: 'upstream' })).map((item) => item.job.id)).toEqual(['aijob_filter_model']);
+  });
 });

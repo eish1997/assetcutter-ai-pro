@@ -1,4 +1,4 @@
-import { buildJimengVideoWorkerRequest, startJimengVideoExecution } from '../adapters/jimeng-visual-adapter.js';
+import { buildJimengVideoWorkerRequest, cancelJimengVideoExecution, startJimengVideoExecution } from '../adapters/jimeng-visual-adapter.js';
 import { assertWorkerSupportsAdapter } from './types.js';
 
 export const videoWorker = Object.freeze({
@@ -15,8 +15,8 @@ export const videoWorker = Object.freeze({
     assertWorkerSupportsAdapter(videoWorker, plan?.route?.adapterId);
     return startJimengVideoExecution(plan, options);
   },
-  async cancel() {
-    return { cancelled: false, mode: 'soft', reason: 'jimeng_cancel_not_implemented' };
+  async cancel(plan, options = {}) {
+    return cancelJimengVideoExecution(plan, options);
   },
   estimateCost() {
     return null;

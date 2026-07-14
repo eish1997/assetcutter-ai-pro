@@ -2,6 +2,7 @@ import { fetch as undiciFetch } from 'undici';
 import { acquireProviderKey, recordProviderKeyError, recordProviderKeySuccess } from '../provider-key-store.js';
 import { AiGatewayValidationError } from '../job.js';
 import { finalizeAiGatewayTerminalPlan } from '../execution-finalize.js';
+import { buildProviderTaskUsage, collectByteSize } from '../execution-usage.js';
 
 export const TRIPO_OPENAPI_BASE_URL = 'https://api.tripo3d.ai/v2/openapi';
 
@@ -212,6 +213,7 @@ async function pollTripoTask(plan, taskId, apiKey, options = {}) {
   const intervalMs = Math.max(intervalFloorMs, Number(options.pollIntervalMs || process.env.AI_GATEWAY_TRIPO_POLL_INTERVAL_MS || 5000));
   const timeoutMs = Math.max(intervalMs, Number(options.pollTimeoutMs || process.env.AI_GATEWAY_TRIPO_POLL_TIMEOUT_MS || 900_000));
   const startedAt = Date.now();
+  const startedAtMs = Date.parse(plan.job?.startedAt || '') || startedAt;
 
   while (Date.now() - startedAt < timeoutMs) {
     await pollDelay(intervalMs);
@@ -226,12 +228,27 @@ async function pollTripoTask(plan, taskId, apiKey, options = {}) {
       const status = normalizeTaskStatus(data?.status ?? data?.data?.status ?? data?.task?.status);
       if (status === 'succeeded') {
         const modelUrls = normalizeModelUrls(data);
+        const completedAtMs = Date.now();
+        const outputBytes = collectByteSize(data);
+        const usage = buildProviderTaskUsage(plan, {
+          provider: 'tripo',
+          upstreamTaskId: taskId,
+          billingSku: '3d.tripo.task',
+          meterKind: 'task',
+          unit: 'task',
+          quantity: 1,
+          outputBytes,
+          artifactCount: modelUrls.length,
+          startedAtMs,
+          completedAtMs,
+        });
         const succeeded = await store.update(plan.job.id, {
           status: 'succeeded',
           output: {
             provider: 'tripo',
             taskId,
             modelUrls,
+            usage,
             raw: data,
           },
           artifacts: modelUrls.map((url) => ({
@@ -239,11 +256,21 @@ async function pollTripoTask(plan, taskId, apiKey, options = {}) {
             url,
             source: 'tripo',
             taskId,
+            billing: {
+              actualCredits: usage.actualCredits,
+              settlementSource: usage.settlementSource,
+            },
           })),
           metadata: {
             tripoTaskId: taskId,
             upstreamTaskId: taskId,
-            gatewayExecution: { completedAt: new Date().toISOString() },
+            usage,
+            gatewayExecution: {
+              completedAt: new Date(completedAtMs).toISOString(),
+              durationMs: usage.durationMs,
+              outputBytes,
+              artifactCount: modelUrls.length,
+            },
           },
         });
         await finalizeAiGatewayTerminalPlan(succeeded, store);
@@ -270,6 +297,18 @@ async function pollTripoTask(plan, taskId, apiKey, options = {}) {
       // Polling is best-effort; leave the last known state for admin retry/inspection.
     }
   }
+}
+
+export async function cancelTripoExecution(plan) {
+  const metadata = plan?.job?.metadata && typeof plan.job.metadata === 'object' ? plan.job.metadata : {};
+  const upstreamTaskId = nonEmptyString(metadata.upstreamTaskId) || nonEmptyString(metadata.tripoTaskId);
+  return {
+    cancelled: false,
+    mode: 'soft',
+    reason: 'tripo_hard_cancel_unavailable',
+    upstreamTaskId: upstreamTaskId || null,
+    provider: 'tripo',
+  };
 }
 
 export async function startTripoExecution(plan, options = {}) {

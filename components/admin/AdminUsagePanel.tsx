@@ -1,8 +1,13 @@
 import React from 'react';
 import {
+  fetchAiGatewayTrends,
   fetchUsageEvents,
   fetchUsageSummary,
   fetchUsageReconciliation,
+  refreshAiGatewayTrendSnapshot,
+  type AiGatewayTrendJobBucket,
+  type AiGatewayTrendReport,
+  type AiGatewayTrendUsageBucket,
   type UsageEventRow,
   type UsageReconciliationRow,
   type UsageSummaryResponse,
@@ -23,7 +28,7 @@ import { fmtCredits } from '../../shared/credits';
 
 const PAGE_SIZE = 50;
 
-type UsageTab = 'events' | 'reconciliation';
+type UsageTab = 'trends' | 'events' | 'reconciliation';
 
 type UsageFilters = {
   timePreset: AuditTimePreset;
@@ -65,10 +70,83 @@ function filtersToQuery(filters: UsageFilters, cursor?: string) {
   };
 }
 
+function pct(value: number | null | undefined) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return '0%';
+  return `${Math.round(Math.max(0, Math.min(1, n)) * 100)}%`;
+}
+
+function shortMoney(value: number | null | undefined) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return '$0';
+  if (n < 1) return `$${n.toFixed(4)}`;
+  return `$${n.toFixed(2)}`;
+}
+
+const TrendJobRows: React.FC<{ rows: AiGatewayTrendJobBucket[]; title: string }> = ({ rows, title }) => (
+  <div className="rounded-xl border border-[#2e2e32] bg-[#121214]">
+    <div className="border-b border-[#252528] px-3 py-2 text-[11px] font-semibold text-gray-300">{title}</div>
+    <div className="divide-y divide-[#252528]">
+      {rows.slice(0, 6).map((row) => (
+        <div key={row.key} className="grid grid-cols-[1fr_auto_auto_auto] gap-3 px-3 py-2 text-[10px]">
+          <div className="min-w-0">
+            <div className="truncate text-gray-200" title={row.key}>{row.key}</div>
+            <div className="mt-0.5 text-gray-600">总数 {row.total} / 终态 {row.terminal}</div>
+          </div>
+          <div className="text-right text-emerald-200">
+            <div>{row.succeeded}</div>
+            <div className="mt-0.5 text-gray-600">成功</div>
+          </div>
+          <div className="text-right text-red-200">
+            <div>{pct(row.failureRate)}</div>
+            <div className="mt-0.5 text-gray-600">失败</div>
+          </div>
+          <div className="text-right text-amber-200">
+            <div>{row.rateLimited}</div>
+            <div className="mt-0.5 text-gray-600">429</div>
+          </div>
+        </div>
+      ))}
+      {!rows.length ? <div className="px-3 py-6 text-center text-[11px] text-gray-600">暂无数据</div> : null}
+    </div>
+  </div>
+);
+
+const TrendUsageRows: React.FC<{ rows: AiGatewayTrendUsageBucket[]; title: string }> = ({ rows, title }) => (
+  <div className="rounded-xl border border-[#2e2e32] bg-[#121214]">
+    <div className="border-b border-[#252528] px-3 py-2 text-[11px] font-semibold text-gray-300">{title}</div>
+    <div className="divide-y divide-[#252528]">
+      {rows.slice(0, 6).map((row) => (
+        <div key={row.key} className="grid grid-cols-[1fr_auto_auto_auto] gap-3 px-3 py-2 text-[10px]">
+          <div className="min-w-0">
+            <div className="truncate text-gray-200" title={row.key}>{row.key}</div>
+            <div className="mt-0.5 text-gray-600">事件 {row.eventCount}</div>
+          </div>
+          <div className="text-right text-amber-200">
+            <div>{fmtCredits(row.totalCreditsCharged)}</div>
+            <div className="mt-0.5 text-gray-600">积分</div>
+          </div>
+          <div className="text-right text-gray-300">
+            <div>{shortMoney(row.totalCostUsdEst)}</div>
+            <div className="mt-0.5 text-gray-600">成本</div>
+          </div>
+          <div className="text-right text-gray-400">
+            <div>{Math.round(row.totalQuantity)}</div>
+            <div className="mt-0.5 text-gray-600">用量</div>
+          </div>
+        </div>
+      ))}
+      {!rows.length ? <div className="px-3 py-6 text-center text-[11px] text-gray-600">暂无数据</div> : null}
+    </div>
+  </div>
+);
+
 const AdminUsagePanel: React.FC = () => {
   const { permissions } = useAdminStaff();
   const canRead = hasAdminPermission(permissions, PERMISSIONS.USAGE_READ);
-  const [tab, setTab] = React.useState<UsageTab>('events');
+  const [tab, setTab] = React.useState<UsageTab>('trends');
+  const [trendDays, setTrendDays] = React.useState(7);
+  const [refreshingSnapshot, setRefreshingSnapshot] = React.useState(false);
   const [draft, setDraft] = React.useState<UsageFilters>(() => {
     const base = defaultFilters();
     const userId = readUserIdFromUrl();
@@ -77,6 +155,7 @@ const AdminUsagePanel: React.FC = () => {
   const [applied, setApplied] = React.useState(draft);
   const [events, setEvents] = React.useState<UsageEventRow[]>([]);
   const [summary, setSummary] = React.useState<UsageSummaryResponse | null>(null);
+  const [trendReport, setTrendReport] = React.useState<AiGatewayTrendReport | null>(null);
   const [total, setTotal] = React.useState(0);
   const [cursor, setCursor] = React.useState<string | undefined>(undefined);
   const [nextCursor, setNextCursor] = React.useState<string | null>(null);
@@ -97,6 +176,8 @@ const AdminUsagePanel: React.FC = () => {
         const report = await fetchUsageReconciliation({ from: from || undefined, to: to || undefined });
         setReconciliation(report.rows);
         setReconciliationEvents(report.eventCount);
+      } else if (tab === 'trends') {
+        setTrendReport(await fetchAiGatewayTrends({ days: trendDays }));
       } else {
         const [listRes, sumRes] = await Promise.all([fetchUsageEvents(q), fetchUsageSummary(q)]);
         setEvents(listRes.events);
@@ -109,11 +190,25 @@ const AdminUsagePanel: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, [applied, cursor, canRead, tab]);
+  }, [applied, cursor, canRead, tab, trendDays]);
 
   React.useEffect(() => {
     void load();
   }, [load]);
+
+  const refreshTrendSnapshot = React.useCallback(async () => {
+    if (!canRead) return;
+    setRefreshingSnapshot(true);
+    setError('');
+    try {
+      await refreshAiGatewayTrendSnapshot();
+      setTrendReport(await fetchAiGatewayTrends({ days: trendDays }));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setRefreshingSnapshot(false);
+    }
+  }, [canRead, trendDays]);
 
   if (!canRead) {
     return <p className="text-[12px] text-gray-500 p-4">无 AI 用量查看权限。</p>;
@@ -127,6 +222,18 @@ const AdminUsagePanel: React.FC = () => {
       </div>
 
       <div className="flex gap-2">
+        <button
+          type="button"
+          onClick={() => {
+            setTab('trends');
+            setCursor(undefined);
+          }}
+          className={`px-3 py-1.5 rounded-lg text-[11px] ${
+            tab === 'trends' ? 'bg-white/15 text-white' : 'bg-white/5 text-gray-400 hover:text-gray-200'
+          }`}
+        >
+          趋势
+        </button>
         <button
           type="button"
           onClick={() => {
@@ -155,6 +262,139 @@ const AdminUsagePanel: React.FC = () => {
         </button>
       </div>
 
+      {tab === 'trends' && trendReport ? (
+        <div className="space-y-3">
+          <div className="flex flex-wrap items-end justify-between gap-3 rounded-xl border border-[#2e2e32] bg-[#121214] p-3">
+            <div>
+              <div className="text-[11px] font-semibold text-gray-200">AI Gateway 趋势</div>
+              <div className="mt-1 text-[10px] text-gray-600">
+                样本：任务 {trendReport.sampleSize?.jobs || 0} / 用量事件 {trendReport.sampleSize?.usageEvents || 0} / Key 事件 {trendReport.sampleSize?.providerKeyEvents || 0}
+              </div>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {[7, 14, 30].map((days) => (
+                <button
+                  key={days}
+                  type="button"
+                  onClick={() => setTrendDays(days)}
+                  className={`rounded-lg border px-3 py-1.5 text-[10px] ${
+                    trendDays === days
+                      ? 'border-blue-400/50 bg-blue-500/15 text-blue-100'
+                      : 'border-white/[0.08] bg-white/5 text-gray-400'
+                  }`}
+                >
+                  {days} 天
+                </button>
+              ))}
+              <button
+                type="button"
+                disabled={refreshingSnapshot}
+                onClick={() => {
+                  void refreshTrendSnapshot();
+                }}
+                className="rounded-lg border border-emerald-400/40 bg-emerald-500/10 px-3 py-1.5 text-[10px] text-emerald-100 disabled:opacity-50"
+              >
+                {refreshingSnapshot ? '保存中' : '刷新今日快照'}
+              </button>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
+            <div className="rounded-xl border border-[#2e2e32] bg-[#121214] p-3">
+              <p className="text-[10px] text-gray-500">任务成功率</p>
+              <p className="mt-1 text-[16px] font-semibold text-emerald-200">
+                {pct(trendReport.jobs.totals.terminal ? trendReport.jobs.totals.succeeded / trendReport.jobs.totals.terminal : 0)}
+              </p>
+            </div>
+            <div className="rounded-xl border border-[#2e2e32] bg-[#121214] p-3">
+              <p className="text-[10px] text-gray-500">任务失败率</p>
+              <p className="mt-1 text-[16px] font-semibold text-red-200">{pct(trendReport.jobs.totals.failureRate)}</p>
+            </div>
+            <div className="rounded-xl border border-[#2e2e32] bg-[#121214] p-3">
+              <p className="text-[10px] text-gray-500">扣费积分</p>
+              <p className="mt-1 text-[16px] font-semibold text-amber-200">
+                {fmtCredits(trendReport.usage.totals.totalCreditsCharged)}
+              </p>
+            </div>
+            <div className="rounded-xl border border-[#2e2e32] bg-[#121214] p-3">
+              <p className="text-[10px] text-gray-500">Key 失败率</p>
+              <p className="mt-1 text-[16px] font-semibold text-gray-200">
+                {pct(trendReport.providerKeys?.totals?.failureRate)}
+              </p>
+            </div>
+          </div>
+
+          <div className="grid gap-3 lg:grid-cols-2">
+            <TrendJobRows title="任务按供应商" rows={trendReport.jobs.byProvider} />
+            <TrendJobRows title="任务按模型/能力" rows={trendReport.jobs.byModel} />
+            <TrendUsageRows title="用量按供应商" rows={trendReport.usage.byProvider} />
+            <TrendUsageRows title="用量按 SKU" rows={trendReport.usage.bySku} />
+          </div>
+
+          <div className="rounded-xl border border-[#2e2e32] bg-[#121214]">
+            <div className="border-b border-[#252528] px-3 py-2 text-[11px] font-semibold text-gray-300">已保存快照</div>
+            <div className="divide-y divide-[#252528]">
+              {(trendReport.snapshots || []).slice(0, 7).map((snapshot) => (
+                <div key={snapshot.day} className="grid grid-cols-[90px_1fr_auto] gap-3 px-3 py-2 text-[10px]">
+                  <div className="text-gray-300">{snapshot.day}</div>
+                  <div className="min-w-0 text-gray-500">
+                    任务 {snapshot.report?.sampleSize?.jobs || 0} / 用量 {snapshot.report?.sampleSize?.usageEvents || 0}
+                  </div>
+                  <div className="text-right text-gray-600">
+                    {snapshot.generatedAt ? new Date(snapshot.generatedAt).toLocaleString() : '-'}
+                  </div>
+                </div>
+              ))}
+              {!(trendReport.snapshots || []).length ? (
+                <div className="px-3 py-6 text-center text-[11px] text-gray-600">还没有保存过趋势快照</div>
+              ) : null}
+            </div>
+          </div>
+
+          <div className="rounded-xl border border-[#2e2e32] bg-[#121214]">
+            <div className="border-b border-[#252528] px-3 py-2 text-[11px] font-semibold text-gray-300">按天走势</div>
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[720px] text-[10px]">
+                <thead className="text-gray-500">
+                  <tr>
+                    <th className="px-3 py-2 text-left font-medium">日期</th>
+                    <th className="px-3 py-2 text-right font-medium">任务</th>
+                    <th className="px-3 py-2 text-right font-medium">成功</th>
+                    <th className="px-3 py-2 text-right font-medium">失败率</th>
+                    <th className="px-3 py-2 text-right font-medium">429</th>
+                    <th className="px-3 py-2 text-right font-medium">用量事件</th>
+                    <th className="px-3 py-2 text-right font-medium">积分</th>
+                    <th className="px-3 py-2 text-right font-medium">成本</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {trendReport.jobs.byDay.map((jobDay) => {
+                    const usageDay = trendReport.usage.byDay.find((row) => row.key === jobDay.key);
+                    return (
+                      <tr key={jobDay.key} className="border-t border-[#252528] text-gray-300">
+                        <td className="px-3 py-2 text-gray-400">{jobDay.key}</td>
+                        <td className="px-3 py-2 text-right">{jobDay.total}</td>
+                        <td className="px-3 py-2 text-right text-emerald-200">{jobDay.succeeded}</td>
+                        <td className="px-3 py-2 text-right text-red-200">{pct(jobDay.failureRate)}</td>
+                        <td className="px-3 py-2 text-right text-amber-200">{jobDay.rateLimited}</td>
+                        <td className="px-3 py-2 text-right">{usageDay?.eventCount || 0}</td>
+                        <td className="px-3 py-2 text-right text-amber-200">{fmtCredits(usageDay?.totalCreditsCharged || 0)}</td>
+                        <td className="px-3 py-2 text-right">{shortMoney(usageDay?.totalCostUsdEst || 0)}</td>
+                      </tr>
+                    );
+                  })}
+                  {!trendReport.jobs.byDay.length ? (
+                    <tr>
+                      <td colSpan={8} className="px-3 py-8 text-center text-gray-600">暂无趋势数据</td>
+                    </tr>
+                  ) : null}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       {tab === 'events' && summary ? (
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
           <div className="rounded-xl border border-[#2e2e32] bg-[#121214] p-3">
@@ -181,6 +421,7 @@ const AdminUsagePanel: React.FC = () => {
         </div>
       ) : null}
 
+      {tab !== 'trends' ? (
       <div className="flex flex-wrap gap-2 items-end rounded-xl border border-[#2e2e32] bg-[#121214] p-3">
         <label className="text-[10px] text-gray-500 flex flex-col gap-1">
           时间
@@ -229,6 +470,7 @@ const AdminUsagePanel: React.FC = () => {
           查询
         </button>
       </div>
+      ) : null}
 
       {error ? <p className="text-[11px] text-red-400">{error}</p> : null}
 

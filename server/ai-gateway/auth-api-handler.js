@@ -67,6 +67,7 @@ export function publicAuthAiJobDetail(plan) {
   return {
     job: {
       ...publicAuthAiJobSummary(plan),
+      metadata: plan.job.metadata && typeof plan.job.metadata === 'object' ? plan.job.metadata : {},
       output: plan.job.output ?? null,
       artifacts: Array.isArray(plan.job.artifacts) ? plan.job.artifacts : [],
     },
@@ -133,14 +134,32 @@ export async function createAuthAiGatewayJob(req, body, user, options = {}) {
 export async function listAuthAiGatewayJobs(user, query = {}, options = {}) {
   const store = options.store || persistentAiGatewayJobStore;
   const limit = clampListLimit(query.limit);
-  const plans = await store.list({ limit, userId: options.admin ? undefined : user.id });
+  const plans = await store.list({
+    limit,
+    userId: options.admin ? query.userId : user.id,
+    status: query.status,
+    provider: query.provider,
+    model: query.model,
+    modality: query.modality,
+    capability: query.capability,
+    q: query.q,
+  });
   return { status: 200, body: { items: plans.map(publicAuthAiJobSummary), limit } };
 }
 
 export async function summarizeAuthAiGatewayJobs(_user, query = {}, options = {}) {
   const store = options.store || persistentAiGatewayJobStore;
   const limit = clampListLimit(query.limit || 100);
-  const plans = await store.list({ limit });
+  const plans = await store.list({
+    limit,
+    userId: options.admin ? query.userId : _user?.id,
+    status: query.status,
+    provider: query.provider,
+    model: query.model,
+    modality: query.modality,
+    capability: query.capability,
+    q: query.q,
+  });
   return { status: 200, body: buildAiGatewayOpsSummary(plans, { limit }) };
 }
 

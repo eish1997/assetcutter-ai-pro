@@ -37,6 +37,53 @@ export {
 
 const PAGE_SIZE = 50;
 const TTL_OPTIONS = [15, 30, 60, 240];
+const STATUS_FILTERS: Array<{ value: '' | AiJobStatus; label: string }> = [
+  { value: '', label: '全部' },
+  { value: 'queued', label: '排队' },
+  { value: 'running', label: '运行' },
+  { value: 'succeeded', label: '成功' },
+  { value: 'failed', label: '失败' },
+  { value: 'cancelled', label: '取消' },
+];
+const MODALITY_FILTERS = [
+  { value: '', label: '全部' },
+  { value: 'image', label: '图片' },
+  { value: 'video', label: '视频' },
+  { value: 'model3d', label: '3D' },
+  { value: 'text', label: '文本' },
+];
+
+type AdminAiJobFilters = {
+  status: '' | AiJobStatus;
+  modality: string;
+  userId: string;
+  provider: string;
+  model: string;
+  capability: string;
+  q: string;
+};
+
+const EMPTY_FILTERS: AdminAiJobFilters = {
+  status: '',
+  modality: '',
+  userId: '',
+  provider: '',
+  model: '',
+  capability: '',
+  q: '',
+};
+
+export function cleanAdminAiJobFilters(filters: AdminAiJobFilters) {
+  return {
+    status: filters.status || '',
+    modality: String(filters.modality || '').trim(),
+    userId: String(filters.userId || '').trim(),
+    provider: String(filters.provider || '').trim(),
+    model: String(filters.model || '').trim(),
+    capability: String(filters.capability || '').trim(),
+    q: String(filters.q || '').trim(),
+  };
+}
 
 export function listToText(values: string[] | null | undefined): string {
   return Array.isArray(values) ? values.join('\n') : '';
@@ -266,6 +313,8 @@ const AdminAiJobsPanel: React.FC = () => {
   const [disabledModelsText, setDisabledModelsText] = React.useState('');
   const [modelOverridesText, setModelOverridesText] = React.useState('');
   const [suggestionTtlMinutes, setSuggestionTtlMinutes] = React.useState(60);
+  const [filters, setFilters] = React.useState<AdminAiJobFilters>(EMPTY_FILTERS);
+  const [appliedFilters, setAppliedFilters] = React.useState<AdminAiJobFilters>(EMPTY_FILTERS);
   const [savingOps, setSavingOps] = React.useState(false);
   const [loading, setLoading] = React.useState(true);
   const [detailLoading, setDetailLoading] = React.useState(false);
@@ -282,8 +331,8 @@ const AdminAiJobsPanel: React.FC = () => {
         ReturnType<typeof fetchAdminAiJobsSummary>,
         Promise<{ config: AiGatewayOpsControlConfig }> | Promise<null>,
       ] = [
-        fetchAdminAiJobs({ limit: PAGE_SIZE }),
-        fetchAdminAiJobsSummary({ limit: 100 }),
+        fetchAdminAiJobs({ limit: PAGE_SIZE, ...cleanAdminAiJobFilters(appliedFilters) }),
+        fetchAdminAiJobsSummary({ limit: 100, ...cleanAdminAiJobFilters(appliedFilters) }),
         canReadOps ? fetchAdminAiGatewayOpsControl() : Promise.resolve(null),
       ];
       const [res, ops, control] = await Promise.all(requests);
@@ -301,7 +350,7 @@ const AdminAiJobsPanel: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, [canReadOps]);
+  }, [appliedFilters, canReadOps]);
 
   const openJobDetail = React.useCallback(async (jobId: string) => {
     setDetailLoading(true);
@@ -390,6 +439,15 @@ const AdminAiJobsPanel: React.FC = () => {
     void load();
   }, [load]);
 
+  const applyFilters = React.useCallback(() => {
+    setAppliedFilters(cleanAdminAiJobFilters(filters));
+  }, [filters]);
+
+  const clearFilters = React.useCallback(() => {
+    setFilters(EMPTY_FILTERS);
+    setAppliedFilters(EMPTY_FILTERS);
+  }, []);
+
   const empty = !loading && jobs.length === 0;
   const opsSuggestions = React.useMemo(
     () => buildAiGatewayOpsSuggestions(summary, opsControl),
@@ -417,6 +475,83 @@ const AdminAiJobsPanel: React.FC = () => {
 
       {error ? <p className="text-[11px] text-red-400">{error}</p> : null}
       {message ? <p className="text-[11px] text-emerald-300">{message}</p> : null}
+
+      <div className="rounded-2xl border border-[#2e2e32] bg-[#121214] p-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h3 className="text-[11px] font-bold text-gray-200">任务筛选</h3>
+            <p className="mt-1 text-[10px] text-gray-600">按状态、用户、供应商、模型或关键词缩小排查范围</p>
+          </div>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={applyFilters}
+              className="rounded-xl border border-blue-500/30 bg-blue-500/10 px-3 py-2 text-[10px] text-blue-100"
+            >
+              应用筛选
+            </button>
+            <button
+              type="button"
+              onClick={clearFilters}
+              className="rounded-xl border border-[#2e2e32] bg-[#1c1c22] px-3 py-2 text-[10px] text-gray-300"
+            >
+              清空
+            </button>
+          </div>
+        </div>
+        <div className="mt-3 space-y-3">
+          <div className="flex flex-wrap gap-1">
+            {STATUS_FILTERS.map((item) => (
+              <button
+                key={item.value || 'all'}
+                type="button"
+                onClick={() => setFilters((prev) => ({ ...prev, status: item.value }))}
+                className={`rounded-lg border px-2 py-1 text-[10px] ${
+                  filters.status === item.value
+                    ? 'border-blue-400/50 bg-blue-400/15 text-blue-100'
+                    : 'border-white/[0.08] bg-black/10 text-gray-400'
+                }`}
+              >
+                {item.label}
+              </button>
+            ))}
+          </div>
+          <div className="flex flex-wrap gap-1">
+            {MODALITY_FILTERS.map((item) => (
+              <button
+                key={item.value || 'all'}
+                type="button"
+                onClick={() => setFilters((prev) => ({ ...prev, modality: item.value }))}
+                className={`rounded-lg border px-2 py-1 text-[10px] ${
+                  filters.modality === item.value
+                    ? 'border-emerald-400/50 bg-emerald-400/15 text-emerald-100'
+                    : 'border-white/[0.08] bg-black/10 text-gray-400'
+                }`}
+              >
+                {item.label}
+              </button>
+            ))}
+          </div>
+          <div className="grid gap-2 md:grid-cols-3 xl:grid-cols-6">
+            {([
+              ['userId', '用户 ID'],
+              ['provider', '供应商'],
+              ['model', '模型'],
+              ['capability', '能力'],
+              ['q', '关键词'],
+            ] as Array<[keyof AdminAiJobFilters, string]>).map(([key, label]) => (
+              <label key={key} className={key === 'q' ? 'block xl:col-span-2' : 'block'}>
+                <span className="text-[10px] text-gray-500">{label}</span>
+                <input
+                  value={String(filters[key] || '')}
+                  onChange={(ev) => setFilters((prev) => ({ ...prev, [key]: ev.target.value }))}
+                  className="mt-1 w-full rounded-xl border border-[#2e2e32] bg-[#0a0a0c] px-3 py-2 text-[11px] text-gray-100 outline-none"
+                />
+              </label>
+            ))}
+          </div>
+        </div>
+      </div>
 
       {selectedDetail ? (
         <div className="rounded-2xl border border-[#2e2e32] bg-[#121214] p-4">
@@ -458,7 +593,7 @@ const AdminAiJobsPanel: React.FC = () => {
               {selectedDetail.job.error.message}
             </p>
           ) : null}
-          <div className="mt-3 grid gap-3 lg:grid-cols-3">
+          <div className="mt-3 grid gap-3 lg:grid-cols-4">
             <div className="rounded-xl border border-[#252528] bg-[#0d0d10] p-3">
               <div className="text-[10px] text-gray-600">适配器请求</div>
               <pre className="mt-2 max-h-44 overflow-auto whitespace-pre-wrap break-words font-mono text-[10px] text-gray-400">
@@ -475,6 +610,12 @@ const AdminAiJobsPanel: React.FC = () => {
               <div className="text-[10px] text-gray-600">输出预览</div>
               <pre className="mt-2 max-h-44 overflow-auto whitespace-pre-wrap break-words font-mono text-[10px] text-gray-400">
                 {compactJson(selectedDetail.job.output)}
+              </pre>
+            </div>
+            <div className="rounded-xl border border-[#252528] bg-[#0d0d10] p-3">
+              <div className="text-[10px] text-gray-600">链路元数据</div>
+              <pre className="mt-2 max-h-44 overflow-auto whitespace-pre-wrap break-words font-mono text-[10px] text-gray-400">
+                {compactJson(selectedDetail.job.metadata)}
               </pre>
             </div>
           </div>

@@ -1,11 +1,14 @@
 import React from 'react';
 import {
+  applyAdminProviderKeyHealthAutomation,
   cooldownAdminProviderKey,
   fetchAdminProviderKeyEvents,
+  fetchAdminProviderKeyHealthSummary,
   fetchAdminProviderKeys,
   restoreAdminProviderKey,
   saveAdminProviderKeys,
   type AdminProviderKeyEvent,
+  type AdminProviderKeyHealthSummaryItem,
   type AdminProviderKeyRow,
 } from '../../services/adminProviderKeysClient';
 import { PERMISSIONS } from '../../services/adminPermissions';
@@ -69,13 +72,46 @@ function eventTypeLabel(type: string) {
   return type || '-';
 }
 
+function summaryStatusLabel(status?: string | null) {
+  if (status === 'cooling_down') return '冷却中';
+  if (status === 'rate_limited') return '触顶';
+  if (status === 'degraded') return '异常';
+  if (status === 'warning') return '观察';
+  if (status === 'healthy') return '健康';
+  return '空闲';
+}
+
+function summaryStatusClass(status?: string | null) {
+  if (status === 'cooling_down' || status === 'rate_limited') return 'border-amber-500/40 bg-amber-500/10 text-amber-100';
+  if (status === 'degraded') return 'border-red-500/40 bg-red-500/10 text-red-100';
+  if (status === 'warning') return 'border-yellow-500/40 bg-yellow-500/10 text-yellow-100';
+  if (status === 'healthy') return 'border-emerald-500/40 bg-emerald-500/10 text-emerald-100';
+  return 'border-white/10 bg-white/[0.03] text-gray-300';
+}
+
+function percent(value?: number | null) {
+  return `${Math.round(Math.max(0, Number(value || 0)) * 100)}%`;
+}
+
 const AdminProviderKeysPanel: React.FC = () => {
   const { can, isRolePreview } = useAdminStaff();
   const canWrite = can(PERMISSIONS.AI_GATEWAY_KEYS_WRITE);
   const [rows, setRows] = React.useState<AdminProviderKeyRow[]>([]);
   const [events, setEvents] = React.useState<AdminProviderKeyEvent[]>([]);
+  const [summary, setSummary] = React.useState<AdminProviderKeyHealthSummaryItem[]>([]);
+  const [summaryTotals, setSummaryTotals] = React.useState<{
+    totalEvents: number;
+    successCount: number;
+    errorCount: number;
+    status429Count: number;
+    status5xxCount: number;
+    cooldownCount: number;
+    failureRate: number;
+    retryableFailureRate: number;
+  } | null>(null);
   const [loading, setLoading] = React.useState(true);
   const [saving, setSaving] = React.useState(false);
+  const [applyingHealth, setApplyingHealth] = React.useState(false);
   const [actingId, setActingId] = React.useState('');
   const [error, setError] = React.useState('');
   const [message, setMessage] = React.useState('');
@@ -84,12 +120,15 @@ const AdminProviderKeysPanel: React.FC = () => {
     setLoading(true);
     setError('');
     try {
-      const [res, eventRes] = await Promise.all([
+      const [res, eventRes, summaryRes] = await Promise.all([
         fetchAdminProviderKeys(),
         fetchAdminProviderKeyEvents({ limit: 30 }),
+        fetchAdminProviderKeyHealthSummary({ windowHours: 24 }),
       ]);
       setRows(res.keys.length ? res.keys : [createDraft()]);
       setEvents(eventRes.events || []);
+      setSummary(summaryRes.summaries || []);
+      setSummaryTotals(summaryRes.totals || null);
     } catch (err) {
       setError(err instanceof Error ? err.message : '加载凭据池失败');
     } finally {
@@ -174,13 +213,38 @@ const AdminProviderKeysPanel: React.FC = () => {
           ? await cooldownAdminProviderKey(row.id, { minutes: 10, reason: '管理员手动冷却' })
           : await restoreAdminProviderKey(row.id);
       setRows(res.keys.length ? res.keys : [createDraft()]);
-      const eventRes = await fetchAdminProviderKeyEvents({ limit: 30 });
+      const [eventRes, summaryRes] = await Promise.all([
+        fetchAdminProviderKeyEvents({ limit: 30 }),
+        fetchAdminProviderKeyHealthSummary({ windowHours: 24 }),
+      ]);
       setEvents(eventRes.events || []);
+      setSummary(summaryRes.summaries || []);
+      setSummaryTotals(summaryRes.totals || null);
       setMessage(action === 'cooldown' ? '已冷却 10 分钟' : '已恢复可用');
     } catch (err) {
       setError(err instanceof Error ? err.message : '操作失败');
     } finally {
       setActingId('');
+    }
+  };
+
+  const runHealthAutomation = async () => {
+    if (blockIfRolePreview(isRolePreview)) return;
+    setApplyingHealth(true);
+    setError('');
+    setMessage('');
+    try {
+      const res = await applyAdminProviderKeyHealthAutomation({ windowHours: 24 });
+      setRows(res.keys?.length ? res.keys : [createDraft()]);
+      setSummary(res.summary?.summaries || []);
+      setSummaryTotals(res.summary?.totals || null);
+      const eventRes = await fetchAdminProviderKeyEvents({ limit: 30 });
+      setEvents(eventRes.events || []);
+      setMessage(res.actions.length ? `已应用 ${res.actions.length} 条健康建议` : '暂无需要应用的健康建议');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '应用健康建议失败');
+    } finally {
+      setApplyingHealth(false);
     }
   };
 
@@ -372,6 +436,88 @@ const AdminProviderKeysPanel: React.FC = () => {
             </div>
           );
         })}
+      </div>
+
+      <div className="rounded-xl border border-[#2e2e32] bg-[#121216] p-4">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h3 className="text-[12px] font-semibold text-gray-200">供应商健康报表（最近 24 小时）</h3>
+            <p className="mt-1 text-[10px] text-gray-500">基于已持久化的成功、失败、冷却和恢复事件统计。</p>
+          </div>
+          {summaryTotals ? (
+            <div className="flex flex-wrap gap-2 text-[10px] text-gray-400">
+              <span className="rounded-lg border border-white/[0.06] bg-black/20 px-2 py-1">事件 {summaryTotals.totalEvents}</span>
+              <span className="rounded-lg border border-white/[0.06] bg-black/20 px-2 py-1">成功 {summaryTotals.successCount}</span>
+              <span className="rounded-lg border border-white/[0.06] bg-black/20 px-2 py-1">失败 {summaryTotals.errorCount}</span>
+              <span className="rounded-lg border border-white/[0.06] bg-black/20 px-2 py-1">429 {summaryTotals.status429Count}</span>
+              <span className="rounded-lg border border-white/[0.06] bg-black/20 px-2 py-1">5xx {summaryTotals.status5xxCount}</span>
+              <span className="rounded-lg border border-white/[0.06] bg-black/20 px-2 py-1">失败率 {percent(summaryTotals.failureRate)}</span>
+            </div>
+          ) : null}
+          <button
+            type="button"
+            disabled={!canWrite || saving || applyingHealth}
+            onClick={() => void runHealthAutomation()}
+            className="rounded-lg border border-amber-900/50 bg-amber-950/25 px-3 py-1.5 text-[10px] text-amber-100 disabled:opacity-40"
+          >
+            {applyingHealth ? '应用中...' : '应用健康建议'}
+          </button>
+        </div>
+        {summary.length ? (
+          <div className="grid gap-2 md:grid-cols-2">
+            {summary.map((item) => (
+              <div key={item.providerKeyId || `${item.provider}-${item.label}`} className="rounded-lg border border-white/[0.06] bg-black/20 px-3 py-3">
+                <div className="mb-2 flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="truncate text-[11px] font-semibold text-gray-200" title={item.label || item.providerKeyId || ''}>
+                      {item.label || item.providerKeyId || '-'}
+                    </div>
+                    <div className="mt-0.5 text-[10px] text-gray-500">{item.provider || '-'}</div>
+                  </div>
+                  <span className={`shrink-0 rounded-full border px-2 py-0.5 text-[10px] ${summaryStatusClass(item.healthStatus)}`}>
+                    {summaryStatusLabel(item.healthStatus)}
+                  </span>
+                </div>
+                <div className="grid grid-cols-4 gap-2 text-[10px] text-gray-500">
+                  <div>
+                    <div>成功</div>
+                    <div className="mt-0.5 text-gray-300">{item.successCount}</div>
+                  </div>
+                  <div>
+                    <div>失败</div>
+                    <div className="mt-0.5 text-gray-300">{item.errorCount}</div>
+                  </div>
+                  <div>
+                    <div>429</div>
+                    <div className="mt-0.5 text-gray-300">{item.status429Count}</div>
+                  </div>
+                  <div>
+                    <div>冷却</div>
+                    <div className="mt-0.5 text-gray-300">{item.cooldownCount}</div>
+                  </div>
+                </div>
+                <div className="mt-2 grid gap-2 text-[10px] text-gray-500 md:grid-cols-2">
+                  <div>失败率 <span className="text-gray-300">{percent(item.failureRate)}</span></div>
+                  <div>可重试失败 <span className="text-gray-300">{percent(item.retryableFailureRate)}</span></div>
+                  <div>最近成功 <span className="text-gray-300">{item.lastSuccessAt ? new Date(item.lastSuccessAt).toLocaleString() : '-'}</span></div>
+                  <div>最近失败 <span className="text-gray-300">{item.lastErrorAt ? new Date(item.lastErrorAt).toLocaleString() : '-'}</span></div>
+                </div>
+                {item.lastErrorMessage ? (
+                  <div className="mt-2 truncate rounded-md bg-red-950/20 px-2 py-1 text-[10px] text-red-100" title={item.lastErrorMessage}>
+                    {item.lastErrorStatus ? `HTTP ${item.lastErrorStatus} ` : ''}{item.lastErrorMessage}
+                  </div>
+                ) : null}
+                {item.automation?.recommended ? (
+                  <div className="mt-2 rounded-md border border-amber-500/20 bg-amber-950/20 px-2 py-1 text-[10px] text-amber-100">
+                    建议：冷却 {item.automation.ttlMinutes} 分钟，避免异常 key 继续接任务
+                  </div>
+                ) : null}
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="rounded-lg border border-white/[0.06] bg-black/20 px-3 py-4 text-[11px] text-gray-500">暂无健康报表数据</div>
+        )}
       </div>
 
       <div className="rounded-xl border border-[#2e2e32] bg-[#121216] p-4">

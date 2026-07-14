@@ -9,8 +9,10 @@ vi.mock('../services/apiBase', () => ({
 }));
 
 import {
+  applyAdminProviderKeyHealthAutomation,
   cooldownAdminProviderKey,
   fetchAdminProviderKeyEvents,
+  fetchAdminProviderKeyHealthSummary,
   fetchAdminProviderKeys,
   restoreAdminProviderKey,
   saveAdminProviderKeys,
@@ -34,6 +36,25 @@ describe('adminProviderKeysClient', () => {
     expect(requestJson).toHaveBeenCalledWith(
       'https://auth.example/api/admin/ai-gateway/provider-key-events?limit=30&keyId=key+1&provider=tripo',
       { cache: 'no-store' }
+    );
+  });
+
+  it('reads provider key health summary through the admin auth-api', async () => {
+    await fetchAdminProviderKeyHealthSummary({ windowHours: 72, keyId: 'key 1', provider: 'tripo' });
+    expect(requestJson).toHaveBeenCalledWith(
+      'https://auth.example/api/admin/ai-gateway/provider-key-health-summary?windowHours=72&keyId=key+1&provider=tripo',
+      { cache: 'no-store' }
+    );
+  });
+
+  it('applies provider key health automation through the admin auth-api', async () => {
+    await applyAdminProviderKeyHealthAutomation({ windowHours: 24, provider: 'tripo', dryRun: true });
+    expect(requestJson).toHaveBeenCalledWith(
+      'https://auth.example/api/admin/ai-gateway/provider-key-health-automation',
+      {
+        method: 'POST',
+        body: JSON.stringify({ windowHours: 24, keyId: '', provider: 'tripo', dryRun: true }),
+      }
     );
   });
 

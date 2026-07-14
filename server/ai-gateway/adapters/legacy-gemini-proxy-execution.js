@@ -203,10 +203,38 @@ export async function startLegacyGeminiProxyExecution(plan, options = {}) {
     }
     return { started: true, upstreamJobId: proxy.jobId, proxyJobId: proxy.jobId, proxyStatus: proxy.status, plan: next || plan };
   } catch (error) {
-    const autoCircuit = await maybeAutoPauseAiGatewayProvider(plan, error).catch(() => null);
+    const failedAt = new Date().toISOString();
+    const failedPlan = {
+      ...plan,
+      job: {
+        ...(plan.job || {}),
+        status: 'failed',
+        error: { code: 'AI_GATEWAY_EXECUTION_HANDOFF_FAILED', message: publicErrorMessage(error) },
+        finishedAt: failedAt,
+        updatedAt: failedAt,
+      },
+    };
+    const provider = plan.route?.providerId || plan.job?.provider || '';
+    let recentPlans = [];
+    if (store?.list && provider) {
+      try {
+        recentPlans = await Promise.resolve(store.list({ provider, limit: options.autoCircuitWindowLimit || 20 }));
+      } catch {
+        recentPlans = [];
+      }
+    }
+    const autoCircuit = await maybeAutoPauseAiGatewayProvider(failedPlan, error, {
+      recentPlans,
+      windowLimit: options.autoCircuitWindowLimit,
+      minTerminal: options.autoCircuitMinTerminal,
+      minFailures: options.autoCircuitMinFailures,
+      failureRate: options.autoCircuitFailureRate,
+      minRateLimited: options.autoCircuitMinRateLimited,
+      ttlMinutes: options.autoCircuitTtlMinutes,
+    }).catch(() => null);
     const metadata = {
       gatewayExecution: {
-        failedAt: new Date().toISOString(),
+        failedAt,
         error: publicErrorMessage(error),
         targetPath: plan.adapterRequest.path,
         autoCircuit: autoCircuit
@@ -214,6 +242,7 @@ export async function startLegacyGeminiProxyExecution(plan, options = {}) {
               providerId: plan.route?.providerId || null,
               updatedAt: autoCircuit.updatedAt || null,
               disabledProviders: autoCircuit.disabledProviders || [],
+              action: autoCircuit.autoCircuitAction || null,
             }
           : null,
       },

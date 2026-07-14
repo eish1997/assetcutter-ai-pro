@@ -629,9 +629,31 @@ export async function fetchTaskExecutionEvents(query: TaskEventsQuery = {}) {
   return requestJson<TaskEventsResponse>(apiUrl(`/api/admin/task-events?${params.toString()}`));
 }
 
-export async function fetchAdminAiJobs(query: { limit?: number } = {}) {
-  const params = new URLSearchParams();
+export type AdminAiJobsQuery = {
+  limit?: number;
+  userId?: string;
+  status?: string;
+  provider?: string;
+  model?: string;
+  modality?: string;
+  capability?: string;
+  q?: string;
+};
+
+function appendAdminAiJobsQuery(params: URLSearchParams, query: AdminAiJobsQuery = {}) {
   if (query.limit != null) params.set('limit', String(query.limit));
+  if (query.userId) params.set('userId', query.userId);
+  if (query.status) params.set('status', query.status);
+  if (query.provider) params.set('provider', query.provider);
+  if (query.model) params.set('model', query.model);
+  if (query.modality) params.set('modality', query.modality);
+  if (query.capability) params.set('capability', query.capability);
+  if (query.q) params.set('q', query.q);
+}
+
+export async function fetchAdminAiJobs(query: AdminAiJobsQuery = {}) {
+  const params = new URLSearchParams();
+  appendAdminAiJobsQuery(params, query);
   const qs = params.toString();
   return requestJson<AiJobsListResponse>(apiUrl(`/api/admin/ai/jobs${qs ? `?${qs}` : ''}`), {
     cache: 'no-store',
@@ -646,9 +668,9 @@ export async function fetchAdminAiJob(jobId: string) {
   });
 }
 
-export async function fetchAdminAiJobsSummary(query: { limit?: number } = {}) {
+export async function fetchAdminAiJobsSummary(query: AdminAiJobsQuery = {}) {
   const params = new URLSearchParams();
-  if (query.limit != null) params.set('limit', String(query.limit));
+  appendAdminAiJobsQuery(params, query);
   const qs = params.toString();
   return requestJson<AiGatewayOpsSummary>(
     apiUrl(`/api/admin/ai/jobs/summary${qs ? `?${qs}` : ''}`),
@@ -734,6 +756,70 @@ export type UsageSummaryResponse = {
   bySku: Array<{ billingSku: string; count: number; quantity: number; costUsdEst: number; creditsCharged?: number }>;
 };
 
+export type AiGatewayTrendJobBucket = {
+  key: string;
+  total: number;
+  terminal: number;
+  succeeded: number;
+  failed: number;
+  cancelled: number;
+  active: number;
+  rateLimited: number;
+  authErrors: number;
+  creditErrors: number;
+  timeoutErrors: number;
+  upstreamErrors: number;
+  failureRate: number;
+  rateLimitRate: number;
+};
+
+export type AiGatewayTrendUsageBucket = {
+  key: string;
+  eventCount: number;
+  succeeded: number;
+  failed: number;
+  totalQuantity: number;
+  totalCostUsdEst: number;
+  totalCreditsCharged: number;
+};
+
+export type AiGatewayTrendReport = {
+  generatedAt: string;
+  days: number;
+  window?: { from: string; to: string };
+  sampleSize?: { jobs: number; usageEvents: number; providerKeyEvents: number };
+  jobs: {
+    totals: AiGatewayTrendJobBucket;
+    byDay: AiGatewayTrendJobBucket[];
+    byProvider: AiGatewayTrendJobBucket[];
+    byModel: AiGatewayTrendJobBucket[];
+  };
+  usage: {
+    totals: AiGatewayTrendUsageBucket;
+    byDay: AiGatewayTrendUsageBucket[];
+    byProvider: AiGatewayTrendUsageBucket[];
+    bySku: AiGatewayTrendUsageBucket[];
+  };
+  providerKeys?: {
+    totals?: {
+      totalEvents: number;
+      successCount: number;
+      errorCount: number;
+      status429Count: number;
+      status5xxCount: number;
+      cooldownCount: number;
+      failureRate: number;
+      retryableFailureRate: number;
+    };
+  } | null;
+  snapshots?: Array<{
+    day: string;
+    version: number;
+    generatedAt: string | null;
+    report: AiGatewayTrendReport;
+  }>;
+};
+
 export async function fetchUsageEvents(query: UsageEventsQuery = {}) {
   const params = new URLSearchParams();
   if (query.limit != null) params.set('limit', String(query.limit));
@@ -754,6 +840,23 @@ export async function fetchUsageSummary(query: Omit<UsageEventsQuery, 'limit' | 
   if (query.from) params.set('from', query.from);
   if (query.to) params.set('to', query.to);
   return requestJson<UsageSummaryResponse>(apiUrl(`/api/admin/usage-summary?${params.toString()}`));
+}
+
+export async function fetchAiGatewayTrends(options: { days?: number } = {}) {
+  const days = Math.min(90, Math.max(1, Math.floor(Number(options.days || 7))));
+  return requestJson<AiGatewayTrendReport>(apiUrl(`/api/admin/ai-gateway/trends?days=${days}`), {
+    cache: 'no-store',
+  });
+}
+
+export async function refreshAiGatewayTrendSnapshot(options: { day?: string } = {}) {
+  return requestJson<{ ok?: boolean; snapshot: NonNullable<AiGatewayTrendReport['snapshots']>[number] }>(
+    apiUrl('/api/admin/ai-gateway/trend-snapshots/refresh'),
+    {
+      method: 'POST',
+      body: JSON.stringify({ day: options.day || '' }),
+    }
+  );
 }
 
 export type ObservabilityTraceResponse = {

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { createAiGatewayJobPlan } from '../server/ai-gateway/index.js';
 import { createInMemoryAiJobStore } from '../server/ai-gateway/job-store.js';
 import { startAiGatewayJobExecution } from '../server/ai-gateway/executor.js';
+import { cancelAiGatewayWorkerExecution } from '../server/ai-gateway/workers/registry.js';
 
 describe('Jimeng visual AI gateway video worker', () => {
   it('starts and polls a video task through Jimeng without storing binary assets', async () => {
@@ -14,6 +15,7 @@ describe('Jimeng visual AI gateway video worker', () => {
         prompt: 'a clean product turntable video',
         width: 1280,
         height: 720,
+        estimatedCredits: 88,
       },
     }));
     const submitJimengTaskImpl = vi.fn().mockResolvedValue({ ok: true, taskId: 'jimeng_task_1' });
@@ -53,14 +55,47 @@ describe('Jimeng visual AI gateway video worker', () => {
       taskId: 'jimeng_task_1',
       registryId: 'jimeng-video-ti2v-v30-pro',
       videoUrl: 'https://cdn.example.com/v.mp4',
+      usage: {
+        provider: 'volcengine-jimeng',
+        upstreamTaskId: 'jimeng_task_1',
+        billingSku: 'video.jimeng.task',
+        meterKind: 'second',
+        artifactCount: 1,
+      },
+    });
+    expect(stored.job.metadata).toMatchObject({
+      usage: {
+        upstreamTaskId: 'jimeng_task_1',
+        billingSku: 'video.jimeng.task',
+      },
+      gatewayExecution: {
+        artifactCount: 1,
+      },
     });
     expect(stored.job.artifacts).toEqual([
       expect.objectContaining({
         kind: 'video',
         url: 'https://cdn.example.com/v.mp4',
         source: 'volcengine-jimeng',
+        billing: expect.objectContaining({ settlementSource: 'provider_task_usage' }),
       }),
     ]);
+  });
+
+  it('returns an explicit soft-cancel result when Jimeng hard cancel is unavailable', async () => {
+    const plan = createAiGatewayJobPlan({
+      id: 'aijob_jimeng_cancel',
+      modality: 'video',
+      input: { prompt: 'clip' },
+      metadata: { jimengTaskId: 'jimeng_task_cancel', upstreamTaskId: 'jimeng_task_cancel' },
+    });
+
+    await expect(cancelAiGatewayWorkerExecution(plan)).resolves.toMatchObject({
+      cancelled: false,
+      mode: 'soft',
+      reason: 'jimeng_hard_cancel_unavailable',
+      upstreamTaskId: 'jimeng_task_cancel',
+    });
   });
 
   it('uses Jimeng AK/SK credentials from provider key pool when available', async () => {

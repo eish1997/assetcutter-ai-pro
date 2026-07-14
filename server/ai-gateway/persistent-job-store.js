@@ -5,8 +5,58 @@ const MAX_JSON_JOBS = 10000;
 const DEFAULT_LIST_LIMIT = 20;
 const MAX_LIST_LIMIT = 100;
 
-function clampListLimit(value) {
-  return Math.min(MAX_LIST_LIMIT, Math.max(1, Math.floor(Number(value) || DEFAULT_LIST_LIMIT)));
+function clampListLimit(value, maxLimit = MAX_LIST_LIMIT) {
+  const max = Math.max(1, Math.min(5000, Math.floor(Number(maxLimit) || MAX_LIST_LIMIT)));
+  return Math.min(max, Math.max(1, Math.floor(Number(value) || DEFAULT_LIST_LIMIT)));
+}
+
+function nonEmptyString(value) {
+  return typeof value === 'string' && value.trim() ? value.trim() : '';
+}
+
+function normalizeJobListFilters(options = {}) {
+  return {
+    userId: nonEmptyString(options.userId),
+    status: nonEmptyString(options.status),
+    provider: nonEmptyString(options.provider),
+    model: nonEmptyString(options.model),
+    modality: nonEmptyString(options.modality),
+    capability: nonEmptyString(options.capability),
+    q: nonEmptyString(options.q),
+  };
+}
+
+function planMatchesJobListFilters(plan, filters) {
+  const job = plan?.job || {};
+  const route = plan?.route || {};
+  const error = job.error || {};
+  const provider = String(job.provider || route.providerId || '').trim();
+  if (filters.userId && String(job.userId || '') !== filters.userId) return false;
+  if (filters.status && String(job.status || '') !== filters.status) return false;
+  if (filters.provider && provider !== filters.provider) return false;
+  if (filters.model && String(job.model || '') !== filters.model) return false;
+  if (filters.modality && String(job.modality || '') !== filters.modality) return false;
+  if (filters.capability && String(job.capability || '') !== filters.capability) return false;
+  if (filters.q) {
+    const haystack = [
+      job.id,
+      job.correlationId,
+      job.userId,
+      job.status,
+      job.modality,
+      job.capability,
+      job.provider,
+      job.model,
+      route.providerId,
+      route.adapterId,
+      route.workerId,
+      route.channel,
+      error.code,
+      error.message,
+    ].join('\n').toLowerCase();
+    if (!haystack.includes(filters.q.toLowerCase())) return false;
+  }
+  return true;
 }
 
 function safeJsonParse(value, fallback) {
@@ -226,13 +276,47 @@ export function createPersistentAiJobStore() {
     },
 
     async list(options = {}) {
-      const limit = clampListLimit(options.limit);
-      const userId = String(options.userId || '').trim();
+      const limit = clampListLimit(options.limit, options.maxLimit);
+      const filters = normalizeJobListFilters(options);
       if (USE_POSTGRES) {
         await ensureAiGatewayJobsStore();
-        const res = userId
-          ? await getPool().query('SELECT * FROM ai_gateway_jobs WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2', [userId, limit])
-          : await getPool().query('SELECT * FROM ai_gateway_jobs ORDER BY created_at DESC LIMIT $1', [limit]);
+        const where = [];
+        const values = [];
+        const addValue = (value) => {
+          values.push(value);
+          return `$${values.length}`;
+        };
+        if (filters.userId) where.push(`user_id = ${addValue(filters.userId)}`);
+        if (filters.status) where.push(`status = ${addValue(filters.status)}`);
+        if (filters.provider) {
+          const p = addValue(filters.provider);
+          where.push(`(provider = ${p} OR route_json->>'providerId' = ${p})`);
+        }
+        if (filters.model) where.push(`model = ${addValue(filters.model)}`);
+        if (filters.modality) where.push(`modality = ${addValue(filters.modality)}`);
+        if (filters.capability) where.push(`capability = ${addValue(filters.capability)}`);
+        if (filters.q) {
+          const p = addValue(`%${filters.q}%`);
+          where.push(`(
+            id ILIKE ${p}
+            OR correlation_id ILIKE ${p}
+            OR COALESCE(user_id, '') ILIKE ${p}
+            OR COALESCE(provider, '') ILIKE ${p}
+            OR COALESCE(model, '') ILIKE ${p}
+            OR capability ILIKE ${p}
+            OR modality ILIKE ${p}
+            OR route_json::text ILIKE ${p}
+            OR error_json::text ILIKE ${p}
+          )`);
+        }
+        values.push(limit);
+        const res = await getPool().query(
+          `SELECT * FROM ai_gateway_jobs
+           ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+           ORDER BY created_at DESC
+           LIMIT $${values.length}`,
+          values
+        );
         return res.rows.map(rowToPlan);
       }
 
@@ -240,10 +324,11 @@ export function createPersistentAiJobStore() {
       const rows = Array.isArray(db.aiGatewayJobs) ? db.aiGatewayJobs : [];
       return rows
         .slice()
-        .filter((row) => !userId || String(row.userId || '') === userId)
-        .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')))
+        .map(rowToPlan)
+        .filter((plan) => planMatchesJobListFilters(plan, filters))
+        .sort((a, b) => String(b.job?.createdAt || '').localeCompare(String(a.job?.createdAt || '')))
         .slice(0, limit)
-        .map(rowToPlan);
+        ;
     },
   };
 }

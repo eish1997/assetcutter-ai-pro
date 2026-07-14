@@ -6,6 +6,7 @@ import {
   aiJobStatusTone,
   buildAiGatewayOpsRuleRows,
   buildAiGatewayOpsSuggestions,
+  cleanAdminAiJobFilters,
   formatAiGatewayDuration,
   formatAiGatewayExpiry,
   formatAiGatewayRate,
@@ -107,6 +108,28 @@ describe('AdminAiJobsPanel helpers', () => {
     expect(textToOverrides('pro => flash # quota\nbad line')).toEqual([
       { from: 'pro', to: 'flash', enabled: true, reason: 'quota' },
     ]);
+  });
+
+  it('cleans admin AI job filters before requesting', () => {
+    expect(
+      cleanAdminAiJobFilters({
+        status: 'failed',
+        modality: ' model3d ',
+        userId: ' user_1 ',
+        provider: ' tripo ',
+        model: ' ',
+        capability: ' model3d.generate ',
+        q: ' upstream ',
+      })
+    ).toEqual({
+      status: 'failed',
+      modality: 'model3d',
+      userId: 'user_1',
+      provider: 'tripo',
+      model: '',
+      capability: 'model3d.generate',
+      q: 'upstream',
+    });
   });
 
   it('builds AI Gateway ops suggestions without repeating existing pauses', () => {
