@@ -5,7 +5,8 @@
  *   node --env-file=.env.local scripts/dev-log-post-push.mjs --rewrite
  * Skip: SKIP_DEV_LOG=1
  *
- * Summary style: plain Chinese for non-developers (what changed + how it feels).
+ * Summary style: plain Chinese for non-developers.
+ * Lead with the product north star, then explain what moved closer and how it feels.
  * Prefer Chinese; keep only short product words. NOT "N files (foo.tsx)".
  */
 import { execFileSync } from 'node:child_process';
@@ -148,24 +149,28 @@ function buildWorkSummaryBullets(nameStats, commits, _stats) {
 
   // 大包功能按文件拆条，避免一条 commit 压成一句旧文案
   if (isAgentPack) {
-    pushUnique('工作区右侧「项目 Agent」侧栏正式可用：能对话、出计划，再在画布出活');
+    pushUnique('北极星：把工作区右侧 Agent 做成一个轻输入、懂现场、能连续推进的产品助手');
+    pushUnique('这次更靠近目标了：用户只要说一句话，Agent 会先理解现场、给出计划，再把结果推进到画布');
     if (has(/experts\//)) {
-      pushUnique('可以 @专家帮忙（如写提示词）；点发送马上出气泡，不用干等');
+      pushUnique('专业能力被藏到自然对话里：需要提示词、风格或流程建议时，可以 @专家接上');
     }
     if (has(/autoMode/)) {
-      pushUnique('多了「自动」挡：按手头素材自己选走文、图还是 3D');
+      pushUnique('输入更轻了：自动挡会按手头素材选择走文字、图片还是 3D');
     }
     if (has(/childRuns|ChildRunProgress/)) {
-      pushUnique('多步任务会显示进度小卡片，跑到哪一步看得清');
+      pushUnique('等待更有把握：多步任务会显示进度小卡片，跑到哪一步看得清');
     }
     if (has(/threadExport|threadColdLoad/)) {
-      pushUnique('对话能导出，也能加载更早的记录');
+      pushUnique('连续工作更稳：对话能导出，也能加载更早的记录');
     }
     if (has(/AssistantMarkdown|assistantTimeline|chatUiCopy|safeMarkdown/)) {
-      pushUnique('助手回复更好读：有排版、有步骤时间线，忙/空/错也说得明白');
+      pushUnique('结果更像产品而不是日志：回复有排版、有步骤，忙、空、错都说得明白');
     }
     if (has(/quickComposeTurnContext|quickComposeSendGate/)) {
-      pushUnique('进行中可取消、失败可重试；只 @专家也能点发送');
+      pushUnique('动作闭环更完整：进行中可取消、失败可重试，只 @专家也能发送');
+    }
+    if (has(/knowledgeStore|skillRegistry|planner|visibleContext/)) {
+      pushUnique('底层也补上了长期方向：上下文、记忆、Skill 和受控规划都开始有边界地工作');
     }
   }
 
