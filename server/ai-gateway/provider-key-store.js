@@ -5,10 +5,18 @@ import crypto from 'crypto';
 import { USE_POSTGRES, ensurePostgres, getPool } from '../auth-store.js';
 
 const DEFAULT_PROVIDER = 'tripo';
+const RETRYABLE_STATUS_RE = /\b(429|500|502|503|504|529)\b|too many requests|rate limit|timeout|econnreset|econnrefused|fetch failed|temporarily unavailable/i;
 
 function diskPath() {
   const custom = String(process.env.AI_GATEWAY_PROVIDER_KEYS_PATH || '').trim();
   return custom ? path.resolve(custom) : path.resolve(process.cwd(), 'server/data/ai-gateway-provider-keys.json');
+}
+
+function eventsDiskPath() {
+  const custom = String(process.env.AI_GATEWAY_PROVIDER_KEY_EVENTS_PATH || '').trim();
+  if (custom) return path.resolve(custom);
+  const parsed = path.parse(diskPath());
+  return path.join(parsed.dir, `${parsed.name}-events${parsed.ext || '.json'}`);
 }
 
 function nonEmptyString(value) {
@@ -19,6 +27,20 @@ function createKeyId(provider = DEFAULT_PROVIDER) {
   return `aigkey_${provider}_${crypto.randomUUID()}`;
 }
 
+function createEventId() {
+  return `aigkeyevt_${Date.now()}_${crypto.randomUUID()}`;
+}
+
+function clampEventsLimit(limit = 100) {
+  const n = Math.floor(Number(limit) || 100);
+  return Math.max(1, Math.min(500, n));
+}
+
+function maxStoredEvents() {
+  const n = Math.floor(Number(process.env.AI_GATEWAY_PROVIDER_KEY_EVENTS_MAX || 5000));
+  return Math.max(100, Math.min(100000, Number.isFinite(n) ? n : 5000));
+}
+
 export function maskProviderSecret(secret) {
   const s = nonEmptyString(secret);
   if (!s) return '';
@@ -26,15 +48,28 @@ export function maskProviderSecret(secret) {
   return `${s.slice(0, 6)}****${s.slice(-4)}`;
 }
 
+function normalizeCredentials(value, existing = null) {
+  const raw = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  const prev = existing && typeof existing === 'object' && !Array.isArray(existing) ? existing : {};
+  const out = {};
+  for (const key of ['accessKeyId', 'secretAccessKey', 'apiKey', 'baseUrl', 'region']) {
+    const next = nonEmptyString(raw[key]) || nonEmptyString(prev[key]);
+    if (next) out[key] = next;
+  }
+  return out;
+}
+
 export function normalizeProviderKeyRow(input, existing = null) {
   const raw = input && typeof input === 'object' && !Array.isArray(input) ? input : {};
   const provider = nonEmptyString(raw.provider) || nonEmptyString(existing?.provider) || DEFAULT_PROVIDER;
   const secret = nonEmptyString(raw.secret) || nonEmptyString(raw.apiKey) || nonEmptyString(existing?.secret);
+  const credentials = normalizeCredentials(raw.credentials, existing?.credentials);
   return {
     id: nonEmptyString(raw.id) || nonEmptyString(existing?.id) || createKeyId(provider),
     provider,
     label: nonEmptyString(raw.label) || nonEmptyString(existing?.label) || provider,
     secret,
+    credentials,
     enabled: raw.enabled !== false,
     priority: Math.max(1, Math.min(9999, Math.floor(Number(raw.priority ?? existing?.priority ?? 100)) || 100)),
     rpm: Math.max(0, Math.min(10000, Math.floor(Number(raw.rpm ?? existing?.rpm ?? 0)) || 0)),
@@ -54,17 +89,46 @@ function runtimeForKey(id) {
       minuteCount: 0,
       cooldownUntil: 0,
       lastUsedAt: null,
+      lastSuccessAt: null,
       lastErrorAt: null,
       lastError: null,
       errorCount: 0,
+      consecutiveErrorCount: 0,
+      autoCooldownCount: 0,
+      lastCooldownReason: null,
     });
   }
   return keyRuntimeState.get(key);
 }
 
+function retryableProviderKeyError(message, options = {}) {
+  if (options.retryable === true) return true;
+  const status = Math.floor(Number(options.status || 0));
+  if (status === 429 || status >= 500) return true;
+  return RETRYABLE_STATUS_RE.test(String(message || ''));
+}
+
+function autoCooldownConfig() {
+  const enabledRaw = String(process.env.AI_GATEWAY_PROVIDER_KEY_AUTO_COOLDOWN || '').trim().toLowerCase();
+  const enabled = !['0', 'false', 'off', 'no'].includes(enabledRaw);
+  const threshold = Math.max(2, Math.min(20, Math.floor(Number(process.env.AI_GATEWAY_PROVIDER_KEY_AUTO_COOLDOWN_ERRORS || 3)) || 3));
+  const cooldownMs = Math.max(30_000, Math.min(86_400_000, Math.floor(Number(process.env.AI_GATEWAY_PROVIDER_KEY_AUTO_COOLDOWN_MS || 300_000)) || 300_000));
+  return { enabled, threshold, cooldownMs };
+}
+
+function providerKeyHealth(runtime, now = Date.now()) {
+  const coolingDown = Boolean(runtime.cooldownUntil && runtime.cooldownUntil > now);
+  const consecutive = Math.max(0, Math.floor(Number(runtime.consecutiveErrorCount || 0)));
+  if (coolingDown) return { status: 'cooling_down', suggestedAction: 'wait_or_restore' };
+  if (consecutive >= 3) return { status: 'degraded', suggestedAction: 'cooldown_or_check_key' };
+  if (consecutive > 0) return { status: 'warning', suggestedAction: 'watch' };
+  return { status: 'healthy', suggestedAction: null };
+}
+
 function redactKey(row) {
   const runtime = runtimeForKey(row.id);
   const now = Date.now();
+  const health = providerKeyHealth(runtime, now);
   return {
     id: row.id,
     provider: row.provider,
@@ -74,21 +138,50 @@ function redactKey(row) {
     rpm: row.rpm || 0,
     secretPreview: maskProviderSecret(row.secret),
     hasSecret: Boolean(nonEmptyString(row.secret)),
+    credentialsPreview: Object.fromEntries(
+      Object.entries(row.credentials || {}).map(([key, value]) => [key, maskProviderSecret(value)])
+    ),
+    hasCredentials: Object.keys(row.credentials || {}).length > 0,
     updatedAt: row.updatedAt || null,
     updatedByUserId: row.updatedByUserId || null,
     runtime: {
       lastUsedAt: runtime.lastUsedAt || null,
+      lastSuccessAt: runtime.lastSuccessAt || null,
       lastErrorAt: runtime.lastErrorAt || null,
       lastError: runtime.lastError || null,
       errorCount: runtime.errorCount || 0,
+      consecutiveErrorCount: runtime.consecutiveErrorCount || 0,
+      autoCooldownCount: runtime.autoCooldownCount || 0,
+      lastCooldownReason: runtime.lastCooldownReason || null,
       cooldownUntil: runtime.cooldownUntil ? new Date(runtime.cooldownUntil).toISOString() : null,
       coolingDown: Boolean(runtime.cooldownUntil && runtime.cooldownUntil > now),
       currentMinuteCount: runtime.minuteCount || 0,
+      healthStatus: health.status,
+      suggestedAction: health.suggestedAction,
     },
   };
 }
 
 function envKeysForProvider(provider) {
+  if (provider === 'volcengine-jimeng') {
+    const accessKeyId = nonEmptyString(process.env.VOLCENGINE_ACCESS_KEY);
+    const secretAccessKey = nonEmptyString(process.env.VOLCENGINE_SECRET_KEY);
+    if (!accessKeyId || !secretAccessKey) return [];
+    return [
+      normalizeProviderKeyRow({
+        id: 'env_volcengine_jimeng_1',
+        provider,
+        label: 'VOLCENGINE_ACCESS_KEY',
+        enabled: true,
+        priority: 9000,
+        credentials: {
+          accessKeyId,
+          secretAccessKey,
+          region: nonEmptyString(process.env.JIMENG_VISUAL_REGION),
+        },
+      }),
+    ];
+  }
   if (provider !== 'tripo') return [];
   const joined = String(process.env.TRIPO_API_KEYS || process.env.TRIPO_API_KEY || '').trim();
   if (!joined) return [];
@@ -110,7 +203,7 @@ function normalizeKeyList(rows) {
   const seen = new Set();
   for (const row of Array.isArray(rows) ? rows : []) {
     const normalized = normalizeProviderKeyRow(row);
-    if (!normalized.secret || seen.has(normalized.id)) continue;
+    if ((!normalized.secret && !Object.keys(normalized.credentials || {}).length) || seen.has(normalized.id)) continue;
     seen.add(normalized.id);
     out.push(normalized);
   }
@@ -130,6 +223,7 @@ async function writeDiskRows(rows, updatedByUserId = null) {
   const payload = {
     keys: normalizeKeyList(rows).map((row) => ({
       ...row,
+      credentials: row.credentials || {},
       updatedAt: new Date().toISOString(),
       updatedByUserId: nonEmptyString(updatedByUserId) || row.updatedByUserId || null,
     })),
@@ -155,6 +249,7 @@ export async function ensureProviderKeyStore() {
       provider TEXT NOT NULL,
       label TEXT NOT NULL,
       secret TEXT NOT NULL,
+      credentials JSONB NOT NULL DEFAULT '{}'::jsonb,
       enabled BOOLEAN NOT NULL DEFAULT TRUE,
       priority INTEGER NOT NULL DEFAULT 100,
       rpm INTEGER NOT NULL DEFAULT 0,
@@ -163,13 +258,33 @@ export async function ensureProviderKeyStore() {
     );
   `);
   await getPool().query(`CREATE INDEX IF NOT EXISTS idx_ai_gateway_provider_keys_provider ON ai_gateway_provider_keys(provider, enabled, priority);`);
+  await getPool().query(`
+    CREATE TABLE IF NOT EXISTS ai_gateway_provider_key_events (
+      id TEXT PRIMARY KEY,
+      provider_key_id TEXT NOT NULL,
+      provider TEXT NULL,
+      label TEXT NULL,
+      type TEXT NOT NULL,
+      status INTEGER NULL,
+      message TEXT NULL,
+      reason TEXT NULL,
+      retryable BOOLEAN NOT NULL DEFAULT FALSE,
+      cooldown_until TIMESTAMPTZ NULL,
+      consecutive_error_count INTEGER NULL,
+      auto_cooldown_count INTEGER NULL,
+      created_at TIMESTAMPTZ NOT NULL
+    );
+  `);
+  await getPool().query(`CREATE INDEX IF NOT EXISTS idx_ai_gateway_provider_key_events_key_created ON ai_gateway_provider_key_events(provider_key_id, created_at DESC);`);
+  await getPool().query(`CREATE INDEX IF NOT EXISTS idx_ai_gateway_provider_key_events_provider_created ON ai_gateway_provider_key_events(provider, created_at DESC);`);
   storeReady = true;
 }
 
 async function readDbRows() {
   await ensureProviderKeyStore();
+  await getPool().query(`ALTER TABLE ai_gateway_provider_keys ADD COLUMN IF NOT EXISTS credentials JSONB NOT NULL DEFAULT '{}'::jsonb;`);
   const res = await getPool().query(
-    `SELECT id, provider, label, secret, enabled, priority, rpm, updated_at, updated_by_user_id
+    `SELECT id, provider, label, secret, credentials, enabled, priority, rpm, updated_at, updated_by_user_id
      FROM ai_gateway_provider_keys
      ORDER BY priority ASC, label ASC`
   );
@@ -178,6 +293,7 @@ async function readDbRows() {
     provider: row.provider,
     label: row.label,
     secret: row.secret,
+    credentials: row.credentials || {},
     enabled: row.enabled,
     priority: row.priority,
     rpm: row.rpm,
@@ -201,9 +317,20 @@ async function writeDbRows(rows, updatedByUserId = null) {
     for (const row of next) {
       await p.query(
         `INSERT INTO ai_gateway_provider_keys
-         (id, provider, label, secret, enabled, priority, rpm, updated_at, updated_by_user_id)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-        [row.id, row.provider, row.label, row.secret, row.enabled !== false, row.priority, row.rpm || 0, row.updatedAt, row.updatedByUserId]
+         (id, provider, label, secret, credentials, enabled, priority, rpm, updated_at, updated_by_user_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+        [
+          row.id,
+          row.provider,
+          row.label,
+          row.secret,
+          JSON.stringify(row.credentials || {}),
+          row.enabled !== false,
+          row.priority,
+          row.rpm || 0,
+          row.updatedAt,
+          row.updatedByUserId,
+        ]
       );
     }
     await p.query('COMMIT');
@@ -216,12 +343,22 @@ async function writeDbRows(rows, updatedByUserId = null) {
 
 export async function listProviderKeys({ includeSecrets = false } = {}) {
   const rows = USE_POSTGRES ? await readDbRows() : readDiskRows();
-  const withEnv = [...rows, ...envKeysForProvider(DEFAULT_PROVIDER)];
+  const providers = new Set([DEFAULT_PROVIDER, ...rows.map((row) => row.provider), 'volcengine-jimeng']);
+  const withEnv = [
+    ...rows,
+    ...Array.from(providers).flatMap((provider) => envKeysForProvider(provider)),
+  ];
   return includeSecrets ? withEnv : withEnv.map(redactKey);
 }
 
 export async function saveProviderKeys(rows, { updatedByUserId = null } = {}) {
-  const saved = USE_POSTGRES ? await writeDbRows(rows, updatedByUserId) : await writeDiskRows(rows, updatedByUserId);
+  const existingRows = await listProviderKeys({ includeSecrets: true });
+  const existingById = new Map(existingRows.map((row) => [row.id, row]));
+  const mergedRows = (Array.isArray(rows) ? rows : []).map((row) => {
+    const id = nonEmptyString(row?.id);
+    return normalizeProviderKeyRow(row, id ? existingById.get(id) : null);
+  });
+  const saved = USE_POSTGRES ? await writeDbRows(mergedRows, updatedByUserId) : await writeDiskRows(mergedRows, updatedByUserId);
   return saved.map(redactKey);
 }
 
@@ -231,7 +368,8 @@ export async function acquireProviderKey(provider = DEFAULT_PROVIDER) {
   const minuteBucket = Math.floor(now / 60_000);
   const candidates = rows
     .filter((row) => {
-      if (row.provider !== provider || row.enabled === false || !row.secret) return false;
+      if (row.provider !== provider || row.enabled === false) return false;
+      if (!row.secret && !Object.keys(row.credentials || {}).length) return false;
       const runtime = runtimeForKey(row.id);
       if (runtime.cooldownUntil && runtime.cooldownUntil > now) return false;
       if (runtime.minuteBucket !== minuteBucket) {
@@ -258,14 +396,160 @@ export async function acquireProviderKey(provider = DEFAULT_PROVIDER) {
     provider: key.provider,
     label: key.label,
     secret: key.secret,
+    credentials: key.credentials || {},
     rpm: key.rpm || 0,
   };
+}
+
+function publicEvent(row) {
+  return {
+    id: row.id,
+    providerKeyId: row.providerKeyId || row.provider_key_id || null,
+    provider: row.provider || null,
+    label: row.label || null,
+    type: row.type,
+    status: row.status == null ? null : Number(row.status),
+    message: row.message || null,
+    reason: row.reason || null,
+    retryable: Boolean(row.retryable),
+    cooldownUntil: row.cooldownUntil || row.cooldown_until || null,
+    consecutiveErrorCount: row.consecutiveErrorCount ?? row.consecutive_error_count ?? null,
+    autoCooldownCount: row.autoCooldownCount ?? row.auto_cooldown_count ?? null,
+    createdAt: row.createdAt || row.created_at || null,
+  };
+}
+
+function readDiskEvents() {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(eventsDiskPath(), 'utf8') || '{}');
+    return Array.isArray(parsed.events) ? parsed.events.map(publicEvent) : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeDiskEvents(events) {
+  const next = (Array.isArray(events) ? events : [])
+    .map(publicEvent)
+    .filter((event) => event.id && event.type && event.createdAt)
+    .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))
+    .slice(0, maxStoredEvents());
+  fs.mkdirSync(path.dirname(eventsDiskPath()), { recursive: true });
+  fs.writeFileSync(eventsDiskPath(), `${JSON.stringify({ events: next }, null, 2)}\n`, 'utf8');
+  return next;
+}
+
+function providerKeyRowForEvent(id) {
+  const rows = readDiskRows();
+  const envRows = [DEFAULT_PROVIDER, 'volcengine-jimeng'].flatMap((provider) => envKeysForProvider(provider));
+  return [...rows, ...envRows].find((row) => row.id === id) || null;
+}
+
+function appendDiskEvent(event) {
+  writeDiskEvents([publicEvent(event), ...readDiskEvents()]);
+}
+
+async function appendDbEvent(event) {
+  await ensureProviderKeyStore();
+  const e = publicEvent(event);
+  await getPool().query(
+    `INSERT INTO ai_gateway_provider_key_events
+     (id, provider_key_id, provider, label, type, status, message, reason, retryable, cooldown_until, consecutive_error_count, auto_cooldown_count, created_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+    [
+      e.id,
+      e.providerKeyId,
+      e.provider,
+      e.label,
+      e.type,
+      e.status,
+      e.message,
+      e.reason,
+      e.retryable,
+      e.cooldownUntil,
+      e.consecutiveErrorCount,
+      e.autoCooldownCount,
+      e.createdAt,
+    ]
+  );
+}
+
+function recordProviderKeyEvent(id, type, fields = {}) {
+  const key = nonEmptyString(id);
+  if (!key) return null;
+  const runtime = runtimeForKey(key);
+  const row = fields.provider || fields.label ? null : providerKeyRowForEvent(key);
+  const event = publicEvent({
+    id: createEventId(),
+    providerKeyId: key,
+    provider: fields.provider || row?.provider || null,
+    label: fields.label || row?.label || null,
+    type,
+    status: fields.status,
+    message: fields.message,
+    reason: fields.reason,
+    retryable: fields.retryable,
+    cooldownUntil: fields.cooldownUntil || (runtime.cooldownUntil ? new Date(runtime.cooldownUntil).toISOString() : null),
+    consecutiveErrorCount: runtime.consecutiveErrorCount || 0,
+    autoCooldownCount: runtime.autoCooldownCount || 0,
+    createdAt: fields.createdAt || new Date().toISOString(),
+  });
+  if (USE_POSTGRES) void appendDbEvent(event).catch(() => {});
+  else {
+    try {
+      appendDiskEvent(event);
+    } catch {
+      // Health history must never block provider execution.
+    }
+  }
+  return event;
+}
+
+export async function listProviderKeyHealthEvents(options = {}) {
+  const limit = clampEventsLimit(options.limit || 100);
+  const keyId = nonEmptyString(options.keyId);
+  const provider = nonEmptyString(options.provider);
+  if (USE_POSTGRES) {
+    await ensureProviderKeyStore();
+    const where = [];
+    const values = [];
+    if (keyId) {
+      values.push(keyId);
+      where.push(`provider_key_id = $${values.length}`);
+    }
+    if (provider) {
+      values.push(provider);
+      where.push(`provider = $${values.length}`);
+    }
+    values.push(limit);
+    const res = await getPool().query(
+      `SELECT id, provider_key_id, provider, label, type, status, message, reason, retryable, cooldown_until, consecutive_error_count, auto_cooldown_count, created_at
+       FROM ai_gateway_provider_key_events
+       ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+       ORDER BY created_at DESC
+       LIMIT $${values.length}`,
+      values
+    );
+    return res.rows.map((row) => publicEvent({
+      ...row,
+      cooldownUntil: row.cooldown_until ? new Date(row.cooldown_until).toISOString() : null,
+      createdAt: row.created_at ? new Date(row.created_at).toISOString() : null,
+    }));
+  }
+  return readDiskEvents()
+    .filter((event) => !keyId || event.providerKeyId === keyId)
+    .filter((event) => !provider || event.provider === provider)
+    .slice(0, limit);
 }
 
 export function recordProviderKeySuccess(id) {
   const runtime = runtimeForKey(id);
   runtime.lastUsedAt = new Date().toISOString();
+  runtime.lastSuccessAt = runtime.lastUsedAt;
   runtime.lastError = null;
+  runtime.consecutiveErrorCount = 0;
+  runtime.lastCooldownReason = null;
+  recordProviderKeyEvent(id, 'success');
 }
 
 export function recordProviderKeyError(id, error, options = {}) {
@@ -275,8 +559,75 @@ export function recordProviderKeyError(id, error, options = {}) {
   runtime.lastErrorAt = new Date(now).toISOString();
   runtime.lastError = message.slice(0, 500);
   runtime.errorCount = (runtime.errorCount || 0) + 1;
-  const cooldownMs = Number(options.cooldownMs || 0);
-  if (cooldownMs > 0) runtime.cooldownUntil = Math.max(runtime.cooldownUntil || 0, now + cooldownMs);
+  runtime.consecutiveErrorCount = (runtime.consecutiveErrorCount || 0) + 1;
+  const config = autoCooldownConfig();
+  const retryable = retryableProviderKeyError(message, options);
+  const explicitCooldownMs = Number(options.cooldownMs || 0);
+  const autoCooldownMs =
+    !explicitCooldownMs &&
+    config.enabled &&
+    retryable &&
+    runtime.consecutiveErrorCount >= config.threshold
+      ? config.cooldownMs
+      : 0;
+  const cooldownMs = explicitCooldownMs || autoCooldownMs;
+  if (cooldownMs > 0) {
+    runtime.cooldownUntil = Math.max(runtime.cooldownUntil || 0, now + cooldownMs);
+    runtime.lastCooldownReason =
+      nonEmptyString(options.reason) ||
+      (autoCooldownMs ? `Auto cooldown after ${runtime.consecutiveErrorCount} consecutive provider errors` : message.slice(0, 200));
+    if (autoCooldownMs) runtime.autoCooldownCount = (runtime.autoCooldownCount || 0) + 1;
+  }
+  recordProviderKeyEvent(id, 'error', {
+    status: Math.floor(Number(options.status || 0)) || null,
+    message,
+    reason: nonEmptyString(options.reason),
+    retryable,
+  });
+  if (autoCooldownMs) {
+    recordProviderKeyEvent(id, 'auto_cooldown', {
+      status: Math.floor(Number(options.status || 0)) || null,
+      message,
+      reason: runtime.lastCooldownReason,
+      retryable,
+    });
+  } else if (explicitCooldownMs) {
+    recordProviderKeyEvent(id, 'cooldown', {
+      status: Math.floor(Number(options.status || 0)) || null,
+      message,
+      reason: runtime.lastCooldownReason,
+      retryable,
+    });
+  }
+}
+
+export function cooldownProviderKey(id, options = {}) {
+  const key = nonEmptyString(id);
+  if (!key) return null;
+  const runtime = runtimeForKey(key);
+  const now = Date.now();
+  const minutes = Math.max(1, Math.min(1440, Math.floor(Number(options.minutes || 10)) || 10));
+  runtime.cooldownUntil = now + minutes * 60_000;
+  runtime.lastErrorAt = new Date(now).toISOString();
+  runtime.lastError = nonEmptyString(options.reason) || `Manual cooldown for ${minutes} minutes`;
+  runtime.lastCooldownReason = runtime.lastError;
+  runtime.errorCount = runtime.errorCount || 0;
+  recordProviderKeyEvent(key, 'manual_cooldown', {
+    reason: runtime.lastCooldownReason,
+    retryable: false,
+  });
+  return runtime;
+}
+
+export function restoreProviderKey(id) {
+  const key = nonEmptyString(id);
+  if (!key) return null;
+  const runtime = runtimeForKey(key);
+  runtime.cooldownUntil = 0;
+  runtime.lastError = null;
+  runtime.lastCooldownReason = null;
+  recordProviderKeyEvent(key, 'restore');
+  return runtime;
 }
 
 export function resetProviderKeyRuntimeForTests() {

@@ -70,6 +70,18 @@ function plainFromSubject(subject) {
   if (!raw) return '';
   const lower = raw.toLowerCase();
   const rules = [
+    [
+      /project\s*agent\s*u4|ship\s+project\s*agent|experts?\s+and\s+optimistic|optimistic\s+send/i,
+      '项目 Agent 大升级：@专家、自动挡、进度卡、导出记录，发送立刻有反馈',
+    ],
+    [
+      /project\s*agent|agent\s*u1|submitturn|threadstore|agent\s*dock/i,
+      '工作区右侧多了「项目 Agent」：说话会先出计划，再在画布出活',
+    ],
+    [
+      /gemini-?3|vertex.*hybrid|publisher\s*404|global\s*hybrid|us-central1/i,
+      '生图路由更稳了：新模型走全球通道，少出现「模型找不到」',
+    ],
     [/richer thermal receipt|thermal receipt|work-style summar/i, '开发日志小票更好看了，摘要也更白话'],
     [/compose-style dropdown|dropdowns? and r2-backed|dropdown/i, '下拉菜单外观和底部输入栏统一了，看着更整齐'],
     [/dev log|dev-log/i, '开发日志能按天查看，也能导出日结小票'],
@@ -78,17 +90,40 @@ function plainFromSubject(subject) {
     [/chunk|lazy|equirect|preview/i, '大图预览切换全景、3D 时更不容易打不开'],
     [/workspace|小盒子|justified/i, '工作区布局和切换更顺手了'],
     [/readme|docs|交接/i, '说明文档有更新'],
+    [/ai\s*gateway|provider\s*key|worker|tripo|model3d|3d/i, 'AI Gateway、供应商 Key 池和多模态 worker 又往生产化推进了一步'],
   ];
   for (const [re, zh] of rules) {
     if (re.test(lower) || re.test(raw)) return zh;
   }
   // Prefer Chinese-heavy subjects as-is; soften dense English
   const latin = (raw.replace(/[^A-Za-z]/g, '').length || 0) / Math.max(raw.length, 1);
-  if (latin > 0.45) return '界面与使用体验有一处改进';
+  if (latin > 0.45) return plainFallbackFromSubject(raw);
   return raw
     .replace(/\bUI\b/g, '界面')
     .replace(/\bpill\b/gi, '小标签')
     .replace(/\bchip\b/gi, '小标签');
+}
+
+function plainFallbackFromSubject(subject) {
+  const raw = stripCommitPrefix(subject)
+    .replace(/[-_/]+/g, ' ')
+    .replace(/\b(feat|fix|chore|docs|refactor|style|test|perf|build|ci)\b/gi, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+  if (!raw) return '这次改动已整理成开发记录，方便回看发生了什么';
+  if (/ai\s*gateway|provider\s*key|worker|tripo|model\s*3d|3d/i.test(raw)) {
+    return '这次主要推进 AI Gateway、供应商 Key 池和多模态 worker，让后续接 3D、视频、音乐时走统一任务链路';
+  }
+  if (/admin|permission|role|dashboard|console/i.test(raw)) {
+    return '这次主要整理后台管理能力，让权限、入口和运营信息更容易看懂和维护';
+  }
+  if (/credit|billing|usage|cost|settlement|reserve/i.test(raw)) {
+    return '这次主要整理积分和计费链路，让任务成功、失败和结算记录更清楚';
+  }
+  if (/image|video|music|model|generate|workflow/i.test(raw)) {
+    return '这次主要整理生成任务链路，让工作流里的生成、状态和结果回填更稳';
+  }
+  return `这次主要整理「${raw}」，让相关流程更清楚、更可追踪`;
 }
 
 /**
@@ -105,25 +140,54 @@ function buildWorkSummaryBullets(nameStats, commits, _stats) {
     bullets.push(t);
   };
 
-  for (const c of commits) {
-    const h = plainFromSubject(c.subject);
-    if (h) pushUnique(h);
-    if (bullets.length >= 6) break;
-  }
-
   const files = nameStats
     .map((line) => line.split('\t').pop()?.trim() || line.trim())
     .filter(Boolean);
   const has = (re) => files.some((f) => re.test(f));
+  const isAgentPack = has(
+    /services\/projectAgent|quickComposeChat|project-agent|quickComposeSendGate|quickComposeTurnContext|quickComposeMention/
+  );
 
-  if (bullets.length < 6) {
+  // 大包功能按文件拆条，避免一条 commit 压成一句旧文案
+  if (isAgentPack) {
+    pushUnique('工作区右侧「项目 Agent」侧栏正式可用：能对话、出计划，再在画布出活');
+    if (has(/experts\//)) {
+      pushUnique('可以 @专家帮忙（如写提示词）；点发送马上出气泡，不用干等');
+    }
+    if (has(/autoMode/)) {
+      pushUnique('多了「自动」挡：按手头素材自己选走文、图还是 3D');
+    }
+    if (has(/childRuns|ChildRunProgress/)) {
+      pushUnique('多步任务会显示进度小卡片，跑到哪一步看得清');
+    }
+    if (has(/threadExport|threadColdLoad/)) {
+      pushUnique('对话能导出，也能加载更早的记录');
+    }
+    if (has(/AssistantMarkdown|assistantTimeline|chatUiCopy|safeMarkdown/)) {
+      pushUnique('助手回复更好读：有排版、有步骤时间线，忙/空/错也说得明白');
+    }
+    if (has(/quickComposeTurnContext|quickComposeSendGate/)) {
+      pushUnique('进行中可取消、失败可重试；只 @专家也能点发送');
+    }
+  }
+
+  for (const c of commits) {
+    const h = plainFromSubject(c.subject);
+    if (!h) continue;
+    // 已有 Agent 拆条时，跳过笼统的「先出计划再出活」一句
+    if (isAgentPack && /项目 Agent/.test(h) && bullets.length >= 2) continue;
+    pushUnique(h);
+    if (bullets.length >= 8) break;
+  }
+
+  if (bullets.length < 8) {
     if (has(/CustomDropdown|DropdownSelect|DROPDOWN_/)) {
       pushUnique('下拉菜单外观和底部输入栏统一了，看着更整齐');
     }
     if (has(/WorkflowSidebarColumn|SIDEBAR_COMPOSE_CHIP|SIDEBAR_FILTER_CHIP/)) {
       pushUnique('左侧功能区的小按钮、筛选标签，和底部输入栏一个风格了');
     }
-    if (has(/WorkspaceQuickComposeBar/)) {
+    if (has(/WorkspaceQuickComposeBar/) && !isAgentPack) {
       pushUnique('底部输入栏的选项样式更统一了');
     }
     if (has(/devLogReceiptExport|devLogPlainSummary/)) {

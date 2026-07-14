@@ -1,31 +1,82 @@
 import React from 'react';
 import {
+  cooldownAdminProviderKey,
+  fetchAdminProviderKeyEvents,
   fetchAdminProviderKeys,
+  restoreAdminProviderKey,
   saveAdminProviderKeys,
+  type AdminProviderKeyEvent,
   type AdminProviderKeyRow,
 } from '../../services/adminProviderKeysClient';
 import { PERMISSIONS } from '../../services/adminPermissions';
 import { blockIfRolePreview } from '../../services/adminRolePreview';
 import { useAdminStaff } from './AdminStaffContext';
 
-function createDraft(): AdminProviderKeyRow {
+const PROVIDERS = [
+  { id: 'tripo', label: 'Tripo 3D', hint: 'Bearer API Key' },
+  { id: 'volcengine-jimeng', label: '即梦视频', hint: '火山 AK/SK' },
+];
+
+function providerLabel(provider: string) {
+  return PROVIDERS.find((item) => item.id === provider)?.label || provider || '供应商';
+}
+
+function createDraft(provider = 'tripo'): AdminProviderKeyRow {
   return {
     id: `draft_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-    provider: 'tripo',
-    label: 'Tripo',
+    provider,
+    label: providerLabel(provider),
     enabled: true,
     priority: 100,
     rpm: 0,
     secret: '',
+    credentials: {},
   };
+}
+
+function credentialValue(row: AdminProviderKeyRow, key: string) {
+  return row.credentials?.[key] || '';
+}
+
+function healthLabel(status?: string | null) {
+  if (status === 'cooling_down') return '冷却中';
+  if (status === 'degraded') return '降级';
+  if (status === 'warning') return '观察';
+  return '健康';
+}
+
+function healthClass(status?: string | null) {
+  if (status === 'cooling_down') return 'text-amber-200';
+  if (status === 'degraded') return 'text-red-200';
+  if (status === 'warning') return 'text-yellow-200';
+  return 'text-emerald-200';
+}
+
+function suggestionLabel(action?: string | null) {
+  if (action === 'wait_or_restore') return '等待或恢复';
+  if (action === 'cooldown_or_check_key') return '建议冷却或检查 Key';
+  if (action === 'watch') return '继续观察';
+  return '-';
+}
+
+function eventTypeLabel(type: string) {
+  if (type === 'success') return '成功';
+  if (type === 'error') return '错误';
+  if (type === 'auto_cooldown') return '自动冷却';
+  if (type === 'manual_cooldown') return '手动冷却';
+  if (type === 'cooldown') return '冷却';
+  if (type === 'restore') return '恢复';
+  return type || '-';
 }
 
 const AdminProviderKeysPanel: React.FC = () => {
   const { can, isRolePreview } = useAdminStaff();
   const canWrite = can(PERMISSIONS.AI_GATEWAY_KEYS_WRITE);
   const [rows, setRows] = React.useState<AdminProviderKeyRow[]>([]);
+  const [events, setEvents] = React.useState<AdminProviderKeyEvent[]>([]);
   const [loading, setLoading] = React.useState(true);
   const [saving, setSaving] = React.useState(false);
+  const [actingId, setActingId] = React.useState('');
   const [error, setError] = React.useState('');
   const [message, setMessage] = React.useState('');
 
@@ -33,10 +84,14 @@ const AdminProviderKeysPanel: React.FC = () => {
     setLoading(true);
     setError('');
     try {
-      const res = await fetchAdminProviderKeys();
+      const [res, eventRes] = await Promise.all([
+        fetchAdminProviderKeys(),
+        fetchAdminProviderKeyEvents({ limit: 30 }),
+      ]);
       setRows(res.keys.length ? res.keys : [createDraft()]);
+      setEvents(eventRes.events || []);
     } catch (err) {
-      setError(err instanceof Error ? err.message : '加载 Key 池失败');
+      setError(err instanceof Error ? err.message : '加载凭据池失败');
     } finally {
       setLoading(false);
     }
@@ -50,6 +105,31 @@ const AdminProviderKeysPanel: React.FC = () => {
     setRows((prev) => prev.map((row) => (row.id === id ? { ...row, ...patch } : row)));
   };
 
+  const updateCredential = (id: string, key: string, value: string) => {
+    setRows((prev) =>
+      prev.map((row) =>
+        row.id === id
+          ? {
+              ...row,
+              credentials: {
+                ...(row.credentials || {}),
+                [key]: value,
+              },
+            }
+          : row
+      )
+    );
+  };
+
+  const switchProvider = (id: string, provider: string) => {
+    updateRow(id, {
+      provider,
+      label: providerLabel(provider),
+      secret: '',
+      credentials: {},
+    });
+  };
+
   const save = async () => {
     if (blockIfRolePreview(isRolePreview)) return;
     setSaving(true);
@@ -57,33 +137,61 @@ const AdminProviderKeysPanel: React.FC = () => {
     setMessage('');
     try {
       const cleaned = rows
-        .map((row) => ({
-          ...row,
-          provider: String(row.provider || 'tripo').trim(),
-          label: String(row.label || row.provider || 'Tripo').trim(),
-          priority: Math.max(1, Math.floor(Number(row.priority) || 100)),
-          rpm: Math.max(0, Math.floor(Number(row.rpm) || 0)),
-          secret: String(row.secret || '').trim(),
-        }))
-        .filter((row) => row.provider && (row.secret || row.hasSecret));
+        .map((row) => {
+          const provider = String(row.provider || 'tripo').trim();
+          const credentials = Object.fromEntries(
+            Object.entries(row.credentials || {}).map(([key, value]) => [key, String(value || '').trim()]).filter(([, value]) => value)
+          );
+          return {
+            ...row,
+            provider,
+            label: String(row.label || providerLabel(provider)).trim(),
+            priority: Math.max(1, Math.floor(Number(row.priority) || 100)),
+            rpm: Math.max(0, Math.floor(Number(row.rpm) || 0)),
+            secret: String(row.secret || '').trim(),
+            credentials,
+          };
+        })
+        .filter((row) => row.provider && (row.secret || row.hasSecret || Object.keys(row.credentials || {}).length || row.hasCredentials));
       const saved = await saveAdminProviderKeys(cleaned);
       setRows(saved.keys.length ? saved.keys : [createDraft()]);
-      setMessage('Key 池已保存');
+      setMessage('凭据池已保存');
     } catch (err) {
-      setError(err instanceof Error ? err.message : '保存 Key 池失败');
+      setError(err instanceof Error ? err.message : '保存凭据池失败');
     } finally {
       setSaving(false);
     }
   };
 
-  if (loading) return <div className="text-[11px] text-gray-400">正在加载 Key 池...</div>;
+  const runKeyAction = async (row: AdminProviderKeyRow, action: 'cooldown' | 'restore') => {
+    if (blockIfRolePreview(isRolePreview)) return;
+    setActingId(row.id);
+    setError('');
+    setMessage('');
+    try {
+      const res =
+        action === 'cooldown'
+          ? await cooldownAdminProviderKey(row.id, { minutes: 10, reason: '管理员手动冷却' })
+          : await restoreAdminProviderKey(row.id);
+      setRows(res.keys.length ? res.keys : [createDraft()]);
+      const eventRes = await fetchAdminProviderKeyEvents({ limit: 30 });
+      setEvents(eventRes.events || []);
+      setMessage(action === 'cooldown' ? '已冷却 10 分钟' : '已恢复可用');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '操作失败');
+    } finally {
+      setActingId('');
+    }
+  };
+
+  if (loading) return <div className="text-[11px] text-gray-400">正在加载凭据池...</div>;
 
   return (
-    <div className="max-w-4xl space-y-4">
+    <div className="max-w-5xl space-y-4">
       <div>
-        <h2 className="text-sm font-semibold text-white">AI Key 池</h2>
+        <h2 className="text-sm font-semibold text-white">AI 供应商凭据池</h2>
         <p className="mt-1 text-[11px] leading-relaxed text-gray-500">
-          AI Gateway worker 使用的服务端供应商 Key 池。Key 只保存在服务端，不会下发给普通用户。
+          给 AI Gateway worker 使用的服务端凭据。普通用户不会看到密钥；同一供应商可配置多组凭据做轮换、限速和冷却。
         </p>
       </div>
 
@@ -91,106 +199,216 @@ const AdminProviderKeysPanel: React.FC = () => {
       {message ? <div className="rounded-lg border border-emerald-900/50 bg-emerald-950/30 px-3 py-2 text-[11px] text-emerald-100">{message}</div> : null}
 
       <div className="space-y-3">
-        {rows.map((row) => (
-          <div key={row.id} className="rounded-xl border border-[#2e2e32] bg-[#121216] p-4">
-            <div className="grid gap-3 md:grid-cols-[130px_1fr_120px_100px]">
-              <label className="block">
-                <span className="text-[10px] text-gray-500">供应商</span>
-                <input
-                  value={row.provider}
-                  onChange={(ev) => updateRow(row.id, { provider: ev.target.value })}
-                  disabled={!canWrite || saving}
-                  className="mt-1 w-full rounded-lg border border-[#2e2e32] bg-[#0a0a0c] px-3 py-2 text-[11px] text-gray-100 disabled:opacity-40"
-                />
-              </label>
-              <label className="block">
-                <span className="text-[10px] text-gray-500">名称</span>
-                <input
-                  value={row.label}
-                  onChange={(ev) => updateRow(row.id, { label: ev.target.value })}
-                  disabled={!canWrite || saving}
-                  className="mt-1 w-full rounded-lg border border-[#2e2e32] bg-[#0a0a0c] px-3 py-2 text-[11px] text-gray-100 disabled:opacity-40"
-                />
-              </label>
-              <label className="block">
-                <span className="text-[10px] text-gray-500">优先级</span>
-                <input
-                  inputMode="numeric"
-                  value={String(row.priority)}
-                  onChange={(ev) => updateRow(row.id, { priority: Number(ev.target.value) || 100 })}
-                  disabled={!canWrite || saving}
-                  className="mt-1 w-full rounded-lg border border-[#2e2e32] bg-[#0a0a0c] px-3 py-2 text-[11px] text-gray-100 disabled:opacity-40"
-                />
-              </label>
-              <label className="flex items-end gap-2 pb-2 text-[11px] text-gray-300">
-                <input
-                  type="checkbox"
-                  checked={row.enabled !== false}
-                  onChange={(ev) => updateRow(row.id, { enabled: ev.target.checked })}
-                  disabled={!canWrite || saving}
-                />
-                启用
-              </label>
-            </div>
-            <div className="mt-3 grid gap-3 md:grid-cols-[1fr_120px_auto]">
-              <label className="block">
-                <span className="text-[10px] text-gray-500">
-                  API Key {row.secretPreview ? `（当前 ${row.secretPreview}）` : ''}
-                </span>
-                <input
-                  type="password"
-                  value={row.secret || ''}
-                  onChange={(ev) => updateRow(row.id, { secret: ev.target.value })}
-                  disabled={!canWrite || saving}
-                  placeholder={row.hasSecret ? '留空则保留现有 Key' : '粘贴 Tripo API Key'}
-                  className="mt-1 w-full rounded-lg border border-[#2e2e32] bg-[#0a0a0c] px-3 py-2 text-[11px] text-gray-100 disabled:opacity-40"
-                />
-              </label>
-              <label className="block">
-                <span className="text-[10px] text-gray-500">每分钟上限</span>
-                <input
-                  inputMode="numeric"
-                  value={String(row.rpm || 0)}
-                  onChange={(ev) => updateRow(row.id, { rpm: Number(ev.target.value) || 0 })}
-                  disabled={!canWrite || saving}
-                  className="mt-1 w-full rounded-lg border border-[#2e2e32] bg-[#0a0a0c] px-3 py-2 text-[11px] text-gray-100 disabled:opacity-40"
-                />
-              </label>
-              <button
-                type="button"
-                disabled={!canWrite || saving}
-                onClick={() => setRows((prev) => prev.filter((item) => item.id !== row.id))}
-                className="self-end rounded-lg border border-red-900/50 bg-red-950/25 px-3 py-2 text-[11px] text-red-200 disabled:opacity-40"
-              >
-                删除
-              </button>
-            </div>
-            {row.runtime ? (
-              <div className="mt-3 grid gap-2 border-t border-white/[0.06] pt-3 text-[10px] text-gray-500 md:grid-cols-4">
-                <div>
-                  <div>上次使用</div>
-                  <div className="mt-0.5 text-gray-300">{row.runtime.lastUsedAt ? new Date(row.runtime.lastUsedAt).toLocaleString() : '-'}</div>
-                </div>
-                <div>
-                  <div>本分钟次数</div>
-                  <div className="mt-0.5 text-gray-300">{row.runtime.currentMinuteCount ?? 0}{row.rpm ? ` / ${row.rpm}` : ''}</div>
-                </div>
-                <div>
-                  <div>状态</div>
-                  <div className={row.runtime.coolingDown ? 'mt-0.5 text-amber-200' : 'mt-0.5 text-emerald-200'}>
-                    {row.runtime.coolingDown ? `冷却至 ${row.runtime.cooldownUntil ? new Date(row.runtime.cooldownUntil).toLocaleTimeString() : ''}` : '可用'}
-                  </div>
-                </div>
-                <div>
-                  <div>最近错误</div>
-                  <div className="mt-0.5 truncate text-gray-300" title={row.runtime.lastError || ''}>
-                    {row.runtime.lastError || '-'}
-                  </div>
-                </div>
+        {rows.map((row) => {
+          const isJimeng = row.provider === 'volcengine-jimeng';
+          const isEnvKey = String(row.id || '').startsWith('env_');
+          const isActing = actingId === row.id;
+          return (
+            <div key={row.id} className="rounded-xl border border-[#2e2e32] bg-[#121216] p-4">
+              <div className="mb-3 flex flex-wrap gap-2">
+                {PROVIDERS.map((provider) => (
+                  <button
+                    key={provider.id}
+                    type="button"
+                    disabled={!canWrite || saving}
+                    onClick={() => switchProvider(row.id, provider.id)}
+                    className={`rounded-lg border px-3 py-2 text-[11px] disabled:opacity-40 ${
+                      row.provider === provider.id
+                        ? 'border-blue-500/70 bg-blue-500/20 text-blue-100'
+                        : 'border-[#2e2e32] bg-[#1c1c22] text-gray-300'
+                    }`}
+                  >
+                    <span className="font-semibold">{provider.label}</span>
+                    <span className="ml-2 text-gray-500">{provider.hint}</span>
+                  </button>
+                ))}
               </div>
-            ) : null}
+
+              <div className="grid gap-3 md:grid-cols-[1fr_120px_120px_100px]">
+                <label className="block">
+                  <span className="text-[10px] text-gray-500">名称</span>
+                  <input
+                    value={row.label}
+                    onChange={(ev) => updateRow(row.id, { label: ev.target.value })}
+                    disabled={!canWrite || saving}
+                    className="mt-1 w-full rounded-lg border border-[#2e2e32] bg-[#0a0a0c] px-3 py-2 text-[11px] text-gray-100 disabled:opacity-40"
+                  />
+                </label>
+                <label className="block">
+                  <span className="text-[10px] text-gray-500">优先级</span>
+                  <input
+                    inputMode="numeric"
+                    value={String(row.priority)}
+                    onChange={(ev) => updateRow(row.id, { priority: Number(ev.target.value) || 100 })}
+                    disabled={!canWrite || saving}
+                    className="mt-1 w-full rounded-lg border border-[#2e2e32] bg-[#0a0a0c] px-3 py-2 text-[11px] text-gray-100 disabled:opacity-40"
+                  />
+                </label>
+                <label className="block">
+                  <span className="text-[10px] text-gray-500">每分钟上限</span>
+                  <input
+                    inputMode="numeric"
+                    value={String(row.rpm || 0)}
+                    onChange={(ev) => updateRow(row.id, { rpm: Number(ev.target.value) || 0 })}
+                    disabled={!canWrite || saving}
+                    className="mt-1 w-full rounded-lg border border-[#2e2e32] bg-[#0a0a0c] px-3 py-2 text-[11px] text-gray-100 disabled:opacity-40"
+                  />
+                </label>
+                <label className="flex items-end gap-2 pb-2 text-[11px] text-gray-300">
+                  <input
+                    type="checkbox"
+                    checked={row.enabled !== false}
+                    onChange={(ev) => updateRow(row.id, { enabled: ev.target.checked })}
+                    disabled={!canWrite || saving}
+                  />
+                  启用
+                </label>
+              </div>
+
+              {isJimeng ? (
+                <div className="mt-3 grid gap-3 md:grid-cols-2">
+                  <label className="block">
+                    <span className="text-[10px] text-gray-500">
+                      Access Key {row.credentialsPreview?.accessKeyId ? `（当前 ${row.credentialsPreview.accessKeyId}）` : ''}
+                    </span>
+                    <input
+                      type="password"
+                      value={credentialValue(row, 'accessKeyId')}
+                      onChange={(ev) => updateCredential(row.id, 'accessKeyId', ev.target.value)}
+                      disabled={!canWrite || saving}
+                      placeholder={row.hasCredentials ? '留空则保留现有 Access Key' : '粘贴 VOLCENGINE_ACCESS_KEY'}
+                      className="mt-1 w-full rounded-lg border border-[#2e2e32] bg-[#0a0a0c] px-3 py-2 text-[11px] text-gray-100 disabled:opacity-40"
+                    />
+                  </label>
+                  <label className="block">
+                    <span className="text-[10px] text-gray-500">
+                      Secret Key {row.credentialsPreview?.secretAccessKey ? `（当前 ${row.credentialsPreview.secretAccessKey}）` : ''}
+                    </span>
+                    <input
+                      type="password"
+                      value={credentialValue(row, 'secretAccessKey')}
+                      onChange={(ev) => updateCredential(row.id, 'secretAccessKey', ev.target.value)}
+                      disabled={!canWrite || saving}
+                      placeholder={row.hasCredentials ? '留空则保留现有 Secret Key' : '粘贴 VOLCENGINE_SECRET_KEY'}
+                      className="mt-1 w-full rounded-lg border border-[#2e2e32] bg-[#0a0a0c] px-3 py-2 text-[11px] text-gray-100 disabled:opacity-40"
+                    />
+                  </label>
+                </div>
+              ) : (
+                <label className="mt-3 block">
+                  <span className="text-[10px] text-gray-500">
+                    API Key {row.secretPreview ? `（当前 ${row.secretPreview}）` : ''}
+                  </span>
+                  <input
+                    type="password"
+                    value={row.secret || ''}
+                    onChange={(ev) => updateRow(row.id, { secret: ev.target.value })}
+                    disabled={!canWrite || saving}
+                    placeholder={row.hasSecret ? '留空则保留现有 API Key' : '粘贴 Tripo API Key'}
+                    className="mt-1 w-full rounded-lg border border-[#2e2e32] bg-[#0a0a0c] px-3 py-2 text-[11px] text-gray-100 disabled:opacity-40"
+                  />
+                </label>
+              )}
+
+              {row.runtime ? (
+                <div className="mt-3 grid gap-2 border-t border-white/[0.06] pt-3 text-[10px] text-gray-500 md:grid-cols-6">
+                  <div>
+                    <div>上次使用</div>
+                    <div className="mt-0.5 text-gray-300">{row.runtime.lastUsedAt ? new Date(row.runtime.lastUsedAt).toLocaleString() : '-'}</div>
+                  </div>
+                  <div>
+                    <div>本分钟次数</div>
+                    <div className="mt-0.5 text-gray-300">{row.runtime.currentMinuteCount ?? 0}{row.rpm ? ` / ${row.rpm}` : ''}</div>
+                  </div>
+                  <div>
+                    <div>状态</div>
+                    <div className={`mt-0.5 ${healthClass(row.runtime.healthStatus)}`}>
+                      {healthLabel(row.runtime.healthStatus)}
+                    </div>
+                  </div>
+                  <div>
+                    <div>连续错误</div>
+                    <div className="mt-0.5 text-gray-300">{row.runtime.consecutiveErrorCount ?? 0}</div>
+                  </div>
+                  <div>
+                    <div>建议</div>
+                    <div className="mt-0.5 text-gray-300">{suggestionLabel(row.runtime.suggestedAction)}</div>
+                  </div>
+                  <div>
+                    <div>最近错误</div>
+                    <div className="mt-0.5 truncate text-gray-300" title={row.runtime.lastCooldownReason || row.runtime.lastError || ''}>
+                      {row.runtime.lastCooldownReason || row.runtime.lastError || '-'}
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+
+              <div className="mt-3 flex flex-wrap justify-end gap-2">
+                <button
+                  type="button"
+                  disabled={!canWrite || saving || isActing || isEnvKey}
+                  onClick={() => void runKeyAction(row, 'cooldown')}
+                  className="rounded-lg border border-amber-900/50 bg-amber-950/25 px-3 py-2 text-[11px] text-amber-100 disabled:opacity-40"
+                >
+                  冷却 10 分钟
+                </button>
+                <button
+                  type="button"
+                  disabled={!canWrite || saving || isActing || isEnvKey}
+                  onClick={() => void runKeyAction(row, 'restore')}
+                  className="rounded-lg border border-emerald-900/50 bg-emerald-950/25 px-3 py-2 text-[11px] text-emerald-100 disabled:opacity-40"
+                >
+                  恢复
+                </button>
+                <button
+                  type="button"
+                  disabled={!canWrite || saving || isEnvKey}
+                  onClick={() => setRows((prev) => prev.filter((item) => item.id !== row.id))}
+                  className="rounded-lg border border-red-900/50 bg-red-950/25 px-3 py-2 text-[11px] text-red-200 disabled:opacity-40"
+                >
+                  删除
+                </button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="rounded-xl border border-[#2e2e32] bg-[#121216] p-4">
+        <div className="mb-3 flex items-center justify-between gap-3">
+          <h3 className="text-[12px] font-semibold text-gray-200">最近健康事件</h3>
+          <button
+            type="button"
+            disabled={saving}
+            onClick={() => void load()}
+            className="rounded-lg border border-[#2e2e32] bg-[#1c1c22] px-3 py-1.5 text-[10px] text-gray-300 disabled:opacity-40"
+          >
+            刷新
+          </button>
+        </div>
+        {events.length ? (
+          <div className="space-y-2">
+            {events.map((event) => (
+              <div key={event.id} className="grid gap-2 rounded-lg border border-white/[0.06] bg-black/20 px-3 py-2 text-[10px] text-gray-500 md:grid-cols-[120px_130px_1fr_150px]">
+                <div>
+                  <div className="text-gray-300">{eventTypeLabel(event.type)}</div>
+                  <div>{event.status ? `HTTP ${event.status}` : event.retryable ? '可重试' : '-'}</div>
+                </div>
+                <div>
+                  <div className="truncate text-gray-300" title={event.label || event.providerKeyId || ''}>{event.label || event.providerKeyId || '-'}</div>
+                  <div>{event.provider || '-'}</div>
+                </div>
+                <div className="min-w-0">
+                  <div className="truncate text-gray-300" title={event.reason || event.message || ''}>{event.reason || event.message || '-'}</div>
+                  <div>连续错误 {event.consecutiveErrorCount ?? 0}，自动冷却 {event.autoCooldownCount ?? 0}</div>
+                </div>
+                <div className="text-gray-400">{event.createdAt ? new Date(event.createdAt).toLocaleString() : '-'}</div>
+              </div>
+            ))}
           </div>
-        ))}
+        ) : (
+          <div className="rounded-lg border border-white/[0.06] bg-black/20 px-3 py-4 text-[11px] text-gray-500">暂无健康事件</div>
+        )}
       </div>
 
       <div className="flex flex-wrap gap-2">
@@ -200,7 +418,7 @@ const AdminProviderKeysPanel: React.FC = () => {
           onClick={() => setRows((prev) => [...prev, createDraft()])}
           className="rounded-lg border border-[#2e2e32] bg-[#1c1c22] px-4 py-2 text-[11px] text-gray-300 disabled:opacity-40"
         >
-          添加 Key
+          添加凭据
         </button>
         <button
           type="button"

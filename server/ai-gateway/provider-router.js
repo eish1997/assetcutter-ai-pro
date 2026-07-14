@@ -52,6 +52,16 @@ export const DEFAULT_AI_PROVIDER_ROUTES = Object.freeze([
     priority: 20,
   },
   {
+    providerId: 'volcengine-jimeng',
+    workerId: 'video-worker',
+    adapterId: 'jimeng-visual',
+    channel: 'jimeng-visual',
+    upstreamBackend: 'volcengine-jimeng',
+    modalities: ['video'],
+    capabilities: ['video.generate', 'workflow_generate_video', 'workflow_jimeng_video'],
+    priority: 10,
+  },
+  {
     providerId: 'tripo',
     workerId: 'model3d-worker',
     adapterId: 'tripo-openapi',

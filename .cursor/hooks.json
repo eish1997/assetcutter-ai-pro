@@ -6,6 +6,13 @@
         "command": "node .cursor/hooks/autopilot-arm.mjs"
       }
     ],
+    "afterShellExecution": [
+      {
+        "command": "node .cursor/hooks/dev-log-after-push.mjs",
+        "matcher": "git\\s+push|npm\\s+run\\s+push",
+        "timeout": 150
+      }
+    ],
     "stop": [
       {
         "command": "node .cursor/hooks/autopilot-stop.mjs",

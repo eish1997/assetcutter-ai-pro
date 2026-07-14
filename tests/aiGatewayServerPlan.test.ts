@@ -17,6 +17,21 @@ describe('server AI gateway job planning', () => {
     });
 
     expect(() => createAiGatewayJobPlan({ modality: 'music', input: {} })).toThrow(AiGatewayRouteError);
+    expect(createAiGatewayJobPlan({ modality: 'video', input: { prompt: 'a product turntable' } })).toMatchObject({
+      route: {
+        providerId: 'volcengine-jimeng',
+        workerId: 'video-worker',
+        adapterId: 'jimeng-visual',
+      },
+      workerRequest: {
+        method: 'POST',
+        path: '/api/jimeng/tasks',
+        body: {
+          registryId: 'jimeng-video-ti2v-v30-pro',
+          prompt: 'a product turntable',
+        },
+      },
+    });
     expect(() => createAiGatewayJobPlan({ modality: 'model3d', input: {} })).toThrow('Tripo text_to_model requires input.prompt');
   });
 

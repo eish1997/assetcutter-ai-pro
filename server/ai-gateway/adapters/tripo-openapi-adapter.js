@@ -1,6 +1,7 @@
 import { fetch as undiciFetch } from 'undici';
 import { acquireProviderKey, recordProviderKeyError, recordProviderKeySuccess } from '../provider-key-store.js';
 import { AiGatewayValidationError } from '../job.js';
+import { finalizeAiGatewayTerminalPlan } from '../execution-finalize.js';
 
 export const TRIPO_OPENAPI_BASE_URL = 'https://api.tripo3d.ai/v2/openapi';
 
@@ -225,7 +226,7 @@ async function pollTripoTask(plan, taskId, apiKey, options = {}) {
       const status = normalizeTaskStatus(data?.status ?? data?.data?.status ?? data?.task?.status);
       if (status === 'succeeded') {
         const modelUrls = normalizeModelUrls(data);
-        await store.update(plan.job.id, {
+        const succeeded = await store.update(plan.job.id, {
           status: 'succeeded',
           output: {
             provider: 'tripo',
@@ -245,10 +246,11 @@ async function pollTripoTask(plan, taskId, apiKey, options = {}) {
             gatewayExecution: { completedAt: new Date().toISOString() },
           },
         });
+        await finalizeAiGatewayTerminalPlan(succeeded, store);
         return;
       }
       if (status === 'failed') {
-        await store.update(plan.job.id, {
+        const failed = await store.update(plan.job.id, {
           status: 'failed',
           error: { code: 'TRIPO_TASK_FAILED', message: tripoErrorMessage(data, 'Tripo task failed') },
           metadata: {
@@ -257,6 +259,7 @@ async function pollTripoTask(plan, taskId, apiKey, options = {}) {
             gatewayExecution: { failedAt: new Date().toISOString() },
           },
         });
+        await finalizeAiGatewayTerminalPlan(failed, store);
         return;
       }
       await store.update(plan.job.id, {
@@ -298,7 +301,11 @@ export async function startTripoExecution(plan, options = {}) {
   const data = await readJsonSafe(response);
   if (!response.ok) {
     const err = new Error(`Tripo rejected AI job handoff: HTTP ${response.status} ${tripoErrorMessage(data)}`);
-    recordProviderKeyError(key.id, err, { cooldownMs: response.status === 429 || response.status >= 500 ? 60_000 : 0 });
+    recordProviderKeyError(key.id, err, {
+      status: response.status,
+      cooldownMs: response.status === 429 || response.status >= 500 ? 60_000 : 0,
+      reason: `Tripo HTTP ${response.status}`,
+    });
     throw err;
   }
   recordProviderKeySuccess(key.id);

@@ -5,6 +5,15 @@ describe('devLogPlainSummary', () => {
   it('turns English commit-ish lines into Chinese feel copy', () => {
     expect(humanizeDevLogBullet('richer thermal receipt and work-style summaries')).toContain('小票');
     expect(humanizeDevLogBullet('feat: compose-style dropdowns and R2-backed dev log')).toMatch(/下拉|开发日志/);
+    expect(humanizeDevLogBullet('feat: ship Project Agent U4 with experts and optimistic send')).toMatch(
+      /@专家|自动挡|进度卡|立刻有反馈/
+    );
+  });
+
+  it('does not collapse unknown English work into vague UI copy', () => {
+    const plain = humanizeDevLogBullet('Expand AI Gateway workers and provider key pool');
+    expect(plain).not.toBe('界面与使用体验有一处改进');
+    expect(plain).toMatch(/AI Gateway|Key|worker|任务链路/);
   });
 
   it('builds day summary without file-count noise or long English', () => {

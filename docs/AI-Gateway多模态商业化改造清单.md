@@ -33,9 +33,14 @@
 - 已新增普通文生图/图生图灰度 trace：前端 Vertex 图片代理在真实 `/proxy/gemini/async` 前尽力创建 `/ai-gateway/jobs` 记录；失败不阻断生图，真实生成仍走旧链路。
 - 已接入旧链路单任务状态回写：`/proxy/gemini/async` 可根据 `fairnessMeta.aiGatewayTraceJobId` 将 trace job 推进到 `queued`、`running`、`succeeded`、`failed`。
 - 默认接管 Vertex 图片生产入口，但保留旧 `gemini-proxy` 自动回退；显式关闭开关后，旧链路仍是稳定生产入口。
-- 音乐、视频、3D 目前只进入统一模态定义，不会误路由到 `gemini-proxy`。
-- 当前仍未完成：更多非 Gemini 执行器补齐真实用量字段、上游硬取消、视频/音乐/3D 的 worker/adapter 拆分、管理员详情/筛选视图、自动执行熔断/恢复、长期成本与失败率报表。
-- 下一步主线：把只读熔断建议升级为半自动运营动作，包括一键填入暂停/降级草稿、按 provider/model 设恢复时间、记录熔断事件，并开始拆第一个非 Gemini worker；若需回滚，设置 `AI_GATEWAY_EXECUTION_ENABLED=false` 或 `VITE_AI_GATEWAY_IMAGE_EXECUTION=false`。
+- 3D 已接入 `model3d-worker -> tripo-openapi`，视频已接入 `video-worker -> jimeng-visual`；音乐仍只进入统一模态定义，不会误路由到 `gemini-proxy`。
+- 已新增异步 worker 终态收口：Tripo/即梦这类后台轮询任务在成功后会写标准 usage event 并结算积分，失败/超时会释放预留，避免任务成功但账务悬空。
+- 已扩展供应商凭据池：Tripo 继续使用单 API Key；即梦支持在管理员后台配置火山 `Access Key / Secret Key`，也保留 Render 环境变量作为只读兜底。
+- 已新增凭据池运营动作：管理员可对单组供应商凭据手动冷却 10 分钟或恢复可用，适合临时处理 429/5xx、单 Key 异常等情况；操作会写审计日志。
+- 已新增凭据池自动健康状态：单组凭据会记录最近成功、连续错误、自动冷却次数和建议动作；连续可重试错误达到阈值后会自动冷却，避免坏 key 持续吃任务。
+- 已新增凭据池健康历史事件：成功、错误、自动冷却、手动冷却、恢复都会写入轻量历史；JSON 环境写本地事件文件，Postgres 环境准备独立事件表，后台凭据池页面可查看最近事件。
+- 当前仍未完成：更多非 Gemini 执行器补齐真实用量字段、上游硬取消、音乐 worker/adapter、管理员详情/筛选视图、自动执行熔断/恢复、长期成本与失败率报表。
+- 下一步主线：继续把健康历史升级成聚合报表，或补视频第二供应商。若需回滚，设置 `AI_GATEWAY_EXECUTION_ENABLED=false`、`VITE_AI_GATEWAY_IMAGE_EXECUTION=false` 或 `VITE_AI_GATEWAY_VIDEO_EXECUTION=false`。
 
 ## 0. 目标架构
 
@@ -45,7 +50,7 @@
   -> ai-gateway / 任务创建 / 路由 / 限流 / 状态
   -> workers / adapters
        image-worker -> vertex / openai / jimeng / toapis
-       video-worker -> veo / kling / runway / other
+       video-worker -> jimeng / veo / kling / runway / other
        music-worker -> suno / udio / other
        3d-worker    -> tripo / tencent / local companion
        text-worker  -> vertex / openai / toapis
@@ -166,7 +171,7 @@ type AiJob = {
 当前拆解：
 
 - 已完成：`AI_GATEWAY_EXECUTION_ENABLED=true` 时，auth-api 创建 job 后会 handoff 到 `gemini-proxy` async；proxy 负责排队、执行和状态写回。
-- 未完成：前端生产文生图入口灰度验证；Gateway 自身轮询/worker 化；上游硬取消；更多非 Gemini 执行器回传真实用量字段。
+- 未完成：前端生产文生图入口灰度验证；上游硬取消；更多非 Gemini 执行器回传真实用量字段。
 
 验收：
 
@@ -221,6 +226,17 @@ type AiJob = {
 - 新增一个供应商不需要改前端任务协议。
 - 新增一个模态不需要改 `gemini-proxy`。
 - 单个 worker 故障不影响其它模态。
+
+当前进度：
+
+- 已完成 `model3d-worker -> tripo-openapi`，3D 文生模型任务可通过统一 job API 创建、轮询并回填模型 URL。
+- 已完成 `video-worker -> jimeng-visual`，通用生视频入口默认先走 AI Gateway，即梦任务成功后只记录视频 URL，不把视频大文件写进云端任务库。
+- 已完成异步 worker 终态收口：后台轮询成功/失败后会自动处理用量记录和积分预留结算。
+- 已完成供应商凭据池扩展：即梦 AK/SK 可在后台配置，旧环境变量继续作为兜底。
+- 已完成供应商凭据池手动运营动作：单组凭据可冷却或恢复，并记录审计日志。
+- 已完成供应商凭据池自动健康状态：连续错误、健康标签、建议动作和自动冷却已经进入后台列表。
+- 已完成供应商凭据池健康历史事件：最近成功/错误/冷却/恢复可在后台查看。
+- 未完成音乐 worker、视频第二供应商、供应商健康聚合报表。
 
 ## 7. Phase 5：商业化运营层
 

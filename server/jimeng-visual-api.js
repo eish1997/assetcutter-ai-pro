@@ -26,6 +26,10 @@ function envBool(name, defaultFalse = false) {
   return v === '1' || v === 'true' || v === 'on' || v === 'yes';
 }
 
+function localNonEmptyString(value) {
+  return typeof value === 'string' && value.trim() ? value.trim() : '';
+}
+
 export function jimengVisualHost() {
   return envTrim('JIMENG_VISUAL_HOST', DEFAULT_HOST);
 }
@@ -77,10 +81,11 @@ export function resolveJimengReqKey(registryId) {
   return resolveVerifiedJimengReqKey(registryId);
 }
 
-function volcCredentials() {
+function volcCredentials(options = {}) {
+  const credentials = options.credentials && typeof options.credentials === 'object' ? options.credentials : {};
   return {
-    accessKeyId: envTrim('VOLCENGINE_ACCESS_KEY'),
-    secretAccessKey: envTrim('VOLCENGINE_SECRET_KEY'),
+    accessKeyId: localNonEmptyString(credentials.accessKeyId) || envTrim('VOLCENGINE_ACCESS_KEY'),
+    secretAccessKey: localNonEmptyString(credentials.secretAccessKey) || envTrim('VOLCENGINE_SECRET_KEY'),
   };
 }
 
@@ -98,12 +103,12 @@ async function readJsonSafe(resp) {
  * @param {string} action CVSync2AsyncSubmitTask | CVSync2AsyncGetResult
  * @param {Record<string, unknown>} payload
  */
-export async function callJimengVisualApi(action, payload) {
+export async function callJimengVisualApi(action, payload, options = {}) {
   const host = jimengVisualHost();
   const version = jimengVisualVersion();
   const query = { Action: action, Version: version };
   const body = JSON.stringify(payload ?? {});
-  const { accessKeyId, secretAccessKey } = volcCredentials();
+  const { accessKeyId, secretAccessKey } = volcCredentials(options);
   const signed = signVolcengineRequest({
     method: 'POST',
     host,
@@ -193,7 +198,7 @@ export async function buildJimengSubmitPayload(input, reqKey) {
  * @param {object} input JimengSubmitInput
  * @returns {Promise<{ ok: true, taskId: string } | { ok: false, status: number, body: object }>}
  */
-export async function submitJimengTask(input) {
+export async function submitJimengTask(input, options = {}) {
   const registryId = String(input?.registryId || '').trim();
   if (!registryId) {
     return { ok: false, status: 400, body: { error: '缺少 registryId' } };
@@ -217,7 +222,7 @@ export async function submitJimengTask(input) {
     };
   }
   try {
-    const upstream = await callJimengVisualApi('CVSync2AsyncSubmitTask', payload);
+    const upstream = await callJimengVisualApi('CVSync2AsyncSubmitTask', payload, options);
     const code = upstream.data?.code;
     if (code === 10000 && upstream.data?.data?.task_id) {
       return { ok: true, taskId: String(upstream.data.data.task_id) };
@@ -345,7 +350,7 @@ export async function pollJimengTask(taskId, registryId, opts = {}) {
     const upstream = await callJimengVisualApi('CVSync2AsyncGetResult', {
       req_key: resolved.reqKey,
       task_id: tid,
-    });
+    }, opts);
     const normalized = normalizeJimengPollResult(upstream.data);
     if (normalized.status === 'failed' && upstream.data?.code !== 10000) {
       return { ok: true, status: 200, body: normalized };

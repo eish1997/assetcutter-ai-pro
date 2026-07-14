@@ -198,7 +198,10 @@ import {
 } from './ai-gateway/ops-control.js';
 import {
   acquireProviderKey,
+  cooldownProviderKey,
+  listProviderKeyHealthEvents,
   listProviderKeys,
+  restoreProviderKey,
   saveProviderKeys,
 } from './ai-gateway/provider-key-store.js';
 import {
@@ -2542,6 +2545,19 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (path === '/api/admin/ai-gateway/provider-key-events' && req.method === 'GET') {
+      const staff = await requirePermission(req, res, PERMISSIONS.AI_GATEWAY_KEYS_READ);
+      if (!staff) return;
+      const u = new URL(req.url || '/', 'http://local');
+      const events = await listProviderKeyHealthEvents({
+        limit: u.searchParams.get('limit') || 50,
+        keyId: u.searchParams.get('keyId') || '',
+        provider: u.searchParams.get('provider') || '',
+      });
+      json(res, 200, { ok: true, events, limit: Math.min(500, Math.max(1, Number(u.searchParams.get('limit') || 50))) });
+      return;
+    }
+
     if (path === '/api/admin/ai-gateway/provider-keys' && req.method === 'PUT') {
       const staff = await requirePermission(req, res, PERMISSIONS.AI_GATEWAY_KEYS_WRITE);
       if (!staff) return;
@@ -2573,6 +2589,45 @@ const server = http.createServer(async (req, res) => {
         userAgent: req.headers['user-agent'],
       });
       json(res, 200, { ok: true, keys: saved });
+      return;
+    }
+
+    const providerKeyActionMatch = path.match(/^\/api\/admin\/ai-gateway\/provider-keys\/([^/]+)\/(cooldown|restore)$/);
+    if (providerKeyActionMatch && req.method === 'POST') {
+      const staff = await requirePermission(req, res, PERMISSIONS.AI_GATEWAY_KEYS_WRITE);
+      if (!staff) return;
+      const keyId = decodeURIComponent(providerKeyActionMatch[1] || '').trim();
+      const action = providerKeyActionMatch[2];
+      const existing = await listProviderKeys({ includeSecrets: true });
+      const target = existing.find((row) => row.id === keyId);
+      if (!target || String(target.id || '').startsWith('env_')) {
+        json(res, 404, { error: 'PROVIDER_KEY_NOT_FOUND', code: 'PROVIDER_KEY_NOT_FOUND' });
+        return;
+      }
+      let body = {};
+      try {
+        body = await readBody(req);
+      } catch {
+        body = {};
+      }
+      if (action === 'cooldown') {
+        cooldownProviderKey(keyId, {
+          minutes: Number(body?.minutes || 10),
+          reason: normalizeTrimmed(body?.reason) || '管理员手动冷却',
+        });
+      } else {
+        restoreProviderKey(keyId);
+      }
+      const keys = await listProviderKeys();
+      await createAuditLog({
+        actorUserId: staff.user.id,
+        actorIdentifier: staff.user.username,
+        action: `admin.ai_gateway_provider_key_${action}`,
+        meta: { keyId, provider: target.provider },
+        ip: getClientIp(req),
+        userAgent: req.headers['user-agent'],
+      });
+      json(res, 200, { ok: true, keys });
       return;
     }
 

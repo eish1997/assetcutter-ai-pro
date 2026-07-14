@@ -1,5 +1,7 @@
 # Agent Autopilot（Cursor `stop` 钩子）
 
+另见：**开发日志自动上传** — `afterShellExecution` → `dev-log-after-push.mjs`（成功 `git push` 后跑 `npm run dev-log:post-push`）。
+
 ## 做什么
 
 Agent 每次尝试结束时触发 `autopilot-stop.mjs`：若任务未在 **`loop-state.json`** 标为完成，则自动下发一条「继续干」的跟进消息（并可附带校验命令输出），最多 **25** 轮（`hooks.json` 里 `loop_limit`）。

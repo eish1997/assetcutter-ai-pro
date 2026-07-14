@@ -5,6 +5,16 @@
 
 /** Longer / more specific patterns first. */
 const JARGON_REPLACEMENTS: Array<[RegExp, string]> = [
+  [
+    /ship\s+Project\s*Agent\s*U4|Project\s*Agent\s*U4|experts?\s+and\s+optimistic\s+send/gi,
+    '项目 Agent 大升级：@专家、自动挡、进度卡、导出记录，发送立刻有反馈',
+  ],
+  [
+    /project\s*Agent\s*U1\s*dock\s*plus\s*Vertex\s*Gemini-?3\s*global\s*hybrid/gi,
+    '工作区上了项目 Agent；生图新模型走全球通道，少报「模型找不到」',
+  ],
+  [/project\s*Agent|Agent\s*U1|submitTurn|threadStore|Agent\s*dock/gi, '项目 Agent（右侧对话会先出计划再出活）'],
+  [/Gemini-?3|Vertex.*hybrid|Publisher\s*404|global\s*hybrid/gi, '生图路由（新模型走全球通道）'],
   [/richer\s+thermal\s+receipt\s+and\s+work[- ]?style\s+summaries?/gi, '开发日志小票更好看了，摘要也更白话'],
   [/compose[- ]?style\s+dropdowns?\s+and\s+R2[- ]?backed\s+dev\s*log/gi, '下拉菜单外观统一了，开发日志也上线了'],
   [/compose[- ]?style\s+dropdowns?/gi, '下拉菜单外观'],
@@ -63,6 +73,29 @@ function latinRatio(s: string): number {
   return (s.replace(/[^A-Za-z]/g, '').length || 0) / Math.max(s.length, 1);
 }
 
+function plainFallbackFromEnglish(text: string): string {
+  const s = stripConventionalPrefix(String(text || '').trim());
+  if (!s) return '这次改动已整理成开发记录，方便回看发生了什么';
+  const cleaned = s
+    .replace(/[-_/]+/g, ' ')
+    .replace(/\b(feat|fix|chore|docs|refactor|style|test|perf|build|ci)\b/gi, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+  if (/ai\s*gateway|provider\s*key|worker|tripo|model\s*3d|3d/i.test(cleaned)) {
+    return '这次主要推进 AI Gateway、供应商 Key 池和多模态 worker，让后续接 3D、视频、音乐时走统一任务链路';
+  }
+  if (/admin|permission|role|dashboard|console/i.test(cleaned)) {
+    return '这次主要整理后台管理能力，让权限、入口和运营信息更容易看懂和维护';
+  }
+  if (/credit|billing|usage|cost|settlement|reserve/i.test(cleaned)) {
+    return '这次主要整理积分和计费链路，让任务成功、失败和结算记录更清楚';
+  }
+  if (/image|video|music|model|generate|workflow/i.test(cleaned)) {
+    return '这次主要整理生成任务链路，让工作流里的生成、状态和结果回填更稳';
+  }
+  return `这次主要整理「${cleaned}」，让相关流程更清楚、更可追踪`;
+}
+
 /** If still English-heavy, collapse to a short Chinese feel line. */
 function softenEnglishRuns(text: string): string {
   const s = text.trim();
@@ -71,8 +104,17 @@ function softenEnglishRuns(text: string): string {
   if (/下拉|dropdown/i.test(s)) return '下拉菜单外观和底部输入栏统一了';
   if (/预览|全景|3[Dd]|equirect/i.test(s)) return '大图预览切换全景、3D 时更稳了';
   if (/积分|credit/i.test(s)) return '积分相关流程更稳了';
+  if (/project\s*agent\s*u4|optimistic\s+send|@?expert|child\s*run|auto\s*mode/i.test(s)) {
+    return '项目 Agent 大升级：@专家、自动挡、进度卡、导出记录，发送立刻有反馈';
+  }
+  if (/project\s*agent|agent\s*dock|submitturn/i.test(s)) {
+    return '工作区右侧多了项目 Agent，说话会先出计划再出活';
+  }
+  if (/gemini-?3|vertex|hybrid|publisher/i.test(s)) {
+    return '生图路由更稳了，新模型少报「模型找不到」';
+  }
   if (/开发日志|dev\s*log/i.test(s)) return '开发日志记录与展示有更新';
-  return '界面与使用体验有一处改进';
+  return plainFallbackFromEnglish(s);
 }
 
 /**

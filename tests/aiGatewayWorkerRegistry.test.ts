@@ -6,7 +6,7 @@ import {
 } from '../server/ai-gateway/index.js';
 
 describe('AI gateway worker registry', () => {
-  it('reports active text/image/model3d workers and planned media workers', () => {
+  it('reports active text/image/video/model3d workers and planned music worker', () => {
     expect(listAiGatewayWorkers()).toEqual([
       { id: 'text-worker', modalities: ['text'], capabilities: ['text.generate'], adapters: ['legacy-gemini-proxy'], status: 'active' },
       {
@@ -16,7 +16,13 @@ describe('AI gateway worker registry', () => {
         adapters: ['legacy-gemini-proxy'],
         status: 'active',
       },
-      { id: 'video-worker', modalities: ['video'], capabilities: ['video.generate'], adapters: [], status: 'planned' },
+      {
+        id: 'video-worker',
+        modalities: ['video'],
+        capabilities: ['video.generate', 'workflow_generate_video', 'workflow_jimeng_video'],
+        adapters: ['jimeng-visual'],
+        status: 'active',
+      },
       { id: 'music-worker', modalities: ['music'], capabilities: ['music.generate'], adapters: [], status: 'planned' },
       { id: 'model3d-worker', modalities: ['model3d'], capabilities: ['model3d.generate'], adapters: ['tripo-openapi'], status: 'active' },
     ]);
@@ -50,11 +56,11 @@ describe('AI gateway worker registry', () => {
   });
 
   it('does not execute planned workers without adapters', () => {
-    expect(resolveAiGatewayWorker({ workerId: 'video-worker' })).toMatchObject({ status: 'planned' });
+    expect(resolveAiGatewayWorker({ workerId: 'music-worker' })).toMatchObject({ status: 'planned' });
     expect(() =>
       buildAiGatewayWorkerRequest(
-        { id: 'aijob_video_1', correlationId: 'corr_video_1', input: {} },
-        { workerId: 'video-worker', adapterId: 'kling-video' }
+        { id: 'aijob_music_1', correlationId: 'corr_music_1', input: {} },
+        { workerId: 'music-worker', adapterId: 'suno-music' }
       )
     ).toThrow(/planned but not implemented/);
   });

@@ -49,6 +49,10 @@ import {
   isWorkflowVideoBridgeConfigured,
   requestWorkflowVideoFromEnv,
 } from "./workflowVideoBridge";
+import {
+  createAndPollAiGatewayVideoJob,
+  isAiGatewayVideoExecutionEnabled,
+} from "./aiGatewayVideoExecution";
 import { GeminiProxyFairnessRejectedError } from "./geminiProxyFairnessError";
 import { dispatchUnifiedAiSoftNotice, clipUnifiedAiNoticeMessage } from "./unifiedAiSoftNotice";
 import { emitMeteredUsageAfterDelivery } from "./observability/metering/pipeline";
@@ -659,12 +663,12 @@ export type { WorkflowVideoJobInput, WorkflowVideoJobResult };
 export { WorkflowVideoNotAvailableError };
 
 export function isWorkflowVideoAvailable(): boolean {
-  return isWorkflowVideoBridgeConfigured();
+  return isAiGatewayVideoExecutionEnabled() || isWorkflowVideoBridgeConfigured();
 }
 
-/** @kind workflow_generate_video — POST 至 `VITE_WORKFLOW_VIDEO_API_URL` */
+/** @kind workflow_generate_video — AI Gateway video worker first, legacy endpoint as fallback */
 export async function workflowGenerateVideo(input: WorkflowVideoJobInput): Promise<WorkflowVideoJobResult> {
-  if (!isWorkflowVideoBridgeConfigured()) {
+  if (!isAiGatewayVideoExecutionEnabled() && !isWorkflowVideoBridgeConfigured()) {
     throw new WorkflowVideoNotAvailableError();
   }
   return runMeteredAiCall(
@@ -676,20 +680,36 @@ export async function workflowGenerateVideo(input: WorkflowVideoJobInput): Promi
       }),
     },
     async ({ billingDecision }) => {
-      const result = await requestWorkflowVideoFromEnv(input);
+      const estimatedCredits = Number(billingDecision.platformReserve?.estimatedCredits || 50);
+      let result: WorkflowVideoJobResult;
+      let settledByAiGateway = false;
+      try {
+        if (!isAiGatewayVideoExecutionEnabled()) throw new WorkflowVideoNotAvailableError();
+        result = await createAndPollAiGatewayVideoJob({
+          ...input,
+          registryId: "jimeng-video-ti2v-v30-pro",
+          estimatedCredits,
+        });
+        settledByAiGateway = true;
+      } catch (e) {
+        if (!isWorkflowVideoBridgeConfigured()) throw e;
+        result = await requestWorkflowVideoFromEnv(input);
+      }
       const requestId =
         (result as { jobId?: string; taskId?: string }).jobId ||
         (result as { jobId?: string; taskId?: string }).taskId ||
         `video-${Date.now()}`;
-      emitMeteredUsageAfterDelivery({
-        reading: meterReadingFromTask({ provider: "workflow-video", modality: "video" }),
-        registryId: "workflow-video",
-        billingSku: resolveBillingSkuForWorkflowVideo(),
-        idempotencyPrefix: `workflow-video:${requestId}`,
-        requestId: String(requestId),
-        jobKind: "workflow_generate_video",
-        extraMeta: extraMetaFromBillingDecision(billingDecision),
-      });
+      if (!settledByAiGateway) {
+        emitMeteredUsageAfterDelivery({
+          reading: meterReadingFromTask({ provider: "workflow-video", modality: "video" }),
+          registryId: "workflow-video",
+          billingSku: resolveBillingSkuForWorkflowVideo(),
+          idempotencyPrefix: `workflow-video:${requestId}`,
+          requestId: String(requestId),
+          jobKind: "workflow_generate_video",
+          extraMeta: extraMetaFromBillingDecision(billingDecision),
+        });
+      }
       return result;
     }
   );
