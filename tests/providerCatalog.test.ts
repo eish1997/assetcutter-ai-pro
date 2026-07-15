@@ -45,7 +45,9 @@ describe("provider catalog", () => {
         "doubao-seed3d-2-0-260328",
       ])
     );
-    expect(arkModels.every((model) => model.status === "testing")).toBe(true);
+    expect(arkModels.find((model) => model.registryId === "doubao-seed-2-0-pro")?.status).toBe("verified");
+    expect(arkModels.find((model) => model.registryId === "doubao-seedream-5-0-pro")?.status).toBe("verified");
+    expect(arkModels.find((model) => model.registryId === "doubao-seedance-2-0")?.status).toBe("testing");
   });
 
   it("mirrors Jimeng static catalog into provider model catalog", () => {

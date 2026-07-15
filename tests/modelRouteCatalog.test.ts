@@ -51,8 +51,18 @@ describe("model route catalog", () => {
         "doubao-seed3d-2-0-260328",
       ])
     );
-    expect(arkRoutes.every((route) => route.executionStatus === "adapter_pending")).toBe(true);
-    expect(arkRoutes.every((route) => route.gatewayExecutionStatus === "adapter_pending")).toBe(true);
+    expect(arkRoutes.find((route) => route.canonicalModelId === "doubao-seed-2-0-pro")).toMatchObject({
+      executionStatus: "platform_ready",
+      gatewayExecutionStatus: "gateway_ready",
+    });
+    expect(arkRoutes.find((route) => route.canonicalModelId === "doubao-seedream-5-0-pro")).toMatchObject({
+      executionStatus: "platform_ready",
+      gatewayExecutionStatus: "gateway_ready",
+    });
+    expect(arkRoutes.find((route) => route.canonicalModelId === "doubao-seedance-2-0")).toMatchObject({
+      executionStatus: "adapter_pending",
+      gatewayExecutionStatus: "adapter_pending",
+    });
   });
 
   it("keeps provider route inventory queryable from supplier center", () => {

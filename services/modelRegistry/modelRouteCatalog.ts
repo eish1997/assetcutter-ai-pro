@@ -123,23 +123,26 @@ function buildJimengNonImageRoutes(): ModelRouteCatalogEntry[] {
 }
 
 function buildArkRoutes(): ModelRouteCatalogEntry[] {
-  return VOLCENGINE_ARK_MODEL_CATALOG.map((row, index) => ({
-    routeId: `${row.registryId || row.providerModelId}:volcengine-ark:${row.modality}`,
-    canonicalModelId: row.registryId || row.providerModelId,
-    providerId: "volcengine-ark" as const,
-    providerModelId: row.providerModelId,
-    modality: row.modality,
-    enabled: true,
-    priority: 20 + index,
-    fallbackPolicy: "on_error" as const,
-    source: "static" as const,
-    executionStatus: "adapter_pending" as const,
-    gatewayExecutionStatus: resolveCatalogGatewayExecutionStatus({
+  return VOLCENGINE_ARK_MODEL_CATALOG.map((row, index) => {
+    const gatewayExecutionStatus = resolveCatalogGatewayExecutionStatus({
       canonicalModelId: row.registryId || row.providerModelId,
       providerId: "volcengine-ark",
       modality: row.modality,
-    }) as ModelRouteGatewayExecutionStatus,
-  }));
+    }) as ModelRouteGatewayExecutionStatus;
+    return {
+      routeId: `${row.registryId || row.providerModelId}:volcengine-ark:${row.modality}`,
+      canonicalModelId: row.registryId || row.providerModelId,
+      providerId: "volcengine-ark" as const,
+      providerModelId: row.providerModelId,
+      modality: row.modality,
+      enabled: true,
+      priority: 20 + index,
+      fallbackPolicy: "on_error" as const,
+      source: "static" as const,
+      executionStatus: gatewayExecutionStatus === "gateway_ready" ? ("platform_ready" as const) : ("adapter_pending" as const),
+      gatewayExecutionStatus,
+    };
+  });
 }
 
 const MODEL3D_ROUTES: readonly ModelRouteCatalogEntry[] = [

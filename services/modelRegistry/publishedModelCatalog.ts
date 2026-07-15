@@ -1,7 +1,5 @@
-import { isRegisteredImageModelId } from "./imageModels";
 import { listCanonicalModels, listPublishedCanonicalModels, type CanonicalModelCatalogEntry } from "./canonicalModelCatalog";
 import { listModelRoutes } from "./modelRouteCatalog";
-import { TEXT_MODEL_REGISTRY } from "./textModels";
 import type { ProviderModality } from "./providerCatalog";
 import type { ModelOpsConfig } from "./opsTypes";
 
@@ -11,10 +9,8 @@ export type PublishedWorkspaceModelRow = {
   label: string;
   modality: Extract<ProviderModality, "text" | "image" | "video" | "model3d" | "music">;
   defaultForModality?: boolean;
-  gatewayReady?: boolean;
+  gatewayReady: boolean;
 };
-
-const TEXT_REGISTRY_IDS = new Set<string>(TEXT_MODEL_REGISTRY.map((row) => row.registryId));
 
 function uniqueByRegistryId(rows: readonly PublishedWorkspaceModelRow[]): PublishedWorkspaceModelRow[] {
   const out: PublishedWorkspaceModelRow[] = [];
@@ -51,15 +47,15 @@ function workspaceCanonicalModels(
 export function listPublishedWorkspaceImageModels(ops?: PublishedModelOps): PublishedWorkspaceModelRow[] {
   return uniqueByRegistryId(
     filterByPublishedAllowlist(workspaceCanonicalModels("image", ops), ops)
-      .filter((row) => row.supportedWorkflows.includes("dialog"))
+      .filter((row) => row.supportedWorkflows.includes("dialog") || row.supportedWorkflows.includes("workflow"))
       .map((row) => ({
         canonicalModelId: row.canonicalModelId,
         registryId: row.sourceRegistryId || row.canonicalModelId,
         label: row.label,
         modality: "image" as const,
         defaultForModality: row.defaultForModality,
+        gatewayReady: gatewayReadyForCanonicalModel(row.canonicalModelId),
       }))
-      .filter((row) => isRegisteredImageModelId(row.registryId))
   );
 }
 
@@ -73,8 +69,8 @@ export function listPublishedWorkspaceTextModels(ops?: PublishedModelOps): Publi
         label: row.label,
         modality: "text" as const,
         defaultForModality: row.defaultForModality,
+        gatewayReady: gatewayReadyForCanonicalModel(row.canonicalModelId),
       }))
-      .filter((row) => TEXT_REGISTRY_IDS.has(row.registryId))
   );
 }
 

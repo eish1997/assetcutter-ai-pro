@@ -4,13 +4,16 @@ import {
   cooldownAdminProviderKey,
   fetchAdminProviderKeyEvents,
   fetchAdminProviderKeyHealthSummary,
+  fetchAdminModelAvailabilitySummary,
   fetchAdminProviderKeys,
   fetchAdminModelOpsConfig,
   restoreAdminProviderKey,
   saveAdminModelOpsConfig,
   saveAdminProviderKeys,
   smokeTestAdminProviderKey,
+  testAdminModelRoute,
   type AdminModelOpsConfig,
+  type AdminModelAvailabilitySummaryItem,
   type AdminProviderKeyEvent,
   type AdminProviderKeyHealthSummaryItem,
   type AdminProviderKeyRow,
@@ -21,6 +24,7 @@ import {
   getProviderCatalogEntry,
   getCanonicalModel,
   listCanonicalModels,
+  listModelRoutes,
   listProviderModels,
   listProviderRoutes,
   providerDisplayName,
@@ -349,6 +353,39 @@ function canonicalStatusLabel(status?: string) {
   return '-';
 }
 
+function modelAvailabilityLabel(status?: string) {
+  if (status === 'ready') return '可发布';
+  if (status === 'key_missing') return '缺 Key';
+  if (status === 'parameter_pending') return '参数待映射';
+  if (status === 'adapter_pending') return 'Gateway 待接';
+  if (status === 'route_not_found') return '无路由';
+  return '检测中';
+}
+
+function modelAvailabilityClass(status?: string) {
+  if (status === 'ready') return 'border-emerald-500/30 bg-emerald-950/25 text-emerald-100';
+  if (status === 'key_missing') return 'border-amber-500/30 bg-amber-950/25 text-amber-100';
+  if (status === 'parameter_pending') return 'border-orange-500/30 bg-orange-950/25 text-orange-100';
+  if (status === 'adapter_pending') return 'border-purple-500/25 bg-purple-950/20 text-purple-100';
+  if (status === 'route_not_found') return 'border-red-500/25 bg-red-950/20 text-red-100';
+  return 'border-white/10 bg-white/[0.03] text-gray-400';
+}
+
+function workspaceModelAvailabilityPayload() {
+  return {
+    models: WORKSPACE_CANONICAL_MODELS.map((model) => ({
+      canonicalModelId: model.canonicalModelId,
+      modality: model.modality,
+      routes: listModelRoutes(model.canonicalModelId).map((route) => ({
+        providerId: route.providerId,
+        modality: route.modality,
+        executionStatus: route.executionStatus,
+        requiresEndpointMapping: route.requiresEndpointMapping === true,
+      })),
+    })),
+  };
+}
+
 const AdminProviderKeysPanel: React.FC = () => {
   const { can, isRolePreview } = useAdminStaff();
   const canWrite = can(PERMISSIONS.AI_GATEWAY_KEYS_WRITE);
@@ -356,6 +393,7 @@ const AdminProviderKeysPanel: React.FC = () => {
   const [rows, setRows] = React.useState<AdminProviderKeyRow[]>([]);
   const [modelOpsConfig, setModelOpsConfig] = React.useState<AdminModelOpsConfig | null>(null);
   const [selectedCanonicalModelIds, setSelectedCanonicalModelIds] = React.useState<string[]>(() => defaultPublishedCanonicalIds());
+  const [modelAvailability, setModelAvailability] = React.useState<AdminModelAvailabilitySummaryItem[]>([]);
   const [events, setEvents] = React.useState<AdminProviderKeyEvent[]>([]);
   const [summary, setSummary] = React.useState<AdminProviderKeyHealthSummaryItem[]>([]);
   const [summaryTotals, setSummaryTotals] = React.useState<{
@@ -373,6 +411,7 @@ const AdminProviderKeysPanel: React.FC = () => {
   const [savingModelOps, setSavingModelOps] = React.useState(false);
   const [applyingHealth, setApplyingHealth] = React.useState(false);
   const [actingId, setActingId] = React.useState('');
+  const [routeTestingId, setRouteTestingId] = React.useState('');
   const [error, setError] = React.useState('');
   const [message, setMessage] = React.useState('');
   const [selectedProviderId, setSelectedProviderId] = React.useState(PROVIDERS[0]?.id || 'tripo');
@@ -381,16 +420,18 @@ const AdminProviderKeysPanel: React.FC = () => {
     setLoading(true);
     setError('');
     try {
-      const [res, eventRes, summaryRes, modelOpsRes] = await Promise.all([
+      const [res, eventRes, summaryRes, modelOpsRes, availabilityRes] = await Promise.all([
         fetchAdminProviderKeys(),
         fetchAdminProviderKeyEvents({ limit: 30 }),
         fetchAdminProviderKeyHealthSummary({ windowHours: 24 }),
         fetchAdminModelOpsConfig().catch(() => null),
+        fetchAdminModelAvailabilitySummary(workspaceModelAvailabilityPayload()).catch(() => null),
       ]);
       setRows(res.keys.length ? res.keys : [createDraft()]);
       setEvents(eventRes.events || []);
       setSummary(summaryRes.summaries || []);
       setSummaryTotals(summaryRes.totals || null);
+      setModelAvailability(availabilityRes?.models || []);
       if (modelOpsRes?.config) {
         setModelOpsConfig(modelOpsRes.config);
         const allow = modelOpsRes.config.publishedCanonicalModelAllowlist;
@@ -435,6 +476,12 @@ const AdminProviderKeysPanel: React.FC = () => {
     );
   };
 
+  const refreshModelAvailability = async () => {
+    const availabilityRes = await fetchAdminModelAvailabilitySummary(workspaceModelAvailabilityPayload());
+    setModelAvailability(availabilityRes.models || []);
+    return availabilityRes.models || [];
+  };
+
   const savePublishedModels = async () => {
     if (blockIfRolePreview(isRolePreview)) return;
     setSavingModelOps(true);
@@ -451,6 +498,20 @@ const AdminProviderKeysPanel: React.FC = () => {
         bindingOverrides: null,
         wiringEdges: null,
       };
+      const availabilityRows = modelAvailability.length ? modelAvailability : await refreshModelAvailability();
+      const availabilityById = new Map(availabilityRows.map((row) => [row.canonicalModelId, row]));
+      const blocked = selected
+        .map((id) => availabilityById.get(id))
+        .filter((row): row is AdminModelAvailabilitySummaryItem => Boolean(row && !row.workspaceSelectable));
+      if (blocked.length) {
+        setError(
+          `有 ${blocked.length} 个模型暂不能发布：${blocked
+            .slice(0, 4)
+            .map((row) => `${row.canonicalModelId}（${row.reason}）`)
+            .join('；')}${blocked.length > 4 ? '；...' : ''}`
+        );
+        return;
+      }
       const saved = await saveAdminModelOpsConfig({
         ...base,
         publishedCanonicalModelAllowlist: selected,
@@ -462,6 +523,52 @@ const AdminProviderKeysPanel: React.FC = () => {
       setError(err instanceof Error ? err.message : 'Failed to save workspace model publish scope');
     } finally {
       setSavingModelOps(false);
+    }
+  };
+
+  const selectPublishableModels = async () => {
+    setError('');
+    setMessage('');
+    try {
+      const availabilityRows = modelAvailability.length ? modelAvailability : await refreshModelAvailability();
+      const readyIds = availabilityRows
+        .filter((row) => row.workspaceSelectable)
+        .map((row) => row.canonicalModelId)
+        .filter((id, index, arr) => arr.indexOf(id) === index);
+      setSelectedCanonicalModelIds(readyIds);
+      setMessage(`Selected ${readyIds.length} publishable models`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to select publishable models');
+    }
+  };
+
+  const runModelRouteTest = async (canonicalModelId: string) => {
+    const model = WORKSPACE_CANONICAL_MODELS.find((row) => row.canonicalModelId === canonicalModelId);
+    if (!model) return;
+    const availability = modelAvailabilityById.get(canonicalModelId);
+    const availabilityRoute = availability?.routes.find((route) => route.selectable) || availability?.routes[0];
+    const catalogRoute = listModelRoutes(canonicalModelId)[0];
+    setRouteTestingId(canonicalModelId);
+    setError('');
+    setMessage('');
+    try {
+      const res = await testAdminModelRoute({
+        canonicalModelId,
+        modality: availabilityRoute?.modality || catalogRoute?.modality || model.modality,
+        providerId: availabilityRoute?.providerId || catalogRoute?.providerId,
+        executionStatus: availabilityRoute?.executionStatus || catalogRoute?.executionStatus,
+        requiresEndpointMapping: catalogRoute?.requiresEndpointMapping === true,
+      });
+      await refreshModelAvailability();
+      if (res.result.status === 'passed') {
+        setMessage(`${canonicalModelId} route test passed`);
+      } else {
+        setError(`${canonicalModelId} route test failed: ${res.result.message}`);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Route test failed');
+    } finally {
+      setRouteTestingId('');
     }
   };
 
@@ -499,6 +606,7 @@ const AdminProviderKeysPanel: React.FC = () => {
         .filter((row) => row.provider && (row.secret || row.hasSecret || Object.keys(row.credentials || {}).length || row.hasCredentials));
       const saved = await saveAdminProviderKeys(cleaned);
       setRows(saved.keys.length ? saved.keys : [createDraft()]);
+      await refreshModelAvailability();
       setMessage('凭据池已保存');
     } catch (err) {
       setError(err instanceof Error ? err.message : '保存凭据池失败');
@@ -521,6 +629,7 @@ const AdminProviderKeysPanel: React.FC = () => {
       const [eventRes, summaryRes] = await Promise.all([
         fetchAdminProviderKeyEvents({ limit: 30 }),
         fetchAdminProviderKeyHealthSummary({ windowHours: 24 }),
+        refreshModelAvailability(),
       ]);
       setEvents(eventRes.events || []);
       setSummary(summaryRes.summaries || []);
@@ -544,6 +653,7 @@ const AdminProviderKeysPanel: React.FC = () => {
       const [eventRes, summaryRes] = await Promise.all([
         fetchAdminProviderKeyEvents({ limit: 30 }),
         fetchAdminProviderKeyHealthSummary({ windowHours: 24 }),
+        refreshModelAvailability(),
       ]);
       setEvents(eventRes.events || []);
       setSummary(summaryRes.summaries || []);
@@ -575,6 +685,7 @@ const AdminProviderKeysPanel: React.FC = () => {
       setSummaryTotals(res.summary?.totals || null);
       const eventRes = await fetchAdminProviderKeyEvents({ limit: 30 });
       setEvents(eventRes.events || []);
+      await refreshModelAvailability();
       setMessage(res.actions.length ? `已应用 ${res.actions.length} 条健康建议` : '暂无需要应用的健康建议');
     } catch (err) {
       setError(err instanceof Error ? err.message : '应用健康建议失败');
@@ -586,6 +697,10 @@ const AdminProviderKeysPanel: React.FC = () => {
   const selectedCanonicalSet = React.useMemo(
     () => new Set(selectedCanonicalModelIds),
     [selectedCanonicalModelIds]
+  );
+  const modelAvailabilityById = React.useMemo(
+    () => new Map(modelAvailability.map((row) => [row.canonicalModelId, row])),
+    [modelAvailability]
   );
 
   if (loading) return <div className="text-[11px] text-gray-400">正在加载凭据池...</div>;
@@ -733,6 +848,14 @@ const AdminProviderKeysPanel: React.FC = () => {
             <button
               type="button"
               disabled={!canWriteOps || savingModelOps}
+              onClick={() => void selectPublishableModels()}
+              className="rounded-lg border border-emerald-500/25 bg-emerald-950/20 px-3 py-1.5 text-[10px] text-emerald-100 disabled:opacity-40"
+            >
+              Ready only
+            </button>
+            <button
+              type="button"
+              disabled={!canWriteOps || savingModelOps}
               onClick={() => setSelectedCanonicalModelIds(defaultPublishedCanonicalIds())}
               className="rounded-lg border border-[#2e2e32] bg-[#1c1c22] px-3 py-1.5 text-[10px] text-gray-300 disabled:opacity-40"
             >
@@ -759,6 +882,7 @@ const AdminProviderKeysPanel: React.FC = () => {
                 <div className="grid gap-2 md:grid-cols-2">
                   {models.map((model) => {
                     const checked = selectedCanonicalSet.has(model.canonicalModelId);
+                    const availability = modelAvailabilityById.get(model.canonicalModelId);
                     return (
                       <label
                         key={model.canonicalModelId}
@@ -791,7 +915,30 @@ const AdminProviderKeysPanel: React.FC = () => {
                                 Default
                               </span>
                             ) : null}
+                            <span
+                              className={`rounded-md border px-1.5 py-0.5 ${modelAvailabilityClass(availability?.status)}`}
+                              title={availability?.reason || '正在检测模型可用性'}
+                            >
+                              {modelAvailabilityLabel(availability?.status)}
+                            </span>
                           </span>
+                          {availability && !availability.workspaceSelectable ? (
+                            <span className="mt-1 block truncate text-[10px] text-amber-200" title={availability.reason}>
+                              {availability.reason}
+                            </span>
+                          ) : null}
+                          <button
+                            type="button"
+                            disabled={routeTestingId === model.canonicalModelId}
+                            onClick={(event) => {
+                              event.preventDefault();
+                              event.stopPropagation();
+                              void runModelRouteTest(model.canonicalModelId);
+                            }}
+                            className="mt-2 rounded-md border border-white/[0.08] bg-black/20 px-2 py-1 text-[10px] text-gray-300 disabled:opacity-40"
+                          >
+                            {routeTestingId === model.canonicalModelId ? 'Testing...' : 'Test Route'}
+                          </button>
                         </span>
                       </label>
                     );

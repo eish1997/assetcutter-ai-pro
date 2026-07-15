@@ -4,8 +4,6 @@ import {
   isRegisteredImageModelId,
   LEGACY_IMAGE_GEAR_TO_REGISTRY,
 } from "./imageModels";
-import { imageModelRouteDisabledReason } from "./imageModelProvider";
-import { pickBinding } from "./pickBinding";
 import {
   listPublishedWorkspaceImageModels,
   listPublishedWorkspaceModel3dModels,
@@ -13,14 +11,15 @@ import {
   listPublishedWorkspaceVideoModels,
   type PublishedWorkspaceModelRow,
 } from "./publishedModelCatalog";
-import { getEnabledChannels } from "../settingsStore";
 import { setBindingDegradedHint } from "../settingsStore";
 import type { ModelOpsConfig } from "./opsTypes";
 import { modelRegistryLog } from "./log";
 
 export type EffectiveImageModelRow = {
+  canonicalModelId?: string;
   registryId: string;
   label: string;
+  gatewayReady?: boolean;
   disabled: boolean;
   disabledReason?: string;
 };
@@ -45,37 +44,23 @@ export function buildEffectiveImageModelRows(ops: ModelOpsConfig): EffectiveImag
 
   const rows: EffectiveImageModelRow[] = publishedRows.map((e) => {
     const blockedByOps = Boolean(allowSet && !allowSet.has(e.registryId));
-    const blockedByCredentials = !pickBinding(e.registryId, "image");
-    const disabled = blockedByOps || blockedByCredentials;
+    const blockedByGateway = e.gatewayReady !== true;
+    const disabled = blockedByOps || blockedByGateway;
     const disabledReason = blockedByOps
       ? "运营未开放该生图模型"
-      : blockedByCredentials
-        ? imageModelRouteDisabledReason(e.registryId)
+      : blockedByGateway
+        ? "Gateway 尚未接通该模型"
         : undefined;
     return {
+      canonicalModelId: e.canonicalModelId,
       registryId: e.registryId,
       label: e.label,
+      gatewayReady: e.gatewayReady,
       disabled,
       disabledReason,
     };
   });
 
-  if (!rows.some((r) => !r.disabled)) {
-    const sampleReason =
-      rows.find((r) => r.disabledReason)?.disabledReason ?? "未配置可用生图通道凭证";
-    setBindingDegradedHint("生图通道未就绪，已降级展示");
-    modelRegistryLog(
-      "error",
-      "all image models disabled by ops/provider rules; falling back to full registry",
-      `channels=${getEnabledChannels().join(",") || "(none)"} reason=${sampleReason}`
-    );
-    return publishedRows.map((e) => ({
-      registryId: e.registryId,
-      label: e.label,
-      disabled: false,
-      disabledReason: sampleReason,
-    }));
-  }
   setBindingDegradedHint(null);
   return rows;
 }
@@ -85,12 +70,14 @@ export function buildEffectiveTextModelRows(
   ops?: Pick<ModelOpsConfig, "publishedCanonicalModelAllowlist">
 ): EffectiveTextModelRow[] {
   return listPublishedWorkspaceTextModels(ops).map((e) => {
-    const blockedByCredentials = !pickBinding(e.registryId, "text");
+    const blockedByGateway = e.gatewayReady !== true;
     return {
+      canonicalModelId: e.canonicalModelId,
       registryId: e.registryId,
       label: e.label,
-      disabled: blockedByCredentials,
-      disabledReason: blockedByCredentials ? "未配置可用文本输出口或凭证" : undefined,
+      gatewayReady: e.gatewayReady,
+      disabled: blockedByGateway,
+      disabledReason: blockedByGateway ? "Gateway 尚未接通该模型" : undefined,
     };
   });
 }

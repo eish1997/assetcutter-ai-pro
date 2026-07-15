@@ -7,33 +7,55 @@ import { acquireProviderKey, recordProviderKeyError, recordProviderKeySuccess } 
 const OPENAI_DEFAULT_BASE_URL = 'https://api.openai.com/v1';
 const OPENAI_PROVIDER_ID = 'openai-official';
 const TOAPIS_DEFAULT_BASE_URL = 'https://toapis.com/v1';
-const OPENAI_COMPATIBLE_ADAPTERS = new Set(['openai-official', 'toapis-openai']);
+const VOLCENGINE_ARK_DEFAULT_BASE_URL = 'https://ark.cn-beijing.volces.com/api/v3';
+const OPENAI_COMPATIBLE_ADAPTERS = new Set(['openai-official', 'toapis-openai', 'volcengine-ark-openai', 'volcengine-ark-image']);
 const GPT_IMAGE_MAX_REFERENCE_IMAGES = 16;
+const VOLCENGINE_ARK_TEXT_MODEL_MAP = Object.freeze({
+  'doubao-seed-2-0-pro': 'doubao-seed-2-0-pro-260215',
+  'doubao-seed-2-0-lite': 'doubao-seed-2-0-lite-260428',
+  'doubao-seed-2-0-mini': 'doubao-seed-2-0-mini-260428',
+  'doubao-seed-2-0-vision': 'doubao-seed-2-0-vision-260215',
+});
+const VOLCENGINE_ARK_IMAGE_MODEL_MAP = Object.freeze({
+  'doubao-seedream-5-0-pro': 'doubao-seedream-5-0-pro-260628',
+  'doubao-seedream-5-0': 'doubao-seedream-5-0-260128',
+  'doubao-seedream-5-0-lite': 'doubao-seedream-5-0-lite-260128',
+});
 
 function nonEmptyString(value) {
   return typeof value === 'string' && value.trim() ? value.trim() : '';
 }
 
 function defaultBaseUrlForProvider(providerId) {
+  if (providerId === 'volcengine-ark') return VOLCENGINE_ARK_DEFAULT_BASE_URL;
   return providerId === 'toapis' ? TOAPIS_DEFAULT_BASE_URL : OPENAI_DEFAULT_BASE_URL;
 }
 
 function normalizeBaseUrl(value, providerId = OPENAI_PROVIDER_ID) {
   const raw = nonEmptyString(value) || defaultBaseUrlForProvider(providerId);
   const trimmed = raw.replace(/\/+$/, '');
+  if (providerId === 'volcengine-ark') return trimmed;
   return /\/v1$/i.test(trimmed) ? trimmed : `${trimmed}/v1`;
 }
 
-function mapOpenAiChatModel(value) {
+function mapOpenAiChatModel(value, providerId = OPENAI_PROVIDER_ID) {
   const model = nonEmptyString(value);
+  if (providerId === 'volcengine-ark') {
+    if (!model) return VOLCENGINE_ARK_TEXT_MODEL_MAP['doubao-seed-2-0-pro'];
+    return VOLCENGINE_ARK_TEXT_MODEL_MAP[model] || model;
+  }
   if (!model) return 'gpt-4o-mini';
   const lower = model.toLowerCase();
   if (lower.startsWith('gpt-') || lower.startsWith('o1') || lower.startsWith('o3') || lower.startsWith('o4')) return model;
   return 'gpt-4o-mini';
 }
 
-function mapOpenAiImageModel(value) {
+function mapOpenAiImageModel(value, providerId = OPENAI_PROVIDER_ID) {
   const model = nonEmptyString(value);
+  if (providerId === 'volcengine-ark') {
+    if (!model) return VOLCENGINE_ARK_IMAGE_MODEL_MAP['doubao-seedream-5-0'];
+    return VOLCENGINE_ARK_IMAGE_MODEL_MAP[model] || model;
+  }
   if (!model) return 'gpt-image-1.5';
   const lower = model.toLowerCase();
   if (lower === 'gpt-image-1' || lower.startsWith('dall-e')) return 'gpt-image-1.5';
@@ -82,7 +104,7 @@ function textFromContents(contents) {
   };
 }
 
-function buildOpenAiTextBody(job) {
+function buildOpenAiTextBody(job, route) {
   const input = job?.input && typeof job.input === 'object' ? job.input : {};
   const config = input.config && typeof input.config === 'object' ? input.config : {};
   const parsed = textFromContents(input.contents ?? input.prompt ?? input.text ?? '');
@@ -90,14 +112,47 @@ function buildOpenAiTextBody(job) {
   if (nonEmptyString(config.systemInstruction)) messages.push({ role: 'system', content: nonEmptyString(config.systemInstruction) });
   messages.push(...parsed.messages);
   return {
-    model: mapOpenAiChatModel(job?.model || input.model),
+    model: mapOpenAiChatModel(job?.model || input.model, route?.providerId),
     messages,
     stream: false,
     ...(config.responseMimeType === 'application/json' ? { response_format: { type: 'json_object' } } : {}),
   };
 }
 
-function buildOpenAiImageBody(job) {
+function aspectRatioToArkSize(aspectRatio) {
+  const raw = nonEmptyString(aspectRatio);
+  if (raw === '16:9') return '1280x720';
+  if (raw === '9:16') return '720x1280';
+  if (raw === '4:3') return '1024x768';
+  if (raw === '3:4') return '768x1024';
+  if (raw === '3:2') return '1152x768';
+  if (raw === '2:3') return '768x1152';
+  return '1024x1024';
+}
+
+function buildArkImageBody(job) {
+  const input = job?.input && typeof job.input === 'object' ? job.input : {};
+  const config = input.config && typeof input.config === 'object' ? input.config : {};
+  const imageConfig = config.imageConfig && typeof config.imageConfig === 'object' ? config.imageConfig : {};
+  const parsed = textFromContents(input.contents ?? input.prompt ?? input.text ?? '');
+  const prompt = nonEmptyString(input.prompt) || [nonEmptyString(config.systemInstruction), parsed.text].filter(Boolean).join('\n\n').trim();
+  if (!prompt) {
+    throw new AiGatewayValidationError('Volcengine Ark image generation requires a prompt', 'AI_GATEWAY_ARK_PROMPT_REQUIRED');
+  }
+  const size = nonEmptyString(imageConfig.size) || aspectRatioToArkSize(imageConfig.aspectRatio);
+  return {
+    model: mapOpenAiImageModel(job?.model || input.model, 'volcengine-ark'),
+    prompt: prompt.slice(0, 32000),
+    size,
+    response_format: 'b64_json',
+    ...(parsed.inlineImages.length
+      ? { image: parsed.inlineImages[0], images: parsed.inlineImages.slice(0, GPT_IMAGE_MAX_REFERENCE_IMAGES) }
+      : {}),
+  };
+}
+
+function buildOpenAiImageBody(job, route) {
+  if (route?.providerId === 'volcengine-ark') return buildArkImageBody(job);
   const input = job?.input && typeof job.input === 'object' ? job.input : {};
   const config = input.config && typeof input.config === 'object' ? input.config : {};
   const imageConfig = config.imageConfig && typeof config.imageConfig === 'object' ? config.imageConfig : {};
@@ -107,7 +162,7 @@ function buildOpenAiImageBody(job) {
     throw new AiGatewayValidationError('OpenAI image generation requires a prompt', 'AI_GATEWAY_OPENAI_PROMPT_REQUIRED');
   }
   return {
-    model: mapOpenAiImageModel(job?.model || input.model),
+    model: mapOpenAiImageModel(job?.model || input.model, route?.providerId),
     prompt: prompt.slice(0, 32000),
     n: 1,
     size: nonEmptyString(imageConfig.size) || '1024x1024',
@@ -124,10 +179,11 @@ export function buildOpenAiOfficialRequest(job, route) {
     throw new AiGatewayValidationError(`Unsupported adapter for OpenAI: ${route?.adapterId || ''}`);
   }
   const image = job?.modality === 'image' || isImageModel(job?.model || job?.input?.model);
-  const body = image ? buildOpenAiImageBody(job) : buildOpenAiTextBody(job);
+  const body = image ? buildOpenAiImageBody(job, route) : buildOpenAiTextBody(job, route);
+  const arkImage = route?.providerId === 'volcengine-ark' && image;
   return {
     method: 'POST',
-    path: image && body.images ? '/images/edits' : image ? '/images/generations' : '/chat/completions',
+    path: arkImage ? '/images/generations' : image && body.images ? '/images/edits' : image ? '/images/generations' : '/chat/completions',
     providerBaseUrl: defaultBaseUrlForProvider(route?.providerId),
     body,
     headers: {
@@ -181,7 +237,7 @@ function extractImageArtifacts(data, providerId = OPENAI_PROVIDER_ID) {
 
 export async function startOpenAiOfficialExecution(plan, options = {}) {
   const providerId = nonEmptyString(plan?.route?.providerId) || OPENAI_PROVIDER_ID;
-  const providerLabel = providerId === 'toapis' ? 'ToAPIs' : 'OpenAI';
+  const providerLabel = providerId === 'toapis' ? 'ToAPIs' : providerId === 'volcengine-ark' ? 'Volcengine Ark' : 'OpenAI';
   const key = await acquireProviderKey(providerId);
   if (!key?.secret) {
     throw new AiGatewayValidationError(`No enabled ${providerLabel} API key in AI Gateway provider key pool`, 'AI_GATEWAY_PROVIDER_KEY_MISSING');

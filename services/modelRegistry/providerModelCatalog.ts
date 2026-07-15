@@ -94,7 +94,7 @@ export const VOLCENGINE_ARK_MODEL_CATALOG: readonly ProviderModelCatalogEntry[] 
     label: "Doubao Seed 2.0 Pro",
     modality: "text",
     lifecycle: "active",
-    status: "testing",
+    status: "verified",
     docsUrl: "https://www.volcengine.com/docs/82379/1330310",
   },
   {
@@ -104,7 +104,7 @@ export const VOLCENGINE_ARK_MODEL_CATALOG: readonly ProviderModelCatalogEntry[] 
     label: "Doubao Seed 2.0 Lite",
     modality: "text",
     lifecycle: "active",
-    status: "testing",
+    status: "verified",
     docsUrl: "https://www.volcengine.com/docs/82379/1330310",
   },
   {
@@ -114,7 +114,7 @@ export const VOLCENGINE_ARK_MODEL_CATALOG: readonly ProviderModelCatalogEntry[] 
     label: "Doubao Seed 2.0 Mini",
     modality: "text",
     lifecycle: "active",
-    status: "testing",
+    status: "verified",
     docsUrl: "https://www.volcengine.com/docs/82379/1330310",
   },
   {
@@ -124,7 +124,7 @@ export const VOLCENGINE_ARK_MODEL_CATALOG: readonly ProviderModelCatalogEntry[] 
     label: "Doubao Seed 2.0 Vision",
     modality: "text",
     lifecycle: "active",
-    status: "testing",
+    status: "verified",
     docsUrl: "https://www.volcengine.com/docs/82379/1330310",
   },
   {
@@ -134,7 +134,7 @@ export const VOLCENGINE_ARK_MODEL_CATALOG: readonly ProviderModelCatalogEntry[] 
     label: "Seedream 5.0 Pro",
     modality: "image",
     lifecycle: "active",
-    status: "testing",
+    status: "verified",
     docsUrl: "https://www.volcengine.com/docs/82379/1330310",
   },
   {
@@ -144,7 +144,7 @@ export const VOLCENGINE_ARK_MODEL_CATALOG: readonly ProviderModelCatalogEntry[] 
     label: "Seedream 5.0",
     modality: "image",
     lifecycle: "active",
-    status: "testing",
+    status: "verified",
     docsUrl: "https://www.volcengine.com/docs/82379/1330310",
   },
   {
@@ -154,7 +154,7 @@ export const VOLCENGINE_ARK_MODEL_CATALOG: readonly ProviderModelCatalogEntry[] 
     label: "Seedream 5.0 Lite",
     modality: "image",
     lifecycle: "active",
-    status: "testing",
+    status: "verified",
     docsUrl: "https://www.volcengine.com/docs/82379/1330310",
   },
   {

@@ -95,15 +95,15 @@ describe('AI gateway auth-api facade', () => {
         {},
         {
           id: 'aijob_auth_ark_pending',
-          modality: 'image',
-          model: 'doubao-seedream-5-0',
+          modality: 'video',
+          model: 'doubao-seedance-2-0',
           provider: 'volcengine-ark',
           input: { prompt: 'render' },
         },
         user,
         {
           store,
-          modelOpsConfig: { publishedCanonicalModelAllowlist: ['doubao-seedream-5-0'] },
+          modelOpsConfig: { publishedCanonicalModelAllowlist: ['doubao-seedance-2-0'] },
         }
       )
     ).rejects.toMatchObject({
@@ -273,6 +273,82 @@ describe('AI gateway auth-api facade', () => {
     expect(stored.job.metadata.modelRouteGuard).toMatchObject({
       canonicalModelId: 'gpt-image-2',
       providerId: 'toapis',
+      gatewayExecutionStatus: 'gateway_ready',
+      platformKeyRequired: true,
+    });
+  });
+
+  it('allows Volcengine Ark text jobs when a platform API key exists', async () => {
+    const store = createInMemoryAiJobStore();
+    const user = { id: 'user_1', username: 'alice' };
+
+    const result = await createAuthAiGatewayJob(
+      {},
+      {
+        id: 'aijob_auth_ark_text_ready',
+        modality: 'text',
+        provider: 'volcengine-ark',
+        model: 'doubao-seed-2-0-pro',
+        input: {
+          contents: [{ role: 'user', parts: [{ text: 'hello ark' }] }],
+        },
+      },
+      user,
+      {
+        store,
+        modelOpsConfig: { publishedCanonicalModelAllowlist: ['doubao-seed-2-0-pro'] },
+        listProviderKeys: async () => [{ provider: 'volcengine-ark', enabled: true, hasSecret: true }],
+      }
+    );
+
+    expect(result.status).toBe(202);
+    const stored = await store.get('aijob_auth_ark_text_ready');
+    expect(stored.job.provider).toBe('volcengine-ark');
+    expect(stored.route).toMatchObject({
+      providerId: 'volcengine-ark',
+      adapterId: 'volcengine-ark-openai',
+    });
+    expect(stored.job.metadata.modelRouteGuard).toMatchObject({
+      canonicalModelId: 'doubao-seed-2-0-pro',
+      providerId: 'volcengine-ark',
+      gatewayExecutionStatus: 'gateway_ready',
+      platformKeyRequired: true,
+    });
+  });
+
+  it('allows Volcengine Ark Seedream image jobs when a platform API key exists', async () => {
+    const store = createInMemoryAiJobStore();
+    const user = { id: 'user_1', username: 'alice' };
+
+    const result = await createAuthAiGatewayJob(
+      {},
+      {
+        id: 'aijob_auth_ark_image_ready',
+        modality: 'image',
+        provider: 'volcengine-ark',
+        model: 'doubao-seedream-5-0',
+        input: {
+          contents: [{ role: 'user', parts: [{ text: 'product image via ark' }] }],
+        },
+      },
+      user,
+      {
+        store,
+        modelOpsConfig: { publishedCanonicalModelAllowlist: ['doubao-seedream-5-0'] },
+        listProviderKeys: async () => [{ provider: 'volcengine-ark', enabled: true, hasSecret: true }],
+      }
+    );
+
+    expect(result.status).toBe(202);
+    const stored = await store.get('aijob_auth_ark_image_ready');
+    expect(stored.job.provider).toBe('volcengine-ark');
+    expect(stored.route).toMatchObject({
+      providerId: 'volcengine-ark',
+      adapterId: 'volcengine-ark-image',
+    });
+    expect(stored.job.metadata.modelRouteGuard).toMatchObject({
+      canonicalModelId: 'doubao-seedream-5-0',
+      providerId: 'volcengine-ark',
       gatewayExecutionStatus: 'gateway_ready',
       platformKeyRequired: true,
     });

@@ -201,6 +201,8 @@ import {
   readModelOpsConfig,
   writeModelOpsConfig,
 } from './ai-gateway/model-ops-config-store.js';
+import { buildModelAvailabilitySummary } from './ai-gateway/model-availability-summary.js';
+import { testAiGatewayModelRoute } from './ai-gateway/model-route-test.js';
 import {
   acquireProviderKey,
   applyProviderKeyHealthAutomation,
@@ -2525,6 +2527,36 @@ const server = http.createServer(async (req, res) => {
         userAgent: req.headers['user-agent'],
       });
       json(res, 200, { ok: true, config: saved });
+      return;
+    }
+
+    if (path === '/api/admin/model-availability-summary' && req.method === 'POST') {
+      const staff = await requirePermission(req, res, PERMISSIONS.AI_GATEWAY_OPS_READ);
+      if (!staff) return;
+      let body;
+      try {
+        body = await readBody(req);
+      } catch (err) {
+        json(res, 400, { error: err?.message || 'Invalid JSON' });
+        return;
+      }
+      const summary = await buildModelAvailabilitySummary(body || {});
+      json(res, 200, { ok: true, ...summary });
+      return;
+    }
+
+    if (path === '/api/admin/model-route-test' && req.method === 'POST') {
+      const staff = await requirePermission(req, res, PERMISSIONS.AI_GATEWAY_OPS_READ);
+      if (!staff) return;
+      let body;
+      try {
+        body = await readBody(req);
+      } catch (err) {
+        json(res, 400, { error: err?.message || 'Invalid JSON' });
+        return;
+      }
+      const result = await testAiGatewayModelRoute(body || {});
+      json(res, 200, { ok: result.ok, result });
       return;
     }
 

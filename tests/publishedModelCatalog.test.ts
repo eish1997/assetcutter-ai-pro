@@ -24,11 +24,13 @@ describe("published workspace model catalog", () => {
     expect(rows.map((row) => row.registryId)).toEqual(["gpt-4o-mini"]);
   });
 
-  it("keeps warehouse-only Jimeng image models out of the generic dialog image picker", () => {
+  it("keeps image catalog rows queryable with gateway readiness", () => {
     const rows = listPublishedWorkspaceImageModels();
 
     expect(rows.map((row) => row.registryId)).toContain("gpt-image-2");
-    expect(rows.some((row) => row.registryId.startsWith("jimeng-"))).toBe(false);
+    expect(rows.map((row) => row.registryId)).toContain("jimeng-image-t2i-v40");
+    expect(rows.find((row) => row.registryId === "gpt-image-2")?.gatewayReady).toBe(true);
+    expect(rows.find((row) => row.registryId === "jimeng-image-t2i-v40")?.gatewayReady).toBe(false);
     expect(rows.every((row) => row.modality === "image")).toBe(true);
   });
 
@@ -38,6 +40,22 @@ describe("published workspace model catalog", () => {
     });
 
     expect(rows.map((row) => row.registryId)).toEqual(["gemini-2.5-flash-image"]);
+  });
+
+  it("uses the admin allowlist as publication source for draft text and image models", () => {
+    const textRows = listPublishedWorkspaceTextModels({
+      publishedCanonicalModelAllowlist: ["doubao-seed-2-0-pro", "gpt-4o-mini"],
+    });
+    const imageRows = listPublishedWorkspaceImageModels({
+      publishedCanonicalModelAllowlist: ["doubao-seedream-5-0", "gpt-image-2"],
+    });
+
+    expect(textRows.map((row) => row.registryId)).toEqual(["gpt-4o-mini", "doubao-seed-2-0-pro"]);
+    expect(textRows.find((row) => row.registryId === "gpt-4o-mini")?.gatewayReady).toBe(true);
+    expect(textRows.find((row) => row.registryId === "doubao-seed-2-0-pro")?.gatewayReady).toBe(true);
+    expect(imageRows.map((row) => row.registryId)).toEqual(["gpt-image-2", "doubao-seedream-5-0"]);
+    expect(imageRows.find((row) => row.registryId === "gpt-image-2")?.gatewayReady).toBe(true);
+    expect(imageRows.find((row) => row.registryId === "doubao-seedream-5-0")?.gatewayReady).toBe(true);
   });
 
   it("uses the admin allowlist as publication source for draft video and 3D models", () => {

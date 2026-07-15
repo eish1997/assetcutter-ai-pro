@@ -163,8 +163,8 @@ import { readLocalJson, writeLocalJson } from '../../services/clientPersist';
 import {
   coerceImageModelRegistryId,
   DEFAULT_IMAGE_MODEL_REGISTRY_ID,
-  DIALOG_IMAGE_MODELS,
 } from '../../services/modelRegistry/imageModels';
+import { useEffectiveImageModelRows } from '../../hooks/useEffectiveImageGearRows';
 import {
   STORYBOARD_GRID_SECONDS_PER_TILE_KEY,
   STORYBOARD_GRID_SECONDS_PRESETS,
@@ -315,6 +315,8 @@ export default function StoryboardTablePanel({
   companionBaseUrl = '',
   companionProjectId = '',
 }: Props) {
+  const { rows: effectiveImageModelRows, coerceModelId: coerceEffectiveImageModelId } =
+    useEffectiveImageModelRows();
   const table = useMemo(() => normalizeStoryboardTableDoc(asset.storyboardTable), [asset.storyboardTable]);
   const stats = useMemo(() => computeStoryboardTableStats(table), [table]);
   const generatedImageAssets = useMemo(
@@ -1021,8 +1023,8 @@ export default function StoryboardTablePanel({
     const stored = readLocalJson(STORYBOARD_EDIT_REDRAW_MODEL_KEY, DEFAULT_IMAGE_MODEL_REGISTRY_ID, (v) =>
       typeof v === 'string' ? v : null
     );
-    return coerceImageModelRegistryId(stored);
-  }, []);
+    return coerceEffectiveImageModelId(coerceImageModelRegistryId(stored));
+  }, [coerceEffectiveImageModelId]);
 
   const [editRedrawModelId, setEditRedrawModelId] = useState(resolvedEditRedrawModelId);
 
@@ -1033,10 +1035,10 @@ export default function StoryboardTablePanel({
   const effectiveEditRedrawModelId = editRedrawModelId;
 
   const setEditRedrawModelIdPersisted = useCallback((modelId: string) => {
-    const coerced = coerceImageModelRegistryId(modelId);
+    const coerced = coerceEffectiveImageModelId(coerceImageModelRegistryId(modelId));
     setEditRedrawModelId(coerced);
     writeLocalJson(STORYBOARD_EDIT_REDRAW_MODEL_KEY, coerced);
-  }, []);
+  }, [coerceEffectiveImageModelId]);
 
   const feedbackCollagePresetList = useMemo(
     () => listStoryboardFeedbackCollageRedrawPresets(redrawPresets),
@@ -1089,8 +1091,8 @@ export default function StoryboardTablePanel({
     const stored = readLocalJson(STORYBOARD_EDIT_FEEDBACK_COLLAGE_MODEL_KEY, fallback, (v) =>
       typeof v === 'string' ? v : null
     );
-    return coerceImageModelRegistryId(stored);
-  }, []);
+    return coerceEffectiveImageModelId(coerceImageModelRegistryId(stored));
+  }, [coerceEffectiveImageModelId]);
 
   const [feedbackCollageModelId, setFeedbackCollageModelId] = useState(resolvedFeedbackCollageModelId);
 
@@ -1101,19 +1103,19 @@ export default function StoryboardTablePanel({
   const effectiveFeedbackCollageModelId = feedbackCollageModelId;
 
   const setFeedbackCollageModelIdPersisted = useCallback((modelId: string) => {
-    const coerced = coerceImageModelRegistryId(modelId);
+    const coerced = coerceEffectiveImageModelId(coerceImageModelRegistryId(modelId));
     setFeedbackCollageModelId(coerced);
     writeLocalJson(STORYBOARD_EDIT_FEEDBACK_COLLAGE_MODEL_KEY, coerced);
-  }, []);
+  }, [coerceEffectiveImageModelId]);
 
   const feedbackCollageModelOptions = useMemo(
-    () => DIALOG_IMAGE_MODELS.map((m) => ({ value: m.id, label: m.label })),
-    []
+    () => effectiveImageModelRows.map((m) => ({ value: m.registryId, label: m.label })),
+    [effectiveImageModelRows]
   );
 
   const editRedrawModelOptions = useMemo(
-    () => DIALOG_IMAGE_MODELS.map((m) => ({ value: m.id, label: m.label })),
-    []
+    () => effectiveImageModelRows.map((m) => ({ value: m.registryId, label: m.label })),
+    [effectiveImageModelRows]
   );
 
   const redrawPresetOptions = useMemo(

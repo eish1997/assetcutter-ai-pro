@@ -28,7 +28,7 @@ export function aiGatewayHealthSnapshot() {
       executeViaAuthApi: 'POST /api/ai/jobs (AI_GATEWAY_EXECUTION_ENABLED=true)',
     },
     workers: listAiGatewayWorkers(),
-    adapters: ['legacy-gemini-proxy', 'openai-official', 'toapis-openai', 'jimeng-visual', 'tripo-openapi'],
+    adapters: ['legacy-gemini-proxy', 'openai-official', 'toapis-openai', 'volcengine-ark-openai', 'volcengine-ark-image', 'jimeng-visual', 'tripo-openapi'],
     legacyAdapters: ['gemini-proxy'],
     modalities: ['text', 'image', 'music', 'video', 'model3d'],
   };

@@ -182,6 +182,65 @@ describe('server AI gateway job planning', () => {
     });
   });
 
+  it('plans explicit Volcengine Ark text jobs through the Ark OpenAI-compatible adapter', () => {
+    const plan = createAiGatewayJobPlan({
+      modality: 'text',
+      provider: 'volcengine-ark',
+      model: 'doubao-seed-2-0-pro',
+      input: {
+        contents: [{ role: 'user', parts: [{ text: 'hello from ark' }] }],
+      },
+    });
+
+    expect(plan.route).toMatchObject({
+      providerId: 'volcengine-ark',
+      workerId: 'text-worker',
+      adapterId: 'volcengine-ark-openai',
+      channel: 'volcengine-ark',
+      upstreamBackend: 'volcengine-ark',
+    });
+    expect(plan.adapterRequest).toMatchObject({
+      method: 'POST',
+      path: '/chat/completions',
+      providerBaseUrl: 'https://ark.cn-beijing.volces.com/api/v3',
+      body: {
+        model: 'doubao-seed-2-0-pro-260215',
+        messages: [{ role: 'user', content: 'hello from ark' }],
+      },
+    });
+  });
+
+  it('plans explicit Volcengine Ark Seedream image jobs through the Ark image adapter', () => {
+    const plan = createAiGatewayJobPlan({
+      modality: 'image',
+      provider: 'volcengine-ark',
+      model: 'doubao-seedream-5-0',
+      input: {
+        contents: [{ role: 'user', parts: [{ text: 'draw a packaging concept' }] }],
+        config: { imageConfig: { aspectRatio: '16:9' } },
+      },
+    });
+
+    expect(plan.route).toMatchObject({
+      providerId: 'volcengine-ark',
+      workerId: 'image-worker',
+      adapterId: 'volcengine-ark-image',
+      channel: 'volcengine-ark',
+      upstreamBackend: 'volcengine-ark',
+    });
+    expect(plan.adapterRequest).toMatchObject({
+      method: 'POST',
+      path: '/images/generations',
+      providerBaseUrl: 'https://ark.cn-beijing.volces.com/api/v3',
+      body: {
+        model: 'doubao-seedream-5-0-260128',
+        prompt: 'draw a packaging concept',
+        size: '1280x720',
+        response_format: 'b64_json',
+      },
+    });
+  });
+
   it('uses ops control to pause providers and fall back to the next route', () => {
     const plan = createAiGatewayJobPlan(
       {

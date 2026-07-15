@@ -40,7 +40,7 @@ export function useEffectiveTextModelRows(): {
 
   const rows = useMemo(() => {
     void channelsKey;
-    return buildEffectiveTextModelRows(ops);
+    return buildEffectiveTextModelRows(ops).filter((row) => !row.disabled);
   }, [channelsKey, ops]);
 
   const coerceModelId = useCallback(

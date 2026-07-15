@@ -175,6 +175,83 @@ export type AdminModelOpsConfigResponse = {
   config: AdminModelOpsConfig;
 };
 
+export type AdminModelAvailabilityRouteSummary = {
+  providerId: string | null;
+  modality: string | null;
+  gatewayExecutionStatus: 'gateway_ready' | 'adapter_pending' | 'not_gateway_routed';
+  executionStatus: string;
+  platformKeyRequired: boolean;
+  keyReady: boolean;
+  selectable: boolean;
+  reasonCode: 'ready' | 'key_missing' | 'adapter_pending' | 'parameter_pending' | 'route_not_executable' | 'route_not_found';
+};
+
+export type AdminModelAvailabilitySummaryItem = {
+  canonicalModelId: string;
+  modality: string | null;
+  status: 'ready' | 'key_missing' | 'adapter_pending' | 'parameter_pending' | 'route_not_found';
+  workspaceSelectable: boolean;
+  reasonCode: 'ready' | 'key_missing' | 'adapter_pending' | 'parameter_pending' | 'route_not_found';
+  reason: string;
+  routes: AdminModelAvailabilityRouteSummary[];
+};
+
+export type AdminModelAvailabilitySummaryResponse = {
+  ok?: boolean;
+  generatedAt: string;
+  totals: {
+    total: number;
+    ready: number;
+    keyMissing: number;
+    adapterPending: number;
+    parameterPending: number;
+    routeMissing: number;
+  };
+  models: AdminModelAvailabilitySummaryItem[];
+};
+
+export type AdminModelRouteTestInput = {
+  canonicalModelId: string;
+  modality?: string;
+  providerId?: string;
+  provider?: string;
+  executionStatus?: string;
+  requiresEndpointMapping?: boolean;
+};
+
+export type AdminModelRouteTestResult = {
+  ok: boolean;
+  status: 'passed' | 'failed';
+  mode: 'route_guard';
+  canonicalModelId: string | null;
+  providerId: string | null;
+  modality: string | null;
+  code: string;
+  message: string;
+  route: {
+    ruleId?: string;
+    canonicalModelId?: string;
+    providerId?: string;
+    gatewayExecutionStatus?: string;
+    executionStatus?: string;
+    platformKeyRequired?: boolean;
+  } | null;
+  testedAt: string;
+};
+
+export type AdminModelRouteTestResponse = {
+  ok?: boolean;
+  result: AdminModelRouteTestResult;
+};
+
+export type AdminModelAvailabilitySummaryInput = {
+  models: Array<{
+    canonicalModelId: string;
+    modality?: string;
+    routes?: Array<{ providerId?: string; modality?: string; executionStatus?: string; requiresEndpointMapping?: boolean }>;
+  }>;
+};
+
 export async function fetchAdminProviderKeys() {
   return requestJson<AdminProviderKeysResponse>(apiUrl('/api/admin/ai-gateway/provider-keys'), {
     cache: 'no-store',
@@ -269,5 +346,19 @@ export async function saveAdminModelOpsConfig(config: AdminModelOpsConfig) {
   return requestJson<AdminModelOpsConfigResponse>(apiUrl('/api/admin/model-ops-config'), {
     method: 'PUT',
     body: JSON.stringify({ config }),
+  });
+}
+
+export async function fetchAdminModelAvailabilitySummary(input: AdminModelAvailabilitySummaryInput) {
+  return requestJson<AdminModelAvailabilitySummaryResponse>(apiUrl('/api/admin/model-availability-summary'), {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+}
+
+export async function testAdminModelRoute(input: AdminModelRouteTestInput) {
+  return requestJson<AdminModelRouteTestResponse>(apiUrl('/api/admin/model-route-test'), {
+    method: 'POST',
+    body: JSON.stringify(input),
   });
 }

@@ -26,16 +26,16 @@ export function useEffectiveCapabilityModelRows(modality: CapabilityModelModalit
       if (alive) setVersion((v) => v + 1);
     });
     const onUpdated = () => setVersion((v) => v + 1);
-    window.addEventListener('ac:model-ops-updated', onUpdated);
+    window.addEventListener('ac-model-ops-updated', onUpdated);
     return () => {
       alive = false;
-      window.removeEventListener('ac:model-ops-updated', onUpdated);
+      window.removeEventListener('ac-model-ops-updated', onUpdated);
     };
   }, []);
 
   const rows = useMemo(() => {
     void version;
-    return buildRows(modality);
+    return buildRows(modality).filter((row) => !row.disabled);
   }, [modality, version]);
   const firstReadyRegistryId = rows.find((row) => !row.disabled)?.registryId || rows[0]?.registryId || '';
   return { rows, firstReadyRegistryId };

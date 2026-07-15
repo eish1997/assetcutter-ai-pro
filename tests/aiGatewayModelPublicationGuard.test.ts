@@ -61,16 +61,28 @@ describe('AI gateway model publication guard', () => {
       executionStatus: 'platform_ready',
       platformKeyRequired: true,
     });
+    expect(resolveExecutableModelRoute({ modality: 'text', model: 'doubao-seed-2-0-pro', provider: 'volcengine-ark' })).toMatchObject({
+      canonicalModelId: 'doubao-seed-2-0-pro',
+      providerId: 'volcengine-ark',
+      executionStatus: 'platform_ready',
+      platformKeyRequired: true,
+    });
+    expect(resolveExecutableModelRoute({ modality: 'image', model: 'doubao-seedream-5-0', provider: 'volcengine-ark' })).toMatchObject({
+      canonicalModelId: 'doubao-seedream-5-0',
+      providerId: 'volcengine-ark',
+      executionStatus: 'platform_ready',
+      platformKeyRequired: true,
+    });
   });
 
   it('identifies catalog models whose backend adapters are still pending', async () => {
-    expect(resolveKnownPendingModelRoute({ modality: 'image', model: 'doubao-seedream-5-0' })).toMatchObject({
+    expect(resolveKnownPendingModelRoute({ modality: 'video', model: 'doubao-seedance-2-0' })).toMatchObject({
       providerId: 'volcengine-ark',
       executionStatus: 'adapter_pending',
     });
     await expect(
       validateAiGatewayModelRouteExecutable(
-        { modality: 'image', model: 'doubao-seedream-5-0' },
+        { modality: 'video', model: 'doubao-seedance-2-0' },
         { checkProviderKeys: false }
       )
     ).rejects.toMatchObject({
@@ -128,6 +140,28 @@ describe('AI gateway model publication guard', () => {
       ok: true,
       checked: true,
       route: { providerId: 'toapis' },
+    });
+
+    await expect(
+      validateAiGatewayModelRouteExecutable(
+        { modality: 'text', model: 'doubao-seed-2-0-pro', provider: 'volcengine-ark' },
+        { listProviderKeys: async () => [{ provider: 'volcengine-ark', enabled: true, hasSecret: true }] }
+      )
+    ).resolves.toMatchObject({
+      ok: true,
+      checked: true,
+      route: { providerId: 'volcengine-ark' },
+    });
+
+    await expect(
+      validateAiGatewayModelRouteExecutable(
+        { modality: 'image', model: 'doubao-seedream-5-0', provider: 'volcengine-ark' },
+        { listProviderKeys: async () => [{ provider: 'volcengine-ark', enabled: true, hasSecret: true }] }
+      )
+    ).resolves.toMatchObject({
+      ok: true,
+      checked: true,
+      route: { providerId: 'volcengine-ark' },
     });
   });
 });

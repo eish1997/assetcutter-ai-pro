@@ -50,7 +50,10 @@ export function useEffectiveImageModelRows(): {
     };
   }, []);
 
-  const rows = useMemo(() => buildEffectiveImageModelRows(ops), [channelsKey, ops]);
+  const rows = useMemo(
+    () => buildEffectiveImageModelRows(ops).filter((row) => !row.disabled),
+    [channelsKey, ops]
+  );
 
   const coerceModelId = useCallback(
     (currentRegistryId: string) =>

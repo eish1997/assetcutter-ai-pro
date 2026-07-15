@@ -18,7 +18,7 @@ describe("modelRegistry merge", () => {
     vi.restoreAllMocks();
   });
 
-  it("allowlist null keeps all models enabled when credentials exist", () => {
+  it("allowlist null keeps gateway-ready image models enabled", () => {
     vi.spyOn(settingsStore, "getEnabledChannels").mockReturnValue([
       "gemini-aistudio",
       "openai-official",
@@ -27,20 +27,18 @@ describe("modelRegistry merge", () => {
     vi.spyOn(settingsStore, "getUserApiKey").mockReturnValue("gemini-key");
     vi.spyOn(settingsStore, "getOpenaiApiKey").mockReturnValue("openai-key");
     const rows = buildEffectiveImageModelRows({ ...DEFAULT_MODEL_OPS_CONFIG, imageRegistryAllowlist: null });
-    expect(rows.every((r) => !r.disabled)).toBe(true);
-    expect(rows).toHaveLength(7);
+    expect(rows.filter((r) => r.gatewayReady).every((r) => !r.disabled)).toBe(true);
+    expect(rows.find((r) => r.registryId === "jimeng-image-t2i-v40")?.disabledReason).toContain("Gateway");
+    expect(rows.length).toBeGreaterThanOrEqual(7);
   });
 
-  it("disables models when provider credentials missing", () => {
+  it("does not let local BYOK credentials hide gateway-ready image models", () => {
     vi.spyOn(settingsStore, "getEnabledChannels").mockReturnValue(["gemini-aistudio", "openai-official"]);
-    vi.spyOn(settingsStore, "isChannelReady").mockImplementation(
-      (ch) => ch === "gemini-aistudio"
-    );
-    vi.spyOn(settingsStore, "getUserApiKey").mockReturnValue("gemini-key");
+    vi.spyOn(settingsStore, "isChannelReady").mockReturnValue(false);
+    vi.spyOn(settingsStore, "getUserApiKey").mockReturnValue(null);
     vi.spyOn(settingsStore, "getOpenaiApiKey").mockReturnValue(null);
     const rows = buildEffectiveImageModelRows({ ...DEFAULT_MODEL_OPS_CONFIG, imageRegistryAllowlist: null });
-    expect(rows.find((x) => x.registryId === "gpt-image-1.5")?.disabled).toBe(true);
-    expect(rows.find((x) => x.registryId === "gpt-image-1.5")?.disabledReason).toContain("OpenAI");
+    expect(rows.find((x) => x.registryId === "gpt-image-1.5")?.disabled).toBe(false);
     expect(rows.find((x) => x.registryId === "gemini-2.5-flash-image")?.disabled).toBe(false);
   });
 

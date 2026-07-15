@@ -7,16 +7,24 @@ export const textWorker = Object.freeze({
   id: 'text-worker',
   modalities: Object.freeze(['text']),
   capabilities: Object.freeze(['text.generate']),
-  adapters: Object.freeze(['legacy-gemini-proxy', 'openai-official', 'toapis-openai']),
+  adapters: Object.freeze(['legacy-gemini-proxy', 'openai-official', 'toapis-openai', 'volcengine-ark-openai']),
   status: 'active',
   buildRequest(job, route) {
     assertWorkerSupportsAdapter(textWorker, route?.adapterId);
-    if (route?.adapterId === 'openai-official' || route?.adapterId === 'toapis-openai') return buildOpenAiOfficialRequest(job, route);
+    if (
+      route?.adapterId === 'openai-official' ||
+      route?.adapterId === 'toapis-openai' ||
+      route?.adapterId === 'volcengine-ark-openai'
+    ) return buildOpenAiOfficialRequest(job, route);
     return buildGeminiProxyAsyncRequest(job, route);
   },
   start(plan, options = {}) {
     assertWorkerSupportsAdapter(textWorker, plan?.route?.adapterId);
-    if (plan?.route?.adapterId === 'openai-official' || plan?.route?.adapterId === 'toapis-openai') {
+    if (
+      plan?.route?.adapterId === 'openai-official' ||
+      plan?.route?.adapterId === 'toapis-openai' ||
+      plan?.route?.adapterId === 'volcengine-ark-openai'
+    ) {
       return startOpenAiOfficialExecution(plan, options);
     }
     return startLegacyGeminiProxyExecution(plan, options);

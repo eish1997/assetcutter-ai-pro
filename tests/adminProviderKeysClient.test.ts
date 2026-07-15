@@ -13,12 +13,14 @@ import {
   cooldownAdminProviderKey,
   fetchAdminProviderKeyEvents,
   fetchAdminProviderKeyHealthSummary,
+  fetchAdminModelAvailabilitySummary,
   fetchAdminProviderKeys,
   fetchAdminModelOpsConfig,
   restoreAdminProviderKey,
   saveAdminModelOpsConfig,
   saveAdminProviderKeys,
   smokeTestAdminProviderKey,
+  testAdminModelRoute,
 } from '../services/adminProviderKeysClient';
 import { requestJson } from '../services/httpClient';
 
@@ -103,6 +105,36 @@ describe('adminProviderKeysClient', () => {
     expect(requestJson).toHaveBeenCalledWith('https://auth.example/api/admin/model-ops-config', {
       method: 'PUT',
       body: JSON.stringify({ config }),
+    });
+  });
+
+  it('reads model availability summary through the admin auth-api', async () => {
+    const input = {
+      models: [
+        {
+          canonicalModelId: 'gpt-image-2',
+          modality: 'image',
+          routes: [{ providerId: 'openai-official', modality: 'image' }],
+        },
+      ],
+    };
+    await fetchAdminModelAvailabilitySummary(input);
+    expect(requestJson).toHaveBeenCalledWith('https://auth.example/api/admin/model-availability-summary', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    });
+  });
+
+  it('runs model route tests through the admin auth-api', async () => {
+    const input = {
+      canonicalModelId: 'tripo-p1',
+      modality: 'model3d',
+      providerId: 'tripo',
+    };
+    await testAdminModelRoute(input);
+    expect(requestJson).toHaveBeenCalledWith('https://auth.example/api/admin/model-route-test', {
+      method: 'POST',
+      body: JSON.stringify(input),
     });
   });
 });
