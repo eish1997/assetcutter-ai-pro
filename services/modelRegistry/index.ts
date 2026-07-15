@@ -10,10 +10,12 @@ export {
 export {
   buildEffectiveImageGearRows,
   buildEffectiveImageModelRows,
+  buildEffectiveModel3dRows,
+  buildEffectiveVideoModelRows,
   pickCoercedGearId,
   pickCoercedImageModelId,
 } from "./merge";
-export type { EffectiveImageGearRow, EffectiveImageModelRow } from "./merge";
+export type { EffectiveCapabilityModelRow, EffectiveImageGearRow, EffectiveImageModelRow } from "./merge";
 export {
   DEFAULT_MODEL_IMAGE,
   DEFAULT_MODEL_PRO,
@@ -61,4 +63,58 @@ export {
 export { CHANNEL_CATALOG, channelsForFamily, labelForChannel } from "./channelCatalog";
 export { PROVIDER_BINDINGS, getBindingsForRegistry } from "./providerBindings";
 export { DEFAULT_TEXT_MODEL_REGISTRY_ID, TEXT_MODEL_REGISTRY } from "./textModels";
+export {
+  PROVIDER_CATALOG,
+  PROVIDER_CATALOG_IDS,
+  getProviderCatalogEntry,
+  isProviderCatalogId,
+  providerCapabilityStatus,
+  providerDisplayName,
+  providersForAdminKeyPool,
+} from "./providerCatalog";
+export type {
+  ProviderAuthField,
+  ProviderAuthScheme,
+  ProviderCapabilityStatus,
+  ProviderCatalogEntry,
+  ProviderCatalogId,
+  ProviderModality,
+} from "./providerCatalog";
+export {
+  PROVIDER_MODEL_CATALOG,
+  listProviderModels,
+  providerModelCount,
+  providerModelCountsByModality,
+} from "./providerModelCatalog";
+export type { ProviderModelCatalogEntry, ProviderModelLifecycle, ProviderModelStatus } from "./providerModelCatalog";
+export {
+  CANONICAL_MODEL_CATALOG,
+  getCanonicalModel,
+  listCanonicalModels,
+  listPublishedCanonicalModels,
+  resolveCanonicalModelId,
+} from "./canonicalModelCatalog";
+export type { CanonicalModelCatalogEntry, CanonicalModelStatus } from "./canonicalModelCatalog";
+export {
+  listPublishedWorkspaceImageModels,
+  listPublishedWorkspaceModel3dModels,
+  listPublishedWorkspaceModels,
+  listPublishedWorkspaceMusicModels,
+  listPublishedWorkspaceTextModels,
+  listPublishedWorkspaceVideoModels,
+} from "./publishedModelCatalog";
+export type { PublishedWorkspaceModelRow } from "./publishedModelCatalog";
+export {
+  MODEL_ROUTE_CATALOG,
+  listModelRoutes,
+  listProviderRoutes,
+  providerRouteCount,
+  routeProvidersForCanonicalModel,
+} from "./modelRouteCatalog";
+export type {
+  ModelRouteCatalogEntry,
+  ModelRouteExecutionStatus,
+  ModelRouteFallbackPolicy,
+  ModelRouteGatewayExecutionStatus,
+} from "./modelRouteCatalog";
 export { migrateSystemModelSlots } from "./systemConfigMigrate";

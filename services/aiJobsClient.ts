@@ -1,5 +1,6 @@
 import { apiUrl } from './apiBase';
 import { requestJson } from './httpClient';
+import { resolveCanonicalModelId } from './modelRegistry/canonicalModelCatalog';
 
 export type AiJobStatus = 'created' | 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
 export type AiJobModality = 'text' | 'image' | 'music' | 'video' | 'model3d';
@@ -157,6 +158,8 @@ export type CreateAiJobInput = {
   capability?: string;
   provider?: string;
   model?: string;
+  canonicalModelId?: string;
+  registryId?: string;
   correlationId?: string;
   estimatedCredits?: number;
   metadata?: Record<string, unknown>;
@@ -174,11 +177,44 @@ function clampLimit(limit?: number) {
   return Math.min(100, Math.max(1, n));
 }
 
+function pickModelId(input: CreateAiJobInput): string | undefined {
+  const nested = input.input || {};
+  const candidates = [
+    input.canonicalModelId,
+    input.registryId,
+    input.model,
+    nested.canonicalModelId,
+    nested.registryId,
+    nested.model,
+  ];
+  for (const candidate of candidates) {
+    if (typeof candidate === 'string' && candidate.trim()) return candidate.trim();
+  }
+  return undefined;
+}
+
+function withCanonicalModel(input: CreateAiJobInput): CreateAiJobInput {
+  const rawModelId = pickModelId(input);
+  if (!rawModelId) return input;
+  const canonicalModelId = resolveCanonicalModelId(rawModelId) || rawModelId;
+  const registryId = input.registryId || (typeof input.input.registryId === 'string' ? input.input.registryId : rawModelId);
+  return {
+    ...input,
+    canonicalModelId,
+    registryId,
+    metadata: {
+      ...input.metadata,
+      canonicalModelId,
+      registryId,
+    },
+  };
+}
+
 export function createAiJob(input: CreateAiJobInput, init?: RequestInit) {
   return requestJson<AiJobDetail>(apiUrl('/api/ai/jobs'), {
     ...init,
     method: 'POST',
-    body: JSON.stringify(input),
+    body: JSON.stringify(withCanonicalModel(input)),
   });
 }
 

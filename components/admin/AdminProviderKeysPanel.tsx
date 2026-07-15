@@ -5,23 +5,67 @@ import {
   fetchAdminProviderKeyEvents,
   fetchAdminProviderKeyHealthSummary,
   fetchAdminProviderKeys,
+  fetchAdminModelOpsConfig,
   restoreAdminProviderKey,
+  saveAdminModelOpsConfig,
   saveAdminProviderKeys,
+  smokeTestAdminProviderKey,
+  type AdminModelOpsConfig,
   type AdminProviderKeyEvent,
   type AdminProviderKeyHealthSummaryItem,
   type AdminProviderKeyRow,
 } from '../../services/adminProviderKeysClient';
 import { PERMISSIONS } from '../../services/adminPermissions';
 import { blockIfRolePreview } from '../../services/adminRolePreview';
+import {
+  getProviderCatalogEntry,
+  getCanonicalModel,
+  listCanonicalModels,
+  listProviderModels,
+  listProviderRoutes,
+  providerDisplayName,
+  providerModelCount,
+  providerRouteCount,
+  providersForAdminKeyPool,
+  type ModelRouteCatalogEntry,
+  type ModelRouteExecutionStatus,
+  type ModelRouteGatewayExecutionStatus,
+  type ProviderAuthField,
+  type ProviderCapabilityStatus,
+  type ProviderCatalogEntry,
+  type ProviderModelCatalogEntry,
+  type ProviderModelLifecycle,
+  type ProviderModelStatus,
+  type ProviderModality,
+} from '../../services/modelRegistry';
 import { useAdminStaff } from './AdminStaffContext';
 
-const PROVIDERS = [
-  { id: 'tripo', label: 'Tripo 3D', hint: 'Bearer API Key' },
-  { id: 'volcengine-jimeng', label: '即梦视频', hint: '火山 AK/SK' },
-];
+const PROVIDERS = providersForAdminKeyPool();
+
+const WORKSPACE_PUBLISH_MODALITIES: readonly ProviderModality[] = ['text', 'image', 'video', 'model3d', 'music'];
+
+const WORKSPACE_CANONICAL_MODELS = listCanonicalModels().filter(
+  (model) =>
+    WORKSPACE_PUBLISH_MODALITIES.includes(model.modality) &&
+    model.visibleInWorkspace &&
+    model.status !== 'disabled'
+);
+
+function defaultPublishedCanonicalIds() {
+  return WORKSPACE_CANONICAL_MODELS.filter((model) => model.status === 'published').map((model) => model.canonicalModelId);
+}
+
+const MODALITY_LABELS: Record<ProviderModality, string> = {
+  text: '文',
+  image: '图',
+  video: '视频',
+  model3d: '3D',
+  music: '音乐',
+  digital_human: '数字人',
+};
 
 function providerLabel(provider: string) {
-  return PROVIDERS.find((item) => item.id === provider)?.label || provider || '供应商';
+  return providerDisplayName(provider) || provider || '供应商';
 }
 
 function createDraft(provider = 'tripo'): AdminProviderKeyRow {
@@ -39,6 +83,52 @@ function createDraft(provider = 'tripo'): AdminProviderKeyRow {
 
 function credentialValue(row: AdminProviderKeyRow, key: string) {
   return row.credentials?.[key] || '';
+}
+
+function providerAuthFields(provider: string): readonly ProviderAuthField[] {
+  return getProviderCatalogEntry(provider)?.authSchemes[0]?.fields || [];
+}
+
+function fieldCurrentPreview(row: AdminProviderKeyRow, field: ProviderAuthField) {
+  if (field.storage === 'secret') return row.secretPreview || '';
+  return row.credentialsPreview?.[field.key] || '';
+}
+
+function fieldValue(row: AdminProviderKeyRow, field: ProviderAuthField) {
+  if (field.storage === 'secret') return row.secret || '';
+  return credentialValue(row, field.key);
+}
+
+function providerKeyCount(rows: readonly AdminProviderKeyRow[], provider: string) {
+  return rows.filter(
+    (row) => row.provider === provider && (row.hasSecret || row.secret || row.hasCredentials || Object.keys(row.credentials || {}).length)
+  ).length;
+}
+
+function ProviderLinks({ provider }: { provider: ProviderCatalogEntry }) {
+  const links = [
+    { label: '官网', href: provider.homepageUrl },
+    { label: '控制台', href: provider.consoleUrl },
+    { label: '文档', href: provider.docsUrl },
+    { label: '价格', href: provider.pricingUrl },
+  ].filter((item): item is { label: string; href: string } => Boolean(item.href));
+
+  if (!links.length) return null;
+  return (
+    <div className="mt-3 flex flex-wrap gap-2">
+      {links.map((link) => (
+        <a
+          key={`${provider.id}:${link.label}`}
+          href={link.href}
+          target="_blank"
+          rel="noreferrer"
+          className="rounded-lg border border-white/[0.08] bg-black/20 px-2 py-1 text-[10px] text-gray-300 hover:border-blue-400/40 hover:text-blue-100"
+        >
+          {link.label}
+        </a>
+      ))}
+    </div>
+  );
 }
 
 function healthLabel(status?: string | null) {
@@ -93,10 +183,179 @@ function percent(value?: number | null) {
   return `${Math.round(Math.max(0, Number(value || 0)) * 100)}%`;
 }
 
+const CAPABILITY_STATUS_ITEMS: readonly {
+  key: keyof ProviderCapabilityStatus;
+  label: string;
+}[] = [
+  { key: 'catalogVisible', label: '展示' },
+  { key: 'keyPoolSupported', label: 'Key池' },
+  { key: 'backendAdapterReady', label: '后端' },
+  { key: 'platformKeyReady', label: '平台Key' },
+  { key: 'byokSupported', label: 'BYOK' },
+  { key: 'modelCatalogReady', label: '模型' },
+  { key: 'smokeTestReady', label: '测试' },
+];
+
+function StatusPill({ active, label }: { active: boolean; label: string }) {
+  return (
+    <span
+      className={`rounded-md border px-1.5 py-0.5 text-[10px] ${
+        active
+          ? 'border-emerald-500/30 bg-emerald-950/25 text-emerald-100'
+          : 'border-white/[0.08] bg-white/[0.03] text-gray-500'
+      }`}
+    >
+      {label}
+    </span>
+  );
+}
+
+function ProviderCapabilityMatrix({ provider }: { provider: ProviderCatalogEntry }) {
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {CAPABILITY_STATUS_ITEMS.map((item) => (
+        <StatusPill key={`${provider.id}:${item.key}`} active={provider.capabilityStatus[item.key]} label={item.label} />
+      ))}
+    </div>
+  );
+}
+
+function lifecycleLabel(lifecycle?: ProviderModelLifecycle) {
+  if (lifecycle === 'active') return '可用';
+  if (lifecycle === 'preview') return '预览';
+  if (lifecycle === 'manual') return '待验证';
+  if (lifecycle === 'planned') return '计划中';
+  return '-';
+}
+
+function modelStatusLabel(status?: ProviderModelStatus) {
+  if (status === 'verified') return '已验证';
+  if (status === 'testing') return '待测试';
+  if (status === 'discovered') return '已发现';
+  if (status === 'requires_mapping') return '需映射';
+  if (status === 'disabled') return '停用';
+  return '-';
+}
+
+function modelStatusClass(status?: ProviderModelStatus) {
+  if (status === 'verified') return 'border-emerald-500/30 bg-emerald-950/25 text-emerald-100';
+  if (status === 'requires_mapping') return 'border-amber-500/30 bg-amber-950/25 text-amber-100';
+  if (status === 'testing' || status === 'discovered') return 'border-blue-500/25 bg-blue-950/20 text-blue-100';
+  return 'border-white/10 bg-white/[0.03] text-gray-400';
+}
+
+function routeExecutionLabel(status?: ModelRouteExecutionStatus) {
+  if (status === 'platform_ready') return '平台可用';
+  if (status === 'byok_ready') return 'BYOK';
+  if (status === 'requires_endpoint_mapping') return '需映射';
+  if (status === 'adapter_pending') return '待后端';
+  if (status === 'disabled') return '停用';
+  return '-';
+}
+
+function routeExecutionClass(status?: ModelRouteExecutionStatus) {
+  if (status === 'platform_ready') return 'border-emerald-500/30 bg-emerald-950/25 text-emerald-100';
+  if (status === 'byok_ready') return 'border-blue-500/25 bg-blue-950/20 text-blue-100';
+  if (status === 'requires_endpoint_mapping') return 'border-amber-500/30 bg-amber-950/25 text-amber-100';
+  if (status === 'adapter_pending') return 'border-purple-500/25 bg-purple-950/20 text-purple-100';
+  return 'border-white/10 bg-white/[0.03] text-gray-400';
+}
+
+function gatewayExecutionLabel(status?: ModelRouteGatewayExecutionStatus) {
+  if (status === 'gateway_ready') return 'Gateway 可执行';
+  if (status === 'adapter_pending') return 'Gateway 待接';
+  if (status === 'not_gateway_routed') return '非 Gateway';
+  return '-';
+}
+
+function gatewayExecutionClass(status?: ModelRouteGatewayExecutionStatus) {
+  if (status === 'gateway_ready') return 'border-emerald-500/30 bg-emerald-950/25 text-emerald-100';
+  if (status === 'adapter_pending') return 'border-purple-500/25 bg-purple-950/20 text-purple-100';
+  return 'border-white/10 bg-white/[0.03] text-gray-400';
+}
+
+function routeStatusLabel(route: ModelRouteCatalogEntry) {
+  return routeExecutionLabel(route.executionStatus);
+}
+
+function routeStatusClass(route: ModelRouteCatalogEntry) {
+  return routeExecutionClass(route.executionStatus);
+}
+
+function ProviderModelRow({ model }: { model: ProviderModelCatalogEntry }) {
+  return (
+    <div className="grid gap-2 rounded-lg border border-white/[0.06] bg-black/20 px-3 py-2 text-[10px] text-gray-500 md:grid-cols-[1fr_90px_90px]">
+      <div className="min-w-0">
+        <div className="truncate text-[11px] font-semibold text-gray-200" title={model.label}>
+          {model.label}
+        </div>
+        <div className="mt-0.5 truncate" title={model.providerModelId}>
+          {model.providerModelId}
+        </div>
+      </div>
+      <div>
+        <div>{MODALITY_LABELS[model.modality]}</div>
+        <div className="mt-0.5 text-gray-300">{model.registryId || '-'}</div>
+      </div>
+      <div>
+        <div>{lifecycleLabel(model.lifecycle)}</div>
+        <div className="mt-1">
+          <span className={`inline-flex rounded-full border px-2 py-0.5 ${modelStatusClass(model.status)}`}>{modelStatusLabel(model.status)}</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ProviderRouteRow({ route }: { route: ModelRouteCatalogEntry }) {
+  const canonical = getCanonicalModel(route.canonicalModelId);
+  return (
+    <div className="grid gap-2 rounded-lg border border-white/[0.06] bg-black/20 px-3 py-2 text-[10px] text-gray-500 md:grid-cols-[1fr_100px_80px_80px]">
+      <div className="min-w-0">
+        <div className="truncate text-[11px] font-semibold text-gray-200" title={canonical?.label || route.canonicalModelId}>
+          {canonical?.label || route.canonicalModelId}
+        </div>
+        <div className="mt-0.5 truncate" title={route.providerModelId}>
+          {route.providerModelId}
+        </div>
+      </div>
+      <div>
+        <div>{MODALITY_LABELS[route.modality]}</div>
+        <div className="mt-0.5 text-gray-300">{route.channel || route.source}</div>
+      </div>
+      <div>
+        <div>优先级</div>
+        <div className="mt-0.5 text-gray-300">{route.priority}</div>
+      </div>
+      <div>
+        <div>
+          <span className={`inline-flex rounded-full border px-2 py-0.5 ${routeStatusClass(route)}`}>{routeStatusLabel(route)}</span>
+        </div>
+        <div className="mt-1">
+          <span className={`inline-flex rounded-full border px-2 py-0.5 ${gatewayExecutionClass(route.gatewayExecutionStatus)}`}>
+            {gatewayExecutionLabel(route.gatewayExecutionStatus)}
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function canonicalStatusLabel(status?: string) {
+  if (status === 'published') return 'Published';
+  if (status === 'draft') return 'Draft';
+  if (status === 'deprecated') return 'Deprecated';
+  if (status === 'disabled') return 'Disabled';
+  return '-';
+}
+
 const AdminProviderKeysPanel: React.FC = () => {
   const { can, isRolePreview } = useAdminStaff();
   const canWrite = can(PERMISSIONS.AI_GATEWAY_KEYS_WRITE);
+  const canWriteOps = can(PERMISSIONS.AI_GATEWAY_OPS_WRITE);
   const [rows, setRows] = React.useState<AdminProviderKeyRow[]>([]);
+  const [modelOpsConfig, setModelOpsConfig] = React.useState<AdminModelOpsConfig | null>(null);
+  const [selectedCanonicalModelIds, setSelectedCanonicalModelIds] = React.useState<string[]>(() => defaultPublishedCanonicalIds());
   const [events, setEvents] = React.useState<AdminProviderKeyEvent[]>([]);
   const [summary, setSummary] = React.useState<AdminProviderKeyHealthSummaryItem[]>([]);
   const [summaryTotals, setSummaryTotals] = React.useState<{
@@ -111,24 +370,32 @@ const AdminProviderKeysPanel: React.FC = () => {
   } | null>(null);
   const [loading, setLoading] = React.useState(true);
   const [saving, setSaving] = React.useState(false);
+  const [savingModelOps, setSavingModelOps] = React.useState(false);
   const [applyingHealth, setApplyingHealth] = React.useState(false);
   const [actingId, setActingId] = React.useState('');
   const [error, setError] = React.useState('');
   const [message, setMessage] = React.useState('');
+  const [selectedProviderId, setSelectedProviderId] = React.useState(PROVIDERS[0]?.id || 'tripo');
 
   const load = React.useCallback(async () => {
     setLoading(true);
     setError('');
     try {
-      const [res, eventRes, summaryRes] = await Promise.all([
+      const [res, eventRes, summaryRes, modelOpsRes] = await Promise.all([
         fetchAdminProviderKeys(),
         fetchAdminProviderKeyEvents({ limit: 30 }),
         fetchAdminProviderKeyHealthSummary({ windowHours: 24 }),
+        fetchAdminModelOpsConfig().catch(() => null),
       ]);
       setRows(res.keys.length ? res.keys : [createDraft()]);
       setEvents(eventRes.events || []);
       setSummary(summaryRes.summaries || []);
       setSummaryTotals(summaryRes.totals || null);
+      if (modelOpsRes?.config) {
+        setModelOpsConfig(modelOpsRes.config);
+        const allow = modelOpsRes.config.publishedCanonicalModelAllowlist;
+        setSelectedCanonicalModelIds(Array.isArray(allow) ? allow : defaultPublishedCanonicalIds());
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : '加载凭据池失败');
     } finally {
@@ -158,6 +425,44 @@ const AdminProviderKeysPanel: React.FC = () => {
           : row
       )
     );
+  };
+
+  const toggleCanonicalModel = (canonicalModelId: string) => {
+    setSelectedCanonicalModelIds((prev) =>
+      prev.includes(canonicalModelId)
+        ? prev.filter((id) => id !== canonicalModelId)
+        : [...prev, canonicalModelId]
+    );
+  };
+
+  const savePublishedModels = async () => {
+    if (blockIfRolePreview(isRolePreview)) return;
+    setSavingModelOps(true);
+    setError('');
+    setMessage('');
+    try {
+      const known = new Set(WORKSPACE_CANONICAL_MODELS.map((model) => model.canonicalModelId));
+      const selected = selectedCanonicalModelIds.filter((id, index, arr) => known.has(id) && arr.indexOf(id) === index);
+      const base: AdminModelOpsConfig = modelOpsConfig || {
+        version: 1,
+        imageRegistryAllowlist: null,
+        publishedCanonicalModelAllowlist: null,
+        imageModelPreference: null,
+        bindingOverrides: null,
+        wiringEdges: null,
+      };
+      const saved = await saveAdminModelOpsConfig({
+        ...base,
+        publishedCanonicalModelAllowlist: selected,
+      });
+      setModelOpsConfig(saved.config);
+      setSelectedCanonicalModelIds(saved.config.publishedCanonicalModelAllowlist || selected);
+      setMessage('Workspace model publish scope saved');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to save workspace model publish scope');
+    } finally {
+      setSavingModelOps(false);
+    }
   };
 
   const switchProvider = (id: string, provider: string) => {
@@ -228,6 +533,36 @@ const AdminProviderKeysPanel: React.FC = () => {
     }
   };
 
+  const runSmokeTest = async (row: AdminProviderKeyRow) => {
+    if (blockIfRolePreview(isRolePreview)) return;
+    setActingId(row.id);
+    setError('');
+    setMessage('');
+    try {
+      const res = await smokeTestAdminProviderKey(row.id);
+      setRows(res.keys.length ? res.keys : [createDraft()]);
+      const [eventRes, summaryRes] = await Promise.all([
+        fetchAdminProviderKeyEvents({ limit: 30 }),
+        fetchAdminProviderKeyHealthSummary({ windowHours: 24 }),
+      ]);
+      setEvents(eventRes.events || []);
+      setSummary(summaryRes.summaries || []);
+      setSummaryTotals(summaryRes.totals || null);
+      const modeLabel = res.result.mode === 'real_upstream' ? '真实探活' : '凭证检查';
+      const routeLabel = res.result.route ? `（${res.result.route}）` : '';
+      const latencyLabel = res.result.latencyMs != null ? `，${res.result.latencyMs}ms` : '';
+      setMessage(
+        res.result.ok
+          ? `测试通过：${res.result.label || row.label} · ${modeLabel}${routeLabel}${latencyLabel}`
+          : `测试失败：${res.result.message}`
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '测试失败');
+    } finally {
+      setActingId('');
+    }
+  };
+
   const runHealthAutomation = async () => {
     if (blockIfRolePreview(isRolePreview)) return;
     setApplyingHealth(true);
@@ -248,23 +583,230 @@ const AdminProviderKeysPanel: React.FC = () => {
     }
   };
 
+  const selectedCanonicalSet = React.useMemo(
+    () => new Set(selectedCanonicalModelIds),
+    [selectedCanonicalModelIds]
+  );
+
   if (loading) return <div className="text-[11px] text-gray-400">正在加载凭据池...</div>;
 
   return (
     <div className="max-w-5xl space-y-4">
       <div>
-        <h2 className="text-sm font-semibold text-white">AI 供应商凭据池</h2>
+        <h2 className="text-sm font-semibold text-white">供应商中心</h2>
         <p className="mt-1 text-[11px] leading-relaxed text-gray-500">
-          给 AI Gateway worker 使用的服务端凭据。普通用户不会看到密钥；同一供应商可配置多组凭据做轮换、限速和冷却。
+          按供应商维护平台凭据、模型清单和入口网址；同一供应商可配置多组凭据做轮换、限速和冷却。
         </p>
       </div>
 
       {error ? <div className="rounded-lg border border-red-900/60 bg-red-950/40 px-3 py-2 text-[11px] text-red-200">{error}</div> : null}
       {message ? <div className="rounded-lg border border-emerald-900/50 bg-emerald-950/30 px-3 py-2 text-[11px] text-emerald-100">{message}</div> : null}
 
+      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+        {PROVIDERS.map((provider) => {
+          const keyCount = providerKeyCount(rows, provider.id);
+          const modelCount = providerModelCount(provider.id);
+          const routeCount = providerRouteCount(provider.id);
+          const sampleModels = listProviderModels(provider.id).slice(0, 3);
+          const selected = selectedProviderId === provider.id;
+          return (
+            <div
+              key={provider.id}
+              className={`rounded-xl border bg-[#121216] p-4 transition ${
+                selected ? 'border-blue-500/60 ring-1 ring-blue-500/20' : 'border-[#2e2e32] hover:border-white/20'
+              }`}
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="truncate text-[12px] font-semibold text-gray-100">{provider.displayName}</div>
+                  <div className="mt-1 flex flex-wrap gap-1.5">
+                    {provider.supportedModalities.map((modality) => (
+                      <span key={`${provider.id}:${modality}`} className="rounded-md border border-white/[0.08] bg-white/[0.03] px-1.5 py-0.5 text-[10px] text-gray-300">
+                        {MODALITY_LABELS[modality]}
+                      </span>
+                    ))}
+                  </div>
+                  <div className="mt-2">
+                    <ProviderCapabilityMatrix provider={provider} />
+                  </div>
+                </div>
+                <div className="shrink-0 text-right text-[10px] text-gray-500">
+                  <div>{keyCount} 组 Key</div>
+                  <div className="mt-1">{modelCount} 个模型</div>
+                  <div className="mt-1">{routeCount} 条路径</div>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedProviderId(provider.id)}
+                    className={`mt-2 rounded-lg border px-2 py-1 text-[10px] ${
+                      selected ? 'border-blue-400/50 bg-blue-500/15 text-blue-100' : 'border-white/[0.08] bg-black/20 text-gray-300'
+                    }`}
+                  >
+                    查看
+                  </button>
+                </div>
+              </div>
+              <div className="mt-3 space-y-1 text-[10px] text-gray-500">
+                {sampleModels.length ? (
+                  sampleModels.map((model) => (
+                    <div key={`${provider.id}:${model.providerModelId}`} className="truncate" title={model.label}>
+                      {model.label}
+                    </div>
+                  ))
+                ) : (
+                  <div>模型清单待维护</div>
+                )}
+              </div>
+              <ProviderLinks provider={provider} />
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="rounded-xl border border-[#2e2e32] bg-[#121216] p-4">
+        {(() => {
+          const selectedProvider = getProviderCatalogEntry(selectedProviderId) || PROVIDERS[0];
+          if (!selectedProvider) return null;
+          const models = listProviderModels(selectedProvider.id);
+          const routes = listProviderRoutes(selectedProvider.id);
+          return (
+            <>
+              <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <h3 className="text-[12px] font-semibold text-gray-200">{selectedProvider.displayName} · 模型与路径</h3>
+                  <div className="mt-1 flex flex-wrap gap-2 text-[10px] text-gray-500">
+                    <span>{models.length} 个模型</span>
+                    <span>{routes.length} 条路径</span>
+                    <span>{selectedProvider.modelDiscovery === 'api-planned' ? '计划扫描' : selectedProvider.modelDiscovery === 'static' ? '静态维护' : '手工维护'}</span>
+                  </div>
+                  <div className="mt-2">
+                    <ProviderCapabilityMatrix provider={selectedProvider} />
+                  </div>
+                </div>
+                <ProviderLinks provider={selectedProvider} />
+              </div>
+
+              <div className="grid gap-3 lg:grid-cols-2">
+                <div>
+                  <div className="mb-2 text-[11px] font-semibold text-gray-300">Models</div>
+                  <div className="max-h-[360px] space-y-2 overflow-auto pr-1">
+                    {models.length ? (
+                      models.map((model) => <ProviderModelRow key={`${model.providerId}:${model.providerModelId}:${model.registryId || ''}`} model={model} />)
+                    ) : (
+                      <div className="rounded-lg border border-white/[0.06] bg-black/20 px-3 py-4 text-[11px] text-gray-500">暂无模型清单</div>
+                    )}
+                  </div>
+                </div>
+                <div>
+                  <div className="mb-2 text-[11px] font-semibold text-gray-300">Routes</div>
+                  <div className="max-h-[360px] space-y-2 overflow-auto pr-1">
+                    {routes.length ? (
+                      routes.map((route) => <ProviderRouteRow key={route.routeId} route={route} />)
+                    ) : (
+                      <div className="rounded-lg border border-white/[0.06] bg-black/20 px-3 py-4 text-[11px] text-gray-500">暂无供应路径</div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </>
+          );
+        })()}
+      </div>
+
+      <div className="rounded-xl border border-[#2e2e32] bg-[#121216] p-4">
+        <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h3 className="text-[12px] font-semibold text-gray-200">Workspace model publishing</h3>
+            <div className="mt-1 text-[10px] text-gray-500">
+              {selectedCanonicalModelIds.length} / {WORKSPACE_CANONICAL_MODELS.length} models enabled
+              {modelOpsConfig?.updatedAt ? ` · ${new Date(modelOpsConfig.updatedAt).toLocaleString()}` : ''}
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              disabled={!canWriteOps || savingModelOps}
+              onClick={() => setSelectedCanonicalModelIds(WORKSPACE_CANONICAL_MODELS.map((model) => model.canonicalModelId))}
+              className="rounded-lg border border-[#2e2e32] bg-[#1c1c22] px-3 py-1.5 text-[10px] text-gray-300 disabled:opacity-40"
+            >
+              All
+            </button>
+            <button
+              type="button"
+              disabled={!canWriteOps || savingModelOps}
+              onClick={() => setSelectedCanonicalModelIds(defaultPublishedCanonicalIds())}
+              className="rounded-lg border border-[#2e2e32] bg-[#1c1c22] px-3 py-1.5 text-[10px] text-gray-300 disabled:opacity-40"
+            >
+              Catalog default
+            </button>
+            <button
+              type="button"
+              disabled={!canWriteOps || savingModelOps || selectedCanonicalModelIds.length === 0}
+              onClick={() => void savePublishedModels()}
+              className="rounded-lg bg-[#2563eb] px-3 py-1.5 text-[10px] font-semibold text-white disabled:opacity-40"
+            >
+              {savingModelOps ? 'Saving...' : 'Save publish scope'}
+            </button>
+          </div>
+        </div>
+
+        <div className="space-y-3">
+          {WORKSPACE_PUBLISH_MODALITIES.map((modality) => {
+            const models = WORKSPACE_CANONICAL_MODELS.filter((model) => model.modality === modality);
+            if (!models.length) return null;
+            return (
+              <div key={modality}>
+                <div className="mb-2 text-[11px] font-semibold text-gray-300">{MODALITY_LABELS[modality]}</div>
+                <div className="grid gap-2 md:grid-cols-2">
+                  {models.map((model) => {
+                    const checked = selectedCanonicalSet.has(model.canonicalModelId);
+                    return (
+                      <label
+                        key={model.canonicalModelId}
+                        className={`flex min-h-[64px] items-start gap-3 rounded-lg border px-3 py-2 text-[10px] ${
+                          checked
+                            ? 'border-blue-500/45 bg-blue-950/20 text-blue-50'
+                            : 'border-white/[0.06] bg-black/20 text-gray-500'
+                        }`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          disabled={!canWriteOps || savingModelOps}
+                          onChange={() => toggleCanonicalModel(model.canonicalModelId)}
+                          className="mt-1"
+                        />
+                        <span className="min-w-0">
+                          <span className="block truncate text-[11px] font-semibold text-gray-200" title={model.label}>
+                            {model.label}
+                          </span>
+                          <span className="mt-0.5 block truncate" title={model.canonicalModelId}>
+                            {model.canonicalModelId}
+                          </span>
+                          <span className="mt-1 flex flex-wrap gap-1">
+                            <span className="rounded-md border border-white/[0.08] bg-white/[0.03] px-1.5 py-0.5">
+                              {canonicalStatusLabel(model.status)}
+                            </span>
+                            {model.defaultForModality ? (
+                              <span className="rounded-md border border-emerald-500/25 bg-emerald-950/20 px-1.5 py-0.5 text-emerald-100">
+                                Default
+                              </span>
+                            ) : null}
+                          </span>
+                        </span>
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
       <div className="space-y-3">
         {rows.map((row) => {
-          const isJimeng = row.provider === 'volcengine-jimeng';
+          const authFields = providerAuthFields(row.provider);
+          const rowProvider = getProviderCatalogEntry(row.provider);
           const isEnvKey = String(row.id || '').startsWith('env_');
           const isActing = actingId === row.id;
           return (
@@ -282,8 +824,8 @@ const AdminProviderKeysPanel: React.FC = () => {
                         : 'border-[#2e2e32] bg-[#1c1c22] text-gray-300'
                     }`}
                   >
-                    <span className="font-semibold">{provider.label}</span>
-                    <span className="ml-2 text-gray-500">{provider.hint}</span>
+                    <span className="font-semibold">{provider.shortName}</span>
+                    <span className="ml-2 text-gray-500">{provider.authSchemes[0]?.label || '凭据'}</span>
                   </button>
                 ))}
               </div>
@@ -329,50 +871,37 @@ const AdminProviderKeysPanel: React.FC = () => {
                 </label>
               </div>
 
-              {isJimeng ? (
-                <div className="mt-3 grid gap-3 md:grid-cols-2">
-                  <label className="block">
-                    <span className="text-[10px] text-gray-500">
-                      Access Key {row.credentialsPreview?.accessKeyId ? `（当前 ${row.credentialsPreview.accessKeyId}）` : ''}
-                    </span>
-                    <input
-                      type="password"
-                      value={credentialValue(row, 'accessKeyId')}
-                      onChange={(ev) => updateCredential(row.id, 'accessKeyId', ev.target.value)}
-                      disabled={!canWrite || saving}
-                      placeholder={row.hasCredentials ? '留空则保留现有 Access Key' : '粘贴 VOLCENGINE_ACCESS_KEY'}
-                      className="mt-1 w-full rounded-lg border border-[#2e2e32] bg-[#0a0a0c] px-3 py-2 text-[11px] text-gray-100 disabled:opacity-40"
-                    />
-                  </label>
-                  <label className="block">
-                    <span className="text-[10px] text-gray-500">
-                      Secret Key {row.credentialsPreview?.secretAccessKey ? `（当前 ${row.credentialsPreview.secretAccessKey}）` : ''}
-                    </span>
-                    <input
-                      type="password"
-                      value={credentialValue(row, 'secretAccessKey')}
-                      onChange={(ev) => updateCredential(row.id, 'secretAccessKey', ev.target.value)}
-                      disabled={!canWrite || saving}
-                      placeholder={row.hasCredentials ? '留空则保留现有 Secret Key' : '粘贴 VOLCENGINE_SECRET_KEY'}
-                      className="mt-1 w-full rounded-lg border border-[#2e2e32] bg-[#0a0a0c] px-3 py-2 text-[11px] text-gray-100 disabled:opacity-40"
-                    />
-                  </label>
-                </div>
-              ) : (
-                <label className="mt-3 block">
-                  <span className="text-[10px] text-gray-500">
-                    API Key {row.secretPreview ? `（当前 ${row.secretPreview}）` : ''}
-                  </span>
-                  <input
-                    type="password"
-                    value={row.secret || ''}
-                    onChange={(ev) => updateRow(row.id, { secret: ev.target.value })}
-                    disabled={!canWrite || saving}
-                    placeholder={row.hasSecret ? '留空则保留现有 API Key' : '粘贴 Tripo API Key'}
-                    className="mt-1 w-full rounded-lg border border-[#2e2e32] bg-[#0a0a0c] px-3 py-2 text-[11px] text-gray-100 disabled:opacity-40"
-                  />
-                </label>
-              )}
+              <div className="mt-3 grid gap-3 md:grid-cols-2">
+                {authFields.length ? (
+                  authFields.map((field) => {
+                    const preview = fieldCurrentPreview(row, field);
+                    const preserveExisting = field.storage === 'secret' ? row.hasSecret : row.hasCredentials;
+                    return (
+                      <label key={`${row.id}:${field.key}`} className="block">
+                        <span className="text-[10px] text-gray-500">
+                          {field.label} {preview ? `（当前 ${preview}）` : ''}
+                        </span>
+                        <input
+                          type={field.secret ? 'password' : 'text'}
+                          value={fieldValue(row, field)}
+                          onChange={(ev) =>
+                            field.storage === 'secret'
+                              ? updateRow(row.id, { secret: ev.target.value })
+                              : updateCredential(row.id, field.key, ev.target.value)
+                          }
+                          disabled={!canWrite || saving}
+                          placeholder={preserveExisting ? `留空则保留现有 ${field.label}` : field.placeholder || `填写 ${field.label}`}
+                          className="mt-1 w-full rounded-lg border border-[#2e2e32] bg-[#0a0a0c] px-3 py-2 text-[11px] text-gray-100 disabled:opacity-40"
+                        />
+                      </label>
+                    );
+                  })
+                ) : (
+                  <div className="rounded-lg border border-white/[0.06] bg-black/20 px-3 py-3 text-[11px] text-gray-500">
+                    {rowProvider?.displayName || row.provider} 当前使用站点代理凭据。
+                  </div>
+                )}
+              </div>
 
               {row.runtime ? (
                 <div className="mt-3 grid gap-2 border-t border-white/[0.06] pt-3 text-[10px] text-gray-500 md:grid-cols-6">
@@ -408,6 +937,14 @@ const AdminProviderKeysPanel: React.FC = () => {
               ) : null}
 
               <div className="mt-3 flex flex-wrap justify-end gap-2">
+                <button
+                  type="button"
+                  disabled={!canWrite || saving || isActing || isEnvKey}
+                  onClick={() => void runSmokeTest(row)}
+                  className="rounded-lg border border-blue-900/50 bg-blue-950/25 px-3 py-2 text-[11px] text-blue-100 disabled:opacity-40"
+                >
+                  测试
+                </button>
                 <button
                   type="button"
                   disabled={!canWrite || saving || isActing || isEnvKey}

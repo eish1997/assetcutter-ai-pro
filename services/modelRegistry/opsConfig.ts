@@ -1,18 +1,20 @@
 import { modelRegistryLog } from "./log";
+import { apiUrl } from "../apiBase";
 import type { ModelOpsConfig } from "./opsTypes";
 import type { SupplierId, WiringEdge } from "./hubGraph/types";
 import {
-  coerceImageModelRegistryId,
   DIALOG_IMAGE_REGISTRY,
   isRegisteredImageModelId,
   LEGACY_IMAGE_GEAR_TO_REGISTRY,
 } from "./imageModels";
+import { getCanonicalModel } from "./canonicalModelCatalog";
 
 const DEFAULT_IMAGE_MODEL_PREFERENCE: string[] = DIALOG_IMAGE_REGISTRY.map((e) => e.registryId);
 
 export const DEFAULT_MODEL_OPS_CONFIG: ModelOpsConfig = {
   version: 1,
   imageRegistryAllowlist: null,
+  publishedCanonicalModelAllowlist: null,
   imageModelPreference: DEFAULT_IMAGE_MODEL_PREFERENCE,
 };
 
@@ -31,6 +33,7 @@ const SUPPLIER_IDS = new Set<SupplierId>([
   "toapis",
   "vectorengine",
   "openai-official",
+  "volcengine-ark",
   "gemini-aistudio",
 ]);
 
@@ -70,6 +73,30 @@ function normalizeWiringEdges(raw: unknown): WiringEdge[] | undefined {
   return edges.length > 0 ? edges : undefined;
 }
 
+function uniqueStrings(values: readonly string[]): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const value of values) {
+    if (!value || seen.has(value)) continue;
+    seen.add(value);
+    out.push(value);
+  }
+  return out;
+}
+
+function normalizePublishedCanonicalAllowlist(raw: unknown): string[] | null | undefined {
+  if (raw === null) return null;
+  if (!Array.isArray(raw)) return undefined;
+  const ids = uniqueStrings(raw.filter((x): x is string => typeof x === "string").map((x) => x.trim()));
+  const known = ids.filter((id) => Boolean(getCanonicalModel(id)));
+  if (known.length === 0 && ids.length > 0) {
+    modelRegistryLog("warn", "ops publishedCanonicalModelAllowlist had no known ids; ignoring allowlist");
+    return null;
+  }
+  if (known.length === 0) return null;
+  return known;
+}
+
 function normalizeOpsPayload(raw: unknown): ModelOpsConfig {
   if (!raw || typeof raw !== "object") return { ...DEFAULT_MODEL_OPS_CONFIG };
   const o = raw as Record<string, unknown>;
@@ -88,6 +115,9 @@ function normalizeOpsPayload(raw: unknown): ModelOpsConfig {
       imageRegistryAllowlist = known;
     }
   }
+  const publishedCanonicalModelAllowlist = normalizePublishedCanonicalAllowlist(
+    o.publishedCanonicalModelAllowlist
+  );
   let imageModelPreference: string[] | undefined;
   const rawPref = o.imageModelPreference ?? o.gearPreference;
   if (Array.isArray(rawPref)) {
@@ -124,6 +154,7 @@ function normalizeOpsPayload(raw: unknown): ModelOpsConfig {
   return {
     version,
     imageRegistryAllowlist,
+    publishedCanonicalModelAllowlist,
     imageModelPreference: imageModelPreference ?? DEFAULT_MODEL_OPS_CONFIG.imageModelPreference,
     bindingOverrides,
     wiringEdges,
@@ -139,7 +170,7 @@ let lastOpsLastModified: string | null = null;
 
 /** 构建期 / 运维：`VITE_MODEL_OPS_CONFIG_URL`（便于排障或将来设置页展示） */
 export function getModelOpsConfigUrl(): string {
-  return readViteEnvTrim("VITE_MODEL_OPS_CONFIG_URL");
+  return readViteEnvTrim("VITE_MODEL_OPS_CONFIG_URL") || apiUrl("/api/model-ops-config");
 }
 
 /**
@@ -205,7 +236,9 @@ async function runFetchModelOps(url: string): Promise<ModelOpsConfig> {
     }
     captureValidatorsFromResponse(res);
     const json: unknown = await res.json();
-    const next = normalizeOpsPayload(json);
+    const payload =
+      json && typeof json === "object" && "config" in json ? (json as { config?: unknown }).config : json;
+    const next = normalizeOpsPayload(payload);
     cached = next;
     modelRegistryLog("info", "ops config loaded", `version=${next.version}`);
     dispatchModelOpsUpdated();

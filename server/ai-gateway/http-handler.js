@@ -5,6 +5,9 @@ import { persistentAiGatewayJobStore } from './persistent-job-store.js';
 import { AiGatewayRouteError } from './provider-router.js';
 import { settleAiGatewayJobCredits, settlementMetadataPatch } from './settlement.js';
 import { recordAiGatewayUsageEvent } from './usage-event.js';
+import { readModelOpsConfig } from './model-ops-config-store.js';
+import { validateAiGatewayModelPublication } from './model-publication-guard.js';
+import { validateAiGatewayModelRouteExecutable } from './model-route-guard.js';
 
 export const AI_GATEWAY_JOBS_PATH = '/ai-gateway/jobs';
 const DEFAULT_LIST_LIMIT = 20;
@@ -156,6 +159,30 @@ export async function handleAiGatewayRequest(req, res, options = {}) {
           ...(gate.metadata || {}),
         },
       };
+      const modelOpsConfig = options.modelOpsConfig || (await readModelOpsConfig());
+      const publication = validateAiGatewayModelPublication(planInput, modelOpsConfig);
+      if (publication.canonicalModelId) {
+        planInput.metadata.modelPublication = {
+          canonicalModelId: publication.canonicalModelId,
+          restricted: publication.restricted,
+        };
+      }
+      const executableRoute = await validateAiGatewayModelRouteExecutable(planInput, {
+        listProviderKeys: options.listProviderKeys,
+        checkProviderKeys: options.checkProviderKeys,
+      });
+      if (executableRoute.checked) {
+        if (!planInput.provider && executableRoute.route?.providerId) {
+          planInput.provider = executableRoute.route.providerId;
+        }
+        planInput.metadata.modelRouteGuard = {
+          canonicalModelId: executableRoute.canonicalModelId,
+          providerId: executableRoute.route.providerId,
+          executionStatus: executableRoute.route.executionStatus,
+          gatewayExecutionStatus: executableRoute.route.gatewayExecutionStatus,
+          platformKeyRequired: executableRoute.route.platformKeyRequired,
+        };
+      }
       const plan = await store.put(createAiGatewayJobPlan(planInput));
       sendJson(res, 202, publicJobPlan(plan));
       return true;

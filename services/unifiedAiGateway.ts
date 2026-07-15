@@ -688,7 +688,7 @@ export async function workflowGenerateVideo(input: WorkflowVideoJobInput): Promi
         if (!isAiGatewayVideoExecutionEnabled()) throw new WorkflowVideoNotAvailableError();
         result = await createAndPollAiGatewayVideoJob({
           ...input,
-          registryId: "jimeng-video-ti2v-v30-pro",
+          registryId: input.registryId || "jimeng-video-ti2v-v30-pro",
           estimatedCredits,
         });
         settledByAiGateway = true;

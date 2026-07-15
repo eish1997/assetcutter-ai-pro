@@ -614,9 +614,9 @@ async function openAiImageGenerateContent(args: {
 export function createOpenAiGeminiClient(
   baseUrl: string,
   apiKey: string,
-  options?: { meteringProvider?: string }
+  options?: { meteringProvider?: string; baseUrlMode?: "openai-v1" | "raw" }
 ): GeminiClientLike {
-  const base = resolveOpenAiBaseUrl(baseUrl);
+  const base = options?.baseUrlMode === "raw" ? baseUrl.trim().replace(/\/+$/, "") : resolveOpenAiBaseUrl(baseUrl);
   const meteringProvider = options?.meteringProvider;
   return {
     models: {

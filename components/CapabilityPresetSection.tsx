@@ -8,7 +8,7 @@ import {
 } from '../services/modelRegistry/textModels';
 import { DEFAULT_MODEL_TEXT } from '../services/modelRegistry/constants';
 import { useEffectiveTextModelRows } from '../hooks/useEffectiveTextModelRows';
-import { CAPABILITY_CATEGORIES, SUPPORTED_ASPECT_RATIOS, SUPPORTED_IMAGE_SIZES } from '../types';
+import { CAPABILITY_CATEGORIES, SUPPORTED_ASPECT_RATIOS } from '../types';
 import { imageSizeDropdownOptionsForRegistryModel } from '../services/openaiAdapter';
 import type { CapabilityTestResult } from '../services/capabilityTestRunner';
 import {
@@ -59,6 +59,7 @@ import { CustomDropdown, DROPDOWN_TRIGGER_COMPACT } from './ui/CustomDropdown';
 import { CapabilityPresetTagsEditor } from './ui/CapabilityPresetTagsEditor';
 import AppIcon from './ui/AppIcon';
 import { useEffectiveImageModelRows } from '../hooks/useEffectiveImageGearRows';
+import { useEffectiveCapabilityModelRows } from '../hooks/useEffectiveCapabilityModelRows';
 import { useWorkflowJustifiedLayout } from '../hooks/useWorkflowJustifiedLayout';
 import {
   WORKFLOW_ASSET_GRID_GAP_PX,
@@ -132,6 +133,29 @@ const TRIPO_MODEL_VERSION_OPTIONS = [
   { value: 'v2.0-20240919', label: 'v2.0-20240919' },
 ] as const;
 const DETAIL_DROPDOWN_PORTAL_ZINDEX = { backdrop: 10120, list: 10121 } as const;
+
+function providerForModel3dRegistryId(registryId: string): Generate3DPreset['provider'] {
+  return registryId.startsWith('tencent-hunyuan-') ? 'tencent' : 'tripo';
+}
+
+function model3dPresetForRegistryId(registryId: string, prev: Generate3DPreset = DEFAULT_GENERATE_3D): Generate3DPreset {
+  const provider = providerForModel3dRegistryId(registryId);
+  if (provider === 'tencent') {
+    return {
+      ...prev,
+      provider: 'tencent',
+      modelRegistryId: registryId,
+      module: registryId.includes('rapid') ? 'rapid' : 'pro',
+      model: prev.model ?? '3.0',
+    };
+  }
+  return {
+    ...DEFAULT_GENERATE_3D,
+    ...prev,
+    provider: 'tripo',
+    modelRegistryId: registryId,
+  };
+}
 
 type ViewMode = 'presets' | 'image_process' | 'sets';
 type PresetTypeFilter = 'all' | 'text_to_text' | 'text_to_image' | 'image_to_image' | 'image_process' | 'image_to_text';
@@ -210,12 +234,22 @@ const CapabilityPresetSection: React.FC<{
   const update = (list: CustomAppModule[]) => onUpdate(reindex(list));
   const { rows: effectiveModelRows, coerceModelId } = useEffectiveImageModelRows();
   const { rows: effectiveTextModelRows, coerceModelId: coerceTextModelId } = useEffectiveTextModelRows();
+  const { rows: effectiveVideoModelRows, firstReadyRegistryId: defaultVideoModelRegistryId } = useEffectiveCapabilityModelRows('video');
+  const { rows: effectiveModel3dRows, firstReadyRegistryId: defaultModel3dRegistryId } = useEffectiveCapabilityModelRows('model3d');
   const getEngine = (p: CustomAppModule): CapabilityEngine => getCapabilityEngine(p);
   const isBuiltinImagePipelinePreset = (p: CustomAppModule) => isImageProcessPreset(p);
   const getImageModelRegistryId = (p: CustomAppModule): string =>
     coerceImageModelRegistryId(p.imageModelRegistryId ?? p.imageGear);
   const getTextModelRegistryId = (p: CustomAppModule): string =>
     coerceTextModelRegistryId(p.textModelRegistryId);
+  const videoModelRegistryIdForPreset = useCallback(
+    (p: CustomAppModule): string => p.videoModelRegistryId || defaultVideoModelRegistryId || 'jimeng-video-ti2v-v30-pro',
+    [defaultVideoModelRegistryId]
+  );
+  const model3dRegistryIdForPreset = useCallback(
+    (p: CustomAppModule): string => p.generate3D?.modelRegistryId || defaultModel3dRegistryId || 'tripo-p1',
+    [defaultModel3dRegistryId]
+  );
   const genId = () => {
     try {
       const c: { randomUUID?: () => string } | null = typeof crypto !== 'undefined' ? crypto : null;
@@ -233,6 +267,7 @@ const CapabilityPresetSection: React.FC<{
   const [editEnabled, setEditEnabled] = useState(true);
   const [editImageModelRegistryId, setEditImageModelRegistryId] = useState<string>(DEFAULT_IMAGE_MODEL_REGISTRY_ID);
   const [editTextModelRegistryId, setEditTextModelRegistryId] = useState<string>(DEFAULT_MODEL_TEXT);
+  const [editVideoModelRegistryId, setEditVideoModelRegistryId] = useState<string>('jimeng-video-ti2v-v30-pro');
   useLayoutEffect(() => {
     if (!editingId) return;
     const next = coerceModelId(editImageModelRegistryId);
@@ -256,6 +291,7 @@ const CapabilityPresetSection: React.FC<{
   const [newEnabled, setNewEnabled] = useState(true);
   const [newImageModelRegistryId, setNewImageModelRegistryId] = useState<string>(DEFAULT_IMAGE_MODEL_REGISTRY_ID);
   const [newTextModelRegistryId, setNewTextModelRegistryId] = useState<string>(DEFAULT_MODEL_TEXT);
+  const [newVideoModelRegistryId, setNewVideoModelRegistryId] = useState<string>('jimeng-video-ti2v-v30-pro');
   const [newImageAspectRatio, setNewImageAspectRatio] = useState('');
   const [newImageSize, setNewImageSize] = useState('');
   const [newInstruction, setNewInstruction] = useState('');
@@ -279,6 +315,24 @@ const CapabilityPresetSection: React.FC<{
   const fileInputRef = useRef<Record<string, HTMLInputElement | null>>({});
   const [newGenerate3D, setNewGenerate3D] = useState<Generate3DPreset>({ ...DEFAULT_GENERATE_3D });
   const [editGenerate3D, setEditGenerate3D] = useState<Generate3DPreset>({ ...DEFAULT_GENERATE_3D });
+  useLayoutEffect(() => {
+    const fallback = defaultVideoModelRegistryId || 'jimeng-video-ti2v-v30-pro';
+    if (!effectiveVideoModelRows.some((row) => row.registryId === newVideoModelRegistryId && !row.disabled)) {
+      setNewVideoModelRegistryId(fallback);
+    }
+    if (editingId && !effectiveVideoModelRows.some((row) => row.registryId === editVideoModelRegistryId && !row.disabled)) {
+      setEditVideoModelRegistryId(fallback);
+    }
+  }, [defaultVideoModelRegistryId, editVideoModelRegistryId, editingId, effectiveVideoModelRows, newVideoModelRegistryId]);
+  useLayoutEffect(() => {
+    const fallback = defaultModel3dRegistryId || 'tripo-p1';
+    if (!effectiveModel3dRows.some((row) => row.registryId === newGenerate3D.modelRegistryId && !row.disabled)) {
+      setNewGenerate3D((g) => model3dPresetForRegistryId(fallback, g));
+    }
+    if (editingId && !effectiveModel3dRows.some((row) => row.registryId === editGenerate3D.modelRegistryId && !row.disabled)) {
+      setEditGenerate3D((g) => model3dPresetForRegistryId(fallback, g));
+    }
+  }, [defaultModel3dRegistryId, editGenerate3D.modelRegistryId, editingId, effectiveModel3dRows, newGenerate3D.modelRegistryId]);
   const newIsTripoV3Line = (newGenerate3D.tripoModelVersion ?? '').startsWith('v3.');
   const editIsTripoV3Line = (editGenerate3D.tripoModelVersion ?? '').startsWith('v3.');
   const newTripoGenerateParts = newGenerate3D.tripoGenerateParts === true;
@@ -559,6 +613,7 @@ const CapabilityPresetSection: React.FC<{
           enabled: editEnabled,
           imageModelRegistryId: showGenImageFields ? editImageModelRegistryId : undefined,
           textModelRegistryId: showGenTextFields ? editTextModelRegistryId : undefined,
+          videoModelRegistryId: showGenVideoFields ? editVideoModelRegistryId : undefined,
           imageAspectRatio: showGenImageFields ? editImageAspectRatio || undefined : undefined,
           imageSize: showGenImageFields ? editImageSize || undefined : undefined,
           engine:
@@ -573,7 +628,8 @@ const CapabilityPresetSection: React.FC<{
                     : editEngine,
         };
         if (editCategory === 'generate_3d') {
-          next.generate3D = { ...editGenerate3D };
+          const modelRegistryId = editGenerate3D.modelRegistryId || defaultModel3dRegistryId || 'tripo-p1';
+          next.generate3D = model3dPresetForRegistryId(modelRegistryId, editGenerate3D);
           delete (next as CustomAppModule & { engine?: CapabilityEngine }).engine;
           delete (next as CustomAppModule & { companionHostBundle?: unknown }).companionHostBundle;
         } else if (editCategory === 'generate_video') {
@@ -607,6 +663,7 @@ const CapabilityPresetSection: React.FC<{
       order: presets.length,
       imageModelRegistryId: showNewGenImage ? newImageModelRegistryId : undefined,
       textModelRegistryId: showNewGenText ? newTextModelRegistryId : undefined,
+      videoModelRegistryId: showNewGenVideo ? newVideoModelRegistryId : undefined,
       imageAspectRatio: showNewGenImage ? newImageAspectRatio || undefined : undefined,
       imageSize: showNewGenImage ? newImageSize || undefined : undefined,
       engine:
@@ -621,7 +678,8 @@ const CapabilityPresetSection: React.FC<{
                 : newEngine,
     };
     if (newCategory === 'generate_3d') {
-      preset.generate3D = { ...newGenerate3D };
+      const modelRegistryId = newGenerate3D.modelRegistryId || defaultModel3dRegistryId || 'tripo-p1';
+      preset.generate3D = model3dPresetForRegistryId(modelRegistryId, newGenerate3D);
     } else if (newCategory === 'image_process') {
       const draft = applyImageProcessorDraftToPreset(preset, newImageProcessor, newImageProcessParams);
       Object.assign(preset, draft);
@@ -633,6 +691,7 @@ const CapabilityPresetSection: React.FC<{
     setNewEnabled(true);
     setNewImageModelRegistryId(DEFAULT_IMAGE_MODEL_REGISTRY_ID);
     setNewTextModelRegistryId(DEFAULT_MODEL_TEXT);
+    setNewVideoModelRegistryId(defaultVideoModelRegistryId || 'jimeng-video-ti2v-v30-pro');
     setNewImageAspectRatio('');
     setNewImageSize('');
     setNewInstruction('');
@@ -641,7 +700,7 @@ const CapabilityPresetSection: React.FC<{
     setNewTags([]);
     setNewImageProcessor('split_component');
     setNewImageProcessParams(defaultParamsForImageProcessor('split_component'));
-    setNewGenerate3D({ ...DEFAULT_GENERATE_3D });
+    setNewGenerate3D(model3dPresetForRegistryId(defaultModel3dRegistryId || 'tripo-p1'));
     setIsAdding(false);
   };
 
@@ -1048,15 +1107,20 @@ const CapabilityPresetSection: React.FC<{
     setEditImageProcessParams(readImageProcessorParamsForForm(p, proc));
     setEditImageModelRegistryId(getImageModelRegistryId(p));
     setEditTextModelRegistryId(getTextModelRegistryId(p));
+    setEditVideoModelRegistryId(videoModelRegistryIdForPreset(p));
     setEditImageAspectRatio(p.imageAspectRatio ?? '');
     setEditImageSize(p.imageSize ?? '');
     setEditInstruction(((p as { instructionFixed?: string }).instructionFixed ?? p.instruction) || '');
     setEditSkipUnderstand(p.skipUnderstand === true);
     setEditRequirePromptOnTextDrop(p.requirePromptOnTextDrop === true);
     setEditTags(Array.isArray(p.tags) ? [...p.tags] : []);
-    setEditGenerate3D(p.category === 'generate_3d' && p.generate3D ? { ...p.generate3D } : { ...DEFAULT_GENERATE_3D });
+    setEditGenerate3D(
+      p.category === 'generate_3d' && p.generate3D
+        ? model3dPresetForRegistryId(model3dRegistryIdForPreset(p), p.generate3D)
+        : model3dPresetForRegistryId(defaultModel3dRegistryId || 'tripo-p1')
+    );
     setDetailEditMode(true);
-  }, []);
+  }, [defaultModel3dRegistryId, model3dRegistryIdForPreset, videoModelRegistryIdForPreset]);
   const saveDetailEdit = () => {
     if (!editingId) return;
     saveEdit();
@@ -1671,6 +1735,8 @@ const CapabilityPresetSection: React.FC<{
                       setNewImageProcessParams(defaultParamsForImageProcessor('split_component'));
                     }
                     if (c.id === 'text_to_text' || c.id === 'image_to_text') setNewEngine('gen_text');
+                    if (c.id === 'generate_video') setNewVideoModelRegistryId(defaultVideoModelRegistryId || 'jimeng-video-ti2v-v30-pro');
+                    if (c.id === 'generate_3d') setNewGenerate3D(model3dPresetForRegistryId(defaultModel3dRegistryId || 'tripo-p1', newGenerate3D));
                   }}
                   className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase border ${newCategory === c.id ? 'bg-[#1e3558] border-[#3b82f6] text-blue-300' : 'bg-white/[0.05] ring-1 ring-white/[0.06] text-gray-500 hover:bg-white/[0.09] border-transparent'}`}
                   title={c.desc}
@@ -1778,7 +1844,23 @@ const CapabilityPresetSection: React.FC<{
               <span className="text-[8px] text-gray-500">工作流请拖入图片卡（内置处理）</span>
             )}
             {newCategory === 'generate_video' && (
-              <span className="text-[8px] text-gray-500">工作流请拖入文字卡或图片卡（或两者）</span>
+              <>
+                <label className="flex items-center gap-2 text-[9px] text-gray-400">
+                  <span className="font-black uppercase">视频模型</span>
+                  <CustomDropdown
+                    options={effectiveVideoModelRows.map((g) => ({
+                      value: g.registryId,
+                      label: g.label,
+                      disabled: g.disabled,
+                      title: g.disabledReason,
+                    }))}
+                    value={newVideoModelRegistryId}
+                    onChange={setNewVideoModelRegistryId}
+                    triggerClassName={DROPDOWN_TRIGGER_COMPACT}
+                  />
+                </label>
+                <span className="text-[8px] text-gray-500">工作流请拖入文字卡或图片卡（或两者）</span>
+              </>
             )}
           </div>
           <div>
@@ -1894,22 +1976,42 @@ const CapabilityPresetSection: React.FC<{
                 <div className="text-[8px] font-black text-amber-400 uppercase">生成3D 预设（工作流拖图即按此配置提交）</div>
                 <div className="flex gap-2 flex-wrap">
                   <label className="flex items-center gap-1.5 text-[9px]">
+                    <span>3D模型</span>
+                    <CustomDropdown
+                      options={effectiveModel3dRows.map((g) => ({
+                        value: g.registryId,
+                        label: g.label,
+                        disabled: g.disabled,
+                        title: g.disabledReason,
+                      }))}
+                      value={newGenerate3D.modelRegistryId || defaultModel3dRegistryId || 'tripo-p1'}
+                      onChange={(v) => setNewGenerate3D((g) => model3dPresetForRegistryId(v, g))}
+                      triggerClassName={DROPDOWN_TRIGGER_COMPACT}
+                    />
+                  </label>
+                  <label className="flex items-center gap-1.5 text-[9px]">
                     <span>服务商</span>
                     <CustomDropdown
                       options={[{ value: 'tripo', label: 'Tripo' }, { value: 'tencent', label: '腾讯混元' }]}
                       value={newGenerate3D.provider ?? 'tripo'}
                       onChange={(v) => {
                         if (v === 'tencent') {
-                          setNewGenerate3D({
-                            provider: 'tencent',
-                            module: 'pro',
-                            model: '3.0',
+                          const nextId =
+                            effectiveModel3dRows.find((row) => row.registryId.startsWith('tencent-hunyuan-') && !row.disabled)?.registryId ||
+                            newGenerate3D.modelRegistryId ||
+                            'tencent-hunyuan-3d-pro';
+                          setNewGenerate3D(model3dPresetForRegistryId(nextId, {
+                            ...newGenerate3D,
                             generateType: 'Normal',
                             faceCount: 100000,
                             enablePBR: false,
-                          });
+                          }));
                         } else {
-                          setNewGenerate3D({ ...DEFAULT_GENERATE_3D });
+                          const nextId =
+                            effectiveModel3dRows.find((row) => !row.registryId.startsWith('tencent-hunyuan-') && !row.disabled)?.registryId ||
+                            defaultModel3dRegistryId ||
+                            'tripo-p1';
+                          setNewGenerate3D(model3dPresetForRegistryId(nextId, newGenerate3D));
                         }
                       }}
                       triggerClassName={DROPDOWN_TRIGGER_COMPACT}
@@ -2428,8 +2530,17 @@ const CapabilityPresetSection: React.FC<{
                                     setEditImageProcessParams(defaultParamsForImageProcessor('split_component'));
                                   }
                                   if (c.id === 'text_to_text' || c.id === 'image_to_text') setEditEngine('gen_text');
-                                  if (c.id === 'generate_3d') setEditGenerate3D(editCategory === 'generate_3d' ? { ...editGenerate3D } : { ...DEFAULT_GENERATE_3D });
-                                  if (c.id === 'generate_video') setEditGenerate3D({ ...DEFAULT_GENERATE_3D });
+                                  if (c.id === 'generate_3d') {
+                                    setEditGenerate3D(
+                                      editCategory === 'generate_3d'
+                                        ? model3dPresetForRegistryId(editGenerate3D.modelRegistryId || defaultModel3dRegistryId || 'tripo-p1', editGenerate3D)
+                                        : model3dPresetForRegistryId(defaultModel3dRegistryId || 'tripo-p1')
+                                    );
+                                  }
+                                  if (c.id === 'generate_video') {
+                                    setEditVideoModelRegistryId(defaultVideoModelRegistryId || 'jimeng-video-ti2v-v30-pro');
+                                    setEditGenerate3D(model3dPresetForRegistryId(defaultModel3dRegistryId || 'tripo-p1'));
+                                  }
                                 }}
                                 className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase border ${editCategory === c.id ? 'bg-[#1e3558] border-[#3b82f6] text-blue-300' : 'bg-white/[0.05] ring-1 ring-white/[0.06] text-gray-500 border-transparent'}`}
                               >
@@ -2534,7 +2645,24 @@ const CapabilityPresetSection: React.FC<{
                               <span className="text-[8px] text-gray-500">工作流请拖入图片卡（内置处理）</span>
                             )}
                             {editCategory === 'generate_video' && (
-                              <span className="text-[8px] text-gray-500">工作流请拖入文字卡或图片卡（或两者）</span>
+                              <>
+                                <label className="flex items-center gap-2 text-[9px] text-gray-400">
+                                  <span className="font-black uppercase">视频模型</span>
+                                  <CustomDropdown
+                                    options={effectiveVideoModelRows.map((g) => ({
+                                      value: g.registryId,
+                                      label: g.label,
+                                      disabled: g.disabled,
+                                      title: g.disabledReason,
+                                    }))}
+                                    value={editVideoModelRegistryId}
+                                    onChange={setEditVideoModelRegistryId}
+                                    triggerClassName={DROPDOWN_TRIGGER_COMPACT}
+                                    portalZIndex={DETAIL_DROPDOWN_PORTAL_ZINDEX}
+                                  />
+                                </label>
+                                <span className="text-[8px] text-gray-500">工作流请拖入文字卡或图片卡（或两者）</span>
+                              </>
                             )}
                           </div>
                           {editCategory === 'generate_video' && (
@@ -2568,22 +2696,43 @@ const CapabilityPresetSection: React.FC<{
                             <div className="rounded-xl border border-[#2e3f5d] bg-[#141b26] p-3 space-y-2">
                               <div className="text-[8px] font-black text-blue-300 uppercase">生成3D 预设</div>
                               <label className="flex items-center gap-2 text-[9px]">
+                                <span>3D模型</span>
+                                <CustomDropdown
+                                  options={effectiveModel3dRows.map((g) => ({
+                                    value: g.registryId,
+                                    label: g.label,
+                                    disabled: g.disabled,
+                                    title: g.disabledReason,
+                                  }))}
+                                  value={editGenerate3D.modelRegistryId || defaultModel3dRegistryId || 'tripo-p1'}
+                                  onChange={(v) => setEditGenerate3D((g) => model3dPresetForRegistryId(v, g))}
+                                  triggerClassName={DROPDOWN_TRIGGER_COMPACT}
+                                  portalZIndex={DETAIL_DROPDOWN_PORTAL_ZINDEX}
+                                />
+                              </label>
+                              <label className="flex items-center gap-2 text-[9px]">
                                 <span>服务商</span>
                                 <CustomDropdown
                                   options={[{ value: 'tripo', label: 'Tripo' }, { value: 'tencent', label: '腾讯混元' }]}
                                   value={editGenerate3D.provider ?? 'tripo'}
                                   onChange={(v) => {
                                     if (v === 'tencent') {
-                                      setEditGenerate3D({
-                                        provider: 'tencent',
-                                        module: 'pro',
-                                        model: '3.0',
+                                      const nextId =
+                                        effectiveModel3dRows.find((row) => row.registryId.startsWith('tencent-hunyuan-') && !row.disabled)?.registryId ||
+                                        editGenerate3D.modelRegistryId ||
+                                        'tencent-hunyuan-3d-pro';
+                                      setEditGenerate3D(model3dPresetForRegistryId(nextId, {
+                                        ...editGenerate3D,
                                         generateType: 'Normal',
                                         faceCount: 100000,
                                         enablePBR: false,
-                                      });
+                                      }));
                                     } else {
-                                      setEditGenerate3D({ ...DEFAULT_GENERATE_3D });
+                                      const nextId =
+                                        effectiveModel3dRows.find((row) => !row.registryId.startsWith('tencent-hunyuan-') && !row.disabled)?.registryId ||
+                                        defaultModel3dRegistryId ||
+                                        'tripo-p1';
+                                      setEditGenerate3D(model3dPresetForRegistryId(nextId, editGenerate3D));
                                     }
                                   }}
                                   triggerClassName={DROPDOWN_TRIGGER_COMPACT}

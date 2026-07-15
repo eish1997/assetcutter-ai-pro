@@ -17,6 +17,7 @@ export function channelToResolveProvider(channel: ChannelId, family: ModelFamily
     case "vectorengine":
       return "vectorengine";
     case "openai-official":
+    case "volcengine-ark":
       return "openai";
   }
 }

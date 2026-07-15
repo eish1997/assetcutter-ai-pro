@@ -14,8 +14,11 @@ import {
   fetchAdminProviderKeyEvents,
   fetchAdminProviderKeyHealthSummary,
   fetchAdminProviderKeys,
+  fetchAdminModelOpsConfig,
   restoreAdminProviderKey,
+  saveAdminModelOpsConfig,
   saveAdminProviderKeys,
+  smokeTestAdminProviderKey,
 } from '../services/adminProviderKeysClient';
 import { requestJson } from '../services/httpClient';
 
@@ -78,6 +81,28 @@ describe('adminProviderKeysClient', () => {
     expect(requestJson).toHaveBeenCalledWith('https://auth.example/api/admin/ai-gateway/provider-keys/key%201/restore', {
       method: 'POST',
       body: JSON.stringify({}),
+    });
+  });
+
+  it('runs provider key smoke tests through the admin auth-api', async () => {
+    await smokeTestAdminProviderKey('key 1');
+    expect(requestJson).toHaveBeenCalledWith('https://auth.example/api/admin/ai-gateway/provider-keys/key%201/smoke-test', {
+      method: 'POST',
+      body: JSON.stringify({}),
+    });
+  });
+
+  it('reads and saves model ops config through the admin auth-api', async () => {
+    await fetchAdminModelOpsConfig();
+    expect(requestJson).toHaveBeenCalledWith('https://auth.example/api/admin/model-ops-config', {
+      cache: 'no-store',
+    });
+
+    const config = { version: 1, publishedCanonicalModelAllowlist: ['gpt-4o-mini'] };
+    await saveAdminModelOpsConfig(config);
+    expect(requestJson).toHaveBeenCalledWith('https://auth.example/api/admin/model-ops-config', {
+      method: 'PUT',
+      body: JSON.stringify({ config }),
     });
   });
 });

@@ -125,6 +125,8 @@ import {
   getToapisBaseUrl,
   getTripoApiKey,
   getUserApiKey,
+  getVolcengineArkApiKey,
+  getVolcengineArkBaseUrl,
   getVectorengineApiKey,
   getVectorengineBaseUrl,
   getEnabledChannels,
@@ -136,6 +138,8 @@ import {
   setToapisApiKey,
   setToapisBaseUrl,
   setUserApiKey,
+  setVolcengineArkApiKey,
+  setVolcengineArkBaseUrl,
   setVectorengineApiKey,
   setVectorengineBaseUrl,
   setWorkspaceAutoSyncEnabled,
@@ -783,6 +787,8 @@ const MainApp: React.FC = () => {
           setToapisBaseUrl(cfg.settings.toapisBaseUrl || null);
           setOpenaiApiKey(cfg.settings.openaiApiKey || null);
           setOpenaiBaseUrl(cfg.settings.openaiBaseUrl || null);
+          setVolcengineArkApiKey(cfg.settings.volcengineArkApiKey || null);
+          setVolcengineArkBaseUrl(cfg.settings.volcengineArkBaseUrl || null);
           setVectorengineApiKey(cfg.settings.vectorengineApiKey || null);
           setVectorengineBaseUrl(cfg.settings.vectorengineBaseUrl || null);
           setAiInvocationStatusRev((n) => n + 1);
@@ -840,6 +846,8 @@ const MainApp: React.FC = () => {
           toapisBaseUrl: getToapisBaseUrl() || '',
           openaiApiKey: getOpenaiApiKey() || '',
           openaiBaseUrl: getOpenaiBaseUrl() || '',
+          volcengineArkApiKey: getVolcengineArkApiKey() || '',
+          volcengineArkBaseUrl: getVolcengineArkBaseUrl() || '',
           vectorengineApiKey: getVectorengineApiKey() || '',
           vectorengineBaseUrl: getVectorengineBaseUrl() || '',
         },

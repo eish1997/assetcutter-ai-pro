@@ -6,6 +6,7 @@ export type SupplierId =
   | "toapis"
   | "vectorengine"
   | "openai-official"
+  | "volcengine-ark"
   | "gemini-aistudio";
 
 export type ApiShape = "gemini" | "openai" | "site-proxy";

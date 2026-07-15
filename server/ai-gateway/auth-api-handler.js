@@ -6,6 +6,9 @@ import { settleAiGatewayJobCredits, settlementMetadataPatch } from './settlement
 import { startAiGatewayJobExecution } from './executor.js';
 import { buildAiGatewayOpsSummary } from './observability.js';
 import { readAiGatewayOpsControlConfig } from './ops-control.js';
+import { readModelOpsConfig } from './model-ops-config-store.js';
+import { validateAiGatewayModelPublication } from './model-publication-guard.js';
+import { validateAiGatewayModelRouteExecutable } from './model-route-guard.js';
 
 const DEFAULT_LIST_LIMIT = 20;
 const MAX_LIST_LIMIT = 100;
@@ -112,6 +115,30 @@ export async function createAuthAiGatewayJob(req, body, user, options = {}) {
     },
   };
   const opsControl = options.opsControl || (await readAiGatewayOpsControlConfig());
+  const modelOpsConfig = options.modelOpsConfig || (await readModelOpsConfig());
+  const publication = validateAiGatewayModelPublication(planInput, modelOpsConfig);
+  if (publication.canonicalModelId) {
+    planInput.metadata.modelPublication = {
+      canonicalModelId: publication.canonicalModelId,
+      restricted: publication.restricted,
+    };
+  }
+  const executableRoute = await validateAiGatewayModelRouteExecutable(planInput, {
+    listProviderKeys: options.listProviderKeys,
+    checkProviderKeys: options.checkProviderKeys,
+  });
+  if (executableRoute.checked) {
+    if (!planInput.provider && executableRoute.route?.providerId) {
+      planInput.provider = executableRoute.route.providerId;
+    }
+    planInput.metadata.modelRouteGuard = {
+      canonicalModelId: executableRoute.canonicalModelId,
+      providerId: executableRoute.route.providerId,
+      executionStatus: executableRoute.route.executionStatus,
+      gatewayExecutionStatus: executableRoute.route.gatewayExecutionStatus,
+      platformKeyRequired: executableRoute.route.platformKeyRequired,
+    };
+  }
   let plan = await store.put(createAiGatewayJobPlan(planInput, { opsControl }));
   const execution = await startAiGatewayJobExecution(plan, {
     store,
@@ -227,26 +254,48 @@ export async function retryAuthAiGatewayJob(id, user, body = {}, options = {}) {
   const raw = body && typeof body === 'object' ? body : {};
   const metadata = original.job.metadata && typeof original.job.metadata === 'object' ? original.job.metadata : {};
   const opsControl = options.opsControl || await readAiGatewayOpsControlConfig();
+  const retryInput = {
+    id: raw.id,
+    modality: original.job.modality,
+    capability: original.job.capability,
+    provider: original.job.provider,
+    model: original.job.model,
+    userId: original.job.userId || user.id,
+    correlationId: raw.correlationId,
+    input: original.job.input || {},
+    metadata: {
+      ...metadata,
+      ...(raw.metadata && typeof raw.metadata === 'object' ? raw.metadata : {}),
+      retryOfJobId: original.job.id,
+      retryOfCorrelationId: original.job.correlationId,
+      retryOfStatus: original.job.status,
+      retryCreatedByUserId: user.id,
+      authApiFacade: true,
+    },
+  };
+  const modelOpsConfig = options.modelOpsConfig || (await readModelOpsConfig());
+  const publication = validateAiGatewayModelPublication(retryInput, modelOpsConfig);
+  if (publication.canonicalModelId) {
+    retryInput.metadata.modelPublication = {
+      canonicalModelId: publication.canonicalModelId,
+      restricted: publication.restricted,
+    };
+  }
+  const executableRoute = await validateAiGatewayModelRouteExecutable(retryInput, {
+    listProviderKeys: options.listProviderKeys,
+    checkProviderKeys: options.checkProviderKeys,
+  });
+  if (executableRoute.checked) {
+    retryInput.metadata.modelRouteGuard = {
+      canonicalModelId: executableRoute.canonicalModelId,
+      providerId: executableRoute.route.providerId,
+      executionStatus: executableRoute.route.executionStatus,
+      gatewayExecutionStatus: executableRoute.route.gatewayExecutionStatus,
+      platformKeyRequired: executableRoute.route.platformKeyRequired,
+    };
+  }
   const retryPlan = await store.put(
-    createAiGatewayJobPlan({
-      id: raw.id,
-      modality: original.job.modality,
-      capability: original.job.capability,
-      provider: original.job.provider,
-      model: original.job.model,
-      userId: original.job.userId || user.id,
-      correlationId: raw.correlationId,
-      input: original.job.input || {},
-      metadata: {
-        ...metadata,
-        ...(raw.metadata && typeof raw.metadata === 'object' ? raw.metadata : {}),
-        retryOfJobId: original.job.id,
-        retryOfCorrelationId: original.job.correlationId,
-        retryOfStatus: original.job.status,
-        retryCreatedByUserId: user.id,
-        authApiFacade: true,
-      },
-    }, {
+    createAiGatewayJobPlan(retryInput, {
       opsControl,
     })
   );

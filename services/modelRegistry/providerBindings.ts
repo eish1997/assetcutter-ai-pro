@@ -24,7 +24,7 @@ const GEMINI_CHANNELS: readonly ChannelTemplate[] = [
 
 const OPENAI_CHANNELS: readonly ChannelTemplate[] = [
   { channel: "openai-official", priority: 10, defaultEnabled: true },
-  { channel: "toapis-openai", priority: 20 },
+  { channel: "toapis-openai", priority: 30 },
 ];
 
 function familyForBindingRegistry(registryId: string, role: ModelResolveRole): ModelFamily {

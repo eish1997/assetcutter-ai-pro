@@ -96,15 +96,25 @@ export async function tripoWorkflowCreateOrResumeTaskId(params: {
   });
   if (isAiGatewayTripoPlatformKey(params.apiKey)) {
     const { apiKey: _apiKey, ...gatewayInput } = input;
+    const registryId = params.preset.generate3D?.modelRegistryId || 'tripo-p1';
     const detail = await createAiJob({
       modality: 'model3d',
       capability: 'model3d.generate',
       provider: 'tripo',
+      model: registryId,
+      canonicalModelId: registryId,
+      registryId,
       metadata: {
         source: 'workflow_generate_3d',
         taskType: input.type,
+        canonicalModelId: registryId,
+        registryId,
       },
-      input: gatewayInput as unknown as Record<string, unknown>,
+      input: {
+        ...(gatewayInput as unknown as Record<string, unknown>),
+        canonicalModelId: registryId,
+        registryId,
+      },
     });
     upsertAiJobSummary(detail.job);
     return { taskId: detail.job.id, resumed: false, aiGatewayJobId: detail.job.id };

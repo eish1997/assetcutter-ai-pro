@@ -217,6 +217,13 @@ export const WORKFLOW_AI_PICK_NODES: readonly WorkflowAiPickNode[] = [
     label: 'visual.volcengineapi.com（即梦 CV API）',
     codeRefs: ['visual.volcengineapi.com'],
   },
+  {
+    id: 'volcengine_ark_upstream',
+    layer: 'supplier',
+    label: '火山方舟（OpenAI 兼容）',
+    codeRefs: ['volcengine-ark', 'https://ark.cn-beijing.volces.com/api/v3'],
+    notes: '经 OpenAI-compatible adapter；与即梦 visual.volcengineapi.com 分离',
+  },
 ];
 
 /** §1.4.3 推荐依赖边（from → to） */
@@ -242,6 +249,7 @@ export const WORKFLOW_AI_PICK_EDGES: readonly WorkflowAiPickEdge[] = [
   { id: 'edge_jimeng_proxy', from: 'jimeng_warehouse', to: 'jimeng_server_proxy' },
   { id: 'edge_jimeng_volc', from: 'jimeng_server_proxy', to: 'volcengine_visual_upstream' },
   { id: 'edge_pick_jimeng', from: 'model_registry_pick', to: 'jimeng_warehouse' },
+  { id: 'edge_pick_ark', from: 'model_registry_pick', to: 'volcengine_ark_upstream' },
 ];
 
 /** §1.4.2 货物大类 → 闸门 → 运营手段 */

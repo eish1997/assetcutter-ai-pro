@@ -80,21 +80,27 @@ export async function createAndPollAiGatewayVideoJob(
   }
   const estimatedCredits = Math.max(1, Math.floor(Number(input.estimatedCredits || 50)));
   const cachedHeaders = getCachedCreditsProxyHeaders(estimatedCredits) || {};
+  const registryId = input.registryId || 'jimeng-video-ti2v-v30-pro';
   const created = await createAiJob(
     {
       modality: 'video',
       capability: 'workflow_generate_video',
       provider: 'volcengine-jimeng',
-      model: input.registryId || 'jimeng-video-ti2v-v30-pro',
+      model: registryId,
+      canonicalModelId: registryId,
+      registryId,
       estimatedCredits,
       input: {
-        registryId: input.registryId || 'jimeng-video-ti2v-v30-pro',
+        canonicalModelId: registryId,
+        registryId,
         prompt: input.prompt,
         referenceImages: input.referenceImages,
         estimatedCredits,
       },
       metadata: {
         source: 'unifiedAiGateway.workflowGenerateVideo',
+        canonicalModelId: registryId,
+        registryId,
       },
     },
     {

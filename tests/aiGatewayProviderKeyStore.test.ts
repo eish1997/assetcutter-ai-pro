@@ -14,6 +14,7 @@ import {
   restoreProviderKey,
   resetProviderKeyRuntimeForTests,
   saveProviderKeys,
+  smokeTestProviderKey,
   summarizeProviderKeyHealth,
 } from '../server/ai-gateway/provider-key-store.js';
 
@@ -23,6 +24,7 @@ describe('AI gateway provider key store', () => {
   const prevTripoKey = process.env.TRIPO_API_KEY;
   const prevVolcAk = process.env.VOLCENGINE_ACCESS_KEY;
   const prevVolcSk = process.env.VOLCENGINE_SECRET_KEY;
+  const prevSmokeMode = process.env.AI_GATEWAY_PROVIDER_KEY_SMOKE_MODE;
   const prevAutoCooldown = process.env.AI_GATEWAY_PROVIDER_KEY_AUTO_COOLDOWN;
   const prevAutoCooldownErrors = process.env.AI_GATEWAY_PROVIDER_KEY_AUTO_COOLDOWN_ERRORS;
   const prevAutoCooldownMs = process.env.AI_GATEWAY_PROVIDER_KEY_AUTO_COOLDOWN_MS;
@@ -39,6 +41,8 @@ describe('AI gateway provider key store', () => {
     else process.env.VOLCENGINE_ACCESS_KEY = prevVolcAk;
     if (prevVolcSk === undefined) delete process.env.VOLCENGINE_SECRET_KEY;
     else process.env.VOLCENGINE_SECRET_KEY = prevVolcSk;
+    if (prevSmokeMode === undefined) delete process.env.AI_GATEWAY_PROVIDER_KEY_SMOKE_MODE;
+    else process.env.AI_GATEWAY_PROVIDER_KEY_SMOKE_MODE = prevSmokeMode;
     if (prevAutoCooldown === undefined) delete process.env.AI_GATEWAY_PROVIDER_KEY_AUTO_COOLDOWN;
     else process.env.AI_GATEWAY_PROVIDER_KEY_AUTO_COOLDOWN = prevAutoCooldown;
     if (prevAutoCooldownErrors === undefined) delete process.env.AI_GATEWAY_PROVIDER_KEY_AUTO_COOLDOWN_ERRORS;
@@ -66,6 +70,7 @@ describe('AI gateway provider key store', () => {
     delete process.env.TRIPO_API_KEY;
     delete process.env.VOLCENGINE_ACCESS_KEY;
     delete process.env.VOLCENGINE_SECRET_KEY;
+    delete process.env.AI_GATEWAY_PROVIDER_KEY_SMOKE_MODE;
     delete process.env.AI_GATEWAY_PROVIDER_KEY_AUTO_COOLDOWN;
     delete process.env.AI_GATEWAY_PROVIDER_KEY_AUTO_COOLDOWN_ERRORS;
     delete process.env.AI_GATEWAY_PROVIDER_KEY_AUTO_COOLDOWN_MS;
@@ -210,6 +215,59 @@ describe('AI gateway provider key store', () => {
     });
   });
 
+  it('stores extended provider credential fields for supplier key pools', async () => {
+    useTempStore();
+
+    await saveProviderKeys([
+      {
+        id: 'key_tencent',
+        provider: 'tencent-hunyuan',
+        label: 'Tencent primary',
+        enabled: true,
+        credentials: {
+          secretId: 'tencent-secret-id-1234',
+          secretKey: 'tencent-secret-key-5678',
+        },
+      },
+      {
+        id: 'key_ark',
+        provider: 'volcengine-ark',
+        label: 'Ark primary',
+        enabled: true,
+        secret: 'ark-api-key-1234',
+        credentials: {
+          baseUrl: 'https://ark.cn-beijing.volces.com/api/v3',
+          endpointId: 'ep-test-1234',
+        },
+      },
+    ]);
+
+    const listed = await listProviderKeys();
+    expect(listed.find((item) => item.id === 'key_tencent')).toMatchObject({
+      provider: 'tencent-hunyuan',
+      hasCredentials: true,
+      credentialsPreview: {
+        secretId: 'tencen****1234',
+        secretKey: 'tencen****5678',
+      },
+    });
+    expect(listed.find((item) => item.id === 'key_ark')).toMatchObject({
+      provider: 'volcengine-ark',
+      hasSecret: true,
+      hasCredentials: true,
+      credentialsPreview: {
+        endpointId: 'ep-tes****1234',
+      },
+    });
+
+    expect(await acquireProviderKey('tencent-hunyuan')).toMatchObject({
+      credentials: {
+        secretId: 'tencent-secret-id-1234',
+        secretKey: 'tencent-secret-key-5678',
+      },
+    });
+  });
+
   it('rotates across same-priority keys in the active pool', async () => {
     useTempStore();
 
@@ -314,6 +372,124 @@ describe('AI gateway provider key store', () => {
     expect(events[2]).toMatchObject({
       status: 503,
       retryable: true,
+    });
+  });
+
+  it('records smoke test results as provider key health events', async () => {
+    useTempStore();
+
+    await saveProviderKeys([
+      {
+        id: 'key_smoke_ok',
+        provider: 'volcengine-ark',
+        label: 'Ark complete',
+        secret: 'ark-key',
+        enabled: true,
+        credentials: {
+          baseUrl: 'https://ark.cn-beijing.volces.com/api/v3',
+        },
+      },
+      {
+        id: 'key_smoke_missing',
+        provider: 'volcengine-ark',
+        label: 'Ark missing',
+        secret: 'ark-key',
+        enabled: true,
+        credentials: {},
+      },
+    ]);
+
+    await expect(smokeTestProviderKey('key_smoke_ok')).resolves.toMatchObject({
+      ok: true,
+      provider: 'volcengine-ark',
+      status: 'passed',
+    });
+    await expect(smokeTestProviderKey('key_smoke_missing')).resolves.toMatchObject({
+      ok: false,
+      provider: 'volcengine-ark',
+      status: 'failed',
+      missingFields: ['credentials.baseUrl'],
+    });
+
+    const events = await listProviderKeyHealthEvents({ provider: 'volcengine-ark', limit: 10 });
+    expect(events.map((event) => event.type)).toEqual(['error', 'success']);
+    expect(events[0]).toMatchObject({
+      providerKeyId: 'key_smoke_missing',
+      status: 400,
+      retryable: false,
+    });
+  });
+
+  it('runs a real upstream smoke probe for Tripo keys without creating a generation task', async () => {
+    useTempStore();
+
+    await saveProviderKeys([
+      {
+        id: 'key_tripo_smoke_real',
+        provider: 'tripo',
+        label: 'Tripo real smoke',
+        secret: 'tsk-test-real-smoke',
+        enabled: true,
+      },
+    ]);
+
+    const calls: Array<{ url: string; init: RequestInit }> = [];
+    const fetchImpl = async (url: string, init: RequestInit) => {
+      calls.push({ url, init });
+      return new Response(JSON.stringify({ data: { balance: 12 } }), { status: 200 });
+    };
+
+    await expect(smokeTestProviderKey('key_tripo_smoke_real', { fetchImpl })).resolves.toMatchObject({
+      ok: true,
+      provider: 'tripo',
+      status: 'passed',
+      mode: 'real_upstream',
+      route: 'GET /user/balance',
+      upstreamStatus: 200,
+    });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0].url).toBe('https://api.tripo3d.ai/v2/openapi/user/balance');
+    expect(calls[0].init).toMatchObject({
+      method: 'GET',
+      headers: { Authorization: 'Bearer tsk-test-real-smoke' },
+    });
+    expect(await listProviderKeyHealthEvents({ keyId: 'key_tripo_smoke_real', limit: 10 })).toEqual([
+      expect.objectContaining({ type: 'success', provider: 'tripo' }),
+    ]);
+  });
+
+  it('records Tripo real upstream smoke failures as provider key errors', async () => {
+    useTempStore();
+
+    await saveProviderKeys([
+      {
+        id: 'key_tripo_smoke_bad',
+        provider: 'tripo',
+        label: 'Tripo bad smoke',
+        secret: 'tsk-test-bad-smoke',
+        enabled: true,
+      },
+    ]);
+
+    const fetchImpl = async () =>
+      new Response(JSON.stringify({ message: 'invalid api key' }), { status: 401 });
+
+    await expect(smokeTestProviderKey('key_tripo_smoke_bad', { fetchImpl })).resolves.toMatchObject({
+      ok: false,
+      provider: 'tripo',
+      status: 'failed',
+      mode: 'real_upstream',
+      route: 'GET /user/balance',
+      upstreamStatus: 401,
+      message: expect.stringContaining('invalid api key'),
+    });
+
+    const events = await listProviderKeyHealthEvents({ keyId: 'key_tripo_smoke_bad', limit: 10 });
+    expect(events[0]).toMatchObject({
+      type: 'error',
+      providerKeyId: 'key_tripo_smoke_bad',
+      status: 401,
     });
   });
 

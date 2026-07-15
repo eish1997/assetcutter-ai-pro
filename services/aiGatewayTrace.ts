@@ -42,21 +42,27 @@ export function buildAiGatewayImageJobBody(
   options: { traceOnly?: boolean } = {}
 ): Record<string, unknown> {
   const traceOnly = options.traceOnly !== false;
+  const registryId = input.registryId || input.model;
   const metadata: Record<string, unknown> = {
     source: input.source || 'geminiService.bulkProxyGenerateContentAsync',
     legacyPath: '/proxy/gemini/async',
     useVertex: Boolean(input.useVertex),
+    canonicalModelId: registryId,
+    registryId,
   };
   if (traceOnly) metadata.traceOnly = true;
-  if (input.registryId) metadata.registryId = input.registryId;
   return {
     modality: 'image',
     capability: 'image.generate',
     provider: input.useVertex ? 'vertex-gemini' : undefined,
     model: input.model,
+    canonicalModelId: registryId,
+    registryId,
     estimatedCredits: input.estimatedCredits,
     input: {
       model: input.model,
+      canonicalModelId: registryId,
+      registryId,
       contents: input.contents,
       config: input.config || {},
       estimatedCredits: input.estimatedCredits,

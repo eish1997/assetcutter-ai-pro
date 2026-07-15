@@ -540,6 +540,43 @@ export type StoryboardTableDoc = {
 };
 
 /** 单个资产：原始图 + 各类型结果图，当前展示版本，是否已归档；归档后可按生成顺序拼流程图 */
+export type WorkflowAssetKind =
+  | 'image'
+  | 'text'
+  | 'video'
+  | 'model3d'
+  | 'audio'
+  | 'storyboard_table'
+  | 'asset_set'
+  | 'group'
+  | 'file';
+
+export type WorkflowAssetVariantKind = 'text' | 'image' | 'video' | 'model3d' | 'audio' | 'file';
+
+export type WorkflowAssetVariantSource = 'original' | 'result' | 'derived' | 'uploaded' | 'external';
+
+export type WorkflowAssetVariant = {
+  id: string;
+  label: string;
+  kind: WorkflowAssetVariantKind;
+  source: WorkflowAssetVariantSource;
+  url?: string;
+  objectKey?: string;
+  companionKey?: string;
+  text?: string;
+  mimeType?: string;
+  posterUrl?: string;
+  posterObjectKey?: string;
+  posterCompanionKey?: string;
+  durationMs?: number;
+  width?: number;
+  height?: number;
+  modelUrls?: string[];
+  modelCompanionKeys?: string[];
+  modelFormats?: Array<'glb' | 'gltf' | 'fbx' | 'obj'>;
+  meta?: Record<string, unknown>;
+};
+
 export type WorkflowAsset = {
   id: string;
   /**
@@ -548,7 +585,7 @@ export type WorkflowAsset = {
    * `storyboard_table`：分镜表容器，镜头行存于 `storyboardTable`。
    * `asset_set`：资产集容器，拆解数据存于 `assetSet`。
    */
-  assetKind?: 'image' | 'text' | 'storyboard_table' | 'asset_set';
+  assetKind?: WorkflowAssetKind;
   /** 分镜表行数据（仅 `assetKind === 'storyboard_table'`） */
   storyboardTable?: StoryboardTableDoc;
   /** 资产集文档（仅 `assetKind === 'asset_set'`） */
@@ -606,7 +643,7 @@ export type WorkflowAsset = {
       /** 资产卡片/步骤条等展示用短标签（如大图局部重绘写入「局部重绘」） */
       displayStepLabel?: string;
       /** 结果槽位媒体类型；生视频步骤写入 `video` 以便网格用 `<video>` 预览 */
-      mediaKind?: 'image' | 'video' | 'model3d';
+      mediaKind?: WorkflowAssetVariantKind;
       /** 生成3D（Tripo）任务 id：写入本步 resultMeta 并随工作区持久化；大图「拉取模型」与继续查询均依赖此字段，请勿手动清空 */
       tripoTaskId?: string;
       /** 生成3D（腾讯混元）任务 JobId；续查与落盘追溯用 */
@@ -754,6 +791,8 @@ export type CapabilityEngine = 'gen_image' | 'gen_text' | 'builtin';
 export type Generate3DPreset = {
   /** 默认 tripo；保留 tencent 兼容历史预设 */
   provider?: 'tripo' | 'tencent';
+  /** 平台模型 registryId；用于工作台发布清单和 AI Gateway 校验 */
+  modelRegistryId?: string;
   /** Tripo 任务类型：文生3D / 图生3D */
   tripoTaskType?: 'text_to_model' | 'image_to_model' | 'multiview_to_model';
   /** Tripo 可选：模型版本（如 P1-20260311 / v3.1-20260211 / v2.5-20250123） */
@@ -821,6 +860,8 @@ export type CustomAppModule = {
   imageModelRegistryId?: string;
   /** 文字模型 registryId（可选），文生文 / 图生文时使用；缺省走设置页默认文字模型 */
   textModelRegistryId?: string;
+  /** 生视频模型 registryId（可选）；缺省走已发布的默认生视频模型 */
+  videoModelRegistryId?: string;
   /** @deprecated 请用 `imageModelRegistryId`；旧 fast/standard/pro 会在读取时迁移 */
   imageGear?: DialogImageGear;
   /** 生图输出比例（可选），如 1:1、16:9，仅 engine === 'gen_image' 时生效，对应 Gemini imageConfig.aspectRatio */

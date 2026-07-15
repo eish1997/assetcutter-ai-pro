@@ -7,6 +7,8 @@ import type { WiringEdge } from "./hubGraph/types";
 export type ModelOpsConfig = {
   version: number;
   imageRegistryAllowlist?: string[] | null;
+  /** Canonical model ids published to workspace pickers; null/undefined means all published catalog models. */
+  publishedCanonicalModelAllowlist?: string[] | null;
   /** 当前模型不可用时按 registryId 顺序回退 */
   imageModelPreference?: string[] | null;
   /** 运营侧 binding 覆盖（禁用 / 调优先级 / 上游 id） */

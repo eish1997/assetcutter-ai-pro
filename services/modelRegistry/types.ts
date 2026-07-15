@@ -9,6 +9,7 @@ export type ChannelId =
   | "toapis-openai"
   | "vectorengine"
   | "openai-official"
+  | "volcengine-ark"
   | "volcengine-jimeng";
 
 export type ModelResolveRole = "text" | "image";

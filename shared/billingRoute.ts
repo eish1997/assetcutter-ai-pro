@@ -35,6 +35,7 @@ const BYOK_CHANNELS = new Set([
   'toapis-openai',
   'vectorengine',
   'openai-official',
+  'volcengine-ark',
 ]);
 
 const ALWAYS_PLATFORM_JOB_KINDS = new Set([

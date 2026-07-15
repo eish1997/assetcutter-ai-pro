@@ -24,6 +24,17 @@ describe('billingRoute', () => {
     ).toBe(false);
   });
 
+  it('volcengine ark explicit model route is BYOK', () => {
+    const decision = resolveBillingRoute({
+      jobKind: 'workflow_chat',
+      registryId: 'doubao-seed-2-0-pro',
+      role: 'text',
+      channel: 'volcengine-ark',
+    });
+    expect(decision.routeKind).toBe('byok');
+    expect(decision.channel).toBe('volcengine-ark');
+  });
+
   it('vertex-proxy binding is platform', () => {
     const decision = resolveBillingRoute({
       jobKind: 'workflow_text_to_image',

@@ -93,4 +93,64 @@ describe("modelRegistry opsConfig remote fetch", () => {
       expect(thirdInit?.headers).toBeUndefined();
     }
   });
+
+  it("normalizes published canonical model allowlist from remote JSON", async () => {
+    const fetchMock = vi.fn();
+    globalThis.fetch = fetchMock as typeof fetch;
+
+    fetchMock.mockResolvedValueOnce(
+      jsonRes({
+        version: 3,
+        publishedCanonicalModelAllowlist: [
+          "gpt-4o-mini",
+          "unknown-model",
+          "gpt-4o-mini",
+          "gemini-2.5-flash-image",
+        ],
+      })
+    );
+
+    await _refreshModelOpsConfigAtUrlForTests(testUrl);
+
+    expect(getModelOpsConfigSync().publishedCanonicalModelAllowlist).toEqual([
+      "gpt-4o-mini",
+      "gemini-2.5-flash-image",
+    ]);
+  });
+
+  it("accepts auth-api wrapped model ops config responses", async () => {
+    const fetchMock = vi.fn();
+    globalThis.fetch = fetchMock as typeof fetch;
+
+    fetchMock.mockResolvedValueOnce(
+      jsonRes({
+        ok: true,
+        config: {
+          version: 5,
+          publishedCanonicalModelAllowlist: ["gpt-4o-mini"],
+        },
+      })
+    );
+
+    await _refreshModelOpsConfigAtUrlForTests(testUrl);
+
+    expect(getModelOpsConfigSync().version).toBe(5);
+    expect(getModelOpsConfigSync().publishedCanonicalModelAllowlist).toEqual(["gpt-4o-mini"]);
+  });
+
+  it("ignores published canonical allowlist when every id is unknown", async () => {
+    const fetchMock = vi.fn();
+    globalThis.fetch = fetchMock as typeof fetch;
+
+    fetchMock.mockResolvedValueOnce(
+      jsonRes({
+        version: 4,
+        publishedCanonicalModelAllowlist: ["unknown-a", "unknown-b"],
+      })
+    );
+
+    await _refreshModelOpsConfigAtUrlForTests(testUrl);
+
+    expect(getModelOpsConfigSync().publishedCanonicalModelAllowlist).toBeNull();
+  });
 });

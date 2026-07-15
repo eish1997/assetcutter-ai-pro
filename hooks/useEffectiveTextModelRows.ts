@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { buildEffectiveTextModelRows, type EffectiveTextModelRow } from "../services/modelRegistry/merge";
+import type { ModelOpsConfig } from "../services/modelRegistry/opsTypes";
+import { getModelOpsConfigSync, refreshModelOpsConfig } from "../services/modelRegistry/opsConfig";
 import { coerceTextModelRegistryId } from "../services/modelRegistry/textModels";
 import { getEnabledChannels, subscribeAiSettingsCrossTab } from "../services/settingsStore";
 
@@ -7,24 +9,39 @@ import { getEnabledChannels, subscribeAiSettingsCrossTab } from "../services/set
 export function useEffectiveTextModelRows(): {
   rows: EffectiveTextModelRow[];
   coerceModelId: (currentRegistryId: string) => string;
+  opsConfig: ModelOpsConfig;
 } {
   const [channelsKey, setChannelsKey] = useState(() => getEnabledChannels().join(","));
+  const [ops, setOps] = useState(() => getModelOpsConfigSync());
 
   useEffect(() => {
-    const sync = () => setChannelsKey(getEnabledChannels().join(","));
+    const syncFromStorage = () => {
+      setChannelsKey(getEnabledChannels().join(","));
+      setOps(getModelOpsConfigSync());
+    };
+    const onChannels = () => setChannelsKey(getEnabledChannels().join(","));
+    const onOps = () => setOps(getModelOpsConfigSync());
     if (typeof window !== "undefined") {
-      window.addEventListener("ac-ai-provider-changed", sync);
+      window.addEventListener("ac-ai-provider-changed", onChannels);
+      window.addEventListener("ac-model-ops-updated", onOps);
     }
-    const unsub = subscribeAiSettingsCrossTab(sync);
+    const unsub = subscribeAiSettingsCrossTab(syncFromStorage);
+    refreshModelOpsConfig()
+      .then(() => setOps(getModelOpsConfigSync()))
+      .catch(() => {});
     return () => {
       if (typeof window !== "undefined") {
-        window.removeEventListener("ac-ai-provider-changed", sync);
+        window.removeEventListener("ac-ai-provider-changed", onChannels);
+        window.removeEventListener("ac-model-ops-updated", onOps);
       }
       unsub();
     };
   }, []);
 
-  const rows = useMemo(() => buildEffectiveTextModelRows(), [channelsKey]);
+  const rows = useMemo(() => {
+    void channelsKey;
+    return buildEffectiveTextModelRows(ops);
+  }, [channelsKey, ops]);
 
   const coerceModelId = useCallback(
     (currentRegistryId: string) => {
@@ -37,5 +54,5 @@ export function useEffectiveTextModelRows(): {
     [rows]
   );
 
-  return { rows, coerceModelId };
+  return { rows, coerceModelId, opsConfig: ops };
 }

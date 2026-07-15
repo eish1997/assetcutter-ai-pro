@@ -63,7 +63,13 @@ describe('aiGatewayVideoExecution', () => {
         capability: 'workflow_generate_video',
         provider: 'volcengine-jimeng',
         model: 'jimeng-video-ti2v-v30-pro',
+        canonicalModelId: 'jimeng-video-ti2v-v30-pro',
+        registryId: 'jimeng-video-ti2v-v30-pro',
         estimatedCredits: 134,
+        metadata: expect.objectContaining({
+          canonicalModelId: 'jimeng-video-ti2v-v30-pro',
+          registryId: 'jimeng-video-ti2v-v30-pro',
+        }),
       }),
       expect.objectContaining({
         cache: 'no-store',

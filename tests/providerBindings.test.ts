@@ -37,7 +37,13 @@ describe("providerBindings", () => {
     const fromFlags = defaultEnabledChannelIds();
     expect(fromFlags).toContain("vertex-proxy");
     expect(fromFlags).toContain("openai-official");
+    expect(fromFlags).not.toContain("volcengine-ark");
     expect(fromFlags).not.toContain("gemini-aistudio");
+  });
+
+  it("does not attach Volcengine Ark to OpenAI model bindings by default", () => {
+    const bindings = getBindingsForRegistry("gpt-4o-mini", "text");
+    expect(bindings.some((b) => b.channel === "volcengine-ark")).toBe(false);
   });
 
   it("gemini-aistudio bindings are not defaultEnabled", () => {

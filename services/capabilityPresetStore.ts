@@ -66,6 +66,9 @@ function deriveEngineForCategory(category: CapabilityCategory, input: CustomAppM
 
 function normalizeGenerate3DPreset(input: NonNullable<CustomAppModule['generate3D']>): NonNullable<CustomAppModule['generate3D']> {
   const out = { ...input };
+  const modelRegistryId = typeof out.modelRegistryId === 'string' ? out.modelRegistryId.trim() : '';
+  if (modelRegistryId) out.modelRegistryId = modelRegistryId;
+  else delete (out as NonNullable<CustomAppModule['generate3D']> & { modelRegistryId?: string }).modelRegistryId;
   const tripoVersion = String(out.tripoModelVersion || '').trim();
   const allowedTripoVersions = new Set([
     'P1-20260311',
@@ -166,6 +169,11 @@ export function normalizeCapabilityPreset(input: CustomAppModule, index: number)
     (typeof rawModel === 'string' && rawModel.trim()) || rawGear || undefined
   );
   const rawTextModel = (input as CustomAppModule).textModelRegistryId;
+  const rawVideoModel = (input as CustomAppModule).videoModelRegistryId;
+  const videoModelRegistryId =
+    category === 'generate_video' && typeof rawVideoModel === 'string' && rawVideoModel.trim()
+      ? rawVideoModel.trim()
+      : undefined;
   const textModelRegistryId =
     category === 'text_to_text' || category === 'image_to_text'
       ? coerceTextModelRegistryId(typeof rawTextModel === 'string' ? rawTextModel : undefined)
@@ -180,6 +188,7 @@ export function normalizeCapabilityPreset(input: CustomAppModule, index: number)
     order,
     imageModelRegistryId,
     ...(textModelRegistryId ? { textModelRegistryId } : {}),
+    ...(videoModelRegistryId ? { videoModelRegistryId } : {}),
     ...(engine ? { engine } : {}),
   };
   delete (base as CustomAppModule & { imageGear?: string }).imageGear;
@@ -188,6 +197,7 @@ export function normalizeCapabilityPreset(input: CustomAppModule, index: number)
     delete (base as any).engine;
     delete (base as any).imageGear;
     delete (base as any).imageModelRegistryId;
+    delete (base as CustomAppModule & { videoModelRegistryId?: string }).videoModelRegistryId;
     delete (base as CustomAppModule & { textModelRegistryId?: string }).textModelRegistryId;
     delete (base as CustomAppModule & { companionHostBundle?: unknown }).companionHostBundle;
     if (base.generate3D) {
@@ -203,6 +213,9 @@ export function normalizeCapabilityPreset(input: CustomAppModule, index: number)
   } else {
     // 非 3D 不应带 generate3D
     delete (base as any).generate3D;
+    if (category !== 'generate_video') {
+      delete (base as CustomAppModule & { videoModelRegistryId?: string }).videoModelRegistryId;
+    }
     if (category !== 'text_to_text' && category !== 'image_to_text') {
       delete (base as CustomAppModule & { textModelRegistryId?: string }).textModelRegistryId;
     }

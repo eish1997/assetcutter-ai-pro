@@ -21,6 +21,8 @@ import {
   getToapisApiKey,
   getToapisBaseUrl,
   getUserApiKey,
+  getVolcengineArkApiKey,
+  getVolcengineArkBaseUrl,
   getVectorengineApiKey,
   getVectorengineBaseUrl,
   isChannelReady,
@@ -32,6 +34,8 @@ import {
   setToapisApiKey,
   setToapisBaseUrl,
   setUserApiKey,
+  setVolcengineArkApiKey,
+  setVolcengineArkBaseUrl,
   setVectorengineApiKey,
   setVectorengineBaseUrl,
   subscribeAiSettingsCrossTab,
@@ -59,6 +63,8 @@ function readChannelDraft(channel: ChannelId): ChannelDraft {
       return readToapisDraft();
     case 'openai-official':
       return { apiKey: getOpenaiApiKey() ?? '', baseUrl: getOpenaiBaseUrl() };
+    case 'volcengine-ark':
+      return { apiKey: getVolcengineArkApiKey() ?? '', baseUrl: getVolcengineArkBaseUrl() };
     case 'vectorengine':
       return { apiKey: getVectorengineApiKey() ?? '', baseUrl: getVectorengineBaseUrl() };
     default:
@@ -79,6 +85,10 @@ function saveChannelDraft(channel: ChannelId, draft: ChannelDraft): void {
     case 'openai-official':
       setOpenaiApiKey(draft.apiKey.trim() || null);
       setOpenaiBaseUrl(draft.baseUrl.trim() || null);
+      break;
+    case 'volcengine-ark':
+      setVolcengineArkApiKey(draft.apiKey.trim() || null);
+      setVolcengineArkBaseUrl(draft.baseUrl.trim() || null);
       break;
     case 'vectorengine':
       setVectorengineApiKey(draft.apiKey.trim() || null);

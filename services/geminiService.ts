@@ -12,6 +12,8 @@ import {
   getToapisApiKey,
   getToapisBaseUrl,
   getUserApiKey,
+  getVolcengineArkApiKey,
+  getVolcengineArkBaseUrl,
   getVectorengineApiKey,
   getVectorengineBaseUrl,
 } from "./settingsStore";
@@ -1703,6 +1705,16 @@ function getClientForChannel(channel: ChannelId, role: "text" | "image" = "text"
       }
       return createOpenAiGeminiClient(getOpenaiBaseUrl(), k) as unknown as GeminiClientLike;
     }
+    case "volcengine-ark": {
+      const k = getVolcengineArkApiKey();
+      if (!k?.trim()) {
+        throw new Error("火山方舟通道需要先在设置中填写 API Key。");
+      }
+      return createOpenAiGeminiClient(getVolcengineArkBaseUrl(), k, {
+        meteringProvider: "volcengine-ark",
+        baseUrlMode: "raw",
+      }) as unknown as GeminiClientLike;
+    }
   }
 }
 
@@ -1757,7 +1769,7 @@ function formatRequestTimeoutMessage(timeoutMs: number, phase?: string): string 
 function usesOpenAiRouteForImage(registryId: string): boolean {
   const id = coerceImageModelRegistryId(registryId);
   const picked = pickBinding(id, "image");
-  if (picked?.channel === "openai-official" || picked?.channel === "toapis-openai") return true;
+  if (picked?.channel === "openai-official" || picked?.channel === "toapis-openai" || picked?.channel === "volcengine-ark") return true;
   return imageModelProviderRoute(id) === "openai";
 }
 

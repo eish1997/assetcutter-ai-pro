@@ -1,13 +1,18 @@
 import {
-  DIALOG_IMAGE_REGISTRY,
   DEFAULT_IMAGE_MODEL_REGISTRY_ID,
   coerceImageModelRegistryId,
   isRegisteredImageModelId,
   LEGACY_IMAGE_GEAR_TO_REGISTRY,
 } from "./imageModels";
-import { TEXT_MODEL_REGISTRY } from "./textModels";
 import { imageModelRouteDisabledReason } from "./imageModelProvider";
 import { pickBinding } from "./pickBinding";
+import {
+  listPublishedWorkspaceImageModels,
+  listPublishedWorkspaceModel3dModels,
+  listPublishedWorkspaceTextModels,
+  listPublishedWorkspaceVideoModels,
+  type PublishedWorkspaceModelRow,
+} from "./publishedModelCatalog";
 import { getEnabledChannels } from "../settingsStore";
 import { setBindingDegradedHint } from "../settingsStore";
 import type { ModelOpsConfig } from "./opsTypes";
@@ -21,6 +26,10 @@ export type EffectiveImageModelRow = {
 };
 
 export type EffectiveTextModelRow = EffectiveImageModelRow;
+export type EffectiveCapabilityModelRow = EffectiveImageModelRow & {
+  canonicalModelId: string;
+  gatewayReady: boolean;
+};
 
 /** @deprecated 请用 `EffectiveImageModelRow` */
 export type EffectiveImageGearRow = EffectiveImageModelRow & { id: string; modelId: string };
@@ -32,8 +41,9 @@ export type EffectiveImageGearRow = EffectiveImageModelRow & { id: string; model
 export function buildEffectiveImageModelRows(ops: ModelOpsConfig): EffectiveImageModelRow[] {
   const allow = ops.imageRegistryAllowlist;
   const allowSet = allow == null || allow.length === 0 ? null : new Set(allow);
+  const publishedRows = listPublishedWorkspaceImageModels(ops);
 
-  const rows: EffectiveImageModelRow[] = DIALOG_IMAGE_REGISTRY.map((e) => {
+  const rows: EffectiveImageModelRow[] = publishedRows.map((e) => {
     const blockedByOps = Boolean(allowSet && !allowSet.has(e.registryId));
     const blockedByCredentials = !pickBinding(e.registryId, "image");
     const disabled = blockedByOps || blockedByCredentials;
@@ -59,7 +69,7 @@ export function buildEffectiveImageModelRows(ops: ModelOpsConfig): EffectiveImag
       "all image models disabled by ops/provider rules; falling back to full registry",
       `channels=${getEnabledChannels().join(",") || "(none)"} reason=${sampleReason}`
     );
-    return DIALOG_IMAGE_REGISTRY.map((e) => ({
+    return publishedRows.map((e) => ({
       registryId: e.registryId,
       label: e.label,
       disabled: false,
@@ -71,8 +81,10 @@ export function buildEffectiveImageModelRows(ops: ModelOpsConfig): EffectiveImag
 }
 
 /** 文本 SKU × 已启用 channel 就绪态（无运营 allowlist） */
-export function buildEffectiveTextModelRows(): EffectiveTextModelRow[] {
-  return TEXT_MODEL_REGISTRY.map((e) => {
+export function buildEffectiveTextModelRows(
+  ops?: Pick<ModelOpsConfig, "publishedCanonicalModelAllowlist">
+): EffectiveTextModelRow[] {
+  return listPublishedWorkspaceTextModels(ops).map((e) => {
     const blockedByCredentials = !pickBinding(e.registryId, "text");
     return {
       registryId: e.registryId,
@@ -81,6 +93,29 @@ export function buildEffectiveTextModelRows(): EffectiveTextModelRow[] {
       disabledReason: blockedByCredentials ? "未配置可用文本输出口或凭证" : undefined,
     };
   });
+}
+
+function buildEffectiveGatewayModelRows(rows: PublishedWorkspaceModelRow[]): EffectiveCapabilityModelRow[] {
+  return rows.map((e) => ({
+    canonicalModelId: e.canonicalModelId,
+    registryId: e.registryId,
+    label: e.label,
+    gatewayReady: e.gatewayReady === true,
+    disabled: e.gatewayReady !== true,
+    disabledReason: e.gatewayReady === true ? undefined : "Gateway 尚未接通该模型",
+  }));
+}
+
+export function buildEffectiveVideoModelRows(
+  ops?: Pick<ModelOpsConfig, "publishedCanonicalModelAllowlist">
+): EffectiveCapabilityModelRow[] {
+  return buildEffectiveGatewayModelRows(listPublishedWorkspaceVideoModels(ops));
+}
+
+export function buildEffectiveModel3dRows(
+  ops?: Pick<ModelOpsConfig, "publishedCanonicalModelAllowlist">
+): EffectiveCapabilityModelRow[] {
+  return buildEffectiveGatewayModelRows(listPublishedWorkspaceModel3dModels(ops));
 }
 
 /** @deprecated 请用 `buildEffectiveImageModelRows` */
@@ -92,8 +127,9 @@ export function buildEffectiveImageGearRows(_provider: unknown, ops: ModelOpsCon
   }));
 }
 
-function defaultModelPreference(): string[] {
-  return DIALOG_IMAGE_REGISTRY.map((e) => e.registryId);
+function defaultModelPreference(rows?: readonly PublishedWorkspaceModelRow[]): string[] {
+  const source = rows?.length ? rows : listPublishedWorkspaceImageModels();
+  return source.map((e) => e.registryId);
 }
 
 function normalizeModelPreference(pref: string[] | undefined): string[] {

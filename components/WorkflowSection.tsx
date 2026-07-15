@@ -176,7 +176,8 @@ import {
   refineWorkflowImageTagsLowCost,
 } from '../services/workflowImageTags';
 import AppIcon from './ui/AppIcon';
-import { ImagePreviewOverlay } from './ImagePreviewOverlay';
+import { AssetPreviewOverlay } from './workflow/AssetPreviewOverlay';
+import { AssetMediaPreviewCenter } from './workflow/AssetMediaPreviewCenter';
 import type {
   ImagePreviewCanvasAdjustControl,
   ImagePreviewLayoutMode,
@@ -223,6 +224,7 @@ const MODEL_3D_DISPLAY_MODES: Array<{ key: Model3DDisplayMode; label: string; ti
 import { resolveCapabilityPreviewSrc } from '../services/capabilityPreviewUrl';
 import { WorkflowCapabilityHoverPreview } from './WorkflowCapabilityHoverPreview';
 import { WorkflowGridImage } from './ProgressivePreviewImage';
+import { AssetCardPreviewRenderer } from './workflow/AssetCardPreviewRenderer';
 import WorkflowPixelBusyOverlay from './WorkflowPixelBusyOverlay';
 import { workflowResultUsesVideoPreview, workflowSafeImgSrc } from '../services/workflowImageDisplay';
 import { previewSrcCacheFingerprint } from '../services/workflowImageThumb';
@@ -408,6 +410,7 @@ import {
 import {
   resolveWorkflowAssetStepBadge,
 } from '../services/workflowAssetStepCount';
+import { resolveWorkflowAssetActiveVariant } from '../services/workflowAssetVariants';
 import { groupCapabilityPresetsByCategory } from './workflow/workflowCapabilityGroups';
 import { WorkflowSidebarColumn, type WorkflowSidebarFavoriteEntry } from './workflow/WorkflowSidebarColumn';
 import WorkflowSpaceMarqueeChrome from './workflow/WorkflowSpaceMarqueeChrome';
@@ -7339,7 +7342,21 @@ ${lineSvg}
       setAssetSetPanelAssetId(null);
     }
   }, [assetSetPanelAsset, assetSetPanelAssetId]);
+  const lightboxActiveVariant = useMemo(
+    () => (lightboxAsset ? resolveWorkflowAssetActiveVariant(lightboxAsset) : null),
+    [lightboxAsset]
+  );
   const lightboxShowsImage = Boolean(lightboxAsset && getAssetDisplayImage(lightboxAsset).trim());
+  const lightboxMediaCenterVariant =
+    lightboxActiveVariant &&
+    (
+      lightboxActiveVariant.kind === 'video' ||
+      lightboxActiveVariant.kind === 'audio' ||
+      lightboxActiveVariant.kind === 'file' ||
+      (lightboxActiveVariant.kind === 'model3d' && !lightboxShowsImage)
+    )
+      ? lightboxActiveVariant
+      : null;
   /** 文字资产当前版本按文本通道展示（非 results 中的位图版本） */
   const lightboxTextAssetOnTextChannel = Boolean(
     lightboxAsset &&
@@ -7968,6 +7985,9 @@ ${lineSvg}
 
   const canWorkflowAssetAddToComposeInput = useCallback(
     (asset: WorkflowAsset) => {
+      if (isWorkflowTextAsset(asset) && workflowAssetCurrentDisplayIsTextChannel(asset)) {
+        return Boolean(workflowAssetToInputText(asset).trim());
+      }
       if (isGroupAsset(asset) || !assetLightboxRasterEligible(asset)) return false;
       return Boolean(getAssetDisplayImage(asset).trim());
     },
@@ -9403,7 +9423,7 @@ ${lineSvg}
       }
       if (clonePlans.length === 0) return { rootIds, cloneTaskSeeds };
       setAssets((prev) => {
-        let next = [...prev];
+        const next = [...prev];
         for (const plan of clonePlans) {
           const src = next.find((a) => a.id === plan.sourceId);
           if (!src) continue;
@@ -9934,12 +9954,38 @@ ${lineSvg}
     [appendQuickComposeDropSlotsForAssetIds]
   );
 
+  const appendQuickComposeTextInput = useCallback(
+    (text: string, sourceLabel = '文本资产') => {
+      const clean = text.trim();
+      if (!clean) {
+        onLog?.('warn', `${sourceLabel}：没有可加入输入框的正文`);
+        return;
+      }
+      setQuickComposeSegmentsTracked((prev) => {
+        const next = [...prev];
+        const last = next[next.length - 1];
+        if (last?.type === 'text') {
+          const prefix = last.value.trim() ? `${last.value.trimEnd()}\n\n` : '';
+          next[next.length - 1] = { ...last, value: `${prefix}${clean}` };
+          return next;
+        }
+        return [...next, newQuickComposeTextSegment(clean)];
+      });
+      onLog?.('info', `${sourceLabel}：已加入底部输入框`);
+    },
+    [onLog, setQuickComposeSegmentsTracked]
+  );
+
   const handleWorkflowAssetAddToComposeInput = useCallback(
     (asset: WorkflowAsset) => {
+      if (isWorkflowTextAsset(asset) && workflowAssetCurrentDisplayIsTextChannel(asset)) {
+        appendQuickComposeTextInput(workflowAssetToInputText(asset), '文本资产');
+        return;
+      }
       const zone: QuickComposeDropZone = lightboxAssetIdRef.current ? 'reference' : 'main';
       appendQuickComposeDropSlotsForAssetIds([asset.id], zone);
     },
-    [appendQuickComposeDropSlotsForAssetIds]
+    [appendQuickComposeDropSlotsForAssetIds, appendQuickComposeTextInput]
   );
 
   const removeQuickComposeMainDropSlot = useCallback((assetId: string) => {
@@ -12910,7 +12956,7 @@ ${lineSvg}
                                       }
                                     }}
                                   >
-                                    {!hasChildDisplayImage && isWorkflowTextAsset(childAsset) ? (
+                                    {hasChildDisplayImage && !hasChildDisplayImage && isWorkflowTextAsset(childAsset) ? (
                                       <div className="relative w-full h-full bg-[#141416] flex flex-col justify-start p-3 text-left">
                                         {childAsset.textTitle?.trim() ? (
                                           <p className="text-[11px] font-bold text-gray-100 line-clamp-2 mb-1.5">
@@ -12926,32 +12972,21 @@ ${lineSvg}
                                         </p>
                                       </div>
                                     ) : (
-                                      <div className="relative w-full h-full bg-[#141416] flex justify-center">
-                                        <WorkflowGridImage
-                                          fullSrc={childGridPreviewSrcEffective}
-                                          cacheKey={childGridCacheKeyEffective}
-                                          mediaVariant={workflowResultUsesVideoPreview(childAsset) ? 'video' : 'image'}
-                                          deferThumbnail={!thumbUnlockKeys.has(groupKey)}
-                                          thumbDecodePriority={thumbHotKeys.has(groupKey) ? 'high' : 'low'}
-                                          imageFetchPriority={thumbHotKeys.has(groupKey) ? 'high' : 'auto'}
-                                          className="relative z-0 block w-full h-full min-h-[5rem]"
-                                          imgClassName="relative z-0 block w-full h-full object-cover"
-                                          draggable={false}
-                                          onDragStart={(e) => e.preventDefault()}
-                                          onIntrinsicSize={(w, h) => {
-                                            applyIntrinsicAspectToAsset(childAsset.id, w, h);
-                                            setCardAspectByAssetId(
-                                              (prev) => mergeCardAspectFromIntrinsic(prev, groupKey, w, h) ?? prev
-                                            );
-                                          }}
-                                        />
-                                        <div
-                                          aria-hidden
-                                          className="absolute inset-0 z-[1]"
-                                          draggable={false}
-                                          onDragStart={(e) => e.preventDefault()}
-                                        />
-                                      </div>
+                                      <AssetCardPreviewRenderer
+                                        asset={childAsset}
+                                        previewSrc={childGridPreviewSrcEffective}
+                                        cacheKey={childGridCacheKeyEffective}
+                                        textDisplay={childTextDisplay}
+                                        deferThumbnail={!thumbUnlockKeys.has(groupKey)}
+                                        thumbDecodePriority={thumbHotKeys.has(groupKey) ? 'high' : 'low'}
+                                        imageFetchPriority={thumbHotKeys.has(groupKey) ? 'high' : 'auto'}
+                                        onIntrinsicSize={(w, h) => {
+                                          applyIntrinsicAspectToAsset(childAsset.id, w, h);
+                                          setCardAspectByAssetId(
+                                            (prev) => mergeCardAspectFromIntrinsic(prev, groupKey, w, h) ?? prev
+                                          );
+                                        }}
+                                      />
                                     )}
                                     {isPendingOnly && (
                                       <div
@@ -13643,7 +13678,7 @@ ${lineSvg}
                             <div className="h-full w-full">
                               <AssetSetGridCard asset={a} />
                             </div>
-                          ) : !hasDisplayImage && isWorkflowTextAsset(a) ? (
+                          ) : hasDisplayImage && !hasDisplayImage && isWorkflowTextAsset(a) ? (
                             <div className="relative w-full h-full bg-[#141416] flex flex-col justify-start p-3 text-left">
                               {a.textTitle?.trim() ? (
                                 <p className="text-[11px] font-bold text-gray-100 line-clamp-2 mb-1.5">
@@ -13659,32 +13694,21 @@ ${lineSvg}
                               </p>
                             </div>
                           ) : (
-                            <div className="relative w-full h-full bg-[#141416] flex justify-center">
-                              <WorkflowGridImage
-                                fullSrc={gridPreviewSrcEffective}
-                                cacheKey={gridPreviewCacheKeyEffective}
-                                mediaVariant={workflowResultUsesVideoPreview(a) ? 'video' : 'image'}
-                                thumbMaxEdge={
-                                  resolveWorkflowStepModelUrls(a, a.displayKey).length > 0 ? 896 : undefined
-                                }
-                                deferThumbnail={!thumbUnlockKeys.has(a.id)}
-                                thumbDecodePriority={thumbHotKeys.has(a.id) ? 'high' : 'low'}
-                                imageFetchPriority={thumbHotKeys.has(a.id) ? 'high' : 'auto'}
-                                className="relative z-0 block w-full h-full min-h-[5rem]"
-                                imgClassName="relative z-0 block w-full h-full object-cover"
-                                draggable={false}
-                                onDragStart={(e) => e.preventDefault()}
-                                onIntrinsicSize={(w, h) => {
-                                  applyIntrinsicAspectToAsset(a.id, w, h);
-                                }}
-                              />
-                              <div
-                                aria-hidden
-                                className="absolute inset-0 z-[1]"
-                                draggable={false}
-                                onDragStart={(e) => e.preventDefault()}
-                              />
-                            </div>
+                            <AssetCardPreviewRenderer
+                              asset={a}
+                              previewSrc={gridPreviewSrcEffective}
+                              cacheKey={gridPreviewCacheKeyEffective}
+                              textDisplay={textDisplay}
+                              thumbMaxEdge={
+                                resolveWorkflowStepModelUrls(a, a.displayKey).length > 0 ? 896 : undefined
+                              }
+                              deferThumbnail={!thumbUnlockKeys.has(a.id)}
+                              thumbDecodePriority={thumbHotKeys.has(a.id) ? 'high' : 'low'}
+                              imageFetchPriority={thumbHotKeys.has(a.id) ? 'high' : 'auto'}
+                              onIntrinsicSize={(w, h) => {
+                                applyIntrinsicAspectToAsset(a.id, w, h);
+                              }}
+                            />
                           )}
                           {isPendingOnly && (
                             <div
@@ -13887,7 +13911,7 @@ ${lineSvg}
 
       {/* 进行中：大图弹窗；外壳统一为 ImagePreviewOverlay，当前版本为纯文本时仅中央为文字编辑区 */}
       {lightboxOverlayMounted && lightboxAssetId && lightboxBootPhase && lightboxAsset && !showArchived && (
-        <ImagePreviewOverlay
+        <AssetPreviewOverlay
           open
           resetKey={lightboxAsset.id}
           bootPhase={lightboxBootPhase}
@@ -13903,7 +13927,9 @@ ${lineSvg}
             )
           }
           imageSrc={
-            lightboxShowsImage || !lightboxTextAssetOnTextChannel
+            lightboxMediaCenterVariant
+              ? undefined
+              : lightboxShowsImage || !lightboxTextAssetOnTextChannel
               ? lightboxShowsImage
                 ? lightboxPreviewUnderlaySrc || getLightboxPreviewImageSrc(lightboxAsset)
                 : getLightboxPreviewImageSrc(lightboxAsset)
@@ -13916,6 +13942,7 @@ ${lineSvg}
                 resetKey={`${lightboxAsset.id}:${lightboxAsset.displayKey}`}
                 title={lightboxAsset.textTitle ?? ''}
                 body={getAssetDisplayText(lightboxAsset)}
+                onAddToComposeInput={(text) => appendQuickComposeTextInput(text, '文本预览')}
                 onPersist={(next) => {
                   const id = lightboxAsset.id;
                   const currentKey = lightboxAsset.displayKey;
@@ -13933,6 +13960,11 @@ ${lineSvg}
                     })
                   );
                 }}
+              />
+            ) : lightboxMediaCenterVariant ? (
+              <AssetMediaPreviewCenter
+                variant={lightboxMediaCenterVariant}
+                model3dDisplayMode={lightboxModel3dDisplayMode}
               />
             ) : undefined
           }
@@ -13972,13 +14004,13 @@ ${lineSvg}
                 onAddToComposeInput={handleWorkflowAssetAddToComposeInput}
                 canAddToComposeInput={canWorkflowAssetAddToComposeInput}
                 getMediaVariant={(asset) => (workflowResultUsesVideoPreview(asset) ? 'video' : 'image')}
+                onSelectVersion={setDisplayKey}
               />
             ) : undefined
           }
           contentLeftInset={
             lightboxChromeReady &&
-            lightboxTextAssetOnTextChannel &&
-            !lightboxShowsImage &&
+            (lightboxMediaCenterVariant || (lightboxTextAssetOnTextChannel && !lightboxShowsImage)) &&
             lightboxStepSideChrome
               ? WORKFLOW_LIGHTBOX_VGP_GRAPH_LEFT_INSET
               : '0px'
@@ -14439,7 +14471,7 @@ ${lineSvg}
           ) : null}
           </>
           ) : null}
-        </ImagePreviewOverlay>
+        </AssetPreviewOverlay>
       )}
 
       {lightboxAsset &&
@@ -15161,7 +15193,7 @@ ${lineSvg}
             }
             if (clonePlans.length > 0) {
               setAssets((prev) => {
-                let next = [...prev];
+                const next = [...prev];
                 for (const plan of clonePlans) {
                   const src = next.find((a) => a.id === plan.sourceId);
                   if (!src) continue;

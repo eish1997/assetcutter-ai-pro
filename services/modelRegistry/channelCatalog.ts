@@ -69,6 +69,16 @@ export const CHANNEL_CATALOG: readonly ChannelCatalogRow[] = [
     hint: "中转站 OpenAI 兼容路径。",
   },
   {
+    channel: "volcengine-ark",
+    label: "火山方舟（OpenAI 兼容）",
+    family: "openai",
+    needsApiKey: true,
+    needsBaseUrl: true,
+    baseUrlPlaceholder: "https://ark.cn-beijing.volces.com/api/v3",
+    keyPlaceholder: "火山方舟 API Key",
+    hint: "火山方舟大模型推理服务；按 OpenAI 兼容协议请求。",
+  },
+  {
     channel: "volcengine-jimeng",
     label: "火山引擎 · 即梦（站点代理）",
     family: "volcengine-jimeng",
@@ -128,4 +138,3 @@ export function channelsForFamily(family: ModelFamily): ChannelCatalogRow[] {
 export function channelsForFamilyPanel(family: ModelFamily): ChannelCatalogRow[] {
   return CHANNEL_CATALOG.filter((r) => r.family === family && !isToapisPathChannel(r.channel));
 }
-

@@ -44,6 +44,14 @@ export const STATIC_SUPPLIER_OUTLETS: readonly SupplierOutlet[] = [
     channelId: "openai-official",
   },
   {
+    outletId: "volcengine-ark",
+    supplierId: "volcengine-ark",
+    label: "火山方舟",
+    upstreamModelId: "*",
+    apiShape: "openai",
+    channelId: "volcengine-ark",
+  },
+  {
     outletId: "gemini-aistudio",
     supplierId: "gemini-aistudio",
     label: "Google AI Studio",

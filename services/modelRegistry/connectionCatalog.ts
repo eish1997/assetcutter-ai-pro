@@ -7,6 +7,7 @@ export type AiConnectionId =
   | "toapis"
   | "vectorengine"
   | "openai-official"
+  | "volcengine-ark"
   | "gemini-aistudio"
   | "volcengine-jimeng";
 
@@ -53,6 +54,14 @@ export const AI_CONNECTION_CATALOG: readonly AiConnectionCatalogRow[] = [
     subtitle: "直连 OpenAI API",
     outletHint: "binding 指向此处的 SKU 走 OpenAI 官方 upstream",
     channels: ["openai-official"],
+    credentialKind: "api-key-base-url",
+  },
+  {
+    id: "volcengine-ark",
+    title: "火山方舟",
+    subtitle: "火山方舟大模型推理服务，使用 OpenAI 兼容接口",
+    outletHint: "binding 指向此处的 SKU 会通过方舟兼容接口发出",
+    channels: ["volcengine-ark"],
     credentialKind: "api-key-base-url",
   },
   {

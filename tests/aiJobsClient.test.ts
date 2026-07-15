@@ -42,15 +42,24 @@ describe('aiJobsClient', () => {
       input: { contents: [{ role: 'user', parts: [{ text: 'render' }] }] },
     });
 
-    expect(requestJson).toHaveBeenCalledWith('https://auth.example/api/ai/jobs', {
-      method: 'POST',
-      body: JSON.stringify({
-        id: 'aijob_client_1',
-        modality: 'image',
-        model: 'gemini-3-pro-image',
-        estimatedCredits: 134,
-        input: { contents: [{ role: 'user', parts: [{ text: 'render' }] }] },
-      }),
+    expect(requestJson).toHaveBeenCalledWith(
+      'https://auth.example/api/ai/jobs',
+      expect.objectContaining({ method: 'POST', body: expect.any(String) })
+    );
+    const [, init] = vi.mocked(requestJson).mock.calls[0];
+    const body = JSON.parse(String(init?.body || '{}'));
+    expect(body).toMatchObject({
+      id: 'aijob_client_1',
+      modality: 'image',
+      model: 'gemini-3-pro-image',
+      canonicalModelId: 'gemini-3-pro-image',
+      registryId: 'gemini-3-pro-image',
+      estimatedCredits: 134,
+      metadata: {
+        canonicalModelId: 'gemini-3-pro-image',
+        registryId: 'gemini-3-pro-image',
+      },
+      input: { contents: [{ role: 'user', parts: [{ text: 'render' }] }] },
     });
   });
 

@@ -28,7 +28,7 @@ describe('AI gateway health snapshot', () => {
         updateJobStatus: 'PATCH /ai-gateway/jobs/:id',
         executeViaAuthApi: 'POST /api/ai/jobs (AI_GATEWAY_EXECUTION_ENABLED=true)',
       },
-      adapters: ['legacy-gemini-proxy', 'jimeng-visual', 'tripo-openapi'],
+      adapters: ['legacy-gemini-proxy', 'openai-official', 'toapis-openai', 'jimeng-visual', 'tripo-openapi'],
       legacyAdapters: ['gemini-proxy'],
       workers: [
         { id: 'text-worker', status: 'active' },

@@ -2,6 +2,7 @@ import fs from 'fs';
 import fsPromises from 'fs/promises';
 import path from 'path';
 import crypto from 'crypto';
+import { fetch as undiciFetch } from 'undici';
 import { USE_POSTGRES, ensurePostgres, getPool } from '../auth-store.js';
 
 const DEFAULT_PROVIDER = 'tripo';
@@ -57,7 +58,7 @@ function normalizeCredentials(value, existing = null) {
   const raw = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
   const prev = existing && typeof existing === 'object' && !Array.isArray(existing) ? existing : {};
   const out = {};
-  for (const key of ['accessKeyId', 'secretAccessKey', 'apiKey', 'baseUrl', 'region']) {
+  for (const key of ['accessKeyId', 'secretAccessKey', 'apiKey', 'baseUrl', 'region', 'secretId', 'secretKey', 'endpointId']) {
     const next = nonEmptyString(raw[key]) || nonEmptyString(prev[key]);
     if (next) out[key] = next;
   }
@@ -164,6 +165,121 @@ function redactKey(row) {
       healthStatus: health.status,
       suggestedAction: health.suggestedAction,
     },
+  };
+}
+
+function providerKeySmokeRequirements(provider) {
+  if (provider === 'volcengine-jimeng') {
+    return {
+      fields: ['credentials.accessKeyId', 'credentials.secretAccessKey'],
+      label: 'VOLCENGINE_ACCESS_KEY / VOLCENGINE_SECRET_KEY',
+    };
+  }
+  if (provider === 'tencent-hunyuan') {
+    return {
+      fields: ['credentials.secretId', 'credentials.secretKey'],
+      label: 'TENCENT_SECRET_ID / TENCENT_SECRET_KEY',
+    };
+  }
+  if (provider === 'volcengine-ark') {
+    return {
+      fields: ['secret', 'credentials.baseUrl'],
+      label: 'API Key / Base URL',
+    };
+  }
+  if (provider === 'openai-official') {
+    return {
+      fields: ['secret'],
+      label: 'API Key',
+    };
+  }
+  if (provider === 'toapis' || provider === 'vectorengine') {
+    return {
+      fields: ['secret', 'credentials.baseUrl'],
+      label: 'API Key / Base URL',
+    };
+  }
+  return {
+    fields: ['secret'],
+    label: 'API Key',
+  };
+}
+
+function valueForSmokeField(row, field) {
+  if (field === 'secret') return nonEmptyString(row.secret);
+  const match = field.match(/^credentials\.(.+)$/);
+  if (match) return nonEmptyString(row.credentials?.[match[1]]);
+  return '';
+}
+
+function missingSmokeFields(row) {
+  const requirements = providerKeySmokeRequirements(row.provider);
+  return requirements.fields.filter((field) => !valueForSmokeField(row, field));
+}
+
+function providerKeySmokeMode(options = {}) {
+  const raw = nonEmptyString(options.mode || process.env.AI_GATEWAY_PROVIDER_KEY_SMOKE_MODE).toLowerCase();
+  if (['shape', 'credentials', 'credentials_only', 'credentialsonly'].includes(raw)) return 'credentials_only';
+  if (['off', 'disabled', 'none'].includes(raw)) return 'disabled';
+  return 'real';
+}
+
+async function readSmokeJsonSafe(response) {
+  const text = await response.text().catch(() => '');
+  if (!text) return {};
+  try {
+    return JSON.parse(text);
+  } catch {
+    return { message: text.slice(0, 500) };
+  }
+}
+
+function smokeErrorMessage(data, fallback) {
+  if (!data || typeof data !== 'object') return fallback;
+  return (
+    nonEmptyString(data.message) ||
+    nonEmptyString(data.msg) ||
+    nonEmptyString(data.error?.message) ||
+    nonEmptyString(data.error) ||
+    nonEmptyString(data.raw) ||
+    fallback
+  );
+}
+
+async function runRealProviderKeySmoke(row, options = {}) {
+  if (row.provider !== 'tripo') {
+    return {
+      supported: false,
+      mode: 'credentials_only',
+      route: null,
+      message: 'Smoke test passed: credentials shape is complete; real upstream probe is not configured for this provider yet',
+    };
+  }
+  const fetchImpl = options.fetchImpl || undiciFetch;
+  const baseUrl = nonEmptyString(options.tripoBaseUrl || process.env.AI_GATEWAY_TRIPO_OPENAPI_BASE_URL) || 'https://api.tripo3d.ai/v2/openapi';
+  const pathName = nonEmptyString(options.tripoSmokePath || process.env.AI_GATEWAY_TRIPO_SMOKE_PATH) || '/user/balance';
+  const url = `${baseUrl.replace(/\/+$/, '')}/${pathName.replace(/^\/+/, '')}`;
+  const started = Date.now();
+  const response = await fetchImpl(url, {
+    method: 'GET',
+    headers: { Authorization: `Bearer ${row.secret}` },
+    signal: AbortSignal.timeout(Number(options.timeoutMs || process.env.AI_GATEWAY_PROVIDER_KEY_SMOKE_TIMEOUT_MS || 15_000)),
+  });
+  const data = await readSmokeJsonSafe(response);
+  const latencyMs = Date.now() - started;
+  if (!response.ok) {
+    const message = `Smoke test failed: upstream HTTP ${response.status} ${smokeErrorMessage(data, 'Tripo probe rejected')}`;
+    const error = new Error(message);
+    error.status = response.status;
+    throw error;
+  }
+  return {
+    supported: true,
+    mode: 'real_upstream',
+    route: 'GET /user/balance',
+    upstreamStatus: response.status,
+    latencyMs,
+    message: 'Smoke test passed: upstream credentials accepted',
   };
 }
 
@@ -827,6 +943,165 @@ export async function applyProviderKeyHealthAutomation(options = {}) {
     windowHours: summary.windowHours,
     actions,
     summary,
+  };
+}
+
+async function smokeTestProviderKeyLegacy(id, options = {}) {
+  const keyId = nonEmptyString(id);
+  if (!keyId) {
+    return {
+      ok: false,
+      testedAt: new Date().toISOString(),
+      providerKeyId: null,
+      provider: null,
+      label: null,
+      status: 'failed',
+      message: '缺少 provider key id',
+      missingFields: [],
+    };
+  }
+  const rows = await listProviderKeys({ includeSecrets: true });
+  const row = rows.find((item) => item.id === keyId);
+  const testedAt = new Date().toISOString();
+  if (!row) {
+    return {
+      ok: false,
+      testedAt,
+      providerKeyId: keyId,
+      provider: null,
+      label: null,
+      status: 'failed',
+      message: 'Provider key not found',
+      missingFields: [],
+    };
+  }
+  const missingFields = missingSmokeFields(row);
+  if (missingFields.length > 0) {
+    const message = `Smoke test failed: missing ${missingFields.join(', ')}`;
+    recordProviderKeyError(keyId, new Error(message), {
+      reason: nonEmptyString(options.reason) || '管理员手动 Smoke Test',
+      retryable: false,
+      status: 400,
+    });
+    return {
+      ok: false,
+      testedAt,
+      providerKeyId: keyId,
+      provider: row.provider,
+      label: row.label,
+      status: 'failed',
+      message,
+      missingFields,
+    };
+  }
+  recordProviderKeySuccess(keyId);
+  return {
+    ok: true,
+    testedAt,
+    providerKeyId: keyId,
+    provider: row.provider,
+    label: row.label,
+    status: 'passed',
+    message: 'Smoke test passed: credentials shape is complete',
+    missingFields: [],
+  };
+}
+
+void smokeTestProviderKeyLegacy;
+
+export async function smokeTestProviderKey(id, options = {}) {
+  const keyId = nonEmptyString(id);
+  const testedAt = new Date().toISOString();
+  const baseResult = {
+    testedAt,
+    providerKeyId: keyId || null,
+    provider: null,
+    label: null,
+    mode: 'credentials_only',
+    route: null,
+    upstreamStatus: null,
+    latencyMs: null,
+    missingFields: [],
+  };
+  if (!keyId) {
+    return {
+      ...baseResult,
+      ok: false,
+      status: 'failed',
+      message: 'Missing provider key id',
+    };
+  }
+  const rows = await listProviderKeys({ includeSecrets: true });
+  const row = rows.find((item) => item.id === keyId);
+  if (!row) {
+    return {
+      ...baseResult,
+      ok: false,
+      status: 'failed',
+      message: 'Provider key not found',
+    };
+  }
+  const resultBase = {
+    ...baseResult,
+    provider: row.provider,
+    label: row.label,
+  };
+  const missingFields = missingSmokeFields(row);
+  if (missingFields.length > 0) {
+    const message = `Smoke test failed: missing ${missingFields.join(', ')}`;
+    recordProviderKeyError(keyId, new Error(message), {
+      reason: nonEmptyString(options.reason) || 'Admin manual Smoke Test',
+      retryable: false,
+      status: 400,
+    });
+    return {
+      ...resultBase,
+      ok: false,
+      status: 'failed',
+      upstreamStatus: 400,
+      message,
+      missingFields,
+    };
+  }
+  const mode = providerKeySmokeMode(options);
+  if (mode === 'disabled' || mode === 'credentials_only') {
+    recordProviderKeySuccess(keyId);
+    return {
+      ...resultBase,
+      ok: true,
+      status: 'passed',
+      message: 'Smoke test passed: credentials shape is complete',
+    };
+  }
+  let probe;
+  try {
+    probe = await runRealProviderKeySmoke(row, options);
+  } catch (error) {
+    recordProviderKeyError(keyId, error, {
+      reason: nonEmptyString(options.reason) || 'Admin manual Smoke Test',
+      retryable: true,
+      status: error?.status || 502,
+    });
+    return {
+      ...resultBase,
+      ok: false,
+      status: 'failed',
+      mode: 'real_upstream',
+      route: row.provider === 'tripo' ? 'GET /user/balance' : null,
+      upstreamStatus: error?.status || null,
+      message: error instanceof Error ? error.message : String(error || 'Smoke test failed'),
+    };
+  }
+  recordProviderKeySuccess(keyId);
+  return {
+    ...resultBase,
+    ok: true,
+    status: 'passed',
+    mode: probe.mode,
+    route: probe.route,
+    upstreamStatus: probe.upstreamStatus || null,
+    latencyMs: probe.latencyMs || null,
+    message: probe.message,
   };
 }
 

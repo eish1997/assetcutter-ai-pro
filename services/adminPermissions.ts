@@ -78,6 +78,6 @@ export const ADMIN_NAV_ITEMS = [
   { label: '注册邀请码', path: '/admin/registration-invites', permission: PERMISSIONS.REGISTRATION_INVITES_WRITE },
   { label: '本地伴侣发行', path: '/admin/companion-artifacts', permission: PERMISSIONS.COMPANION_READ },
   { label: 'Gemini 公平限流', path: '/admin/gemini-fairness', permission: PERMISSIONS.GEMINI_FAIRNESS_READ },
-  { label: 'AI Key 池', path: '/admin/ai-provider-keys', permission: PERMISSIONS.AI_GATEWAY_KEYS_READ },
+  { label: '供应商中心', path: '/admin/ai-provider-keys', permission: PERMISSIONS.AI_GATEWAY_KEYS_READ },
   { label: '角色与权限', path: '/admin/roles', permission: PERMISSIONS.ROLES_READ },
 ] as const;

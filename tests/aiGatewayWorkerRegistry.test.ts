@@ -8,12 +8,12 @@ import {
 describe('AI gateway worker registry', () => {
   it('reports active text/image/video/model3d workers and planned music worker', () => {
     expect(listAiGatewayWorkers()).toEqual([
-      { id: 'text-worker', modalities: ['text'], capabilities: ['text.generate'], adapters: ['legacy-gemini-proxy'], status: 'active' },
+      { id: 'text-worker', modalities: ['text'], capabilities: ['text.generate'], adapters: ['legacy-gemini-proxy', 'openai-official', 'toapis-openai'], status: 'active' },
       {
         id: 'image-worker',
         modalities: ['image'],
         capabilities: ['image.generate', 'image.edit', 'workflow_text_to_image', 'workflow_image_edit'],
-        adapters: ['legacy-gemini-proxy'],
+        adapters: ['legacy-gemini-proxy', 'openai-official', 'toapis-openai'],
         status: 'active',
       },
       {

@@ -59,7 +59,11 @@ describe('CapabilityPresetSection: image_process host_bundle', () => {
     await user.click(addFormCategory!);
     await user.type(screen.getByPlaceholderText('如：拆分组件、切割图片、提取主体'), '扩展包能力');
     await user.click(screen.getByRole('button', { name: /拆分组件/ }));
-    await user.click(screen.getByRole('button', { name: /提交已安装扩展包 run\.json/ }));
+    const hostBundleButton = screen
+      .getAllByRole('button', { name: '本机扩展包' })
+      .find((el) => el.getAttribute('title')?.includes('提交已安装扩展包 run.json'));
+    expect(hostBundleButton).toBeTruthy();
+    await user.click(hostBundleButton!);
     await user.type(
       screen.getByPlaceholderText('与设置页「已安装扩展包」列表中的名称一致'),
       'demo-host-bundle'

@@ -19,6 +19,7 @@ function readViteEnvTrim(key: string): string {
 export type WorkflowVideoJobInput = {
   prompt: string;
   referenceImages?: string[];
+  registryId?: string;
 };
 
 /** `videoUrl` 可为 `https:` 地址或 `data:video/...;base64,...` */
@@ -60,6 +61,7 @@ export async function requestWorkflowVideoWithEndpoint(
     body: JSON.stringify({
       prompt: (input.prompt || "").trim(),
       referenceImages: (input.referenceImages ?? []).filter((s) => typeof s === "string" && s.trim()),
+      registryId: typeof input.registryId === "string" && input.registryId.trim() ? input.registryId.trim() : undefined,
     }),
     cache: "no-store",
   });

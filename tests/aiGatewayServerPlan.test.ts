@@ -125,6 +125,63 @@ describe('server AI gateway job planning', () => {
     expect(plan.adapterRequest.body.aiBackend).toBeUndefined();
   });
 
+  it('plans explicit OpenAI official image jobs through the OpenAI adapter', () => {
+    const plan = createAiGatewayJobPlan({
+      modality: 'image',
+      provider: 'openai-official',
+      model: 'gpt-image-2',
+      input: {
+        contents: [{ role: 'user', parts: [{ text: 'draw a product hero image' }] }],
+        config: { imageConfig: { size: '1024x1024' } },
+      },
+    });
+
+    expect(plan.route).toMatchObject({
+      providerId: 'openai-official',
+      workerId: 'image-worker',
+      adapterId: 'openai-official',
+      channel: 'openai-official',
+      upstreamBackend: 'openai-official',
+    });
+    expect(plan.adapterRequest).toMatchObject({
+      method: 'POST',
+      path: '/images/generations',
+      body: {
+        model: 'gpt-image-2',
+        prompt: 'draw a product hero image',
+        size: '1024x1024',
+      },
+    });
+  });
+
+  it('plans explicit ToAPIs OpenAI-compatible jobs through the shared OpenAI adapter', () => {
+    const plan = createAiGatewayJobPlan({
+      modality: 'text',
+      provider: 'toapis',
+      model: 'gpt-4o-mini',
+      input: {
+        contents: [{ role: 'user', parts: [{ text: 'hello from toapis' }] }],
+      },
+    });
+
+    expect(plan.route).toMatchObject({
+      providerId: 'toapis',
+      workerId: 'text-worker',
+      adapterId: 'toapis-openai',
+      channel: 'toapis-openai',
+      upstreamBackend: 'toapis-openai',
+    });
+    expect(plan.adapterRequest).toMatchObject({
+      method: 'POST',
+      path: '/chat/completions',
+      providerBaseUrl: 'https://toapis.com/v1',
+      body: {
+        model: 'gpt-4o-mini',
+        messages: [{ role: 'user', content: 'hello from toapis' }],
+      },
+    });
+  });
+
   it('uses ops control to pause providers and fall back to the next route', () => {
     const plan = createAiGatewayJobPlan(
       {

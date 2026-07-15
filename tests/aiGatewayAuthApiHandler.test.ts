@@ -35,7 +35,10 @@ describe('AI gateway auth-api facade', () => {
   it('creates a user-owned job and hides provider request bodies from the auth response', async () => {
     const store = createInMemoryAiJobStore();
     const user = { id: 'user_1', username: 'alice' };
-    const result = await createAuthAiGatewayJob({}, imageJobBody('aijob_auth_1'), user, { store });
+    const result = await createAuthAiGatewayJob({}, imageJobBody('aijob_auth_1'), user, {
+      store,
+      modelOpsConfig: { publishedCanonicalModelAllowlist: ['gemini-3-pro-image-preview'] },
+    });
 
     expect(result.status).toBe(202);
     expect(result.body).toMatchObject({
@@ -54,6 +57,225 @@ describe('AI gateway auth-api facade', () => {
     const stored = await store.get('aijob_auth_1');
     expect(stored.job.userId).toBe('user_1');
     expect(stored.job.metadata.authApiFacade).toBe(true);
+    expect(stored.job.metadata.modelPublication).toMatchObject({
+      canonicalModelId: 'gemini-3-pro-image-preview',
+      restricted: true,
+    });
+    expect(stored.job.metadata.modelRouteGuard).toMatchObject({
+      canonicalModelId: 'gemini-3-pro-image-preview',
+      providerId: 'vertex-gemini',
+      executionStatus: 'platform_ready',
+      gatewayExecutionStatus: 'gateway_ready',
+      platformKeyRequired: false,
+    });
+  });
+
+  it('rejects auth-api jobs for models not published to the workspace', async () => {
+    const store = createInMemoryAiJobStore();
+    const user = { id: 'user_1', username: 'alice' };
+
+    await expect(
+      createAuthAiGatewayJob({}, imageJobBody('aijob_auth_blocked'), user, {
+        store,
+        modelOpsConfig: { publishedCanonicalModelAllowlist: ['gpt-image-2'] },
+      })
+    ).rejects.toMatchObject({
+      code: 'AI_GATEWAY_MODEL_NOT_PUBLISHED',
+    });
+
+    expect(await store.get('aijob_auth_blocked')).toBeNull();
+  });
+
+  it('rejects published models whose gateway adapter is still pending', async () => {
+    const store = createInMemoryAiJobStore();
+    const user = { id: 'user_1', username: 'alice' };
+
+    await expect(
+      createAuthAiGatewayJob(
+        {},
+        {
+          id: 'aijob_auth_ark_pending',
+          modality: 'image',
+          model: 'doubao-seedream-5-0',
+          provider: 'volcengine-ark',
+          input: { prompt: 'render' },
+        },
+        user,
+        {
+          store,
+          modelOpsConfig: { publishedCanonicalModelAllowlist: ['doubao-seedream-5-0'] },
+        }
+      )
+    ).rejects.toMatchObject({
+      code: 'AI_GATEWAY_MODEL_ADAPTER_PENDING',
+    });
+
+    expect(await store.get('aijob_auth_ark_pending')).toBeNull();
+  });
+
+  it('rejects platform-key models when no usable provider key is available', async () => {
+    const store = createInMemoryAiJobStore();
+    const user = { id: 'user_1', username: 'alice' };
+
+    await expect(
+      createAuthAiGatewayJob(
+        {},
+        {
+          id: 'aijob_auth_tripo_no_key',
+          modality: 'model3d',
+          provider: 'tripo',
+          model: 'tripo-p1',
+          input: { type: 'image_to_model' },
+        },
+        user,
+        {
+          store,
+          modelOpsConfig: { publishedCanonicalModelAllowlist: ['tripo-p1'] },
+          listProviderKeys: async () => [],
+        }
+      )
+    ).rejects.toMatchObject({
+      code: 'AI_GATEWAY_PROVIDER_KEY_UNAVAILABLE',
+    });
+
+    expect(await store.get('aijob_auth_tripo_no_key')).toBeNull();
+  });
+
+  it('allows Tripo 3D jobs when a usable provider key exists', async () => {
+    const store = createInMemoryAiJobStore();
+    const user = { id: 'user_1', username: 'alice' };
+
+    const result = await createAuthAiGatewayJob(
+      {},
+      {
+        id: 'aijob_auth_tripo_ready',
+        modality: 'model3d',
+        provider: 'tripo',
+        model: 'tripo-p1',
+        input: { type: 'text_to_model', prompt: 'small crate' },
+      },
+      user,
+      {
+        store,
+        modelOpsConfig: { publishedCanonicalModelAllowlist: ['tripo-p1'] },
+        listProviderKeys: async () => [{ provider: 'tripo', enabled: true, hasSecret: true }],
+      }
+    );
+
+    expect(result.status).toBe(202);
+    const stored = await store.get('aijob_auth_tripo_ready');
+    expect(stored.job.metadata.modelRouteGuard).toMatchObject({
+      canonicalModelId: 'tripo-p1',
+      providerId: 'tripo',
+      gatewayExecutionStatus: 'gateway_ready',
+      platformKeyRequired: true,
+    });
+  });
+
+  it('allows Jimeng video jobs when AK/SK provider credentials exist', async () => {
+    const store = createInMemoryAiJobStore();
+    const user = { id: 'user_1', username: 'alice' };
+
+    const result = await createAuthAiGatewayJob(
+      {},
+      {
+        id: 'aijob_auth_jimeng_ready',
+        modality: 'video',
+        provider: 'volcengine-jimeng',
+        model: 'jimeng-video-ti2v-v30-pro',
+        input: { registryId: 'jimeng-video-ti2v-v30-pro', prompt: 'product clip' },
+      },
+      user,
+      {
+        store,
+        modelOpsConfig: { publishedCanonicalModelAllowlist: ['jimeng-video-ti2v-v30-pro'] },
+        listProviderKeys: async () => [{ provider: 'volcengine-jimeng', enabled: true, hasCredentials: true }],
+      }
+    );
+
+    expect(result.status).toBe(202);
+    const stored = await store.get('aijob_auth_jimeng_ready');
+    expect(stored.job.metadata.modelRouteGuard).toMatchObject({
+      canonicalModelId: 'jimeng-video-ti2v-v30-pro',
+      providerId: 'volcengine-jimeng',
+      gatewayExecutionStatus: 'gateway_ready',
+      platformKeyRequired: true,
+    });
+  });
+
+  it('allows OpenAI image jobs when a platform API key exists and pins the provider route', async () => {
+    const store = createInMemoryAiJobStore();
+    const user = { id: 'user_1', username: 'alice' };
+
+    const result = await createAuthAiGatewayJob(
+      {},
+      {
+        id: 'aijob_auth_openai_ready',
+        modality: 'image',
+        model: 'gpt-image-2',
+        input: {
+          contents: [{ role: 'user', parts: [{ text: 'product image' }] }],
+        },
+      },
+      user,
+      {
+        store,
+        modelOpsConfig: { publishedCanonicalModelAllowlist: ['gpt-image-2'] },
+        listProviderKeys: async () => [{ provider: 'openai-official', enabled: true, hasSecret: true }],
+      }
+    );
+
+    expect(result.status).toBe(202);
+    const stored = await store.get('aijob_auth_openai_ready');
+    expect(stored.job.provider).toBe('openai-official');
+    expect(stored.route).toMatchObject({
+      providerId: 'openai-official',
+      adapterId: 'openai-official',
+    });
+    expect(stored.job.metadata.modelRouteGuard).toMatchObject({
+      canonicalModelId: 'gpt-image-2',
+      providerId: 'openai-official',
+      gatewayExecutionStatus: 'gateway_ready',
+      platformKeyRequired: true,
+    });
+  });
+
+  it('allows ToAPIs OpenAI-compatible jobs when explicitly requested and a key exists', async () => {
+    const store = createInMemoryAiJobStore();
+    const user = { id: 'user_1', username: 'alice' };
+
+    const result = await createAuthAiGatewayJob(
+      {},
+      {
+        id: 'aijob_auth_toapis_ready',
+        modality: 'image',
+        provider: 'toapis',
+        model: 'gpt-image-2',
+        input: {
+          contents: [{ role: 'user', parts: [{ text: 'product image via toapis' }] }],
+        },
+      },
+      user,
+      {
+        store,
+        modelOpsConfig: { publishedCanonicalModelAllowlist: ['gpt-image-2'] },
+        listProviderKeys: async () => [{ provider: 'toapis', enabled: true, hasSecret: true }],
+      }
+    );
+
+    expect(result.status).toBe(202);
+    const stored = await store.get('aijob_auth_toapis_ready');
+    expect(stored.job.provider).toBe('toapis');
+    expect(stored.route).toMatchObject({
+      providerId: 'toapis',
+      adapterId: 'toapis-openai',
+    });
+    expect(stored.job.metadata.modelRouteGuard).toMatchObject({
+      canonicalModelId: 'gpt-image-2',
+      providerId: 'toapis',
+      gatewayExecutionStatus: 'gateway_ready',
+      platformKeyRequired: true,
+    });
   });
 
   it('lists only the current user jobs unless admin mode is requested', async () => {

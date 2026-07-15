@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { CustomAppModule } from '../types';
-import { CAPABILITY_PRESETS_KEY } from '../services/capabilityPresetStore';
+import { CAPABILITY_PRESETS_KEY, CAPABILITY_PRESETS_VERSION } from '../services/capabilityPresetStore';
 
 const { memory, resetMemory } = vi.hoisted(() => {
   const memory: Record<string, string> = {};
@@ -51,7 +51,7 @@ describe('capabilityPreset persistence (mirrors CapabilityPresetSection → save
     const raw = memory[CAPABILITY_PRESETS_KEY];
     expect(raw).toBeTruthy();
     const parsed = JSON.parse(raw!) as { version: number; presets: CustomAppModule[] };
-    expect(parsed.version).toBe(4);
+    expect(parsed.version).toBe(CAPABILITY_PRESETS_VERSION);
     const written = parsed.presets.find((p) => p.id === 'ui-hb-roundtrip');
     expect(written?.category).toBe('image_process');
     expect(written?.processor).toBe('host_bundle');
@@ -95,4 +95,3 @@ describe('capabilityPreset persistence (mirrors CapabilityPresetSection → save
     expect(twice?.companionHostBundle).toBeUndefined();
   });
 });
-

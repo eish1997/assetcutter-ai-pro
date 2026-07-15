@@ -197,6 +197,11 @@ import {
   writeAiGatewayOpsControlConfig,
 } from './ai-gateway/ops-control.js';
 import {
+  normalizeModelOpsConfig,
+  readModelOpsConfig,
+  writeModelOpsConfig,
+} from './ai-gateway/model-ops-config-store.js';
+import {
   acquireProviderKey,
   applyProviderKeyHealthAutomation,
   cooldownProviderKey,
@@ -204,6 +209,7 @@ import {
   listProviderKeys,
   restoreProviderKey,
   saveProviderKeys,
+  smokeTestProviderKey,
   summarizeProviderKeyHealth,
 } from './ai-gateway/provider-key-store.js';
 import {
@@ -2456,6 +2462,13 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (path === '/api/model-ops-config' && req.method === 'GET') {
+      const config = await readModelOpsConfig();
+      const { path: _path, storage: _storage, source: _source, updatedByUserId: _updatedByUserId, ...publicConfig } = config;
+      json(res, 200, { ok: true, config: publicConfig });
+      return;
+    }
+
     if (path === '/api/admin/ai/jobs/summary' && req.method === 'GET') {
       const staff = await requirePermission(req, res, PERMISSIONS.TASK_EVENTS_READ);
       if (!staff) return;
@@ -2479,6 +2492,39 @@ const server = http.createServer(async (req, res) => {
       if (!staff) return;
       const config = await readAiGatewayOpsControlConfig();
       json(res, 200, { ok: true, config });
+      return;
+    }
+
+    if (path === '/api/admin/model-ops-config' && req.method === 'GET') {
+      const staff = await requirePermission(req, res, PERMISSIONS.AI_GATEWAY_OPS_READ);
+      if (!staff) return;
+      const config = await readModelOpsConfig();
+      json(res, 200, { ok: true, config });
+      return;
+    }
+
+    if (path === '/api/admin/model-ops-config' && req.method === 'PUT') {
+      const staff = await requirePermission(req, res, PERMISSIONS.AI_GATEWAY_OPS_WRITE);
+      if (!staff) return;
+      const existing = await readModelOpsConfig();
+      let body;
+      try {
+        body = await readBody(req);
+      } catch (err) {
+        json(res, 400, { error: err?.message || 'Invalid JSON' });
+        return;
+      }
+      const config = normalizeModelOpsConfig(body?.config || body);
+      const saved = await writeModelOpsConfig(config, { updatedByUserId: staff.user.id });
+      await createAuditLog({
+        actorUserId: staff.user.id,
+        actorIdentifier: staff.user.username,
+        action: 'admin.model_ops_config_put',
+        meta: { before: existing, after: saved },
+        ip: getClientIp(req),
+        userAgent: req.headers['user-agent'],
+      });
+      json(res, 200, { ok: true, config: saved });
       return;
     }
 
@@ -2643,6 +2689,31 @@ const server = http.createServer(async (req, res) => {
         userAgent: req.headers['user-agent'],
       });
       json(res, 200, { ok: true, keys: saved });
+      return;
+    }
+
+    const providerKeySmokeTestMatch = path.match(/^\/api\/admin\/ai-gateway\/provider-keys\/([^/]+)\/smoke-test$/);
+    if (providerKeySmokeTestMatch && req.method === 'POST') {
+      const staff = await requirePermission(req, res, PERMISSIONS.AI_GATEWAY_KEYS_WRITE);
+      if (!staff) return;
+      const keyId = decodeURIComponent(providerKeySmokeTestMatch[1] || '').trim();
+      const existing = await listProviderKeys({ includeSecrets: true });
+      const target = existing.find((row) => row.id === keyId);
+      if (!target || String(target.id || '').startsWith('env_')) {
+        json(res, 404, { error: 'PROVIDER_KEY_NOT_FOUND', code: 'PROVIDER_KEY_NOT_FOUND' });
+        return;
+      }
+      const result = await smokeTestProviderKey(keyId, { reason: '管理员手动 Smoke Test' });
+      const keys = await listProviderKeys();
+      await createAuditLog({
+        actorUserId: staff.user.id,
+        actorIdentifier: staff.user.username,
+        action: 'admin.ai_gateway_provider_key_smoke_test',
+        meta: { keyId, provider: target.provider, result },
+        ip: getClientIp(req),
+        userAgent: req.headers['user-agent'],
+      });
+      json(res, 200, { ok: result.ok, result, keys });
       return;
     }
 

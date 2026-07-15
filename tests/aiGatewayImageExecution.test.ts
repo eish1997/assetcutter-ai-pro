@@ -56,7 +56,12 @@ describe('aiGatewayImageExecution', () => {
       expect.objectContaining({
         modality: 'image',
         capability: 'image.generate',
-        metadata: expect.not.objectContaining({ traceOnly: true }),
+        canonicalModelId: 'gemini-3.1-flash-image',
+        registryId: 'gemini-3.1-flash-image',
+        metadata: expect.objectContaining({
+          canonicalModelId: 'gemini-3.1-flash-image',
+          registryId: 'gemini-3.1-flash-image',
+        }),
       }),
       expect.objectContaining({ cache: 'no-store' })
     );

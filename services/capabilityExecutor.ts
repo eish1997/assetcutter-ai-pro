@@ -460,6 +460,7 @@ async function executeGenerateVideoPath(
     const out = await workflowGenerateVideo({
       prompt: promptFinal,
       referenceImages: hasImg ? refs : undefined,
+      registryId: preset.videoModelRegistryId,
     });
     return {
       ok: true,
@@ -1582,4 +1583,3 @@ export async function executeCapabilitySet(
     nodeImageOutputs: Object.keys(nodeImageOutputs).length > 0 ? nodeImageOutputs : {},
   };
 }
-

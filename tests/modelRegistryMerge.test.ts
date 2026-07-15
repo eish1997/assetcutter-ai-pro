@@ -1,5 +1,9 @@
 import { describe, expect, it, afterEach, vi } from "vitest";
-import { buildEffectiveImageModelRows, pickCoercedImageModelId } from "../services/modelRegistry/merge";
+import {
+  buildEffectiveImageModelRows,
+  buildEffectiveTextModelRows,
+  pickCoercedImageModelId,
+} from "../services/modelRegistry/merge";
 import {
   DEFAULT_MODEL_OPS_CONFIG,
   _resetModelOpsRemoteStateForTests,
@@ -56,6 +60,37 @@ describe("modelRegistry merge", () => {
     expect(rows.find((x) => x.registryId === "gemini-2.5-flash-image")?.disabled).toBe(false);
     expect(rows.find((x) => x.registryId === "gemini-3.1-flash-image")?.disabled).toBe(true);
     expect(rows.find((x) => x.registryId === "gemini-3-pro-image")?.disabled).toBe(true);
+  });
+
+  it("published canonical allowlist restricts image rows before credential checks", () => {
+    vi.spyOn(settingsStore, "getEnabledChannels").mockReturnValue([
+      "gemini-aistudio",
+      "openai-official",
+    ]);
+    vi.spyOn(settingsStore, "isChannelReady").mockReturnValue(true);
+    vi.spyOn(settingsStore, "getUserApiKey").mockReturnValue("gemini-key");
+    vi.spyOn(settingsStore, "getOpenaiApiKey").mockReturnValue("openai-key");
+
+    const rows = buildEffectiveImageModelRows({
+      ...DEFAULT_MODEL_OPS_CONFIG,
+      publishedCanonicalModelAllowlist: ["gemini-2.5-flash-image"],
+    });
+
+    expect(rows.map((row) => row.registryId)).toEqual(["gemini-2.5-flash-image"]);
+    expect(rows[0]?.disabled).toBe(false);
+  });
+
+  it("published canonical allowlist restricts text rows", () => {
+    vi.spyOn(settingsStore, "getEnabledChannels").mockReturnValue(["openai-official"]);
+    vi.spyOn(settingsStore, "isChannelReady").mockReturnValue(true);
+    vi.spyOn(settingsStore, "getOpenaiApiKey").mockReturnValue("openai-key");
+
+    const rows = buildEffectiveTextModelRows({
+      publishedCanonicalModelAllowlist: ["gpt-4o-mini"],
+    });
+
+    expect(rows.map((row) => row.registryId)).toEqual(["gpt-4o-mini"]);
+    expect(rows[0]?.disabled).toBe(false);
   });
 
   it("pickCoercedImageModelId falls back along preference", () => {

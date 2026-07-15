@@ -15,6 +15,10 @@ export function useWorkflowJustifiedLayout(
   const targetRowHeight = options.targetRowHeight;
   const maxRowHeight = options.maxRowHeight;
   const remeasureKey = options.remeasureKey;
+  const layoutOptions = useMemo(
+    () => ({ gap, targetRowHeight, maxRowHeight }),
+    [gap, targetRowHeight, maxRowHeight]
+  );
 
   useLayoutEffect(() => {
     const el = containerRef.current;
@@ -27,21 +31,25 @@ export function useWorkflowJustifiedLayout(
       setContainerWidth((prev) => (prev === w ? prev : w));
     };
     update();
+    if (typeof ResizeObserver === 'undefined') {
+      window.addEventListener('resize', update);
+      return () => window.removeEventListener('resize', update);
+    }
     const ro = new ResizeObserver(update);
     ro.observe(el);
     return () => ro.disconnect();
   }, [containerRef, items.length, remeasureKey]);
 
   const layout = useMemo(
-    () => computeWorkflowJustifiedLayout(items, containerWidth, options),
-    [items, containerWidth, gap, targetRowHeight, maxRowHeight]
+    () => computeWorkflowJustifiedLayout(items, containerWidth, layoutOptions),
+    [items, containerWidth, layoutOptions]
   );
 
   const boxById = useMemo(() => {
     const map = new Map<string, (typeof layout.boxes)[number]>();
     for (const box of layout.boxes) map.set(box.id, box);
     return map;
-  }, [layout.boxes]);
+  }, [layout]);
 
   return { ...layout, boxById, ready: containerWidth > 0 };
 }

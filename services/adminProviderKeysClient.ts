@@ -135,6 +135,46 @@ export type AdminProviderKeyHealthAutomationResponse = {
   keys: AdminProviderKeyRow[];
 };
 
+export type AdminProviderKeySmokeTestResult = {
+  ok: boolean;
+  testedAt: string;
+  providerKeyId: string | null;
+  provider: string | null;
+  label: string | null;
+  status: 'passed' | 'failed';
+  mode?: 'credentials_only' | 'real_upstream';
+  route?: string | null;
+  upstreamStatus?: number | null;
+  latencyMs?: number | null;
+  message: string;
+  missingFields: string[];
+};
+
+export type AdminProviderKeySmokeTestResponse = {
+  ok?: boolean;
+  result: AdminProviderKeySmokeTestResult;
+  keys: AdminProviderKeyRow[];
+};
+
+export type AdminModelOpsConfig = {
+  version: number;
+  imageRegistryAllowlist?: string[] | null;
+  publishedCanonicalModelAllowlist?: string[] | null;
+  imageModelPreference?: string[] | null;
+  bindingOverrides?: unknown[] | null;
+  wiringEdges?: unknown[] | null;
+  updatedAt?: string | null;
+  updatedByUserId?: string | null;
+  source?: string | null;
+  storage?: string | null;
+  path?: string | null;
+};
+
+export type AdminModelOpsConfigResponse = {
+  ok?: boolean;
+  config: AdminModelOpsConfig;
+};
+
 export async function fetchAdminProviderKeys() {
   return requestJson<AdminProviderKeysResponse>(apiUrl('/api/admin/ai-gateway/provider-keys'), {
     cache: 'no-store',
@@ -207,4 +247,27 @@ export async function restoreAdminProviderKey(id: string) {
       body: JSON.stringify({}),
     }
   );
+}
+
+export async function smokeTestAdminProviderKey(id: string) {
+  return requestJson<AdminProviderKeySmokeTestResponse>(
+    apiUrl(`/api/admin/ai-gateway/provider-keys/${encodeURIComponent(id)}/smoke-test`),
+    {
+      method: 'POST',
+      body: JSON.stringify({}),
+    }
+  );
+}
+
+export async function fetchAdminModelOpsConfig() {
+  return requestJson<AdminModelOpsConfigResponse>(apiUrl('/api/admin/model-ops-config'), {
+    cache: 'no-store',
+  });
+}
+
+export async function saveAdminModelOpsConfig(config: AdminModelOpsConfig) {
+  return requestJson<AdminModelOpsConfigResponse>(apiUrl('/api/admin/model-ops-config'), {
+    method: 'PUT',
+    body: JSON.stringify({ config }),
+  });
 }
