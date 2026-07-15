@@ -44,6 +44,45 @@ const MAX_TEXT_CHARS = 1000;
 const MAX_TRIGGER_CHARS = 120;
 const TOOL_ID_SET = new Set<string>(PROJECT_AGENT_TOOL_IDS);
 
+export const AGENT_SKILL_PERMISSION_LABELS: Record<AgentSkillPermissionLevel, string> = {
+  none: '只读',
+  light: '轻确认',
+  cost: '可能扣费',
+  destructive: '高风险',
+};
+
+export const AGENT_SKILL_SOURCE_LABELS: Record<AgentSkillSource, string> = {
+  local: '本地',
+  imported: '导入',
+  preset: '预设',
+  expert: '专家',
+};
+
+export function agentSkillPermissionLabel(level: AgentSkillPermissionLevel): string {
+  return AGENT_SKILL_PERMISSION_LABELS[level] ?? AGENT_SKILL_PERMISSION_LABELS.none;
+}
+
+export function agentSkillSourceLabel(source: AgentSkillSource): string {
+  return AGENT_SKILL_SOURCE_LABELS[source] ?? AGENT_SKILL_SOURCE_LABELS.imported;
+}
+
+export function summarizeAgentSkillSafety(skill: Pick<AgentSkill, 'permissionLevel' | 'toolIds' | 'safetyWarnings'>): {
+  label: string;
+  details: string[];
+} {
+  const details: string[] = [];
+  details.push(`权限：${agentSkillPermissionLabel(skill.permissionLevel)}`);
+  details.push(`白名单工具：${skill.toolIds.join(' / ') || '无'}`);
+  for (const warning of skill.safetyWarnings ?? []) {
+    const text = cleanText(warning);
+    if (text) details.push(`风险：${text}`);
+  }
+  return {
+    label: agentSkillPermissionLabel(skill.permissionLevel),
+    details,
+  };
+}
+
 type PersistedBlob = {
   version: typeof STORE_VERSION;
   skills: AgentSkill[];
@@ -128,7 +167,7 @@ function detectDangerousText(text: string): string[] {
     ) ||
     /删除|移除|覆盖|发布|付款|扣费|额度|密钥|令牌/.test(text)
   ) {
-    warnings.push('Contains instructions that may modify, delete, publish, bill, or expose secrets.');
+    warnings.push('包含可能修改、删除、发布、扣费或暴露密钥的指令。');
   }
   if (
     /shell|powershell|cmd|terminal|filesystem|file system|network|http|https|webhook|external tool/i.test(
@@ -136,13 +175,13 @@ function detectDangerousText(text: string): string[] {
     ) ||
     /终端|命令行|文件系统|本机|网络|外部工具/.test(text)
   ) {
-    warnings.push('Mentions local, network, or external tool access that skills cannot execute directly.');
+    warnings.push('提到了本机、网络或外部工具访问；Skill 不能直接执行这些能力。');
   }
   if (
     /skip confirmation|without confirmation|do not ask|no need to confirm|bypass/i.test(text) ||
     /跳过确认|无需确认|不需要确认|不要询问|绕过/.test(text)
   ) {
-    warnings.push('Attempts to bypass confirmation.');
+    warnings.push('尝试绕过确认流程。');
   }
   return warnings;
 }

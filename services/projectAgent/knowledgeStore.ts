@@ -38,11 +38,74 @@ export type RetrieveProjectAgentKnowledgeResult = {
   knowledgeIdsInjected: string[];
 };
 
+export type ProjectAgentKnowledgeCategory =
+  | 'product'
+  | 'project'
+  | 'preference'
+  | 'asset_rule';
+
+export type ProjectAgentKnowledgeKindMeta = {
+  category: ProjectAgentKnowledgeCategory;
+  label: string;
+  contextLabel: string;
+};
+
 const STORAGE_BASE = 'ac_project_agent_knowledge_v1';
 const STORE_VERSION = 1 as const;
 const MAX_ENTRIES_PER_PROJECT = 120;
 const MAX_ENTRY_TEXT_CHARS = 4000;
 export const PROJECT_AGENT_KNOWLEDGE_INJECT_CHAR_BUDGET = 2400;
+
+export const PROJECT_AGENT_KNOWLEDGE_KIND_META: Record<
+  ProjectAgentKnowledgeKind,
+  ProjectAgentKnowledgeKindMeta
+> = {
+  product_knowledge: {
+    category: 'product',
+    label: '产品知识',
+    contextLabel: '产品知识',
+  },
+  project_knowledge: {
+    category: 'project',
+    label: '项目知识',
+    contextLabel: '项目知识',
+  },
+  user_preference: {
+    category: 'preference',
+    label: '用户偏好',
+    contextLabel: '用户偏好',
+  },
+  asset_rule: {
+    category: 'asset_rule',
+    label: '资产规则',
+    contextLabel: '资产规则',
+  },
+  preference: {
+    category: 'preference',
+    label: '用户偏好',
+    contextLabel: '用户偏好',
+  },
+  brand_rule: {
+    category: 'asset_rule',
+    label: '品牌/资产规则',
+    contextLabel: '资产规则',
+  },
+  workflow: {
+    category: 'project',
+    label: '项目流程',
+    contextLabel: '项目知识',
+  },
+  style: {
+    category: 'preference',
+    label: '风格偏好',
+    contextLabel: '用户偏好',
+  },
+  note: {
+    category: 'project',
+    label: '项目备注',
+    contextLabel: '项目知识',
+  },
+};
 
 type PersistedBlob = {
   version: typeof STORE_VERSION;
@@ -69,12 +132,30 @@ function looksLikeMediaOrBase64(text: string): boolean {
 
 function isKnowledgeKind(value: unknown): value is ProjectAgentKnowledgeKind {
   return (
+    value === 'product_knowledge' ||
+    value === 'project_knowledge' ||
+    value === 'user_preference' ||
+    value === 'asset_rule' ||
     value === 'preference' ||
     value === 'brand_rule' ||
     value === 'workflow' ||
     value === 'style' ||
     value === 'note'
   );
+}
+
+export function projectAgentKnowledgeKindMeta(
+  kind: ProjectAgentKnowledgeKind
+): ProjectAgentKnowledgeKindMeta {
+  return PROJECT_AGENT_KNOWLEDGE_KIND_META[kind];
+}
+
+export function projectAgentKnowledgeKindLabel(kind: ProjectAgentKnowledgeKind): string {
+  return projectAgentKnowledgeKindMeta(kind).label;
+}
+
+export function projectAgentKnowledgeContextLabel(kind: ProjectAgentKnowledgeKind): string {
+  return projectAgentKnowledgeKindMeta(kind).contextLabel;
 }
 
 export function projectAgentKnowledgeStorageKey(scope: ProjectAgentKnowledgeStoreKey): string {
@@ -271,7 +352,7 @@ export function formatProjectAgentKnowledgeForContext(entries: ProjectAgentKnowl
   return entries
     .map((entry) => {
       const label = entry.label ? `${entry.label}: ` : '';
-      return `- [${entry.kind}] ${label}${entry.text}`;
+      return `- [${projectAgentKnowledgeContextLabel(entry.kind)}] ${label}${entry.text}`;
     })
     .join('\n');
 }

@@ -76,13 +76,13 @@ function withCommonMeta(
   const details = [...(summary.details ?? [])];
 
   if (attachmentCount > 0) {
-    chips.push(`${attachmentCount} attachment${attachmentCount === 1 ? '' : 's'}`);
-    details.push(`${attachmentCount} attached source${attachmentCount === 1 ? '' : 's'} available`);
+    chips.push(`${attachmentCount} 个上下文资产`);
+    details.push(`已挂载 ${attachmentCount} 个可供 Agent 读取的资产或文件`);
   }
 
   if (input.stale) {
-    chips.push('stale');
-    details.push('Context may be out of date');
+    chips.push('可能过期');
+    details.push('当前上下文可能已过期，执行前应重新确认范围');
   }
 
   return {
@@ -108,27 +108,27 @@ export function buildAgentVisibleContextSummary(
   const targetCount = targetIds.length;
 
   if (surface.kind === 'local_edit') {
-    const title = cleanText(surface.title) ?? 'Local edit context';
+    const title = cleanText(surface.title) ?? '当前编辑草稿';
     return withCommonMeta(
       {
         title,
-        chips: ['local edit', targetCount > 0 ? `${targetCount} target${targetCount === 1 ? '' : 's'}` : 'active draft'],
+        chips: ['编辑草稿', targetCount > 0 ? `${targetCount} 个对象` : '当前草稿'],
         targetIds: targetCount > 0 ? targetIds : undefined,
         targetCount: targetCount > 0 ? targetCount : undefined,
         source: 'local_edit',
         risk: 'destructive',
-        details: ['Changes may overwrite the active edit draft'],
+        details: ['可能影响当前编辑草稿，执行前需要确认是否保留原内容'],
       },
       input,
     );
   }
 
   if (surface.kind === 'lightbox') {
-    const title = cleanText(surface.title) ?? 'Large image preview';
+    const title = cleanText(surface.title) ?? '当前预览资产';
     return withCommonMeta(
       {
         title,
-        chips: ['lightbox', targetCount > 0 ? '1 image' : 'preview'],
+        chips: ['当前预览', targetCount > 0 ? '1 个资产' : '预览中'],
         targetIds: targetCount > 0 ? targetIds.slice(0, 1) : undefined,
         targetCount: targetCount > 0 ? 1 : undefined,
         source: 'lightbox',
@@ -142,13 +142,13 @@ export function buildAgentVisibleContextSummary(
     const isBatch = targetCount > 1;
     return withCommonMeta(
       {
-        title: isBatch ? `${targetCount} selected assets` : 'Selected asset',
-        chips: [isBatch ? `${targetCount} selected` : 'selected', ...(activeSelectionId ? ['active'] : [])],
+        title: isBatch ? `已选 ${targetCount} 个资产` : '当前选中资产',
+        chips: [isBatch ? `${targetCount} 个资产` : '选中资产', ...(activeSelectionId ? ['当前目标'] : [])],
         targetIds,
         targetCount,
         source: 'selection',
         risk: isBatch ? 'batch' : 'none',
-        details: activeSelectionId ? [`Active target: ${activeSelectionId}`] : undefined,
+        details: activeSelectionId ? [`当前目标资产：${activeSelectionId}`] : undefined,
       },
       input,
     );
@@ -158,7 +158,7 @@ export function buildAgentVisibleContextSummary(
   if (attachmentCount > 0) {
     return withCommonMeta(
       {
-        title: `${attachmentCount} attachment${attachmentCount === 1 ? '' : 's'}`,
+        title: `已挂载 ${attachmentCount} 个上下文资产`,
         chips: [],
         targetCount: attachmentCount,
         source: 'attachment',
@@ -171,8 +171,8 @@ export function buildAgentVisibleContextSummary(
   if (surface.kind === 'conversation') {
     return withCommonMeta(
       {
-        title: 'Conversation context',
-        chips: ['conversation'],
+        title: '当前对话上下文',
+        chips: ['对话'],
         source: 'conversation',
         risk: 'none',
       },
@@ -182,8 +182,8 @@ export function buildAgentVisibleContextSummary(
 
   return withCommonMeta(
     {
-      title: projectName ? `Project: ${projectName}` : 'Project context',
-      chips: [projectName ?? 'project'],
+      title: projectName ? `当前项目：${projectName}` : '当前项目',
+      chips: [projectName ?? '项目'],
       source: 'project',
       risk: 'none',
     },

@@ -485,7 +485,6 @@ import {
   scheduleProjectAgentThreadBackup,
 } from '../services/projectAgent/threadCloudSync';
 import { maybeCompactProjectAgentThread } from '../services/projectAgent/compaction';
-import { buildAgentVisibleContextSummary } from '../services/projectAgent/visibleContext';
 import {
   addProjectAgentKnowledge,
   deleteProjectAgentKnowledge,
@@ -823,6 +822,14 @@ const LIGHTBOX_ICON_BTN_VIOLET =
   'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-white/[0.05] text-violet-200/95 ring-1 ring-violet-500/25 hover:bg-white/[0.09] hover:text-violet-50 outline-none transition-colors focus-visible:ring-2 focus-visible:ring-blue-500/45';
 
 /** 平面资产字段不存 `panoViewportCrop`（全景独立桶） */
+type LightboxLaunchAnimation = {
+  id: string;
+  src: string;
+  from: { left: number; top: number; width: number; height: number };
+  to: { left: number; top: number; width: number; height: number };
+  active: boolean;
+};
+
 function overlayDocForFlatAsset(doc: ImageOverlayAnnotationDoc): ImageOverlayAnnotationDoc {
   return normalizeImageOverlayDoc({
     ...doc,
@@ -845,7 +852,9 @@ export type QuickComposeChatDockHandlers = {
   isInputDisabled: boolean;
   /** Credits / empty draft / in-flight assistant — disables send only */
   isSendDisabled: boolean;
-  contextSummary: ReturnType<typeof buildAgentVisibleContextSummary>;
+  selectionStatusLabel: string;
+  selectionStatusTone: 'idle' | 'active' | 'preview';
+  onResultPreview: (assetId: string, event: React.MouseEvent<HTMLElement>) => void;
   onSend: () => void;
   onRetry: (messageId: string) => void;
   onAction: (messageId: string, action: AgentSuggestedAction) => void;
@@ -1019,6 +1028,8 @@ const WorkflowSection: React.FC<{
   /** 延后挂载完整预览层，避免与 instant shell 同帧 reconcile */
   const [lightboxOverlayMounted, setLightboxOverlayMounted] = useState(false);
   const [lightboxPlaceholderImageSrc, setLightboxPlaceholderImageSrc] = useState<string | null>(null);
+  const [lightboxLaunchAnimation, setLightboxLaunchAnimation] =
+    useState<LightboxLaunchAnimation | null>(null);
   const {
     phase: lightboxBootPhase,
     beginOpen: beginLightboxBoot,
@@ -2326,6 +2337,63 @@ const WorkflowSection: React.FC<{
       return workflowAssetLightboxRasterEligible(a, getAssetDisplayImage(a));
     },
     [getAssetDisplayImage]
+  );
+
+  const handleQuickComposeResultPreview = useCallback(
+    (assetId: string, event: React.MouseEvent<HTMLElement>) => {
+      const id = String(assetId || '').trim();
+      if (!id) return;
+      const asset = assetsRef.current.find((a) => a.id === id);
+      if (!asset) {
+        onLog?.('warn', '项目 Agent：未找到这张结果资产');
+        return;
+      }
+      if (!assetLightboxRasterEligible(asset)) {
+        onLog?.('warn', '项目 Agent：这张结果暂不支持大图预览');
+        return;
+      }
+      const src = getAssetDisplayImage(asset).trim();
+      if (!src) {
+        openWorkflowLightbox(id);
+        return;
+      }
+      const rect = event.currentTarget.getBoundingClientRect();
+      const vw = typeof window !== 'undefined' ? window.innerWidth : 1200;
+      const vh = typeof window !== 'undefined' ? window.innerHeight : 800;
+      const from = {
+        left: rect.left,
+        top: rect.top,
+        width: Math.max(1, rect.width),
+        height: Math.max(1, rect.height),
+      };
+      const ratio = from.width / Math.max(1, from.height);
+      const maxW = Math.min(vw * 0.72, 960);
+      const maxH = Math.min(vh * 0.72, 720);
+      let width = maxW;
+      let height = width / Math.max(0.01, ratio);
+      if (height > maxH) {
+        height = maxH;
+        width = height * ratio;
+      }
+      const to = {
+        left: (vw - width) / 2,
+        top: (vh - height) / 2,
+        width,
+        height,
+      };
+      const animId = `${id}:${Date.now()}`;
+      setLightboxLaunchAnimation({ id: animId, src, from, to, active: false });
+      window.requestAnimationFrame(() => {
+        setLightboxLaunchAnimation((prev) =>
+          prev?.id === animId ? { ...prev, active: true } : prev
+        );
+      });
+      window.setTimeout(() => {
+        setLightboxLaunchAnimation((prev) => (prev?.id === animId ? null : prev));
+      }, 360);
+      openWorkflowLightbox(id);
+    },
+    [assetLightboxRasterEligible, getAssetDisplayImage, onLog, openWorkflowLightbox]
   );
 
   const companionHydrateKey = useMemo(() => {
@@ -4576,6 +4644,8 @@ ${lineSvg}
     skipPromptCards?: boolean;
     /** 大图预览等：任务挂在该已有图片资产上，不新建隐藏卡片 */
     reuseAssetId?: string;
+    reuseAssetIds?: string[];
+    referenceAssetIds?: string[];
     /** 侧栏对话等：无附图时强制走「文」内置链路，避免误触文生图 RPM */
     preferTextPipelineWhenNoImagesAttached?: boolean;
     /** Phase 2 Agent：强制 compose 模态（覆盖底部芯片） */
@@ -4619,6 +4689,34 @@ ${lineSvg}
     const overrideImgs = invoke?.overrideImageDataUrls?.filter((s) => String(s).trim()) ?? [];
     let mainUrls = overrideImgs.length > 0 ? overrideImgs : queues.mainUrls;
     let referenceUrls = overrideImgs.length > 0 ? [] : queues.referenceUrls;
+    const assetImageById = (assetId: string): string => {
+      const asset = assetsRef.current.find((a) => a.id === assetId.trim());
+      return asset ? getAssetDisplayImage(asset).trim() : '';
+    };
+    const reuseIdsForInput = [
+      ...(invoke?.reuseAssetIds ?? []),
+      ...(invoke?.reuseAssetId ? [invoke.reuseAssetId] : []),
+    ]
+      .map((id) => id.trim())
+      .filter(Boolean)
+      .filter((id, index, arr) => arr.indexOf(id) === index);
+    const invokedReferenceUrls = (invoke?.referenceAssetIds ?? [])
+      .map((id) => assetImageById(id))
+      .filter((src) => src.trim());
+    if (invokedReferenceUrls.length > 0) {
+      referenceUrls = invokedReferenceUrls.slice(0, maxRefs);
+    }
+    if (reuseIdsForInput.length > 0 && mainUrls.length === 0) {
+      const reuseMainUrls = reuseIdsForInput.map((id) => assetImageById(id)).filter(Boolean);
+      const missing = reuseMainUrls.length !== reuseIdsForInput.length;
+      if (reuseMainUrls.length > 0 && !missing) {
+        mainUrls = reuseMainUrls;
+      } else {
+        onLog?.('warn', '项目 Agent：选中的目标资产没有可用预览，无法作为生成输入');
+        lastQuickComposeTaskAssetByIdRef.current = {};
+        return [];
+      }
+    }
     if (mainUrls.length === 0 && referenceUrls.length === 0 && resolved.refs.length > 0) {
       mainUrls = [resolved.refs[0]!];
       referenceUrls = resolved.refs.slice(1);
@@ -5042,29 +5140,41 @@ ${lineSvg}
       return [];
     }
 
-    const reuseId = invoke?.reuseAssetId?.trim();
-    if (reuseId) {
-      const exist = assetsRef.current.find((a) => a.id === reuseId);
-      if (!exist || !assetLightboxRasterEligible(exist)) {
+    const reuseIds = [
+      ...(invoke?.reuseAssetIds ?? []),
+      ...(invoke?.reuseAssetId ? [invoke.reuseAssetId] : []),
+    ]
+      .map((id) => id.trim())
+      .filter(Boolean)
+      .filter((id, index, arr) => arr.indexOf(id) === index);
+    if (reuseIds.length > 0) {
+      const targets = reuseIds
+        .map((id) => assetsRef.current.find((a) => a.id === id) ?? null)
+        .filter((a): a is WorkflowAsset => Boolean(a));
+      if (targets.length !== reuseIds.length || targets.some((a) => !assetLightboxRasterEligible(a))) {
         onLog?.('warn', '底部快捷栏：无法将任务挂到指定资产');
         return [];
       }
-      const built = buildQuickComposeTaskPromptOverride(effectiveUserText, plainMainUrls[0]!, plainRefUrls, maxRef);
-      const { primary, references, promptOverride } = built;
       const newTasks: WorkflowPendingTask[] = [];
-      for (let i = 0; i < countN; i += 1) {
-        newTasks.push({
-          id: uuid(),
-          assetId: reuseId,
-          actionType: QUICK_COMPOSE_PLAIN_I2I_ACTION_ID,
-          inputImage: primary || plainMainUrls[0]!,
-          addedAt: Date.now(),
-          inputSourceDisplayKey: exist.displayKey,
-          ...(references.length > 0 ? { inputImages: references } : {}),
-          ...(promptOverride || plainText ? { promptOverride: promptOverride || plainText } : {}),
-          ...taskOverrides,
-          logContext: plainLog,
-        });
+      for (const target of targets) {
+        const targetMainUrl = getAssetDisplayImage(target).trim();
+        if (!targetMainUrl) continue;
+        const built = buildQuickComposeTaskPromptOverride(effectiveUserText, targetMainUrl, plainRefUrls, maxRef);
+        const { primary, references, promptOverride } = built;
+        for (let i = 0; i < countN; i += 1) {
+          newTasks.push({
+            id: uuid(),
+            assetId: target.id,
+            actionType: QUICK_COMPOSE_PLAIN_I2I_ACTION_ID,
+            inputImage: primary || targetMainUrl,
+            addedAt: Date.now(),
+            inputSourceDisplayKey: target.displayKey,
+            ...(references.length > 0 ? { inputImages: references } : {}),
+            ...(promptOverride || plainText ? { promptOverride: promptOverride || plainText } : {}),
+            ...taskOverrides,
+            logContext: plainLog,
+          });
+        }
       }
       if (newTasks.length === 0) return [];
       rememberTaskAssetById(newTasks);
@@ -5523,6 +5633,9 @@ ${lineSvg}
           ? { preferTextPipelineWhenNoImagesAttached: true }
           : {}),
         ...(mapped.presetCardsOverride ? { presetCardsOverride: mapped.presetCardsOverride } : {}),
+        ...(mapped.reuseAssetId ? { reuseAssetId: mapped.reuseAssetId } : {}),
+        ...(mapped.reuseAssetIds?.length ? { reuseAssetIds: mapped.reuseAssetIds } : {}),
+        ...(mapped.referenceAssetIds?.length ? { referenceAssetIds: mapped.referenceAssetIds } : {}),
       };
 
       const taskIds = submitQuickCompose(invoke);
@@ -5663,23 +5776,44 @@ ${lineSvg}
       ).filter(Boolean);
       const agentMentions: AgentMentionRef[] = mentionsFromSegments(
         quickComposeSegmentsRef.current
-      ).flatMap((m) => {
+      ).reduce<AgentMentionRef[]>((acc, m) => {
         if (m.kind === 'expert') {
-          return [{ kind: 'expert' as const, id: m.expertId, label: m.label }];
+          acc.push({ kind: 'expert', id: m.expertId, label: m.label });
+          return acc;
         }
         if (m.kind === 'asset') {
-          return [{ kind: 'asset' as const, id: m.assetId, label: m.label }];
+          acc.push({ kind: 'asset', id: m.assetId, label: m.label });
+          return acc;
         }
-        return [];
-      });
+        return acc;
+      }, []);
+      const assetMentionIds = agentMentions
+        .filter((m) => m.kind === 'asset')
+        .map((m) => m.id.trim())
+        .filter(Boolean)
+        .filter((id, index, arr) => arr.indexOf(id) === index);
       const hasExpertMention = agentMentions.some((m) => m.kind === 'expert');
-      if (!currentUserText && presetIds.length === 0 && !hasExpertMention) return [];
+      const hasAssetContext =
+        assetMentionIds.length > 0 || selectedAssetIds.size > 0 || Boolean(lightboxAssetIdRef.current);
+      if (!currentUserText && presetIds.length === 0 && !hasExpertMention && !hasAssetContext) return [];
 
-      const primaryUrl = queues.mainUrls[0] || resolved.refs[0] || '';
-      const mainAssetId =
-        primaryUrl
-          ? assetsRef.current.find((a) => getAssetDisplayImage(a) === primaryUrl)?.id
-          : lightboxAssetIdRef.current || undefined;
+      const surface = buildQuickComposeAgentSurface();
+      const selectedTargetIds =
+        surface.kind === 'canvas'
+          ? surface.selectedAssetIds.map((id) => id.trim()).filter(Boolean)
+          : surface.kind === 'lightbox'
+            ? [surface.assetId.trim()].filter(Boolean)
+            : [];
+      const targetAssetIds =
+        selectedTargetIds.length > 0
+          ? selectedTargetIds
+          : assetMentionIds[0]
+            ? [assetMentionIds[0]]
+            : [];
+      const referenceAssetIds =
+        selectedTargetIds.length > 0
+          ? assetMentionIds.filter((id) => !targetAssetIds.includes(id))
+          : assetMentionIds.slice(1);
       const hasEnabled3dPreset = Boolean(
         actionModules.some((m) => m.category === 'generate_3d' && m.enabled !== false) ||
           capabilityPresets.some((m) => m.category === 'generate_3d' && m.enabled !== false)
@@ -5689,8 +5823,9 @@ ${lineSvg}
         mode: quickComposeMode,
         presetIds,
         mentions: agentMentions,
-        surface: buildQuickComposeAgentSurface(),
-        mainAssetId: mainAssetId || undefined,
+        surface,
+        mainAssetId: targetAssetIds[0] || undefined,
+        referenceAssetIds,
         hasEnabled3dPreset,
         enabledSkills: enabledProjectAgentSkills,
         textModel: quickComposeTextModel,
@@ -5914,6 +6049,7 @@ ${lineSvg}
       quickComposeUnderstand,
       quickComposeThreadHasInFlightAssistant,
       onLog,
+      selectedAssetIds,
       setQuickComposeSegmentsTracked,
       updateProjectAgentThread,
     ]
@@ -11928,41 +12064,26 @@ ${lineSvg}
     draftEmpty: !quickComposeHasSendableContent,
   });
 
-  const quickComposeVisibleContextSummary = useMemo(() => {
-    const selectedIds = [...selectedAssetIds].filter(Boolean);
-    const attachmentCount =
-      quickComposeMainDropSlots.length + quickComposeReferenceDropSlots.length;
-    const lb = String(lightboxAssetId || '').trim();
-    const lbAsset = lb ? assets.find((a) => a.id === lb) : null;
-    const projectName = workspaceProjectChrome?.activeProjectName || '工作区';
-    const surface = lb
-      ? {
-          kind: lightboxOverlayDraft?.localEdit ? ('local_edit' as const) : ('lightbox' as const),
-          targetId: lb,
-          title: lbAsset ? workflowAssetMentionLabel(lbAsset) : undefined,
-        }
-      : undefined;
-    return buildAgentVisibleContextSummary({
-      projectName,
-      ...(surface ? { surface } : {}),
-      selection: {
-        ids: selectedIds,
-        activeId: selectedIds[0],
-      },
-      attachmentCount,
-    });
-  }, [
-    assets,
-    lightboxAssetId,
-    lightboxOverlayDraft,
-    quickComposeMainDropSlots.length,
-    quickComposeReferenceDropSlots.length,
-    selectedAssetIds,
-    workspaceProjectChrome?.activeProjectName,
-  ]);
-
   const quickComposeChatDockHandlers = useMemo((): QuickComposeChatDockHandlers | null => {
     if (!quickComposeBarVisible) return null;
+    const selectedIds = [...selectedAssetIds].map((id) => id.trim()).filter(Boolean);
+    const lightboxAsset = lightboxAssetId
+      ? assets.find((a) => a.id === lightboxAssetId)
+      : null;
+    const selectedAssetList = selectedIds
+      .map((id) => assets.find((a) => a.id === id))
+      .filter((a): a is WorkflowAsset => Boolean(a));
+    const selectionStatusTone: QuickComposeChatDockHandlers['selectionStatusTone'] =
+      lightboxAsset ? 'preview' : selectedIds.length > 0 || selectedGroupItemKeys.size > 0 ? 'active' : 'idle';
+    const selectionStatusLabel = lightboxAsset
+      ? `当前预览：${workflowAssetMentionLabel(lightboxAsset)}`
+      : selectedGroupItemKeys.size > 0
+        ? `组内已选 ${selectedGroupItemKeys.size} 个资产`
+        : selectedAssetList.length > 1
+          ? `当前选中 ${selectedAssetList.length} 个资产`
+          : selectedAssetList[0]
+            ? `当前选中：${workflowAssetMentionLabel(selectedAssetList[0])}`
+            : '当前未选中资产';
     const threadTitle = quickComposeInLightbox
       ? (() => {
           const asset = lightboxAssetId
@@ -11986,7 +12107,9 @@ ${lineSvg}
       threadTitle,
       isInputDisabled: quickComposeChatDockInputDisabled,
       isSendDisabled: quickComposeChatDockSubmitDisabled,
-      contextSummary: quickComposeVisibleContextSummary,
+      selectionStatusLabel,
+      selectionStatusTone,
+      onResultPreview: handleQuickComposeResultPreview,
       onSend: handleQuickComposeChatSend,
       onRetry: handleQuickComposeChatRetry,
       onAction: handleQuickComposeChatAction,
@@ -12002,7 +12125,7 @@ ${lineSvg}
     handleQuickComposeChatRetry,
     handleQuickComposeChatAction,
     handleQuickComposeChatCancel,
-    quickComposeVisibleContextSummary,
+    handleQuickComposeResultPreview,
     quickComposeCreditsBypass,
     preferenceScope,
     creditBalance,
@@ -12012,6 +12135,7 @@ ${lineSvg}
     executingQueue,
     getAssetDisplayImage,
     selectedAssetIds,
+    selectedGroupItemKeys,
     workspaceProjectChrome?.activeProjectName,
   ]);
 
@@ -12080,7 +12204,9 @@ ${lineSvg}
       chatDockProps: quickComposeChatDockHandlers
         ? {
             messages: quickComposeChatDockHandlers.messages,
-            contextSummary: quickComposeChatDockHandlers.contextSummary,
+            selectionStatusLabel: quickComposeChatDockHandlers.selectionStatusLabel,
+            selectionStatusTone: quickComposeChatDockHandlers.selectionStatusTone,
+            onResultPreview: quickComposeChatDockHandlers.onResultPreview,
             onRetryMessage: quickComposeChatDockHandlers.onRetry,
             onMessageAction: quickComposeChatDockHandlers.onAction,
             onCancelMessage: quickComposeChatDockHandlers.onCancel,
@@ -15078,6 +15204,36 @@ ${lineSvg}
             expandedDockHostRef={quickComposeWorkspaceDockHostRef}
             onInputExpandedChange={handleQuickComposeInputExpandedChange}
           />,
+          document.body
+        )
+      : null}
+    {lightboxLaunchAnimation && typeof document !== 'undefined'
+      ? createPortal(
+          <div className="pointer-events-none fixed inset-0 z-[12050]" aria-hidden>
+            <img
+              src={lightboxLaunchAnimation.src}
+              alt=""
+              className="absolute rounded-lg object-cover shadow-2xl ring-1 ring-white/20"
+              style={{
+                left: lightboxLaunchAnimation.active
+                  ? lightboxLaunchAnimation.to.left
+                  : lightboxLaunchAnimation.from.left,
+                top: lightboxLaunchAnimation.active
+                  ? lightboxLaunchAnimation.to.top
+                  : lightboxLaunchAnimation.from.top,
+                width: lightboxLaunchAnimation.active
+                  ? lightboxLaunchAnimation.to.width
+                  : lightboxLaunchAnimation.from.width,
+                height: lightboxLaunchAnimation.active
+                  ? lightboxLaunchAnimation.to.height
+                  : lightboxLaunchAnimation.from.height,
+                opacity: lightboxLaunchAnimation.active ? 0.18 : 0.98,
+                transform: lightboxLaunchAnimation.active ? 'scale(1.01)' : 'scale(1)',
+                transition:
+                  'left 320ms cubic-bezier(0.2, 0.8, 0.2, 1), top 320ms cubic-bezier(0.2, 0.8, 0.2, 1), width 320ms cubic-bezier(0.2, 0.8, 0.2, 1), height 320ms cubic-bezier(0.2, 0.8, 0.2, 1), opacity 220ms ease-out, transform 320ms cubic-bezier(0.2, 0.8, 0.2, 1)',
+              }}
+            />
+          </div>,
           document.body
         )
       : null}

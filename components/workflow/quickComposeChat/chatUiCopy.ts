@@ -3,27 +3,22 @@
  */
 
 import type { QuickComposeMessageStatus } from '../../../types/quickComposeThread';
+import type {
+  AgentSuggestedActionConfirmLevel,
+  AgentSuggestedActionConfirmation,
+  AgentSuggestedActionRiskLevel,
+  AgentSuggestedActionTargetScope,
+} from '../../../types/quickComposeThread';
 
 export const PROJECT_AGENT_EMPTY_SUGGESTIONS = [
-  '把当前画面改成更适合电商主图的构图，保留主体材质',
-  '基于这组参考图生成 3 个统一风格的详情页视觉方向',
-  '检查当前项目里哪些素材适合做活动海报，并给出下一步',
-  '把这张图扩展成 16:9 横版场景，补充自然光和环境细节',
-  '帮我整理一个可执行的商品图优化清单',
+  '帮我看一下当前项目下一步最该做什么',
+  '检查选中资产是否统一，并给出处理建议',
+  '把这批资产整理成可交付版本',
+  '根据当前结果继续推进，先给我一个计划',
+  '把这次操作整理成给同事看的说明',
 ];
-export const PROJECT_AGENT_EMPTY_TITLE = '跟项目里的 Agent 说话';
-export const PROJECT_AGENT_EMPTY_HINT = '发送后会先给出计划，再在画布出活。可用 @ 引用资产或专家。';
-export const PROJECT_AGENT_CONTEXT_DETAILS_LABEL = 'Agent 已读取的上下文';
-export const PROJECT_AGENT_CONTEXT_TARGET_LABEL = '目标';
-export const PROJECT_AGENT_CONTEXT_STALE_LABEL = '可能已过期';
-export const PROJECT_AGENT_CONTEXT_RISK_LABEL: Record<
-  'cost' | 'batch' | 'destructive',
-  string
-> = {
-  cost: '额度相关',
-  batch: '批量操作',
-  destructive: '会改动内容',
-};
+export const PROJECT_AGENT_EMPTY_TITLE = '工作区 Agent';
+export const PROJECT_AGENT_EMPTY_HINT = '说说你想完成什么。Agent 会读取当前项目、资产和选择，再给出下一步。';
 
 export const BUSY_STATUS_LABEL: Record<
   Extract<QuickComposeMessageStatus, 'queued' | 'understanding' | 'running'>,
@@ -31,14 +26,14 @@ export const BUSY_STATUS_LABEL: Record<
 > = {
   understanding: '理解中…',
   queued: '排队中…',
-  running: '生成中…',
+  running: '执行中…',
 };
 
 export const COMPOSER_BUSY_HINT = '助手处理中，完成后可继续发送';
 export const COMPOSER_EMPTY_DRAFT_REASON = '请先输入内容';
 export const CLEAR_CHAT_BUSY_REASON = '助手处理中，暂不可清空';
 
-export const ERROR_FALLBACK = '生成失败，可重试或换个说法';
+export const ERROR_FALLBACK = '没完成，可以重试、换个方式，或先只生成方案';
 /** @deprecated 与 `QUICK_COMPOSE_CANCELLED_MESSAGE` 同文；气泡侧请直接用 turnContext 常量 */
 export const ERROR_CANCELLED = '已取消';
 
@@ -48,20 +43,26 @@ export const FAILURE_RECOVERY_RETRY_ACTION = {
   label: '重试',
 } as const;
 
-export const COST_ACTION_CONFIRM_COPY = '此操作会消耗额度，确认继续？';
-export const DESTRUCTIVE_ACTION_CONFIRM_COPY = '此操作会修改或删除现有内容，确认继续？';
+export const COST_ACTION_CONFIRM_COPY = '准备执行：此操作可能消耗积分或处理多个资产，确认继续？';
+export const DESTRUCTIVE_ACTION_CONFIRM_COPY = '准备执行：此操作可能修改、覆盖或删除现有资产，确认继续？';
 export const LIGHT_ACTION_CONFIRM_COPY = '确认执行这个动作？';
 export const MEMORY_ACTION_CONFIRM_COPY =
-  '确认把这次风格、流程或偏好保存为可管理记忆？后续可以在记忆管理里查看和移除。';
+  '确认把这次偏好、流程或资产规则保存为可管理记忆？后续可以在记忆管理里查看和移除。';
 
 export type QuickComposeChatActionLike = {
   kind?: string;
   type?: string;
   action?: string;
+  label?: string;
+  confirmLevel?: AgentSuggestedActionConfirmLevel | string;
+  riskLevel?: AgentSuggestedActionRiskLevel | string;
+  targetScope?: AgentSuggestedActionTargetScope | string;
+  confirmation?: AgentSuggestedActionConfirmation;
   requiresConfirmation?: boolean;
   requiresCost?: boolean;
   cost?: unknown;
   costCredits?: number;
+  estimatedItems?: number;
   destructive?: boolean;
   isDestructive?: boolean;
 };
@@ -138,11 +139,88 @@ function actionHasCost(action: QuickComposeChatActionLike): boolean {
   return action.cost != null && action.cost !== false && action.cost !== 0;
 }
 
+function actionTargetScopeLabel(action: QuickComposeChatActionLike): string {
+  if (action.confirmation?.scope?.trim()) return action.confirmation.scope.trim();
+  const count =
+    typeof action.confirmation?.assetCount === 'number' && action.confirmation.assetCount > 0
+      ? action.confirmation.assetCount
+      : typeof action.estimatedItems === 'number' && action.estimatedItems > 0
+        ? action.estimatedItems
+        : undefined;
+  if (action.targetScope === 'selected') {
+    return count ? `当前选中 ${count} 个资产` : '当前选中资产';
+  }
+  if (action.targetScope === 'current') return '当前资产或当前结果';
+  if (action.targetScope === 'group') return '当前资产组';
+  if (action.targetScope === 'all') return '当前项目全部相关资产';
+  return count ? `${count} 个资产` : '当前对话上下文';
+}
+
+function actionImpactLabel(action: QuickComposeChatActionLike): string {
+  if (action.confirmation?.impact?.trim()) return action.confirmation.impact.trim();
+  if (action.confirmation?.createsVersion) return '会创建新版本，不覆盖原内容';
+  if (action.confirmLevel === 'destructive' || action.destructive || action.isDestructive) {
+    return '可能修改、覆盖或删除现有资产';
+  }
+  if (action.confirmLevel === 'cost' || actionHasCost(action)) {
+    return '会执行一次付费或批量处理动作';
+  }
+  if (action.kind === 'save_memory' || action.type === 'save_memory' || action.action === 'save_memory') {
+    return '会保存为后续可管理的偏好或资产规则';
+  }
+  return '会按当前上下文执行这个动作';
+}
+
+function actionCostLabel(action: QuickComposeChatActionLike): string {
+  if (action.confirmation?.cost?.trim()) return action.confirmation.cost.trim();
+  if (typeof action.costCredits === 'number' && action.costCredits > 0) {
+    return `约 ${action.costCredits} 积分`;
+  }
+  if (typeof action.cost === 'number' && action.cost > 0) {
+    return `约 ${action.cost} 积分`;
+  }
+  if (action.confirmLevel === 'cost' || actionHasCost(action)) return '以执行时实际计费为准';
+  return '不预计消耗积分';
+}
+
+function actionRecoverabilityLabel(action: QuickComposeChatActionLike): string {
+  if (action.confirmation?.recoverability?.trim()) return action.confirmation.recoverability.trim();
+  if (action.confirmLevel === 'destructive' || action.destructive || action.isDestructive) {
+    return '执行前请确认已有备份或可撤销路径';
+  }
+  if (action.confirmation?.createsVersion || action.confirmLevel === 'cost') {
+    return '默认保留原资产，失败后保留可恢复状态';
+  }
+  return '可在后续管理入口调整或移除';
+}
+
+export function quickComposeChatActionConfirmSummary(
+  action: QuickComposeChatActionLike | null | undefined
+): string | undefined {
+  if (!action || !quickComposeChatActionNeedsConfirm(action)) return undefined;
+  const lines = [
+    '准备执行：',
+    `范围：${actionTargetScopeLabel(action)}`,
+    `影响：${actionImpactLabel(action)}`,
+    `预计：${actionCostLabel(action)}`,
+    `可恢复：${actionRecoverabilityLabel(action)}`,
+  ];
+  return lines.join('\n');
+}
+
 export function quickComposeChatActionNeedsConfirm(
   action: QuickComposeChatActionLike | null | undefined
 ): boolean {
   if (!action) return false;
   if (action.requiresConfirmation) return true;
+  if (action.riskLevel === 'medium' || action.riskLevel === 'high') return true;
+  if (
+    action.confirmLevel === 'light' ||
+    action.confirmLevel === 'cost' ||
+    action.confirmLevel === 'destructive'
+  ) {
+    return true;
+  }
   if (action.destructive || action.isDestructive) return true;
   return actionHasCost(action);
 }
@@ -151,10 +229,14 @@ export function quickComposeChatActionConfirmCopy(
   action: QuickComposeChatActionLike | null | undefined
 ): string | undefined {
   if (!action || !quickComposeChatActionNeedsConfirm(action)) return undefined;
+  const summary = quickComposeChatActionConfirmSummary(action);
+  if (summary) return summary;
+  if (action.confirmLevel === 'destructive') return DESTRUCTIVE_ACTION_CONFIRM_COPY;
   if (action.destructive || action.isDestructive) return DESTRUCTIVE_ACTION_CONFIRM_COPY;
   if (action.kind === 'save_memory' || action.type === 'save_memory' || action.action === 'save_memory') {
     return MEMORY_ACTION_CONFIRM_COPY;
   }
+  if (action.confirmLevel === 'cost') return COST_ACTION_CONFIRM_COPY;
   if (actionHasCost(action)) return COST_ACTION_CONFIRM_COPY;
   return LIGHT_ACTION_CONFIRM_COPY;
 }

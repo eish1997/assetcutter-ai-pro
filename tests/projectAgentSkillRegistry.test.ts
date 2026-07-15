@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import {
   __resetAgentSkillRegistryForTests,
   agentSkillRegistryStorageKey,
+  agentSkillPermissionLabel,
+  agentSkillSourceLabel,
   deleteAgentSkill,
   installAgentSkill,
   listAgentSkills,
@@ -9,6 +11,7 @@ import {
   previewAgentSkillImport,
   resolveAgentSkillsForIntent,
   setAgentSkillEnabled,
+  summarizeAgentSkillSafety,
   type AgentSkillRegistryScope,
 } from '../services/projectAgent/skillRegistry';
 
@@ -91,6 +94,13 @@ describe('AgentSkillRegistry (Phase 4)', () => {
     expect(dangerous.ok).toBe(true);
     expect(dangerous.requiresConfirmation).toBe(true);
     expect(dangerous.skill?.permissionLevel).toBe('destructive');
+    expect(agentSkillPermissionLabel('destructive')).toBe('高风险');
+    expect(agentSkillSourceLabel('imported')).toBe('导入');
+    if (dangerous.skill) {
+      const safety = summarizeAgentSkillSafety(dangerous.skill);
+      expect(safety.label).toBe('高风险');
+      expect(safety.details.join(' ')).toContain('白名单工具');
+    }
   });
 
   it('requires confirmation before installing imported or risky skills', () => {

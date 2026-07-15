@@ -143,6 +143,33 @@ function taskAssetIdForHint(
   return assetId?.trim() || undefined;
 }
 
+function resolveLiveTaskAssetId(
+  taskId: string,
+  pending: WorkflowPendingTask[],
+  executingQueue: { tasks: WorkflowPendingTask[] } | null
+): string | undefined {
+  const task = findTaskById(taskId, pending, executingQueue);
+  return task?.assetId?.trim() || undefined;
+}
+
+function mergeTaskAssetHints(
+  taskIds: string[],
+  taskAssetById: Readonly<Record<string, string>> | undefined,
+  pending: WorkflowPendingTask[],
+  executingQueue: { tasks: WorkflowPendingTask[] } | null
+): Record<string, string> | undefined {
+  const next: Record<string, string> = {};
+  for (const rawTaskId of taskIds) {
+    const taskId = String(rawTaskId || '').trim();
+    if (!taskId) continue;
+    const assetId =
+      taskAssetIdForHint(taskId, taskAssetById) ||
+      resolveLiveTaskAssetId(taskId, pending, executingQueue);
+    if (assetId) next[taskId] = assetId;
+  }
+  return Object.keys(next).length ? next : undefined;
+}
+
 /** 任务已出队后：资产上是否已有成功产出（文/图），用于避免误报「任务已结束或失败」。 */
 export function workflowAssetHasSuccessfulOutput(asset: WorkflowAsset | null | undefined): boolean {
   if (!asset) return false;
@@ -320,6 +347,12 @@ export function patchQuickComposeThreadMessageStatuses(
   let changed = false;
   const next = thread.messages.map((m) => {
     if (m.role !== 'assistant' || !m.taskIds?.length) return m;
+    const taskAssetById = mergeTaskAssetHints(
+      m.taskIds,
+      m.taskAssetById,
+      args.pending,
+      args.executingQueue
+    );
 
     // 用户取消粘性：不依赖 cancelledTaskIdsRef 是否仍存活（批 finally / 刷新后可能已空）
     if (m.status === 'error' && isQuickComposeCancelledErrorMessage(m.errorMessage)) {
@@ -329,7 +362,7 @@ export function patchQuickComposeThreadMessageStatuses(
     const status = resolveQuickComposeAssistantMessageStatus({
       ...args,
       taskIds: m.taskIds,
-      taskAssetById: m.taskAssetById,
+      taskAssetById,
     });
     let errorMessage: string | undefined;
     if (status === 'error') {
@@ -354,7 +387,7 @@ export function patchQuickComposeThreadMessageStatuses(
               break;
             }
           }
-          const hintedAssetId = taskAssetIdForHint(taskId, m.taskAssetById);
+          const hintedAssetId = taskAssetIdForHint(taskId, taskAssetById);
           if (hintedAssetId) {
             const err = args.assetErrors.get(hintedAssetId);
             if (err) {
@@ -366,14 +399,26 @@ export function patchQuickComposeThreadMessageStatuses(
         errorMessage = errorMessage ?? m.errorMessage ?? QUICK_COMPOSE_ORPHAN_TASK_ERROR;
       }
     }
+    const messageWithTaskAssets: QuickComposeThreadMessage = taskAssetById
+      ? { ...m, taskAssetById }
+      : m;
     const resultText =
-      status === 'done' ? resolveAssistantResultText(m, args.resolveAssetById) : m.resultText;
+      status === 'done'
+        ? resolveAssistantResultText(messageWithTaskAssets, args.resolveAssetById)
+        : m.resultText;
     const nextError = status === 'error' ? errorMessage : undefined;
     const nextResult = resultText?.trim() || undefined;
+    const nextTaskAssetById =
+      taskAssetById && Object.keys(taskAssetById).length ? taskAssetById : undefined;
+    const prevTaskAssetById =
+      m.taskAssetById && Object.keys(m.taskAssetById).length ? m.taskAssetById : undefined;
+    const taskAssetUnchanged =
+      JSON.stringify(prevTaskAssetById ?? null) === JSON.stringify(nextTaskAssetById ?? null);
     if (
       m.status === status &&
       m.errorMessage === nextError &&
-      (m.resultText || undefined) === nextResult
+      (m.resultText || undefined) === nextResult &&
+      taskAssetUnchanged
     ) {
       return m;
     }
@@ -385,6 +430,8 @@ export function patchQuickComposeThreadMessageStatuses(
     if (nextError) patched.errorMessage = nextError;
     else delete patched.errorMessage;
     if (nextResult) patched.resultText = nextResult;
+    if (nextTaskAssetById) patched.taskAssetById = nextTaskAssetById;
+    else delete patched.taskAssetById;
     return patched;
   });
   return changed ? next : thread.messages;

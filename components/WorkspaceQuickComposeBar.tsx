@@ -147,6 +147,9 @@ export type WorkspaceQuickComposeBarProps = {
     | 'onRetryMessage'
     | 'onMessageAction'
     | 'onCancelMessage'
+    | 'onResultPreview'
+    | 'selectionStatusLabel'
+    | 'selectionStatusTone'
     | 'onOpenPanel'
     | 'onClearChat'
     | 'onLoadEarlier'
@@ -158,7 +161,6 @@ export type WorkspaceQuickComposeBarProps = {
     | 'className'
     | 'expertStudio'
     | 'onTryRunPrompt'
-    | 'contextSummary'
     | 'memoryEntries'
     | 'onToggleMemory'
     | 'onDeleteMemory'
@@ -859,15 +861,15 @@ export default function WorkspaceQuickComposeBar({
     ? trimmedOverride
     : (() => {
         if (composeMode === '3d') {
-          return '生成 3D：请 @ 引用图片资产并可选填说明';
+          return '说说你想把哪些资产转成 3D...';
         }
         if (composeMode === 'text') {
-          return '输入问题或指令（文模式请 @ 文字资产）';
+          return '说说你想整理、分析或说明什么...';
         }
         if (composeMode === 'auto') {
-          return '自动模式：按意图推断文/图/3D（可随时改芯片纠正）';
+          return '说说你想完成什么，Agent 会自动选择方式...';
         }
-        return `想创作什么？输入 @ 引用参考图（最多 ${maxMentions} 张）`;
+        return `说说你想完成什么... 可 @ 资产/项目/专家（最多 ${maxMentions} 个）`;
       })();
 
   const aspectSummary =
@@ -1402,49 +1404,6 @@ export default function WorkspaceQuickComposeBar({
           {inputExpanded ? (
             useChatDock ? (
               <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-                {/* 与悬浮条「上方预设区」同一套放置逻辑，避免侧栏 Dock 路径丢预设 */}
-                <div
-                  className="pointer-events-auto flex shrink-0 flex-col gap-1.5 border-b border-white/[0.06] px-3 py-2"
-                  data-quick-compose-dock-preset-strip
-                  onDragOver={handleMainZoneDragOver}
-                  onDrop={handlePresetOnlyDrop}
-                >
-                  {promptCards.length > 0 ? (
-                    <div className="flex flex-wrap items-center gap-2">
-                      {promptCards.map((c) => (
-                        <div
-                          key={c.key}
-                          className={`group inline-flex max-w-full min-w-0 shrink-0 items-center gap-1.5 px-2.5 py-1.5 ${WORKFLOW_QUICK_COMPOSE_BAR_SHELL}`}
-                          title={c.instruction.trim() ? c.instruction : c.label}
-                        >
-                          <span className="min-w-0 truncate text-[13px] text-gray-100">{c.label}</span>
-                          <button
-                            type="button"
-                            onClick={() => onRemovePromptCard(c.key)}
-                            className="grid h-7 w-7 shrink-0 place-items-center rounded-full text-gray-400 outline-none transition-colors hover:bg-white/[0.08] hover:text-white focus-visible:ring-2 focus-visible:ring-blue-500/50"
-                            aria-label={`移除 ${c.label}`}
-                          >
-                            <svg
-                              viewBox="0 0 24 24"
-                              className="h-3.5 w-3.5"
-                              fill="none"
-                              stroke="currentColor"
-                              strokeWidth="2.2"
-                              strokeLinecap="round"
-                              aria-hidden
-                            >
-                              <path d="M18 6 6 18M6 6l12 12" />
-                            </svg>
-                          </button>
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <div className="rounded-lg border border-dashed border-white/[0.1] px-2 py-2 text-center text-[10px] text-gray-500">
-                      拖入能力预设到此处（与底部悬浮条相同）
-                    </div>
-                  )}
-                </div>
                 <div className="min-h-0 flex-1 overflow-hidden">
                   <ProjectAgentDock
                     title={dockTitle}
@@ -1455,13 +1414,15 @@ export default function WorkspaceQuickComposeBar({
                     onRetryMessage={chatDockProps?.onRetryMessage}
                     onMessageAction={chatDockProps?.onMessageAction}
                     onCancelMessage={chatDockProps?.onCancelMessage}
+                    onResultPreview={chatDockProps?.onResultPreview}
+                    selectionStatusLabel={chatDockProps?.selectionStatusLabel}
+                    selectionStatusTone={chatDockProps?.selectionStatusTone}
                     onClearChat={chatDockProps?.onClearChat}
                     onLoadEarlier={chatDockProps?.onLoadEarlier}
                     canLoadEarlier={chatDockProps?.canLoadEarlier}
                     onExportChat={chatDockProps?.onExportChat}
                     expertStudio={chatDockProps?.expertStudio}
                     onTryRunPrompt={chatDockProps?.onTryRunPrompt}
-                    contextSummary={chatDockProps?.contextSummary}
                     skillEntries={chatDockProps?.skillEntries}
                     onToggleSkill={chatDockProps?.onToggleSkill}
                     onDeleteSkill={chatDockProps?.onDeleteSkill}
@@ -1470,10 +1431,10 @@ export default function WorkspaceQuickComposeBar({
                     memoryEntries={chatDockProps?.memoryEntries}
                     onToggleMemory={chatDockProps?.onToggleMemory}
                     onDeleteMemory={chatDockProps?.onDeleteMemory}
-                    threadEmptyTitle={chatDockProps?.threadEmptyTitle ?? '跟项目里的 Agent 说话'}
+                    threadEmptyTitle={chatDockProps?.threadEmptyTitle ?? '工作区 Agent'}
                     threadEmptyHint={
                       chatDockProps?.threadEmptyHint ??
-                      '发送后会先给出计划，再在画布出活'
+                      '说说你想完成什么。Agent 会读取当前项目、资产和选择。'
                     }
                     segments={segments}
                     onSegmentsChange={onSegmentsChange}

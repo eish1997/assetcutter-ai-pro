@@ -88,6 +88,9 @@ describe('QuickComposeChatDock Skill Registry', () => {
 
     const user = await openSkillPanel(container);
     expect(onOpenPanel).toHaveBeenCalledWith('skills');
+    expect(screen.getByText('本地')).toBeTruthy();
+    expect(screen.getByText('轻确认')).toBeTruthy();
+    expect(screen.getByText(/白名单工具：run_plain_text/)).toBeTruthy();
 
     await user.click(screen.getByRole('button', { name: /安装示例 Skill/ }));
     await user.click(screen.getByRole('button', { name: /导入预览/ }));

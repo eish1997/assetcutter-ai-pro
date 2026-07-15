@@ -29,23 +29,40 @@ export type AgentSuggestedActionConfirmLevel =
   | 'cost'
   | 'destructive';
 
+export type AgentSuggestedActionRiskLevel =
+  | 'read'
+  | 'low'
+  | 'medium'
+  | 'high';
+
 export type AgentSuggestedActionTargetScope =
   | 'current'
   | 'selected'
   | 'group'
   | 'all';
 
+export type AgentSuggestedActionConfirmation = {
+  scope?: string;
+  impact?: string;
+  cost?: string;
+  recoverability?: string;
+  assetCount?: number;
+  createsVersion?: boolean;
+};
+
 export type AgentSuggestedAction = {
   id: string;
   label: string;
   kind: AgentSuggestedActionKind;
   confirmLevel: AgentSuggestedActionConfirmLevel;
+  riskLevel?: AgentSuggestedActionRiskLevel;
   targetScope?: AgentSuggestedActionTargetScope;
   costHint?: {
     estimatedCredits?: number;
     estimatedItems?: number;
     mayExceedBalance?: boolean;
   };
+  confirmation?: AgentSuggestedActionConfirmation;
   payload?: Record<string, unknown>;
 };
 

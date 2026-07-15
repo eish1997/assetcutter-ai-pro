@@ -4,7 +4,7 @@ import { buildAgentVisibleContextSummary } from '../services/projectAgent/visibl
 describe('buildAgentVisibleContextSummary', () => {
   it('summarizes project context when there is no selection', () => {
     expect(buildAgentVisibleContextSummary({ projectName: 'Spring Campaign' })).toEqual({
-      title: 'Project: Spring Campaign',
+      title: '当前项目：Spring Campaign',
       chips: ['Spring Campaign'],
       source: 'project',
       risk: 'none',
@@ -17,13 +17,13 @@ describe('buildAgentVisibleContextSummary', () => {
     });
 
     expect(summary).toMatchObject({
-      title: '2 selected assets',
-      chips: ['2 selected', 'active'],
+      title: '已选 2 个资产',
+      chips: ['2 个资产', '当前目标'],
       targetIds: ['img-1', 'img-2'],
       targetCount: 2,
       source: 'selection',
       risk: 'batch',
-      details: ['Active target: img-2'],
+      details: ['当前目标资产：img-2'],
     });
   });
 
@@ -35,7 +35,7 @@ describe('buildAgentVisibleContextSummary', () => {
 
     expect(summary).toEqual({
       title: 'Hero close-up',
-      chips: ['lightbox', '1 image'],
+      chips: ['当前预览', '1 个资产'],
       targetIds: ['hero-large'],
       targetCount: 1,
       source: 'lightbox',
@@ -49,13 +49,13 @@ describe('buildAgentVisibleContextSummary', () => {
     });
 
     expect(summary).toEqual({
-      title: 'Local edit context',
-      chips: ['local edit', '2 targets'],
+      title: '当前编辑草稿',
+      chips: ['编辑草稿', '2 个对象'],
       targetIds: ['layer-1', 'layer-2'],
       targetCount: 2,
       source: 'local_edit',
       risk: 'destructive',
-      details: ['Changes may overwrite the active edit draft'],
+      details: ['可能影响当前编辑草稿，执行前需要确认是否保留原内容'],
     });
   });
 
@@ -63,12 +63,12 @@ describe('buildAgentVisibleContextSummary', () => {
     const summary = buildAgentVisibleContextSummary({ attachmentCount: 3 });
 
     expect(summary).toEqual({
-      title: '3 attachments',
-      chips: ['3 attachments'],
+      title: '已挂载 3 个上下文资产',
+      chips: ['3 个上下文资产'],
       targetCount: 3,
       source: 'attachment',
       risk: 'cost',
-      details: ['3 attached sources available'],
+      details: ['已挂载 3 个可供 Agent 读取的资产或文件'],
     });
   });
 
@@ -79,12 +79,12 @@ describe('buildAgentVisibleContextSummary', () => {
     });
 
     expect(summary).toEqual({
-      title: 'Project: Archive',
-      chips: ['Archive', 'stale'],
+      title: '当前项目：Archive',
+      chips: ['Archive', '可能过期'],
       source: 'project',
       risk: 'none',
       stale: true,
-      details: ['Context may be out of date'],
+      details: ['当前上下文可能已过期，执行前应重新确认范围'],
     });
   });
 });

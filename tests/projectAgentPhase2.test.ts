@@ -265,6 +265,33 @@ describe('mapPlanToQuickComposeInvoke', () => {
     if (!imgPlan.ok) return;
     const imgInv = mapPlanToQuickComposeInvoke(imgIntent, imgPlan.plan, resolve, key);
     expect(imgInv.forceComposeMode).toBe('image');
+    expect(imgInv.reuseAssetId).toBeUndefined();
+
+    const i2iIntent = buildProjectAgentIntent({
+      mode: 'image',
+      text: '换成雨天',
+      surface: { kind: 'canvas', selectedAssetIds: ['asset-selected'] },
+    });
+    const i2iPlan = planTools(i2iIntent);
+    expect(i2iPlan.ok).toBe(true);
+    if (!i2iPlan.ok) return;
+    const i2iInv = mapPlanToQuickComposeInvoke(i2iIntent, i2iPlan.plan, resolve, key);
+    expect(i2iInv.forceComposeMode).toBe('image');
+    expect(i2iInv.reuseAssetId).toBe('asset-selected');
+    expect(i2iInv.reuseAssetIds).toEqual(['asset-selected']);
+
+    const multiI2iIntent = buildProjectAgentIntent({
+      mode: 'image',
+      text: 'change mood with reference',
+      surface: { kind: 'canvas', selectedAssetIds: ['target-1', 'target-2'] },
+      referenceAssetIds: ['ref-1'],
+    });
+    const multiI2iPlan = planTools(multiI2iIntent);
+    expect(multiI2iPlan.ok).toBe(true);
+    if (!multiI2iPlan.ok) return;
+    const multiI2iInv = mapPlanToQuickComposeInvoke(multiI2iIntent, multiI2iPlan.plan, resolve, key);
+    expect(multiI2iInv.reuseAssetIds).toEqual(['target-1', 'target-2']);
+    expect(multiI2iInv.referenceAssetIds).toEqual(['ref-1']);
 
     const presetIntent = buildProjectAgentIntent({
       mode: 'text',
@@ -288,6 +315,18 @@ describe('mapPlanToQuickComposeInvoke', () => {
     if (!lbPlan.ok) return;
     const lbInv = mapPlanToQuickComposeInvoke(lbIntent, lbPlan.plan, resolve, key);
     expect(lbInv.useLightboxLocalEdit).toBe(true);
+
+    const lbPlainIntent = buildProjectAgentIntent({
+      mode: 'image',
+      text: '增强光影',
+      surface: { kind: 'lightbox', assetId: 'asset-lightbox', displayKey: 'full' },
+    });
+    const lbPlainPlan = planTools(lbPlainIntent);
+    expect(lbPlainPlan.ok).toBe(true);
+    if (!lbPlainPlan.ok) return;
+    const lbPlainInv = mapPlanToQuickComposeInvoke(lbPlainIntent, lbPlainPlan.plan, resolve, key);
+    expect(lbPlainInv.useLightboxLocalEdit).toBeUndefined();
+    expect(lbPlainInv.reuseAssetId).toBe('asset-lightbox');
   });
 
   it('maps multiple invoke_expert steps to invokeExpertIds', () => {

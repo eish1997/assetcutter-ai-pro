@@ -16,7 +16,7 @@ export type ProjectAgentDockProps = QuickComposeChatDockProps;
 
 export default function ProjectAgentDock(props: ProjectAgentDockProps) {
   const {
-    title = '项目 Agent',
+    title = '工作区 Agent',
     threadEmptyTitle = PROJECT_AGENT_EMPTY_TITLE,
     threadEmptyHint = PROJECT_AGENT_EMPTY_HINT,
     ...rest

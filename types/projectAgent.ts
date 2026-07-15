@@ -265,7 +265,17 @@ export type ProjectAgentKnowledgeScope = {
   workspaceProjectId: string;
 };
 
-export type ProjectAgentKnowledgeKind = 'preference' | 'brand_rule' | 'workflow' | 'style' | 'note';
+export type ProjectAgentKnowledgeKind =
+  | 'product_knowledge'
+  | 'project_knowledge'
+  | 'user_preference'
+  | 'asset_rule'
+  /** legacy aliases kept for existing local stores */
+  | 'preference'
+  | 'brand_rule'
+  | 'workflow'
+  | 'style'
+  | 'note';
 
 export type ProjectAgentKnowledgeEntry = {
   id: string;

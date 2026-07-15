@@ -6,6 +6,7 @@ import {
   deleteProjectAgentKnowledge,
   formatProjectAgentKnowledgeForContext,
   listProjectAgentKnowledge,
+  projectAgentKnowledgeKindLabel,
   projectAgentKnowledgeStorageKey,
   retrieveProjectAgentKnowledgeForInject,
   setProjectAgentKnowledgeEnabled,
@@ -85,7 +86,22 @@ describe('ProjectAgentKnowledgeStore (Phase 3)', () => {
     const loaded = listProjectAgentKnowledge(scope);
     expect(loaded[0]?.id).toBe(saved.id);
     expect(loaded[0]?.sourceTurnId).toBe('turn-1');
-    expect(formatProjectAgentKnowledgeForContext(loaded)).toContain('[brand_rule] 品牌禁忌');
+    expect(formatProjectAgentKnowledgeForContext(loaded)).toContain('[资产规则] 品牌禁忌');
+  });
+
+  it('supports commercial knowledge categories with legacy labels', () => {
+    addProjectAgentKnowledge({ scope, kind: 'product_knowledge', text: '免费用户每天最多处理 3 次' });
+    addProjectAgentKnowledge({ scope, kind: 'project_knowledge', text: '本项目目标是电商上新' });
+    addProjectAgentKnowledge({ scope, kind: 'user_preference', text: '常用冷白光' });
+    addProjectAgentKnowledge({ scope, kind: 'asset_rule', text: '导出图必须 1:1' });
+
+    expect(projectAgentKnowledgeKindLabel('product_knowledge')).toBe('产品知识');
+    expect(projectAgentKnowledgeKindLabel('brand_rule')).toBe('品牌/资产规则');
+    const formatted = formatProjectAgentKnowledgeForContext(listProjectAgentKnowledge(scope));
+    expect(formatted).toContain('[产品知识]');
+    expect(formatted).toContain('[项目知识]');
+    expect(formatted).toContain('[用户偏好]');
+    expect(formatted).toContain('[资产规则]');
   });
 
   it('disabled and deleted entries are visible or skipped correctly', () => {

@@ -14,6 +14,12 @@ export type QuickComposeInvokeFromPlan = {
   skipPromptCards: boolean;
   forceComposeMode?: WorkspaceQuickComposeComposeMode;
   preferTextPipelineWhenNoImagesAttached?: boolean;
+  /** Existing asset that should receive generated result history. */
+  reuseAssetId?: string;
+  /** Existing assets that should receive generated result history. */
+  reuseAssetIds?: string[];
+  /** Mentioned/reference assets captured at submit time. */
+  referenceAssetIds?: string[];
   presetCardsOverride?: WorkspaceQuickComposePromptCard[];
   /** Host should call lightbox local-edit pipeline instead of submitQuickCompose. */
   useLightboxLocalEdit?: boolean;
@@ -28,6 +34,41 @@ export type ResolvePresetCardFn = (presetId: string) => {
   label: string;
   instruction: string;
 } | null;
+
+function resolveMainAssetId(intent: ProjectAgentIntent, step?: AgentPlannedTool): string | undefined {
+  const fromStep = String(step?.args?.mainAssetId ?? step?.args?.assetId ?? '').trim();
+  if (fromStep) return fromStep;
+  if (intent.mainAssetId?.trim()) return intent.mainAssetId.trim();
+  if (intent.surface.kind === 'lightbox') return intent.surface.assetId.trim() || undefined;
+  if (intent.surface.kind === 'canvas') {
+    return intent.surface.selectedAssetIds.find((id) => id.trim())?.trim();
+  }
+  return undefined;
+}
+
+function resolveMainAssetIds(intent: ProjectAgentIntent, step?: AgentPlannedTool): string[] {
+  const fromStep = step?.args?.mainAssetIds;
+  if (Array.isArray(fromStep)) {
+    return fromStep.map((id) => String(id || '').trim()).filter(Boolean);
+  }
+  if (intent.surface.kind === 'canvas' && intent.surface.selectedAssetIds.length > 1) {
+    return intent.surface.selectedAssetIds.map((id) => id.trim()).filter(Boolean);
+  }
+  const one = resolveMainAssetId(intent, step);
+  if (one) return [one];
+  if (intent.surface.kind === 'canvas') {
+    return intent.surface.selectedAssetIds.map((id) => id.trim()).filter(Boolean);
+  }
+  return [];
+}
+
+function resolveReferenceAssetIds(intent: ProjectAgentIntent, step?: AgentPlannedTool): string[] {
+  const fromStep = step?.args?.referenceAssetIds;
+  if (Array.isArray(fromStep)) {
+    return fromStep.map((id) => String(id || '').trim()).filter(Boolean);
+  }
+  return (intent.referenceAssetIds ?? []).map((id) => id.trim()).filter(Boolean);
+}
 
 export function mapPlanToQuickComposeInvoke(
   intent: ProjectAgentIntent,
@@ -79,7 +120,15 @@ export function mapPlanToQuickComposeInvoke(
     };
   }
   if (first.toolId === 'run_plain_t2i' || first.toolId === 'run_plain_i2i') {
-    return { ...base, forceComposeMode: 'image' };
+    const reuseAssetIds = first.toolId === 'run_plain_i2i' ? resolveMainAssetIds(intent, first) : [];
+    const referenceAssetIds = resolveReferenceAssetIds(intent, first);
+    return {
+      ...base,
+      forceComposeMode: 'image',
+      ...(reuseAssetIds[0] ? { reuseAssetId: reuseAssetIds[0] } : {}),
+      ...(reuseAssetIds.length ? { reuseAssetIds } : {}),
+      ...(referenceAssetIds.length ? { referenceAssetIds } : {}),
+    };
   }
   if (first.toolId === 'run_plain_3d') {
     return { ...base, forceComposeMode: '3d' };

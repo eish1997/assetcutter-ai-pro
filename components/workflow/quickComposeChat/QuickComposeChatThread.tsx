@@ -16,6 +16,7 @@ export type QuickComposeChatThreadProps = {
   onRetryMessage?: (messageId: string) => void;
   onMessageAction?: (messageId: string, action: AgentSuggestedAction) => void;
   onCancelMessage?: (messageId: string) => void;
+  onResultPreview?: (assetId: string, event: React.MouseEvent<HTMLElement>) => void;
   emptyStateTitle?: string;
   emptyStateHint?: string;
   emptyStateSuggestions?: string[];
@@ -30,17 +31,24 @@ export default function QuickComposeChatThread({
   onRetryMessage,
   onMessageAction,
   onCancelMessage,
+  onResultPreview,
   emptyStateTitle = PROJECT_AGENT_EMPTY_TITLE,
   emptyStateHint = PROJECT_AGENT_EMPTY_HINT,
   emptyStateSuggestions = PROJECT_AGENT_EMPTY_SUGGESTIONS,
   onEmptySuggestionClick,
 }: QuickComposeChatThreadProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
-  const bottomRef = useRef<HTMLDivElement>(null);
   const lastMessage = messages[messages.length - 1];
+  const orderedMessages = [...messages].reverse();
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+    const el = scrollRef.current;
+    if (!el) return;
+    if (typeof el.scrollTo === 'function') {
+      el.scrollTo({ top: 0, behavior: 'smooth' });
+    } else {
+      el.scrollTop = 0;
+    }
   }, [messages.length, lastMessage?.id, lastMessage?.status, lastMessage?.displayResultText]);
 
   return (
@@ -88,16 +96,16 @@ export default function QuickComposeChatThread({
         </div>
       ) : (
         <div className="flex flex-col gap-2.5 px-3 py-3">
-          {messages.map((msg) => (
+          {orderedMessages.map((msg) => (
             <QuickComposeChatMessage
               key={msg.id}
               message={msg}
               onRetry={onRetryMessage}
               onAction={onMessageAction}
               onCancel={onCancelMessage}
+              onResultPreview={onResultPreview}
             />
           ))}
-          <div ref={bottomRef} className="h-px shrink-0" aria-hidden />
         </div>
       )}
     </div>

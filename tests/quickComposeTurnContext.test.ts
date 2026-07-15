@@ -142,6 +142,7 @@ describe('quickComposeTurnContext', () => {
       })
     ).toBe('pseudo block');
   });
+
 });
 
 const emptyRuntime = {
@@ -390,6 +391,34 @@ describe('patchQuickComposeThreadMessageStatuses', () => {
     expect(messages[0].status).toBe('done');
     expect(messages[0].resultText).toBe('气泡正文');
     expect(messages[0].errorMessage).toBeUndefined();
+  });
+  it('persists taskAssetById from live queue so result thumbs can resolve after completion', () => {
+    const messages = patchQuickComposeThreadMessageStatuses(
+      {
+        messages: [
+          msg({
+            id: 'a1',
+            role: 'assistant',
+            text: '璁″垝锛氬浘鐢熷浘',
+            status: 'queued',
+            taskIds: ['t1'],
+          }),
+        ],
+      },
+      {
+        ...emptyRuntime,
+        pending: [
+          {
+            id: 't1',
+            assetId: 'asset-1',
+            actionType: 'gen',
+            inputImage: 'data:image/png;base64,src',
+            addedAt: 1,
+          },
+        ],
+      }
+    );
+    expect(messages[0].taskAssetById).toEqual({ t1: 'asset-1' });
   });
 });
 

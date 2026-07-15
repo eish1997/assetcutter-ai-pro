@@ -3,7 +3,7 @@ import {
   COMPOSER_BUSY_HINT,
   COMPOSER_EMPTY_DRAFT_REASON,
   FAILURE_RECOVERY_RETRY_ACTION,
-  LIGHT_ACTION_CONFIRM_COPY,
+  quickComposeChatActionConfirmSummary,
   quickComposeChatActionConfirmCopy,
   quickComposeChatActionNeedsConfirm,
   resolveComposerSubmitDisabledReason,
@@ -102,20 +102,51 @@ describe('quick compose action fallback copy (Phase 1)', () => {
 
   it('requires confirmation for cost and destructive actions', () => {
     expect(quickComposeChatActionNeedsConfirm({ kind: 'generate', requiresCost: true })).toBe(true);
-    expect(quickComposeChatActionConfirmCopy({ kind: 'generate', costCredits: 1 })).toContain('额度');
+    expect(quickComposeChatActionConfirmCopy({ kind: 'generate', costCredits: 1 })).toContain('约 1 积分');
 
     expect(quickComposeChatActionNeedsConfirm({ kind: 'delete_asset', destructive: true })).toBe(true);
-    expect(quickComposeChatActionConfirmCopy({ kind: 'delete_asset', destructive: true })).toContain('修改或删除');
+    expect(quickComposeChatActionConfirmCopy({ kind: 'delete_asset', destructive: true })).toContain('修改、覆盖或删除');
 
     expect(
       quickComposeChatActionConfirmCopy({
         kind: 'save_memory',
         requiresConfirmation: true,
       })
-    ).toContain('记忆');
+    ).toContain('偏好或资产规则');
 
     expect(quickComposeChatActionConfirmCopy({ kind: 'save_preset', requiresConfirmation: true })).toBe(
-      LIGHT_ACTION_CONFIRM_COPY
+      [
+        '准备执行：',
+        '范围：当前对话上下文',
+        '影响：会按当前上下文执行这个动作',
+        '预计：不预计消耗积分',
+        '可恢复：可在后续管理入口调整或移除',
+      ].join('\n')
+    );
+  });
+
+  it('builds commercial confirmation summary with scope, impact, cost and recoverability', () => {
+    expect(
+      quickComposeChatActionConfirmSummary({
+        kind: 'apply',
+        confirmLevel: 'cost',
+        riskLevel: 'medium',
+        targetScope: 'selected',
+        estimatedItems: 3,
+        confirmation: {
+          impact: '会创建新版本，不覆盖原内容',
+          cost: '约 12 积分',
+          recoverability: '保留原资产',
+        },
+      })
+    ).toBe(
+      [
+        '准备执行：',
+        '范围：当前选中 3 个资产',
+        '影响：会创建新版本，不覆盖原内容',
+        '预计：约 12 积分',
+        '可恢复：保留原资产',
+      ].join('\n')
     );
   });
 

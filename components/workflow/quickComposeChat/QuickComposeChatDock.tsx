@@ -10,14 +10,16 @@ import type {
   AgentSkill,
 } from '../../../types/projectAgent';
 import { ExpertStudio } from '../../project-agent/ExpertStudio';
+import { projectAgentKnowledgeKindLabel } from '../../../services/projectAgent/knowledgeStore';
+import {
+  agentSkillPermissionLabel,
+  agentSkillSourceLabel,
+  summarizeAgentSkillSafety,
+} from '../../../services/projectAgent/skillRegistry';
 import { WORKFLOW_QUICK_COMPOSE_DOCKED_WIDTH_CLASS } from '../workflowSectionUiConstants';
 import {
   CLEAR_CHAT_BUSY_REASON,
   COMPOSER_BUSY_HINT,
-  PROJECT_AGENT_CONTEXT_DETAILS_LABEL,
-  PROJECT_AGENT_CONTEXT_RISK_LABEL,
-  PROJECT_AGENT_CONTEXT_STALE_LABEL,
-  PROJECT_AGENT_CONTEXT_TARGET_LABEL,
   PROJECT_AGENT_EMPTY_HINT,
   PROJECT_AGENT_EMPTY_SUGGESTIONS,
   PROJECT_AGENT_EMPTY_TITLE,
@@ -32,17 +34,6 @@ export type QuickComposeChatDockExpertStudioKey = {
 };
 
 export type QuickComposeChatDockPanelKey = 'memory' | 'skills';
-
-export type QuickComposeChatContextRisk = 'none' | 'cost' | 'batch' | 'destructive';
-
-export type QuickComposeChatContextSummary = {
-  title?: string;
-  chips?: string[];
-  risk?: QuickComposeChatContextRisk | null;
-  stale?: boolean;
-  targetCount?: number;
-  details?: string[];
-};
 
 export type QuickComposeChatDockProps = {
   /** Header title (default: 快捷生成) */
@@ -67,6 +58,9 @@ export type QuickComposeChatDockProps = {
   onRetryMessage?: (messageId: string) => void;
   onMessageAction?: (messageId: string, action: AgentSuggestedAction) => void;
   onCancelMessage?: (messageId: string) => void;
+  onResultPreview?: (assetId: string, event: React.MouseEvent<HTMLElement>) => void;
+  selectionStatusLabel?: string;
+  selectionStatusTone?: 'idle' | 'active' | 'preview';
   threadEmptyTitle?: string;
   threadEmptyHint?: string;
   className?: string;
@@ -81,8 +75,6 @@ export type QuickComposeChatDockProps = {
   onTryRunPrompt?: (text: string) => void;
   onEmptySuggestionClick?: (text: string) => void;
   emptyStateSuggestions?: string[];
-  /** Lightweight context the Project Agent has already read for the next turn. */
-  contextSummary?: QuickComposeChatContextSummary | null;
   memoryEntries?: ProjectAgentKnowledgeEntry[];
   onToggleMemory?: (memoryId: string, enabled: boolean) => void;
   onDeleteMemory?: (memoryId: string) => void;
@@ -103,12 +95,11 @@ const SAMPLE_AGENT_SKILL: AgentSkill = {
   enabled: true,
   source: 'local',
   createdAt: 1,
-  safetyWarnings: ['Runs through the normal action confirmation flow before applying results.'],
+  safetyWarnings: ['执行前会走统一动作确认，不会绕过扣费或覆盖检查。'],
 };
 
 /**
- * Gemini-style quick compose chat sidebar: header + scrollable thread + bottom composer.
- * Preset drops are handled by the parent strip (same as floating bar) when docked.
+ * Product Agent sidebar: header + selected target + composer controls + newest-first thread.
  */
 export default function QuickComposeChatDock({
   title = '快捷生成',
@@ -122,6 +113,9 @@ export default function QuickComposeChatDock({
   onRetryMessage,
   onMessageAction,
   onCancelMessage,
+  onResultPreview,
+  selectionStatusLabel,
+  selectionStatusTone = 'idle',
   threadEmptyTitle = PROJECT_AGENT_EMPTY_TITLE,
   threadEmptyHint = PROJECT_AGENT_EMPTY_HINT,
   className = '',
@@ -130,7 +124,6 @@ export default function QuickComposeChatDock({
   onTryRunPrompt,
   onEmptySuggestionClick,
   emptyStateSuggestions = PROJECT_AGENT_EMPTY_SUGGESTIONS,
-  contextSummary = null,
   memoryEntries = [],
   onToggleMemory,
   onDeleteMemory,
@@ -147,7 +140,6 @@ export default function QuickComposeChatDock({
   const [localSkillEntries, setLocalSkillEntries] = useState<AgentSkill[]>([]);
   const [importPreviewOpen, setImportPreviewOpen] = useState(false);
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
-  const [contextDetailsOpen, setContextDetailsOpen] = useState(false);
   const moreMenuRef = useRef<HTMLDivElement | null>(null);
 
   const threadBusy = useMemo(
@@ -157,22 +149,20 @@ export default function QuickComposeChatDock({
       ),
     [messages]
   );
-  const { onComposeInputDragOver, onComposeInputDrop, onSegmentsChange } =
-    composerProps;
+  const { onSegmentsChange } = composerProps;
 
-  // Match the floating MentionField: forward at bubble phase only.
-  const handleDockDragOver = useCallback(
-    (e: React.DragEvent) => {
-      onComposeInputDragOver?.(e);
-    },
-    [onComposeInputDragOver]
-  );
-  const handleDockDrop = useCallback(
-    (e: React.DragEvent) => {
-      onComposeInputDrop?.(e, 'main');
-    },
-    [onComposeInputDrop]
-  );
+  const handleDockDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    try {
+      e.dataTransfer.dropEffect = 'none';
+    } catch {
+      /* ignore */
+    }
+  }, []);
+  const handleDockDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+  }, []);
 
   const canOpenExpertStudio = Boolean(
     expertStudio?.userId && expertStudio?.workspaceProjectId
@@ -187,44 +177,6 @@ export default function QuickComposeChatDock({
     }
     return Array.from(byId.values());
   }, [localSkillEntries, skillEntries]);
-
-  const contextDetails = useMemo(
-    () => (contextSummary?.details ?? []).map((item) => item.trim()).filter(Boolean),
-    [contextSummary?.details]
-  );
-  const contextChips = useMemo(() => {
-    if (!contextSummary) return [];
-    const chips = (contextSummary.chips ?? []).map((chip) => chip.trim()).filter(Boolean);
-    if (typeof contextSummary.targetCount === 'number' && contextSummary.targetCount > 0) {
-      chips.unshift(`${PROJECT_AGENT_CONTEXT_TARGET_LABEL} ${contextSummary.targetCount}`);
-    }
-    if (contextSummary.stale) chips.push(PROJECT_AGENT_CONTEXT_STALE_LABEL);
-    if (contextSummary.risk && contextSummary.risk in PROJECT_AGENT_CONTEXT_RISK_LABEL) {
-      chips.push(PROJECT_AGENT_CONTEXT_RISK_LABEL[contextSummary.risk]);
-    }
-    return chips.slice(0, 5);
-  }, [contextSummary]);
-  const hasContextSummary = Boolean(
-    contextSummary?.title?.trim() || contextChips.length > 0 || contextDetails.length > 0
-  );
-  const hasContextDetails = contextDetails.length > 0;
-  const contextTone =
-    contextSummary?.stale ||
-    contextSummary?.risk === 'cost' ||
-    contextSummary?.risk === 'batch' ||
-    contextSummary?.risk === 'destructive'
-      ? 'warning'
-      : 'default';
-  const contextShellClass =
-    contextTone === 'warning'
-      ? 'border-amber-400/15 bg-amber-400/[0.045]'
-      : 'border-white/[0.06] bg-white/[0.025]';
-  const contextChipClass =
-    contextTone === 'warning'
-      ? 'border-amber-300/18 bg-amber-300/[0.08] text-amber-100/80'
-      : 'border-white/[0.08] bg-white/[0.05] text-gray-300';
-  const contextTitleClass =
-    contextTone === 'warning' ? 'text-amber-50/80' : 'text-gray-200';
 
   useEffect(() => {
     if (!moreMenuOpen) return;
@@ -242,10 +194,6 @@ export default function QuickComposeChatDock({
       document.removeEventListener('keydown', handleKeyDown);
     };
   }, [moreMenuOpen]);
-
-  useEffect(() => {
-    if (!hasContextDetails) setContextDetailsOpen(false);
-  }, [hasContextDetails]);
 
   const handleEmptySuggestionClick = useCallback(
     (text: string) => {
@@ -442,77 +390,35 @@ export default function QuickComposeChatDock({
         </div>
       </header>
 
-      {hasContextSummary ? (
-        <div className={`shrink-0 border-b px-3 py-1.5 ${contextShellClass}`}>
-          {hasContextDetails ? (
-            <button
-              type="button"
-              onClick={() => setContextDetailsOpen((v) => !v)}
-              className="flex w-full min-w-0 items-center gap-1.5 text-left outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40"
-              aria-expanded={contextDetailsOpen}
-              title={PROJECT_AGENT_CONTEXT_DETAILS_LABEL}
-            >
-              <span className={`min-w-0 truncate text-[10px] font-semibold ${contextTitleClass}`}>
-                {contextSummary?.title?.trim() || PROJECT_AGENT_CONTEXT_DETAILS_LABEL}
-              </span>
-              {contextChips.length > 0 ? (
-                <span className="flex min-w-0 flex-1 flex-wrap items-center gap-1 overflow-hidden">
-                  {contextChips.map((chip) => (
-                    <span
-                      key={chip}
-                      className={`max-w-[7.5rem] truncate rounded-full border px-1.5 py-0.5 text-[10px] font-medium leading-none ${contextChipClass}`}
-                    >
-                      {chip}
-                    </span>
-                  ))}
-                </span>
-              ) : null}
-              <span className="ml-auto shrink-0 text-[10px] font-medium text-gray-500">
-                {contextDetailsOpen ? '收起' : '查看'}
-              </span>
-            </button>
-          ) : (
-            <div className="flex min-w-0 items-center gap-1.5">
-              <span className={`min-w-0 truncate text-[10px] font-semibold ${contextTitleClass}`}>
-                {contextSummary?.title?.trim() || PROJECT_AGENT_CONTEXT_DETAILS_LABEL}
-              </span>
-              {contextChips.length > 0 ? (
-                <span className="flex min-w-0 flex-1 flex-wrap items-center gap-1 overflow-hidden">
-                  {contextChips.map((chip) => (
-                    <span
-                      key={chip}
-                      className={`max-w-[7.5rem] truncate rounded-full border px-1.5 py-0.5 text-[10px] font-medium leading-none ${contextChipClass}`}
-                    >
-                      {chip}
-                    </span>
-                  ))}
-                </span>
-              ) : null}
-            </div>
-          )}
-          {contextDetailsOpen && hasContextDetails ? (
-            <div className="mt-1 line-clamp-2 text-[10px] leading-4 text-gray-400">
-              {contextDetails.join(' · ')}
-            </div>
-          ) : null}
-        </div>
-      ) : null}
+      <div
+        className={`shrink-0 border-b px-3 py-1.5 text-[10px] font-semibold ${
+          selectionStatusTone === 'preview'
+            ? 'border-violet-300/10 bg-violet-300/[0.045] text-violet-100/80'
+            : selectionStatusTone === 'active'
+              ? 'border-cyan-300/10 bg-cyan-300/[0.045] text-cyan-100/80'
+              : 'border-white/[0.06] bg-white/[0.025] text-gray-500'
+        }`}
+        data-agent-selection-status
+      >
+        <span className="block truncate">{selectionStatusLabel || '当前未选中资产'}</span>
+      </div>
+
+      <QuickComposeChatComposer
+        {...composerProps}
+        threadBusy={threadBusy}
+        threadBusyHint={COMPOSER_BUSY_HINT}
+      />
 
       <QuickComposeChatThread
         messages={messages}
         onRetryMessage={onRetryMessage}
         onMessageAction={onMessageAction}
         onCancelMessage={onCancelMessage}
+        onResultPreview={onResultPreview}
         emptyStateTitle={threadEmptyTitle}
         emptyStateHint={threadEmptyHint}
         emptyStateSuggestions={emptyStateSuggestions}
         onEmptySuggestionClick={handleEmptySuggestionClick}
-      />
-
-      <QuickComposeChatComposer
-        {...composerProps}
-        threadBusy={threadBusy}
-        threadBusyHint={COMPOSER_BUSY_HINT}
       />
 
       {expertStudioOpen && canOpenExpertStudio && expertStudio ? (
@@ -547,7 +453,7 @@ export default function QuickComposeChatDock({
               </span>
               <div className="min-w-0">
                 <h3 className="truncate text-[11px] font-black text-gray-200">记忆管理</h3>
-                <p className="truncate text-[10px] text-gray-500">已确认的偏好会在这里管理</p>
+                <p className="truncate text-[10px] text-gray-500">产品知识、项目知识、用户偏好和资产规则</p>
               </div>
             </div>
             <button
@@ -564,6 +470,7 @@ export default function QuickComposeChatDock({
             {memoryEntries.length > 0 ? (
               memoryEntries.map((entry) => {
                 const enabled = entry.disabledAt == null;
+                const kindLabel = projectAgentKnowledgeKindLabel(entry.kind);
                 return (
                   <div
                     key={entry.id}
@@ -571,11 +478,20 @@ export default function QuickComposeChatDock({
                   >
                     <div className="flex items-start justify-between gap-2">
                       <div className="min-w-0">
-                        <p className="truncate text-[11px] font-semibold text-gray-200">
-                          {entry.label || entry.kind}
-                        </p>
+                        <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+                          <p className="min-w-0 truncate text-[11px] font-semibold text-gray-200">
+                            {entry.label || kindLabel}
+                          </p>
+                          <span className="shrink-0 rounded-full border border-cyan-300/15 bg-cyan-300/[0.07] px-1.5 py-0.5 text-[9px] font-semibold text-cyan-100/75">
+                            {kindLabel}
+                          </span>
+                        </div>
                         <p className="mt-1 line-clamp-3 text-[10px] leading-4 text-gray-500">
                           {entry.text}
+                        </p>
+                        <p className="mt-1 truncate text-[9px] text-gray-600">
+                          {enabled ? '会参与 Agent 上下文' : '已暂停，不会参与上下文'}
+                          {entry.sourceTurnId ? ` · 来源 ${entry.sourceTurnId}` : ''}
                         </p>
                       </div>
                       <span
@@ -615,7 +531,7 @@ export default function QuickComposeChatDock({
               <div className="rounded-lg border border-white/[0.08] bg-white/[0.035] px-3 py-2.5">
                 <p className="text-[11px] font-semibold text-gray-200">还没有保存的项目记忆</p>
                 <p className="mt-1 text-[10px] leading-4 text-gray-500">
-                  从结果卡点击“保存这次风格/流程/偏好”后，确认过的内容会出现在这里。
+                  从结果卡确认保存后，产品知识、项目目标、用户偏好和资产规则会出现在这里，并可随时暂停或删除。
                 </p>
               </div>
             )}
@@ -694,6 +610,7 @@ export default function QuickComposeChatDock({
                 const enabled = skill.enabled !== false;
                 const triggers = skill.triggers.slice(0, 3).join(' / ');
                 const allowedTools = skill.toolIds.slice(0, 3).join(' / ');
+                const safety = summarizeAgentSkillSafety(skill);
                 return (
                   <div
                     key={skill.id}
@@ -701,9 +618,25 @@ export default function QuickComposeChatDock({
                   >
                     <div className="flex items-start justify-between gap-2">
                       <div className="min-w-0">
-                        <p className="truncate text-[11px] font-semibold text-gray-200">
-                          {skill.name}
-                        </p>
+                        <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+                          <p className="min-w-0 truncate text-[11px] font-semibold text-gray-200">
+                            {skill.name}
+                          </p>
+                          <span className="shrink-0 rounded-full border border-violet-300/15 bg-violet-300/[0.08] px-1.5 py-0.5 text-[9px] font-semibold text-violet-100/75">
+                            {agentSkillSourceLabel(skill.source)}
+                          </span>
+                          <span
+                            className={`shrink-0 rounded-full border px-1.5 py-0.5 text-[9px] font-semibold ${
+                              skill.permissionLevel === 'destructive'
+                                ? 'border-rose-300/20 bg-rose-300/[0.08] text-rose-100/80'
+                                : skill.permissionLevel === 'cost'
+                                  ? 'border-amber-300/20 bg-amber-300/[0.08] text-amber-100/80'
+                                  : 'border-white/[0.08] bg-white/[0.04] text-gray-400'
+                            }`}
+                          >
+                            {agentSkillPermissionLabel(skill.permissionLevel)}
+                          </span>
+                        </div>
                         <p className="mt-1 line-clamp-2 text-[10px] leading-4 text-gray-500">
                           {skill.description}
                         </p>
@@ -720,7 +653,11 @@ export default function QuickComposeChatDock({
                     </div>
                     <div className="mt-2 grid gap-1 text-[9px] leading-4 text-gray-500">
                       <div className="truncate">触发词：{triggers || skill.name}</div>
-                      <div className="truncate">工具：{allowedTools || '无'}</div>
+                      <div className="truncate">白名单工具：{allowedTools || '无'}</div>
+                      <div className="truncate" title={safety.details.join(' / ')}>
+                        安全：{safety.label}
+                        {skill.safetyWarnings?.length ? ` · ${skill.safetyWarnings[0]}` : ''}
+                      </div>
                     </div>
                     <div className="mt-2 flex items-center gap-1.5">
                       <button
