@@ -28,7 +28,7 @@ type Props = {
 type TextViewMode = 'read' | 'edit' | 'structure';
 
 function normalizeTitle(title: string): string {
-  return title.trim() || '文本资产';
+  return title.trim() || '鏂囨湰璧勪骇';
 }
 
 function buildMarkdown(title: string, body: string): string {
@@ -90,11 +90,11 @@ const WorkflowTextLightboxCenter = forwardRef<WorkflowTextLightboxCenterHandle, 
     }, [draftBody]);
     const structureRows = useMemo(
       () => [
-        ['标题', titleText],
-        ['字符', stats.chars.toLocaleString()],
-        ['词/字', stats.words.toLocaleString()],
-        ['段落', stats.paragraphs.toLocaleString()],
-        ['行数', stats.lines.toLocaleString()],
+        ['Title', titleText],
+        ['Chars', stats.chars.toLocaleString()],
+        ['Words', stats.words.toLocaleString()],
+        ['Paragraphs', stats.paragraphs.toLocaleString()],
+        ['Lines', stats.lines.toLocaleString()],
       ],
       [stats.chars, stats.lines, stats.paragraphs, stats.words, titleText]
     );
@@ -118,11 +118,11 @@ const WorkflowTextLightboxCenter = forwardRef<WorkflowTextLightboxCenterHandle, 
 
     return (
       <div
-        className="pointer-events-auto flex h-[min(82vh,56rem)] w-full min-h-0 min-w-0 flex-col rounded-2xl border border-white/10 bg-[#101114]/96 shadow-2xl"
+        className="pointer-events-auto relative flex h-full w-full min-h-0 min-w-0 flex-col overflow-hidden"
         onMouseDownCapture={(e) => e.stopPropagation()}
         onPointerDownCapture={(e) => e.stopPropagation()}
       >
-        <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-white/10 px-4 py-3">
+        <div className="absolute left-1/2 top-4 z-10 flex w-[min(calc(100%-2rem),56rem)] -translate-x-1/2 shrink-0 flex-wrap items-center gap-2 rounded-xl border border-white/10 bg-[#0f0f12]/95 px-2.5 py-2 shadow-xl ring-1 ring-white/[0.05]">
           <div className="min-w-0 flex-1">
             <p className="truncate text-[13px] font-bold text-gray-100">{titleText}</p>
             <p
@@ -135,8 +135,8 @@ const WorkflowTextLightboxCenter = forwardRef<WorkflowTextLightboxCenterHandle, 
               }`}
             >
               {draftBody.length.toLocaleString()} / {WORKFLOW_TEXT_ASSET_BODY_MAX_CHARS.toLocaleString()}
-              {lengthTier === 'warn' ? ' · 较长' : null}
-              {lengthTier === 'confirm' ? ' · 入队前将确认' : null}
+              {lengthTier === 'warn' ? ' / Long' : null}
+              {lengthTier === 'confirm' ? ' / Confirm before queue' : null}
             </p>
           </div>
           <div className="flex shrink-0 items-center gap-1 rounded-lg bg-white/[0.04] p-1">
@@ -150,7 +150,7 @@ const WorkflowTextLightboxCenter = forwardRef<WorkflowTextLightboxCenterHandle, 
                   mode === key ? 'bg-blue-600 text-white' : 'text-gray-400 hover:bg-white/[0.08] hover:text-gray-200',
                 ].join(' ')}
               >
-                {key === 'read' ? '阅读' : key === 'edit' ? '编辑' : '结构'}
+                {key === 'read' ? 'Read' : key === 'edit' ? 'Edit' : 'Info'}
               </button>
             ))}
           </div>
@@ -160,7 +160,7 @@ const WorkflowTextLightboxCenter = forwardRef<WorkflowTextLightboxCenterHandle, 
               onClick={copyFullText}
               className="h-8 rounded-lg border border-white/10 bg-white/[0.04] px-2 text-[10px] font-bold text-gray-300 hover:bg-white/[0.08] hover:text-white"
             >
-              复制全文
+              Copy
             </button>
             {onAddToComposeInput ? (
               <button
@@ -168,7 +168,7 @@ const WorkflowTextLightboxCenter = forwardRef<WorkflowTextLightboxCenterHandle, 
                 onClick={addToComposeInput}
                 className="h-8 rounded-lg border border-white/10 bg-white/[0.04] px-2 text-[10px] font-bold text-gray-300 hover:bg-white/[0.08] hover:text-white"
               >
-                加入输入框
+                Add to input
               </button>
             ) : null}
             <button
@@ -189,54 +189,61 @@ const WorkflowTextLightboxCenter = forwardRef<WorkflowTextLightboxCenterHandle, 
         </div>
 
         <div
-          className="grid shrink-0 grid-cols-4 gap-px border-b border-white/10 bg-white/[0.04] text-center text-[10px] text-gray-400"
-          aria-label="文本统计"
+          className="absolute left-1/2 top-[5.5rem] z-10 grid w-[min(calc(100%-2rem),56rem)] -translate-x-1/2 shrink-0 grid-cols-4 gap-px overflow-hidden rounded-lg border border-white/10 bg-white/[0.04] text-center text-[10px] text-gray-400 shadow-lg"
+          aria-label="Text stats"
         >
-          <div className="bg-[#101114] px-2 py-2">
-            <strong className="text-gray-200">{stats.chars.toLocaleString()}</strong> 字符
+          <div className="bg-[#101114]/95 px-2 py-2">
+            <strong className="text-gray-200">{stats.chars.toLocaleString()}</strong> Chars
           </div>
-          <div className="bg-[#101114] px-2 py-2">
-            <strong className="text-gray-200">{stats.words.toLocaleString()}</strong> 词/字
+          <div className="bg-[#101114]/95 px-2 py-2">
+            <strong className="text-gray-200">{stats.words.toLocaleString()}</strong> Words
           </div>
-          <div className="bg-[#101114] px-2 py-2">
-            <strong className="text-gray-200">{stats.paragraphs.toLocaleString()}</strong> 段
+          <div className="bg-[#101114]/95 px-2 py-2">
+            <strong className="text-gray-200">{stats.paragraphs.toLocaleString()}</strong> Paragraphs
           </div>
-          <div className="bg-[#101114] px-2 py-2">
-            <strong className="text-gray-200">{stats.lines.toLocaleString()}</strong> 行
+          <div className="bg-[#101114]/95 px-2 py-2">
+            <strong className="text-gray-200">{stats.lines.toLocaleString()}</strong> Lines
           </div>
         </div>
 
         {mode === 'edit' ? (
-          <textarea
-            value={draftBody}
-            onChange={(e) => setDraftBody(clampWorkflowTextBody(e.target.value))}
-            className="min-h-0 w-full flex-1 resize-none border-0 bg-[#141416]/95 px-5 py-4 font-mono text-[13px] leading-relaxed text-gray-100 outline-none focus:ring-1 focus:ring-inset focus:ring-blue-500"
-            placeholder="在此输入文字内容..."
-            spellCheck={false}
-            data-image-preview-scroll
-          />
+          <div className="min-h-0 flex-1 overflow-auto px-6 py-36" data-image-preview-scroll>
+            <textarea
+              value={draftBody}
+              onChange={(e) => setDraftBody(clampWorkflowTextBody(e.target.value))}
+              className="mx-auto block min-h-full w-full max-w-4xl resize-none rounded-xl border border-white/10 bg-[#101114]/70 px-6 py-5 font-mono text-[13px] leading-relaxed text-gray-100 outline-none focus:border-blue-400/50 focus:ring-1 focus:ring-blue-500"
+              placeholder="鍦ㄦ杈撳叆鏂囧瓧鍐呭..."
+              spellCheck={false}
+            />
+          </div>
         ) : mode === 'structure' ? (
-          <div className="min-h-0 flex-1 overflow-auto p-4" data-image-preview-scroll>
-            <div className="overflow-hidden rounded-xl border border-white/10">
-              {structureRows.map(([label, value]) => (
-                <div key={label} className="grid grid-cols-[5rem_1fr] border-b border-white/10 last:border-b-0">
-                  <div className="bg-white/[0.04] px-3 py-2 text-[11px] font-bold text-gray-400">{label}</div>
-                  <div className="min-w-0 px-3 py-2 text-[11px] text-gray-200">{value}</div>
+          <div className="min-h-0 flex-1 overflow-auto px-6 py-36" data-image-preview-scroll>
+            <div className="flex min-h-full items-center justify-center">
+              <div className="w-full max-w-3xl">
+                <div className="overflow-hidden rounded-xl border border-white/10">
+                  {structureRows.map(([label, value]) => (
+                    <div key={label} className="grid grid-cols-[5rem_1fr] border-b border-white/10 last:border-b-0">
+                      <div className="bg-white/[0.04] px-3 py-2 text-[11px] font-bold text-gray-400">{label}</div>
+                      <div className="min-w-0 px-3 py-2 text-[11px] text-gray-200">{value}</div>
+                    </div>
+                  ))}
                 </div>
-              ))}
-            </div>
-            <div className="mt-3 rounded-xl border border-white/10 bg-white/[0.03] p-3">
-              <p className="text-[10px] font-bold uppercase text-gray-500">Preview</p>
-              <p className="mt-2 whitespace-pre-wrap break-words text-[12px] leading-relaxed text-gray-300">
-                {draftBody.trim() || '空白文本'}
-              </p>
+                <div className="mt-3 rounded-xl border border-white/10 bg-white/[0.03] p-3">
+                  <p className="text-[10px] font-bold uppercase text-gray-500">Preview</p>
+                  <p className="mt-2 whitespace-pre-wrap break-words text-[12px] leading-relaxed text-gray-300">
+                    {draftBody.trim() || '空白文本'}
+                  </p>
+                </div>
+              </div>
             </div>
           </div>
         ) : (
-          <div className="min-h-0 flex-1 overflow-auto px-6 py-5" data-image-preview-scroll>
-            <article className="mx-auto max-w-3xl whitespace-pre-wrap break-words text-[14px] leading-7 text-gray-100">
-              {draftBody.trim() || '空白文本'}
-            </article>
+          <div className="min-h-0 flex-1 overflow-auto px-6 py-36" data-image-preview-scroll>
+            <div className="flex min-h-full items-center justify-center">
+              <article className="w-full max-w-3xl whitespace-pre-wrap break-words text-[14px] leading-7 text-gray-100">
+                {draftBody.trim() || '空白文本'}
+              </article>
+            </div>
           </div>
         )}
       </div>

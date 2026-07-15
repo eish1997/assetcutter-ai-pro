@@ -50,12 +50,21 @@ function textNonEmpty(intent: ProjectAgentIntent): boolean {
 }
 
 function hasMainImage(intent: ProjectAgentIntent): boolean {
+  if (intent.hasInlineImageRefs === true) return true;
   if (intent.mainAssetId?.trim()) return true;
   if (intent.surface.kind === 'lightbox' && intent.surface.assetId.trim()) return true;
   if (intent.surface.kind === 'canvas' && intent.surface.selectedAssetIds.some((id) => id.trim())) {
     return true;
   }
   return false;
+}
+
+function wantsVisualAnswer(intent: ProjectAgentIntent): boolean {
+  if (!hasMainImage(intent)) return false;
+  const text = intent.text.trim();
+  if (!text) return false;
+  if (intent.mode === 'image' || intent.mode === '3d') return false;
+  return /(?:这是什么|是什么东西|是什么|看一下|识别|描述|分析|画面|图里|图片|current|what\s+is|what's|describe|identify)/i.test(text);
 }
 
 function resolveMainAssetId(intent: ProjectAgentIntent): string | undefined {
@@ -167,6 +176,16 @@ function buildCandidatePlan(intent: ProjectAgentIntent, trace: AgentPlannerDecis
   }
 
   const mode = intent.mode === 'auto' ? resolveComposerMode(intent) : intent.mode;
+  if (wantsVisualAnswer(intent)) {
+    pushTrace(trace, { stage: 'candidate', message: 'visual question with image reference' });
+    return [
+      step('run_plain_i2t', {
+        text: intent.text,
+        mainAssetId: resolveMainAssetId(intent),
+        referenceAssetIds: intent.referenceAssetIds,
+      }),
+    ];
+  }
   if (wantsTextAndImage(intent)) {
     pushTrace(trace, { stage: 'candidate', message: 'split compound copy plus image request' });
     return [
@@ -265,6 +284,15 @@ export function validateControlledPlan(
       issues.push({
         code: 'missing_text',
         message: 'Text planning requires non-empty text',
+        stepIndex: index,
+        toolId: item.toolId,
+        severity: 'error',
+      });
+    }
+    if (item.toolId === 'run_plain_i2t' && !hasMainImage(intent)) {
+      issues.push({
+        code: 'missing_asset',
+        message: 'Image-to-text requires an image',
         stepIndex: index,
         toolId: item.toolId,
         severity: 'error',

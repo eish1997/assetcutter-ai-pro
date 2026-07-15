@@ -2,6 +2,7 @@ import React from 'react';
 
 import type { WorkflowAsset } from '../../types';
 import { resolveWorkflowAssetActiveVariant, resolveWorkflowAssetKind } from '../../services/workflowAssetVariants';
+import { captureWorkflowModelThumbnailDataUrl } from '../../services/workflowModelPreviewCapture';
 import { WorkflowGridImage } from '../ProgressivePreviewImage';
 import AppIcon from '../ui/AppIcon';
 
@@ -17,6 +18,13 @@ type AssetCardPreviewRendererProps = {
   onIntrinsicSize?: (width: number, height: number) => void;
 };
 
+const modelThumbnailCache = new Map<string, string | null>();
+const modelThumbnailPending = new Map<string, Promise<string | null>>();
+
+function firstModelPreviewSrc(modelUrls?: string[], fallbackUrl?: string): string {
+  return (modelUrls || []).find((value) => String(value || '').trim())?.trim() || String(fallbackUrl || '').trim();
+}
+
 function readableText(asset: WorkflowAsset, textDisplay?: string): { title: string; body: string } {
   const title = String(asset.textTitle || '').trim();
   const active = resolveWorkflowAssetActiveVariant(asset);
@@ -27,7 +35,7 @@ function readableText(asset: WorkflowAsset, textDisplay?: string): { title: stri
   return { title, body };
 }
 
-function Badge({ icon, label }: { icon: 'video' | 'cube' | 'image' | 'package' | 'play'; label: string }) {
+function Badge({ icon, label }: { icon: 'video' | 'cube' | 'image' | 'package' | 'play' | 'chat'; label: string }) {
   return (
     <div className="absolute left-2 top-2 z-[2] inline-flex max-w-[calc(100%-1rem)] items-center gap-1 rounded-md border border-white/12 bg-black/55 px-1.5 py-1 text-[9px] font-black uppercase leading-none text-white/85 shadow-sm backdrop-blur">
       <AppIcon name={icon} className="h-3 w-3 shrink-0" />
@@ -81,15 +89,71 @@ export const AssetCardPreviewRenderer: React.FC<AssetCardPreviewRendererProps> =
 }) => {
   const activeVariant = resolveWorkflowAssetActiveVariant(asset);
   const activeKind = activeVariant?.kind ?? resolveWorkflowAssetKind(asset);
+  const modelSrc =
+    activeKind === 'model3d'
+      ? firstModelPreviewSrc(activeVariant?.modelUrls, activeVariant?.url)
+      : '';
+  const modelThumbCacheKey =
+    activeKind === 'model3d' && modelSrc
+      ? `${asset.id}:${activeVariant?.id || asset.displayKey || 'original'}:${modelSrc}`
+      : '';
+  const [capturedModelThumb, setCapturedModelThumb] = React.useState<string>(() =>
+    modelThumbCacheKey ? modelThumbnailCache.get(modelThumbCacheKey) || '' : ''
+  );
+
+  React.useEffect(() => {
+    if (activeKind !== 'model3d' || !modelSrc || !modelThumbCacheKey) {
+      setCapturedModelThumb('');
+      return;
+    }
+    const cached = modelThumbnailCache.get(modelThumbCacheKey);
+    if (cached !== undefined) {
+      setCapturedModelThumb(cached || '');
+      return;
+    }
+    let cancelled = false;
+    const pending =
+      modelThumbnailPending.get(modelThumbCacheKey) ||
+      captureWorkflowModelThumbnailDataUrl({
+        modelSrc,
+        modelFileName: asset.modelSourceName || activeVariant?.modelCompanionKeys?.[0] || modelSrc,
+        width: 896,
+        height: 560,
+        timeoutMs: 55_000,
+      }).finally(() => {
+        modelThumbnailPending.delete(modelThumbCacheKey);
+      });
+    if (!modelThumbnailPending.has(modelThumbCacheKey)) {
+      modelThumbnailPending.set(modelThumbCacheKey, pending);
+    }
+    pending.then((thumb) => {
+      modelThumbnailCache.set(modelThumbCacheKey, thumb || null);
+      if (!cancelled) setCapturedModelThumb(thumb || '');
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    activeKind,
+    activeVariant?.id,
+    activeVariant?.modelCompanionKeys,
+    asset.id,
+    asset.modelSourceName,
+    modelSrc,
+    modelThumbCacheKey,
+  ]);
+
   const displaySrc =
     activeKind === 'model3d'
-      ? previewSrc || activeVariant?.posterUrl || ''
+      ? capturedModelThumb || previewSrc || activeVariant?.posterUrl || ''
       : previewSrc || activeVariant?.posterUrl || activeVariant?.url || '';
 
   if (activeKind === 'text' && !displaySrc.trim()) {
     const { title, body } = readableText(asset, textDisplay);
     return (
       <div className="relative flex h-full w-full flex-col justify-start bg-[#141416] p-3 text-left">
+        <Badge icon="chat" label="Text" />
+        <div className="h-5 shrink-0" aria-hidden />
         {title ? (
           <p className="mb-1.5 line-clamp-2 text-[11px] font-bold leading-snug text-gray-100">{title}</p>
         ) : null}
@@ -98,7 +162,7 @@ export const AssetCardPreviewRenderer: React.FC<AssetCardPreviewRendererProps> =
             title ? 'line-clamp-6' : 'line-clamp-8'
           }`}
         >
-          {body || '(Empty text asset)'}
+          {body || '空白文本资产'}
         </p>
       </div>
     );
@@ -122,7 +186,7 @@ export const AssetCardPreviewRenderer: React.FC<AssetCardPreviewRendererProps> =
         deferThumbnail={deferThumbnail}
         thumbDecodePriority={thumbDecodePriority}
         imageFetchPriority={imageFetchPriority}
-        className="relative z-0 block h-full min-h-[5rem] w-full"
+        className="relative z-0 block h-full w-full"
         imgClassName="relative z-0 block h-full w-full object-cover"
         draggable={false}
         onDragStart={(e) => e.preventDefault()}

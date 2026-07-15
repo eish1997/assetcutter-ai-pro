@@ -13,6 +13,7 @@ export type QuickComposeInvokeFromPlan = {
   overrideUserText: string;
   skipPromptCards: boolean;
   forceComposeMode?: WorkspaceQuickComposeComposeMode;
+  allowVisionText?: boolean;
   preferTextPipelineWhenNoImagesAttached?: boolean;
   /** Existing asset that should receive generated result history. */
   reuseAssetId?: string;
@@ -117,6 +118,18 @@ export function mapPlanToQuickComposeInvoke(
       ...base,
       forceComposeMode: 'text',
       preferTextPipelineWhenNoImagesAttached: true,
+    };
+  }
+  if (first.toolId === 'run_plain_i2t') {
+    const reuseAssetIds = resolveMainAssetIds(intent, first);
+    const referenceAssetIds = resolveReferenceAssetIds(intent, first);
+    return {
+      ...base,
+      forceComposeMode: 'text',
+      allowVisionText: true,
+      ...(reuseAssetIds[0] ? { reuseAssetId: reuseAssetIds[0] } : {}),
+      ...(reuseAssetIds.length ? { reuseAssetIds } : {}),
+      ...(referenceAssetIds.length ? { referenceAssetIds } : {}),
     };
   }
   if (first.toolId === 'run_plain_t2i' || first.toolId === 'run_plain_i2i') {

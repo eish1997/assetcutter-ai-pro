@@ -19,9 +19,7 @@ import { createPortal, flushSync } from 'react-dom';
 import {
   CloudDownload,
   Download,
-  Image as ImageIcon,
   ImagePlus,
-  LayoutGrid,
   Package,
   Trash2,
 } from 'lucide-react';
@@ -100,6 +98,7 @@ import { overrideSkipUnderstandFromUnderstandEnabled, shouldRunCapabilityUnderst
 import { isWorkspaceCompanionDirectorySourceOfTruth } from '../services/workspaceCloudSync';
 import {
   getQuickComposePlainModule,
+  QUICK_COMPOSE_PLAIN_I2T_ACTION_ID,
   QUICK_COMPOSE_PLAIN_I2I_ACTION_ID,
   QUICK_COMPOSE_PLAIN_T2I_ACTION_ID,
   QUICK_COMPOSE_PLAIN_TEXT_ACTION_ID,
@@ -382,7 +381,6 @@ import {
   WORKFLOW_LIGHTBOX_ASSET_THUMB_STRIP_INSET,
   WORKFLOW_LIGHTBOX_COMPOSE_DOCKED_INSET,
   WORKFLOW_IMAGE_PREVIEW_RAIL,
-  WORKFLOW_IMAGE_PREVIEW_RAIL_DIVIDER,
   WORKFLOW_CARD_DISMISS_ICON_BTN,
 } from './workflow/workflowSectionUiConstants';
 import { sortRootWorkflowAssetsNewestFirst } from './workflow/workflowOutlineUtils';
@@ -1084,6 +1082,7 @@ const WorkflowSection: React.FC<{
     []
   );
   const [lightboxUiHidden, setLightboxUiHidden] = useState(false);
+  const [lightboxDetailPanelOpen, setLightboxDetailPanelOpen] = useState(false);
   const handleLightboxUiHiddenChange = useCallback((hidden: boolean) => {
     setLightboxUiHidden(hidden);
   }, []);
@@ -1328,6 +1327,7 @@ const WorkflowSection: React.FC<{
   }, []);
 
   useEffect(() => {
+    setLightboxDetailPanelOpen(false);
     if (!lightboxAssetId) {
       setLightboxUiHidden(false);
       setLightboxQuickComposeAnchor(null);
@@ -1343,6 +1343,7 @@ const WorkflowSection: React.FC<{
   const quickComposeChatSendGuardRef = useRef(false);
   /** 清空对话时递增；进行中的 submit 在 await 后若 generation 变了则勿追加消息 */
   const quickComposeClearGenerationRef = useRef(0);
+  const projectAgentInlineImageRefsRef = useRef<string[]>([]);
   /** 最近一次 submitQuickCompose 创建的 taskId→assetId，供对话线程持久化 */
   const lastQuickComposeTaskAssetByIdRef = useRef<Record<string, string>>({});
   const projectAgentRuntimeRef = useRef<ProjectAgentRuntime | null>(null);
@@ -4651,6 +4652,8 @@ ${lineSvg}
     referenceAssetIds?: string[];
     /** 侧栏对话等：无附图时强制走「文」内置链路，避免误触文生图 RPM */
     preferTextPipelineWhenNoImagesAttached?: boolean;
+    /** 侧栏 Agent：带图问答走图生文，而不是普通文生文或图生图 */
+    allowVisionText?: boolean;
     /** Phase 2 Agent：强制 compose 模态（覆盖底部芯片） */
     forceComposeMode?: WorkspaceQuickComposeComposeMode;
     /** Phase 2 Agent：覆盖预设卡片列表（按 plan 执行） */
@@ -4990,6 +4993,46 @@ ${lineSvg}
     };
 
     if (composeMode === 'text') {
+      if (invoke?.allowVisionText && imgsAll.length > 0) {
+        if (!plainText && !userText) {
+          onLog?.('warn', '项目 Agent：请先输入要询问图片的问题');
+          return [];
+        }
+        const plainMod = getQuickComposePlainModule(QUICK_COMPOSE_PLAIN_I2T_ACTION_ID)!;
+        const taskOverrides = buildQuickComposeGenOverrides(plainMod);
+        const priorThreadMessages = workspaceQuickComposeThreadRef.current?.messages ?? [];
+        const currentTurnText = userText.trim() || plainText;
+        const textForModel = resolvePlainTextPromptForModel({
+          currentTurnText,
+          priorMessages: priorThreadMessages,
+          pseudoMultiTurnPrompt: invoke?.pseudoMultiTurnPrompt,
+          skipThreadContextInject: invoke?.skipThreadContextInject,
+        });
+        const body = clampWorkflowTextBody(textForModel);
+        const newId = uuid();
+        const asset = attachInitialVgpToNewAsset({
+          id: newId,
+          original: '',
+          displayKey: 'original',
+          results: {},
+          resultOrder: [],
+          archived: false,
+          hiddenInGrid: true,
+          createdAt: Date.now(),
+          assetKind: 'text',
+          textTitle: '',
+          textBody: body,
+        });
+        const task = buildPendingTaskFromAssetSnapshot(asset, newId, QUICK_COMPOSE_PLAIN_I2T_ACTION_ID, {
+          ...taskOverrides,
+          logContext: plainLog,
+        });
+        if (!task) return [];
+        task.inputImage = imgsAll[0]!;
+        task.inputText = body;
+        if (imgsAll.length > 1) task.inputImages = imgsAll.slice(1);
+        return runPlainBatch([asset], [task]);
+      }
       if (imgsAll.length > 0) {
         onLog?.('warn', '底部快捷栏：「文」模式请以 @ 引用文字资产，或切换到「图」');
         return [];
@@ -5635,6 +5678,10 @@ ${lineSvg}
         ...(mapped.preferTextPipelineWhenNoImagesAttached
           ? { preferTextPipelineWhenNoImagesAttached: true }
           : {}),
+        ...(mapped.allowVisionText ? { allowVisionText: true } : {}),
+        ...(mapped.allowVisionText && projectAgentInlineImageRefsRef.current.length > 0
+          ? { overrideImageDataUrls: projectAgentInlineImageRefsRef.current }
+          : {}),
         ...(mapped.presetCardsOverride ? { presetCardsOverride: mapped.presetCardsOverride } : {}),
         ...(mapped.reuseAssetId ? { reuseAssetId: mapped.reuseAssetId } : {}),
         ...(mapped.reuseAssetIds?.length ? { reuseAssetIds: mapped.reuseAssetIds } : {}),
@@ -5753,6 +5800,28 @@ ${lineSvg}
       const submittedThreadId = thread.id;
       const clearGenerationAtSubmit = quickComposeClearGenerationRef.current;
 
+      const hasCurrentViewMention = quickComposeSegmentsRef.current.some(
+        (s) => s.type === 'mention' && s.mention.kind === 'current_view'
+      );
+      const currentViewDataUrlForAgent = (() => {
+        if (!hasCurrentViewMention) return '';
+        try {
+          const layout = lightboxPreviewLayoutRef.current;
+          if (layout === 'pano') {
+            const s = lightboxPanoViewerRef.current?.captureViewDataUrl('image/png');
+            if (s && String(s).trim().startsWith('data:image/')) return String(s).trim();
+          } else if (layout === 'heightfield' || layout === 'model3d') {
+            const s = lightboxWebPreviewCaptureApiRef.current?.captureCurrentViewAsDataUrl();
+            if (s && String(s).trim().startsWith('data:image/')) return String(s).trim();
+          }
+        } catch {
+          /* fall back to the active asset preview */
+        }
+        const id = lightboxAssetIdRef.current;
+        const asset = id ? assetsRef.current.find((a) => a.id === id) : null;
+        return asset ? getAssetDisplayImage(asset).trim() : '';
+      })();
+
       const resolved = resolveQuickComposeReferences({
         segments: quickComposeSegmentsRef.current,
         mainDropSlots: quickComposeMainDropSlotsRef.current,
@@ -5760,6 +5829,7 @@ ${lineSvg}
         assets: assetsRef.current,
         getAssetDisplayImage,
         maxRefs: getQuickComposeMaxRefs(),
+        currentViewDataUrl: currentViewDataUrlForAgent || undefined,
       });
       const queues = resolveQuickComposeImageQueues({
         mainDropSlots: quickComposeMainDropSlotsRef.current,
@@ -5773,6 +5843,7 @@ ${lineSvg}
         resolved.referenceContextBlock
       );
       const currentUserText = (invoke?.overrideUserText ?? promptText).trim();
+      projectAgentInlineImageRefsRef.current = resolved.refs.filter((src) => String(src || '').trim());
       const skipCards = invoke?.skipPromptCards === true;
       const presetIds = (
         skipCards ? [] : quickComposePromptCards.map((c) => c.presetId)
@@ -5829,6 +5900,7 @@ ${lineSvg}
         surface,
         mainAssetId: targetAssetIds[0] || undefined,
         referenceAssetIds,
+        hasInlineImageRefs: resolved.refs.length > 0,
         hasEnabled3dPreset,
         enabledSkills: enabledProjectAgentSkills,
         textModel: quickComposeTextModel,
@@ -7353,7 +7425,7 @@ ${lineSvg}
       lightboxActiveVariant.kind === 'video' ||
       lightboxActiveVariant.kind === 'audio' ||
       lightboxActiveVariant.kind === 'file' ||
-      (lightboxActiveVariant.kind === 'model3d' && !lightboxShowsImage)
+      lightboxActiveVariant.kind === 'model3d'
     )
       ? lightboxActiveVariant
       : null;
@@ -12070,8 +12142,9 @@ ${lineSvg}
     showArchived
   );
   const quickComposeInLightbox = Boolean(
-    lightboxAsset && !showArchived && lightboxRasterChrome && !lightboxUiHidden
+    lightboxAsset && !showArchived && !lightboxUiHidden
   );
+  const quickComposeInRasterLightbox = Boolean(quickComposeInLightbox && lightboxRasterChrome);
   const handleQuickComposeInputExpandedChange = useCallback(
     (expanded: boolean) => {
       onWorkspaceQuickComposeExpandedChange?.(expanded);
@@ -12213,7 +12286,7 @@ ${lineSvg}
       maxMentions: quickComposeMaxReferenceImages,
       onSubmit: quickComposeChatDockHandlers
         ? quickComposeChatDockHandlers.onSend
-        : quickComposeInLightbox
+        : quickComposeInRasterLightbox
           ? () => void submitLightboxQuickCompose()
           : submitQuickCompose,
       inputDisabled: quickComposeChatDockHandlers?.isInputDisabled ?? quickComposeSubmitDisabled,
@@ -12307,6 +12380,7 @@ ${lineSvg}
     [
       quickComposeBarVisible,
       quickComposeInLightbox,
+      quickComposeInRasterLightbox,
       quickComposeMode,
       quickComposePromptCards,
       quickComposeSegments,
@@ -13965,9 +14039,12 @@ ${lineSvg}
               <AssetMediaPreviewCenter
                 variant={lightboxMediaCenterVariant}
                 model3dDisplayMode={lightboxModel3dDisplayMode}
+                onModel3dDisplayModeChange={setLightboxModel3dDisplayMode}
+                onAddToComposeInput={(text) => appendQuickComposeTextInput(text, '媒体资产引用')}
               />
             ) : undefined
           }
+          centerSlotFullBleed={Boolean(lightboxMediaCenterVariant)}
           onClose={handleLightboxClose}
           wheelListLength={lightboxList.length}
           onWheelNavigate={handleLightboxWheelNavigate}
@@ -14004,15 +14081,14 @@ ${lineSvg}
                 onAddToComposeInput={handleWorkflowAssetAddToComposeInput}
                 canAddToComposeInput={canWorkflowAssetAddToComposeInput}
                 getMediaVariant={(asset) => (workflowResultUsesVideoPreview(asset) ? 'video' : 'image')}
-                onSelectVersion={setDisplayKey}
               />
             ) : undefined
           }
           contentLeftInset={
-            lightboxChromeReady &&
-            (lightboxMediaCenterVariant || (lightboxTextAssetOnTextChannel && !lightboxShowsImage)) &&
-            lightboxStepSideChrome
-              ? WORKFLOW_LIGHTBOX_VGP_GRAPH_LEFT_INSET
+            lightboxChromeReady && !lightboxUiHidden
+              ? lightboxStepSideChrome
+                ? WORKFLOW_LIGHTBOX_VGP_GRAPH_LEFT_INSET
+                : '0px'
               : '0px'
           }
           enablePanoramaMode={lightboxShowsImage}
@@ -14077,7 +14153,7 @@ ${lineSvg}
               : undefined
           }
           topRightExtra={
-            lightboxChromeReady ? (
+            lightboxChromeReady && !lightboxMediaCenterVariant ? (
             <>
               <button
                 type="button"
@@ -14165,8 +14241,13 @@ ${lineSvg}
             </>
             ) : undefined
           }
+          detailToggle={{
+            expanded: lightboxDetailPanelOpen,
+            onToggle: () => setLightboxDetailPanelOpen((open) => !open),
+            available: lightboxChromeReady && !lightboxUiHidden,
+          }}
         >
-          {lightboxChromeReady ? (
+          {lightboxChromeReady && lightboxDetailPanelOpen ? (
           <>
           <WorkflowLightboxDetailEdgePanel
             edgeRightClassName="right-0"
@@ -14177,7 +14258,7 @@ ${lineSvg}
                 : 'hidden'
             }
             headerSlot={
-              lightboxShowTripo3DToolbar ? (
+              lightboxShowTripo3DToolbar && !lightboxMediaCenterVariant ? (
               <div
                 className={`${WORKFLOW_LIGHTBOX_BOTTOM_RAIL} w-full min-w-0 shrink-0 flex-wrap justify-start pointer-events-auto`}
                 role="toolbar"
@@ -14390,68 +14471,13 @@ ${lineSvg}
                 executionStepLabel={lightboxActiveExecution?.stepLabel ?? null}
               />
           </WorkflowLightboxDetailEdgePanel>
-          {!lightboxRasterChrome ||
-          (lightboxModelUrls.length > 0 && !lightboxModelDownloadsOnRight) ? (
+          {!lightboxMediaCenterVariant && !lightboxModelDownloadsOnRight && lightboxModelDownloadSlots.length > 0 ? (
           <div
             className={`absolute bottom-4 left-1/2 z-10 max-h-[42vh] w-max max-w-[min(58rem,calc(100vw-3rem))] -translate-x-1/2 overflow-y-auto ${WORKFLOW_LIGHTBOX_BOTTOM_RAIL}`}
             data-image-preview-no-wheel
             data-image-preview-scroll
           >
-            {!lightboxRasterChrome ? (
-              <>
-                <div className={`${WORKFLOW_IMAGE_PREVIEW_RAIL_DIVIDER} shrink-0`} aria-hidden />
-                <button
-                  type="button"
-                  onClick={() => setDisplayKey(lightboxAsset.id, 'original')}
-                  className={lightboxAsset.displayKey === 'original' ? LIGHTBOX_ICON_BTN_ACTIVE : LIGHTBOX_ICON_BTN_NEUTRAL}
-                  title="原始"
-                  aria-label="切换到原始版本"
-                >
-                  <ImageIcon {...LIGHTBOX_BAR_IC} aria-hidden />
-                </button>
-                {isGroupAsset(lightboxAsset) && (lightboxAsset.assetIds?.length ?? 0) > 0 ? (
-                  <button
-                    type="button"
-                    onClick={() => setDisplayKey(lightboxAsset.id, 'group_preview')}
-                    className={
-                      lightboxAsset.displayKey === 'group_preview' ? LIGHTBOX_ICON_BTN_ACTIVE : LIGHTBOX_ICON_BTN_NEUTRAL
-                    }
-                    title="组预览"
-                    aria-label="切换到组预览"
-                  >
-                    <LayoutGrid {...LIGHTBOX_BAR_IC} aria-hidden />
-                  </button>
-                ) : null}
-                {(lightboxAsset.resultOrder || []).map((k) => {
-                  if (stripResultKeyToBaseActionId(k) === 'cut_image') return null;
-                  const label =
-                    lightboxAsset.resultMeta?.[k]?.displayStepLabel?.trim() ||
-                    getModule(stripResultKeyToBaseActionId(k))?.label ||
-                    stripResultKeyToBaseActionId(k);
-                  if (isWorkflowTextAsset(lightboxAsset)) {
-                    const hasText = Boolean((lightboxAsset.textResults || {})[k]);
-                    const hasImg = Boolean(asWorkflowImageString(lightboxAsset.results?.[k]).trim());
-                    if (!hasText && !hasImg) return null;
-                  } else if (!lightboxAsset.results?.[k]) {
-                    return null;
-                  }
-                  return (
-                    <button
-                      type="button"
-                      key={k}
-                      onClick={() => setDisplayKey(lightboxAsset.id, k)}
-                      className={lightboxAsset.displayKey === k ? LIGHTBOX_ICON_BTN_ACTIVE : LIGHTBOX_ICON_BTN_NEUTRAL}
-                      title={label}
-                      aria-label={`切换到 ${label}`}
-                    >
-                      <ImagePlus {...LIGHTBOX_BAR_IC} aria-hidden />
-                    </button>
-                  );
-                })}
-              </>
-            ) : null}
-            {!lightboxModelDownloadsOnRight
-              ? lightboxModelDownloadSlots.map((slot) => (
+            {lightboxModelDownloadSlots.map((slot) => (
                   <button
                     key={`${slot.format}:${slot.index}`}
                     type="button"
@@ -14465,8 +14491,7 @@ ${lineSvg}
                   >
                     <Package {...LIGHTBOX_BAR_IC} aria-hidden />
                   </button>
-                ))
-              : null}
+                ))}
           </div>
           ) : null}
           </>

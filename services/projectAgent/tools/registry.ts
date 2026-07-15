@@ -12,6 +12,11 @@ export const PROJECT_AGENT_TOOL_REGISTRY: readonly ProjectAgentToolDefinition[] 
     description: 'Plain text generation without a capability preset. Input: user text and optional textModel.',
   },
   {
+    id: 'run_plain_i2t',
+    label: '图生文',
+    description: 'Visual question answering / image-to-text when an image is present.',
+  },
+  {
     id: 'run_plain_t2i',
     label: '文生图',
     description: 'Text-to-image with no main image. Input: text prompt and image settings.',

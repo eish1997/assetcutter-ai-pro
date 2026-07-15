@@ -13,6 +13,7 @@ const THREE_D_KEYWORD_RE =
   /(?:\b3d\b|三维|立体模型|生成\s*3d|做个?\s*3d|mesh|glb|tripo|文生3d|图生3d)/i;
 
 function hasMainImage(intent: ProjectAgentIntent): boolean {
+  if (intent.hasInlineImageRefs === true) return true;
   if (intent.mainAssetId?.trim()) return true;
   if (intent.surface.kind === 'lightbox' && intent.surface.assetId.trim()) return true;
   if (intent.surface.kind === 'canvas' && intent.surface.selectedAssetIds.some((id) => id.trim())) {

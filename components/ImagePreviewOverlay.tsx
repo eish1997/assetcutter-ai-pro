@@ -16,7 +16,7 @@ import {
   imageNaturalIndicesFromClientPoint,
   readRgbFromCanvasMappedNatural,
 } from '../services/imagePreviewPointerGeometry';
-import { Box, Contrast, Globe2, GripHorizontal, Image as ImageIcon, Mountain, Save, Scaling, X } from 'lucide-react';
+import { Box, Contrast, Globe2, GripHorizontal, Image as ImageIcon, Mountain, PanelRight, Save, Scaling, X } from 'lucide-react';
 import { readLocalString, writeLocalString } from '../services/clientPersist';
 import {
   isWorkflowLightboxBootAtLeast,
@@ -75,12 +75,12 @@ const LIGHTBOX_BACKDROP_CLASS: Record<ImageLightboxBackdropId, string> = {
   white: 'bg-white',
 };
 
-/** 工作流列表卸载后的静态底图仍可见时，遮罩需半透明 */
+/** 工作流列表卸载后的静态底图仍可见时，仅毛玻璃保持半透明；纯色背景必须遮住底图。 */
 const LIGHTBOX_BACKDROP_OVER_LIST_CLASS: Record<ImageLightboxBackdropId, string> = {
   frosted: 'bg-black/58 backdrop-blur-md',
-  black: 'bg-black/45',
-  gray50: 'bg-[#808080]/55',
-  white: 'bg-white/55',
+  black: 'bg-black',
+  gray50: 'bg-[#808080]',
+  white: 'bg-white',
 };
 
 const LIGHTBOX_BACKDROP_OPTIONS: Array<{
@@ -180,6 +180,8 @@ export type ImagePreviewOverlayProps = {
   imageSrc?: string;
   /** 替代中央图片区（如文字编辑）。有时与 imageSrc 同时存在：仅展示 centerSlot，不展示图片与缩放平移 */
   centerSlot?: React.ReactNode;
+  /** centerSlot 铺满主舞台，不为左右浮层和四周 padding 让位。用于 3D/视频/音频等独立资产预览。 */
+  centerSlotFullBleed?: boolean;
   onClose: () => void;
   /** 按住 Shift+滚轮：切换「上一资产 / 下一资产」时的列表长度（≤1 时不切换） */
   wheelListLength: number;
@@ -235,6 +237,11 @@ export type ImagePreviewOverlayProps = {
   onPrimaryImageReady?: () => void;
   /** 右上角「平面/全景/关闭」左侧：额外控件（如工作流下载、丢弃版本） */
   topRightExtra?: React.ReactNode;
+  detailToggle?: {
+    expanded: boolean;
+    onToggle: () => void;
+    available?: boolean;
+  };
   children?: React.ReactNode;
   /**
    * 平面预览时叠在 `<img>` 上的内容（与图同层、受同一套 scale/translate 影响）。
@@ -336,6 +343,7 @@ export function ImagePreviewOverlay({
   resetKey,
   imageSrc,
   centerSlot,
+  centerSlotFullBleed = false,
   onClose,
   wheelListLength,
   onWheelNavigate,
@@ -357,6 +365,7 @@ export function ImagePreviewOverlay({
   bootPhase = 't3',
   onPrimaryImageReady,
   topRightExtra,
+  detailToggle,
   children,
   flatImageOverlay,
   panoViewerRef: panoViewerRefProp,
@@ -730,7 +739,8 @@ export function ImagePreviewOverlay({
     [flatNavigateCanvasOk]
   );
 
-  const splitLayoutActive = rightRail != null && contentRightInset !== '0px';
+  const rightRailOverlayActive = Boolean(centerSlotFullBleed && rightRail != null && contentRightInset !== '0px');
+  const splitLayoutActive = rightRail != null && contentRightInset !== '0px' && !rightRailOverlayActive;
 
   const syncPrimaryImageReadyFromDom = useCallback((): boolean => {
     if (!open || centerSlot || !imageSrc?.trim()) return false;
@@ -1521,36 +1531,29 @@ export function ImagePreviewOverlay({
         ) : null}
 
         {centerSlot ? (
-          contentRightInset !== '0px' || contentLeftInset !== '0px' ? (
-            <div
-              className="absolute top-1/2 z-[4] box-border flex min-w-0 items-stretch justify-center px-4"
-              style={{
-                left:
-                  contentLeftInset !== '0px'
-                    ? `calc(max(1rem, env(safe-area-inset-left, 0px)) + ${contentLeftInset} + 0.75rem)`
-                    : 'max(1rem, env(safe-area-inset-left, 0px))',
-                right:
-                  useSplitLayout
-                    ? 'max(1rem, env(safe-area-inset-right, 0px))'
-                    : contentRightInset !== '0px'
-                      ? `calc(1rem + ${contentRightInset} + 0.75rem)`
-                      : 'max(1rem, env(safe-area-inset-right, 0px))',
-                transform: 'translateY(-50%)',
-              }}
-            >
-              {centerSlot}
-            </div>
-          ) : (
-            <div
-              className="absolute top-1/2 z-[4] box-border flex w-[min(80rem,calc(100vw-3rem))] max-w-[calc(100vw-3rem)] items-center justify-center px-4"
-              style={{
-                left: '50%',
-                transform: 'translate(-50%, -50%)',
-              }}
-            >
-              {centerSlot}
-            </div>
-          )
+          <div
+            className={`absolute bottom-0 top-0 z-[4] box-border flex min-w-0 items-stretch justify-center ${
+              centerSlotFullBleed ? '' : 'px-4 py-4'
+            }`}
+            style={{
+              left:
+                centerSlotFullBleed
+                  ? '0px'
+                  : contentLeftInset !== '0px'
+                  ? `calc(max(1rem, env(safe-area-inset-left, 0px)) + ${contentLeftInset} + 0.75rem)`
+                  : 'max(1rem, env(safe-area-inset-left, 0px))',
+              right:
+                centerSlotFullBleed
+                  ? '0px'
+                  : useSplitLayout
+                  ? 'max(1rem, env(safe-area-inset-right, 0px))'
+                  : contentRightInset !== '0px'
+                    ? `calc(1rem + ${contentRightInset} + 0.75rem)`
+                    : 'max(1rem, env(safe-area-inset-right, 0px))',
+            }}
+          >
+            {centerSlot}
+          </div>
         ) : null}
 
         {flatAnnotationColumnOutsidePanoStack ? (
@@ -1809,6 +1812,22 @@ export function ImagePreviewOverlay({
             {showToolbarExtended ? (
               <div className={WORKFLOW_IMAGE_PREVIEW_RAIL_DIVIDER} aria-hidden />
             ) : null}
+            {showToolbarExtended && detailToggle?.available !== false ? (
+              <button
+                type="button"
+                onClick={detailToggle?.onToggle}
+                className={
+                  detailToggle?.expanded
+                    ? `${IMAGE_LIGHTBOX_TOOL_ICON_BTN_IDLE} bg-blue-600/35 text-blue-100 ring-2 ring-inset ring-blue-400/40`
+                    : IMAGE_LIGHTBOX_TOOL_ICON_BTN_IDLE
+                }
+                title={detailToggle?.expanded ? '收起详情' : '展开详情'}
+                aria-label={detailToggle?.expanded ? '收起详情' : '展开详情'}
+                aria-pressed={Boolean(detailToggle?.expanded)}
+              >
+                <PanelRight {...PV_MODE_IC} aria-hidden />
+              </button>
+            ) : null}
             <button
               type="button"
               onClick={onClose}
@@ -1869,7 +1888,18 @@ export function ImagePreviewOverlay({
       backdropImageSrc={backdropImageSrc}
       shellRightGutter={shellRightGutter}
     >
-      {useSplitLayout ? (
+      {rightRailOverlayActive ? (
+        <div className="relative h-full w-full min-h-0 overflow-hidden">
+          {mainStageContent}
+          <div
+            className="absolute inset-y-0 right-0 z-[8] flex min-h-0 flex-col overflow-hidden"
+            style={{ width: contentRightInset }}
+            data-lightbox-right-rail
+          >
+            {!uiHidden ? rightRail : null}
+          </div>
+        </div>
+      ) : useSplitLayout ? (
         <div className="flex h-full w-full min-h-0">
           <div
             className="relative min-h-0 min-w-0 flex-1 h-full overflow-hidden"

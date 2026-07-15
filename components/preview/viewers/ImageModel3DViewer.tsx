@@ -99,11 +99,12 @@ const ImageModel3DViewer: React.FC<LazyImagePreviewViewerProps> = ({
     renderer.domElement.style.display = 'block';
     renderer.domElement.style.background = 'transparent';
     renderer.domElement.style.cursor = 'grab';
+    renderer.domElement.style.touchAction = 'none';
 
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
     controls.dampingFactor = 0.08;
-    controls.enablePan = false;
+    controls.enablePan = true;
     controls.minDistance = 0.25;
     controls.maxDistance = 20;
     controls.target.set(0, 0, 0);

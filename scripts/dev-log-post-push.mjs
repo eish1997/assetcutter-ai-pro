@@ -1,4 +1,4 @@
-/**
+﻿/**
  * After successful git push: summarize since last tip and upload to R2.
  * Usage:
  *   node --env-file=.env.local scripts/dev-log-post-push.mjs
@@ -53,6 +53,10 @@ function dayKeyLocal(d = new Date()) {
 
 function shortSha(sha) {
   return String(sha || '').slice(0, 7);
+}
+
+function zh(base64) {
+  return Buffer.from(base64, 'base64').toString('utf8');
 }
 
 /** Strip conventional-commit prefix */
@@ -146,6 +150,12 @@ function buildWorkSummaryBullets(nameStats, commits, _stats) {
   const isAgentPack = has(
     /services\/projectAgent|quickComposeChat|project-agent|quickComposeSendGate|quickComposeTurnContext|quickComposeMention/
   );
+  const isProviderOpsPack = has(
+    /services\/modelRegistry\/(canonicalModelCatalog|providerCatalog|providerModelCatalog|modelRouteCatalog|publishedModelCatalog)|server\/ai-gateway\/(model-ops-config-store|model-publication-guard|model-route-guard)|shared\/aiGatewayModelRoutes|AdminProviderKeysPanel|adminProviderKeysClient/
+  );
+  const isAssetPreviewPack = has(
+    /workflowAssetVariants|AssetCardPreviewRenderer|AssetMediaPreviewCenter|AssetPreviewOverlay|WorkflowLightboxAssetThumbStrip|WorkflowTextLightboxCenter/
+  );
 
   // 大包功能按文件拆条，避免一条 commit 压成一句旧文案
   if (isAgentPack) {
@@ -174,11 +184,50 @@ function buildWorkSummaryBullets(nameStats, commits, _stats) {
     }
   }
 
+  if (isProviderOpsPack) {
+    pushUnique('北极星是：把供应商、模型、Key 和发布状态收进同一个运营面板，管理员不再靠记文档和手工找控制台来维护模型');
+    if (has(/providerCatalog|providerModelCatalog|canonicalModelCatalog|modelRouteCatalog/)) {
+      pushUnique('供应商模型中心有了主清单：OpenAI、火山方舟/即梦、Tripo、腾讯混元等供应商，按能提供哪些模型和类型统一维护');
+    }
+    if (has(/publishedModelCatalog|model-ops-config-store|model-publication-guard/)) {
+      pushUnique('模型发布更像商业后台了：哪些模型允许出现在工作台，哪些只是待接入或待发布，都可以用配置控制');
+    }
+    if (has(/model-route-guard|aiGatewayModelRoutes|provider-router/)) {
+      pushUnique('AI Gateway 多了一层路由保护：前端选到模型后，后端会按已发布模型和可执行供应商路线判断能不能真正调用');
+    }
+    if (has(/AdminProviderKeysPanel|adminProviderKeysClient|provider-key-store/)) {
+      pushUnique('Key 池从某几个模型的配置页升级为按供应商管理：能看供应商链接、Key 健康、测试结果和可用模型');
+    }
+    if (has(/openai-official-adapter|image-worker|text-worker/)) {
+      pushUnique('OpenAI 官方通道也接进了统一 Gateway，文本和图片任务以后可以和其它供应商走同一套任务链路');
+    }
+  }
+
+  if (isAssetPreviewPack) {
+    pushUnique('资产体验从图片为中心，往文、图、视频、3D、音频都能管理迈了一步');
+    if (has(/workflowAssetVariants|types\.ts/)) {
+      pushUnique('资产底层开始按版本识别不同产物：同一张卡可以有文字、图片、视频、3D、音频或文件版本');
+    }
+    if (has(/AssetCardPreviewRenderer/)) {
+      pushUnique('资产卡片更懂类型了：文本显示正文摘要，视频有播放标识，3D 有格式标识，音频有波形占位');
+    }
+    if (has(/WorkflowLightboxAssetThumbStrip|AssetPreviewOverlay/)) {
+      pushUnique('打开预览后，右侧可以在资产和版本之间切换，不再只能围着图片结果转');
+    }
+    if (has(/WorkflowTextLightboxCenter/)) {
+      pushUnique('文字资产终于像小文档了：可阅读、可编辑、看结构、复制全文、下载 TXT/MD，也能一键加入输入框');
+    }
+    if (has(/AssetMediaPreviewCenter/)) {
+      pushUnique('视频、音频、文件和无封面的 3D 也有了预览中心：能播放、复制链接、下载，缺文件时也能看到来源信息');
+    }
+  }
+
   for (const c of commits) {
     const h = plainFromSubject(c.subject);
     if (!h) continue;
     // 已有 Agent 拆条时，跳过笼统的「先出计划再出活」一句
     if (isAgentPack && /项目 Agent/.test(h) && bullets.length >= 2) continue;
+    if ((isProviderOpsPack || isAssetPreviewPack) && /大图预览|AI Gateway/.test(h) && bullets.length >= 4) continue;
     pushUnique(h);
     if (bullets.length >= 8) break;
   }

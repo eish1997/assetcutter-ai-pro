@@ -1,5 +1,4 @@
-import React, { useState } from 'react';
-import { PanelRight } from 'lucide-react';
+import React from 'react';
 import { WORKFLOW_LIGHTBOX_RIGHT_PANEL_WIDTH_CLASS } from './workflowSectionUiConstants';
 
 export type WorkflowLightboxDetailEdgePanelProps = {
@@ -22,55 +21,23 @@ export default function WorkflowLightboxDetailEdgePanel({
   edgeRightClassName = 'right-0',
   children,
 }: WorkflowLightboxDetailEdgePanelProps) {
-  const [expanded, setExpanded] = useState(false);
-
   return (
     <div
-      className={`absolute ${edgeRightClassName} z-[9] flex max-h-[72vh] min-h-0 flex-row-reverse items-stretch`}
+      className={`absolute ${edgeRightClassName} z-[9] flex max-h-[72vh] min-h-0 items-stretch`}
       style={{ top: 'max(3.5rem, env(safe-area-inset-top, 0px))' }}
-      onMouseEnter={() => setExpanded(true)}
-      onMouseLeave={() => setExpanded(false)}
     >
       <div
         className={[
-          'flex w-9 shrink-0 flex-col items-center justify-center',
-          'rounded-l-xl border border-r-0 border-white/10',
-          'bg-[#141418]/96 shadow-[-6px_0_28px_rgba(0,0,0,0.42)]',
-          'ring-1 ring-inset ring-white/[0.07]',
-          'transition-[background-color,box-shadow] duration-200 ease-out',
-          expanded ? 'bg-[#18181e]/98 shadow-[-8px_0_32px_rgba(0,0,0,0.5)]' : '',
-        ].join(' ')}
-        aria-label="详情面板"
-        title="移入展开详情 · 移开收起"
-      >
-        <PanelRight
-          size={18}
-          strokeWidth={1.75}
-          className={[
-            'shrink-0 text-gray-300 transition-[transform,color] duration-200 ease-out',
-            expanded ? '-translate-x-0.5 text-blue-200/90' : '',
-          ].join(' ')}
-          aria-hidden
-        />
-      </div>
-
-      <div
-        className={[
           'flex min-h-0 min-w-0 flex-col overflow-hidden',
-          'transition-[width,opacity,visibility] duration-200 ease-[cubic-bezier(0.22,1,0.36,1)]',
-          expanded
-            ? `${WORKFLOW_LIGHTBOX_RIGHT_PANEL_WIDTH_CLASS} max-w-[calc(100vw-2.75rem)] opacity-100 visible pointer-events-auto`
-            : 'w-0 opacity-0 invisible pointer-events-none',
+          `${WORKFLOW_LIGHTBOX_RIGHT_PANEL_WIDTH_CLASS} max-w-[calc(100vw-2.75rem)] opacity-100 visible pointer-events-auto`,
         ].join(' ')}
-        aria-hidden={!expanded}
       >
         <div
           className={[
             'flex min-h-0 flex-col gap-2 pr-0.5',
             WORKFLOW_LIGHTBOX_RIGHT_PANEL_WIDTH_CLASS,
             'max-h-[72vh] max-w-[calc(100vw-2.75rem)]',
-            'transition-transform duration-200 ease-[cubic-bezier(0.22,1,0.36,1)] will-change-transform',
-            expanded ? 'translate-x-0' : 'translate-x-2',
+            'transition-transform duration-200 ease-[cubic-bezier(0.22,1,0.36,1)] will-change-transform translate-x-0',
           ].join(' ')}
         >
           <div

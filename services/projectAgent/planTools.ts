@@ -56,12 +56,21 @@ function collectExpertIds(intent: ProjectAgentIntent): string[] {
 }
 
 function hasMainImage(intent: ProjectAgentIntent): boolean {
+  if (intent.hasInlineImageRefs === true) return true;
   if (intent.mainAssetId?.trim()) return true;
   if (intent.surface.kind === 'lightbox' && intent.surface.assetId.trim()) return true;
   if (intent.surface.kind === 'canvas' && intent.surface.selectedAssetIds.some((id) => id.trim())) {
     return true;
   }
   return false;
+}
+
+function wantsVisualAnswer(intent: ProjectAgentIntent): boolean {
+  if (!hasMainImage(intent)) return false;
+  const text = intent.text.trim();
+  if (!text) return false;
+  if (intent.mode === 'image' || intent.mode === '3d') return false;
+  return /(?:这是什么|是什么东西|是什么|看一下|识别|描述|分析|画面|图里|图片|current|what\s+is|what's|describe|identify)/i.test(text);
 }
 
 function resolveMainAssetId(intent: ProjectAgentIntent): string | undefined {
@@ -187,6 +196,19 @@ function planToolsRuleFallback(intent: ProjectAgentIntent): AgentPlanResult {
           displayKey: intent.surface.kind === 'lightbox' ? intent.surface.displayKey : '',
           localEdit: true,
           text: intent.text,
+        }),
+      ],
+    };
+  }
+
+  if (wantsVisualAnswer(intent)) {
+    return {
+      ok: true,
+      plan: [
+        step('run_plain_i2t', {
+          text: intent.text,
+          mainAssetId: resolveMainAssetId(intent),
+          referenceAssetIds: intent.referenceAssetIds,
         }),
       ],
     };

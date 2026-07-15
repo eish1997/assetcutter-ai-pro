@@ -10,6 +10,7 @@ import type { QuickComposeThreadMessage } from './quickComposeThread';
 /** P0+P1 tool ids — P0 media ≤6; P1 adds invoke_expert (still one id for all experts). */
 export const PROJECT_AGENT_TOOL_IDS = [
   'run_plain_text',
+  'run_plain_i2t',
   'run_plain_t2i',
   'run_plain_i2i',
   'run_preset',
@@ -110,6 +111,8 @@ export type ProjectAgentIntent = {
   /** Primary image asset for i2i when mode=image (or from surface). */
   mainAssetId?: string;
   referenceAssetIds?: string[];
+  /** True when the turn includes image bytes that are not represented by a durable asset id. */
+  hasInlineImageRefs?: boolean;
   imageSettings?: AgentImageSettingsSummary;
   textModel?: string;
   /** True when at least one enabled generate_3d preset exists in host catalog. */
