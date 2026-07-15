@@ -55,6 +55,7 @@
     "guard:cloud-index": "node scripts/check-workspace-cloud-index-guard.mjs",
     "guard:workflow-inline-bytes": "node scripts/check-workflow-inline-bytes-guard.mjs",
     "guard:no-default-workflow-upload": "node scripts/check-no-default-workflow-upload.mjs",
+    "guard:ai-routing": "node scripts/check-ai-routing-boundary.mjs",
     "guard:storage": "npm run -s guard:persistence && npm run -s guard:cloud-index && npm run -s guard:workflow-inline-bytes && npm run -s guard:no-default-workflow-upload",
     "local-companion:typecheck": "npm run typecheck --prefix local-companion",
     "local-companion:dev": "npm run dev --prefix local-companion",

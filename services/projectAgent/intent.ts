@@ -20,6 +20,7 @@ export type BuildProjectAgentIntentInput = {
   referenceAssetIds?: string[];
   imageSettings?: ProjectAgentIntent['imageSettings'];
   textModel?: string;
+  hasInlineImageRefs?: boolean;
   hasEnabled3dPreset?: boolean;
   enabledSkills?: ProjectAgentIntent['enabledSkills'];
 };
@@ -37,6 +38,9 @@ export function buildProjectAgentIntent(input: BuildProjectAgentIntentInput): Pr
       : {}),
     ...(input.imageSettings ? { imageSettings: input.imageSettings } : {}),
     ...(input.textModel ? { textModel: input.textModel } : {}),
+    ...(typeof input.hasInlineImageRefs === 'boolean'
+      ? { hasInlineImageRefs: input.hasInlineImageRefs }
+      : {}),
     ...(typeof input.hasEnabled3dPreset === 'boolean'
       ? { hasEnabled3dPreset: input.hasEnabled3dPreset }
       : {}),

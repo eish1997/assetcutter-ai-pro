@@ -36,6 +36,19 @@ export interface WorkflowAiCargoRow {
   readonly remark?: string;
 }
 
+export type WorkflowAiExecutionRouteStatus = 'gateway' | 'legacy' | 'partial_gateway' | 'local' | 'admin_only';
+
+export interface WorkflowAiExecutionEntryRow {
+  readonly id: string;
+  readonly entryLabel: string;
+  readonly sourceRefs: readonly string[];
+  readonly modalities: readonly string[];
+  readonly routeStatus: WorkflowAiExecutionRouteStatus;
+  readonly modelContract: 'canonical_model' | 'registry_id_only' | 'mixed' | 'not_applicable';
+  readonly contextContract: 'complete' | 'partial' | 'missing' | 'not_applicable';
+  readonly nextAction: string;
+}
+
 /** §1.4.3 Mermaid「门面菜单 → 拣货 → 闸门 → 供货商」节点 */
 export const WORKFLOW_AI_PICK_NODES: readonly WorkflowAiPickNode[] = [
   {
@@ -223,6 +236,128 @@ export const WORKFLOW_AI_PICK_NODES: readonly WorkflowAiPickNode[] = [
     label: '火山方舟（OpenAI 兼容）',
     codeRefs: ['volcengine-ark', 'https://ark.cn-beijing.volces.com/api/v3'],
     notes: '经 OpenAI-compatible adapter；与即梦 visual.volcengineapi.com 分离',
+  },
+];
+
+/**
+ * AI 执行入口审计表：用于判断“前端选了模型”是否真的能进入 Gateway route。
+ * 这是只读架构索引，不参与运行时分发；更新规则见 docs/AI执行路由闭环架构审计.md。
+ */
+export const WORKFLOW_AI_EXECUTION_ENTRY_ROWS: readonly WorkflowAiExecutionEntryRow[] = [
+  {
+    id: 'quick_compose_text',
+    entryLabel: '全局输入框 / 快捷生成 · 文生文',
+    sourceRefs: ['components/WorkflowSection.tsx', 'components/WorkspaceQuickComposeBar.tsx'],
+    modalities: ['text'],
+    routeStatus: 'gateway',
+    modelContract: 'canonical_model',
+    contextContract: 'partial',
+    nextAction: '已走 runUnifiedGeneration(text.generate) -> /api/ai/jobs；后续补流式和更细参数 schema。',
+  },
+  {
+    id: 'project_agent_plain_text',
+    entryLabel: 'Project Agent · run_plain_text',
+    sourceRefs: [
+      'services/projectAgent/planTools.ts',
+      'services/projectAgent/planner.ts',
+      'components/project-agent/mapPlanToQuickComposeInvoke.ts',
+      'components/WorkflowSection.tsx',
+    ],
+    modalities: ['text'],
+    routeStatus: 'gateway',
+    modelContract: 'canonical_model',
+    contextContract: 'partial',
+    nextAction: '已随快捷文本入口创建 Gateway Job；后续补 Agent 子运行 job id 展示。',
+  },
+  {
+    id: 'project_agent_current_view_qa',
+    entryLabel: 'Project Agent · @当前画面 / run_plain_i2t',
+    sourceRefs: [
+      'components/project-agent/mapPlanToQuickComposeInvoke.ts',
+      'services/projectAgent/contextAssembly.ts',
+      'components/WorkflowSection.tsx',
+    ],
+    modalities: ['text', 'image', 'model3d', 'video'],
+    routeStatus: 'gateway',
+    modelContract: 'canonical_model',
+    contextContract: 'partial',
+    nextAction: '第 4 轮补 asset preview snapshot / asset id / version id 后走 vision.describe。',
+  },
+  {
+    id: 'quick_compose_image',
+    entryLabel: '全局输入框 / 快捷生成 · 文生图 / 图生图',
+    sourceRefs: ['components/WorkflowSection.tsx', 'components/WorkspaceQuickComposeBar.tsx'],
+    modalities: ['image'],
+    routeStatus: 'gateway',
+    modelContract: 'canonical_model',
+    contextContract: 'partial',
+    nextAction: '已走 runUnifiedGeneration(workflow_text_to_image / workflow_image_edit)；后续补局部重绘、分镜和 route schema。',
+  },
+  {
+    id: 'capability_preset_execute',
+    entryLabel: '能力预设执行 · 文 / 图 / 视频 / 3D',
+    sourceRefs: ['services/capabilityExecutor.ts', 'components/CapabilityPresetSection.tsx'],
+    modalities: ['text', 'image', 'video', 'model3d'],
+    routeStatus: 'partial_gateway',
+    modelContract: 'mixed',
+    contextContract: 'partial',
+    nextAction: '先统一 resolve 组覆盖、预设、全局默认，再按 capability 创建 Gateway Job。',
+  },
+  {
+    id: 'storyboard_ai',
+    entryLabel: '分镜表 · 重绘 / 拼图 / 角色替换 / 结构解析',
+    sourceRefs: [
+      'components/storyboard/StoryboardTablePanel.tsx',
+      'services/storyboardTableRedraw.ts',
+      'services/storyboardFeedbackSheetRedraw.ts',
+      'services/storyboardRoleReplaceRedraw.ts',
+      'services/storyboardTableParse.ts',
+    ],
+    modalities: ['text', 'image'],
+    routeStatus: 'partial_gateway',
+    modelContract: 'canonical_model',
+    contextContract: 'partial',
+    nextAction: '第 5 轮纳入统一请求，并保留 storyboardAssetId / rowId metadata。',
+  },
+  {
+    id: 'workflow_video',
+    entryLabel: '工作流 · 生视频',
+    sourceRefs: ['services/unifiedAiGateway.ts', 'services/aiGatewayVideoExecution.ts'],
+    modalities: ['video'],
+    routeStatus: 'gateway',
+    modelContract: 'canonical_model',
+    contextContract: 'partial',
+    nextAction: '继续补 route parameter schema；保留 legacy HTTP bridge 为显式 fallback。',
+  },
+  {
+    id: 'workflow_3d',
+    entryLabel: '工作流 · 生 3D',
+    sourceRefs: ['services/generate3d/', 'services/unifiedAiGateway.ts', 'components/WorkflowSection.tsx'],
+    modalities: ['model3d'],
+    routeStatus: 'partial_gateway',
+    modelContract: 'mixed',
+    contextContract: 'partial',
+    nextAction: '按 model3d.generate 统一任务结构，Tripo / 混元 / 方舟 3D 只作为 route。',
+  },
+  {
+    id: 'local_sam_segment',
+    entryLabel: '本机伴侣 · 智能分割',
+    sourceRefs: ['services/lightboxSamSegment.ts', 'services/companionClient/compute.ts'],
+    modalities: ['image'],
+    routeStatus: 'local',
+    modelContract: 'not_applicable',
+    contextContract: 'complete',
+    nextAction: '作为本地工具例外保留，不进入 AI Gateway。',
+  },
+  {
+    id: 'admin_route_test',
+    entryLabel: '管理端 · Route Test / 可用性摘要',
+    sourceRefs: ['components/admin/AdminProviderKeysPanel.tsx', 'server/ai-gateway/model-availability-summary.js'],
+    modalities: ['text', 'image', 'video', 'model3d', 'music'],
+    routeStatus: 'admin_only',
+    modelContract: 'canonical_model',
+    contextContract: 'not_applicable',
+    nextAction: '继续区分 Key / Model / Route / Artifact 测试层级，避免误认为真实生成通过。',
   },
 ];
 

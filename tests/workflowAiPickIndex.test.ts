@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  WORKFLOW_AI_EXECUTION_ENTRY_ROWS,
   WORKFLOW_AI_CARGO_ROWS,
   WORKFLOW_AI_PICK_EDGES,
   WORKFLOW_AI_PICK_NODES,
@@ -101,5 +102,41 @@ describe('workflowAiPickIndex', () => {
     expect(WORKFLOW_AI_PICK_EDGES.some((e) => e.from === 'model_registry_pick' && e.to === 'jimeng_warehouse')).toBe(
       true
     );
+  });
+
+  it('AI 执行入口审计表覆盖第一轮需要跟踪的入口', () => {
+    const ids = WORKFLOW_AI_EXECUTION_ENTRY_ROWS.map((r) => r.id);
+    expect(ids).toEqual(
+      expect.arrayContaining([
+        'quick_compose_text',
+        'project_agent_plain_text',
+        'project_agent_current_view_qa',
+        'quick_compose_image',
+        'capability_preset_execute',
+        'storyboard_ai',
+        'workflow_video',
+        'workflow_3d',
+        'local_sam_segment',
+        'admin_route_test',
+      ])
+    );
+  });
+
+  it('第三轮审计明确文本与图片主入口已 Gateway 化，当前画面问答仍待第四轮收口', () => {
+    const byId = new Map(WORKFLOW_AI_EXECUTION_ENTRY_ROWS.map((r) => [r.id, r]));
+    expect(byId.get('quick_compose_text')?.routeStatus).toBe('gateway');
+    expect(byId.get('project_agent_plain_text')?.routeStatus).toBe('gateway');
+    expect(byId.get('quick_compose_image')?.routeStatus).toBe('gateway');
+    expect(byId.get('project_agent_current_view_qa')?.routeStatus).toBe('gateway');
+    expect(byId.get('storyboard_ai')?.routeStatus).toBe('partial_gateway');
+    expect(byId.get('workflow_video')?.routeStatus).toBe('gateway');
+  });
+
+  it('每个执行入口都有后续动作，避免只登记不收敛', () => {
+    for (const row of WORKFLOW_AI_EXECUTION_ENTRY_ROWS) {
+      expect(row.nextAction.trim().length, row.id).toBeGreaterThan(8);
+      expect(row.sourceRefs.length, row.id).toBeGreaterThan(0);
+      expect(row.modalities.length, row.id).toBeGreaterThan(0);
+    }
   });
 });

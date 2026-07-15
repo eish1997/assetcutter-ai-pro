@@ -2,8 +2,8 @@ import { describe, expect, it, vi } from 'vitest';
 
 const workflowChatMock = vi.hoisted(() => vi.fn());
 
-vi.mock('../services/unifiedAiGateway', () => ({
-  workflowChat: workflowChatMock,
+vi.mock('../services/storyboardGatewayText', () => ({
+  runStoryboardGatewayText: workflowChatMock,
 }));
 
 import {
@@ -220,9 +220,10 @@ describe('storyboardParsePageCore', () => {
     );
 
     expect(workflowChatMock).toHaveBeenCalledTimes(1);
-    const body = workflowChatMock.mock.calls[0]?.[0]?.[0]?.parts?.[0]?.text ?? '';
-    const modelArg = workflowChatMock.mock.calls[0]?.[1];
-    const optionsArg = workflowChatMock.mock.calls[0]?.[2];
+    const call = workflowChatMock.mock.calls[0]?.[0] ?? {};
+    const body = call.prompt ?? '';
+    const modelArg = call.model;
+    const optionsArg = call.requestOptions;
     expect(body).toContain('001 远景 2s 城市');
     expect(body).toContain(STORYBOARD_PARSE_PAGE_CANONICAL_HEADER);
     expect(body).toContain(DEFAULT_STORYBOARD_PARSE_PAGE_FORMAT_INSTRUCTION.slice(0, 20));

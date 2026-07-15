@@ -723,6 +723,13 @@ export type WorkflowPendingTask = {
    */
   inputImages?: string[];
   inputImagesObjectKeys?: string[];
+  /** 输入来源上下文，不含媒体字节；用于 Agent 当前画面 / 资产版本追踪。 */
+  inputContext?: {
+    source: 'current_view' | 'asset' | 'inline';
+    assetId?: string;
+    displayKey?: string;
+    mimeType?: string;
+  };
   /** Tripo multiview slots. Submit order is front/left/back/right. */
   tripoMultiviewImages?: Partial<Record<'front' | 'back' | 'left' | 'right', string>>;
   addedAt: number;

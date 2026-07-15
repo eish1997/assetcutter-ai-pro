@@ -2,8 +2,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const workflowChatMock = vi.hoisted(() => vi.fn());
 
-vi.mock('../services/unifiedAiGateway', () => ({
-  workflowChat: workflowChatMock,
+vi.mock('../services/storyboardGatewayText', () => ({
+  runStoryboardGatewayText: workflowChatMock,
 }));
 
 import {
@@ -43,7 +43,7 @@ describe('storyboardTableBulkAiDetect', () => {
       {}
     );
     expect(result.isStoryboard).toBe(false);
-    if (!result.isStoryboard) {
+    if (result.isStoryboard === false) {
       expect(result.reason).toContain('聊天');
     }
   });
@@ -100,6 +100,7 @@ A01 | 远景 | 2s`;
       {}
     );
     expect(result.source).toBe('ai');
+    if (result.source !== 'ai') throw new Error('expected AI fallback result');
     expect(result.rows).toHaveLength(1);
     expect(result.normalizedText).toContain('办公室内景');
   });

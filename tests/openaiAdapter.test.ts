@@ -147,6 +147,11 @@ describe("openaiAdapter", () => {
     expect(coerceImageModelRegistryId("dall-e-3")).toBe("gpt-image-1.5");
   });
 
+  it("coerceImageModelRegistryId keeps provider image ids outside the legacy local registry", () => {
+    expect(coerceImageModelRegistryId("doubao-seedream-5-0")).toBe("doubao-seedream-5-0");
+    expect(coerceImageModelRegistryId("doubao-seedream-5-0-pro")).toBe("doubao-seedream-5-0-pro");
+  });
+
   it("geminiContentsToOpenAiMessages builds roles", () => {
     const messages = geminiContentsToOpenAiMessages(
       [

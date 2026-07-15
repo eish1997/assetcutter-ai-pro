@@ -3,6 +3,7 @@ import type {
   CapabilitySet,
   CapabilitySetNode,
   CapabilitySetEdge,
+  WorkflowPendingTask,
 } from '../types';
 import {
   planCapabilityModuleRoutes,
@@ -22,8 +23,6 @@ import {
   detectObjectsInImage,
   normalizeApiErrorMessage,
   workflowChat,
-  workflowGenerateImage,
-  workflowGenerateImageMultiRefs,
   workflowGenerateVideo,
   workflowUnderstandForImageGen,
   WorkflowVideoNotAvailableError,
@@ -46,6 +45,11 @@ import {
   type WorkflowTextSendBudgetKind,
 } from './workflowTextLimits';
 import { resolveUpstreamImageModelId, resolveUpstreamTextModelId } from './modelRegistry/resolve';
+import {
+  runUnifiedImageGeneration,
+  runUnifiedTextGeneration,
+  runUnifiedVisionTextGeneration,
+} from './generation/runUnifiedGeneration';
 import {
   submitCompanionHostBundleExecJob,
   submitCompanionHostBundleProbeJob,
@@ -107,6 +111,8 @@ export type CapabilityExecuteContext = {
   workflowAssetId?: string;
   /** 与 `WorkflowPendingTask.inputSourceDisplayKey` 一致；缺省按 original */
   workflowSourceDisplayKey?: string;
+  /** 与 `WorkflowPendingTask.inputContext` 一致；不含媒体字节 */
+  inputContext?: WorkflowPendingTask['inputContext'];
   /** 取消执行：透传到 gateway / gemini fetch 与退避 sleep */
   abortSignal?: AbortSignal;
 };
@@ -526,9 +532,32 @@ async function executeGenTextPath(
     };
   }
   ctx.onLog?.('info', `[${actionLabel}] 文字模型处理中…`, undefined);
-  const parts: Array<{ text: string } | { inlineData: { mimeType: string; data: string } }> = [];
-  for (const img of refs) {
-    parts.push({ inlineData: parseInlineForLlm(img) });
+  if (preset.category === 'text_to_text' && !hasImg) {
+    try {
+      throwIfCapabilityAborted(ctx);
+      const text = await runUnifiedTextGeneration({
+        prompt: [`【系统任务】\n${sys}`, `【用户文字】\n${userT}`].join('\n\n'),
+        model: resolveTextModelForPreset(preset, ctx),
+        uiSource: 'capability_executor.text_to_text',
+        assetContext: {
+          ...(ctx.companionProjectId ? { projectId: ctx.companionProjectId } : {}),
+          ...(ctx.workflowAssetId ? { sourceAssetId: ctx.workflowAssetId } : {}),
+        },
+        metadata: {
+          presetId: preset.id,
+          presetLabel: preset.label || preset.id,
+          workflowSourceDisplayKey: ctx.workflowSourceDisplayKey,
+        },
+        abortSignal: ctx.abortSignal,
+      });
+      const out = (text || '').trim();
+      if (!out) return { ok: false, kind: 'none', error: '文字模型未返回内容', durationMs: Date.now() - start };
+      return { ok: true, kind: 'text', text: out, durationMs: Date.now() - start };
+    } catch (e) {
+      const msg = normalizeApiErrorMessage(e);
+      logCapabilityRawError(ctx, actionLabel, e, msg);
+      return { ok: false, kind: 'none', error: msg, durationMs: Date.now() - start };
+    }
   }
   const body = [
     `【系统任务】\n${sys}`,
@@ -537,6 +566,42 @@ async function executeGenTextPath(
   ]
     .filter(Boolean)
     .join('\n\n');
+  if (hasImg) {
+    try {
+      throwIfCapabilityAborted(ctx);
+      const text = await runUnifiedVisionTextGeneration({
+        prompt: body,
+        model: resolveTextModelForPreset(preset, ctx),
+        images: refs,
+        uiSource: 'capability_executor.image_to_text',
+        assetContext: {
+          ...(ctx.companionProjectId ? { projectId: ctx.companionProjectId } : {}),
+          ...(ctx.workflowAssetId ? { sourceAssetId: ctx.workflowAssetId } : {}),
+          ...(ctx.inputContext?.source === 'current_view' && ctx.inputContext.assetId
+            ? { currentPreviewAssetId: ctx.inputContext.assetId }
+            : {}),
+        },
+        metadata: {
+          presetId: preset.id,
+          presetLabel: preset.label || preset.id,
+          workflowSourceDisplayKey: ctx.workflowSourceDisplayKey,
+          inputContext: ctx.inputContext,
+        },
+        abortSignal: ctx.abortSignal,
+      });
+      const out = (text || '').trim();
+      if (!out) return { ok: false, kind: 'none', error: '文字模型未返回内容', durationMs: Date.now() - start };
+      return { ok: true, kind: 'text', text: out, durationMs: Date.now() - start };
+    } catch (e) {
+      const msg = normalizeApiErrorMessage(e);
+      logCapabilityRawError(ctx, actionLabel, e, msg);
+      return { ok: false, kind: 'none', error: msg, durationMs: Date.now() - start };
+    }
+  }
+  const parts: Array<{ text: string } | { inlineData: { mimeType: string; data: string } }> = [];
+  for (const img of refs) {
+    parts.push({ inlineData: parseInlineForLlm(img) });
+  }
   parts.push({ text: body });
   try {
     throwIfCapabilityAborted(ctx);
@@ -787,18 +852,25 @@ async function executeSplitComponentCapability(
       preset.imageAspectRatio || preset.imageSize
         ? { aspectRatio: preset.imageAspectRatio, imageSize: preset.imageSize }
         : undefined;
-    const result = await workflowGenerateImage(
-      cropped,
+    const result = await runUnifiedImageGeneration({
       prompt,
-      modelId,
+      model: modelId,
+      referenceImages: [cropped],
       imageOptions,
-      undefined,
-      ctx.abortSignal,
-      {
+      uiSource: 'capability_executor.split_component',
+      assetContext: {
+        ...(ctx.companionProjectId ? { projectId: ctx.companionProjectId } : {}),
+        ...(ctx.workflowAssetId ? { sourceAssetId: ctx.workflowAssetId } : {}),
+      },
+      metadata: {
+        presetId: preset.id,
+        presetLabel: preset.label || preset.id,
+        workflowSourceDisplayKey: ctx.workflowSourceDisplayKey,
         ...(opts?.batchGroupKey ? { batchGroupKey: opts.batchGroupKey } : {}),
         ...(opts?.batchGroupExpected ? { batchGroupExpected: opts.batchGroupExpected } : {}),
-      }
-    );
+      },
+      abortSignal: ctx.abortSignal,
+    });
     return {
       ok: true,
       kind: 'image',
@@ -1006,18 +1078,25 @@ export async function executeCapability(
         preset.imageAspectRatio || preset.imageSize
           ? { aspectRatio: preset.imageAspectRatio, imageSize: preset.imageSize }
           : undefined;
-      const result = await workflowGenerateImage(
-        null,
+      const result = await runUnifiedImageGeneration({
         prompt,
-        modelId,
+        model: modelId,
         imageOptions,
-        opts?.imageSystemPrompt,
-        ctx.abortSignal,
-        {
+        systemInstruction: opts?.imageSystemPrompt,
+        uiSource: 'capability_executor.text_to_image',
+        assetContext: {
+          ...(ctx.companionProjectId ? { projectId: ctx.companionProjectId } : {}),
+          ...(ctx.workflowAssetId ? { sourceAssetId: ctx.workflowAssetId } : {}),
+        },
+        metadata: {
+          presetId: preset.id,
+          presetLabel: preset.label || preset.id,
+          workflowSourceDisplayKey: ctx.workflowSourceDisplayKey,
           ...(opts?.batchGroupKey ? { batchGroupKey: opts.batchGroupKey } : {}),
           ...(opts?.batchGroupExpected ? { batchGroupExpected: opts.batchGroupExpected } : {}),
-        }
-      );
+        },
+        abortSignal: ctx.abortSignal,
+      });
       return {
         ok: true,
         kind: 'image',
@@ -1094,23 +1173,42 @@ export async function executeCapability(
       if (refs.length >= 2) {
         ctx.onLog?.('info', `[${actionLabel}] 多参考图生图中（${refs.length} 张）…`, undefined);
         emitStep(`${actionLabel}：多参考图生图中（${refs.length} 张）…`);
-        result = await workflowGenerateImageMultiRefs(
-          refs,
-          augmented,
-          modelId,
+        result = await runUnifiedImageGeneration({
+          prompt: augmented,
+          model: modelId,
+          referenceImages: refs,
           imageOptions,
-          ctx.abortSignal
-        );
+          uiSource: 'capability_executor.image_edit_multi',
+          assetContext: {
+            ...(ctx.companionProjectId ? { projectId: ctx.companionProjectId } : {}),
+            ...(ctx.workflowAssetId ? { sourceAssetId: ctx.workflowAssetId } : {}),
+          },
+          metadata: {
+            presetId: preset.id,
+            presetLabel: preset.label || preset.id,
+            workflowSourceDisplayKey: ctx.workflowSourceDisplayKey,
+          },
+          abortSignal: ctx.abortSignal,
+        });
       } else {
-        result = await workflowGenerateImage(
-          refs[0]!,
-          augmented,
-          modelId,
+        result = await runUnifiedImageGeneration({
+          prompt: augmented,
+          model: modelId,
+          referenceImages: [refs[0]!],
           imageOptions,
-          undefined,
-          ctx.abortSignal,
-          batchOpts
-        );
+          uiSource: 'capability_executor.image_edit',
+          assetContext: {
+            ...(ctx.companionProjectId ? { projectId: ctx.companionProjectId } : {}),
+            ...(ctx.workflowAssetId ? { sourceAssetId: ctx.workflowAssetId } : {}),
+          },
+          metadata: {
+            presetId: preset.id,
+            presetLabel: preset.label || preset.id,
+            workflowSourceDisplayKey: ctx.workflowSourceDisplayKey,
+            ...batchOpts,
+          },
+          abortSignal: ctx.abortSignal,
+        });
       }
     } catch (e) {
       const msg = capabilityStepErrorMessage('image_create', e);
@@ -1381,13 +1479,24 @@ export async function executeCapabilitySet(
           const imageOptions = (preset.imageAspectRatio || preset.imageSize) ? { aspectRatio: preset.imageAspectRatio, imageSize: preset.imageSize } : undefined;
           try {
             throwIfCapabilityAborted(ctx);
-            const result = await workflowGenerateImageMultiRefs(
-              images,
-              instruction,
-              modelId,
+            const result = await runUnifiedImageGeneration({
+              prompt: instruction,
+              model: modelId,
+              referenceImages: images,
               imageOptions,
-              ctx.abortSignal
-            );
+              uiSource: 'capability_executor.capability_set',
+              assetContext: {
+                ...(ctx.companionProjectId ? { projectId: ctx.companionProjectId } : {}),
+                ...(ctx.workflowAssetId ? { sourceAssetId: ctx.workflowAssetId } : {}),
+              },
+              metadata: {
+                presetId: preset.id,
+                presetLabel: preset.label || preset.id,
+                nodeId: n.id,
+                workflowSourceDisplayKey: ctx.workflowSourceDisplayKey,
+              },
+              abortSignal: ctx.abortSignal,
+            });
             outputs.set(n.id, result);
             recordNodeImage(n.id, result);
             lastImage = result;

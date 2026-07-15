@@ -2,8 +2,8 @@ import { describe, expect, it, vi } from 'vitest';
 
 const workflowChatMock = vi.hoisted(() => vi.fn());
 
-vi.mock('../services/unifiedAiGateway', () => ({
-  workflowChat: workflowChatMock,
+vi.mock('../services/storyboardGatewayText', () => ({
+  runStoryboardGatewayText: workflowChatMock,
 }));
 
 import {
@@ -273,8 +273,8 @@ describe('storyboardTableParse', () => {
   });
 
   it('parseStoryboardRowsBatch unions catalog in row order after parallel LLM calls', async () => {
-    workflowChatMock.mockImplementation(async (contents: { role: string; parts: { text: string }[] }[]) => {
-      const text = contents[0]?.parts?.[0]?.text ?? '';
+    workflowChatMock.mockImplementation(async (request: { prompt?: string }) => {
+      const text = request.prompt ?? '';
       if (text.includes('\n\nr1')) {
         return JSON.stringify({
           fields: [

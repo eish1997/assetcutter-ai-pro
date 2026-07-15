@@ -74,7 +74,7 @@ import {
   DEFAULT_IMAGE_MODEL_REGISTRY_ID,
 } from '../services/modelRegistry/imageModels';
 import { coerceTextModelRegistryId } from '../services/modelRegistry/textModels';
-import { getDialogTextResponse } from '../services/geminiService';
+import { getDialogTextResponse } from '../services/unifiedAiGateway';
 import {
   executeCapability,
   executeCapabilitySet,
@@ -1344,6 +1344,7 @@ const WorkflowSection: React.FC<{
   /** 清空对话时递增；进行中的 submit 在 await 后若 generation 变了则勿追加消息 */
   const quickComposeClearGenerationRef = useRef(0);
   const projectAgentInlineImageRefsRef = useRef<string[]>([]);
+  const projectAgentInlineImageContextRef = useRef<WorkflowPendingTask['inputContext'] | null>(null);
   /** 最近一次 submitQuickCompose 创建的 taskId→assetId，供对话线程持久化 */
   const lastQuickComposeTaskAssetByIdRef = useRef<Record<string, string>>({});
   const projectAgentRuntimeRef = useRef<ProjectAgentRuntime | null>(null);
@@ -2145,7 +2146,7 @@ const WorkflowSection: React.FC<{
         : hasFrame
           ? collagePreset
           : pickStoryboardEditRedrawPreset(storyboardRedrawPresets, row);
-      if (!preset || preset.disabled) {
+      if (!preset || preset.enabled === false) {
         onLog?.(
           'warn',
           options?.feedbackOnly || hasFrame
@@ -2171,7 +2172,7 @@ const WorkflowSection: React.FC<{
         companionBaseUrl: String(getCompanionLocalBaseUrl() || ''),
         companionProjectId: String(workspaceProjectChrome?.activeProjectId || ''),
       });
-      if (!result.ok) {
+      if (result.ok === false) {
         onLog?.('warn', `分镜重绘失败：${result.error}`);
         return;
       }
@@ -3288,6 +3289,7 @@ ${lineSvg}
               companionProjectId: workspaceProjectChrome?.activeProjectId?.trim() || undefined,
               workflowAssetId: task.assetId,
               workflowSourceDisplayKey: task.inputSourceDisplayKey,
+              inputContext: task.inputContext,
               abortSignal: taskAbortControllersRef.current.get(task.id)?.signal,
               onLog,
               onRunProgress: (line) => {
@@ -3594,10 +3596,11 @@ ${lineSvg}
     const onRecovered = (ev: Event) => {
       const detail = (ev as CustomEvent<GeminiAsyncRecoveredDetail>).detail;
       if (!detail?.jobId) return;
+      const recoveredTasks = Array.from(geminiRecoveryTasksRef.current.values()) as WorkflowPendingTask[];
       const task =
         geminiRecoveryTasksRef.current.get(detail.jobId) ??
         (detail.workflowTaskId
-          ? Array.from(geminiRecoveryTasksRef.current.values()).find((t) => t.id === detail.workflowTaskId)
+          ? recoveredTasks.find((t) => t.id === detail.workflowTaskId)
           : undefined);
       if (!task) return;
       const applied = applyGeminiRecoveredToWorkflowTask({
@@ -4650,6 +4653,7 @@ ${lineSvg}
     reuseAssetId?: string;
     reuseAssetIds?: string[];
     referenceAssetIds?: string[];
+    inputContext?: WorkflowPendingTask['inputContext'];
     /** 侧栏对话等：无附图时强制走「文」内置链路，避免误触文生图 RPM */
     preferTextPipelineWhenNoImagesAttached?: boolean;
     /** 侧栏 Agent：带图问答走图生文，而不是普通文生文或图生图 */
@@ -5030,6 +5034,7 @@ ${lineSvg}
         if (!task) return [];
         task.inputImage = imgsAll[0]!;
         task.inputText = body;
+        if (invoke?.inputContext) task.inputContext = invoke.inputContext;
         if (imgsAll.length > 1) task.inputImages = imgsAll.slice(1);
         return runPlainBatch([asset], [task]);
       }
@@ -5682,6 +5687,9 @@ ${lineSvg}
         ...(mapped.allowVisionText && projectAgentInlineImageRefsRef.current.length > 0
           ? { overrideImageDataUrls: projectAgentInlineImageRefsRef.current }
           : {}),
+        ...(mapped.allowVisionText && projectAgentInlineImageContextRef.current
+          ? { inputContext: projectAgentInlineImageContextRef.current }
+          : {}),
         ...(mapped.presetCardsOverride ? { presetCardsOverride: mapped.presetCardsOverride } : {}),
         ...(mapped.reuseAssetId ? { reuseAssetId: mapped.reuseAssetId } : {}),
         ...(mapped.reuseAssetIds?.length ? { reuseAssetIds: mapped.reuseAssetIds } : {}),
@@ -5821,6 +5829,21 @@ ${lineSvg}
         const asset = id ? assetsRef.current.find((a) => a.id === id) : null;
         return asset ? getAssetDisplayImage(asset).trim() : '';
       })();
+      projectAgentInlineImageContextRef.current =
+        hasCurrentViewMention && currentViewDataUrlForAgent
+          ? {
+              source: 'current_view',
+              ...(lightboxAssetIdRef.current ? { assetId: String(lightboxAssetIdRef.current).trim() } : {}),
+              ...(lightboxAssetIdRef.current
+                ? {
+                    displayKey:
+                      assetsRef.current.find((a) => a.id === String(lightboxAssetIdRef.current).trim())?.displayKey ||
+                      undefined,
+                  }
+                : {}),
+              mimeType: 'image/png',
+            }
+          : null;
 
       const resolved = resolveQuickComposeReferences({
         segments: quickComposeSegmentsRef.current,
@@ -9656,6 +9679,10 @@ ${lineSvg}
         return;
       }
 
+      if (src.kind !== 'group') {
+        finish();
+        return;
+      }
       const { groupAssetId, itemIndexes } = src;
       if (groupAssetId === targetId) {
         finish();

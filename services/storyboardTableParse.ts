@@ -9,7 +9,7 @@ import { resolveTextModelForPreset } from './capabilityTextModel';
 import type { CapabilityExecuteContext } from './capabilityExecutor';
 import { runStoryboardLlmAudited } from './storyboardTaskAuditEvents';
 import { STORYBOARD_BULK_LLM_REQUEST_OPTIONS } from './storyboardTableBulkLlmConstants';
-import { workflowChat } from './unifiedAiGateway';
+import { runStoryboardGatewayText } from './storyboardGatewayText';
 
 export const STORYBOARD_PARSE_PRESET_KEY = 'ac_storyboard_parse_preset_v1';
 export const STORYBOARD_PARSE_DEFAULT_PRESET_ID = 'storyboard_parse_structured_v1';
@@ -629,7 +629,7 @@ export function compileRedrawPrompt(
 ): string {
   const parts: string[] = [];
   const shotNo = (row.shotNo || '').trim();
-  if (shotNo) parts.push(`【镜头号 ${shotNo}】`);
+  if (shotNo) parts.push(`【镜头号 ${parseShotNoFromParsedValue(shotNo) || formatStoryboardNumericShotNo(shotNo)}】`);
   for (const def of catalog) {
     if (!def.redrawInclude) continue;
     const value = String(row.shotFields[def.id] || '').trim();
@@ -743,11 +743,17 @@ export async function parseStoryboardTextWithPreset(
     ctx,
     options?.rowId ? 'parse_row' : 'parse_text',
     async () => {
-      const raw = await workflowChat(
-        [{ role: 'user', parts: [{ text: body }] }],
-        resolveTextModelForPreset(preset, ctx),
-        STORYBOARD_BULK_LLM_REQUEST_OPTIONS
-      );
+      const operation = options?.rowId ? 'parse_row' : 'parse_text';
+      const raw = await runStoryboardGatewayText({
+        prompt: body,
+        model: resolveTextModelForPreset(preset, ctx),
+        ctx,
+        operation,
+        presetId: preset.id,
+        presetLabel: label,
+        rowId: options?.rowId,
+        requestOptions: STORYBOARD_BULK_LLM_REQUEST_OPTIONS,
+      });
       const out = normalizeParseModelOutput(raw);
       ctx.onLog?.('info', `分镜表 · 结构化解析完成（${out.fields.length} 个字段）`);
       return out;
@@ -783,11 +789,15 @@ export async function parseStoryboardBulkStructuredWithPreset(
     ctx,
     'parse_bulk',
     async () => {
-      const raw = await workflowChat(
-        [{ role: 'user', parts: [{ text: body }] }],
-        resolveTextModelForPreset(preset, ctx),
-        STORYBOARD_BULK_LLM_REQUEST_OPTIONS
-      );
+      const raw = await runStoryboardGatewayText({
+        prompt: body,
+        model: resolveTextModelForPreset(preset, ctx),
+        ctx,
+        operation: 'parse_bulk',
+        presetId: preset.id,
+        presetLabel: label,
+        requestOptions: STORYBOARD_BULK_LLM_REQUEST_OPTIONS,
+      });
       const out = normalizeBulkParseModelOutput(raw);
       ctx.onLog?.('info', `分镜表 · 批量结构化解析完成（${out.rows.length} 镜）`);
       return out;
@@ -948,7 +958,7 @@ export async function parseStoryboardRowsBatch(
   for (const row of targets) {
     const outcome = outcomeById.get(row.id);
     if (!outcome) continue;
-    if (!outcome.ok) {
+    if (outcome.ok === false) {
       results.push({ rowId: row.id, ok: false, error: outcome.error });
       continue;
     }
@@ -1069,11 +1079,16 @@ export async function optimizeStoryboardTextWithPreset(
     ctx,
     'optimize_row',
     async () => {
-      const raw = await workflowChat(
-        [{ role: 'user', parts: [{ text: body }] }],
-        resolveTextModelForPreset(preset, ctx),
-        STORYBOARD_BULK_LLM_REQUEST_OPTIONS
-      );
+      const raw = await runStoryboardGatewayText({
+        prompt: body,
+        model: resolveTextModelForPreset(preset, ctx),
+        ctx,
+        operation: 'optimize_row',
+        presetId: preset.id,
+        presetLabel: label,
+        rowId: row.id,
+        requestOptions: STORYBOARD_BULK_LLM_REQUEST_OPTIONS,
+      });
       const out = normalizeOptimizeModelOutput(raw, catalog);
       ctx.onLog?.('info', `分镜表 · 结构化优化完成（${out.fields.length} 个字段）`);
       return out;
@@ -1130,7 +1145,7 @@ export function canonicalStoryboardImportFieldLabel(raw: string): string {
   if (/^对白$|^台词/.test(trimmed)) return '对白';
   if (/^景别$|^景$/.test(trimmed)) return '景别';
   if (/^焦距|^焦段/.test(trimmed)) return '焦距';
-  if (/^音效$|^声音$|^音乐$|^拟音/.test(trimmed)) return '备注';
+  if (/^(?:\u97f3\u6548|\u58f0\u97f3|\u97f3\u4e50|\u62df\u97f3)$/.test(trimmed)) return '\u97f3\u6548';
   if (/^备注$|^说明$|^注释$/.test(trimmed)) return '备注';
   return trimmed;
 }

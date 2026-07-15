@@ -139,12 +139,22 @@ const LEGACY_IMAGE_REGISTRY_ALIASES: Record<string, DialogImageModelRegistryId> 
   "gemini-3-pro-image-preview": "gemini-3-pro-image",
 };
 
+function isProviderImageModelId(id: string): boolean {
+  const s = (id || "").trim();
+  if (!s) return false;
+  if (/^doubao-seedream-/i.test(s)) return true;
+  if (/^gpt-image-/i.test(s)) return true;
+  if (/^dall-e-/i.test(s)) return true;
+  return false;
+}
+
 /** 旧 gear id 或 registryId → 合法 registryId */
 export function coerceImageModelRegistryId(raw?: string | null): DialogImageModelRegistryId {
   const s = (raw || "").trim();
   const fromLegacyAlias = LEGACY_IMAGE_REGISTRY_ALIASES[s];
   if (fromLegacyAlias) return fromLegacyAlias;
   if (s && isRegisteredImageModelId(s)) return s as DialogImageModelRegistryId;
+  if (isProviderImageModelId(s)) return s as DialogImageModelRegistryId;
   const fromGear = LEGACY_IMAGE_GEAR_TO_REGISTRY[s];
   if (fromGear) return fromGear;
   return DEFAULT_IMAGE_MODEL_REGISTRY_ID;

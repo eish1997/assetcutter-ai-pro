@@ -2,7 +2,7 @@ import type { CustomAppModule } from '../types';
 import { resolveTextModelForPreset } from './capabilityTextModel';
 import type { CapabilityExecuteContext } from './capabilityExecutor';
 import { auditStoryboardTaskOutcome, storyboardAssetIdFromCtx } from './storyboardTaskAuditEvents';
-import { workflowChat } from './unifiedAiGateway';
+import { runStoryboardGatewayText } from './storyboardGatewayText';
 import {
   STORYBOARD_BULK_LLM_REQUEST_OPTIONS,
   STORYBOARD_BULK_LLM_TIMEOUT_MS,
@@ -100,11 +100,15 @@ export async function normalizeStoryboardBulkWithAi(
   const assetId = storyboardAssetIdFromCtx(ctx);
   let raw: string;
   try {
-    raw = await workflowChat(
-      [{ role: 'user', parts: [{ text: body }] }],
-      resolveTextModelForPreset(preset, ctx),
-      STORYBOARD_BULK_LLM_REQUEST_OPTIONS
-    );
+    raw = await runStoryboardGatewayText({
+      prompt: body,
+      model: resolveTextModelForPreset(preset, ctx),
+      ctx,
+      operation: 'bulk_normalize',
+      presetId: preset.id,
+      presetLabel: label,
+      requestOptions: STORYBOARD_BULK_LLM_REQUEST_OPTIONS,
+    });
   } catch (err) {
     if (assetId) {
       auditStoryboardTaskOutcome({
@@ -222,7 +226,7 @@ export async function parseStoryboardBulkTextWithAiFallback(
   }
 
   const ai = await normalizeStoryboardBulkWithAi(text, preset, ctx, { mode });
-  if (!ai.isStoryboard) {
+  if (ai.isStoryboard === false) {
     throw new Error(ai.reason);
   }
   return { ...ai.parsed, source: 'ai', normalizedText: ai.normalizedText };
