@@ -1,5 +1,6 @@
 import type { UpstreamProviderId } from "./types";
 import { imageModelProviderRoute } from "./imageModels";
+import { isRegisteredJimengImageModelId } from "./jimengImageRegistry";
 import { textModelFamily } from "./textModels";
 import type { ChannelId, ModelFamily, ModelResolveRole, ProviderBinding } from "./types";
 
@@ -17,13 +18,18 @@ export function channelToResolveProvider(channel: ChannelId, family: ModelFamily
     case "vectorengine":
       return "vectorengine";
     case "openai-official":
-    case "volcengine-ark":
       return "openai";
+    case "volcengine-ark":
+      return "volcengine-ark";
+    case "volcengine-jimeng":
+      return "volcengine-jimeng";
   }
 }
 
 export function familyForRegistry(registryId: string, role: ModelResolveRole): ModelFamily {
   if (role === "image") {
+    if (isRegisteredJimengImageModelId(registryId) || /^jimeng-image-/i.test(registryId)) return "volcengine-jimeng";
+    if (/^doubao-seedream-/i.test(registryId)) return "volcengine-ark";
     return imageModelProviderRoute(registryId) === "openai" ? "openai" : "gemini";
   }
   return textModelFamily(registryId);

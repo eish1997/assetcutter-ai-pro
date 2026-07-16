@@ -1,6 +1,6 @@
 /**
  * `workflow*` 经 `unifiedAiGateway.runMeteredAiCall` 捕获的非「公平拒绝」类限流/繁忙错误，
- * 通过 CustomEvent 交给根组件浮层（与 `geminiProxyFairnessError` 的公平拒绝事件分离）。
+ * 通过 CustomEvent 交给根组件浮层（与 `aiWorkerProxyFairnessError` 的公平拒绝事件分离）。
  */
 
 export const AC_UNIFIED_AI_SOFT_NOTICE_EVENT = "ac:unified-ai-soft-notice" as const;

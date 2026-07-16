@@ -3,6 +3,8 @@
  * 新增/下架模型只改本文件；`providerRoute` 决定调用 Gemini 还是 OpenAI，与设置页全局供应商解耦。
  */
 
+import { isRegisteredJimengImageModelId } from "./jimengImageRegistry";
+
 export type ImageModelProviderRoute = "gemini" | "openai";
 
 export const DIALOG_IMAGE_REGISTRY = [
@@ -98,7 +100,7 @@ export function isRegisteredImageModelId(id: string): boolean {
 /** 注册表 id 或已知旧 id（如 `gpt-image-1`） */
 export function isKnownImageModelRegistryInput(raw: string): boolean {
   const s = (raw || "").trim();
-  return isRegisteredImageModelId(s) || s in LEGACY_IMAGE_REGISTRY_ALIASES;
+  return isRegisteredImageModelId(s) || isRegisteredJimengImageModelId(s) || s in LEGACY_IMAGE_REGISTRY_ALIASES;
 }
 
 /** 生图 registryId 绑定的 API 供应商（与设置页全局 `aiProvider` 独立） */
@@ -143,6 +145,7 @@ function isProviderImageModelId(id: string): boolean {
   const s = (id || "").trim();
   if (!s) return false;
   if (/^doubao-seedream-/i.test(s)) return true;
+  if (/^jimeng-image-/i.test(s)) return true;
   if (/^gpt-image-/i.test(s)) return true;
   if (/^dall-e-/i.test(s)) return true;
   return false;

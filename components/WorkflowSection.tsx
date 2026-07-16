@@ -86,7 +86,7 @@ import {
   type GeminiAsyncRecoveredDetail,
 } from '../services/geminiAsyncJobRecovery';
 import {
-  extractGeminiProxyImageDataUrl,
+  extractAiWorkerProxyImageDataUrl,
   retryAllRecoverableGeminiJobs,
 } from '../services/unifiedAiGateway';
 import { consumeAiGatewayJobIdForImage } from '../services/aiGatewayImageResultRegistry';
@@ -3694,7 +3694,7 @@ ${lineSvg}
       const applied = applyGeminiRecoveredToWorkflowTask({
         detail,
         task,
-        extractImage: extractGeminiProxyImageDataUrl,
+        extractImage: extractAiWorkerProxyImageDataUrl,
       });
       if (!applied.applied) return;
       geminiRecoveryTasksRef.current.delete(detail.jobId);

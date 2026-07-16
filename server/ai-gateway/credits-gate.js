@@ -1,8 +1,8 @@
 import {
-  assertGeminiProxyCreditsGate,
+  assertAiWorkerProxyCreditsGate,
   estimatedCreditsFromProxyBody,
-  isGeminiProxyCreditsGateEnabled,
-} from '../gemini-proxy-credits-gate.js';
+  isAiWorkerProxyCreditsGateEnabled,
+} from '../ai-worker-proxy-credits-gate.js';
 import { CREDITS_EXCEEDED_CODE, CreditsExceededError, isCreditsBillingEnabled, reserveCredits } from '../credit-store.js';
 
 const CHECK_MODES = new Set(['check', 'precheck', 'on', 'true', '1']);
@@ -29,7 +29,7 @@ export function estimateAiGatewayJobCredits(input, fallback = 50) {
 export async function evaluateAiGatewayCreditsGate(req, input, options = {}) {
   const mode = options.mode || aiGatewayCreditsGateMode();
   const estimatedCredits = estimateAiGatewayJobCredits(input, options.fallbackCredits || 50);
-  const enabled = isGeminiProxyCreditsGateEnabled();
+  const enabled = isAiWorkerProxyCreditsGateEnabled();
   const reserveKey = String(req?.headers?.['x-ac-credits-reserve'] || '').trim() || null;
   const fairnessKey = String(req?.headers?.['x-ac-fairness-key'] || '').trim() || null;
 
@@ -85,7 +85,7 @@ export async function evaluateAiGatewayCreditsGate(req, input, options = {}) {
     return { ok: true, metadata };
   }
 
-  const gate = await assertGeminiProxyCreditsGate(req, estimatedCredits);
+  const gate = await assertAiWorkerProxyCreditsGate(req, estimatedCredits);
   if (gate.ok) {
     metadata.creditsGate.checked = true;
     return { ok: true, metadata };

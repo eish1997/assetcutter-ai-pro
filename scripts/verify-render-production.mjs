@@ -1,11 +1,11 @@
 /**
- * 云端 auth + 直连 Render gemini-proxy 生图 E2E（Vertex）。
+ * 云端 auth + 直连 Render ai-worker-proxy 生图 E2E（Vertex）。
  * 用法：$env:VERIFY_USER='maoer'; $env:VERIFY_PASS='***'; node --env-file=.env.local scripts/verify-render-production.mjs
  */
 import { ProxyAgent, fetch as undiciFetch } from 'undici';
 
 const AUTH = 'https://assetcutter-auth-api.onrender.com';
-const PROXY = 'https://assetcutter-gemini-proxy.onrender.com';
+const PROXY = 'https://assetcutter-ai-worker-proxy.onrender.com';
 const USER = String(process.env.VERIFY_USER || 'maoer').trim();
 const PASS = String(process.env.VERIFY_PASS || '').trim();
 const POLL_MS = 2500;

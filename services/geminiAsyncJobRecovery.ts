@@ -80,7 +80,7 @@ export function isGeminiAsyncJobNotFoundPoll(status: number, bodyText: string): 
 export function geminiAsyncJobNotFoundUserMessage(): string {
   return (
     '生图任务在代理上已丢失（常见于 Render 冷启动/重启，或 create/poll 打到不同实例）。' +
-    '请重新运行一次；本地稳定调试可在 .env.local 设 VITE_BULK_IMAGE_API=same-origin 并 npm run dev:gemini-proxy。'
+    '请重新运行一次；本地稳定调试可在 .env.local 设 VITE_AI_WORKER_PROXY_API=same-origin 并 npm run dev:ai-worker-proxy。'
   );
 }
 

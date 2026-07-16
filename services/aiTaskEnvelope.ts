@@ -1,6 +1,6 @@
 /**
  * 用户一次提交 = 一个任务信封：内部多步串行，占槽至整包成功或任一步失败。
- * 与 gemini-proxy 公平限流「单用户单请求」对齐；整包复用同一 proxy 预扣头。
+ * 与 ai-worker-proxy 公平限流「单用户单请求」对齐；整包复用同一 proxy 预扣头。
  */
 import type { AiBillingRouteStep } from './aiBillingGate';
 import { requiresPlatformCredits, sumPlatformMinCredits } from './aiBillingGate';

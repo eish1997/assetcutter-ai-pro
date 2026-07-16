@@ -1,17 +1,17 @@
 import { AiGatewayValidationError } from '../job.js';
 
-export const GEMINI_PROXY_ASYNC_PATH = '/proxy/gemini/async';
+export const AI_WORKER_PROXY_ASYNC_PATH = '/proxy/gemini/async';
 
 function requireValue(value, field) {
   if (value == null || value === '') {
-    throw new AiGatewayValidationError(`Gemini proxy adapter requires ${field}`, 'AI_GATEWAY_ADAPTER_INPUT_INVALID');
+    throw new AiGatewayValidationError(`AI Worker Proxy adapter requires ${field}`, 'AI_GATEWAY_ADAPTER_INPUT_INVALID');
   }
   return value;
 }
 
-export function buildGeminiProxyAsyncRequest(job, route) {
-  if (route?.adapterId !== 'legacy-gemini-proxy' && route?.legacyAdapterId !== 'gemini-proxy') {
-    throw new AiGatewayValidationError(`Unsupported adapter for Gemini proxy: ${route?.adapterId || ''}`);
+export function buildAiWorkerProxyAsyncRequest(job, route) {
+  if (route?.adapterId !== 'ai-worker-proxy') {
+    throw new AiGatewayValidationError(`Unsupported adapter for AI Worker Proxy: ${route?.adapterId || ''}`);
   }
 
   const input = job.input || {};
@@ -37,7 +37,7 @@ export function buildGeminiProxyAsyncRequest(job, route) {
 
   return {
     method: 'POST',
-    path: GEMINI_PROXY_ASYNC_PATH,
+    path: AI_WORKER_PROXY_ASYNC_PATH,
     body,
     headers: {
       'content-type': 'application/json',

@@ -11,7 +11,10 @@ export function envBytes(name, fallback) {
 }
 
 /** Gemini 代理：整段 JSON（含 base64 图） */
-export const GEMINI_PROXY_MAX_BODY_BYTES = envBytes('GEMINI_PROXY_MAX_BODY_BYTES', 25 * 1024 * 1024);
+export const AI_WORKER_PROXY_MAX_BODY_BYTES = envBytes(
+  'AI_WORKER_PROXY_MAX_BODY_BYTES',
+  envBytes('GEMINI_PROXY_MAX_BODY_BYTES', 25 * 1024 * 1024)
+);
 
 /**
  * Auth / R2 JSON API：登录、预签名、object-refs 等（大文件本体走 PUT 直传 R2，不经此限制）。

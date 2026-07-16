@@ -11,7 +11,7 @@ export function parseGeminiTokenCounts(
   return { prompt, candidates };
 }
 
-export function meterReadingFromGeminiProxy(args: {
+export function meterReadingFromAiWorkerProxy(args: {
   registryId: string;
   provider: string;
   usageMetadata?: UsageGeminiMetadata | null;

@@ -150,6 +150,7 @@ describe("openaiAdapter", () => {
   it("coerceImageModelRegistryId keeps provider image ids outside the legacy local registry", () => {
     expect(coerceImageModelRegistryId("doubao-seedream-5-0")).toBe("doubao-seedream-5-0");
     expect(coerceImageModelRegistryId("doubao-seedream-5-0-pro")).toBe("doubao-seedream-5-0-pro");
+    expect(coerceImageModelRegistryId("jimeng-image-t2i-v40")).toBe("jimeng-image-t2i-v40");
   });
 
   it("geminiContentsToOpenAiMessages builds roles", () => {

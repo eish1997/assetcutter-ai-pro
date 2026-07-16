@@ -1,6 +1,6 @@
 /**
- * 本地生图链路冒烟：Vite __ac-bulk-forward、auth-api 积分预扣、gemini-proxy 准入。
- * 用法：node scripts/test-local-bulk-image.mjs
+ * 本地生图链路冒烟：Vite __ac-ai-worker-forward、auth-api 积分预扣、ai-worker-proxy 准入。
+ * 用法：node scripts/test-local-ai-worker-image.mjs
  */
 const VITE = 'http://127.0.0.1:3000';
 const AUTH = 'http://127.0.0.1:9100';
@@ -38,9 +38,9 @@ async function main() {
   for (const [name, url] of [
     ['Vite dev', `${VITE}/`],
     ['auth-api', `${AUTH}/healthz`],
-    ['gemini-proxy 本机', `${LOCAL_PROXY}/healthz`],
-    ['Vite bulk forward → Render', `${VITE}/__ac-bulk-forward/0/healthz`],
-    ['Vite /api/gemini-proxy 中继', `${VITE}/api/gemini-proxy/healthz`],
+    ['ai-worker-proxy 本机', `${LOCAL_PROXY}/healthz`],
+    ['Vite AI Worker Proxy forward → Render', `${VITE}/__ac-ai-worker-forward/0/healthz`],
+    ['Vite /api/ai-worker-proxy 中继', `${VITE}/api/ai-worker-proxy/healthz`],
   ]) {
     try {
       const { res, text } = await fetchText(url, { cache: 'no-store' });
@@ -65,10 +65,10 @@ async function main() {
     fail('网络失败', e instanceof Error ? e.message : String(e));
   }
 
-  // 3. bulk forward POST（无积分头：应 HTTP 401/403，证明转发通）
-  console.log('\n3) __ac-bulk-forward POST /proxy/gemini/async（无登录/无 reserve）');
+  // 3. AI Worker Proxy forward POST（无积分头：应 HTTP 401/403，证明转发通）
+  console.log('\n3) __ac-ai-worker-forward POST /proxy/gemini/async（无登录/无 reserve）');
   try {
-    const { res, text } = await fetchText(`${VITE}/__ac-bulk-forward/0/proxy/gemini/async`, {
+    const { res, text } = await fetchText(`${VITE}/__ac-ai-worker-forward/0/proxy/gemini/async`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: MINIMAL_ASYNC_BODY,
@@ -91,8 +91,8 @@ async function main() {
     fail('fetch failed / 网络错误', e instanceof Error ? e.message : String(e));
   }
 
-  // 4. 本机 gemini-proxy 同源（经 Vite /proxy/gemini 若配置 same-origin 时用；此处直打 9002）
-  console.log('\n4) 本机 gemini-proxy POST（无 reserve，预期 401）');
+  // 4. 本机 ai-worker-proxy 同源（经 Vite /proxy/gemini 若配置 same-origin 时用；此处直打 9002）
+  console.log('\n4) 本机 ai-worker-proxy POST（无 reserve，预期 401）');
   try {
     const { res, text } = await fetchText(`${LOCAL_PROXY}/proxy/gemini/async`, {
       method: 'POST',
@@ -108,7 +108,7 @@ async function main() {
 
   console.log('\n=== 结论 ===');
   console.log(
-    '若 1) bulk forward 与 auth-api 均 ✅，且 3) 为 HTTP 401/403（非 fetch failed），说明本地网络链路正常。'
+    '若 1) AI Worker Proxy forward 与 auth-api 均 ✅，且 3) 为 HTTP 401/403（非 fetch failed），说明本地网络链路正常。'
   );
   console.log('工作区生图还需：浏览器已登录 + 积分足够 + credits-proxy-bundle 成功返回 reserveKey。\n');
 }

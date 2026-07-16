@@ -222,7 +222,7 @@ import {
   submitJimengTask,
 } from './jimeng-visual-api.js';
 import { assertJimengCreditsGate } from './jimeng-credits-gate.js';
-import { relayGeminiProxyRequest } from './gemini-proxy-relay.js';
+import { relayAiWorkerProxyRequest } from './ai-worker-proxy-relay.js';
 import {
   cancelAuthAiGatewayJob,
   createAuthAiGatewayJob,
@@ -498,7 +498,7 @@ function applyCors(req, res) {
   res.setHeader('Access-Control-Allow-Credentials', 'true');
   /** 须含 PATCH：管理后台 updateAdminUser、部分客户端会发 PATCH */
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PATCH,PUT,DELETE,OPTIONS');
-  /** gemini-proxy 中继 POST 须带积分/公平性头；与 server/gemini-proxy-api.js 对齐 */
+  /** ai-worker-proxy 中继 POST 须带积分/公平性头；与 server/ai-worker-proxy-api.js 对齐 */
   res.setHeader(
     'Access-Control-Allow-Headers',
     'Content-Type, X-CSRF-Token, X-AC-Fairness-Key, X-AC-Fairness-Signature, X-AC-Client-Ip, X-AC-Credits-Reserve, X-AC-Credits-Gate-Signature, X-AC-Credits-Gate-Estimate, X-AC-Task-Envelope'
@@ -517,7 +517,7 @@ function assertWriteOrigin(req, res) {
   if (method === 'GET' || method === 'HEAD' || method === 'OPTIONS') return true;
   const pathOnly = ((req.url || '/').split('?')[0] || '/').replace(/\/+$/, '') || '/';
   const origin = String(req.headers.origin || '');
-  /** gemini-proxy 等同源/loopback 服务 server-to-server 调用 credits-gate，无浏览器 Origin */
+  /** ai-worker-proxy 等同源/loopback 服务 server-to-server 调用 credits-gate，无浏览器 Origin */
   const serverSideCreditsPath =
     pathOnly === '/api/auth/credits-gate' || pathOnly.startsWith('/api/internal/credits/');
   if (serverSideCreditsPath && !origin) return true;
@@ -562,6 +562,7 @@ function assertCsrf(req, res) {
   if (pathOnly === '/api/companion-artifacts/resolve-download') return true;
   if (pathOnly.startsWith('/api/tripo')) return true;
   if (pathOnly.startsWith('/api/jimeng')) return true;
+  if (pathOnly.startsWith('/api/ai-worker-proxy')) return true;
   if (pathOnly.startsWith('/api/gemini-proxy')) return true;
   if (pathOnly === '/api/auth/trial-gemini/consume') return true;
   if (pathOnly === '/api/workflow/task-events') return true;
@@ -1263,7 +1264,10 @@ const server = http.createServer(async (req, res) => {
 
     if (path === '/api/internal/credits/precheck' && req.method === 'POST') {
       const internalSecret = String(
-        process.env.GEMINI_PROXY_CREDITS_INTERNAL_SECRET || process.env.INTERNAL_API_SECRET || ''
+        process.env.AI_WORKER_PROXY_CREDITS_INTERNAL_SECRET ||
+          process.env.GEMINI_PROXY_CREDITS_INTERNAL_SECRET ||
+          process.env.INTERNAL_API_SECRET ||
+          ''
       ).trim();
       const hdr = String(req.headers['x-internal-secret'] || '').trim();
       if (!internalSecret || hdr !== internalSecret) {
@@ -1311,7 +1315,10 @@ const server = http.createServer(async (req, res) => {
 
     if (path === '/api/internal/credits/validate-reserve' && req.method === 'POST') {
       const internalSecret = String(
-        process.env.GEMINI_PROXY_CREDITS_INTERNAL_SECRET || process.env.INTERNAL_API_SECRET || ''
+        process.env.AI_WORKER_PROXY_CREDITS_INTERNAL_SECRET ||
+          process.env.GEMINI_PROXY_CREDITS_INTERNAL_SECRET ||
+          process.env.INTERNAL_API_SECRET ||
+          ''
       ).trim();
       const hdr = String(req.headers['x-internal-secret'] || '').trim();
       if (!internalSecret || hdr !== internalSecret) {
@@ -3652,9 +3659,15 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    if (path.startsWith('/api/gemini-proxy/') || path === '/api/gemini-proxy') {
-      const upstreamPath = path.slice('/api/gemini-proxy'.length) || '/';
-      await relayGeminiProxyRequest(req, res, upstreamPath);
+    const aiWorkerProxyPrefix =
+      path.startsWith('/api/ai-worker-proxy/') || path === '/api/ai-worker-proxy'
+        ? '/api/ai-worker-proxy'
+        : path.startsWith('/api/gemini-proxy/') || path === '/api/gemini-proxy'
+          ? '/api/gemini-proxy'
+          : '';
+    if (aiWorkerProxyPrefix) {
+      const upstreamPath = path.slice(aiWorkerProxyPrefix.length) || '/';
+      await relayAiWorkerProxyRequest(req, res, upstreamPath);
       return;
     }
 

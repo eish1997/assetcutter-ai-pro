@@ -9,12 +9,12 @@ import {
 describe('AI gateway worker registry', () => {
   it('reports active text/image/video/model3d workers and planned music worker', () => {
     expect(listAiGatewayWorkers()).toEqual([
-      { id: 'text-worker', modalities: ['text'], capabilities: ['text.generate'], adapters: ['legacy-gemini-proxy', 'openai-official', 'toapis-openai', 'volcengine-ark-openai'], status: 'active' },
+      { id: 'text-worker', modalities: ['text'], capabilities: ['text.generate'], adapters: ['ai-worker-proxy', 'openai-official', 'toapis-openai', 'volcengine-ark-openai'], status: 'active' },
       {
         id: 'image-worker',
         modalities: ['image'],
         capabilities: ['image.generate', 'image.edit', 'workflow_text_to_image', 'workflow_image_edit'],
-        adapters: ['legacy-gemini-proxy', 'openai-official', 'toapis-openai', 'volcengine-ark-image', 'jimeng-visual'],
+        adapters: ['ai-worker-proxy', 'openai-official', 'toapis-openai', 'volcengine-ark-image', 'jimeng-visual'],
         status: 'active',
       },
       {
@@ -46,7 +46,7 @@ describe('AI gateway worker registry', () => {
     }
   });
 
-  it('builds legacy Gemini proxy requests only through active workers', () => {
+  it('builds AI Worker Proxy requests only through active workers', () => {
     const request = buildAiGatewayWorkerRequest(
       {
         id: 'aijob_worker_1',
@@ -57,8 +57,7 @@ describe('AI gateway worker registry', () => {
       {
         providerId: 'vertex-gemini',
         workerId: 'image-worker',
-        adapterId: 'legacy-gemini-proxy',
-        legacyAdapterId: 'gemini-proxy',
+        adapterId: 'ai-worker-proxy',
         upstreamBackend: 'vertex',
       }
     );

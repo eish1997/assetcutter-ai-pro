@@ -1,5 +1,5 @@
 /**
- * gemini-proxy 服务端积分准入：HMAC 预扣、session Cookie、或内部密钥 + user id。
+ * ai-worker-proxy 服务端积分准入：HMAC 预扣、session Cookie、或内部密钥 + user id。
  */
 import { Agent, fetch as undiciFetch } from 'undici';
 import { CREDITS_EXCEEDED_CODE } from './credits-math.js';
@@ -9,15 +9,15 @@ import {
   verifyFairnessKeySignature,
 } from './credits-gate-hmac.js';
 
-/** gemini-proxy 可能设全局 HTTPS_PROXY；auth-api loopback 须直连（见 gemini-proxy-relay.js） */
+/** ai-worker-proxy 可能设全局 HTTPS_PROXY；auth-api loopback 须直连（见 ai-worker-proxy-relay.js） */
 const authApiDirectDispatcher = new Agent();
 
 async function authApiFetch(url, init) {
   return undiciFetch(url, { ...init, dispatcher: authApiDirectDispatcher });
 }
 
-export function isGeminiProxyCreditsGateEnabled() {
-  const raw = String(process.env.GEMINI_PROXY_CREDITS_GATE ?? 'true').trim().toLowerCase();
+export function isAiWorkerProxyCreditsGateEnabled() {
+  const raw = String(process.env.AI_WORKER_PROXY_CREDITS_GATE ?? 'true').trim().toLowerCase();
   return raw !== '0' && raw !== 'false' && raw !== 'off';
 }
 
@@ -31,7 +31,10 @@ function authApiBase() {
 
 function internalSecret() {
   return String(
-    process.env.GEMINI_PROXY_CREDITS_INTERNAL_SECRET || process.env.INTERNAL_API_SECRET || ''
+    process.env.AI_WORKER_PROXY_CREDITS_INTERNAL_SECRET ||
+      process.env.GEMINI_PROXY_CREDITS_INTERNAL_SECRET ||
+      process.env.INTERNAL_API_SECRET ||
+      ''
   ).trim();
 }
 
@@ -135,8 +138,8 @@ function creditsExceededBody(data, estimatedCredits) {
  * @param {number} estimatedCredits
  * @returns {Promise<{ ok: true } | { ok: false, status: number, body: object }>}
  */
-export async function assertGeminiProxyCreditsGate(req, estimatedCredits = 50) {
-  if (!isGeminiProxyCreditsGateEnabled()) return { ok: true };
+export async function assertAiWorkerProxyCreditsGate(req, estimatedCredits = 50) {
+  if (!isAiWorkerProxyCreditsGateEnabled()) return { ok: true };
 
   const est = normalizeEstimatedCredits(estimatedCredits);
   const cookie = String(req.headers.cookie || '');

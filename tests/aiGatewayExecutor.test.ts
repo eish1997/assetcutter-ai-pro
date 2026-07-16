@@ -44,7 +44,7 @@ describe('AI gateway execution handoff', () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
-  it('hands image jobs to gemini-proxy by default', async () => {
+  it('hands image jobs to ai-worker-proxy by default', async () => {
     delete process.env.AI_GATEWAY_EXECUTION_ENABLED;
     const store = createInMemoryAiJobStore();
     const fetchImpl = vi.fn().mockResolvedValue(proxyResponse({ jobId: 'gasync_exec_1', status: 'queued' }));

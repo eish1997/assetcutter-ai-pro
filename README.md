@@ -34,4 +34,4 @@ npm install
 npm run dev
 ```
 
-See `.env.example` for environment variables (including `GEMINI_PROXY_RATE_LIMIT_RETRIES`, `VITE_WORKFLOW_UNDERSTAND_IMAGE_CONCURRENCY`).
+See `.env.example` for environment variables (including `AI_WORKER_PROXY_RATE_LIMIT_RETRIES`, `VITE_WORKFLOW_UNDERSTAND_IMAGE_CONCURRENCY`).

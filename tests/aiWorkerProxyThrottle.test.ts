@@ -3,13 +3,13 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import {
-  geminiProxyThrottleSnapshot,
-  resetGeminiProxyThrottleForTests,
+  aiWorkerProxyThrottleSnapshot,
+  resetAiWorkerProxyThrottleForTests,
   vertexImageMinIntervalMs,
   waitForGeminiUpstreamThrottle,
-} from '../server/gemini-proxy-throttle.js';
+} from '../server/ai-worker-proxy-throttle.js';
 
-describe('gemini proxy upstream throttle', () => {
+describe('AI Worker Proxy upstream throttle', () => {
   const prevNodeEnv = process.env.NODE_ENV;
   const prevMinInterval = process.env.GEMINI_VERTEX_IMAGE_MIN_INTERVAL_MS;
   const prevEnabled = process.env.GEMINI_VERTEX_IMAGE_THROTTLE_ENABLED;
@@ -27,7 +27,7 @@ describe('gemini proxy upstream throttle', () => {
     else process.env.GEMINI_VERTEX_IMAGE_THROTTLE_PERSIST = prevPersist;
     if (prevStatePath === undefined) delete process.env.GEMINI_VERTEX_IMAGE_THROTTLE_STATE_PATH;
     else process.env.GEMINI_VERTEX_IMAGE_THROTTLE_STATE_PATH = prevStatePath;
-    resetGeminiProxyThrottleForTests();
+    resetAiWorkerProxyThrottleForTests();
   });
 
   it('uses a conservative production default only for Vertex image starts', () => {
@@ -65,7 +65,7 @@ describe('gemini proxy upstream throttle', () => {
     });
 
     expect(sleeps).toEqual([100]);
-    expect(geminiProxyThrottleSnapshot().lastVertexImageStartAt).toBe(1100);
+    expect(aiWorkerProxyThrottleSnapshot().lastVertexImageStartAt).toBe(1100);
   });
 
   it('does not delay non-Vertex or text-only calls', async () => {
@@ -100,7 +100,7 @@ describe('gemini proxy upstream throttle', () => {
       nowFn,
       sleepFn,
     });
-    resetGeminiProxyThrottleForTests();
+    resetAiWorkerProxyThrottleForTests();
 
     await waitForGeminiUpstreamThrottle({
       useVertex: true,
@@ -111,6 +111,6 @@ describe('gemini proxy upstream throttle', () => {
     });
 
     expect(sleeps).toEqual([100]);
-    expect(geminiProxyThrottleSnapshot().lastVertexImageStartAt).toBe(1100);
+    expect(aiWorkerProxyThrottleSnapshot().lastVertexImageStartAt).toBe(1100);
   });
 });

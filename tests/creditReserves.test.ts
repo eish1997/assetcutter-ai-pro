@@ -92,15 +92,19 @@ describe('credit reserve', () => {
 });
 
 describe('credits-gate-hmac', () => {
-  const prevSecret = process.env.GEMINI_PROXY_CREDITS_HMAC_SECRET;
+  const prevSecret = process.env.AI_WORKER_PROXY_CREDITS_HMAC_SECRET;
+  const prevLegacySecret = process.env.GEMINI_PROXY_CREDITS_HMAC_SECRET;
 
   beforeEach(() => {
-    process.env.GEMINI_PROXY_CREDITS_HMAC_SECRET = 'test-hmac-secret-for-credits';
+    delete process.env.GEMINI_PROXY_CREDITS_HMAC_SECRET;
+    process.env.AI_WORKER_PROXY_CREDITS_HMAC_SECRET = 'test-hmac-secret-for-credits';
   });
 
   afterEach(() => {
-    if (prevSecret === undefined) delete process.env.GEMINI_PROXY_CREDITS_HMAC_SECRET;
-    else process.env.GEMINI_PROXY_CREDITS_HMAC_SECRET = prevSecret;
+    if (prevSecret === undefined) delete process.env.AI_WORKER_PROXY_CREDITS_HMAC_SECRET;
+    else process.env.AI_WORKER_PROXY_CREDITS_HMAC_SECRET = prevSecret;
+    if (prevLegacySecret === undefined) delete process.env.GEMINI_PROXY_CREDITS_HMAC_SECRET;
+    else process.env.GEMINI_PROXY_CREDITS_HMAC_SECRET = prevLegacySecret;
   });
 
   it('signs and verifies credits gate payload', () => {
@@ -136,6 +140,21 @@ describe('credits-gate-hmac', () => {
       sigHeader: signed!.creditsGateSignature,
     });
     expect(tooHigh.ok).toBe(false);
+  });
+
+  it('keeps legacy GEMINI_PROXY_CREDITS_HMAC_SECRET as migration fallback', () => {
+    delete process.env.AI_WORKER_PROXY_CREDITS_HMAC_SECRET;
+    process.env.GEMINI_PROXY_CREDITS_HMAC_SECRET = 'legacy-hmac-secret-for-credits';
+    const reserveKey = `proxy:${crypto.randomUUID()}`;
+    const signed = signCreditsGatePayload({ userId: 'u1', estimatedCredits: 50, reserveKey });
+    expect(signed?.creditsGateSignature).toMatch(/^\d+\.[a-f0-9]+$/);
+    const ok = verifyCreditsGateSignature({
+      userId: 'u1',
+      estimatedCredits: 50,
+      reserveKey,
+      sigHeader: signed!.creditsGateSignature,
+    });
+    expect(ok.ok).toBe(true);
   });
 
   it('rejects tampered reserve key', () => {

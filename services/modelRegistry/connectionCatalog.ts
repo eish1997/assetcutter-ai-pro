@@ -27,7 +27,7 @@ export const AI_CONNECTION_CATALOG: readonly AiConnectionCatalogRow[] = [
   {
     id: "vertex-site",
     title: "Vertex · 站点代理",
-    subtitle: "由站点 gemini-proxy 转发，无需自备 Google Key",
+    subtitle: "由站点 ai-worker-proxy 转发，无需自备 Google Key",
     outletHint: "binding 可将各 registryId 接到此站点输出口",
     channels: ["vertex-proxy"],
     credentialKind: "site",

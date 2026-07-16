@@ -21,7 +21,7 @@ registryId + role → pickBinding → resolveUpstream → geminiService.getClien
 | `providerBindings.ts` | 静态 binding 表 + family 级兜底 |
 | `hubGraph/` | 枢纽节点类型、供应商输出口、`edges ↔ bindings` 编译 |
 | `pickBinding.ts` | 按 priority 选第一条 ready binding（支持 ops `bindingOverrides` / `wiringEdges`） |
-| `bindingRuntime.ts` | Vertex/bulk 等运行时 helper |
+| `bindingRuntime.ts` | Vertex/AI Worker Proxy 等运行时 helper |
 | `channelCatalog.ts` / `channelCredentials.ts` | channel UI 元数据与凭证检查 |
 | `resolve.ts` | 按 binding.channel 解析上游 model id |
 | `imageModelProvider.ts` | 生图 channel 级就绪与禁用原因 |

@@ -5,7 +5,7 @@
  * - 默认 location：us-central1 → {region}-aiplatform.googleapis.com（Console「Agent Platform API」）
  * - Gemini 3.x（含 flash-preview / *-image）：本项目在 us-central1 常 404，默认改走 global express
  *   （Console 可能记在「Gemini for Google Cloud API」）；可用 VERTEX_GEMINI3_LOCATION / VERTEX_AIPLATFORM_REGIONAL_ONLY 覆盖
- * - 生图需 config.responseModalities: ['TEXT','IMAGE']（见 gemini-proxy-api / buildGeminiConfig）
+ * - 生图需 config.responseModalities: ['TEXT','IMAGE']（见 ai-worker-proxy-api / buildGeminiConfig）
  * - REST 建议 v1
  */
 import { GoogleGenAI } from '@google/genai';

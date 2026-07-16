@@ -75,7 +75,7 @@ async function main() {
     'X-AC-Fairness-Key': `user:${userId}`,
   };
 
-  const createRes = await fetch(`${VITE}/api/gemini-proxy/proxy/gemini/async`, {
+  const createRes = await fetch(`${VITE}/api/ai-worker-proxy/proxy/gemini/async`, {
     method: 'POST',
     headers,
     body: JSON.stringify({
@@ -97,7 +97,7 @@ async function main() {
   const deadline = Date.now() + POLL_MAX_MS;
   while (Date.now() < deadline) {
     await sleep(POLL_MS);
-    const pollRes = await fetch(`${VITE}/api/gemini-proxy/proxy/gemini/async/${encodeURIComponent(jobId)}`, {
+    const pollRes = await fetch(`${VITE}/api/ai-worker-proxy/proxy/gemini/async/${encodeURIComponent(jobId)}`, {
       headers: { Cookie: cookie, Origin: VITE, ...(bundle.headers || {}) },
       credentials: 'include',
     });

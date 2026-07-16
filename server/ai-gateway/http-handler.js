@@ -77,7 +77,7 @@ function publicJobSummary(plan) {
           }
       : null,
     traceOnly: Boolean(metadata.traceOnly),
-    legacyPath: metadata.legacyPath || null,
+    proxyPath: metadata.proxyPath || null,
     proxyJobId: metadata.proxyJobId || null,
     creditsGate: metadata.creditsGate || null,
     error: plan.job.error

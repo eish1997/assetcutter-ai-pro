@@ -1,4 +1,4 @@
-import { isUpstreamRateLimitError } from './gemini-proxy-retry.js';
+import { isUpstreamRateLimitError } from './ai-worker-proxy-retry.js';
 
 const DEFAULT_WINDOW_MS = 10 * 60 * 1000;
 const DEFAULT_MAX_EVENTS = 500;
@@ -10,12 +10,12 @@ function nowMs() {
 }
 
 function windowMs() {
-  const raw = Number(process.env.GEMINI_PROXY_OBSERVABILITY_WINDOW_MS);
+  const raw = Number(process.env.AI_WORKER_PROXY_OBSERVABILITY_WINDOW_MS);
   return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : DEFAULT_WINDOW_MS;
 }
 
 function maxEvents() {
-  const raw = Number(process.env.GEMINI_PROXY_OBSERVABILITY_MAX_EVENTS);
+  const raw = Number(process.env.AI_WORKER_PROXY_OBSERVABILITY_MAX_EVENTS);
   return Number.isFinite(raw) && raw > 10 ? Math.floor(raw) : DEFAULT_MAX_EVENTS;
 }
 
@@ -36,7 +36,7 @@ function prune(now = nowMs()) {
   }
 }
 
-export function recordGeminiProxyThrottleWait(info = {}) {
+export function recordAiWorkerProxyThrottleWait(info = {}) {
   const ts = nowMs();
   events.push({
     type: 'throttle_wait',
@@ -49,7 +49,7 @@ export function recordGeminiProxyThrottleWait(info = {}) {
   prune(ts);
 }
 
-export function beginGeminiProxyUpstreamCall(info = {}) {
+export function beginAiWorkerProxyUpstreamCall(info = {}) {
   const startedAt = nowMs();
   const base = {
     provider: info.useVertex ? 'vertex' : 'gemini-aistudio',
@@ -74,7 +74,7 @@ export function beginGeminiProxyUpstreamCall(info = {}) {
   };
 }
 
-export function geminiProxyObservabilitySnapshot() {
+export function aiWorkerProxyObservabilitySnapshot() {
   prune();
   const summary = {
     windowMs: windowMs(),
@@ -117,6 +117,6 @@ export function geminiProxyObservabilitySnapshot() {
   return summary;
 }
 
-export function resetGeminiProxyObservabilityForTests() {
+export function resetAiWorkerProxyObservabilityForTests() {
   events.length = 0;
 }

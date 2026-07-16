@@ -64,7 +64,7 @@ describe('aiGatewayTrace', () => {
       estimatedCredits: 50,
       metadata: {
         traceOnly: true,
-        legacyPath: '/proxy/gemini/async',
+        proxyPath: '/proxy/gemini/async',
         useVertex: true,
         registryId: 'gemini-3.1-flash-image',
       },
@@ -96,7 +96,7 @@ describe('aiGatewayTrace', () => {
       capability: 'image.generate',
       provider: 'vertex-site',
       metadata: {
-        legacyPath: '/proxy/gemini/async',
+        proxyPath: '/proxy/gemini/async',
         useVertex: true,
       },
     });

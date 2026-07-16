@@ -1,5 +1,5 @@
 /**
- * 检查 Vercel 构建产物是否包含 auth 中继 / gemini-proxy 地址。
+ * 检查 Vercel 构建产物是否包含 auth 中继 / ai-worker-proxy 地址。
  * 用法：node scripts/inspect-vercel-bundle.mjs [siteUrl]
  */
 import { ProxyAgent, fetch as undiciFetch } from 'undici';
@@ -15,8 +15,8 @@ async function main() {
   console.log(`site=${SITE} js chunks=${assets.length}`);
   const needles = [
     'assetcutter-auth-api.onrender.com',
-    'assetcutter-gemini-proxy.onrender.com',
-    '/api/gemini-proxy',
+    'assetcutter-ai-worker-proxy.onrender.com',
+    '/api/ai-worker-proxy',
     'same-origin',
   ];
   const hits = Object.fromEntries(needles.map((n) => [n, false]));

@@ -88,7 +88,7 @@ Phase M2 体验与运营
 | W0.1 | `services/jimeng/catalog.ts` 含 §3 全表，且每条有 `modality`、`upstreamReqKey`、`docRef`、`verified` | 单测 `jimeng.catalog.test.ts` |
 | W0.2 | **verified SKU** 经 `/api/jimeng/tasks` 完成 Submit → Poll → done（图 ≥1，视频 ≥1） | `npm run test:jimeng-smoke` 或手测 |
 | W0.3 | `JIMENG_API_ENABLED=false` 时 POST `/api/jimeng/tasks` → **503**；网关 `isJimengAvailable()` → false | 单测 |
-| W0.4 | 平台代付路径：未登录 / 积分不足 → **403** `CREDITS_EXCEEDED` / `LOGIN_REQUIRED`（对齐 gemini-proxy） | `tests/jimeng.credits-gate.test.ts` |
+| W0.4 | 平台代付路径：未登录 / 积分不足 → **403** `CREDITS_EXCEEDED` / `LOGIN_REQUIRED`（对齐 ai-worker-proxy） | `tests/jimeng.credits-gate.test.ts` |
 | W0.5 | 经网关的 jimeng 调用包裹 **`traceUnifiedAiCall`**，产生 usage 且带 `registryId` + `billingSku` | 单测或 mock |
 | W0.6 | **零**新增用户可见菜单项 | UI review |
 | W0.7 | ESLint **`no-restricted-imports`** 禁止业务目录 import `services/jimeng/adapter` | `eslint.config.js` + CI |
@@ -430,7 +430,7 @@ case "workflow_jimeng_digital_human": return 150;
 
 扩展 [`services/platformAiPath.ts`](services/platformAiPath.ts) `isPlatformMeteredJobKind` 包含上述三项。
 
-服务端 credits-gate：复用 gemini-proxy 模式（session Cookie 查余额）或 HMAC 头；**新增** `server/jimeng-credits-gate.js`（若与 gemini 逻辑可共用则提取公共模块）。
+服务端 credits-gate：复用 ai-worker-proxy 模式（session Cookie 查余额）或 HMAC 头；**新增** `server/jimeng-credits-gate.js`（若与 gemini 逻辑可共用则提取公共模块）。
 
 #### L2 实扣（成功后）
 

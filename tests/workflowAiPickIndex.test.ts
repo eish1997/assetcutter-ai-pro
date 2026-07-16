@@ -34,7 +34,7 @@ describe('workflowAiPickIndex', () => {
         'generate3d_module',
         'workflow_3d_companion_slots',
         'workflow_video_bridge',
-        'gemini_proxy_fairness_chain',
+        'ai_worker_proxy_fairness_chain',
         'model_registry_pick',
         'gemini_service_stack',
         'tripo_service',
@@ -68,11 +68,11 @@ describe('workflowAiPickIndex', () => {
     );
   });
 
-  it('Gemini：unified_ai_gateway → gemini_proxy_fairness_chain → model_registry_pick → gemini_service_stack', () => {
-    expect(WORKFLOW_AI_PICK_EDGES.some((e) => e.from === 'unified_ai_gateway' && e.to === 'gemini_proxy_fairness_chain')).toBe(
+  it('Gemini：unified_ai_gateway → ai_worker_proxy_fairness_chain → model_registry_pick → gemini_service_stack', () => {
+    expect(WORKFLOW_AI_PICK_EDGES.some((e) => e.from === 'unified_ai_gateway' && e.to === 'ai_worker_proxy_fairness_chain')).toBe(
       true
     );
-    expect(WORKFLOW_AI_PICK_EDGES.some((e) => e.from === 'gemini_proxy_fairness_chain' && e.to === 'model_registry_pick')).toBe(
+    expect(WORKFLOW_AI_PICK_EDGES.some((e) => e.from === 'ai_worker_proxy_fairness_chain' && e.to === 'model_registry_pick')).toBe(
       true
     );
     expect(WORKFLOW_AI_PICK_EDGES.some((e) => e.from === 'model_registry_pick' && e.to === 'gemini_service_stack')).toBe(

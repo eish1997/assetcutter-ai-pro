@@ -10,7 +10,7 @@ import { blockIfRolePreview } from '../../services/adminRolePreview';
 import { useAdminStaff } from './AdminStaffContext';
 
 const FIELDS: Array<{ key: string; label: string; hint?: string; strict?: boolean }> = [
-  { key: 'GEMINI_ASYNC_PROXY_MAX_CONCURRENT', label: '全站并发槽（全局）', hint: '1～64' },
+  { key: 'AI_WORKER_ASYNC_PROXY_MAX_CONCURRENT', label: '全站并发槽（全局）', hint: '1～64' },
   { key: 'GEMINI_FAIRNESS_USER_MAX_IN_FLIGHT', label: '每用户同时执行上限（登录）', hint: '1～32' },
   { key: 'GEMINI_FAIRNESS_USER_MAX_QUEUED', label: '每用户排队深度（登录）', hint: '1～200' },
   { key: 'GEMINI_FAIRNESS_USER_SUBMIT_RPM', label: '每用户提交 RPM（登录）', hint: '1～500' },
@@ -24,7 +24,7 @@ const FIELDS: Array<{ key: string; label: string; hint?: string; strict?: boolea
 
 const PRESETS: Record<string, Record<string, number>> = {
   conservative: {
-    GEMINI_ASYNC_PROXY_MAX_CONCURRENT: 4,
+    AI_WORKER_ASYNC_PROXY_MAX_CONCURRENT: 4,
     GEMINI_FAIRNESS_USER_MAX_IN_FLIGHT: 1,
     GEMINI_FAIRNESS_USER_MAX_QUEUED: 8,
     GEMINI_FAIRNESS_USER_SUBMIT_RPM: 20,
@@ -34,7 +34,7 @@ const PRESETS: Record<string, Record<string, number>> = {
     GEMINI_FAIRNESS_GLOBAL_QUEUE_MAX: 80,
   },
   standard: {
-    GEMINI_ASYNC_PROXY_MAX_CONCURRENT: 8,
+    AI_WORKER_ASYNC_PROXY_MAX_CONCURRENT: 8,
     GEMINI_FAIRNESS_USER_MAX_IN_FLIGHT: 2,
     GEMINI_FAIRNESS_USER_MAX_QUEUED: 16,
     GEMINI_FAIRNESS_USER_SUBMIT_RPM: 60,
@@ -44,7 +44,7 @@ const PRESETS: Record<string, Record<string, number>> = {
     GEMINI_FAIRNESS_GLOBAL_QUEUE_MAX: 200,
   },
   peak: {
-    GEMINI_ASYNC_PROXY_MAX_CONCURRENT: 16,
+    AI_WORKER_ASYNC_PROXY_MAX_CONCURRENT: 16,
     GEMINI_FAIRNESS_USER_MAX_IN_FLIGHT: 4,
     GEMINI_FAIRNESS_USER_MAX_QUEUED: 32,
     GEMINI_FAIRNESS_USER_SUBMIT_RPM: 120,
@@ -74,7 +74,7 @@ const AdminGeminiFairnessPanel: React.FC = () => {
       const r = await fetchAdminGeminiFairnessConfig();
       const storage =
         r.storage === 'postgres'
-          ? 'Postgres（auth-api 与 gemini-proxy 共享）'
+          ? 'Postgres（auth-api 与 ai-worker-proxy 共享）'
           : r.source === 'disk'
             ? `磁盘 ${r.path || ''}`
             : r.source === 'env_only'
@@ -118,7 +118,7 @@ const AdminGeminiFairnessPanel: React.FC = () => {
         body[f.key] = n;
       }
       const r = await saveAdminGeminiFairnessConfig(body);
-      setMessage(`已保存（${Object.keys(r.config || {}).length} 项）。gemini-proxy 约 3 秒内热加载。`);
+      setMessage(`已保存（${Object.keys(r.config || {}).length} 项）。ai-worker-proxy 约 3 秒内热加载。`);
       await load();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -141,7 +141,7 @@ const AdminGeminiFairnessPanel: React.FC = () => {
     setError(null);
     try {
       await clearAdminGeminiFairnessConfig();
-      setMessage('已清空覆盖；gemini-proxy 约 3 秒内热加载。');
+      setMessage('已清空覆盖；ai-worker-proxy 约 3 秒内热加载。');
       await load();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -174,7 +174,7 @@ const AdminGeminiFairnessPanel: React.FC = () => {
         <p className="text-[11px] text-gray-500 mt-1 leading-relaxed">
           持久化：<code className="text-gray-400">{storageLabel || 'server/data/gemini-fairness-config.json'}</code>
           {updatedAt ? <span className="text-gray-600"> · 更新于 {updatedAt}</span> : null}
-          ，与 <code className="text-gray-400">GEMINI_FAIRNESS_ENABLED=true</code> 的 gemini-proxy 同机时可热更新数值。
+          ，与 <code className="text-gray-400">GEMINI_FAIRNESS_ENABLED=true</code> 的 ai-worker-proxy 同机时可热更新数值。
           总开关、密钥类仍用环境变量。排障：代理根 <code className="text-gray-400">GET /healthz.fairness</code>。
           架构见 <code className="text-gray-400">docs/Gemini代理-公平排队与每用户限流.md</code> 开篇「全链路速查」。
         </p>

@@ -16,8 +16,7 @@ export const DEFAULT_AI_PROVIDER_ROUTES = Object.freeze([
   {
     providerId: 'vertex-site',
     workerId: 'text-worker',
-    adapterId: 'legacy-gemini-proxy',
-    legacyAdapterId: 'gemini-proxy',
+    adapterId: 'ai-worker-proxy',
     channel: 'vertex-proxy',
     upstreamBackend: 'vertex',
     modalities: ['text'],
@@ -27,8 +26,7 @@ export const DEFAULT_AI_PROVIDER_ROUTES = Object.freeze([
   {
     providerId: 'vertex-site',
     workerId: 'image-worker',
-    adapterId: 'legacy-gemini-proxy',
-    legacyAdapterId: 'gemini-proxy',
+    adapterId: 'ai-worker-proxy',
     channel: 'vertex-proxy',
     upstreamBackend: 'vertex',
     modalities: ['image'],
@@ -38,8 +36,7 @@ export const DEFAULT_AI_PROVIDER_ROUTES = Object.freeze([
   {
     providerId: 'gemini-aistudio',
     workerId: 'text-worker',
-    adapterId: 'legacy-gemini-proxy',
-    legacyAdapterId: 'gemini-proxy',
+    adapterId: 'ai-worker-proxy',
     channel: 'gemini-aistudio',
     upstreamBackend: 'gemini-api-key',
     modalities: ['text'],
@@ -49,8 +46,7 @@ export const DEFAULT_AI_PROVIDER_ROUTES = Object.freeze([
   {
     providerId: 'gemini-aistudio',
     workerId: 'image-worker',
-    adapterId: 'legacy-gemini-proxy',
-    legacyAdapterId: 'gemini-proxy',
+    adapterId: 'ai-worker-proxy',
     channel: 'gemini-aistudio',
     upstreamBackend: 'gemini-api-key',
     modalities: ['image'],

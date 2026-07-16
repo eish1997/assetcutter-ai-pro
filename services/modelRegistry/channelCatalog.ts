@@ -19,7 +19,7 @@ export const CHANNEL_CATALOG: readonly ChannelCatalogRow[] = [
     label: "Vertex AI（站点代理）",
     family: "gemini",
     needsApiKey: false,
-    hint: "由 gemini-proxy 转发；需 VITE_BULK_IMAGE_API_VERTEX 或 VITE_BULK_IMAGE_API。",
+    hint: "由 AI Worker Proxy 转发；需配置 VITE_AI_WORKER_PROXY_API_VERTEX 或 VITE_AI_WORKER_PROXY_API。",
   },
   {
     channel: "gemini-aistudio",
@@ -71,7 +71,7 @@ export const CHANNEL_CATALOG: readonly ChannelCatalogRow[] = [
   {
     channel: "volcengine-ark",
     label: "火山方舟（OpenAI 兼容）",
-    family: "openai",
+    family: "volcengine-ark",
     needsApiKey: true,
     needsBaseUrl: true,
     baseUrlPlaceholder: "https://ark.cn-beijing.volces.com/api/v3",

@@ -2,7 +2,7 @@ import type { UsageGeminiMetadata } from '../../../shared/usageBilling';
 import { extractUsageMetadata } from '../../../shared/extractUsageMetadata.js';
 import { peekCorrelationContext } from '../correlationContext';
 import { emitMeteredUsage } from './pipeline';
-import { meterReadingFromGeminiProxy } from './adapters/gemini';
+import { meterReadingFromAiWorkerProxy } from './adapters/gemini';
 import { isLikelyImageRegistryId } from './resolveBillingSku';
 
 export type GeminiChannelProvider = 'toapis' | 'vectorengine';
@@ -79,7 +79,7 @@ export function emitGeminiChannelMeteredUsage(args: {
   const imageRole = isLikelyImageRegistryId(registryId);
   const streamTag = args.stream ? '-stream' : '';
   emitMeteredUsage({
-    reading: meterReadingFromGeminiProxy({
+    reading: meterReadingFromAiWorkerProxy({
       registryId,
       provider: args.provider,
       usageMetadata: usageMetadataFromGeminiLikeResponse(args.response),

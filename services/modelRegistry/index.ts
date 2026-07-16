@@ -54,7 +54,7 @@ export type { ModelResolveRole } from "./resolve";
 export type { ChannelId, ModelFamily, ProviderBinding, PickedBinding } from "./types";
 export { pickBinding, hasReadyBinding } from "./pickBinding";
 export {
-  bulkUsesVertexBackend,
+  aiWorkerProxyUsesVertexBackend,
   pickChannel,
   usesVertexProxyFor,
   usesVertexProxyForImage,

@@ -5,7 +5,7 @@ Updated: 2026-07-13
 ## Naming
 
 - `ai-gateway` is the product gateway for all commercial AI jobs.
-- `gemini-proxy` is now a legacy Gemini adapter, not the place for new video, music, or 3D providers.
+- `ai-worker-proxy` is now a legacy Gemini adapter, not the place for new video, music, or 3D providers.
 - `provider keys` are server-side credentials managed by admins. They are never sent to normal users.
 - Large generated assets stay local-first through the companion flow. Cloud job records keep only lightweight URLs, manifests, status, and billing metadata.
 
@@ -13,8 +13,8 @@ Updated: 2026-07-13
 
 | Worker | Status | Adapter |
 | --- | --- | --- |
-| `text-worker` | active | `legacy-gemini-proxy` |
-| `image-worker` | active | `legacy-gemini-proxy` |
+| `text-worker` | active | `ai-worker-proxy` |
+| `image-worker` | active | `ai-worker-proxy` |
 | `model3d-worker` | active | `tripo-openapi` |
 | `video-worker` | planned | none |
 | `music-worker` | planned | none |
@@ -69,4 +69,4 @@ Supported now:
 - API keys are server-side only.
 - Image base64 inputs for 3D jobs are transient. The persistent job store redacts them.
 - Tripo model file fetching in platform mode goes through `/api/ai/provider-artifacts/tripo/fetch-file`, which uses the provider key pool server-side.
-- Do not add new modalities to `gemini-proxy`; add a worker and provider adapter under `server/ai-gateway/`.
+- Do not add new modalities to `ai-worker-proxy`; add a worker and provider adapter under `server/ai-gateway/`.

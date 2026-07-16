@@ -28,8 +28,7 @@ export function aiGatewayHealthSnapshot() {
       executeViaAuthApi: 'POST /api/ai/jobs (AI_GATEWAY_EXECUTION_ENABLED=true)',
     },
     workers: listAiGatewayWorkers(),
-    adapters: ['legacy-gemini-proxy', 'openai-official', 'toapis-openai', 'volcengine-ark-openai', 'volcengine-ark-image', 'volcengine-ark-async', 'jimeng-visual', 'tripo-openapi', 'tencent-hunyuan-3d'],
-    legacyAdapters: ['gemini-proxy'],
+    adapters: ['ai-worker-proxy', 'openai-official', 'toapis-openai', 'volcengine-ark-openai', 'volcengine-ark-image', 'volcengine-ark-async', 'jimeng-visual', 'tripo-openapi', 'tencent-hunyuan-3d'],
     modalities: ['text', 'image', 'music', 'video', 'model3d'],
   };
 }

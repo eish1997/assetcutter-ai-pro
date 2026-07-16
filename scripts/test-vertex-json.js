@@ -224,12 +224,12 @@ async function testJsonKey() {
   console.log('');
   console.log('💡 后续步骤:');
   console.log('  1. 将服务账号JSON放到安全位置 (如 ~/.gcp/ 目录)');
-  console.log('  2. 在运行gemini-proxy-api.js的环境中设置:');
+  console.log('  2. 在运行ai-worker-proxy-api.js的环境中设置:');
   console.log(`     export GOOGLE_APPLICATION_CREDENTIALS="${SERVICE_ACCOUNT_PATH}"`);
   console.log(`     export VERTEX_PROJECT_ID="${credentials.project_id}"`);
   console.log('     export VERTEX_LOCATION="global"');
-  console.log('  3. 启动代理: node server/gemini-proxy-api.js');
-  console.log('  4. 在前端设置VITE_BULK_IMAGE_API指向代理地址');
+  console.log('  3. 启动代理: node server/ai-worker-proxy-api.js');
+  console.log('  4. 在前端设置VITE_AI_WORKER_PROXY_API指向代理地址');
   console.log('');
 
   return true;

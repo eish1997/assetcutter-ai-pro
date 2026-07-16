@@ -1,13 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
-  geminiProxyMaxAttempts,
-  geminiProxyRetryDelayMs,
+  aiWorkerProxyMaxAttempts,
+  aiWorkerProxyRetryDelayMs,
   isRetryable,
   isUpstreamRateLimitError,
-} from '../server/gemini-proxy-retry.js';
+} from '../server/ai-worker-proxy-retry.js';
 
-describe('gemini-proxy-retry isRetryable', () => {
-  it('returns true for upstream 429 (limited by geminiProxyMaxAttempts)', () => {
+describe('ai-worker-proxy-retry isRetryable', () => {
+  it('returns true for upstream 429 (limited by aiWorkerProxyMaxAttempts)', () => {
     expect(isRetryable(new Error('429 Too Many Requests'))).toBe(true);
     expect(isRetryable(new Error('Too Many Requests'))).toBe(true);
     expect(isRetryable({ message: 'upstream', code: 429 })).toBe(true);
@@ -39,7 +39,7 @@ describe('gemini-proxy-retry isRetryable', () => {
   });
 });
 
-describe('gemini-proxy-retry upstream 429 plan', () => {
+describe('ai-worker-proxy-retry upstream 429 plan', () => {
   it('detects upstream rate limit errors', () => {
     expect(isUpstreamRateLimitError(new Error('Too Many Requests'))).toBe(true);
     expect(isUpstreamRateLimitError(new Error('RESOURCE_EXHAUSTED'))).toBe(true);
@@ -48,10 +48,10 @@ describe('gemini-proxy-retry upstream 429 plan', () => {
 
   it('uses fewer attempts and longer delay for upstream 429', () => {
     const err = new Error('Too Many Requests');
-    // 默认 GEMINI_PROXY_RATE_LIMIT_RETRIES=2 → 共 3 次尝试
-    expect(geminiProxyMaxAttempts(err, 15)).toBe(3);
-    expect(geminiProxyRetryDelayMs(err, 0)).toBe(65_000);
-    expect(geminiProxyRetryDelayMs(err, 1)).toBe(95_000);
-    expect(geminiProxyRetryDelayMs(err, 2)).toBe(125_000);
+    // 默认 AI_WORKER_PROXY_RATE_LIMIT_RETRIES=2 → 共 3 次尝试
+    expect(aiWorkerProxyMaxAttempts(err, 15)).toBe(3);
+    expect(aiWorkerProxyRetryDelayMs(err, 0)).toBe(65_000);
+    expect(aiWorkerProxyRetryDelayMs(err, 1)).toBe(95_000);
+    expect(aiWorkerProxyRetryDelayMs(err, 2)).toBe(125_000);
   });
 });

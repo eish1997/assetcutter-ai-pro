@@ -88,7 +88,7 @@ describe('server AI gateway job planning', () => {
     });
   });
 
-  it('plans image generation through the existing Vertex-backed gemini proxy by default', () => {
+  it('plans image generation through the existing Vertex-backed AI Worker Proxy by default', () => {
     const plan = createAiGatewayJobPlan(
       {
         id: 'aijob_test_1',
@@ -109,8 +109,7 @@ describe('server AI gateway job planning', () => {
     expect(plan.route).toMatchObject({
       providerId: 'vertex-site',
       workerId: 'image-worker',
-      adapterId: 'legacy-gemini-proxy',
-      legacyAdapterId: 'gemini-proxy',
+      adapterId: 'ai-worker-proxy',
       channel: 'vertex-proxy',
       upstreamBackend: 'vertex',
     });

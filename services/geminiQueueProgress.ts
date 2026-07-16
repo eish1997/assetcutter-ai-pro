@@ -10,7 +10,7 @@ export type GeminiQueueMeta = {
   waitSecEstimate?: number;
 };
 
-export const AC_GEMINI_QUEUE_PROGRESS_EVENT = "ac:gemini-proxy-queue-progress" as const;
+export const AC_GEMINI_QUEUE_PROGRESS_EVENT = "ac:ai-worker-proxy-queue-progress" as const;
 
 export type AcGeminiQueueProgressDetail = {
   jobId: string;
@@ -19,7 +19,7 @@ export type AcGeminiQueueProgressDetail = {
   waitedMs: number;
 };
 
-export const AC_GEMINI_QUEUE_RETRY_WAIT_EVENT = "ac:gemini-proxy-queue-retry-wait" as const;
+export const AC_GEMINI_QUEUE_RETRY_WAIT_EVENT = "ac:ai-worker-proxy-queue-retry-wait" as const;
 
 export type AcGeminiQueueRetryWaitDetail = {
   retryAfterSec: number;
@@ -34,7 +34,7 @@ export type GeminiQueueHintKind =
   | "job_direct"
   | "job_done_no_queue";
 
-export const AC_GEMINI_QUEUE_HINT_EVENT = "ac:gemini-proxy-queue-hint" as const;
+export const AC_GEMINI_QUEUE_HINT_EVENT = "ac:ai-worker-proxy-queue-hint" as const;
 
 export type AcGeminiQueueHintDetail = {
   kind: GeminiQueueHintKind;

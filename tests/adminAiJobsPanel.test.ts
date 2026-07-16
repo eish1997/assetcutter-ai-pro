@@ -34,7 +34,7 @@ function makeJob(overrides: Partial<AiJobSummary> = {}): AiJobSummary {
     finishedAt: null,
     route: null,
     traceOnly: false,
-    legacyPath: null,
+    proxyPath: null,
     proxyJobId: null,
     creditsGate: null,
     error: null,
@@ -56,7 +56,7 @@ describe('AdminAiJobsPanel helpers', () => {
           provider: 'fallback-provider',
           route: {
             providerId: 'vertex-image',
-            adapterId: 'gemini-proxy',
+            adapterId: 'ai-worker-proxy',
             channel: 'google',
             upstreamBackend: 'vertex',
           },

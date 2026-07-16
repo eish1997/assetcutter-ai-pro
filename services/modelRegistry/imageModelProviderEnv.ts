@@ -1,16 +1,23 @@
-function readBulkEnvTrim(key: string): string {
+function readAiWorkerProxyEnvTrim(key: string): string {
   try {
-    return String(
+    const viteValue = String(
       ((import.meta as unknown as { env?: Record<string, string | undefined> }).env?.[key] || "").trim()
     );
+    if (viteValue) return viteValue;
+  } catch {
+    /* ignore */
+  }
+  try {
+    return String((globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env?.[key] || "").trim();
   } catch {
     return "";
   }
 }
 
-/** Gemini 生图是否可走构建时配置的 bulk 代理 */
 export function hasGeminiImageProxyConfigured(): boolean {
-  const bulk = readBulkEnvTrim("VITE_BULK_IMAGE_API");
-  const bulkVertex = readBulkEnvTrim("VITE_BULK_IMAGE_API_VERTEX");
-  return Boolean(bulk || bulkVertex);
+  return Boolean(
+    readAiWorkerProxyEnvTrim("VITE_AI_WORKER_PROXY_API") ||
+      readAiWorkerProxyEnvTrim("VITE_AI_WORKER_PROXY_API_VERTEX") ||
+      readAiWorkerProxyEnvTrim("VITE_VERTEX_FALLBACK_AI_WORKER_PROXY_API")
+  );
 }

@@ -887,7 +887,7 @@ export type AdminSystemStatusPayload = {
   generatedAt: string;
   services: {
     authApi: { ok: boolean; service: string; port: number };
-    geminiProxy: {
+    aiWorkerProxy: {
       ok: boolean;
       skipped?: boolean;
       reason?: string;
@@ -902,7 +902,7 @@ export type AdminSystemStatusPayload = {
         persistedKeysLoaded: number;
         configSource: string | null;
         geminiAsyncJobs: number;
-        geminiProxyInFlight: number;
+        aiWorkerProxyInFlight: number;
       } | null;
       vertex?: unknown;
     };

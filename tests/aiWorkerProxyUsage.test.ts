@@ -5,7 +5,7 @@ import {
   extractUsageMetadata,
   extractUsageMetadataFromProxyResult,
   sanitizeProxyResultForAiGatewayJob,
-} from '../server/gemini-proxy-usage.js';
+} from '../server/ai-worker-proxy-usage.js';
 
 describe('extractUsageMetadata', () => {
   it('extracts nested usageMetadata', () => {

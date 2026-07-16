@@ -110,7 +110,7 @@ const AdminSystemStatusPanel: React.FC = () => {
     return <div className="rounded-2xl border border-[#2e2e32] bg-[#121214] p-6 text-[11px] text-gray-400">加载系统状态…</div>;
   }
 
-  const gp = status?.services.geminiProxy;
+  const gp = status?.services.aiWorkerProxy;
   const ps = status?.services.promoSweep;
 
   return (
@@ -144,7 +144,7 @@ const AdminSystemStatusPanel: React.FC = () => {
                   <dd className="text-emerald-300">正常 · 端口 {status.services.authApi.port}</dd>
                 </div>
                 <div className="flex justify-between gap-4">
-                  <dt className="text-gray-500 shrink-0">gemini-proxy</dt>
+                  <dt className="text-gray-500 shrink-0">AI Worker Proxy</dt>
                   <dd className={`text-right ${statusClass(Boolean(gp?.ok), gp?.skipped)}`}>
                     {statusLabel(Boolean(gp?.ok), gp?.skipped, gp?.reason || gp?.error)}
                   </dd>
@@ -200,7 +200,7 @@ const AdminSystemStatusPanel: React.FC = () => {
                   </div>
                   <div className="flex justify-between">
                     <dt className="text-gray-500">Proxy 并发中</dt>
-                    <dd className="text-gray-300">{gp.metrics.geminiProxyInFlight}</dd>
+                    <dd className="text-gray-300">{gp.metrics.aiWorkerProxyInFlight}</dd>
                   </div>
                 </dl>
               ) : null}

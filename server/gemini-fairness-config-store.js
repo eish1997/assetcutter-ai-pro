@@ -6,7 +6,7 @@ import { USE_POSTGRES, getPool, ensurePostgres } from './auth-store.js';
 const CONFIG_ROW_ID = 'default';
 
 export const GEMINI_FAIRNESS_CONFIG_KEYS = new Set([
-  'GEMINI_ASYNC_PROXY_MAX_CONCURRENT',
+  'AI_WORKER_ASYNC_PROXY_MAX_CONCURRENT',
   'GEMINI_FAIRNESS_USER_MAX_IN_FLIGHT',
   'GEMINI_FAIRNESS_USER_MAX_QUEUED',
   'GEMINI_FAIRNESS_USER_SUBMIT_RPM',
@@ -19,7 +19,7 @@ export const GEMINI_FAIRNESS_CONFIG_KEYS = new Set([
 ]);
 
 export const GEMINI_FAIRNESS_CLAMP = {
-  GEMINI_ASYNC_PROXY_MAX_CONCURRENT: [1, 64],
+  AI_WORKER_ASYNC_PROXY_MAX_CONCURRENT: [1, 64],
   GEMINI_FAIRNESS_USER_MAX_IN_FLIGHT: [1, 32],
   GEMINI_FAIRNESS_USER_MAX_QUEUED: [1, 200],
   GEMINI_FAIRNESS_USER_SUBMIT_RPM: [1, 500],
@@ -224,7 +224,7 @@ export async function clearGeminiFairnessConfig({ updatedByUserId = null } = {})
   return writeGeminiFairnessConfig({}, { updatedByUserId });
 }
 
-/** gemini-proxy: preload + background refresh for db source */
+/** ai-worker-proxy: preload + background refresh for db source */
 let proxyCache = {};
 let proxyCacheAt = 0;
 let proxyRefreshPromise = null;

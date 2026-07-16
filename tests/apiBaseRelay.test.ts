@@ -45,8 +45,8 @@ describe('resolvedAuthApiBaseUrl on Vercel', () => {
 
   it('returns empty string so apiUrl uses same-origin /api relay', () => {
     expect(resolvedAuthApiBaseUrl()).toBe('');
-    expect(apiUrl('/api/gemini-proxy/proxy/gemini/async')).toBe(
-      '/api/gemini-proxy/proxy/gemini/async'
+    expect(apiUrl('/api/ai-worker-proxy/proxy/gemini/async')).toBe(
+      '/api/ai-worker-proxy/proxy/gemini/async'
     );
     expect(authApiRelayConfigured()).toBe(true);
   });

@@ -11,7 +11,7 @@ describe('fairness task envelope (P2-21)', () => {
     process.env.GEMINI_FAIRNESS_USER_MAX_QUEUED = '1';
     process.env.GEMINI_FAIRNESS_USER_MAX_IN_FLIGHT = '1';
     process.env.GEMINI_FAIRNESS_USER_SUBMIT_RPM = '2';
-    const mod = await import('../server/gemini-proxy-fairness.js');
+    const mod = await import('../server/ai-worker-proxy-fairness.js');
     mod.resetFairnessStateForTests();
   });
 
@@ -24,12 +24,12 @@ describe('fairness task envelope (P2-21)', () => {
     else process.env.GEMINI_FAIRNESS_USER_MAX_IN_FLIGHT = prevMaxInFlight;
     if (prevSubmitRpm === undefined) delete process.env.GEMINI_FAIRNESS_USER_SUBMIT_RPM;
     else process.env.GEMINI_FAIRNESS_USER_SUBMIT_RPM = prevSubmitRpm;
-    const mod = await import('../server/gemini-proxy-fairness.js');
+    const mod = await import('../server/ai-worker-proxy-fairness.js');
     mod.resetFairnessStateForTests();
   });
 
   it('同 envelope 第二步不因 user_queue_depth 被拒', async () => {
-    const mod = await import('../server/gemini-proxy-fairness.js');
+    const mod = await import('../server/ai-worker-proxy-fairness.js');
     const key = 'user:envelope-depth';
     const env = 'task-env-1';
 
@@ -46,7 +46,7 @@ describe('fairness task envelope (P2-21)', () => {
 
   it('同 envelope 第二步不因 user_rpm 被拒', async () => {
     process.env.GEMINI_FAIRNESS_USER_SUBMIT_RPM = '1';
-    const mod = await import('../server/gemini-proxy-fairness.js');
+    const mod = await import('../server/ai-worker-proxy-fairness.js');
     mod.resetFairnessStateForTests();
     const key = 'user:envelope-rpm';
     const env = 'task-env-2';
@@ -60,7 +60,7 @@ describe('fairness task envelope (P2-21)', () => {
   });
 
   it('sync enter/leave 后 async 仍视为 envelope continuation', async () => {
-    const mod = await import('../server/gemini-proxy-fairness.js');
+    const mod = await import('../server/ai-worker-proxy-fairness.js');
     const key = 'user:envelope-sync';
     const env = 'task-env-3';
 
@@ -72,7 +72,7 @@ describe('fairness task envelope (P2-21)', () => {
   });
 
   it('parseFairnessTaskEnvelope 校验头格式', async () => {
-    const mod = await import('../server/gemini-proxy-fairness.js');
+    const mod = await import('../server/ai-worker-proxy-fairness.js');
     expect(mod.parseFairnessTaskEnvelope({ headers: { 'x-ac-task-envelope': 'task-abc_1' } })).toBe('task-abc_1');
     expect(mod.parseFairnessTaskEnvelope({ headers: { 'x-ac-task-envelope': 'bad id' } })).toBeNull();
     expect(mod.parseFairnessTaskEnvelope({ headers: {} })).toBeNull();

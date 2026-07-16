@@ -44,7 +44,7 @@ export type AiJobSummary = {
   finishedAt: string | null;
   route: AiJobRouteSummary | null;
   traceOnly: boolean;
-  legacyPath: string | null;
+  proxyPath: string | null;
   proxyJobId: string | null;
   creditsGate: AiJobCreditsGateSummary | null;
   error: AiJobErrorSummary | null;

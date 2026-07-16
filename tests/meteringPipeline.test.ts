@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { meterReadingFromGeminiProxy } from '../services/observability/metering/adapters/gemini';
+import { meterReadingFromAiWorkerProxy } from '../services/observability/metering/adapters/gemini';
 import { DEFAULT_PRICE_CATALOG, estimateUsageCostUsd, findPriceCatalogEntry } from '../services/observability/metering/estimateCost';
 import { splitMeterReadingToDrafts } from '../services/observability/metering/splitDrafts';
 import { priceUsageQuote } from '../shared/pricing/pricingEngine';
 
 describe('metering pipeline', () => {
   it('emits one flat-rate image draft with prompt tokens in meta (C-end billing)', () => {
-    const reading = meterReadingFromGeminiProxy({
+    const reading = meterReadingFromAiWorkerProxy({
       registryId: 'gemini-3-pro-image-preview',
       provider: 'vertex',
       usageMetadata: { promptTokenCount: 1560, candidatesTokenCount: 2000 },
@@ -35,7 +35,7 @@ describe('metering pipeline', () => {
   });
 
   it('falls back to one image when no candidate tokens', () => {
-    const reading = meterReadingFromGeminiProxy({
+    const reading = meterReadingFromAiWorkerProxy({
       registryId: 'gemini-3.1-flash-image-preview',
       provider: 'vertex',
       usageMetadata: { promptTokenCount: 200, candidatesTokenCount: 0 },

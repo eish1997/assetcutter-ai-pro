@@ -1,12 +1,12 @@
 # Vertex AI 接入说明（本站实现）
 
-本文描述 **AssetCutter** 如何通过已有 **Gemini 异步代理**（`server/gemini-proxy-api.js`）调用 **Google Cloud Vertex AI** 上的 Gemini，与浏览器内 **AI Studio API Key**、ToAPIs 等供应商并列。
+本文描述 **AssetCutter** 如何通过已有 **Gemini 异步代理**（`server/ai-worker-proxy-api.js`）调用 **Google Cloud Vertex AI** 上的 Gemini，与浏览器内 **AI Studio API Key**、ToAPIs 等供应商并列。
 
 ## 1. 架构与安全
 
-- **浏览器不持有 GCP 凭证**：Vertex 使用 **Application Default Credentials（ADC）** 或服务账号，仅在 **部署了 `gemini-proxy-api` 的服务器**上配置。
+- **浏览器不持有 GCP 凭证**：Vertex 使用 **Application Default Credentials（ADC）** 或服务账号，仅在 **部署了 `ai-worker-proxy-api` 的服务器**上配置。
 - **前端多传一个字段（可选）**：在 `POST /proxy/gemini/async`（及同步 `POST /proxy/gemini/generate-content`）的 JSON 中增加 `aiBackend: "vertex"`，代理在服务端用 `@google/genai` 的 **Vertex 模式**转发。站点设置选择 **「Vertex AI」** 供应商时，前端异步/批量请求会自动附带；选择「试用（代理）」时不附带，代理走 `GEMINI_API_KEY`。
-- **同源与 CORS**：与现有代理相同，通过 `PROXY_ALLOWED_ORIGINS` 限制前端 Origin；前端通过 `VITE_BULK_IMAGE_API` 指向代理根 URL（或本地 `same-origin` + Vite 反代）。
+- **同源与 CORS**：与现有代理相同，通过 `PROXY_ALLOWED_ORIGINS` 限制前端 Origin；前端通过 `VITE_AI_WORKER_PROXY_API` 指向代理根 URL（或本地 `same-origin` + Vite 反代）。
 
 ## 2. 环境变量（代理进程）
 
@@ -19,8 +19,8 @@
 | ADC                                          | 选 Vertex 时必填   | 任选一：`GOOGLE_APPLICATION_CREDENTIALS` 指向服务账号 JSON 文件路径；**或**（Render 等）将整段 JSON 粘贴到 `GOOGLE_APPLICATION_CREDENTIALS_JSON`（别名 `GCP_SERVICE_ACCOUNT_JSON` / `GOOGLE_SERVICE_ACCOUNT_JSON`），代理启动时会写入临时文件并设置 ADC。GCE/Cloud Run 等可用内置身份。作用域需能调用 Vertex AI。                                                                           |
 | `GEMINI_API_KEY`                             | 非 Vertex 请求仍需要 | 仅当请求**未**带 `aiBackend: "vertex"` 时，代理仍走 AI Studio Key。可同时配置：同一代理既服务 Key 用户又服务 Vertex。                                                                               |
 | `GEMINI_FAIRNESS_ENABLED`                    | 否              | 生产环境默认 `true`，本地/测试默认 `false`；显式设为 `false` 可紧急回滚。启用时使用 **公平排队 / 每用户限流**（内存态，**单副本**有效）。详见 **[Gemini代理-公平排队与每用户限流.md](./Gemini代理-公平排队与每用户限流.md)**。 |
-| `GEMINI_PROXY_FAIRNESS_HMAC_SECRET`          | 否              | 非空时要求 `X-AC-Fairness-Signature`（与 `X-AC-Fairness-Key` 配套），公网直连代理时防伪造。内网可信转发可仅传 Key。 |
-| `GEMINI_FAIRNESS_CONFIG_PATH`                | 否              | 磁盘覆盖配置路径，默认 `server/data/gemini-fairness-config.json`；**gemini-proxy** 约 3s 重读；与 **auth-api** 管理接口写同一路径。 |
+| `AI_WORKER_PROXY_FAIRNESS_HMAC_SECRET`          | 否              | 非空时要求 `X-AC-Fairness-Signature`（与 `X-AC-Fairness-Key` 配套），公网直连代理时防伪造。内网可信转发可仅传 Key。 |
+| `GEMINI_FAIRNESS_CONFIG_PATH`                | 否              | 磁盘覆盖配置路径，默认 `server/data/gemini-fairness-config.json`；**ai-worker-proxy** 约 3s 重读；与 **auth-api** 管理接口写同一路径。 |
 | `GEMINI_FAIRNESS_TRUST_CLIENT_KEY_HEADER`    | 否              | 为 `true` 且无 HMAC、非内网 relay 时，可接受浏览器自带的 **`X-AC-Fairness-Key`**（公网慎用，优先 HMAC 或 BFF）。 |
 | `GEMINI_VERTEX_IMAGE_MIN_INTERVAL_MS`         | 否              | Vertex 图片生图请求启动间隔；生产默认 `65000`，本地/测试默认 `0`。用于保护低 RPM 配额，避免连续线稿/白模任务打穿上游。 |
 
@@ -36,7 +36,7 @@
 
 | 变量                    | 说明                                                                 |
 | --------------------- | ------------------------------------------------------------------ |
-| `VITE_BULK_IMAGE_API` | **Vertex 供应商下必填**（或 `same-origin` + 本地起代理）。与现有「官方 Gemini 走后端代理」相同。 |
+| `VITE_AI_WORKER_PROXY_API` | **Vertex 供应商下必填**（或 `same-origin` + 本地起代理）。与现有「官方 Gemini 走后端代理」相同。 |
 
 
 设置页选择 **Vertex AI（GCP · 经本站代理）** 后，所有 `generateContent` 均走上述代理，且自动附带 `aiBackend: "vertex"`。用户**不需要**在浏览器填写 GCP 密钥。
@@ -49,7 +49,7 @@
 
 **区域**：默认 `VERTEX_LOCATION=us-central1`（2.5 等走区域 Agent Platform）。**Gemini 3.x**（`gemini-3*` / `gemini-3.*`，含 `gemini-3-flash-preview`、`gemini-3-pro-image`）在本项目 us-central1 常返回 Publisher model 404，代理默认按模型改走 **`global`**（`VERTEX_GEMINI3_LOCATION`，可用 `VERTEX_AIPLATFORM_REGIONAL_ONLY=true` 强制全部区域）。Console 上 3.x 流量可能仍出现在「Gemini for Google Cloud API」。
 
-**线上核对**：`GET https://assetcutter-gemini-proxy.onrender.com/healthz` → `vertex.route`：`location` 应为 `us-central1`，`gemini3Location` 应为 `global`（除非关掉 hybrid）。
+**线上核对**：`GET https://assetcutter-ai-worker-proxy.onrender.com/healthz` → `vertex.route`：`location` 应为 `us-central1`，`gemini3Location` 应为 `global`（除非关掉 hybrid）。
 
 | 站内 ID                            | Vertex Model ID                           |
 | -------------------------------- | ----------------------------------------- |
@@ -90,7 +90,7 @@
 | `Vertex: set VERTEX_PROJECT_ID or GOOGLE_CLOUD_PROJECT` | 代理未配置项目。                                           |
 | `403` / `PERMISSION_DENIED`                             | GCP 项目未开通 Vertex、计费、或服务账号权限不足。                     |
 | `404` / model not found                                 | 确认模型 id；Gemini 3 应走 global hybrid（见上）；或试 `VERTEX_GEMINI3_LOCATION` / 文档区域。 |
-| 前端提示未配置代理                                               | 未设置 `VITE_BULK_IMAGE_API`，或构建未包含该变量。               |
+| 前端提示未配置代理                                               | 未设置 `VITE_AI_WORKER_PROXY_API`，或构建未包含该变量。               |
 
 
 ## 8. 后续可迭代项（未做）

@@ -1,8 +1,8 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  AC_GEMINI_FAIRNESS_REJECTED_EVENT,
+  AC_AI_WORKER_FAIRNESS_REJECTED_EVENT,
   type AcGeminiFairnessRejectedDetail,
-} from '../services/geminiProxyFairnessError';
+} from '../services/aiWorkerProxyFairnessError';
 import {
   AC_UNIFIED_AI_SOFT_NOTICE_EVENT,
   type AcUnifiedAiSoftNoticeDetail,
@@ -66,10 +66,10 @@ const GeminiFairnessFloatingNotice: React.FC = () => {
       if (!d || typeof d.message !== 'string') return;
       arm(variantFromSoftKind(d.kind), d.message);
     };
-    window.addEventListener(AC_GEMINI_FAIRNESS_REJECTED_EVENT, onFair);
+    window.addEventListener(AC_AI_WORKER_FAIRNESS_REJECTED_EVENT, onFair);
     window.addEventListener(AC_UNIFIED_AI_SOFT_NOTICE_EVENT, onSoft);
     return () => {
-      window.removeEventListener(AC_GEMINI_FAIRNESS_REJECTED_EVENT, onFair);
+      window.removeEventListener(AC_AI_WORKER_FAIRNESS_REJECTED_EVENT, onFair);
       window.removeEventListener(AC_UNIFIED_AI_SOFT_NOTICE_EVENT, onSoft);
       if (timerRef.current) clearTimeout(timerRef.current);
     };

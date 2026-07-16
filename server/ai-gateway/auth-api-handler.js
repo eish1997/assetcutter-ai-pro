@@ -59,7 +59,7 @@ export function publicAuthAiJobSummary(plan) {
     finishedAt: plan.job.finishedAt || null,
     route: routeSummary(plan.route),
     traceOnly: Boolean(metadata.traceOnly),
-    legacyPath: metadata.legacyPath || null,
+    proxyPath: metadata.proxyPath || null,
     proxyJobId: metadata.proxyJobId || null,
     creditsGate: metadata.creditsGate || null,
     error: errorSummary(plan.job.error),

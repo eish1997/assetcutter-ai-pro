@@ -21,7 +21,7 @@
 ## 2026-07-12 当前真实进度
 
 - 已新增服务端最小骨架：`server/ai-gateway/`。
-- 已有统一 `AiJob` 草稿、provider route、`gemini-proxy` adapter request plan。
+- 已有统一 `AiJob` 草稿、provider route、`ai-worker-proxy` adapter request plan。
 - 已新增接口：`POST /ai-gateway/jobs`、`GET /ai-gateway/jobs/:id`、`GET /ai-gateway/jobs?limit=20`、`PATCH /ai-gateway/jobs/:id`。
 - 已新增 `auth-api` 门面：`POST /api/ai/jobs`、`GET /api/ai/jobs`、`GET /api/ai/jobs/:id`；普通用户只能读自己的 job，管理员可通过 `GET /api/admin/ai/jobs` 读最近概要。
 - 已新增前端读取 client：`services/aiJobsClient.ts`，统一封装创建、读取我的任务、读取管理员任务概要。
@@ -40,16 +40,16 @@
 - 已新增 Gateway reserve/finalize 最小闭环：显式 `AI_GATEWAY_CREDITS_GATE=reserve` 时，auth-api 创建 job 会 reserve 估算积分；job `succeeded` 时按估算积分扣除并释放占用，`failed/cancelled` 时释放占用。默认仍不影响现有线上旧链路。
 - 已新增 Gateway 精确结算第一段：终态成功时优先按 usage event 或 job `metadata/output/artifacts` 里的真实 `creditsCharged/actualCredits` 结算；没有真实用量时才回退估算积分。
 - 已新增 Gateway 标准 usage event 第一段：`AI_GATEWAY_CREDITS_GATE=reserve` 且 job 成功终态时，Gateway 会写入带 `correlationId/aiGatewayJobId/proxyJobId/billingSku/settlementSource` 的标准 usage event；该事件标记 `externalCreditSettlement=true`，避免插入事件时二次扣分，实际扣分仍由 reserve finalize 完成。
-- 已新增 Gemini proxy 真实用量回写第一段：`/proxy/gemini/async` 成功后会把 `usageMetadata` 写回 AI Gateway job；Gateway 标准 usage event 会优先按该 token 用量和 SKU 计算积分，再回退到 job 显式 `creditsCharged/actualCredits` 或预估积分。
+- 已新增 AI Worker Proxy 真实用量回写第一段：`/proxy/gemini/async` 成功后会把 `usageMetadata` 写回 AI Gateway job；Gateway 标准 usage event 会优先按该 token 用量和 SKU 计算积分，再回退到 job 显式 `creditsCharged/actualCredits` 或预估积分。
 - 已新增 Gateway 轻量产物清单：Gemini inline 图片/视频结果写入 AI job 时会提取 `artifacts` 的 mime/bytes/sourcePath，并把 `output` 内的 base64 主体脱敏；任务记录可审计、可结算，但不把资产大文件存进云端 job store。
 - 已新增客户端结果绑定：Gemini inline 图片生成完成后，前端会把短暂内存中的图片结果与 `aiGatewayJobId` 绑定；工作流写入资产卡时把该 id 写入 `resultMeta`，真实图片仍走工作区/本地伴侣持久化，云端 job store 只保留轻量记录。
-- 已新增 Gateway 执行灰度 handoff：默认开启，`POST /api/ai/jobs` 会把 image/text job 交给 `gemini-proxy` 的 `/proxy/gemini/async`，并通过 `fairnessMeta.aiGatewayTraceJobId` 复用旧链路写回 `queued/running/succeeded/failed`；显式 `AI_GATEWAY_EXECUTION_ENABLED=false` 可回滚为只建 job 不执行。
+- 已新增 Gateway 执行灰度 handoff：默认开启，`POST /api/ai/jobs` 会把 image/text job 交给 `ai-worker-proxy` 的 `/proxy/gemini/async`，并通过 `fairnessMeta.aiGatewayTraceJobId` 复用旧链路写回 `queued/running/succeeded/failed`；显式 `AI_GATEWAY_EXECUTION_ENABLED=false` 可回滚为只建 job 不执行。
 - 已新增前端生产入口灰度切流：Vertex 图片生成默认优先走 `POST /api/ai/jobs`；若 auth-api 未开启执行或未返回 `proxyJobId`，会复用该 job id 回退旧 `/proxy/gemini/async`，避免阻断生产生成；显式 `VITE_AI_GATEWAY_IMAGE_EXECUTION=false` 可回滚旧入口。
 - `/healthz` 已包含 `aiGateway`：可查看 execution 是否切流、jobStore 来源、credits gate 模式和样板路由。
 - 已新增普通文生图/图生图灰度 trace：前端 Vertex 图片代理在真实 `/proxy/gemini/async` 前尽力创建 `/ai-gateway/jobs` 记录；失败不阻断生图，真实生成仍走旧链路。
 - 已接入旧链路单任务状态回写：`/proxy/gemini/async` 可根据 `fairnessMeta.aiGatewayTraceJobId` 将 trace job 推进到 `queued`、`running`、`succeeded`、`failed`。
-- 默认接管 Vertex 图片生产入口，但保留旧 `gemini-proxy` 自动回退；显式关闭开关后，旧链路仍是稳定生产入口。
-- 3D 已接入 `model3d-worker -> tripo-openapi`，视频已接入 `video-worker -> jimeng-visual`；音乐仍只进入统一模态定义，不会误路由到 `gemini-proxy`。
+- 默认接管 Vertex 图片生产入口，但保留旧 `ai-worker-proxy` 自动回退；显式关闭开关后，旧链路仍是稳定生产入口。
+- 3D 已接入 `model3d-worker -> tripo-openapi`，视频已接入 `video-worker -> jimeng-visual`；音乐仍只进入统一模态定义，不会误路由到 `ai-worker-proxy`。
 - 已新增异步 worker 终态收口：Tripo/即梦这类后台轮询任务在成功后会写标准 usage event 并结算积分，失败/超时会释放预留，避免任务成功但账务悬空。
 - 已扩展供应商凭据池：Tripo 继续使用单 API Key；即梦支持在管理员后台配置火山 `Access Key / Secret Key`，也保留 Render 环境变量作为只读兜底。
 - 已新增凭据池运营动作：管理员可对单组供应商凭据手动冷却 10 分钟或恢复可用，适合临时处理 429/5xx、单 Key 异常等情况；操作会写审计日志。
@@ -79,7 +79,7 @@
   -> artifact storage / R2 / project asset store
 ```
 
-当前 `server/gemini-proxy-api.js` 不再继续扩大为万能代理；它先作为 `vertex/gemini image/text adapter` 被新网关包住，后续再按风险迁移。
+当前 `server/ai-worker-proxy-api.js` 不再继续扩大为万能代理；它先作为 `vertex/gemini image/text adapter` 被新网关包住，后续再按风险迁移。
 
 ## 1. 统一任务模型
 
@@ -123,9 +123,9 @@ type AiJob = {
 
 任务：
 
-- Render `assetcutter-gemini-proxy` 开启 `GEMINI_FAIRNESS_ENABLED=true`。
+- Render `assetcutter-ai-worker-proxy` 开启 `GEMINI_FAIRNESS_ENABLED=true`。
 - 确认 `/healthz`：`vertex.configured=true`、`adcLikelyConfigured=true`、`location=us-central1`。
-- 线上 `gemini-proxy` 与 `auth-api` 共用 `DATABASE_URL`，使 fairness 管理页写入能被 proxy 热加载。
+- 线上 `ai-worker-proxy` 与 `auth-api` 共用 `DATABASE_URL`，使 fairness 管理页写入能被 proxy 热加载。
 - 为白模、Pro 生图、批量能力设置更低默认并发。
 - 默认优先直发，理解步只在必要能力开启。
 - 429、登录、积分不足、Vertex 未配置、模型 404 分开映射。
@@ -167,32 +167,32 @@ type AiJob = {
 
 当前拆解：
 
-- 已完成：job 草稿、路由计划、Postgres/JSON 持久化、单任务创建/读取/列表、生命周期状态更新、用户软取消、失败/取消 job 重试创建、Gateway reserve/finalize 最小闭环、Gateway → gemini-proxy 执行 handoff 灰度开关、旧链路单任务 trace 状态写回、`auth-api` 用户门面与管理员只读概要、前端 `aiJobsClient`、前端 `aiJobsStore/useAiJobs`、管理后台 `/admin/ai-jobs` 只读视图。
+- 已完成：job 草稿、路由计划、Postgres/JSON 持久化、单任务创建/读取/列表、生命周期状态更新、用户软取消、失败/取消 job 重试创建、Gateway reserve/finalize 最小闭环、Gateway → ai-worker-proxy 执行 handoff 灰度开关、旧链路单任务 trace 状态写回、`auth-api` 用户门面与管理员只读概要、前端 `aiJobsClient`、前端 `aiJobsStore/useAiJobs`、管理后台 `/admin/ai-jobs` 只读视图。
 - 未完成：更多非 Gemini 执行器补齐真实用量字段、上游硬取消、管理员详情/筛选视图、生产入口灰度验证。
 - Phase 1 出口：图片单任务在不切主执行流的前提下，能完整记录 `created -> queued/running -> succeeded/failed`，并具备权限、计费接入点和用户侧基础恢复入口。
 
-## 4. Phase 2：AI Gateway 包住现有 Gemini Proxy
+## 4. Phase 2：AI Gateway 包住现有 AI Worker Proxy
 
-目标：先不重写 `gemini-proxy`，由 `ai-gateway` 创建 job 并调用旧链路。
+目标：先不重写 `ai-worker-proxy`，由 `ai-gateway` 创建 job 并调用旧链路。
 
 建议文件：
 
 - `server/ai-gateway.js`
 - `server/ai-provider-router.js`
-- `server/adapters/gemini-proxy-adapter.js`
-- `tests/aiGateway.geminiProxy.test.ts`
+- `server/adapters/ai-worker-proxy-adapter.js`
+- `tests/aiGateway.aiWorkerProxy.test.ts`
 
 任务：
 
 - `POST /api/ai/jobs` 接普通文生图。
-- Gateway 根据 `modality/capability/model` 选择 `gemini-proxy-adapter`。
+- Gateway 根据 `modality/capability/model` 选择 `ai-worker-proxy-adapter`。
 - Adapter 调用现有 `/proxy/gemini/async` 或 `/generate-content`。
 - poll 结果写回 `ai_jobs`。
 - 保留旧前端入口作为回退。
 
 当前拆解：
 
-- 已完成：`AI_GATEWAY_EXECUTION_ENABLED=true` 时，auth-api 创建 job 后会 handoff 到 `gemini-proxy` async；proxy 负责排队、执行和状态写回。
+- 已完成：`AI_GATEWAY_EXECUTION_ENABLED=true` 时，auth-api 创建 job 后会 handoff 到 `ai-worker-proxy` async；proxy 负责排队、执行和状态写回。
 - 未完成：前端生产文生图入口灰度验证；上游硬取消；更多非 Gemini 执行器回传真实用量字段。
 
 验收：
@@ -227,7 +227,7 @@ type AiJob = {
 
 ## 6. Phase 4：多模态 Worker 与 Adapter
 
-目标：新增音乐、视频、3D 时不塞进 `gemini-proxy`。
+目标：新增音乐、视频、3D 时不塞进 `ai-worker-proxy`。
 
 建议拆分：
 
@@ -246,7 +246,7 @@ type AiJob = {
 验收：
 
 - 新增一个供应商不需要改前端任务协议。
-- 新增一个模态不需要改 `gemini-proxy`。
+- 新增一个模态不需要改 `ai-worker-proxy`。
 - 单个 worker 故障不影响其它模态。
 
 当前进度：
@@ -300,7 +300,7 @@ P1：
 
 - 建 `AiJob` 表和只读管理视图。
 - 新增普通文生图 job API 样板。
-- Gateway 包现有 `gemini-proxy`。
+- Gateway 包现有 `ai-worker-proxy`。
 
 P2：
 
@@ -311,7 +311,7 @@ P2：
 ## 9. 验证命令
 
 ```powershell
-npx vitest run tests/geminiProxyRetry.test.ts tests/geminiProxyFairnessEnvelope.test.ts
+npx vitest run tests/aiWorkerProxyRetry.test.ts tests/aiWorkerProxyFairnessEnvelope.test.ts
 npx vitest run tests/proxyCreditsGate.test.ts tests/creditReserves.test.ts
 npx vitest run tests/workflowRunTaskBranch.test.ts tests/workflowAiPickIndex.test.ts
 npm run typecheck
@@ -320,14 +320,14 @@ npm run typecheck
 涉及 Render 后还要验证：
 
 ```powershell
-Invoke-WebRequest -UseBasicParsing https://assetcutter-gemini-proxy.onrender.com/healthz
+Invoke-WebRequest -UseBasicParsing https://assetcutter-ai-worker-proxy.onrender.com/healthz
 Invoke-WebRequest -UseBasicParsing https://assetcutter-auth-api.onrender.com/healthz
 ```
 
 ## 10. 不做事项
 
-- 不把音乐、视频、3D 全塞进 `gemini-proxy`。
+- 不把音乐、视频、3D 全塞进 `ai-worker-proxy`。
 - 不让前端直接拼供应商专用 API。
 - 不在没有 job 表的情况下做长视频/长音乐任务。
 - 不用 `localStorage` 存核心任务状态。
-- 不在生产使用 `VITE_BULK_IMAGE_API=same-origin`。
+- 不在生产使用 `VITE_AI_WORKER_PROXY_API=same-origin`。

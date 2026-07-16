@@ -20,7 +20,7 @@ function throwProxyGateNetworkError(): never {
 }
 
 /**
- * 在发起站点 bulk 代理任务前调用：须登录且积分足够。
+ * 在发起站点 AI Worker Proxy 任务前调用：须登录且积分足够。
  * @param estimatedCredits 预检最低消耗（默认 1；工作流按任务类型传入保守估计）
  */
 export async function assertCreditsGateBeforeProxyOrThrow(estimatedCredits = 1): Promise<void> {

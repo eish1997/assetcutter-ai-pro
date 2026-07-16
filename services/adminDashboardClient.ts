@@ -43,7 +43,7 @@ export type AdminDashboardPayload = {
   } | null;
   health: {
     authApi: { ok: boolean; service: string };
-    geminiProxy: {
+    aiWorkerProxy: {
       ok: boolean;
       skipped?: boolean;
       reason?: string;
@@ -59,7 +59,7 @@ export type AdminDashboardPayload = {
         persistedKeysLoaded: number;
         configSource: string | null;
         geminiAsyncJobs: number;
-        geminiProxyInFlight: number;
+        aiWorkerProxyInFlight: number;
       } | null;
     };
   };

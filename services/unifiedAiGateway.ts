@@ -11,7 +11,7 @@
  * - **生视频**：配置 **`VITE_WORKFLOW_VIDEO_API_URL`** 时 `workflowGenerateVideo` POST 桥接后端；未配置则抛 **`WorkflowVideoNotAvailableError`**；**`isWorkflowVideoAvailable()`** 反映是否已配置 URL。
  * - **即梦 Jimeng**：`workflowGenerateImageJimeng` / `workflowGenerateVideoJimeng` / `workflowGenerateDigitalHumanJimeng` 经站内 `/api/jimeng/*`；**`isJimengAvailable()`** 读 status API。
  * - **排障**：构建变量 **`VITE_DEBUG_UNIFIED_AI=1`** 时，`workflow*` 委托在控制台输出 **`[unified-ai]`** 行 + **结构化第二参数**（`provider`、`registryId`/`model`、失败时的 **`errorHint`** 启发式分类），默认关闭。
- * - **Gemini 代理公平限流**：代理返回 **`rate_limited` / `queue_overflow`** 时底层抛 **`GeminiProxyFairnessRejectedError`**（本文件再导出）；**`throwFairnessRejected`** 同步派发 **`ac:gemini-proxy-fairness-rejected`** 供根组件浮层提示。
+ * - **Gemini 代理公平限流**：代理返回 **`rate_limited` / `queue_overflow`** 时底层抛 **`AiWorkerProxyFairnessRejectedError`**（本文件再导出）；**`throwFairnessRejected`** 同步派发 **`ac:ai-worker-proxy-fairness-rejected`** 供根组件浮层提示。
  * - **工作流软提示**：凡经 **`runMeteredAiCall`** 的 **`workflow*`** 失败且启发式为限流/繁忙（且**非**公平拒绝类）时，节流派发 **`ac:unified-ai-soft-notice`**（见 **`unifiedAiSoftNotice.ts`**）；对话等经本文件 **`getDialogTextResponse`** 包装同样走 gate。
  *
  * @see docs/多模型可运营改造计划.md §3.6
@@ -53,7 +53,7 @@ import {
   createAndPollAiGatewayVideoJob,
   isAiGatewayVideoExecutionEnabled,
 } from "./aiGatewayVideoExecution";
-import { GeminiProxyFairnessRejectedError } from "./geminiProxyFairnessError";
+import { AiWorkerProxyFairnessRejectedError } from "./aiWorkerProxyFairnessError";
 import { dispatchUnifiedAiSoftNotice, clipUnifiedAiNoticeMessage } from "./unifiedAiSoftNotice";
 import { emitMeteredUsageAfterDelivery } from "./observability/metering/pipeline";
 import { meterReadingFromTask } from "./observability/metering/adapters/task";
@@ -193,7 +193,7 @@ async function runMeteredAiCall<T>(
     const errorHint =
       isCreditsExceededError(e)
         ? "credits_exceeded"
-        : e instanceof GeminiProxyFairnessRejectedError
+        : e instanceof AiWorkerProxyFairnessRejectedError
         ? e.status === 429 || e.code === "rate_limited"
           ? "rate_limit"
           : "upstream_busy"
@@ -209,7 +209,7 @@ async function runMeteredAiCall<T>(
       });
       throw new Error(creditsExceededUserMessage(), { cause: e });
     }
-    if (!(e instanceof GeminiProxyFairnessRejectedError)) {
+    if (!(e instanceof AiWorkerProxyFairnessRejectedError)) {
       if (errorHint === "rate_limit" || errorHint === "upstream_busy") {
         const headline =
           errorHint === "rate_limit" ? "上游或配额限流（非本站公平队列）" : "上游繁忙或暂时不可用（非队列硬顶）";
@@ -238,7 +238,7 @@ export {
   buildStoryboardSheetStructureAnalysisPrompt,
   getEditPrompt,
   withGeminiRequestControl,
-  extractGeminiProxyImageDataUrl,
+  extractAiWorkerProxyImageDataUrl,
   resumeGeminiAsyncJob,
   retryAllRecoverableGeminiJobs,
 } from "./geminiService";
@@ -549,12 +549,12 @@ export async function analyzeStoryboardSheetStructureInImage(
 }
 
 export {
-  AC_GEMINI_FAIRNESS_REJECTED_EVENT,
-  GeminiProxyFairnessRejectedError,
-  isGeminiProxyFairnessRejectedError,
+  AC_AI_WORKER_FAIRNESS_REJECTED_EVENT,
+  AiWorkerProxyFairnessRejectedError,
+  isAiWorkerProxyFairnessRejectedError,
   throwFairnessRejected,
   type AcGeminiFairnessRejectedDetail,
-} from "./geminiProxyFairnessError";
+} from "./aiWorkerProxyFairnessError";
 
 export {
   AC_UNIFIED_AI_SOFT_NOTICE_EVENT,

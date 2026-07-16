@@ -76,7 +76,7 @@ export function createAiGatewayJobPlan(input, options = {}) {
 
 export { createAiJobDraft, normalizeAiJobModality, AiGatewayValidationError } from './job.js';
 export { resolveAiProviderRoute, AiGatewayRouteError, DEFAULT_AI_PROVIDER_ROUTES } from './provider-router.js';
-export { buildGeminiProxyAsyncRequest, GEMINI_PROXY_ASYNC_PATH } from './adapters/gemini-proxy-adapter.js';
+export { buildAiWorkerProxyAsyncRequest, AI_WORKER_PROXY_ASYNC_PATH } from './adapters/ai-worker-proxy-adapter.js';
 export {
   buildAiGatewayWorkerRequest,
   cancelAiGatewayWorkerExecution,

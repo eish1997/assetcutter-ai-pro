@@ -44,8 +44,8 @@ export function buildAiGatewayImageJobBody(
   const traceOnly = options.traceOnly !== false;
   const registryId = input.registryId || input.model;
   const metadata: Record<string, unknown> = {
-    source: input.source || 'geminiService.bulkProxyGenerateContentAsync',
-    legacyPath: '/proxy/gemini/async',
+    source: input.source || 'geminiService.aiWorkerProxyGenerateContentAsync',
+    proxyPath: '/proxy/gemini/async',
     useVertex: Boolean(input.useVertex),
     canonicalModelId: registryId,
     registryId,

@@ -33,7 +33,7 @@ const ALLOW_LOCALHOST_PATHS = new Set([
   'server/ai3d-proxy.js',
   'server/auth-api.js',
   'server/bridge-relay.js',
-  'server/gemini-proxy-api.js',
+  'server/ai-worker-proxy-api.js',
   'server/r2-storage-handlers.js',
   'scripts/bridge-relay-smoke.mjs',
   'scripts/start-seam-backend.js',

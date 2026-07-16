@@ -6,9 +6,9 @@ describe("settingsStore channel readiness", () => {
     vi.resetModules();
   });
 
-  it("can disable the Vertex site proxy while keeping the generic bulk proxy configured", async () => {
-    vi.stubEnv("VITE_BULK_IMAGE_API", "same-origin");
-    vi.stubEnv("VITE_BULK_IMAGE_API_VERTEX", "same-origin");
+  it("can disable the Vertex site proxy while keeping the generic AI Worker Proxy configured", async () => {
+    vi.stubEnv("VITE_AI_WORKER_PROXY_API", "same-origin");
+    vi.stubEnv("VITE_AI_WORKER_PROXY_API_VERTEX", "same-origin");
     vi.stubEnv("VITE_DISABLE_VERTEX_SITE_PROXY", "true");
     vi.resetModules();
 

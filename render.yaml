@@ -1,20 +1,20 @@
-services:
-  # 官方 Render 服务仅此三项（勿再创建与仓库同名的 assetcutter-ai-pro Web 服务，会无 start 脚本导致 Port scan 失败）
-  # Gemini 异步代理（无 --env-file；密钥与 CORS 在 Dashboard 配置）
+﻿services:
+  # 瀹樻柟 Render 鏈嶅姟浠呮涓夐」锛堝嬁鍐嶅垱寤轰笌浠撳簱鍚屽悕鐨?assetcutter-ai-pro Web 鏈嶅姟锛屼細鏃?start 鑴氭湰瀵艰嚧 Port scan 澶辫触锛?
+  # Gemini 寮傛浠ｇ悊锛堟棤 --env-file锛涘瘑閽ヤ笌 CORS 鍦?Dashboard 閰嶇疆锛?
   - type: web
-    name: assetcutter-gemini-proxy
+    name: assetcutter-ai-worker-proxy
     runtime: node
     plan: free
     rootDir: .
     buildCommand: npm ci
-    startCommand: npm run start:gemini-proxy
+    startCommand: npm run start:ai-worker-proxy
     healthCheckPath: /healthz
     envVars:
       - key: NODE_ENV
         value: production
       - key: GEMINI_API_KEY
         sync: false
-      # 公平排队总开关（数值旋钮在管理页 /admin/gemini-fairness 写入 Postgres，与 auth-api 共享）
+      # 鍏钩鎺掗槦鎬诲紑鍏筹紙鏁板€兼棆閽湪绠＄悊椤?/admin/gemini-fairness 鍐欏叆 Postgres锛屼笌 auth-api 鍏变韩锛?
       - key: GEMINI_FAIRNESS_ENABLED
         value: "true"
       - key: GEMINI_FAIRNESS_CONFIG_SOURCE
@@ -23,31 +23,31 @@ services:
         fromDatabase:
           name: assetcutter-auth-db
           property: connectionString
-      # 浏览器直连本代理时接受登录态 X-AC-Fairness-Key（公网无 HMAC 时的生产默认）
+      # 娴忚鍣ㄧ洿杩炴湰浠ｇ悊鏃舵帴鍙楃櫥褰曟€?X-AC-Fairness-Key锛堝叕缃戞棤 HMAC 鏃剁殑鐢熶骇榛樿锛?
       - key: GEMINI_FAIRNESS_TRUST_CLIENT_KEY_HEADER
         value: "true"
-      # 逗号分隔；与 BUILTIN_PROXY_ALLOWED_ORIGINS（含 app.adrazzo.com 等）合并，勿只配 Vercel 漏自定义域
+      # 閫楀彿鍒嗛殧锛涗笌 BUILTIN_PROXY_ALLOWED_ORIGINS锛堝惈 app.adrazzo.com 绛夛級鍚堝苟锛屽嬁鍙厤 Vercel 婕忚嚜瀹氫箟鍩?
       - key: PROXY_ALLOWED_ORIGINS
         sync: false
-      # Vertex（设置页选 Vertex 时必填，与前端 VITE_BULK_IMAGE_API 指向的**本服务**一致）
+      # Vertex锛堣缃〉閫?Vertex 鏃跺繀濉紝涓庡墠绔?VITE_AI_WORKER_PROXY_API 鎸囧悜鐨?*鏈湇鍔?*涓€鑷达級
       - key: VERTEX_PROJECT_ID
         sync: false
-      # Vertex：必须 us-central1（Agent Platform 区域端点）。勿设 global——会走 aiplatform.googleapis.com，
-      # Console 计入「Gemini for Google Cloud API」且与区域配额分离。Dashboard 若仍为 global，Sync Blueprint 或手动改后 redeploy。
+      # Vertex锛氬繀椤?us-central1锛圓gent Platform 鍖哄煙绔偣锛夈€傚嬁璁?global鈥斺€斾細璧?aiplatform.googleapis.com锛?
+      # Console 璁″叆銆孏emini for Google Cloud API銆嶄笖涓庡尯鍩熼厤棰濆垎绂汇€侱ashboard 鑻ヤ粛涓?global锛孲ync Blueprint 鎴栨墜鍔ㄦ敼鍚?redeploy銆?
       - key: VERTEX_LOCATION
         value: us-central1
-      # 与 VERTEX_LOCATION 对齐；若 Dashboard 曾单独设 GOOGLE_CLOUD_LOCATION=global 会覆盖上面默认，故显式钉死
+      # 涓?VERTEX_LOCATION 瀵归綈锛涜嫢 Dashboard 鏇惧崟鐙 GOOGLE_CLOUD_LOCATION=global 浼氳鐩栦笂闈㈤粯璁わ紝鏁呮樉寮忛拤姝?
       - key: GOOGLE_CLOUD_LOCATION
         value: us-central1
-      # Agent Platform 生图 REST 用 v1
+      # Agent Platform 鐢熷浘 REST 鐢?v1
       - key: VERTEX_API_VERSION
         value: v1
-      # 服务账号 JSON：Dashboard 粘贴整段 JSON 到 GOOGLE_APPLICATION_CREDENTIALS_JSON（或本机路径式 GOOGLE_APPLICATION_CREDENTIALS）
+      # 鏈嶅姟璐﹀彿 JSON锛欴ashboard 绮樿创鏁存 JSON 鍒?GOOGLE_APPLICATION_CREDENTIALS_JSON锛堟垨鏈満璺緞寮?GOOGLE_APPLICATION_CREDENTIALS锛?
       - key: GOOGLE_APPLICATION_CREDENTIALS_JSON
         sync: false
-      # 可选：GEMINI_API_KEYS、ENABLE_TOAPIS_FALLBACK、TOAPIS_API_KEY 等，见 README 与 docs/VERTEX_AI_INTEGRATION.md
-      # 与 auth-api INTERNAL_API_SECRET 相同；gemini-proxy 校验浏览器 X-AC-Credits-Reserve 时回调 auth-api
-      - key: GEMINI_PROXY_CREDITS_INTERNAL_SECRET
+      # 鍙€夛細GEMINI_API_KEYS銆丒NABLE_TOAPIS_FALLBACK銆乀OAPIS_API_KEY 绛夛紝瑙?README 涓?docs/VERTEX_AI_INTEGRATION.md
+      # 涓?auth-api INTERNAL_API_SECRET 鐩稿悓锛沢emini-proxy 鏍￠獙娴忚鍣?X-AC-Credits-Reserve 鏃跺洖璋?auth-api
+      - key: AI_WORKER_PROXY_CREDITS_INTERNAL_SECRET
         sync: false
       - key: AUTH_API_BASE
         value: https://assetcutter-auth-api.onrender.com
@@ -76,7 +76,7 @@ services:
         value: none
       - key: AUTH_COOKIE_SECURE
         value: "true"
-      # 邀请制注册：须管理端生成的一次性码 AC-XXXX-XXXX 或链接 ?invite=
+      # 閭€璇峰埗娉ㄥ唽锛氶』绠＄悊绔敓鎴愮殑涓€娆℃€х爜 AC-XXXX-XXXX 鎴栭摼鎺??invite=
       - key: REGISTRATION_MODE
         value: invite_only
       - key: AUTH_ADMIN_EMAIL
@@ -89,16 +89,16 @@ services:
         fromDatabase:
           name: assetcutter-auth-db
           property: connectionString
-      # Dashboard 拉取 gemini-proxy /healthz.fairness（勿浏览器直打 proxy）
-      - key: GEMINI_PROXY_HEALTH_URL
-        value: https://assetcutter-gemini-proxy.onrender.com
-      # auth-api /api/gemini-proxy/* 转发目标（默认同 HEALTH_URL）
-      - key: GEMINI_PROXY_UPSTREAM_URL
-        value: https://assetcutter-gemini-proxy.onrender.com
-      # AI Gateway execution handoff: /api/ai/jobs can submit image/text jobs to gemini-proxy.
+      # Dashboard pulls AI Worker Proxy health.
+      - key: AI_WORKER_PROXY_HEALTH_URL
+        value: https://assetcutter-ai-worker-proxy.onrender.com
+      # auth-api proxy relay upstream.
+      - key: AI_WORKER_PROXY_UPSTREAM_URL
+        value: https://assetcutter-ai-worker-proxy.onrender.com
+      # AI Gateway execution handoff: /api/ai/jobs can submit image/text jobs to AI Worker Proxy.
       - key: AI_GATEWAY_EXECUTION_ENABLED
         value: "true"
-      # 工作区云同步（R2）：与 auth 同源挂载 /api/r2，无需单独 R2 服务
+      # 宸ヤ綔鍖轰簯鍚屾锛圧2锛夛細涓?auth 鍚屾簮鎸傝浇 /api/r2锛屾棤闇€鍗曠嫭 R2 鏈嶅姟
       - key: R2_ACCOUNT_ID
         sync: false
       - key: R2_ACCESS_KEY_ID
@@ -109,7 +109,7 @@ services:
         sync: false
       - key: R2_PUBLIC_BASE_URL
         sync: false
-      # 伴侣安装包/扩展包公网直链与 electron-updater YAML；未设时回退 R2_PUBLIC_BASE_URL
+      # 浼翠荆瀹夎鍖?鎵╁睍鍖呭叕缃戠洿閾句笌 electron-updater YAML锛涙湭璁炬椂鍥為€€ R2_PUBLIC_BASE_URL
       - key: COMPANION_DIST_PUBLIC_HTTP_BASE
         sync: false
       - key: PROXY_ALLOWED_ORIGINS
@@ -126,24 +126,24 @@ services:
         source: /*
         destination: /index.html
     envVars:
-      # 与 auth 不同源时构建期必填；生图经 /api/gemini-proxy 中继，避免浏览器直连 onrender 失败
+      # 涓?auth 涓嶅悓婧愭椂鏋勫缓鏈熷繀濉紱鐢熷浘缁?/api/ai-worker-proxy 涓户锛岄伩鍏嶆祻瑙堝櫒鐩磋繛 onrender 澶辫触
       - key: VITE_AUTH_API_BASE_URL
         value: https://assetcutter-auth-api.onrender.com
-      # 与 auth 同源时可不填；仅当 R2 单独域名部署时再设
+      # 涓?auth 鍚屾簮鏃跺彲涓嶅～锛涗粎褰?R2 鍗曠嫭鍩熷悕閮ㄧ讲鏃跺啀璁?
       - key: VITE_R2_API_BASE_URL
         sync: false
-      # 试用 / 官方 Gemini 走后端代理；须与 gemini-proxy 上 GEMINI_API_KEY、PROXY_ALLOWED_ORIGINS 一致
-      - key: VITE_BULK_IMAGE_API
-        value: https://assetcutter-gemini-proxy.onrender.com
-      # Vertex 专用（可与上一项相同）；构建产物需含 geminiService 对 VITE_BULK_IMAGE_API_VERTEX 的支持
-      - key: VITE_BULK_IMAGE_API_VERTEX
-        value: https://assetcutter-gemini-proxy.onrender.com
-      # 20 人共享单账号：降低浏览器侧并发尖峰
+      # AI Worker Proxy root.
+      - key: VITE_AI_WORKER_PROXY_API
+        value: https://assetcutter-ai-worker-proxy.onrender.com
+      # Vertex-specific AI Worker Proxy root.
+      - key: VITE_AI_WORKER_PROXY_API_VERTEX
+        value: https://assetcutter-ai-worker-proxy.onrender.com
+      # Shared account: keep browser-side concurrency conservative.
       - key: VITE_WORKFLOW_MAX_CONCURRENCY
         value: "2"
       - key: VITE_GEMINI_IMAGE_BATCH_BOX_SIZE_VERTEX
         value: "2"
-      # Frontend gray gate: Vertex image jobs try /api/ai/jobs first, then fall back to legacy proxy.
+      # Frontend gray gate: Vertex image jobs try /api/ai/jobs first, then use AI Worker Proxy execution.
       - key: VITE_AI_GATEWAY_IMAGE_EXECUTION
         value: vertex
 

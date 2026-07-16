@@ -1,7 +1,7 @@
 /**
- * 即梦服务端积分 L1 预检：登录 + 余额（对齐 gemini-proxy credits-gate）。
+ * 即梦服务端积分 L1 预检：登录 + 余额（对齐 ai-worker-proxy credits-gate）。
  */
-import { assertGeminiProxyCreditsGate } from './gemini-proxy-credits-gate.js';
+import { assertAiWorkerProxyCreditsGate } from './ai-worker-proxy-credits-gate.js';
 
 /** 即梦 verified registry → L1 最低预检积分（对齐 shared/credits.ts 价目表） */
 const REGISTRY_MIN_CREDITS = {
@@ -33,5 +33,5 @@ export async function assertJimengCreditsGate(req, registryId, explicitEstimate)
     explicitEstimate != null && Number.isFinite(Number(explicitEstimate))
       ? Math.max(1, Math.floor(Number(explicitEstimate)))
       : estimatedCreditsForJimengRegistry(registryId);
-  return assertGeminiProxyCreditsGate(req, est);
+  return assertAiWorkerProxyCreditsGate(req, est);
 }

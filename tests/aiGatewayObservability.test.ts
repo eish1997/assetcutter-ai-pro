@@ -23,7 +23,7 @@ function plan(overrides: Record<string, any> = {}) {
     },
     route: overrides.route || {
       providerId: overrides.providerId || 'vertex-gemini',
-      adapterId: 'gemini-proxy',
+      adapterId: 'ai-worker-proxy',
       upstreamBackend: 'vertex',
     },
     adapterRequest: {},

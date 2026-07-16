@@ -2,9 +2,9 @@
  * 本地同源生图 E2E（与线上一致：Vertex + 积分闸门）。
  * session → credits-proxy-bundle → POST async（aiBackend: vertex）→ 轮询至完成。
  *
- * 用法：node --env-file=.env.local scripts/test-local-bulk-image-authed.mjs
+ * 用法：node --env-file=.env.local scripts/test-local-ai-worker-image-authed.mjs
  *
- * 本机 gemini-proxy 须已配置 VERTEX_PROJECT_ID + ADC（见 docs/VERTEX_AI_INTEGRATION.md）。
+ * 本机 ai-worker-proxy 须已配置 VERTEX_PROJECT_ID + ADC（见 docs/VERTEX_AI_INTEGRATION.md）。
  * 设 E2E_AI_BACKEND=gemini 可改测 AI Studio Key 路径（非默认）。
  */
 import crypto from 'crypto';
@@ -34,24 +34,24 @@ async function sleep(ms) {
 async function assertUpstreamReady() {
   const res = await fetch(`${LOCAL_PROXY}/healthz`, { cache: 'no-store' });
   const text = await res.text();
-  if (!res.ok) fail(`gemini-proxy healthz 失败 HTTP ${res.status}`);
+  if (!res.ok) fail(`ai-worker-proxy healthz 失败 HTTP ${res.status}`);
   let health;
   try {
     health = JSON.parse(text);
   } catch {
-    fail(`gemini-proxy healthz 非 JSON：${text.slice(0, 200)}`);
+    fail(`ai-worker-proxy healthz 非 JSON：${text.slice(0, 200)}`);
   }
 
   if (USE_VERTEX) {
     const vtx = health?.vertex || {};
     if (!vtx.configured) {
       fail(
-        '本机 gemini-proxy 未配置 Vertex（healthz vertex.configured=false）。请在 .env.local 设置 VERTEX_PROJECT_ID（或 GOOGLE_CLOUD_PROJECT）与 GOOGLE_APPLICATION_CREDENTIALS（或 GOOGLE_APPLICATION_CREDENTIALS_JSON），重启 9002。见 docs/VERTEX_AI_INTEGRATION.md'
+        '本机 ai-worker-proxy 未配置 Vertex（healthz vertex.configured=false）。请在 .env.local 设置 VERTEX_PROJECT_ID（或 GOOGLE_CLOUD_PROJECT）与 GOOGLE_APPLICATION_CREDENTIALS（或 GOOGLE_APPLICATION_CREDENTIALS_JSON），重启 9002。见 docs/VERTEX_AI_INTEGRATION.md'
       );
     }
     if (!vtx.adcLikelyConfigured) {
       fail(
-        'Vertex ADC 未就绪（healthz vertex.adcLikelyConfigured=false）。请配置服务账号 JSON 或 gcloud application-default login 后重启 gemini-proxy'
+        'Vertex ADC 未就绪（healthz vertex.adcLikelyConfigured=false）。请配置服务账号 JSON 或 gcloud application-default login 后重启 ai-worker-proxy'
       );
     }
     ok(`Vertex 就绪 project=${vtx.project || '(healthz)'} location=${vtx.location || 'global'}`);

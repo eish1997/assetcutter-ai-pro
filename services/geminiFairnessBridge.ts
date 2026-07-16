@@ -1,5 +1,5 @@
 /**
- * 浏览器直连 gemini-proxy 时，通过请求头传递限流键（与 `server/gemini-proxy-fairness.js` 对齐）。
+ * 浏览器直连 ai-worker-proxy 时，通过请求头传递限流键（与 `server/ai-worker-proxy-fairness.js` 对齐）。
  * 生产环境若代理对公网且未设 `GEMINI_FAIRNESS_TRUST_CLIENT_KEY_HEADER` / HMAC，请勿依赖浏览器自报 user id。
  */
 let fairnessUserId: string | null = null;

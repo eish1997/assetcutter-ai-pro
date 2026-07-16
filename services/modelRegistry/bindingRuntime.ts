@@ -26,7 +26,7 @@ export function usesVertexProxyForText(modelOrRegistryId?: string): boolean {
   return usesVertexProxyFor((modelOrRegistryId || DEFAULT_MODEL_TEXT).trim(), "text");
 }
 
-/** bulk 代理是否应带 aiBackend: vertex（默认看生图 binding，文本 bulk 场景可传 role） */
-export function bulkUsesVertexBackend(registryId: string, role: ModelResolveRole = "image"): boolean {
+/** AI Worker Proxy 是否应带 aiBackend: vertex（默认看生图 binding，文本代理场景可传 role） */
+export function aiWorkerProxyUsesVertexBackend(registryId: string, role: ModelResolveRole = "image"): boolean {
   return usesVertexProxyFor(registryId, role);
 }

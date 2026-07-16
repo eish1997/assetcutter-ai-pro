@@ -1,5 +1,5 @@
 /**
- * 跨域 gemini-proxy 积分预扣 + HMAC 请求头（与 auth-api credits-proxy-bundle 对齐）。
+ * 跨域 ai-worker-proxy 积分预扣 + HMAC 请求头（与 auth-api credits-proxy-bundle 对齐）。
  */
 import { dispatchCreditsBalanceChanged } from '../shared/credits';
 import { apiUrl } from './apiBase';
@@ -45,7 +45,7 @@ export function getCachedCreditsProxyHeaders(estimatedCredits: number): Record<s
   return null;
 }
 
-/** 将 gate 取得的完整准入头写入模块缓存，供 bulk 复用 */
+/** 将 gate 取得的完整准入头写入模块缓存，供 AI Worker Proxy 复用 */
 export function markCreditsProxyHeadersFromGate(
   headers: Record<string, string>,
   estimatedCredits: number

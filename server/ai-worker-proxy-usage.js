@@ -1,5 +1,5 @@
 /**
- * Re-export shared extractor (gemini-proxy tests import this path).
+ * Re-export shared extractor (ai-worker-proxy tests import this path).
  */
 export {
   extractUsageMetadata,

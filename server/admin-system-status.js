@@ -4,11 +4,18 @@ import { resolveGeminiFairnessConfigSource } from './gemini-fairness-config-stor
 import { getPromoSweepMonitorState } from './credit-promo-sweep-monitor.js';
 import { isPromoLotsEnabled } from './credit-store.js';
 
-async function fetchGeminiProxyHealth() {
-  const base = String(process.env.GEMINI_PROXY_HEALTH_URL || process.env.GEMINI_PROXY_BASE_URL || '')
+async function fetchAiWorkerProxyHealth() {
+  const base = String(
+    process.env.AI_WORKER_PROXY_HEALTH_URL ||
+      process.env.AI_WORKER_PROXY_BASE_URL ||
+      process.env.GEMINI_PROXY_HEALTH_URL ||
+      process.env.GEMINI_PROXY_BASE_URL ||
+      process.env.GEMINI_PROXY_UPSTREAM_URL ||
+      ''
+  )
     .trim()
     .replace(/\/+$/, '');
-  if (!base) return { ok: false, skipped: true, reason: '未配置 GEMINI_PROXY_HEALTH_URL' };
+  if (!base) return { ok: false, skipped: true, reason: '未配置 AI_WORKER_PROXY_HEALTH_URL' };
   const url = `${base}/healthz`;
   try {
     const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
@@ -30,7 +37,7 @@ async function fetchGeminiProxyHealth() {
             persistedKeysLoaded: Number(fairness.persistedKeysLoaded) || 0,
             configSource: fairness.configSource || null,
             geminiAsyncJobs: Number(body.geminiAsyncJobs) || 0,
-            geminiProxyInFlight: Number(body.geminiProxyInFlight) || 0,
+            aiWorkerProxyInFlight: Number(body.aiWorkerProxyInFlight) || 0,
           }
         : null;
     return { ok: res.ok, status: res.status, url, metrics, vertex: body?.vertex || null };
@@ -52,20 +59,27 @@ export async function buildAdminSystemStatus() {
     companionCount = 0;
   }
 
-  const geminiProxy = await fetchGeminiProxyHealth();
+  const aiWorkerProxy = await fetchAiWorkerProxyHealth();
 
   return {
     generatedAt: new Date().toISOString(),
     services: {
       authApi: { ok: true, service: 'auth-api', port: Number(process.env.PORT || 9100) },
-      geminiProxy,
+      aiWorkerProxy,
       promoSweep: getPromoSweepMonitorState(),
     },
     config: {
       flags: [
         flag('DATABASE_URL', process.env.DATABASE_URL),
         flag('R2_*', isR2Configured()),
-        flag('GEMINI_PROXY_HEALTH_URL / GEMINI_PROXY_BASE_URL', process.env.GEMINI_PROXY_HEALTH_URL || process.env.GEMINI_PROXY_BASE_URL),
+        flag(
+          'AI_WORKER_PROXY_HEALTH_URL',
+          process.env.AI_WORKER_PROXY_HEALTH_URL ||
+            process.env.AI_WORKER_PROXY_BASE_URL ||
+            process.env.GEMINI_PROXY_HEALTH_URL ||
+            process.env.GEMINI_PROXY_BASE_URL ||
+            process.env.GEMINI_PROXY_UPSTREAM_URL
+        ),
         flag('AUTH_COOKIE_DOMAIN', process.env.AUTH_COOKIE_DOMAIN),
         flag('TRIPO_PROXY / HTTPS_PROXY', process.env.TRIPO_PROXY || process.env.HTTPS_PROXY),
         flag('SCRIPT_HUB API (DATABASE_URL for hub)', process.env.DATABASE_URL),

@@ -13,7 +13,7 @@ describe('fairnessQueueMetaForJob', () => {
   });
 
   it('returns queue position snapshot for enqueued job', async () => {
-    const mod = await import('../server/gemini-proxy-fairness.js');
+    const mod = await import('../server/ai-worker-proxy-fairness.js');
     const key = 'user:test-queue-meta';
     const jobA = 'job-a-meta';
     const jobB = 'job-b-meta';

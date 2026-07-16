@@ -34,7 +34,7 @@
  * 6) 浏览器与 CORS
  *    - 直连 ToAPIs 需对方允许站点来源；若失败表现为浏览器 Network 跨域，与适配逻辑无关。
  *
- * 7) 与可选 Gemini 代理（VITE_BULK_IMAGE_API → server/gemini-proxy-api.js）关系
+ * 7) 与可选 Gemini 代理（VITE_AI_WORKER_PROXY_API → server/ai-worker-proxy-api.js）关系
  *    - 选择 ToAPIs 时走本适配层，不会自动改用代理的 `/proxy/gemini/async`。
  *
  * 8) Antigravity Tools（走其 **OpenAI 协议** `/v1/*`；与控制台「Gemini 协议 /v1beta」为不同入口，勿混填 Base URL）

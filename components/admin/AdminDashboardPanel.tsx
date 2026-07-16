@@ -193,49 +193,49 @@ const AdminDashboardPanel: React.FC = () => {
                   <dd className="text-emerald-300">正常</dd>
                 </div>
                 <div className="flex justify-between gap-4">
-                  <dt className="text-gray-500 shrink-0">gemini-proxy</dt>
+                  <dt className="text-gray-500 shrink-0">AI Worker Proxy</dt>
                   <dd className="text-right text-gray-300">
-                    {data.health.geminiProxy.skipped
-                      ? data.health.geminiProxy.reason || '未配置'
-                      : data.health.geminiProxy.ok
+                    {data.health.aiWorkerProxy.skipped
+                      ? data.health.aiWorkerProxy.reason || '未配置'
+                      : data.health.aiWorkerProxy.ok
                         ? '正常'
-                        : data.health.geminiProxy.error || `HTTP ${data.health.geminiProxy.status ?? '?'}`}
+                        : data.health.aiWorkerProxy.error || `HTTP ${data.health.aiWorkerProxy.status ?? '?'}`}
                   </dd>
                 </div>
               </dl>
-              {!data.health.geminiProxy.skipped && !data.health.geminiProxy.ok ? (
+              {!data.health.aiWorkerProxy.skipped && !data.health.aiWorkerProxy.ok ? (
                 <p className="mt-2 text-[10px] text-amber-600/90 leading-relaxed">
-                  请在 auth-api 环境变量配置 GEMINI_PROXY_HEALTH_URL；Render 多实例时限流 JSON 可能与 proxy 不同步。
+                  请在 auth-api 环境变量配置 AI_WORKER_PROXY_HEALTH_URL。
                 </p>
               ) : null}
-              {data.health.geminiProxy.metrics ? (
+              {data.health.aiWorkerProxy.metrics ? (
                 <dl className="mt-3 pt-3 border-t border-[#252528] space-y-1.5 text-[10px]">
                   <div className="flex justify-between">
                     <dt className="text-gray-500">公平排队</dt>
-                    <dd className={data.health.geminiProxy.metrics.enabled ? 'text-emerald-300' : 'text-gray-500'}>
-                      {data.health.geminiProxy.metrics.enabled ? '已启用' : '未启用'}
+                    <dd className={data.health.aiWorkerProxy.metrics.enabled ? 'text-emerald-300' : 'text-gray-500'}>
+                      {data.health.aiWorkerProxy.metrics.enabled ? '已启用' : '未启用'}
                     </dd>
                   </div>
                   <div className="flex justify-between">
                     <dt className="text-gray-500">排队估算</dt>
-                    <dd className="text-gray-300">{data.health.geminiProxy.metrics.globalQueuedApprox}</dd>
+                    <dd className="text-gray-300">{data.health.aiWorkerProxy.metrics.globalQueuedApprox}</dd>
                   </div>
                   <div className="flex justify-between">
                     <dt className="text-gray-500">有排队的 Key</dt>
-                    <dd className="text-gray-300">{data.health.geminiProxy.metrics.keysWithQueued}</dd>
+                    <dd className="text-gray-300">{data.health.aiWorkerProxy.metrics.keysWithQueued}</dd>
                   </div>
                   <div className="flex justify-between">
                     <dt className="text-gray-500">Proxy 并发中</dt>
-                    <dd className="text-gray-300">{data.health.geminiProxy.metrics.geminiProxyInFlight}</dd>
+                    <dd className="text-gray-300">{data.health.aiWorkerProxy.metrics.aiWorkerProxyInFlight}</dd>
                   </div>
                   <div className="flex justify-between">
                     <dt className="text-gray-500">异步任务</dt>
-                    <dd className="text-gray-300">{data.health.geminiProxy.metrics.geminiAsyncJobs}</dd>
+                    <dd className="text-gray-300">{data.health.aiWorkerProxy.metrics.geminiAsyncJobs}</dd>
                   </div>
-                  {data.health.geminiProxy.metrics.configSource ? (
+                  {data.health.aiWorkerProxy.metrics.configSource ? (
                     <div className="flex justify-between gap-4">
                       <dt className="text-gray-500 shrink-0">配置来源</dt>
-                      <dd className="text-gray-400 text-right">{data.health.geminiProxy.metrics.configSource}</dd>
+                      <dd className="text-gray-400 text-right">{data.health.aiWorkerProxy.metrics.configSource}</dd>
                     </div>
                   ) : null}
                 </dl>

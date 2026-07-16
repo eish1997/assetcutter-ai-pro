@@ -1,18 +1,18 @@
 # Gemini / Vertex 代理：公平排队与每用户限流（开发规格）
 
-本文档描述在 **单 GCP 项目、单 Vertex 凭证** 前提下，为 `server/gemini-proxy-api.js` 及调用链增加的 **公平排队** 与 **每用户限流** 的设计目标、行为规格与落地清单。**实现前以本文为准；实现后应同步更新环境变量表与健康检查字段。**
+本文档描述在 **单 GCP 项目、单 Vertex 凭证** 前提下，为 `server/ai-worker-proxy-api.js` 及调用链增加的 **公平排队** 与 **每用户限流** 的设计目标、行为规格与落地清单。**实现前以本文为准；实现后应同步更新环境变量表与健康检查字段。**
 
 相关文档：
 
-- [Vertex AI 接入说明](./VERTEX_AI_INTEGRATION.md)（`aiBackend: "vertex"`、ADC、前端 `VITE_BULK_IMAGE_API` / `VITE_BULK_IMAGE_API_VERTEX`）
+- [Vertex AI 接入说明](./VERTEX_AI_INTEGRATION.md)（`aiBackend: "vertex"`、ADC、前端 `VITE_AI_WORKER_PROXY_API` / `VITE_AI_WORKER_PROXY_API_VERTEX`）
 - Google：**[Standard PayGo 与用量档位（TPM）](https://cloud.google.com/vertex-ai/generative-ai/docs/dynamic-shared-quota)**、**[Throughput quota / 动态共享池](https://cloud.google.com/vertex-ai/generative-ai/docs/resources/throughput-quota)**、**[Generative AI quotas](https://cloud.google.com/vertex-ai/generative-ai/docs/quotas)**、**[Vertex AI quotas](https://cloud.google.com/vertex-ai/docs/quotas)**
 
 ### 全链路速查（实现后）
 
 | 位置 | 职责 |
 | --- | --- |
-| **浏览器** | `geminiFairnessBridge` 登录头；**`throwFairnessRejected`** → **`ac:gemini-proxy-fairness-rejected`**；**`traceUnifiedAiCall`**（`workflow*`）对其它限流/繁忙节流派发 **`ac:unified-ai-soft-notice`**；**`GeminiFairnessFloatingNotice`** 统一顶栏展示。 |
-| **gemini-proxy 进程** | **`server/gemini-proxy-fairness.js`** 准入与队列；**`server/gemini-proxy-api.js`** 挂接 async / async-batch / generate-content；**`/healthz.fairness`** 可观测。 |
+| **浏览器** | `geminiFairnessBridge` 登录头；**`throwFairnessRejected`** → **`ac:ai-worker-proxy-fairness-rejected`**；**`traceUnifiedAiCall`**（`workflow*`）对其它限流/繁忙节流派发 **`ac:unified-ai-soft-notice`**；**`GeminiFairnessFloatingNotice`** 统一顶栏展示。 |
+| **ai-worker-proxy 进程** | **`server/ai-worker-proxy-fairness.js`** 准入与队列；**`server/ai-worker-proxy-api.js`** 挂接 async / async-batch / generate-content；**`/healthz.fairness`** 可观测。 |
 | **运维数值** | 默认磁盘 **`server/data/gemini-fairness-config.json`**（或 **`GEMINI_FAIRNESS_CONFIG_PATH`**）；代理约 **3s** 重读；**auth-api** **`GET` / `PUT` / `DELETE`** **`/api/admin/gemini-fairness-config`**（**DELETE** 清空为 `{}`）与站点 **`/admin/gemini-fairness`**（**PUT 与已有键合并**、**清空磁盘覆盖**按钮）。 |
 | **总开关 / 密钥** | 仍以环境变量为准（**`GEMINI_FAIRNESS_ENABLED`**、HMAC、**`GEMINI_FAIRNESS_TRUST_CLIENT_KEY_HEADER`** 等）；磁盘只覆盖数值型旋钮。 |
 
@@ -21,7 +21,7 @@
 | 术语 | 含义 |
 | --- | --- |
 | **Fairness key** | 限流与公平排队使用的逻辑主体标识（如 `user:<id>`、`anon:<ip>`、`service:<name>`）。 |
-| **全局槽** | 全站同时占用、正在执行上游 `generateContent` 的槽位数（与现有 `withGeminiProxySlot` / `GEMINI_ASYNC_PROXY_MAX_CONCURRENT` 语义一致）。 |
+| **全局槽** | 全站同时占用、正在执行上游 `generateContent` 的槽位数（与现有 `withAiWorkerProxySlot` / `AI_WORKER_ASYNC_PROXY_MAX_CONCURRENT` 语义一致）。 |
 | **排队深度** | 某 fairness key 已入队、尚未进入 `running` 的任务数量（含 `pending` / `queued` 等未执行态）。 |
 
 **文档维护**：规格在代码中稳定落地后，可将 **§0** 压缩为简短「背景摘要」或移至文末附录，减少长期维护中的会话口吻。
@@ -47,7 +47,7 @@
 ### 1.1 问题
 
 - 全站用户共用 **同一 Vertex 项目** 时，Google 侧为 **组织级 TPM 基线 + 动态共享池**；高峰会出现 **429 / RESOURCE_EXHAUSTED**，且官方说明 **秒级尖峰** 易触发限流（即使分钟均值不高）。
-- 代理侧若仅有 **全局并发上限**（如现有 `GEMINI_ASYNC_PROXY_MAX_CONCURRENT`），**无法防止单用户**占用过多排队资源或并发槽，导致 **多数用户饥饿**。
+- 代理侧若仅有 **全局并发上限**（如现有 `AI_WORKER_ASYNC_PROXY_MAX_CONCURRENT`），**无法防止单用户**占用过多排队资源或并发槽，导致 **多数用户饥饿**。
 
 ### 1.2 目标（可验收）
 
@@ -95,7 +95,7 @@
 
 | 组件 | 行为 |
 | --- | --- |
-| `server/gemini-proxy-api.js` | 异步单任务 / 批量异步在真正调用前使用 **`withGeminiProxySlot`**，全局并发由 **`GEMINI_ASYNC_PROXY_MAX_CONCURRENT`**（生产默认 2，本地/测试默认 4）控制；**同步** `POST /proxy/gemini/generate-content` 在 Vertex 路径上 **不经过** 该槽（若不做改造则存在绕过风险）。 |
+| `server/ai-worker-proxy-api.js` | 异步单任务 / 批量异步在真正调用前使用 **`withAiWorkerProxySlot`**，全局并发由 **`AI_WORKER_ASYNC_PROXY_MAX_CONCURRENT`**（生产默认 2，本地/测试默认 4）控制；**同步** `POST /proxy/gemini/generate-content` 在 Vertex 路径上 **不经过** 该槽（若不做改造则存在绕过风险）。 |
 | `services/geminiService.ts` | 对代理发起 `POST /proxy/gemini/async`、`async-batch`；Vertex 时 body 带 **`aiBackend: "vertex"`**。 |
 | 试用额度 | **`consumeTrialGeminiSlotBeforeProxyOrThrow`**（经 **auth-api** 扣日配额）与 Vertex **正交**；Vertex 全站公平队列 **不能** 替代试用配额，二者叠加。 |
 
@@ -105,7 +105,7 @@
 
 | 部署形态 | 行为 | 建议 |
 | --- | --- | --- |
-| **单实例** `gemini-proxy` | 本文所述公平队列与每用户限流 **可直接实现**。 | MVP / 中小流量默认。 |
+| **单实例** `ai-worker-proxy` | 本文所述公平队列与每用户限流 **可直接实现**。 | MVP / 中小流量默认。 |
 | **多实例**（多 Pod / 多进程负载均衡） | 各实例内存 **不共享**，总和限流失效；公平性 **仅在单实例内** 成立。 | 必须其一：**Redis（或等价）集中计数与队列**；**API 网关统一限流**（按 key）；**Ingress 会话粘滞**（仅缓解，换实例仍漂移）；或 **明确文档化「仅单副本」** 并在编排上锁副本数为 1。 |
 
 **实现清单**：若目标为生产多副本，将 **「集中式存储或网关限流」** 列为独立里程碑，避免先做满内存队列再推倒重来。
@@ -154,7 +154,7 @@
 ### 5.1 层 A：全站对 Vertex 的并发（已有概念，可保留并改名）
 
 - **含义**：任意时刻 **正在执行** `proxyVertexGenerateContent`（或等价 SDK 调用）的请求数上限。
-- **与现有变量对齐**：继续以 **`GEMINI_ASYNC_PROXY_MAX_CONCURRENT`** 为全局槽（或拆出 **`VERTEX_PROXY_MAX_CONCURRENT`** 仅作用于 `useVertex`，便于与 Gemini Key 路径分离调参）。
+- **与现有变量对齐**：继续以 **`AI_WORKER_ASYNC_PROXY_MAX_CONCURRENT`** 为全局槽（或拆出 **`VERTEX_PROXY_MAX_CONCURRENT`** 仅作用于 `useVertex`，便于与 Gemini Key 路径分离调参）。
 - **作用**：保护进程与上游连接数；**单独使用不足以公平**。
 
 ### 5.2 层 B：每用户（每 fairness key）限制
@@ -187,14 +187,14 @@
 
 ### 6.2 透传方式（二选一，实现时定稿）
 
-**方案甲（推荐）**：调用方在反向代理或 BFF 上校验会话后，向 gemini-proxy 转发请求并设置：
+**方案甲（推荐）**：调用方在反向代理或 BFF 上校验会话后，向 ai-worker-proxy 转发请求并设置：
 
 - `X-AC-Fairness-Key: user:<id>`（或 `anon:...`）
 
 代理 **只信任** 以下之一：
 
 - 请求来自 **内网**（如 `127.0.0.1` / 私有网段）且网关已剥离公网直连；或  
-- `X-AC-Fairness-Signature: <HMAC>`，密钥为 **`GEMINI_PROXY_FAIRNESS_HMAC_SECRET`**，载荷为 `key + '\n' + timestamp`，防伪造；**时间戳允许偏差**见 §10.3。
+- `X-AC-Fairness-Signature: <HMAC>`，密钥为 **`AI_WORKER_PROXY_FAIRNESS_HMAC_SECRET`**，载荷为 `key + '\n' + timestamp`，防伪造；**时间戳允许偏差**见 §10.3。
 
 **方案乙**：在 JSON body 增加 **`fairnessKey`** —— **仅当** 与 HMAC 或 mTLS 联用时采用；**不推荐**单独使用。
 
@@ -230,7 +230,7 @@ Vertex 官方以 **TPM** 为主计量；应用侧无精确 tokenizer 时可用 *
 | 场景 | 建议 `costWeight` |
 | --- | --- |
 | 文本 / JSON 小请求 | `1` |
-| 含图输入或生图模型（站内 `*-image*`、`image` 在 model 字段中） | `2`～`5`（与 `GEMINI_ASYNC_PROXY_MAX_CONCURRENT` 联调） |
+| 含图输入或生图模型（站内 `*-image*`、`image` 在 model 字段中） | `2`～`5`（与 `AI_WORKER_ASYNC_PROXY_MAX_CONCURRENT` 联调） |
 | `async-batch` 每条子项 | 每条计 `1` 图像素级权重可二期再做 |
 
 **公平性**：权重只影响 **出队优先级或占槽个数** 二选一，首版建议 **仅影响「提交速率扣减」**（例如一次请求扣 `costWeight` 个令牌），避免「大任务永不运行」。
@@ -293,7 +293,7 @@ Vertex 官方以 **TPM** 为主计量；应用侧无精确 tokenizer 时可用 *
 | --- | --- | --- |
 | `GEMINI_FAIRNESS_ENABLED` | 生产默认 `true`，本地/测试默认 `false` | `false` 时关闭公平队列与每用户限流，仅保留现有行为；**紧急回滚**，见 §10.2。 |
 | `GEMINI_FAIRNESS_CONFIG_SOURCE` | `db` 或空 | `env_only`：忽略管理员 UI 持久化，仅用 env/默认；用于排障或双源冲突时强制单源。 |
-| `GEMINI_ASYNC_PROXY_MAX_CONCURRENT` | 生产默认 `2`，本地/测试默认 `4` | 全局 Vertex+非 Vertex 共用或拆变量见 §5.1；429 多时先降，排队明显但 429 少时再升。 |
+| `AI_WORKER_ASYNC_PROXY_MAX_CONCURRENT` | 生产默认 `2`，本地/测试默认 `4` | 全局 Vertex+非 Vertex 共用或拆变量见 §5.1；429 多时先降，排队明显但 429 少时再升。 |
 | `VERTEX_PROXY_MAX_CONCURRENT` | 空=回退到全局 | 可选：仅 Vertex 使用独立槽 |
 | `GEMINI_FAIRNESS_USER_MAX_IN_FLIGHT` | `2` | 每 fairness key 占用全局槽上限 |
 | `GEMINI_FAIRNESS_USER_MAX_QUEUED` | `5` | 每 key 未开始任务数上限 |
@@ -302,7 +302,7 @@ Vertex 官方以 **TPM** 为主计量；应用侧无精确 tokenizer 时可用 *
 | `GEMINI_FAIRNESS_ANON_MAX_QUEUED` | `2` | anon 桶排队深度 |
 | `GEMINI_FAIRNESS_ANON_SUBMIT_RPM` | `10` | anon 桶提交 RPM |
 | `GEMINI_FAIRNESS_GLOBAL_QUEUE_MAX` | `500` | 全站等待队列长度硬顶，防 OOM |
-| `GEMINI_PROXY_FAIRNESS_HMAC_SECRET` | 空=不校验 | 非空则要求 `X-AC-Fairness-Signature` |
+| `AI_WORKER_PROXY_FAIRNESS_HMAC_SECRET` | 空=不校验 | 非空则要求 `X-AC-Fairness-Signature` |
 | `GEMINI_FAIRNESS_STRICT` | `false` | `true` 时无有效 key 直接 401，不回落 anon |
 
 ### 10.1 管理员界面与配置分层（运维调参）
@@ -335,7 +335,7 @@ Vertex 官方以 **TPM** 为主计量；应用侧无精确 tokenizer 时可用 *
 ### 10.3 安全补充（HMAC 与滥用面）
 
 - **HMAC 时间戳窗口**：校验 `timestamp` 与服务器时间差在 **±60～120 秒**（可配置），超出视为 **401**，防重放。
-- **`GEMINI_PROXY_FAIRNESS_HMAC_SECRET` 轮换**：轮换时支持 **双密钥** 短暂并存（可选），避免全站瞬时 401。
+- **`AI_WORKER_PROXY_FAIRNESS_HMAC_SECRET` 轮换**：轮换时支持 **双密钥** 短暂并存（可选），避免全站瞬时 401。
 - **日志**：禁止输出完整 fairness key 中的 **PII**；已述脱敏策略见 §11.2。
 
 ---
@@ -396,7 +396,7 @@ Vertex 官方以 **TPM** 为主计量；应用侧无精确 tokenizer 时可用 *
 
 | 参数项 | 建议首版值 | 调参方向（经验规则） |
 | --- | --- | --- |
-| 全站同时执行（全局槽） | 生产默认 `2`，本地/测试默认 `4`（`GEMINI_ASYNC_PROXY_MAX_CONCURRENT`） | 429 **少**、排队长 → 可逐步上调；429 **多** → **先降**或先查 GCP |
+| 全站同时执行（全局槽） | 生产默认 `2`，本地/测试默认 `4`（`AI_WORKER_ASYNC_PROXY_MAX_CONCURRENT`） | 429 **少**、排队长 → 可逐步上调；429 **多** → **先降**或先查 GCP |
 | 每用户占用全局槽上限（登录） | `2` | 生图慢且堆积 → 改为 **1** |
 | 每用户未开始队列深度（登录） | `5` | 内存或轮询压力大 → **3** |
 | 每用户提交 RPM（登录） | `30` | 误伤正常用户则略升；刷接口则略降 |

@@ -1,4 +1,4 @@
-import { recordGeminiProxyThrottleWait } from './gemini-proxy-observability.js';
+import { recordAiWorkerProxyThrottleWait } from './ai-worker-proxy-observability.js';
 import fs from 'fs';
 import path from 'path';
 
@@ -61,7 +61,7 @@ function persistThrottleState() {
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, `${JSON.stringify({ lastVertexImageStartAt })}\n`, 'utf8');
   } catch (e) {
-    console.warn('[gemini-proxy] vertex image throttle state persist failed:', e instanceof Error ? e.message : String(e));
+    console.warn('[ai-worker-proxy] vertex image throttle state persist failed:', e instanceof Error ? e.message : String(e));
   }
 }
 
@@ -84,7 +84,7 @@ export function vertexImageMinIntervalMs() {
   );
 }
 
-export function geminiProxyThrottleSnapshot() {
+export function aiWorkerProxyThrottleSnapshot() {
   loadThrottleStateOnce();
   return {
     vertexImageMinIntervalMs: vertexImageMinIntervalMs(),
@@ -107,8 +107,8 @@ export async function waitForGeminiUpstreamThrottle(args = {}) {
   const run = async () => {
     const waitMs = Math.max(0, lastVertexImageStartAt + minIntervalMs - nowFn());
     if (waitMs > 0) {
-      console.warn(`[gemini-proxy] vertex image throttle wait=${waitMs}ms minInterval=${minIntervalMs}ms`);
-      recordGeminiProxyThrottleWait({ waitMs, minIntervalMs });
+      console.warn(`[ai-worker-proxy] vertex image throttle wait=${waitMs}ms minInterval=${minIntervalMs}ms`);
+      recordAiWorkerProxyThrottleWait({ waitMs, minIntervalMs });
       await sleepFn(waitMs);
     }
     lastVertexImageStartAt = nowFn();
@@ -119,7 +119,7 @@ export async function waitForGeminiUpstreamThrottle(args = {}) {
   await next;
 }
 
-export function resetGeminiProxyThrottleForTests() {
+export function resetAiWorkerProxyThrottleForTests() {
   throttleTail = Promise.resolve();
   lastVertexImageStartAt = 0;
   throttleStateLoaded = false;

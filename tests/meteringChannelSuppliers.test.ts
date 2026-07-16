@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { meterReadingFromGeminiProxy } from '../services/observability/metering/adapters/gemini';
+import { meterReadingFromAiWorkerProxy } from '../services/observability/metering/adapters/gemini';
 import { splitMeterReadingToDrafts } from '../services/observability/metering/splitDrafts';
 import {
   resolveBillingSkuForTencent3dTask,
@@ -32,7 +32,7 @@ describe('third-party channel metering', () => {
   });
 
   it('builds vectorengine image reading with token usage', () => {
-    const reading = meterReadingFromGeminiProxy({
+    const reading = meterReadingFromAiWorkerProxy({
       registryId: 'gemini-2.5-flash-image',
       provider: 'vectorengine',
       usageMetadata: { promptTokenCount: 200, candidatesTokenCount: 800 },
@@ -44,7 +44,7 @@ describe('third-party channel metering', () => {
   });
 
   it('falls back to output_image for toapis when no usage metadata', () => {
-    const reading = meterReadingFromGeminiProxy({
+    const reading = meterReadingFromAiWorkerProxy({
       registryId: 'gemini-3-pro-image-preview',
       provider: 'toapis',
       proxyResult: { candidates: [{ content: { parts: [{ inlineData: { data: 'x' } }] } }] },
@@ -73,7 +73,7 @@ describe('third-party channel metering', () => {
     const chunk = {
       [OPENAI_STREAM_USAGE_KEY]: { prompt_tokens: 12, completion_tokens: 34, total_tokens: 46 },
     };
-    const reading = meterReadingFromGeminiProxy({
+    const reading = meterReadingFromAiWorkerProxy({
       registryId: 'gemini-3-flash-preview',
       provider: 'toapis',
       usageMetadata: {

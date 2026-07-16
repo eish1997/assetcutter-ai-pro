@@ -36,11 +36,15 @@ export type { CapabilityCreditOverrides } from './workflowCreditsBypass';
 export { assertAiGateForRegistry } from './aiBillingGate';
 export type { AiBillingRouteStep, AiBillingRouteKind } from './aiBillingGate';
 
-/** 站点 bulk / Vertex 代理（平台代付密钥）是否已配置 */
+/** 站点 AI Worker Proxy / Vertex 代理（平台代付密钥）是否已配置 */
 export function platformSiteProxyConfigured(): boolean {
   try {
     const env = import.meta.env as Record<string, string | undefined>;
-    return Boolean(String(env.VITE_BULK_IMAGE_API || '').trim() || String(env.VITE_BULK_IMAGE_API_VERTEX || '').trim());
+    return Boolean(
+      String(env.VITE_AI_WORKER_PROXY_API || '').trim() ||
+        String(env.VITE_AI_WORKER_PROXY_API_VERTEX || '').trim() ||
+        String(env.VITE_VERTEX_FALLBACK_AI_WORKER_PROXY_API || '').trim()
+    );
   } catch {
     return false;
   }

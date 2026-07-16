@@ -1,5 +1,5 @@
 /**
- * 经 auth-api /api/gemini-proxy 中继到 Render（生产 Key），验证本地 session + 积分 + relay。
+ * 经 auth-api /api/ai-worker-proxy 中继到 Render（生产 Key），验证本地 session + 积分 + relay。
  */
 import crypto from 'crypto';
 import { createSession } from '../server/auth-store.js';
@@ -32,7 +32,7 @@ async function main() {
     'X-AC-Fairness-Key': `user:${USER_ID}`,
   };
 
-  const createUrl = `${VITE}/api/gemini-proxy/proxy/gemini/async`;
+  const createUrl = `${VITE}/api/ai-worker-proxy/proxy/gemini/async`;
   const createRes = await fetch(createUrl, {
     method: 'POST',
     headers,
@@ -50,7 +50,7 @@ async function main() {
   const deadline = Date.now() + POLL_MAX_MS;
   while (Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, POLL_MS));
-    const pollRes = await fetch(`${VITE}/api/gemini-proxy/proxy/gemini/async/${encodeURIComponent(jobId)}`, {
+    const pollRes = await fetch(`${VITE}/api/ai-worker-proxy/proxy/gemini/async/${encodeURIComponent(jobId)}`, {
       headers: { Cookie: cookie, Origin: VITE, ...(bundle.headers || {}) },
     });
     const pollText = await pollRes.text();

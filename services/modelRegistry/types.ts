@@ -1,5 +1,5 @@
 /** 模型能力族：决定适配器与 binding 优先级链 */
-export type ModelFamily = "gemini" | "openai" | "volcengine-jimeng";
+export type ModelFamily = "gemini" | "openai" | "volcengine-ark" | "volcengine-jimeng";
 
 /** 接线 channel（实现层，不是产品菜单 SKU） */
 export type ChannelId =
@@ -21,6 +21,8 @@ export type UpstreamProviderId =
   | "toapis"
   | "openai"
   | "vectorengine"
+  | "volcengine-ark"
+  | "volcengine-jimeng"
   | "antigravity";
 
 export type ProviderBinding = {

@@ -1,10 +1,10 @@
 /**
- * 验证：真实登录 → 积分预扣 → Render bulk-forward 生图（Vertex）。
+ * 验证：真实登录 → 积分预扣 → Render AI Worker Proxy forward 生图（Vertex）。
  * 用法：
- *   $env:VERIFY_USER='maoer'; $env:VERIFY_PASS='***'; node scripts/verify-render-bulk-login.mjs
+ *   $env:VERIFY_USER='maoer'; $env:VERIFY_PASS='***'; node scripts/verify-render-ai-worker-login.mjs
  */
 const VITE = 'http://127.0.0.1:3000';
-const BULK_PREFIX = '/__ac-bulk-forward/0';
+const AI_WORKER_PROXY_FORWARD_PREFIX = '/__ac-ai-worker-forward/0';
 const USER = String(process.env.VERIFY_USER || 'maoer').trim();
 const PASS = String(process.env.VERIFY_PASS || '').trim();
 const POLL_MS = 2500;
@@ -86,7 +86,7 @@ async function main() {
   if (!headers['X-AC-Credits-Reserve']) headers['X-AC-Credits-Reserve'] = bundle.reserveKey;
   if (!headers['X-AC-Fairness-Key']) headers['X-AC-Fairness-Key'] = `user:${userId}`;
 
-  const createUrl = `${VITE}${BULK_PREFIX}/proxy/gemini/async`;
+  const createUrl = `${VITE}${AI_WORKER_PROXY_FORWARD_PREFIX}/proxy/gemini/async`;
   const createRes = await fetch(createUrl, {
     method: 'POST',
     headers,
@@ -102,7 +102,7 @@ async function main() {
   console.log(`\nasync 创建 HTTP ${createRes.status}`);
   if (!createRes.ok) {
     if (/fetch failed/i.test(createText)) {
-      warn('Render 返回 fetch failed：多为云端 gemini-proxy ↔ auth-api 积分校验或出站网络问题');
+      warn('Render 返回 fetch failed：多为云端 ai-worker-proxy ↔ auth-api 积分校验或出站网络问题');
     }
     fail(`async 创建失败 ${createText.slice(0, 500)}`);
   }
@@ -118,7 +118,7 @@ async function main() {
   const deadline = Date.now() + POLL_MAX_MS;
   while (Date.now() < deadline) {
     await sleep(POLL_MS);
-    const pollRes = await fetch(`${VITE}${BULK_PREFIX}/proxy/gemini/async/${encodeURIComponent(jobId)}`, {
+    const pollRes = await fetch(`${VITE}${AI_WORKER_PROXY_FORWARD_PREFIX}/proxy/gemini/async/${encodeURIComponent(jobId)}`, {
       headers: { Cookie: cookie, Origin: VITE, ...(bundle.headers || {}) },
       credentials: 'include',
     });

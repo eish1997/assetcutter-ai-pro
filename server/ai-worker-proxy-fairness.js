@@ -41,7 +41,11 @@ function persistedConfigSnapshot() {
 export function getDiskOverrideInt(name, fallback, min, max) {
   const cache = persistedConfigSnapshot();
   const fromPersisted = cache[name];
-  const fromEnv = process.env[name];
+  const fromEnv =
+    process.env[name] ??
+    (name === 'AI_WORKER_ASYNC_PROXY_MAX_CONCURRENT'
+      ? process.env.GEMINI_ASYNC_PROXY_MAX_CONCURRENT
+      : undefined);
   const raw = fromPersisted != null && fromPersisted !== '' ? fromPersisted : fromEnv;
   const n = Number(raw);
   const base = Number.isFinite(n) ? Math.floor(n) : fallback;
@@ -65,7 +69,7 @@ function trustXForwarded() {
 }
 
 function hmacSecret() {
-  return String(process.env.GEMINI_PROXY_FAIRNESS_HMAC_SECRET || '').trim();
+  return String(process.env.AI_WORKER_PROXY_FAIRNESS_HMAC_SECRET || '').trim();
 }
 
 function keyMaxLen() {
@@ -189,7 +193,7 @@ export function resolveFairnessKey(req) {
         ok: false,
         status: 401,
         error:
-          'Fairness key requires trusted relay (private IP), or GEMINI_FAIRNESS_TRUST_CLIENT_KEY_HEADER=true, or set GEMINI_PROXY_FAIRNESS_HMAC_SECRET and X-AC-Fairness-Signature',
+          'Fairness key requires trusted relay (private IP), or GEMINI_FAIRNESS_TRUST_CLIENT_KEY_HEADER=true, or set AI_WORKER_PROXY_FAIRNESS_HMAC_SECRET and X-AC-Fairness-Signature',
       };
     }
     return { ok: true, key: shape.key };
@@ -557,7 +561,7 @@ export function fairnessQueueMetaForJob(jobId, jobStatus) {
   }
 
   const globalCap = getDiskOverrideInt(
-    'GEMINI_ASYNC_PROXY_MAX_CONCURRENT',
+    'AI_WORKER_ASYNC_PROXY_MAX_CONCURRENT',
     defaultGeminiAsyncProxyMaxConcurrent(),
     1,
     64

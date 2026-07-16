@@ -7,18 +7,18 @@ import {
 
 describe('AI gateway credits gate planning', () => {
   const prevMode = process.env.AI_GATEWAY_CREDITS_GATE;
-  const prevProxyGate = process.env.GEMINI_PROXY_CREDITS_GATE;
+  const prevProxyGate = process.env.AI_WORKER_PROXY_CREDITS_GATE;
 
   afterEach(() => {
     if (prevMode === undefined) delete process.env.AI_GATEWAY_CREDITS_GATE;
     else process.env.AI_GATEWAY_CREDITS_GATE = prevMode;
-    if (prevProxyGate === undefined) delete process.env.GEMINI_PROXY_CREDITS_GATE;
-    else process.env.GEMINI_PROXY_CREDITS_GATE = prevProxyGate;
+    if (prevProxyGate === undefined) delete process.env.AI_WORKER_PROXY_CREDITS_GATE;
+    else process.env.AI_WORKER_PROXY_CREDITS_GATE = prevProxyGate;
   });
 
   it('defaults to plan mode so job creation does not precharge by itself', async () => {
     delete process.env.AI_GATEWAY_CREDITS_GATE;
-    process.env.GEMINI_PROXY_CREDITS_GATE = 'true';
+    process.env.AI_WORKER_PROXY_CREDITS_GATE = 'true';
 
     const result = await evaluateAiGatewayCreditsGate(
       { headers: { 'x-ac-credits-reserve': 'reserve_1', 'x-ac-fairness-key': 'user:u1' } },

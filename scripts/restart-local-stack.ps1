@@ -1,6 +1,6 @@
-# Stop listeners on dev ports, then start: Vite + auth-api + local-companion + SamLocal + gemini-proxy
+# Stop listeners on dev ports, then start: Vite + auth-api + local-companion + SamLocal + ai-worker-proxy
 # Usage: npm run restart:local-stack
-# 生图默认与线上一致（.env.development → Render gemini-proxy + Vite 转发）。仅调试本机 9002 时在 .env.local 覆盖为 same-origin。
+# 生图默认与线上一致（.env.development → Render ai-worker-proxy + Vite 转发）。仅调试本机 9002 时在 .env.local 覆盖为 same-origin。
 
 $ErrorActionPreference = 'Continue'
 $repo = Split-Path -Parent $PSScriptRoot
@@ -22,4 +22,4 @@ foreach ($port in $ports) {
 
 Start-Sleep -Seconds 2
 Write-Host "[restart-local-stack] Starting vite:3000 auth:9100 companion:18765 sam:18081 gemini:9002 (Ctrl+C stops all)"
-npx concurrently -n vite,auth,companion,sam,gemini -c blue,magenta,green,cyan,yellow 'npm run dev' 'npm run dev:auth-backend' 'npm run local-companion:dev' 'npm run dev:sam-local' 'npm run dev:gemini-proxy'
+npx concurrently -n vite,auth,companion,sam,gemini -c blue,magenta,green,cyan,yellow 'npm run dev' 'npm run dev:auth-backend' 'npm run local-companion:dev' 'npm run dev:sam-local' 'npm run dev:ai-worker-proxy'

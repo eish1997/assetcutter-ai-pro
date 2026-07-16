@@ -96,20 +96,20 @@ function viteEnvValue(name: string): string | undefined {
   }
 }
 
-function bulkImageProxyConfigured(): boolean {
-  const bulk = viteEnvValue('VITE_BULK_IMAGE_API');
-  return Boolean(bulk && String(bulk).trim());
+function aiWorkerProxyConfigured(): boolean {
+  const base = viteEnvValue('VITE_AI_WORKER_PROXY_API');
+  return Boolean(base && String(base).trim());
 }
 
-function bulkImageVertexProxyConfigured(): boolean {
+function vertexAiWorkerProxyConfigured(): boolean {
   if (String(viteEnvValue('VITE_DISABLE_VERTEX_SITE_PROXY') || '').trim().toLowerCase() === 'true') return false;
-  const bulk = viteEnvValue('VITE_BULK_IMAGE_API');
-  const bulkVertex = viteEnvValue('VITE_BULK_IMAGE_API_VERTEX');
-  return Boolean((bulk && String(bulk).trim()) || (bulkVertex && String(bulkVertex).trim()));
+  const base = viteEnvValue('VITE_AI_WORKER_PROXY_API');
+  const vertexBase = viteEnvValue('VITE_AI_WORKER_PROXY_API_VERTEX');
+  return Boolean((base && String(base).trim()) || (vertexBase && String(vertexBase).trim()));
 }
 
 export function isVertexSiteProxyConfigured(): boolean {
-  return bulkImageVertexProxyConfigured();
+  return vertexAiWorkerProxyConfigured();
 }
 
 function dispatchAiSettingsChanged(): void {
@@ -155,8 +155,8 @@ export function isChannelEnabled(channel: ChannelId): boolean {
 
 /** 单个 channel 是否具备调用条件（与是否启用无关） */
 export function isChannelReady(channel: ChannelId): boolean {
-  if (channel === 'vertex-proxy') return bulkImageVertexProxyConfigured();
-  if (channel === 'gemini-aistudio') return Boolean(getUserApiKey()?.trim()) || bulkImageProxyConfigured();
+  if (channel === 'vertex-proxy') return vertexAiWorkerProxyConfigured();
+  if (channel === 'gemini-aistudio') return Boolean(getUserApiKey()?.trim()) || aiWorkerProxyConfigured();
   if (channel === 'toapis-gemini' || channel === 'toapis-openai') return Boolean(getToapisApiKey()?.trim());
   if (channel === 'vectorengine') return Boolean(getVectorengineApiKey()?.trim());
   if (channel === 'openai-official') return Boolean(getOpenaiApiKey()?.trim());
@@ -384,7 +384,7 @@ export function isAiInvocationReady(): boolean {
   if (enabledChannels.length > 0) {
     return enabledChannels.some((ch) => isChannelReady(ch));
   }
-  return bulkImageProxyConfigured() || Boolean(getUserApiKey()?.trim());
+  return aiWorkerProxyConfigured() || Boolean(getUserApiKey()?.trim());
 }
 
 /** 工作区：是否启用自动云同步（默认开启） */

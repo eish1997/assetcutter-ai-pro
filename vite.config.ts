@@ -4,7 +4,7 @@ import type { Plugin } from 'vite';
 import { defineConfig, loadEnv } from 'vite';
 import react from '@vitejs/plugin-react';
 import { HttpsProxyAgent } from 'https-proxy-agent';
-import { collectRemoteBulkOriginsFromEnv } from './services/geminiBulkForwardDevOrigins';
+import { collectRemoteAiWorkerProxyOriginsFromEnv } from './services/aiWorkerProxyForwardDevOrigins';
 
 const HOP_BY_HOP_REQ = new Set([
   'host',
@@ -93,10 +93,10 @@ function openAiUpstreamProxyErrorMessage(outboundProxyUrl: string): string {
   );
 }
 
-/** 开发服务器将 `/__ac-bulk-forward/{i}/...` 转发到 `origins[i]`，与 `services/geminiBulkForwardDevOrigins.ts` 白名单一致 */
-function geminiBulkForwardDevPlugin(origins: string[]): Plugin {
+/** 开发服务器将 `/__ac-ai-worker-forward/{i}/...` 转发到 `origins[i]`，与 `services/aiWorkerProxyForwardDevOrigins.ts` 白名单一致 */
+function aiWorkerProxyForwardDevPlugin(origins: string[]): Plugin {
   return {
-    name: 'ac-gemini-bulk-forward-dev',
+    name: 'ac-ai-worker-proxy-forward-dev',
     configureServer(server) {
       if (origins.length === 0) return;
 
@@ -105,7 +105,7 @@ function geminiBulkForwardDevPlugin(origins: string[]): Plugin {
         const pathOnly = url.split('?')[0] || '';
         const q = url.indexOf('?');
         const query = q >= 0 ? url.slice(q) : '';
-        const m = /^\/__ac-bulk-forward\/(\d+)(\/.*)?$/.exec(pathOnly);
+        const m = /^\/__ac-ai-worker-forward\/(\d+)(\/.*)?$/.exec(pathOnly);
         if (!m) {
           next();
           return;
@@ -116,7 +116,7 @@ function geminiBulkForwardDevPlugin(origins: string[]): Plugin {
         if (!Number.isFinite(idx) || idx < 0 || idx >= origins.length || !origin) {
           res.statusCode = 403;
           res.setHeader('Content-Type', 'application/json; charset=utf-8');
-          res.end(JSON.stringify({ error: '无效的 dev bulk 转发索引' }));
+          res.end(JSON.stringify({ error: '无效的 dev AI Worker Proxy 转发索引' }));
           return;
         }
 
@@ -165,7 +165,7 @@ function geminiBulkForwardDevPlugin(origins: string[]): Plugin {
           res.setHeader('Content-Type', 'application/json; charset=utf-8');
           res.end(
             JSON.stringify({
-              error: 'dev bulk 转发无法连接上游',
+              error: 'dev AI Worker Proxy 转发无法连接上游',
               detail: e instanceof Error ? e.message : String(e),
               targetUrl,
             })
@@ -209,7 +209,7 @@ export default defineConfig(({ mode }) => {
         VITE_ALLOW_UNSAFE_TENCENT_BROWSER_CREDS:
           process.env.VITE_ALLOW_UNSAFE_TENCENT_BROWSER_CREDS ?? fromFile.VITE_ALLOW_UNSAFE_TENCENT_BROWSER_CREDS,
     };
-    const bulkForwardOrigins = collectRemoteBulkOriginsFromEnv({
+    const aiWorkerProxyForwardOrigins = collectRemoteAiWorkerProxyOriginsFromEnv({
       ...fromFile,
       ...process.env,
     } as Record<string, string | undefined>);
@@ -251,6 +251,7 @@ export default defineConfig(({ mode }) => {
             },
           },
           '/api/tripo': authApiProxy,
+          '/api/ai-worker-proxy': authApiProxy,
           '/api/gemini-proxy': authApiProxy,
           '/api/tripo/upload': authApiProxy,
           '/api/debug': authApiProxy,
@@ -299,12 +300,12 @@ export default defineConfig(({ mode }) => {
           '/proxy/gemini': {
             target: 'http://127.0.0.1:9002',
             changeOrigin: true,
-            /** 保留浏览器 Cookie，供 gemini-proxy 转发至 auth-api credits-gate */
+            /** 保留浏览器 Cookie，供 ai-worker-proxy 转发至 auth-api credits-gate */
             cookieDomainRewrite: { '*': '' },
             configure(proxy) {
               proxy.on('error', (err, _req, res) => {
                 const msg =
-                  '无法连接本机 gemini-proxy（已代理到 127.0.0.1:9002）。请在仓库根执行 npm run dev:gemini-proxy，或使用 npm run restart:local-stack 一并拉起；并确认 .env.local 已配置 GEMINI_API_KEY。若 VITE_BULK_IMAGE_API 指向境外 *.onrender.com，请检查网络或改为 same-origin 走本机代理。';
+                  '无法连接本机 ai-worker-proxy（已代理到 127.0.0.1:9002）。请在仓库根执行 npm run dev:ai-worker-proxy，或使用 npm run restart:local-stack 一并拉起；并确认 .env.local 已配置 GEMINI_API_KEY。若 VITE_AI_WORKER_PROXY_API 指向境外 *.onrender.com，请检查网络或改为 same-origin 走本机代理。';
                 if (res && typeof res.writeHead === 'function' && !res.headersSent) {
                   res.writeHead(503, { 'Content-Type': 'application/json; charset=utf-8' });
                   res.end(
@@ -319,7 +320,7 @@ export default defineConfig(({ mode }) => {
           },
         },
       },
-      plugins: [fixViteDecimalTimestampQuery(), react(), geminiBulkForwardDevPlugin(bulkForwardOrigins)],
+      plugins: [fixViteDecimalTimestampQuery(), react(), aiWorkerProxyForwardDevPlugin(aiWorkerProxyForwardOrigins)],
       define: {
         'process.env.VITE_TENCENT_PROXY': JSON.stringify(env.VITE_TENCENT_PROXY),
         'process.env.VITE_ALLOW_UNSAFE_TENCENT_BROWSER_CREDS': JSON.stringify(env.VITE_ALLOW_UNSAFE_TENCENT_BROWSER_CREDS),

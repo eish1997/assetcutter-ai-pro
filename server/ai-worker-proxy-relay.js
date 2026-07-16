@@ -1,9 +1,9 @@
 /**
- * auth-api 同源转发 gemini-proxy，避免浏览器跨域访问 onrender gemini-proxy 时 CORS 白名单遗漏。
- * 前端在 bulk 根与页面不同源且已配置 VITE_AUTH_API_BASE_URL 时走 /api/gemini-proxy/*。
+ * auth-api 同源转发 ai-worker-proxy，避免浏览器跨域访问 onrender ai-worker-proxy 时 CORS 白名单遗漏。
+ * 前端在 bulk 根与页面不同源且已配置 VITE_AUTH_API_BASE_URL 时走 /api/ai-worker-proxy/*。
  */
 import { Agent, fetch as undiciFetch } from 'undici';
-import { GEMINI_PROXY_MAX_BODY_BYTES, readBodyUtf8 } from './http-limits.js';
+import { AI_WORKER_PROXY_MAX_BODY_BYTES, readBodyUtf8 } from './http-limits.js';
 
 const directDispatcher = new Agent();
 
@@ -21,23 +21,27 @@ const SKIP_REQ_HEADERS = new Set([
 
 const SKIP_RESP_HEADERS = new Set(['content-encoding', 'transfer-encoding', 'content-length', 'connection']);
 
-/** 与 render.yaml / VITE_BULK_IMAGE_API 默认一致；Render 未注入 GEMINI_PROXY_* 时避免误连 127.0.0.1:9002 */
-const DEFAULT_PRODUCTION_GEMINI_PROXY_UPSTREAM = 'https://assetcutter-gemini-proxy.onrender.com';
+/** ? render.yaml / VITE_AI_WORKER_PROXY_API ????? */
+const DEFAULT_PRODUCTION_AI_WORKER_PROXY_UPSTREAM = 'https://assetcutter-ai-worker-proxy.onrender.com';
 
-function defaultGeminiProxyUpstream() {
+function defaultAiWorkerProxyUpstream() {
   const isProd = String(process.env.NODE_ENV || '').toLowerCase() === 'production';
-  return isProd ? DEFAULT_PRODUCTION_GEMINI_PROXY_UPSTREAM : 'http://127.0.0.1:9002';
+  return isProd ? DEFAULT_PRODUCTION_AI_WORKER_PROXY_UPSTREAM : 'http://127.0.0.1:9002';
 }
 
-export function geminiProxyUpstreamBase() {
+export function aiWorkerProxyUpstreamBase() {
   const raw = String(
-    process.env.GEMINI_PROXY_UPSTREAM_URL ||
+    process.env.AI_WORKER_PROXY_UPSTREAM_URL ||
+      process.env.AI_WORKER_PROXY_HEALTH_URL ||
+      process.env.AI_WORKER_PROXY_BASE_URL ||
+      process.env.GEMINI_PROXY_UPSTREAM_URL ||
       process.env.GEMINI_PROXY_HEALTH_URL ||
-      defaultGeminiProxyUpstream()
+      process.env.GEMINI_PROXY_BASE_URL ||
+      defaultAiWorkerProxyUpstream()
   )
     .trim()
     .replace(/\/+$/, '');
-  return raw || defaultGeminiProxyUpstream();
+  return raw || defaultAiWorkerProxyUpstream();
 }
 
 /** auth-api 可能设全局 TRIPO_PROXY/HTTPS_PROXY；loopback 须直连，否则 relay 报 fetch failed */
@@ -69,7 +73,7 @@ function sendRelayJson(res, status, obj) {
  * @param {import('http').ServerResponse} res
  * @param {string} upstreamPath e.g. `/healthz` or `/proxy/gemini/async`
  */
-export async function relayGeminiProxyRequest(req, res, upstreamPath) {
+export async function relayAiWorkerProxyRequest(req, res, upstreamPath) {
   const method = String(req.method || 'GET').toUpperCase();
   const allowed = new Set(['GET', 'POST', 'HEAD', 'OPTIONS']);
   if (!allowed.has(method)) {
@@ -91,7 +95,7 @@ export async function relayGeminiProxyRequest(req, res, upstreamPath) {
   }
 
   const pathPart = upstreamPath.startsWith('/') ? upstreamPath : `/${upstreamPath}`;
-  const targetUrl = `${geminiProxyUpstreamBase()}${pathPart}${search}`;
+  const targetUrl = `${aiWorkerProxyUpstreamBase()}${pathPart}${search}`;
 
   const headers = {};
   for (const [k, v] of Object.entries(req.headers)) {
@@ -104,7 +108,7 @@ export async function relayGeminiProxyRequest(req, res, upstreamPath) {
   let body;
   if (method !== 'GET' && method !== 'HEAD') {
     try {
-      body = await readBodyUtf8(req, GEMINI_PROXY_MAX_BODY_BYTES);
+      body = await readBodyUtf8(req, AI_WORKER_PROXY_MAX_BODY_BYTES);
     } catch (e) {
       sendRelayJson(res, 413, {
         error: e instanceof Error ? e.message : String(e),
@@ -124,7 +128,7 @@ export async function relayGeminiProxyRequest(req, res, upstreamPath) {
     });
   } catch (e) {
     sendRelayJson(res, 502, {
-      error: 'gemini-proxy relay 无法连接上游',
+      error: 'ai-worker-proxy relay 无法连接上游',
       detail: e instanceof Error ? e.message : String(e),
       targetUrl,
     });

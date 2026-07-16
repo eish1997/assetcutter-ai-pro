@@ -22,7 +22,7 @@
  * 环境变量：
  * - `DIAG_FROM_STEP` / `DIAG_TO_STEP`：1～6，默认 1～6
  * - `DIAG_SKIP_UNDERSTAND=1`：跳过第 3 步（对齐 P0 预设直发，只测生图）
- * - `DIAG_AUTH` / `DIAG_PROXY`：覆盖 auth-api / gemini-proxy 根地址
+ * - `DIAG_AUTH` / `DIAG_PROXY`：覆盖 auth-api / ai-worker-proxy 根地址
  * - `DIAG_COOKIE`：跳过登录，直接带 Cookie（从第 2 步起）
  */
 import { ProxyAgent, fetch as undiciFetch } from 'undici';
@@ -31,7 +31,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const AUTH = String(process.env.DIAG_AUTH || 'https://assetcutter-auth-api.onrender.com').replace(/\/$/, '');
-const PROXY = String(process.env.DIAG_PROXY || 'https://assetcutter-gemini-proxy.onrender.com').replace(/\/$/, '');
+const PROXY = String(process.env.DIAG_PROXY || 'https://assetcutter-ai-worker-proxy.onrender.com').replace(/\/$/, '');
 const ORIGIN = process.env.DIAG_ORIGIN || 'https://assetcutter-ai-pro.vercel.app';
 const USER = String(process.env.VERIFY_USER || 'maoer').trim();
 const PASS = String(process.env.VERIFY_PASS || '').trim();
@@ -166,7 +166,7 @@ async function step3Understand(relayHeaders) {
     aiBackend: 'vertex',
     estimatedCredits: 15,
   });
-  const res = await undiciFetch(`${AUTH}/api/gemini-proxy/proxy/gemini/generate-content`, {
+  const res = await undiciFetch(`${AUTH}/api/ai-worker-proxy/proxy/gemini/generate-content`, {
     method: 'POST',
     headers: relayHeaders,
     body: understandBody,
@@ -195,7 +195,7 @@ async function step4ImageCreate(relayHeaders) {
     estimatedCredits: 134,
     aiBackend: 'vertex',
   });
-  const createRes = await undiciFetch(`${AUTH}/api/gemini-proxy/proxy/gemini/async`, {
+  const createRes = await undiciFetch(`${AUTH}/api/ai-worker-proxy/proxy/gemini/async`, {
     method: 'POST',
     headers: relayHeaders,
     body: createBody,
@@ -225,7 +225,7 @@ async function step5ImagePoll(authHeaders, jobId) {
   for (let i = 0; i < 8; i += 1) {
     await new Promise((r) => setTimeout(r, 2500));
     const pollRes = await undiciFetch(
-      `${AUTH}/api/gemini-proxy/proxy/gemini/async/${encodeURIComponent(jobId)}`,
+      `${AUTH}/api/ai-worker-proxy/proxy/gemini/async/${encodeURIComponent(jobId)}`,
       { headers: authHeaders, ...fo }
     );
     const pollText = await pollRes.text();
@@ -296,8 +296,8 @@ async function main() {
 
   if (fromStep === 1) {
     for (const [name, url] of [
-      ['gemini-proxy /healthz', `${PROXY}/healthz`],
-      ['auth relay /api/gemini-proxy/healthz', `${AUTH}/api/gemini-proxy/healthz`],
+      ['ai-worker-proxy /healthz', `${PROXY}/healthz`],
+      ['auth relay /api/ai-worker-proxy/healthz', `${AUTH}/api/ai-worker-proxy/healthz`],
     ]) {
       const res = await undiciFetch(url, fo);
       summarize(name, res, await res.text());

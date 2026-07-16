@@ -10,6 +10,7 @@ import * as settingsStore from "../services/settingsStore";
 describe("imageModelProvider", () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
   });
 
   it("openai route requires enabled openai-official channel", () => {
@@ -21,16 +22,20 @@ describe("imageModelProvider", () => {
 
   it("gemini route accepts gemini-aistudio key", () => {
     vi.spyOn(settingsStore, "getEnabledChannels").mockReturnValue(["gemini-aistudio"]);
-    vi.spyOn(settingsStore, "getUserApiKey").mockReturnValue("gemini-key");
+    vi.spyOn(settingsStore, "isChannelReady").mockImplementation((channel) => channel === "gemini-aistudio");
     expect(isImageModelProviderRouteReady("gemini")).toBe(true);
     expect(isImageModelRegistryReady("gemini-2.5-flash-image")).toBe(true);
     expect(imageModelRouteDisabledReason("gemini-2.5-flash-image")).toBeUndefined();
   });
 
-  it("hasGeminiImageProxyConfigured reads bulk env", () => {
-    const prev = import.meta.env.VITE_BULK_IMAGE_API;
-    import.meta.env.VITE_BULK_IMAGE_API = "https://proxy.example";
+  it("hasGeminiImageProxyConfigured reads AI Worker Proxy base env", () => {
+    vi.stubEnv("VITE_AI_WORKER_PROXY_API", "https://proxy.example");
     expect(hasGeminiImageProxyConfigured()).toBe(true);
-    import.meta.env.VITE_BULK_IMAGE_API = prev;
+  });
+
+  it("hasGeminiImageProxyConfigured reads AI Worker Proxy Vertex env", () => {
+    vi.stubEnv("VITE_AI_WORKER_PROXY_API", "");
+    vi.stubEnv("VITE_AI_WORKER_PROXY_API_VERTEX", "https://vertex-proxy.example");
+    expect(hasGeminiImageProxyConfigured()).toBe(true);
   });
 });

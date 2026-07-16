@@ -1,18 +1,18 @@
 import { describe, expect, it, beforeEach } from 'vitest';
 import {
-  beginGeminiProxyUpstreamCall,
-  geminiProxyObservabilitySnapshot,
-  recordGeminiProxyThrottleWait,
-  resetGeminiProxyObservabilityForTests,
-} from '../server/gemini-proxy-observability.js';
+  beginAiWorkerProxyUpstreamCall,
+  aiWorkerProxyObservabilitySnapshot,
+  recordAiWorkerProxyThrottleWait,
+  resetAiWorkerProxyObservabilityForTests,
+} from '../server/ai-worker-proxy-observability.js';
 
-describe('gemini proxy observability snapshot', () => {
+describe('AI Worker Proxy observability snapshot', () => {
   beforeEach(() => {
-    resetGeminiProxyObservabilityForTests();
+    resetAiWorkerProxyObservabilityForTests();
   });
 
   it('summarizes vertex image calls, rate limits, durations, and throttle waits', async () => {
-    const ok = beginGeminiProxyUpstreamCall({
+    const ok = beginAiWorkerProxyUpstreamCall({
       useVertex: true,
       model: 'gemini-3-pro-image-preview',
       modality: 'image',
@@ -20,7 +20,7 @@ describe('gemini proxy observability snapshot', () => {
     });
     ok.end();
 
-    const failed = beginGeminiProxyUpstreamCall({
+    const failed = beginAiWorkerProxyUpstreamCall({
       useVertex: true,
       model: 'gemini-3-pro-image-preview',
       modality: 'image',
@@ -28,9 +28,9 @@ describe('gemini proxy observability snapshot', () => {
     });
     failed.end({ error: new Error('Too Many Requests') });
 
-    recordGeminiProxyThrottleWait({ waitMs: 65000, minIntervalMs: 65000 });
+    recordAiWorkerProxyThrottleWait({ waitMs: 65000, minIntervalMs: 65000 });
 
-    expect(geminiProxyObservabilitySnapshot()).toMatchObject({
+    expect(aiWorkerProxyObservabilitySnapshot()).toMatchObject({
       upstreamCalls: 2,
       vertexImageCalls: 2,
       succeeded: 1,

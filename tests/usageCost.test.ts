@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_PRICE_CATALOG,
-  buildGeminiProxyUsageDrafts,
+  buildAiWorkerProxyUsageDrafts,
   estimateUsageCostUsd,
   findPriceCatalogEntry,
   usageFromGeminiMetadata,
@@ -45,7 +45,7 @@ describe('usageCost', () => {
   });
 
   it('emits one flat-rate image draft for proxy image usage', () => {
-    const drafts = buildGeminiProxyUsageDrafts({
+    const drafts = buildAiWorkerProxyUsageDrafts({
       role: 'image',
       usageMetadata: { promptTokenCount: 200, candidatesTokenCount: 0 },
     });
@@ -59,7 +59,7 @@ describe('usageCost', () => {
   });
 
   it('keeps output token count in meta for flat-rate image drafts', () => {
-    const drafts = buildGeminiProxyUsageDrafts({
+    const drafts = buildAiWorkerProxyUsageDrafts({
       role: 'image',
       usageMetadata: { promptTokenCount: 100, candidatesTokenCount: 40 },
     });

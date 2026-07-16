@@ -32,5 +32,5 @@ npx concurrently -n vite,auth,sam,gemini,desktop -c blue,magenta,cyan,yellow,gre
   'npm run dev' `
   'npm run dev:auth-backend' `
   'npm run dev:sam-local' `
-  'npm run dev:gemini-proxy' `
+  'npm run dev:ai-worker-proxy' `
   'npm run companion-desktop:start'

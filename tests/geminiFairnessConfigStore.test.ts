@@ -9,13 +9,13 @@ import {
 describe('gemini-fairness-config-store', () => {
   it('normalizeGeminiFairnessConfig clamps known keys', () => {
     const r = normalizeGeminiFairnessConfig({
-      GEMINI_ASYNC_PROXY_MAX_CONCURRENT: 999,
+      AI_WORKER_ASYNC_PROXY_MAX_CONCURRENT: 999,
       GEMINI_FAIRNESS_USER_MAX_IN_FLIGHT: 2,
       UNKNOWN: 1,
     });
     expect(r.ok).toBe(true);
     if (!r.ok) return;
-    expect(r.config.GEMINI_ASYNC_PROXY_MAX_CONCURRENT).toBe(64);
+    expect(r.config.AI_WORKER_ASYNC_PROXY_MAX_CONCURRENT).toBe(64);
     expect(r.config.GEMINI_FAIRNESS_USER_MAX_IN_FLIGHT).toBe(2);
     expect(r.config.UNKNOWN).toBeUndefined();
   });
@@ -38,7 +38,7 @@ describe('gemini-fairness-config-store', () => {
   });
 
   it('exports whitelist keys', () => {
-    expect(GEMINI_FAIRNESS_CONFIG_KEYS.has('GEMINI_ASYNC_PROXY_MAX_CONCURRENT')).toBe(true);
+    expect(GEMINI_FAIRNESS_CONFIG_KEYS.has('AI_WORKER_ASYNC_PROXY_MAX_CONCURRENT')).toBe(true);
     expect(GEMINI_FAIRNESS_CONFIG_KEYS.size).toBeGreaterThanOrEqual(10);
   });
 });

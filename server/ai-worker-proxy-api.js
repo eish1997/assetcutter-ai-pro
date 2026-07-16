@@ -1,9 +1,9 @@
 /**
  * Gemini 代理（仅 /proxy/gemini/*）：供前端在无浏览器 Key 或长任务场景下走后端。
- * 原「批量出图 Job /jobs」已移除；环境变量名仍可与旧部署兼容（BULK_IMAGE_PORT 等）。
+ * 原「批量出图 Job /jobs」已移除；环境变量名仍可与旧部署兼容（AI_WORKER_PROXY_PORT 等）。
  *
- * 用法：GEMINI_API_KEY=xxx node server/gemini-proxy-api.js
- * 前端：VITE_BULK_IMAGE_API=http://localhost:9002
+ * 用法：GEMINI_API_KEY=xxx node server/ai-worker-proxy-api.js
+ * 前端：VITE_AI_WORKER_PROXY_API=http://localhost:9002
  *
  * Vertex AI：请求 JSON 带 aiBackend: "vertex" 时走 GCP（需 VERTEX_PROJECT_ID 或 GOOGLE_CLOUD_PROJECT、ADC）。
  * 详见 docs/VERTEX_AI_INTEGRATION.md
@@ -17,7 +17,7 @@ import { GoogleGenAI } from '@google/genai';
 import { handleAiGatewayRequest, updateAiGatewayJobStatus } from './ai-gateway/http-handler.js';
 import { aiGatewayHealthSnapshot } from './ai-gateway/health.js';
 import {
-  GEMINI_PROXY_MAX_BODY_BYTES as MAX_BODY_BYTES,
+  AI_WORKER_PROXY_MAX_BODY_BYTES as MAX_BODY_BYTES,
   BODY_TOO_LARGE_MESSAGE,
   readBodyUtf8,
 } from './http-limits.js';
@@ -35,7 +35,7 @@ import {
   fairnessQueueMetaForJob,
   parseFairnessTaskEnvelope,
   getDiskOverrideInt,
-} from './gemini-proxy-fairness.js';
+} from './ai-worker-proxy-fairness.js';
 import {
   describeVertexAgentPlatformRoute,
   getVertexGenAIClientForModel,
@@ -43,25 +43,25 @@ import {
   vertexProjectIdFromEnv,
 } from './vertex-genai-client.js';
 import { initGeminiFairnessConfigLoader, resolveGeminiFairnessConfigSource } from './gemini-fairness-config-store.js';
-import { beginGeminiProxyUpstreamCall, geminiProxyObservabilitySnapshot } from './gemini-proxy-observability.js';
-import { geminiProxyThrottleSnapshot, waitForGeminiUpstreamThrottle } from './gemini-proxy-throttle.js';
+import { beginAiWorkerProxyUpstreamCall, aiWorkerProxyObservabilitySnapshot } from './ai-worker-proxy-observability.js';
+import { aiWorkerProxyThrottleSnapshot, waitForGeminiUpstreamThrottle } from './ai-worker-proxy-throttle.js';
 import {
   buildAiGatewayTraceSuccessMetadata,
   extractAiGatewayArtifactsFromProxyResult,
   extractUsageMetadata,
   sanitizeProxyResultForAiGatewayJob,
-} from './gemini-proxy-usage.js';
+} from './ai-worker-proxy-usage.js';
 import {
-  assertGeminiProxyCreditsGate,
+  assertAiWorkerProxyCreditsGate,
   estimatedCreditsFromProxyBody,
-  isGeminiProxyCreditsGateEnabled,
-} from './gemini-proxy-credits-gate.js';
+  isAiWorkerProxyCreditsGateEnabled,
+} from './ai-worker-proxy-credits-gate.js';
 import {
-  geminiProxyMaxAttempts,
-  geminiProxyRetryDelayMs,
+  aiWorkerProxyMaxAttempts,
+  aiWorkerProxyRetryDelayMs,
   isRetryable,
   isUpstreamRateLimitError,
-} from './gemini-proxy-retry.js';
+} from './ai-worker-proxy-retry.js';
 
 /** 与 auth-api 一致：本地访问 Google API 常需 TRIPO_PROXY / HTTPS_PROXY（见 .env.local） */
 const GEMINI_OUTBOUND_PROXY = String(
@@ -71,14 +71,21 @@ if (GEMINI_OUTBOUND_PROXY) {
   try {
     setGlobalDispatcher(new ProxyAgent(GEMINI_OUTBOUND_PROXY));
   } catch (e) {
-    console.warn('[gemini-proxy-api] outbound proxy init failed:', e instanceof Error ? e.message : e);
+    console.warn('[ai-worker-proxy-api] outbound proxy init failed:', e instanceof Error ? e.message : e);
   }
 }
 
 /** 监听端口：优先专用变量，避免与 .env.local 里给 ai3d 等用的通用 `PORT` 冲突 */
 const PORT =
-  Number(process.env.GEMINI_PROXY_PORT || process.env.BULK_IMAGE_PORT || process.env.PORT) || 9002;
-const BIND_HOST = (process.env.BULK_IMAGE_BIND_HOST || '0.0.0.0').trim() || '0.0.0.0';
+  Number(
+    process.env.AI_WORKER_PROXY_PORT ||
+      process.env.GEMINI_PROXY_PORT ||
+      process.env.BULK_IMAGE_PORT ||
+      process.env.PORT
+  ) || 9002;
+const BIND_HOST =
+  (process.env.AI_WORKER_PROXY_BIND_HOST || process.env.BULK_IMAGE_BIND_HOST || '0.0.0.0').trim() ||
+  '0.0.0.0';
 const IMAGE_REQUEST_TIMEOUT_MS = Number(process.env.GEMINI_IMAGE_REQUEST_TIMEOUT_MS) || 120_000;
 const VERTEX_IMAGE_REQUEST_TIMEOUT_MS = Number(process.env.GEMINI_VERTEX_IMAGE_TIMEOUT_MS) || 600_000;
 const TOAPIS_BASE_URL = String(process.env.TOAPIS_BASE_URL || 'https://toapis.com/v1').trim().replace(/\/+$/, '');
@@ -87,7 +94,7 @@ const ENABLE_TOAPIS_FALLBACK = String(process.env.ENABLE_TOAPIS_FALLBACK || '').
 const TOAPIS_IMAGE_POLL_MS = Number(process.env.TOAPIS_IMAGE_POLL_MS) || 3000;
 const TOAPIS_IMAGE_MAX_WAIT_MS = Number(process.env.TOAPIS_IMAGE_MAX_WAIT_MS) || 600_000;
 
-/** 本地 dev + 已知生产前端 Origin；与 `AUTH_ALLOWED_ORIGINS` 对齐，避免仅配 auth 却漏配 gemini-proxy */
+/** 本地 dev + 已知生产前端 Origin；与 `AUTH_ALLOWED_ORIGINS` 对齐，避免仅配 auth 却漏配 ai-worker-proxy */
 const BUILTIN_PROXY_ALLOWED_ORIGINS = [
   'http://localhost:3000',
   'http://127.0.0.1:3000',
@@ -128,7 +135,7 @@ function applyCors(req, res) {
   const rawOrigin = req.headers.origin;
   /** Node/undici 跨域 fetch 可能送 Origin: null（opaque origin），不应按字面量拒掉 */
   const origin = rawOrigin && String(rawOrigin).toLowerCase() !== 'null' ? rawOrigin : '';
-  /** 前端 bulkFetch 使用 credentials:include（积分 Cookie / fairness）；须回显 Origin 且允许凭据，否则浏览器报 Failed to fetch */
+  /** 前端 aiWorkerProxyFetch 使用 credentials:include（积分 Cookie / fairness）；须回显 Origin 且允许凭据，否则浏览器报 Failed to fetch */
   const allowCredentialsForOrigin = () => {
     res.setHeader('Access-Control-Allow-Credentials', 'true');
   };
@@ -156,8 +163,8 @@ function applyCors(req, res) {
     allowCredentialsForOrigin();
     return true;
   }
-  if (String(process.env.GEMINI_PROXY_DEBUG_CORS || '').trim() === '1') {
-    console.warn('[gemini-proxy-api] CORS reject', { rawOrigin, origin, allowed: [...(allowedOrigins || [])] });
+  if (String(process.env.AI_WORKER_PROXY_DEBUG_CORS || '').trim() === '1') {
+    console.warn('[ai-worker-proxy-api] CORS reject', { rawOrigin, origin, allowed: [...(allowedOrigins || [])] });
   }
   return false;
 }
@@ -298,16 +305,16 @@ function ensureAdcFromJsonEnv() {
     const parsed = JSON.parse(raw);
     if (!parsed || typeof parsed !== 'object') return;
   } catch {
-    console.warn('[gemini-proxy-api] GOOGLE_APPLICATION_CREDENTIALS_JSON / GCP_SERVICE_ACCOUNT_JSON is not valid JSON; ignoring');
+    console.warn('[ai-worker-proxy-api] GOOGLE_APPLICATION_CREDENTIALS_JSON / GCP_SERVICE_ACCOUNT_JSON is not valid JSON; ignoring');
     return;
   }
   const tmp = path.join(os.tmpdir(), `gcp-adc-${process.pid}.json`);
   try {
     fs.writeFileSync(tmp, raw, 'utf8');
     process.env.GOOGLE_APPLICATION_CREDENTIALS = tmp;
-    console.log('[gemini-proxy-api] ADC: using inline JSON env → temp file for Application Default Credentials');
+    console.log('[ai-worker-proxy-api] ADC: using inline JSON env → temp file for Application Default Credentials');
   } catch (e) {
-    console.warn('[gemini-proxy-api] ADC: could not write temp credentials file:', e?.message || e);
+    console.warn('[ai-worker-proxy-api] ADC: could not write temp credentials file:', e?.message || e);
   }
 }
 
@@ -611,7 +618,7 @@ async function proxyGenerateContent(model, contents, config) {
     const detail = formatErrorDetail(e);
     if (isGeminiNetworkError(detail)) {
       if (ENABLE_TOAPIS_FALLBACK && TOAPIS_API_KEY) {
-        console.warn('[gemini-proxy] Gemini 网络不可达，自动回退 ToAPIs');
+        console.warn('[ai-worker-proxy] Gemini 网络不可达，自动回退 ToAPIs');
         return proxyViaToapis(model, contents, { ...mergedConfig, abortSignal: config?.abortSignal });
       }
       throw new Error(`${detail}（代理后端到 Google Gemini 网络不通。请为该进程配置 HTTPS_PROXY/HTTP_PROXY。若确需兜底，可设置 ENABLE_TOAPIS_FALLBACK=true 并配置 TOAPIS_API_KEY）`);
@@ -626,41 +633,41 @@ const GEMINI_ASYNC_JOB_TTL_MS = Number(process.env.GEMINI_ASYNC_JOB_TTL_MS) || 6
 const geminiAsyncJobs = new Map();
 function getGeminiAsyncProxyMaxConcurrent() {
   return getDiskOverrideInt(
-    'GEMINI_ASYNC_PROXY_MAX_CONCURRENT',
+    'AI_WORKER_ASYNC_PROXY_MAX_CONCURRENT',
     defaultGeminiAsyncProxyMaxConcurrent(),
     1,
     64
   );
 }
 
-let geminiProxyInFlight = 0;
-const geminiProxyWaiters = [];
+let aiWorkerProxyInFlight = 0;
+const aiWorkerProxyWaiters = [];
 
-function acquireGeminiProxySlot() {
+function acquireAiWorkerProxySlot() {
   const cap = getGeminiAsyncProxyMaxConcurrent();
-  if (geminiProxyInFlight < cap) {
-    geminiProxyInFlight++;
+  if (aiWorkerProxyInFlight < cap) {
+    aiWorkerProxyInFlight++;
     return Promise.resolve();
   }
   return new Promise((resolve) => {
-    geminiProxyWaiters.push(resolve);
+    aiWorkerProxyWaiters.push(resolve);
   }).then(() => {
-    geminiProxyInFlight++;
+    aiWorkerProxyInFlight++;
   });
 }
 
-function releaseGeminiProxySlot() {
-  geminiProxyInFlight = Math.max(0, geminiProxyInFlight - 1);
-  const next = geminiProxyWaiters.shift();
+function releaseAiWorkerProxySlot() {
+  aiWorkerProxyInFlight = Math.max(0, aiWorkerProxyInFlight - 1);
+  const next = aiWorkerProxyWaiters.shift();
   if (next) next();
 }
 
-async function withGeminiProxySlot(fn, throttle = {}) {
-  await acquireGeminiProxySlot();
+async function withAiWorkerProxySlot(fn, throttle = {}) {
+  await acquireAiWorkerProxySlot();
   let span = null;
   try {
     await waitForGeminiUpstreamThrottle(throttle);
-    span = beginGeminiProxyUpstreamCall(throttle);
+    span = beginAiWorkerProxyUpstreamCall(throttle);
     const result = await fn();
     span.end();
     return result;
@@ -668,7 +675,7 @@ async function withGeminiProxySlot(fn, throttle = {}) {
     span?.end({ error: e });
     throw e;
   } finally {
-    releaseGeminiProxySlot();
+    releaseAiWorkerProxySlot();
   }
 }
 
@@ -726,7 +733,7 @@ async function runGeminiAsyncJob(jobId) {
       },
     });
     const { model, contents, config, useVertex } = job;
-    const overloadMaxAttempts = Number(process.env.GEMINI_PROXY_RETRIES) || 15;
+    const overloadMaxAttempts = Number(process.env.AI_WORKER_PROXY_RETRIES) || 15;
     const startedAt = Date.now();
     let lastErr;
     let attempt = 0;
@@ -735,7 +742,7 @@ async function runGeminiAsyncJob(jobId) {
         if (Date.now() - startedAt > GEMINI_ASYNC_JOB_MAX_WAIT_MS) {
           throw new Error(`Gemini 异步任务最大等待超时（>${GEMINI_ASYNC_JOB_MAX_WAIT_MS}ms）`);
         }
-        const result = await withGeminiProxySlot(
+        const result = await withAiWorkerProxySlot(
           () =>
             useVertex ? proxyVertexGenerateContent(model, contents, config) : proxyGenerateContent(model, contents, config),
           { useVertex, model, config }
@@ -754,13 +761,13 @@ async function runGeminiAsyncJob(jobId) {
         return;
       } catch (e) {
         lastErr = e;
-        const maxAttempts = geminiProxyMaxAttempts(e, overloadMaxAttempts);
+        const maxAttempts = aiWorkerProxyMaxAttempts(e, overloadMaxAttempts);
         const shouldRetry = attempt < maxAttempts - 1 && isRetryable(e);
         if (!shouldRetry) break;
-        const delay = geminiProxyRetryDelayMs(e, attempt);
+        const delay = aiWorkerProxyRetryDelayMs(e, attempt);
         const kind = isUpstreamRateLimitError(e) ? 'upstream_rate_limit' : 'overload';
         console.warn(
-          `[gemini-proxy] async retry id=${jobId} kind=${kind} attempt=${attempt + 1}/${maxAttempts - 1} delay=${delay}ms`
+          `[ai-worker-proxy] async retry id=${jobId} kind=${kind} attempt=${attempt + 1}/${maxAttempts - 1} delay=${delay}ms`
         );
         await sleep(delay);
         attempt += 1;
@@ -773,13 +780,13 @@ async function runGeminiAsyncJob(jobId) {
     j.updatedAt = Date.now();
     await updateAiGatewayTraceJob(j.aiGatewayTraceJobId, {
       status: 'failed',
-      error: { code: 'GEMINI_PROXY_ASYNC_FAILED', message: j.error },
+      error: { code: 'AI_WORKER_PROXY_ASYNC_FAILED', message: j.error },
       metadata: {
         proxyJobId: jobId,
         proxyStatus: 'failed',
       },
     });
-    console.error(`[gemini-proxy] async failed id=${jobId} error=${j.error}`);
+    console.error(`[ai-worker-proxy] async failed id=${jobId} error=${j.error}`);
   } finally {
     fairnessOnAsyncJobFinished(jobId);
     if (isFairnessEnabled()) pumpFairAsyncWorkers();
@@ -806,7 +813,7 @@ async function updateAiGatewayTraceJob(traceJobId, patch) {
   try {
     await updateAiGatewayJobStatus(traceJobId, patch);
   } catch (e) {
-    console.warn('[gemini-proxy] ai-gateway trace update failed:', e instanceof Error ? e.message : String(e));
+    console.warn('[ai-worker-proxy] ai-gateway trace update failed:', e instanceof Error ? e.message : String(e));
   }
 }
 
@@ -866,7 +873,7 @@ async function runGeminiAsyncBatchJobBody(jobId) {
           results.push({ ok: true, result });
         } catch (e) {
           const error = formatErrorDetail(e);
-          console.error(`[gemini-proxy] async batch item failed id=${jobId} index=${index} error=${error}`);
+          console.error(`[ai-worker-proxy] async batch item failed id=${jobId} index=${index} error=${error}`);
           results.push({ ok: false, error });
         }
       }
@@ -878,7 +885,7 @@ async function runGeminiAsyncBatchJobBody(jobId) {
             return { ok: true, result };
           } catch (e) {
             const error = formatErrorDetail(e);
-            console.error(`[gemini-proxy] async batch item failed id=${jobId} index=${index} error=${error}`);
+            console.error(`[ai-worker-proxy] async batch item failed id=${jobId} index=${index} error=${error}`);
             return { ok: false, error };
           }
         })
@@ -895,7 +902,7 @@ async function runGeminiAsyncBatchJobBody(jobId) {
     j.status = 'failed';
     j.error = formatErrorDetail(e);
     j.updatedAt = Date.now();
-    console.error(`[gemini-proxy] async batch failed id=${jobId} error=${j.error}`);
+    console.error(`[ai-worker-proxy] async batch failed id=${jobId} error=${j.error}`);
   } finally {
     fairnessOnAsyncJobFinished(jobId);
     if (isFairnessEnabled()) pumpFairAsyncWorkers();
@@ -941,7 +948,7 @@ function createGeminiAsyncBatchJob(normalizedItems, useVertex, fairnessKey, enve
 }
 
 async function runGeminiWithRetries(model, contents, config, useVertex) {
-  const overloadMaxAttempts = Number(process.env.GEMINI_PROXY_RETRIES) || 15;
+  const overloadMaxAttempts = Number(process.env.AI_WORKER_PROXY_RETRIES) || 15;
   const startedAt = Date.now();
   let lastErr;
   let attempt = 0;
@@ -950,16 +957,16 @@ async function runGeminiWithRetries(model, contents, config, useVertex) {
       if (Date.now() - startedAt > GEMINI_ASYNC_JOB_MAX_WAIT_MS) {
         throw new Error(`Gemini 异步任务最大等待超时（>${GEMINI_ASYNC_JOB_MAX_WAIT_MS}ms）`);
       }
-      return await withGeminiProxySlot(
+      return await withAiWorkerProxySlot(
         () => (useVertex ? proxyVertexGenerateContent(model, contents, config) : proxyGenerateContent(model, contents, config)),
         { useVertex, model, config }
       );
     } catch (e) {
       lastErr = e;
-      const maxAttempts = geminiProxyMaxAttempts(e, overloadMaxAttempts);
+      const maxAttempts = aiWorkerProxyMaxAttempts(e, overloadMaxAttempts);
       const shouldRetry = attempt < maxAttempts - 1 && isRetryable(e);
       if (!shouldRetry) break;
-      await sleep(geminiProxyRetryDelayMs(e, attempt));
+      await sleep(aiWorkerProxyRetryDelayMs(e, attempt));
       attempt += 1;
     }
   }
@@ -981,16 +988,16 @@ function sendBodyReadError(res, e) {
 }
 
 async function applyCreditsGateOrReject(req, res, parsed, fallbackCredits) {
-  if (!isGeminiProxyCreditsGateEnabled()) return true;
+  if (!isAiWorkerProxyCreditsGateEnabled()) return true;
   const est = estimatedCreditsFromProxyBody(parsed, fallbackCredits);
   try {
-    const gate = await assertGeminiProxyCreditsGate(req, est);
+    const gate = await assertAiWorkerProxyCreditsGate(req, est);
     if (gate.ok) return true;
     sendJson(res, gate.status, gate.body);
     return false;
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    console.error('[gemini-proxy] credits gate error:', msg);
+    console.error('[ai-worker-proxy] credits gate error:', msg);
     sendJson(res, 503, { error: '积分准入服务暂不可用', detail: msg });
     return false;
   }
@@ -1000,12 +1007,12 @@ const GEMINI_ASYNC_PATH = '/proxy/gemini/async';
 const GEMINI_ASYNC_BATCH_PATH = '/proxy/gemini/async-batch';
 
 const server = http.createServer(async (req, res) => {
-  if (String(process.env.GEMINI_PROXY_DEBUG_CORS || '').trim() === '1' && req.method === 'POST') {
-    console.warn('[gemini-proxy-api] POST', req.url, 'origin=', req.headers.origin);
+  if (String(process.env.AI_WORKER_PROXY_DEBUG_CORS || '').trim() === '1' && req.method === 'POST') {
+    console.warn('[ai-worker-proxy-api] POST', req.url, 'origin=', req.headers.origin);
   }
   const corsOk = applyCors(req, res);
-  if (String(process.env.GEMINI_PROXY_DEBUG_CORS || '').trim() === '1' && req.method === 'POST') {
-    console.warn('[gemini-proxy-api] corsOk=', corsOk, 'origin=', JSON.stringify(req.headers.origin));
+  if (String(process.env.AI_WORKER_PROXY_DEBUG_CORS || '').trim() === '1' && req.method === 'POST') {
+    console.warn('[ai-worker-proxy-api] corsOk=', corsOk, 'origin=', JSON.stringify(req.headers.origin));
   }
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-AC-Fairness-Key, X-AC-Fairness-Signature, X-AC-Client-Ip, X-AC-Credits-Reserve, X-AC-Credits-Gate-Signature, X-AC-Credits-Gate-Estimate, X-AC-Task-Envelope');
@@ -1263,7 +1270,7 @@ const server = http.createServer(async (req, res) => {
         sendJson(res, 200, response);
       } catch (e) {
         const msg = formatErrorDetail(e);
-        console.error('[gemini-proxy] generate-content error:', msg);
+        console.error('[ai-worker-proxy] generate-content error:', msg);
         sendError(res, 500, msg);
       }
     } catch (e) {
@@ -1275,12 +1282,12 @@ const server = http.createServer(async (req, res) => {
   if (path === '/healthz' && req.method === 'GET') {
     sendJson(res, 200, {
       ok: true,
-      service: 'gemini-proxy-api',
+      service: 'ai-worker-proxy',
       geminiAsyncJobs: geminiAsyncJobs.size,
-      geminiProxyInFlight,
+      aiWorkerProxyInFlight,
       fairness: fairnessHealthSnapshot(),
-      throttle: geminiProxyThrottleSnapshot(),
-      observability: geminiProxyObservabilitySnapshot(),
+      throttle: aiWorkerProxyThrottleSnapshot(),
+      observability: aiWorkerProxyObservabilitySnapshot(),
       aiGateway: aiGatewayHealthSnapshot(),
       vertex: {
         configured: isVertexConfigured(),
@@ -1302,41 +1309,41 @@ server.listen(PORT, BIND_HOST, async () => {
   try {
     await initGeminiFairnessConfigLoader();
   } catch (e) {
-    console.warn('[gemini-proxy-api] fairness config loader init failed:', e instanceof Error ? e.message : String(e));
+    console.warn('[ai-worker-proxy-api] fairness config loader init failed:', e instanceof Error ? e.message : String(e));
   }
-  console.log(`[gemini-proxy-api] http://${BIND_HOST}:${PORT}`);
+  console.log(`[ai-worker-proxy-api] http://${BIND_HOST}:${PORT}`);
   console.log(
-    `[gemini-proxy-api] creditsGate=${isGeminiProxyCreditsGateEnabled() ? 'on' : 'off'} (AUTH_API_BASE / session cookie → auth-api)`
+    `[ai-worker-proxy-api] creditsGate=${isAiWorkerProxyCreditsGateEnabled() ? 'on' : 'off'} (AUTH_API_BASE / session cookie → auth-api)`
   );
   console.log(
-    `[gemini-proxy-api] GEMINI_FAIRNESS_ENABLED=${isFairnessEnabled() ? 'true' : 'false'} (see docs/Gemini代理-公平排队与每用户限流.md)`
+    `[ai-worker-proxy-api] GEMINI_FAIRNESS_ENABLED=${isFairnessEnabled() ? 'true' : 'false'} (see docs/Gemini代理-公平排队与每用户限流.md)`
   );
-  console.log(`[gemini-proxy-api] GEMINI_FAIRNESS_CONFIG_SOURCE=${resolveGeminiFairnessConfigSource()}`);
+  console.log(`[ai-worker-proxy-api] GEMINI_FAIRNESS_CONFIG_SOURCE=${resolveGeminiFairnessConfigSource()}`);
   const vp = vertexProjectId();
   const vOk = isVertexConfigured();
   if (vOk) {
     const route = describeVertexAgentPlatformRoute();
     console.log(
-      `[gemini-proxy-api] Vertex project=${vp} location=${route.location} host=${route.apiHost} apiVersion=${route.apiVersion} agentPlatform=${route.agentPlatformRegional ? 'regional' : 'global'} gemini3Location=${route.gemini3Location}`
+      `[ai-worker-proxy-api] Vertex project=${vp} location=${route.location} host=${route.apiHost} apiVersion=${route.apiVersion} agentPlatform=${route.agentPlatformRegional ? 'regional' : 'global'} gemini3Location=${route.gemini3Location}`
     );
     if (route.gemini3UsesGlobal) {
       console.log(
-        '[gemini-proxy-api] Gemini 3.x models use location=global (VERTEX_GEMINI3_LOCATION); set VERTEX_AIPLATFORM_REGIONAL_ONLY=true to force VERTEX_LOCATION for all models.'
+        '[ai-worker-proxy-api] Gemini 3.x models use location=global (VERTEX_GEMINI3_LOCATION); set VERTEX_AIPLATFORM_REGIONAL_ONLY=true to force VERTEX_LOCATION for all models.'
       );
     }
     if (route.location === 'global') {
       console.warn(
-        '[gemini-proxy-api] VERTEX_LOCATION=global → host aiplatform.googleapis.com (express). ' +
+        '[ai-worker-proxy-api] VERTEX_LOCATION=global → host aiplatform.googleapis.com (express). ' +
           'GCP Console often meters this under「Gemini for Google Cloud API」, not regional「Agent Platform API」. ' +
           'Prefer VERTEX_LOCATION=us-central1 + Gemini-3 hybrid global (default). See docs/VERTEX_AI_INTEGRATION.md.'
       );
     }
   } else {
-    console.log(`[gemini-proxy-api] Vertex project: (unset)  configured=false`);
+    console.log(`[ai-worker-proxy-api] Vertex project: (unset)  configured=false`);
   }
   if (!vOk) {
     console.warn(
-      '[gemini-proxy-api] Vertex is not configured (VERTEX_PROJECT_ID / GOOGLE_CLOUD_PROJECT empty). Requests with aiBackend:vertex will return 500. Set project id + ADC on this service — see docs/VERTEX_AI_INTEGRATION.md'
+      '[ai-worker-proxy-api] Vertex is not configured (VERTEX_PROJECT_ID / GOOGLE_CLOUD_PROJECT empty). Requests with aiBackend:vertex will return 500. Set project id + ADC on this service — see docs/VERTEX_AI_INTEGRATION.md'
     );
   }
 });

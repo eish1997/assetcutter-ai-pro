@@ -1,6 +1,6 @@
 import type { UsageGeminiMetadata, UsageMeterKind } from '../shared/usageBilling';
 import {
-  meterReadingFromGeminiProxy,
+  meterReadingFromAiWorkerProxy,
   parseGeminiTokenCounts,
   usageFromGeminiMetadata,
 } from './observability/metering/adapters/gemini';
@@ -13,7 +13,7 @@ export {
 } from './observability/metering/estimateCost';
 
 export { emitMeteredUsage } from './observability/metering/pipeline';
-export { meterReadingFromGeminiProxy, usageFromGeminiMetadata };
+export { meterReadingFromAiWorkerProxy, usageFromGeminiMetadata };
 
 export type GeminiUsageMeterDraft = {
   meterKind: UsageMeterKind;
@@ -24,19 +24,19 @@ export type GeminiUsageMeterDraft = {
   costConfidence: 'exact' | 'estimated';
 };
 
-export type GeminiProxyUsageDraft = {
+export type AiWorkerProxyUsageDraft = {
   idempotencySuffix: string;
   meter: GeminiUsageMeterDraft;
   meta: Record<string, unknown>;
 };
 
 /** @deprecated 请使用 metering/splitDrafts + adapters/gemini；保留供既有单测 */
-export function buildGeminiProxyUsageDrafts(args: {
+export function buildAiWorkerProxyUsageDrafts(args: {
   usageMetadata: UsageGeminiMetadata | null | undefined;
   role: 'text' | 'image';
-}): GeminiProxyUsageDraft[] {
+}): AiWorkerProxyUsageDraft[] {
   const registryId = args.role === 'image' ? 'gemini-image-preview' : 'gemini-text';
-  const reading = meterReadingFromGeminiProxy({
+  const reading = meterReadingFromAiWorkerProxy({
     registryId,
     provider: 'gemini',
     usageMetadata: args.usageMetadata,

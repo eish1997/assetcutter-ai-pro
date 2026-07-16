@@ -1,12 +1,12 @@
 import { fetch as undiciFetch } from 'undici';
-import { geminiProxyUpstreamBase } from '../../gemini-proxy-relay.js';
+import { aiWorkerProxyUpstreamBase } from '../../ai-worker-proxy-relay.js';
 import { creditsProxyHeadersFromSigned, fairnessKeyForUserId, signCreditsGatePayload } from '../../credits-gate-hmac.js';
 import { settleAiGatewayJobCredits, settlementMetadataPatch } from '../settlement.js';
 import { maybeAutoPauseAiGatewayProvider } from '../ops-control.js';
 import {
   extractAiGatewayArtifactsFromProxyResult,
   sanitizeProxyResultForAiGatewayJob,
-} from '../../gemini-proxy-usage.js';
+} from '../../ai-worker-proxy-usage.js';
 
 function publicErrorMessage(error) {
   return error instanceof Error ? error.message : String(error || 'AI Gateway execution failed');
@@ -86,7 +86,7 @@ async function handoffRetryDelay(attempt, response, options = {}) {
 
 function proxyPollUrl(plan, proxyJobId) {
   const path = String(plan.adapterRequest?.path || '/proxy/gemini/async').replace(/\/+$/, '');
-  return `${geminiProxyUpstreamBase()}${path}/${encodeURIComponent(proxyJobId)}`;
+  return `${aiWorkerProxyUpstreamBase()}${path}/${encodeURIComponent(proxyJobId)}`;
 }
 
 async function settleIfNeeded(plan, store) {
@@ -97,7 +97,7 @@ async function settleIfNeeded(plan, store) {
   return store.update(plan.job.id, { metadata: settlementMetadata });
 }
 
-export async function pollLegacyGeminiProxyJob(plan, proxyJobId, options = {}) {
+export async function pollAiWorkerProxyJob(plan, proxyJobId, options = {}) {
   const store = options.store;
   if (!store?.update || !plan?.job?.id || !proxyJobId) return;
   const fetchImpl = options.fetchImpl || undiciFetch;
@@ -136,7 +136,7 @@ export async function pollLegacyGeminiProxyJob(plan, proxyJobId, options = {}) {
       if (status === 'failed') {
         current = await store.update(plan.job.id, {
           status: 'failed',
-          error: { code: 'GEMINI_PROXY_ASYNC_FAILED', message: String(body.error || 'Gemini proxy job failed') },
+          error: { code: 'AI_WORKER_PROXY_ASYNC_FAILED', message: String(body.error || 'AI Worker Proxy job failed') },
           metadata: {
             proxyJobId,
             proxyStatus: 'failed',
@@ -158,10 +158,10 @@ export async function pollLegacyGeminiProxyJob(plan, proxyJobId, options = {}) {
   }
 }
 
-export async function startLegacyGeminiProxyExecution(plan, options = {}) {
+export async function startAiWorkerProxyExecution(plan, options = {}) {
   const store = options.store;
   const fetchImpl = options.fetchImpl || undiciFetch;
-  const targetUrl = `${geminiProxyUpstreamBase()}${plan.adapterRequest.path}`;
+  const targetUrl = `${aiWorkerProxyUpstreamBase()}${plan.adapterRequest.path}`;
 
   try {
     const maxRetries = Math.max(0, Math.floor(Number(options.handoffRetries ?? process.env.AI_GATEWAY_PROXY_HANDOFF_RETRIES ?? 2)));
@@ -177,12 +177,12 @@ export async function startLegacyGeminiProxyExecution(plan, options = {}) {
       text = await response.text();
       if (response.ok) break;
       if (!isRetryableHandoffStatus(response.status) || attempt >= maxRetries) {
-        throw new Error(`Gemini proxy rejected AI job handoff: HTTP ${response.status} ${text.slice(0, 300)}`);
+        throw new Error(`AI Worker Proxy rejected AI job handoff: HTTP ${response.status} ${text.slice(0, 300)}`);
       }
       await handoffRetryDelay(attempt + 1, response, options);
     }
     const proxy = parseProxyCreateResponse(text);
-    if (!proxy.jobId) throw new Error(`Gemini proxy did not return jobId: ${text.slice(0, 300)}`);
+    if (!proxy.jobId) throw new Error(`AI Worker Proxy did not return jobId: ${text.slice(0, 300)}`);
 
     const metadata = {
       gatewayExecution: {
@@ -197,7 +197,7 @@ export async function startLegacyGeminiProxyExecution(plan, options = {}) {
       ? await store.update(plan.job.id, { status: proxy.status === 'queued' ? 'queued' : 'running', metadata })
       : plan;
     if (!options.disableBackgroundPoll) {
-      const pollPromise = pollLegacyGeminiProxyJob(next || plan, proxy.jobId, options);
+      const pollPromise = pollAiWorkerProxyJob(next || plan, proxy.jobId, options);
       if (options.awaitBackgroundPoll) await pollPromise;
       else void pollPromise;
     }

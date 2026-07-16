@@ -1,5 +1,5 @@
 /**
- * 跨域 gemini-proxy 积分准入 HMAC（与 fairness 共用密钥时可对齐 GEMINI_PROXY_FAIRNESS_HMAC_SECRET）。
+ * 跨域 ai-worker-proxy 积分准入 HMAC（与 fairness 共用密钥时可对齐 AI_WORKER_PROXY_FAIRNESS_HMAC_SECRET）。
  */
 import crypto from 'crypto';
 
@@ -14,7 +14,9 @@ function envBool(name, defaultTrue = false) {
 
 export function creditsGateHmacSecret() {
   return String(
-    process.env.GEMINI_PROXY_CREDITS_HMAC_SECRET ||
+    process.env.AI_WORKER_PROXY_CREDITS_HMAC_SECRET ||
+      process.env.AI_WORKER_PROXY_FAIRNESS_HMAC_SECRET ||
+      process.env.GEMINI_PROXY_CREDITS_HMAC_SECRET ||
       process.env.GEMINI_PROXY_FAIRNESS_HMAC_SECRET ||
       ''
   ).trim();
@@ -26,7 +28,8 @@ export function creditsGateHmacEnabled() {
 
 export function creditsGateHmacSkewMs() {
   const raw = Number(
-    process.env.GEMINI_PROXY_CREDITS_HMAC_SKEW_SEC ??
+    process.env.AI_WORKER_PROXY_CREDITS_HMAC_SKEW_SEC ??
+      process.env.GEMINI_PROXY_CREDITS_HMAC_SKEW_SEC ??
       process.env.GEMINI_FAIRNESS_HMAC_SKEW_SEC ??
       120
   );

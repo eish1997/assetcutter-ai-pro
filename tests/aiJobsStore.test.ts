@@ -34,9 +34,9 @@ function makeSummary(id: string, status: AiJobSummary['status'] = 'created'): Ai
     updatedAt: '2026-07-12T00:00:00.000Z',
     startedAt: null,
     finishedAt: null,
-    route: { providerId: 'vertex-gemini', adapterId: 'gemini-proxy', channel: 'vertex-proxy', upstreamBackend: 'vertex' },
+    route: { providerId: 'vertex-gemini', adapterId: 'ai-worker-proxy', channel: 'vertex-proxy', upstreamBackend: 'vertex' },
     traceOnly: true,
-    legacyPath: '/proxy/gemini/async',
+    proxyPath: '/proxy/gemini/async',
     proxyJobId: null,
     creditsGate: { mode: 'plan', estimatedCredits: 134 },
     error: null,
@@ -50,7 +50,7 @@ function makeDetail(id: string, status: AiJobSummary['status'] = 'succeeded'): A
       output: null,
       artifacts: [],
     },
-    route: { providerId: 'vertex-gemini', adapterId: 'gemini-proxy', channel: 'vertex-proxy', upstreamBackend: 'vertex' },
+    route: { providerId: 'vertex-gemini', adapterId: 'ai-worker-proxy', channel: 'vertex-proxy', upstreamBackend: 'vertex' },
     adapterRequest: { method: 'POST', path: '/proxy/gemini/async', headers: {} },
   };
 }

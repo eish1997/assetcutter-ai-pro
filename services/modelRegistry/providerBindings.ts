@@ -27,9 +27,14 @@ const OPENAI_CHANNELS: readonly ChannelTemplate[] = [
   { channel: "toapis-openai", priority: 30 },
 ];
 
+const VOLCENGINE_ARK_CHANNELS: readonly ChannelTemplate[] = [
+  { channel: "volcengine-ark", priority: 10, defaultEnabled: false },
+];
+
 function familyForBindingRegistry(registryId: string, role: ModelResolveRole): ModelFamily {
   if (role === "image") {
     if (isRegisteredJimengImageModelId(registryId)) return "volcengine-jimeng";
+    if (/^doubao-seedream-/i.test(registryId)) return "volcengine-ark";
     if (isRegisteredImageModelId(registryId)) {
       return imageModelProviderRoute(registryId) === "openai" ? "openai" : "gemini";
     }
@@ -48,7 +53,8 @@ function bindingsForRegistry(
   if (family === "volcengine-jimeng" && role === "image") {
     return getJimengImageBindingsForRegistry(registryId);
   }
-  const templates = family === "openai" ? OPENAI_CHANNELS : GEMINI_CHANNELS;
+  const templates =
+    family === "volcengine-ark" ? VOLCENGINE_ARK_CHANNELS : family === "openai" ? OPENAI_CHANNELS : GEMINI_CHANNELS;
   return templates.map(({ channel, priority, defaultEnabled }) => ({
     bindingId: `${registryId}:${channel}:${role}`,
     registryId,

@@ -18,7 +18,7 @@ import {
   getVectorengineBaseUrl,
 } from "./settingsStore";
 import { emitMeteredUsageAfterDelivery, emitMeteredUsageAwait } from "./observability/metering/pipeline";
-import { meterReadingFromGeminiProxy } from "./observability/metering/adapters/gemini";
+import { meterReadingFromAiWorkerProxy } from "./observability/metering/adapters/gemini";
 import {
   wrapGeminiClientWithChannelMetering,
   stripMeteringConfigKeys,
@@ -69,7 +69,7 @@ import {
 } from "./geminiAsyncJobRecovery";
 import { peekCorrelationContext } from "./observability/correlationContext";
 import { releaseCreditReserve } from "./creditsApi";
-import { tryParseGeminiProxyFairnessRejected, throwFairnessRejected } from "./geminiProxyFairnessError";
+import { tryParseAiWorkerProxyFairnessRejected, throwFairnessRejected } from "./aiWorkerProxyFairnessError";
 import {
   dispatchGeminiFairnessRetryWait,
   dispatchGeminiQueueHint,
@@ -80,7 +80,7 @@ import { DEFAULT_MODEL_TEXT } from "./modelRegistry/constants";
 import type { ChannelId } from "./modelRegistry/types";
 import { pickBinding } from "./modelRegistry/pickBinding";
 import {
-  bulkUsesVertexBackend,
+  aiWorkerProxyUsesVertexBackend,
   pickChannel,
   usesVertexProxyForImage,
   usesVertexProxyForText,
@@ -101,10 +101,10 @@ import {
 } from "./modelRegistry/resolve";
 import { coerceImageModelRegistryId, imageModelProviderRoute } from "./modelRegistry/imageModels";
 import {
-  bulkForwardOriginIndex,
-  collectRemoteBulkOriginsFromEnv,
-  DEFAULT_GEMINI_BULK_PROXY_ORIGIN,
-} from "./geminiBulkForwardDevOrigins";
+  aiWorkerProxyForwardOriginIndex,
+  collectRemoteAiWorkerProxyOriginsFromEnv,
+  DEFAULT_AI_WORKER_PROXY_ORIGIN,
+} from "./aiWorkerProxyForwardDevOrigins";
 
 export {
   resolveUpstreamImageModelId,
@@ -125,68 +125,68 @@ function readViteEnvTrim(key: string): string {
   }
 }
 
-const BULK_RAW =
+const AI_WORKER_PROXY_RAW =
   typeof import.meta !== "undefined" && (import.meta as unknown as { env?: Record<string, string | undefined> })?.env
-    ? readViteEnvTrim("VITE_BULK_IMAGE_API")
+    ? readViteEnvTrim("VITE_AI_WORKER_PROXY_API")
     : "";
 
-/** 仅当供应商选「Vertex AI」时使用：可与 `VITE_BULK_IMAGE_API` 不同，指向已配 Vertex+ADC 的 gemini-proxy。 */
-const VERTEX_BULK_RAW =
+/** 仅当供应商选「Vertex AI」时使用：可与 `VITE_AI_WORKER_PROXY_API` 不同，指向已配 Vertex+ADC 的 ai-worker-proxy。 */
+const VERTEX_AI_WORKER_PROXY_RAW =
   typeof import.meta !== "undefined" && (import.meta as unknown as { env?: Record<string, string | undefined> })?.env
-    ? readViteEnvTrim("VITE_BULK_IMAGE_API_VERTEX")
+    ? readViteEnvTrim("VITE_AI_WORKER_PROXY_API_VERTEX")
     : "";
 
 /** 与当前页面同源（配合 Vite `/proxy/gemini` → 本机 9002），避免跨端口 CORS */
-const BULK_SAME_ORIGIN_MARKER = "__SAME_ORIGIN__";
+const AI_WORKER_PROXY_SAME_ORIGIN_MARKER = "__SAME_ORIGIN__";
 
-/** 开发环境：经 Vite 同源转发到公网 bulk，避免浏览器直连 Render 触发 CORS（与 `vite.config.ts` 白名单一致） */
-const AC_BULK_FORWARD_PREFIX = "/__ac-bulk-forward";
+/** 开发环境：经 Vite 同源转发到公网 AI Worker Proxy，避免浏览器直连 Render 触发 CORS（与 `vite.config.ts` 白名单一致） */
+const AC_AI_WORKER_FORWARD_PREFIX = "/__ac-ai-worker-forward";
 
-function bulkDevForwardOrigins(): string[] {
+function aiWorkerProxyDevForwardOrigins(): string[] {
   try {
     const env = (import.meta as unknown as { env?: Record<string, string | undefined> }).env || {};
-    return collectRemoteBulkOriginsFromEnv(env);
+    return collectRemoteAiWorkerProxyOriginsFromEnv(env);
   } catch {
     return [];
   }
 }
 
-function resolveBulkBaseFromRaw(raw: string): string {
+function resolveAiWorkerProxyBaseFromRaw(raw: string): string {
   const t = (raw || "").trim();
   if (!t) return "";
   const lower = t.toLowerCase();
   if (t === "1" || lower === "true" || lower === "same-origin") {
-    return BULK_SAME_ORIGIN_MARKER;
+    return AI_WORKER_PROXY_SAME_ORIGIN_MARKER;
   }
   return t;
 }
 
-const BULK_BASE = resolveBulkBaseFromRaw(BULK_RAW);
-const VERTEX_BULK_BASE = resolveBulkBaseFromRaw(VERTEX_BULK_RAW);
+const AI_WORKER_PROXY_BASE = resolveAiWorkerProxyBaseFromRaw(AI_WORKER_PROXY_RAW);
+const VERTEX_AI_WORKER_PROXY_BASE = resolveAiWorkerProxyBaseFromRaw(VERTEX_AI_WORKER_PROXY_RAW);
 
-/** 选 Vertex 时若 `VITE_BULK_IMAGE_API` 仍指向未配 Vertex 的旧主机会 500；可设 `VITE_VERTEX_FALLBACK_BULK_API` 或使用下方默认已配 Vertex 的代理根。 */
-const VERTEX_FALLBACK_BULK_RAW =
+/** 选 Vertex 时若 `VITE_AI_WORKER_PROXY_API` 仍指向未配 Vertex 的旧主机会 500；可设 `VITE_VERTEX_FALLBACK_AI_WORKER_PROXY_API` 或使用下方默认已配 Vertex 的代理根。 */
+const VERTEX_FALLBACK_AI_WORKER_PROXY_RAW =
   typeof import.meta !== "undefined" && (import.meta as unknown as { env?: Record<string, string | undefined> })?.env
-    ? readViteEnvTrim("VITE_VERTEX_FALLBACK_BULK_API")
+    ? readViteEnvTrim("VITE_VERTEX_FALLBACK_AI_WORKER_PROXY_API")
     : "";
-const DEFAULT_VERTEX_OK_BULK = DEFAULT_GEMINI_BULK_PROXY_ORIGIN;
+const DEFAULT_VERTEX_OK_AI_WORKER_PROXY = DEFAULT_AI_WORKER_PROXY_ORIGIN;
 const VERTEX_MISCONFIGURED_PROXY_HOSTS = new Set(
   ["assetcutter-ai-pro.onrender.com", "assetcutter-ai-pro.org", "www.assetcutter-ai-pro.org"].map((h) => h.toLowerCase())
 );
 
-function vertexFallbackBulkBase(): string {
-  const v = VERTEX_FALLBACK_BULK_RAW.replace(/\/$/, "");
-  return v || DEFAULT_VERTEX_OK_BULK;
+function vertexFallbackAiWorkerProxyBase(): string {
+  const v = VERTEX_FALLBACK_AI_WORKER_PROXY_RAW.replace(/\/$/, "");
+  return v || DEFAULT_VERTEX_OK_AI_WORKER_PROXY;
 }
 
-function usesVertexBulkEndpoint(): boolean {
+function usesVertexAiWorkerEndpoint(): boolean {
   return usesVertexProxyForImage() || usesVertexProxyForText();
 }
 
 function redirectVertexAwayFromUnconfiguredProxy(base: string): string {
-  if (!usesVertexBulkEndpoint()) return base;
-  if (readViteEnvTrim("VITE_DISABLE_VERTEX_BULK_FALLBACK") === "true") return base;
-  if (!base || base === BULK_SAME_ORIGIN_MARKER) return base;
+  if (!usesVertexAiWorkerEndpoint()) return base;
+  if (readViteEnvTrim("VITE_DISABLE_VERTEX_AI_WORKER_PROXY_FALLBACK") === "true") return base;
+  if (!base || base === AI_WORKER_PROXY_SAME_ORIGIN_MARKER) return base;
   let host = "";
   try {
     const normalized = /^https?:\/\//i.test(base) ? base : `https://${base}`;
@@ -195,18 +195,18 @@ function redirectVertexAwayFromUnconfiguredProxy(base: string): string {
     return base;
   }
   if (!VERTEX_MISCONFIGURED_PROXY_HOSTS.has(host)) return base;
-  return vertexFallbackBulkBase();
+  return vertexFallbackAiWorkerProxyBase();
 }
 
-/** Vertex 且配置了 `VITE_BULK_IMAGE_API_VERTEX` 时走专用代理根；否则与试用相同用 `VITE_BULK_IMAGE_API`。 */
-function effectiveBulkBase(): string {
+/** Vertex 且配置了 `VITE_AI_WORKER_PROXY_API_VERTEX` 时走专用代理根；否则与试用相同用 `VITE_AI_WORKER_PROXY_API`。 */
+function effectiveAiWorkerProxyBase(): string {
   let base: string;
-  if (usesVertexBulkEndpoint() && VERTEX_BULK_BASE) base = VERTEX_BULK_BASE;
-  else base = BULK_BASE;
+  if (usesVertexAiWorkerEndpoint() && VERTEX_AI_WORKER_PROXY_BASE) base = VERTEX_AI_WORKER_PROXY_BASE;
+  else base = AI_WORKER_PROXY_BASE;
   return redirectVertexAwayFromUnconfiguredProxy(base);
 }
 
-/** 为 true 时恢复旧行为：本机 Gemini Key 优先于 VITE_BULK_IMAGE_API（浏览器直连 Google）。默认 false：有代理地址则优先走后端代理，与生产环境一致、避免本机 Key 直连触发地区限制。 */
+/** 为 true 时恢复旧行为：本机 Gemini Key 优先于 VITE_AI_WORKER_PROXY_API（浏览器直连 Google）。默认 false：有代理地址则优先走后端代理，与生产环境一致、避免本机 Key 直连触发地区限制。 */
 function preferBrowserGeminiKeyFirst(): boolean {
   try {
     return (
@@ -229,15 +229,15 @@ function isLocalDevPage(): boolean {
   }
 }
 
-function shouldRelayBulkViaAuthApi(baseResolved: string): boolean {
+function shouldRelayAiWorkerProxyViaAuthApi(baseResolved: string): boolean {
   if (typeof window === "undefined") return false;
-  if (!baseResolved || baseResolved === BULK_SAME_ORIGIN_MARKER) return false;
+  if (!baseResolved || baseResolved === AI_WORKER_PROXY_SAME_ORIGIN_MARKER) return false;
   if (!authApiRelayConfigured()) return false;
   try {
-    const bulkOrigin = new URL(
+    const aiWorkerProxyOrigin = new URL(
       /^https?:\/\//i.test(baseResolved) ? baseResolved : `https://${baseResolved}`
     ).origin;
-    if (bulkOrigin === window.location.origin) return false;
+    if (aiWorkerProxyOrigin === window.location.origin) return false;
     if (resolvedAuthApiBaseUrl()) {
       const authOrigin = new URL(
         /^https?:\/\//i.test(resolvedAuthApiBaseUrl()) ? resolvedAuthApiBaseUrl() : `https://${resolvedAuthApiBaseUrl()}`
@@ -250,8 +250,8 @@ function shouldRelayBulkViaAuthApi(baseResolved: string): boolean {
   }
 }
 
-/** 7525000 起 bulk 默认 credentials:include；直连跨域 gemini-proxy 会触发 credentialed CORS 预检失败 → fetch failed */
-export function resolveBulkFetchCredentials(
+/** 7525000 起 AI Worker Proxy 默认 credentials:include；直连跨域 ai-worker-proxy 会触发 credentialed CORS 预检失败 → fetch failed */
+export function resolveAiWorkerProxyFetchCredentials(
   input: RequestInfo | URL,
   init?: RequestInit
 ): RequestCredentials {
@@ -285,40 +285,40 @@ export function resolveBulkFetchCredentials(
   return "omit";
 }
 
-function bulkApiUrl(path: string): string {
-  const baseResolved = effectiveBulkBase();
+function aiWorkerProxyApiUrl(path: string): string {
+  const baseResolved = effectiveAiWorkerProxyBase();
   if (!baseResolved) return path;
   const p = path.startsWith("/") ? path : `/${path}`;
-  if (baseResolved === BULK_SAME_ORIGIN_MARKER) {
+  if (baseResolved === AI_WORKER_PROXY_SAME_ORIGIN_MARKER) {
     return p;
   }
-  /** 与线上一致：已配置跨域 auth-api 时走 /api/gemini-proxy 中继（Cookie + 积分头一并转发） */
-  if (shouldRelayBulkViaAuthApi(baseResolved)) {
-    return apiUrl(`/api/gemini-proxy${p}`);
+  /** 与线上一致：已配置跨域 auth-api 时走 /api/ai-worker-proxy 中继（Cookie + 积分头一并转发） */
+  if (shouldRelayAiWorkerProxyViaAuthApi(baseResolved)) {
+    return apiUrl(`/api/ai-worker-proxy${p}`);
   }
-  /** 本地 npm run dev：无 auth 中继时经 Vite /__ac-bulk-forward 转发（须与云端 auth 登录对齐，见 assertDevBulkCreditsAuthAligned） */
+  /** 本地 npm run dev：无 auth 中继时经 Vite /__ac-ai-worker-forward 转发（须与云端 auth 登录对齐，见 assertDevAiWorkerProxyCreditsAuthAligned） */
   if (import.meta.env.DEV && isLocalDevPage()) {
-    const idx = bulkForwardOriginIndex(baseResolved, bulkDevForwardOrigins());
+    const idx = aiWorkerProxyForwardOriginIndex(baseResolved, aiWorkerProxyDevForwardOrigins());
     if (idx >= 0) {
-      return `${AC_BULK_FORWARD_PREFIX}/${idx}${p}`;
+      return `${AC_AI_WORKER_FORWARD_PREFIX}/${idx}${p}`;
     }
   }
   const base = baseResolved.replace(/\/$/, "");
   return `${base}${p}`;
 }
 
-function bulkUsesDevForward(requestUrl: string): boolean {
+function aiWorkerProxyUsesDevForward(requestUrl: string): boolean {
   try {
     const u = typeof requestUrl === "string" ? requestUrl : String(requestUrl);
-    return u.includes(`${AC_BULK_FORWARD_PREFIX}/`);
+    return u.includes(`${AC_AI_WORKER_FORWARD_PREFIX}/`);
   } catch {
     return false;
   }
 }
 
-/** 本地登录 + dev bulk-forward 到 Render 时，云端 proxy 无法识别本机 session */
-function assertDevBulkCreditsAuthAligned(requestUrl: string): void {
-  if (!import.meta.env.DEV || !bulkUsesDevForward(requestUrl)) return;
+/** 本地登录 + dev AI Worker Proxy-forward 到 Render 时，云端 proxy 无法识别本机 session */
+function assertDevAiWorkerProxyCreditsAuthAligned(requestUrl: string): void {
+  if (!import.meta.env.DEV || !aiWorkerProxyUsesDevForward(requestUrl)) return;
   if (resolvedAuthApiBaseUrl() || devUsesRemoteAuthViaViteProxy()) return;
   throw new Error(
     "本地登录与 Render 生图代理不匹配：云端会提示「请先登录」。请在 .env.local 设置 VITE_AUTH_API_BASE_URL=https://assetcutter-auth-api.onrender.com，重启 npm run dev 后重新登录。"
@@ -365,7 +365,7 @@ export function getGeminiImageBatchBoxSizeForCurrentProvider(registryId?: string
   return resolveImageBatchBoxSize(usesVertexProxyForImage(registryId) ? "vertex" : undefined);
 }
 
-/** gemini-proxy 在 Vertex 未就绪时返回；映射为工作区可读的完整短句（避免单行截断） */
+/** ai-worker-proxy 在 Vertex 未就绪时返回；映射为工作区可读的完整短句（避免单行截断） */
 function userMessageForVertexProxyNotReady(text: string): string | null {
   const t = (text || "").trim();
   if (!t) return null;
@@ -379,7 +379,7 @@ function userMessageForVertexProxyNotReady(text: string): string | null {
   return null;
 }
 
-function parseBulkProxyCreateError(status: number, text: string, requestUrl?: string): string {
+function parseAiWorkerProxyCreateError(status: number, text: string, requestUrl?: string): string {
   const raw = (text || "").trim();
   try {
     const j = JSON.parse(raw) as { error?: string; message?: string; retryAfterSec?: number };
@@ -400,22 +400,22 @@ function parseBulkProxyCreateError(status: number, text: string, requestUrl?: st
   } catch {
     /* ignore */
   }
-  const base = parseBulkProxyErrorBody(raw) || `Gemini 异步任务创建失败（${status}）`;
+  const base = parseAiWorkerProxyErrorBody(raw) || `Gemini 异步任务创建失败（${status}）`;
   if (status === 405) {
     const urlHint = requestUrl ? ` 请求 URL：${requestUrl}。` : "";
     const prodSameOrigin =
       typeof import.meta !== "undefined" &&
       (import.meta as unknown as { env?: { PROD?: boolean } }).env?.PROD &&
-      effectiveBulkBase() === BULK_SAME_ORIGIN_MARKER;
+      effectiveAiWorkerProxyBase() === AI_WORKER_PROXY_SAME_ORIGIN_MARKER;
     const fixHint = prodSameOrigin
-      ? "构建时误用了 VITE_BULK_IMAGE_API=same-origin（仅适用于本机 Vite 反代）；请改为与线上一致的 gemini-proxy 根地址并重新部署。"
-      : "请确认 VITE_BULK_IMAGE_API 指向已部署的 gemini-proxy（如 https://assetcutter-gemini-proxy.onrender.com），勿指向前端静态站域名。";
+      ? "构建时误用了 VITE_AI_WORKER_PROXY_API=same-origin（仅适用于本机 Vite 反代）；请改为与线上一致的 ai-worker-proxy 根地址并重新部署。"
+      : "请确认 VITE_AI_WORKER_PROXY_API 指向已部署的 ai-worker-proxy（如 https://assetcutter-ai-worker-proxy.onrender.com），勿指向前端静态站域名。";
     return `${base}${urlHint} ${fixHint}`;
   }
   return base;
 }
 
-function parseBulkProxyErrorBody(text: string): string {
+function parseAiWorkerProxyErrorBody(text: string): string {
   const raw = (text || "").trim();
   try {
     const j = JSON.parse(raw) as { error?: string };
@@ -439,10 +439,10 @@ function isBrowserFetchNetworkError(e: unknown): boolean {
   );
 }
 
-function bulkFetchNetworkUserMessage(): string {
+function aiWorkerProxyFetchNetworkUserMessage(): string {
   const originHint =
     typeof window !== "undefined" && window.location?.origin
-      ? `（当前站点 ${window.location.origin}；若直连 gemini-proxy，须加入 PROXY_ALLOWED_ORIGINS）`
+      ? `（当前站点 ${window.location.origin}；若直连 ai-worker-proxy，须加入 PROXY_ALLOWED_ORIGINS）`
       : "";
   if (usesVertexProxyForImage()) {
     return `Vertex 生图服务暂时连不上，请检查网络或稍后再试。若使用公网代理，请确认本机可访问该地址。${originHint}`;
@@ -451,43 +451,43 @@ function bulkFetchNetworkUserMessage(): string {
 }
 
 /** 不把端口/env 细节写进工作区日志；仅开发环境打到控制台 */
-function warnDevBulkImageNetwork(context: string): void {
+function warnDevAiWorkerProxyNetwork(context: string): void {
   try {
     if (!import.meta.env.DEV) return;
     const vx = usesVertexProxyForImage();
     console.warn(
-      `[assetcutter] ${context}：请求未送达。${vx ? "Vertex：请确认 VITE_BULK_IMAGE_API（或 VERTEX 专用地址）在浏览器侧可访问，且代理已配置 Vertex；" : ""}若使用同源 /proxy/gemini，请确认本机 gemini-proxy 在 9002 且 Vite 已反代。`
+      `[assetcutter] ${context}：请求未送达。${vx ? "Vertex：请确认 VITE_AI_WORKER_PROXY_API（或 VERTEX 专用地址）在浏览器侧可访问，且代理已配置 Vertex；" : ""}若使用同源 /proxy/gemini，请确认本机 ai-worker-proxy 在 9002 且 Vite 已反代。`
     );
   } catch {
     /* ignore */
   }
 }
 
-async function bulkFetchOrExplain(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+async function aiWorkerProxyFetchOrExplain(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
   try {
     return await fetch(input, {
       ...init,
-      credentials: resolveBulkFetchCredentials(input, init),
+      credentials: resolveAiWorkerProxyFetchCredentials(input, init),
     });
   } catch (e) {
     if (isBrowserFetchNetworkError(e)) {
-      warnDevBulkImageNetwork("生图代理");
-      throw new Error(bulkFetchNetworkUserMessage());
+      warnDevAiWorkerProxyNetwork("生图代理");
+      throw new Error(aiWorkerProxyFetchNetworkUserMessage());
     }
     throw e;
   }
 }
 
-async function bulkFetchCreateWithFairnessRetry(
+async function aiWorkerProxyFetchCreateWithFairnessRetry(
   url: string,
   init: RequestInit
 ): Promise<{ ok: true; text: string } | { ok: false; status: number; text: string }> {
   const abortSignal = init.signal ?? undefined;
   for (let attempt = 1; attempt <= FAIRNESS_CREATE_MAX_RETRIES; attempt += 1) {
-    const response = await bulkFetchOrExplain(url, init);
+    const response = await aiWorkerProxyFetchOrExplain(url, init);
     const text = await response.text();
     if (response.ok) return { ok: true, text };
-    const fairnessErr = tryParseGeminiProxyFairnessRejected(response.status, text);
+    const fairnessErr = tryParseAiWorkerProxyFairnessRejected(response.status, text);
     if (!fairnessErr || attempt >= FAIRNESS_CREATE_MAX_RETRIES) {
       return { ok: false, status: response.status, text };
     }
@@ -503,13 +503,13 @@ async function bulkFetchCreateWithFairnessRetry(
   return { ok: false, status: 429, text: '{"error":"rate_limited","message":"公平队列重试耗尽"}' };
 }
 
-let geminiProxySessionHintDone = false;
-let geminiProxyFairnessProbe: Promise<{ enabled: boolean; globalQueuedApprox?: number } | null> | null = null;
+let aiWorkerProxySessionHintDone = false;
+let aiWorkerProxyFairnessProbe: Promise<{ enabled: boolean; globalQueuedApprox?: number } | null> | null = null;
 
-async function probeGeminiProxyFairnessOnce(): Promise<{ enabled: boolean; globalQueuedApprox?: number } | null> {
-  if (!effectiveBulkBase()) return null;
+async function probeAiWorkerProxyFairnessOnce(): Promise<{ enabled: boolean; globalQueuedApprox?: number } | null> {
+  if (!effectiveAiWorkerProxyBase()) return null;
   try {
-    const res = await bulkFetchOrExplain(bulkApiUrl("/healthz"), { cache: "no-store" });
+    const res = await aiWorkerProxyFetchOrExplain(aiWorkerProxyApiUrl("/healthz"), { cache: "no-store" });
     if (!res.ok) return null;
     const j = (await res.json()) as {
       fairness?: { enabled?: boolean; globalQueuedApprox?: number };
@@ -528,11 +528,11 @@ async function probeGeminiProxyFairnessOnce(): Promise<{ enabled: boolean; globa
   }
 }
 
-async function ensureGeminiProxySessionHint(): Promise<void> {
-  if (typeof window === "undefined" || geminiProxySessionHintDone) return;
-  geminiProxySessionHintDone = true;
-  geminiProxyFairnessProbe ??= probeGeminiProxyFairnessOnce();
-  const info = await geminiProxyFairnessProbe;
+async function ensureAiWorkerProxySessionHint(): Promise<void> {
+  if (typeof window === "undefined" || aiWorkerProxySessionHintDone) return;
+  aiWorkerProxySessionHintDone = true;
+  aiWorkerProxyFairnessProbe ??= probeAiWorkerProxyFairnessOnce();
+  const info = await aiWorkerProxyFairnessProbe;
   dispatchGeminiQueueHint({
     kind: "proxy_session",
     fairnessEnabled: info?.enabled === true,
@@ -677,14 +677,14 @@ async function fetchGeminiAsyncPollStep(
   tracker: GeminiAsyncPollTracker,
   abortSignal?: AbortSignal
 ): Promise<GeminiAsyncPollStep> {
-  const pollRes = await bulkFetchOrExplain(bulkApiUrl(`/proxy/gemini/async/${encodeURIComponent(jobId)}`), {
+  const pollRes = await aiWorkerProxyFetchOrExplain(aiWorkerProxyApiUrl(`/proxy/gemini/async/${encodeURIComponent(jobId)}`), {
     signal: abortSignal,
     cache: "no-store",
   });
   const pollText = await pollRes.text();
   if (!pollRes.ok) {
     const pt = (pollText || "").trim();
-    const fe = tryParseGeminiProxyFairnessRejected(pollRes.status, pt);
+    const fe = tryParseAiWorkerProxyFairnessRejected(pollRes.status, pt);
     if (fe) throwFairnessRejected(fe);
     if (isGeminiAsyncJobNotFoundPoll(pollRes.status, pt)) {
       const createdAt = getPendingGeminiAsyncJob(jobId)?.createdAt;
@@ -706,7 +706,7 @@ async function fetchGeminiAsyncPollStep(
     throw new AiPipelineStepError(
       "image_poll",
       "ASYNC_POLL_HTTP",
-      parseBulkProxyErrorBody(pt) || `轮询失败（${pollRes.status}）`
+      parseAiWorkerProxyErrorBody(pt) || `轮询失败（${pollRes.status}）`
     );
   }
   let j: GeminiAsyncPollBody;
@@ -736,7 +736,7 @@ async function finalizeGeminiAsyncDelivery(args: {
   aiGatewayJobId?: string | null;
 }): Promise<GeminiAsyncDelivered> {
   const imageRole = isLikelyImageRegistryId(args.bindingRegistryId);
-  const useVertex = bulkUsesVertexBackend(args.bindingRegistryId, imageRole ? "image" : "text");
+  const useVertex = aiWorkerProxyUsesVertexBackend(args.bindingRegistryId, imageRole ? "image" : "text");
   const meterArgs = {
     jobId: args.jobId,
     model: args.model,
@@ -748,11 +748,11 @@ async function finalizeGeminiAsyncDelivery(args: {
     creditsReserveKey: args.creditsReserveKey ?? getLastCreditsReserveKey(),
   };
   if (peekCreditsPrechargeSession()) {
-    await emitGeminiProxyMeteredUsage(meterArgs);
+    await emitAiWorkerProxyMeteredUsage(meterArgs);
   } else {
-    settleGeminiProxyMeteredUsageAfterDelivery(meterArgs);
+    settleAiWorkerProxyMeteredUsageAfterDelivery(meterArgs);
   }
-  const imageResult = extractGeminiProxyImageDataUrl(args.delivered);
+  const imageResult = extractAiWorkerProxyImageDataUrl(args.delivered);
   if (imageResult) {
     rememberAiGatewayImageResult(imageResult, args.aiGatewayJobId);
   }
@@ -781,7 +781,7 @@ function registerGeminiAsyncJobForRecovery(args: {
 }
 
 /** 从 proxy async 结果提取首张图 data URL（工作流恢复用） */
-export function extractGeminiProxyImageDataUrl(result: unknown): string | null {
+export function extractAiWorkerProxyImageDataUrl(result: unknown): string | null {
   if (!result || typeof result !== "object") return null;
   const r = result as { candidates?: unknown[] };
   const candidates = Array.isArray(r.candidates) ? r.candidates : [];
@@ -889,7 +889,7 @@ function throwCreditsReserveInvalid(step: 'credits_gate' | 'credits_bundle', raw
   );
 }
 
-async function bulkProxyAdmissionHeaders(estimatedCredits: number): Promise<Record<string, string>> {
+async function aiWorkerProxyAdmissionHeaders(estimatedCredits: number): Promise<Record<string, string>> {
   const fallback = {
     ...getGeminiFairnessRequestHeaders(),
     ...getActiveAiTaskEnvelopeRequestHeaders(),
@@ -906,7 +906,7 @@ async function bulkProxyAdmissionHeaders(estimatedCredits: number): Promise<Reco
   return { ...fallback, ...proxyHeaders };
 }
 
-async function emitGeminiProxyMeteredUsage(args: {
+async function emitAiWorkerProxyMeteredUsage(args: {
   jobId: string;
   model: string;
   registryId?: string;
@@ -920,7 +920,7 @@ async function emitGeminiProxyMeteredUsage(args: {
   if (!registryId) return;
   const reserveKey = (args.creditsReserveKey ?? getLastCreditsReserveKey())?.trim() || null;
   await emitMeteredUsageAwait({
-    reading: meterReadingFromGeminiProxy({
+    reading: meterReadingFromAiWorkerProxy({
       registryId,
       provider: resolveProviderForGeminiPath(args.useVertex),
       usageMetadata: args.usageMetadata,
@@ -935,9 +935,9 @@ async function emitGeminiProxyMeteredUsage(args: {
 }
 
 /** 先返回结果，后台结算（P2） */
-function settleGeminiProxyMeteredUsageAfterDelivery(args: Parameters<typeof emitGeminiProxyMeteredUsage>[0]): void {
+function settleAiWorkerProxyMeteredUsageAfterDelivery(args: Parameters<typeof emitAiWorkerProxyMeteredUsage>[0]): void {
   emitMeteredUsageAfterDelivery({
-    reading: meterReadingFromGeminiProxy({
+    reading: meterReadingFromAiWorkerProxy({
       registryId: (args.registryId || args.model || "").trim(),
       provider: resolveProviderForGeminiPath(args.useVertex),
       usageMetadata: args.usageMetadata,
@@ -954,7 +954,7 @@ function settleGeminiProxyMeteredUsageAfterDelivery(args: Parameters<typeof emit
   });
 }
 
-async function bulkProxyGenerateContentSync(args: {
+async function aiWorkerProxyGenerateContentSync(args: {
   model: string;
   contents: unknown;
   config?: Record<string, unknown>;
@@ -971,13 +971,13 @@ async function bulkProxyGenerateContentSync(args: {
   const jobKind = args.jobKind ?? (role === "text" ? "workflow_understand" : "workflow_text_to_image");
   const bindingRegistryId =
     resolveMeteringRegistryId({ model: args.model, config }) || (args.registryId || args.model || "").trim();
-  const aiBackendExtra = bulkUsesVertexBackend(bindingRegistryId, role) ? { aiBackend: "vertex" as const } : {};
+  const aiBackendExtra = aiWorkerProxyUsesVertexBackend(bindingRegistryId, role) ? { aiBackend: "vertex" as const } : {};
   const gateCredits = proxyGateMinCreditsForJob(jobKind);
   let skipReleaseOnFinally = false;
   let frozenCreditsReserveKey: string | null = null;
   try {
-    const syncUrl = bulkApiUrl("/proxy/gemini/generate-content");
-    assertDevBulkCreditsAuthAligned(syncUrl);
+    const syncUrl = aiWorkerProxyApiUrl("/proxy/gemini/generate-content");
+    assertDevAiWorkerProxyCreditsAuthAligned(syncUrl);
     const createBody = JSON.stringify({
       model: args.model,
       contents: args.contents,
@@ -986,10 +986,10 @@ async function bulkProxyGenerateContentSync(args: {
       ...aiBackendExtra,
     });
     const postSync = async () => {
-      const admissionHeaders = await bulkProxyAdmissionHeaders(gateCredits);
+      const admissionHeaders = await aiWorkerProxyAdmissionHeaders(gateCredits);
       frozenCreditsReserveKey =
         admissionHeaders['X-AC-Credits-Reserve']?.trim() || getLastCreditsReserveKey();
-      return bulkFetchOrExplain(syncUrl, {
+      return aiWorkerProxyFetchOrExplain(syncUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json", ...admissionHeaders },
         body: createBody,
@@ -1024,9 +1024,9 @@ async function bulkProxyGenerateContentSync(args: {
         reserveKey: frozenCreditsReserveKey ?? getLastCreditsReserveKey(),
       });
       const raw = (text || "").trim();
-      const fairnessErr = tryParseGeminiProxyFairnessRejected(res.status, raw);
+      const fairnessErr = tryParseAiWorkerProxyFairnessRejected(res.status, raw);
       if (fairnessErr) throwFairnessRejected(fairnessErr);
-      throw new Error(parseBulkProxyCreateError(res.status, raw, syncUrl));
+      throw new Error(parseAiWorkerProxyCreateError(res.status, raw, syncUrl));
     }
     let delivered: { text?: string; candidates?: unknown[]; usageMetadata?: UsageGeminiMetadata | null };
     try {
@@ -1038,16 +1038,16 @@ async function bulkProxyGenerateContentSync(args: {
       jobId: `sync:${Date.now()}`,
       model: args.model,
       registryId: bindingRegistryId,
-      useVertex: bulkUsesVertexBackend(bindingRegistryId, role),
+      useVertex: aiWorkerProxyUsesVertexBackend(bindingRegistryId, role),
       proxyResult: delivered,
       usageMetadata: delivered.usageMetadata,
       jobKind,
       creditsReserveKey: frozenCreditsReserveKey ?? getLastCreditsReserveKey(),
     };
     if (peekCreditsPrechargeSession()) {
-      await emitGeminiProxyMeteredUsage(meterArgs);
+      await emitAiWorkerProxyMeteredUsage(meterArgs);
     } else {
-      settleGeminiProxyMeteredUsageAfterDelivery(meterArgs);
+      settleAiWorkerProxyMeteredUsageAfterDelivery(meterArgs);
     }
     skipReleaseOnFinally = true;
     return delivered;
@@ -1069,9 +1069,9 @@ async function createAiGatewayImageJobTrace(args: {
 }): Promise<string | null> {
   if (!isAiGatewayJobTraceEnabled(args.useVertex)) return null;
   try {
-    const url = bulkApiUrl('/ai-gateway/jobs');
-    assertDevBulkCreditsAuthAligned(url);
-    const response = await bulkFetchOrExplain(url, {
+    const url = aiWorkerProxyApiUrl('/ai-gateway/jobs');
+    assertDevAiWorkerProxyCreditsAuthAligned(url);
+    const response = await aiWorkerProxyFetchOrExplain(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(
@@ -1113,7 +1113,7 @@ async function createAiGatewayImageJobTrace(args: {
   }
 }
 
-async function bulkProxyGenerateContentAsync(args: {
+async function aiWorkerProxyGenerateContentAsync(args: {
   model: string;
   contents: unknown;
   config?: Record<string, unknown>;
@@ -1129,10 +1129,10 @@ async function bulkProxyGenerateContentAsync(args: {
   /** 服务端可对 503 多次退避，轮询上限需覆盖 */
   const maxPollMs = Math.max(httpTimeout + 240_000, GEMINI_ASYNC_CLIENT_MAX_POLL_MS);
 
-  await ensureGeminiProxySessionHint();
+  await ensureAiWorkerProxySessionHint();
 
   const bindingRegistryId = resolveMeteringRegistryId({ model: args.model, config }) || (args.registryId || args.model || "").trim();
-  const useVertexBackend = bulkUsesVertexBackend(bindingRegistryId, "image");
+  const useVertexBackend = aiWorkerProxyUsesVertexBackend(bindingRegistryId, "image");
   const aiBackendExtra = useVertexBackend
     ? { aiBackend: "vertex" as const }
     : {};
@@ -1140,8 +1140,8 @@ async function bulkProxyGenerateContentAsync(args: {
   const gateCredits = proxyGateMinCreditsForJob("workflow_text_to_image");
   let skipReleaseOnFinally = false;
   try {
-  const asyncCreateUrl = bulkApiUrl("/proxy/gemini/async");
-  assertDevBulkCreditsAuthAligned(asyncCreateUrl);
+  const asyncCreateUrl = aiWorkerProxyApiUrl("/proxy/gemini/async");
+  assertDevAiWorkerProxyCreditsAuthAligned(asyncCreateUrl);
   const gatewayExecution = await (async () => {
     try {
       return await createAiGatewayImageExecutionJob({
@@ -1196,9 +1196,9 @@ async function bulkProxyGenerateContentAsync(args: {
     ...aiBackendExtra,
   });
   const postAsyncCreate = async () =>
-    bulkFetchCreateWithFairnessRetry(asyncCreateUrl, {
+    aiWorkerProxyFetchCreateWithFairnessRetry(asyncCreateUrl, {
       method: "POST",
-      headers: { "Content-Type": "application/json", ...(await bulkProxyAdmissionHeaders(gateCredits)) },
+      headers: { "Content-Type": "application/json", ...(await aiWorkerProxyAdmissionHeaders(gateCredits)) },
       body: createBody,
       signal: abortSignal,
       cache: "no-store",
@@ -1225,24 +1225,24 @@ async function bulkProxyGenerateContentAsync(args: {
       raw,
       reserveKey: getLastCreditsReserveKey(),
     });
-    const parsedMsg = parseBulkProxyErrorBody(raw);
+    const parsedMsg = parseAiWorkerProxyErrorBody(raw);
     if (/Use POST \/jobs/i.test(raw)) {
-      const bulkHint =
-        usesVertexProxyForImage(bindingRegistryId) && VERTEX_BULK_BASE
-          ? `VITE_BULK_IMAGE_API_VERTEX=${VERTEX_BULK_BASE || "(empty)"}`
-          : `VITE_BULK_IMAGE_API=${BULK_BASE || "(empty)"}`;
+      const aiWorkerProxyHint =
+        usesVertexProxyForImage(bindingRegistryId) && VERTEX_AI_WORKER_PROXY_BASE
+          ? `VITE_AI_WORKER_PROXY_API_VERTEX=${VERTEX_AI_WORKER_PROXY_BASE || "(empty)"}`
+          : `VITE_AI_WORKER_PROXY_API=${AI_WORKER_PROXY_BASE || "(empty)"}`;
       throw new Error(
         [
           parsedMsg,
-          `当前后端代理地址不是 Gemini 代理：${bulkHint}`,
-          "请改为部署了 server/gemini-proxy-api.js 的根地址（应支持 POST /proxy/gemini/async）。",
+          `当前后端代理地址不是 Gemini 代理：${aiWorkerProxyHint}`,
+          "请改为部署了 server/ai-worker-proxy-api.js 的根地址（应支持 POST /proxy/gemini/async）。",
         ].join(" ")
       );
     }
-    const fairnessErr = tryParseGeminiProxyFairnessRejected(create.status, raw);
+    const fairnessErr = tryParseAiWorkerProxyFairnessRejected(create.status, raw);
     if (fairnessErr) throwFairnessRejected(fairnessErr);
     throw new Error(
-      parseBulkProxyCreateError(create.status, raw, bulkApiUrl("/proxy/gemini/async"))
+      parseAiWorkerProxyCreateError(create.status, raw, aiWorkerProxyApiUrl("/proxy/gemini/async"))
     );
   }
   try {
@@ -1261,7 +1261,7 @@ async function bulkProxyGenerateContentAsync(args: {
     jobId,
     model: args.model,
     registryId: bindingRegistryId,
-    useVertex: bulkUsesVertexBackend(bindingRegistryId, "image"),
+    useVertex: aiWorkerProxyUsesVertexBackend(bindingRegistryId, "image"),
   });
 
   const deadline = Date.now() + maxPollMs;
@@ -1307,17 +1307,17 @@ async function bulkProxyGenerateContentAsync(args: {
   }
 }
 
-async function bulkProxyGenerateContentBatchAsync(args: {
+async function aiWorkerProxyGenerateContentBatchAsync(args: {
   items: Array<{ model: string; contents: unknown; config?: Record<string, unknown> }>;
   aiBackend?: "vertex";
 }): Promise<Array<{ ok: boolean; result?: { text?: string; candidates?: unknown[] }; error?: string }>> {
   if (!Array.isArray(args.items) || args.items.length === 0) return [];
-  await ensureGeminiProxySessionHint();
+  await ensureAiWorkerProxySessionHint();
   const batchGateCredits = proxyGateMinCreditsForJob("workflow_text_to_image");
   try {
-  const create = await bulkFetchCreateWithFairnessRetry(bulkApiUrl("/proxy/gemini/async-batch"), {
+  const create = await aiWorkerProxyFetchCreateWithFairnessRetry(aiWorkerProxyApiUrl("/proxy/gemini/async-batch"), {
     method: "POST",
-    headers: { "Content-Type": "application/json", ...(await bulkProxyAdmissionHeaders(batchGateCredits)) },
+    headers: { "Content-Type": "application/json", ...(await aiWorkerProxyAdmissionHeaders(batchGateCredits)) },
     body: JSON.stringify({
       items: args.items.map((item) => ({
         model: item.model,
@@ -1331,10 +1331,10 @@ async function bulkProxyGenerateContentBatchAsync(args: {
   });
   if (!create.ok) {
     const rawBatch = (create.text || "").trim();
-    const fairnessErr = tryParseGeminiProxyFairnessRejected(create.status, rawBatch);
+    const fairnessErr = tryParseAiWorkerProxyFairnessRejected(create.status, rawBatch);
     if (fairnessErr) throwFairnessRejected(fairnessErr);
     throw new Error(
-      parseBulkProxyCreateError(create.status, rawBatch, bulkApiUrl("/proxy/gemini/async-batch")) ||
+      parseAiWorkerProxyCreateError(create.status, rawBatch, aiWorkerProxyApiUrl("/proxy/gemini/async-batch")) ||
         `Gemini 批量异步任务创建失败（${create.status}）`
     );
   }
@@ -1358,13 +1358,13 @@ async function bulkProxyGenerateContentBatchAsync(args: {
   const deadline = Date.now() + GEMINI_ASYNC_CLIENT_MAX_POLL_MS;
   const tracker = createGeminiAsyncPollTracker();
   while (Date.now() < deadline) {
-    const pollRes = await bulkFetchOrExplain(bulkApiUrl(`/proxy/gemini/async-batch/${encodeURIComponent(jobId)}`), {
+    const pollRes = await aiWorkerProxyFetchOrExplain(aiWorkerProxyApiUrl(`/proxy/gemini/async-batch/${encodeURIComponent(jobId)}`), {
       cache: "no-store",
     });
     const pollText = await pollRes.text();
     if (!pollRes.ok) {
       const pt = (pollText || "").trim();
-      const fe = tryParseGeminiProxyFairnessRejected(pollRes.status, pt);
+      const fe = tryParseAiWorkerProxyFairnessRejected(pollRes.status, pt);
       if (fe) throwFairnessRejected(fe);
       if (isGeminiAsyncJobNotFoundPoll(pollRes.status, pt)) {
         throw new AiPipelineStepError(
@@ -1376,7 +1376,7 @@ async function bulkProxyGenerateContentBatchAsync(args: {
       throw new AiPipelineStepError(
         "image_poll",
         "ASYNC_POLL_HTTP",
-        parseBulkProxyErrorBody(pt) || `批量任务轮询失败（${pollRes.status}）`
+        parseAiWorkerProxyErrorBody(pt) || `批量任务轮询失败（${pollRes.status}）`
       );
     }
     let j: GeminiAsyncPollBody;
@@ -1399,7 +1399,7 @@ async function bulkProxyGenerateContentBatchAsync(args: {
         const bindingRegistryId = String(args.items[idx]?.model || "").trim();
         if (!bindingRegistryId) continue;
         const imageRole = isLikelyImageRegistryId(bindingRegistryId);
-        const useVertex = bulkUsesVertexBackend(bindingRegistryId, imageRole ? "image" : "text");
+        const useVertex = aiWorkerProxyUsesVertexBackend(bindingRegistryId, imageRole ? "image" : "text");
         const meterArgs = {
           jobId: `${jobId}:${idx}`,
           model: args.items[idx]!.model,
@@ -1410,9 +1410,9 @@ async function bulkProxyGenerateContentBatchAsync(args: {
           jobKind: imageRole ? "workflow_image" : "workflow_chat",
         };
         if (peekCreditsPrechargeSession()) {
-          await emitGeminiProxyMeteredUsage(meterArgs);
+          await emitAiWorkerProxyMeteredUsage(meterArgs);
         } else {
-          settleGeminiProxyMeteredUsageAfterDelivery(meterArgs);
+          settleAiWorkerProxyMeteredUsageAfterDelivery(meterArgs);
         }
       }
       return items.map((it) => {
@@ -1508,7 +1508,7 @@ async function flushImageBatchQueue(): Promise<void> {
       if (mixedBackend) {
         for (const item of chunk) {
           try {
-            const single = await bulkProxyGenerateContentAsync({
+            const single = await aiWorkerProxyGenerateContentAsync({
               model: item.model,
               contents: item.contents,
               config: item.config,
@@ -1524,7 +1524,7 @@ async function flushImageBatchQueue(): Promise<void> {
         console.info(
           `[gemini-batch] dispatch size=${chunk.length} box=${batchBoxSize} provider=${aiBackend ?? "gemini"}`
         );
-        const results = await bulkProxyGenerateContentBatchAsync({
+        const results = await aiWorkerProxyGenerateContentBatchAsync({
           items: chunk.map((item) => ({
             model: item.model,
             contents: item.contents,
@@ -1559,7 +1559,7 @@ function enqueueImageBatchGenerateContent(args: {
 }): Promise<{ text?: string; candidates?: unknown[] }> {
   return new Promise((resolve, reject) => {
     const bindingRegistryId = (args.model || "").trim();
-    const aiBackend = bulkUsesVertexBackend(bindingRegistryId, "image") ? ("vertex" as const) : undefined;
+    const aiBackend = aiWorkerProxyUsesVertexBackend(bindingRegistryId, "image") ? ("vertex" as const) : undefined;
     const batchBoxSize = resolveImageBatchBoxSize(aiBackend);
     const batchGroupKey = args.batchGroupKey?.trim();
     if (batchGroupKey) {
@@ -1623,11 +1623,11 @@ function withStrippedClientConfig(client: GeminiClientLike): GeminiClientLike {
   };
 }
 
-function createBulkProxyGeminiTextClient(): GeminiClientLike {
+function createAiWorkerProxyGeminiTextClient(): GeminiClientLike {
   return {
     models: {
       async generateContent(args) {
-        return bulkProxyGenerateContentSync({
+        return aiWorkerProxyGenerateContentSync({
           model: args.model,
           contents: args.contents,
           config: stripMeteringConfigKeys((args.config || {}) as Record<string, unknown>) || {},
@@ -1639,11 +1639,11 @@ function createBulkProxyGeminiTextClient(): GeminiClientLike {
   };
 }
 
-function createBulkProxyGeminiImageClient(): GeminiClientLike {
+function createAiWorkerProxyGeminiImageClient(): GeminiClientLike {
   return {
     models: {
       async generateContent(args) {
-        return bulkProxyGenerateContentAsync({
+        return aiWorkerProxyGenerateContentAsync({
           model: args.model,
           contents: args.contents,
           config: stripMeteringConfigKeys((args.config || {}) as Record<string, unknown>) || {},
@@ -1653,17 +1653,17 @@ function createBulkProxyGeminiImageClient(): GeminiClientLike {
   };
 }
 
-function geminiImageBulkProxyConfigured(): boolean {
-  return Boolean(BULK_BASE || effectiveBulkBase());
+function geminiImageAiWorkerProxyConfigured(): boolean {
+  return Boolean(AI_WORKER_PROXY_BASE || effectiveAiWorkerProxyBase());
 }
 
 function getClientForChannel(channel: ChannelId, role: "text" | "image" = "text"): GeminiClientLike {
   switch (channel) {
     case "vertex-proxy":
-      if (!geminiImageBulkProxyConfigured()) {
-        throw new Error("Vertex 代理未配置：需站点 VITE_BULK_IMAGE_API_VERTEX 或 VITE_BULK_IMAGE_API。");
+      if (!geminiImageAiWorkerProxyConfigured()) {
+        throw new Error("Vertex 代理未配置：需站点 VITE_AI_WORKER_PROXY_API_VERTEX 或 VITE_AI_WORKER_PROXY_API。");
       }
-      return role === "image" ? createBulkProxyGeminiImageClient() : createBulkProxyGeminiTextClient();
+      return role === "image" ? createAiWorkerProxyGeminiImageClient() : createAiWorkerProxyGeminiTextClient();
     case "gemini-aistudio": {
       const apiKey = getUserApiKey();
       if (!apiKey?.trim()) {
@@ -1735,11 +1735,11 @@ function getAIForImageModel(registryId: string): GeminiClientLike {
   if (apiKey) {
     return withStrippedClientConfig(new GoogleGenAI({ apiKey }) as unknown as GeminiClientLike);
   }
-  if (geminiImageBulkProxyConfigured()) {
-    return createBulkProxyGeminiImageClient();
+  if (geminiImageAiWorkerProxyConfigured()) {
+    return createAiWorkerProxyGeminiImageClient();
   }
   throw new Error(
-    "使用 Gemini 生图模型需先在设置中填写 Gemini API Key，或配置 Vertex 代理（VITE_BULK_IMAGE_API）。"
+    "使用 Gemini 生图模型需先在设置中填写 Gemini API Key，或配置 Vertex 代理（VITE_AI_WORKER_PROXY_API）。"
   );
 }
 
@@ -1749,8 +1749,8 @@ export function getClientForTask(registryId: string, role: "text" | "image" = "t
   const picked = pickBinding(id, role);
   if (picked) return getClientForChannel(picked.channel, role);
   if (role === "image") return getAIForImageModel(id);
-  if (geminiImageBulkProxyConfigured()) {
-    return createBulkProxyGeminiTextClient();
+  if (geminiImageAiWorkerProxyConfigured()) {
+    return createAiWorkerProxyGeminiTextClient();
   }
   throw new Error(
     "无可用文本通道：请在设置 → API 供应商中启用 Vertex / ToAPIs 等通道并填写密钥。"
@@ -1773,27 +1773,27 @@ function usesOpenAiRouteForImage(registryId: string): boolean {
   return imageModelProviderRoute(id) === "openai";
 }
 
-function shouldUseBulkImageBatchQueueForModel(registryId: string): boolean {
+function shouldUseAiWorkerProxyImageQueueForModel(registryId: string): boolean {
   const picked = pickBinding(coerceImageModelRegistryId(registryId), "image");
   if (picked?.channel === "vertex-proxy" && !getUserApiKey()?.trim()) {
-    return geminiImageBulkProxyConfigured();
+    return geminiImageAiWorkerProxyConfigured();
   }
   if (picked?.channel === "gemini-aistudio" && !getUserApiKey()?.trim()) {
     return false;
   }
   if (!picked) {
     if (getUserApiKey()?.trim()) return false;
-    return geminiImageBulkProxyConfigured();
+    return geminiImageAiWorkerProxyConfigured();
   }
   return false;
 }
 
 function imageGenTimeoutMsForModel(registryId: string, baseTimeout: number): number {
-  if (shouldUseBulkImageBatchQueueForModel(registryId)) {
+  if (shouldUseAiWorkerProxyImageQueueForModel(registryId)) {
     return Math.max(baseTimeout, GEMINI_VERTEX_IMAGE_TIMEOUT_MS);
   }
   const route = imageModelProviderRoute(coerceImageModelRegistryId(registryId));
-  if (route === "gemini" && !getUserApiKey()?.trim() && geminiImageBulkProxyConfigured()) {
+  if (route === "gemini" && !getUserApiKey()?.trim() && geminiImageAiWorkerProxyConfigured()) {
     return Math.max(baseTimeout, GEMINI_VERTEX_IMAGE_TIMEOUT_MS);
   }
   if (usesOpenAiRouteForImage(registryId)) {
@@ -2109,10 +2109,10 @@ function isUpstreamRateLimitError(err: unknown): boolean {
   return Boolean(mapped && mapped.includes('Google/Vertex'));
 }
 
-/** 上游 429 客户端有限重试：走 bulk 时 proxy 已退避，客户端再补 1 次；直连 SDK 可 2 次 */
+/** 上游 429 客户端有限重试：走 AI Worker Proxy 时 proxy 已退避，客户端再补 1 次；直连 SDK 可 2 次 */
 function upstreamRateLimitClientRetries(): number {
   try {
-    return effectiveBulkBase() ? 1 : 2;
+    return effectiveAiWorkerProxyBase() ? 1 : 2;
   } catch {
     return 2;
   }
@@ -2161,7 +2161,7 @@ function isRetryableError(err: unknown): boolean {
 
 /** 生图：503/过载时重试；仅在未成功出图前重试，不重复计费成功结果 */
 const IMAGE_GEN_RETRIES_ON_OVERLOAD = 8;
-/** 工作流「理解→生图」：理解阶段在 bulk 代理下需等服务端多次 503 退避，外层超时不能太短 */
+/** 工作流「理解→生图」：理解阶段在 AI Worker Proxy 代理下需等服务端多次 503 退避，外层超时不能太短 */
 /** 工作流/能力（如转风格）调用 understand 时传入，不跳过理解、专抗 503 高峰 */
 export const CAPABILITY_UNDERSTAND_RETRY_OPTIONS: GeminiRequestOptions = {
   timeoutMs: 90_000,
@@ -2170,29 +2170,29 @@ export const CAPABILITY_UNDERSTAND_RETRY_OPTIONS: GeminiRequestOptions = {
   maxRetryDelayMs: 8000,
   requestPhase: '理解',
 };
-const BULK_PROXY_UNDERSTAND_TIMEOUT_MS = 120_000;
+const AI_WORKER_PROXY_UNDERSTAND_TIMEOUT_MS = 120_000;
 const IMAGE_GEN_RETRY_DELAY_MS = 6000;
-/** 走 bulk 异步代理时含轮询+服务端退避，总等待需长于单次 SDK 超时（与 Vertex 4K 档位对齐） */
-const BULK_PROXY_IMAGE_TIMEOUT_MS = 600_000;
+/** 走 AI Worker Proxy 异步代理时含轮询+服务端退避，总等待需长于单次 SDK 超时（与 Vertex 4K 档位对齐） */
+const AI_WORKER_PROXY_IMAGE_TIMEOUT_MS = 600_000;
 
-/** 外层 withGeminiRequestControl 不得短于 Vertex/bulk 内层 SDK 超时，否则会先被客户端掐断 */
+/** 外层 withGeminiRequestControl 不得短于 Vertex/AI Worker Proxy 内层 SDK 超时，否则会先被客户端掐断 */
 function effectiveImageGenControlTimeoutMs(
   baseTimeout: number,
-  useLongBulkWait: boolean,
+  useLongAiWorkerProxyWait: boolean,
   registryId: string
 ): number {
   let floor = baseTimeout;
-  if (useLongBulkWait || usesVertexProxyForImage(registryId)) {
+  if (useLongAiWorkerProxyWait || usesVertexProxyForImage(registryId)) {
     floor = Math.max(floor, GEMINI_VERTEX_IMAGE_TIMEOUT_MS);
   }
   if (usesOpenAiRouteForImage(registryId)) {
     floor = Math.max(floor, OPENAI_IMAGE_REQUEST_TIMEOUT_MS);
   }
-  return useLongBulkWait ? Math.max(floor, BULK_PROXY_IMAGE_TIMEOUT_MS) : floor;
+  return useLongAiWorkerProxyWait ? Math.max(floor, AI_WORKER_PROXY_IMAGE_TIMEOUT_MS) : floor;
 }
 
 function shouldFallbackUnderstandToBrowserGemini(error: unknown): boolean {
-  if (!BULK_BASE) return false;
+  if (!AI_WORKER_PROXY_BASE) return false;
   if (pickChannel(DEFAULT_MODEL_TEXT, "text") !== "gemini-aistudio") return false;
   if (!getUserApiKey()) return false;
   const msg = String((error as Error)?.message ?? error ?? "");
@@ -2272,11 +2272,11 @@ async function callWithRetry<T>(
 }
 
 const GEMINI_PERMISSION_DENIED_HINT =
-  "Google 已拒绝当前密钥对应项目的访问（403 PERMISSION_DENIED）。请到 Google AI Studio / Cloud Console 检查该项目是否欠费、违规受限或未开通 Gemini；或更换新的 API Key。若站点配置了后端生图代理（VITE_BULK_IMAGE_API），请在服务器环境变量中使用有效的 GEMINI_API_KEY。";
+  "Google 已拒绝当前密钥对应项目的访问（403 PERMISSION_DENIED）。请到 Google AI Studio / Cloud Console 检查该项目是否欠费、违规受限或未开通 Gemini；或更换新的 API Key。若站点配置了后端生图代理（VITE_AI_WORKER_PROXY_API），请在服务器环境变量中使用有效的 GEMINI_API_KEY。";
 
 /** 403 提示：按当前构建配置说明「实际用的是哪一把 Key」，避免用户只改设置页却无效 */
 function geminiPermissionDeniedHintForBuild(): string {
-  if (!BULK_BASE) return GEMINI_PERMISSION_DENIED_HINT;
+  if (!AI_WORKER_PROXY_BASE) return GEMINI_PERMISSION_DENIED_HINT;
   if (preferBrowserGeminiKeyFirst()) {
     return (
       GEMINI_PERMISSION_DENIED_HINT +
@@ -2285,7 +2285,7 @@ function geminiPermissionDeniedHintForBuild(): string {
   }
   return (
     GEMINI_PERMISSION_DENIED_HINT +
-    " 【说明】当前构建已配置 VITE_BULK_IMAGE_API 且默认优先走后端：Google 看到的是代理服务器上的 GEMINI_API_KEY，与设置页里的 Key 通常不是同一把；请在部署代理的环境（如 Render）里更换/核对密钥并重启服务。"
+    " 【说明】当前构建已配置 VITE_AI_WORKER_PROXY_API 且默认优先走后端：Google 看到的是代理服务器上的 GEMINI_API_KEY，与设置页里的 Key 通常不是同一把；请在部署代理的环境（如 Render）里更换/核对密钥并重启服务。"
   );
 }
 
@@ -2401,12 +2401,21 @@ export function userFacingRateLimitMessage(kind: 'upstream' | 'site' = 'upstream
   try {
     if (import.meta.env.DEV && isLocalDevPage()) {
       msg +=
-        ' 本地 dev 默认经 Render 共享 gemini-proxy（与他人共用 Google 配额）；若仅自己调试仍频繁 429，可在 .env.local 设 VITE_BULK_IMAGE_API=same-origin 并本机 npm run dev:gemini-proxy（需 VERTEX_PROJECT_ID）。';
+        ' 本地 dev 默认经 Render 共享 ai-worker-proxy（与他人共用 Google 配额）；若仅自己调试仍频繁 429，可在 .env.local 设 VITE_AI_WORKER_PROXY_API=same-origin 并本机 npm run dev:ai-worker-proxy（需 VERTEX_PROJECT_ID）。';
     }
   } catch {
     /* ignore */
   }
   return msg;
+}
+
+function userFacingUpstreamAccountCreditMessage(raw: string): string | null {
+  const t = (raw || '').trim();
+  if (!t) return null;
+  if (/prepayment credits? (are )?depleted|billing account|insufficient.*(balance|credit)|quota.*depleted/i.test(t)) {
+    return 'Google/Vertex 上游账户预付额度或结算余额已耗尽。请管理员到 Google AI Studio / Google Cloud 检查余额、账单和配额；这不是本站积分不足，也不是等待几分钟就一定恢复的短时限流。';
+  }
+  return null;
 }
 
 function isCreditsOrGateErrorText(raw: string): boolean {
@@ -2423,6 +2432,8 @@ export function mapRateLimitErrorText(raw: string): string | null {
   if (/proxy:[0-9a-f-]{20,}/i.test(t) && !/too many requests|resource_exhausted|rate_limited/i.test(t)) {
     return null;
   }
+  const accountCredit = userFacingUpstreamAccountCreditMessage(t);
+  if (accountCredit) return accountCredit;
   if (/too many requests/i.test(t)) return userFacingRateLimitMessage('upstream');
   if (/\bHTTP\s*429\b/i.test(t) || /\bstatus\s*429\b/i.test(t)) return userFacingRateLimitMessage('upstream');
   if (/"code"\s*:\s*429\b/.test(t) || /\berror\.code\s*[=:]\s*429\b/i.test(t)) {
@@ -2455,13 +2466,15 @@ export function normalizeApiErrorMessage(err: unknown): string {
   }
   if (/LOGIN_REQUIRED|请先登录后再使用 AI 生成/i.test(raw)) {
     if (import.meta.env.DEV && isLocalDevPage()) {
-      return '请先登录后再使用 AI 生成。本地调试时若已登录，请确认 .env.local 里的 AUTH_API_BASE 与 VITE_AUTH_API_BASE_URL 指向同一个 auth-api，并重启 npm run dev:gemini-proxy 后硬刷新页面。';
+      return '请先登录后再使用 AI 生成。本地调试时若已登录，请确认 .env.local 里的 AUTH_API_BASE 与 VITE_AUTH_API_BASE_URL 指向同一个 auth-api，并重启 npm run dev:ai-worker-proxy 后硬刷新页面。';
     }
     return '请先登录后再使用 AI 生成。';
   }
   if (/CREDITS_BUNDLE_INVALID|CREDITS_BUNDLE_UNAVAILABLE|积分预扣未返回|无法连接.*积分/.test(raw)) {
     return raw.length < 160 ? raw : '无法连接积分预扣服务，请确认已登录且 auth-api 可用后重试。';
   }
+  const accountCredit = userFacingUpstreamAccountCreditMessage(raw);
+  if (accountCredit) return accountCredit;
   const rateLimit = mapRateLimitErrorText(raw);
   if (rateLimit) {
     logAiPipelineDev('map', { raw, mapped: rateLimit });
@@ -2819,9 +2832,9 @@ export async function understandImageEditIntent(
   options?: GeminiRequestOptions
 ): Promise<{ instruction: string; summary?: string; shouldGenerateImage?: boolean }> {
   const innerTimeout = options?.timeoutMs ?? GEMINI_REQUEST_TIMEOUT_MS;
-  const capabilityScale = (options?.retries != null && options.retries > 6) || Boolean(effectiveBulkBase());
+  const capabilityScale = (options?.retries != null && options.retries > 6) || Boolean(effectiveAiWorkerProxyBase());
   const controlTimeout = capabilityScale
-    ? Math.max(innerTimeout, BULK_PROXY_UNDERSTAND_TIMEOUT_MS)
+    ? Math.max(innerTimeout, AI_WORKER_PROXY_UNDERSTAND_TIMEOUT_MS)
     : innerTimeout;
   const resolvedModel = resolveUpstreamTextModelId(model);
   const runUnderstand = async (
@@ -2862,8 +2875,8 @@ export async function understandImageEditIntent(
         requestPhase: options?.requestPhase ?? '理解',
         retries:
           options?.retries ??
-          (effectiveBulkBase() ? 1 : 3),
-        retryDelayMs: options?.retryDelayMs ?? (effectiveBulkBase() ? 6000 : 2000),
+          (effectiveAiWorkerProxyBase() ? 1 : 3),
+        retryDelayMs: options?.retryDelayMs ?? (effectiveAiWorkerProxyBase() ? 6000 : 2000),
         ...overrideOptions,
       }
     );
@@ -2876,7 +2889,7 @@ export async function understandImageEditIntent(
       throw error;
     }
     console.warn(
-      "understandImageEditIntent: bulk proxy slow/unavailable, fallback to browser Gemini key for understanding."
+      "understandImageEditIntent: AI Worker Proxy slow/unavailable, fallback to browser Gemini key for understanding."
     );
     raw = await runUnderstand("browser_google", {
       timeoutMs: Math.min(innerTimeout, 45_000),
@@ -2913,8 +2926,8 @@ export async function dialogGenerateImage(
   requestOptions?: Omit<GeminiRequestOptions, 'abortSignal'> & GeminiImageBatchGroupOptions
 ): Promise<string> {
   const baseTimeout = requestOptions?.timeoutMs ?? GEMINI_IMAGE_REQUEST_TIMEOUT_MS;
-  const useBulkImageQueue = shouldUseBulkImageBatchQueueForModel(model);
-  const controlTimeoutMs = effectiveImageGenControlTimeoutMs(baseTimeout, useBulkImageQueue, model);
+  const useAiWorkerProxyImageQueue = shouldUseAiWorkerProxyImageQueueForModel(model);
+  const controlTimeoutMs = effectiveImageGenControlTimeoutMs(baseTimeout, useAiWorkerProxyImageQueue, model);
   // 429/503/UNAVAILABLE 等自动退避重试；成功返回图片后不会再次请求。
   return callWithRetry(async (signal) => {
     const ai = getAIForImageModel(model);
@@ -2949,7 +2962,7 @@ export async function dialogGenerateImage(
       contents: [{ role: 'user' as const, parts }],
       config: buildGeminiConfig(config, signal, timeoutMs, model),
     };
-    const response = useBulkImageQueue
+    const response = useAiWorkerProxyImageQueue
       ? await enqueueImageBatchGenerateContent({
           ...payload,
           ...(requestOptions?.batchGroupKey ? { batchGroupKey: requestOptions.batchGroupKey } : {}),
@@ -2986,8 +2999,8 @@ export async function dialogGenerateImageMulti(
   if (imagesBase64.length === 0) throw new Error('多图生图至少需要一张图片');
   const modelId = 'gemini-2.5-flash-image';
   const baseTimeout = requestOptions?.timeoutMs ?? GEMINI_IMAGE_REQUEST_TIMEOUT_MS;
-  const useBulkImageQueue = shouldUseBulkImageBatchQueueForModel(modelId);
-  const controlTimeoutMs = effectiveImageGenControlTimeoutMs(baseTimeout, useBulkImageQueue, model);
+  const useAiWorkerProxyImageQueue = shouldUseAiWorkerProxyImageQueueForModel(modelId);
+  const controlTimeoutMs = effectiveImageGenControlTimeoutMs(baseTimeout, useAiWorkerProxyImageQueue, model);
   return callWithRetry(async (signal) => {
     const ai = getAIForImageModel(modelId);
     const systemInstruction = (DEFAULT_PROMPTS.edit || '').replace('{instruction}', instruction);
@@ -3108,8 +3121,8 @@ export async function getSiteAssistantResponseStream(
   model = DEFAULT_MODEL_TEXT,
   options?: GeminiRequestOptions
 ): Promise<string> {
-  /** 走后端代理时没有 generateContentStream，统一走非流式（与 !apiKey && BULK 时行为一致） */
-  if (effectiveBulkBase()) {
+  /** 走后端代理时没有 generateContentStream，统一走非流式（与 !apiKey && AI Worker Proxy 时行为一致） */
+  if (effectiveAiWorkerProxyBase()) {
     const full = await getSiteAssistantResponse(userMessage, history, model, options);
     onChunk(full);
     return full;

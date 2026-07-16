@@ -19,7 +19,7 @@ function makeDetail(overrides: Partial<AiJobDetail['job']> = {}): AiJobDetail {
       finishedAt: null,
       route: null,
       traceOnly: false,
-      legacyPath: null,
+      proxyPath: null,
       proxyJobId: null,
       creditsGate: null,
       error: null,

@@ -6,9 +6,16 @@ import { countWorkflowTaskEventsSince } from './workflow-task-events-store.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-async function fetchGeminiProxyHealth() {
-  const base = String(process.env.GEMINI_PROXY_HEALTH_URL || process.env.GEMINI_PROXY_BASE_URL || '').trim().replace(/\/+$/, '');
-  if (!base) return { ok: false, skipped: true, reason: '未配置 GEMINI_PROXY_HEALTH_URL' };
+async function fetchAiWorkerProxyHealth() {
+  const base = String(
+    process.env.AI_WORKER_PROXY_HEALTH_URL ||
+      process.env.AI_WORKER_PROXY_BASE_URL ||
+      process.env.GEMINI_PROXY_HEALTH_URL ||
+      process.env.GEMINI_PROXY_BASE_URL ||
+      process.env.GEMINI_PROXY_UPSTREAM_URL ||
+      ''
+  ).trim().replace(/\/+$/, '');
+  if (!base) return { ok: false, skipped: true, reason: '未配置 AI_WORKER_PROXY_HEALTH_URL' };
   const url = `${base}/healthz`;
   try {
     const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
@@ -30,7 +37,7 @@ async function fetchGeminiProxyHealth() {
             persistedKeysLoaded: Number(fairness.persistedKeysLoaded) || 0,
             configSource: fairness.configSource || null,
             geminiAsyncJobs: Number(body.geminiAsyncJobs) || 0,
-            geminiProxyInFlight: Number(body.geminiProxyInFlight) || 0,
+            aiWorkerProxyInFlight: Number(body.aiWorkerProxyInFlight) || 0,
           }
         : null;
     return { ok: res.ok, status: res.status, url, body, metrics };
@@ -83,7 +90,7 @@ export async function buildAdminDashboard() {
     latestCompanionBeta = null;
   }
 
-  const geminiProxy = await fetchGeminiProxyHealth();
+  const aiWorkerProxy = await fetchAiWorkerProxyHealth();
 
   return {
     generatedAt: new Date().toISOString(),
@@ -114,7 +121,7 @@ export async function buildAdminDashboard() {
       : null,
     health: {
       authApi: { ok: true, service: 'auth-api' },
-      geminiProxy,
+      aiWorkerProxy,
     },
   };
 }

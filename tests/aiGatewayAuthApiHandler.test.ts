@@ -105,7 +105,7 @@ describe('AI gateway auth-api facade', () => {
     expect(stored.route).toMatchObject({
       providerId: 'gemini-aistudio',
       workerId: 'image-worker',
-      adapterId: 'legacy-gemini-proxy',
+      adapterId: 'ai-worker-proxy',
     });
     expect(stored.job.metadata.modelRouteGuard).toMatchObject({
       providerId: 'gemini-aistudio',
