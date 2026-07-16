@@ -43,6 +43,7 @@
     "start:ai3d-proxy": "node server/ai3d-proxy.js",
     "dev:ai-worker-proxy": "node --env-file=.env.local server/ai-worker-proxy-api.js",
     "start:ai-worker-proxy": "node server/ai-worker-proxy-api.js",
+    "start:gemini-proxy": "npm run start:ai-worker-proxy",
     "dev:r2-api": "node --env-file=.env.local server/r2-storage-api.js",
     "start:r2-api": "node server/r2-storage-api.js",
     "seed:admin": "node scripts/seed-admin.js",
