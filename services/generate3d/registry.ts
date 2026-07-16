@@ -4,6 +4,7 @@ import type { Generate3dProviderId } from './types';
 export const GENERATE3D_PROVIDER_REGISTRY: Record<Generate3dProviderId, { label: string }> = {
   tencent: { label: '腾讯混元生3D' },
   tripo: { label: 'Tripo' },
+  'volcengine-ark': { label: 'Volcengine Ark Seed3D' },
 };
 
 export function listRegisteredGenerate3dProviderIds(): Generate3dProviderId[] {

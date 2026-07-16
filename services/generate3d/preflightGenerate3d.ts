@@ -25,7 +25,7 @@ async function probeTripoProxyReachable(): Promise<boolean> {
 export async function preflightGenerate3dEnvironment(opts: {
   companionBaseUrl?: string | null;
   companionProjectId?: string | null;
-  provider: 'tripo' | 'tencent';
+  provider: 'tripo' | 'tencent' | 'volcengine-ark';
 }): Promise<Generate3dPreflightResult> {
   const warnings: string[] = [];
   const base = normalizeCompanionBaseUrl(String(opts.companionBaseUrl || '').trim());

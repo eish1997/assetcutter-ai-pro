@@ -4,4 +4,4 @@
  */
 
 /** 当前已接入的 3D 供应商（工作流预设 generate3D.provider） */
-export type Generate3dProviderId = 'tencent' | 'tripo';
+export type Generate3dProviderId = 'tencent' | 'tripo' | 'volcengine-ark';

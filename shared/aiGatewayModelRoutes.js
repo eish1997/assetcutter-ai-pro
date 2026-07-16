@@ -50,6 +50,26 @@ export const AI_GATEWAY_MODEL_ROUTE_EXECUTABLE_RULES = Object.freeze([
     platformKeyRequired: true,
   },
   {
+    id: 'volcengine-ark-seedance-gateway',
+    modelPattern: /^doubao-seedance-2-0/i,
+    modalities: Object.freeze(['video']),
+    catalogProviderIds: Object.freeze(['volcengine-ark']),
+    gatewayProviderIds: Object.freeze(['volcengine-ark']),
+    gatewayExecutionStatus: 'gateway_ready',
+    executionStatus: 'platform_ready',
+    platformKeyRequired: true,
+  },
+  {
+    id: 'volcengine-ark-seed3d-gateway',
+    modelPattern: /^doubao-seed3d-2-0/i,
+    modalities: Object.freeze(['model3d']),
+    catalogProviderIds: Object.freeze(['volcengine-ark']),
+    gatewayProviderIds: Object.freeze(['volcengine-ark']),
+    gatewayExecutionStatus: 'gateway_ready',
+    executionStatus: 'platform_ready',
+    platformKeyRequired: true,
+  },
+  {
     id: 'jimeng-video-gateway',
     modelPattern: /^jimeng-video-/i,
     modalities: Object.freeze(['video']),
@@ -101,7 +121,16 @@ export function normalizeAiGatewayModelRouteModality(value) {
   return raw;
 }
 
-function providerMatches(rule, providerId, field) {
+function disabledProviderSet(options) {
+  return new Set(Array.isArray(options?.disabledProviders) ? options.disabledProviders.filter(Boolean) : []);
+}
+
+function firstEnabledProvider(rule, field, disabledProviders) {
+  const providers = Array.isArray(rule[field]) ? rule[field] : [];
+  return providers.find((provider) => !disabledProviders.has(provider)) || providers[0];
+}
+
+function providerMatches(rule, providerId, field, disabledProviders) {
   const id = nonEmptyString(providerId);
   if (!id) return true;
   return Array.isArray(rule[field]) && rule[field].includes(id);
@@ -117,14 +146,17 @@ function resolveRuntimeRule(rules, input, providerField) {
   const raw = input && typeof input === 'object' ? input : {};
   const canonicalModelId = nonEmptyString(raw.canonicalModelId || raw.registryId || raw.model);
   if (!canonicalModelId) return null;
+  const disabledProviders = disabledProviderSet(raw);
   for (const rule of rules) {
     if (!rule.modelPattern.test(canonicalModelId)) continue;
     if (!modalityMatches(rule, raw.modality)) continue;
-    if (!providerMatches(rule, raw.providerId || raw.provider, providerField)) continue;
+    if (!providerMatches(rule, raw.providerId || raw.provider, providerField, disabledProviders)) continue;
+    const providerId = nonEmptyString(raw.providerId || raw.provider) || firstEnabledProvider(rule, providerField, disabledProviders);
+    if (!providerId) continue;
     return {
       ruleId: rule.id,
       canonicalModelId,
-      providerId: nonEmptyString(raw.providerId || raw.provider) || rule[providerField][0],
+      providerId,
       gatewayExecutionStatus: rule.gatewayExecutionStatus,
       executionStatus: rule.executionStatus,
       platformKeyRequired: Boolean(rule.platformKeyRequired),

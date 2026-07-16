@@ -399,7 +399,7 @@ describe('AI gateway provider key store', () => {
       },
     ]);
 
-    await expect(smokeTestProviderKey('key_smoke_ok')).resolves.toMatchObject({
+    await expect(smokeTestProviderKey('key_smoke_ok', { mode: 'credentials_only' })).resolves.toMatchObject({
       ok: true,
       provider: 'volcengine-ark',
       status: 'passed',
@@ -457,6 +457,46 @@ describe('AI gateway provider key store', () => {
     expect(await listProviderKeyHealthEvents({ keyId: 'key_tripo_smoke_real', limit: 10 })).toEqual([
       expect.objectContaining({ type: 'success', provider: 'tripo' }),
     ]);
+  });
+
+  it('runs a real upstream smoke probe for OpenAI-compatible provider keys without creating a generation task', async () => {
+    useTempStore();
+
+    await saveProviderKeys([
+      {
+        id: 'key_ark_models_smoke',
+        provider: 'volcengine-ark',
+        label: 'Ark models smoke',
+        secret: 'ark-test-key',
+        enabled: true,
+        credentials: { baseUrl: 'https://ark.example/api/v3' },
+      },
+    ]);
+
+    const calls: Array<{ url: string; init: RequestInit }> = [];
+    const fetchImpl = async (url: string, init: RequestInit) => {
+      calls.push({ url, init });
+      return new Response(JSON.stringify({ data: [] }), { status: 200 });
+    };
+
+    await expect(smokeTestProviderKey('key_ark_models_smoke', { fetchImpl })).resolves.toMatchObject({
+      ok: true,
+      provider: 'volcengine-ark',
+      status: 'passed',
+      testLayer: 'key_smoke',
+      mode: 'real_upstream',
+      createsGenerationTask: false,
+      route: 'GET /models',
+      upstreamStatus: 200,
+      nextAction: expect.stringContaining('Route Test'),
+    });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0].url).toBe('https://ark.example/api/v3/models');
+    expect(calls[0].init).toMatchObject({
+      method: 'GET',
+      headers: { Authorization: 'Bearer ark-test-key' },
+    });
   });
 
   it('records Tripo real upstream smoke failures as provider key errors', async () => {

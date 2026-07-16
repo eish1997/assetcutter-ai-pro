@@ -23,6 +23,7 @@ function makeDetail(overrides: Partial<AiJobDetail['job']> = {}): AiJobDetail {
       proxyJobId: null,
       creditsGate: null,
       error: null,
+      metadata: {},
       output: null,
       artifacts: [],
       ...overrides,
@@ -49,6 +50,41 @@ describe('aiJobArtifacts', () => {
     expect(artifacts[0]!.label).toBe('result');
   });
 
+  it('attaches standardized source metadata to restorable artifacts', () => {
+    const artifacts = extractRestorableAiJobArtifacts(
+      makeDetail({
+        provider: 'volcengine-ark',
+        model: 'doubao-seedream-5-0',
+        route: {
+          providerId: 'volcengine-ark',
+          workerId: 'image-worker',
+          adapterId: 'volcengine-ark-image',
+          channel: 'volcengine-ark',
+          upstreamBackend: 'ark',
+        },
+        metadata: {
+          canonicalModelId: 'doubao-seedream-5-0',
+          registryId: 'doubao-seedream-5-0',
+          paramsSnapshot: { size: '1024x1024' },
+        },
+        artifacts: [{ label: 'ark image', url: 'https://cdn.example.com/ark.png', mimeType: 'image/png' }],
+      })
+    );
+
+    expect(artifacts[0]!.source).toMatchObject({
+      source: 'ai_gateway',
+      aiGatewayJobId: 'aijob_restore',
+      providerId: 'volcengine-ark',
+      modelId: 'doubao-seedream-5-0',
+      canonicalModelId: 'doubao-seedream-5-0',
+      registryId: 'doubao-seedream-5-0',
+      modality: 'image',
+      capability: 'image.generate',
+      adapterId: 'volcengine-ark-image',
+      paramsSnapshot: { size: '1024x1024' },
+    });
+  });
+
   it('ignores non-media URLs and duplicate media URLs', () => {
     const artifacts = extractRestorableAiJobArtifacts(
       makeDetail({
@@ -61,5 +97,44 @@ describe('aiJobArtifacts', () => {
 
     expect(artifacts).toHaveLength(1);
     expect(artifacts[0]!.url).toBe('https://cdn.example.com/a.webp');
+  });
+
+  it('extracts restorable audio URLs from music jobs', () => {
+    const artifacts = extractRestorableAiJobArtifacts(
+      makeDetail({
+        modality: 'music',
+        capability: 'music.generate',
+        output: {
+          musicUrl: 'https://cdn.example.com/song.mp3',
+        },
+      })
+    );
+
+    expect(artifacts).toHaveLength(1);
+    expect(artifacts[0]).toMatchObject({
+      kind: 'audio',
+      url: 'https://cdn.example.com/song.mp3',
+    });
+  });
+
+  it('extracts text outputs only for text jobs', () => {
+    const artifacts = extractRestorableAiJobArtifacts(
+      makeDetail({
+        modality: 'text',
+        capability: 'text.generate',
+        output: {
+          title: 'Generated copy',
+          text: 'A polished launch tagline.',
+        },
+      })
+    );
+
+    expect(artifacts).toHaveLength(1);
+    expect(artifacts[0]).toMatchObject({
+      kind: 'text',
+      label: 'Generated copy',
+      text: 'A polished launch tagline.',
+      mimeType: 'text/plain',
+    });
   });
 });

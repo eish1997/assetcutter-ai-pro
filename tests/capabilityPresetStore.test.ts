@@ -95,6 +95,39 @@ describe('normalizeCapabilityPreset: companionHostBundle', () => {
   });
 });
 
+describe('normalizeCapabilityPreset: generate_3d provider parameters', () => {
+  it('keeps Ark Seed3D parameters and removes Tripo-only parameters', () => {
+    const normalized = normalizeCapabilityPreset(
+      makeBasePreset({
+        id: 'ark_seed3d',
+        category: 'generate_3d',
+        generate3D: {
+          provider: 'volcengine-ark',
+          modelRegistryId: 'doubao-seed3d-2-0',
+          module: 'pro',
+          quality: ' high ',
+          format: 'OBJ',
+          texture: false,
+          tripoTaskType: 'image_to_model',
+          tripoModelVersion: 'v3.1-20260211',
+          tripoTextureQuality: 'detailed',
+          tripoNegativePrompt: 'low quality',
+        },
+      }),
+      0
+    );
+
+    expect(normalized.generate3D?.provider).toBe('volcengine-ark');
+    expect(normalized.generate3D?.quality).toBe('high');
+    expect(normalized.generate3D?.format).toBe('obj');
+    expect(normalized.generate3D?.texture).toBe(false);
+    expect(normalized.generate3D?.tripoTaskType).toBeUndefined();
+    expect(normalized.generate3D?.tripoModelVersion).toBeUndefined();
+    expect(normalized.generate3D?.tripoTextureQuality).toBeUndefined();
+    expect(normalized.generate3D?.tripoNegativePrompt).toBeUndefined();
+  });
+});
+
 describe('enforceBuiltinImageProcessPresets', () => {
   it('enforceBuiltinImageProcessPresets：迁移顶层 cutMode 到 params', () => {
     const merged = enforceBuiltinImageProcessPresets([

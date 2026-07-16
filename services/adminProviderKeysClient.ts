@@ -142,12 +142,15 @@ export type AdminProviderKeySmokeTestResult = {
   provider: string | null;
   label: string | null;
   status: 'passed' | 'failed';
+  testLayer?: 'key_smoke';
   mode?: 'credentials_only' | 'real_upstream';
+  createsGenerationTask?: boolean;
   route?: string | null;
   upstreamStatus?: number | null;
   latencyMs?: number | null;
   message: string;
   missingFields: string[];
+  nextAction?: string | null;
 };
 
 export type AdminProviderKeySmokeTestResponse = {
@@ -223,6 +226,8 @@ export type AdminModelRouteTestResult = {
   ok: boolean;
   status: 'passed' | 'failed';
   mode: 'route_guard';
+  testLayer?: 'route_test';
+  createsGenerationTask?: boolean;
   canonicalModelId: string | null;
   providerId: string | null;
   modality: string | null;
@@ -236,6 +241,7 @@ export type AdminModelRouteTestResult = {
     executionStatus?: string;
     platformKeyRequired?: boolean;
   } | null;
+  nextAction?: string | null;
   testedAt: string;
 };
 

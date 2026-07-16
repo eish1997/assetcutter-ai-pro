@@ -86,7 +86,7 @@ describe('AI gateway auth-api facade', () => {
     expect(await store.get('aijob_auth_blocked')).toBeNull();
   });
 
-  it('rejects published models whose gateway adapter is still pending', async () => {
+  it('rejects published Ark async models when no usable provider key exists', async () => {
     const store = createInMemoryAiJobStore();
     const user = { id: 'user_1', username: 'alice' };
 
@@ -107,7 +107,7 @@ describe('AI gateway auth-api facade', () => {
         }
       )
     ).rejects.toMatchObject({
-      code: 'AI_GATEWAY_MODEL_ADAPTER_PENDING',
+      code: 'AI_GATEWAY_PROVIDER_KEY_UNAVAILABLE',
     });
 
     expect(await store.get('aijob_auth_ark_pending')).toBeNull();

@@ -40,6 +40,12 @@ function mimeToExt(mime: string, fallback = 'bin'): string {
   if (m.includes('svg')) return 'svg';
   if (m.includes('mp4')) return 'mp4';
   if (m.includes('webm')) return 'webm';
+  if (m.includes('mpeg') || m.includes('mp3')) return 'mp3';
+  if (m.includes('wav')) return 'wav';
+  if (m.includes('ogg')) return 'ogg';
+  if (m.includes('m4a')) return 'm4a';
+  if (m.includes('aac')) return 'aac';
+  if (m.includes('flac')) return 'flac';
   if (m.includes('gltf-binary')) return 'glb';
   if (m.includes('gltf')) return 'gltf';
   return fallback;
@@ -63,8 +69,11 @@ function userStorageDirName(userId: string, username?: string | null): string {
 }
 
 export function aiJobArtifactResultKey(kind: RestorableAiJobArtifact['kind']): string {
+  if (kind === 'text') return 'ai_job_text';
   if (kind === 'video') return 'ai_job_video';
   if (kind === 'model3d') return 'ai_job_model3d';
+  if (kind === 'audio') return 'ai_job_audio';
+  if (kind === 'file') return 'ai_job_file';
   return 'ai_job_image';
 }
 
@@ -77,6 +86,24 @@ export function buildAiJobModelPlaceholder(label: string): string {
 
 function modelFormatFromUrl(url: string): 'glb' | 'fbx' {
   return url.toLowerCase().includes('.fbx') ? 'fbx' : 'glb';
+}
+
+function mediaKindForArtifact(kind: RestorableAiJobArtifact['kind']): WorkflowAsset['resultMeta'][string]['mediaKind'] {
+  if (kind === 'video' || kind === 'model3d' || kind === 'audio' || kind === 'text' || kind === 'file') return kind;
+  return 'image';
+}
+
+function resultMetaForArtifact(artifact: RestorableAiJobArtifact, jobId: string, now: number) {
+  return {
+    executedAt: now,
+    displayStepLabel: 'AI 任务回填',
+    mediaKind: mediaKindForArtifact(artifact.kind),
+    aiGatewayJobId: jobId,
+    source: artifact.source || {
+      source: 'ai_gateway' as const,
+      aiGatewayJobId: jobId,
+    },
+  };
 }
 
 async function fetchArtifactBlob(url: string): Promise<Blob | null> {
@@ -134,7 +161,12 @@ export async function buildAiJobRestoreAssets(
   let failedPersistCount = 0;
 
   const restorable = options.artifacts.filter(
-    (artifact) => artifact.kind === 'image' || artifact.kind === 'video' || artifact.kind === 'model3d'
+    (artifact) =>
+      artifact.kind === 'text' ||
+      artifact.kind === 'image' ||
+      artifact.kind === 'video' ||
+      artifact.kind === 'model3d' ||
+      artifact.kind === 'audio'
   );
 
   const assets: WorkflowAsset[] = [];
@@ -142,10 +174,32 @@ export async function buildAiJobRestoreAssets(
     const artifact = restorable[index]!;
     const id = `wf_aijob_${now}_${index}_${Math.random().toString(36).slice(2, 8)}`;
     const resultKey = aiJobArtifactResultKey(artifact.kind);
+    if (artifact.kind === 'text') {
+      const text = String(artifact.text || '').trim();
+      if (!text) continue;
+      assets.push({
+        id,
+        assetKind: 'text',
+        textTitle: artifact.label,
+        textBody: '',
+        original: '',
+        displayKey: resultKey,
+        results: {},
+        textResults: { [resultKey]: text },
+        resultOrder: [resultKey],
+        resultMeta: { [resultKey]: resultMetaForArtifact(artifact, options.jobId, now) },
+        groupId: null,
+        archived: false,
+        hiddenInGrid: false,
+        createdAt: now,
+      });
+      continue;
+    }
+    if (!artifact.url) continue;
     const original = artifact.kind === 'model3d' ? buildAiJobModelPlaceholder(artifact.label) : artifact.url;
     const asset: WorkflowAsset = {
       id,
-      assetKind: 'image',
+      assetKind: artifact.kind === 'audio' ? 'audio' : 'image',
       original,
       displayKey: artifact.kind === 'image' ? 'original' : resultKey,
       results: artifact.kind === 'image' ? {} : { [resultKey]: original },
@@ -154,12 +208,7 @@ export async function buildAiJobRestoreAssets(
       stepModelFormats: artifact.kind === 'model3d' ? { [resultKey]: [modelFormatFromUrl(artifact.url)] } : undefined,
       resultOrder: artifact.kind === 'image' ? [] : [resultKey],
       resultMeta: {
-        [resultKey]: {
-          executedAt: now,
-          displayStepLabel: 'AI 任务回填',
-          mediaKind: artifact.kind === 'video' ? 'video' : artifact.kind === 'model3d' ? 'model3d' : 'image',
-          aiGatewayJobId: options.jobId,
-        },
+        [resultKey]: resultMetaForArtifact(artifact, options.jobId, now),
       },
       groupId: null,
       archived: false,

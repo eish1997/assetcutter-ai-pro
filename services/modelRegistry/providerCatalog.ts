@@ -219,9 +219,10 @@ export const PROVIDER_CATALOG: readonly ProviderCatalogEntry[] = [
     modelDiscovery: "api-planned",
     capabilityStatus: capabilityStatus({
       keyPoolSupported: true,
-      backendAdapterReady: false,
-      platformKeyReady: false,
+      backendAdapterReady: true,
+      platformKeyReady: true,
       byokSupported: true,
+      smokeTestReady: true,
     }),
   },
   {

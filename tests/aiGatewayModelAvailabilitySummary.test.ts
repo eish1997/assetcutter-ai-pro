@@ -60,13 +60,14 @@ describe('AI gateway model availability summary', () => {
     expect(summary.totals.ready).toBe(3);
   });
 
-  it('marks Volcengine Ark text and Seedream image ready while keeping Ark video pending', async () => {
+  it('marks Volcengine Ark text, Seedream image, Seedance video, and Seed3D ready when a key exists', async () => {
     const summary = await buildModelAvailabilitySummary(
       {
         models: [
           model('doubao-seed-2-0-pro', 'text', 'volcengine-ark'),
           model('doubao-seedream-5-0', 'image', 'volcengine-ark'),
           model('doubao-seedance-2-0', 'video', 'volcengine-ark'),
+          model('doubao-seed3d-2-0', 'model3d', 'volcengine-ark'),
         ],
       },
       { listProviderKeys: async () => [{ provider: 'volcengine-ark', enabled: true, hasSecret: true }] }
@@ -75,20 +76,21 @@ describe('AI gateway model availability summary', () => {
     expect(summary.models.map((row) => [row.canonicalModelId, row.status])).toEqual([
       ['doubao-seed-2-0-pro', 'ready'],
       ['doubao-seedream-5-0', 'ready'],
-      ['doubao-seedance-2-0', 'adapter_pending'],
+      ['doubao-seedance-2-0', 'ready'],
+      ['doubao-seed3d-2-0', 'ready'],
     ]);
   });
 
-  it('keeps Volcengine Ark draft models blocked as adapter pending', async () => {
+  it('marks Volcengine Ark executable draft models as key missing until configured', async () => {
     const summary = await buildModelAvailabilitySummary(
       { models: [model('doubao-seedance-2-0', 'video', 'volcengine-ark')] },
-      { listProviderKeys: async () => [{ provider: 'volcengine-ark', enabled: true, hasSecret: true }] }
+      { listProviderKeys: async () => [] }
     );
 
     expect(summary.models[0]).toMatchObject({
-      status: 'adapter_pending',
+      status: 'key_missing',
       workspaceSelectable: false,
-      reasonCode: 'adapter_pending',
+      reasonCode: 'key_missing',
     });
   });
 

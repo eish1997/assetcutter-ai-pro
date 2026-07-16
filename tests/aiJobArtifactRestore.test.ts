@@ -29,6 +29,17 @@ function imageArtifact(overrides: Partial<RestorableAiJobArtifact> = {}): Restor
   };
 }
 
+function artifact(overrides: Partial<RestorableAiJobArtifact>): RestorableAiJobArtifact {
+  return {
+    id: 'job:any',
+    label: 'artifact',
+    url: 'https://cdn.example.com/out.bin',
+    mimeType: 'application/octet-stream',
+    kind: 'file',
+    ...overrides,
+  };
+}
+
 describe('aiJobArtifactRestore', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -53,6 +64,94 @@ describe('aiJobArtifactRestore', () => {
       createdAt: 1000,
     });
     expect(result.assets[0]!.resultMeta?.ai_job_image?.aiGatewayJobId).toBe('aijob_1');
+  });
+
+  it('writes standardized source metadata into restored asset resultMeta', async () => {
+    const result = await buildAiJobRestoreAssets({
+      jobId: 'aijob_source',
+      artifacts: [
+        imageArtifact({
+          source: {
+            source: 'ai_gateway',
+            aiGatewayJobId: 'aijob_source',
+            providerId: 'volcengine-ark',
+            modelId: 'doubao-seedream-5-0',
+            canonicalModelId: 'doubao-seedream-5-0',
+            registryId: 'doubao-seedream-5-0',
+            modality: 'image',
+            capability: 'image.generate',
+            paramsSnapshot: { aspectRatio: '1:1' },
+          },
+        }),
+      ],
+      now: 1100,
+    });
+
+    expect(result.assets[0]!.resultMeta?.ai_job_image?.source).toMatchObject({
+      source: 'ai_gateway',
+      aiGatewayJobId: 'aijob_source',
+      providerId: 'volcengine-ark',
+      modelId: 'doubao-seedream-5-0',
+      canonicalModelId: 'doubao-seedream-5-0',
+      paramsSnapshot: { aspectRatio: '1:1' },
+    });
+  });
+
+  it('builds text assets from text artifacts', async () => {
+    const result = await buildAiJobRestoreAssets({
+      jobId: 'aijob_text',
+      artifacts: [
+        artifact({
+          label: 'Generated copy',
+          url: undefined,
+          text: 'A polished launch tagline.',
+          mimeType: 'text/plain',
+          kind: 'text',
+        }),
+      ],
+      now: 1200,
+    });
+
+    expect(result.assets).toHaveLength(1);
+    expect(result.assets[0]).toMatchObject({
+      assetKind: 'text',
+      textTitle: 'Generated copy',
+      displayKey: 'ai_job_text',
+      textResults: { ai_job_text: 'A polished launch tagline.' },
+      resultOrder: ['ai_job_text'],
+    });
+    expect(result.assets[0]!.resultMeta?.ai_job_text).toMatchObject({
+      mediaKind: 'text',
+      aiGatewayJobId: 'aijob_text',
+    });
+  });
+
+  it('builds audio assets from audio artifacts', async () => {
+    const result = await buildAiJobRestoreAssets({
+      jobId: 'aijob_audio',
+      artifacts: [
+        artifact({
+          label: 'Generated music',
+          url: 'https://cdn.example.com/song.mp3',
+          mimeType: 'audio/mpeg',
+          kind: 'audio',
+        }),
+      ],
+      now: 1300,
+    });
+
+    expect(result.assets).toHaveLength(1);
+    expect(result.assets[0]).toMatchObject({
+      assetKind: 'audio',
+      original: 'https://cdn.example.com/song.mp3',
+      displayKey: 'ai_job_audio',
+      results: { ai_job_audio: 'https://cdn.example.com/song.mp3' },
+      resultOrder: ['ai_job_audio'],
+    });
+    expect(result.assets[0]!.resultMeta?.ai_job_audio).toMatchObject({
+      mediaKind: 'audio',
+      aiGatewayJobId: 'aijob_audio',
+    });
   });
 
   it('persists image artifacts to companion when companion context is available', async () => {

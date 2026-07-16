@@ -10,6 +10,10 @@ import { DEFAULT_MODEL_TEXT } from '../services/modelRegistry/constants';
 import { useEffectiveTextModelRows } from '../hooks/useEffectiveTextModelRows';
 import { CAPABILITY_CATEGORIES, SUPPORTED_ASPECT_RATIOS } from '../types';
 import { imageSizeDropdownOptionsForRegistryModel } from '../services/openaiAdapter';
+import {
+  modelSupportsParameter,
+  resolveModelParameterCapabilities,
+} from '../services/modelRegistry/modelParameterCapabilities';
 import type { CapabilityTestResult } from '../services/capabilityTestRunner';
 import {
   BUILTIN_CAPABILITY_EDITABLE_IDS,
@@ -135,6 +139,7 @@ const TRIPO_MODEL_VERSION_OPTIONS = [
 const DETAIL_DROPDOWN_PORTAL_ZINDEX = { backdrop: 10120, list: 10121 } as const;
 
 function providerForModel3dRegistryId(registryId: string): Generate3DPreset['provider'] {
+  if (registryId.startsWith('doubao-seed3d-')) return 'volcengine-ark';
   return registryId.startsWith('tencent-hunyuan-') ? 'tencent' : 'tripo';
 }
 
@@ -148,6 +153,17 @@ function model3dPresetForRegistryId(registryId: string, prev: Generate3DPreset =
       module: registryId.includes('rapid') ? 'rapid' : 'pro',
       model: prev.model ?? '3.0',
     };
+  }
+  if (provider === 'volcengine-ark') {
+    return {
+      ...prev,
+      provider: 'volcengine-ark',
+      modelRegistryId: registryId,
+      module: prev.module ?? 'pro',
+      quality: (prev as Generate3DPreset & { quality?: string }).quality,
+      format: (prev as Generate3DPreset & { format?: string }).format || 'glb',
+      texture: (prev as Generate3DPreset & { texture?: boolean }).texture ?? true,
+    } as Generate3DPreset;
   }
   return {
     ...DEFAULT_GENERATE_3D,
@@ -341,6 +357,50 @@ const CapabilityPresetSection: React.FC<{
   const editTripoGenerateParts = editGenerate3D.tripoGenerateParts === true;
   const editTripoTextureEnabled = editGenerate3D.tripoTexture !== false;
   const editTripoPbrEnabled = editGenerate3D.tripoPbr !== false;
+  const newImageCapability = useMemo(
+    () => resolveModelParameterCapabilities({ registryId: newImageModelRegistryId, modality: 'image' }),
+    [newImageModelRegistryId]
+  );
+  const editImageCapability = useMemo(
+    () => resolveModelParameterCapabilities({ registryId: editImageModelRegistryId, modality: 'image' }),
+    [editImageModelRegistryId]
+  );
+  const newVideoCapability = useMemo(
+    () => resolveModelParameterCapabilities({ registryId: newVideoModelRegistryId, modality: 'video' }),
+    [newVideoModelRegistryId]
+  );
+  const editVideoCapability = useMemo(
+    () => resolveModelParameterCapabilities({ registryId: editVideoModelRegistryId, modality: 'video' }),
+    [editVideoModelRegistryId]
+  );
+  const newModel3dCapability = useMemo(
+    () => resolveModelParameterCapabilities({ registryId: newGenerate3D.modelRegistryId || defaultModel3dRegistryId || 'tripo-p1', modality: 'model3d' }),
+    [defaultModel3dRegistryId, newGenerate3D.modelRegistryId]
+  );
+  const editModel3dCapability = useMemo(
+    () => resolveModelParameterCapabilities({ registryId: editGenerate3D.modelRegistryId || defaultModel3dRegistryId || 'tripo-p1', modality: 'model3d' }),
+    [defaultModel3dRegistryId, editGenerate3D.modelRegistryId]
+  );
+  const newModel3dSupports = useCallback(
+    (key: Parameters<typeof modelSupportsParameter>[2]) => modelSupportsParameter(newGenerate3D.modelRegistryId || defaultModel3dRegistryId || 'tripo-p1', 'model3d', key),
+    [defaultModel3dRegistryId, newGenerate3D.modelRegistryId]
+  );
+  const editModel3dSupports = useCallback(
+    (key: Parameters<typeof modelSupportsParameter>[2]) => modelSupportsParameter(editGenerate3D.modelRegistryId || defaultModel3dRegistryId || 'tripo-p1', 'model3d', key),
+    [defaultModel3dRegistryId, editGenerate3D.modelRegistryId]
+  );
+  const newIsArkSeed3d = newModel3dCapability.providerId === 'volcengine-ark';
+  const editIsArkSeed3d = editModel3dCapability.providerId === 'volcengine-ark';
+  const newIsTripo3d = (newGenerate3D.provider ?? 'tripo') === 'tripo';
+  const editIsTripo3d = (editGenerate3D.provider ?? 'tripo') === 'tripo';
+  const newModel3dOptionsFor = useCallback(
+    (key: Parameters<typeof modelSupportsParameter>[2]) => newModel3dCapability.supported.find((cap) => cap.key === key)?.options || [],
+    [newModel3dCapability]
+  );
+  const editModel3dOptionsFor = useCallback(
+    (key: Parameters<typeof modelSupportsParameter>[2]) => editModel3dCapability.supported.find((cap) => cap.key === key)?.options || [],
+    [editModel3dCapability]
+  );
   const [lightboxImage, setLightboxImage] = useState<string | null>(null);
   const [lightboxCompare, setLightboxCompare] = useState<{ original: string; generated: string } | null>(null);
   const [lightboxSplitRatio, setLightboxSplitRatio] = useState(0.5);
@@ -1772,6 +1832,7 @@ const CapabilityPresetSection: React.FC<{
                     triggerClassName={DROPDOWN_TRIGGER_COMPACT}
                   />
                 </label>
+                {modelSupportsParameter(newImageModelRegistryId, 'image', 'aspectRatio') && (
                 <label className="flex items-center gap-2 text-[9px] text-gray-400">
                   <span className="font-black uppercase">贴图比例</span>
                   <CustomDropdown
@@ -1782,6 +1843,8 @@ const CapabilityPresetSection: React.FC<{
                     triggerClassName={DROPDOWN_TRIGGER_COMPACT}
                   />
                 </label>
+                )}
+                {modelSupportsParameter(newImageModelRegistryId, 'image', 'imageSize') && (
                 <label className="flex items-center gap-2 text-[9px] text-gray-400">
                   <span className="font-black uppercase">贴图尺寸</span>
                   <CustomDropdown
@@ -1792,6 +1855,7 @@ const CapabilityPresetSection: React.FC<{
                     triggerClassName={DROPDOWN_TRIGGER_COMPACT}
                   />
                 </label>
+                )}
                 <label className="flex items-center gap-2 text-[9px] text-gray-400 cursor-pointer" title="勾选：先由文字模型理解预设提示词再生成生图提示词；不勾选：预设提示词直发生图模型">
                   <input
                     type="checkbox"
@@ -1820,11 +1884,13 @@ const CapabilityPresetSection: React.FC<{
             )}
             {newCategory === 'text_to_text' && (
               <label className="flex items-center gap-2 text-[9px] text-gray-400 cursor-pointer">
+                {newModel3dSupports('negativePrompt') && (
                 <input
                   type="checkbox"
                   checked={newRequirePromptOnTextDrop}
                   onChange={(e) => setNewRequirePromptOnTextDrop(e.target.checked)}
                 />
+                )}
                 <span className="font-black uppercase">拖拽临时提示词</span>
               </label>
             )}
@@ -2017,7 +2083,7 @@ const CapabilityPresetSection: React.FC<{
                       triggerClassName={DROPDOWN_TRIGGER_COMPACT}
                     />
                   </label>
-                  {newGenerate3D.provider !== 'tencent' && (
+                  {newIsTripo3d && (
                     <>
                       <div className="w-full mt-1 rounded-lg border border-white/[0.08] bg-black/20 p-2 space-y-1.5">
                         <div className="text-[8px] font-black text-cyan-300 uppercase">标准参数</div>
@@ -2174,9 +2240,48 @@ const CapabilityPresetSection: React.FC<{
                       />
                     </div>
                   )}
+                  {newIsArkSeed3d && (
+                    <div className="w-full mt-1 rounded-lg border border-sky-500/25 bg-black/20 p-2 space-y-2">
+                      <div className="text-[8px] font-black text-sky-300 uppercase">Seed3D Parameters</div>
+                      <div className="flex gap-2 flex-wrap">
+                        {newModel3dSupports('quality') && (
+                          <label className="flex items-center gap-1.5 text-[9px]">
+                            <span>Quality</span>
+                            <CustomDropdown
+                              options={[{ value: '', label: 'Default' }, ...newModel3dOptionsFor('quality')]}
+                              value={(newGenerate3D as Generate3DPreset & { quality?: string }).quality ?? ''}
+                              onChange={(v) => setNewGenerate3D((g) => ({ ...g, quality: v || undefined } as Generate3DPreset))}
+                              triggerClassName={DROPDOWN_TRIGGER_COMPACT}
+                            />
+                          </label>
+                        )}
+                        {newModel3dSupports('format') && (
+                          <label className="flex items-center gap-1.5 text-[9px]">
+                            <span>Format</span>
+                            <CustomDropdown
+                              options={newModel3dOptionsFor('format')}
+                              value={(newGenerate3D as Generate3DPreset & { format?: string }).format ?? 'glb'}
+                              onChange={(v) => setNewGenerate3D((g) => ({ ...g, format: v || 'glb' } as Generate3DPreset))}
+                              triggerClassName={DROPDOWN_TRIGGER_COMPACT}
+                            />
+                          </label>
+                        )}
+                        {newModel3dSupports('texture') && (
+                          <label className="flex items-center gap-1.5 text-[9px]">
+                            <input
+                              type="checkbox"
+                              checked={(newGenerate3D as Generate3DPreset & { texture?: boolean }).texture !== false}
+                              onChange={(e) => setNewGenerate3D((g) => ({ ...g, texture: e.target.checked } as Generate3DPreset))}
+                            />
+                            <span>Texture</span>
+                          </label>
+                        )}
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
-              {newGenerate3D.provider !== 'tencent' ? (
+              {newModel3dSupports('prompt') ? (
               <div>
                 <span className="text-[8px] font-black text-gray-500 uppercase">可选：提示词补充 / 负向提示词</span>
                 <textarea
@@ -2574,6 +2679,7 @@ const CapabilityPresetSection: React.FC<{
                                     portalZIndex={DETAIL_DROPDOWN_PORTAL_ZINDEX}
                                   />
                                 </label>
+                                {modelSupportsParameter(editImageModelRegistryId, 'image', 'aspectRatio') && (
                                 <label className="flex items-center gap-2 text-[9px] text-gray-400">
                                   <span className="font-black uppercase">贴图比例</span>
                                   <CustomDropdown
@@ -2585,6 +2691,8 @@ const CapabilityPresetSection: React.FC<{
                                     portalZIndex={DETAIL_DROPDOWN_PORTAL_ZINDEX}
                                   />
                                 </label>
+                                )}
+                                {modelSupportsParameter(editImageModelRegistryId, 'image', 'imageSize') && (
                                 <label className="flex items-center gap-2 text-[9px] text-gray-400">
                                   <span className="font-black uppercase">贴图尺寸</span>
                                   <CustomDropdown
@@ -2596,6 +2704,7 @@ const CapabilityPresetSection: React.FC<{
                                     portalZIndex={DETAIL_DROPDOWN_PORTAL_ZINDEX}
                                   />
                                 </label>
+                                )}
                                 <label className="flex items-center gap-2 text-[9px] text-gray-400 cursor-pointer" title="勾选：先理解再生成生图提示词；不勾选：预设提示词直发">
                                   <input type="checkbox" checked={!editSkipUnderstand} onChange={(e) => setEditSkipUnderstand(!e.target.checked)} />
                                   <span className="font-black uppercase">理解</span>
@@ -2739,7 +2848,7 @@ const CapabilityPresetSection: React.FC<{
                                   portalZIndex={DETAIL_DROPDOWN_PORTAL_ZINDEX}
                                 />
                               </label>
-                              {editGenerate3D.provider !== 'tencent' && (
+                              {editIsTripo3d && (
                                 <>
                                   <div className="w-full rounded-lg border border-white/[0.08] bg-black/20 p-2 space-y-1.5">
                                     <div className="text-[8px] font-black text-cyan-300 uppercase">标准参数</div>
@@ -2902,6 +3011,47 @@ const CapabilityPresetSection: React.FC<{
                                   triggerClassName={DROPDOWN_TRIGGER_COMPACT}
                                   portalZIndex={DETAIL_DROPDOWN_PORTAL_ZINDEX}
                                 />
+                              )}
+                              {editIsArkSeed3d && (
+                                <div className="w-full mt-1 rounded-lg border border-sky-500/25 bg-black/20 p-2 space-y-2">
+                                  <div className="text-[8px] font-black text-sky-300 uppercase">Seed3D Parameters</div>
+                                  <div className="flex gap-2 flex-wrap">
+                                    {editModel3dSupports('quality') && (
+                                      <label className="flex items-center gap-1.5 text-[9px]">
+                                        <span>Quality</span>
+                                        <CustomDropdown
+                                          options={[{ value: '', label: 'Default' }, ...editModel3dOptionsFor('quality')]}
+                                          value={(editGenerate3D as Generate3DPreset & { quality?: string }).quality ?? ''}
+                                          onChange={(v) => setEditGenerate3D((g) => ({ ...g, quality: v || undefined } as Generate3DPreset))}
+                                          triggerClassName={DROPDOWN_TRIGGER_COMPACT}
+                                          portalZIndex={DETAIL_DROPDOWN_PORTAL_ZINDEX}
+                                        />
+                                      </label>
+                                    )}
+                                    {editModel3dSupports('format') && (
+                                      <label className="flex items-center gap-1.5 text-[9px]">
+                                        <span>Format</span>
+                                        <CustomDropdown
+                                          options={editModel3dOptionsFor('format')}
+                                          value={(editGenerate3D as Generate3DPreset & { format?: string }).format ?? 'glb'}
+                                          onChange={(v) => setEditGenerate3D((g) => ({ ...g, format: v || 'glb' } as Generate3DPreset))}
+                                          triggerClassName={DROPDOWN_TRIGGER_COMPACT}
+                                          portalZIndex={DETAIL_DROPDOWN_PORTAL_ZINDEX}
+                                        />
+                                      </label>
+                                    )}
+                                    {editModel3dSupports('texture') && (
+                                      <label className="flex items-center gap-1.5 text-[9px]">
+                                        <input
+                                          type="checkbox"
+                                          checked={(editGenerate3D as Generate3DPreset & { texture?: boolean }).texture !== false}
+                                          onChange={(e) => setEditGenerate3D((g) => ({ ...g, texture: e.target.checked } as Generate3DPreset))}
+                                        />
+                                        <span>Texture</span>
+                                      </label>
+                                    )}
+                                  </div>
+                                </div>
                               )}
                             </div>
                           )}

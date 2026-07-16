@@ -117,4 +117,13 @@ export type {
   ModelRouteFallbackPolicy,
   ModelRouteGatewayExecutionStatus,
 } from "./modelRouteCatalog";
+export {
+  modelSupportsParameter,
+  resolveModelParameterCapabilities,
+} from "./modelParameterCapabilities";
+export type {
+  ModelParameterCapability,
+  ModelParameterCapabilitySet,
+  ModelParameterKey,
+} from "./modelParameterCapabilities";
 export { migrateSystemModelSlots } from "./systemConfigMigrate";

@@ -224,6 +224,35 @@ function providerKeySmokeMode(options = {}) {
   return 'real';
 }
 
+function openAiCompatibleSmokeConfig(row, options = {}) {
+  const provider = row.provider;
+  if (provider === 'openai-official') {
+    return {
+      baseUrl: nonEmptyString(options.openAiBaseUrl || row.credentials?.baseUrl || process.env.AI_GATEWAY_OPENAI_BASE_URL) || 'https://api.openai.com/v1',
+      route: 'GET /models',
+    };
+  }
+  if (provider === 'toapis') {
+    return {
+      baseUrl: nonEmptyString(options.toapisBaseUrl || row.credentials?.baseUrl) || 'https://toapis.com/v1',
+      route: 'GET /models',
+    };
+  }
+  if (provider === 'volcengine-ark') {
+    return {
+      baseUrl: nonEmptyString(options.arkBaseUrl || row.credentials?.baseUrl) || 'https://ark.cn-beijing.volces.com/api/v3',
+      route: 'GET /models',
+    };
+  }
+  if (provider === 'vectorengine') {
+    return {
+      baseUrl: nonEmptyString(options.vectorEngineBaseUrl || row.credentials?.baseUrl),
+      route: 'GET /models',
+    };
+  }
+  return null;
+}
+
 async function readSmokeJsonSafe(response) {
   const text = await response.text().catch(() => '');
   if (!text) return {};
@@ -247,15 +276,43 @@ function smokeErrorMessage(data, fallback) {
 }
 
 async function runRealProviderKeySmoke(row, options = {}) {
+  const fetchImpl = options.fetchImpl || undiciFetch;
+  const compatibleConfig = openAiCompatibleSmokeConfig(row, options);
+  if (compatibleConfig?.baseUrl) {
+    const baseUrl = compatibleConfig.baseUrl.replace(/\/+$/, '');
+    const started = Date.now();
+    const response = await fetchImpl(`${baseUrl}/models`, {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${row.secret}` },
+      signal: AbortSignal.timeout(Number(options.timeoutMs || process.env.AI_GATEWAY_PROVIDER_KEY_SMOKE_TIMEOUT_MS || 15_000)),
+    });
+    const data = await readSmokeJsonSafe(response);
+    const latencyMs = Date.now() - started;
+    if (!response.ok) {
+      const message = `Smoke test failed: upstream HTTP ${response.status} ${smokeErrorMessage(data, 'OpenAI-compatible probe rejected')}`;
+      const error = new Error(message);
+      error.status = response.status;
+      throw error;
+    }
+    return {
+      supported: true,
+      mode: 'real_upstream',
+      route: compatibleConfig.route,
+      upstreamStatus: response.status,
+      latencyMs,
+      message: 'Smoke test passed: upstream credentials accepted',
+    };
+  }
   if (row.provider !== 'tripo') {
     return {
       supported: false,
       mode: 'credentials_only',
       route: null,
+      upstreamStatus: null,
+      latencyMs: null,
       message: 'Smoke test passed: credentials shape is complete; real upstream probe is not configured for this provider yet',
     };
   }
-  const fetchImpl = options.fetchImpl || undiciFetch;
   const baseUrl = nonEmptyString(options.tripoBaseUrl || process.env.AI_GATEWAY_TRIPO_OPENAPI_BASE_URL) || 'https://api.tripo3d.ai/v2/openapi';
   const pathName = nonEmptyString(options.tripoSmokePath || process.env.AI_GATEWAY_TRIPO_SMOKE_PATH) || '/user/balance';
   const url = `${baseUrl.replace(/\/+$/, '')}/${pathName.replace(/^\/+/, '')}`;
@@ -1017,11 +1074,14 @@ export async function smokeTestProviderKey(id, options = {}) {
     providerKeyId: keyId || null,
     provider: null,
     label: null,
+    testLayer: 'key_smoke',
     mode: 'credentials_only',
+    createsGenerationTask: false,
     route: null,
     upstreamStatus: null,
     latencyMs: null,
     missingFields: [],
+    nextAction: null,
   };
   if (!keyId) {
     return {
@@ -1029,6 +1089,7 @@ export async function smokeTestProviderKey(id, options = {}) {
       ok: false,
       status: 'failed',
       message: 'Missing provider key id',
+      nextAction: 'Select a saved provider key before testing',
     };
   }
   const rows = await listProviderKeys({ includeSecrets: true });
@@ -1039,6 +1100,7 @@ export async function smokeTestProviderKey(id, options = {}) {
       ok: false,
       status: 'failed',
       message: 'Provider key not found',
+      nextAction: 'Refresh provider keys and try again',
     };
   }
   const resultBase = {
@@ -1061,6 +1123,7 @@ export async function smokeTestProviderKey(id, options = {}) {
       upstreamStatus: 400,
       message,
       missingFields,
+      nextAction: 'Fill the required credential fields and save the key before testing again',
     };
   }
   const mode = providerKeySmokeMode(options);
@@ -1071,6 +1134,7 @@ export async function smokeTestProviderKey(id, options = {}) {
       ok: true,
       status: 'passed',
       message: 'Smoke test passed: credentials shape is complete',
+      nextAction: 'Run Route Test on a published model to verify backend executability',
     };
   }
   let probe;
@@ -1090,6 +1154,7 @@ export async function smokeTestProviderKey(id, options = {}) {
       route: row.provider === 'tripo' ? 'GET /user/balance' : null,
       upstreamStatus: error?.status || null,
       message: error instanceof Error ? error.message : String(error || 'Smoke test failed'),
+      nextAction: 'Check key validity, upstream permissions, base URL, quota, and network reachability',
     };
   }
   recordProviderKeySuccess(keyId);
@@ -1102,6 +1167,7 @@ export async function smokeTestProviderKey(id, options = {}) {
     upstreamStatus: probe.upstreamStatus || null,
     latencyMs: probe.latencyMs || null,
     message: probe.message,
+    nextAction: 'Run Route Test on a published model to verify backend executability',
   };
 }
 

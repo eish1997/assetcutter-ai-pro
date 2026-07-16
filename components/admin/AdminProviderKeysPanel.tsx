@@ -187,6 +187,16 @@ function percent(value?: number | null) {
   return `${Math.round(Math.max(0, Number(value || 0)) * 100)}%`;
 }
 
+function providerKeyTestModeLabel(mode?: string | null) {
+  if (mode === 'real_upstream') return 'Upstream Probe';
+  return 'Credential Check';
+}
+
+function routeTestModeLabel(mode?: string | null) {
+  if (mode === 'route_guard') return 'Route Check';
+  return 'Route Test';
+}
+
 const CAPABILITY_STATUS_ITEMS: readonly {
   key: keyof ProviderCapabilityStatus;
   label: string;
@@ -218,7 +228,9 @@ function ProviderCapabilityMatrix({ provider }: { provider: ProviderCatalogEntry
   return (
     <div className="flex flex-wrap gap-1.5">
       {CAPABILITY_STATUS_ITEMS.map((item) => (
-        <StatusPill key={`${provider.id}:${item.key}`} active={provider.capabilityStatus[item.key]} label={item.label} />
+        <React.Fragment key={`${provider.id}:${item.key}`}>
+          <StatusPill active={provider.capabilityStatus[item.key]} label={item.label} />
+        </React.Fragment>
       ))}
     </div>
   );
@@ -561,9 +573,9 @@ const AdminProviderKeysPanel: React.FC = () => {
       });
       await refreshModelAvailability();
       if (res.result.status === 'passed') {
-        setMessage(`${canonicalModelId} route test passed`);
+        setMessage(`${canonicalModelId} ${routeTestModeLabel(res.result.mode)} passed · no generation task created`);
       } else {
-        setError(`${canonicalModelId} route test failed: ${res.result.message}`);
+        setError(`${canonicalModelId} ${routeTestModeLabel(res.result.mode)} failed: ${res.result.message}${res.result.nextAction ? ` · ${res.result.nextAction}` : ''}`);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Route test failed');
@@ -777,6 +789,24 @@ const AdminProviderKeysPanel: React.FC = () => {
         })}
       </div>
 
+      <div className="rounded-xl border border-blue-500/20 bg-blue-950/10 p-4">
+        <div className="text-[11px] font-semibold text-blue-100">Test Layers</div>
+        <div className="mt-2 grid gap-2 text-[10px] text-gray-400 md:grid-cols-3">
+          <div className="rounded-lg border border-white/[0.06] bg-black/20 p-2">
+            <div className="font-semibold text-gray-200">Credential Check</div>
+            <div className="mt-1">Checks required key fields only. No upstream call and no generation task.</div>
+          </div>
+          <div className="rounded-lg border border-white/[0.06] bg-black/20 p-2">
+            <div className="font-semibold text-gray-200">Upstream Probe</div>
+            <div className="mt-1">Calls a low-cost provider endpoint such as /models or balance. No generation task.</div>
+          </div>
+          <div className="rounded-lg border border-white/[0.06] bg-black/20 p-2">
+            <div className="font-semibold text-gray-200">Route Check</div>
+            <div className="mt-1">Checks published model route, adapter readiness, and platform key availability.</div>
+          </div>
+        </div>
+      </div>
+
       <div className="rounded-xl border border-[#2e2e32] bg-[#121216] p-4">
         {(() => {
           const selectedProvider = getProviderCatalogEntry(selectedProviderId) || PROVIDERS[0];
@@ -805,7 +835,11 @@ const AdminProviderKeysPanel: React.FC = () => {
                   <div className="mb-2 text-[11px] font-semibold text-gray-300">Models</div>
                   <div className="max-h-[360px] space-y-2 overflow-auto pr-1">
                     {models.length ? (
-                      models.map((model) => <ProviderModelRow key={`${model.providerId}:${model.providerModelId}:${model.registryId || ''}`} model={model} />)
+                      models.map((model) => (
+                        <React.Fragment key={`${model.providerId}:${model.providerModelId}:${model.registryId || ''}`}>
+                          <ProviderModelRow model={model} />
+                        </React.Fragment>
+                      ))
                     ) : (
                       <div className="rounded-lg border border-white/[0.06] bg-black/20 px-3 py-4 text-[11px] text-gray-500">暂无模型清单</div>
                     )}
@@ -815,7 +849,11 @@ const AdminProviderKeysPanel: React.FC = () => {
                   <div className="mb-2 text-[11px] font-semibold text-gray-300">Routes</div>
                   <div className="max-h-[360px] space-y-2 overflow-auto pr-1">
                     {routes.length ? (
-                      routes.map((route) => <ProviderRouteRow key={route.routeId} route={route} />)
+                      routes.map((route) => (
+                        <React.Fragment key={route.routeId}>
+                          <ProviderRouteRow route={route} />
+                        </React.Fragment>
+                      ))
                     ) : (
                       <div className="rounded-lg border border-white/[0.06] bg-black/20 px-3 py-4 text-[11px] text-gray-500">暂无供应路径</div>
                     )}
@@ -937,7 +975,7 @@ const AdminProviderKeysPanel: React.FC = () => {
                             }}
                             className="mt-2 rounded-md border border-white/[0.08] bg-black/20 px-2 py-1 text-[10px] text-gray-300 disabled:opacity-40"
                           >
-                            {routeTestingId === model.canonicalModelId ? 'Testing...' : 'Test Route'}
+                            {routeTestingId === model.canonicalModelId ? 'Checking...' : 'Route Check'}
                           </button>
                         </span>
                       </label>
@@ -1087,6 +1125,7 @@ const AdminProviderKeysPanel: React.FC = () => {
                 <button
                   type="button"
                   disabled={!canWrite || saving || isActing || isEnvKey}
+                  title="Credential Check / Upstream Probe. Does not create a generation task."
                   onClick={() => void runSmokeTest(row)}
                   className="rounded-lg border border-blue-900/50 bg-blue-950/25 px-3 py-2 text-[11px] text-blue-100 disabled:opacity-40"
                 >

@@ -21,11 +21,11 @@ describe("provider catalog", () => {
     expect(ark?.capabilityStatus).toMatchObject({
       catalogVisible: true,
       keyPoolSupported: true,
-      backendAdapterReady: false,
-      platformKeyReady: false,
+      backendAdapterReady: true,
+      platformKeyReady: true,
       byokSupported: true,
       modelCatalogReady: true,
-      smokeTestReady: false,
+      smokeTestReady: true,
     });
   });
 
@@ -76,8 +76,8 @@ describe("provider catalog", () => {
       byokSupported: true,
     });
     expect(getProviderCatalogEntry("volcengine-ark")?.capabilityStatus).toMatchObject({
-      backendAdapterReady: false,
-      platformKeyReady: false,
+      backendAdapterReady: true,
+      platformKeyReady: true,
     });
   });
 });

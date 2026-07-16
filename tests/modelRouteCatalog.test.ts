@@ -60,8 +60,12 @@ describe("model route catalog", () => {
       gatewayExecutionStatus: "gateway_ready",
     });
     expect(arkRoutes.find((route) => route.canonicalModelId === "doubao-seedance-2-0")).toMatchObject({
-      executionStatus: "adapter_pending",
-      gatewayExecutionStatus: "adapter_pending",
+      executionStatus: "platform_ready",
+      gatewayExecutionStatus: "gateway_ready",
+    });
+    expect(arkRoutes.find((route) => route.canonicalModelId === "doubao-seed3d-2-0")).toMatchObject({
+      executionStatus: "platform_ready",
+      gatewayExecutionStatus: "gateway_ready",
     });
   });
 

@@ -553,6 +553,21 @@ export type WorkflowAssetKind =
 
 export type WorkflowAssetVariantKind = 'text' | 'image' | 'video' | 'model3d' | 'audio' | 'file';
 
+export type GeneratedAssetSourceMeta = {
+  source: 'ai_gateway' | 'provider' | 'local' | 'unknown';
+  aiGatewayJobId?: string;
+  providerId?: string | null;
+  modelId?: string | null;
+  canonicalModelId?: string | null;
+  registryId?: string | null;
+  modality?: string | null;
+  capability?: string | null;
+  createdAt?: string | null;
+  routeId?: string | null;
+  adapterId?: string | null;
+  paramsSnapshot?: unknown;
+};
+
 export type WorkflowAssetVariantSource = 'original' | 'result' | 'derived' | 'uploaded' | 'external';
 
 export type WorkflowAssetVariant = {
@@ -666,6 +681,7 @@ export type WorkflowAsset = {
       semanticSummary?: string;
       /** AI Gateway job id：用于从工作区结果反查统一任务中心 */
       aiGatewayJobId?: string;
+      source?: GeneratedAssetSourceMeta;
     }
   >;
   /** 文字能力（gen_text）等产生的文本结果，key 与 resultOrder 中步骤 id 对齐 */
@@ -797,7 +813,7 @@ export type CapabilityEngine = 'gen_image' | 'gen_text' | 'builtin';
 /** 生成3D 能力预设：在工作流中拖图即用此配置提交 */
 export type Generate3DPreset = {
   /** 默认 tripo；保留 tencent 兼容历史预设 */
-  provider?: 'tripo' | 'tencent';
+    provider?: 'tripo' | 'tencent' | 'volcengine-ark';
   /** 平台模型 registryId；用于工作台发布清单和 AI Gateway 校验 */
   modelRegistryId?: string;
   /** Tripo 任务类型：文生3D / 图生3D */
@@ -838,6 +854,12 @@ export type Generate3DPreset = {
   module: 'pro' | 'rapid';
   /** 图生3D 时可留空；文生3D 用 instruction，能力里主要用图生 */
   prompt?: string;
+  /** 通用 3D 质量参数，供方舟 Seed3D 等 Gateway 供应商使用 */
+  quality?: string;
+  /** 通用 3D 输出格式，供方舟 Seed3D 等 Gateway 供应商使用 */
+  format?: string;
+  /** 通用贴图开关，供方舟 Seed3D 等 Gateway 供应商使用 */
+  texture?: boolean;
   /** 专业版：模型 3.0 | 3.1 */
   model?: '3.0' | '3.1';
   enablePBR?: boolean;

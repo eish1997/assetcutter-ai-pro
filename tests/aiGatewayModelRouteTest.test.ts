@@ -19,6 +19,8 @@ describe('AI gateway model route test', () => {
       ok: true,
       status: 'passed',
       mode: 'route_guard',
+      testLayer: 'route_test',
+      createsGenerationTask: false,
       canonicalModelId: 'gpt-image-2',
       providerId: 'openai-official',
       code: 'AI_GATEWAY_MODEL_ROUTE_READY',
@@ -45,7 +47,7 @@ describe('AI gateway model route test', () => {
     });
   });
 
-  it('fails pending adapter routes without creating generation work', async () => {
+  it('passes Volcengine Ark Seedance routes when a usable platform key exists', async () => {
     const result = await testAiGatewayModelRoute(
       {
         canonicalModelId: 'doubao-seedance-2-0',
@@ -58,9 +60,11 @@ describe('AI gateway model route test', () => {
     );
 
     expect(result).toMatchObject({
-      ok: false,
-      status: 'failed',
-      code: 'AI_GATEWAY_MODEL_ADAPTER_PENDING',
+      ok: true,
+      status: 'passed',
+      mode: 'route_guard',
+      code: 'AI_GATEWAY_MODEL_ROUTE_READY',
+      route: { ruleId: 'volcengine-ark-seedance-gateway' },
     });
   });
 

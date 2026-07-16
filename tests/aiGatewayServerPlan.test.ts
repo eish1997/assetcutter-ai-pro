@@ -241,6 +241,121 @@ describe('server AI gateway job planning', () => {
     });
   });
 
+  it('plans explicit Volcengine Ark Seedance video jobs through the Ark async adapter', () => {
+    const plan = createAiGatewayJobPlan({
+      modality: 'video',
+      provider: 'volcengine-ark',
+      model: 'doubao-seedance-2-0',
+      input: {
+        prompt: 'a product bottle rotating on a clean studio table',
+        durationSeconds: 5,
+        aspectRatio: '16:9',
+        resolution: '1080p',
+      },
+    });
+
+    expect(plan.route).toMatchObject({
+      providerId: 'volcengine-ark',
+      workerId: 'video-worker',
+      adapterId: 'volcengine-ark-async',
+      channel: 'volcengine-ark',
+      upstreamBackend: 'volcengine-ark',
+    });
+    expect(plan.workerRequest).toMatchObject({
+      method: 'POST',
+      path: '/contents/generations/tasks',
+      providerBaseUrl: 'https://ark.cn-beijing.volces.com/api/v3',
+      body: {
+        model: 'doubao-seedance-2-0-260128',
+        duration: 5,
+        ratio: '16:9',
+        resolution: '1080p',
+      },
+    });
+    expect(plan.workerRequest.body.content).toEqual([
+      { type: 'text', text: 'a product bottle rotating on a clean studio table' },
+    ]);
+  });
+
+  it('infers Volcengine Ark provider for Seedance video jobs when provider is omitted', () => {
+    const plan = createAiGatewayJobPlan({
+      modality: 'video',
+      model: 'doubao-seedance-2-0',
+      input: {
+        prompt: 'a product bottle rotating on a clean studio table',
+        durationSeconds: 5,
+      },
+    });
+
+    expect(plan.job.provider).toBe('volcengine-ark');
+    expect(plan.job.metadata.modelRouteInference).toMatchObject({
+      canonicalModelId: 'doubao-seedance-2-0',
+      providerId: 'volcengine-ark',
+      ruleId: 'volcengine-ark-seedance-gateway',
+    });
+    expect(plan.route).toMatchObject({
+      providerId: 'volcengine-ark',
+      workerId: 'video-worker',
+      adapterId: 'volcengine-ark-async',
+    });
+  });
+
+  it('plans explicit Volcengine Ark Seed3D jobs through the Ark async adapter', () => {
+    const plan = createAiGatewayJobPlan({
+      modality: 'model3d',
+      provider: 'volcengine-ark',
+      model: 'doubao-seed3d-2-0',
+      input: {
+        prompt: 'low-poly sci-fi crate',
+        quality: 'high',
+        format: 'glb',
+        referenceImages: ['data:image/png;base64,AAAA'],
+      },
+    });
+
+    expect(plan.route).toMatchObject({
+      providerId: 'volcengine-ark',
+      workerId: 'model3d-worker',
+      adapterId: 'volcengine-ark-async',
+      channel: 'volcengine-ark',
+      upstreamBackend: 'volcengine-ark',
+    });
+    expect(plan.workerRequest).toMatchObject({
+      method: 'POST',
+      path: '/contents/generations/tasks',
+      providerBaseUrl: 'https://ark.cn-beijing.volces.com/api/v3',
+      body: {
+        model: 'doubao-seed3d-2-0-260328',
+        quality: 'high',
+        format: 'glb',
+      },
+    });
+    expect(plan.workerRequest.body.content).toEqual([
+      { type: 'text', text: 'low-poly sci-fi crate' },
+      { type: 'image_url', image_url: { url: 'data:image/png;base64,AAAA' } },
+    ]);
+  });
+
+  it('infers Volcengine Ark provider for Seed3D jobs when provider is omitted', () => {
+    const plan = createAiGatewayJobPlan({
+      modality: 'model3d',
+      model: 'doubao-seed3d-2-0',
+      input: { prompt: 'low-poly sci-fi crate' },
+    });
+
+    expect(plan.job.provider).toBe('volcengine-ark');
+    expect(plan.job.metadata.modelRouteInference).toMatchObject({
+      canonicalModelId: 'doubao-seed3d-2-0',
+      providerId: 'volcengine-ark',
+      ruleId: 'volcengine-ark-seed3d-gateway',
+    });
+    expect(plan.route).toMatchObject({
+      providerId: 'volcengine-ark',
+      workerId: 'model3d-worker',
+      adapterId: 'volcengine-ark-async',
+    });
+  });
+
   it('uses ops control to pause providers and fall back to the next route', () => {
     const plan = createAiGatewayJobPlan(
       {

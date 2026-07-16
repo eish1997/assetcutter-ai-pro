@@ -67,10 +67,10 @@ describe("published workspace model catalog", () => {
     });
 
     expect(videoRows.map((row) => row.registryId)).toEqual(["doubao-seedance-2-0", "jimeng-video-ti2v-v30-pro"]);
-    expect(videoRows.find((row) => row.registryId === "doubao-seedance-2-0")?.gatewayReady).toBe(false);
+    expect(videoRows.find((row) => row.registryId === "doubao-seedance-2-0")?.gatewayReady).toBe(true);
     expect(videoRows.find((row) => row.registryId === "jimeng-video-ti2v-v30-pro")?.gatewayReady).toBe(true);
     expect(model3dRows.map((row) => row.registryId)).toEqual(["doubao-seed3d-2-0", "tripo-p1"]);
-    expect(model3dRows.find((row) => row.registryId === "doubao-seed3d-2-0")?.gatewayReady).toBe(false);
+    expect(model3dRows.find((row) => row.registryId === "doubao-seed3d-2-0")?.gatewayReady).toBe(true);
     expect(model3dRows.find((row) => row.registryId === "tripo-p1")?.gatewayReady).toBe(true);
   });
 });

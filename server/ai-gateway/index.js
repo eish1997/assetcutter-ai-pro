@@ -5,11 +5,57 @@ import {
   applyAiGatewayModelOverride,
   readAiGatewayOpsControlConfigSync,
 } from './ops-control.js';
+import { resolveExecutableAiGatewayModelRoute } from '../../shared/aiGatewayModelRoutes.js';
+
+function nonEmptyString(value) {
+  return typeof value === 'string' && value.trim() ? value.trim() : '';
+}
+
+function resolveRequestedModelId(job) {
+  const input = job?.input && typeof job.input === 'object' ? job.input : {};
+  const metadata = job?.metadata && typeof job.metadata === 'object' ? job.metadata : {};
+  return (
+    nonEmptyString(job?.model) ||
+    nonEmptyString(input.canonicalModelId) ||
+    nonEmptyString(input.registryId) ||
+    nonEmptyString(input.model) ||
+    nonEmptyString(metadata.canonicalModelId) ||
+    nonEmptyString(metadata.modelPublication?.canonicalModelId)
+  );
+}
+
+function applyModelRouteProviderInference(job, opsControl = {}) {
+  if (nonEmptyString(job?.provider)) return { job, inferred: null };
+  const canonicalModelId = resolveRequestedModelId(job);
+  if (!canonicalModelId) return { job, inferred: null };
+  const route = resolveExecutableAiGatewayModelRoute({
+    canonicalModelId,
+    modality: job.modality,
+    disabledProviders: opsControl.disabledProviders,
+  });
+  if (!route?.providerId) return { job, inferred: null };
+  return {
+    job: {
+      ...job,
+      provider: route.providerId,
+      metadata: {
+        ...(job.metadata && typeof job.metadata === 'object' ? job.metadata : {}),
+        modelRouteInference: {
+          canonicalModelId,
+          providerId: route.providerId,
+          ruleId: route.ruleId,
+        },
+      },
+    },
+    inferred: route,
+  };
+}
 
 export function createAiGatewayJobPlan(input, options = {}) {
   const draft = createAiJobDraft(input, options);
   const opsControl = options.opsControl || readAiGatewayOpsControlConfigSync();
-  const { job } = applyAiGatewayModelOverride(draft, opsControl);
+  const overridden = applyAiGatewayModelOverride(draft, opsControl);
+  const { job } = applyModelRouteProviderInference(overridden.job, opsControl);
   const route = resolveAiProviderRoute(job, options.routes, opsControl);
 
   const workerRequest = buildAiGatewayWorkerRequest(job, route);

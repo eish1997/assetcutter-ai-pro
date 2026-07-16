@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildAiGatewayWorkerRequest,
+  DEFAULT_AI_PROVIDER_ROUTES,
   listAiGatewayWorkers,
   resolveAiGatewayWorker,
 } from '../server/ai-gateway/index.js';
@@ -8,24 +9,41 @@ import {
 describe('AI gateway worker registry', () => {
   it('reports active text/image/video/model3d workers and planned music worker', () => {
     expect(listAiGatewayWorkers()).toEqual([
-      { id: 'text-worker', modalities: ['text'], capabilities: ['text.generate'], adapters: ['legacy-gemini-proxy', 'openai-official', 'toapis-openai'], status: 'active' },
+      { id: 'text-worker', modalities: ['text'], capabilities: ['text.generate'], adapters: ['legacy-gemini-proxy', 'openai-official', 'toapis-openai', 'volcengine-ark-openai'], status: 'active' },
       {
         id: 'image-worker',
         modalities: ['image'],
         capabilities: ['image.generate', 'image.edit', 'workflow_text_to_image', 'workflow_image_edit'],
-        adapters: ['legacy-gemini-proxy', 'openai-official', 'toapis-openai'],
+        adapters: ['legacy-gemini-proxy', 'openai-official', 'toapis-openai', 'volcengine-ark-image'],
         status: 'active',
       },
       {
         id: 'video-worker',
         modalities: ['video'],
         capabilities: ['video.generate', 'workflow_generate_video', 'workflow_jimeng_video'],
-        adapters: ['jimeng-visual'],
+        adapters: ['jimeng-visual', 'volcengine-ark-async'],
         status: 'active',
       },
       { id: 'music-worker', modalities: ['music'], capabilities: ['music.generate'], adapters: [], status: 'planned' },
-      { id: 'model3d-worker', modalities: ['model3d'], capabilities: ['model3d.generate'], adapters: ['tripo-openapi'], status: 'active' },
+      { id: 'model3d-worker', modalities: ['model3d'], capabilities: ['model3d.generate'], adapters: ['tripo-openapi', 'volcengine-ark-async'], status: 'active' },
     ]);
+  });
+
+  it('keeps default provider routes aligned with worker modality, capability, and adapter support', () => {
+    const workers = new Map(listAiGatewayWorkers().map((worker) => [worker.id, worker]));
+
+    for (const route of DEFAULT_AI_PROVIDER_ROUTES) {
+      const worker = workers.get(route.workerId);
+      expect(worker, `${route.providerId}:${route.workerId}`).toBeTruthy();
+      expect(worker?.status, `${route.providerId}:${route.workerId}`).toBe('active');
+      expect(worker?.adapters, `${route.providerId}:${route.adapterId}`).toContain(route.adapterId);
+      for (const modality of route.modalities) {
+        expect(worker?.modalities, `${route.providerId}:${route.workerId}:${modality}`).toContain(modality);
+      }
+      for (const capability of route.capabilities) {
+        expect(worker?.capabilities, `${route.providerId}:${route.workerId}:${capability}`).toContain(capability);
+      }
+    }
   });
 
   it('builds legacy Gemini proxy requests only through active workers', () => {

@@ -4,6 +4,7 @@ import {
   getBuiltinStoryboardFeedbackCollagePreset,
   STORYBOARD_FEEDBACK_COLLAGE_DEFAULT_PRESET_ID,
   DEFAULT_STORYBOARD_FEEDBACK_COLLAGE_INSTRUCTION,
+  DEFAULT_STORYBOARD_ROLE_REPLACE_INSTRUCTION,
   getBuiltinStoryboardRoleReplacePreset,
   STORYBOARD_ROLE_REPLACE_DEFAULT_PRESET_ID,
 } from './storyboardBuiltinPresets';
@@ -78,7 +79,39 @@ function normalizeGenerate3DPreset(input: NonNullable<CustomAppModule['generate3
     'v2.0-20240919',
   ]);
   if (out.module !== 'pro' && out.module !== 'rapid') out.module = 'pro';
-  if (out.provider !== 'tencent' && out.provider !== 'tripo') out.provider = 'tripo';
+  if (out.provider !== 'tencent' && out.provider !== 'tripo' && out.provider !== 'volcengine-ark') out.provider = 'tripo';
+  if (out.provider === 'volcengine-ark') {
+    const arkOut = out as NonNullable<CustomAppModule['generate3D']> & {
+      quality?: string;
+      format?: string;
+      texture?: boolean;
+      tripoTaskType?: string;
+      tripoModelVersion?: string;
+      tripoGeometryQuality?: string;
+      tripoTextureQuality?: string;
+      tripoTextureAlignment?: string;
+      tripoOrientation?: string;
+      tripoFaceLimit?: number;
+      tripoNegativePrompt?: string;
+    };
+    delete arkOut.tripoTaskType;
+    delete arkOut.tripoModelVersion;
+    delete arkOut.tripoGeometryQuality;
+    delete arkOut.tripoTextureQuality;
+    delete arkOut.tripoTextureAlignment;
+    delete arkOut.tripoOrientation;
+    delete arkOut.tripoFaceLimit;
+    delete arkOut.tripoNegativePrompt;
+    if (typeof arkOut.quality === 'string') {
+      arkOut.quality = arkOut.quality.trim() || undefined;
+    }
+    if (!arkOut.quality) delete arkOut.quality;
+    const format = String(arkOut.format || '').trim().toLowerCase();
+    if (['glb', 'obj', 'fbx', 'usdz', 'zip'].includes(format)) arkOut.format = format;
+    else arkOut.format = 'glb';
+    arkOut.texture = arkOut.texture !== false;
+    return out;
+  }
   if (
     out.tripoTaskType !== 'text_to_model' &&
     out.tripoTaskType !== 'image_to_model' &&
@@ -213,9 +246,7 @@ export function normalizeCapabilityPreset(input: CustomAppModule, index: number)
   } else {
     // 非 3D 不应带 generate3D
     delete (base as any).generate3D;
-    if (category !== 'generate_video') {
-      delete (base as CustomAppModule & { videoModelRegistryId?: string }).videoModelRegistryId;
-    }
+    delete (base as CustomAppModule & { videoModelRegistryId?: string }).videoModelRegistryId;
     if (category !== 'text_to_text' && category !== 'image_to_text') {
       delete (base as CustomAppModule & { textModelRegistryId?: string }).textModelRegistryId;
     }

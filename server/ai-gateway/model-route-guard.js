@@ -19,6 +19,12 @@ export function resolveExecutableModelRoute(input) {
 export function resolveKnownPendingModelRoute(input) {
   const canonicalModelId = resolveRequestedCanonicalModelId(input);
   if (!canonicalModelId) return null;
+  const executable = resolveExecutableAiGatewayModelRoute({
+    canonicalModelId,
+    modality: input?.modality,
+    provider: input?.provider,
+  });
+  if (executable) return null;
   return resolvePendingAiGatewayModelRoute({
     canonicalModelId,
     modality: input?.modality,
