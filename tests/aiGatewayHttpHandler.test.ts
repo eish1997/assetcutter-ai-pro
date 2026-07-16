@@ -62,7 +62,7 @@ describe('AI gateway HTTP job sample', () => {
           },
         },
       },
-      route: { providerId: 'vertex-gemini', workerId: 'image-worker', adapterId: 'legacy-gemini-proxy' },
+      route: { providerId: 'vertex-site', workerId: 'image-worker', adapterId: 'legacy-gemini-proxy' },
       adapterRequest: { method: 'POST', path: '/proxy/gemini/async' },
       workerRequest: { method: 'POST', path: '/proxy/gemini/async' },
     });
@@ -108,7 +108,7 @@ describe('AI gateway HTTP job sample', () => {
           id: 'aijob_http_new',
           traceOnly: true,
           legacyPath: '/proxy/gemini/async',
-          route: { providerId: 'vertex-gemini', workerId: 'image-worker', adapterId: 'legacy-gemini-proxy' },
+          route: { providerId: 'vertex-site', workerId: 'image-worker', adapterId: 'legacy-gemini-proxy' },
         },
       ],
     });
@@ -161,10 +161,14 @@ describe('AI gateway HTTP job sample', () => {
   it('rejects unsupported modalities without creating a job', async () => {
     const store = createInMemoryAiJobStore();
     const res = makeRes();
-    await handleAiGatewayRequest(makeReq('POST', '/ai-gateway/jobs', { modality: 'music', input: {} }), res, { store });
+    await handleAiGatewayRequest(
+      makeReq('POST', '/ai-gateway/jobs', { modality: 'music', model: 'music-model', input: {} }),
+      res,
+      { store, modelOpsConfig: { publishedCanonicalModelAllowlist: null } }
+    );
 
     expect(res.statusCode).toBe(422);
-    expect(res.json()).toMatchObject({ error: 'AI_GATEWAY_NO_PROVIDER_ROUTE' });
+    expect(res.json()).toMatchObject({ error: 'AI_GATEWAY_MODEL_ROUTE_NOT_FOUND' });
     expect(store.size()).toBe(0);
   });
 

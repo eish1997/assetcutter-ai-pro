@@ -1,4 +1,5 @@
 import {
+  listExecutableAiGatewayModelRoutes,
   resolveExecutableAiGatewayModelRoute,
   resolvePendingAiGatewayModelRoute,
 } from '../../shared/aiGatewayModelRoutes.js';
@@ -75,7 +76,14 @@ function routeSummary(input, keys) {
     };
   }
 
-  const executable = resolveExecutableAiGatewayModelRoute(input);
+  const executableRoutes = listExecutableAiGatewayModelRoutes(input);
+  const executable =
+    executableRoutes.find((route) => {
+      if (!route.platformKeyRequired) return true;
+      return keys.some((row) => row.provider === route.providerId && providerKeyUsable(row));
+    }) ||
+    executableRoutes[0] ||
+    resolveExecutableAiGatewayModelRoute(input);
   if (executable) {
     const keyReady =
       !executable.platformKeyRequired ||

@@ -6,6 +6,7 @@ import { AiGatewayRouteError } from './provider-router.js';
 import { settleAiGatewayJobCredits, settlementMetadataPatch } from './settlement.js';
 import { recordAiGatewayUsageEvent } from './usage-event.js';
 import { readModelOpsConfig } from './model-ops-config-store.js';
+import { readAiGatewayOpsControlConfig } from './ops-control.js';
 import { validateAiGatewayModelPublication } from './model-publication-guard.js';
 import { validateAiGatewayModelRouteExecutable } from './model-route-guard.js';
 
@@ -90,6 +91,14 @@ function publicJobSummary(plan) {
 
 function mapGatewayError(err) {
   if (err instanceof AiGatewayValidationError) {
+    if (
+      err.code === 'AI_GATEWAY_MODEL_ROUTE_NOT_FOUND' ||
+      err.code === 'AI_GATEWAY_MODEL_ROUTE_NOT_EXECUTABLE' ||
+      err.code === 'AI_GATEWAY_MODEL_ADAPTER_PENDING' ||
+      err.code === 'AI_GATEWAY_PROVIDER_KEY_UNAVAILABLE'
+    ) {
+      return { status: 422, body: { error: err.code, message: err.message } };
+    }
     return { status: 400, body: { error: err.code, message: err.message } };
   }
   if (err instanceof AiGatewayRouteError) {
@@ -167,12 +176,17 @@ export async function handleAiGatewayRequest(req, res, options = {}) {
           restricted: publication.restricted,
         };
       }
+      const opsControl = options.opsControl || (await readAiGatewayOpsControlConfig());
       const executableRoute = await validateAiGatewayModelRouteExecutable(planInput, {
         listProviderKeys: options.listProviderKeys,
         checkProviderKeys: options.checkProviderKeys,
+        disabledProviders: opsControl.disabledProviders,
       });
       if (executableRoute.checked) {
-        if (!planInput.provider && executableRoute.route?.providerId) {
+        const shouldPinProvider =
+          Boolean(parsed?.provider) ||
+          Boolean(executableRoute.route?.platformKeyRequired);
+        if (shouldPinProvider && !planInput.provider && executableRoute.route?.providerId) {
           planInput.provider = executableRoute.route.providerId;
         }
         planInput.metadata.modelRouteGuard = {
@@ -183,7 +197,7 @@ export async function handleAiGatewayRequest(req, res, options = {}) {
           platformKeyRequired: executableRoute.route.platformKeyRequired,
         };
       }
-      const plan = await store.put(createAiGatewayJobPlan(planInput));
+      const plan = await store.put(createAiGatewayJobPlan(planInput, { opsControl }));
       sendJson(res, 202, publicJobPlan(plan));
       return true;
     } catch (err) {

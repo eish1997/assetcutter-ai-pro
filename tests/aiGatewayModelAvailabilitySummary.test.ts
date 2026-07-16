@@ -34,6 +34,24 @@ describe('AI gateway model availability summary', () => {
     });
   });
 
+  it('uses the first key-ready OpenAI-compatible provider instead of stopping at a missing primary key', async () => {
+    const summary = await buildModelAvailabilitySummary(
+      { models: [model('gpt-image-2', 'image', undefined)] },
+      { listProviderKeys: async () => [{ provider: 'toapis', enabled: true, hasSecret: true }] }
+    );
+
+    expect(summary.models[0]).toMatchObject({
+      canonicalModelId: 'gpt-image-2',
+      status: 'ready',
+      workspaceSelectable: true,
+      reasonCode: 'ready',
+    });
+    expect(summary.models[0].routes[0]).toMatchObject({
+      providerId: 'toapis',
+      keyReady: true,
+    });
+  });
+
   it('marks ToAPIs, Jimeng video, and Tripo P1 ready when matching platform keys exist', async () => {
     const summary = await buildModelAvailabilitySummary(
       {

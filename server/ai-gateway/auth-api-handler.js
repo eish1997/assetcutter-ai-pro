@@ -87,6 +87,14 @@ export function publicAuthAiJobDetail(plan) {
 
 export function mapAuthAiGatewayError(err) {
   if (err instanceof AiGatewayValidationError) {
+    if (
+      err.code === 'AI_GATEWAY_MODEL_ROUTE_NOT_FOUND' ||
+      err.code === 'AI_GATEWAY_MODEL_ROUTE_NOT_EXECUTABLE' ||
+      err.code === 'AI_GATEWAY_MODEL_ADAPTER_PENDING' ||
+      err.code === 'AI_GATEWAY_PROVIDER_KEY_UNAVAILABLE'
+    ) {
+      return { status: 422, body: { error: err.code, message: err.message } };
+    }
     return { status: 400, body: { error: err.code, message: err.message } };
   }
   if (err instanceof AiGatewayRouteError) {
@@ -262,7 +270,7 @@ export async function retryAuthAiGatewayJob(id, user, body = {}, options = {}) {
     id: raw.id,
     modality: original.job.modality,
     capability: original.job.capability,
-    provider: original.job.provider,
+    ...(typeof raw.provider === 'string' && raw.provider.trim() ? { provider: raw.provider.trim() } : {}),
     model: original.job.model,
     userId: original.job.userId || user.id,
     correlationId: raw.correlationId,
@@ -288,8 +296,18 @@ export async function retryAuthAiGatewayJob(id, user, body = {}, options = {}) {
   const executableRoute = await validateAiGatewayModelRouteExecutable(retryInput, {
     listProviderKeys: options.listProviderKeys,
     checkProviderKeys: options.checkProviderKeys,
+    disabledProviders: opsControl.disabledProviders,
   });
   if (executableRoute.checked) {
+    const shouldPinProvider =
+      Boolean(raw.provider) ||
+      Boolean(executableRoute.route?.platformKeyRequired);
+    if (shouldPinProvider && !retryInput.provider && executableRoute.route?.providerId) {
+      retryInput.provider = executableRoute.route.providerId;
+    }
+    if (!shouldPinProvider && retryInput.provider && !raw.provider) {
+      delete retryInput.provider;
+    }
     retryInput.metadata.modelRouteGuard = {
       canonicalModelId: executableRoute.canonicalModelId,
       providerId: executableRoute.route.providerId,

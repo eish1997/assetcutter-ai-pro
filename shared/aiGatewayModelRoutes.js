@@ -149,12 +149,13 @@ function disabledProviderSet(options) {
 
 function firstEnabledProvider(rule, field, disabledProviders) {
   const providers = Array.isArray(rule[field]) ? rule[field] : [];
-  return providers.find((provider) => !disabledProviders.has(provider)) || providers[0];
+  return providers.find((provider) => !disabledProviders.has(provider));
 }
 
 function providerMatches(rule, providerId, field, disabledProviders) {
   const id = normalizeAiGatewayProviderId(providerId);
   if (!id) return true;
+  if (disabledProviders.has(id)) return false;
   return Array.isArray(rule[field]) && rule[field].includes(id);
 }
 
@@ -165,28 +166,43 @@ function modalityMatches(rule, modality) {
 }
 
 function resolveRuntimeRule(rules, input, providerField) {
+  return listRuntimeRules(rules, input, providerField)[0] || null;
+}
+
+function routeFromRule(rule, canonicalModelId, providerId) {
+  return {
+    ruleId: rule.id,
+    canonicalModelId,
+    providerId,
+    gatewayExecutionStatus: rule.gatewayExecutionStatus,
+    executionStatus: rule.executionStatus,
+    platformKeyRequired: Boolean(rule.platformKeyRequired),
+  };
+}
+
+function listRuntimeRules(rules, input, providerField) {
   const raw = input && typeof input === 'object' ? input : {};
   const canonicalModelId = nonEmptyString(raw.canonicalModelId || raw.registryId || raw.model);
-  if (!canonicalModelId) return null;
+  if (!canonicalModelId) return [];
   const disabledProviders = disabledProviderSet(raw);
+  const explicitProviderId = normalizeAiGatewayProviderId(raw.providerId || raw.provider);
+  const out = [];
   for (const rule of rules) {
     if (!rule.modelPattern.test(canonicalModelId)) continue;
     if (!modalityMatches(rule, raw.modality)) continue;
-    if (!providerMatches(rule, raw.providerId || raw.provider, providerField, disabledProviders)) continue;
-    const providerId =
-      normalizeAiGatewayProviderId(raw.providerId || raw.provider) ||
-      firstEnabledProvider(rule, providerField, disabledProviders);
-    if (!providerId) continue;
-    return {
-      ruleId: rule.id,
-      canonicalModelId,
-      providerId,
-      gatewayExecutionStatus: rule.gatewayExecutionStatus,
-      executionStatus: rule.executionStatus,
-      platformKeyRequired: Boolean(rule.platformKeyRequired),
-    };
+    if (!providerMatches(rule, explicitProviderId, providerField, disabledProviders)) continue;
+    if (explicitProviderId) {
+      out.push(routeFromRule(rule, canonicalModelId, explicitProviderId));
+      continue;
+    }
+    const providers = Array.isArray(rule[providerField]) ? rule[providerField] : [];
+    for (const provider of providers) {
+      const providerId = normalizeAiGatewayProviderId(provider);
+      if (!providerId || disabledProviders.has(providerId)) continue;
+      out.push(routeFromRule(rule, canonicalModelId, providerId));
+    }
   }
-  return null;
+  return out;
 }
 
 export function resolveExecutableAiGatewayModelRoute(input, options = {}) {
@@ -194,9 +210,19 @@ export function resolveExecutableAiGatewayModelRoute(input, options = {}) {
   return resolveRuntimeRule(AI_GATEWAY_MODEL_ROUTE_EXECUTABLE_RULES, input, providerField);
 }
 
+export function listExecutableAiGatewayModelRoutes(input, options = {}) {
+  const providerField = options.providerField || 'gatewayProviderIds';
+  return listRuntimeRules(AI_GATEWAY_MODEL_ROUTE_EXECUTABLE_RULES, input, providerField);
+}
+
 export function resolvePendingAiGatewayModelRoute(input, options = {}) {
   const providerField = options.providerField || 'gatewayProviderIds';
   return resolveRuntimeRule(AI_GATEWAY_MODEL_ROUTE_PENDING_RULES, input, providerField);
+}
+
+export function listPendingAiGatewayModelRoutes(input, options = {}) {
+  const providerField = options.providerField || 'gatewayProviderIds';
+  return listRuntimeRules(AI_GATEWAY_MODEL_ROUTE_PENDING_RULES, input, providerField);
 }
 
 export function resolveCatalogGatewayExecutionStatus(input) {

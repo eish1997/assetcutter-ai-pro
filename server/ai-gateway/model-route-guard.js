@@ -2,6 +2,7 @@ import { AiGatewayValidationError } from './job.js';
 import { listProviderKeys } from './provider-key-store.js';
 import { resolveRequestedCanonicalModelId } from './model-publication-guard.js';
 import {
+  listExecutableAiGatewayModelRoutes,
   normalizeAiGatewayProviderId,
   resolveExecutableAiGatewayModelRoute,
   resolvePendingAiGatewayModelRoute,
@@ -42,13 +43,23 @@ function providerKeyUsable(row) {
   return Boolean(row.hasSecret || row.hasCredentials || row.secret || Object.keys(row.credentials || {}).length);
 }
 
+function routeHasUsableKey(route, keys) {
+  if (!route.platformKeyRequired) return true;
+  return (Array.isArray(keys) ? keys : []).some((row) => row.provider === route.providerId && providerKeyUsable(row));
+}
+
 export async function validateAiGatewayModelRouteExecutable(input, options = {}) {
   const canonicalModelId = resolveRequestedCanonicalModelId(input);
   if (!canonicalModelId) return { ok: true, canonicalModelId: null, route: null, checked: false };
 
-  const route = resolveExecutableModelRoute(input, {
+  const routeInput = {
+    canonicalModelId,
+    modality: input?.modality,
+    provider: normalizeAiGatewayProviderId(input?.provider),
     disabledProviders: options.disabledProviders,
-  });
+  };
+  const routes = listExecutableAiGatewayModelRoutes(routeInput);
+  const route = routes[0] || null;
   if (!route) {
     const pending = resolveKnownPendingModelRoute(input, {
       disabledProviders: options.disabledProviders,
@@ -67,10 +78,13 @@ export async function validateAiGatewayModelRouteExecutable(input, options = {})
     );
   }
 
-  if (route.platformKeyRequired && options.checkProviderKeys !== false) {
+  if (options.checkProviderKeys !== false) {
     const keys = await (options.listProviderKeys || listProviderKeys)();
-    const hasUsableKey = (Array.isArray(keys) ? keys : []).some((row) => row.provider === route.providerId && providerKeyUsable(row));
-    if (!hasUsableKey) {
+    const readyRoute = routes.find((candidate) => routeHasUsableKey(candidate, keys));
+    if (readyRoute) {
+      return { ok: true, canonicalModelId, route: readyRoute, checked: true };
+    }
+    if (routes.some((candidate) => candidate.platformKeyRequired)) {
       throw new AiGatewayValidationError(
         `No usable platform key for AI provider: ${route.providerId}`,
         'AI_GATEWAY_PROVIDER_KEY_UNAVAILABLE'

@@ -4,6 +4,7 @@ import {
   resolveRequestedCanonicalModelId,
   validateAiGatewayModelPublication,
 } from '../server/ai-gateway/model-publication-guard.js';
+import { listExecutableAiGatewayModelRoutes } from '../shared/aiGatewayModelRoutes.js';
 import {
   resolveExecutableModelRoute,
   resolveKnownPendingModelRoute,
@@ -87,6 +88,22 @@ describe('AI gateway model publication guard', () => {
     });
   });
 
+  it('removes paused providers from executable route candidates before planning', () => {
+    expect(
+      resolveExecutableModelRoute(
+        { modality: 'image', model: 'doubao-seedream-5-0' },
+        { disabledProviders: ['volcengine-ark'] }
+      )
+    ).toBeNull();
+    expect(
+      listExecutableAiGatewayModelRoutes({
+        modality: 'image',
+        model: 'gemini-3-pro-image-preview',
+        disabledProviders: ['vertex-site'],
+      }).map((route) => route.providerId)
+    ).toEqual(['gemini-aistudio']);
+  });
+
   it('identifies catalog models whose backend adapters are still pending', async () => {
     expect(resolveKnownPendingModelRoute({ modality: 'video', model: 'doubao-seedance-2-0' })).toBeNull();
     expect(resolveKnownPendingModelRoute({ modality: 'model3d', model: 'doubao-seed3d-2-0' })).toBeNull();
@@ -136,6 +153,17 @@ describe('AI gateway model publication guard', () => {
     await expect(
       validateAiGatewayModelRouteExecutable(
         { modality: 'image', model: 'gpt-image-2', provider: 'toapis' },
+        { listProviderKeys: async () => [{ provider: 'toapis', enabled: true, hasSecret: true }] }
+      )
+    ).resolves.toMatchObject({
+      ok: true,
+      checked: true,
+      route: { providerId: 'toapis' },
+    });
+
+    await expect(
+      validateAiGatewayModelRouteExecutable(
+        { modality: 'image', model: 'gpt-image-2' },
         { listProviderKeys: async () => [{ provider: 'toapis', enabled: true, hasSecret: true }] }
       )
     ).resolves.toMatchObject({

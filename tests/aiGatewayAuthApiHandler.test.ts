@@ -342,6 +342,41 @@ describe('AI gateway auth-api facade', () => {
     });
   });
 
+  it('routes OpenAI-compatible jobs to a key-ready secondary provider when the primary key is absent', async () => {
+    const store = createInMemoryAiJobStore();
+    const user = { id: 'user_1', username: 'alice' };
+
+    const result = await createAuthAiGatewayJob(
+      {},
+      {
+        id: 'aijob_auth_openai_secondary_ready',
+        modality: 'image',
+        model: 'gpt-image-2',
+        input: {
+          contents: [{ role: 'user', parts: [{ text: 'product image via any openai compatible route' }] }],
+        },
+      },
+      user,
+      {
+        store,
+        modelOpsConfig: { publishedCanonicalModelAllowlist: ['gpt-image-2'] },
+        listProviderKeys: async () => [{ provider: 'toapis', enabled: true, hasSecret: true }],
+      }
+    );
+
+    expect(result.status).toBe(202);
+    const stored = await store.get('aijob_auth_openai_secondary_ready');
+    expect(stored.job.provider).toBe('toapis');
+    expect(stored.route).toMatchObject({
+      providerId: 'toapis',
+      adapterId: 'toapis-openai',
+    });
+    expect(stored.job.metadata.modelRouteGuard).toMatchObject({
+      providerId: 'toapis',
+      platformKeyRequired: true,
+    });
+  });
+
   it('allows Volcengine Ark text jobs when a platform API key exists', async () => {
     const store = createInMemoryAiJobStore();
     const user = { id: 'user_1', username: 'alice' };
