@@ -40,7 +40,7 @@ describe('AI gateway model publication guard', () => {
   it('resolves executable backend routes for gateway-ready models', () => {
     expect(resolveExecutableModelRoute({ modality: 'image', model: 'gemini-3-pro-image-preview' })).toMatchObject({
       canonicalModelId: 'gemini-3-pro-image-preview',
-      providerId: 'vertex-gemini',
+      providerId: 'vertex-site',
       executionStatus: 'platform_ready',
       platformKeyRequired: false,
     });

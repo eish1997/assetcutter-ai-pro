@@ -212,6 +212,19 @@ export function resolveImageModelIdFromPreset(preset: Pick<CustomAppModule, 'ima
   return resolveUpstreamImageModelId(registryId);
 }
 
+function resolveImageModelRouteIdsFromPreset(preset: Pick<CustomAppModule, 'imageModelRegistryId' | 'imageGear'>): {
+  registryId: string;
+  upstreamModelId: string;
+} {
+  const registryId = resolveImageModelRegistryId(
+    preset.imageModelRegistryId ?? preset.imageGear ?? undefined
+  );
+  return {
+    registryId,
+    upstreamModelId: resolveUpstreamImageModelId(registryId),
+  };
+}
+
 /** @deprecated 请用 `resolveImageModelIdFromPreset` */
 export function resolveImageModelId(gearOrRegistryId?: string): string {
   return resolveUpstreamImageModelId(resolveImageModelRegistryId(gearOrRegistryId));
@@ -851,7 +864,7 @@ async function executeSplitComponentCapability(
     ctx.onLog?.('info', `[${actionLabel}] 生图中…`, undefined);
     emitCapabilityRunProgress(ctx, `${actionLabel}：生图中…`);
     throwIfCapabilityAborted(ctx);
-    const modelId = resolveImageModelIdFromPreset(preset);
+    const { registryId: imageRegistryId, upstreamModelId: modelId } = resolveImageModelRouteIdsFromPreset(preset);
     const imageOptions =
       preset.imageAspectRatio || preset.imageSize
         ? { aspectRatio: preset.imageAspectRatio, imageSize: preset.imageSize }
@@ -859,6 +872,8 @@ async function executeSplitComponentCapability(
     const result = await runUnifiedImageGeneration({
       prompt,
       model: modelId,
+      registryId: imageRegistryId,
+      upstreamModelId: modelId,
       referenceImages: [cropped],
       imageOptions,
       uiSource: 'capability_executor.split_component',
@@ -1077,7 +1092,7 @@ export async function executeCapability(
       }
       ctx.onLog?.('info', `[${actionLabel}] 文生图中…`, undefined);
       throwIfCapabilityAborted(ctx);
-      const modelId = resolveImageModelIdFromPreset(preset);
+      const { registryId: imageRegistryId, upstreamModelId: modelId } = resolveImageModelRouteIdsFromPreset(preset);
       const imageOptions =
         preset.imageAspectRatio || preset.imageSize
           ? { aspectRatio: preset.imageAspectRatio, imageSize: preset.imageSize }
@@ -1085,6 +1100,8 @@ export async function executeCapability(
       const result = await runUnifiedImageGeneration({
         prompt,
         model: modelId,
+        registryId: imageRegistryId,
+        upstreamModelId: modelId,
         imageOptions,
         systemInstruction: opts?.imageSystemPrompt,
         uiSource: 'capability_executor.text_to_image',
@@ -1166,7 +1183,7 @@ export async function executeCapability(
     ctx.onLog?.('info', `[${actionLabel}] 生图中…`, undefined);
     emitStep(`${actionLabel}：生图中（可能较慢）…`);
     throwIfCapabilityAborted(ctx);
-    const modelId = resolveImageModelIdFromPreset(preset);
+    const { registryId: imageRegistryId, upstreamModelId: modelId } = resolveImageModelRouteIdsFromPreset(preset);
     const imageOptions = (preset.imageAspectRatio || preset.imageSize) ? { aspectRatio: preset.imageAspectRatio, imageSize: preset.imageSize } : undefined;
     const batchOpts = {
       ...(opts?.batchGroupKey ? { batchGroupKey: opts.batchGroupKey } : {}),
@@ -1180,6 +1197,8 @@ export async function executeCapability(
         result = await runUnifiedImageGeneration({
           prompt: augmented,
           model: modelId,
+          registryId: imageRegistryId,
+          upstreamModelId: modelId,
           referenceImages: refs,
           imageOptions,
           uiSource: 'capability_executor.image_edit_multi',
@@ -1198,6 +1217,8 @@ export async function executeCapability(
         result = await runUnifiedImageGeneration({
           prompt: augmented,
           model: modelId,
+          registryId: imageRegistryId,
+          upstreamModelId: modelId,
           referenceImages: [refs[0]!],
           imageOptions,
           uiSource: 'capability_executor.image_edit',
@@ -1479,13 +1500,15 @@ export async function executeCapabilitySet(
           ctx.onRunProgress?.(`${n.data.label || preset.label || n.id}：多图生图中（${images.length} 张参考）…`, {
             nodeId: n.id,
           });
-          const modelId = resolveImageModelIdFromPreset(preset);
+          const { registryId: imageRegistryId, upstreamModelId: modelId } = resolveImageModelRouteIdsFromPreset(preset);
           const imageOptions = (preset.imageAspectRatio || preset.imageSize) ? { aspectRatio: preset.imageAspectRatio, imageSize: preset.imageSize } : undefined;
           try {
             throwIfCapabilityAborted(ctx);
             const result = await runUnifiedImageGeneration({
               prompt: instruction,
               model: modelId,
+              registryId: imageRegistryId,
+              upstreamModelId: modelId,
               referenceImages: images,
               imageOptions,
               uiSource: 'capability_executor.capability_set',

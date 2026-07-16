@@ -9,6 +9,7 @@ export type UnifiedGenerationRequest = {
   capability: string;
   canonicalModelId: string;
   registryId?: string;
+  upstreamModelId?: string;
   providerId?: string;
   input: Record<string, unknown>;
   assetContext?: {
@@ -49,7 +50,10 @@ export type UnifiedVisionTextGenerationRequest = {
 
 export type UnifiedImageGenerationRequest = {
   prompt: string;
+  canonicalModelId?: string;
+  registryId?: string;
   model: string;
+  upstreamModelId?: string;
   referenceImages?: string[];
   imageOptions?: {
     aspectRatio?: string;
@@ -159,6 +163,7 @@ export async function runUnifiedGeneration(request: UnifiedGenerationRequest): P
   if (!rawModel) throw new Error('缺少生成模型');
   const canonicalModelId = resolveCanonicalModelId(rawModel) || rawModel;
   const registryId = String(request.registryId || rawModel).trim() || canonicalModelId;
+  const upstreamModelId = String(request.upstreamModelId || '').trim();
   const estimatedCredits = Math.max(1, Math.floor(Number(request.estimatedCredits || 1)));
   const cachedHeaders = getCachedCreditsProxyHeaders(estimatedCredits) || {};
   return createAiJob(
@@ -174,6 +179,7 @@ export async function runUnifiedGeneration(request: UnifiedGenerationRequest): P
         ...request.input,
         canonicalModelId,
         registryId,
+        ...(upstreamModelId ? { upstreamModelId, model: upstreamModelId } : {}),
         ...(request.assetContext ? { assetContext: request.assetContext } : {}),
       },
       metadata: {
@@ -182,6 +188,7 @@ export async function runUnifiedGeneration(request: UnifiedGenerationRequest): P
         uiSource: request.uiSource,
         canonicalModelId,
         registryId,
+        ...(upstreamModelId ? { upstreamModelId } : {}),
         ...(request.assetContext ? { assetContext: request.assetContext } : {}),
       },
     },
@@ -299,6 +306,9 @@ export async function runUnifiedImageGeneration(request: UnifiedImageGenerationR
   if (!prompt) throw new Error('请输入画面描述');
   const model = String(request.model || '').trim();
   if (!model) throw new Error('缺少图片模型');
+  const registryId = String(request.registryId || request.canonicalModelId || model).trim();
+  const canonicalModelId = String(request.canonicalModelId || registryId).trim();
+  const upstreamModelId = String(request.upstreamModelId || model).trim();
   const refs = (request.referenceImages || []).map((s) => String(s || '').trim()).filter(Boolean);
   const parts: Array<{ text: string } | { inlineData: { mimeType: string; data: string } }> = [{ text: prompt }];
   for (const ref of refs) {
@@ -313,8 +323,9 @@ export async function runUnifiedImageGeneration(request: UnifiedImageGenerationR
   const created = await runUnifiedGeneration({
     modality: 'image',
     capability,
-    canonicalModelId: model,
-    registryId: model,
+    canonicalModelId,
+    registryId,
+    upstreamModelId: upstreamModelId && upstreamModelId !== canonicalModelId ? upstreamModelId : undefined,
     input: {
       contents: [{ role: 'user', parts }],
       prompt,

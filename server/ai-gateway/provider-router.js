@@ -139,6 +139,16 @@ export const DEFAULT_AI_PROVIDER_ROUTES = Object.freeze([
   },
   {
     providerId: 'volcengine-jimeng',
+    workerId: 'image-worker',
+    adapterId: 'jimeng-visual',
+    channel: 'jimeng-visual',
+    upstreamBackend: 'volcengine-jimeng',
+    modalities: ['image'],
+    capabilities: ['image.generate', 'workflow_text_to_image', 'workflow_image_edit'],
+    priority: 15,
+  },
+  {
+    providerId: 'volcengine-jimeng',
     workerId: 'video-worker',
     adapterId: 'jimeng-visual',
     channel: 'jimeng-visual',

@@ -14,7 +14,7 @@ describe('AI gateway worker registry', () => {
         id: 'image-worker',
         modalities: ['image'],
         capabilities: ['image.generate', 'image.edit', 'workflow_text_to_image', 'workflow_image_edit'],
-        adapters: ['legacy-gemini-proxy', 'openai-official', 'toapis-openai', 'volcengine-ark-image'],
+        adapters: ['legacy-gemini-proxy', 'openai-official', 'toapis-openai', 'volcengine-ark-image', 'jimeng-visual'],
         status: 'active',
       },
       {

@@ -112,7 +112,7 @@ function buildOpenAiTextBody(job, route) {
   if (nonEmptyString(config.systemInstruction)) messages.push({ role: 'system', content: nonEmptyString(config.systemInstruction) });
   messages.push(...parsed.messages);
   return {
-    model: mapOpenAiChatModel(job?.model || input.model, route?.providerId),
+    model: mapOpenAiChatModel(input.upstreamModelId || input.model || job?.model, route?.providerId),
     messages,
     stream: false,
     ...(config.responseMimeType === 'application/json' ? { response_format: { type: 'json_object' } } : {}),
@@ -141,7 +141,7 @@ function buildArkImageBody(job) {
   }
   const size = nonEmptyString(imageConfig.size) || aspectRatioToArkSize(imageConfig.aspectRatio);
   return {
-    model: mapOpenAiImageModel(job?.model || input.model, 'volcengine-ark'),
+    model: mapOpenAiImageModel(input.upstreamModelId || input.model || job?.model, 'volcengine-ark'),
     prompt: prompt.slice(0, 32000),
     size,
     response_format: 'b64_json',
@@ -162,7 +162,7 @@ function buildOpenAiImageBody(job, route) {
     throw new AiGatewayValidationError('OpenAI image generation requires a prompt', 'AI_GATEWAY_OPENAI_PROMPT_REQUIRED');
   }
   return {
-    model: mapOpenAiImageModel(job?.model || input.model, route?.providerId),
+    model: mapOpenAiImageModel(input.upstreamModelId || input.model || job?.model, route?.providerId),
     prompt: prompt.slice(0, 32000),
     n: 1,
     size: nonEmptyString(imageConfig.size) || '1024x1024',

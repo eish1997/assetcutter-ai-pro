@@ -70,6 +70,16 @@ export const AI_GATEWAY_MODEL_ROUTE_EXECUTABLE_RULES = Object.freeze([
     platformKeyRequired: true,
   },
   {
+    id: 'jimeng-image-gateway',
+    modelPattern: /^jimeng-image-/i,
+    modalities: Object.freeze(['image']),
+    catalogProviderIds: Object.freeze(['volcengine-jimeng']),
+    gatewayProviderIds: Object.freeze(['volcengine-jimeng']),
+    gatewayExecutionStatus: 'gateway_ready',
+    executionStatus: 'platform_ready',
+    platformKeyRequired: true,
+  },
+  {
     id: 'jimeng-video-gateway',
     modelPattern: /^jimeng-video-/i,
     modalities: Object.freeze(['video']),

@@ -230,4 +230,40 @@ describe('runUnifiedGeneration', () => {
       expect.any(Object)
     );
   });
+
+  it('keeps published registry id separate from upstream image model id', async () => {
+    vi.mocked(createAiJob).mockResolvedValue({
+      job: {
+        id: 'aijob_image_upstream',
+        status: 'succeeded',
+        output: null,
+        artifacts: [{ kind: 'image', url: 'data:image/png;base64,IMG' }],
+      },
+    } as unknown as Awaited<ReturnType<typeof createAiJob>>);
+
+    await expect(
+      runUnifiedImageGeneration({
+        prompt: 'clean package',
+        registryId: 'gemini-3.1-flash-image-preview',
+        model: 'gemini-3.1-flash-image',
+        upstreamModelId: 'gemini-3.1-flash-image',
+        uiSource: 'test',
+      })
+    ).resolves.toBe('data:image/png;base64,IMG');
+
+    expect(createAiJob).toHaveBeenCalledWith(
+      expect.objectContaining({
+        modality: 'image',
+        model: 'gemini-3.1-flash-image-preview',
+        canonicalModelId: 'gemini-3.1-flash-image-preview',
+        registryId: 'gemini-3.1-flash-image-preview',
+        input: expect.objectContaining({
+          model: 'gemini-3.1-flash-image',
+          upstreamModelId: 'gemini-3.1-flash-image',
+          registryId: 'gemini-3.1-flash-image-preview',
+        }),
+      }),
+      expect.any(Object)
+    );
+  });
 });

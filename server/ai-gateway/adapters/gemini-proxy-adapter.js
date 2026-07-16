@@ -15,7 +15,7 @@ export function buildGeminiProxyAsyncRequest(job, route) {
   }
 
   const input = job.input || {};
-  const model = requireValue(job.model || input.model, 'model');
+  const model = requireValue(input.upstreamModelId || input.model || job.model, 'model');
   const contents = requireValue(input.contents, 'input.contents');
   const body = {
     model,

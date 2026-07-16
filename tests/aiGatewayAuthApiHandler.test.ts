@@ -203,6 +203,43 @@ describe('AI gateway auth-api facade', () => {
     });
   });
 
+  it('allows Jimeng image jobs when AK/SK provider credentials exist', async () => {
+    const store = createInMemoryAiJobStore();
+    const user = { id: 'user_1', username: 'alice' };
+
+    const result = await createAuthAiGatewayJob(
+      {},
+      {
+        id: 'aijob_auth_jimeng_image_ready',
+        modality: 'image',
+        provider: 'volcengine-jimeng',
+        model: 'jimeng-image-t2i-v40',
+        input: { registryId: 'jimeng-image-t2i-v40', prompt: 'product image' },
+      },
+      user,
+      {
+        store,
+        modelOpsConfig: { publishedCanonicalModelAllowlist: ['jimeng-image-t2i-v40'] },
+        listProviderKeys: async () => [{ provider: 'volcengine-jimeng', enabled: true, hasCredentials: true }],
+      }
+    );
+
+    expect(result.status).toBe(202);
+    const stored = await store.get('aijob_auth_jimeng_image_ready');
+    expect(stored.job.provider).toBe('volcengine-jimeng');
+    expect(stored.route).toMatchObject({
+      providerId: 'volcengine-jimeng',
+      workerId: 'image-worker',
+      adapterId: 'jimeng-visual',
+    });
+    expect(stored.job.metadata.modelRouteGuard).toMatchObject({
+      canonicalModelId: 'jimeng-image-t2i-v40',
+      providerId: 'volcengine-jimeng',
+      gatewayExecutionStatus: 'gateway_ready',
+      platformKeyRequired: true,
+    });
+  });
+
   it('allows OpenAI image jobs when a platform API key exists and pins the provider route', async () => {
     const store = createInMemoryAiJobStore();
     const user = { id: 'user_1', username: 'alice' };
