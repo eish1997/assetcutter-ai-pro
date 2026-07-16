@@ -33,6 +33,9 @@ function responseErrorMessage(
   data: Record<string, unknown> & { error?: string; code?: string; message?: string },
   code?: string
 ): string {
+  if (code === 'AI_GATEWAY_PROVIDER_PAUSED') {
+    return '供应商通道已被运营暂停，请在供应商中心恢复后再试，或切换到其他已发布模型。';
+  }
   if (code && AI_GATEWAY_ERROR_MESSAGES[code]) return AI_GATEWAY_ERROR_MESSAGES[code];
   if (typeof data.message === 'string' && data.message.trim()) return data.message.trim();
   if (typeof data.error === 'string' && data.error.trim() && data.error.trim() !== code) return data.error.trim();

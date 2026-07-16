@@ -19,6 +19,16 @@ describe('mapRateLimitErrorText', () => {
     expect(mapped).not.toContain('1～3');
   });
 
+  it('maps Volcengine Ark 429 without blaming Google or Vertex', () => {
+    const raw =
+      'Volcengine Ark rejected AI job handoff: HTTP 429 Your account [2106137965] has reached the set inference limit';
+    const mapped = mapRateLimitErrorText(raw);
+
+    expect(mapped).toContain('Ark');
+    expect(mapped).toContain('火山方舟');
+    expect(mapped).not.toContain('Google/Vertex API');
+  });
+
   it('does not false-positive on reserve UUID containing 429 substring', () => {
     const reserveKey = 'proxy:86337429-70ae-44ae-ac1b-590827fec482';
     expect(mapRateLimitErrorText(`CREDITS_RESERVE_INVALID reserve=${reserveKey}`)).toBeNull();
@@ -47,6 +57,16 @@ describe('normalizeApiErrorMessage', () => {
 
   it('maps real Too Many Requests via normalizeApiErrorMessage', () => {
     expect(normalizeApiErrorMessage('Too Many Requests')).toContain('Google/Vertex');
+  });
+
+  it('normalizes Volcengine Ark 429 as provider-specific rate limit', () => {
+    const msg = normalizeApiErrorMessage(
+      'Volcengine Ark rejected AI job handoff: HTTP 429 Your account [2106137965] has reached the set inference limit'
+    );
+
+    expect(msg).toContain('Ark');
+    expect(msg).toContain('火山方舟');
+    expect(msg).not.toContain('Google/Vertex API');
   });
 
   it('normalizes Google depleted prepayment credits as account billing issue', () => {

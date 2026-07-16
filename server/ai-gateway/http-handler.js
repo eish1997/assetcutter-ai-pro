@@ -95,6 +95,7 @@ function mapGatewayError(err) {
       err.code === 'AI_GATEWAY_MODEL_ROUTE_NOT_FOUND' ||
       err.code === 'AI_GATEWAY_MODEL_ROUTE_NOT_EXECUTABLE' ||
       err.code === 'AI_GATEWAY_MODEL_ADAPTER_PENDING' ||
+      err.code === 'AI_GATEWAY_PROVIDER_PAUSED' ||
       err.code === 'AI_GATEWAY_PROVIDER_KEY_UNAVAILABLE'
     ) {
       return { status: 422, body: { error: err.code, message: err.message } };

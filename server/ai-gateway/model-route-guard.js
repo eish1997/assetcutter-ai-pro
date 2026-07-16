@@ -45,7 +45,9 @@ function providerKeyUsable(row) {
 
 function routeHasUsableKey(route, keys) {
   if (!route.platformKeyRequired) return true;
-  return (Array.isArray(keys) ? keys : []).some((row) => row.provider === route.providerId && providerKeyUsable(row));
+  return (Array.isArray(keys) ? keys : []).some(
+    (row) => normalizeAiGatewayProviderId(row?.provider) === route.providerId && providerKeyUsable(row)
+  );
 }
 
 export async function validateAiGatewayModelRouteExecutable(input, options = {}) {
@@ -61,6 +63,17 @@ export async function validateAiGatewayModelRouteExecutable(input, options = {})
   const routes = listExecutableAiGatewayModelRoutes(routeInput);
   const route = routes[0] || null;
   if (!route) {
+    const routesIgnoringPausedProviders = listExecutableAiGatewayModelRoutes({
+      ...routeInput,
+      disabledProviders: [],
+    });
+    if (routesIgnoringPausedProviders.length > 0) {
+      const providerIds = routesIgnoringPausedProviders.map((candidate) => candidate.providerId).join(', ');
+      throw new AiGatewayValidationError(
+        `AI provider route is paused by ops control: ${providerIds}`,
+        'AI_GATEWAY_PROVIDER_PAUSED'
+      );
+    }
     const pending = resolveKnownPendingModelRoute(input, {
       disabledProviders: options.disabledProviders,
     });

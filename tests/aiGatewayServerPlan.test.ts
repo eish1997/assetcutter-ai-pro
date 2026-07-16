@@ -322,6 +322,56 @@ describe('server AI gateway job planning', () => {
     });
   });
 
+  it('normalizes legacy channel and adapter ids before planning provider routes', () => {
+    expect(
+      createAiGatewayJobPlan({
+        modality: 'image',
+        provider: 'vertex-proxy',
+        model: 'gemini-3-pro-image-preview',
+        input: { contents: [{ role: 'user', parts: [{ text: 'draw from vertex alias' }] }] },
+      }).route
+    ).toMatchObject({
+      providerId: 'vertex-site',
+      adapterId: 'ai-worker-proxy',
+    });
+
+    expect(
+      createAiGatewayJobPlan({
+        modality: 'image',
+        provider: 'volcengine-ark-image',
+        model: 'doubao-seedream-5-0',
+        input: { contents: [{ role: 'user', parts: [{ text: 'draw from ark adapter alias' }] }] },
+      }).route
+    ).toMatchObject({
+      providerId: 'volcengine-ark',
+      adapterId: 'volcengine-ark-image',
+    });
+
+    expect(
+      createAiGatewayJobPlan({
+        modality: 'text',
+        provider: 'toapis-openai',
+        model: 'gpt-4o-mini',
+        input: { contents: [{ role: 'user', parts: [{ text: 'hello from toapis alias' }] }] },
+      }).route
+    ).toMatchObject({
+      providerId: 'toapis',
+      adapterId: 'toapis-openai',
+    });
+
+    expect(
+      createAiGatewayJobPlan({
+        modality: 'model3d',
+        provider: 'tripo-openapi',
+        model: 'tripo-p1',
+        input: { prompt: 'small sci-fi crate' },
+      }).route
+    ).toMatchObject({
+      providerId: 'tripo',
+      adapterId: 'tripo-openapi',
+    });
+  });
+
   it('plans explicit Volcengine Ark Seed3D jobs through the Ark async adapter', () => {
     const plan = createAiGatewayJobPlan({
       modality: 'model3d',

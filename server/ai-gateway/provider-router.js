@@ -1,3 +1,5 @@
+import { normalizeAiGatewayProviderId } from '../../shared/aiGatewayModelRoutes.js';
+
 export class AiGatewayRouteError extends Error {
   constructor(message, code = 'AI_GATEWAY_NO_PROVIDER_ROUTE') {
     super(message);
@@ -7,9 +9,7 @@ export class AiGatewayRouteError extends Error {
 }
 
 export function normalizeAiGatewayRuntimeProviderId(value) {
-  const id = typeof value === 'string' && value.trim() ? value.trim() : '';
-  if (id === 'vertex-gemini') return 'vertex-site';
-  return id;
+  return normalizeAiGatewayProviderId(value);
 }
 
 export const DEFAULT_AI_PROVIDER_ROUTES = Object.freeze([

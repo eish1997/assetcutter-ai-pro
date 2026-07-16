@@ -88,6 +88,44 @@ describe('AI gateway model publication guard', () => {
     });
   });
 
+  it('normalizes legacy channel and adapter provider ids before route validation', async () => {
+    expect(resolveExecutableModelRoute({ modality: 'image', model: 'gemini-3-pro-image-preview', provider: 'vertex-proxy' })).toMatchObject({
+      canonicalModelId: 'gemini-3-pro-image-preview',
+      providerId: 'vertex-site',
+    });
+    expect(resolveExecutableModelRoute({ modality: 'image', model: 'gpt-image-2', provider: 'toapis-openai' })).toMatchObject({
+      canonicalModelId: 'gpt-image-2',
+      providerId: 'toapis',
+    });
+    expect(resolveExecutableModelRoute({ modality: 'image', model: 'doubao-seedream-5-0', provider: 'volcengine-ark-image' })).toMatchObject({
+      canonicalModelId: 'doubao-seedream-5-0',
+      providerId: 'volcengine-ark',
+    });
+    expect(resolveExecutableModelRoute({ modality: 'video', model: 'jimeng-video-ti2v-v30-pro', provider: 'jimeng-visual' })).toMatchObject({
+      canonicalModelId: 'jimeng-video-ti2v-v30-pro',
+      providerId: 'volcengine-jimeng',
+    });
+    expect(resolveExecutableModelRoute({ modality: 'model3d', model: 'tripo-p1', provider: 'tripo-openapi' })).toMatchObject({
+      canonicalModelId: 'tripo-p1',
+      providerId: 'tripo',
+    });
+    expect(resolveExecutableModelRoute({ modality: 'model3d', model: 'tencent-hunyuan-3d-rapid', provider: 'tencent-hunyuan-3d' })).toMatchObject({
+      canonicalModelId: 'tencent-hunyuan-3d-rapid',
+      providerId: 'tencent-hunyuan',
+    });
+
+    await expect(
+      validateAiGatewayModelRouteExecutable(
+        { modality: 'image', model: 'doubao-seedream-5-0', provider: 'volcengine-ark-image' },
+        { listProviderKeys: async () => [{ provider: 'volcengine-ark-image', enabled: true, hasSecret: true }] }
+      )
+    ).resolves.toMatchObject({
+      ok: true,
+      checked: true,
+      route: { providerId: 'volcengine-ark' },
+    });
+  });
+
   it('removes paused providers from executable route candidates before planning', () => {
     expect(
       resolveExecutableModelRoute(
@@ -102,6 +140,20 @@ describe('AI gateway model publication guard', () => {
         disabledProviders: ['vertex-site'],
       }).map((route) => route.providerId)
     ).toEqual(['gemini-aistudio']);
+  });
+
+  it('reports paused providers separately from missing model routes', async () => {
+    await expect(
+      validateAiGatewayModelRouteExecutable(
+        { modality: 'image', model: 'doubao-seedream-5-0' },
+        {
+          disabledProviders: ['volcengine-ark-image'],
+          listProviderKeys: async () => [{ provider: 'volcengine-ark', enabled: true, hasSecret: true }],
+        }
+      )
+    ).rejects.toMatchObject({
+      code: 'AI_GATEWAY_PROVIDER_PAUSED',
+    });
   });
 
   it('identifies catalog models whose backend adapters are still pending', async () => {

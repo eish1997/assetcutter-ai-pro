@@ -128,6 +128,16 @@ function nonEmptyString(value) {
 
 export function normalizeAiGatewayProviderId(value) {
   const id = nonEmptyString(value);
+  if (id === 'volcengine-ark-openai' || id === 'volcengine-ark-image' || id === 'volcengine-ark-async') {
+    return 'volcengine-ark';
+  }
+  if (id === 'jimeng-visual' || id === 'volcengine-jimeng-visual' || id === 'volcengine-visual') {
+    return 'volcengine-jimeng';
+  }
+  if (id === 'tripo-openapi') return 'tripo';
+  if (id === 'tencent-hunyuan-3d' || id === 'hunyuan-3d') return 'tencent-hunyuan';
+  if (id === 'ai-worker-proxy' || id === 'vertex-proxy') return 'vertex-site';
+  if (id === 'toapis-openai' || id === 'toapis-gemini') return 'toapis';
   if (id === 'vertex-gemini') return 'vertex-site';
   return id;
 }

@@ -2418,6 +2418,20 @@ function userFacingUpstreamAccountCreditMessage(raw: string): string | null {
   return null;
 }
 
+function userFacingVolcengineArkRateLimitMessage(raw: string): string | null {
+  const t = (raw || '').trim();
+  if (!t) return null;
+  if (!/Volcengine Ark|volcengine|volces|火山方舟|方舟|doubao|seedream|seedance|seed3d/i.test(t)) return null;
+  if (
+    !/\bHTTP\s*429\b|\bstatus\s*429\b|"code"\s*:\s*429\b|too many requests|reached the set inference limit|inference limit|rate limit|RESOURCE_EXHAUSTED/i.test(
+      t
+    )
+  ) {
+    return null;
+  }
+  return '火山方舟/Ark 推理限流或账号并发额度触顶。请等待一段时间后单次重试，或在火山方舟控制台提升/调整推理限额；这不是 Google/Vertex 配额。';
+}
+
 function isCreditsOrGateErrorText(raw: string): boolean {
   return /CREDITS_RESERVE_INVALID|CREDITS_EXCEEDED|CREDITS_BUNDLE|CREDITS_GATE|积分预扣|积分不足|积分准入|LOGIN_REQUIRED|请先登录/i.test(
     raw
@@ -2432,6 +2446,8 @@ export function mapRateLimitErrorText(raw: string): string | null {
   if (/proxy:[0-9a-f-]{20,}/i.test(t) && !/too many requests|resource_exhausted|rate_limited/i.test(t)) {
     return null;
   }
+  const arkRateLimit = userFacingVolcengineArkRateLimitMessage(t);
+  if (arkRateLimit) return arkRateLimit;
   const accountCredit = userFacingUpstreamAccountCreditMessage(t);
   if (accountCredit) return accountCredit;
   if (/too many requests/i.test(t)) return userFacingRateLimitMessage('upstream');
