@@ -7,29 +7,32 @@ import {
   resolvePendingAiGatewayModelRoute,
 } from '../../shared/aiGatewayModelRoutes.js';
 
-export function resolveExecutableModelRoute(input) {
+export function resolveExecutableModelRoute(input, options = {}) {
   const canonicalModelId = resolveRequestedCanonicalModelId(input);
   if (!canonicalModelId) return null;
   return resolveExecutableAiGatewayModelRoute({
     canonicalModelId,
     modality: input?.modality,
     provider: normalizeAiGatewayProviderId(input?.provider),
+    disabledProviders: options.disabledProviders,
   });
 }
 
-export function resolveKnownPendingModelRoute(input) {
+export function resolveKnownPendingModelRoute(input, options = {}) {
   const canonicalModelId = resolveRequestedCanonicalModelId(input);
   if (!canonicalModelId) return null;
   const executable = resolveExecutableAiGatewayModelRoute({
     canonicalModelId,
     modality: input?.modality,
     provider: normalizeAiGatewayProviderId(input?.provider),
+    disabledProviders: options.disabledProviders,
   });
   if (executable) return null;
   return resolvePendingAiGatewayModelRoute({
     canonicalModelId,
     modality: input?.modality,
     provider: normalizeAiGatewayProviderId(input?.provider),
+    disabledProviders: options.disabledProviders,
   });
 }
 
@@ -43,9 +46,13 @@ export async function validateAiGatewayModelRouteExecutable(input, options = {})
   const canonicalModelId = resolveRequestedCanonicalModelId(input);
   if (!canonicalModelId) return { ok: true, canonicalModelId: null, route: null, checked: false };
 
-  const route = resolveExecutableModelRoute(input);
+  const route = resolveExecutableModelRoute(input, {
+    disabledProviders: options.disabledProviders,
+  });
   if (!route) {
-    const pending = resolveKnownPendingModelRoute(input);
+    const pending = resolveKnownPendingModelRoute(input, {
+      disabledProviders: options.disabledProviders,
+    });
     if (pending) {
       throw new AiGatewayValidationError(
         `AI model route is not executable yet: ${canonicalModelId} via ${pending.providerId}`,

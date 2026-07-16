@@ -126,9 +126,13 @@ export async function createAuthAiGatewayJob(req, body, user, options = {}) {
   const executableRoute = await validateAiGatewayModelRouteExecutable(planInput, {
     listProviderKeys: options.listProviderKeys,
     checkProviderKeys: options.checkProviderKeys,
+    disabledProviders: opsControl.disabledProviders,
   });
   if (executableRoute.checked) {
-    if (!planInput.provider && executableRoute.route?.providerId) {
+    const shouldPinProvider =
+      Boolean(raw.provider) ||
+      Boolean(executableRoute.route?.platformKeyRequired);
+    if (shouldPinProvider && !planInput.provider && executableRoute.route?.providerId) {
       planInput.provider = executableRoute.route.providerId;
     }
     planInput.metadata.modelRouteGuard = {

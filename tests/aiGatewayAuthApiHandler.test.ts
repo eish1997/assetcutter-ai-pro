@@ -86,6 +86,33 @@ describe('AI gateway auth-api facade', () => {
     expect(await store.get('aijob_auth_blocked')).toBeNull();
   });
 
+  it('keeps Gemini auth job routing aligned with ops fallback instead of pinning a paused Vertex route', async () => {
+    const store = createInMemoryAiJobStore();
+    const user = { id: 'user_1', username: 'alice' };
+    const result = await createAuthAiGatewayJob({}, imageJobBody('aijob_auth_vertex_paused'), user, {
+      store,
+      modelOpsConfig: { publishedCanonicalModelAllowlist: ['gemini-3-pro-image-preview'] },
+      opsControl: {
+        disabledProviders: ['vertex-site'],
+        disabledModels: [],
+        modelOverrides: [],
+      },
+    });
+
+    expect(result.status).toBe(202);
+    const stored = await store.get('aijob_auth_vertex_paused');
+    expect(stored.job.provider).toBe('gemini-aistudio');
+    expect(stored.route).toMatchObject({
+      providerId: 'gemini-aistudio',
+      workerId: 'image-worker',
+      adapterId: 'legacy-gemini-proxy',
+    });
+    expect(stored.job.metadata.modelRouteGuard).toMatchObject({
+      providerId: 'gemini-aistudio',
+      gatewayExecutionStatus: 'gateway_ready',
+    });
+  });
+
   it('rejects published Ark async models when no usable provider key exists', async () => {
     const store = createInMemoryAiJobStore();
     const user = { id: 'user_1', username: 'alice' };
