@@ -5,7 +5,10 @@ import {
   applyAiGatewayModelOverride,
   readAiGatewayOpsControlConfigSync,
 } from './ops-control.js';
-import { resolveExecutableAiGatewayModelRoute } from '../../shared/aiGatewayModelRoutes.js';
+import {
+  normalizeAiGatewayProviderId,
+  resolveExecutableAiGatewayModelRoute,
+} from '../../shared/aiGatewayModelRoutes.js';
 
 function nonEmptyString(value) {
   return typeof value === 'string' && value.trim() ? value.trim() : '';
@@ -25,7 +28,11 @@ function resolveRequestedModelId(job) {
 }
 
 function applyModelRouteProviderInference(job, opsControl = {}) {
-  if (nonEmptyString(job?.provider)) return { job, inferred: null };
+  const explicitProvider = normalizeAiGatewayProviderId(job?.provider);
+  if (explicitProvider) {
+    if (explicitProvider === job.provider) return { job, inferred: null };
+    return { job: { ...job, provider: explicitProvider }, inferred: null };
+  }
   const canonicalModelId = resolveRequestedModelId(job);
   if (!canonicalModelId) return { job, inferred: null };
   const route = resolveExecutableAiGatewayModelRoute({

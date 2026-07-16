@@ -118,6 +118,16 @@ describe('resolveComposerMode (P23)', () => {
     expect(resolveComposerMode(baseIntent({ mode: 'auto', text: '写一句旁白' }))).toBe('text');
   });
 
+  it('auto + video keywords -> video', () => {
+    expect(resolveComposerMode(baseIntent({ mode: 'auto', text: '把当前角色生成一段视频' }))).toBe('video');
+  });
+
+  it('auto + video keywords can use image refs', () => {
+    expect(
+      resolveComposerMode(baseIntent({ mode: 'auto', text: '让这张图动起来', mainAssetId: 'a1' }))
+    ).toBe('video');
+  });
+
   it('auto + image ref beats 3D keywords', () => {
     expect(
       resolveComposerMode(
@@ -169,6 +179,13 @@ describe('planTools with mode=auto', () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.plan.map((p) => p.toolId)).toEqual(['run_plain_3d']);
+  });
+
+  it('auto + video keywords -> run_plain_video', () => {
+    const result = planTools(baseIntent({ mode: 'auto', text: '生成一段产品视频' }));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.plan.map((p) => p.toolId)).toEqual(['run_plain_video']);
   });
 
   it('explicit image chip still wins over auto-like text (no resolve overwrite)', () => {

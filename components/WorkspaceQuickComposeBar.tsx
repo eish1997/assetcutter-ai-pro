@@ -4,6 +4,8 @@ import { Image as ImageIcon, Maximize2, Minimize2 } from 'lucide-react';
 import { imageSizeSelectOptionsForRegistryModel } from '../services/openaiAdapter';
 import { useEffectiveImageModelRows } from '../hooks/useEffectiveImageGearRows';
 import { useEffectiveTextModelRows } from '../hooks/useEffectiveTextModelRows';
+import { useEffectiveCapabilityModelRows } from '../hooks/useEffectiveCapabilityModelRows';
+import { resolveModelParameterCapabilities } from '../services/modelRegistry/modelParameterCapabilities';
 import {
   DT_AC_CAPABILITY_ACTION,
   DT_AC_CAPABILITY_FROM_EDITOR,
@@ -56,14 +58,38 @@ export type WorkspaceQuickComposeGenSettings = {
   onAspectRatio: (v: string) => void;
   imageSize: string;
   onImageSize: (v: string) => void;
-  /** true = 先理解再生成；false = 直发提示词（与侧栏分组「解」一致） */
+  /** true = 閸忓牏鎮婄憴锝呭晙閻㈢喐鍨氶敍娌燼lse = 閻╂潙褰傞幓鎰仛鐠囧稄绱欐稉搴濇櫠閺嶅繐鍨庣紒鍕┾偓宀冃掗妴宥勭閼疯揪绱?*/
   understand: boolean;
   onUnderstand: (v: boolean) => void;
   count: number;
   onCount: (v: number) => void;
+  videoModelRegistryId: string;
+  onVideoModelRegistryId: (v: string) => void;
+  videoDurationSeconds: string;
+  onVideoDurationSeconds: (v: string) => void;
+  videoAspectRatio: string;
+  onVideoAspectRatio: (v: string) => void;
+  videoResolution: string;
+  onVideoResolution: (v: string) => void;
+  videoMotionStrength: string;
+  onVideoMotionStrength: (v: string) => void;
+  model3dRegistryId: string;
+  onModel3dRegistryId: (v: string) => void;
+  model3dQuality: string;
+  onModel3dQuality: (v: string) => void;
+  model3dGeometryQuality: string;
+  onModel3dGeometryQuality: (v: string) => void;
+  model3dTextureQuality: string;
+  onModel3dTextureQuality: (v: string) => void;
+  model3dFormat: string;
+  onModel3dFormat: (v: string) => void;
+  model3dTexture: boolean;
+  onModel3dTexture: (v: boolean) => void;
+  model3dPbr: boolean;
+  onModel3dPbr: (v: boolean) => void;
 };
 
-/** 从功能区/能力列拖入文本框的预设：展示为卡片，入队时与输入文案合并为提示词 */
+/** 娴犲骸濮涢懗钘夊隘/閼宠棄濮忛崚妤佸珛閸忋儲鏋冮張顒侇攱閻ㄥ嫰顣╃拋鎾呯窗鐏炴洜銇氭稉鍝勫幢閻楀浄绱濋崗銉╂Е閺冩湹绗屾潏鎾冲弳閺傚洦顢嶉崥鍫濊嫙娑撶儤褰佺粈楦跨槤 */
 export type WorkspaceQuickComposePromptCard = {
   key: string;
   presetId: string;
@@ -71,76 +97,75 @@ export type WorkspaceQuickComposePromptCard = {
   instruction: string;
 };
 
-export type WorkspaceQuickComposeComposeMode = 'text' | 'image' | '3d' | 'auto';
+export type WorkspaceQuickComposeComposeMode = 'text' | 'image' | 'video' | '3d' | 'auto';
 
 export type WorkspaceQuickComposeBarProps = {
   visible: boolean;
   /**
-   * `floating`：可拖动，默认贴底居中附近。
-   * `lightbox`：大图预览内 portal；可拖动定位（与全局相同），禁用加图 / 拖入，附图由外层提交逻辑注入。
-   */
+   * `floating`閿涙艾褰查幏鏍уЗ閿涘矂绮拋銈堝垱鎼存洖鐪虫稉顓㈡鏉╂垯鈧?   * `lightbox`閿涙艾銇囬崶楣冾暕鐟欏牆鍞?portal閿涙稑褰查幏鏍уЗ鐎规矮缍呴敍鍫滅瑢閸忋劌鐪惄绋挎倱閿涘绱濈粋浣烘暏閸旂姴娴?/ 閹锋牕鍙嗛敍宀勬閸ュ墽鏁辨径鏍х湴閹绘劒姘﹂柅鏄忕帆濞夈劌鍙嗛妴?   */
   placement?: 'floating' | 'lightbox';
   /**
-   * 仅 `lightbox`：选区底边中点（视口 CSS 像素）。非空时输入条移到该点下方；`null` 时恢复默认贴底居中。
-   */
+   * 娴?`lightbox`閿涙岸鈧灏惔鏇＄珶娑擃厾鍋ｉ敍鍫ｎ潒閸?CSS 閸嶅繒绀岄敍澶堚偓鍌炴姜缁岀儤妞傛潏鎾冲弳閺夛紕些閸掓媽顕氶悙閫涚瑓閺傜櫢绱盽null` 閺冭埖浠径宥夌帛鐠併倛鍒涙惔鏇炵湷娑擃厹鈧?   */
   lightboxAnchorClient?: { x: number; y: number } | null;
-  /** 仅 `lightbox`：递增时强制将输入条复位到默认贴底（提交后即时归位） */
+  /** 娴?`lightbox`閿涙岸鈧帒顤冮弮璺哄繁閸掕泛鐨㈡潏鎾冲弳閺夆€愁槻娴ｅ秴鍩屾妯款吇鐠愭潙绨抽敍鍫熷絹娴溿倕鎮楅崡铏瑜版帊缍呴敍?*/
   lightboxLayoutResetNonce?: number;
-  /** 非空时覆盖根据模式推导的输入框 placeholder */
+  /** 闂堢偟鈹栭弮鎯邦洬閻╂牗鐗撮幑顔侥佸蹇斿腹鐎佃偐娈戞潏鎾冲弳濡?placeholder */
   placeholderOverride?: string;
-  /** 无拖入预设卡片时生效；有卡片时提交以卡片能力为准 */
+  /** 閺冪姵瀚嬮崗銉╊暕鐠佹儳宕遍悧鍥ㄦ閻㈢喐鏅ラ敍娑欐箒閸楋紕澧栭弮鑸靛絹娴溿倓浜掗崡锛勫閼宠棄濮忔稉鍝勫櫙 */
   composeMode: WorkspaceQuickComposeComposeMode;
   onComposeModeChange: (m: WorkspaceQuickComposeComposeMode) => void;
-  /** 已拖入能力预设卡片（输入框预设优先） */
+  /** 瀹稿弶瀚嬮崗銉ㄥ厴閸旀盯顣╃拋鎯у幢閻楀浄绱欐潏鎾冲弳濡楀棝顣╃拋鍙ョ喘閸忓牞绱?*/
   inputPresetsActive: boolean;
   segments: QuickComposeSegment[];
   onSegmentsChange: (next: QuickComposeSegment[]) => void;
   mentionCandidates: QuickComposeMentionCandidate[];
-  /** 主图区（每张主图 = 一条任务的图1） */
+  /** 娑撹娴橀崠鐚寸礄濮ｅ繐绱舵稉璇叉禈 = 娑撯偓閺夆€叉崲閸旓紕娈戦崶?閿?*/
   mainDropSlots: QuickComposeDropSlot[];
-  /** 参考图区（所有主图任务共用，图2、图3…） */
+  /** 閸欏倽鈧啫娴橀崠鐚寸礄閹碘偓閺堝瀵岄崶鍙ユ崲閸斺€冲彙閻㈩煉绱濋崶?閵嗕礁娴?閳ワ讣绱?*/
   referenceDropSlots: QuickComposeDropSlot[];
   onRemoveMainDropSlot: (assetId: string) => void;
   onRemoveReferenceDropSlot: (assetId: string) => void;
-  /** 托盘内拖动：在主图区 / 参考图区之间换区 */
+  /** 閹垫娲忛崘鍛珛閸旑煉绱伴崷銊ゅ瘜閸ユ儳灏?/ 閸欏倽鈧啫娴橀崠杞扮闂傚瓨宕查崠?*/
   onMoveDropSlot?: (assetId: string, toZone: QuickComposeDropZone) => void;
-  /** 同区内拖动调整顺序 */
+  /** 閸氬苯灏崘鍛珛閸斻劏鐨熼弫鎾€庢惔?*/
   onReorderDropSlot?: (assetId: string, zone: QuickComposeDropZone, toIndex: number) => void;
-  /** 参考图（@ 引用）数量上限 */
+  /** 閸欏倽鈧啫娴橀敍鍦?瀵洜鏁ら敍澶嬫殶闁插繋绗傞梽?*/
   maxMentions: number;
-  /** 积分不足等：禁用 composer 输入（不含空 draft） */
+  /** 缁夘垰鍨庢稉宥堝喕缁涘绱扮粋浣烘暏 composer 鏉堟挸鍙嗛敍鍫滅瑝閸氼偆鈹?draft閿?*/
   inputDisabled?: boolean;
-  /** 积分不足、空 draft、或助手进行中：禁用发送 */
+  /** 缁夘垰鍨庢稉宥堝喕閵嗕胶鈹?draft閵嗕焦鍨ㄩ崝鈺傚鏉╂稖顢戞稉顓ㄧ窗缁備胶鏁ら崣鎴︹偓?*/
   submitDisabled?: boolean;
   submitDisabledReason?: string;
   onSubmit: () => void;
   genSettings: WorkspaceQuickComposeGenSettings;
-  /** 展示档位 / 比例 / 输出尺寸（生图引擎） */
+  /** 鐏炴洜銇氬锝勭秴 / 濮ｆ柧绶?/ 鏉堟挸鍤亸鍝勵嚟閿涘牏鏁撻崶鎯х穿閹垮函绱?*/
   showGenImageSettings: boolean;
-  /** 展示文字模型选择（文模式） */
+  /** 鐏炴洜銇氶弬鍥х摟濡€崇€烽柅澶嬪閿涘牊鏋冨Ο鈥崇础閿?*/
   showGenTextSettings: boolean;
-  /** 展示生成数量 1～4 */
+  /** 鐏炴洜銇氱憴鍡涱暥濡€崇€锋稉搴″棘閺?*/
+  showGenVideoSettings: boolean;
+  /** 鐏炴洜銇?3D 濡€崇€锋稉搴″棘閺?*/
+  showGenModel3dSettings: boolean;
+  /** 鐏炴洜銇氶悽鐔稿灇閺佷即鍣?1閿? */
   allowBatchCount: boolean;
-  /** 拖入「文本框」区域时：切换快捷能力并追加预设提示词卡片（功能区/能力列 MIME） */
+  /** 閹锋牕鍙嗛妴灞炬瀮閺堫剚顢嬮妴宥呭隘閸╃喐妞傞敍姘瀼閹广垹鎻╅幑鐤厴閸旀稑鑻熸潻钘夊妫板嫯顔曢幓鎰仛鐠囧秴宕遍悧鍥风礄閸旂喕鍏橀崠?閼宠棄濮忛崚?MIME閿?*/
   onComposeInputCapabilityDrop?: (presetId: string) => void;
-  /** 拖入工作区资产；zone 区分主图区 / 参考图区 */
+  /** 閹锋牕鍙嗗銉ょ稊閸栭缚绁禍褝绱眤one 閸栧搫鍨庢稉璇叉禈閸?/ 閸欏倽鈧啫娴橀崠?*/
   onComposeInputWorkflowDrop?: (e: React.DragEvent, zone: QuickComposeDropZone) => void;
-  /** 粘贴自缩略图/列表「复制 ID」的资产引用（不新建卡片） */
+  /** 缁鍒涢懛顏嗙級閻ｃ儱娴?閸掓銆冮妴灞筋槻閸?ID閵嗗秶娈戠挧鍕獓瀵洜鏁ら敍鍫滅瑝閺傛澘缂撻崡锛勫閿?*/
   onPasteAssetRefs?: (assetIds: string[], zone: QuickComposeDropZone) => void;
-  /** 粘贴引用默认落入的拖入区；大图预览为 reference（当前图固定主图） */
+  /** 缁鍒涘鏇犳暏姒涙顓婚拃钘夊弳閻ㄥ嫭瀚嬮崗銉ュ隘閿涙稑銇囬崶楣冾暕鐟欏牅璐?reference閿涘牆缍嬮崜宥呮禈閸ュ搫鐣炬稉璇叉禈閿?*/
   pasteAssetRefZone?: QuickComposeDropZone;
-  /** 仅 lightbox：隐藏主图区（当前画面即主图） */
+  /** 娴?lightbox閿涙岸娈ｉ挊蹇庡瘜閸ユ儳灏敍鍫濈秼閸撳秶鏁鹃棃銏犲祮娑撹娴橀敍?*/
   hideMainDropZone?: boolean;
-  /** 展开态：portal 到外层右侧挂载点（工作区 / 大图左右分栏） */
+  /** 鐏炴洖绱戦幀渚婄窗portal 閸掓澘顦荤仦鍌氬礁娓氀勫瘯鏉炵晫鍋ｉ敍鍫濅紣娴ｆ粌灏?/ 婢堆冩禈瀹革箑褰搁崚鍡樼埉閿?*/
   expandedDockHostRef?: React.RefObject<HTMLDivElement | null>;
-  /** 内嵌展开态变化（供外层收窄主区域） */
+  /** 閸愬懎绁电仦鏇炵磻閹礁褰夐崠鏍电礄娓氭稑顦荤仦鍌涙暪缁愬嫪瀵岄崠鍝勭厵閿?*/
   onInputExpandedChange?: (expanded: boolean) => void;
   promptCards: WorkspaceQuickComposePromptCard[];
   onRemovePromptCard: (key: string) => void;
   /**
-   * 展开 dock 且提供时：右侧内嵌区渲染 `QuickComposeChatDock`（对话线程 + composer），
-   * 替代 mention 大输入区；未提供时保持原有 dock 布局（fallback）。
-   */
+   * 鐏炴洖绱?dock 娑撴梹褰佹笟娑欐閿涙艾褰告笟褍鍞村畵灞藉隘濞撳弶鐓?`QuickComposeChatDock`閿涘牆顕拠婵堝殠缁?+ composer閿涘绱?   * 閺囧じ鍞?mention 婢堆嗙翻閸忋儱灏敍娑欐弓閹绘劒绶甸弮鏈电箽閹镐礁甯張?dock 鐢啫鐪敍鍧抋llback閿涘鈧?   */
   chatDockProps?: Pick<
     ProjectAgentDockProps,
     | 'messages'
@@ -176,25 +201,25 @@ export type WorkspaceQuickComposeChatDockProps = NonNullable<
   WorkspaceQuickComposeBarProps['chatDockProps']
 >;
 
-/** 参考常见生图产品：主比例一行 */
+/** 閸欏倽鈧啫鐖剁憴浣烘晸閸ュ彞楠囬崫渚婄窗娑撶粯鐦笟瀣╃鐞?*/
 const QC_ASPECT_PRIMARY = ['16:9', '4:3', '1:1', '3:4', '9:16'] as const;
 
-/** 快捷条右侧控件统一高度（模式 / 模型 / 参数 pill） */
+/** 韫囶偅宓庨弶鈥冲礁娓氀勫付娴犲墎绮烘稉鈧妯哄閿涘牊膩瀵?/ 濡€崇€?/ 閸欏倹鏆?pill閿?*/
 const QUICK_COMPOSE_CTRL_H = 'h-6';
 
-/** 快捷条内 pill 按钮（模型 / 参数）统一高度与内边距 */
+/** 韫囶偅宓庨弶鈥冲敶 pill 閹稿鎸抽敍鍫熌侀崹?/ 閸欏倹鏆熼敍澶岀埠娑撯偓妤傛ê瀹虫稉搴″敶鏉堢绐?*/
 const QUICK_COMPOSE_PILL_TRIGGER =
   `inline-flex ${QUICK_COMPOSE_CTRL_H} min-h-6 max-h-6 shrink-0 items-center gap-0.5 rounded-md bg-white/[0.06] px-1.5 text-[9px] leading-none ring-1 ring-white/[0.08] outline-none transition-colors hover:bg-white/[0.1] focus-visible:ring-2 focus-visible:ring-blue-500/45`;
 
-/** 快捷条模式 chip（文 / 图 / 3D） */
+/** 韫囶偅宓庨弶鈩兡佸?chip閿涘牊鏋?/ 閸?/ 3D閿?*/
 const QUICK_COMPOSE_MODE_CHIP_BASE =
   `inline-flex ${QUICK_COMPOSE_CTRL_H} min-h-6 max-h-6 shrink-0 items-center justify-center rounded-md px-1.5 text-[9px] font-bold leading-none transition-colors box-border`;
 
 const VIEW_MARGIN = QUICK_COMPOSE_VIEW_MARGIN;
-/** 快捷条默认贴底：底边距视口底约 28px（与旧逻辑 top≈vh−92、高≈64 一致：92−64=28） */
+/** 韫囶偅宓庨弶锟犵帛鐠併倛鍒涙惔鏇窗鎼存洝绔熺捄婵婎潒閸欙絽绨崇痪?28px閿涘牅绗岄弮褔鈧槒绶?top閳澊h閳?2閵嗕線鐝埉?4 娑撯偓閼疯揪绱?2閳?4=28閿?*/
 const QUICK_COMPOSE_BAR_BOTTOM_GAP = 28;
 
-/** 将 fixed 定位的 left/top 限制在当前视口内（含上方浮层 overhang） */
+/** 鐏?fixed 鐎规矮缍呴惃?left/top 闂勬劕鍩楅崷銊ョ秼閸撳秷顫嬮崣锝呭敶閿涘牆鎯堟稉濠冩煙濞搭喖鐪?overhang閿?*/
 function clampBarToViewport(
   pos: { left: number; top: number },
   barEl: HTMLElement | null,
@@ -205,8 +230,7 @@ function clampBarToViewport(
 }
 
 /**
- * 工作区底部居中：与预览工具栏同系实色条快捷输入；支持多图、生成参数摘要条与弹出设置。
- */
+ * 瀹搞儰缍旈崠鍝勭俺闁劌鐪虫稉顓ㄧ窗娑撳酣顣╃憴鍫濅紣閸忛攱鐖崥宀€閮寸€圭偠澹婇弶鈥虫彥閹圭柉绶崗銉幢閺€顖涘瘮婢舵艾娴橀妴浣烘晸閹存劕寮弫鐗堟喅鐟曚焦娼稉搴¤剨閸戦缚顔曠純顔衡偓? */
 export default function WorkspaceQuickComposeBar({
   visible,
   placement = 'floating',
@@ -233,6 +257,8 @@ export default function WorkspaceQuickComposeBar({
   genSettings,
   showGenImageSettings,
   showGenTextSettings,
+  showGenVideoSettings,
+  showGenModel3dSettings,
   allowBatchCount,
   onComposeInputCapabilityDrop,
   onComposeInputWorkflowDrop,
@@ -252,23 +278,25 @@ export default function WorkspaceQuickComposeBar({
   const settingsTriggerRef = useRef<HTMLButtonElement>(null);
   const modelTriggerRef = useRef<HTMLButtonElement>(null);
   const textModelTriggerRef = useRef<HTMLButtonElement>(null);
+  const videoModelTriggerRef = useRef<HTMLButtonElement>(null);
+  const model3dTriggerRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
-  const [panelAnchor, setPanelAnchor] = useState<'model' | 'textModel' | 'params'>('params');
-  /** 展开输入区前记录条形容器底边（视口 Y），用于增高时固定底边、向上延伸 */
+  const [panelAnchor, setPanelAnchor] = useState<'model' | 'textModel' | 'videoModel' | 'model3dModel' | 'params'>('params');
+  /** 鐏炴洖绱戞潏鎾冲弳閸栧搫澧犵拋鏉跨秿閺夆€宠埌鐎圭懓娅掓惔鏇＄珶閿涘牐顫嬮崣?Y閿涘绱濋悽銊ょ艾婢х偤鐝弮璺烘祼鐎规艾绨虫潏骞库偓浣告倻娑撳﹤娆㈡导?*/
   const expandAnchorBottomRef = useRef<number | null>(null);
-  /** 收起前记录底边，用于变矮时固定底边、向上收合（与展开对称） */
+  /** 閺€鎯版崳閸撳秷顔囪ぐ鏇炵俺鏉堢櫢绱濋悽銊ょ艾閸欐鐓弮璺烘祼鐎规艾绨虫潏骞库偓浣告倻娑撳﹥鏁归崥鍫礄娑撳骸鐫嶅鈧€靛湱袨閿?*/
   const collapseAnchorBottomRef = useRef<number | null>(null);
-  /** 展开期间固定底边，输入增高时向上延伸且不超出视口 */
+  /** 鐏炴洖绱戦張鐔兼？閸ュ搫鐣炬惔鏇＄珶閿涘矁绶崗銉ヮ杻妤傛ɑ妞傞崥鎴滅瑐瀵ゆ湹鍑犳稉鏂剧瑝鐡掑懎鍤憴鍡楀經 */
   const expandedBarBottomRef = useRef<number | null>(null);
   const prevInputExpandedRef = useRef(false);
   const [dragging, setDragging] = useState(false);
   const [position, setPosition] = useState<{ left: number; top: number } | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  /** 展开：输入区变高、整条变窄，便于编辑长文案 */
+  /** 鐏炴洖绱戦敍姘崇翻閸忋儱灏崣姗€鐝妴浣规殻閺夆€冲綁缁愬嫸绱濇笟澶哥艾缂傛牞绶梹鎸庢瀮濡?*/
   const [inputExpanded, setInputExpanded] = useState(false);
   const [composeTextMaxHeightPx, setComposeTextMaxHeightPx] = useState<number | undefined>(undefined);
   const [panelPos, setPanelPos] = useState<{
-    /** 与触发药丸水平居中对齐：样式 left + translateX(-50%) */
+    /** 娑撳氦袝閸欐垼宓傛稉鍛婃寜楠炲啿鐪虫稉顓烆嚠姒绘劧绱伴弽宄扮础 left + translateX(-50%) */
     anchorX: number;
     top: number;
     transform: string;
@@ -276,7 +304,9 @@ export default function WorkspaceQuickComposeBar({
 
   const { rows: effectiveModelRows, coerceModelId } = useEffectiveImageModelRows();
   const { rows: effectiveTextModelRows, coerceModelId: coerceTextModelId } = useEffectiveTextModelRows();
-  /** 勿将整颗 `genSettings` 放进 deps：父级每次 render 都是新对象，会导致 layout effect 每帧跑一遍并可能级联 setState → 栈溢出。 */
+  const { rows: effectiveVideoModelRows, firstReadyRegistryId: firstVideoModelId } = useEffectiveCapabilityModelRows('video');
+  const { rows: effectiveModel3dRows, firstReadyRegistryId: firstModel3dId } = useEffectiveCapabilityModelRows('model3d');
+  /** 閸曞灝鐨㈤弫鎾暭 `genSettings` 閺€鎹愮箻 deps閿涙氨鍩楃痪褎鐦″▎?render 闁姤妲搁弬鏉款嚠鐠炩槄绱濇导姘嚤閼?layout effect 濮ｅ繐鎶氱捄鎴滅闁秴鑻熼崣顖濆厴缁狙嗕粓 setState 閳?閺嶅牊瀛╅崙鎭掆偓?*/
   const coerceModelTargetId = genSettings.imageModelRegistryId;
   const onImageModelChange = genSettings.onImageModelRegistryId;
   const coerceTextModelTargetId = genSettings.textModelRegistryId;
@@ -293,6 +323,20 @@ export default function WorkspaceQuickComposeBar({
     const next = coerceTextModelId(coerceTextModelTargetId);
     if (next !== coerceTextModelTargetId) onTextModelChange(next);
   }, [showGenTextSettings, coerceTextModelId, coerceTextModelTargetId, onTextModelChange]);
+
+  useLayoutEffect(() => {
+    if (!showGenVideoSettings) return;
+    const current = genSettings.videoModelRegistryId;
+    if (current && effectiveVideoModelRows.some((row) => row.registryId === current && !row.disabled)) return;
+    if (firstVideoModelId) genSettings.onVideoModelRegistryId(firstVideoModelId);
+  }, [showGenVideoSettings, effectiveVideoModelRows, firstVideoModelId, genSettings.videoModelRegistryId, genSettings.onVideoModelRegistryId]);
+
+  useLayoutEffect(() => {
+    if (!showGenModel3dSettings) return;
+    const current = genSettings.model3dRegistryId;
+    if (current && effectiveModel3dRows.some((row) => row.registryId === current && !row.disabled)) return;
+    if (firstModel3dId) genSettings.onModel3dRegistryId(firstModel3dId);
+  }, [showGenModel3dSettings, effectiveModel3dRows, firstModel3dId, genSettings.model3dRegistryId, genSettings.onModel3dRegistryId]);
 
   const resetToDefaultPosition = useCallback(() => {
     const vw = window.innerWidth;
@@ -376,8 +420,6 @@ export default function WorkspaceQuickComposeBar({
 
   const handleComposeInputDragOver = useCallback(
     (e: React.DragEvent) => {
-      // 与悬浮条一致：只要挂了能力/资产回调就允许放置。
-      // 部分浏览器 dragover 阶段不暴露自定义 MIME，不能靠 types 卡死。
       const allowCap = Boolean(onComposeInputCapabilityDrop);
       const allowWf = Boolean(onComposeInputWorkflowDrop) && dragHasWorkflowExport(e);
       if (!allowCap && !allowWf) return;
@@ -394,14 +436,12 @@ export default function WorkspaceQuickComposeBar({
 
   const handleComposeInputDrop = useCallback(
     (e: React.DragEvent, zone: QuickComposeDropZone = 'main') => {
-      // 资产拖放优先
       if (onComposeInputWorkflowDrop && dragHasWorkflowExport(e)) {
         e.preventDefault();
         e.stopPropagation();
         onComposeInputWorkflowDrop(e, zone);
         return;
       }
-      // 与悬浮条一致：drop 时直接读 id，不依赖 types 门闩
       if (onComposeInputCapabilityDrop) {
         const id = readDroppedCapabilityPresetId(e.dataTransfer);
         if (id) {
@@ -418,7 +458,6 @@ export default function WorkspaceQuickComposeBar({
       readDroppedCapabilityPresetId,
     ]
   );
-
   const handleMainZoneDragOver = useCallback(
     (e: React.DragEvent) => {
       const allowCap = Boolean(onComposeInputCapabilityDrop);
@@ -500,17 +539,17 @@ export default function WorkspaceQuickComposeBar({
     [mainDropSlots, referenceDropSlots, mentionCandidates]
   );
 
-  /** 仅在有拖入图片时展示主图/参考图两区；大图模式始终展示参考图区（当前图固定为主图） */
+  /** 娴犲懎婀張澶嬪珛閸忋儱娴橀悧鍥ㄦ鐏炴洜銇氭稉璇叉禈/閸欏倽鈧啫娴樻稉銈呭隘閿涙稑銇囬崶鐐佸蹇擃潗缂佸牆鐫嶇粈鍝勫棘閼板啫娴橀崠鐚寸礄瑜版挸澧犻崶鎯ф祼鐎规矮璐熸稉璇叉禈閿?*/
   const showSplitDropZones =
     hideMainDropZone || mainDropSlots.length > 0 || referenceDropSlots.length > 0;
 
   const hasMainDropSlots = mainDropSlots.length > 0;
   const hasReferenceDropSlots = referenceDropSlots.length > 0;
-  /** 参考区有图时需保留主区作跨区拖放目标；主区有图时保留参考区作空拖入位 */
+  /** 閸欏倽鈧啫灏張澶婃禈閺冨爼娓舵穱婵堟殌娑撹灏担婊嗘硶閸栫儤瀚嬮弨鍓ф窗閺嶅浄绱辨稉璇插隘閺堝娴橀弮鏈电箽閻ｆ瑥寮懓鍐ㄥ隘娴ｆ粎鈹栭幏鏍у弳娴?*/
   const showMainDropColumn = !hideMainDropZone && (hasMainDropSlots || hasReferenceDropSlots);
   const showReferenceDropColumn =
     hideMainDropZone || hasReferenceDropSlots || (!hideMainDropZone && hasMainDropSlots);
-  /** 双列布局时始终显示分割线（含仅一侧有图、另一侧为空拖入位） */
+  /** 閸欏苯鍨敮鍐ㄧ湰閺冭泛顫愮紒鍫熸▔缁€鍝勫瀻閸撹尙鍤庨敍鍫濇儓娴犲懍绔存笟褎婀侀崶淇扁偓浣稿綗娑撯偓娓氀傝礋缁岀儤瀚嬮崗銉ょ秴閿?*/
   const showZoneDivider =
     !hideMainDropZone && showMainDropColumn && showReferenceDropColumn;
   const splitDropZoneGridCols = hideMainDropZone
@@ -664,7 +703,11 @@ export default function WorkspaceQuickComposeBar({
       ? modelTriggerRef
       : panelAnchor === 'textModel'
         ? textModelTriggerRef
-        : settingsTriggerRef;
+        : panelAnchor === 'videoModel'
+          ? videoModelTriggerRef
+          : panelAnchor === 'model3dModel'
+            ? model3dTriggerRef
+            : settingsTriggerRef;
 
   useLayoutEffect(() => {
     if (!settingsOpen || typeof window === 'undefined') return;
@@ -676,7 +719,7 @@ export default function WorkspaceQuickComposeBar({
 
       const gap = 6;
       const measuredH = panelRef.current?.getBoundingClientRect().height ?? 0;
-      // 首次挂载前 measuredH 为 0，用保守高度估占位，避免下一帧 rAF 因高度变化翻转上下侧导致跳闪
+      // 妫ｆ牗顐奸幐鍌濇祰閸?measuredH 娑?0閿涘瞼鏁ゆ穱婵嗙暓妤傛ê瀹虫导鏉垮窗娴ｅ稄绱濋柆鍨帳娑撳绔寸敮?rAF 閸ョ娀鐝惔锕€褰夐崠鏍倳鏉烆兛绗傛稉瀣╂櫠鐎佃壈鍤х捄鎶芥／
       const estH = Math.max(measuredH, 200);
       const roomBelow = window.innerHeight - rect.bottom - gap;
       const roomAbove = rect.top - gap;
@@ -697,7 +740,7 @@ export default function WorkspaceQuickComposeBar({
     };
   }, [settingsOpen, position, panelAnchor]);
 
-  /** 关闭时清空，避免下次打开用旧坐标先渲染一帧再纠正（观感像闪屏） */
+  /** 閸忔娊妫撮弮鑸电缁岀尨绱濋柆鍨帳娑撳顐奸幍鎾崇磻閻劍妫崸鎰垼閸忓牊瑕嗛弻鎾茬鐢冨晙缁剧姵顒滈敍鍫ｎ潎閹扮喎鍎氶梻顏勭潌閿?*/
   useEffect(() => {
     if (!settingsOpen) setPanelPos(null);
   }, [settingsOpen]);
@@ -861,33 +904,35 @@ export default function WorkspaceQuickComposeBar({
     ? trimmedOverride
     : (() => {
         if (composeMode === '3d') {
-          return '说说你想把哪些资产转成 3D...';
+          return '\u63cf\u8ff0\u4f60\u60f3\u751f\u6210\u7684 3D \u6a21\u578b\uff0c\u4e5f\u53ef\u4ee5 @ \u56fe\u7247\u4f5c\u4e3a\u53c2\u8003...';
+        }
+        if (composeMode === 'video') {
+          return '\u63cf\u8ff0\u4f60\u60f3\u751f\u6210\u7684\u89c6\u9891\u955c\u5934\uff0c\u53ef\u4ee5 @ \u56fe\u7247\u4f5c\u4e3a\u9996\u5e27\u6216\u53c2\u8003...';
         }
         if (composeMode === 'text') {
-          return '说说你想整理、分析或说明什么...';
+          return '\u8bf4\u8bf4\u4f60\u60f3\u6574\u7406\u3001\u5206\u6790\u6216\u8bf4\u660e\u4ec0\u4e48...';
         }
         if (composeMode === 'auto') {
-          return '说说你想完成什么，Agent 会自动选择方式...';
+          return '\u8bf4\u8bf4\u4f60\u60f3\u5b8c\u6210\u4ec0\u4e48\uff0cAgent \u4f1a\u81ea\u52a8\u9009\u62e9\u751f\u6210\u65b9\u5f0f...';
         }
-        return `说说你想完成什么... 可 @ 资产/项目/专家（最多 ${maxMentions} 个）`;
+        return `\u8bf4\u8bf4\u4f60\u60f3\u5b8c\u6210\u4ec0\u4e48... \u53ef @ \u8d44\u4ea7/\u9879\u76ee/\u4e13\u5bb6\uff08\u6700\u591a ${maxMentions} \u4e2a\uff09`;
       })();
-
   const aspectSummary =
-    genSettings.aspectRatio === 'adaptive' ? '自' : genSettings.aspectRatio || '自';
+    genSettings.aspectRatio === 'adaptive' ? '\u81ea\u9002\u5e94' : genSettings.aspectRatio || '\u81ea\u9002\u5e94';
   const sizeSummary =
     genSettings.imageSize && imageSizeOptions.some((s) => s.value === genSettings.imageSize)
       ? genSettings.imageSize
       : '';
   const countSummary = allowBatchCount ? Math.min(4, Math.max(1, genSettings.count)) : 1;
-  const understandSummary = showGenImageSettings ? (genSettings.understand ? '解' : '直发') : '';
+  const understandSummary = showGenImageSettings ? (genSettings.understand ? '\u7406\u89e3' : '\u76f4\u53d1') : '';
 
-  /** 第一行（比例）：自然宽度，与整表同宽后作为「最宽行」基准 */
+  /** 缁楊兛绔寸悰宀嬬礄濮ｆ柧绶ラ敍澶涚窗閼奉亞鍔х€硅棄瀹抽敍灞肩瑢閺佺銆冮崥灞筋啍閸氬簼缍旀稉鎭掆偓灞炬付鐎瑰€燁攽閵嗗秴鐔€閸?*/
   const chipCls = (on: boolean) =>
     `inline-flex shrink-0 items-center justify-center whitespace-nowrap rounded-md px-2 py-0.5 text-[9px] font-bold tabular-nums ring-1 transition-colors ${
       on ? 'bg-white/[0.16] text-white ring-white/[0.22]' : 'bg-white/[0.04] text-gray-400 ring-white/[0.07] hover:bg-white/[0.08]'
     }`;
 
-  /** 其余行：与表同宽，芯片均分填满（左右对齐） */
+  /** 閸忔湹缍戠悰宀嬬窗娑撳氦銆冮崥灞筋啍閿涘矁濮遍悧鍥ф綆閸掑棗锝炲鈽呯礄瀹革箑褰哥€靛綊缍堥敍?*/
   const chipClsStretch = (on: boolean) =>
     `flex min-h-[1.5rem] min-w-0 flex-1 items-center justify-center whitespace-nowrap rounded-md px-1 py-0.5 text-[9px] font-bold tabular-nums ring-1 transition-colors ${
       on ? 'bg-white/[0.16] text-white ring-white/[0.22]' : 'bg-white/[0.04] text-gray-400 ring-white/[0.07] hover:bg-white/[0.08]'
@@ -897,6 +942,28 @@ export default function WorkspaceQuickComposeBar({
     `flex min-h-[1.5rem] min-w-0 flex-1 items-center justify-center whitespace-nowrap rounded-md px-1 py-0.5 text-[9px] font-black ring-1 transition-colors ${
       on ? 'bg-white text-[#0a0a0c] ring-white' : 'bg-white/[0.05] text-gray-300 ring-white/[0.07] hover:bg-white/[0.1]'
     }`;
+
+  const activeVideoModel = effectiveVideoModelRows.find((row) => row.registryId === genSettings.videoModelRegistryId);
+  const activeModel3d = effectiveModel3dRows.find((row) => row.registryId === genSettings.model3dRegistryId);
+  const videoCapability = resolveModelParameterCapabilities({ registryId: genSettings.videoModelRegistryId, modality: 'video' });
+  const model3dCapability = resolveModelParameterCapabilities({ registryId: genSettings.model3dRegistryId, modality: 'model3d' });
+  const supportsCap = (
+    caps: ReturnType<typeof resolveModelParameterCapabilities>,
+    key: string
+  ): boolean => caps.supported.some((cap) => cap.key === key);
+  const capOptions = (
+    caps: ReturnType<typeof resolveModelParameterCapabilities>,
+    key: string
+  ): Array<{ value: string; label: string }> =>
+    caps.supported.find((cap) => cap.key === key)?.options ?? [];
+  const fallbackOptions = (
+    caps: ReturnType<typeof resolveModelParameterCapabilities>,
+    key: string,
+    fallback: Array<{ value: string; label: string }>
+  ) => {
+    const options = capOptions(caps, key);
+    return options.length > 0 ? options : fallback;
+  };
 
   const modelShortLabel = shortLabelForImageModelRegistryId(genSettings.imageModelRegistryId);
   const modelFullLabel = labelForImageModelRegistryId(genSettings.imageModelRegistryId);
@@ -913,7 +980,7 @@ export default function WorkspaceQuickComposeBar({
         setSettingsOpen((open) => (open && panelAnchor === 'model' ? false : true));
       }}
       className={`${QUICK_COMPOSE_PILL_TRIGGER} font-bold text-gray-300`}
-      title={`生图模型：${modelFullLabel}`}
+      title={`\u751f\u56fe\u6a21\u578b\uff1a${modelFullLabel}`}
       aria-expanded={settingsOpen && panelAnchor === 'model'}
       aria-haspopup="dialog"
     >
@@ -921,7 +988,7 @@ export default function WorkspaceQuickComposeBar({
         {modelShortLabel}
       </span>
       <span className="shrink-0 text-[7px] leading-none text-gray-600">
-        {settingsOpen && panelAnchor === 'model' ? '▲' : '▼'}
+        {settingsOpen && panelAnchor === 'model' ? '\u25b2' : '\u25bc'}
       </span>
     </button>
   ) : null;
@@ -936,7 +1003,7 @@ export default function WorkspaceQuickComposeBar({
         setSettingsOpen((open) => (open && panelAnchor === 'textModel' ? false : true));
       }}
       className={`${QUICK_COMPOSE_PILL_TRIGGER} font-bold text-emerald-300/90`}
-      title={`文字模型：${textModelFullLabel}`}
+      title={`\u6587\u5b57\u6a21\u578b\uff1a${textModelFullLabel}`}
       aria-expanded={settingsOpen && panelAnchor === 'textModel'}
       aria-haspopup="dialog"
     >
@@ -944,7 +1011,53 @@ export default function WorkspaceQuickComposeBar({
         {textModelShortLabel}
       </span>
       <span className="shrink-0 text-[7px] leading-none text-gray-600">
-        {settingsOpen && panelAnchor === 'textModel' ? '▲' : '▼'}
+        {settingsOpen && panelAnchor === 'textModel' ? '\u25b2' : '\u25bc'}
+      </span>
+    </button>
+  ) : null;
+
+  const videoModelPickerControl = showGenVideoSettings ? (
+    <button
+      ref={videoModelTriggerRef}
+      type="button"
+      disabled={controlsDisabled}
+      onClick={() => {
+        setPanelAnchor('videoModel');
+        setSettingsOpen((open) => (open && panelAnchor === 'videoModel' ? false : true));
+      }}
+      className={`${QUICK_COMPOSE_PILL_TRIGGER} font-bold text-sky-300/90`}
+      title={`\u89c6\u9891\u6a21\u578b\uff1a${activeVideoModel?.label || genSettings.videoModelRegistryId || '\u672a\u9009\u62e9'}`}
+      aria-expanded={settingsOpen && panelAnchor === 'videoModel'}
+      aria-haspopup="dialog"
+    >
+      <span className="max-w-[4.5rem] truncate tabular-nums font-semibold text-sky-200/90">
+        {activeVideoModel?.label?.replace(/^.*?(Seedance|Jimeng)/i, '$1') || '\u89c6\u9891'}
+      </span>
+      <span className="shrink-0 text-[7px] leading-none text-gray-600">
+        {settingsOpen && panelAnchor === 'videoModel' ? '\u25b2' : '\u25bc'}
+      </span>
+    </button>
+  ) : null;
+
+  const model3dPickerControl = showGenModel3dSettings ? (
+    <button
+      ref={model3dTriggerRef}
+      type="button"
+      disabled={controlsDisabled}
+      onClick={() => {
+        setPanelAnchor('model3dModel');
+        setSettingsOpen((open) => (open && panelAnchor === 'model3dModel' ? false : true));
+      }}
+      className={`${QUICK_COMPOSE_PILL_TRIGGER} font-bold text-violet-300/90`}
+      title={`3D \u6a21\u578b\uff1a${activeModel3d?.label || genSettings.model3dRegistryId || '\u672a\u9009\u62e9'}`}
+      aria-expanded={settingsOpen && panelAnchor === 'model3dModel'}
+      aria-haspopup="dialog"
+    >
+      <span className="max-w-[4.5rem] truncate tabular-nums font-semibold text-violet-200/90">
+        {activeModel3d?.label?.replace(/^Tripo\s*/i, '') || '3D'}
+      </span>
+      <span className="shrink-0 text-[7px] leading-none text-gray-600">
+        {settingsOpen && panelAnchor === 'model3dModel' ? '\u25b2' : '\u25bc'}
       </span>
     </button>
   ) : null;
@@ -964,40 +1077,89 @@ export default function WorkspaceQuickComposeBar({
           <span className="shrink-0 text-[9px] text-gray-400">{aspectSummary}</span>
           {sizeSummary ? (
             <>
-              <span className="shrink-0 text-[9px] text-gray-600">·</span>
+              <span className="shrink-0 text-[9px] text-gray-600">/</span>
               <span className="shrink-0 text-[9px] font-mono text-gray-400">{sizeSummary}</span>
             </>
           ) : null}
           {understandSummary ? (
             <>
-              <span className="shrink-0 text-[9px] text-gray-600">·</span>
+              <span className="shrink-0 text-[9px] text-gray-600">/</span>
               <span className="shrink-0 text-[9px] font-semibold text-gray-400">{understandSummary}</span>
+            </>
+          ) : null}
+        </>
+      ) : null}
+      {showGenVideoSettings ? (
+        <>
+          <span className="shrink-0 text-[9px] text-gray-400">{genSettings.videoDurationSeconds || '5'}s</span>
+          <span className="shrink-0 text-[9px] text-gray-600">/</span>
+          <span className="shrink-0 text-[9px] text-gray-400">{genSettings.videoAspectRatio || '16:9'}</span>
+          {genSettings.videoResolution ? (
+            <>
+              <span className="shrink-0 text-[9px] text-gray-600">/</span>
+              <span className="shrink-0 text-[9px] text-gray-400">{genSettings.videoResolution}</span>
+            </>
+          ) : null}
+          {genSettings.videoMotionStrength ? (
+            <>
+              <span className="shrink-0 text-[9px] text-gray-600">/</span>
+              <span className="shrink-0 text-[9px] text-gray-400">\u8fd0\u52a8{genSettings.videoMotionStrength}</span>
+            </>
+          ) : null}
+        </>
+      ) : null}
+      {showGenModel3dSettings ? (
+        <>
+          <span className="shrink-0 text-[9px] text-gray-400">{genSettings.model3dQuality || '\u9ed8\u8ba4'}</span>
+          {genSettings.model3dGeometryQuality ? (
+            <>
+              <span className="shrink-0 text-[9px] text-gray-600">/</span>
+              <span className="shrink-0 text-[9px] text-gray-400">\u51e0\u4f55{genSettings.model3dGeometryQuality}</span>
+            </>
+          ) : null}
+          {genSettings.model3dTextureQuality ? (
+            <>
+              <span className="shrink-0 text-[9px] text-gray-600">/</span>
+              <span className="shrink-0 text-[9px] text-gray-400">\u7eb9\u7406{genSettings.model3dTextureQuality}</span>
+            </>
+          ) : null}
+          {genSettings.model3dFormat ? (
+            <>
+              <span className="shrink-0 text-[9px] text-gray-600">/</span>
+              <span className="shrink-0 text-[9px] text-gray-400">{genSettings.model3dFormat}</span>
+            </>
+          ) : null}
+          <span className="shrink-0 text-[9px] text-gray-600">/</span>
+          <span className="shrink-0 text-[9px] text-gray-400">{genSettings.model3dTexture ? '\u8d34\u56fe' : '\u65e0\u8d34\u56fe'}</span>
+          {supportsCap(model3dCapability, 'pbr') ? (
+            <>
+              <span className="shrink-0 text-[9px] text-gray-600">/</span>
+              <span className="shrink-0 text-[9px] text-gray-400">{genSettings.model3dPbr ? 'PBR' : '\u65e0 PBR'}</span>
             </>
           ) : null}
         </>
       ) : null}
       {allowBatchCount ? (
         <>
-          {showGenImageSettings ? (
-            <span className="shrink-0 text-[9px] text-gray-600">·</span>
+          {showGenImageSettings || showGenVideoSettings || showGenModel3dSettings ? (
+            <span className="shrink-0 text-[9px] text-gray-600">/</span>
           ) : null}
           <span className="shrink-0 text-[9px] font-bold tabular-nums text-gray-400">x{countSummary}</span>
         </>
       ) : null}
     </>
   );
-
   const genActionControls = (
     <div className="flex shrink-0 items-center gap-2.5">
       <div
         className="flex shrink-0 items-center gap-0.5"
         title={
           modeLockedByInputPresets
-            ? '已拖入预设卡片，提交时以卡片能力为准（模式切换已锁定）'
-            : '快捷模式：文 · 图 · 3D · 自动（无拖入预设时使用；自动可推断，芯片可覆盖）'
+            ? '\u5df2\u62d6\u5165\u9884\u8bbe\u5361\u7247\uff0c\u63d0\u4ea4\u65f6\u4ee5\u5361\u7247\u80fd\u529b\u4e3a\u51c6\uff08\u6a21\u5f0f\u5df2\u9501\u5b9a\uff09'
+            : '\u5feb\u6377\u6a21\u5f0f\uff1a\u6587 / \u56fe / \u89c6\u9891 / 3D / \u81ea\u52a8'
         }
       >
-        {(['text', 'image', '3d', 'auto'] as const).map((m) => (
+        {(['text', 'image', 'video', '3d', 'auto'] as const).map((m) => (
           <button
             key={m}
             type="button"
@@ -1008,13 +1170,15 @@ export default function WorkspaceQuickComposeBar({
             }}
             className={modeChipCls(composeMode === m)}
           >
-            {m === 'text' ? '文' : m === 'image' ? '图' : m === '3d' ? '3D' : '自动'}
+            {m === 'text' ? '\u6587' : m === 'image' ? '\u56fe' : m === 'video' ? '\u89c6\u9891' : m === '3d' ? '3D' : '\u81ea\u52a8'}
           </button>
         ))}
       </div>
 
       {modelPickerControl}
       {textModelPickerControl}
+      {videoModelPickerControl}
+      {model3dPickerControl}
 
       <button
         ref={settingsTriggerRef}
@@ -1022,18 +1186,17 @@ export default function WorkspaceQuickComposeBar({
         disabled={controlsDisabled}
         onClick={openGenParamsPanel}
         className={`${QUICK_COMPOSE_PILL_TRIGGER} max-w-[min(11rem,36vw)] overflow-hidden text-left`}
-        title="生成参数"
+        title="\u751f\u6210\u53c2\u6570"
         aria-expanded={settingsOpen && panelAnchor === 'params'}
         aria-haspopup="dialog"
       >
         {genParamsSummary}
         <span className="ml-px shrink-0 text-[7px] leading-none text-gray-600">
-          {settingsOpen && panelAnchor === 'params' ? '▲' : '▼'}
+          {settingsOpen && panelAnchor === 'params' ? '\u25b2' : '\u25bc'}
         </span>
       </button>
     </div>
   );
-
   const settingsPanel =
     settingsOpen && panelPos && typeof document !== 'undefined'
       ? createPortal(
@@ -1049,10 +1212,14 @@ export default function WorkspaceQuickComposeBar({
               role="dialog"
               aria-label={
                 panelAnchor === 'model'
-                  ? '选择生图模型'
+                  ? '\u9009\u62e9\u751f\u56fe\u6a21\u578b'
                   : panelAnchor === 'textModel'
-                    ? '选择文字模型'
-                    : '本次生成参数'
+                    ? '\u9009\u62e9\u6587\u5b57\u6a21\u578b'
+                    : panelAnchor === 'videoModel'
+                      ? '\u9009\u62e9\u89c6\u9891\u6a21\u578b'
+                      : panelAnchor === 'model3dModel'
+                        ? '\u9009\u62e9 3D \u6a21\u578b'
+                        : '\u672c\u6b21\u751f\u6210\u53c2\u6570'
               }
             >
               {panelAnchor === 'model' && showGenImageSettings ? (
@@ -1068,18 +1235,13 @@ export default function WorkspaceQuickComposeBar({
                           onClick={() => {
                             if (g.disabled) return;
                             genSettings.onImageModelRegistryId(g.registryId);
-                            const allowed = imageSizeSelectOptionsForRegistryModel(g.registryId).map(
-                              (s) => s.value
-                            );
+                            const allowed = imageSizeSelectOptionsForRegistryModel(g.registryId).map((s) => s.value);
                             if (genSettings.imageSize && !allowed.includes(genSettings.imageSize)) {
                               genSettings.onImageSize('');
                             }
                             setSettingsOpen(false);
                           }}
-                          className={modelOptionChipCls(
-                            genSettings.imageModelRegistryId === g.registryId,
-                            g.disabled
-                          )}
+                          className={modelOptionChipCls(genSettings.imageModelRegistryId === g.registryId, g.disabled)}
                         >
                           {g.label}
                         </button>
@@ -1104,10 +1266,57 @@ export default function WorkspaceQuickComposeBar({
                             genSettings.onTextModelRegistryId(g.registryId);
                             setSettingsOpen(false);
                           }}
-                          className={modelOptionChipCls(
-                            genSettings.textModelRegistryId === g.registryId,
-                            g.disabled
-                          )}
+                          className={modelOptionChipCls(genSettings.textModelRegistryId === g.registryId, g.disabled)}
+                        >
+                          {g.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+
+              {panelAnchor === 'videoModel' && showGenVideoSettings ? (
+                <div className="table-row">
+                  <div className="table-cell w-full min-w-0 p-0 align-middle">
+                    <div className="flex flex-col gap-1">
+                      {effectiveVideoModelRows.map((g) => (
+                        <button
+                          key={g.registryId}
+                          type="button"
+                          disabled={g.disabled}
+                          title={g.disabled ? g.disabledReason : g.label}
+                          onClick={() => {
+                            if (g.disabled) return;
+                            genSettings.onVideoModelRegistryId(g.registryId);
+                            setSettingsOpen(false);
+                          }}
+                          className={modelOptionChipCls(genSettings.videoModelRegistryId === g.registryId, g.disabled)}
+                        >
+                          {g.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+
+              {panelAnchor === 'model3dModel' && showGenModel3dSettings ? (
+                <div className="table-row">
+                  <div className="table-cell w-full min-w-0 p-0 align-middle">
+                    <div className="flex flex-col gap-1">
+                      {effectiveModel3dRows.map((g) => (
+                        <button
+                          key={g.registryId}
+                          type="button"
+                          disabled={g.disabled}
+                          title={g.disabled ? g.disabledReason : g.label}
+                          onClick={() => {
+                            if (g.disabled) return;
+                            genSettings.onModel3dRegistryId(g.registryId);
+                            setSettingsOpen(false);
+                          }}
+                          className={modelOptionChipCls(genSettings.model3dRegistryId === g.registryId, g.disabled)}
                         >
                           {g.label}
                         </button>
@@ -1122,20 +1331,11 @@ export default function WorkspaceQuickComposeBar({
                   <div className="table-row">
                     <div className="table-cell p-0 align-middle">
                       <div className="flex flex-nowrap items-center gap-1">
-                        <button
-                          type="button"
-                          onClick={() => genSettings.onAspectRatio('adaptive')}
-                          className={chipCls(genSettings.aspectRatio === 'adaptive')}
-                        >
-                          自
+                        <button type="button" onClick={() => genSettings.onAspectRatio('adaptive')} className={chipCls(genSettings.aspectRatio === 'adaptive')}>
+                          \u81ea\u9002\u5e94
                         </button>
                         {QC_ASPECT_PRIMARY.map((r) => (
-                          <button
-                            key={r}
-                            type="button"
-                            onClick={() => genSettings.onAspectRatio(r)}
-                            className={chipCls(genSettings.aspectRatio === r)}
-                          >
+                          <button key={r} type="button" onClick={() => genSettings.onAspectRatio(r)} className={chipCls(genSettings.aspectRatio === r)}>
                             {r}
                           </button>
                         ))}
@@ -1146,21 +1346,11 @@ export default function WorkspaceQuickComposeBar({
                   <div className="table-row">
                     <div className="table-cell w-full min-w-0 p-0 align-middle">
                       <div className="flex min-w-0 w-full flex-nowrap items-stretch gap-1">
-                        <button
-                          type="button"
-                          onClick={() => genSettings.onImageSize('')}
-                          className={chipClsStretch(!genSettings.imageSize)}
-                          title="不指定输出尺寸"
-                        >
-                          —
+                        <button type="button" onClick={() => genSettings.onImageSize('')} className={chipClsStretch(!genSettings.imageSize)} title="\u4e0d\u6307\u5b9a\u8f93\u51fa\u5c3a\u5bf8">
+                          -
                         </button>
                         {imageSizeOptions.map((s) => (
-                          <button
-                            key={s.value}
-                            type="button"
-                            onClick={() => genSettings.onImageSize(s.value)}
-                            className={chipClsStretch(genSettings.imageSize === s.value)}
-                          >
+                          <button key={s.value} type="button" onClick={() => genSettings.onImageSize(s.value)} className={chipClsStretch(genSettings.imageSize === s.value)}>
                             {s.label}
                           </button>
                         ))}
@@ -1171,25 +1361,94 @@ export default function WorkspaceQuickComposeBar({
                   <div className="table-row">
                     <div className="table-cell w-full min-w-0 p-0 align-middle">
                       <div className="flex min-w-0 w-full flex-nowrap items-stretch gap-1">
-                        <button
-                          type="button"
-                          onClick={() => genSettings.onUnderstand(true)}
-                          className={chipClsStretch(genSettings.understand)}
-                          title="先理解用户意图，再生成画面"
-                        >
-                          理解
+                        <button type="button" onClick={() => genSettings.onUnderstand(true)} className={chipClsStretch(genSettings.understand)} title="\u5148\u7406\u89e3\u610f\u56fe\uff0c\u518d\u751f\u6210\u753b\u9762">
+                          \u7406\u89e3
                         </button>
-                        <button
-                          type="button"
-                          onClick={() => genSettings.onUnderstand(false)}
-                          className={chipClsStretch(!genSettings.understand)}
-                          title="跳过理解，直发提示词到生图"
-                        >
-                          直发
+                        <button type="button" onClick={() => genSettings.onUnderstand(false)} className={chipClsStretch(!genSettings.understand)} title="\u8df3\u8fc7\u7406\u89e3\uff0c\u76f4\u63a5\u53d1\u9001\u63d0\u793a\u8bcd\u751f\u6210">
+                          \u76f4\u53d1
                         </button>
                       </div>
                     </div>
                   </div>
+                </>
+              ) : null}
+
+              {panelAnchor === 'params' && showGenVideoSettings ? (
+                <>
+                  {supportsCap(videoCapability, 'durationSeconds') ? (
+                    <div className="table-row"><div className="table-cell w-full min-w-0 p-0 align-middle"><div className="flex min-w-0 w-full flex-nowrap items-stretch gap-1">
+                      {capOptions(videoCapability, 'durationSeconds').map((s) => (
+                        <button key={s.value} type="button" onClick={() => genSettings.onVideoDurationSeconds(s.value)} className={chipClsStretch((genSettings.videoDurationSeconds || '5') === s.value)}>{s.label}</button>
+                      ))}
+                    </div></div></div>
+                  ) : null}
+                  {supportsCap(videoCapability, 'aspectRatio') ? (
+                    <div className="table-row"><div className="table-cell w-full min-w-0 p-0 align-middle"><div className="flex min-w-0 w-full flex-nowrap items-stretch gap-1">
+                      {capOptions(videoCapability, 'aspectRatio').map((s) => (
+                        <button key={s.value} type="button" onClick={() => genSettings.onVideoAspectRatio(s.value)} className={chipClsStretch((genSettings.videoAspectRatio || '16:9') === s.value)}>{s.label}</button>
+                      ))}
+                    </div></div></div>
+                  ) : null}
+                  {supportsCap(videoCapability, 'resolution') ? (
+                    <div className="table-row"><div className="table-cell w-full min-w-0 p-0 align-middle"><div className="flex min-w-0 w-full flex-nowrap items-stretch gap-1">
+                      {capOptions(videoCapability, 'resolution').map((s) => (
+                        <button key={s.value} type="button" onClick={() => genSettings.onVideoResolution(s.value)} className={chipClsStretch((genSettings.videoResolution || '1080p') === s.value)}>{s.label}</button>
+                      ))}
+                    </div></div></div>
+                  ) : null}
+                  {supportsCap(videoCapability, 'motionStrength') ? (
+                    <div className="table-row"><div className="table-cell w-full min-w-0 p-0 align-middle"><div className="flex min-w-0 w-full flex-nowrap items-stretch gap-1">
+                      {fallbackOptions(videoCapability, 'motionStrength', [
+                        { value: '0.25', label: '\u8fd0\u52a8\u5f31' },
+                        { value: '0.5', label: '\u8fd0\u52a8\u4e2d' },
+                        { value: '0.75', label: '\u8fd0\u52a8\u5f3a' },
+                        { value: '1', label: '\u8fd0\u52a8\u6ee1' },
+                      ]).map((s) => (
+                        <button key={s.value} type="button" onClick={() => genSettings.onVideoMotionStrength(s.value)} className={chipClsStretch(genSettings.videoMotionStrength === s.value)}>{s.label}</button>
+                      ))}
+                    </div></div></div>
+                  ) : null}
+                </>
+              ) : null}
+
+              {panelAnchor === 'params' && showGenModel3dSettings ? (
+                <>
+                  {supportsCap(model3dCapability, 'quality') ? (
+                    <div className="table-row"><div className="table-cell w-full min-w-0 p-0 align-middle"><div className="flex min-w-0 w-full flex-nowrap items-stretch gap-1">
+                      <button type="button" onClick={() => genSettings.onModel3dQuality('')} className={chipClsStretch(!genSettings.model3dQuality)}>\u9ed8\u8ba4</button>
+                      {capOptions(model3dCapability, 'quality').map((s) => <button key={s.value} type="button" onClick={() => genSettings.onModel3dQuality(s.value)} className={chipClsStretch(genSettings.model3dQuality === s.value)}>{s.label}</button>)}
+                    </div></div></div>
+                  ) : null}
+                  {supportsCap(model3dCapability, 'format') ? (
+                    <div className="table-row"><div className="table-cell w-full min-w-0 p-0 align-middle"><div className="flex min-w-0 w-full flex-nowrap items-stretch gap-1">
+                      <button type="button" onClick={() => genSettings.onModel3dFormat('')} className={chipClsStretch(!genSettings.model3dFormat)}>\u9ed8\u8ba4</button>
+                      {capOptions(model3dCapability, 'format').slice(0, 5).map((s) => <button key={s.value} type="button" onClick={() => genSettings.onModel3dFormat(s.value)} className={chipClsStretch(genSettings.model3dFormat === s.value)}>{s.label}</button>)}
+                    </div></div></div>
+                  ) : null}
+                  {supportsCap(model3dCapability, 'geometryQuality') ? (
+                    <div className="table-row"><div className="table-cell w-full min-w-0 p-0 align-middle"><div className="flex min-w-0 w-full flex-nowrap items-stretch gap-1">
+                      <button type="button" onClick={() => genSettings.onModel3dGeometryQuality('')} className={chipClsStretch(!genSettings.model3dGeometryQuality)}>\u51e0\u4f55\u9ed8\u8ba4</button>
+                      {capOptions(model3dCapability, 'geometryQuality').map((s) => <button key={s.value} type="button" onClick={() => genSettings.onModel3dGeometryQuality(s.value)} className={chipClsStretch(genSettings.model3dGeometryQuality === s.value)}>{s.label}</button>)}
+                    </div></div></div>
+                  ) : null}
+                  {supportsCap(model3dCapability, 'textureQuality') ? (
+                    <div className="table-row"><div className="table-cell w-full min-w-0 p-0 align-middle"><div className="flex min-w-0 w-full flex-nowrap items-stretch gap-1">
+                      <button type="button" onClick={() => genSettings.onModel3dTextureQuality('')} className={chipClsStretch(!genSettings.model3dTextureQuality)}>\u7eb9\u7406\u9ed8\u8ba4</button>
+                      {capOptions(model3dCapability, 'textureQuality').map((s) => <button key={s.value} type="button" onClick={() => genSettings.onModel3dTextureQuality(s.value)} className={chipClsStretch(genSettings.model3dTextureQuality === s.value)}>{s.label}</button>)}
+                    </div></div></div>
+                  ) : null}
+                  {supportsCap(model3dCapability, 'texture') ? (
+                    <div className="table-row"><div className="table-cell w-full min-w-0 p-0 align-middle"><div className="flex min-w-0 w-full flex-nowrap items-stretch gap-1">
+                      <button type="button" onClick={() => genSettings.onModel3dTexture(true)} className={chipClsStretch(genSettings.model3dTexture)}>\u8d34\u56fe</button>
+                      <button type="button" onClick={() => genSettings.onModel3dTexture(false)} className={chipClsStretch(!genSettings.model3dTexture)}>\u65e0\u8d34\u56fe</button>
+                    </div></div></div>
+                  ) : null}
+                  {supportsCap(model3dCapability, 'pbr') ? (
+                    <div className="table-row"><div className="table-cell w-full min-w-0 p-0 align-middle"><div className="flex min-w-0 w-full flex-nowrap items-stretch gap-1">
+                      <button type="button" onClick={() => genSettings.onModel3dPbr(true)} className={chipClsStretch(genSettings.model3dPbr)}>PBR</button>
+                      <button type="button" onClick={() => genSettings.onModel3dPbr(false)} className={chipClsStretch(!genSettings.model3dPbr)}>\u65e0 PBR</button>
+                    </div></div></div>
+                  ) : null}
                 </>
               ) : null}
 
@@ -1198,12 +1457,7 @@ export default function WorkspaceQuickComposeBar({
                   <div className="table-cell w-full min-w-0 p-0 align-middle">
                     <div className="flex min-w-0 w-full flex-nowrap items-stretch gap-1">
                       {([1, 2, 3, 4] as const).map((n) => (
-                        <button
-                          key={n}
-                          type="button"
-                          onClick={() => genSettings.onCount(n)}
-                          className={countChipClsStretch(genSettings.count === n)}
-                        >
+                        <button key={n} type="button" onClick={() => genSettings.onCount(n)} className={countChipClsStretch(genSettings.count === n)}>
                           {n === 1 ? '1x' : `x${n}`}
                         </button>
                       ))}
@@ -1223,7 +1477,7 @@ export default function WorkspaceQuickComposeBar({
                       }}
                       className="mt-0.5 w-full rounded-md py-1 text-[9px] font-semibold text-gray-500 ring-1 ring-white/[0.07] hover:bg-white/[0.05] hover:text-gray-300"
                     >
-                      清空 @ 引用
+                      \u6e05\u7a7a @ \u5f15\u7528
                     </button>
                   </div>
                 </div>
@@ -1233,7 +1487,6 @@ export default function WorkspaceQuickComposeBar({
           document.body
         )
       : null;
-
   const barPositionStyle: React.CSSProperties | undefined =
     isWorkspaceDockedExpanded || isLightboxInlineChatExpanded
       ? undefined
@@ -1244,7 +1497,7 @@ export default function WorkspaceQuickComposeBar({
           : undefined;
 
   const dockHostEl = expandedDockHostRef?.current ?? null;
-  const dockTitle = isLightbox ? '大图 · 项目 Agent' : '项目 Agent';
+  const dockTitle = isLightbox ? '\u5927\u56fe / \u9879\u76ee Agent' : '\u9879\u76ee Agent';
   const useChatDock = Boolean(
     inputExpanded && (chatDockProps || isWorkspaceDockedExpanded || isLightboxInlineChatExpanded)
   );
@@ -1299,7 +1552,7 @@ export default function WorkspaceQuickComposeBar({
                         type="button"
                         onClick={() => onRemovePromptCard(c.key)}
                         className="grid h-7 w-7 shrink-0 place-items-center rounded-full text-gray-400 outline-none transition-colors hover:bg-white/[0.08] hover:text-white focus-visible:ring-2 focus-visible:ring-blue-500/50"
-                        aria-label={`移除 ${c.label}`}
+                        aria-label={`\u79fb\u9664 ${c.label}`}
                       >
                         <svg
                           viewBox="0 0 24 24"
@@ -1322,18 +1575,14 @@ export default function WorkspaceQuickComposeBar({
                 <div className={`grid gap-x-0 gap-y-1 px-0.5 py-1 ${splitDropZoneGridCols}`}>
                   {showMainDropColumn ? (
                     hasMainDropSlots ? (
-                      <span className="justify-self-center px-1.5 text-[9px] font-semibold text-gray-500">
-                        主图（待修改）
-                      </span>
+                      <span className="justify-self-center px-1.5 text-[9px] font-semibold text-gray-500">{hideMainDropZone ? '\u53c2\u8003\u56fe\uff08\u5f53\u524d\u56fe\u4e3a\u4e3b\u56fe\uff09' : '\u53c2\u8003\u56fe'}</span>
                     ) : (
                       <div className="px-1.5" aria-hidden />
                     )
                   ) : null}
                   {showZoneDivider ? <div className="pointer-events-none" aria-hidden /> : null}
                   {showReferenceDropColumn ? (
-                    <span className="justify-self-center px-1.5 text-[9px] font-semibold text-gray-500">
-                      {hideMainDropZone ? '参考图（当前图为主图）' : '参考图'}
-                    </span>
+                    <span className="justify-self-center px-1.5 text-[9px] font-semibold text-gray-500">{hideMainDropZone ? '\u53c2\u8003\u56fe\uff08\u5f53\u524d\u56fe\u4e3a\u4e3b\u56fe\uff09' : '\u53c2\u8003\u56fe'}</span>
                   ) : null}
 
                   {showMainDropColumn ? (
@@ -1357,7 +1606,7 @@ export default function WorkspaceQuickComposeBar({
                         }
                         onSlotClick={handleDropSlotClick}
                         onStashCaret={() => mentionFieldRef.current?.stashCaretBeforeBlur()}
-                        emptyHint="拖入主图"
+                        emptyHint="\u62d6\u5165\u4e3b\u56fe"
                       />
                     </div>
                   ) : null}
@@ -1390,9 +1639,7 @@ export default function WorkspaceQuickComposeBar({
                         }
                         onSlotClick={handleDropSlotClick}
                         onStashCaret={() => mentionFieldRef.current?.stashCaretBeforeBlur()}
-                        emptyHint={
-                          hideMainDropZone ? '粘贴或 @ 引用其它资产' : '拖入参考图'
-                        }
+                        emptyHint={hideMainDropZone ? '\u53c2\u8003\u56fe\uff08\u5f53\u524d\u56fe\u4e3a\u4e3b\u56fe\uff09' : '\u53c2\u8003\u56fe'}
                       />
                     </div>
                   ) : null}
@@ -1431,11 +1678,8 @@ export default function WorkspaceQuickComposeBar({
                     memoryEntries={chatDockProps?.memoryEntries}
                     onToggleMemory={chatDockProps?.onToggleMemory}
                     onDeleteMemory={chatDockProps?.onDeleteMemory}
-                    threadEmptyTitle={chatDockProps?.threadEmptyTitle ?? '工作区 Agent'}
-                    threadEmptyHint={
-                      chatDockProps?.threadEmptyHint ??
-                      '说说你想完成什么。Agent 会读取当前项目、资产和选择。'
-                    }
+                    threadEmptyTitle={chatDockProps?.threadEmptyTitle ?? '\u5de5\u4f5c\u533a Agent'}
+                    threadEmptyHint={chatDockProps?.threadEmptyHint ?? '\u8bf4\u8bf4\u4f60\u60f3\u5b8c\u6210\u4ec0\u4e48\uff0cAgent \u4f1a\u8bfb\u53d6\u5f53\u524d\u9879\u76ee\u3001\u8d44\u4ea7\u548c\u9009\u62e9\u3002'}
                     segments={segments}
                     onSegmentsChange={onSegmentsChange}
                     mentionCandidates={mentionCandidates}
@@ -1474,8 +1718,8 @@ export default function WorkspaceQuickComposeBar({
                       type="button"
                       onClick={collapseInputExpanded}
                       className="grid h-8 w-8 shrink-0 place-items-center rounded-md text-gray-400 outline-none transition-colors hover:bg-white/[0.08] hover:text-white focus-visible:ring-2 focus-visible:ring-blue-500/50"
-                      title="收起为底部输入条"
-                      aria-label="收起输入区"
+                      title="\u6536\u8d77\u4e3a\u5e95\u90e8\u8f93\u5165\u6761"
+                      aria-label="\u6536\u8d77\u8f93\u5165\u533a"
                       aria-pressed
                     >
                       <Minimize2 className="h-4 w-4" strokeWidth={2.2} aria-hidden />
@@ -1498,7 +1742,7 @@ export default function WorkspaceQuickComposeBar({
                                     type="button"
                                     onClick={() => onRemovePromptCard(c.key)}
                                     className="grid h-7 w-7 shrink-0 place-items-center rounded-full text-gray-400 outline-none transition-colors hover:bg-white/[0.08] hover:text-white focus-visible:ring-2 focus-visible:ring-blue-500/50"
-                                    aria-label={`移除 ${c.label}`}
+                                    aria-label={`\u79fb\u9664 ${c.label}`}
                                   >
                                     <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden>
                                       <path d="M18 6 6 18M6 6l12 12" />
@@ -1512,20 +1756,18 @@ export default function WorkspaceQuickComposeBar({
                             <div className={`grid gap-x-0 gap-y-1 px-0.5 py-1 ${splitDropZoneGridCols}`}>
                               {showMainDropColumn ? (
                                 hasMainDropSlots ? (
-                                  <span className="justify-self-center px-1.5 text-[9px] font-semibold text-gray-500">主图（待修改）</span>
+                                  <span className="justify-self-center px-1.5 text-[9px] font-semibold text-gray-500">{hideMainDropZone ? '\u53c2\u8003\u56fe\uff08\u5f53\u524d\u56fe\u4e3a\u4e3b\u56fe\uff09' : '\u53c2\u8003\u56fe'}</span>
                                 ) : (
                                   <div className="px-1.5" aria-hidden />
                                 )
                               ) : null}
                               {showZoneDivider ? <div className="pointer-events-none" aria-hidden /> : null}
                               {showReferenceDropColumn ? (
-                                <span className="justify-self-center px-1.5 text-[9px] font-semibold text-gray-500">
-                                  {hideMainDropZone ? '参考图（当前图为主图）' : '参考图'}
-                                </span>
+                                <span className="justify-self-center px-1.5 text-[9px] font-semibold text-gray-500">{hideMainDropZone ? '\u53c2\u8003\u56fe\uff08\u5f53\u524d\u56fe\u4e3a\u4e3b\u56fe\uff09' : '\u53c2\u8003\u56fe'}</span>
                               ) : null}
                               {showMainDropColumn ? (
                                 <div data-quick-compose-drop-zone="main" className="inline-flex w-fit max-w-full shrink-0 justify-self-center px-1.5" {...bindQuickComposeDropZone('main')}>
-                                  <QuickComposeDropTray zone="main" slots={mainDropSlots} disabled={false} onRemoveSlot={onRemoveMainDropSlot} onReorderSlot={onReorderDropSlot ? (assetId, toIndex) => onReorderDropSlot(assetId, 'main', toIndex) : undefined} onMoveSlotToZone={onMoveDropSlot ? (assetId) => onMoveDropSlot(assetId, 'reference') : undefined} onSlotClick={handleDropSlotClick} onStashCaret={() => mentionFieldRef.current?.stashCaretBeforeBlur()} emptyHint="拖入主图" />
+                                  <QuickComposeDropTray zone="main" slots={mainDropSlots} disabled={false} onRemoveSlot={onRemoveMainDropSlot} onReorderSlot={onReorderDropSlot ? (assetId, toIndex) => onReorderDropSlot(assetId, 'main', toIndex) : undefined} onMoveSlotToZone={onMoveDropSlot ? (assetId) => onMoveDropSlot(assetId, 'reference') : undefined} onSlotClick={handleDropSlotClick} onStashCaret={() => mentionFieldRef.current?.stashCaretBeforeBlur()} emptyHint="\u62d6\u5165\u4e3b\u56fe" />
                                 </div>
                               ) : null}
                               {showZoneDivider ? (
@@ -1533,7 +1775,7 @@ export default function WorkspaceQuickComposeBar({
                               ) : null}
                               {showReferenceDropColumn ? (
                                 <div data-quick-compose-drop-zone="reference" className="inline-flex w-fit max-w-full shrink-0 justify-self-center px-1.5" {...bindQuickComposeDropZone('reference')}>
-                                  <QuickComposeDropTray zone="reference" slots={referenceDropSlots} disabled={false} onRemoveSlot={onRemoveReferenceDropSlot} onReorderSlot={onReorderDropSlot ? (assetId, toIndex) => onReorderDropSlot(assetId, 'reference', toIndex) : undefined} onMoveSlotToZone={onMoveDropSlot && showMainDropColumn ? (assetId) => onMoveDropSlot(assetId, 'main') : undefined} onSlotClick={handleDropSlotClick} onStashCaret={() => mentionFieldRef.current?.stashCaretBeforeBlur()} emptyHint={hideMainDropZone ? '粘贴或 @ 引用其它资产' : '拖入参考图'} />
+                                  <QuickComposeDropTray zone="reference" slots={referenceDropSlots} disabled={false} onRemoveSlot={onRemoveReferenceDropSlot} onReorderSlot={onReorderDropSlot ? (assetId, toIndex) => onReorderDropSlot(assetId, 'reference', toIndex) : undefined} onMoveSlotToZone={onMoveDropSlot && showMainDropColumn ? (assetId) => onMoveDropSlot(assetId, 'main') : undefined} onSlotClick={handleDropSlotClick} onStashCaret={() => mentionFieldRef.current?.stashCaretBeforeBlur()} emptyHint={hideMainDropZone ? '\u53c2\u8003\u56fe\uff08\u5f53\u524d\u56fe\u4e3a\u4e3b\u56fe\uff09' : '\u53c2\u8003\u56fe'} />
                                 </div>
                               ) : null}
                             </div>
@@ -1550,7 +1792,7 @@ export default function WorkspaceQuickComposeBar({
                         disabled={inputDisabled}
                         multiline
                         rows={10}
-                        ariaLabel={isLightbox ? '大图预览快捷生成描述' : '快捷生成描述'}
+                        ariaLabel={isLightbox ? '\u5927\u56fe\u9884\u89c8\u5feb\u6377\u751f\u6210\u63cf\u8ff0' : '\u5feb\u6377\u751f\u6210\u63cf\u8ff0'}
                         onSubmit={onSubmit}
                         onDragOver={handleComposeInputDragOver}
                         onDrop={(e) => handleComposeInputDrop(e, 'main')}
@@ -1565,8 +1807,8 @@ export default function WorkspaceQuickComposeBar({
                         disabled={submitDisabled}
                         onClick={onSubmit}
                         className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-white text-[#0a0a0c] shadow-md outline-none transition-transform hover:scale-[1.03] active:scale-[0.98] disabled:opacity-35 focus-visible:ring-2 focus-visible:ring-blue-500/55"
-                        title={submitDisabledTitle ?? '加入队列并执行'}
-                        aria-label={submitDisabledTitle ?? '加入队列并执行'}
+                        title={submitDisabledTitle ?? '\u52a0\u5165\u961f\u5217\u5e76\u6267\u884c'}
+                          aria-label={submitDisabledTitle ?? '\u52a0\u5165\u961f\u5217\u5e76\u6267\u884c'}
                       >
                         <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
                           <path d="M5 12h14M13 5l7 7-7 7" />
@@ -1596,15 +1838,15 @@ export default function WorkspaceQuickComposeBar({
                   setDragging(true);
                 }}
                 className="flex h-9 w-7 shrink-0 cursor-grab items-center justify-center rounded-md text-gray-400 outline-none transition-colors hover:bg-white/[0.08] hover:text-white active:cursor-grabbing disabled:opacity-35 focus-visible:ring-2 focus-visible:ring-blue-500/50"
-                title="拖动输入框（双击回到默认位置）"
-                aria-label="拖动输入框"
+                title="\u62d6\u52a8\u8f93\u5165\u6846\uff08\u53cc\u51fb\u56de\u5230\u9ed8\u8ba4\u4f4d\u7f6e\uff09"
+                aria-label="\u62d6\u52a8\u8f93\u5165\u6846"
               >
-                <span className="select-none text-xs leading-none">⋮⋮</span>
+                <span className="select-none text-xs leading-none">::</span>
               </button>
               {isLightbox ? (
                 <div
                   className="grid h-9 w-9 shrink-0 place-items-center rounded-md text-gray-400"
-                  title="输入 @ 可引用当前画面或其它资产"
+                  title="\u8f93\u5165 @ \u53ef\u5f15\u7528\u5f53\u524d\u753b\u9762\u6216\u5176\u5b83\u8d44\u4ea7"
                 >
                   <ImageIcon className="h-[1.125rem] w-[1.125rem]" strokeWidth={2.2} aria-hidden />
                 </div>
@@ -1618,7 +1860,7 @@ export default function WorkspaceQuickComposeBar({
                 maxMentions={maxMentions}
                 placeholder={placeholder}
                 disabled={inputDisabled}
-                ariaLabel={isLightbox ? '大图预览快捷生成描述' : '快捷生成描述'}
+                ariaLabel={isLightbox ? '\u5927\u56fe\u9884\u89c8\u5feb\u6377\u751f\u6210\u63cf\u8ff0' : '\u5feb\u6377\u751f\u6210\u63cf\u8ff0'}
                 onSubmit={onSubmit}
                 onDragOver={handleComposeInputDragOver}
                 onDrop={(e) => handleComposeInputDrop(e, 'main')}
@@ -1633,8 +1875,8 @@ export default function WorkspaceQuickComposeBar({
                   setInputExpanded(true);
                 }}
                 className="grid h-9 w-8 shrink-0 place-items-center rounded-md text-gray-400 outline-none transition-colors hover:bg-white/[0.08] hover:text-white focus-visible:ring-2 focus-visible:ring-blue-500/50"
-                title="展开多行（条宽变窄）；多行时 Ctrl+Enter 提交"
-                aria-label="展开输入区"
+                title="\u5c55\u5f00\u591a\u884c\u8f93\u5165\u533a\uff1b\u591a\u884c\u65f6 Ctrl+Enter \u63d0\u4ea4"
+                aria-label="\u5c55\u5f00\u8f93\u5165\u533a"
                 aria-pressed={false}
               >
                 <Maximize2 className="h-4 w-4" strokeWidth={2.2} aria-hidden />
@@ -1648,8 +1890,8 @@ export default function WorkspaceQuickComposeBar({
                   disabled={submitDisabled}
                   onClick={onSubmit}
                   className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-white text-[#0a0a0c] shadow-md outline-none transition-transform hover:scale-[1.03] active:scale-[0.98] disabled:opacity-35 focus-visible:ring-2 focus-visible:ring-blue-500/55"
-                  title={submitDisabledTitle ?? '加入队列并执行'}
-                  aria-label={submitDisabledTitle ?? '加入队列并执行'}
+                  title={submitDisabledTitle ?? '\u52a0\u5165\u961f\u5217\u5e76\u6267\u884c'}
+                          aria-label={submitDisabledTitle ?? '\u52a0\u5165\u961f\u5217\u5e76\u6267\u884c'}
                 >
                   <svg
                     viewBox="0 0 24 24"
@@ -1680,3 +1922,13 @@ export default function WorkspaceQuickComposeBar({
     </>
   );
 }
+
+
+
+
+
+
+
+
+
+

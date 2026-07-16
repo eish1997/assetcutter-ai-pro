@@ -205,6 +205,17 @@ function buildCandidatePlan(intent: ProjectAgentIntent, trace: AgentPlannerDecis
     return [step('run_plain_3d', { text: intent.text, mainAssetId: resolveMainAssetId(intent) })];
   }
 
+  if (mode === 'video') {
+    pushTrace(trace, { stage: 'candidate', message: 'resolved composer mode to video' });
+    return [
+      step('run_plain_video', {
+        text: intent.text,
+        mainAssetId: resolveMainAssetId(intent),
+        referenceAssetIds: intent.referenceAssetIds,
+      }),
+    ];
+  }
+
   if (mode === 'image') {
     pushTrace(trace, { stage: 'candidate', message: 'resolved composer mode to image' });
     if (hasMainImage(intent)) {

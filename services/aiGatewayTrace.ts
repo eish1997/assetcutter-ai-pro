@@ -54,7 +54,7 @@ export function buildAiGatewayImageJobBody(
   return {
     modality: 'image',
     capability: 'image.generate',
-    provider: input.useVertex ? 'vertex-gemini' : undefined,
+    provider: input.useVertex ? 'vertex-site' : undefined,
     model: input.model,
     canonicalModelId: registryId,
     registryId,

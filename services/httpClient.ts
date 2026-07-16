@@ -20,6 +20,7 @@ const AI_GATEWAY_ERROR_MESSAGES: Record<string, string> = {
   AI_GATEWAY_PROVIDER_KEY_MISSING: '该供应商没有可用平台 Key，请先在供应商中心配置并启用 Key。',
   AI_GATEWAY_MODEL_PAUSED: '该模型已被运营暂停，请稍后再试或切换模型。',
   AI_GATEWAY_NO_PROVIDER_ROUTE: '当前能力没有可用供应商通道。',
+  AI_GATEWAY_EXECUTION_HANDOFF_FAILED: 'AI Gateway 已创建任务，但转交给上游供应商失败，请检查供应商代理、凭证或额度。',
 };
 
 function responseErrorCode(data: Record<string, unknown> & { error?: string; code?: string }): string | undefined {

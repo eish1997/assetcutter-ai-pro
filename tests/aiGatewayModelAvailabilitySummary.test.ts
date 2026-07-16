@@ -60,6 +60,28 @@ describe('AI gateway model availability summary', () => {
     expect(summary.totals.ready).toBe(3);
   });
 
+  it('marks Tencent Hunyuan 3D ready when SecretId and SecretKey exist', async () => {
+    const summary = await buildModelAvailabilitySummary(
+      {
+        models: [
+          model('tencent-hunyuan-3d-rapid', 'model3d', 'tencent-hunyuan'),
+        ],
+      },
+      {
+        listProviderKeys: async () => [
+          { provider: 'tencent-hunyuan', enabled: true, hasCredentials: true },
+        ],
+      }
+    );
+
+    expect(summary.models[0]).toMatchObject({
+      canonicalModelId: 'tencent-hunyuan-3d-rapid',
+      status: 'ready',
+      workspaceSelectable: true,
+    });
+  });
+
+
   it('marks Volcengine Ark text, Seedream image, Seedance video, and Seed3D ready when a key exists', async () => {
     const summary = await buildModelAvailabilitySummary(
       {

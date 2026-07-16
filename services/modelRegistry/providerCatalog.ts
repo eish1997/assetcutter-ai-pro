@@ -365,6 +365,10 @@ export function providersForAdminKeyPool(): readonly ProviderCatalogEntry[] {
   return PROVIDER_CATALOG.filter((entry) => entry.keyPoolSupported);
 }
 
+export function providersForAdminConsole(): readonly ProviderCatalogEntry[] {
+  return PROVIDER_CATALOG.filter((entry) => entry.capabilityStatus.catalogVisible);
+}
+
 export function providerCapabilityStatus(id: string): ProviderCapabilityStatus | undefined {
   return getProviderCatalogEntry(id)?.capabilityStatus;
 }

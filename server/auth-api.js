@@ -3841,9 +3841,18 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    if (path === '/api/ai/provider-artifacts/tripo/fetch-file' && req.method === 'POST') {
+    const providerArtifactMatch = path.match(/^\/api\/ai\/provider-artifacts\/([^/]+)\/fetch-file$/);
+    if (providerArtifactMatch && req.method === 'POST') {
       const auth = await requireAuth(req, res);
       if (!auth) return;
+      const providerId = normalizeTrimmed(decodeURIComponent(providerArtifactMatch[1] || ''))
+        .toLowerCase()
+        .replace(/[^a-z0-9_.-]+/g, '-')
+        .replace(/^-+|-+$/g, '');
+      if (!providerId) {
+        json(res, 400, { error: 'Missing provider id' });
+        return;
+      }
       const body = await readBody(req);
       const fileUrl = normalizeTrimmed(body.url);
       if (!fileUrl) {
@@ -3862,15 +3871,25 @@ const server = http.createServer(async (req, res) => {
         json(res, 400, { error: '仅支持 http/https url' });
         return;
       }
-      const key = await acquireProviderKey('tripo');
-      if (!key?.secret) {
-        json(res, 503, { error: 'AI_GATEWAY_PROVIDER_KEY_MISSING', message: 'No enabled Tripo API key in provider key pool' });
+      const key = await acquireProviderKey(providerId);
+      const artifactSecret = normalizeTrimmed(
+        key?.secret ||
+          key?.credentials?.apiKey ||
+          key?.credentials?.token ||
+          key?.credentials?.accessToken ||
+          ''
+      );
+      if (!artifactSecret) {
+        json(res, 503, {
+          error: 'AI_GATEWAY_PROVIDER_KEY_MISSING',
+          message: `No enabled ${providerId} API key in provider key pool`,
+        });
         return;
       }
       try {
         const upstreamResp = await fetch(fileUrl, {
           method: 'GET',
-          headers: { Authorization: `Bearer ${key.secret}` },
+          headers: { Authorization: `Bearer ${artifactSecret}` },
           signal: AbortSignal.timeout(TRIPO_TIMEOUT_MS),
         });
         if (!upstreamResp.ok) {
@@ -3891,7 +3910,7 @@ const server = http.createServer(async (req, res) => {
       } catch (e) {
         const detail = formatFetchError(e);
         json(res, 502, {
-          error: `Tripo provider file fetch failed: ${detail.message}`,
+          error: `${providerId} provider file fetch failed: ${detail.message}`,
           ...(detail.code ? { code: detail.code } : {}),
         });
       }

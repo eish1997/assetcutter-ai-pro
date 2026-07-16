@@ -85,7 +85,6 @@ export async function createAndPollAiGatewayVideoJob(
     {
       modality: 'video',
       capability: 'workflow_generate_video',
-      provider: 'volcengine-jimeng',
       model: registryId,
       canonicalModelId: registryId,
       registryId,
@@ -95,6 +94,10 @@ export async function createAndPollAiGatewayVideoJob(
         registryId,
         prompt: input.prompt,
         referenceImages: input.referenceImages,
+        durationSeconds: input.durationSeconds,
+        aspectRatio: input.aspectRatio,
+        resolution: input.resolution,
+        motionStrength: input.motionStrength,
         estimatedCredits,
       },
       metadata: {

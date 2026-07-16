@@ -6,6 +6,14 @@ import { buildProviderTaskUsage, collectByteSize } from '../execution-usage.js';
 
 export const TRIPO_OPENAPI_BASE_URL = 'https://api.tripo3d.ai/v2/openapi';
 
+const TRIPO_MODEL_VERSION_MAP = Object.freeze({
+  'tripo-p1': 'P1-20260311',
+  'tripo-v3.1': 'v3.1-20260211',
+  'tripo-v3.0': 'v3.0-20250812',
+  'tripo-v2.5': 'v2.5-20250123',
+  'tripo-v2.0': 'v2.0-20240919',
+});
+
 function nonEmptyString(value) {
   return typeof value === 'string' && value.trim() ? value.trim() : '';
 }
@@ -114,6 +122,9 @@ function buildTripoTaskBody(job) {
     type,
     ...(prompt ? { prompt } : {}),
   };
+  const registryId = nonEmptyString(input.registryId) || nonEmptyString(input.canonicalModelId) || nonEmptyString(job?.model);
+  const mappedModelVersion = TRIPO_MODEL_VERSION_MAP[registryId];
+  if (mappedModelVersion && !nonEmptyString(input.modelVersion)) body.model_version = mappedModelVersion;
   const map = [
     ['negativePrompt', 'negative_prompt'],
     ['modelVersion', 'model_version'],

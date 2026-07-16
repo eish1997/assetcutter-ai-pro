@@ -5,6 +5,8 @@ import {
   tripoWorkflowPollUntilDone,
   extractTripoModelAndPreviewUrls,
 } from '../generate3d/tripoWorkflow';
+import { normalizeGenerate3DPresetForRun, resolveGenerate3dProviderId } from '../generate3d';
+import { createAndPollAiGatewayModel3dJob } from '../aiGatewayModel3dExecution';
 import { normalizeApiErrorMessage } from '../unifiedAiGateway';
 import { persistWorkflow3dSlots } from '../persistWorkflow3dSlots';
 import { resolveAssetSetComponentViewSrc } from './assetSetAsset';
@@ -73,6 +75,7 @@ export type RunAssetSetComponent3dResult =
   | {
       ok: true;
       jobId: string;
+      provider: string;
       files: string[];
       previewUrl: string;
     }
@@ -84,6 +87,7 @@ export function assetSetComponent3dResultKey(componentId: string): string {
 
 export async function persistAssetSetComponent3dModels(params: {
   apiKey: string;
+  provider: string;
   taskId: string;
   assetId: string;
   componentId: string;
@@ -102,11 +106,8 @@ export async function persistAssetSetComponent3dModels(params: {
   previewUrl: string;
   previewCompanionKey?: string;
 }> {
-  const persisted = await persistWorkflow3dSlots({
-    provider: 'tripo',
-    apiKey: params.apiKey,
+  const common = {
     taskId: params.taskId,
-    glbSourceUrls: params.glbSourceUrls,
     previewUrl: params.previewUrl,
     assetId: params.assetId,
     resultKey: assetSetComponent3dResultKey(params.componentId),
@@ -119,7 +120,19 @@ export async function persistAssetSetComponent3dModels(params: {
         }
       : undefined,
     onLog: params.onLog,
-  });
+  };
+  const persisted = params.provider === 'tripo'
+    ? await persistWorkflow3dSlots({
+        ...common,
+        provider: 'tripo',
+        apiKey: params.apiKey,
+        glbSourceUrls: params.glbSourceUrls,
+      })
+    : await persistWorkflow3dSlots({
+        ...common,
+        provider: params.provider,
+        modelUrls: params.glbSourceUrls,
+      });
   return {
     files: persisted.modelUrls,
     fileCompanionKeys: persisted.modelCompanionKeys,
@@ -143,6 +156,35 @@ export async function runAssetSetComponent3d(params: {
     return { ok: false, error: '组件尚无可用视角图' };
   }
   try {
+    const g = normalizeGenerate3DPresetForRun(params.preset.generate3D!);
+    const provider = resolveGenerate3dProviderId(g);
+    if (provider === 'volcengine-ark') {
+      const prompt = (
+        params.preset.instruction?.trim() ||
+        g.prompt?.trim() ||
+        `Generate a 3D model for ${params.component.name || params.component.id}`
+      ).trim();
+      params.onStatus?.('queued');
+      const result = await createAndPollAiGatewayModel3dJob({
+        prompt,
+        referenceImages: [primary],
+        registryId: g.modelRegistryId || 'doubao-seed3d-2-0',
+        quality: g.quality,
+        format: g.format,
+        texture: g.texture,
+      });
+      params.onStatus?.('running');
+      return {
+        ok: true,
+        jobId: result.aiGatewayJobId,
+        provider,
+        files: result.modelUrls,
+        previewUrl: result.previewUrl || '',
+      };
+    }
+    if (provider !== 'tripo') {
+      return { ok: false, error: `资产集 3D 暂不支持该供应商：${provider}` };
+    }
     const { taskId } = await tripoWorkflowCreateOrResumeTaskId({
       apiKey: params.apiKey,
       preset: params.preset,
@@ -168,6 +210,7 @@ export async function runAssetSetComponent3d(params: {
     return {
       ok: true,
       jobId: taskId,
+      provider,
       files: modelUrls,
       previewUrl,
     };

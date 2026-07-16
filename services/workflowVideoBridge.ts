@@ -20,6 +20,10 @@ export type WorkflowVideoJobInput = {
   prompt: string;
   referenceImages?: string[];
   registryId?: string;
+  durationSeconds?: number;
+  aspectRatio?: string;
+  resolution?: string;
+  motionStrength?: number;
 };
 
 /** `videoUrl` 可为 `https:` 地址或 `data:video/...;base64,...` */
@@ -62,6 +66,10 @@ export async function requestWorkflowVideoWithEndpoint(
       prompt: (input.prompt || "").trim(),
       referenceImages: (input.referenceImages ?? []).filter((s) => typeof s === "string" && s.trim()),
       registryId: typeof input.registryId === "string" && input.registryId.trim() ? input.registryId.trim() : undefined,
+      durationSeconds: Number.isFinite(input.durationSeconds) ? input.durationSeconds : undefined,
+      aspectRatio: typeof input.aspectRatio === "string" && input.aspectRatio.trim() ? input.aspectRatio.trim() : undefined,
+      resolution: typeof input.resolution === "string" && input.resolution.trim() ? input.resolution.trim() : undefined,
+      motionStrength: Number.isFinite(input.motionStrength) ? input.motionStrength : undefined,
     }),
     cache: "no-store",
   });

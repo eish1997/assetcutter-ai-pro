@@ -1,6 +1,6 @@
 /**
- * P23 modal「自动挡」— thin deterministic resolve (no LLM).
- * Explicit text|image|3d chips must not be overwritten by callers; this only
+ * P23 auto composer routing: thin deterministic resolve (no LLM).
+ * Explicit text|image|video|3d chips must not be overwritten by callers; this only
  * resolves when mode === 'auto' (or returns the explicit mode unchanged).
  */
 
@@ -8,9 +8,11 @@ import type { AgentComposerMode, ProjectAgentIntent } from '../../types/projectA
 
 export type ResolvedComposerMode = Exclude<AgentComposerMode, 'auto'>;
 
-/** Clear 3D intent tokens (CN/EN); must also have hasEnabled3dPreset to pick 3d. */
 const THREE_D_KEYWORD_RE =
   /(?:\b3d\b|三维|立体模型|生成\s*3d|做个?\s*3d|mesh|glb|tripo|文生3d|图生3d)/i;
+
+const VIDEO_KEYWORD_RE =
+  /(?:视频|生视频|生成视频|短片|镜头|动画|动起来|video|clip|animate|i2v|t2v)/i;
 
 function hasMainImage(intent: ProjectAgentIntent): boolean {
   if (intent.hasInlineImageRefs === true) return true;
@@ -37,15 +39,23 @@ function has3dKeywords(text: string): boolean {
   return THREE_D_KEYWORD_RE.test(text);
 }
 
+function hasVideoKeywords(text: string): boolean {
+  return VIDEO_KEYWORD_RE.test(text);
+}
+
 /**
  * Resolve composer mode for routing.
- * Priority (auto only): lightbox local / main·ref image → image;
- * clear 3D keywords + hasEnabled3dPreset → 3d; else text.
+ * Priority (auto only): video keywords -> video; local edit/image refs -> image;
+ * clear 3D keywords + hasEnabled3dPreset -> 3d; else text.
  * Preset cards still short-circuit in planTools before mode is used.
  */
 export function resolveComposerMode(intent: ProjectAgentIntent): ResolvedComposerMode {
   if (intent.mode !== 'auto') {
     return intent.mode;
+  }
+
+  if (hasVideoKeywords(intent.text)) {
+    return 'video';
   }
 
   if (isLightboxLocalEdit(intent) || hasAnyImageRef(intent)) {

@@ -63,7 +63,7 @@ describe('AI gateway auth-api facade', () => {
     });
     expect(stored.job.metadata.modelRouteGuard).toMatchObject({
       canonicalModelId: 'gemini-3-pro-image-preview',
-      providerId: 'vertex-gemini',
+      providerId: 'vertex-site',
       executionStatus: 'platform_ready',
       gatewayExecutionStatus: 'gateway_ready',
       platformKeyRequired: false,

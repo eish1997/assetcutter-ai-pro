@@ -13,6 +13,7 @@ export const PROJECT_AGENT_TOOL_IDS = [
   'run_plain_i2t',
   'run_plain_t2i',
   'run_plain_i2i',
+  'run_plain_video',
   'run_preset',
   'run_lightbox_local_edit',
   'run_plain_3d',
@@ -23,7 +24,7 @@ export type ProjectAgentToolId = (typeof PROJECT_AGENT_TOOL_IDS)[number];
 
 export const PROJECT_AGENT_MAX_TOOL_STEPS = 8 as const;
 
-export type AgentComposerMode = 'text' | 'image' | '3d' | 'auto';
+export type AgentComposerMode = 'text' | 'image' | 'video' | '3d' | 'auto';
 
 /**
  * Phase 5 / U4 — agents-as-tools 子 run 进度卡（§11 P2）。

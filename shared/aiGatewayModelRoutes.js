@@ -4,7 +4,7 @@ export const AI_GATEWAY_MODEL_ROUTE_EXECUTABLE_RULES = Object.freeze([
     modelPattern: /^gemini-/i,
     modalities: Object.freeze(['text', 'image']),
     catalogProviderIds: Object.freeze(['vertex-site', 'gemini-aistudio']),
-    gatewayProviderIds: Object.freeze(['vertex-gemini', 'gemini-aistudio']),
+    gatewayProviderIds: Object.freeze(['vertex-site', 'gemini-aistudio']),
     gatewayExecutionStatus: 'gateway_ready',
     executionStatus: 'platform_ready',
     platformKeyRequired: false,
@@ -80,11 +80,21 @@ export const AI_GATEWAY_MODEL_ROUTE_EXECUTABLE_RULES = Object.freeze([
     platformKeyRequired: true,
   },
   {
-    id: 'tripo-p1-gateway',
-    modelPattern: /^tripo-p1$/i,
+    id: 'tripo-gateway',
+    modelPattern: /^tripo-/i,
     modalities: Object.freeze(['model3d']),
     catalogProviderIds: Object.freeze(['tripo']),
     gatewayProviderIds: Object.freeze(['tripo']),
+    gatewayExecutionStatus: 'gateway_ready',
+    executionStatus: 'platform_ready',
+    platformKeyRequired: true,
+  },
+  {
+    id: 'tencent-hunyuan-3d-gateway',
+    modelPattern: /^tencent-hunyuan-3d-/i,
+    modalities: Object.freeze(['model3d']),
+    catalogProviderIds: Object.freeze(['tencent-hunyuan']),
+    gatewayProviderIds: Object.freeze(['tencent-hunyuan']),
     gatewayExecutionStatus: 'gateway_ready',
     executionStatus: 'platform_ready',
     platformKeyRequired: true,
@@ -100,18 +110,16 @@ export const AI_GATEWAY_MODEL_ROUTE_PENDING_RULES = Object.freeze([
     gatewayExecutionStatus: 'adapter_pending',
     executionStatus: 'adapter_pending',
   },
-  {
-    id: 'tencent-hunyuan-pending',
-    modelPattern: /^tencent-hunyuan-/i,
-    catalogProviderIds: Object.freeze(['tencent-hunyuan']),
-    gatewayProviderIds: Object.freeze(['tencent-hunyuan']),
-    gatewayExecutionStatus: 'adapter_pending',
-    executionStatus: 'adapter_pending',
-  },
 ]);
 
 function nonEmptyString(value) {
   return typeof value === 'string' && value.trim() ? value.trim() : '';
+}
+
+export function normalizeAiGatewayProviderId(value) {
+  const id = nonEmptyString(value);
+  if (id === 'vertex-gemini') return 'vertex-site';
+  return id;
 }
 
 export function normalizeAiGatewayModelRouteModality(value) {
@@ -122,7 +130,11 @@ export function normalizeAiGatewayModelRouteModality(value) {
 }
 
 function disabledProviderSet(options) {
-  return new Set(Array.isArray(options?.disabledProviders) ? options.disabledProviders.filter(Boolean) : []);
+  return new Set(
+    Array.isArray(options?.disabledProviders)
+      ? options.disabledProviders.map(normalizeAiGatewayProviderId).filter(Boolean)
+      : []
+  );
 }
 
 function firstEnabledProvider(rule, field, disabledProviders) {
@@ -131,7 +143,7 @@ function firstEnabledProvider(rule, field, disabledProviders) {
 }
 
 function providerMatches(rule, providerId, field, disabledProviders) {
-  const id = nonEmptyString(providerId);
+  const id = normalizeAiGatewayProviderId(providerId);
   if (!id) return true;
   return Array.isArray(rule[field]) && rule[field].includes(id);
 }
@@ -151,7 +163,9 @@ function resolveRuntimeRule(rules, input, providerField) {
     if (!rule.modelPattern.test(canonicalModelId)) continue;
     if (!modalityMatches(rule, raw.modality)) continue;
     if (!providerMatches(rule, raw.providerId || raw.provider, providerField, disabledProviders)) continue;
-    const providerId = nonEmptyString(raw.providerId || raw.provider) || firstEnabledProvider(rule, providerField, disabledProviders);
+    const providerId =
+      normalizeAiGatewayProviderId(raw.providerId || raw.provider) ||
+      firstEnabledProvider(rule, providerField, disabledProviders);
     if (!providerId) continue;
     return {
       ruleId: rule.id,

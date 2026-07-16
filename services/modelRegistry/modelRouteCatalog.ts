@@ -57,7 +57,12 @@ function routeExecutionStatus(row: {
 }): ModelRouteExecutionStatus {
   if (!row.enabled) return "disabled";
   if (row.requiresEndpointMapping) return "requires_endpoint_mapping";
-  if (row.providerId === "volcengine-jimeng" || row.providerId === "tripo" || row.providerId === "openai-official") {
+  if (
+    row.providerId === "vertex-site" ||
+    row.providerId === "volcengine-jimeng" ||
+    row.providerId === "tripo" ||
+    row.providerId === "openai-official"
+  ) {
     return "platform_ready";
   }
   if (row.providerId === "toapis" && row.channel === "toapis-openai") return "platform_ready";
@@ -145,20 +150,32 @@ function buildArkRoutes(): ModelRouteCatalogEntry[] {
   });
 }
 
+function buildTripoRoutes(): ModelRouteCatalogEntry[] {
+  return listProviderModels("tripo")
+    .filter((row) => row.modality === "model3d")
+    .map((row, index) => ({
+      routeId: `${row.registryId || row.providerModelId}:tripo:model3d`,
+      canonicalModelId: row.registryId || row.providerModelId,
+      providerId: "tripo" as const,
+      providerModelId: row.providerModelId,
+      modality: "model3d" as const,
+      enabled: row.status !== "disabled",
+      priority: 10 + index,
+      fallbackPolicy: "none" as const,
+      source: "static" as const,
+      executionStatus: routeExecutionStatus({
+        providerId: "tripo",
+        enabled: row.status !== "disabled",
+      }),
+      gatewayExecutionStatus: resolveCatalogGatewayExecutionStatus({
+        canonicalModelId: row.registryId || row.providerModelId,
+        providerId: "tripo",
+        modality: "model3d",
+      }) as ModelRouteGatewayExecutionStatus,
+    }));
+}
+
 const MODEL3D_ROUTES: readonly ModelRouteCatalogEntry[] = [
-  {
-    routeId: "tripo-p1:tripo:model3d",
-    canonicalModelId: "tripo-p1",
-    providerId: "tripo",
-    providerModelId: "P1-20260311",
-    modality: "model3d",
-    enabled: true,
-    priority: 10,
-    fallbackPolicy: "none",
-    source: "static",
-    executionStatus: "platform_ready",
-    gatewayExecutionStatus: "gateway_ready",
-  },
   {
     routeId: "tencent-hunyuan-3d-pro:tencent-hunyuan:model3d",
     canonicalModelId: "tencent-hunyuan-3d-pro",
@@ -169,8 +186,8 @@ const MODEL3D_ROUTES: readonly ModelRouteCatalogEntry[] = [
     priority: 10,
     fallbackPolicy: "none",
     source: "static",
-    executionStatus: "adapter_pending",
-    gatewayExecutionStatus: "adapter_pending",
+    executionStatus: "platform_ready",
+    gatewayExecutionStatus: "gateway_ready",
   },
   {
     routeId: "tencent-hunyuan-3d-rapid:tencent-hunyuan:model3d",
@@ -182,8 +199,8 @@ const MODEL3D_ROUTES: readonly ModelRouteCatalogEntry[] = [
     priority: 20,
     fallbackPolicy: "none",
     source: "static",
-    executionStatus: "adapter_pending",
-    gatewayExecutionStatus: "adapter_pending",
+    executionStatus: "platform_ready",
+    gatewayExecutionStatus: "gateway_ready",
   },
 ];
 
@@ -202,6 +219,7 @@ export const MODEL_ROUTE_CATALOG: readonly ModelRouteCatalogEntry[] = uniqueRout
   ...buildBindingRoutes(),
   ...buildArkRoutes(),
   ...buildJimengNonImageRoutes(),
+  ...buildTripoRoutes(),
   ...MODEL3D_ROUTES,
 ]);
 

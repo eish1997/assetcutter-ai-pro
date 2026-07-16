@@ -230,6 +230,23 @@ function planToolsRuleFallback(intent: ProjectAgentIntent): AgentPlanResult {
     };
   }
 
+  // Mode video
+  if (mode === 'video') {
+    if (!textNonEmpty(intent) && !hasAnyRef(intent)) {
+      return { ok: false, errorMessage: 'Video generation requires text or a reference asset' };
+    }
+    return {
+      ok: true,
+      plan: [
+        step('run_plain_video', {
+          text: intent.text,
+          mainAssetId: resolveMainAssetId(intent),
+          referenceAssetIds: intent.referenceAssetIds,
+        }),
+      ],
+    };
+  }
+
   // Mode image
   if (mode === 'image') {
     if (!textNonEmpty(intent) && !hasAnyRef(intent)) {

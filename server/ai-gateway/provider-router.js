@@ -6,9 +6,15 @@ export class AiGatewayRouteError extends Error {
   }
 }
 
+export function normalizeAiGatewayRuntimeProviderId(value) {
+  const id = typeof value === 'string' && value.trim() ? value.trim() : '';
+  if (id === 'vertex-gemini') return 'vertex-site';
+  return id;
+}
+
 export const DEFAULT_AI_PROVIDER_ROUTES = Object.freeze([
   {
-    providerId: 'vertex-gemini',
+    providerId: 'vertex-site',
     workerId: 'text-worker',
     adapterId: 'legacy-gemini-proxy',
     legacyAdapterId: 'gemini-proxy',
@@ -19,7 +25,7 @@ export const DEFAULT_AI_PROVIDER_ROUTES = Object.freeze([
     priority: 10,
   },
   {
-    providerId: 'vertex-gemini',
+    providerId: 'vertex-site',
     workerId: 'image-worker',
     adapterId: 'legacy-gemini-proxy',
     legacyAdapterId: 'gemini-proxy',
@@ -151,6 +157,16 @@ export const DEFAULT_AI_PROVIDER_ROUTES = Object.freeze([
     capabilities: ['model3d.generate'],
     priority: 10,
   },
+  {
+    providerId: 'tencent-hunyuan',
+    workerId: 'model3d-worker',
+    adapterId: 'tencent-hunyuan-3d',
+    channel: 'tencent-hunyuan',
+    upstreamBackend: 'tencent-hunyuan',
+    modalities: ['model3d'],
+    capabilities: ['model3d.generate'],
+    priority: 20,
+  },
 ]);
 
 function matches(value, accepted) {
@@ -158,14 +174,19 @@ function matches(value, accepted) {
 }
 
 function routeMatchesJob(route, job) {
-  if (job.provider && route.providerId !== job.provider) return false;
+  const requestedProvider = normalizeAiGatewayRuntimeProviderId(job.provider);
+  if (requestedProvider && route.providerId !== requestedProvider) return false;
   if (!matches(job.modality, route.modalities)) return false;
   if (matches(job.capability, route.capabilities)) return true;
   return route.capabilities.some((cap) => cap.endsWith('.generate') && job.capability === `${job.modality}.generate`);
 }
 
 export function resolveAiProviderRoute(job, routes = DEFAULT_AI_PROVIDER_ROUTES, options = {}) {
-  const disabledProviders = new Set(Array.isArray(options.disabledProviders) ? options.disabledProviders : []);
+  const disabledProviders = new Set(
+    Array.isArray(options.disabledProviders)
+      ? options.disabledProviders.map(normalizeAiGatewayRuntimeProviderId).filter(Boolean)
+      : []
+  );
   const disabledModels = new Set(Array.isArray(options.disabledModels) ? options.disabledModels : []);
   if (job.model && disabledModels.has(job.model)) {
     throw new AiGatewayRouteError(
@@ -180,7 +201,7 @@ export function resolveAiProviderRoute(job, routes = DEFAULT_AI_PROVIDER_ROUTES,
 
   const route = candidates[0];
   if (!route) {
-    const wanted = job.provider ? ` provider=${job.provider}` : '';
+    const wanted = job.provider ? ` provider=${normalizeAiGatewayRuntimeProviderId(job.provider) || job.provider}` : '';
     throw new AiGatewayRouteError(
       `No AI provider route for modality=${job.modality} capability=${job.capability}${wanted}`
     );

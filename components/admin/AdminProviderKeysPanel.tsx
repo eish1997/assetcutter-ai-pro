@@ -30,6 +30,7 @@ import {
   providerDisplayName,
   providerModelCount,
   providerRouteCount,
+  providersForAdminConsole,
   providersForAdminKeyPool,
   type ModelRouteCatalogEntry,
   type ModelRouteExecutionStatus,
@@ -44,7 +45,8 @@ import {
 } from '../../services/modelRegistry';
 import { useAdminStaff } from './AdminStaffContext';
 
-const PROVIDERS = providersForAdminKeyPool();
+const PROVIDERS = providersForAdminConsole();
+const KEY_POOL_PROVIDERS = providersForAdminKeyPool();
 
 const WORKSPACE_PUBLISH_MODALITIES: readonly ProviderModality[] = ['text', 'image', 'video', 'model3d', 'music'];
 
@@ -72,7 +74,7 @@ function providerLabel(provider: string) {
   return providerDisplayName(provider) || provider || '供应商';
 }
 
-function createDraft(provider = 'tripo'): AdminProviderKeyRow {
+function createDraft(provider = KEY_POOL_PROVIDERS[0]?.id || 'tripo'): AdminProviderKeyRow {
   return {
     id: `draft_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
     provider,
@@ -758,7 +760,7 @@ const AdminProviderKeysPanel: React.FC = () => {
                   </div>
                 </div>
                 <div className="shrink-0 text-right text-[10px] text-gray-500">
-                  <div>{keyCount} 组 Key</div>
+                  <div>{provider.keyPoolSupported ? `${keyCount} 组 Key` : provider.authSchemes[0]?.label || '站点代理'}</div>
                   <div className="mt-1">{modelCount} 个模型</div>
                   <div className="mt-1">{routeCount} 条路径</div>
                   <button
@@ -997,7 +999,7 @@ const AdminProviderKeysPanel: React.FC = () => {
           return (
             <div key={row.id} className="rounded-xl border border-[#2e2e32] bg-[#121216] p-4">
               <div className="mb-3 flex flex-wrap gap-2">
-                {PROVIDERS.map((provider) => (
+                {KEY_POOL_PROVIDERS.map((provider) => (
                   <button
                     key={provider.id}
                     type="button"

@@ -3,6 +3,7 @@ import {
   getProviderCatalogEntry,
   listProviderModels,
   providerModelCount,
+  providersForAdminConsole,
   providersForAdminKeyPool,
 } from "../services/modelRegistry";
 
@@ -27,6 +28,15 @@ describe("provider catalog", () => {
       modelCatalogReady: true,
       smokeTestReady: true,
     });
+  });
+
+  it("shows site-proxy suppliers in the admin supplier center", () => {
+    const adminProviders = providersForAdminConsole();
+    const keyPoolProviders = providersForAdminKeyPool();
+
+    expect(adminProviders.map((provider) => provider.id)).toContain("vertex-site");
+    expect(keyPoolProviders.map((provider) => provider.id)).not.toContain("vertex-site");
+    expect(getProviderCatalogEntry("vertex-site")?.authSchemes[0]?.label).toBe("站点代理");
   });
 
   it("keeps provider identity separate from provider model rows", () => {

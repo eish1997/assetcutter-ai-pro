@@ -13,6 +13,9 @@ export const QUICK_COMPOSE_PLAIN_T2I_ACTION_ID = 'ac_internal_quick_compose_plai
 /** 内置「快捷条·图生图」（有参考图时） */
 export const QUICK_COMPOSE_PLAIN_I2I_ACTION_ID = 'ac_internal_quick_compose_plain_i2i';
 
+/** 内置「快捷栏·文/图生视频」 */
+export const QUICK_COMPOSE_PLAIN_VIDEO_ACTION_ID = 'ac_internal_quick_compose_plain_video';
+
 function plainTextModule(): CustomAppModule {
   return {
     id: QUICK_COMPOSE_PLAIN_TEXT_ACTION_ID,
@@ -69,6 +72,18 @@ function plainI2IModule(): CustomAppModule {
   };
 }
 
+function plainVideoModule(): CustomAppModule {
+  return {
+    id: QUICK_COMPOSE_PLAIN_VIDEO_ACTION_ID,
+    label: QUICK_COMPOSE_BAR_LOG_LABEL,
+    category: 'generate_video',
+    enabled: true,
+    order: -997,
+    instruction: '',
+    skipUnderstand: true,
+  };
+}
+
 /** 解析底部快捷条「无拖入预设」用的内置能力（不在预设列表中） */
 export function getQuickComposePlainModule(actionType: string): CustomAppModule | null {
   switch (actionType) {
@@ -80,6 +95,8 @@ export function getQuickComposePlainModule(actionType: string): CustomAppModule 
       return plainT2IModule();
     case QUICK_COMPOSE_PLAIN_I2I_ACTION_ID:
       return plainI2IModule();
+    case QUICK_COMPOSE_PLAIN_VIDEO_ACTION_ID:
+      return plainVideoModule();
     default:
       return null;
   }

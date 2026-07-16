@@ -239,7 +239,7 @@ export function buildComposerTextAssetThumbDataUrl(titleRaw: string, bodyRaw: st
 </defs>
 <rect width="320" height="${svgH}" rx="20" fill="url(#g)"/>
 <rect x="10" y="10" width="300" height="${svgH - 20}" rx="16" fill="#0b1222" stroke="#334155" stroke-width="1.5"/>
-<text x="18" y="22" fill="#64748b" font-size="12" font-weight="600" font-family="ui-sans-serif,system-ui,sans-serif">文字资产</text>
+<text x="18" y="22" fill="#64748b" font-size="12" font-weight="600" font-family="ui-sans-serif,system-ui,sans-serif">文本资产</text>
 <text x="18" y="${title1Y}" fill="#38bdf8" font-size="22" font-weight="700" font-family="ui-sans-serif,system-ui,sans-serif">${t1}</text>
 ${title2Svg}
 ${lineSvg}

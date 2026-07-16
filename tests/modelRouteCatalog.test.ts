@@ -40,6 +40,20 @@ describe("model route catalog", () => {
     });
   });
 
+  it("marks Vertex Gemini routes as platform ready site-proxy routes", () => {
+    const textRoute = listModelRoutes("gemini-3-flash-preview").find((route) => route.providerId === "vertex-site");
+    const imageRoute = listModelRoutes("gemini-3.1-flash-image").find((route) => route.providerId === "vertex-site");
+
+    expect(textRoute).toMatchObject({
+      executionStatus: "platform_ready",
+      gatewayExecutionStatus: "gateway_ready",
+    });
+    expect(imageRoute).toMatchObject({
+      executionStatus: "platform_ready",
+      gatewayExecutionStatus: "gateway_ready",
+    });
+  });
+
   it("maps Volcengine Ark to Doubao and Seed provider models", () => {
     const arkRoutes = listProviderRoutes("volcengine-ark");
 
@@ -72,16 +86,34 @@ describe("model route catalog", () => {
   it("keeps provider route inventory queryable from supplier center", () => {
     const arkRoutes = listProviderRoutes("volcengine-ark");
     const jimengRoutes = listProviderRoutes("volcengine-jimeng");
+    const tripoRoutes = listProviderRoutes("tripo");
+    const hunyuanRoutes = listProviderRoutes("tencent-hunyuan");
 
     expect(arkRoutes.some((route) => route.canonicalModelId === "doubao-seed-2-0-pro")).toBe(true);
     expect(jimengRoutes.some((route) => route.modality === "video")).toBe(true);
     expect(jimengRoutes.some((route) => route.executionStatus === "platform_ready")).toBe(true);
     expect(jimengRoutes.some((route) => route.gatewayExecutionStatus === "gateway_ready")).toBe(true);
+    expect(tripoRoutes.find((route) => route.canonicalModelId === "tripo-v3.0")).toMatchObject({
+      executionStatus: "platform_ready",
+      gatewayExecutionStatus: "gateway_ready",
+    });
+    expect(tripoRoutes.find((route) => route.canonicalModelId === "tripo-v2.0")).toMatchObject({
+      executionStatus: "platform_ready",
+      gatewayExecutionStatus: "gateway_ready",
+    });
+    expect(hunyuanRoutes.find((route) => route.canonicalModelId === "tencent-hunyuan-3d-rapid")).toMatchObject({
+      executionStatus: "platform_ready",
+      gatewayExecutionStatus: "gateway_ready",
+    });
+    expect(tripoRoutes.map((route) => route.canonicalModelId)).toEqual(
+      expect.arrayContaining(["tripo-p1", "tripo-v3.1", "tripo-v3.0", "tripo-v2.5", "tripo-v2.0"])
+    );
+    expect(tripoRoutes.every((route) => route.gatewayExecutionStatus === "gateway_ready")).toBe(true);
   });
 
   it("marks backend Gateway executable routes separately from supplier capability", () => {
     expect(listModelRoutes("gemini-3-pro-image-preview").some((route) => route.gatewayExecutionStatus === "gateway_ready")).toBe(true);
     expect(listModelRoutes("tripo-p1").some((route) => route.gatewayExecutionStatus === "gateway_ready")).toBe(true);
-    expect(listModelRoutes("tencent-hunyuan-3d-pro").some((route) => route.gatewayExecutionStatus === "adapter_pending")).toBe(true);
+    expect(listModelRoutes("tencent-hunyuan-3d-pro").some((route) => route.gatewayExecutionStatus === "gateway_ready")).toBe(true);
   });
 });

@@ -13,6 +13,7 @@ import { useWorkflowMarquee } from '../hooks/useWorkflowMarquee';
 import { useWorkflowExecutionStartedAt } from '../hooks/useWorkflowAssetExecutionElapsed';
 import { useWorkflowJustifiedLayout } from '../hooks/useWorkflowJustifiedLayout';
 import { useWorkflowAssetCardHoverKeys, type WorkflowCardHoverControl } from '../hooks/useWorkflowAssetCardHoverKeys';
+import { useEffectiveCapabilityModelRows } from '../hooks/useEffectiveCapabilityModelRows';
 import { stepDisplayKeyInOrder } from '../services/workflowAssetDisplayKeyCycle';
 import { useWorkflowLightboxBoot } from '../hooks/useWorkflowLightboxBoot';
 import { createPortal, flushSync } from 'react-dom';
@@ -102,6 +103,7 @@ import {
   QUICK_COMPOSE_PLAIN_I2I_ACTION_ID,
   QUICK_COMPOSE_PLAIN_T2I_ACTION_ID,
   QUICK_COMPOSE_PLAIN_TEXT_ACTION_ID,
+  QUICK_COMPOSE_PLAIN_VIDEO_ACTION_ID,
 } from '../services/quickComposePlainPresets';
 import { classifyWorkflowRunTaskBranch } from '../services/workflowRunTaskBranch';
 import {
@@ -655,6 +657,18 @@ type WorkflowPendingTaskOptions = {
   /** @deprecated */
   overrideImageGear?: CustomAppModule['imageGear'];
   overrideTextModelRegistryId?: string;
+  overrideVideoModelRegistryId?: string;
+  overrideVideoDurationSeconds?: number;
+  overrideVideoAspectRatio?: string;
+  overrideVideoResolution?: string;
+  overrideVideoMotionStrength?: number;
+  overrideModel3dRegistryId?: string;
+  overrideModel3dQuality?: string;
+  overrideModel3dGeometryQuality?: string;
+  overrideModel3dTextureQuality?: string;
+  overrideModel3dFormat?: string;
+  overrideModel3dTexture?: boolean;
+  overrideModel3dPbr?: boolean;
   overrideImageAspectRatio?: string;
   overrideImageSize?: string;
   overrideSkipUnderstand?: boolean;
@@ -1601,6 +1615,20 @@ const WorkflowSection: React.FC<{
   const [quickComposeTextModel, setQuickComposeTextModel] = useState<string>(() =>
     coerceTextModelRegistryId((textModelRegistryId || '').trim() || DEFAULT_MODEL_TEXT)
   );
+  const { firstReadyRegistryId: quickComposeDefaultVideoModel } = useEffectiveCapabilityModelRows('video');
+  const { firstReadyRegistryId: quickComposeDefaultModel3d } = useEffectiveCapabilityModelRows('model3d');
+  const [quickComposeVideoModel, setQuickComposeVideoModel] = useState<string>('');
+  const [quickComposeVideoDuration, setQuickComposeVideoDuration] = useState('5');
+  const [quickComposeVideoAspect, setQuickComposeVideoAspect] = useState('16:9');
+  const [quickComposeVideoResolution, setQuickComposeVideoResolution] = useState('1080p');
+  const [quickComposeVideoMotion, setQuickComposeVideoMotion] = useState('');
+  const [quickComposeModel3dModel, setQuickComposeModel3dModel] = useState<string>('');
+  const [quickComposeModel3dQuality, setQuickComposeModel3dQuality] = useState('');
+  const [quickComposeModel3dGeometryQuality, setQuickComposeModel3dGeometryQuality] = useState('');
+  const [quickComposeModel3dTextureQuality, setQuickComposeModel3dTextureQuality] = useState('');
+  const [quickComposeModel3dFormat, setQuickComposeModel3dFormat] = useState('');
+  const [quickComposeModel3dTexture, setQuickComposeModel3dTexture] = useState(true);
+  const [quickComposeModel3dPbr, setQuickComposeModel3dPbr] = useState(true);
   const [quickComposeAspect, setQuickComposeAspect] = useState('adaptive');
   const [quickComposeSize, setQuickComposeSize] = useState('');
   const [quickComposeCount, setQuickComposeCount] = useState(1);
@@ -1635,10 +1663,21 @@ const WorkflowSection: React.FC<{
   );
   const getQuickComposeMaxRefs = useCallback(() => {
     if (quickComposeMode === 'text') return 10;
+    if (quickComposeMode === 'video') return 1;
     if (quickComposeMode === '3d') return 1;
     // image | auto：按生图模型上限（自动挡可能落到图）
     return maxReferenceImagesForImageModel(quickComposeImageModel);
   }, [quickComposeMode, quickComposeImageModel]);
+  useEffect(() => {
+    if (!quickComposeVideoModel && quickComposeDefaultVideoModel) {
+      setQuickComposeVideoModel(quickComposeDefaultVideoModel);
+    }
+  }, [quickComposeVideoModel, quickComposeDefaultVideoModel]);
+  useEffect(() => {
+    if (!quickComposeModel3dModel && quickComposeDefaultModel3d) {
+      setQuickComposeModel3dModel(quickComposeDefaultModel3d);
+    }
+  }, [quickComposeModel3dModel, quickComposeDefaultModel3d]);
   const [showAllInGroup, setShowAllInGroup] = useState(false);
   /** 组筛选 ID：用于查看组内资产 */
   const [groupFilterId, setGroupFilterId] = useState<string | null>(null);
@@ -2936,6 +2975,18 @@ ${lineSvg}
               overrideTextModelRegistryId: coerceTextModelRegistryId(options.overrideTextModelRegistryId),
             }
           : {}),
+        ...(options?.overrideVideoModelRegistryId ? { overrideVideoModelRegistryId: options.overrideVideoModelRegistryId } : {}),
+        ...(typeof options?.overrideVideoDurationSeconds === 'number' ? { overrideVideoDurationSeconds: options.overrideVideoDurationSeconds } : {}),
+        ...(options?.overrideVideoAspectRatio ? { overrideVideoAspectRatio: options.overrideVideoAspectRatio } : {}),
+        ...(options?.overrideVideoResolution ? { overrideVideoResolution: options.overrideVideoResolution } : {}),
+        ...(typeof options?.overrideVideoMotionStrength === 'number' ? { overrideVideoMotionStrength: options.overrideVideoMotionStrength } : {}),
+        ...(options?.overrideModel3dRegistryId ? { overrideModel3dRegistryId: options.overrideModel3dRegistryId } : {}),
+        ...(options?.overrideModel3dQuality ? { overrideModel3dQuality: options.overrideModel3dQuality } : {}),
+        ...(options?.overrideModel3dGeometryQuality ? { overrideModel3dGeometryQuality: options.overrideModel3dGeometryQuality } : {}),
+        ...(options?.overrideModel3dTextureQuality ? { overrideModel3dTextureQuality: options.overrideModel3dTextureQuality } : {}),
+        ...(options?.overrideModel3dFormat ? { overrideModel3dFormat: options.overrideModel3dFormat } : {}),
+        ...(typeof options?.overrideModel3dTexture === 'boolean' ? { overrideModel3dTexture: options.overrideModel3dTexture } : {}),
+        ...(typeof options?.overrideModel3dPbr === 'boolean' ? { overrideModel3dPbr: options.overrideModel3dPbr } : {}),
         ...(options?.overrideImageAspectRatio ? { overrideImageAspectRatio: options.overrideImageAspectRatio } : {}),
         ...(options?.overrideImageSize ? { overrideImageSize: options.overrideImageSize } : {}),
         ...(typeof options?.overrideSkipUnderstand === 'boolean'
@@ -3448,6 +3499,43 @@ ${lineSvg}
               : {}),
             ...(task.overrideTextModelRegistryId
               ? { textModelRegistryId: coerceTextModelRegistryId(task.overrideTextModelRegistryId) }
+              : {}),
+            ...(task.overrideVideoModelRegistryId ? { videoModelRegistryId: task.overrideVideoModelRegistryId } : {}),
+            ...(typeof task.overrideVideoDurationSeconds === 'number'
+              ? { videoDurationSeconds: task.overrideVideoDurationSeconds }
+              : {}),
+            ...(task.overrideVideoAspectRatio ? { videoAspectRatio: task.overrideVideoAspectRatio } : {}),
+            ...(task.overrideVideoResolution ? { videoResolution: task.overrideVideoResolution } : {}),
+            ...(typeof task.overrideVideoMotionStrength === 'number'
+              ? { videoMotionStrength: task.overrideVideoMotionStrength }
+              : {}),
+            ...(task.overrideModel3dRegistryId ||
+            task.overrideModel3dQuality ||
+            task.overrideModel3dGeometryQuality ||
+            task.overrideModel3dTextureQuality ||
+            task.overrideModel3dFormat ||
+            typeof task.overrideModel3dTexture === 'boolean' ||
+            typeof task.overrideModel3dPbr === 'boolean'
+              ? {
+                  generate3D: {
+                    ...(presetBase.generate3D ?? {
+                      provider: 'tripo',
+                      module: 'pro',
+                      tripoTaskType: 'image_to_model',
+                    }),
+                    ...(task.overrideModel3dRegistryId ? { modelRegistryId: task.overrideModel3dRegistryId } : {}),
+                    ...(task.overrideModel3dQuality ? { quality: task.overrideModel3dQuality } : {}),
+                    ...(task.overrideModel3dGeometryQuality ? { tripoGeometryQuality: task.overrideModel3dGeometryQuality as 'standard' | 'detailed' } : {}),
+                    ...(task.overrideModel3dTextureQuality ? { tripoTextureQuality: task.overrideModel3dTextureQuality as 'standard' | 'detailed' } : {}),
+                    ...(task.overrideModel3dFormat ? { format: task.overrideModel3dFormat } : {}),
+                    ...(typeof task.overrideModel3dTexture === 'boolean'
+                      ? { texture: task.overrideModel3dTexture, tripoTexture: task.overrideModel3dTexture }
+                      : {}),
+                    ...(typeof task.overrideModel3dPbr === 'boolean'
+                      ? { tripoPbr: task.overrideModel3dPbr, enablePBR: task.overrideModel3dPbr }
+                      : {}),
+                  },
+                }
               : {}),
             ...(task.overrideImageAspectRatio ? { imageAspectRatio: task.overrideImageAspectRatio } : {}),
             ...(task.overrideImageSize &&
@@ -4178,6 +4266,7 @@ ${lineSvg}
                   return next;
                 })
               );
+              markTaskCompleted(task);
             } else if (videoUrl) {
               if (isTaskCancelled()) {
                 skipCancelledWrite();
@@ -4800,6 +4889,32 @@ ${lineSvg}
       ) {
         o.overrideTextModelRegistryId = coerceTextModelRegistryId(quickComposeTextModel);
       }
+      if (m.category === 'generate_video') {
+        if (quickComposeVideoModel || quickComposeDefaultVideoModel) {
+          o.overrideVideoModelRegistryId = quickComposeVideoModel || quickComposeDefaultVideoModel;
+        }
+        const durationSeconds = Number(quickComposeVideoDuration);
+        if (Number.isFinite(durationSeconds) && durationSeconds > 0) {
+          o.overrideVideoDurationSeconds = durationSeconds;
+        }
+        if (quickComposeVideoAspect) o.overrideVideoAspectRatio = quickComposeVideoAspect;
+        if (quickComposeVideoResolution) o.overrideVideoResolution = quickComposeVideoResolution;
+        const motionStrength = Number(quickComposeVideoMotion);
+        if (Number.isFinite(motionStrength) && quickComposeVideoMotion.trim()) {
+          o.overrideVideoMotionStrength = motionStrength;
+        }
+      }
+      if (m.category === 'generate_3d') {
+        if (quickComposeModel3dModel || quickComposeDefaultModel3d) {
+          o.overrideModel3dRegistryId = quickComposeModel3dModel || quickComposeDefaultModel3d;
+        }
+        if (quickComposeModel3dQuality) o.overrideModel3dQuality = quickComposeModel3dQuality;
+        if (quickComposeModel3dGeometryQuality) o.overrideModel3dGeometryQuality = quickComposeModel3dGeometryQuality;
+        if (quickComposeModel3dTextureQuality) o.overrideModel3dTextureQuality = quickComposeModel3dTextureQuality;
+        if (quickComposeModel3dFormat) o.overrideModel3dFormat = quickComposeModel3dFormat;
+        o.overrideModel3dTexture = quickComposeModel3dTexture;
+        o.overrideModel3dPbr = quickComposeModel3dPbr;
+      }
       return o;
     };
 
@@ -5133,6 +5248,41 @@ ${lineSvg}
       return runPlainBatch([newAsset], [newTask]);
     }
 
+    if (composeMode === 'video') {
+      const videoMod = getQuickComposePlainModule(QUICK_COMPOSE_PLAIN_VIDEO_ACTION_ID)!;
+      const taskOverrides = buildQuickComposeGenOverrides(videoMod);
+      if (!plainText && imgsAll.length === 0) {
+        onLog?.('warn', '底部快捷栏：生视频需要文字描述或 @ 图片');
+        return [];
+      }
+      const primary = imgsAll[0] || '';
+      const newId = uuid();
+      const newAsset = attachInitialVgpToNewAsset({
+        id: newId,
+        original: primary,
+        displayKey: 'original',
+        results: {},
+        resultOrder: [],
+        archived: false,
+        hiddenInGrid: true,
+        createdAt: Date.now(),
+        ...(primary ? {} : { assetKind: 'text' as const, textTitle: '', textBody: clampWorkflowTextBody(plainText) }),
+      });
+      const newTask: WorkflowPendingTask = {
+        id: uuid(),
+        assetId: newId,
+        actionType: QUICK_COMPOSE_PLAIN_VIDEO_ACTION_ID,
+        inputImage: primary,
+        addedAt: Date.now(),
+        inputSourceDisplayKey: 'original',
+        ...(plainText ? { inputText: clampWorkflowTextBody(plainText), promptOverride: plainText } : {}),
+        ...(imgsAll.length > 1 ? { inputImages: imgsAll.slice(1) } : {}),
+        ...taskOverrides,
+        logContext: plainLog,
+      };
+      return runPlainBatch([newAsset], [newTask]);
+    }
+
     /* composeMode === 'image' */
     const plainImageId = imgsAll.length > 0 ? QUICK_COMPOSE_PLAIN_I2I_ACTION_ID : QUICK_COMPOSE_PLAIN_T2I_ACTION_ID;
     const plainImgMod = getQuickComposePlainModule(plainImageId)!;
@@ -5285,6 +5435,20 @@ ${lineSvg}
     getAssetDisplayImage,
     quickComposeImageModel,
     quickComposeTextModel,
+    quickComposeVideoModel,
+    quickComposeDefaultVideoModel,
+    quickComposeVideoDuration,
+    quickComposeVideoAspect,
+    quickComposeVideoResolution,
+    quickComposeVideoMotion,
+    quickComposeModel3dModel,
+    quickComposeDefaultModel3d,
+    quickComposeModel3dQuality,
+    quickComposeModel3dGeometryQuality,
+    quickComposeModel3dTextureQuality,
+    quickComposeModel3dFormat,
+    quickComposeModel3dTexture,
+    quickComposeModel3dPbr,
     quickComposeAspect,
     quickComposeSize,
     quickComposeCount,
@@ -9948,6 +10112,7 @@ ${lineSvg}
 
   const quickComposeMaxReferenceImages = useMemo(() => {
     if (quickComposeMode === 'text') return 10;
+    if (quickComposeMode === 'video') return 1;
     if (quickComposeMode === '3d') return 1;
     return maxReferenceImagesForImageModel(quickComposeImageModel);
   }, [quickComposeMode, quickComposeImageModel]);
@@ -10163,6 +10328,10 @@ ${lineSvg}
     quickComposeMode === 'image' || quickComposeMode === 'auto';
   const quickComposeShowGenTextSettings =
     quickComposeMode === 'text' || quickComposeMode === 'auto';
+  const quickComposeShowGenVideoSettings =
+    quickComposeMode === 'video';
+  const quickComposeShowGenModel3dSettings =
+    quickComposeMode === '3d';
 
   const quickComposeAllowBatchCount =
     quickComposeMode === 'text' || quickComposeMode === 'image' || quickComposeMode === 'auto';
@@ -10176,7 +10345,7 @@ ${lineSvg}
       quickComposeModeStorageKey,
       '',
       (parsed) =>
-        parsed === 'text' || parsed === 'image' || parsed === '3d' || parsed === 'auto'
+        parsed === 'text' || parsed === 'image' || parsed === 'video' || parsed === '3d' || parsed === 'auto'
           ? parsed
           : null
     );
@@ -12222,23 +12391,22 @@ ${lineSvg}
     const selectionStatusTone: QuickComposeChatDockHandlers['selectionStatusTone'] =
       lightboxAsset ? 'preview' : selectedIds.length > 0 || selectedGroupItemKeys.size > 0 ? 'active' : 'idle';
     const selectionStatusLabel = lightboxAsset
-      ? `当前预览：${workflowAssetMentionLabel(lightboxAsset)}`
+      ? `\u5f53\u524d\u9884\u89c8\uff1a${workflowAssetMentionLabel(lightboxAsset)}`
       : selectedGroupItemKeys.size > 0
-        ? `组内已选 ${selectedGroupItemKeys.size} 个资产`
+        ? `\u7ec4\u5185\u5df2\u9009 ${selectedGroupItemKeys.size} \u4e2a\u8d44\u4ea7`
         : selectedAssetList.length > 1
-          ? `当前选中 ${selectedAssetList.length} 个资产`
+          ? `\u5f53\u524d\u9009\u4e2d ${selectedAssetList.length} \u4e2a\u8d44\u4ea7`
           : selectedAssetList[0]
-            ? `当前选中：${workflowAssetMentionLabel(selectedAssetList[0])}`
-            : '当前未选中资产';
+            ? `\u5f53\u524d\u9009\u4e2d\uff1a${workflowAssetMentionLabel(selectedAssetList[0])}`
+            : '\u5f53\u524d\u672a\u9009\u4e2d\u8d44\u4ea7';
     const threadTitle = quickComposeInLightbox
       ? (() => {
           const asset = lightboxAssetId
             ? assets.find((a) => a.id === lightboxAssetId)
             : null;
-          return asset ? workflowAssetMentionLabel(asset) : '大图预览';
+          return asset ? workflowAssetMentionLabel(asset) : '\u5927\u56fe\u9884\u89c8';
         })()
-      : workspaceProjectChrome?.activeProjectName || '工作区';
-    const messages: QuickComposeChatMessageView[] = activeQuickComposeThread
+      : workspaceProjectChrome?.activeProjectName || '\u5de5\u4f5c\u533a';    const messages: QuickComposeChatMessageView[] = activeQuickComposeThread
       ? mapQuickComposeThreadMessagesToChatViews(activeQuickComposeThread.messages, {
           assets,
           pending,
@@ -12323,6 +12491,8 @@ ${lineSvg}
         : quickComposeSubmitDisabledReason,
       showGenImageSettings: quickComposeShowGenImageSettings,
       showGenTextSettings: quickComposeShowGenTextSettings,
+      showGenVideoSettings: quickComposeShowGenVideoSettings,
+      showGenModel3dSettings: quickComposeShowGenModel3dSettings,
       allowBatchCount: quickComposeAllowBatchCount,
       onComposeInputCapabilityDrop: quickComposeInLightbox ? undefined : onQuickComposeInputCapabilityDrop,
       onComposeInputWorkflowDrop: quickComposeInLightbox ? undefined : handleQuickComposeWorkflowDrop,
@@ -12335,6 +12505,30 @@ ${lineSvg}
         onImageModelRegistryId: setQuickComposeImageModel,
         textModelRegistryId: quickComposeTextModel,
         onTextModelRegistryId: setQuickComposeTextModel,
+        videoModelRegistryId: quickComposeVideoModel || quickComposeDefaultVideoModel,
+        onVideoModelRegistryId: setQuickComposeVideoModel,
+        videoDurationSeconds: quickComposeVideoDuration,
+        onVideoDurationSeconds: setQuickComposeVideoDuration,
+        videoAspectRatio: quickComposeVideoAspect,
+        onVideoAspectRatio: setQuickComposeVideoAspect,
+        videoResolution: quickComposeVideoResolution,
+        onVideoResolution: setQuickComposeVideoResolution,
+        videoMotionStrength: quickComposeVideoMotion,
+        onVideoMotionStrength: setQuickComposeVideoMotion,
+        model3dRegistryId: quickComposeModel3dModel || quickComposeDefaultModel3d,
+        onModel3dRegistryId: setQuickComposeModel3dModel,
+        model3dQuality: quickComposeModel3dQuality,
+        onModel3dQuality: setQuickComposeModel3dQuality,
+        model3dGeometryQuality: quickComposeModel3dGeometryQuality,
+        onModel3dGeometryQuality: setQuickComposeModel3dGeometryQuality,
+        model3dTextureQuality: quickComposeModel3dTextureQuality,
+        onModel3dTextureQuality: setQuickComposeModel3dTextureQuality,
+        model3dFormat: quickComposeModel3dFormat,
+        onModel3dFormat: setQuickComposeModel3dFormat,
+        model3dTexture: quickComposeModel3dTexture,
+        onModel3dTexture: setQuickComposeModel3dTexture,
+        model3dPbr: quickComposeModel3dPbr,
+        onModel3dPbr: setQuickComposeModel3dPbr,
         aspectRatio: quickComposeAspect,
         onAspectRatio: setQuickComposeAspect,
         imageSize: quickComposeSize,
@@ -12345,7 +12539,7 @@ ${lineSvg}
         onUnderstand: setQuickComposeUnderstand,
       },
       placeholderOverride: quickComposeInLightbox
-        ? '描述修改意图；需要时可 @ 当前画面或其它资产'
+        ? '\u63cf\u8ff0\u4fee\u6539\u610f\u56fe\uff1b\u9700\u8981\u65f6\u53ef @ \u5f53\u524d\u753b\u9762\u6216\u5176\u5b83\u8d44\u4ea7'
         : undefined,
       chatDockProps: quickComposeChatDockHandlers
         ? {
@@ -12426,6 +12620,8 @@ ${lineSvg}
       quickComposeChatDockSubmitDisabledReason,
       quickComposeShowGenImageSettings,
       quickComposeShowGenTextSettings,
+      quickComposeShowGenVideoSettings,
+      quickComposeShowGenModel3dSettings,
       quickComposeAllowBatchCount,
       projectAgentMemoryEntries,
       projectAgentSkillEntries,
@@ -12440,6 +12636,20 @@ ${lineSvg}
       handleProjectAgentToggleSkill,
       quickComposeImageModel,
       quickComposeTextModel,
+      quickComposeVideoModel,
+      quickComposeDefaultVideoModel,
+      quickComposeVideoDuration,
+      quickComposeVideoAspect,
+      quickComposeVideoResolution,
+      quickComposeVideoMotion,
+      quickComposeModel3dModel,
+      quickComposeDefaultModel3d,
+      quickComposeModel3dQuality,
+      quickComposeModel3dGeometryQuality,
+      quickComposeModel3dTextureQuality,
+      quickComposeModel3dFormat,
+      quickComposeModel3dTexture,
+      quickComposeModel3dPbr,
       quickComposeAspect,
       quickComposeSize,
       quickComposeCount,
@@ -15352,3 +15562,4 @@ ${lineSvg}
 };
 
 export default WorkflowSection;
+

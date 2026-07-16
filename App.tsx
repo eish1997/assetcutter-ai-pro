@@ -116,6 +116,7 @@ import { downloadModelFromSource } from './services/downloadModelFile';
 import { persistWorkflow3dSlots } from './services/persistWorkflow3dSlots';
 import { preflightGenerate3dEnvironment } from './services/generate3d/preflightGenerate3d';
 import { AI_GATEWAY_TRIPO_PLATFORM_KEY } from './services/tripoService';
+import { createAndPollAiGatewayModel3dJob } from './services/aiGatewayModel3dExecution';
 import { patchWorkflowAssetsWith3dResultAndHydrate } from './services/workflow3dCompanionHydrate';
 import {
   getAiProviderToolbarLabel,
@@ -2650,7 +2651,7 @@ const MainApp: React.FC = () => {
     const preflight = await preflightGenerate3dEnvironment({
       companionBaseUrl: getCompanionLocalBaseUrl(),
       companionProjectId: companionProjectIdForPreflight,
-      provider: provider === 'tencent' ? 'tencent' : 'tripo',
+      provider,
     });
     for (const w of preflight.warnings) {
       addGenerate3DLog('warn', `[工作流] ${w}`);
@@ -2790,6 +2791,100 @@ const MainApp: React.FC = () => {
           );
         }
         addGenerate3DLog('error', `[工作流] 混元生成失败：${preset.label}`, msg);
+        throw new Error(msg);
+      }
+      return;
+    }
+    if (provider === 'volcengine-ark') {
+      const taskId = addTask('GENERATE_3D', `${preset.label}（方舟 Seed3D）`);
+      const gNorm = normalizeGenerate3DPresetForRun(preset.generate3D);
+      try {
+        addGenerate3DLog('info', `[工作流] 方舟 Seed3D 提交：${preset.label}`, {
+          modelRegistryId: gNorm.modelRegistryId,
+          quality: gNorm.quality,
+          format: gNorm.format,
+          texture: gNorm.texture,
+        });
+        updateTask(taskId, { status: 'RUNNING', progress: 10 });
+        const prompt = (preset.instruction?.trim() || gNorm.prompt?.trim() || 'Generate a 3D model from the reference image').trim();
+        const result = await createAndPollAiGatewayModel3dJob({
+          prompt,
+          referenceImages: imageBase64 ? [imageBase64] : undefined,
+          registryId: gNorm.modelRegistryId || 'doubao-seed3d-2-0',
+          quality: gNorm.quality,
+          format: gNorm.format,
+          texture: gNorm.texture,
+        });
+        if (!result.modelUrls.length) {
+          throw new Error('方舟 Seed3D 任务完成但未返回模型文件');
+        }
+        updateTask(taskId, { status: 'RUNNING', progress: 85 });
+        const companionBase = getCompanionLocalBaseUrl();
+        const companionProjectId = String(activeWorkspaceProjectId || '').trim() || 'default';
+        const workflowAssetId = task?.assetId || `wf_ark3d_${Math.random().toString(36).slice(2, 11)}`;
+        const resultKey = task?.actionType || preset.id;
+        const persisted = await persistWorkflow3dSlots({
+          provider: 'volcengine-ark',
+          taskId: result.aiGatewayJobId,
+          modelUrls: result.modelUrls,
+          previewUrl: result.previewUrl,
+          assetId: workflowAssetId,
+          resultKey,
+          companionBaseUrl: companionBase,
+          companionProjectId,
+          onLog: (level, message, detail) => addGenerate3DLog(level, message, detail),
+        });
+        const localModelUrls = persisted.modelUrls;
+        const modelCompanionKeys = persisted.modelCompanionKeys;
+        const stepModelFormats = persisted.stepModelFormats;
+        const modelSourceName = persisted.modelSourceName;
+        const localPreviewUrl = persisted.preview?.objectUrl || '';
+        const previewCompanionKey = persisted.preview?.companionKey || '';
+        if (!companionBase || !companionProjectId || companionProjectId === 'default') {
+          addGenerate3DLog(
+            'warn',
+            '[Workflow] Ark Seed3D model is only kept in browser memory',
+            'Connect the local companion to archive provider model files to the project folder.'
+          );
+        }
+        const { assets: hydratedAssets, revokeBlobUrls: hydrateRevokes } =
+          await patchWorkflowAssetsWith3dResultAndHydrate({
+            prev: workflowAssetsRef.current,
+            task,
+            preset,
+            imageBase64,
+            workflowAssetId,
+            resultKey,
+            localModelUrls,
+            modelCompanionKeys,
+            stepModelFormats,
+            modelSourceName,
+            localPreviewUrl,
+            previewCompanionKey,
+            jobMeta: { aiGatewayJobId: result.aiGatewayJobId },
+            companionBaseUrl: companionBase,
+            companionProjectId,
+            onLog: (level, message, detail) => addGenerate3DLog(level, message, detail),
+          });
+        for (const u of hydrateRevokes) {
+          try {
+            URL.revokeObjectURL(u);
+          } catch {
+            /* ignore */
+          }
+        }
+        setWorkflowAssets(hydratedAssets);
+        updateTask(taskId, { status: 'SUCCESS', progress: 100 });
+        addGenerate3DLog('info', `[工作流] 方舟 Seed3D 生成完成：${preset.label}`, {
+          aiGatewayJobId: result.aiGatewayJobId,
+          modelCount: result.modelUrls.length,
+          hasPreview: Boolean(result.previewUrl),
+          companionProjectId,
+        });
+      } catch (e) {
+        const msg = normalizeApiErrorMessage(e);
+        updateTask(taskId, { status: 'FAILED', error: msg });
+        addGenerate3DLog('error', `[工作流] 方舟 Seed3D 生成失败：${preset.label}`, msg);
         throw new Error(msg);
       }
       return;

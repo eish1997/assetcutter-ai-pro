@@ -38,6 +38,7 @@ function readyRows(): PublishedWorkspaceModelRow[] {
       "doubao-seed3d-2-0",
       "jimeng-video-ti2v-v30-pro",
       "tripo-p1",
+      "tripo-v3.1",
       "tencent-hunyuan-3d-pro",
     ],
   };
@@ -60,6 +61,7 @@ describe("published model route consistency", () => {
         "doubao-seed3d-2-0",
         "jimeng-video-ti2v-v30-pro",
         "tripo-p1",
+        "tripo-v3.1",
       ])
     );
 

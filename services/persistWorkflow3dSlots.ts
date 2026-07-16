@@ -1,12 +1,13 @@
 import type { CustomAppModule } from '../types';
 import type { File3D, TencentCredentials } from './tencentService';
+import { persistProviderModelArtifactsForWorkflowAsset } from './providerModelArtifactPersist';
 import { persistTencentModelsForWorkflowAsset } from './tencentModelPersist';
 import { persistTripoModelsForWorkflowAsset } from './tripoModelPersist';
 import type { WorkflowModelSlotFormat } from './tripoModelPersist';
 import type { Persist3dModelsResult } from './workflowModelSlots';
 
 export type PersistWorkflow3dSlotsParams = {
-  provider: 'tripo' | 'tencent';
+  provider: 'tripo' | 'tencent' | 'volcengine-ark' | (string & {});
   assetId: string;
   resultKey: string;
   companionBaseUrl?: string | null;
@@ -32,6 +33,12 @@ export type PersistWorkflow3dSlotsParams = {
       taskId: string;
       files: File3D[];
     }
+  | {
+      provider: 'volcengine-ark' | (string & {});
+      taskId: string;
+      modelUrls: string[];
+      previewUrl?: string;
+    }
 );
 
 /** 工作流 3D 归档统一门面：Tripo / 混元落伴侣 + 预览 blob */
@@ -56,11 +63,21 @@ export async function persistWorkflow3dSlots(params: PersistWorkflow3dSlotsParam
     });
   }
 
-  return persistTencentModelsForWorkflowAsset({
+  if (params.provider === 'tencent') {
+    return persistTencentModelsForWorkflowAsset({
+      ...common,
+      creds: params.creds,
+      tencentJobId: params.taskId,
+      files: params.files,
+    });
+  }
+
+  return persistProviderModelArtifactsForWorkflowAsset({
     ...common,
-    creds: params.creds,
-    tencentJobId: params.taskId,
-    files: params.files,
+    providerId: params.provider,
+    taskId: params.taskId,
+    modelUrls: params.modelUrls,
+    previewUrl: params.previewUrl,
   });
 }
 

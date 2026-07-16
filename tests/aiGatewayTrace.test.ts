@@ -59,7 +59,7 @@ describe('aiGatewayTrace', () => {
     expect(body).toMatchObject({
       modality: 'image',
       capability: 'image.generate',
-      provider: 'vertex-gemini',
+      provider: 'vertex-site',
       model: 'gemini-3.1-flash-image',
       estimatedCredits: 50,
       metadata: {
@@ -94,7 +94,7 @@ describe('aiGatewayTrace', () => {
     expect(body).toMatchObject({
       modality: 'image',
       capability: 'image.generate',
-      provider: 'vertex-gemini',
+      provider: 'vertex-site',
       metadata: {
         legacyPath: '/proxy/gemini/async',
         useVertex: true,

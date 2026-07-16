@@ -27,6 +27,11 @@ export const PROJECT_AGENT_TOOL_REGISTRY: readonly ProjectAgentToolDefinition[] 
     description: 'Image-to-image when a main image asset is present. Input: text, mainAssetId, optional refs.',
   },
   {
+    id: 'run_plain_video',
+    label: '生成视频',
+    description: 'Text/image-to-video without a capability preset. Input: text, optional mainAssetId and refs.',
+  },
+  {
     id: 'run_preset',
     label: '运行预设',
     description:

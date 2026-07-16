@@ -18,20 +18,19 @@ export const PROJECT_AGENT_EMPTY_SUGGESTIONS = [
   '把这次操作整理成给同事看的说明',
 ];
 export const PROJECT_AGENT_EMPTY_TITLE = '工作区 Agent';
-export const PROJECT_AGENT_EMPTY_HINT = '说说你想完成什么。Agent 会读取当前项目、资产和选择，再给出下一步。';
-
+export const PROJECT_AGENT_EMPTY_HINT = '说说你想完成什么，Agent 会读取当前项目、资产和选择，再给出下一步。';
 export const BUSY_STATUS_LABEL: Record<
   Extract<QuickComposeMessageStatus, 'queued' | 'understanding' | 'running'>,
   string
 > = {
-  understanding: '理解中…',
-  queued: '排队中…',
-  running: '执行中…',
+  understanding: '理解中...',
+  queued: '排队中...',
+  running: '执行中...',
 };
 
 export const COMPOSER_BUSY_HINT = '助手处理中，完成后可继续发送';
 export const COMPOSER_EMPTY_DRAFT_REASON = '请先输入内容';
-export const CLEAR_CHAT_BUSY_REASON = '助手处理中，暂不可清空';
+export const CLEAR_CHAT_BUSY_REASON = '助手处理中，暂不能清空';
 
 export const ERROR_FALLBACK = '没完成，可以重试、换个方式，或先只生成方案';
 /** @deprecated 与 `QUICK_COMPOSE_CANCELLED_MESSAGE` 同文；气泡侧请直接用 turnContext 常量 */
@@ -44,10 +43,11 @@ export const FAILURE_RECOVERY_RETRY_ACTION = {
 } as const;
 
 export const COST_ACTION_CONFIRM_COPY = '准备执行：此操作可能消耗积分或处理多个资产，确认继续？';
-export const DESTRUCTIVE_ACTION_CONFIRM_COPY = '准备执行：此操作可能修改、覆盖或删除现有资产，确认继续？';
+export const DESTRUCTIVE_ACTION_CONFIRM_COPY =
+  '准备执行：此操作可能修改、覆盖或删除现有资产，确认继续？';
 export const LIGHT_ACTION_CONFIRM_COPY = '确认执行这个动作？';
 export const MEMORY_ACTION_CONFIRM_COPY =
-  '确认把这次偏好、流程或资产规则保存为可管理记忆？后续可以在记忆管理里查看和移除。';
+  '确认把这次偏好、流程或资产规则保存为可管理记忆？后续可在记忆管理里查看和移除。';
 
 export type QuickComposeChatActionLike = {
   kind?: string;
@@ -77,7 +77,6 @@ export function isRunningAssistantStatus(
 ): status is 'queued' | 'understanding' | 'running' {
   return status === 'queued' || status === 'understanding' || status === 'running';
 }
-
 export function busyStatusLabel(status: QuickComposeMessageStatus | undefined): string {
   if (status === 'understanding' || status === 'queued' || status === 'running') {
     return BUSY_STATUS_LABEL[status];
@@ -112,7 +111,7 @@ export function shouldHardBlockComposerCredits(input: ComposerCreditsHardBlockIn
   return false;
 }
 
-/** 鍙戦€佹寜閽鐢ㄥ師鍥犱紭鍏堢骇锛氬繖 > 绉垎/鐧诲綍闂ㄧ > 绌鸿崏绋?*/
+/** 发送按钮禁用原因优先级：忙 > 积分/登录门禁 > 空草稿 */
 export function resolveComposerSubmitDisabledReason(
   input: ComposerDisableReasonInput
 ): string | undefined {
@@ -240,3 +239,4 @@ export function quickComposeChatActionConfirmCopy(
   if (actionHasCost(action)) return COST_ACTION_CONFIRM_COPY;
   return LIGHT_ACTION_CONFIRM_COPY;
 }
+

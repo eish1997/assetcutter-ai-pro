@@ -6,6 +6,14 @@ import { normalizeGenerate3DPresetForRun } from './normalizePreset';
 import { createAiJob, getMyAiJob, type AiJobDetail } from '../aiJobsClient';
 import { upsertAiJobSummary } from '../aiJobsStore';
 
+const TRIPO_REGISTRY_MODEL_VERSION: Record<string, string> = {
+  'tripo-p1': 'P1-20260311',
+  'tripo-v3.1': 'v3.1-20260211',
+  'tripo-v3.0': 'v3.0-20250812',
+  'tripo-v2.5': 'v2.5-20250123',
+  'tripo-v2.0': 'v2.0-20240919',
+};
+
 export function buildTripoCreateTaskInputFromPreset(params: {
   apiKey: string;
   preset: CustomAppModule;
@@ -26,8 +34,8 @@ export function buildTripoCreateTaskInputFromPreset(params: {
     type: taskType,
     ...(prompt ? { prompt } : {}),
     ...(g.tripoNegativePrompt?.trim() ? { negativePrompt: g.tripoNegativePrompt.trim() } : {}),
-    ...(g.tripoModelVersion?.trim()
-      ? { modelVersion: g.tripoModelVersion.trim() }
+    ...(g.tripoModelVersion?.trim() || TRIPO_REGISTRY_MODEL_VERSION[g.modelRegistryId || '']
+      ? { modelVersion: g.tripoModelVersion?.trim() || TRIPO_REGISTRY_MODEL_VERSION[g.modelRegistryId || ''] }
       : taskType === 'multiview_to_model'
         ? { modelVersion: 'v3.1-20260211' }
         : {}),

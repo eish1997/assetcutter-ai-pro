@@ -763,7 +763,6 @@ export default function AssetSetPanel({
 
   const runOneComponent3d = useCallback(
     async (component: AssetSetComponent, options?: { forceNew?: boolean }) => {
-      const apiKey = getTripoApiKey() || AI_GATEWAY_TRIPO_PLATFORM_KEY;
       const preset = pickAssetSet3dPreset(component.views, single3dPreset, multi3dPreset);
       if (!preset) {
         onNotify?.('warn', `组件 ${component.name ?? component.id}：无可用 3D 预设`);
@@ -776,6 +775,7 @@ export default function AssetSetPanel({
           model3d: { status: 'running', updatedAt: Date.now() },
         }))
       );
+      const apiKey = preset.generate3D?.provider === 'tripo' ? getTripoApiKey() || AI_GATEWAY_TRIPO_PLATFORM_KEY : '';
       const result = await runAssetSetComponent3d({
         apiKey,
         preset,
@@ -794,7 +794,7 @@ export default function AssetSetPanel({
           );
         },
       });
-      if (result.ok) {
+      if (result.ok === true) {
         let files = result.files;
         let fileCompanionKeys: string[] | undefined;
         let previewUrl = result.previewUrl;
@@ -802,6 +802,7 @@ export default function AssetSetPanel({
         try {
           const persisted = await persistAssetSetComponent3dModels({
             apiKey,
+            provider: result.provider,
             taskId: result.jobId,
             assetId: asset.id,
             componentId: component.id,
@@ -828,7 +829,7 @@ export default function AssetSetPanel({
             model3d: {
               status: 'done',
               jobId: result.jobId,
-              provider: 'tripo',
+              provider: result.provider,
               files,
               fileCompanionKeys,
               previewUrl,

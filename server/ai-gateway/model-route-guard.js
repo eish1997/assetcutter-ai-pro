@@ -2,6 +2,7 @@ import { AiGatewayValidationError } from './job.js';
 import { listProviderKeys } from './provider-key-store.js';
 import { resolveRequestedCanonicalModelId } from './model-publication-guard.js';
 import {
+  normalizeAiGatewayProviderId,
   resolveExecutableAiGatewayModelRoute,
   resolvePendingAiGatewayModelRoute,
 } from '../../shared/aiGatewayModelRoutes.js';
@@ -12,7 +13,7 @@ export function resolveExecutableModelRoute(input) {
   return resolveExecutableAiGatewayModelRoute({
     canonicalModelId,
     modality: input?.modality,
-    provider: input?.provider,
+    provider: normalizeAiGatewayProviderId(input?.provider),
   });
 }
 
@@ -22,13 +23,13 @@ export function resolveKnownPendingModelRoute(input) {
   const executable = resolveExecutableAiGatewayModelRoute({
     canonicalModelId,
     modality: input?.modality,
-    provider: input?.provider,
+    provider: normalizeAiGatewayProviderId(input?.provider),
   });
   if (executable) return null;
   return resolvePendingAiGatewayModelRoute({
     canonicalModelId,
     modality: input?.modality,
-    provider: input?.provider,
+    provider: normalizeAiGatewayProviderId(input?.provider),
   });
 }
 

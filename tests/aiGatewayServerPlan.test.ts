@@ -65,6 +65,29 @@ describe('server AI gateway job planning', () => {
     });
   });
 
+  it('maps Tripo registry ids to upstream model_version when planning model3d jobs', () => {
+    const plan = createAiGatewayJobPlan({
+      modality: 'model3d',
+      model: 'tripo-v3.1',
+      input: {
+        prompt: 'small low-poly sci-fi crate',
+        texture: true,
+      },
+    });
+
+    expect(plan.job.provider).toBe('tripo');
+    expect(plan.route).toMatchObject({
+      providerId: 'tripo',
+      workerId: 'model3d-worker',
+      adapterId: 'tripo-openapi',
+    });
+    expect(plan.workerRequest.body).toMatchObject({
+      model_version: 'v3.1-20260211',
+      prompt: 'small low-poly sci-fi crate',
+      texture: true,
+    });
+  });
+
   it('plans image generation through the existing Vertex-backed gemini proxy by default', () => {
     const plan = createAiGatewayJobPlan(
       {
@@ -84,7 +107,7 @@ describe('server AI gateway job planning', () => {
     );
 
     expect(plan.route).toMatchObject({
-      providerId: 'vertex-gemini',
+      providerId: 'vertex-site',
       workerId: 'image-worker',
       adapterId: 'legacy-gemini-proxy',
       legacyAdapterId: 'gemini-proxy',
@@ -356,7 +379,84 @@ describe('server AI gateway job planning', () => {
     });
   });
 
+  it('plans Tripo model versions through the Tripo OpenAPI adapter', () => {
+    const plan = createAiGatewayJobPlan({
+      modality: 'model3d',
+      model: 'tripo-v3.0',
+      input: { prompt: 'stylized robot mascot', registryId: 'tripo-v3.0' },
+    });
+
+    expect(plan.job.provider).toBe('tripo');
+    expect(plan.route).toMatchObject({
+      providerId: 'tripo',
+      workerId: 'model3d-worker',
+      adapterId: 'tripo-openapi',
+    });
+    expect(plan.workerRequest.body).toMatchObject({
+      type: 'text_to_model',
+      prompt: 'stylized robot mascot',
+      model_version: 'v3.0-20250812',
+    });
+  });
+
+  it('plans Tencent Hunyuan Rapid 3D jobs through the Tencent Gateway adapter', () => {
+    const plan = createAiGatewayJobPlan({
+      modality: 'model3d',
+      model: 'tencent-hunyuan-3d-rapid',
+      input: {
+        prompt: 'a cute vinyl toy',
+        registryId: 'tencent-hunyuan-3d-rapid',
+        format: 'glb',
+        texture: true,
+      },
+    });
+
+    expect(plan.job.provider).toBe('tencent-hunyuan');
+    expect(plan.job.metadata.modelRouteInference).toMatchObject({
+      canonicalModelId: 'tencent-hunyuan-3d-rapid',
+      providerId: 'tencent-hunyuan',
+      ruleId: 'tencent-hunyuan-3d-gateway',
+    });
+    expect(plan.route).toMatchObject({
+      providerId: 'tencent-hunyuan',
+      workerId: 'model3d-worker',
+      adapterId: 'tencent-hunyuan-3d',
+      channel: 'tencent-hunyuan',
+    });
+    expect(plan.workerRequest.metadata).toMatchObject({
+      submitAction: 'SubmitHunyuanTo3DRapidJob',
+      queryAction: 'QueryHunyuanTo3DRapidJob',
+      rapid: true,
+    });
+    expect(plan.workerRequest.body).toMatchObject({
+      Prompt: 'a cute vinyl toy',
+      ResultFormat: 'GLB',
+      EnablePBR: true,
+    });
+  });
+
   it('uses ops control to pause providers and fall back to the next route', () => {
+    const plan = createAiGatewayJobPlan(
+      {
+        modality: 'image',
+        model: 'gemini-3-pro-image-preview',
+        input: { contents: [{ role: 'user', parts: [{ text: 'fallback' }] }] },
+      },
+      {
+        opsControl: {
+          disabledProviders: ['vertex-site'],
+          disabledModels: [],
+          modelOverrides: [],
+        },
+      }
+    );
+
+    expect(plan.route.providerId).toBe('gemini-aistudio');
+    expect(plan.route.workerId).toBe('image-worker');
+    expect(plan.adapterRequest.body.aiBackend).toBeUndefined();
+  });
+
+  it('keeps legacy vertex-gemini pause rules compatible with vertex-site routes', () => {
     const plan = createAiGatewayJobPlan(
       {
         modality: 'image',
@@ -373,8 +473,6 @@ describe('server AI gateway job planning', () => {
     );
 
     expect(plan.route.providerId).toBe('gemini-aistudio');
-    expect(plan.route.workerId).toBe('image-worker');
-    expect(plan.adapterRequest.body.aiBackend).toBeUndefined();
   });
 
   it('uses ops control to pause a model or override it before routing', () => {

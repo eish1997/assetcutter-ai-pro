@@ -25,7 +25,7 @@ describe('AI gateway worker registry', () => {
         status: 'active',
       },
       { id: 'music-worker', modalities: ['music'], capabilities: ['music.generate'], adapters: [], status: 'planned' },
-      { id: 'model3d-worker', modalities: ['model3d'], capabilities: ['model3d.generate'], adapters: ['tripo-openapi', 'volcengine-ark-async'], status: 'active' },
+      { id: 'model3d-worker', modalities: ['model3d'], capabilities: ['model3d.generate'], adapters: ['tripo-openapi', 'volcengine-ark-async', 'tencent-hunyuan-3d'], status: 'active' },
     ]);
   });
 

@@ -28,7 +28,7 @@ type Props = {
 type TextViewMode = 'read' | 'edit' | 'structure';
 
 function normalizeTitle(title: string): string {
-  return title.trim() || '鏂囨湰璧勪骇';
+  return title.trim() || '文本资产';
 }
 
 function buildMarkdown(title: string, body: string): string {
@@ -90,11 +90,11 @@ const WorkflowTextLightboxCenter = forwardRef<WorkflowTextLightboxCenterHandle, 
     }, [draftBody]);
     const structureRows = useMemo(
       () => [
-        ['Title', titleText],
-        ['Chars', stats.chars.toLocaleString()],
-        ['Words', stats.words.toLocaleString()],
-        ['Paragraphs', stats.paragraphs.toLocaleString()],
-        ['Lines', stats.lines.toLocaleString()],
+        ['标题', titleText],
+        ['字符', stats.chars.toLocaleString()],
+        ['词数', stats.words.toLocaleString()],
+        ['段落', stats.paragraphs.toLocaleString()],
+        ['行数', stats.lines.toLocaleString()],
       ],
       [stats.chars, stats.lines, stats.paragraphs, stats.words, titleText]
     );
@@ -150,7 +150,7 @@ const WorkflowTextLightboxCenter = forwardRef<WorkflowTextLightboxCenterHandle, 
                   mode === key ? 'bg-blue-600 text-white' : 'text-gray-400 hover:bg-white/[0.08] hover:text-gray-200',
                 ].join(' ')}
               >
-                {key === 'read' ? 'Read' : key === 'edit' ? 'Edit' : 'Info'}
+                {key === 'read' ? '阅读' : key === 'edit' ? '编辑' : '结构'}
               </button>
             ))}
           </div>
@@ -160,7 +160,7 @@ const WorkflowTextLightboxCenter = forwardRef<WorkflowTextLightboxCenterHandle, 
               onClick={copyFullText}
               className="h-8 rounded-lg border border-white/10 bg-white/[0.04] px-2 text-[10px] font-bold text-gray-300 hover:bg-white/[0.08] hover:text-white"
             >
-              Copy
+              复制全文
             </button>
             {onAddToComposeInput ? (
               <button
@@ -168,7 +168,7 @@ const WorkflowTextLightboxCenter = forwardRef<WorkflowTextLightboxCenterHandle, 
                 onClick={addToComposeInput}
                 className="h-8 rounded-lg border border-white/10 bg-white/[0.04] px-2 text-[10px] font-bold text-gray-300 hover:bg-white/[0.08] hover:text-white"
               >
-                Add to input
+                加入输入框
               </button>
             ) : null}
             <button
@@ -188,23 +188,25 @@ const WorkflowTextLightboxCenter = forwardRef<WorkflowTextLightboxCenterHandle, 
           </div>
         </div>
 
-        <div
-          className="absolute left-1/2 top-[5.5rem] z-10 grid w-[min(calc(100%-2rem),56rem)] -translate-x-1/2 shrink-0 grid-cols-4 gap-px overflow-hidden rounded-lg border border-white/10 bg-white/[0.04] text-center text-[10px] text-gray-400 shadow-lg"
-          aria-label="Text stats"
-        >
-          <div className="bg-[#101114]/95 px-2 py-2">
-            <strong className="text-gray-200">{stats.chars.toLocaleString()}</strong> Chars
+        {mode !== 'structure' ? (
+          <div
+            className="absolute left-1/2 top-[5.5rem] z-10 grid w-[min(calc(100%-2rem),56rem)] -translate-x-1/2 shrink-0 grid-cols-4 gap-px overflow-hidden rounded-lg border border-white/10 bg-white/[0.04] text-center text-[10px] text-gray-400 shadow-lg"
+            aria-label="文本统计"
+          >
+            <div className="bg-[#101114]/95 px-2 py-2">
+              <strong className="text-gray-200">{stats.chars.toLocaleString()}</strong> 字符
+            </div>
+            <div className="bg-[#101114]/95 px-2 py-2">
+              <strong className="text-gray-200">{stats.words.toLocaleString()}</strong> 词数
+            </div>
+            <div className="bg-[#101114]/95 px-2 py-2">
+              <strong className="text-gray-200">{stats.paragraphs.toLocaleString()}</strong> 段落
+            </div>
+            <div className="bg-[#101114]/95 px-2 py-2">
+              <strong className="text-gray-200">{stats.lines.toLocaleString()}</strong> 行数
+            </div>
           </div>
-          <div className="bg-[#101114]/95 px-2 py-2">
-            <strong className="text-gray-200">{stats.words.toLocaleString()}</strong> Words
-          </div>
-          <div className="bg-[#101114]/95 px-2 py-2">
-            <strong className="text-gray-200">{stats.paragraphs.toLocaleString()}</strong> Paragraphs
-          </div>
-          <div className="bg-[#101114]/95 px-2 py-2">
-            <strong className="text-gray-200">{stats.lines.toLocaleString()}</strong> Lines
-          </div>
-        </div>
+        ) : null}
 
         {mode === 'edit' ? (
           <div className="min-h-0 flex-1 overflow-auto px-6 py-36" data-image-preview-scroll>
@@ -212,7 +214,7 @@ const WorkflowTextLightboxCenter = forwardRef<WorkflowTextLightboxCenterHandle, 
               value={draftBody}
               onChange={(e) => setDraftBody(clampWorkflowTextBody(e.target.value))}
               className="mx-auto block min-h-full w-full max-w-4xl resize-none rounded-xl border border-white/10 bg-[#101114]/70 px-6 py-5 font-mono text-[13px] leading-relaxed text-gray-100 outline-none focus:border-blue-400/50 focus:ring-1 focus:ring-blue-500"
-              placeholder="鍦ㄦ杈撳叆鏂囧瓧鍐呭..."
+              placeholder="在此输入文字内容..."
               spellCheck={false}
             />
           </div>
@@ -229,7 +231,7 @@ const WorkflowTextLightboxCenter = forwardRef<WorkflowTextLightboxCenterHandle, 
                   ))}
                 </div>
                 <div className="mt-3 rounded-xl border border-white/10 bg-white/[0.03] p-3">
-                  <p className="text-[10px] font-bold uppercase text-gray-500">Preview</p>
+                  <p className="text-[10px] font-bold uppercase text-gray-500">预览</p>
                   <p className="mt-2 whitespace-pre-wrap break-words text-[12px] leading-relaxed text-gray-300">
                     {draftBody.trim() || '空白文本'}
                   </p>

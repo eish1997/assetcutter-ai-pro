@@ -70,6 +70,7 @@ export {
   isProviderCatalogId,
   providerCapabilityStatus,
   providerDisplayName,
+  providersForAdminConsole,
   providersForAdminKeyPool,
 } from "./providerCatalog";
 export type {

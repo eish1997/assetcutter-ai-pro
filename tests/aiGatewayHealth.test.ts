@@ -28,7 +28,7 @@ describe('AI gateway health snapshot', () => {
         updateJobStatus: 'PATCH /ai-gateway/jobs/:id',
         executeViaAuthApi: 'POST /api/ai/jobs (AI_GATEWAY_EXECUTION_ENABLED=true)',
       },
-      adapters: ['legacy-gemini-proxy', 'openai-official', 'toapis-openai', 'volcengine-ark-openai', 'volcengine-ark-image', 'volcengine-ark-async', 'jimeng-visual', 'tripo-openapi'],
+      adapters: ['legacy-gemini-proxy', 'openai-official', 'toapis-openai', 'volcengine-ark-openai', 'volcengine-ark-image', 'volcengine-ark-async', 'jimeng-visual', 'tripo-openapi', 'tencent-hunyuan-3d'],
       legacyAdapters: ['gemini-proxy'],
       workers: [
         { id: 'text-worker', status: 'active' },

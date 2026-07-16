@@ -6,6 +6,7 @@ import {
 } from './workflowModelSlots';
 
 export type Workflow3dJobMetaPatch = {
+  aiGatewayJobId?: string;
   tripoTaskId?: string;
   tencentJobId?: string;
   tripoLastError?: undefined;

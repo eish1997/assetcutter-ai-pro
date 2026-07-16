@@ -143,6 +143,17 @@ export function mapPlanToQuickComposeInvoke(
       ...(referenceAssetIds.length ? { referenceAssetIds } : {}),
     };
   }
+  if (first.toolId === 'run_plain_video') {
+    const reuseAssetIds = resolveMainAssetIds(intent, first);
+    const referenceAssetIds = resolveReferenceAssetIds(intent, first);
+    return {
+      ...base,
+      forceComposeMode: 'video',
+      ...(reuseAssetIds[0] ? { reuseAssetId: reuseAssetIds[0] } : {}),
+      ...(reuseAssetIds.length ? { reuseAssetIds } : {}),
+      ...(referenceAssetIds.length ? { referenceAssetIds } : {}),
+    };
+  }
   if (first.toolId === 'run_plain_3d') {
     return { ...base, forceComposeMode: '3d' };
   }

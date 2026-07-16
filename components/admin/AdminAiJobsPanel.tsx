@@ -758,7 +758,7 @@ const AdminAiJobsPanel: React.FC = () => {
                 onChange={(ev) => setDisabledProvidersText(ev.target.value)}
                 disabled={!canWriteOps || savingOps}
                 className="mt-1 h-24 w-full resize-none rounded-xl border border-[#2e2e32] bg-[#0a0a0c] px-3 py-2 font-mono text-[11px] text-gray-100 outline-none disabled:opacity-40"
-                placeholder="vertex-gemini"
+                placeholder="vertex-site"
               />
             </label>
             <label className="block">

@@ -467,6 +467,10 @@ async function executeGenerateVideoPath(
       prompt: promptFinal,
       referenceImages: hasImg ? refs : undefined,
       registryId: preset.videoModelRegistryId,
+      durationSeconds: preset.videoDurationSeconds,
+      aspectRatio: preset.videoAspectRatio,
+      resolution: preset.videoResolution,
+      motionStrength: preset.videoMotionStrength,
     });
     return {
       ok: true,

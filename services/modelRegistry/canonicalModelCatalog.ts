@@ -1,7 +1,7 @@
 import { JIMENG_CATALOG } from "../jimeng/catalog";
 import { DIALOG_IMAGE_REGISTRY } from "./imageModels";
 import { TEXT_MODEL_REGISTRY } from "./textModels";
-import { VOLCENGINE_ARK_MODEL_CATALOG } from "./providerModelCatalog";
+import { VOLCENGINE_ARK_MODEL_CATALOG, listProviderModels } from "./providerModelCatalog";
 import type { ProviderModality } from "./providerCatalog";
 
 export type CanonicalModelStatus = "draft" | "published" | "deprecated" | "disabled";
@@ -81,18 +81,22 @@ const ARK_CANONICAL_MODELS: CanonicalModelCatalogEntry[] = VOLCENGINE_ARK_MODEL_
   sourceRegistryId: row.registryId || row.providerModelId,
 }));
 
-const MODEL3D_CANONICAL_MODELS: CanonicalModelCatalogEntry[] = [
-  {
-    canonicalModelId: "tripo-p1",
-    label: "Tripo P1",
-    modality: "model3d",
+const TRIPO_CANONICAL_MODELS: CanonicalModelCatalogEntry[] = listProviderModels("tripo")
+  .filter((row) => row.modality === "model3d")
+  .map((row) => ({
+    canonicalModelId: row.registryId || row.providerModelId,
+    label: row.label,
+    modality: "model3d" as const,
     category: "model3d_generation",
-    visibleInWorkspace: true,
-    defaultForModality: true,
+    visibleInWorkspace: row.status !== "disabled",
+    defaultForModality: row.registryId === "tripo-p1",
     supportedWorkflows: ["workflow", "asset_set"],
-    status: "published",
-    sourceRegistryId: "tripo-p1",
-  },
+    status: row.status === "disabled" ? ("disabled" as const) : ("published" as const),
+    sourceRegistryId: row.registryId || row.providerModelId,
+  }));
+
+const MODEL3D_CANONICAL_MODELS: CanonicalModelCatalogEntry[] = [
+  ...TRIPO_CANONICAL_MODELS,
   {
     canonicalModelId: "tencent-hunyuan-3d-pro",
     label: "混元 3D Pro",

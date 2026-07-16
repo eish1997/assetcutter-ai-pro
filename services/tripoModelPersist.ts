@@ -12,7 +12,7 @@ import {
   putWorkflowResultImageToCompanion,
 } from './workflowCompanionAssets';
 
-export type WorkflowModelSlotFormat = 'glb' | 'fbx';
+export type WorkflowModelSlotFormat = 'glb' | 'gltf' | 'fbx' | 'obj' | 'stl' | 'usdz' | 'zip';
 
 export type PersistTripoModelsResult = {
   modelUrls: string[];

@@ -767,6 +767,27 @@ export type WorkflowPendingTask = {
   overrideImageGear?: DialogImageGear;
   /** 功能区分组覆盖：文生文 / 图生文文字模型 */
   overrideTextModelRegistryId?: string;
+  /** 分组/快捷栏覆盖：生视频模型 */
+  overrideVideoModelRegistryId?: string;
+  /** 分组/快捷栏覆盖：生视频时长（秒） */
+  overrideVideoDurationSeconds?: number;
+  /** 分组/快捷栏覆盖：生视频画幅 */
+  overrideVideoAspectRatio?: string;
+  /** 分组/快捷栏覆盖：生视频清晰度 */
+  overrideVideoResolution?: string;
+  /** 分组/快捷栏覆盖：生视频运动强度 */
+  overrideVideoMotionStrength?: number;
+  /** 分组/快捷栏覆盖：3D 模型 */
+  overrideModel3dRegistryId?: string;
+  /** 分组/快捷栏覆盖：3D 质量 */
+  overrideModel3dQuality?: string;
+  overrideModel3dGeometryQuality?: string;
+  overrideModel3dTextureQuality?: string;
+  /** 分组/快捷栏覆盖：3D 输出格式 */
+  overrideModel3dFormat?: string;
+  /** 分组/快捷栏覆盖：3D 贴图开关 */
+  overrideModel3dTexture?: boolean;
+  overrideModel3dPbr?: boolean;
   overrideImageAspectRatio?: string;
   overrideImageSize?: string;
   overrideSkipUnderstand?: boolean;
@@ -891,6 +912,14 @@ export type CustomAppModule = {
   textModelRegistryId?: string;
   /** 生视频模型 registryId（可选）；缺省走已发布的默认生视频模型 */
   videoModelRegistryId?: string;
+  /** 生视频时长（秒） */
+  videoDurationSeconds?: number;
+  /** 生视频画幅 */
+  videoAspectRatio?: string;
+  /** 生视频清晰度 */
+  videoResolution?: string;
+  /** 生视频运动强度 */
+  videoMotionStrength?: number;
   /** @deprecated 请用 `imageModelRegistryId`；旧 fast/standard/pro 会在读取时迁移 */
   imageGear?: DialogImageGear;
   /** 生图输出比例（可选），如 1:1、16:9，仅 engine === 'gen_image' 时生效，对应 Gemini imageConfig.aspectRatio */

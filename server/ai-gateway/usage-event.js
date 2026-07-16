@@ -30,7 +30,7 @@ function resolveBillingSku(job, route) {
   }
   if (job?.modality === 'video') return 'video.workflow.task';
   if (job?.modality === 'model3d') return '3d.tripo.task';
-  if (route?.providerId === 'vertex-gemini' || model.includes('gemini')) {
+  if (route?.providerId === 'vertex-site' || route?.providerId === 'vertex-gemini' || model.includes('gemini')) {
     return model.includes('pro') && !model.includes('flash') ? 'llm.gemini.pro' : 'llm.gemini.flash';
   }
   return `${job?.modality || 'ai'}.gateway.task`.slice(0, 120);
