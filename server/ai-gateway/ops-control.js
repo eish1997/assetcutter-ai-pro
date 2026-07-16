@@ -104,6 +104,8 @@ export function normalizeAiGatewayOpsControlConfig(input, options = {}) {
   const pruned = pruneExpiredAiGatewayOpsControlConfig(raw, now).config;
   const keepAutoCircuitRules =
     options.autoCircuitEnabled == null ? isAiGatewayAutoCircuitEnabled() : options.autoCircuitEnabled !== false;
+  const ignoreAutoCircuitSnapshot =
+    !keepAutoCircuitRules && nonEmptyString(pruned.updatedByUserId) === 'system:auto-circuit';
   const providerRuleInputs = Array.isArray(pruned.disabledProviderRules) ? pruned.disabledProviderRules : [];
   const ignoredAutoCircuitProviders = new Set(
     keepAutoCircuitRules
@@ -116,9 +118,9 @@ export function normalizeAiGatewayOpsControlConfig(input, options = {}) {
   const activeProviderRuleInputs = keepAutoCircuitRules
     ? providerRuleInputs
     : providerRuleInputs.filter((item) => nonEmptyString(item?.createdByUserId) !== 'system:auto-circuit');
-  const disabledProviderInputs = uniqueStrings(pruned.disabledProviders).filter(
-    (provider) => !ignoredAutoCircuitProviders.has(provider)
-  );
+  const disabledProviderInputs = ignoreAutoCircuitSnapshot
+    ? []
+    : uniqueStrings(pruned.disabledProviders).filter((provider) => !ignoredAutoCircuitProviders.has(provider));
   const disabledProviderRules = mergePauseRules([
     ...normalizePauseRules(activeProviderRuleInputs, 'provider', now),
     ...disabledProviderInputs.map((provider) => ({ provider })),

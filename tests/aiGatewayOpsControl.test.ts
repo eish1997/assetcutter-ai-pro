@@ -132,6 +132,25 @@ describe('AI Gateway ops control config', () => {
     ).toEqual(['vertex-site']);
   });
 
+  it('ignores legacy auto-circuit snapshots that only persisted disabledProviders', () => {
+    delete process.env.AI_GATEWAY_AUTO_CIRCUIT_ENABLED;
+
+    expect(
+      normalizeAiGatewayOpsControlConfig({
+        disabledProviders: ['vertex-site', 'gemini-aistudio'],
+        disabledProviderRules: [],
+        updatedByUserId: 'system:auto-circuit',
+      }).disabledProviders
+    ).toEqual([]);
+
+    expect(
+      normalizeAiGatewayOpsControlConfig({
+        disabledProviders: ['vertex-site'],
+        updatedByUserId: 'user_admin',
+      }).disabledProviders
+    ).toEqual(['vertex-site']);
+  });
+
   function plan(provider: string, status: string, message = '') {
     return {
       job: {
