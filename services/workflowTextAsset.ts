@@ -4,6 +4,7 @@ import {
   WORKFLOW_TEXT_ASSET_BODY_MAX_CHARS,
   clampWorkflowTextBody,
 } from './workflowTextLimits';
+import { safeSvgDataUrl } from './svgDataUrl';
 
 export { WORKFLOW_TEXT_ASSET_BODY_MAX_CHARS, clampWorkflowTextBody } from './workflowTextLimits';
 
@@ -244,5 +245,5 @@ export function buildComposerTextAssetThumbDataUrl(titleRaw: string, bodyRaw: st
 ${title2Svg}
 ${lineSvg}
 </svg>`;
-  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+  return safeSvgDataUrl(svg);
 }

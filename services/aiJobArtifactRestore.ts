@@ -2,6 +2,7 @@ import type { WorkflowAsset } from '../types';
 import type { RestorableAiJobArtifact } from './aiJobArtifacts';
 import { r2ApiUrl } from './apiBase';
 import { requestJson } from './httpClient';
+import { safeSvgDataUrl } from './svgDataUrl';
 import {
   fetchWorkflowModelFromCompanionAsObjectUrl,
   imageSrcToDataUrlForCompanion,
@@ -79,9 +80,9 @@ export function aiJobArtifactResultKey(kind: RestorableAiJobArtifact['kind']): s
 
 export function buildAiJobModelPlaceholder(label: string): string {
   const safeLabel = String(label || 'AI model').replace(/[<>&"]/g, '');
-  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(
+  return safeSvgDataUrl(
     `<svg xmlns="http://www.w3.org/2000/svg" width="960" height="640" viewBox="0 0 960 640"><rect width="960" height="640" fill="#111827"/><path d="M480 126 672 236v168L480 514 288 404V236l192-110Z" fill="#1f2937" stroke="#60a5fa" stroke-width="18"/><path d="M288 236 480 348l192-112M480 348v166" stroke="#93c5fd" stroke-width="14" fill="none"/><text x="480" y="584" fill="#dbeafe" font-family="Arial,sans-serif" font-size="34" text-anchor="middle">${safeLabel}</text></svg>`
-  )}`;
+  );
 }
 
 function modelFormatFromUrl(url: string): 'glb' | 'fbx' {

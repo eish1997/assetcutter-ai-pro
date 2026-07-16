@@ -229,6 +229,7 @@ import { AssetCardPreviewRenderer } from './workflow/AssetCardPreviewRenderer';
 import WorkflowPixelBusyOverlay from './WorkflowPixelBusyOverlay';
 import { workflowResultUsesVideoPreview, workflowSafeImgSrc } from '../services/workflowImageDisplay';
 import { previewSrcCacheFingerprint } from '../services/workflowImageThumb';
+import { safeSvgDataUrl } from '../services/svgDataUrl';
 import { humanMessageForSamSegmentFailure, isSamInstallHelpCode } from '../services/companionSamSegmentMessages';
 import { humanMessageForRembgFailure, isRembgInstallHelpCode } from '../services/companionRembgMessages';
 import { runLightboxRembgFromImageSrc } from '../services/lightboxRembg';
@@ -2874,7 +2875,7 @@ const WorkflowSection: React.FC<{
 <text x="64" y="188" fill="#f8fafc" font-size="42" font-weight="700">${title}</text>
 ${lineSvg}
 </svg>`;
-    return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+    return safeSvgDataUrl(svg);
   }, []);
   const buildWorkflowModelPlaceholderDataUrl = useCallback((fileNameRaw: string): string => {
     const esc = (s: string) =>
@@ -2898,7 +2899,7 @@ ${lineSvg}
 <text x="64" y="228" fill="#f8fafc" font-size="34" font-weight="600">本地预览</text>
 <text x="64" y="296" fill="#94a3b8" font-size="26">${base}</text>
 </svg>`;
-    return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+    return safeSvgDataUrl(svg);
   }, []);
   const getLightboxPreviewImageSrc = useCallback((asset: WorkflowAsset): string => {
     const display = getAssetDisplayImage(asset).trim();
