@@ -93,6 +93,45 @@ describe('AI Gateway ops control config', () => {
     ]);
   });
 
+  it('ignores stale auto-circuit provider pauses unless auto circuit is explicitly enabled', () => {
+    delete process.env.AI_GATEWAY_AUTO_CIRCUIT_ENABLED;
+
+    expect(
+      normalizeAiGatewayOpsControlConfig({
+        disabledProviders: ['vertex-site', 'tripo'],
+        disabledProviderRules: [
+          {
+            provider: 'vertex-site',
+            reason: 'auto circuit: rate limited',
+            expiresAt: '2099-07-13T11:00:00.000Z',
+            createdAt: '2026-07-13T10:00:00.000Z',
+            createdByUserId: 'system:auto-circuit',
+          },
+          {
+            provider: 'tripo',
+            reason: 'manual pause',
+            createdByUserId: 'user_admin',
+          },
+        ],
+      }).disabledProviders
+    ).toEqual(['tripo']);
+
+    process.env.AI_GATEWAY_AUTO_CIRCUIT_ENABLED = 'true';
+    expect(
+      normalizeAiGatewayOpsControlConfig({
+        disabledProviderRules: [
+          {
+            provider: 'vertex-site',
+            reason: 'auto circuit: rate limited',
+            expiresAt: '2099-07-13T11:00:00.000Z',
+            createdAt: '2026-07-13T10:00:00.000Z',
+            createdByUserId: 'system:auto-circuit',
+          },
+        ],
+      }).disabledProviders
+    ).toEqual(['vertex-site']);
+  });
+
   function plan(provider: string, status: string, message = '') {
     return {
       job: {
@@ -121,6 +160,24 @@ describe('AI Gateway ops control config', () => {
     const config = await maybeAutoPauseAiGatewayProvider(
       { route: { providerId: 'tripo' }, job: { provider: 'tripo', status: 'failed' } },
       new Error('HTTP 429 Too Many Requests')
+    );
+
+    expect(config).toBeNull();
+  });
+
+  it('keeps auto-pause disabled by default even when failures cross the threshold', async () => {
+    const file = path.join(os.tmpdir(), `ac-aig-ops-${Date.now()}-${Math.random().toString(36).slice(2)}.json`);
+    tempFiles.add(file);
+    process.env.AI_GATEWAY_OPS_CONTROL_PATH = file;
+    delete process.env.AI_GATEWAY_AUTO_CIRCUIT_ENABLED;
+
+    const config = await maybeAutoPauseAiGatewayProvider(
+      plan('vertex-site', 'failed', 'HTTP 429 Too Many Requests'),
+      new Error('HTTP 429 Too Many Requests'),
+      {
+        recentPlans: [plan('vertex-site', 'failed', 'HTTP 429 Too Many Requests'), plan('vertex-site', 'succeeded')],
+        ttlMinutes: 5,
+      }
     );
 
     expect(config).toBeNull();

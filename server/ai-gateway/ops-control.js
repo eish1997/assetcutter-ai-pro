@@ -102,9 +102,26 @@ export function normalizeAiGatewayOpsControlConfig(input, options = {}) {
   const raw = input && typeof input === 'object' && !Array.isArray(input) ? input : {};
   const now = options.now instanceof Date ? options.now : new Date();
   const pruned = pruneExpiredAiGatewayOpsControlConfig(raw, now).config;
+  const keepAutoCircuitRules =
+    options.autoCircuitEnabled == null ? isAiGatewayAutoCircuitEnabled() : options.autoCircuitEnabled !== false;
+  const providerRuleInputs = Array.isArray(pruned.disabledProviderRules) ? pruned.disabledProviderRules : [];
+  const ignoredAutoCircuitProviders = new Set(
+    keepAutoCircuitRules
+      ? []
+      : providerRuleInputs
+          .filter((item) => nonEmptyString(item?.createdByUserId) === 'system:auto-circuit')
+          .map((item) => nonEmptyString(item?.provider))
+          .filter(Boolean)
+  );
+  const activeProviderRuleInputs = keepAutoCircuitRules
+    ? providerRuleInputs
+    : providerRuleInputs.filter((item) => nonEmptyString(item?.createdByUserId) !== 'system:auto-circuit');
+  const disabledProviderInputs = uniqueStrings(pruned.disabledProviders).filter(
+    (provider) => !ignoredAutoCircuitProviders.has(provider)
+  );
   const disabledProviderRules = mergePauseRules([
-    ...normalizePauseRules(pruned.disabledProviderRules, 'provider', now),
-    ...uniqueStrings(pruned.disabledProviders).map((provider) => ({ provider })),
+    ...normalizePauseRules(activeProviderRuleInputs, 'provider', now),
+    ...disabledProviderInputs.map((provider) => ({ provider })),
   ], 'provider').slice(0, 50);
   const disabledModelRules = mergePauseRules([
     ...normalizePauseRules(pruned.disabledModelRules, 'model', now),
@@ -253,7 +270,7 @@ export function mergeAiGatewayOpsControlAction(input, action, { now = new Date()
 export function isAiGatewayAutoCircuitEnabled() {
   const raw = String(process.env.AI_GATEWAY_AUTO_CIRCUIT_ENABLED || '').trim().toLowerCase();
   if (!raw && (process.env.VITEST === 'true' || process.env.NODE_ENV === 'test')) return false;
-  if (!raw) return true;
+  if (!raw) return false;
   return !['0', 'false', 'off', 'no'].includes(raw);
 }
 
