@@ -6,16 +6,20 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   normalizeModelOpsConfig,
   readModelOpsConfig,
+  resolveModelOpsConfigSource,
   writeModelOpsConfig,
 } from '../server/ai-gateway/model-ops-config-store.js';
 
 describe('model ops config store', () => {
   const prevPath = process.env.MODEL_OPS_CONFIG_PATH;
+  const prevSource = process.env.MODEL_OPS_CONFIG_SOURCE;
   const tempFiles = new Set<string>();
 
   afterEach(() => {
     if (prevPath === undefined) delete process.env.MODEL_OPS_CONFIG_PATH;
     else process.env.MODEL_OPS_CONFIG_PATH = prevPath;
+    if (prevSource === undefined) delete process.env.MODEL_OPS_CONFIG_SOURCE;
+    else process.env.MODEL_OPS_CONFIG_SOURCE = prevSource;
     for (const file of tempFiles) {
       try {
         fs.rmSync(file, { force: true });
@@ -42,6 +46,7 @@ describe('model ops config store', () => {
     const file = path.join(os.tmpdir(), `ac-model-ops-${Date.now()}-${Math.random().toString(36).slice(2)}.json`);
     tempFiles.add(file);
     process.env.MODEL_OPS_CONFIG_PATH = file;
+    process.env.MODEL_OPS_CONFIG_SOURCE = 'disk';
 
     const saved = await writeModelOpsConfig(
       {
@@ -56,5 +61,11 @@ describe('model ops config store', () => {
     expect(read.publishedCanonicalModelAllowlist).toEqual(['gpt-4o-mini']);
     expect(read.updatedByUserId).toBe('user_admin');
     expect(read.storage).toBe('disk');
+    expect(read.source).toBe('disk');
+  });
+
+  it('falls back to disk when db source is requested without postgres', () => {
+    process.env.MODEL_OPS_CONFIG_SOURCE = 'db';
+    expect(resolveModelOpsConfigSource()).toBe('disk');
   });
 });

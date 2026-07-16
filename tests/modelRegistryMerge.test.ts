@@ -28,7 +28,8 @@ describe("modelRegistry merge", () => {
     vi.spyOn(settingsStore, "getOpenaiApiKey").mockReturnValue("openai-key");
     const rows = buildEffectiveImageModelRows({ ...DEFAULT_MODEL_OPS_CONFIG, imageRegistryAllowlist: null });
     expect(rows.filter((r) => r.gatewayReady).every((r) => !r.disabled)).toBe(true);
-    expect(rows.find((r) => r.registryId === "jimeng-image-t2i-v40")?.disabledReason).toContain("Gateway");
+    expect(rows.find((r) => r.registryId === "jimeng-image-t2i-v40")?.gatewayReady).toBe(true);
+    expect(rows.find((r) => r.registryId === "jimeng-image-t2i-v40")?.disabled).toBe(false);
     expect(rows.length).toBeGreaterThanOrEqual(7);
   });
 

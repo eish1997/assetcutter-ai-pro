@@ -32,6 +32,7 @@ import {
   providerRouteCount,
   providersForAdminConsole,
   providersForAdminKeyPool,
+  refreshModelOpsConfig,
   type ModelRouteCatalogEntry,
   type ModelRouteExecutionStatus,
   type ModelRouteGatewayExecutionStatus,
@@ -532,6 +533,7 @@ const AdminProviderKeysPanel: React.FC = () => {
       });
       setModelOpsConfig(saved.config);
       setSelectedCanonicalModelIds(saved.config.publishedCanonicalModelAllowlist || selected);
+      await refreshModelOpsConfig();
       setMessage('Workspace model publish scope saved');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to save workspace model publish scope');

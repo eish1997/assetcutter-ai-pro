@@ -1,5 +1,6 @@
 import { apiUrl } from './apiBase';
-import { requestJson } from './httpClient';
+import { HttpRequestError, requestJson } from './httpClient';
+import { clearLastCreditsReserveKey } from './creditsProxyBridge';
 import { resolveCanonicalModelId } from './modelRegistry/canonicalModelCatalog';
 
 export type AiJobStatus = 'created' | 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
@@ -210,12 +211,55 @@ function withCanonicalModel(input: CreateAiJobInput): CreateAiJobInput {
   };
 }
 
-export function createAiJob(input: CreateAiJobInput, init?: RequestInit) {
-  return requestJson<AiJobDetail>(apiUrl('/api/ai/jobs'), {
+function hasCreditsReserveHeader(headers: HeadersInit | undefined): boolean {
+  if (!headers) return false;
+  if (headers instanceof Headers) return Boolean(headers.get('X-AC-Credits-Reserve'));
+  if (Array.isArray(headers)) {
+    return headers.some(([key, value]) => key.toLowerCase() === 'x-ac-credits-reserve' && String(value || '').trim());
+  }
+  return Boolean((headers as Record<string, string>)['X-AC-Credits-Reserve']?.trim());
+}
+
+function stripCreditsReserveHeaders(headers: HeadersInit | undefined): HeadersInit | undefined {
+  if (!headers) return undefined;
+  const out: Record<string, string> = {};
+  const push = (key: string, value: string) => {
+    const k = String(key || '').trim();
+    if (!k.toLowerCase().startsWith('x-ac-credits-')) out[k] = String(value ?? '');
+  };
+  if (headers instanceof Headers) {
+    headers.forEach((value, key) => push(key, value));
+    return out;
+  }
+  if (Array.isArray(headers)) {
+    for (const [key, value] of headers) push(key, String(value ?? ''));
+    return out;
+  }
+  for (const [key, value] of Object.entries(headers as Record<string, string>)) push(key, value);
+  return out;
+}
+
+function isCreditsReserveInvalidError(err: unknown): boolean {
+  return err instanceof HttpRequestError && err.code === 'CREDITS_RESERVE_INVALID';
+}
+
+export async function createAiJob(input: CreateAiJobInput, init?: RequestInit) {
+  const body = JSON.stringify(withCanonicalModel(input));
+  const requestInit = {
     ...init,
     method: 'POST',
-    body: JSON.stringify(withCanonicalModel(input)),
-  });
+    body,
+  };
+  try {
+    return await requestJson<AiJobDetail>(apiUrl('/api/ai/jobs'), requestInit);
+  } catch (err) {
+    if (!isCreditsReserveInvalidError(err) || !hasCreditsReserveHeader(init?.headers)) throw err;
+    clearLastCreditsReserveKey();
+    return requestJson<AiJobDetail>(apiUrl('/api/ai/jobs'), {
+      ...requestInit,
+      headers: stripCreditsReserveHeaders(init?.headers),
+    });
+  }
 }
 
 export function listMyAiJobs(options: { limit?: number } = {}) {

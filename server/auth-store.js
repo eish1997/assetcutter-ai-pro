@@ -968,8 +968,9 @@ export async function initAuthStore() {
   await ensureWorkflowTaskEventsStore();
   const { ensureCreditStore } = await import('./credit-store.js');
   await ensureCreditStore();
+  const { ensureModelOpsConfigStore } = await import('./ai-gateway/model-ops-config-store.js');
+  await ensureModelOpsConfigStore();
 }
 
 /** @internal RBAC JSON/Postgres helpers */
 export { readDb, writeDb, USE_POSTGRES, getPool, ensurePostgres };
-

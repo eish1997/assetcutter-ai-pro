@@ -30,7 +30,7 @@ describe("published workspace model catalog", () => {
     expect(rows.map((row) => row.registryId)).toContain("gpt-image-2");
     expect(rows.map((row) => row.registryId)).toContain("jimeng-image-t2i-v40");
     expect(rows.find((row) => row.registryId === "gpt-image-2")?.gatewayReady).toBe(true);
-    expect(rows.find((row) => row.registryId === "jimeng-image-t2i-v40")?.gatewayReady).toBe(false);
+    expect(rows.find((row) => row.registryId === "jimeng-image-t2i-v40")?.gatewayReady).toBe(true);
     expect(rows.every((row) => row.modality === "image")).toBe(true);
   });
 

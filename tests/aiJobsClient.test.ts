@@ -2,10 +2,27 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../services/httpClient', () => ({
   requestJson: vi.fn().mockResolvedValue({}),
+  HttpRequestError: class HttpRequestError extends Error {
+    status: number;
+    code?: string;
+    payload?: Record<string, unknown>;
+
+    constructor(message: string, status: number, code?: string, payload?: Record<string, unknown>) {
+      super(message);
+      this.name = 'HttpRequestError';
+      this.status = status;
+      this.code = code;
+      this.payload = payload;
+    }
+  },
 }));
 
 vi.mock('../services/apiBase', () => ({
   apiUrl: (path: string) => `https://auth.example${path}`,
+}));
+
+vi.mock('../services/creditsProxyBridge', () => ({
+  clearLastCreditsReserveKey: vi.fn(),
 }));
 
 import {
@@ -27,10 +44,12 @@ import {
   saveAdminAiGatewayOpsControl,
 } from '../services/adminClient';
 import { requestJson } from '../services/httpClient';
+import { clearLastCreditsReserveKey } from '../services/creditsProxyBridge';
 
 describe('aiJobsClient', () => {
   beforeEach(() => {
     vi.mocked(requestJson).mockClear();
+    vi.mocked(clearLastCreditsReserveKey).mockClear();
   });
 
   it('creates a user AI job through auth-api', async () => {
@@ -60,6 +79,49 @@ describe('aiJobsClient', () => {
         registryId: 'gemini-3-pro-image',
       },
       input: { contents: [{ role: 'user', parts: [{ text: 'render' }] }] },
+    });
+  });
+
+  it('retries AI job creation once without stale credits reserve headers', async () => {
+    const { HttpRequestError } = await import('../services/httpClient');
+    vi.mocked(requestJson)
+      .mockRejectedValueOnce(
+        new HttpRequestError('积分预扣无效', 403, 'CREDITS_RESERVE_INVALID', {
+          code: 'CREDITS_RESERVE_INVALID',
+        })
+      )
+      .mockResolvedValueOnce({ job: { id: 'aijob_retry_ok' } });
+
+    await createAiJob(
+      {
+        id: 'aijob_retry_ok',
+        modality: 'text',
+        model: 'gemini-3-flash-preview',
+        input: { prompt: 'hello' },
+      },
+      {
+        cache: 'no-store',
+        headers: {
+          'X-AC-Credits-Reserve': 'stale-reserve',
+          'X-AC-Credits-Gate-Signature': 'stale-sig',
+          'X-Other': 'keep',
+        },
+      }
+    );
+
+    expect(clearLastCreditsReserveKey).toHaveBeenCalledTimes(1);
+    expect(requestJson).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(requestJson).mock.calls[0][1]).toMatchObject({
+      headers: {
+        'X-AC-Credits-Reserve': 'stale-reserve',
+        'X-AC-Credits-Gate-Signature': 'stale-sig',
+        'X-Other': 'keep',
+      },
+    });
+    expect(vi.mocked(requestJson).mock.calls[1][1]).toMatchObject({
+      headers: {
+        'X-Other': 'keep',
+      },
     });
   });
 
