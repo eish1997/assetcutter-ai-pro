@@ -127,6 +127,56 @@ describe('AI gateway execution handoff', () => {
     });
   });
 
+  it('retries transient worker 502 handoff failures before failing the job', async () => {
+    process.env.AI_GATEWAY_EXECUTION_ENABLED = 'true';
+    const store = createInMemoryAiJobStore();
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(proxyResponse('<!DOCTYPE html><title>502</title>', false, 502))
+      .mockResolvedValueOnce(proxyResponse({ jobId: 'gasync_retry_502', status: 'queued' }));
+
+    const result = await createAuthAiGatewayJob({}, imageJobBody('aijob_exec_retry_502'), user, {
+      store,
+      fetchImpl,
+      handoffRetryDelayMs: 0,
+      handoffRetryJitterMs: 0,
+      handoffRetries: 1,
+      handoffHealthProbe: false,
+    });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(result.body.job).toMatchObject({
+      id: 'aijob_exec_retry_502',
+      status: 'queued',
+      proxyJobId: 'gasync_retry_502',
+    });
+  });
+
+  it('retries transient worker connection failures before failing the job', async () => {
+    process.env.AI_GATEWAY_EXECUTION_ENABLED = 'true';
+    const store = createInMemoryAiJobStore();
+    const fetchImpl = vi
+      .fn()
+      .mockRejectedValueOnce(new TypeError('fetch failed', { cause: { code: 'ECONNRESET' } }))
+      .mockResolvedValueOnce(proxyResponse({ jobId: 'gasync_retry_conn', status: 'queued' }));
+
+    const result = await createAuthAiGatewayJob({}, imageJobBody('aijob_exec_retry_conn'), user, {
+      store,
+      fetchImpl,
+      handoffRetryDelayMs: 0,
+      handoffRetryJitterMs: 0,
+      handoffRetries: 1,
+      handoffHealthProbe: false,
+    });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(result.body.job).toMatchObject({
+      id: 'aijob_exec_retry_conn',
+      status: 'queued',
+      proxyJobId: 'gasync_retry_conn',
+    });
+  });
+
   it('polls proxy completion back into auth job store with redacted artifacts', async () => {
     delete process.env.AI_GATEWAY_EXECUTION_ENABLED;
     const store = createInMemoryAiJobStore();

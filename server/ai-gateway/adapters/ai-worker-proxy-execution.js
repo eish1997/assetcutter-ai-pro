@@ -96,6 +96,23 @@ function isRetryableHandoffStatus(status) {
   return status === 429 || status === 502 || status === 503 || status === 504;
 }
 
+function isRetryableHandoffError(error) {
+  const name = String(error?.name || '');
+  const message = String(error?.message || error || '').toLowerCase();
+  const causeCode = String(error?.cause?.code || '').toLowerCase();
+  return (
+    name === 'TimeoutError' ||
+    name === 'AbortError' ||
+    causeCode === 'econnreset' ||
+    causeCode === 'econnrefused' ||
+    causeCode === 'etimedout' ||
+    causeCode === 'eai_again' ||
+    message.includes('fetch failed') ||
+    message.includes('connection terminated') ||
+    message.includes('socket hang up')
+  );
+}
+
 function retryAfterMs(response) {
   const raw = response?.headers?.get ? String(response.headers.get('retry-after') || '').trim() : '';
   if (!raw) return 0;
@@ -107,12 +124,42 @@ function retryAfterMs(response) {
 }
 
 async function handoffRetryDelay(attempt, response, options = {}) {
-  const configured = Number(options.handoffRetryDelayMs ?? process.env.AI_GATEWAY_PROXY_HANDOFF_RETRY_DELAY_MS ?? 2500);
-  const baseMs = Number.isFinite(configured) ? Math.max(0, configured) : 2500;
-  const jitterMs = Number(options.handoffRetryJitterMs ?? process.env.AI_GATEWAY_PROXY_HANDOFF_RETRY_JITTER_MS ?? 500);
+  const configured = Number(options.handoffRetryDelayMs ?? process.env.AI_GATEWAY_PROXY_HANDOFF_RETRY_DELAY_MS ?? 4000);
+  const baseMs = Number.isFinite(configured) ? Math.max(0, configured) : 4000;
+  const jitterMs = Number(options.handoffRetryJitterMs ?? process.env.AI_GATEWAY_PROXY_HANDOFF_RETRY_JITTER_MS ?? 1000);
   const retryAfter = retryAfterMs(response);
   const delayMs = Math.min(30_000, Math.max(retryAfter, baseMs * Math.max(1, attempt) + Math.floor(Math.random() * Math.max(0, jitterMs))));
   if (delayMs > 0) await pollDelay(delayMs);
+}
+
+async function waitForProxyHealth(fetchImpl, options = {}) {
+  if (options.handoffHealthProbe === false) return;
+  const base = aiWorkerProxyUpstreamBase();
+  if (!/^https?:\/\//i.test(base)) return;
+
+  const timeoutMs = Math.max(0, Number(options.handoffHealthProbeTimeoutMs ?? process.env.AI_GATEWAY_PROXY_HANDOFF_HEALTH_TIMEOUT_MS ?? 75_000));
+  if (!timeoutMs) return;
+  const intervalMs = Math.max(500, Number(options.handoffHealthProbeIntervalMs ?? process.env.AI_GATEWAY_PROXY_HANDOFF_HEALTH_INTERVAL_MS ?? 5000));
+  const requestTimeoutMs = Math.max(1000, Number(options.handoffHealthProbeRequestTimeoutMs ?? process.env.AI_GATEWAY_PROXY_HANDOFF_HEALTH_REQUEST_TIMEOUT_MS ?? 12_000));
+  const deadline = Date.now() + timeoutMs;
+  const healthUrl = `${base}/healthz`;
+
+  while (Date.now() < deadline) {
+    try {
+      const response = await fetchImpl(healthUrl, fetchInitWithLoopbackDirect(healthUrl, {
+        method: 'GET',
+        signal: AbortSignal.timeout(requestTimeoutMs),
+      }));
+      if (response?.ok) {
+        await response.arrayBuffer().catch(() => null);
+        return;
+      }
+      await response?.arrayBuffer?.().catch(() => null);
+    } catch {
+      // Worker may be cold-starting or switching instances. Keep probing until the deadline.
+    }
+    await pollDelay(Math.min(intervalMs, Math.max(0, deadline - Date.now())));
+  }
 }
 
 function proxyPollUrl(plan, proxyJobId) {
@@ -196,20 +243,32 @@ export async function startAiWorkerProxyExecution(plan, options = {}) {
   const targetUrl = `${aiWorkerProxyUpstreamBase()}${plan.adapterRequest.path}`;
 
   try {
-    const maxRetries = Math.max(0, Math.floor(Number(options.handoffRetries ?? process.env.AI_GATEWAY_PROXY_HANDOFF_RETRIES ?? 2)));
+    const maxRetries = Math.max(0, Math.floor(Number(options.handoffRetries ?? process.env.AI_GATEWAY_PROXY_HANDOFF_RETRIES ?? 5)));
     let response = null;
     let text = '';
+    let lastError = null;
     for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
-      response = await fetchImpl(targetUrl, fetchInitWithLoopbackDirect(targetUrl, {
-        method: plan.adapterRequest.method || 'POST',
-        headers: executionHeaders(plan, options),
-        body: JSON.stringify(plan.adapterRequest.body || {}),
-        signal: AbortSignal.timeout(Number(options.timeoutMs || process.env.AI_GATEWAY_EXECUTION_START_TIMEOUT_MS || 30_000)),
-      }));
-      text = await response.text();
-      if (response.ok) break;
-      if (!isRetryableHandoffStatus(response.status) || attempt >= maxRetries) {
-        throw new Error(`AI Worker Proxy rejected AI job handoff: HTTP ${response.status} ${text.slice(0, 300)}`);
+      try {
+        response = await fetchImpl(targetUrl, fetchInitWithLoopbackDirect(targetUrl, {
+          method: plan.adapterRequest.method || 'POST',
+          headers: executionHeaders(plan, options),
+          body: JSON.stringify(plan.adapterRequest.body || {}),
+          signal: AbortSignal.timeout(Number(options.timeoutMs || process.env.AI_GATEWAY_EXECUTION_START_TIMEOUT_MS || 45_000)),
+        }));
+        text = await response.text();
+        if (response.ok) break;
+        lastError = new Error(`AI Worker Proxy rejected AI job handoff: HTTP ${response.status} ${text.slice(0, 300)}`);
+        if (!isRetryableHandoffStatus(response.status) || attempt >= maxRetries) {
+          throw lastError;
+        }
+      } catch (error) {
+        lastError = error;
+        if (!isRetryableHandoffError(error) || attempt >= maxRetries) {
+          throw error;
+        }
+      }
+      if ((response && response.status >= 502) || isRetryableHandoffError(lastError)) {
+        await waitForProxyHealth(options.healthFetchImpl || undiciFetch, options);
       }
       await handoffRetryDelay(attempt + 1, response, options);
     }
