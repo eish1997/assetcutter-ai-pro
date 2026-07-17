@@ -18,6 +18,7 @@ const DATABASE_URL = String(process.env.DATABASE_URL || '').trim();
 let USE_POSTGRES = Boolean(DATABASE_URL);
 let pool = null;
 let pgReady = false;
+const POSTGRES_TRANSIENT_RETRY_ATTEMPTS = Math.max(1, Number(process.env.PG_TRANSIENT_RETRY_ATTEMPTS || 5));
 
 function isTransientPostgresConnectionError(err) {
   const code = String(err?.code || '').trim();
@@ -28,7 +29,7 @@ function isTransientPostgresConnectionError(err) {
     code === '57P03' ||
     code === '08003' ||
     code === '08006' ||
-    /Connection terminated unexpectedly|ECONNRESET|ECONNREFUSED|ETIMEDOUT|terminating connection|connection timeout|server closed the connection/i.test(
+    /Connection terminated unexpectedly|ECONNRESET|ECONNREFUSED|ETIMEDOUT|terminating connection|connection timeout|server closed the connection|database system is in recovery mode|database system is starting up/i.test(
       msg
     )
   );
@@ -40,38 +41,63 @@ function postgresErrorSummary(err) {
   return [code, msg].filter(Boolean).join(' ');
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function postgresTransientRetryDelayMs(attempt) {
+  const base = Number(process.env.PG_TRANSIENT_RETRY_BASE_MS || 350);
+  const capped = Math.min(4_000, base * 2 ** Math.max(0, attempt));
+  const jitter = Math.floor(Math.random() * 125);
+  return capped + jitter;
+}
+
+function recreatePoolAfterTransientError(p, err, operation, attempt) {
+  pgReady = false;
+  if (pool === p) pool = null;
+  console.warn(
+    `[auth-store] transient postgres ${operation} error; recreating pool and retrying (${attempt + 1}/${POSTGRES_TRANSIENT_RETRY_ATTEMPTS}):`,
+    postgresErrorSummary(err)
+  );
+  void p.end().catch((endErr) => {
+    console.warn('[auth-store] postgres pool close after transient error failed:', postgresErrorSummary(endErr));
+  });
+}
+
+async function queryWithPostgresRetry(p, args, attempt = 0) {
+  try {
+    return await p.__assetcutterRawQuery(...args);
+  } catch (err) {
+    if (!isTransientPostgresConnectionError(err) || attempt >= POSTGRES_TRANSIENT_RETRY_ATTEMPTS - 1) throw err;
+    recreatePoolAfterTransientError(p, err, 'query', attempt);
+    await sleep(postgresTransientRetryDelayMs(attempt));
+    return queryWithPostgresRetry(getPool(), args, attempt + 1);
+  }
+}
+
+async function connectWithPostgresRetry(p, attempt = 0) {
+  try {
+    return await p.__assetcutterRawConnect();
+  } catch (err) {
+    if (!isTransientPostgresConnectionError(err) || attempt >= POSTGRES_TRANSIENT_RETRY_ATTEMPTS - 1) throw err;
+    recreatePoolAfterTransientError(p, err, 'connect', attempt);
+    await sleep(postgresTransientRetryDelayMs(attempt));
+    return connectWithPostgresRetry(getPool(), attempt + 1);
+  }
+}
+
 function attachPoolGuards(p) {
   if (!p || p.__assetcutterGuarded) return p;
   Object.defineProperty(p, '__assetcutterGuarded', { value: true });
-  Object.defineProperty(p, '__assetcutterRetryingQuery', { value: false, writable: true });
+  Object.defineProperty(p, '__assetcutterRawQuery', { value: p.query.bind(p) });
+  Object.defineProperty(p, '__assetcutterRawConnect', { value: p.connect.bind(p) });
   p.on('error', (err) => {
     pgReady = false;
     console.warn('[auth-store] postgres idle client error:', postgresErrorSummary(err));
   });
 
-  const query = p.query.bind(p);
-  p.query = async (...args) => {
-    try {
-      return await query(...args);
-    } catch (err) {
-      if (!isTransientPostgresConnectionError(err) || p.__assetcutterRetryingQuery) throw err;
-      console.warn('[auth-store] transient postgres query error; recreating pool and retrying once:', postgresErrorSummary(err));
-      if (pool === p) {
-        pool = null;
-        pgReady = false;
-      }
-      void p.end().catch((endErr) => {
-        console.warn('[auth-store] postgres pool close after transient error failed:', postgresErrorSummary(endErr));
-      });
-      const next = getPool();
-      next.__assetcutterRetryingQuery = true;
-      try {
-        return await next.query(...args);
-      } finally {
-        next.__assetcutterRetryingQuery = false;
-      }
-    }
-  };
+  p.query = (...args) => queryWithPostgresRetry(p, args);
+  p.connect = () => connectWithPostgresRetry(p);
   return p;
 }
 
