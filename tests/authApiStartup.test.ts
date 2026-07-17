@@ -68,27 +68,6 @@ async function stopChild(child: ChildProcess) {
   });
 }
 
-function collectChildOutput(child: ChildProcess) {
-  let output = '';
-  child.stdout?.on('data', (chunk) => {
-    output += String(chunk);
-  });
-  child.stderr?.on('data', (chunk) => {
-    output += String(chunk);
-  });
-  return () => output;
-}
-
-function waitForExit(child: ChildProcess, timeoutMs = 10_000): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`process did not exit within ${timeoutMs}ms`)), timeoutMs);
-    child.once('exit', (code, signal) => {
-      clearTimeout(timer);
-      resolve({ code, signal });
-    });
-  });
-}
-
 describe('auth-api startup', () => {
   it('opens port before store init finishes and never returns Service starting', async () => {
     const port = 19_000 + Math.floor(Math.random() * 800);
@@ -139,12 +118,19 @@ describe('auth-api startup', () => {
       PG_LOCK_TIMEOUT_MS: '500',
     });
 
-    const output = collectChildOutput(child);
     try {
-      const exit = await waitForExit(child, 10_000);
-      expect(exit.code).not.toBe(0);
-      expect(output()).toContain('Postgres unavailable and JSON fallback is disabled');
-      expect(output()).not.toContain('回退 auth-db.json');
+      await waitForPort(port, 10_000);
+      const loginRes = await fetch(`http://127.0.0.1:${port}/api/auth/login`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Origin: 'https://assetcutter-ai-pro.vercel.app',
+        },
+        body: JSON.stringify({ identifier: 'existing-user', password: 'wrong-password' }),
+      });
+      const body = (await loginRes.json()) as { error?: string };
+      expect(loginRes.status).toBe(503);
+      expect(String(body.error || '')).toContain('Postgres unavailable');
     } finally {
       await stopChild(child);
     }

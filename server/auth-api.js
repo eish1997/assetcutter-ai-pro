@@ -287,7 +287,8 @@ function startStoreInit() {
   })(), STORE_INIT_TIMEOUT_MS, `Auth store initialization timed out after ${STORE_INIT_TIMEOUT_MS}ms`).catch((error) => {
     storeInitFailureMessage = error instanceof Error ? error.message : String(error);
     console.error('[auth-api] init failed:', storeInitFailureMessage);
-    setTimeout(() => process.exit(1), 500);
+    storeReady = false;
+    storeInitPromise = null;
     throw error;
   });
   return storeInitPromise;
@@ -4084,7 +4085,7 @@ server.listen(PORT, BIND_HOST, () => {
   console.log(
     `[billing] usage=${isUsageBillingEnabled() ? 'on' : 'off'} credits=${isCreditsBillingEnabled() ? 'on' : 'off'} promoLots=${isPromoLotsEnabled() ? 'on' : 'off'}`
   );
-  startStoreInit();
+  void startStoreInit().catch(() => {});
   startPromoExpireSweep();
 });
 
