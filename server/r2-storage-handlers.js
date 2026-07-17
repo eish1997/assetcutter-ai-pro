@@ -45,6 +45,30 @@ export function isR2Configured() {
   return !!(R2_ACCOUNT_ID() && R2_ACCESS_KEY_ID() && R2_SECRET_ACCESS_KEY() && R2_BUCKET());
 }
 
+export function publicR2UrlForKey(objectKey) {
+  const pub = R2_PUBLIC_BASE_URL();
+  const key = safeObjectKey(objectKey);
+  return pub && key ? `${pub}/${encodeURIComponent(key).replace(/%2F/g, '/')}` : null;
+}
+
+export async function putPublicR2Object(objectKey, body, options = {}) {
+  assertR2Config();
+  const key = safeObjectKey(objectKey);
+  const s3 = getS3();
+  if (!s3) throw new Error('R2 未配置');
+  const contentType = String(options.contentType || 'application/octet-stream').trim() || 'application/octet-stream';
+  await s3.send(new PutObjectCommand({
+    Bucket: R2_BUCKET(),
+    Key: key,
+    Body: body,
+    ContentType: contentType,
+  }));
+  return {
+    objectKey: key,
+    publicUrl: publicR2UrlForKey(key),
+  };
+}
+
 export function assertR2Config() {
   const missing = [];
   if (!R2_ACCOUNT_ID()) missing.push('R2_ACCOUNT_ID');

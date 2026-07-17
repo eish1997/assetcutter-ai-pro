@@ -1,5 +1,6 @@
 import { readDb, writeDb, USE_POSTGRES, getPool, ensurePostgres } from '../auth-store.js';
 import { applyAiJobStatusPatch } from './job.js';
+import { archiveAiGatewayJobMedia } from './job-media-archive.js';
 import { withAiGatewayPostgresRetry } from './postgres-transient-retry.js';
 
 const MAX_JSON_JOBS = 10000;
@@ -229,6 +230,7 @@ export async function ensureAiGatewayJobsStore() {
 export function createPersistentAiJobStore() {
   return {
     async put(plan) {
+      const storedPlan = await archiveAiGatewayJobMedia(plan);
       if (USE_POSTGRES) {
         await ensureAiGatewayJobsStore();
         await withAiGatewayPostgresRetry('aiGatewayJobs.put', () => getPool().query(
@@ -256,39 +258,39 @@ export function createPersistentAiJobStore() {
              started_at = EXCLUDED.started_at,
              finished_at = EXCLUDED.finished_at`,
           [
-            plan.job.id,
-            plan.job.userId || null,
-            plan.job.status,
-            plan.job.modality,
-            plan.job.capability,
-            plan.job.provider || null,
-            plan.job.model || null,
-            plan.job.correlationId,
-            stringifyStoredAiGatewayJson(plan.job.input || {}, '{}'),
-            stringifyStoredAiGatewayJson(plan.job.metadata || {}, '{}'),
-            JSON.stringify(plan.route || {}),
-            stringifyStoredAiGatewayJson(sanitizeAiGatewayAdapterRequest(plan.adapterRequest || {}), '{}'),
-            stringifyStoredAiGatewayJson(plan.job.output, null),
-            stringifyStoredAiGatewayJson(plan.job.artifacts, null),
-            plan.job.error ? JSON.stringify(plan.job.error) : null,
-            plan.job.createdAt,
-            plan.job.updatedAt,
-            plan.job.startedAt || null,
-            plan.job.finishedAt || null,
+            storedPlan.job.id,
+            storedPlan.job.userId || null,
+            storedPlan.job.status,
+            storedPlan.job.modality,
+            storedPlan.job.capability,
+            storedPlan.job.provider || null,
+            storedPlan.job.model || null,
+            storedPlan.job.correlationId,
+            stringifyStoredAiGatewayJson(storedPlan.job.input || {}, '{}'),
+            stringifyStoredAiGatewayJson(storedPlan.job.metadata || {}, '{}'),
+            JSON.stringify(storedPlan.route || {}),
+            stringifyStoredAiGatewayJson(sanitizeAiGatewayAdapterRequest(storedPlan.adapterRequest || {}), '{}'),
+            stringifyStoredAiGatewayJson(storedPlan.job.output, null),
+            stringifyStoredAiGatewayJson(storedPlan.job.artifacts, null),
+            storedPlan.job.error ? JSON.stringify(storedPlan.job.error) : null,
+            storedPlan.job.createdAt,
+            storedPlan.job.updatedAt,
+            storedPlan.job.startedAt || null,
+            storedPlan.job.finishedAt || null,
           ]
         ));
-        return plan;
+        return storedPlan;
       }
 
       const db = readDb();
       if (!Array.isArray(db.aiGatewayJobs)) db.aiGatewayJobs = [];
-      const row = planToJsonRow(plan);
+      const row = planToJsonRow(storedPlan);
       const idx = db.aiGatewayJobs.findIndex((item) => item.id === row.id);
       if (idx >= 0) db.aiGatewayJobs[idx] = row;
       else db.aiGatewayJobs.unshift(row);
       if (db.aiGatewayJobs.length > MAX_JSON_JOBS) db.aiGatewayJobs.length = MAX_JSON_JOBS;
       writeDb(db);
-      return plan;
+      return storedPlan;
     },
 
     async get(id) {
