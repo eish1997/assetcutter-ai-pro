@@ -44,6 +44,32 @@ export function aiWorkerProxyUpstreamBase() {
   return raw || defaultAiWorkerProxyUpstream();
 }
 
+export function aiWorkerProxyUpstreamDiagnostics() {
+  const candidates = [
+    ['AI_WORKER_PROXY_UPSTREAM_URL', process.env.AI_WORKER_PROXY_UPSTREAM_URL],
+    ['AI_WORKER_PROXY_HEALTH_URL', process.env.AI_WORKER_PROXY_HEALTH_URL],
+    ['AI_WORKER_PROXY_BASE_URL', process.env.AI_WORKER_PROXY_BASE_URL],
+    ['GEMINI_PROXY_UPSTREAM_URL', process.env.GEMINI_PROXY_UPSTREAM_URL],
+    ['GEMINI_PROXY_HEALTH_URL', process.env.GEMINI_PROXY_HEALTH_URL],
+    ['GEMINI_PROXY_BASE_URL', process.env.GEMINI_PROXY_BASE_URL],
+  ];
+  const matched = candidates.find(([, value]) => String(value || '').trim());
+  const base = aiWorkerProxyUpstreamBase();
+  let origin = null;
+  try {
+    origin = new URL(base).origin;
+  } catch {
+    origin = base || null;
+  }
+  return {
+    origin,
+    source: matched ? matched[0] : 'default',
+    legacyGeminiProxyEnvUsed: Boolean(matched?.[0]?.startsWith('GEMINI_PROXY_')),
+    legacyGeminiProxyEnvPresent: candidates.some(([key, value]) => key.startsWith('GEMINI_PROXY_') && String(value || '').trim()),
+    internalCompatibilityRoutes: ['/proxy/gemini/async', '/proxy/gemini/async-batch', '/proxy/gemini/generate-content'],
+  };
+}
+
 /** auth-api 可能设全局 TRIPO_PROXY/HTTPS_PROXY；loopback 须直连，否则 relay 报 fetch failed */
 function isLoopbackHost(hostname) {
   const h = String(hostname || '').toLowerCase();

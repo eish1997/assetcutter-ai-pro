@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { aiWorkerProxyUpstreamBase } from '../server/ai-worker-proxy-relay.js';
+import { aiWorkerProxyUpstreamBase, aiWorkerProxyUpstreamDiagnostics } from '../server/ai-worker-proxy-relay.js';
 
 const ENV_KEYS = [
   'AI_WORKER_PROXY_UPSTREAM_URL',
@@ -59,6 +59,26 @@ describe('ai-worker-proxy-relay', () => {
     clearEnv();
     process.env.GEMINI_PROXY_UPSTREAM_URL = 'https://legacy-worker.example/';
     expect(aiWorkerProxyUpstreamBase()).toBe('https://legacy-worker.example');
+    expect(aiWorkerProxyUpstreamDiagnostics()).toMatchObject({
+      origin: 'https://legacy-worker.example',
+      source: 'GEMINI_PROXY_UPSTREAM_URL',
+      legacyGeminiProxyEnvUsed: true,
+      legacyGeminiProxyEnvPresent: true,
+    });
+    restoreEnv(prev);
+  });
+
+  it('reports new ai-worker-proxy env as non-legacy diagnostics', () => {
+    const prev = snapshotEnv();
+    clearEnv();
+    process.env.AI_WORKER_PROXY_UPSTREAM_URL = 'https://worker.example/';
+    process.env.GEMINI_PROXY_BASE_URL = 'https://legacy-worker.example/';
+    expect(aiWorkerProxyUpstreamDiagnostics()).toMatchObject({
+      origin: 'https://worker.example',
+      source: 'AI_WORKER_PROXY_UPSTREAM_URL',
+      legacyGeminiProxyEnvUsed: false,
+      legacyGeminiProxyEnvPresent: true,
+    });
     restoreEnv(prev);
   });
 });

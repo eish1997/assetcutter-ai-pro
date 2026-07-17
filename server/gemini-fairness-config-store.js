@@ -2,6 +2,7 @@ import fs from 'fs';
 import fsPromises from 'fs/promises';
 import path from 'path';
 import { USE_POSTGRES, getPool, ensurePostgres } from './auth-store.js';
+import { withAiGatewayPostgresRetry } from './ai-gateway/postgres-transient-retry.js';
 
 const CONFIG_ROW_ID = 'default';
 
@@ -113,12 +114,13 @@ async function writeGeminiFairnessConfigToDisk(config) {
 }
 
 async function readGeminiFairnessConfigFromDb() {
-  await ensurePostgres();
-  const p = getPool();
-  const res = await p.query(
-    'SELECT config_json, updated_at, updated_by_user_id FROM gemini_fairness_config WHERE id = $1 LIMIT 1',
-    [CONFIG_ROW_ID]
-  );
+  const res = await withAiGatewayPostgresRetry('geminiFairnessConfig.read', async () => {
+    await ensurePostgres();
+    return getPool().query(
+      'SELECT config_json, updated_at, updated_by_user_id FROM gemini_fairness_config WHERE id = $1 LIMIT 1',
+      [CONFIG_ROW_ID]
+    );
+  });
   if (!res.rows[0]) return { config: {}, updatedAt: null, updatedByUserId: null };
   const row = res.rows[0];
   const config = sanitizeConfigObject(
@@ -132,19 +134,20 @@ async function readGeminiFairnessConfigFromDb() {
 }
 
 async function writeGeminiFairnessConfigToDb(config, { updatedByUserId = null } = {}) {
-  await ensurePostgres();
-  const p = getPool();
   const ts = new Date().toISOString();
   const sanitized = sanitizeConfigObject(config);
-  await p.query(
-    `INSERT INTO gemini_fairness_config (id, config_json, updated_at, updated_by_user_id)
-     VALUES ($1, $2::jsonb, $3, $4)
-     ON CONFLICT (id) DO UPDATE SET
-       config_json = EXCLUDED.config_json,
-       updated_at = EXCLUDED.updated_at,
-       updated_by_user_id = EXCLUDED.updated_by_user_id`,
-    [CONFIG_ROW_ID, JSON.stringify(sanitized), ts, updatedByUserId]
-  );
+  await withAiGatewayPostgresRetry('geminiFairnessConfig.write', async () => {
+    await ensurePostgres();
+    await getPool().query(
+      `INSERT INTO gemini_fairness_config (id, config_json, updated_at, updated_by_user_id)
+       VALUES ($1, $2::jsonb, $3, $4)
+       ON CONFLICT (id) DO UPDATE SET
+         config_json = EXCLUDED.config_json,
+         updated_at = EXCLUDED.updated_at,
+         updated_by_user_id = EXCLUDED.updated_by_user_id`,
+      [CONFIG_ROW_ID, JSON.stringify(sanitized), ts, updatedByUserId]
+    );
+  });
   return { config: sanitized, updatedAt: ts, updatedByUserId };
 }
 
@@ -162,9 +165,11 @@ export async function ensureGeminiFairnessConfigStore() {
   if (storeReady) return;
   const source = resolveGeminiFairnessConfigSource();
   if (source === 'db') {
-    await ensurePostgres();
-    await ensureGeminiFairnessConfigTablePg(getPool());
-    await migrateDiskToDbIfEmpty();
+    await withAiGatewayPostgresRetry('geminiFairnessConfig.ensure', async () => {
+      await ensurePostgres();
+      await ensureGeminiFairnessConfigTablePg(getPool());
+      await migrateDiskToDbIfEmpty();
+    });
   }
   storeReady = true;
 }

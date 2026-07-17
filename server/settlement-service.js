@@ -12,6 +12,7 @@ import {
   ensureCreditStore,
 } from './credit-store.js';
 import { readDb, writeDb, USE_POSTGRES, getPool } from './auth-store.js';
+import { withAiGatewayPostgresRetry } from './ai-gateway/postgres-transient-retry.js';
 
 export function parseCreditsReserveKeyFromMetaJson(metaJson) {
   if (!metaJson) return null;
@@ -30,7 +31,9 @@ export function parseCreditsReserveKeyFromMetaJson(metaJson) {
  * @param {string} idempotencyKey
  */
 export async function acquirePlatformReserve(userId, amount, idempotencyKey) {
-  return reserveCredits(userId, amount, { idempotencyKey });
+  return withAiGatewayPostgresRetry('settlement.acquirePlatformReserve', () =>
+    reserveCredits(userId, amount, { idempotencyKey })
+  );
 }
 
 /**
@@ -38,7 +41,9 @@ export async function acquirePlatformReserve(userId, amount, idempotencyKey) {
  * @param {string} reserveKey
  */
 export async function releaseReserveFullVoid(userId, reserveKey) {
-  return releaseCreditReserve(userId, reserveKey, { fullVoid: true });
+  return withAiGatewayPostgresRetry('settlement.releaseReserveFullVoid', () =>
+    releaseCreditReserve(userId, reserveKey, { fullVoid: true })
+  );
 }
 
 /**
@@ -124,30 +129,32 @@ export async function settleUsageEvents(userId, opts = {}) {
   }
 
   if (USE_POSTGRES) {
-    await ensureCreditStore();
-    const p = getPool();
-    const client = await p.connect();
-    try {
-      await client.query('BEGIN');
-      let settled = 0;
-      if (totalCredits > 0) {
-        await consumeCreditsInTx(client, uid, totalCredits, {
-          usageEventId: events.find((e) => shouldChargeCreditsForEvent(e))?.id ?? null,
-          idempotencyKey: taskId ? `settle:${taskId}` : null,
-          reserveKey,
-        });
-        settled = events.filter((e) => shouldChargeCreditsForEvent(e)).length;
-      } else if (hasFailed && reserveKey) {
-        await releaseCreditReserveInTx(client, uid, reserveKey);
+    return withAiGatewayPostgresRetry('settlement.settleUsageEvents', async () => {
+      await ensureCreditStore();
+      const p = getPool();
+      const client = await p.connect();
+      try {
+        await client.query('BEGIN');
+        let settled = 0;
+        if (totalCredits > 0) {
+          await consumeCreditsInTx(client, uid, totalCredits, {
+            usageEventId: events.find((e) => shouldChargeCreditsForEvent(e))?.id ?? null,
+            idempotencyKey: taskId ? `settle:${taskId}` : null,
+            reserveKey,
+          });
+          settled = events.filter((e) => shouldChargeCreditsForEvent(e)).length;
+        } else if (hasFailed && reserveKey) {
+          await releaseCreditReserveInTx(client, uid, reserveKey);
+        }
+        await client.query('COMMIT');
+        return { totalCredits, settled, taskId, reserveKey: reserveKey ?? null };
+      } catch (e) {
+        await client.query('ROLLBACK').catch(() => {});
+        throw e;
+      } finally {
+        client.release();
       }
-      await client.query('COMMIT');
-      return { totalCredits, settled, taskId, reserveKey: reserveKey ?? null };
-    } catch (e) {
-      await client.query('ROLLBACK');
-      throw e;
-    } finally {
-      client.release();
-    }
+    });
   }
 
   const db = readDb();

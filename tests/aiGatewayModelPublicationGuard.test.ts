@@ -161,6 +161,57 @@ describe('AI gateway model publication guard', () => {
     });
   });
 
+  it('reports Gemini image routes as paused only when every gateway provider is disabled', async () => {
+    await expect(
+      validateAiGatewayModelRouteExecutable(
+        { modality: 'image', model: 'gemini-3-pro-image-preview' },
+        {
+          disabledProviders: ['vertex-site', 'gemini-aistudio'],
+          listProviderKeys: async () => [],
+        }
+      )
+    ).rejects.toMatchObject({
+      code: 'AI_GATEWAY_PROVIDER_PAUSED',
+      details: {
+        providerIds: ['vertex-site', 'gemini-aistudio'],
+        canonicalModelId: 'gemini-3-pro-image-preview',
+        modality: 'image',
+      },
+    });
+  });
+
+  it('normalizes legacy Vertex provider aliases before pause checks', async () => {
+    await expect(
+      validateAiGatewayModelRouteExecutable(
+        { modality: 'image', model: 'gemini-3-pro-image-preview', provider: 'vertex-proxy' },
+        {
+          disabledProviders: ['vertex-gemini'],
+          listProviderKeys: async () => [],
+        }
+      )
+    ).rejects.toMatchObject({
+      code: 'AI_GATEWAY_PROVIDER_PAUSED',
+      details: {
+        providerIds: ['vertex-site'],
+        canonicalModelId: 'gemini-3-pro-image-preview',
+      },
+    });
+  });
+
+  it('does not fall through to Vertex when a Gemini request pins an unsupported provider', async () => {
+    await expect(
+      validateAiGatewayModelRouteExecutable(
+        { modality: 'image', model: 'gemini-3-pro-image-preview', provider: 'toapis' },
+        {
+          disabledProviders: [],
+          listProviderKeys: async () => [{ provider: 'toapis', enabled: true, hasSecret: true }],
+        }
+      )
+    ).rejects.toMatchObject({
+      code: 'AI_GATEWAY_MODEL_ROUTE_NOT_FOUND',
+    });
+  });
+
   it('identifies catalog models whose backend adapters are still pending', async () => {
     expect(resolveKnownPendingModelRoute({ modality: 'video', model: 'doubao-seedance-2-0' })).toBeNull();
     expect(resolveKnownPendingModelRoute({ modality: 'model3d', model: 'doubao-seed3d-2-0' })).toBeNull();

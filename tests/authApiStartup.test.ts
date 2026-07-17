@@ -37,7 +37,7 @@ async function waitForStoreReady(port: number, timeoutMs = 15_000) {
   throw new Error('store not ready in time');
 }
 
-function spawnAuthApi(port: number): ChildProcess {
+function spawnAuthApi(port: number, envOverrides: Record<string, string> = {}): ChildProcess {
   return spawn(process.execPath, [path.join(ROOT, 'server/auth-api.js')], {
     cwd: ROOT,
     env: {
@@ -47,6 +47,7 @@ function spawnAuthApi(port: number): ChildProcess {
       BRIDGE_REQUIRE_AUTH: 'false',
       NODE_ENV: 'test',
       DATABASE_URL: '',
+      ...envOverrides,
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -64,6 +65,27 @@ async function stopChild(child: ChildProcess) {
       }
       resolve();
     }, 2000);
+  });
+}
+
+function collectChildOutput(child: ChildProcess) {
+  let output = '';
+  child.stdout?.on('data', (chunk) => {
+    output += String(chunk);
+  });
+  child.stderr?.on('data', (chunk) => {
+    output += String(chunk);
+  });
+  return () => output;
+}
+
+function waitForExit(child: ChildProcess, timeoutMs = 10_000): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`process did not exit within ${timeoutMs}ms`)), timeoutMs);
+    child.once('exit', (code, signal) => {
+      clearTimeout(timer);
+      resolve({ code, signal });
+    });
   });
 }
 
@@ -96,6 +118,33 @@ describe('auth-api startup', () => {
       const ready = await waitForStoreReady(port, 10_000);
       expect(ready.ok).toBe(true);
       expect(ready.ready).toBe(true);
+    } finally {
+      await stopChild(child);
+    }
+  }, 30_000);
+
+  it('does not fall back to an empty JSON auth store when production Postgres is unavailable', async () => {
+    const port = 19_900 + Math.floor(Math.random() * 500);
+    const child = spawnAuthApi(port, {
+      NODE_ENV: 'production',
+      DATABASE_URL: 'postgres://user:pass@127.0.0.1:1/missing',
+      AUTH_ALLOWED_ORIGINS: 'https://assetcutter-ai-pro.vercel.app',
+      AUTH_COOKIE_SAMESITE: 'none',
+      AUTH_COOKIE_SECURE: 'true',
+      AUTH_STORE_ALLOW_JSON_FALLBACK: 'false',
+      AUTH_STORE_INIT_TIMEOUT_MS: '2500',
+      PG_CONNECTION_TIMEOUT_MS: '500',
+      PG_QUERY_TIMEOUT_MS: '500',
+      PG_STATEMENT_TIMEOUT_MS: '500',
+      PG_LOCK_TIMEOUT_MS: '500',
+    });
+
+    const output = collectChildOutput(child);
+    try {
+      const exit = await waitForExit(child, 10_000);
+      expect(exit.code).not.toBe(0);
+      expect(output()).toContain('Postgres unavailable and JSON fallback is disabled');
+      expect(output()).not.toContain('回退 auth-db.json');
     } finally {
       await stopChild(child);
     }

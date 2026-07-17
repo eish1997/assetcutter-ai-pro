@@ -44,17 +44,21 @@ function imageJobBody(id: string, estimatedCredits = 30) {
 
 describe('AI gateway credits settlement', () => {
   const prevMode = process.env.AI_GATEWAY_CREDITS_GATE;
+  const prevExecution = process.env.AI_GATEWAY_EXECUTION_ENABLED;
   const user = { id: 'test-ai-gateway-settlement-user', username: 'alice' };
 
   beforeEach(async () => {
     resetCreditJson();
     process.env.AI_GATEWAY_CREDITS_GATE = 'reserve';
+    process.env.AI_GATEWAY_EXECUTION_ENABLED = 'false';
     await adjustCredits(user.id, 100, { note: 'seed', createdBy: 'test' });
   });
 
   afterEach(() => {
     if (prevMode === undefined) delete process.env.AI_GATEWAY_CREDITS_GATE;
     else process.env.AI_GATEWAY_CREDITS_GATE = prevMode;
+    if (prevExecution === undefined) delete process.env.AI_GATEWAY_EXECUTION_ENABLED;
+    else process.env.AI_GATEWAY_EXECUTION_ENABLED = prevExecution;
   });
 
   it('reserves credits on job creation and charges the reserve on success', async () => {

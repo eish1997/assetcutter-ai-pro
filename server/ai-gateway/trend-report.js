@@ -2,6 +2,7 @@ import { persistentAiGatewayJobStore } from './persistent-job-store.js';
 import { listUsageEventsForAdmin } from '../usage-billing-store.js';
 import { summarizeProviderKeyHealth } from './provider-key-store.js';
 import { USE_POSTGRES, ensurePostgres, getPool, readDb, writeDb } from '../auth-store.js';
+import { withAiGatewayPostgresRetry } from './postgres-transient-retry.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const TERMINAL_STATUSES = new Set(['succeeded', 'failed', 'cancelled']);
@@ -281,16 +282,18 @@ export async function buildAiGatewayTrendReport(query = {}, options = {}) {
 
 export async function ensureAiGatewayTrendSnapshotStore() {
   if (!USE_POSTGRES) return;
-  await ensurePostgres();
-  await getPool().query(`
-    CREATE TABLE IF NOT EXISTS ai_gateway_trend_snapshots (
-      day TEXT PRIMARY KEY,
-      version INTEGER NOT NULL DEFAULT 1,
-      report_json JSONB NOT NULL,
-      generated_at TIMESTAMPTZ NOT NULL
-    );
-  `);
-  await getPool().query(`CREATE INDEX IF NOT EXISTS idx_ai_gateway_trend_snapshots_generated ON ai_gateway_trend_snapshots(generated_at DESC);`);
+  await withAiGatewayPostgresRetry('aiGatewayTrendSnapshots.ensure', async () => {
+    await ensurePostgres();
+    await getPool().query(`
+      CREATE TABLE IF NOT EXISTS ai_gateway_trend_snapshots (
+        day TEXT PRIMARY KEY,
+        version INTEGER NOT NULL DEFAULT 1,
+        report_json JSONB NOT NULL,
+        generated_at TIMESTAMPTZ NOT NULL
+      );
+    `);
+    await getPool().query(`CREATE INDEX IF NOT EXISTS idx_ai_gateway_trend_snapshots_generated ON ai_gateway_trend_snapshots(generated_at DESC);`);
+  });
 }
 
 function publicSnapshot(row) {
@@ -312,14 +315,16 @@ export async function saveAiGatewayTrendSnapshot(report, day) {
   const generatedAt = nonEmptyString(report?.generatedAt) || new Date().toISOString();
   if (USE_POSTGRES) {
     await ensureAiGatewayTrendSnapshotStore();
-    await getPool().query(
-      `INSERT INTO ai_gateway_trend_snapshots (day, version, report_json, generated_at)
-       VALUES ($1, $2, $3::jsonb, $4)
-       ON CONFLICT (day) DO UPDATE SET
-         version = EXCLUDED.version,
-         report_json = EXCLUDED.report_json,
-         generated_at = EXCLUDED.generated_at`,
-      [snapshotDay, SNAPSHOT_VERSION, JSON.stringify(payload), generatedAt]
+    await withAiGatewayPostgresRetry('aiGatewayTrendSnapshots.save', () =>
+      getPool().query(
+        `INSERT INTO ai_gateway_trend_snapshots (day, version, report_json, generated_at)
+         VALUES ($1, $2, $3::jsonb, $4)
+         ON CONFLICT (day) DO UPDATE SET
+           version = EXCLUDED.version,
+           report_json = EXCLUDED.report_json,
+           generated_at = EXCLUDED.generated_at`,
+        [snapshotDay, SNAPSHOT_VERSION, JSON.stringify(payload), generatedAt]
+      )
     );
     return publicSnapshot({ day: snapshotDay, version: SNAPSHOT_VERSION, reportJson: payload, generatedAt });
   }
@@ -343,13 +348,15 @@ export async function listAiGatewayTrendSnapshots(query = {}) {
   const since = new Date(now.getTime() - (days - 1) * DAY_MS).toISOString().slice(0, 10);
   if (USE_POSTGRES) {
     await ensureAiGatewayTrendSnapshotStore();
-    const res = await getPool().query(
-      `SELECT day, version, report_json, generated_at
-       FROM ai_gateway_trend_snapshots
-       WHERE day >= $1
-       ORDER BY day DESC
-       LIMIT $2`,
-      [since, Math.min(120, days)]
+    const res = await withAiGatewayPostgresRetry('aiGatewayTrendSnapshots.list', () =>
+      getPool().query(
+        `SELECT day, version, report_json, generated_at
+         FROM ai_gateway_trend_snapshots
+         WHERE day >= $1
+         ORDER BY day DESC
+         LIMIT $2`,
+        [since, Math.min(120, days)]
+      )
     );
     return res.rows.map(publicSnapshot);
   }

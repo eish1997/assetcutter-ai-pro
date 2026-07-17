@@ -32,6 +32,7 @@ import {
 import type { UsageGeminiMetadata } from "../shared/usageBilling";
 import { proxyGateMinCreditsForJob } from "../shared/credits";
 import { apiUrl, authApiRelayConfigured, devUsesRemoteAuthViaViteProxy, resolvedAuthApiBaseUrl } from "./apiBase";
+import { HttpRequestError } from "./httpClient";
 import {
   getCachedCreditsProxyHeaders,
   getCreditsProxyRequestHeaders,
@@ -105,6 +106,23 @@ import {
   collectRemoteAiWorkerProxyOriginsFromEnv,
   DEFAULT_AI_WORKER_PROXY_ORIGIN,
 } from "./aiWorkerProxyForwardDevOrigins";
+
+const AI_GATEWAY_GOVERNANCE_ERROR_CODES = new Set([
+  'AI_GATEWAY_MODEL_NOT_PUBLISHED',
+  'AI_GATEWAY_MODEL_ADAPTER_PENDING',
+  'AI_GATEWAY_MODEL_ROUTE_NOT_FOUND',
+  'AI_GATEWAY_MODEL_ROUTE_NOT_EXECUTABLE',
+  'AI_GATEWAY_PROVIDER_KEY_UNAVAILABLE',
+  'AI_GATEWAY_PROVIDER_KEY_MISSING',
+  'AI_GATEWAY_PROVIDER_PAUSED',
+  'AI_GATEWAY_MODEL_PAUSED',
+  'AI_GATEWAY_NO_PROVIDER_ROUTE',
+]);
+
+function isAiGatewayGovernanceError(error: unknown): boolean {
+  if (!(error instanceof HttpRequestError)) return false;
+  return Boolean(error.code && AI_GATEWAY_GOVERNANCE_ERROR_CODES.has(error.code));
+}
 
 export {
   resolveUpstreamImageModelId,
@@ -1155,6 +1173,7 @@ async function aiWorkerProxyGenerateContentAsync(args: {
       });
     } catch (error) {
       if (isAbortError(error)) throw error;
+      if (isAiGatewayGovernanceError(error)) throw error;
       logAiPipelineDev('warn', {
         step: 'image_create',
         code: 'AI_GATEWAY_EXECUTION_FALLBACK',

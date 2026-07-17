@@ -1,8 +1,10 @@
 import { clearLastCreditsReserveKey, getCachedCreditsProxyHeaders } from '../creditsProxyBridge';
 import { createAiJob, getMyAiJob, type AiJobDetail, type AiJobModality } from '../aiJobsClient';
 import { resolveCanonicalModelId } from '../modelRegistry/canonicalModelCatalog';
+import { pickBinding } from '../modelRegistry/pickBinding';
 import { proxyGateMinCreditsForJob } from '../../shared/credits';
 import { isAiTaskEnvelopeActive } from '../aiTaskEnvelope';
+import type { ChannelId } from '../modelRegistry/types';
 
 export type UnifiedGenerationModality = AiJobModality;
 
@@ -183,12 +185,45 @@ function defaultEstimatedCreditsForGateway(modality: UnifiedGenerationModality, 
   return Math.max(1, proxyGateMinCreditsForJob(gatewayJobKindForCapability(modality, capability)));
 }
 
+const GATEWAY_CHANNEL_PROVIDER: Partial<Record<ChannelId, string>> = {
+  'vertex-proxy': 'vertex-site',
+  'gemini-aistudio': 'gemini-aistudio',
+  'toapis-gemini': 'toapis',
+  vectorengine: 'vectorengine',
+  'openai-official': 'openai-official',
+  'toapis-openai': 'toapis',
+  'volcengine-ark': 'volcengine-ark',
+  'volcengine-jimeng': 'volcengine-jimeng',
+};
+
+function gatewayRoleForModality(modality: UnifiedGenerationModality): 'text' | 'image' | null {
+  if (modality === 'text') return 'text';
+  if (modality === 'image') return 'image';
+  return null;
+}
+
+function inferGatewayProviderId(
+  registryId: string,
+  canonicalModelId: string,
+  modality: UnifiedGenerationModality,
+  explicitProviderId?: string
+): string | undefined {
+  const explicit = String(explicitProviderId || '').trim();
+  if (explicit) return explicit;
+  const role = gatewayRoleForModality(modality);
+  if (!role) return undefined;
+  const picked = pickBinding(registryId || canonicalModelId, role);
+  const providerId = picked ? GATEWAY_CHANNEL_PROVIDER[picked.channel] : undefined;
+  return providerId || undefined;
+}
+
 export async function runUnifiedGeneration(request: UnifiedGenerationRequest): Promise<AiJobDetail> {
   const rawModel = String(request.canonicalModelId || request.registryId || '').trim();
   if (!rawModel) throw new Error('缺少生成模型');
   const canonicalModelId = resolveCanonicalModelId(rawModel) || rawModel;
   const registryId = String(request.registryId || rawModel).trim() || canonicalModelId;
   const upstreamModelId = String(request.upstreamModelId || '').trim();
+  const providerId = inferGatewayProviderId(registryId, canonicalModelId, request.modality, request.providerId);
   const estimatedCredits = Math.max(
     1,
     Math.floor(Number(request.estimatedCredits || defaultEstimatedCreditsForGateway(request.modality, request.capability)))
@@ -199,7 +234,7 @@ export async function runUnifiedGeneration(request: UnifiedGenerationRequest): P
       {
         modality: request.modality,
         capability: request.capability,
-        ...(request.providerId ? { provider: request.providerId } : {}),
+        ...(providerId ? { provider: providerId } : {}),
         model: canonicalModelId,
         canonicalModelId,
         registryId,
@@ -218,6 +253,7 @@ export async function runUnifiedGeneration(request: UnifiedGenerationRequest): P
           uiSource: request.uiSource,
           canonicalModelId,
           registryId,
+          ...(providerId ? { providerId } : {}),
           ...(upstreamModelId ? { upstreamModelId } : {}),
           ...(request.assetContext ? { assetContext: request.assetContext } : {}),
         },

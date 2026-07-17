@@ -709,13 +709,15 @@ export async function listProviderKeyHealthEvents(options = {}) {
       where.push(`provider = $${values.length}`);
     }
     values.push(limit);
-    const res = await getPool().query(
-      `SELECT id, provider_key_id, provider, label, type, status, message, reason, retryable, cooldown_until, consecutive_error_count, auto_cooldown_count, created_at
-       FROM ai_gateway_provider_key_events
-       ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
-       ORDER BY created_at DESC
-       LIMIT $${values.length}`,
-      values
+    const res = await withAiGatewayPostgresRetry('providerKeyStore.listHealthEvents', () =>
+      getPool().query(
+        `SELECT id, provider_key_id, provider, label, type, status, message, reason, retryable, cooldown_until, consecutive_error_count, auto_cooldown_count, created_at
+         FROM ai_gateway_provider_key_events
+         ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+         ORDER BY created_at DESC
+         LIMIT $${values.length}`,
+        values
+      )
     );
     return res.rows.map((row) => publicEvent({
       ...row,
@@ -882,12 +884,14 @@ async function readProviderKeyHealthEventsForSummary({ sinceIso, keyId, provider
       values.push(provider);
       where.push(`provider = $${values.length}`);
     }
-    const res = await getPool().query(
-      `SELECT id, provider_key_id, provider, label, type, status, message, reason, retryable, cooldown_until, consecutive_error_count, auto_cooldown_count, created_at
-       FROM ai_gateway_provider_key_events
-       WHERE ${where.join(' AND ')}
-       ORDER BY created_at DESC`,
-      values
+    const res = await withAiGatewayPostgresRetry('providerKeyStore.readHealthEventsForSummary', () =>
+      getPool().query(
+        `SELECT id, provider_key_id, provider, label, type, status, message, reason, retryable, cooldown_until, consecutive_error_count, auto_cooldown_count, created_at
+         FROM ai_gateway_provider_key_events
+         WHERE ${where.join(' AND ')}
+         ORDER BY created_at DESC`,
+        values
+      )
     );
     return res.rows.map((row) => publicEvent({
       ...row,

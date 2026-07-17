@@ -26,13 +26,13 @@ function sleep(ms) {
 }
 
 function retryDelayMs(attempt) {
-  const base = Number(process.env.AI_GATEWAY_PG_RETRY_BASE_MS || 450);
-  const capped = Math.min(5_000, base * 2 ** Math.max(0, attempt));
+  const base = Number(process.env.AI_GATEWAY_PG_RETRY_BASE_MS || 300);
+  const capped = Math.min(2_000, base * 2 ** Math.max(0, attempt));
   return capped + Math.floor(Math.random() * 150);
 }
 
 export async function withAiGatewayPostgresRetry(label, fn, options = {}) {
-  const attempts = Math.max(1, Number(options.attempts || process.env.AI_GATEWAY_PG_RETRY_ATTEMPTS || 10));
+  const attempts = Math.max(1, Number(options.attempts || process.env.AI_GATEWAY_PG_RETRY_ATTEMPTS || 4));
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     try {
       return await fn();

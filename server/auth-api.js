@@ -222,7 +222,7 @@ import {
   submitJimengTask,
 } from './jimeng-visual-api.js';
 import { assertJimengCreditsGate } from './jimeng-credits-gate.js';
-import { relayAiWorkerProxyRequest } from './ai-worker-proxy-relay.js';
+import { aiWorkerProxyUpstreamDiagnostics, relayAiWorkerProxyRequest } from './ai-worker-proxy-relay.js';
 import {
   cancelAuthAiGatewayJob,
   createAuthAiGatewayJob,
@@ -2560,6 +2560,48 @@ const server = http.createServer(async (req, res) => {
       }
       const summary = await buildModelAvailabilitySummary(body || {});
       json(res, 200, { ok: true, ...summary });
+      return;
+    }
+
+    if (path === '/api/admin/ai-gateway/diagnostics' && req.method === 'GET') {
+      const staff = await requirePermission(req, res, PERMISSIONS.AI_GATEWAY_OPS_READ);
+      if (!staff) return;
+      const [opsControl, modelOpsConfig, fairnessMeta] = await Promise.all([
+        readAiGatewayOpsControlConfig(),
+        readModelOpsConfig(),
+        getGeminiFairnessConfigMeta(),
+      ]);
+      json(res, 200, {
+        ok: true,
+        aiWorkerProxy: aiWorkerProxyUpstreamDiagnostics(),
+        stores: {
+          opsControl: {
+            source: opsControl.source,
+            storage: opsControl.storage,
+            updatedAt: opsControl.updatedAt || null,
+            updatedByUserId: opsControl.updatedByUserId || null,
+          },
+          modelOpsConfig: {
+            source: modelOpsConfig.source,
+            storage: modelOpsConfig.storage,
+            updatedAt: modelOpsConfig.updatedAt || null,
+            updatedByUserId: modelOpsConfig.updatedByUserId || null,
+          },
+          geminiFairness: fairnessMeta,
+        },
+        paused: {
+          providers: opsControl.disabledProviders || [],
+          providerRules: opsControl.disabledProviderRules || [],
+          models: opsControl.disabledModels || [],
+          modelRules: opsControl.disabledModelRules || [],
+        },
+        modelOps: {
+          publishedCanonicalModelAllowlist: modelOpsConfig.publishedCanonicalModelAllowlist || null,
+          imageRegistryAllowlist: modelOpsConfig.imageRegistryAllowlist || null,
+          bindingOverridesCount: Array.isArray(modelOpsConfig.bindingOverrides) ? modelOpsConfig.bindingOverrides.length : 0,
+          wiringEdgesCount: Array.isArray(modelOpsConfig.wiringEdges) ? modelOpsConfig.wiringEdges.length : 0,
+        },
+      });
       return;
     }
 

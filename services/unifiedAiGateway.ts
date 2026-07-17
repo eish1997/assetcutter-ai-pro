@@ -60,6 +60,7 @@ import { meterReadingFromTask } from "./observability/metering/adapters/task";
 import { resolveBillingSkuForWorkflowVideo, resolveBillingSkuForJimeng } from "./usageBillingSku";
 import { gateBeforeUpstream } from "./aiDispatchGate";
 import { markCreditsProxyHeadersFromGate } from "./creditsProxyBridge";
+import { HttpRequestError } from "./httpClient";
 import type { BillingDecision } from "../shared/billingDecision";
 import { peekCorrelationContext } from "./observability/correlationContext";
 import {
@@ -95,6 +96,23 @@ export type UnifiedAiJobKind =
 
 /** @deprecated 请优先使用 `UnifiedAiJobKind` */
 export type WorkflowAiJobKind = UnifiedAiJobKind;
+
+const AI_GATEWAY_GOVERNANCE_ERROR_CODES = new Set([
+  'AI_GATEWAY_MODEL_NOT_PUBLISHED',
+  'AI_GATEWAY_MODEL_ADAPTER_PENDING',
+  'AI_GATEWAY_MODEL_ROUTE_NOT_FOUND',
+  'AI_GATEWAY_MODEL_ROUTE_NOT_EXECUTABLE',
+  'AI_GATEWAY_PROVIDER_KEY_UNAVAILABLE',
+  'AI_GATEWAY_PROVIDER_KEY_MISSING',
+  'AI_GATEWAY_PROVIDER_PAUSED',
+  'AI_GATEWAY_MODEL_PAUSED',
+  'AI_GATEWAY_NO_PROVIDER_ROUTE',
+]);
+
+function isAiGatewayGovernanceError(error: unknown): boolean {
+  if (!(error instanceof HttpRequestError)) return false;
+  return Boolean(error.code && AI_GATEWAY_GOVERNANCE_ERROR_CODES.has(error.code));
+}
 
 function isViteDebugUnifiedAi(): boolean {
   try {
@@ -693,6 +711,7 @@ export async function workflowGenerateVideo(input: WorkflowVideoJobInput): Promi
         });
         settledByAiGateway = true;
       } catch (e) {
+        if (isAiGatewayGovernanceError(e)) throw e;
         if (!isWorkflowVideoBridgeConfigured()) throw e;
         result = await requestWorkflowVideoFromEnv(input);
       }

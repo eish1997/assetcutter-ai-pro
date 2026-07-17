@@ -16,6 +16,7 @@ import {
   settleUsageEventInTx,
   settleUsageEventJson,
 } from './settlement-service.js';
+import { withAiGatewayPostgresRetry } from './ai-gateway/postgres-transient-retry.js';
 
 const MAX_JSON_EVENTS = 20000;
 const METER_KINDS = new Set(['token', 'image', 'second', 'task', 'byte']);
@@ -184,45 +185,47 @@ function mapRow(r) {
 
 export async function ensureUsageBillingStore() {
   if (!USE_POSTGRES) return;
-  await ensurePostgres();
-  const p = getPool();
-  await p.query(`
-    CREATE TABLE IF NOT EXISTS usage_events (
-      id TEXT PRIMARY KEY,
-      idempotency_key TEXT NOT NULL UNIQUE,
-      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-      workspace_id TEXT NULL,
-      project_id TEXT NULL,
-      workflow_step_id TEXT NULL,
-      audit_log_id TEXT NULL,
-      provider TEXT NOT NULL,
-      registry_id TEXT NULL,
-      billing_sku TEXT NOT NULL,
-      meter_kind TEXT NOT NULL CHECK (meter_kind IN ('token', 'image', 'second', 'task', 'byte')),
-      quantity_in NUMERIC NULL,
-      quantity_out NUMERIC NULL,
-      quantity NUMERIC NOT NULL DEFAULT 0,
-      unit TEXT NOT NULL,
-      cost_usd_est NUMERIC NULL,
-      cost_confidence TEXT NOT NULL DEFAULT 'unknown'
-        CHECK (cost_confidence IN ('exact', 'estimated', 'unknown')),
-      status TEXT NOT NULL DEFAULT 'succeeded'
-        CHECK (status IN ('pending', 'succeeded', 'failed', 'refunded')),
-      upstream_task_id TEXT NULL,
-      request_id TEXT NULL,
-      job_kind TEXT NULL,
-      meta_json JSONB NULL,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  await withAiGatewayPostgresRetry('usageBilling.ensure', async () => {
+    await ensurePostgres();
+    const p = getPool();
+    await p.query(`
+      CREATE TABLE IF NOT EXISTS usage_events (
+        id TEXT PRIMARY KEY,
+        idempotency_key TEXT NOT NULL UNIQUE,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        workspace_id TEXT NULL,
+        project_id TEXT NULL,
+        workflow_step_id TEXT NULL,
+        audit_log_id TEXT NULL,
+        provider TEXT NOT NULL,
+        registry_id TEXT NULL,
+        billing_sku TEXT NOT NULL,
+        meter_kind TEXT NOT NULL CHECK (meter_kind IN ('token', 'image', 'second', 'task', 'byte')),
+        quantity_in NUMERIC NULL,
+        quantity_out NUMERIC NULL,
+        quantity NUMERIC NOT NULL DEFAULT 0,
+        unit TEXT NOT NULL,
+        cost_usd_est NUMERIC NULL,
+        cost_confidence TEXT NOT NULL DEFAULT 'unknown'
+          CHECK (cost_confidence IN ('exact', 'estimated', 'unknown')),
+        status TEXT NOT NULL DEFAULT 'succeeded'
+          CHECK (status IN ('pending', 'succeeded', 'failed', 'refunded')),
+        upstream_task_id TEXT NULL,
+        request_id TEXT NULL,
+        job_kind TEXT NULL,
+        meta_json JSONB NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      );
+    `);
+    await p.query(
+      `CREATE INDEX IF NOT EXISTS idx_usage_events_user_created ON usage_events(user_id, created_at DESC);`
     );
-  `);
-  await p.query(
-    `CREATE INDEX IF NOT EXISTS idx_usage_events_user_created ON usage_events(user_id, created_at DESC);`
-  );
-  await p.query(
-    `CREATE INDEX IF NOT EXISTS idx_usage_events_billing_sku_created ON usage_events(billing_sku, created_at DESC);`
-  );
-  await p.query(`ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS credits_charged BIGINT NULL;`);
-  await p.query(`ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS catalog_version TEXT NULL;`);
+    await p.query(
+      `CREATE INDEX IF NOT EXISTS idx_usage_events_billing_sku_created ON usage_events(billing_sku, created_at DESC);`
+    );
+    await p.query(`ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS credits_charged BIGINT NULL;`);
+    await p.query(`ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS catalog_version TEXT NULL;`);
+  });
 }
 
 /**
@@ -242,61 +245,64 @@ export async function insertUsageEvents(userId, rawEvents) {
   if (USE_POSTGRES) {
     await ensureUsageBillingStore();
     await ensureCreditStore();
-    const p = getPool();
     let inserted = 0;
     for (const ev of list) {
-      const client = await p.connect();
-      try {
-        await client.query('BEGIN');
-        const dup = await client.query(`SELECT id FROM usage_events WHERE idempotency_key = $1`, [ev.idempotencyKey]);
-        if (dup.rows[0]) {
+      const didInsert = await withAiGatewayPostgresRetry('usageBilling.insertEvent', async () => {
+        const p = getPool();
+        const client = await p.connect();
+        try {
+          await client.query('BEGIN');
+          const dup = await client.query(`SELECT id FROM usage_events WHERE idempotency_key = $1`, [ev.idempotencyKey]);
+          if (dup.rows[0]) {
+            await client.query('COMMIT');
+            return false;
+          }
+          await settleUsageEventInTx(client, uid, ev);
+          const res = await client.query(
+            `INSERT INTO usage_events
+             (id, idempotency_key, user_id, workspace_id, project_id, workflow_step_id, audit_log_id,
+              provider, registry_id, billing_sku, meter_kind, quantity_in, quantity_out, quantity, unit,
+              cost_usd_est, cost_confidence, status, upstream_task_id, request_id, job_kind, meta_json, credits_charged, catalog_version, created_at)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22::jsonb,$23,$24,$25)`,
+            [
+              ev.id,
+              ev.idempotencyKey,
+              ev.userId,
+              ev.workspaceId,
+              ev.projectId,
+              ev.workflowStepId,
+              ev.auditLogId,
+              ev.provider,
+              ev.registryId,
+              ev.billingSku,
+              ev.meterKind,
+              ev.quantityIn,
+              ev.quantityOut,
+              ev.quantity,
+              ev.unit,
+              ev.costUsdEst,
+              ev.costConfidence,
+              ev.status,
+              ev.upstreamTaskId,
+              ev.requestId,
+              ev.jobKind,
+              ev.metaJson,
+              ev.creditsCharged > 0 ? ev.creditsCharged : null,
+              ev.catalogVersion,
+              ev.createdAt,
+            ]
+          );
           await client.query('COMMIT');
-          continue;
+          return res.rowCount > 0;
+        } catch (e) {
+          await client.query('ROLLBACK').catch(() => {});
+          if (e instanceof CreditsExceededError) throw e;
+          throw e;
+        } finally {
+          client.release();
         }
-        await settleUsageEventInTx(client, uid, ev);
-        const res = await client.query(
-          `INSERT INTO usage_events
-           (id, idempotency_key, user_id, workspace_id, project_id, workflow_step_id, audit_log_id,
-            provider, registry_id, billing_sku, meter_kind, quantity_in, quantity_out, quantity, unit,
-            cost_usd_est, cost_confidence, status, upstream_task_id, request_id, job_kind, meta_json, credits_charged, catalog_version, created_at)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22::jsonb,$23,$24,$25)`,
-          [
-            ev.id,
-            ev.idempotencyKey,
-            ev.userId,
-            ev.workspaceId,
-            ev.projectId,
-            ev.workflowStepId,
-            ev.auditLogId,
-            ev.provider,
-            ev.registryId,
-            ev.billingSku,
-            ev.meterKind,
-            ev.quantityIn,
-            ev.quantityOut,
-            ev.quantity,
-            ev.unit,
-            ev.costUsdEst,
-            ev.costConfidence,
-            ev.status,
-            ev.upstreamTaskId,
-            ev.requestId,
-            ev.jobKind,
-            ev.metaJson,
-            ev.creditsCharged > 0 ? ev.creditsCharged : null,
-            ev.catalogVersion,
-            ev.createdAt,
-          ]
-        );
-        await client.query('COMMIT');
-        if (res.rowCount > 0) inserted += 1;
-      } catch (e) {
-        await client.query('ROLLBACK');
-        if (e instanceof CreditsExceededError) throw e;
-        throw e;
-      } finally {
-        client.release();
-      }
+      });
+      if (didInsert) inserted += 1;
     }
     return { inserted, skipped: list.length - inserted };
   }
@@ -468,18 +474,21 @@ export async function listUsageEventsForAdmin(query = {}) {
 
   if (USE_POSTGRES) {
     await ensureUsageBillingStore();
-    const p = getPool();
     const { fromSql, params, nextParamIndex } = buildUsageListQuery(query);
-    const countRes = await p.query(`SELECT COUNT(*)::int AS c ${fromSql}`, params);
+    const { countRes, res } = await withAiGatewayPostgresRetry('usageBilling.listAdmin', async () => {
+      const p = getPool();
+      const countRes = await p.query(`SELECT COUNT(*)::int AS c ${fromSql}`, params);
+      const listParams = [...params, max + 1];
+      const res = await p.query(
+        `SELECT e.*, u.username
+         ${fromSql}
+         ORDER BY e.created_at DESC, e.id DESC
+         LIMIT $${nextParamIndex}`,
+        listParams
+      );
+      return { countRes, res };
+    });
     const total = Number(countRes.rows[0]?.c || 0);
-    const listParams = [...params, max + 1];
-    const res = await p.query(
-      `SELECT e.*, u.username
-       ${fromSql}
-       ORDER BY e.created_at DESC, e.id DESC
-       LIMIT $${nextParamIndex}`,
-      listParams
-    );
     let events = res.rows.map((r) => mapRow(r));
     let nextCursor = null;
     if (events.length > max) {

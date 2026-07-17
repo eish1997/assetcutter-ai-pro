@@ -59,7 +59,9 @@ async function actualCreditsFromUsageEvents(job) {
   const correlationId = String(job?.correlationId || '').trim();
   if (!correlationId) return { credits: 0, source: null, eventCount: 0, usageEventId: null };
   try {
-    const { events } = await listUsageEventsByCorrelationId(correlationId, { limit: 100 });
+    const { events } = await withAiGatewayPostgresRetry('aiGatewaySettlement.listUsageEvents', () =>
+      listUsageEventsByCorrelationId(correlationId, { limit: 100 })
+    );
     const chargeable = events.filter((event) => String(event.status || 'succeeded') !== 'failed');
     const credits = chargeable.reduce((sum, event) => sum + positiveInt(event.creditsCharged), 0);
     return credits > 0

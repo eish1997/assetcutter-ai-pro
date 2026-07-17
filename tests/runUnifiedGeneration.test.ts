@@ -18,6 +18,7 @@ vi.mock('../services/aiJobsClient', () => ({
 
 import { createAiJob, getMyAiJob } from '../services/aiJobsClient';
 import { clearLastCreditsReserveKey } from '../services/creditsProxyBridge';
+import * as settingsStore from '../services/settingsStore';
 import {
   runUnifiedImageGeneration,
   runUnifiedTextGeneration,
@@ -32,6 +33,7 @@ describe('runUnifiedGeneration', () => {
     vi.mocked(createAiJob).mockReset();
     vi.mocked(getMyAiJob).mockReset();
     vi.mocked(clearLastCreditsReserveKey).mockReset();
+    vi.restoreAllMocks();
     if (prevInterval === undefined) delete process.env.VITE_AI_GATEWAY_TEXT_POLL_INTERVAL_MS;
     else process.env.VITE_AI_GATEWAY_TEXT_POLL_INTERVAL_MS = prevInterval;
     if (prevImageInterval === undefined) delete process.env.VITE_AI_GATEWAY_IMAGE_POLL_INTERVAL_MS;
@@ -274,6 +276,70 @@ describe('runUnifiedGeneration', () => {
           model: 'gemini-3.1-flash-image',
           upstreamModelId: 'gemini-3.1-flash-image',
           registryId: 'gemini-3.1-flash-image-preview',
+        }),
+      }),
+      expect.any(Object)
+    );
+  });
+
+  it('pins Gemini AI Studio provider when the selected binding is gateway-ready', async () => {
+    vi.spyOn(settingsStore, 'getEnabledChannels').mockReturnValue(['gemini-aistudio']);
+    vi.spyOn(settingsStore, 'isChannelReady').mockImplementation((channel) => channel === 'gemini-aistudio');
+    vi.mocked(createAiJob).mockResolvedValue({
+      job: {
+        id: 'aijob_image_aistudio',
+        status: 'succeeded',
+        output: null,
+        artifacts: [{ kind: 'image', url: 'data:image/png;base64,AISTUDIO' }],
+      },
+    } as unknown as Awaited<ReturnType<typeof createAiJob>>);
+
+    await expect(
+      runUnifiedImageGeneration({
+        prompt: 'clean package',
+        registryId: 'gemini-3.1-flash-image-preview',
+        model: 'gemini-3.1-flash-image',
+        upstreamModelId: 'gemini-3.1-flash-image',
+        uiSource: 'test',
+      })
+    ).resolves.toBe('data:image/png;base64,AISTUDIO');
+
+    expect(createAiJob).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: 'gemini-aistudio',
+        metadata: expect.objectContaining({
+          providerId: 'gemini-aistudio',
+        }),
+      }),
+      expect.any(Object)
+    );
+  });
+
+  it('pins unsupported Gemini BYOK channels to their real provider instead of falling through to Vertex', async () => {
+    vi.spyOn(settingsStore, 'getEnabledChannels').mockReturnValue(['toapis-gemini']);
+    vi.spyOn(settingsStore, 'isChannelReady').mockImplementation((channel) => channel === 'toapis-gemini');
+    vi.mocked(createAiJob).mockResolvedValue({
+      job: {
+        id: 'aijob_image_toapis_gemini',
+        status: 'succeeded',
+        output: null,
+        artifacts: [{ kind: 'image', url: 'data:image/png;base64,TOAPIS' }],
+      },
+    } as unknown as Awaited<ReturnType<typeof createAiJob>>);
+
+    await runUnifiedImageGeneration({
+      prompt: 'clean package',
+      registryId: 'gemini-3.1-flash-image-preview',
+      model: 'gemini-3.1-flash-image',
+      upstreamModelId: 'gemini-3.1-flash-image',
+      uiSource: 'test',
+    });
+
+    expect(createAiJob).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: 'toapis',
+        metadata: expect.objectContaining({
+          providerId: 'toapis',
         }),
       }),
       expect.any(Object)

@@ -19,6 +19,12 @@ let USE_POSTGRES = Boolean(DATABASE_URL);
 let pool = null;
 let pgReady = false;
 
+function allowJsonFallbackWhenPostgresFails() {
+  const explicit = String(process.env.AUTH_STORE_ALLOW_JSON_FALLBACK || '').trim().toLowerCase();
+  if (explicit) return ['1', 'true', 'on', 'yes'].includes(explicit);
+  return String(process.env.NODE_ENV || '').trim().toLowerCase() !== 'production';
+}
+
 function postgresErrorSummary(err) {
   const code = String(err?.code || '').trim();
   const msg = String(err?.message || err || '').trim();
@@ -984,6 +990,11 @@ export async function initAuthStore() {
       await ensurePostgres();
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
+      if (!allowJsonFallbackWhenPostgresFails()) {
+        pgReady = false;
+        resetPostgresPool();
+        throw new Error(`Postgres unavailable and JSON fallback is disabled: ${msg}`);
+      }
       console.warn(`[auth-store] Postgres 不可用（${msg}），回退 auth-db.json`);
       USE_POSTGRES = false;
       pool = null;
