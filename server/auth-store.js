@@ -112,6 +112,9 @@ function getPool() {
       connectionString: DATABASE_URL,
       ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : undefined,
       connectionTimeoutMillis: Number(process.env.PG_CONNECTION_TIMEOUT_MS || 15_000),
+      query_timeout: Number(process.env.PG_QUERY_TIMEOUT_MS || 15_000),
+      statement_timeout: Number(process.env.PG_STATEMENT_TIMEOUT_MS || 15_000),
+      lock_timeout: Number(process.env.PG_LOCK_TIMEOUT_MS || 10_000),
     }));
   }
   return pool;

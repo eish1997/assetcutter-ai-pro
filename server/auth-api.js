@@ -248,10 +248,21 @@ const BIND_HOST = String(process.env.AUTH_BIND_HOST || '0.0.0.0').trim() || '0.0
 let storeReady = false;
 let storeInitPromise = null;
 let storeInitFailureMessage = '';
+const STORE_INIT_TIMEOUT_MS = Math.max(5_000, Number(process.env.AUTH_STORE_INIT_TIMEOUT_MS || 30_000));
+
+function withTimeout(promise, ms, message) {
+  let timer = null;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(message)), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
+}
 
 function startStoreInit() {
   if (storeInitPromise) return storeInitPromise;
-  storeInitPromise = (async () => {
+  storeInitPromise = withTimeout((async () => {
     await initAuthStore();
     await ensurePriceCatalogStore();
     storeReady = true;
@@ -273,7 +284,7 @@ function startStoreInit() {
     } catch (error) {
       console.error('[auth-api] post-init setup failed:', error instanceof Error ? error.message : String(error));
     }
-  })().catch((error) => {
+  })(), STORE_INIT_TIMEOUT_MS, `Auth store initialization timed out after ${STORE_INIT_TIMEOUT_MS}ms`).catch((error) => {
     storeInitFailureMessage = error instanceof Error ? error.message : String(error);
     console.error('[auth-api] init failed:', storeInitFailureMessage);
     setTimeout(() => process.exit(1), 500);
