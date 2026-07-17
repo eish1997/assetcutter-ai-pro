@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { AiPipelineStepError } from '../services/aiPipelineStepError';
+import { HttpRequestError } from '../services/httpClient';
 import { mapRateLimitErrorText, normalizeApiErrorMessage } from '../services/unifiedAiGateway';
 
 describe('mapRateLimitErrorText', () => {
@@ -42,6 +43,17 @@ describe('mapRateLimitErrorText', () => {
   it('does not map pipeline step errors to Google 429', () => {
     expect(mapRateLimitErrorText('[理解步] Too Many Requests')).toBeNull();
     expect(mapRateLimitErrorText('[积分准入] proxy:86337429-70ae-44ae-ac1b-590827fec482')).toBeNull();
+  });
+  it('keeps AI Gateway paused provider details through generic normalization', () => {
+    const err = new HttpRequestError('供应商通道已被运营暂停，请在供应商中心恢复后再试。', 422, 'AI_GATEWAY_PROVIDER_PAUSED', {
+      error: 'AI_GATEWAY_PROVIDER_PAUSED',
+      message: 'AI provider route is paused by ops control: vertex-site',
+      details: { providerIds: ['vertex-site'] },
+    });
+
+    expect(normalizeApiErrorMessage(err)).toBe(
+      '供应商通道已被运营暂停（vertex-site），请在供应商中心的 Gateway 运营控制中清空暂停供应商，或切换到其他已发布模型。'
+    );
   });
 });
 

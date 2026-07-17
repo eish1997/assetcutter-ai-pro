@@ -1,5 +1,10 @@
 import React from 'react';
 import {
+  clearAdminAiGatewayOpsControl,
+  fetchAdminAiGatewayOpsControl,
+} from '../../services/adminClient';
+import type { AiGatewayOpsControlConfig } from '../../services/aiJobsClient';
+import {
   applyAdminProviderKeyHealthAutomation,
   cooldownAdminProviderKey,
   fetchAdminProviderKeyEvents,
@@ -110,6 +115,16 @@ function providerKeyCount(rows: readonly AdminProviderKeyRow[], provider: string
   return rows.filter(
     (row) => row.provider === provider && (row.hasSecret || row.secret || row.hasCredentials || Object.keys(row.credentials || {}).length)
   ).length;
+}
+
+function rowHasCredential(row: AdminProviderKeyRow) {
+  return Boolean(
+    row.hasSecret ||
+      row.secret ||
+      row.hasCredentials ||
+      Object.keys(row.credentials || {}).length ||
+      Object.keys(row.credentialsPreview || {}).length
+  );
 }
 
 function ProviderLinks({ provider }: { provider: ProviderCatalogEntry }) {
@@ -403,9 +418,11 @@ function workspaceModelAvailabilityPayload() {
 
 const AdminProviderKeysPanel: React.FC = () => {
   const { can, isRolePreview } = useAdminStaff();
+  const canReadOps = can(PERMISSIONS.AI_GATEWAY_OPS_READ);
   const canWrite = can(PERMISSIONS.AI_GATEWAY_KEYS_WRITE);
   const canWriteOps = can(PERMISSIONS.AI_GATEWAY_OPS_WRITE);
   const [rows, setRows] = React.useState<AdminProviderKeyRow[]>([]);
+  const [opsControl, setOpsControl] = React.useState<AiGatewayOpsControlConfig | null>(null);
   const [modelOpsConfig, setModelOpsConfig] = React.useState<AdminModelOpsConfig | null>(null);
   const [selectedCanonicalModelIds, setSelectedCanonicalModelIds] = React.useState<string[]>(() => defaultPublishedCanonicalIds());
   const [modelAvailability, setModelAvailability] = React.useState<AdminModelAvailabilitySummaryItem[]>([]);
@@ -435,18 +452,20 @@ const AdminProviderKeysPanel: React.FC = () => {
     setLoading(true);
     setError('');
     try {
-      const [res, eventRes, summaryRes, modelOpsRes, availabilityRes] = await Promise.all([
+      const [res, eventRes, summaryRes, modelOpsRes, availabilityRes, opsControlRes] = await Promise.all([
         fetchAdminProviderKeys(),
         fetchAdminProviderKeyEvents({ limit: 30 }),
         fetchAdminProviderKeyHealthSummary({ windowHours: 24 }),
         fetchAdminModelOpsConfig().catch(() => null),
         fetchAdminModelAvailabilitySummary(workspaceModelAvailabilityPayload()).catch(() => null),
+        canReadOps ? fetchAdminAiGatewayOpsControl().catch(() => null) : Promise.resolve(null),
       ]);
       setRows(res.keys.length ? res.keys : [createDraft()]);
       setEvents(eventRes.events || []);
       setSummary(summaryRes.summaries || []);
       setSummaryTotals(summaryRes.totals || null);
       setModelAvailability(availabilityRes?.models || []);
+      setOpsControl(opsControlRes?.config || null);
       if (modelOpsRes?.config) {
         setModelOpsConfig(modelOpsRes.config);
         const allow = modelOpsRes.config.publishedCanonicalModelAllowlist;
@@ -457,7 +476,7 @@ const AdminProviderKeysPanel: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [canReadOps]);
 
   React.useEffect(() => {
     void load();
@@ -588,7 +607,20 @@ const AdminProviderKeysPanel: React.FC = () => {
     }
   };
 
+  const addProviderKeyDraft = (provider = selectedProviderId) => {
+    const nextProvider = KEY_POOL_PROVIDERS.some((item) => item.id === provider)
+      ? provider
+      : KEY_POOL_PROVIDERS[0]?.id || 'tripo';
+    setRows((prev) => [...prev, createDraft(nextProvider)]);
+  };
+
   const switchProvider = (id: string, provider: string) => {
+    const current = rows.find((row) => row.id === id);
+    if (current && current.provider !== provider && rowHasCredential(current)) {
+      setRows((prev) => [...prev, createDraft(provider)]);
+      setMessage(`已为 ${providerLabel(provider)} 新增一张凭据卡，原 ${providerLabel(current.provider)} 凭据已保留`);
+      return;
+    }
     updateRow(id, {
       provider,
       label: providerLabel(provider),
@@ -718,6 +750,30 @@ const AdminProviderKeysPanel: React.FC = () => {
     () => new Map(modelAvailability.map((row) => [row.canonicalModelId, row])),
     [modelAvailability]
   );
+  const pausedGatewayProviders = React.useMemo(
+    () => Array.from(new Set((opsControl?.disabledProviders || []).map((item) => String(item || '').trim()).filter(Boolean))),
+    [opsControl]
+  );
+  const selectedKeyPoolProviderId = KEY_POOL_PROVIDERS.some((item) => item.id === selectedProviderId)
+    ? selectedProviderId
+    : KEY_POOL_PROVIDERS[0]?.id || 'tripo';
+  const clearGatewayPausedProviders = async () => {
+    if (blockIfRolePreview(isRolePreview)) return;
+    if (!window.confirm('清空 AI Gateway 的供应商/模型暂停规则和模型替换规则？')) return;
+    setSaving(true);
+    setError('');
+    setMessage('');
+    try {
+      const cleared = await clearAdminAiGatewayOpsControl();
+      setOpsControl(cleared.config);
+      setMessage('AI Gateway 运营暂停已清空');
+      void load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '清空 AI Gateway 运营暂停失败');
+    } finally {
+      setSaving(false);
+    }
+  };
 
   if (loading) return <div className="text-[11px] text-gray-400">正在加载凭据池...</div>;
 
@@ -732,6 +788,32 @@ const AdminProviderKeysPanel: React.FC = () => {
 
       {error ? <div className="rounded-lg border border-red-900/60 bg-red-950/40 px-3 py-2 text-[11px] text-red-200">{error}</div> : null}
       {message ? <div className="rounded-lg border border-emerald-900/50 bg-emerald-950/30 px-3 py-2 text-[11px] text-emerald-100">{message}</div> : null}
+
+      {canReadOps && pausedGatewayProviders.length ? (
+        <div className="rounded-xl border border-amber-500/35 bg-amber-950/20 px-4 py-3 text-[11px] text-amber-100">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="min-w-0">
+              <div className="font-semibold">AI Gateway 当前有运营暂停通道</div>
+              <div className="mt-1 text-amber-100/80">
+                暂停供应商：<span className="font-mono">{pausedGatewayProviders.join(', ')}</span>
+              </div>
+              <div className="mt-1 text-amber-100/65">
+                工作台选择这些通道承载的模型时会被拦截；Vertex / Google 也在这里控制，不在 Key 池开关里。
+              </div>
+            </div>
+            <button
+              type="button"
+              disabled={!canWriteOps || saving}
+              onClick={() => {
+                void clearGatewayPausedProviders();
+              }}
+              className="rounded-lg border border-amber-300/30 bg-amber-300/10 px-3 py-2 text-[10px] font-semibold text-amber-50 disabled:opacity-40"
+            >
+              清空 Gateway 暂停
+            </button>
+          </div>
+        </div>
+      ) : null}
 
       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
         {PROVIDERS.map((provider) => {
@@ -765,15 +847,27 @@ const AdminProviderKeysPanel: React.FC = () => {
                   <div>{provider.keyPoolSupported ? `${keyCount} 组 Key` : provider.authSchemes[0]?.label || '站点代理'}</div>
                   <div className="mt-1">{modelCount} 个模型</div>
                   <div className="mt-1">{routeCount} 条路径</div>
-                  <button
-                    type="button"
-                    onClick={() => setSelectedProviderId(provider.id)}
-                    className={`mt-2 rounded-lg border px-2 py-1 text-[10px] ${
-                      selected ? 'border-blue-400/50 bg-blue-500/15 text-blue-100' : 'border-white/[0.08] bg-black/20 text-gray-300'
-                    }`}
-                  >
-                    查看
-                  </button>
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => setSelectedProviderId(provider.id)}
+                      className={`rounded-lg border px-2 py-1 text-[10px] ${
+                        selected ? 'border-blue-400/50 bg-blue-500/15 text-blue-100' : 'border-white/[0.08] bg-black/20 text-gray-300'
+                      }`}
+                    >
+                      查看
+                    </button>
+                    {provider.keyPoolSupported ? (
+                      <button
+                        type="button"
+                        disabled={!canWrite || saving}
+                        onClick={() => addProviderKeyDraft(provider.id)}
+                        className="rounded-lg border border-emerald-500/25 bg-emerald-950/20 px-2 py-1 text-[10px] text-emerald-100 disabled:opacity-40"
+                      >
+                        添加 Key
+                      </button>
+                    ) : null}
+                  </div>
                 </div>
               </div>
               <div className="mt-3 space-y-1 text-[10px] text-gray-500">
@@ -1288,10 +1382,10 @@ const AdminProviderKeysPanel: React.FC = () => {
         <button
           type="button"
           disabled={!canWrite || saving}
-          onClick={() => setRows((prev) => [...prev, createDraft()])}
+          onClick={() => addProviderKeyDraft()}
           className="rounded-lg border border-[#2e2e32] bg-[#1c1c22] px-4 py-2 text-[11px] text-gray-300 disabled:opacity-40"
         >
-          添加凭据
+          添加 {providerLabel(selectedKeyPoolProviderId)} 凭据
         </button>
         <button
           type="button"

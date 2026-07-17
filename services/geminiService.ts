@@ -2467,8 +2467,30 @@ export function mapRateLimitErrorText(raw: string): string | null {
 }
 
 /** 将 API 返回的原始错误转为用户可读的简短说明（用于界面展示） */
+function aiGatewayStructuredErrorMessage(err: unknown): string | null {
+  const obj = err && typeof err === 'object' ? (err as any) : null;
+  const payload = obj?.payload && typeof obj.payload === 'object' ? obj.payload : null;
+  const code = String(obj?.code || payload?.code || payload?.error || '').trim();
+  if (code !== 'AI_GATEWAY_PROVIDER_PAUSED') return null;
+  const details = payload?.details && typeof payload.details === 'object' ? payload.details : null;
+  let providerIds = Array.isArray(details?.providerIds)
+    ? details.providerIds.map((item: unknown) => String(item || '').trim()).filter(Boolean)
+    : [];
+  if (!providerIds.length) {
+    const backendMessage = String(payload?.message || obj?.message || '');
+    const matched = backendMessage.match(/paused by ops control:\s*([^。；;\n]+)/i);
+    if (matched?.[1]) {
+      providerIds = matched[1].split(',').map((item) => item.trim()).filter(Boolean);
+    }
+  }
+  const suffix = providerIds.length ? `（${providerIds.join('、')}）` : '';
+  return `供应商通道已被运营暂停${suffix}，请在供应商中心的 Gateway 运营控制中清空暂停供应商，或切换到其他已发布模型。`;
+}
+
 export function normalizeApiErrorMessage(err: unknown): string {
   if (isAiPipelineStepError(err)) return err.message;
+  const structuredGatewayMessage = aiGatewayStructuredErrorMessage(err);
+  if (structuredGatewayMessage) return structuredGatewayMessage;
   const raw = String((err as any)?.message ?? err);
   if (detectPipelineStepFromMessage(raw)) return raw;
   if (/maximum call stack size exceeded/i.test(raw)) {
