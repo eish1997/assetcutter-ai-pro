@@ -19,6 +19,62 @@ let USE_POSTGRES = Boolean(DATABASE_URL);
 let pool = null;
 let pgReady = false;
 
+function isTransientPostgresConnectionError(err) {
+  const code = String(err?.code || '').trim();
+  const msg = String(err?.message || err || '');
+  return (
+    code === '57P01' ||
+    code === '57P02' ||
+    code === '57P03' ||
+    code === '08003' ||
+    code === '08006' ||
+    /Connection terminated unexpectedly|ECONNRESET|ECONNREFUSED|ETIMEDOUT|terminating connection|connection timeout|server closed the connection/i.test(
+      msg
+    )
+  );
+}
+
+function postgresErrorSummary(err) {
+  const code = String(err?.code || '').trim();
+  const msg = String(err?.message || err || '').trim();
+  return [code, msg].filter(Boolean).join(' ');
+}
+
+function attachPoolGuards(p) {
+  if (!p || p.__assetcutterGuarded) return p;
+  Object.defineProperty(p, '__assetcutterGuarded', { value: true });
+  Object.defineProperty(p, '__assetcutterRetryingQuery', { value: false, writable: true });
+  p.on('error', (err) => {
+    pgReady = false;
+    console.warn('[auth-store] postgres idle client error:', postgresErrorSummary(err));
+  });
+
+  const query = p.query.bind(p);
+  p.query = async (...args) => {
+    try {
+      return await query(...args);
+    } catch (err) {
+      if (!isTransientPostgresConnectionError(err) || p.__assetcutterRetryingQuery) throw err;
+      console.warn('[auth-store] transient postgres query error; recreating pool and retrying once:', postgresErrorSummary(err));
+      if (pool === p) {
+        pool = null;
+        pgReady = false;
+      }
+      void p.end().catch((endErr) => {
+        console.warn('[auth-store] postgres pool close after transient error failed:', postgresErrorSummary(endErr));
+      });
+      const next = getPool();
+      next.__assetcutterRetryingQuery = true;
+      try {
+        return await next.query(...args);
+      } finally {
+        next.__assetcutterRetryingQuery = false;
+      }
+    }
+  };
+  return p;
+}
+
 function nowIso() {
   return new Date().toISOString();
 }
@@ -26,11 +82,11 @@ function nowIso() {
 function getPool() {
   if (!USE_POSTGRES) return null;
   if (!pool) {
-    pool = new Pool({
+    pool = attachPoolGuards(new Pool({
       connectionString: DATABASE_URL,
       ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : undefined,
       connectionTimeoutMillis: Number(process.env.PG_CONNECTION_TIMEOUT_MS || 15_000),
-    });
+    }));
   }
   return pool;
 }

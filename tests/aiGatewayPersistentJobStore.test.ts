@@ -46,7 +46,7 @@ describe('persistent AI gateway job store', () => {
         userId: 'user_1',
       },
       route: {
-        providerId: 'vertex-gemini',
+        providerId: 'vertex-site',
         upstreamBackend: 'vertex',
       },
       adapterRequest: {
