@@ -18,7 +18,7 @@ const DATABASE_URL = String(process.env.DATABASE_URL || '').trim();
 let USE_POSTGRES = Boolean(DATABASE_URL);
 let pool = null;
 let pgReady = false;
-const POSTGRES_TRANSIENT_RETRY_ATTEMPTS = Math.max(1, Number(process.env.PG_TRANSIENT_RETRY_ATTEMPTS || 5));
+const POSTGRES_TRANSIENT_RETRY_ATTEMPTS = Math.max(1, Number(process.env.PG_TRANSIENT_RETRY_ATTEMPTS || 8));
 
 function isTransientPostgresConnectionError(err) {
   const code = String(err?.code || '').trim();
