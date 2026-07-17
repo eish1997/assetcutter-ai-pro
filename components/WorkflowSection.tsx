@@ -335,7 +335,7 @@ import {
   pickDefaultStoryboardRedrawPresetId,
   STORYBOARD_REDRAW_PRESET_KEY,
 } from '../services/storyboardTableRedraw';
-import { storyboardRowHasFrameRef } from '../services/storyboardFrameImageUrl';
+import { resolveStoryboardFrameDisplaySrc, storyboardRowHasFrameRef } from '../services/storyboardFrameImageUrl';
 import {
   WORKFLOW_TEXT_CONFIRM_CHARS,
   WORKFLOW_TEXT_WARN_CHARS,
@@ -2342,6 +2342,30 @@ const WorkflowSection: React.FC<{
     const baseId = stripResultKeyToBaseActionId(stepKey);
     return getModule(baseId)?.label ?? baseId;
   }, [getSet, getModule]);
+  const resolveAssetObjectKeyDisplayImage = useCallback((a: WorkflowAsset): string => {
+    const dk = String(a.displayKey || 'original').trim() || 'original';
+    if (dk !== 'original') {
+      const resultObjectKey = String(a.resultsObjectKeys?.[dk] || '').trim();
+      if (resultObjectKey) {
+        return resolveStoryboardFrameDisplaySrc('', resultObjectKey) || '';
+      }
+    }
+    const originalObjectKey = String(a.originalObjectKey || '').trim();
+    return originalObjectKey ? resolveStoryboardFrameDisplaySrc('', originalObjectKey) || '' : '';
+  }, []);
+  const resolveAssetCompanionKeyDisplayImage = useCallback((a: WorkflowAsset): string => {
+    const projectId = String(workspaceProjectChrome?.activeProjectId || '').trim();
+    if (!projectId) return '';
+    const base = normalizeCompanionBaseUrl(String(getCompanionLocalBaseUrl() || '').trim());
+    if (!base) return '';
+    const dk = String(a.displayKey || 'original').trim() || 'original';
+    const key =
+      dk !== 'original'
+        ? String(a.resultsCompanionKeys?.[dk] || '').trim()
+        : String(a.originalCompanionKey || '').trim();
+    if (!key) return '';
+    return `${base}/v1/projects/${encodeURIComponent(projectId)}/assets/${encodeURIComponent(key)}`;
+  }, [workspaceProjectChrome?.activeProjectId]);
   const getAssetDisplayImage = useCallback((
     a: WorkflowAsset,
     _assetsList?: WorkflowAsset[],
@@ -2354,12 +2378,19 @@ const WorkflowSection: React.FC<{
     if (isWorkflowTextAsset(a)) {
       if (a.displayKey === 'original') return orig;
       const fromResults = (a.results as Record<string, unknown>)[a.displayKey];
-      return asWorkflowImageString(fromResults) || orig;
+      return asWorkflowImageString(fromResults) || resolveAssetObjectKeyDisplayImage(a) || orig;
     }
-    if (a.displayKey === 'original') return orig;
+    if (a.displayKey === 'original') {
+      return orig || resolveAssetObjectKeyDisplayImage(a) || resolveAssetCompanionKeyDisplayImage(a);
+    }
     const fromResults = (a.results as Record<string, unknown>)[a.displayKey];
-    return asWorkflowImageString(fromResults) || orig;
-  }, []);
+    return (
+      asWorkflowImageString(fromResults) ||
+      resolveAssetObjectKeyDisplayImage(a) ||
+      resolveAssetCompanionKeyDisplayImage(a) ||
+      orig
+    );
+  }, [resolveAssetCompanionKeyDisplayImage, resolveAssetObjectKeyDisplayImage]);
 
   const scheduleWorkflowLightboxPrefetch = useCallback((asset: WorkflowAsset) => {
     if (isWorkflowStoryboardTableAsset(asset) || isWorkflowAssetSetAsset(asset)) return;

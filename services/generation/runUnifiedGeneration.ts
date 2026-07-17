@@ -1,6 +1,8 @@
-import { getCachedCreditsProxyHeaders } from '../creditsProxyBridge';
+import { clearLastCreditsReserveKey, getCachedCreditsProxyHeaders } from '../creditsProxyBridge';
 import { createAiJob, getMyAiJob, type AiJobDetail, type AiJobModality } from '../aiJobsClient';
 import { resolveCanonicalModelId } from '../modelRegistry/canonicalModelCatalog';
+import { proxyGateMinCreditsForJob } from '../../shared/credits';
+import { isAiTaskEnvelopeActive } from '../aiTaskEnvelope';
 
 export type UnifiedGenerationModality = AiJobModality;
 
@@ -158,46 +160,79 @@ function terminalError(detail: AiJobDetail): Error {
   return new Error(msg);
 }
 
+function imageOutputDebug(detail: AiJobDetail): string {
+  const artifacts = Array.isArray(detail.job?.artifacts) ? detail.job.artifacts : [];
+  const output = detailOutput(detail);
+  return `status=${detail.job?.status || 'unknown'} artifacts=${artifacts.length} outputKeys=${Object.keys(output).join(',') || '-'}`;
+}
+
+function gatewayJobKindForCapability(modality: UnifiedGenerationModality, capability: string): string {
+  const cap = String(capability || '').trim();
+  if (cap === 'workflow_text_to_image' || cap === 'image.generate') return 'workflow_text_to_image';
+  if (cap === 'workflow_image_edit' || cap === 'image.edit') return 'workflow_image_edit';
+  if (cap === 'workflow_generate_video' || cap === 'video.generate') return 'workflow_generate_video';
+  if (cap === 'model3d.generate') return 'workflow_generate_3d';
+  if (modality === 'text') return 'workflow_chat';
+  if (modality === 'image') return 'workflow_text_to_image';
+  if (modality === 'video') return 'workflow_generate_video';
+  if (modality === 'model3d') return 'workflow_generate_3d';
+  return cap || 'workflow_chat';
+}
+
+function defaultEstimatedCreditsForGateway(modality: UnifiedGenerationModality, capability: string): number {
+  return Math.max(1, proxyGateMinCreditsForJob(gatewayJobKindForCapability(modality, capability)));
+}
+
 export async function runUnifiedGeneration(request: UnifiedGenerationRequest): Promise<AiJobDetail> {
   const rawModel = String(request.canonicalModelId || request.registryId || '').trim();
   if (!rawModel) throw new Error('缺少生成模型');
   const canonicalModelId = resolveCanonicalModelId(rawModel) || rawModel;
   const registryId = String(request.registryId || rawModel).trim() || canonicalModelId;
   const upstreamModelId = String(request.upstreamModelId || '').trim();
-  const estimatedCredits = Math.max(1, Math.floor(Number(request.estimatedCredits || 1)));
-  const cachedHeaders = getCachedCreditsProxyHeaders(estimatedCredits) || {};
-  return createAiJob(
-    {
-      modality: request.modality,
-      capability: request.capability,
-      ...(request.providerId ? { provider: request.providerId } : {}),
-      model: canonicalModelId,
-      canonicalModelId,
-      registryId,
-      estimatedCredits,
-      input: {
-        ...request.input,
-        canonicalModelId,
-        registryId,
-        ...(upstreamModelId ? { upstreamModelId, model: upstreamModelId } : {}),
-        ...(request.assetContext ? { assetContext: request.assetContext } : {}),
-      },
-      metadata: {
-        ...(request.metadata || {}),
-        source: 'runUnifiedGeneration',
-        uiSource: request.uiSource,
-        canonicalModelId,
-        registryId,
-        ...(upstreamModelId ? { upstreamModelId } : {}),
-        ...(request.assetContext ? { assetContext: request.assetContext } : {}),
-      },
-    },
-    {
-      signal: request.abortSignal,
-      cache: 'no-store',
-      headers: cachedHeaders,
-    }
+  const estimatedCredits = Math.max(
+    1,
+    Math.floor(Number(request.estimatedCredits || defaultEstimatedCreditsForGateway(request.modality, request.capability)))
   );
+  const cachedHeaders = getCachedCreditsProxyHeaders(estimatedCredits) || {};
+  try {
+    return await createAiJob(
+      {
+        modality: request.modality,
+        capability: request.capability,
+        ...(request.providerId ? { provider: request.providerId } : {}),
+        model: canonicalModelId,
+        canonicalModelId,
+        registryId,
+        estimatedCredits,
+        input: {
+          ...request.input,
+          canonicalModelId,
+          registryId,
+          estimatedCredits,
+          ...(upstreamModelId ? { upstreamModelId, model: upstreamModelId } : {}),
+          ...(request.assetContext ? { assetContext: request.assetContext } : {}),
+        },
+        metadata: {
+          ...(request.metadata || {}),
+          source: 'runUnifiedGeneration',
+          uiSource: request.uiSource,
+          canonicalModelId,
+          registryId,
+          ...(upstreamModelId ? { upstreamModelId } : {}),
+          ...(request.assetContext ? { assetContext: request.assetContext } : {}),
+        },
+      },
+      {
+        signal: request.abortSignal,
+        cache: 'no-store',
+        headers: cachedHeaders,
+      }
+    );
+  } finally {
+    if (!isAiTaskEnvelopeActive()) {
+      clearLastCreditsReserveKey();
+    }
+  }
 }
 
 export async function runUnifiedTextGeneration(request: UnifiedTextGenerationRequest): Promise<string> {
@@ -351,16 +386,27 @@ export async function runUnifiedImageGeneration(request: UnifiedImageGenerationR
   const timeoutMs = Math.max(30_000, Number(readEnv('VITE_AI_GATEWAY_IMAGE_POLL_TIMEOUT_MS') || 660_000));
   let intervalMs = Math.max(1, Number(readEnv('VITE_AI_GATEWAY_IMAGE_POLL_INTERVAL_MS') || 2000));
   const startedAt = Date.now();
+  let missingImageOutputDetail: AiJobDetail | null = null;
+  let missingImageOutputRetries = 0;
   while (Date.now() - startedAt < timeoutMs) {
     await sleep(intervalMs, request.abortSignal);
     const detail = await getMyAiJob(created.job.id);
     if (detail.job.status === 'succeeded') {
       const imageUrl = extractImageUrl(detail);
       if (imageUrl != null) return imageUrl;
-      throw new Error('AI Gateway image job succeeded without image output');
+      missingImageOutputDetail = detail;
+      if (missingImageOutputRetries < 3) {
+        missingImageOutputRetries += 1;
+        intervalMs = 1000;
+        continue;
+      }
+      throw new Error(`AI Gateway image job succeeded without image output (${imageOutputDebug(detail)})`);
     }
     if (detail.job.status === 'failed' || detail.job.status === 'cancelled') throw terminalError(detail);
     intervalMs = Math.min(Math.round(intervalMs * 1.5), 10_000);
+  }
+  if (missingImageOutputDetail) {
+    throw new Error(`AI Gateway image job succeeded without image output (${imageOutputDebug(missingImageOutputDetail)})`);
   }
   throw new Error('AI Gateway image job polling timed out');
 }

@@ -35,13 +35,17 @@ function collectInlineArtifacts(value, out, path = '$', depth = 0) {
   const mimeType = typeof inlineData.mimeType === 'string' ? inlineData.mimeType : '';
   const data = typeof inlineData.data === 'string' ? inlineData.data : '';
   if (mimeType && data && /^(image|video)\//i.test(mimeType)) {
+    const kind = artifactKindForMime(mimeType);
+    const url = `data:${mimeType};base64,${data}`;
     out.push({
       id: `artifact_${out.length + 1}`,
-      label: `${artifactKindForMime(mimeType)} ${out.length + 1}`,
-      kind: artifactKindForMime(mimeType),
+      label: `${kind} ${out.length + 1}`,
+      kind,
       mimeType,
       bytes: estimateBase64Bytes(data),
       inlineData: true,
+      url,
+      dataUrl: url,
       sourcePath: record.inlineData ? `${path}.inlineData` : path,
     });
   }

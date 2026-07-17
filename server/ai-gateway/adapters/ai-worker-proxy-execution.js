@@ -1,4 +1,4 @@
-import { fetch as undiciFetch } from 'undici';
+import { Agent, fetch as undiciFetch } from 'undici';
 import { aiWorkerProxyUpstreamBase } from '../../ai-worker-proxy-relay.js';
 import { creditsProxyHeadersFromSigned, fairnessKeyForUserId, signCreditsGatePayload } from '../../credits-gate-hmac.js';
 import { settleAiGatewayJobCredits, settlementMetadataPatch } from '../settlement.js';
@@ -8,8 +8,39 @@ import {
   sanitizeProxyResultForAiGatewayJob,
 } from '../../ai-worker-proxy-usage.js';
 
+const directDispatcher = new Agent();
+
 function publicErrorMessage(error) {
   return error instanceof Error ? error.message : String(error || 'AI Gateway execution failed');
+}
+
+function errorCauseMetadata(error) {
+  const cause = error && typeof error === 'object' ? error.cause : null;
+  if (!cause || typeof cause !== 'object') return null;
+  const out = {};
+  for (const key of ['code', 'errno', 'syscall', 'address', 'port']) {
+    if (cause[key] != null) out[key] = cause[key];
+  }
+  if (cause.message) out.message = String(cause.message);
+  return Object.keys(out).length ? out : null;
+}
+
+function isLoopbackHost(hostname) {
+  const h = String(hostname || '').toLowerCase();
+  return h === 'localhost' || h === '127.0.0.1' || h === '::1';
+}
+
+function useDirectDispatcherForUrl(targetUrl) {
+  try {
+    return isLoopbackHost(new URL(targetUrl).hostname);
+  } catch {
+    return false;
+  }
+}
+
+function fetchInitWithLoopbackDirect(targetUrl, init) {
+  if (!useDirectDispatcherForUrl(targetUrl)) return init;
+  return { ...init, dispatcher: directDispatcher };
 }
 
 function creditsGate(plan) {
@@ -110,10 +141,11 @@ export async function pollAiWorkerProxyJob(plan, proxyJobId, options = {}) {
   while (Date.now() - startedAt < timeoutMs) {
     await pollDelay(intervalMs);
     try {
-      const response = await fetchImpl(proxyPollUrl(plan, proxyJobId), {
+      const pollUrl = proxyPollUrl(plan, proxyJobId);
+      const response = await fetchImpl(pollUrl, fetchInitWithLoopbackDirect(pollUrl, {
         method: 'GET',
         signal: AbortSignal.timeout(Number(options.pollRequestTimeoutMs || 15_000)),
-      });
+      }));
       const text = await response.text();
       if (!response.ok) continue;
       const body = JSON.parse(text || '{}');
@@ -168,12 +200,12 @@ export async function startAiWorkerProxyExecution(plan, options = {}) {
     let response = null;
     let text = '';
     for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
-      response = await fetchImpl(targetUrl, {
+      response = await fetchImpl(targetUrl, fetchInitWithLoopbackDirect(targetUrl, {
         method: plan.adapterRequest.method || 'POST',
         headers: executionHeaders(plan, options),
         body: JSON.stringify(plan.adapterRequest.body || {}),
         signal: AbortSignal.timeout(Number(options.timeoutMs || process.env.AI_GATEWAY_EXECUTION_START_TIMEOUT_MS || 30_000)),
-      });
+      }));
       text = await response.text();
       if (response.ok) break;
       if (!isRetryableHandoffStatus(response.status) || attempt >= maxRetries) {
@@ -236,7 +268,9 @@ export async function startAiWorkerProxyExecution(plan, options = {}) {
       gatewayExecution: {
         failedAt,
         error: publicErrorMessage(error),
+        errorCause: errorCauseMetadata(error),
         targetPath: plan.adapterRequest.path,
+        targetUrl,
         autoCircuit: autoCircuit
           ? {
               providerId: plan.route?.providerId || null,

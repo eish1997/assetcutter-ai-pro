@@ -251,6 +251,7 @@ export default defineConfig(({ mode }) => {
             },
           },
           '/api/tripo': authApiProxy,
+          '/api/ai': authApiProxy,
           '/api/ai-worker-proxy': authApiProxy,
           '/api/gemini-proxy': authApiProxy,
           '/api/tripo/upload': authApiProxy,

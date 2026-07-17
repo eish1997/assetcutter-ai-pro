@@ -149,6 +149,16 @@ describe('AI Gateway ops control config', () => {
         updatedByUserId: 'user_admin',
       }).disabledProviders
     ).toEqual(['vertex-site']);
+
+    expect(
+      normalizeAiGatewayOpsControlConfig(
+        {
+          disabledProviders: ['vertex-site', 'volcengine-ark'],
+          disabledProviderRules: [],
+        },
+        { updatedByUserId: 'system:auto-circuit' }
+      ).disabledProviders
+    ).toEqual([]);
   });
 
   function plan(provider: string, status: string, message = '') {

@@ -104,8 +104,9 @@ export function normalizeAiGatewayOpsControlConfig(input, options = {}) {
   const pruned = pruneExpiredAiGatewayOpsControlConfig(raw, now).config;
   const keepAutoCircuitRules =
     options.autoCircuitEnabled == null ? isAiGatewayAutoCircuitEnabled() : options.autoCircuitEnabled !== false;
+  const updatedByUserId = nonEmptyString(options.updatedByUserId) || nonEmptyString(pruned.updatedByUserId);
   const ignoreAutoCircuitSnapshot =
-    !keepAutoCircuitRules && nonEmptyString(pruned.updatedByUserId) === 'system:auto-circuit';
+    !keepAutoCircuitRules && updatedByUserId === 'system:auto-circuit';
   const providerRuleInputs = Array.isArray(pruned.disabledProviderRules) ? pruned.disabledProviderRules : [];
   const ignoredAutoCircuitProviders = new Set(
     keepAutoCircuitRules
@@ -163,10 +164,11 @@ export function resolveAiGatewayOpsControlSource() {
 
 function withMeta(config, meta = {}) {
   const source = meta.source || resolveAiGatewayOpsControlSource();
+  const updatedByUserId = meta.updatedByUserId || config?.updatedByUserId || null;
   return {
-    ...normalizeAiGatewayOpsControlConfig(config),
+    ...normalizeAiGatewayOpsControlConfig(config, { updatedByUserId }),
     updatedAt: meta.updatedAt || null,
-    updatedByUserId: meta.updatedByUserId || null,
+    updatedByUserId,
     source,
     path: source === 'disk' ? opsControlDiskPath() : null,
     storage: source === 'db' ? 'postgres' : 'disk',

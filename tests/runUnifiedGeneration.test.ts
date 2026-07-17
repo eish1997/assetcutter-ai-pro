@@ -1,7 +1,14 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../services/creditsProxyBridge', () => ({
-  getCachedCreditsProxyHeaders: vi.fn(() => ({ 'X-AC-Credits-Reserve': 'reserve_text' })),
+  clearLastCreditsReserveKey: vi.fn(),
+  getCachedCreditsProxyHeaders: vi.fn((estimatedCredits: number) => ({
+    'X-AC-Credits-Reserve': `reserve_${estimatedCredits}`,
+  })),
+}));
+
+vi.mock('../services/aiTaskEnvelope', () => ({
+  isAiTaskEnvelopeActive: vi.fn(() => false),
 }));
 
 vi.mock('../services/aiJobsClient', () => ({
@@ -10,6 +17,7 @@ vi.mock('../services/aiJobsClient', () => ({
 }));
 
 import { createAiJob, getMyAiJob } from '../services/aiJobsClient';
+import { clearLastCreditsReserveKey } from '../services/creditsProxyBridge';
 import {
   runUnifiedImageGeneration,
   runUnifiedTextGeneration,
@@ -18,12 +26,16 @@ import {
 
 describe('runUnifiedGeneration', () => {
   const prevInterval = process.env.VITE_AI_GATEWAY_TEXT_POLL_INTERVAL_MS;
+  const prevImageInterval = process.env.VITE_AI_GATEWAY_IMAGE_POLL_INTERVAL_MS;
 
   afterEach(() => {
     vi.mocked(createAiJob).mockReset();
     vi.mocked(getMyAiJob).mockReset();
+    vi.mocked(clearLastCreditsReserveKey).mockReset();
     if (prevInterval === undefined) delete process.env.VITE_AI_GATEWAY_TEXT_POLL_INTERVAL_MS;
     else process.env.VITE_AI_GATEWAY_TEXT_POLL_INTERVAL_MS = prevInterval;
+    if (prevImageInterval === undefined) delete process.env.VITE_AI_GATEWAY_IMAGE_POLL_INTERVAL_MS;
+    else process.env.VITE_AI_GATEWAY_IMAGE_POLL_INTERVAL_MS = prevImageInterval;
   });
 
   it('creates an Ark text Gateway job with canonical model metadata', async () => {
@@ -52,6 +64,7 @@ describe('runUnifiedGeneration', () => {
         model: 'doubao-seed-2-0-pro',
         canonicalModelId: 'doubao-seed-2-0-pro',
         registryId: 'doubao-seed-2-0-pro',
+        estimatedCredits: 10,
         input: expect.objectContaining({
           canonicalModelId: 'doubao-seed-2-0-pro',
           registryId: 'doubao-seed-2-0-pro',
@@ -67,7 +80,7 @@ describe('runUnifiedGeneration', () => {
       }),
       expect.objectContaining({
         cache: 'no-store',
-        headers: { 'X-AC-Credits-Reserve': 'reserve_text' },
+        headers: { 'X-AC-Credits-Reserve': 'reserve_10' },
       })
     );
   });
@@ -265,5 +278,89 @@ describe('runUnifiedGeneration', () => {
       }),
       expect.any(Object)
     );
+  });
+
+  it('extracts image URLs from completed AI Worker Proxy artifacts after polling', async () => {
+    process.env.VITE_AI_GATEWAY_IMAGE_POLL_INTERVAL_MS = '1';
+    vi.mocked(createAiJob).mockResolvedValue({
+      job: {
+        id: 'aijob_image_proxy',
+        status: 'queued',
+        output: null,
+        artifacts: [],
+      },
+    } as unknown as Awaited<ReturnType<typeof createAiJob>>);
+    vi.mocked(getMyAiJob).mockResolvedValue({
+      job: {
+        id: 'aijob_image_proxy',
+        status: 'succeeded',
+        output: {
+          candidates: [
+            {
+              content: {
+                parts: [{ inlineData: { data: '[REDACTED_BASE64:4B]', bytes: 4, redacted: true } }],
+              },
+            },
+          ],
+        },
+        artifacts: [
+          {
+            kind: 'image',
+            mimeType: 'image/png',
+            inlineData: true,
+            url: 'data:image/png;base64,QUJDRA==',
+          },
+        ],
+      },
+    } as unknown as Awaited<ReturnType<typeof getMyAiJob>>);
+
+    await expect(
+      runUnifiedImageGeneration({
+        prompt: 'clean package',
+        model: 'gemini-3.1-flash-image',
+        uiSource: 'test',
+      })
+    ).resolves.toBe('data:image/png;base64,QUJDRA==');
+
+    expect(getMyAiJob).toHaveBeenCalledWith('aijob_image_proxy');
+  });
+
+  it('refetches briefly when an image job succeeds before artifacts are visible', async () => {
+    process.env.VITE_AI_GATEWAY_IMAGE_POLL_INTERVAL_MS = '1';
+    vi.mocked(createAiJob).mockResolvedValue({
+      job: {
+        id: 'aijob_image_artifact_lag',
+        status: 'queued',
+        output: null,
+        artifacts: [],
+      },
+    } as unknown as Awaited<ReturnType<typeof createAiJob>>);
+    vi.mocked(getMyAiJob)
+      .mockResolvedValueOnce({
+        job: {
+          id: 'aijob_image_artifact_lag',
+          status: 'succeeded',
+          output: { candidates: [{ content: { parts: [{ inlineData: { data: '[REDACTED_BASE64:4B]' } }] } }] },
+          artifacts: [],
+        },
+      } as unknown as Awaited<ReturnType<typeof getMyAiJob>>)
+      .mockResolvedValueOnce({
+        job: {
+          id: 'aijob_image_artifact_lag',
+          status: 'succeeded',
+          output: null,
+          artifacts: [{ kind: 'image', url: 'data:image/png;base64,LAG' }],
+        },
+      } as unknown as Awaited<ReturnType<typeof getMyAiJob>>);
+
+    await expect(
+      runUnifiedImageGeneration({
+        prompt: 'clean package',
+        model: 'gemini-3.1-flash-image',
+        uiSource: 'test',
+      })
+    ).resolves.toBe('data:image/png;base64,LAG');
+
+    expect(getMyAiJob).toHaveBeenCalledTimes(2);
   });
 });

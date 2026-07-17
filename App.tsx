@@ -1,6 +1,8 @@
-
+import { installSafeEncodeURIComponent } from './services/safeUriEncodingInstall';
 import React, { Suspense, useState, useEffect, useLayoutEffect, useMemo, useRef, useCallback } from 'react';
 import { createPortal } from 'react-dom';
+
+installSafeEncodeURIComponent();
 import {
   DEFAULT_PROMPTS,
   normalizeApiErrorMessage,

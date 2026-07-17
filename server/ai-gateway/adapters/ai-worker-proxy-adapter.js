@@ -9,6 +9,23 @@ function requireValue(value, field) {
   return value;
 }
 
+function positiveInt(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  return Math.floor(n);
+}
+
+function estimatedCreditsForJob(job, input) {
+  const metadata = job?.metadata && typeof job.metadata === 'object' ? job.metadata : {};
+  const gate = metadata.creditsGate && typeof metadata.creditsGate === 'object' ? metadata.creditsGate : {};
+  return (
+    positiveInt(input?.estimatedCredits) ||
+    positiveInt(input?.costWeight) ||
+    positiveInt(gate.estimatedCredits) ||
+    positiveInt(gate.reserveAmount)
+  );
+}
+
 export function buildAiWorkerProxyAsyncRequest(job, route) {
   if (route?.adapterId !== 'ai-worker-proxy') {
     throw new AiGatewayValidationError(`Unsupported adapter for AI Worker Proxy: ${route?.adapterId || ''}`);
@@ -33,6 +50,11 @@ export function buildAiWorkerProxyAsyncRequest(job, route) {
   if (input.costWeight != null) {
     body.costWeight = input.costWeight;
     body.fairnessMeta.costWeight = input.costWeight;
+  }
+  const estimatedCredits = estimatedCreditsForJob(job, input);
+  if (estimatedCredits > 0) {
+    body.estimatedCredits = estimatedCredits;
+    if (body.fairnessMeta.costWeight == null) body.fairnessMeta.costWeight = estimatedCredits;
   }
 
   return {

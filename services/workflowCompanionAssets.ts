@@ -1,6 +1,11 @@
 import type { WorkflowAsset } from '../types';
 import type { WorkflowProjectBundle } from './workspaceProjectStore';
-import { fetchCompanionAssetBlob, putCompanionAsset } from './companionClient/storage';
+import {
+  fetchCompanionAssetBlob,
+  getCompanionManifest,
+  listCompanionProjects,
+  putCompanionAsset,
+} from './companionClient/storage';
 import { normalizeCompanionBaseUrl } from './companionLocalPrefs';
 import { mapSiteR2PathToFetchUrl, resolveCapabilityPreviewSrc } from './capabilityPreviewUrl';
 import {
@@ -78,6 +83,78 @@ function sniffModelMimeFromBytes(bytes: Uint8Array, fileName?: string): string {
   return 'application/octet-stream';
 }
 
+const companionProjectIdsByBase = new Map<string, Promise<string[]>>();
+const companionAssetProjectByKey = new Map<string, string>();
+
+function companionAssetProjectCacheKey(baseUrl: string, key: string): string {
+  return `${normalizeCompanionBaseUrl(baseUrl)}\0${String(key || '').trim()}`;
+}
+
+async function listCompanionProjectIdsForAssetFallback(baseUrl: string, preferredProjectId: string): Promise<string[]> {
+  const base = normalizeCompanionBaseUrl(baseUrl);
+  let p = companionProjectIdsByBase.get(base);
+  if (!p) {
+    p = listCompanionProjects(base).then((r) => {
+      if (r.ok === false) return [];
+      return Array.isArray(r.data.projectIds)
+        ? r.data.projectIds.map((id) => String(id || '').trim()).filter(Boolean)
+        : [];
+    });
+    companionProjectIdsByBase.set(base, p);
+  }
+  const preferred = String(preferredProjectId || '').trim();
+  const ids = await p.catch(() => []);
+  return Array.from(new Set([preferred, ...ids].filter(Boolean)));
+}
+
+async function manifestHasCompanionAssetKey(baseUrl: string, projectId: string, key: string): Promise<boolean> {
+  const r = await getCompanionManifest(baseUrl, projectId);
+  if (r.ok === false) return false;
+  return Array.isArray(r.data.entries) && r.data.entries.some((e) => String(e?.key || '').trim() === key);
+}
+
+async function fetchCompanionAssetBlobWithProjectFallback(
+  baseUrl: string,
+  projectId: string,
+  key: string
+): Promise<ReturnType<typeof fetchCompanionAssetBlob> extends Promise<infer T> ? T : never> {
+  const base = normalizeCompanionBaseUrl(baseUrl);
+  const pid = String(projectId || '').trim();
+  const k = String(key || '').trim();
+  const first = await fetchCompanionAssetBlob(base, pid, k);
+  if (first.ok || first.status !== 404) return first;
+
+  const cacheKey = companionAssetProjectCacheKey(base, k);
+  const cachedProjectId = companionAssetProjectByKey.get(cacheKey);
+  if (cachedProjectId && cachedProjectId !== pid) {
+    const cached = await fetchCompanionAssetBlob(base, cachedProjectId, k);
+    if (cached.ok) return cached;
+    companionAssetProjectByKey.delete(cacheKey);
+  }
+
+  const ids = await listCompanionProjectIdsForAssetFallback(base, pid);
+  for (const candidateId of ids) {
+    if (!candidateId || candidateId === pid || candidateId === cachedProjectId) continue;
+    if (!(await manifestHasCompanionAssetKey(base, candidateId, k))) continue;
+    const got = await fetchCompanionAssetBlob(base, candidateId, k);
+    if (got.ok) {
+      companionAssetProjectByKey.set(cacheKey, candidateId);
+      return got;
+    }
+  }
+
+  for (const candidateId of ids) {
+    if (!candidateId || candidateId === pid || candidateId === cachedProjectId) continue;
+    const got = await fetchCompanionAssetBlob(base, candidateId, k);
+    if (got.ok) {
+      companionAssetProjectByKey.set(cacheKey, candidateId);
+      return got;
+    }
+  }
+
+  return first;
+}
+
 /** 将本地 3D 文件写入伴侣；`slotIndex` 与 `modelUrls` 下标一致 */
 export async function putWorkflowModelFileToCompanion(
   baseUrl: string,
@@ -130,7 +207,7 @@ export async function fetchWorkflowModelFromCompanionAsObjectUrl(
   fileNameHint?: string
 ): Promise<{ ok: true; objectUrl: string; mime: string } | { ok: false; error: string }> {
   const base = normalizeCompanionBaseUrl(baseUrl);
-  const res = await fetchCompanionAssetBlob(base, projectId, key);
+  const res = await fetchCompanionAssetBlobWithProjectFallback(base, projectId, key);
   if (res.ok === false) {
     return { ok: false, error: `${res.error}${res.status != null ? ` (HTTP ${res.status})` : ''}` };
   }
@@ -165,7 +242,7 @@ export async function cloneWorkflowModelSlotsForDuplicatedAsset(opts: {
     const uOld = String(urlsIn[i] || '').trim();
     let blob: Blob | null = null;
     if (kOld) {
-      const r = await fetchCompanionAssetBlob(base, pid, kOld);
+      const r = await fetchCompanionAssetBlobWithProjectFallback(base, pid, kOld);
       if (r.ok) {
         const u8 = new Uint8Array(r.data);
         const mime = sniffModelMimeFromBytes(u8, sourceAsset.modelSourceName);
@@ -818,7 +895,7 @@ export async function fetchCompanionAssetAsDataUrl(
   key: string
 ): Promise<string | null> {
   const base = normalizeCompanionBaseUrl(baseUrl);
-  const res = await fetchCompanionAssetBlob(base, projectId, key);
+  const res = await fetchCompanionAssetBlobWithProjectFallback(base, projectId, key);
   if (res.ok === false) return null;
   const u8 = new Uint8Array(res.data);
   const mime = sniffImageMimeFromBytes(u8);
@@ -889,7 +966,7 @@ export async function fetchWorkflowOriginalFromCompanionAsObjectUrl(
   key: string
 ): Promise<{ ok: true; objectUrl: string; mime: string } | { ok: false; error: string }> {
   const base = normalizeCompanionBaseUrl(baseUrl);
-  const res = await fetchCompanionAssetBlob(base, projectId, key);
+  const res = await fetchCompanionAssetBlobWithProjectFallback(base, projectId, key);
   if (res.ok === false) {
     return { ok: false, error: `${res.error}${res.status != null ? ` (HTTP ${res.status})` : ''}` };
   }

@@ -124,10 +124,44 @@ describe('server AI gateway job planning', () => {
         model: 'gemini-3-pro-image-preview',
         aiBackend: 'vertex',
         costWeight: 2,
+        estimatedCredits: 2,
         fairnessMeta: {
           aiGatewayTraceJobId: 'aijob_test_1',
           costWeight: 2,
         },
+      },
+    });
+  });
+
+  it('passes credits gate estimates into AI Worker Proxy requests', () => {
+    const plan = createAiGatewayJobPlan(
+      {
+        id: 'aijob_text_estimate',
+        modality: 'text',
+        capability: 'text.generate',
+        model: 'gemini-3-flash-preview',
+        userId: 'user_1',
+        input: {
+          contents: [{ role: 'user', parts: [{ text: 'hello' }] }],
+        },
+        metadata: {
+          creditsGate: {
+            mode: 'plan',
+            estimatedCredits: 10,
+            reserveKey: 'proxy:test',
+          },
+        },
+      },
+      { nowIso: '2026-07-11T00:00:00.000Z' }
+    );
+
+    expect(plan.adapterRequest.body).toMatchObject({
+      model: 'gemini-3-flash-preview',
+      aiBackend: 'vertex',
+      estimatedCredits: 10,
+      fairnessMeta: {
+        aiGatewayTraceJobId: 'aijob_text_estimate',
+        costWeight: 10,
       },
     });
   });

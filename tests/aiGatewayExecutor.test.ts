@@ -65,6 +65,7 @@ describe('AI gateway execution handoff', () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);
     const [url, init] = fetchImpl.mock.calls[0];
     expect(String(url)).toContain('/proxy/gemini/async');
+    expect(init.dispatcher).toBeTruthy();
     expect(init.headers).toMatchObject({
       Cookie: 'ac_session=session_1; ac_csrf=csrf_1',
       'x-ac-task-envelope': 'aijob_exec_start',
@@ -156,9 +157,17 @@ describe('AI gateway execution handoff', () => {
     });
 
     const stored = await store.get('aijob_exec_done');
+    expect(fetchImpl.mock.calls[0][1].dispatcher).toBeTruthy();
+    expect(fetchImpl.mock.calls[1][1].dispatcher).toBeTruthy();
     expect(stored.job.status).toBe('succeeded');
     expect(stored.job.artifacts).toEqual([
-      expect.objectContaining({ kind: 'image', mimeType: 'image/png', bytes: 4, inlineData: true }),
+      expect.objectContaining({
+        kind: 'image',
+        mimeType: 'image/png',
+        bytes: 4,
+        inlineData: true,
+        url: 'data:image/png;base64,QUJDRA==',
+      }),
     ]);
     expect(JSON.stringify(stored.job.output)).not.toContain('QUJDRA==');
     expect(stored.job.output).toMatchObject({
