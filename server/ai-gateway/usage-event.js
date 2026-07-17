@@ -1,6 +1,7 @@
 import { insertUsageEvents } from '../usage-billing-store.js';
 import { priceUsageQuote } from '../pricing-engine.js';
 import { actualCreditsFromAiGatewayPlan } from './settlement.js';
+import { withAiGatewayPostgresRetry } from './postgres-transient-retry.js';
 
 function text(value) {
   return typeof value === 'string' && value.trim() ? value.trim() : null;
@@ -154,7 +155,9 @@ export function buildAiGatewayUsageEvent(plan) {
 export async function recordAiGatewayUsageEvent(plan) {
   const built = buildAiGatewayUsageEvent(plan);
   if (!built) return { recorded: false, reason: 'not_recordable' };
-  const result = await insertUsageEvents(built.userId, built.event);
+  const result = await withAiGatewayPostgresRetry('aiGatewayUsage.insertUsageEvents', () =>
+    insertUsageEvents(built.userId, built.event)
+  );
   return {
     recorded: result.inserted > 0 || result.skipped > 0,
     inserted: result.inserted,

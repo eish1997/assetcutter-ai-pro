@@ -3,6 +3,7 @@ import fsPromises from 'fs/promises';
 import path from 'path';
 import { USE_POSTGRES, ensurePostgres, getPool } from '../auth-store.js';
 import { buildAiGatewayOpsSummary } from './observability.js';
+import { withAiGatewayPostgresRetry } from './postgres-transient-retry.js';
 
 const DEFAULT_CONFIG = Object.freeze({
   disabledProviders: [],
@@ -190,11 +191,13 @@ export function readAiGatewayOpsControlConfigSync() {
 
 export async function readAiGatewayOpsControlConfig() {
   if (resolveAiGatewayOpsControlSource() === 'db') {
-    await ensureAiGatewayOpsControlStore();
-    const res = await getPool().query(
-      'SELECT config_json, updated_at, updated_by_user_id FROM ai_gateway_ops_control WHERE id = $1 LIMIT 1',
-      [CONFIG_ROW_ID]
-    );
+    const res = await withAiGatewayPostgresRetry('aiGatewayOpsControl.read', async () => {
+      await ensureAiGatewayOpsControlStore();
+      return getPool().query(
+        'SELECT config_json, updated_at, updated_by_user_id FROM ai_gateway_ops_control WHERE id = $1 LIMIT 1',
+        [CONFIG_ROW_ID]
+      );
+    });
     if (!res.rows[0]) return withMeta(DEFAULT_CONFIG, { source: 'db' });
     const row = res.rows[0];
     const rawConfig = typeof row.config_json === 'object' ? row.config_json : JSON.parse(String(row.config_json || '{}'));
@@ -222,16 +225,18 @@ export async function writeAiGatewayOpsControlConfig(input, { updatedByUserId = 
     updatedByUserId: nonEmptyString(updatedByUserId) || null,
   };
   if (resolveAiGatewayOpsControlSource() === 'db') {
-    await ensureAiGatewayOpsControlStore();
-    await getPool().query(
-      `INSERT INTO ai_gateway_ops_control (id, config_json, updated_at, updated_by_user_id)
-       VALUES ($1, $2::jsonb, $3, $4)
-       ON CONFLICT (id) DO UPDATE SET
-         config_json = EXCLUDED.config_json,
-         updated_at = EXCLUDED.updated_at,
-         updated_by_user_id = EXCLUDED.updated_by_user_id`,
-      [CONFIG_ROW_ID, JSON.stringify(config), payload.updatedAt, payload.updatedByUserId]
-    );
+    await withAiGatewayPostgresRetry('aiGatewayOpsControl.write', async () => {
+      await ensureAiGatewayOpsControlStore();
+      await getPool().query(
+        `INSERT INTO ai_gateway_ops_control (id, config_json, updated_at, updated_by_user_id)
+         VALUES ($1, $2::jsonb, $3, $4)
+         ON CONFLICT (id) DO UPDATE SET
+           config_json = EXCLUDED.config_json,
+           updated_at = EXCLUDED.updated_at,
+           updated_by_user_id = EXCLUDED.updated_by_user_id`,
+        [CONFIG_ROW_ID, JSON.stringify(config), payload.updatedAt, payload.updatedByUserId]
+      );
+    });
     return withMeta(config, { ...payload, source: 'db' });
   }
   const filePath = opsControlDiskPath();
@@ -418,14 +423,16 @@ export async function ensureAiGatewayOpsControlStore() {
     storeReady = true;
     return;
   }
-  await ensurePostgres();
-  await getPool().query(`
-    CREATE TABLE IF NOT EXISTS ai_gateway_ops_control (
-      id TEXT PRIMARY KEY DEFAULT 'default',
-      config_json JSONB NOT NULL DEFAULT '{}'::jsonb,
-      updated_at TIMESTAMPTZ NOT NULL,
-      updated_by_user_id TEXT NULL
-    );
-  `);
+  await withAiGatewayPostgresRetry('aiGatewayOpsControl.ensure', async () => {
+    await ensurePostgres();
+    await getPool().query(`
+      CREATE TABLE IF NOT EXISTS ai_gateway_ops_control (
+        id TEXT PRIMARY KEY DEFAULT 'default',
+        config_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+        updated_at TIMESTAMPTZ NOT NULL,
+        updated_by_user_id TEXT NULL
+      );
+    `);
+  });
   storeReady = true;
 }

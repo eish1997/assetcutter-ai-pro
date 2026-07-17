@@ -6,6 +6,7 @@ import {
 } from '../credit-store.js';
 import { getPool, readDb, USE_POSTGRES, writeDb } from '../auth-store.js';
 import { listUsageEventsByCorrelationId } from '../usage-billing-store.js';
+import { withAiGatewayPostgresRetry } from './postgres-transient-retry.js';
 
 const TERMINAL_STATUSES = new Set(['succeeded', 'failed', 'cancelled']);
 
@@ -96,10 +97,12 @@ export async function settleAiGatewayJobCredits(plan) {
 
   if (job.status === 'succeeded') {
     const actual = await resolveSettlementCredits(plan, estimatedCredits);
-    const result = await consumeAiGatewayReserve(userId, reserveKey, actual.credits, {
-      jobId: job.id,
-      usageEventId: actual.usageEventId || job.id,
-    });
+    const result = await withAiGatewayPostgresRetry('aiGatewaySettlement.consumeReserve', () =>
+      consumeAiGatewayReserve(userId, reserveKey, actual.credits, {
+        jobId: job.id,
+        usageEventId: actual.usageEventId || job.id,
+      })
+    );
     return {
       settled: true,
       action: 'charged',
@@ -113,7 +116,9 @@ export async function settleAiGatewayJobCredits(plan) {
     };
   }
 
-  const result = await releaseCreditReserve(userId, reserveKey, { fullVoid: true });
+  const result = await withAiGatewayPostgresRetry('aiGatewaySettlement.releaseReserve', () =>
+    releaseCreditReserve(userId, reserveKey, { fullVoid: true })
+  );
   return { settled: true, action: 'released', reserveKey, result };
 }
 

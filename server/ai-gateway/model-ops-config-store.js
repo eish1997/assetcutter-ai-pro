@@ -2,6 +2,7 @@ import fs from 'fs';
 import fsPromises from 'fs/promises';
 import path from 'path';
 import { USE_POSTGRES, ensurePostgres, getPool } from '../auth-store.js';
+import { withAiGatewayPostgresRetry } from './postgres-transient-retry.js';
 
 const DEFAULT_CONFIG = Object.freeze({
   version: 1,
@@ -144,11 +145,13 @@ export function readModelOpsConfigSync() {
 
 export async function readModelOpsConfig() {
   if (resolveModelOpsConfigSource() === 'db') {
-    await ensureModelOpsConfigStore();
-    const res = await getPool().query(
-      'SELECT config_json, updated_at, updated_by_user_id FROM model_ops_config WHERE id = $1 LIMIT 1',
-      [CONFIG_ROW_ID]
-    );
+    const res = await withAiGatewayPostgresRetry('modelOpsConfig.read', async () => {
+      await ensureModelOpsConfigStore();
+      return getPool().query(
+        'SELECT config_json, updated_at, updated_by_user_id FROM model_ops_config WHERE id = $1 LIMIT 1',
+        [CONFIG_ROW_ID]
+      );
+    });
     if (!res.rows[0]) return withMeta(DEFAULT_CONFIG, { source: 'db' });
     const row = res.rows[0];
     const rawConfig = typeof row.config_json === 'object' ? row.config_json : JSON.parse(String(row.config_json || '{}'));
@@ -169,16 +172,18 @@ export async function writeModelOpsConfig(input, { updatedByUserId = null } = {}
     updatedByUserId: nonEmptyString(updatedByUserId) || null,
   };
   if (resolveModelOpsConfigSource() === 'db') {
-    await ensureModelOpsConfigStore();
-    await getPool().query(
-      `INSERT INTO model_ops_config (id, config_json, updated_at, updated_by_user_id)
-       VALUES ($1, $2::jsonb, $3, $4)
-       ON CONFLICT (id) DO UPDATE SET
-         config_json = EXCLUDED.config_json,
-         updated_at = EXCLUDED.updated_at,
-         updated_by_user_id = EXCLUDED.updated_by_user_id`,
-      [CONFIG_ROW_ID, JSON.stringify(config), payload.updatedAt, payload.updatedByUserId]
-    );
+    await withAiGatewayPostgresRetry('modelOpsConfig.write', async () => {
+      await ensureModelOpsConfigStore();
+      await getPool().query(
+        `INSERT INTO model_ops_config (id, config_json, updated_at, updated_by_user_id)
+         VALUES ($1, $2::jsonb, $3, $4)
+         ON CONFLICT (id) DO UPDATE SET
+           config_json = EXCLUDED.config_json,
+           updated_at = EXCLUDED.updated_at,
+           updated_by_user_id = EXCLUDED.updated_by_user_id`,
+        [CONFIG_ROW_ID, JSON.stringify(config), payload.updatedAt, payload.updatedByUserId]
+      );
+    });
     return withMeta(config, { ...payload, source: 'db' });
   }
   const filePath = modelOpsConfigDiskPath();
@@ -196,14 +201,16 @@ export async function ensureModelOpsConfigStore() {
     storeReadySource = source;
     return;
   }
-  await ensurePostgres();
-  await getPool().query(`
-    CREATE TABLE IF NOT EXISTS model_ops_config (
-      id TEXT PRIMARY KEY DEFAULT 'default',
-      config_json JSONB NOT NULL DEFAULT '{}'::jsonb,
-      updated_at TIMESTAMPTZ NOT NULL,
-      updated_by_user_id TEXT NULL
-    );
-  `);
+  await withAiGatewayPostgresRetry('modelOpsConfig.ensure', async () => {
+    await ensurePostgres();
+    await getPool().query(`
+      CREATE TABLE IF NOT EXISTS model_ops_config (
+        id TEXT PRIMARY KEY DEFAULT 'default',
+        config_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+        updated_at TIMESTAMPTZ NOT NULL,
+        updated_by_user_id TEXT NULL
+      );
+    `);
+  });
   storeReadySource = source;
 }

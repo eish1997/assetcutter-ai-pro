@@ -3027,9 +3027,14 @@ const server = http.createServer(async (req, res) => {
     if (path === '/api/ai/jobs' && req.method === 'GET') {
       const user = await requireAuth(req, res);
       if (!user) return;
-      const u = new URL(req.url || '/', 'http://local');
-      const result = await listAuthAiGatewayJobs(user, { limit: u.searchParams.get('limit') || 20 });
-      json(res, result.status, result.body);
+      try {
+        const u = new URL(req.url || '/', 'http://local');
+        const result = await listAuthAiGatewayJobs(user, { limit: u.searchParams.get('limit') || 20 });
+        json(res, result.status, result.body);
+      } catch (error) {
+        const mapped = mapAuthAiGatewayError(error);
+        json(res, mapped.status, mapped.body);
+      }
       return;
     }
 
@@ -3041,8 +3046,13 @@ const server = http.createServer(async (req, res) => {
         json(res, 400, { error: '缺少 jobId' });
         return;
       }
-      const result = await getAuthAiGatewayJob(jobId, user);
-      json(res, result.status, result.body);
+      try {
+        const result = await getAuthAiGatewayJob(jobId, user);
+        json(res, result.status, result.body);
+      } catch (error) {
+        const mapped = mapAuthAiGatewayError(error);
+        json(res, mapped.status, mapped.body);
+      }
       return;
     }
 

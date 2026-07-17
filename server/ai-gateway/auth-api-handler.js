@@ -9,6 +9,7 @@ import { readAiGatewayOpsControlConfig } from './ops-control.js';
 import { readModelOpsConfig } from './model-ops-config-store.js';
 import { validateAiGatewayModelPublication } from './model-publication-guard.js';
 import { validateAiGatewayModelRouteExecutable } from './model-route-guard.js';
+import { aiGatewayTransientPostgresBody, isTransientPostgresError } from './postgres-transient-retry.js';
 
 const DEFAULT_LIST_LIMIT = 20;
 const MAX_LIST_LIMIT = 100;
@@ -86,6 +87,9 @@ export function publicAuthAiJobDetail(plan) {
 }
 
 export function mapAuthAiGatewayError(err) {
+  if (isTransientPostgresError(err)) {
+    return { status: 503, body: aiGatewayTransientPostgresBody() };
+  }
   if (err instanceof AiGatewayValidationError) {
     const body = { error: err.code, message: err.message };
     if (err.details && typeof err.details === 'object') body.details = err.details;

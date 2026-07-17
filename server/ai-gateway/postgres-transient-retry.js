@@ -1,6 +1,6 @@
 import { resetPostgresPool } from '../auth-store.js';
 
-function isTransientPostgresError(err) {
+export function isTransientPostgresError(err) {
   const code = String(err?.code || '').trim();
   const msg = String(err?.message || err || '');
   return (
@@ -32,7 +32,7 @@ function retryDelayMs(attempt) {
 }
 
 export async function withAiGatewayPostgresRetry(label, fn, options = {}) {
-  const attempts = Math.max(1, Number(options.attempts || process.env.AI_GATEWAY_PG_RETRY_ATTEMPTS || 7));
+  const attempts = Math.max(1, Number(options.attempts || process.env.AI_GATEWAY_PG_RETRY_ATTEMPTS || 10));
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     try {
       return await fn();
@@ -49,3 +49,10 @@ export async function withAiGatewayPostgresRetry(label, fn, options = {}) {
   return fn();
 }
 
+export function aiGatewayTransientPostgresBody() {
+  return {
+    error: 'AI_GATEWAY_TEMPORARILY_UNAVAILABLE',
+    code: 'AI_GATEWAY_TEMPORARILY_UNAVAILABLE',
+    message: 'AI Gateway 数据库短暂恢复中，请稍后单次重试。',
+  };
+}

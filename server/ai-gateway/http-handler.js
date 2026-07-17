@@ -9,6 +9,7 @@ import { readModelOpsConfig } from './model-ops-config-store.js';
 import { readAiGatewayOpsControlConfig } from './ops-control.js';
 import { validateAiGatewayModelPublication } from './model-publication-guard.js';
 import { validateAiGatewayModelRouteExecutable } from './model-route-guard.js';
+import { aiGatewayTransientPostgresBody, isTransientPostgresError } from './postgres-transient-retry.js';
 
 export const AI_GATEWAY_JOBS_PATH = '/ai-gateway/jobs';
 const DEFAULT_LIST_LIMIT = 20;
@@ -90,6 +91,9 @@ function publicJobSummary(plan) {
 }
 
 function mapGatewayError(err) {
+  if (isTransientPostgresError(err)) {
+    return { status: 503, body: aiGatewayTransientPostgresBody() };
+  }
   if (err instanceof AiGatewayValidationError) {
     const body = { error: err.code, message: err.message };
     if (err.details && typeof err.details === 'object') body.details = err.details;
@@ -215,21 +219,31 @@ export async function handleAiGatewayRequest(req, res, options = {}) {
   }
 
   if (path === AI_GATEWAY_JOBS_PATH && req.method === 'GET') {
-    const url = new URL(req.url || '/', 'http://localhost');
-    const limit = clampListLimit(url.searchParams.get('limit'));
-    const plans = typeof store.list === 'function' ? await store.list({ limit }) : [];
-    sendJson(res, 200, { items: plans.map(publicJobSummary), limit });
+    try {
+      const url = new URL(req.url || '/', 'http://localhost');
+      const limit = clampListLimit(url.searchParams.get('limit'));
+      const plans = typeof store.list === 'function' ? await store.list({ limit }) : [];
+      sendJson(res, 200, { items: plans.map(publicJobSummary), limit });
+    } catch (err) {
+      const mapped = mapGatewayError(err);
+      sendJson(res, mapped.status, mapped.body);
+    }
     return true;
   }
 
   if (path.startsWith(`${AI_GATEWAY_JOBS_PATH}/`) && req.method === 'GET') {
-    const id = decodeURIComponent(path.slice(`${AI_GATEWAY_JOBS_PATH}/`.length));
-    const plan = await store.get(id);
-    if (!plan) {
-      sendJson(res, 404, { error: 'AI_GATEWAY_JOB_NOT_FOUND', message: 'Job not found or expired' });
-      return true;
+    try {
+      const id = decodeURIComponent(path.slice(`${AI_GATEWAY_JOBS_PATH}/`.length));
+      const plan = await store.get(id);
+      if (!plan) {
+        sendJson(res, 404, { error: 'AI_GATEWAY_JOB_NOT_FOUND', message: 'Job not found or expired' });
+        return true;
+      }
+      sendJson(res, 200, publicJobPlan(plan));
+    } catch (err) {
+      const mapped = mapGatewayError(err);
+      sendJson(res, mapped.status, mapped.body);
     }
-    sendJson(res, 200, publicJobPlan(plan));
     return true;
   }
 

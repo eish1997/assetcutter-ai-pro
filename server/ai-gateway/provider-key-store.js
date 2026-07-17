@@ -4,6 +4,7 @@ import path from 'path';
 import crypto from 'crypto';
 import { fetch as undiciFetch } from 'undici';
 import { USE_POSTGRES, ensurePostgres, getPool } from '../auth-store.js';
+import { withAiGatewayPostgresRetry } from './postgres-transient-retry.js';
 
 const DEFAULT_PROVIDER = 'tripo';
 const RETRYABLE_STATUS_RE = /\b(429|500|502|503|504|529)\b|too many requests|rate limit|timeout|econnreset|econnrefused|fetch failed|temporarily unavailable/i;
@@ -420,52 +421,56 @@ export async function ensureProviderKeyStore() {
     storeReady = true;
     return;
   }
-  await ensurePostgres();
-  await getPool().query(`
-    CREATE TABLE IF NOT EXISTS ai_gateway_provider_keys (
-      id TEXT PRIMARY KEY,
-      provider TEXT NOT NULL,
-      label TEXT NOT NULL,
-      secret TEXT NOT NULL,
-      credentials JSONB NOT NULL DEFAULT '{}'::jsonb,
-      enabled BOOLEAN NOT NULL DEFAULT TRUE,
-      priority INTEGER NOT NULL DEFAULT 100,
-      rpm INTEGER NOT NULL DEFAULT 0,
-      updated_at TIMESTAMPTZ NOT NULL,
-      updated_by_user_id TEXT NULL
-    );
-  `);
-  await getPool().query(`CREATE INDEX IF NOT EXISTS idx_ai_gateway_provider_keys_provider ON ai_gateway_provider_keys(provider, enabled, priority);`);
-  await getPool().query(`
-    CREATE TABLE IF NOT EXISTS ai_gateway_provider_key_events (
-      id TEXT PRIMARY KEY,
-      provider_key_id TEXT NOT NULL,
-      provider TEXT NULL,
-      label TEXT NULL,
-      type TEXT NOT NULL,
-      status INTEGER NULL,
-      message TEXT NULL,
-      reason TEXT NULL,
-      retryable BOOLEAN NOT NULL DEFAULT FALSE,
-      cooldown_until TIMESTAMPTZ NULL,
-      consecutive_error_count INTEGER NULL,
-      auto_cooldown_count INTEGER NULL,
-      created_at TIMESTAMPTZ NOT NULL
-    );
-  `);
-  await getPool().query(`CREATE INDEX IF NOT EXISTS idx_ai_gateway_provider_key_events_key_created ON ai_gateway_provider_key_events(provider_key_id, created_at DESC);`);
-  await getPool().query(`CREATE INDEX IF NOT EXISTS idx_ai_gateway_provider_key_events_provider_created ON ai_gateway_provider_key_events(provider, created_at DESC);`);
+  await withAiGatewayPostgresRetry('providerKeyStore.ensure', async () => {
+    await ensurePostgres();
+    await getPool().query(`
+      CREATE TABLE IF NOT EXISTS ai_gateway_provider_keys (
+        id TEXT PRIMARY KEY,
+        provider TEXT NOT NULL,
+        label TEXT NOT NULL,
+        secret TEXT NOT NULL,
+        credentials JSONB NOT NULL DEFAULT '{}'::jsonb,
+        enabled BOOLEAN NOT NULL DEFAULT TRUE,
+        priority INTEGER NOT NULL DEFAULT 100,
+        rpm INTEGER NOT NULL DEFAULT 0,
+        updated_at TIMESTAMPTZ NOT NULL,
+        updated_by_user_id TEXT NULL
+      );
+    `);
+    await getPool().query(`CREATE INDEX IF NOT EXISTS idx_ai_gateway_provider_keys_provider ON ai_gateway_provider_keys(provider, enabled, priority);`);
+    await getPool().query(`
+      CREATE TABLE IF NOT EXISTS ai_gateway_provider_key_events (
+        id TEXT PRIMARY KEY,
+        provider_key_id TEXT NOT NULL,
+        provider TEXT NULL,
+        label TEXT NULL,
+        type TEXT NOT NULL,
+        status INTEGER NULL,
+        message TEXT NULL,
+        reason TEXT NULL,
+        retryable BOOLEAN NOT NULL DEFAULT FALSE,
+        cooldown_until TIMESTAMPTZ NULL,
+        consecutive_error_count INTEGER NULL,
+        auto_cooldown_count INTEGER NULL,
+        created_at TIMESTAMPTZ NOT NULL
+      );
+    `);
+    await getPool().query(`CREATE INDEX IF NOT EXISTS idx_ai_gateway_provider_key_events_key_created ON ai_gateway_provider_key_events(provider_key_id, created_at DESC);`);
+    await getPool().query(`CREATE INDEX IF NOT EXISTS idx_ai_gateway_provider_key_events_provider_created ON ai_gateway_provider_key_events(provider, created_at DESC);`);
+  });
   storeReady = true;
 }
 
 async function readDbRows() {
   await ensureProviderKeyStore();
-  await getPool().query(`ALTER TABLE ai_gateway_provider_keys ADD COLUMN IF NOT EXISTS credentials JSONB NOT NULL DEFAULT '{}'::jsonb;`);
-  const res = await getPool().query(
-    `SELECT id, provider, label, secret, credentials, enabled, priority, rpm, updated_at, updated_by_user_id
-     FROM ai_gateway_provider_keys
-     ORDER BY priority ASC, label ASC`
-  );
+  const res = await withAiGatewayPostgresRetry('providerKeyStore.readRows', async () => {
+    await getPool().query(`ALTER TABLE ai_gateway_provider_keys ADD COLUMN IF NOT EXISTS credentials JSONB NOT NULL DEFAULT '{}'::jsonb;`);
+    return getPool().query(
+      `SELECT id, provider, label, secret, credentials, enabled, priority, rpm, updated_at, updated_by_user_id
+       FROM ai_gateway_provider_keys
+       ORDER BY priority ASC, label ASC`
+    );
+  });
   return res.rows.map((row) => normalizeProviderKeyRow({
     id: row.id,
     provider: row.provider,
@@ -482,40 +487,42 @@ async function readDbRows() {
 
 async function writeDbRows(rows, updatedByUserId = null) {
   await ensureProviderKeyStore();
-  const p = getPool();
   const now = new Date().toISOString();
   const next = normalizeKeyList(rows).map((row) => ({
     ...row,
     updatedAt: now,
     updatedByUserId: nonEmptyString(updatedByUserId) || row.updatedByUserId || null,
   }));
-  await p.query('BEGIN');
-  try {
-    await p.query('DELETE FROM ai_gateway_provider_keys');
-    for (const row of next) {
-      await p.query(
-        `INSERT INTO ai_gateway_provider_keys
-         (id, provider, label, secret, credentials, enabled, priority, rpm, updated_at, updated_by_user_id)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
-        [
-          row.id,
-          row.provider,
-          row.label,
-          row.secret,
-          JSON.stringify(row.credentials || {}),
-          row.enabled !== false,
-          row.priority,
-          row.rpm || 0,
-          row.updatedAt,
-          row.updatedByUserId,
-        ]
-      );
+  await withAiGatewayPostgresRetry('providerKeyStore.writeRows', async () => {
+    const p = getPool();
+    await p.query('BEGIN');
+    try {
+      await p.query('DELETE FROM ai_gateway_provider_keys');
+      for (const row of next) {
+        await p.query(
+          `INSERT INTO ai_gateway_provider_keys
+           (id, provider, label, secret, credentials, enabled, priority, rpm, updated_at, updated_by_user_id)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+          [
+            row.id,
+            row.provider,
+            row.label,
+            row.secret,
+            JSON.stringify(row.credentials || {}),
+            row.enabled !== false,
+            row.priority,
+            row.rpm || 0,
+            row.updatedAt,
+            row.updatedByUserId,
+          ]
+        );
+      }
+      await p.query('COMMIT');
+    } catch (err) {
+      await p.query('ROLLBACK').catch(() => {});
+      throw err;
     }
-    await p.query('COMMIT');
-  } catch (err) {
-    await p.query('ROLLBACK');
-    throw err;
-  }
+  });
   return next;
 }
 
@@ -630,25 +637,27 @@ function appendDiskEvent(event) {
 async function appendDbEvent(event) {
   await ensureProviderKeyStore();
   const e = publicEvent(event);
-  await getPool().query(
-    `INSERT INTO ai_gateway_provider_key_events
-     (id, provider_key_id, provider, label, type, status, message, reason, retryable, cooldown_until, consecutive_error_count, auto_cooldown_count, created_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
-    [
-      e.id,
-      e.providerKeyId,
-      e.provider,
-      e.label,
-      e.type,
-      e.status,
-      e.message,
-      e.reason,
-      e.retryable,
-      e.cooldownUntil,
-      e.consecutiveErrorCount,
-      e.autoCooldownCount,
-      e.createdAt,
-    ]
+  await withAiGatewayPostgresRetry('providerKeyStore.appendEvent', () =>
+    getPool().query(
+      `INSERT INTO ai_gateway_provider_key_events
+       (id, provider_key_id, provider, label, type, status, message, reason, retryable, cooldown_until, consecutive_error_count, auto_cooldown_count, created_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+      [
+        e.id,
+        e.providerKeyId,
+        e.provider,
+        e.label,
+        e.type,
+        e.status,
+        e.message,
+        e.reason,
+        e.retryable,
+        e.cooldownUntil,
+        e.consecutiveErrorCount,
+        e.autoCooldownCount,
+        e.createdAt,
+      ]
+    )
   );
 }
 

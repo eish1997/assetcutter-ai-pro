@@ -4,6 +4,7 @@ import {
   isAiWorkerProxyCreditsGateEnabled,
 } from '../ai-worker-proxy-credits-gate.js';
 import { CREDITS_EXCEEDED_CODE, CreditsExceededError, isCreditsBillingEnabled, reserveCredits } from '../credit-store.js';
+import { withAiGatewayPostgresRetry } from './postgres-transient-retry.js';
 
 const CHECK_MODES = new Set(['check', 'precheck', 'on', 'true', '1']);
 const RESERVE_MODES = new Set(['reserve', 'reserved']);
@@ -57,7 +58,9 @@ export async function evaluateAiGatewayCreditsGate(req, input, options = {}) {
     }
     try {
       const key = reserveKey || `aijob:${input?.id || input?.correlationId || cryptoSafeRandomId()}`.slice(0, 200);
-      const reserve = await reserveCredits(userId, estimatedCredits, { idempotencyKey: key });
+      const reserve = await withAiGatewayPostgresRetry('aiGatewayCredits.reserveCredits', () =>
+        reserveCredits(userId, estimatedCredits, { idempotencyKey: key })
+      );
       metadata.creditsGate.reserveKey = reserve.reserveKey;
       metadata.creditsGate.checked = true;
       metadata.creditsGate.reserved = true;
