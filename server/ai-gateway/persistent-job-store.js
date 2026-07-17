@@ -1,5 +1,6 @@
 import { readDb, writeDb, USE_POSTGRES, getPool, ensurePostgres } from '../auth-store.js';
 import { applyAiJobStatusPatch } from './job.js';
+import { withAiGatewayPostgresRetry } from './postgres-transient-retry.js';
 
 const MAX_JSON_JOBS = 10000;
 const DEFAULT_LIST_LIMIT = 20;
@@ -155,38 +156,40 @@ function planToJsonRow(plan) {
 
 export async function ensureAiGatewayJobsStore() {
   if (!USE_POSTGRES) return;
-  await ensurePostgres();
-  const p = getPool();
-  await p.query(`
-    CREATE TABLE IF NOT EXISTS ai_gateway_jobs (
-      id TEXT PRIMARY KEY,
-      user_id TEXT NULL REFERENCES users(id) ON DELETE SET NULL,
-      status TEXT NOT NULL,
-      modality TEXT NOT NULL,
-      capability TEXT NOT NULL,
-      provider TEXT NULL,
-      model TEXT NULL,
-      correlation_id TEXT NOT NULL,
-      input_json JSONB NOT NULL DEFAULT '{}'::jsonb,
-      metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb,
-      route_json JSONB NOT NULL DEFAULT '{}'::jsonb,
-      adapter_request_json JSONB NOT NULL DEFAULT '{}'::jsonb,
-      output_json JSONB NULL,
-      artifacts_json JSONB NULL,
-      error_json JSONB NULL,
-      created_at TIMESTAMPTZ NOT NULL,
-      updated_at TIMESTAMPTZ NOT NULL,
-      started_at TIMESTAMPTZ NULL,
-      finished_at TIMESTAMPTZ NULL
-    );
-  `);
-  await p.query(`ALTER TABLE ai_gateway_jobs ADD COLUMN IF NOT EXISTS output_json JSONB NULL;`);
-  await p.query(`ALTER TABLE ai_gateway_jobs ADD COLUMN IF NOT EXISTS artifacts_json JSONB NULL;`);
-  await p.query(`ALTER TABLE ai_gateway_jobs ADD COLUMN IF NOT EXISTS started_at TIMESTAMPTZ NULL;`);
-  await p.query(`ALTER TABLE ai_gateway_jobs ADD COLUMN IF NOT EXISTS finished_at TIMESTAMPTZ NULL;`);
-  await p.query(`CREATE INDEX IF NOT EXISTS idx_ai_gateway_jobs_user_created ON ai_gateway_jobs(user_id, created_at DESC);`);
-  await p.query(`CREATE INDEX IF NOT EXISTS idx_ai_gateway_jobs_status_updated ON ai_gateway_jobs(status, updated_at DESC);`);
-  await p.query(`CREATE INDEX IF NOT EXISTS idx_ai_gateway_jobs_correlation ON ai_gateway_jobs(correlation_id);`);
+  await withAiGatewayPostgresRetry('ensureAiGatewayJobsStore', async () => {
+    await ensurePostgres();
+    const p = getPool();
+    await p.query(`
+      CREATE TABLE IF NOT EXISTS ai_gateway_jobs (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NULL REFERENCES users(id) ON DELETE SET NULL,
+        status TEXT NOT NULL,
+        modality TEXT NOT NULL,
+        capability TEXT NOT NULL,
+        provider TEXT NULL,
+        model TEXT NULL,
+        correlation_id TEXT NOT NULL,
+        input_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+        metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+        route_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+        adapter_request_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+        output_json JSONB NULL,
+        artifacts_json JSONB NULL,
+        error_json JSONB NULL,
+        created_at TIMESTAMPTZ NOT NULL,
+        updated_at TIMESTAMPTZ NOT NULL,
+        started_at TIMESTAMPTZ NULL,
+        finished_at TIMESTAMPTZ NULL
+      );
+    `);
+    await p.query(`ALTER TABLE ai_gateway_jobs ADD COLUMN IF NOT EXISTS output_json JSONB NULL;`);
+    await p.query(`ALTER TABLE ai_gateway_jobs ADD COLUMN IF NOT EXISTS artifacts_json JSONB NULL;`);
+    await p.query(`ALTER TABLE ai_gateway_jobs ADD COLUMN IF NOT EXISTS started_at TIMESTAMPTZ NULL;`);
+    await p.query(`ALTER TABLE ai_gateway_jobs ADD COLUMN IF NOT EXISTS finished_at TIMESTAMPTZ NULL;`);
+    await p.query(`CREATE INDEX IF NOT EXISTS idx_ai_gateway_jobs_user_created ON ai_gateway_jobs(user_id, created_at DESC);`);
+    await p.query(`CREATE INDEX IF NOT EXISTS idx_ai_gateway_jobs_status_updated ON ai_gateway_jobs(status, updated_at DESC);`);
+    await p.query(`CREATE INDEX IF NOT EXISTS idx_ai_gateway_jobs_correlation ON ai_gateway_jobs(correlation_id);`);
+  });
 }
 
 export function createPersistentAiJobStore() {
@@ -194,7 +197,7 @@ export function createPersistentAiJobStore() {
     async put(plan) {
       if (USE_POSTGRES) {
         await ensureAiGatewayJobsStore();
-        await getPool().query(
+        await withAiGatewayPostgresRetry('aiGatewayJobs.put', () => getPool().query(
           `INSERT INTO ai_gateway_jobs
            (id, user_id, status, modality, capability, provider, model, correlation_id,
             input_json, metadata_json, route_json, adapter_request_json, output_json, artifacts_json,
@@ -239,7 +242,7 @@ export function createPersistentAiJobStore() {
             plan.job.startedAt || null,
             plan.job.finishedAt || null,
           ]
-        );
+        ));
         return plan;
       }
 
@@ -259,7 +262,9 @@ export function createPersistentAiJobStore() {
       if (!key) return null;
       if (USE_POSTGRES) {
         await ensureAiGatewayJobsStore();
-        const res = await getPool().query('SELECT * FROM ai_gateway_jobs WHERE id = $1 LIMIT 1', [key]);
+        const res = await withAiGatewayPostgresRetry('aiGatewayJobs.get', () =>
+          getPool().query('SELECT * FROM ai_gateway_jobs WHERE id = $1 LIMIT 1', [key])
+        );
         return res.rows[0] ? rowToPlan(res.rows[0]) : null;
       }
 
@@ -310,13 +315,13 @@ export function createPersistentAiJobStore() {
           )`);
         }
         values.push(limit);
-        const res = await getPool().query(
+        const res = await withAiGatewayPostgresRetry('aiGatewayJobs.list', () => getPool().query(
           `SELECT * FROM ai_gateway_jobs
            ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
            ORDER BY created_at DESC
            LIMIT $${values.length}`,
           values
-        );
+        ));
         return res.rows.map(rowToPlan);
       }
 

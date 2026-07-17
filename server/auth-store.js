@@ -54,6 +54,17 @@ function getPool() {
   return pool;
 }
 
+function resetPostgresPool() {
+  const p = pool;
+  pool = null;
+  pgReady = false;
+  if (p) {
+    void p.end().catch((err) => {
+      console.warn('[auth-store] postgres pool close failed:', postgresErrorSummary(err));
+    });
+  }
+}
+
 async function ensurePostgres() {
   if (!USE_POSTGRES || pgReady) return;
   const p = getPool();
@@ -992,4 +1003,4 @@ export async function initAuthStore() {
 }
 
 /** @internal RBAC JSON/Postgres helpers */
-export { readDb, writeDb, USE_POSTGRES, getPool, ensurePostgres };
+export { readDb, writeDb, USE_POSTGRES, getPool, ensurePostgres, resetPostgresPool };
