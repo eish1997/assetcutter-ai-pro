@@ -5,6 +5,8 @@ import { withAiGatewayPostgresRetry } from './postgres-transient-retry.js';
 const MAX_JSON_JOBS = 10000;
 const DEFAULT_LIST_LIMIT = 20;
 const MAX_LIST_LIMIT = 100;
+const MAX_STORED_TEXT_CHARS = 20000;
+const MAX_STORED_JSON_CHARS = 120000;
 
 function clampListLimit(value, maxLimit = MAX_LIST_LIMIT) {
   const max = Math.max(1, Math.min(5000, Math.floor(Number(maxLimit) || MAX_LIST_LIMIT)));
@@ -97,13 +99,33 @@ function rowToPlan(row) {
   };
 }
 
-function sanitizeAiGatewayJobInput(value) {
+function redactStoredText(value, reason = 'large_text') {
+  const text = String(value || '');
+  return `[REDACTED_${reason.toUpperCase()}:${text.length} chars]`;
+}
+
+function isLikelyInlineMediaString(value) {
+  if (typeof value !== 'string') return false;
+  if (/^data:(image|video|audio|model|application)\//i.test(value)) return true;
+  if (value.length < 8000) return false;
+  return /^[A-Za-z0-9+/=\r\n]+$/.test(value.slice(0, 2000));
+}
+
+function sanitizeStoredAiGatewayJson(value) {
+  if (typeof value === 'string') {
+    if (isLikelyInlineMediaString(value)) return redactStoredText(value, 'media');
+    return value.length > MAX_STORED_TEXT_CHARS ? redactStoredText(value, 'large_text') : value;
+  }
   if (value == null || typeof value !== 'object') return value;
-  if (Array.isArray(value)) return value.map(sanitizeAiGatewayJobInput);
+  if (Array.isArray(value)) return value.map(sanitizeStoredAiGatewayJson);
   const out = {};
   for (const [key, raw] of Object.entries(value)) {
-    if (/base64|dataurl|imageBase64DataUrl/i.test(key) && typeof raw === 'string') {
-      out[key] = raw ? `[REDACTED_MEDIA:${raw.length} chars]` : '';
+    if (typeof raw === 'string') {
+      if (/base64|dataurl|imageBase64DataUrl|inlineData|bytes/i.test(key) || isLikelyInlineMediaString(raw)) {
+        out[key] = raw ? redactStoredText(raw, 'media') : '';
+        continue;
+      }
+      out[key] = raw.length > MAX_STORED_TEXT_CHARS ? redactStoredText(raw, 'large_text') : raw;
       continue;
     }
     if (key === 'multiviewImageBase64DataUrls' && raw && typeof raw === 'object') {
@@ -111,13 +133,13 @@ function sanitizeAiGatewayJobInput(value) {
         Object.entries(raw).map(([slot, slotValue]) => [
           slot,
           typeof slotValue === 'string' && slotValue
-            ? `[REDACTED_MEDIA:${slotValue.length} chars]`
+            ? redactStoredText(slotValue, 'media')
             : slotValue,
         ])
       );
       continue;
     }
-    out[key] = sanitizeAiGatewayJobInput(raw);
+    out[key] = sanitizeStoredAiGatewayJson(raw);
   }
   return out;
 }
@@ -126,8 +148,20 @@ function sanitizeAiGatewayAdapterRequest(value) {
   if (!value || typeof value !== 'object') return value || {};
   return {
     ...value,
-    body: sanitizeAiGatewayJobInput(value.body || {}),
+    body: sanitizeStoredAiGatewayJson(value.body || {}),
   };
+}
+
+function stringifyStoredAiGatewayJson(value, fallback = null) {
+  if (value === undefined) return fallback;
+  const sanitized = sanitizeStoredAiGatewayJson(value);
+  const json = JSON.stringify(sanitized ?? {});
+  if (json.length <= MAX_STORED_JSON_CHARS) return json;
+  return JSON.stringify({
+    redacted: true,
+    reason: 'ai_gateway_job_payload_too_large',
+    originalChars: json.length,
+  });
 }
 
 function planToJsonRow(plan) {
@@ -140,12 +174,12 @@ function planToJsonRow(plan) {
     provider: plan.job.provider || null,
     model: plan.job.model || null,
     correlationId: plan.job.correlationId,
-    inputJson: JSON.stringify(sanitizeAiGatewayJobInput(plan.job.input || {})),
-    outputJson: plan.job.output === undefined ? null : JSON.stringify(plan.job.output),
-    artifactsJson: plan.job.artifacts === undefined ? null : JSON.stringify(plan.job.artifacts),
-    metadataJson: JSON.stringify(plan.job.metadata || {}),
+    inputJson: stringifyStoredAiGatewayJson(plan.job.input || {}, '{}'),
+    outputJson: stringifyStoredAiGatewayJson(plan.job.output, null),
+    artifactsJson: stringifyStoredAiGatewayJson(plan.job.artifacts, null),
+    metadataJson: stringifyStoredAiGatewayJson(plan.job.metadata || {}, '{}'),
     routeJson: JSON.stringify(plan.route || {}),
-    adapterRequestJson: JSON.stringify(sanitizeAiGatewayAdapterRequest(plan.adapterRequest || {})),
+    adapterRequestJson: stringifyStoredAiGatewayJson(sanitizeAiGatewayAdapterRequest(plan.adapterRequest || {}), '{}'),
     errorJson: plan.job.error ? JSON.stringify(plan.job.error) : null,
     createdAt: plan.job.createdAt,
     updatedAt: plan.job.updatedAt,
@@ -230,12 +264,12 @@ export function createPersistentAiJobStore() {
             plan.job.provider || null,
             plan.job.model || null,
             plan.job.correlationId,
-            JSON.stringify(sanitizeAiGatewayJobInput(plan.job.input || {})),
-            JSON.stringify(plan.job.metadata || {}),
+            stringifyStoredAiGatewayJson(plan.job.input || {}, '{}'),
+            stringifyStoredAiGatewayJson(plan.job.metadata || {}, '{}'),
             JSON.stringify(plan.route || {}),
-            JSON.stringify(sanitizeAiGatewayAdapterRequest(plan.adapterRequest || {})),
-            plan.job.output === undefined ? null : JSON.stringify(plan.job.output),
-            plan.job.artifacts === undefined ? null : JSON.stringify(plan.job.artifacts),
+            stringifyStoredAiGatewayJson(sanitizeAiGatewayAdapterRequest(plan.adapterRequest || {}), '{}'),
+            stringifyStoredAiGatewayJson(plan.job.output, null),
+            stringifyStoredAiGatewayJson(plan.job.artifacts, null),
             plan.job.error ? JSON.stringify(plan.job.error) : null,
             plan.job.createdAt,
             plan.job.updatedAt,

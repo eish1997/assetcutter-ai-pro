@@ -118,6 +118,43 @@ describe('persistent AI gateway job store', () => {
     expect(raw).toContain('[REDACTED_MEDIA:');
   });
 
+  it('redacts large inline media outputs and artifacts from persisted job records', async () => {
+    const { createAiGatewayJobPlan } = await import('../server/ai-gateway/index.js');
+    const { createPersistentAiJobStore } = await import('../server/ai-gateway/persistent-job-store.js');
+    const store = createPersistentAiJobStore();
+    const plan = createAiGatewayJobPlan({
+      id: 'aijob_persist_large_output',
+      modality: 'image',
+      model: 'gemini-3-pro-image-preview',
+      input: { contents: [{ role: 'user', parts: [{ text: 'tiny prompt' }] }] },
+    });
+
+    await store.put(plan);
+    await store.update('aijob_persist_large_output', {
+      status: 'succeeded',
+      output: {
+        image: 'data:image/png;base64,' + 'A'.repeat(10000),
+        rawImage: 'data:image/png;base64,' + 'C'.repeat(10000),
+        publicUrl: 'https://cdn.example.com/result.png',
+      },
+      artifacts: [
+        {
+          type: 'image',
+          url: 'data:image/png;base64,' + 'B'.repeat(10000),
+          previewUrl: 'https://cdn.example.com/preview.png',
+        },
+      ],
+    });
+
+    const raw = JSON.stringify(mockDb.value.aiGatewayJobs[0]);
+    expect(raw).not.toContain('A'.repeat(100));
+    expect(raw).not.toContain('B'.repeat(100));
+    expect(raw).not.toContain('C'.repeat(100));
+    expect(raw).toContain('[REDACTED_MEDIA:');
+    expect(raw).toContain('https://cdn.example.com/result.png');
+    expect(raw).toContain('https://cdn.example.com/preview.png');
+  });
+
   it('filters JSON fallback job lists by status, provider, modality, and keyword', async () => {
     const { createAiGatewayJobPlan } = await import('../server/ai-gateway/index.js');
     const { createPersistentAiJobStore } = await import('../server/ai-gateway/persistent-job-store.js');
