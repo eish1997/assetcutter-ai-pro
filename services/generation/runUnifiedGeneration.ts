@@ -5,6 +5,11 @@ import { pickBinding } from '../modelRegistry/pickBinding';
 import { proxyGateMinCreditsForJob } from '../../shared/credits';
 import { isAiTaskEnvelopeActive } from '../aiTaskEnvelope';
 import type { ChannelId } from '../modelRegistry/types';
+import { rememberAiGatewayImageResult } from '../aiGatewayImageResultRegistry';
+import {
+  dataUrlPayloadBytes,
+  normalizeDataUrlForVisionApi,
+} from '../workflowImageDataUrlCompress';
 
 export type UnifiedGenerationModality = AiJobModality;
 
@@ -123,24 +128,34 @@ function extractText(detail: AiJobDetail): string | null {
 }
 
 function extractImageUrl(detail: AiJobDetail): string | null {
+  const usable = (value: unknown): string | null => {
+    if (typeof value !== 'string') return null;
+    const s = value.trim();
+    if (!s || /^\[REDACTED_/i.test(s)) return null;
+    return s;
+  };
   const artifacts = Array.isArray(detail.job?.artifacts) ? detail.job.artifacts : [];
   for (const artifact of artifacts) {
     const obj = artifact && typeof artifact === 'object' ? artifact : {};
     if (String(obj.kind || '').toLowerCase() !== 'image') continue;
-    if (typeof obj.url === 'string' && obj.url.trim()) return obj.url.trim();
-    if (typeof obj.imageUrl === 'string' && obj.imageUrl.trim()) return obj.imageUrl.trim();
-    if (typeof obj.dataUrl === 'string' && obj.dataUrl.trim()) return obj.dataUrl.trim();
+    const url = usable(obj.url);
+    if (url) return url;
+    const imageUrl = usable(obj.imageUrl);
+    if (imageUrl) return imageUrl;
+    const dataUrl = usable(obj.dataUrl);
+    if (dataUrl) return dataUrl;
   }
   const output = detailOutput(detail);
   const outputArtifacts = Array.isArray(output.artifacts) ? output.artifacts : [];
   for (const artifact of outputArtifacts) {
     const obj = artifact && typeof artifact === 'object' ? artifact as Record<string, unknown> : {};
     if (String(obj.kind || '').toLowerCase() !== 'image') continue;
-    if (typeof obj.url === 'string' && obj.url.trim()) return obj.url.trim();
+    const url = usable(obj.url);
+    if (url) return url;
   }
   for (const key of ['imageUrl', 'image_url', 'url', 'dataUrl', 'data_url']) {
-    const value = output[key];
-    if (typeof value === 'string' && value.trim()) return value.trim();
+    const value = usable(output[key]);
+    if (value) return value;
   }
   return null;
 }
@@ -160,6 +175,20 @@ function inlineDataFromDataUrl(input: string): { mimeType: string; data: string 
 function terminalError(detail: AiJobDetail): Error {
   const msg = detail.job?.error?.message || 'AI Gateway generation job failed';
   return new Error(msg);
+}
+
+const AI_GATEWAY_IMAGE_REFERENCE_MAX_BYTES = 900 * 1024;
+
+async function normalizeImageReferenceForGateway(input: string): Promise<string> {
+  const raw = String(input || '').trim();
+  if (!raw) return raw;
+  const inline = inlineDataFromDataUrl(raw);
+  if (!inline?.data) return raw;
+  const normalized = await normalizeDataUrlForVisionApi(raw, AI_GATEWAY_IMAGE_REFERENCE_MAX_BYTES);
+  if (dataUrlPayloadBytes(normalized) > AI_GATEWAY_IMAGE_REFERENCE_MAX_BYTES) {
+    throw new Error('输入图片过大，已尝试压缩但仍超过网关请求上限；请缩小图片后重试');
+  }
+  return normalized;
 }
 
 function imageOutputDebug(detail: AiJobDetail): string {
@@ -320,7 +349,11 @@ export async function runUnifiedVisionTextGeneration(request: UnifiedVisionTextG
   if (!prompt) throw new Error('请输入要询问图片的问题');
   const model = String(request.model || '').trim();
   if (!model) throw new Error('缺少文字模型');
-  const images = (request.images || []).map((s) => String(s || '').trim()).filter(Boolean);
+  const imagesRaw = (request.images || []).map((s) => String(s || '').trim()).filter(Boolean);
+  const images: string[] = [];
+  for (const image of imagesRaw) {
+    images.push(await normalizeImageReferenceForGateway(image));
+  }
   if (images.length === 0) throw new Error('图生文需要图片');
   const parts: Array<{ text: string } | { inlineData: { mimeType: string; data: string } }> = [];
   for (const image of images) {
@@ -380,7 +413,11 @@ export async function runUnifiedImageGeneration(request: UnifiedImageGenerationR
   const registryId = String(request.registryId || request.canonicalModelId || model).trim();
   const canonicalModelId = String(request.canonicalModelId || registryId).trim();
   const upstreamModelId = String(request.upstreamModelId || model).trim();
-  const refs = (request.referenceImages || []).map((s) => String(s || '').trim()).filter(Boolean);
+  const refsRaw = (request.referenceImages || []).map((s) => String(s || '').trim()).filter(Boolean);
+  const refs: string[] = [];
+  for (const ref of refsRaw) {
+    refs.push(await normalizeImageReferenceForGateway(ref));
+  }
   const parts: Array<{ text: string } | { inlineData: { mimeType: string; data: string } }> = [{ text: prompt }];
   for (const ref of refs) {
     const inline = inlineDataFromDataUrl(ref);
@@ -416,7 +453,10 @@ export async function runUnifiedImageGeneration(request: UnifiedImageGenerationR
     abortSignal: request.abortSignal,
   });
   const immediate = extractImageUrl(created);
-  if (created.job.status === 'succeeded' && immediate != null) return immediate;
+  if (created.job.status === 'succeeded' && immediate != null) {
+    rememberAiGatewayImageResult(immediate, created.job.id);
+    return immediate;
+  }
   if (created.job.status === 'failed' || created.job.status === 'cancelled') throw terminalError(created);
 
   const timeoutMs = Math.max(30_000, Number(readEnv('VITE_AI_GATEWAY_IMAGE_POLL_TIMEOUT_MS') || 660_000));
@@ -429,7 +469,10 @@ export async function runUnifiedImageGeneration(request: UnifiedImageGenerationR
     const detail = await getMyAiJob(created.job.id);
     if (detail.job.status === 'succeeded') {
       const imageUrl = extractImageUrl(detail);
-      if (imageUrl != null) return imageUrl;
+      if (imageUrl != null) {
+        rememberAiGatewayImageResult(imageUrl, detail.job.id);
+        return imageUrl;
+      }
       missingImageOutputDetail = detail;
       if (missingImageOutputRetries < 3) {
         missingImageOutputRetries += 1;

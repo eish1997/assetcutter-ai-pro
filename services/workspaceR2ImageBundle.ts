@@ -480,7 +480,20 @@ export async function packWorkflowBundleForCloud(
         }
       }
       if (!v) return { stepId, key: null as string | null };
-      if (isLikelyHttpImageUrl(v)) return { stepId, key: null as string | null };
+      if (isLikelyHttpImageUrl(v)) {
+        const ck = String(resultsCompanionKeysMap[stepId] || '').trim();
+        if (ck && packOpts?.companionHydrate?.baseUrl?.trim() && packOpts.companionHydrate.projectId.trim()) {
+          const fromDisk = await fetchCompanionAssetAsDataUrl(
+            packOpts.companionHydrate.baseUrl,
+            packOpts.companionHydrate.projectId,
+            ck
+          );
+          if (fromDisk) v = fromDisk;
+          else return { stepId, key: null as string | null };
+        } else {
+          return { stepId, key: null as string | null };
+        }
+      }
       const key = await uploadDataUrlDeduped(
         dataUrlToKey,
         contentHashToKey,

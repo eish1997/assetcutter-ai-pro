@@ -439,6 +439,19 @@ export async function putWorkflowResultImageToCompanion(
   return { ok: true, key };
 }
 
+/** 结果图可来自 data/blob/http/R2 URL；归档前统一转成 data URL 再写入本地伴侣。 */
+export async function putWorkflowResultImageFromAnyUrl(
+  baseUrl: string,
+  projectId: string,
+  assetId: string,
+  resultKey: string,
+  imageSrc: string
+): Promise<{ ok: true; key: string } | { ok: false; error: string }> {
+  const dataUrl = await imageSrcToDataUrlForCompanion(imageSrc);
+  if (!dataUrl) return { ok: false, error: 'cannot_normalize_image_src' };
+  return putWorkflowResultImageToCompanion(baseUrl, projectId, assetId, resultKey, dataUrl);
+}
+
 function shouldStripOriginalForPersist(original: string): boolean {
   const o = String(original || '').trim();
   return o.startsWith('data:') || /^blob:/i.test(o) || /^https?:\/\//i.test(o);

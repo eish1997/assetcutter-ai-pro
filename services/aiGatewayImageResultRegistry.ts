@@ -1,6 +1,7 @@
 const MAX_RESULT_BINDINGS = 50;
 
 const imageResultJobIds = new Map<string, string>();
+const IMAGE_URL_RE = /\.(png|jpe?g|webp|gif|avif)(\?|#|$)/i;
 
 function nonEmptyString(value: unknown): string | null {
   return typeof value === 'string' && value.trim() ? value.trim() : null;
@@ -16,9 +17,14 @@ export function aiGatewayImageResultKey(imageDataUrl: string): string {
   return `${src.length}:${(hash >>> 0).toString(16)}`;
 }
 
+function isBindableImageResult(value: string): boolean {
+  const src = String(value || '').trim();
+  return /^data:image\//i.test(src) || (/^https?:\/\//i.test(src) && IMAGE_URL_RE.test(src));
+}
+
 export function rememberAiGatewayImageResult(imageDataUrl: string, jobId: unknown): void {
   const id = nonEmptyString(jobId);
-  if (!id || !String(imageDataUrl || '').startsWith('data:image/')) return;
+  if (!id || !isBindableImageResult(imageDataUrl)) return;
   const key = aiGatewayImageResultKey(imageDataUrl);
   imageResultJobIds.delete(key);
   imageResultJobIds.set(key, id);
@@ -30,7 +36,7 @@ export function rememberAiGatewayImageResult(imageDataUrl: string, jobId: unknow
 }
 
 export function consumeAiGatewayJobIdForImage(imageDataUrl: string): string | null {
-  if (!String(imageDataUrl || '').startsWith('data:image/')) return null;
+  if (!isBindableImageResult(imageDataUrl)) return null;
   const key = aiGatewayImageResultKey(imageDataUrl);
   const id = imageResultJobIds.get(key) || null;
   if (id) imageResultJobIds.delete(key);

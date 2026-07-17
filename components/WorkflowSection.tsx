@@ -554,6 +554,7 @@ import {
   putWorkflowModelFileToCompanion,
   putWorkflowOriginalImageFromAnyUrl,
   putWorkflowOriginalImageToCompanion,
+  putWorkflowResultImageFromAnyUrl,
   putWorkflowResultImageToCompanion,
   resolveCapabilityInputImageForExecute,
   shouldKeepExistingCompanionRasterUrl,
@@ -2825,13 +2826,16 @@ const WorkflowSection: React.FC<{
   );
 
   const scheduleCompanionPersistResult = useCallback(
-    (assetId: string, resultKey: string, imageDataUrl: string) => {
-      if (!parseDataUrlToBlob(imageDataUrl)) return;
+    (assetId: string, resultKey: string, imageSrc: string) => {
+      const source = String(imageSrc || '').trim();
+      if (!source) return;
       const base = String(getCompanionLocalBaseUrl() || '').trim();
       const pid = String(workspaceProjectChrome?.activeProjectId || '').trim();
       if (!base || !pid) return;
       void (async () => {
-        const put = await putWorkflowResultImageToCompanion(base, pid, assetId, resultKey, imageDataUrl);
+        const put = parseDataUrlToBlob(source)
+          ? await putWorkflowResultImageToCompanion(base, pid, assetId, resultKey, source)
+          : await putWorkflowResultImageFromAnyUrl(base, pid, assetId, resultKey, source);
         if (put.ok === false) {
           onLog?.('warn', '本地伴侣步骤结果落盘失败（画布仍在内存）', put.error);
           return;
@@ -3812,7 +3816,7 @@ ${lineSvg}
           );
         });
         const after = assetsRef.current.find((x) => x.id === task.assetId);
-        if (after && parseDataUrlToBlob(result)) {
+        if (after) {
           if (isWorkflowTextAsset(after)) {
             void loadImageIntrinsicSize(result).then((dim) => {
               if (dim) applyIntrinsicAspectToAsset(task.assetId, dim.w, dim.h);
@@ -4435,7 +4439,7 @@ ${lineSvg}
               });
               }
               const after = assetsRef.current.find((x) => x.id === task.assetId);
-              if (after && result && parseDataUrlToBlob(result)) {
+              if (after && result) {
                 if (isWorkflowTextAsset(after)) {
                   void loadImageIntrinsicSize(result).then((dim) => {
                     if (dim) applyIntrinsicAspectToAsset(task.assetId, dim.w, dim.h);
@@ -14021,7 +14025,7 @@ ${lineSvg}
                             <div className="h-full w-full">
                               <AssetSetGridCard asset={a} />
                             </div>
-                          ) : hasDisplayImage && !hasDisplayImage && isWorkflowTextAsset(a) ? (
+                          ) : !hasDisplayImage && isWorkflowTextAsset(a) ? (
                             <div className="relative w-full h-full bg-[#141416] flex flex-col justify-start p-3 text-left">
                               {a.textTitle?.trim() ? (
                                 <p className="text-[11px] font-bold text-gray-100 line-clamp-2 mb-1.5">

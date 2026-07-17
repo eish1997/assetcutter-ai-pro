@@ -2,6 +2,7 @@ import type { WorkflowAsset } from '../types';
 import type { CompanionManifestV1 } from './companionClient/storage';
 import { attachInitialVgpToNewAsset } from './vgp/vgpStore';
 import { isWorkflowStoryboardTableAsset } from './storyboardTableAsset';
+import { isWorkflowTextAsset } from './workflowTextAsset';
 import {
   imageSrcToDataUrlForCompanion,
   putWorkflowModelBlobToCompanion,

@@ -20,6 +20,14 @@ describe('aiGatewayImageResultRegistry', () => {
     expect(consumeAiGatewayJobIdForImage(image)).toBeNull();
   });
 
+  it('binds a remote image result to a gateway job id once', () => {
+    const image = 'https://files.example.com/results/aijob_1/out.png';
+    rememberAiGatewayImageResult(image, 'aijob_1');
+
+    expect(consumeAiGatewayJobIdForImage(image)).toBe('aijob_1');
+    expect(consumeAiGatewayJobIdForImage(image)).toBeNull();
+  });
+
   it('does not retain raw data urls in the lookup key', () => {
     const image = 'data:image/png;base64,' + 'x'.repeat(200);
 

@@ -63,6 +63,7 @@ function classifyUrl(url: string, mimeType?: string | null): RestorableAiJobArti
 function looksLikeRestorableUrl(value: string): boolean {
   const s = value.trim();
   if (!s) return false;
+  if (/^\[REDACTED_/i.test(s)) return false;
   if (/^data:(image|video|audio)\//i.test(s)) return true;
   if (!/^https?:\/\//i.test(s) && !s.startsWith('/')) return false;
   return IMAGE_EXT.test(s) || VIDEO_EXT.test(s) || AUDIO_EXT.test(s) || MODEL_EXT.test(s);

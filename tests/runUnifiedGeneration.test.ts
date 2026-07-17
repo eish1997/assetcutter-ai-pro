@@ -20,6 +20,10 @@ import { createAiJob, getMyAiJob } from '../services/aiJobsClient';
 import { clearLastCreditsReserveKey } from '../services/creditsProxyBridge';
 import * as settingsStore from '../services/settingsStore';
 import {
+  clearAiGatewayImageResultRegistryForTest,
+  consumeAiGatewayJobIdForImage,
+} from '../services/aiGatewayImageResultRegistry';
+import {
   runUnifiedImageGeneration,
   runUnifiedTextGeneration,
   runUnifiedVisionTextGeneration,
@@ -33,6 +37,7 @@ describe('runUnifiedGeneration', () => {
     vi.mocked(createAiJob).mockReset();
     vi.mocked(getMyAiJob).mockReset();
     vi.mocked(clearLastCreditsReserveKey).mockReset();
+    clearAiGatewayImageResultRegistryForTest();
     vi.restoreAllMocks();
     if (prevInterval === undefined) delete process.env.VITE_AI_GATEWAY_TEXT_POLL_INTERVAL_MS;
     else process.env.VITE_AI_GATEWAY_TEXT_POLL_INTERVAL_MS = prevInterval;
@@ -428,5 +433,31 @@ describe('runUnifiedGeneration', () => {
     ).resolves.toBe('data:image/png;base64,LAG');
 
     expect(getMyAiJob).toHaveBeenCalledTimes(2);
+  });
+
+  it('ignores redacted image fields and keeps the first real artifact URL', async () => {
+    vi.mocked(createAiJob).mockResolvedValue({
+      job: {
+        id: 'aijob_image_r2',
+        status: 'succeeded',
+        output: { dataUrl: '[REDACTED_MEDIA:100 chars]' },
+        artifacts: [
+          {
+            kind: 'image',
+            dataUrl: '[REDACTED_MEDIA:100 chars]',
+            url: 'https://files.example.com/public/ai-gateway-results/aijob_image_r2/out.png',
+          },
+        ],
+      },
+    } as unknown as Awaited<ReturnType<typeof createAiJob>>);
+
+    const image = await runUnifiedImageGeneration({
+      prompt: 'clean package',
+      model: 'gemini-3.1-flash-image',
+      uiSource: 'test',
+    });
+
+    expect(image).toBe('https://files.example.com/public/ai-gateway-results/aijob_image_r2/out.png');
+    expect(consumeAiGatewayJobIdForImage(image)).toBe('aijob_image_r2');
   });
 });
