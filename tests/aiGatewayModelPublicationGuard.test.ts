@@ -153,6 +153,11 @@ describe('AI gateway model publication guard', () => {
       )
     ).rejects.toMatchObject({
       code: 'AI_GATEWAY_PROVIDER_PAUSED',
+      details: {
+        providerIds: ['volcengine-ark'],
+        canonicalModelId: 'doubao-seedream-5-0',
+        modality: 'image',
+      },
     });
   });
 

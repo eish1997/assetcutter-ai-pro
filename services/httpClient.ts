@@ -29,13 +29,20 @@ function responseErrorCode(data: Record<string, unknown> & { error?: string; cod
   return undefined;
 }
 
+function pausedProviderMessage(data: Record<string, unknown>): string {
+  const details = data.details && typeof data.details === 'object' ? (data.details as Record<string, unknown>) : null;
+  const providerIds = Array.isArray(details?.providerIds)
+    ? details.providerIds.map((item) => String(item || '').trim()).filter(Boolean)
+    : [];
+  const suffix = providerIds.length ? `（${providerIds.join('、')}）` : '';
+  return `供应商通道已被运营暂停${suffix}，请在供应商中心恢复后再试，或切换到其他已发布模型。`;
+}
+
 function responseErrorMessage(
   data: Record<string, unknown> & { error?: string; code?: string; message?: string },
   code?: string
 ): string {
-  if (code === 'AI_GATEWAY_PROVIDER_PAUSED') {
-    return '供应商通道已被运营暂停，请在供应商中心恢复后再试，或切换到其他已发布模型。';
-  }
+  if (code === 'AI_GATEWAY_PROVIDER_PAUSED') return pausedProviderMessage(data);
   if (code && AI_GATEWAY_ERROR_MESSAGES[code]) return AI_GATEWAY_ERROR_MESSAGES[code];
   if (typeof data.message === 'string' && data.message.trim()) return data.message.trim();
   if (typeof data.error === 'string' && data.error.trim() && data.error.trim() !== code) return data.error.trim();

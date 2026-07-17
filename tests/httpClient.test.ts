@@ -27,6 +27,24 @@ describe('httpClient', () => {
     });
   });
 
+  it('shows the paused AI Gateway provider when the backend includes route details', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 422,
+      json: vi.fn().mockResolvedValue({
+        error: 'AI_GATEWAY_PROVIDER_PAUSED',
+        message: 'AI provider route is paused by ops control: volcengine-ark',
+        details: { providerIds: ['volcengine-ark'] },
+      }),
+    } as unknown as Response);
+
+    await expect(requestJson('/api/ai/jobs', { method: 'POST', body: '{}' })).rejects.toMatchObject({
+      status: 422,
+      code: 'AI_GATEWAY_PROVIDER_PAUSED',
+      message: '供应商通道已被运营暂停（volcengine-ark），请在供应商中心恢复后再试，或切换到其他已发布模型。',
+    });
+  });
+
   it('keeps backend messages for non-gateway errors', async () => {
     globalThis.fetch = vi.fn().mockResolvedValue({
       ok: false,

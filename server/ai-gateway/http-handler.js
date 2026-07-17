@@ -91,6 +91,8 @@ function publicJobSummary(plan) {
 
 function mapGatewayError(err) {
   if (err instanceof AiGatewayValidationError) {
+    const body = { error: err.code, message: err.message };
+    if (err.details && typeof err.details === 'object') body.details = err.details;
     if (
       err.code === 'AI_GATEWAY_MODEL_ROUTE_NOT_FOUND' ||
       err.code === 'AI_GATEWAY_MODEL_ROUTE_NOT_EXECUTABLE' ||
@@ -98,9 +100,9 @@ function mapGatewayError(err) {
       err.code === 'AI_GATEWAY_PROVIDER_PAUSED' ||
       err.code === 'AI_GATEWAY_PROVIDER_KEY_UNAVAILABLE'
     ) {
-      return { status: 422, body: { error: err.code, message: err.message } };
+      return { status: 422, body };
     }
-    return { status: 400, body: { error: err.code, message: err.message } };
+    return { status: 400, body };
   }
   if (err instanceof AiGatewayRouteError) {
     return { status: 422, body: { error: err.code, message: err.message } };

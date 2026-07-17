@@ -17,10 +17,11 @@ const MODALITY_ALIASES = new Map([
 ]);
 
 export class AiGatewayValidationError extends Error {
-  constructor(message, code = 'AI_GATEWAY_INVALID_JOB') {
+  constructor(message, code = 'AI_GATEWAY_INVALID_JOB', details = null) {
     super(message);
     this.name = 'AiGatewayValidationError';
     this.code = code;
+    if (details && typeof details === 'object') this.details = details;
   }
 }
 

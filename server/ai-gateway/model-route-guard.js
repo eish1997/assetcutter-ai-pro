@@ -68,10 +68,15 @@ export async function validateAiGatewayModelRouteExecutable(input, options = {})
       disabledProviders: [],
     });
     if (routesIgnoringPausedProviders.length > 0) {
-      const providerIds = routesIgnoringPausedProviders.map((candidate) => candidate.providerId).join(', ');
+      const providerIds = [...new Set(routesIgnoringPausedProviders.map((candidate) => candidate.providerId).filter(Boolean))];
       throw new AiGatewayValidationError(
-        `AI provider route is paused by ops control: ${providerIds}`,
-        'AI_GATEWAY_PROVIDER_PAUSED'
+        `AI provider route is paused by ops control: ${providerIds.join(', ')}`,
+        'AI_GATEWAY_PROVIDER_PAUSED',
+        {
+          providerIds,
+          canonicalModelId,
+          modality: input?.modality || null,
+        }
       );
     }
     const pending = resolveKnownPendingModelRoute(input, {
