@@ -248,7 +248,7 @@ const BIND_HOST = String(process.env.AUTH_BIND_HOST || '0.0.0.0').trim() || '0.0
 let storeReady = false;
 let storeInitPromise = null;
 let storeInitFailureMessage = '';
-const STORE_INIT_TIMEOUT_MS = Math.max(5_000, Number(process.env.AUTH_STORE_INIT_TIMEOUT_MS || 30_000));
+const STORE_INIT_TIMEOUT_MS = Math.max(5_000, Number(process.env.AUTH_STORE_INIT_TIMEOUT_MS || 75_000));
 
 function withTimeout(promise, ms, message) {
   let timer = null;
