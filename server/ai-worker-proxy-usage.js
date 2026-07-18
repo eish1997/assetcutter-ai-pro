@@ -23,6 +23,37 @@ function artifactKindForMime(mimeType) {
   return 'file';
 }
 
+function stringField(record, keys) {
+  for (const key of keys) {
+    const value = record && typeof record === 'object' ? record[key] : undefined;
+    if (typeof value === 'string' && value.trim()) return value.trim();
+  }
+  return '';
+}
+
+function mimeTypeFromRecord(record) {
+  return stringField(record, ['mimeType', 'mime_type', 'mime', 'contentType', 'content_type']);
+}
+
+function collectFileArtifacts(record, out, path) {
+  const fileData = record.fileData && typeof record.fileData === 'object' ? record.fileData : null;
+  const source = fileData || record;
+  const uri = stringField(source, ['fileUri', 'file_uri', 'url', 'uri', 'publicUrl', 'downloadUrl']);
+  if (!uri) return;
+  const mimeType = mimeTypeFromRecord(source) || mimeTypeFromRecord(record);
+  if (!mimeType || !/^(image|video)\//i.test(mimeType)) return;
+  const kind = artifactKindForMime(mimeType);
+  out.push({
+    id: `artifact_${out.length + 1}`,
+    label: `${kind} ${out.length + 1}`,
+    kind,
+    mimeType,
+    url: uri,
+    previewUrl: uri,
+    sourcePath: fileData ? `${path}.fileData` : path,
+  });
+}
+
 function collectInlineArtifacts(value, out, path = '$', depth = 0) {
   if (!value || out.length >= 20 || depth > 8) return;
   if (Array.isArray(value)) {
@@ -32,8 +63,8 @@ function collectInlineArtifacts(value, out, path = '$', depth = 0) {
   if (typeof value !== 'object') return;
   const record = value;
   const inlineData = record.inlineData && typeof record.inlineData === 'object' ? record.inlineData : record;
-  const mimeType = typeof inlineData.mimeType === 'string' ? inlineData.mimeType : '';
-  const data = typeof inlineData.data === 'string' ? inlineData.data : '';
+  const mimeType = mimeTypeFromRecord(inlineData);
+  const data = stringField(inlineData, ['data', 'base64', 'b64Json', 'b64_json']);
   if (mimeType && data && /^(image|video)\//i.test(mimeType)) {
     const kind = artifactKindForMime(mimeType);
     const url = `data:${mimeType};base64,${data}`;
@@ -49,8 +80,10 @@ function collectInlineArtifacts(value, out, path = '$', depth = 0) {
       sourcePath: record.inlineData ? `${path}.inlineData` : path,
     });
   }
+  collectFileArtifacts(record, out, path);
   for (const [key, child] of Object.entries(record)) {
     if (key === 'inlineData' && record.inlineData && typeof record.inlineData === 'object') continue;
+    if (key === 'fileData' && record.fileData && typeof record.fileData === 'object') continue;
     if (key === 'data' && typeof child === 'string' && mimeType) continue;
     collectInlineArtifacts(child, out, `${path}.${key}`, depth + 1);
   }

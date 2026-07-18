@@ -134,26 +134,61 @@ function extractImageUrl(detail: AiJobDetail): string | null {
     if (!s || /^\[REDACTED_/i.test(s)) return null;
     return s;
   };
+  const isImageLikeArtifact = (obj: Record<string, unknown>): boolean => {
+    const kind = String(obj.kind || obj.type || obj.mediaType || '').toLowerCase();
+    if (kind === 'image' || kind === 'image_asset') return true;
+    const mime = String(obj.mimeType || obj.mime || obj.contentType || '').toLowerCase();
+    return mime.startsWith('image/');
+  };
+  const imageUrlFromObject = (obj: Record<string, unknown>): string | null => {
+    for (const key of [
+      'url',
+      'imageUrl',
+      'image_url',
+      'dataUrl',
+      'data_url',
+      'publicUrl',
+      'public_url',
+      'previewUrl',
+      'preview_url',
+      'displayUrl',
+      'display_url',
+      'objectUrl',
+      'downloadUrl',
+      'fileUrl',
+      'uri',
+      'src',
+      'href',
+    ]) {
+      const value = usable(obj[key]);
+      if (value) return value;
+    }
+    const nestedImageUrl = obj.image_url && typeof obj.image_url === 'object'
+      ? usable((obj.image_url as Record<string, unknown>).url)
+      : null;
+    if (nestedImageUrl) return nestedImageUrl;
+    const fileDataUrl = obj.fileData && typeof obj.fileData === 'object'
+      ? usable((obj.fileData as Record<string, unknown>).fileUri || (obj.fileData as Record<string, unknown>).url)
+      : null;
+    if (fileDataUrl) return fileDataUrl;
+    return null;
+  };
   const artifacts = Array.isArray(detail.job?.artifacts) ? detail.job.artifacts : [];
   for (const artifact of artifacts) {
     const obj = artifact && typeof artifact === 'object' ? artifact : {};
-    if (String(obj.kind || '').toLowerCase() !== 'image') continue;
-    const url = usable(obj.url);
+    if (!isImageLikeArtifact(obj as Record<string, unknown>)) continue;
+    const url = imageUrlFromObject(obj as Record<string, unknown>);
     if (url) return url;
-    const imageUrl = usable(obj.imageUrl);
-    if (imageUrl) return imageUrl;
-    const dataUrl = usable(obj.dataUrl);
-    if (dataUrl) return dataUrl;
   }
   const output = detailOutput(detail);
   const outputArtifacts = Array.isArray(output.artifacts) ? output.artifacts : [];
   for (const artifact of outputArtifacts) {
     const obj = artifact && typeof artifact === 'object' ? artifact as Record<string, unknown> : {};
-    if (String(obj.kind || '').toLowerCase() !== 'image') continue;
-    const url = usable(obj.url);
+    if (!isImageLikeArtifact(obj)) continue;
+    const url = imageUrlFromObject(obj);
     if (url) return url;
   }
-  for (const key of ['imageUrl', 'image_url', 'url', 'dataUrl', 'data_url']) {
+  for (const key of ['imageUrl', 'image_url', 'url', 'dataUrl', 'data_url', 'publicUrl', 'previewUrl', 'displayUrl']) {
     const value = usable(output[key]);
     if (value) return value;
   }

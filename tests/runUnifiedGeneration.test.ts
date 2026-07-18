@@ -460,4 +460,30 @@ describe('runUnifiedGeneration', () => {
     expect(image).toBe('https://files.example.com/public/ai-gateway-results/aijob_image_r2/out.png');
     expect(consumeAiGatewayJobIdForImage(image)).toBe('aijob_image_r2');
   });
+
+  it('extracts image URLs from mime-typed gateway artifacts with nonstandard URL fields', async () => {
+    vi.mocked(createAiJob).mockResolvedValue({
+      job: {
+        id: 'aijob_image_public_url',
+        status: 'succeeded',
+        output: { text: '', candidates: [], usageMetadata: {} },
+        artifacts: [
+          {
+            id: 'artifact_1',
+            label: 'result',
+            mimeType: 'image/png',
+            publicUrl: 'https://files.example.com/public/ai-gateway-results/aijob_image_public_url/out.png',
+          },
+        ],
+      },
+    } as unknown as Awaited<ReturnType<typeof createAiJob>>);
+
+    await expect(
+      runUnifiedImageGeneration({
+        prompt: 'clean package',
+        model: 'gemini-3.1-flash-image',
+        uiSource: 'test',
+      })
+    ).resolves.toBe('https://files.example.com/public/ai-gateway-results/aijob_image_public_url/out.png');
+  });
 });

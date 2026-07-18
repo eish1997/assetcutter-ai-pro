@@ -94,4 +94,32 @@ describe('extractUsageMetadata', () => {
       ],
     });
   });
+
+  it('extracts mime-typed fileData artifacts from proxy results', () => {
+    const result = {
+      candidates: [
+        {
+          content: {
+            parts: [
+              {
+                fileData: {
+                  mime_type: 'image/png',
+                  fileUri: 'https://files.example.com/result.png',
+                },
+              },
+            ],
+          },
+        },
+      ],
+    };
+
+    expect(extractAiGatewayArtifactsFromProxyResult(result)).toEqual([
+      expect.objectContaining({
+        kind: 'image',
+        mimeType: 'image/png',
+        url: 'https://files.example.com/result.png',
+        previewUrl: 'https://files.example.com/result.png',
+      }),
+    ]);
+  });
 });
