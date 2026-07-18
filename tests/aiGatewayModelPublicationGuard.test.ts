@@ -43,7 +43,7 @@ describe('AI gateway model publication guard', () => {
       canonicalModelId: 'gemini-3-pro-image-preview',
       providerId: 'vertex-site',
       executionStatus: 'platform_ready',
-      platformKeyRequired: false,
+      platformKeyRequired: true,
     });
     expect(resolveExecutableModelRoute({ modality: 'model3d', model: 'tripo-p1', provider: 'tripo' })).toMatchObject({
       canonicalModelId: 'tripo-p1',
@@ -213,10 +213,14 @@ describe('AI gateway model publication guard', () => {
   });
 
   it('identifies catalog models whose backend adapters are still pending', async () => {
-    expect(resolveExecutableModelRoute({ modality: 'image', model: 'gemini-3.1-flash-image' })).toBeNull();
-    expect(resolveKnownPendingModelRoute({ modality: 'image', model: 'gemini-3.1-flash-image' })).toMatchObject({
-      canonicalModelId: 'gemini-3.1-flash-image',
+    expect(resolveExecutableModelRoute({ modality: 'image', model: 'gemini-3-pro-preview' })).toBeNull();
+    expect(resolveKnownPendingModelRoute({ modality: 'text', model: 'gemini-3-pro-preview' })).toMatchObject({
+      canonicalModelId: 'gemini-3-pro-preview',
       gatewayExecutionStatus: 'adapter_pending',
+    });
+    expect(resolveExecutableModelRoute({ modality: 'image', model: 'gemini-3.1-flash-image' })).toMatchObject({
+      canonicalModelId: 'gemini-3.1-flash-image',
+      gatewayExecutionStatus: 'gateway_ready',
     });
     expect(resolveKnownPendingModelRoute({ modality: 'video', model: 'doubao-seedance-2-0' })).toBeNull();
     expect(resolveKnownPendingModelRoute({ modality: 'model3d', model: 'doubao-seed3d-2-0' })).toBeNull();

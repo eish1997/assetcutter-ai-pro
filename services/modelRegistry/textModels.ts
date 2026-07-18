@@ -10,6 +10,11 @@ export type TextModelRegistryEntry = {
 /** 文本/理解模型注册表（最小集；与 constants 默认 id 对齐） */
 export const TEXT_MODEL_REGISTRY: readonly TextModelRegistryEntry[] = [
   { registryId: DEFAULT_MODEL_TEXT, label: "Gemini 3 Flash", family: "gemini" },
+  { registryId: "gemini-3.5-flash", label: "Gemini 3.5 Flash", family: "gemini" },
+  { registryId: "gemini-3.1-flash-lite", label: "Gemini 3.1 Flash-Lite", family: "gemini" },
+  { registryId: "gemini-2.5-pro", label: "Gemini 2.5 Pro", family: "gemini" },
+  { registryId: "gemini-2.5-flash", label: "Gemini 2.5 Flash", family: "gemini" },
+  { registryId: "gemini-2.5-flash-lite", label: "Gemini 2.5 Flash-Lite", family: "gemini" },
   { registryId: "gemini-3-pro-preview", label: "Gemini 3 Pro", family: "gemini" },
   { registryId: "gpt-4o-mini", label: "GPT-4o Mini", family: "openai" },
   { registryId: "gpt-4o", label: "GPT-4o", family: "openai" },
@@ -43,6 +48,11 @@ export function labelForTextModelRegistryId(registryId: string): string {
 
 const SHORT_TEXT_MODEL_LABELS: Record<string, string> = {
   "gemini-3-flash-preview": "Flash",
+  "gemini-3.5-flash": "3.5",
+  "gemini-3.1-flash-lite": "3.1L",
+  "gemini-2.5-pro": "2.5P",
+  "gemini-2.5-flash": "2.5F",
+  "gemini-2.5-flash-lite": "2.5L",
   "gemini-3-pro-preview": "Pro",
   "gpt-4o-mini": "Mini",
   "gpt-4o": "4o",

@@ -21,6 +21,12 @@ export const DIALOG_IMAGE_REGISTRY = [
     providerRoute: "gemini" as const,
   },
   {
+    registryId: "gemini-3.1-flash-lite-image",
+    label: "Gemini 3.1 Flash-Lite Image",
+    maxReferenceImages: 10,
+    providerRoute: "gemini" as const,
+  },
+  {
     registryId: "gemini-3-pro-image",
     label: "Gemini 3 Pro Image",
     maxReferenceImages: 10,
@@ -119,6 +125,7 @@ export function labelForImageModelRegistryId(registryId: string): string {
 const SHORT_IMAGE_MODEL_LABELS: Partial<Record<DialogImageModelRegistryId, string>> = {
   "gemini-2.5-flash-image": "2.5",
   "gemini-3.1-flash-image": "3.1",
+  "gemini-3.1-flash-lite-image": "3.1L",
   "gemini-3-pro-image": "Pro",
   "gemini-3.1-flash-image-preview": "3.1p",
   "gemini-3-pro-image-preview": "Prop",

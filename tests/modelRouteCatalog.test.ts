@@ -61,10 +61,15 @@ describe("model route catalog", () => {
     });
   });
 
-  it("does not advertise Gemini 3.1 Flash Image as Gateway executable until verified", () => {
+  it("advertises Gemini 3.1 image family as Gateway executable", () => {
     const route = listModelRoutes("gemini-3.1-flash-image").find((row) => row.providerId === "vertex-site");
     expect(route).toMatchObject({
-      gatewayExecutionStatus: "adapter_pending",
+      executionStatus: "platform_ready",
+      gatewayExecutionStatus: "gateway_ready",
+    });
+    expect(listModelRoutes("gemini-3.1-flash-lite-image").find((row) => row.providerId === "vertex-site")).toMatchObject({
+      executionStatus: "platform_ready",
+      gatewayExecutionStatus: "gateway_ready",
     });
   });
 
