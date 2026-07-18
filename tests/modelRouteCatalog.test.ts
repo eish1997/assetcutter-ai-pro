@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { normalizeAiGatewayProviderId } from "../shared/aiGatewayModelRoutes.js";
 import {
   getCanonicalModel,
   listModelRoutes,
@@ -8,6 +9,12 @@ import {
 } from "../services/modelRegistry";
 
 describe("model route catalog", () => {
+  it("normalizes Google Agent Platform aliases to the legacy site route id", () => {
+    expect(normalizeAiGatewayProviderId("google-agent-platform")).toBe("vertex-site");
+    expect(normalizeAiGatewayProviderId("agent-platform")).toBe("vertex-site");
+    expect(normalizeAiGatewayProviderId("vertex-proxy")).toBe("vertex-site");
+  });
+
   it("publishes canonical text and image models separately from provider routes", () => {
     const imageModels = listPublishedCanonicalModels("image");
     const gptImage = getCanonicalModel("gpt-image-2");

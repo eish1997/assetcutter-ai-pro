@@ -36,6 +36,8 @@ describe("provider catalog", () => {
 
     expect(adminProviders.map((provider) => provider.id)).toContain("vertex-site");
     expect(keyPoolProviders.map((provider) => provider.id)).not.toContain("vertex-site");
+    expect(getProviderCatalogEntry("vertex-site")?.displayName).toBe("Google Agent Platform");
+    expect(getProviderCatalogEntry("vertex-site")?.shortName).toBe("Agent Platform");
     expect(getProviderCatalogEntry("vertex-site")?.authSchemes[0]?.label).toBe("站点代理");
   });
 

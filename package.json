@@ -51,6 +51,7 @@
     "credits:grant-batch": "node --env-file=.env.local scripts/credits-grant-batch.js",
     "test:credits": "vitest run tests/credits.test.ts tests/creditsConsume.test.ts tests/creditsGate.test.ts tests/creditReserves.test.ts tests/proxyCreditsGate.test.ts --maxWorkers=1",
     "render:sync-fairness-env": "node --env-file=.env.local scripts/render-set-gemini-fairness-env.mjs",
+    "admin:online-config": "node scripts/admin-online-config.mjs",
     "migrate:auth-to-postgres": "node scripts/migrate-auth-json-to-postgres.js",
     "guard:persistence": "node scripts/check-persistence-guard.mjs",
     "guard:cloud-index": "node scripts/check-workspace-cloud-index-guard.mjs",

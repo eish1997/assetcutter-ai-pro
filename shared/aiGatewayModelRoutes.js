@@ -155,7 +155,16 @@ export function normalizeAiGatewayProviderId(value) {
   }
   if (id === 'tripo-openapi') return 'tripo';
   if (id === 'tencent-hunyuan-3d' || id === 'hunyuan-3d') return 'tencent-hunyuan';
-  if (id === 'ai-worker-proxy' || id === 'vertex-proxy') return 'vertex-site';
+  if (
+    id === 'ai-worker-proxy' ||
+    id === 'vertex-proxy' ||
+    id === 'vertex-site' ||
+    id === 'google-agent-platform' ||
+    id === 'agent-platform' ||
+    id === 'gemini-agent-platform'
+  ) {
+    return 'vertex-site';
+  }
   if (id === 'toapis-openai' || id === 'toapis-gemini') return 'toapis';
   if (id === 'vertex-gemini') return 'vertex-site';
   return id;
