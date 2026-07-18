@@ -65,6 +65,18 @@ function commaList(value) {
     .filter((item, index, arr) => arr.indexOf(item) === index);
 }
 
+function inferDiagnosticModality(canonicalModelId) {
+  const id = String(canonicalModelId || '').trim().toLowerCase();
+  if (!id) return null;
+  if (id.includes('image') || id.includes('seedream') || id.startsWith('dall-e') || id.startsWith('gpt-image')) {
+    return 'image';
+  }
+  if (id.startsWith('gemini-') || id.startsWith('gpt-') || id.startsWith('doubao-') || id.startsWith('o')) {
+    return 'text';
+  }
+  return null;
+}
+
 function normalizeProviderId(value) {
   const id = String(value || '').trim().toLowerCase();
   if (
@@ -304,7 +316,10 @@ async function diagnostics(client, args) {
   const layers = args.generation ? ['route', 'generation'] : ['route'];
   const result = await client.post('/api/admin/model-diagnostics/run', {
     layers,
-    models: models.map((canonicalModelId) => ({ canonicalModelId })),
+    models: models.map((canonicalModelId) => ({
+      canonicalModelId,
+      modality: inferDiagnosticModality(canonicalModelId),
+    })),
   });
   return compactDiagnostics(result);
 }
