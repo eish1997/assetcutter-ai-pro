@@ -754,6 +754,7 @@ async function runGeminiAsyncJob(jobId) {
         j.updatedAt = Date.now();
         await updateAiGatewayTraceJob(j.aiGatewayTraceJobId, {
           status: 'succeeded',
+          error: null,
           output: sanitizeProxyResultForAiGatewayJob(result),
           artifacts: extractAiGatewayArtifactsFromProxyResult(result),
           metadata: buildAiGatewayTraceSuccessMetadata(jobId, result),

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createAuthAiGatewayJob } from '../server/ai-gateway/auth-api-handler.js';
 import { recoverAiGatewayQueuedJobs, shouldRecoverAiGatewayJob } from '../server/ai-gateway/recovery.js';
 import { createInMemoryAiJobStore } from '../server/ai-gateway/job-store.js';
+import { pollAiWorkerProxyJob } from '../server/ai-gateway/adapters/ai-worker-proxy-execution.js';
 
 function imageJobBody(id: string) {
   return {
@@ -26,11 +27,14 @@ function proxyResponse(body: unknown, ok = true, status = 202) {
 
 describe('AI gateway execution handoff', () => {
   const prevExecution = process.env.AI_GATEWAY_EXECUTION_ENABLED;
+  const prevHmacSecret = process.env.AI_WORKER_PROXY_CREDITS_HMAC_SECRET;
   const user = { id: 'user_exec_1', username: 'alice' };
 
   afterEach(() => {
     if (prevExecution === undefined) delete process.env.AI_GATEWAY_EXECUTION_ENABLED;
     else process.env.AI_GATEWAY_EXECUTION_ENABLED = prevExecution;
+    if (prevHmacSecret === undefined) delete process.env.AI_WORKER_PROXY_CREDITS_HMAC_SECRET;
+    else process.env.AI_WORKER_PROXY_CREDITS_HMAC_SECRET = prevHmacSecret;
     vi.useRealTimers();
   });
 
@@ -48,6 +52,7 @@ describe('AI gateway execution handoff', () => {
 
   it('hands image jobs to ai-worker-proxy by default', async () => {
     delete process.env.AI_GATEWAY_EXECUTION_ENABLED;
+    process.env.AI_WORKER_PROXY_CREDITS_HMAC_SECRET = 'test_handoff_secret';
     const store = createInMemoryAiJobStore();
     const fetchImpl = vi.fn().mockResolvedValue(proxyResponse({ jobId: 'gasync_exec_1', status: 'queued' }));
 
@@ -73,6 +78,7 @@ describe('AI gateway execution handoff', () => {
       'x-ac-task-envelope': 'aijob_exec_start',
       'X-AC-Fairness-Key': 'user:user_exec_1',
     });
+    expect(init.headers['X-AC-Fairness-Signature']).toMatch(/^\d+\.[a-f0-9]+$/);
     expect(JSON.parse(init.body)).toMatchObject({
       model: 'gemini-3-pro-image-preview',
       aiBackend: 'vertex',
@@ -264,12 +270,42 @@ describe('AI gateway execution handoff', () => {
     });
   });
 
+  it('clears stale handoff errors when proxy polling succeeds', async () => {
+    process.env.AI_GATEWAY_EXECUTION_ENABLED = 'false';
+    const store = createInMemoryAiJobStore();
+    await createAuthAiGatewayJob({}, imageJobBody('aijob_exec_clear_stale_error'), user, { store });
+    await store.update('aijob_exec_clear_stale_error', {
+      status: 'queued',
+      error: { code: 'AI_GATEWAY_EXECUTION_HANDOFF_FAILED', message: 'old 502' },
+    });
+    const plan = await store.get('aijob_exec_clear_stale_error');
+    const fetchImpl = vi.fn().mockResolvedValue(
+      proxyResponse({
+        status: 'completed',
+        result: { candidates: [{ content: { parts: [{ text: 'ok' }] } }] },
+      }, true, 200)
+    );
+
+    await pollAiWorkerProxyJob(plan, 'gasync_clear_error', {
+      store,
+      fetchImpl,
+      pollIntervalMs: 1,
+      pollTimeoutMs: 50,
+    });
+
+    const stored = await store.get('aijob_exec_clear_stale_error');
+    expect(stored.job.status).toBe('succeeded');
+    expect(stored.job.error).toBeNull();
+  });
+
   it('recovers persisted queued jobs whose deferred handoff timer was lost', async () => {
     process.env.AI_GATEWAY_EXECUTION_ENABLED = 'false';
+    process.env.AI_WORKER_PROXY_CREDITS_HMAC_SECRET = 'test_recovery_secret';
     const store = createInMemoryAiJobStore();
     await createAuthAiGatewayJob({}, imageJobBody('aijob_exec_recover'), user, { store });
     await store.update('aijob_exec_recover', {
       status: 'queued',
+      error: { code: 'AI_GATEWAY_EXECUTION_HANDOFF_FAILED', message: 'old 502' },
       metadata: {
         gatewayExecution: {
           deferredAttempt: 1,
@@ -292,9 +328,11 @@ describe('AI gateway execution handoff', () => {
 
     expect(result).toMatchObject({ recovered: 1, candidates: 1 });
     expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(fetchImpl.mock.calls[0][1].headers['X-AC-Fairness-Signature']).toMatch(/^\d+\.[a-f0-9]+$/);
     const recovered = await store.get('aijob_exec_recover');
     expect(recovered.job).toMatchObject({
       status: 'queued',
+      error: null,
       metadata: expect.objectContaining({
         proxyJobId: 'gasync_recovered_1',
       }),

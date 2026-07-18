@@ -1,6 +1,11 @@
 import { Agent, fetch as undiciFetch } from 'undici';
 import { aiWorkerProxyUpstreamBase } from '../../ai-worker-proxy-relay.js';
-import { creditsProxyHeadersFromSigned, fairnessKeyForUserId, signCreditsGatePayload } from '../../credits-gate-hmac.js';
+import {
+  creditsProxyHeadersFromSigned,
+  fairnessKeyForUserId,
+  signCreditsGatePayload,
+  signFairnessKeyHeader,
+} from '../../credits-gate-hmac.js';
 import { settleAiGatewayJobCredits, settlementMetadataPatch } from '../settlement.js';
 import { maybeAutoPauseAiGatewayProvider } from '../ops-control.js';
 import {
@@ -60,6 +65,8 @@ function executionHeaders(plan, options = {}) {
   const fairnessKey = fairnessKeyForUserId(userId);
   if (fairnessKey) {
     headers['X-AC-Fairness-Key'] = fairnessKey;
+    const fairnessSignature = signFairnessKeyHeader(fairnessKey);
+    if (fairnessSignature) headers['X-AC-Fairness-Signature'] = fairnessSignature;
   }
 
   const gate = creditsGate(plan);
@@ -229,6 +236,7 @@ export async function pollAiWorkerProxyJob(plan, proxyJobId, options = {}) {
         const result = body.result ?? null;
         current = await store.update(plan.job.id, {
           status: 'succeeded',
+          error: null,
           output: sanitizeProxyResultForAiGatewayJob(result),
           artifacts: extractAiGatewayArtifactsFromProxyResult(result),
           metadata: {
@@ -313,7 +321,7 @@ export async function startAiWorkerProxyExecution(plan, options = {}) {
       proxyStatus: proxy.status,
     };
     const next = store?.update
-      ? await store.update(plan.job.id, { status: proxy.status === 'queued' ? 'queued' : 'running', metadata })
+      ? await store.update(plan.job.id, { status: proxy.status === 'queued' ? 'queued' : 'running', error: null, metadata })
       : plan;
     if (!options.disableBackgroundPoll) {
       const pollPromise = pollAiWorkerProxyJob(next || plan, proxy.jobId, options);
