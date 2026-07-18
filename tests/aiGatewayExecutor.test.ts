@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createAuthAiGatewayJob } from '../server/ai-gateway/auth-api-handler.js';
 import { recoverAiGatewayQueuedJobs, shouldRecoverAiGatewayJob } from '../server/ai-gateway/recovery.js';
 import { createInMemoryAiJobStore } from '../server/ai-gateway/job-store.js';
@@ -28,13 +28,20 @@ function proxyResponse(body: unknown, ok = true, status = 202) {
 describe('AI gateway execution handoff', () => {
   const prevExecution = process.env.AI_GATEWAY_EXECUTION_ENABLED;
   const prevHmacSecret = process.env.AI_WORKER_PROXY_CREDITS_HMAC_SECRET;
+  const prevAgentPlatformKey = process.env.GOOGLE_AGENT_PLATFORM_API_KEY;
   const user = { id: 'user_exec_1', username: 'alice' };
+
+  beforeEach(() => {
+    process.env.GOOGLE_AGENT_PLATFORM_API_KEY = 'test_agent_platform_key';
+  });
 
   afterEach(() => {
     if (prevExecution === undefined) delete process.env.AI_GATEWAY_EXECUTION_ENABLED;
     else process.env.AI_GATEWAY_EXECUTION_ENABLED = prevExecution;
     if (prevHmacSecret === undefined) delete process.env.AI_WORKER_PROXY_CREDITS_HMAC_SECRET;
     else process.env.AI_WORKER_PROXY_CREDITS_HMAC_SECRET = prevHmacSecret;
+    if (prevAgentPlatformKey === undefined) delete process.env.GOOGLE_AGENT_PLATFORM_API_KEY;
+    else process.env.GOOGLE_AGENT_PLATFORM_API_KEY = prevAgentPlatformKey;
     vi.useRealTimers();
   });
 

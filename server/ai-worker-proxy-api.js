@@ -37,6 +37,7 @@ import {
   getDiskOverrideInt,
 } from './ai-worker-proxy-fairness.js';
 import {
+  agentPlatformApiKeyFromEnv,
   describeVertexAgentPlatformRoute,
   getVertexGenAIClientForModel,
   resolveVertexLocationFromEnv,
@@ -238,7 +239,15 @@ function vertexLocation() {
 }
 
 function isVertexConfigured() {
-  return Boolean(vertexProjectId());
+  return Boolean(vertexProjectId() || agentPlatformApiKeyFromEnv());
+}
+
+function agentPlatformApiKeyFromBody(parsed) {
+  return normalizeSecret(parsed?.agentPlatformApiKey || parsed?.googleAgentPlatformApiKey || '');
+}
+
+function agentPlatformApiKeyConfigured(parsed = null) {
+  return Boolean(agentPlatformApiKeyFromBody(parsed) || agentPlatformApiKeyFromEnv());
 }
 
 function adcCredentialPath() {
@@ -275,8 +284,7 @@ function isAdcLikelyConfigured() {
 
 function vertexConfigGuideMessage() {
   return (
-    'Vertex 生图尚未就绪：请在运行本代理的环境中配置 Google Cloud 项目（VERTEX_PROJECT_ID 或 GOOGLE_CLOUD_PROJECT）、区域（默认 us-central1 / Agent Platform 区域端点；勿设 VERTEX_LOCATION=global，否则 Console 会计入 Gemini for Google Cloud API），并完成 ADC。' +
-    ' 可将服务账号 JSON 写入 GOOGLE_APPLICATION_CREDENTIALS_JSON（或设置 GOOGLE_APPLICATION_CREDENTIALS 指向密钥文件）。完整说明见仓库 docs/VERTEX_AI_INTEGRATION.md。'
+    'Google Agent Platform 尚未就绪：请在后台供应商中心配置 Agent Platform API Key，或在运行本代理的环境中配置 GOOGLE_AGENT_PLATFORM_API_KEY；也可以继续使用 Google Cloud 项目（VERTEX_PROJECT_ID 或 GOOGLE_CLOUD_PROJECT）+ ADC。'
   );
 }
 
@@ -321,8 +329,8 @@ function ensureAdcFromJsonEnv() {
 ensureAdcFromJsonEnv();
 
 /** Vertex ADC：按模型选区域（Gemini 3 默认 global，其余 VERTEX_LOCATION） */
-function getVertexAI(model) {
-  return getVertexGenAIClientForModel(model);
+function getVertexAI(model, options = {}) {
+  return getVertexGenAIClientForModel(model, options);
 }
 
 function isImageGenerationModel(model) {
@@ -344,8 +352,11 @@ function mergeAgentPlatformImageConfig(model, config) {
 
 async function proxyVertexGenerateContent(model, contents, config) {
   const safeConfig = { ...(config || {}) };
+  const agentPlatformApiKey = normalizeSecret(safeConfig.__agentPlatformApiKey || '');
   if (safeConfig.abortSignal) delete safeConfig.abortSignal;
   delete safeConfig.__meteringRegistryId;
+  delete safeConfig.__agentPlatformApiKey;
+  delete safeConfig.__agentPlatformProviderKeyId;
   const timeout = Math.max(
     Number(safeConfig?.httpOptions?.timeout) || IMAGE_REQUEST_TIMEOUT_MS,
     VERTEX_IMAGE_REQUEST_TIMEOUT_MS
@@ -355,7 +366,7 @@ async function proxyVertexGenerateContent(model, contents, config) {
     ...withImageConfig,
     httpOptions: { ...(withImageConfig.httpOptions || {}), timeout },
   };
-  const ai = getVertexAI(model);
+  const ai = getVertexAI(model, { apiKey: agentPlatformApiKey });
   const response = await ai.models.generateContent({
     model: model || 'gemini-2.5-flash',
     contents,
@@ -1061,7 +1072,7 @@ const server = http.createServer(async (req, res) => {
           sendError(res, 500, vertexConfigGuideMessage());
           return;
         }
-        if (!isAdcLikelyConfigured()) {
+        if (!agentPlatformApiKeyConfigured(parsed) && !isAdcLikelyConfigured()) {
           sendError(res, 500, vertexConfigGuideMessage());
           return;
         }
@@ -1084,7 +1095,13 @@ const server = http.createServer(async (req, res) => {
       const cr = createGeminiAsyncJob(
         model,
         contents,
-        config,
+        useVertex
+          ? {
+              ...(config || {}),
+              __agentPlatformApiKey: agentPlatformApiKeyFromBody(parsed),
+              __agentPlatformProviderKeyId: normalizeSecret(parsed?.agentPlatformProviderKeyId || ''),
+            }
+          : config,
         useVertex,
         fairnessKey,
         costWeight,
@@ -1135,7 +1152,7 @@ const server = http.createServer(async (req, res) => {
           sendError(res, 500, vertexConfigGuideMessage());
           return;
         }
-        if (!isAdcLikelyConfigured()) {
+        if (!agentPlatformApiKeyConfigured(parsed) && !isAdcLikelyConfigured()) {
           sendError(res, 500, vertexConfigGuideMessage());
           return;
         }
@@ -1146,7 +1163,13 @@ const server = http.createServer(async (req, res) => {
       const normalizedItems = items.map((item) => ({
         model: item?.model,
         contents: item?.contents,
-        config: item?.config || {},
+        config: useVertex
+          ? {
+              ...(item?.config || {}),
+              __agentPlatformApiKey: agentPlatformApiKeyFromBody(parsed),
+              __agentPlatformProviderKeyId: normalizeSecret(parsed?.agentPlatformProviderKeyId || ''),
+            }
+          : item?.config || {},
       }));
       if (normalizedItems.some((item) => !item.model || !item.contents)) {
         sendError(res, 400, 'Each item needs model and contents');
@@ -1241,7 +1264,7 @@ const server = http.createServer(async (req, res) => {
         sendError(res, 500, vertexConfigGuideMessage());
         return;
       }
-      if (useVertex && !isAdcLikelyConfigured()) {
+      if (useVertex && !agentPlatformApiKeyConfigured(parsed) && !isAdcLikelyConfigured()) {
         sendError(res, 500, vertexConfigGuideMessage());
         return;
       }
@@ -1261,12 +1284,34 @@ const server = http.createServer(async (req, res) => {
           const taskEnvelopeId = parseFairnessTaskEnvelope(req);
           const syncSlot = await fairnessSyncEnter(syncFairnessKey, taskEnvelopeId);
           try {
-            response = await runGeminiWithRetries(model, contents, config, useVertex);
+            response = await runGeminiWithRetries(
+              model,
+              contents,
+              useVertex
+                ? {
+                    ...(config || {}),
+                    __agentPlatformApiKey: agentPlatformApiKeyFromBody(parsed),
+                    __agentPlatformProviderKeyId: normalizeSecret(parsed?.agentPlatformProviderKeyId || ''),
+                  }
+                : config,
+              useVertex
+            );
           } finally {
             fairnessSyncLeave(syncFairnessKey, taskEnvelopeId, syncSlot.acquiredRunning);
           }
         } else {
-          response = await runGeminiWithRetries(model, contents, config, useVertex);
+          response = await runGeminiWithRetries(
+            model,
+            contents,
+            useVertex
+              ? {
+                  ...(config || {}),
+                  __agentPlatformApiKey: agentPlatformApiKeyFromBody(parsed),
+                  __agentPlatformProviderKeyId: normalizeSecret(parsed?.agentPlatformProviderKeyId || ''),
+                }
+              : config,
+            useVertex
+          );
         }
         sendJson(res, 200, response);
       } catch (e) {
@@ -1294,6 +1339,7 @@ const server = http.createServer(async (req, res) => {
         configured: isVertexConfigured(),
         location: isVertexConfigured() ? vertexLocation() : null,
         adcLikelyConfigured: isAdcLikelyConfigured(),
+        apiKeyConfigured: agentPlatformApiKeyConfigured(),
         route: isVertexConfigured() ? describeVertexAgentPlatformRoute() : null,
       },
     });

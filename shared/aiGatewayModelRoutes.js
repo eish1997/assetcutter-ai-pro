@@ -8,7 +8,7 @@ export const AI_GATEWAY_MODEL_ROUTE_EXECUTABLE_RULES = Object.freeze([
     gatewayProviderIds: Object.freeze(['vertex-site', 'gemini-aistudio']),
     gatewayExecutionStatus: 'gateway_ready',
     executionStatus: 'platform_ready',
-    platformKeyRequired: false,
+    platformKeyRequired: true,
   },
   {
     id: 'openai-official-gateway',

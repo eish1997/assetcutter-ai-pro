@@ -17,6 +17,15 @@ export function vertexProjectIdFromEnv() {
   return (process.env.VERTEX_PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT || '').trim();
 }
 
+export function agentPlatformApiKeyFromEnv() {
+  return String(
+    process.env.GOOGLE_AGENT_PLATFORM_API_KEY ||
+      process.env.AGENT_PLATFORM_API_KEY ||
+      process.env.VERTEX_API_KEY ||
+      ''
+  ).trim();
+}
+
 /** Agent Platform 生图/GA 模型推荐 v1；可用 VERTEX_API_VERSION 覆盖 */
 export function vertexApiVersionFromEnv() {
   const raw = String(process.env.VERTEX_API_VERSION || 'v1').trim();
@@ -69,6 +78,7 @@ export function vertexAgentPlatformHost(location) {
 
 export function describeVertexAgentPlatformRoute() {
   const project = vertexProjectIdFromEnv();
+  const apiKey = agentPlatformApiKeyFromEnv();
   const { location } = resolveVertexLocationFromEnv();
   const gemini3Location = resolveVertexGemini3LocationFromEnv();
   const apiVersion = vertexApiVersionFromEnv();
@@ -82,16 +92,19 @@ export function describeVertexAgentPlatformRoute() {
     baseUrl: `https://${host}/`,
     agentPlatformRegional: location !== 'global',
     gemini3UsesGlobal: gemini3Location === 'global' && location !== 'global',
+    authMode: apiKey ? 'api_key' : project ? 'adc' : 'missing',
+    apiKeyConfigured: Boolean(apiKey),
   };
 }
 
 /** @type {Map<string, import('@google/genai').GoogleGenAI>} */
 const clientCache = new Map();
 
-export function getVertexGenAIClientForLocation(locationOverride) {
+export function getVertexGenAIClientForLocation(locationOverride, options = {}) {
+  const apiKey = String(options.apiKey || '').trim() || agentPlatformApiKeyFromEnv();
   const project = vertexProjectIdFromEnv();
-  if (!project) {
-    throw new Error('Vertex: set VERTEX_PROJECT_ID or GOOGLE_CLOUD_PROJECT');
+  if (!apiKey && !project) {
+    throw new Error('Agent Platform: set GOOGLE_AGENT_PLATFORM_API_KEY, VERTEX_PROJECT_ID, or GOOGLE_CLOUD_PROJECT');
   }
   const { location: envLocation } = resolveVertexLocationFromEnv();
   const location =
@@ -99,16 +112,23 @@ export function getVertexGenAIClientForLocation(locationOverride) {
       ? String(locationOverride).trim()
       : envLocation;
   const apiVersion = vertexApiVersionFromEnv();
-  const cacheKey = `${project}\0${location}\0${apiVersion}`;
+  const authKey = apiKey ? `key:${apiKey.slice(0, 8)}:${apiKey.slice(-4)}` : `adc:${project}`;
+  const cacheKey = `${authKey}\0${location}\0${apiVersion}`;
   const cached = clientCache.get(cacheKey);
   if (cached) return cached;
 
-  const client = new GoogleGenAI({
-    vertexai: true,
-    project,
-    location,
-    apiVersion,
-  });
+  const client = apiKey
+    ? new GoogleGenAI({
+        vertexai: true,
+        apiKey,
+        apiVersion,
+      })
+    : new GoogleGenAI({
+        vertexai: true,
+        project,
+        location,
+        apiVersion,
+      });
   clientCache.set(cacheKey, client);
   return client;
 }
@@ -118,8 +138,8 @@ export function getVertexGenAIClient() {
 }
 
 /** Pick client by model id (Gemini 3 → global by default). */
-export function getVertexGenAIClientForModel(model) {
-  return getVertexGenAIClientForLocation(resolveVertexLocationForModel(model));
+export function getVertexGenAIClientForModel(model, options = {}) {
+  return getVertexGenAIClientForLocation(resolveVertexLocationForModel(model), options);
 }
 
 /** @internal */

@@ -22,6 +22,7 @@ describe('AI gateway provider key store', () => {
   const prevPath = process.env.AI_GATEWAY_PROVIDER_KEYS_PATH;
   const prevEventsPath = process.env.AI_GATEWAY_PROVIDER_KEY_EVENTS_PATH;
   const prevTripoKey = process.env.TRIPO_API_KEY;
+  const prevAgentPlatformKey = process.env.GOOGLE_AGENT_PLATFORM_API_KEY;
   const prevVolcAk = process.env.VOLCENGINE_ACCESS_KEY;
   const prevVolcSk = process.env.VOLCENGINE_SECRET_KEY;
   const prevSmokeMode = process.env.AI_GATEWAY_PROVIDER_KEY_SMOKE_MODE;
@@ -37,6 +38,8 @@ describe('AI gateway provider key store', () => {
     else process.env.AI_GATEWAY_PROVIDER_KEY_EVENTS_PATH = prevEventsPath;
     if (prevTripoKey === undefined) delete process.env.TRIPO_API_KEY;
     else process.env.TRIPO_API_KEY = prevTripoKey;
+    if (prevAgentPlatformKey === undefined) delete process.env.GOOGLE_AGENT_PLATFORM_API_KEY;
+    else process.env.GOOGLE_AGENT_PLATFORM_API_KEY = prevAgentPlatformKey;
     if (prevVolcAk === undefined) delete process.env.VOLCENGINE_ACCESS_KEY;
     else process.env.VOLCENGINE_ACCESS_KEY = prevVolcAk;
     if (prevVolcSk === undefined) delete process.env.VOLCENGINE_SECRET_KEY;
@@ -68,6 +71,7 @@ describe('AI gateway provider key store', () => {
     process.env.AI_GATEWAY_PROVIDER_KEYS_PATH = file;
     process.env.AI_GATEWAY_PROVIDER_KEY_EVENTS_PATH = eventsFile;
     delete process.env.TRIPO_API_KEY;
+    delete process.env.GOOGLE_AGENT_PLATFORM_API_KEY;
     delete process.env.VOLCENGINE_ACCESS_KEY;
     delete process.env.VOLCENGINE_SECRET_KEY;
     delete process.env.AI_GATEWAY_PROVIDER_KEY_SMOKE_MODE;
@@ -114,6 +118,21 @@ describe('AI gateway provider key store', () => {
     expect(await acquireProviderKey('tripo')).toMatchObject({
       id: 'env_tripo_1',
       secret: 'env-tripo-secret',
+    });
+  });
+
+  it('supports GOOGLE_AGENT_PLATFORM_API_KEY as a read-only vertex-site fallback key', async () => {
+    useTempStore();
+    process.env.GOOGLE_AGENT_PLATFORM_API_KEY = 'env-agent-platform-secret';
+
+    const listed = await listProviderKeys();
+    expect(listed).toEqual([
+      expect.objectContaining({ id: 'env_vertex_site_1', provider: 'vertex-site', label: 'GOOGLE_AGENT_PLATFORM_API_KEY', hasSecret: true }),
+    ]);
+    expect(await acquireProviderKey('vertex-site')).toMatchObject({
+      id: 'env_vertex_site_1',
+      provider: 'vertex-site',
+      secret: 'env-agent-platform-secret',
     });
   });
 

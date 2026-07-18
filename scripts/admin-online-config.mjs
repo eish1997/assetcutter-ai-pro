@@ -10,9 +10,11 @@ function usage() {
 
 Read-only:
   npm run admin:online-config -- inspect
+  npm run admin:online-config -- provider-keys
   npm run admin:online-config -- diagnostics --models gemini-3-flash-preview,gemini-3-pro-image --generation
 
 Mutating commands require --apply:
+  $env:PROVIDER_API_KEY='...'; npm run admin:online-config -- provider-key-upsert --provider google-agent-platform --label "Agent Platform primary" --apply
   npm run admin:online-config -- publish-add --models gemini-3-pro-image --apply
   npm run admin:online-config -- publish-remove --models gemini-3-pro-preview --apply
   npm run admin:online-config -- publish-set --models gemini-3-flash-preview,gemini-3-pro-image --apply
@@ -25,7 +27,7 @@ Required env:
   ADMIN_IDENTIFIER, ADMIN_PASSWORD
 
 Optional env:
-  AUTH_API_BASE, ADMIN_ORIGIN
+  AUTH_API_BASE, ADMIN_ORIGIN, PROVIDER_API_KEY, AGENT_PLATFORM_API_KEY
 `);
 }
 
@@ -202,6 +204,30 @@ function assertApply(args, command) {
   throw new Error(`${command} would change online configuration. Re-run with --apply after reviewing the command.`);
 }
 
+function keyHasUsableSecret(row) {
+  return Boolean(row?.hasSecret || row?.secret || row?.credentials?.apiKey || row?.hasCredentials);
+}
+
+function compactProviderKeys(result) {
+  return {
+    ok: true,
+    keys: (result.keys || []).map((row) => ({
+      id: row.id,
+      provider: row.provider,
+      label: row.label,
+      enabled: row.enabled !== false,
+      priority: row.priority,
+      rpm: row.rpm || 0,
+      secretPreview: row.secretPreview || null,
+      hasSecret: Boolean(row.hasSecret),
+      healthStatus: row.runtime?.healthStatus || null,
+      lastSuccessAt: row.runtime?.lastSuccessAt || null,
+      lastErrorAt: row.runtime?.lastErrorAt || null,
+      lastError: row.runtime?.lastError || null,
+    })),
+  };
+}
+
 async function inspect(client) {
   const [diagnostics, modelOps, opsControl] = await Promise.all([
     client.get('/api/admin/ai-gateway/diagnostics'),
@@ -209,6 +235,67 @@ async function inspect(client) {
     client.get('/api/admin/ai-gateway/ops-control'),
   ]);
   return compactInspection({ diagnostics, modelOps, opsControl });
+}
+
+async function providerKeys(client) {
+  return compactProviderKeys(await client.get('/api/admin/ai-gateway/provider-keys'));
+}
+
+async function providerKeyUpsert(client, args) {
+  assertApply(args, 'provider-key-upsert');
+  const provider = normalizeProviderId(args.provider || 'google-agent-platform');
+  if (!provider) throw new Error('--provider is required');
+  const secret = requireNonEmpty(
+    args.secret || process.env.PROVIDER_API_KEY || process.env.AGENT_PLATFORM_API_KEY,
+    'PROVIDER_API_KEY'
+  );
+  const label = String(args.label || (provider === 'vertex-site' ? 'Agent Platform primary' : `${provider} primary`)).trim();
+  const current = await client.get('/api/admin/ai-gateway/provider-keys');
+  const rows = Array.isArray(current.keys) ? current.keys : [];
+  const existing = rows.find((row) => normalizeProviderId(row.provider) === provider && row.label === label)
+    || rows.find((row) => normalizeProviderId(row.provider) === provider && keyHasUsableSecret(row));
+  const nextRow = {
+    ...(existing || {}),
+    id: existing?.id,
+    provider,
+    label,
+    enabled: true,
+    priority: Number(args.priority || existing?.priority || 100),
+    rpm: Number(args.rpm || existing?.rpm || 0),
+    secret,
+    credentials: existing?.credentials || {},
+  };
+  const nextRows = existing
+    ? rows.map((row) => (row.id === existing.id ? nextRow : row))
+    : [...rows, nextRow];
+  const saved = await client.put('/api/admin/ai-gateway/provider-keys', { keys: nextRows });
+  const savedRow = (saved.keys || []).find((row) => normalizeProviderId(row.provider) === provider && row.label === label)
+    || (saved.keys || []).find((row) => normalizeProviderId(row.provider) === provider);
+  const smoke = savedRow?.id
+    ? await client.post(`/api/admin/ai-gateway/provider-keys/${encodeURIComponent(savedRow.id)}/smoke-test`, {})
+    : null;
+  return {
+    ok: true,
+    provider,
+    key: savedRow
+      ? {
+          id: savedRow.id,
+          label: savedRow.label,
+          enabled: savedRow.enabled !== false,
+          secretPreview: savedRow.secretPreview || null,
+          hasSecret: Boolean(savedRow.hasSecret),
+        }
+      : null,
+    smoke: smoke
+      ? {
+          ok: Boolean(smoke.ok),
+          status: smoke.status || null,
+          mode: smoke.mode || null,
+          message: smoke.message || null,
+          nextAction: smoke.nextAction || null,
+        }
+      : null,
+  };
 }
 
 async function diagnostics(client, args) {
@@ -319,6 +406,8 @@ async function main() {
   const login = await client.login();
   let result;
   if (command === 'inspect') result = await inspect(client);
+  else if (command === 'provider-keys') result = await providerKeys(client);
+  else if (command === 'provider-key-upsert') result = await providerKeyUpsert(client, args);
   else if (command === 'diagnostics') result = await diagnostics(client, args);
   else if (command === 'publish-set') result = await publishSet(client, args);
   else if (command === 'publish-add') result = await publishAdd(client, args);

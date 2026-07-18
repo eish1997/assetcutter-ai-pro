@@ -22,14 +22,18 @@ function imageJobBody(id, text = 'product render') {
 
 describe('AI gateway auth-api facade', () => {
   const previousExecution = process.env.AI_GATEWAY_EXECUTION_ENABLED;
+  const previousAgentPlatformKey = process.env.GOOGLE_AGENT_PLATFORM_API_KEY;
 
   beforeEach(() => {
     process.env.AI_GATEWAY_EXECUTION_ENABLED = 'false';
+    process.env.GOOGLE_AGENT_PLATFORM_API_KEY = 'test_agent_platform_key';
   });
 
   afterEach(() => {
     if (previousExecution === undefined) delete process.env.AI_GATEWAY_EXECUTION_ENABLED;
     else process.env.AI_GATEWAY_EXECUTION_ENABLED = previousExecution;
+    if (previousAgentPlatformKey === undefined) delete process.env.GOOGLE_AGENT_PLATFORM_API_KEY;
+    else process.env.GOOGLE_AGENT_PLATFORM_API_KEY = previousAgentPlatformKey;
   });
 
   it('creates a user-owned job and hides provider request bodies from the auth response', async () => {
@@ -66,7 +70,7 @@ describe('AI gateway auth-api facade', () => {
       providerId: 'vertex-site',
       executionStatus: 'platform_ready',
       gatewayExecutionStatus: 'gateway_ready',
-      platformKeyRequired: false,
+      platformKeyRequired: true,
     });
   });
 
@@ -97,6 +101,7 @@ describe('AI gateway auth-api facade', () => {
         disabledModels: [],
         modelOverrides: [],
       },
+      listProviderKeys: async () => [{ provider: 'gemini-aistudio', enabled: true, hasSecret: true }],
     });
 
     expect(result.status).toBe(202);

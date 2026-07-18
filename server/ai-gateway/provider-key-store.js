@@ -170,6 +170,12 @@ function redactKey(row) {
 }
 
 function providerKeySmokeRequirements(provider) {
+  if (provider === 'vertex-site') {
+    return {
+      fields: ['secret'],
+      label: 'Agent Platform API Key',
+    };
+  }
   if (provider === 'volcengine-jimeng') {
     return {
       fields: ['credentials.accessKeyId', 'credentials.secretAccessKey'],
@@ -342,6 +348,24 @@ async function runRealProviderKeySmoke(row, options = {}) {
 }
 
 function envKeysForProvider(provider) {
+  if (provider === 'vertex-site') {
+    const apiKey = nonEmptyString(
+      process.env.GOOGLE_AGENT_PLATFORM_API_KEY ||
+        process.env.AGENT_PLATFORM_API_KEY ||
+        process.env.VERTEX_API_KEY
+    );
+    if (!apiKey) return [];
+    return [
+      normalizeProviderKeyRow({
+        id: 'env_vertex_site_1',
+        provider,
+        label: 'GOOGLE_AGENT_PLATFORM_API_KEY',
+        enabled: true,
+        priority: 9000,
+        secret: apiKey,
+      }),
+    ];
+  }
   if (provider === 'volcengine-jimeng') {
     const accessKeyId = nonEmptyString(process.env.VOLCENGINE_ACCESS_KEY);
     const secretAccessKey = nonEmptyString(process.env.VOLCENGINE_SECRET_KEY);
@@ -528,7 +552,7 @@ async function writeDbRows(rows, updatedByUserId = null) {
 
 export async function listProviderKeys({ includeSecrets = false } = {}) {
   const rows = USE_POSTGRES ? await readDbRows() : readDiskRows();
-  const providers = new Set([DEFAULT_PROVIDER, ...rows.map((row) => row.provider), 'volcengine-jimeng']);
+  const providers = new Set([DEFAULT_PROVIDER, ...rows.map((row) => row.provider), 'volcengine-jimeng', 'vertex-site']);
   const withEnv = [
     ...rows,
     ...Array.from(providers).flatMap((provider) => envKeysForProvider(provider)),

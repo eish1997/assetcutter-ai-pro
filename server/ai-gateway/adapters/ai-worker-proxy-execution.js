@@ -1,5 +1,6 @@
 import { Agent, fetch as undiciFetch } from 'undici';
 import { aiWorkerProxyUpstreamBase } from '../../ai-worker-proxy-relay.js';
+import { acquireProviderKey } from '../provider-key-store.js';
 import {
   creditsProxyHeadersFromSigned,
   fairnessKeyForUserId,
@@ -101,6 +102,23 @@ function pollDelay(ms) {
 
 function isRetryableHandoffStatus(status) {
   return status === 429 || status === 502 || status === 503 || status === 504;
+}
+
+async function adapterBodyForExecution(plan, options = {}) {
+  const body = { ...(plan.adapterRequest?.body || {}) };
+  const providerId = String(plan.route?.providerId || plan.job?.provider || '').trim();
+  const needsAgentPlatformKey = providerId === 'vertex-site' && body.aiBackend === 'vertex';
+  if (!needsAgentPlatformKey || body.agentPlatformApiKey) return body;
+
+  const acquireKey = options.acquireProviderKey || acquireProviderKey;
+  const key = await acquireKey('vertex-site');
+  const secret = String(key?.secret || key?.credentials?.apiKey || '').trim();
+  if (!secret) {
+    throw new Error('No enabled Google Agent Platform API key in AI Gateway provider key pool');
+  }
+  body.agentPlatformApiKey = secret;
+  body.agentPlatformProviderKeyId = key.id;
+  return body;
 }
 
 function isRetryableHandoffError(error) {
@@ -283,12 +301,13 @@ export async function startAiWorkerProxyExecution(plan, options = {}) {
     let response = null;
     let text = '';
     let lastError = null;
+    const requestBody = await adapterBodyForExecution(plan, options);
     for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
       try {
         response = await fetchImpl(targetUrl, fetchInitWithLoopbackDirect(targetUrl, {
           method: plan.adapterRequest.method || 'POST',
           headers: executionHeaders(plan, options),
-          body: JSON.stringify(plan.adapterRequest.body || {}),
+          body: JSON.stringify(requestBody),
           signal: AbortSignal.timeout(Number(options.timeoutMs || process.env.AI_GATEWAY_EXECUTION_START_TIMEOUT_MS || 45_000)),
         }));
         text = await response.text();

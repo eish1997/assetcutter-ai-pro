@@ -4,11 +4,13 @@ describe('vertex-genai-client', () => {
   const prevLocation = process.env.VERTEX_LOCATION;
   const prevApiVersion = process.env.VERTEX_API_VERSION;
   const prevProject = process.env.VERTEX_PROJECT_ID;
+  const prevAgentPlatformKey = process.env.GOOGLE_AGENT_PLATFORM_API_KEY;
 
   beforeEach(async () => {
     delete process.env.VERTEX_LOCATION;
     delete process.env.GOOGLE_CLOUD_LOCATION;
     delete process.env.VERTEX_API_VERSION;
+    delete process.env.GOOGLE_AGENT_PLATFORM_API_KEY;
     const mod = await import('../server/vertex-genai-client.js');
     mod.resetVertexGenAIClientForTests();
   });
@@ -20,6 +22,8 @@ describe('vertex-genai-client', () => {
     else process.env.VERTEX_API_VERSION = prevApiVersion;
     if (prevProject === undefined) delete process.env.VERTEX_PROJECT_ID;
     else process.env.VERTEX_PROJECT_ID = prevProject;
+    if (prevAgentPlatformKey === undefined) delete process.env.GOOGLE_AGENT_PLATFORM_API_KEY;
+    else process.env.GOOGLE_AGENT_PLATFORM_API_KEY = prevAgentPlatformKey;
     const mod = await import('../server/vertex-genai-client.js');
     mod.resetVertexGenAIClientForTests();
   });
@@ -41,6 +45,16 @@ describe('vertex-genai-client', () => {
     expect(route.apiVersion).toBe('v1');
     expect(route.gemini3Location).toBe('global');
     expect(route.gemini3UsesGlobal).toBe(true);
+    expect(route.authMode).toBe('adc');
+    expect(route.apiKeyConfigured).toBe(false);
+  });
+
+  it('describes API key mode for Agent Platform Express Mode', async () => {
+    process.env.GOOGLE_AGENT_PLATFORM_API_KEY = 'test-key';
+    const mod = await import('../server/vertex-genai-client.js');
+    const route = mod.describeVertexAgentPlatformRoute();
+    expect(route.authMode).toBe('api_key');
+    expect(route.apiKeyConfigured).toBe(true);
   });
 
   it('routes Gemini 3 models to global by default', async () => {

@@ -84,6 +84,18 @@ const API_KEY_SCHEME: ProviderAuthScheme = {
   fields: [API_KEY_FIELD],
 };
 
+const AGENT_PLATFORM_API_KEY_SCHEME: ProviderAuthScheme = {
+  id: "api-key",
+  label: "Agent Platform API Key",
+  fields: [
+    {
+      ...API_KEY_FIELD,
+      placeholder: "GOOGLE_AGENT_PLATFORM_API_KEY",
+      envName: "GOOGLE_AGENT_PLATFORM_API_KEY",
+    },
+  ],
+};
+
 const API_KEY_BASE_URL_SCHEME: ProviderAuthScheme = {
   id: "api-key-base-url",
   label: "API Key + Base URL",
@@ -140,12 +152,6 @@ const TENCENT_SECRET_SCHEME: ProviderAuthScheme = {
       storage: "credentials",
     },
   ],
-};
-
-const SITE_SCHEME: ProviderAuthScheme = {
-  id: "site",
-  label: "站点代理",
-  fields: [],
 };
 
 export const PROVIDER_CATALOG: readonly ProviderCatalogEntry[] = [
@@ -251,19 +257,20 @@ export const PROVIDER_CATALOG: readonly ProviderCatalogEntry[] = [
     displayName: "Google Agent Platform",
     shortName: "Agent Platform",
     supportedModalities: ["text", "image"],
-    authSchemes: [SITE_SCHEME],
+    authSchemes: [AGENT_PLATFORM_API_KEY_SCHEME],
     homepageUrl: "https://cloud.google.com/products/gemini/agent-platform",
     consoleUrl: "https://console.cloud.google.com/vertex-ai",
     docsUrl: "https://docs.cloud.google.com/gemini-enterprise-agent-platform",
     pricingUrl: "https://cloud.google.com/products/gemini/pricing",
-    keyPoolSupported: false,
-    byokSupported: false,
+    keyPoolSupported: true,
+    byokSupported: true,
     modelDiscovery: "api-planned",
     capabilityStatus: capabilityStatus({
-      keyPoolSupported: false,
+      keyPoolSupported: true,
       backendAdapterReady: true,
-      platformKeyReady: false,
-      byokSupported: false,
+      platformKeyReady: true,
+      byokSupported: true,
+      smokeTestReady: true,
     }),
   },
   {
