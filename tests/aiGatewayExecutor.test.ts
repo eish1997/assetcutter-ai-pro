@@ -30,6 +30,7 @@ describe('AI gateway execution handoff', () => {
   afterEach(() => {
     if (prevExecution === undefined) delete process.env.AI_GATEWAY_EXECUTION_ENABLED;
     else process.env.AI_GATEWAY_EXECUTION_ENABLED = prevExecution;
+    vi.useRealTimers();
   });
 
   it('keeps auth-api job creation as planning-only when execution is explicitly disabled', async () => {
@@ -81,10 +82,10 @@ describe('AI gateway execution handoff', () => {
     });
   });
 
-  it('marks the job failed when proxy handoff is rejected', async () => {
+  it('marks the job failed when proxy handoff is rejected with a non-transient error', async () => {
     process.env.AI_GATEWAY_EXECUTION_ENABLED = 'true';
     const store = createInMemoryAiJobStore();
-    const fetchImpl = vi.fn().mockResolvedValue(proxyResponse({ error: 'proxy down' }, false, 502));
+    const fetchImpl = vi.fn().mockResolvedValue(proxyResponse({ error: 'bad request' }, false, 400));
 
     const result = await createAuthAiGatewayJob({}, imageJobBody('aijob_exec_fail'), user, {
       store,
@@ -100,7 +101,38 @@ describe('AI gateway execution handoff', () => {
       },
     });
     const stored = await store.get('aijob_exec_fail');
-    expect(stored.job.metadata.gatewayExecution.error).toContain('HTTP 502');
+    expect(stored.job.metadata.gatewayExecution.error).toContain('HTTP 400');
+  });
+
+  it('keeps transient proxy handoff failures queued for deferred retry', async () => {
+    vi.useFakeTimers();
+    process.env.AI_GATEWAY_EXECUTION_ENABLED = 'true';
+    const store = createInMemoryAiJobStore();
+    const fetchImpl = vi.fn().mockResolvedValue(proxyResponse('<!DOCTYPE html><title>502</title>', false, 502));
+
+    const result = await createAuthAiGatewayJob({}, imageJobBody('aijob_exec_defer_502'), user, {
+      store,
+      fetchImpl,
+      handoffRetries: 0,
+      handoffHealthProbe: false,
+      deferredHandoffDelayMs: 60_000,
+      deferredHandoffJitterMs: 0,
+      deferredHandoffMaxAttempts: 3,
+    });
+
+    expect(result.body.job).toMatchObject({
+      id: 'aijob_exec_defer_502',
+      status: 'queued',
+    });
+    expect(result.body.job.error).toBeNull();
+    const stored = await store.get('aijob_exec_defer_502');
+    expect(stored.job.status).toBe('queued');
+    expect(stored.job.metadata.gatewayExecution).toMatchObject({
+      deferredAttempt: 1,
+      deferredMaxAttempts: 3,
+      nextRetryInMs: 60_000,
+    });
+    expect(stored.job.metadata.gatewayExecution.lastHandoffError).toContain('HTTP 502');
   });
 
   it('retries transient proxy handoff rate limits before failing the job', async () => {

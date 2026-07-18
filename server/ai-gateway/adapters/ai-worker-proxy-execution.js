@@ -113,6 +113,12 @@ function isRetryableHandoffError(error) {
   );
 }
 
+function isRetryableHandoffFailure(error) {
+  if (isRetryableHandoffError(error)) return true;
+  const message = String(error?.message || error || '');
+  return /HTTP\s+(429|502|503|504)\b/i.test(message);
+}
+
 function retryAfterMs(response) {
   const raw = response?.headers?.get ? String(response.headers.get('retry-after') || '').trim() : '';
   if (!raw) return 0;
@@ -130,6 +136,28 @@ async function handoffRetryDelay(attempt, response, options = {}) {
   const retryAfter = retryAfterMs(response);
   const delayMs = Math.min(30_000, Math.max(retryAfter, baseMs * Math.max(1, attempt) + Math.floor(Math.random() * Math.max(0, jitterMs))));
   if (delayMs > 0) await pollDelay(delayMs);
+}
+
+function deferredHandoffDelayMs(attempt, options = {}) {
+  const configured = Number(options.deferredHandoffDelayMs ?? process.env.AI_GATEWAY_PROXY_DEFERRED_HANDOFF_DELAY_MS ?? 15_000);
+  const baseMs = Number.isFinite(configured) ? Math.max(0, configured) : 15_000;
+  const jitterMs = Number(options.deferredHandoffJitterMs ?? process.env.AI_GATEWAY_PROXY_DEFERRED_HANDOFF_JITTER_MS ?? 3000);
+  return Math.min(60_000, baseMs * Math.max(1, attempt) + Math.floor(Math.random() * Math.max(0, jitterMs)));
+}
+
+function scheduleDeferredHandoff(plan, options = {}) {
+  const attempt = Math.max(0, Math.floor(Number(options.deferredHandoffAttempt || 0))) + 1;
+  const maxAttempts = Math.max(0, Math.floor(Number(options.deferredHandoffMaxAttempts ?? process.env.AI_GATEWAY_PROXY_DEFERRED_HANDOFF_MAX_ATTEMPTS ?? 12)));
+  if (attempt > maxAttempts) return false;
+  const delayMs = deferredHandoffDelayMs(attempt, options);
+  const timer = setTimeout(() => {
+    void startAiWorkerProxyExecution(plan, {
+      ...options,
+      deferredHandoffAttempt: attempt,
+    });
+  }, delayMs);
+  if (typeof timer.unref === 'function') timer.unref();
+  return { attempt, maxAttempts, delayMs };
 }
 
 async function waitForProxyHealth(fetchImpl, options = {}) {
@@ -294,6 +322,28 @@ export async function startAiWorkerProxyExecution(plan, options = {}) {
     }
     return { started: true, upstreamJobId: proxy.jobId, proxyJobId: proxy.jobId, proxyStatus: proxy.status, plan: next || plan };
   } catch (error) {
+    if (options.deferRetryableHandoff !== false && isRetryableHandoffFailure(error)) {
+      const now = new Date().toISOString();
+      const deferred = scheduleDeferredHandoff(plan, options);
+      if (deferred && store?.update) {
+        const next = await store.update(plan.job.id, {
+          status: 'queued',
+          metadata: {
+            gatewayExecution: {
+              deferredAt: now,
+              lastHandoffError: publicErrorMessage(error),
+              errorCause: errorCauseMetadata(error),
+              targetPath: plan.adapterRequest.path,
+              targetUrl,
+              deferredAttempt: deferred.attempt,
+              deferredMaxAttempts: deferred.maxAttempts,
+              nextRetryInMs: deferred.delayMs,
+            },
+          },
+        });
+        return { started: false, deferred: true, retryable: true, error, plan: next || plan };
+      }
+    }
     const failedAt = new Date().toISOString();
     const failedPlan = {
       ...plan,
