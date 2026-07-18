@@ -80,4 +80,19 @@ describe('httpClient', () => {
       expect((error as HttpRequestError).payload).toMatchObject({ code: 'SERVER_ERROR', detail: 'boom' });
     }
   });
+
+  it('wraps browser network failures with endpoint diagnostics', async () => {
+    globalThis.fetch = vi.fn().mockRejectedValue(new TypeError('Failed to fetch'));
+
+    await expect(requestJson('/api/ai/jobs', { method: 'POST', body: '{}' })).rejects.toMatchObject({
+      status: 0,
+      code: 'NETWORK_REQUEST_FAILED',
+      message: expect.stringContaining('/api/ai/jobs'),
+      payload: expect.objectContaining({
+        code: 'NETWORK_REQUEST_FAILED',
+        url: '/api/ai/jobs',
+        method: 'POST',
+      }),
+    });
+  });
 });

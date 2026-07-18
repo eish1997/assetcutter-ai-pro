@@ -12,6 +12,18 @@ export class HttpRequestError extends Error {
   }
 }
 
+function isAbortError(error: unknown): boolean {
+  const name = String((error as { name?: unknown })?.name || '');
+  return name === 'AbortError';
+}
+
+function networkErrorMessage(url: string, error: unknown): string {
+  const raw = error instanceof Error ? error.message : String(error || '');
+  const target = String(url || '').trim() || 'unknown endpoint';
+  const detail = raw ? `原始错误：${raw}` : '浏览器未返回具体错误。';
+  return `请求失败：无法连接生成服务，请稍后重试。URL：${target}。${detail}`;
+}
+
 const AI_GATEWAY_ERROR_MESSAGES: Record<string, string> = {
   AI_GATEWAY_MODEL_NOT_PUBLISHED: '该模型尚未发布到工作台，请在供应商中心发布后再使用。',
   AI_GATEWAY_MODEL_ADAPTER_PENDING: '该模型已在目录中，但后端通道尚未接通，暂时不能生成。',
@@ -66,11 +78,24 @@ export async function requestJson<T>(url: string, init?: RequestInit): Promise<T
     const csrf = getCookie('ac_csrf');
     if (csrf) headers['X-CSRF-Token'] = csrf;
   }
-  const res = await fetch(url, {
-    credentials: 'include',
-    ...init,
-    headers,
-  });
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      credentials: 'include',
+      ...init,
+      headers,
+    });
+  } catch (error) {
+    if (isAbortError(error)) throw error;
+    const message = networkErrorMessage(url, error);
+    throw new HttpRequestError(message, 0, 'NETWORK_REQUEST_FAILED', {
+      code: 'NETWORK_REQUEST_FAILED',
+      message,
+      url,
+      method,
+      detail: error instanceof Error ? error.message : String(error || ''),
+    });
+  }
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
     const d = data as Record<string, unknown> & { error?: string; code?: string; message?: string };

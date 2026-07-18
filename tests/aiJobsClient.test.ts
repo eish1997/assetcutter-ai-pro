@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../services/httpClient', () => ({
   requestJson: vi.fn().mockResolvedValue({}),
@@ -52,6 +52,10 @@ describe('aiJobsClient', () => {
     vi.mocked(clearLastCreditsReserveKey).mockClear();
   });
 
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it('creates a user AI job through auth-api', async () => {
     await createAiJob({
       id: 'aijob_client_1',
@@ -80,6 +84,45 @@ describe('aiJobsClient', () => {
       },
       input: { contents: [{ role: 'user', parts: [{ text: 'render' }] }] },
     });
+  });
+
+  it('adds a client id for idempotent AI job creation retries', async () => {
+    await createAiJob({
+      modality: 'image',
+      model: 'gemini-3-pro-image',
+      estimatedCredits: 134,
+      input: { prompt: 'render' },
+    });
+
+    const [, init] = vi.mocked(requestJson).mock.calls[0];
+    const body = JSON.parse(String(init?.body || '{}'));
+    expect(body.id).toMatch(/^aijob_client_/);
+  });
+
+  it('retries AI job creation after transient network failures with the same id', async () => {
+    vi.useFakeTimers();
+    const { HttpRequestError } = await import('../services/httpClient');
+    vi.mocked(requestJson)
+      .mockRejectedValueOnce(
+        new HttpRequestError('请求失败：无法连接生成服务', 0, 'NETWORK_REQUEST_FAILED', {
+          code: 'NETWORK_REQUEST_FAILED',
+        })
+      )
+      .mockResolvedValueOnce({ job: { id: 'aijob_network_retry_ok' } });
+
+    const promise = createAiJob({
+      modality: 'image',
+      model: 'gemini-3-pro-image',
+      input: { prompt: 'render' },
+    });
+    await vi.advanceTimersByTimeAsync(1500);
+    await promise;
+
+    expect(requestJson).toHaveBeenCalledTimes(2);
+    const firstBody = JSON.parse(String(vi.mocked(requestJson).mock.calls[0][1]?.body || '{}'));
+    const secondBody = JSON.parse(String(vi.mocked(requestJson).mock.calls[1][1]?.body || '{}'));
+    expect(firstBody.id).toMatch(/^aijob_client_/);
+    expect(secondBody.id).toBe(firstBody.id);
   });
 
   it('retries AI job creation once without stale credits reserve headers', async () => {

@@ -211,6 +211,21 @@ function withCanonicalModel(input: CreateAiJobInput): CreateAiJobInput {
   };
 }
 
+function createClientAiJobId(): string {
+  try {
+    const id = globalThis.crypto?.randomUUID?.();
+    if (id) return `aijob_client_${id}`;
+  } catch {
+    /* ignore */
+  }
+  return `aijob_client_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function withClientJobId(input: CreateAiJobInput): CreateAiJobInput {
+  const id = typeof input.id === 'string' && input.id.trim() ? input.id.trim() : createClientAiJobId();
+  return { ...input, id };
+}
+
 function hasCreditsReserveHeader(headers: HeadersInit | undefined): boolean {
   if (!headers) return false;
   if (headers instanceof Headers) return Boolean(headers.get('X-AC-Credits-Reserve'));
@@ -243,15 +258,51 @@ function isCreditsReserveInvalidError(err: unknown): boolean {
   return err instanceof HttpRequestError && err.code === 'CREDITS_RESERVE_INVALID';
 }
 
+function isNetworkRequestError(err: unknown): boolean {
+  return err instanceof HttpRequestError && err.code === 'NETWORK_REQUEST_FAILED';
+}
+
+function aiJobCreateRetryDelayMs(attempt: number): number {
+  const delays = [1500, 5000, 10000];
+  return delays[Math.min(Math.max(0, attempt), delays.length - 1)] ?? 10000;
+}
+
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) return Promise.reject(new DOMException('Aborted', 'AbortError'));
+  return new Promise((resolve, reject) => {
+    const cleanup = () => signal?.removeEventListener('abort', onAbort);
+    const timer = setTimeout(() => {
+      cleanup();
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      cleanup();
+      reject(new DOMException('Aborted', 'AbortError'));
+    };
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
 export async function createAiJob(input: CreateAiJobInput, init?: RequestInit) {
-  const body = JSON.stringify(withCanonicalModel(input));
+  const normalizedInput = withCanonicalModel(withClientJobId(input));
+  const body = JSON.stringify(normalizedInput);
   const requestInit = {
     ...init,
     method: 'POST',
     body,
   };
   try {
-    return await requestJson<AiJobDetail>(apiUrl('/api/ai/jobs'), requestInit);
+    const maxNetworkRetries = 3;
+    for (let attempt = 0; attempt <= maxNetworkRetries; attempt += 1) {
+      try {
+        return await requestJson<AiJobDetail>(apiUrl('/api/ai/jobs'), requestInit);
+      } catch (err) {
+        if (!isNetworkRequestError(err) || attempt >= maxNetworkRetries) throw err;
+        await sleep(aiJobCreateRetryDelayMs(attempt), init?.signal ?? undefined);
+      }
+    }
+    throw new Error('AI job creation retry exhausted');
   } catch (err) {
     if (!isCreditsReserveInvalidError(err) || !hasCreditsReserveHeader(init?.headers)) throw err;
     clearLastCreditsReserveKey();
