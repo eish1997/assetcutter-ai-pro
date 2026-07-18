@@ -234,6 +234,7 @@ import {
   retryAuthAiGatewayJob,
   summarizeAuthAiGatewayJobs,
 } from './ai-gateway/auth-api-handler.js';
+import { startAiGatewayQueueRecoveryLoop } from './ai-gateway/recovery.js';
 import { buildAiGatewayTrendReport, refreshAiGatewayTrendSnapshot } from './ai-gateway/trend-report.js';
 import { listPublicPriceCatalog } from './pricing-engine.js';
 import { buildUsageReceipt, quoteJobKinds } from './pricing-read-model.js';
@@ -269,6 +270,7 @@ function startStoreInit() {
     await ensurePriceCatalogStore();
     storeReady = true;
     console.log('[auth-api] store ready');
+    startAiGatewayQueueRecoveryLoop();
     try {
       assertProductionConfig();
       const adminEmail = String(process.env.AUTH_ADMIN_EMAIL || '').trim().toLowerCase();
