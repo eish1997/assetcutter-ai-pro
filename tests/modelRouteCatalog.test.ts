@@ -61,6 +61,14 @@ describe("model route catalog", () => {
     });
   });
 
+  it("does not advertise unavailable Gemini 3 Pro Preview as Gateway executable", () => {
+    const route = listModelRoutes("gemini-3-pro-preview").find((row) => row.providerId === "vertex-site");
+    expect(route).toMatchObject({
+      executionStatus: "platform_ready",
+      gatewayExecutionStatus: "adapter_pending",
+    });
+  });
+
   it("maps Volcengine Ark to Doubao and Seed provider models", () => {
     const arkRoutes = listProviderRoutes("volcengine-ark");
 
