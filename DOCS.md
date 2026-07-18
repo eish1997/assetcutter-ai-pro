@@ -2,6 +2,8 @@
 
 本文档描述当前网站的功能、架构与扩展方式，便于你了解与修改开发。
 
+**AI 生成链路排障**：如果后台供应商显示正常但前端生成失败，先按 `[docs/AI生成任务链路核对表.md](docs/AI生成任务链路核对表.md)` 填写入口、模型、route、key、job、artifact 和回写状态；不要把 Key Check 或 Route Check 当成真实 Generation Test。
+**供应商插头接入**：新增或改造供应商时，按 `[docs/供应商插头接入规范.md](docs/供应商插头接入规范.md)` 补齐目录、路由、worker、adapter、Key 池和测试；`npm run guard:ai-routing` 会串联执行供应商插头守门检查。
 ---
 
 ## 一、项目概述

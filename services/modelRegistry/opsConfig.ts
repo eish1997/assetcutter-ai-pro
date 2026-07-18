@@ -3,13 +3,17 @@ import { apiUrl } from "../apiBase";
 import type { ModelOpsConfig } from "./opsTypes";
 import type { SupplierId, WiringEdge } from "./hubGraph/types";
 import {
+  DEFAULT_IMAGE_MODEL_REGISTRY_ID,
   DIALOG_IMAGE_REGISTRY,
   isRegisteredImageModelId,
   LEGACY_IMAGE_GEAR_TO_REGISTRY,
 } from "./imageModels";
 import { getCanonicalModel } from "./canonicalModelCatalog";
 
-const DEFAULT_IMAGE_MODEL_PREFERENCE: string[] = DIALOG_IMAGE_REGISTRY.map((e) => e.registryId);
+const DEFAULT_IMAGE_MODEL_PREFERENCE: string[] = [
+  DEFAULT_IMAGE_MODEL_REGISTRY_ID,
+  ...DIALOG_IMAGE_REGISTRY.map((e) => e.registryId),
+].filter((id, index, arr) => arr.indexOf(id) === index);
 
 export const DEFAULT_MODEL_OPS_CONFIG: ModelOpsConfig = {
   version: 1,

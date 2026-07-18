@@ -250,6 +250,93 @@ export type AdminModelRouteTestResponse = {
   result: AdminModelRouteTestResult;
 };
 
+export type AdminModelGenerationTestInput = {
+  canonicalModelId: string;
+  modality?: string;
+  providerId?: string;
+  provider?: string;
+  executionStatus?: string;
+  requiresEndpointMapping?: boolean;
+};
+
+export type AdminModelGenerationTestResult = {
+  ok: boolean;
+  status: 'passed' | 'failed';
+  mode: 'real_generation';
+  testLayer?: 'generation_test';
+  createsGenerationTask?: boolean;
+  canonicalModelId: string | null;
+  providerId: string | null;
+  modality: string | null;
+  code: string;
+  message: string;
+  jobId: string | null;
+  jobStatus: string | null;
+  route: {
+    ruleId?: string | null;
+    providerId?: string | null;
+    workerId?: string | null;
+    adapterId?: string | null;
+    gatewayExecutionStatus?: string | null;
+    executionStatus?: string | null;
+    platformKeyRequired?: boolean | null;
+  } | null;
+  artifacts: Array<{
+    kind: string | null;
+    hasUrl: boolean;
+    source: string | null;
+  }>;
+  outputSummary?: {
+    kind?: string;
+    textPreview?: string;
+  } | null;
+  nextAction?: string | null;
+  testedAt: string;
+};
+
+export type AdminModelGenerationTestResponse = {
+  ok?: boolean;
+  result: AdminModelGenerationTestResult;
+};
+
+export type AdminModelDiagnosticsRunInput = {
+  layers?: ReadonlyArray<'route' | 'generation'>;
+  models: Array<
+    | string
+    | {
+        canonicalModelId: string;
+        registryId?: string;
+        modality?: string;
+        providerId?: string;
+        provider?: string;
+        executionStatus?: string;
+        requiresEndpointMapping?: boolean;
+      }
+  >;
+};
+
+export type AdminModelDiagnosticsRunResultItem = {
+  canonicalModelId: string;
+  providerId: string | null;
+  modality: string | null;
+  route?: AdminModelRouteTestResult;
+  generation?: AdminModelGenerationTestResult;
+};
+
+export type AdminModelDiagnosticsRunResponse = {
+  ok: boolean;
+  code?: string;
+  message?: string;
+  layers: Array<'route' | 'generation'>;
+  results: AdminModelDiagnosticsRunResultItem[];
+  summary: {
+    total: number;
+    route: { tested: number; passed: number; failed: number };
+    generation: { tested: number; passed: number; failed: number; createdJobs: number };
+  };
+  generatedAt: string;
+};
+
 export type AdminModelAvailabilitySummaryInput = {
   models: Array<{
     canonicalModelId: string;
@@ -364,6 +451,20 @@ export async function fetchAdminModelAvailabilitySummary(input: AdminModelAvaila
 
 export async function testAdminModelRoute(input: AdminModelRouteTestInput) {
   return requestJson<AdminModelRouteTestResponse>(apiUrl('/api/admin/model-route-test'), {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+}
+
+export async function testAdminModelGeneration(input: AdminModelGenerationTestInput) {
+  return requestJson<AdminModelGenerationTestResponse>(apiUrl('/api/admin/model-generation-test'), {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+}
+
+export async function runAdminModelDiagnostics(input: AdminModelDiagnosticsRunInput) {
+  return requestJson<AdminModelDiagnosticsRunResponse>(apiUrl('/api/admin/model-diagnostics/run'), {
     method: 'POST',
     body: JSON.stringify(input),
   });

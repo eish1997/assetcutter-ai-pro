@@ -213,6 +213,11 @@ describe('AI gateway model publication guard', () => {
   });
 
   it('identifies catalog models whose backend adapters are still pending', async () => {
+    expect(resolveExecutableModelRoute({ modality: 'image', model: 'gemini-3.1-flash-image' })).toBeNull();
+    expect(resolveKnownPendingModelRoute({ modality: 'image', model: 'gemini-3.1-flash-image' })).toMatchObject({
+      canonicalModelId: 'gemini-3.1-flash-image',
+      gatewayExecutionStatus: 'adapter_pending',
+    });
     expect(resolveKnownPendingModelRoute({ modality: 'video', model: 'doubao-seedance-2-0' })).toBeNull();
     expect(resolveKnownPendingModelRoute({ modality: 'model3d', model: 'doubao-seed3d-2-0' })).toBeNull();
     expect(resolveKnownPendingModelRoute({ modality: 'image', model: 'gpt-image-2', provider: 'toapis' })).toBeNull();

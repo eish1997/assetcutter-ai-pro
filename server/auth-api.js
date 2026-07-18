@@ -203,6 +203,8 @@ import {
 } from './ai-gateway/model-ops-config-store.js';
 import { buildModelAvailabilitySummary } from './ai-gateway/model-availability-summary.js';
 import { testAiGatewayModelRoute } from './ai-gateway/model-route-test.js';
+import { testAiGatewayModelGeneration } from './ai-gateway/model-generation-test.js';
+import { runAiGatewayModelDiagnostics } from './ai-gateway/model-diagnostics-run.js';
 import {
   acquireProviderKey,
   applyProviderKeyHealthAutomation,
@@ -2618,6 +2620,72 @@ const server = http.createServer(async (req, res) => {
       }
       const result = await testAiGatewayModelRoute(body || {});
       json(res, 200, { ok: result.ok, result });
+      return;
+    }
+
+    if (path === '/api/admin/model-generation-test' && req.method === 'POST') {
+      const staff = await requirePermission(req, res, PERMISSIONS.AI_GATEWAY_OPS_WRITE);
+      if (!staff) return;
+      let body;
+      try {
+        body = await readBody(req);
+      } catch (err) {
+        json(res, 400, { error: err?.message || 'Invalid JSON' });
+        return;
+      }
+      const result = await testAiGatewayModelGeneration(req, body || {}, staff.user);
+      await createAuditLog({
+        actorUserId: staff.user.id,
+        actorIdentifier: staff.user.username,
+        action: 'admin.model_generation_test',
+        meta: {
+          canonicalModelId: result.canonicalModelId,
+          providerId: result.providerId,
+          modality: result.modality,
+          status: result.status,
+          code: result.code,
+          jobId: result.jobId,
+          createsGenerationTask: result.createsGenerationTask,
+        },
+        ip: getClientIp(req),
+        userAgent: req.headers['user-agent'],
+      });
+      json(res, 200, { ok: result.ok, result });
+      return;
+    }
+
+    if (path === '/api/admin/model-diagnostics/run' && req.method === 'POST') {
+      const staff = await requirePermission(req, res, PERMISSIONS.AI_GATEWAY_OPS_WRITE);
+      if (!staff) return;
+      let body;
+      try {
+        body = await readBody(req);
+      } catch (err) {
+        json(res, 400, { error: err?.message || 'Invalid JSON' });
+        return;
+      }
+      const result = await runAiGatewayModelDiagnostics(req, body || {}, staff.user);
+      await createAuditLog({
+        actorUserId: staff.user.id,
+        actorIdentifier: staff.user.username,
+        action: 'admin.model_diagnostics_run',
+        meta: {
+          layers: result.layers,
+          modelCount: result.results.length,
+          summary: result.summary,
+          models: result.results.map((item) => ({
+            canonicalModelId: item.canonicalModelId,
+            providerId: item.providerId,
+            modality: item.modality,
+            routeStatus: item.route?.status || null,
+            generationStatus: item.generation?.status || null,
+            generationJobId: item.generation?.jobId || null,
+          })),
+        },
+        ip: getClientIp(req),
+        userAgent: req.headers['user-agent'],
+      });
+      json(res, 200, result);
       return;
     }
 

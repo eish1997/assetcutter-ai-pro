@@ -54,8 +54,8 @@
 | 站内 ID                            | Vertex Model ID                           |
 | -------------------------------- | ----------------------------------------- |
 | `gemini-2.5-flash-image`         | `gemini-2.5-flash-image`（GA）              |
-| `gemini-3.1-flash-image`         | `gemini-3.1-flash-image`（GA，**默认**）   |
-| `gemini-3-pro-image`             | `gemini-3-pro-image`（GA）                  |
+| `gemini-3.1-flash-image`         | `gemini-3.1-flash-image`（GA；本项目暂不标记 Gateway ready） |
+| `gemini-3-pro-image`             | `gemini-3-pro-image`（GA，**默认**）        |
 | `gemini-3.1-flash-image-preview` | `gemini-3.1-flash-image-preview`（Preview） |
 | `gemini-3-pro-image-preview`     | `gemini-3-pro-image-preview`（Preview）     |
 

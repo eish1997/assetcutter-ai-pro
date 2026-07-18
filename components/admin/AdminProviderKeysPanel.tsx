@@ -13,12 +13,16 @@ import {
   fetchAdminProviderKeys,
   fetchAdminModelOpsConfig,
   restoreAdminProviderKey,
+  runAdminModelDiagnostics,
   saveAdminModelOpsConfig,
   saveAdminProviderKeys,
   smokeTestAdminProviderKey,
+  testAdminModelGeneration,
   testAdminModelRoute,
+  type AdminModelGenerationTestResult,
   type AdminModelOpsConfig,
   type AdminModelAvailabilitySummaryItem,
+  type AdminModelRouteTestResult,
   type AdminProviderKeyEvent,
   type AdminProviderKeyHealthSummaryItem,
   type AdminProviderKeyRow,
@@ -28,6 +32,7 @@ import { blockIfRolePreview } from '../../services/adminRolePreview';
 import {
   getProviderCatalogEntry,
   getCanonicalModel,
+  isProviderCatalogId,
   listCanonicalModels,
   listModelRoutes,
   listProviderModels,
@@ -44,6 +49,7 @@ import {
   type ProviderAuthField,
   type ProviderCapabilityStatus,
   type ProviderCatalogEntry,
+  type ProviderCatalogId,
   type ProviderModelCatalogEntry,
   type ProviderModelLifecycle,
   type ProviderModelStatus,
@@ -80,7 +86,7 @@ function providerLabel(provider: string) {
   return providerDisplayName(provider) || provider || '供应商';
 }
 
-function createDraft(provider = KEY_POOL_PROVIDERS[0]?.id || 'tripo'): AdminProviderKeyRow {
+function createDraft(provider: string = KEY_POOL_PROVIDERS[0]?.id || 'tripo'): AdminProviderKeyRow {
   return {
     id: `draft_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
     provider,
@@ -213,6 +219,60 @@ function providerKeyTestModeLabel(mode?: string | null) {
 function routeTestModeLabel(mode?: string | null) {
   if (mode === 'route_guard') return 'Route Check';
   return 'Route Test';
+}
+
+type ModelDiagnosticLayer = 'route' | 'generation';
+
+type ModelDiagnosticEntry = {
+  layer: ModelDiagnosticLayer;
+  status: 'passed' | 'failed';
+  message: string;
+  code?: string | null;
+  providerId?: string | null;
+  jobId?: string | null;
+  jobStatus?: string | null;
+  nextAction?: string | null;
+  testedAt?: string | null;
+};
+
+type ModelDiagnosticState = Record<string, Partial<Record<ModelDiagnosticLayer, ModelDiagnosticEntry>>>;
+
+function diagnosticStatusClass(status?: string) {
+  if (status === 'passed') return 'border-emerald-500/25 bg-emerald-950/20 text-emerald-100';
+  if (status === 'failed') return 'border-red-500/25 bg-red-950/20 text-red-100';
+  return 'border-white/[0.06] bg-black/20 text-gray-500';
+}
+
+function diagnosticStatusLabel(status?: string) {
+  if (status === 'passed') return 'PASS';
+  if (status === 'failed') return 'FAIL';
+  return '未测';
+}
+
+function routeDiagnosticEntry(result: AdminModelRouteTestResult): ModelDiagnosticEntry {
+  return {
+    layer: 'route',
+    status: result.status,
+    message: result.message,
+    code: result.code,
+    providerId: result.providerId,
+    nextAction: result.nextAction || null,
+    testedAt: result.testedAt,
+  };
+}
+
+function generationDiagnosticEntry(result: AdminModelGenerationTestResult): ModelDiagnosticEntry {
+  return {
+    layer: 'generation',
+    status: result.status,
+    message: result.message,
+    code: result.code,
+    providerId: result.providerId,
+    jobId: result.jobId,
+    jobStatus: result.jobStatus,
+    nextAction: result.nextAction || null,
+    testedAt: result.testedAt,
+  };
 }
 
 const CAPABILITY_STATUS_ITEMS: readonly {
@@ -441,9 +501,12 @@ const AdminProviderKeysPanel: React.FC = () => {
   const [loading, setLoading] = React.useState(true);
   const [saving, setSaving] = React.useState(false);
   const [savingModelOps, setSavingModelOps] = React.useState(false);
+  const [runningPublishedDiagnostics, setRunningPublishedDiagnostics] = React.useState(false);
   const [applyingHealth, setApplyingHealth] = React.useState(false);
   const [actingId, setActingId] = React.useState('');
   const [routeTestingId, setRouteTestingId] = React.useState('');
+  const [generationTestingId, setGenerationTestingId] = React.useState('');
+  const [modelDiagnostics, setModelDiagnostics] = React.useState<ModelDiagnosticState>({});
   const [error, setError] = React.useState('');
   const [message, setMessage] = React.useState('');
   const [selectedProviderId, setSelectedProviderId] = React.useState(PROVIDERS[0]?.id || 'tripo');
@@ -577,6 +640,69 @@ const AdminProviderKeysPanel: React.FC = () => {
     }
   };
 
+  const runPublishedModelDiagnostics = async () => {
+    if (blockIfRolePreview(isRolePreview)) return;
+    setRunningPublishedDiagnostics(true);
+    setError('');
+    setMessage('');
+    try {
+      const availabilityRows: AdminModelAvailabilitySummaryItem[] = modelAvailability.length ? modelAvailability : await refreshModelAvailability();
+      const availabilityById = new Map<string, AdminModelAvailabilitySummaryItem>(
+        availabilityRows.map((row) => [row.canonicalModelId, row])
+      );
+      const targets: Array<{
+        canonicalModelId: string;
+        modality: string;
+        providerId?: string;
+        executionStatus?: string;
+        requiresEndpointMapping: boolean;
+      }> = [];
+      for (const model of WORKSPACE_CANONICAL_MODELS) {
+        if (!selectedCanonicalSet.has(model.canonicalModelId)) continue;
+        if (model.modality !== 'text' && model.modality !== 'image') continue;
+        const availability = availabilityById.get(model.canonicalModelId);
+        if (!availability?.workspaceSelectable) continue;
+        const availabilityRoute = availability.routes.find((route) => route.selectable) || availability.routes[0];
+        const catalogRoute = listModelRoutes(model.canonicalModelId)[0];
+        targets.push({
+            canonicalModelId: model.canonicalModelId,
+            modality: availabilityRoute?.modality || catalogRoute?.modality || model.modality,
+            providerId: availabilityRoute?.providerId || catalogRoute?.providerId,
+            executionStatus: availabilityRoute?.executionStatus || catalogRoute?.executionStatus,
+            requiresEndpointMapping: catalogRoute?.requiresEndpointMapping === true,
+        });
+      }
+      if (!targets.length) {
+        setError('No ready published text/image models to diagnose');
+        return;
+      }
+      const res = await runAdminModelDiagnostics({
+        layers: ['route', 'generation'],
+        models: targets,
+      });
+      setModelDiagnostics((prev) => {
+        const next: ModelDiagnosticState = { ...prev };
+        for (const item of res.results || []) {
+          next[item.canonicalModelId] = {
+            ...(next[item.canonicalModelId] || {}),
+            ...(item.route ? { route: routeDiagnosticEntry(item.route) } : {}),
+            ...(item.generation ? { generation: generationDiagnosticEntry(item.generation) } : {}),
+          };
+        }
+        return next;
+      });
+      const route = res.summary.route;
+      const generation = res.summary.generation;
+      setMessage(
+        `Published diagnostics finished: Route ${route.passed}/${route.tested} passed · Gen ${generation.passed}/${generation.tested} passed · jobs ${generation.createdJobs}`
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Published diagnostics failed');
+    } finally {
+      setRunningPublishedDiagnostics(false);
+    }
+  };
+
   const runModelRouteTest = async (canonicalModelId: string) => {
     const model = WORKSPACE_CANONICAL_MODELS.find((row) => row.canonicalModelId === canonicalModelId);
     if (!model) return;
@@ -594,6 +720,13 @@ const AdminProviderKeysPanel: React.FC = () => {
         executionStatus: availabilityRoute?.executionStatus || catalogRoute?.executionStatus,
         requiresEndpointMapping: catalogRoute?.requiresEndpointMapping === true,
       });
+      setModelDiagnostics((prev) => ({
+        ...prev,
+        [canonicalModelId]: {
+          ...(prev[canonicalModelId] || {}),
+          route: routeDiagnosticEntry(res.result),
+        },
+      }));
       await refreshModelAvailability();
       if (res.result.status === 'passed') {
         setMessage(`${canonicalModelId} ${routeTestModeLabel(res.result.mode)} passed · no generation task created`);
@@ -601,14 +734,82 @@ const AdminProviderKeysPanel: React.FC = () => {
         setError(`${canonicalModelId} ${routeTestModeLabel(res.result.mode)} failed: ${res.result.message}${res.result.nextAction ? ` · ${res.result.nextAction}` : ''}`);
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Route test failed');
+      const fallbackMessage = err instanceof Error ? err.message : 'Route test failed';
+      setModelDiagnostics((prev) => ({
+        ...prev,
+        [canonicalModelId]: {
+          ...(prev[canonicalModelId] || {}),
+          route: {
+            layer: 'route',
+            status: 'failed',
+            message: fallbackMessage,
+            code: 'ADMIN_ROUTE_TEST_REQUEST_FAILED',
+            providerId: availabilityRoute?.providerId || catalogRoute?.providerId || null,
+            testedAt: new Date().toISOString(),
+          },
+        },
+      }));
+      setError(fallbackMessage);
     } finally {
       setRouteTestingId('');
     }
   };
 
+  const runModelGenerationTest = async (canonicalModelId: string) => {
+    const model = WORKSPACE_CANONICAL_MODELS.find((row) => row.canonicalModelId === canonicalModelId);
+    if (!model) return;
+    const availability = modelAvailabilityById.get(canonicalModelId);
+    const availabilityRoute = availability?.routes.find((route) => route.selectable) || availability?.routes[0];
+    const catalogRoute = listModelRoutes(canonicalModelId)[0];
+    setGenerationTestingId(canonicalModelId);
+    setError('');
+    setMessage('');
+    try {
+      const res = await testAdminModelGeneration({
+        canonicalModelId,
+        modality: availabilityRoute?.modality || catalogRoute?.modality || model.modality,
+        providerId: availabilityRoute?.providerId || catalogRoute?.providerId,
+        executionStatus: availabilityRoute?.executionStatus || catalogRoute?.executionStatus,
+        requiresEndpointMapping: catalogRoute?.requiresEndpointMapping === true,
+      });
+      setModelDiagnostics((prev) => ({
+        ...prev,
+        [canonicalModelId]: {
+          ...(prev[canonicalModelId] || {}),
+          generation: generationDiagnosticEntry(res.result),
+        },
+      }));
+      await refreshModelAvailability();
+      const jobLabel = res.result.jobId ? ` · job ${res.result.jobId}` : '';
+      if (res.result.status === 'passed') {
+        setMessage(`${canonicalModelId} Generation Test passed${jobLabel}`);
+      } else {
+        setError(`${canonicalModelId} Generation Test failed: ${res.result.message}${jobLabel}${res.result.nextAction ? ` · ${res.result.nextAction}` : ''}`);
+      }
+    } catch (err) {
+      const fallbackMessage = err instanceof Error ? err.message : 'Generation test failed';
+      setModelDiagnostics((prev) => ({
+        ...prev,
+        [canonicalModelId]: {
+          ...(prev[canonicalModelId] || {}),
+          generation: {
+            layer: 'generation',
+            status: 'failed',
+            message: fallbackMessage,
+            code: 'ADMIN_GENERATION_TEST_REQUEST_FAILED',
+            providerId: availabilityRoute?.providerId || catalogRoute?.providerId || null,
+            testedAt: new Date().toISOString(),
+          },
+        },
+      }));
+      setError(fallbackMessage);
+    } finally {
+      setGenerationTestingId('');
+    }
+  };
+
   const addProviderKeyDraft = (provider = selectedProviderId) => {
-    const nextProvider = KEY_POOL_PROVIDERS.some((item) => item.id === provider)
+    const nextProvider: ProviderCatalogId = KEY_POOL_PROVIDERS.some((item) => item.id === provider) && isProviderCatalogId(provider)
       ? provider
       : KEY_POOL_PROVIDERS[0]?.id || 'tripo';
     setRows((prev) => [...prev, createDraft(nextProvider)]);
@@ -889,7 +1090,7 @@ const AdminProviderKeysPanel: React.FC = () => {
 
       <div className="rounded-xl border border-blue-500/20 bg-blue-950/10 p-4">
         <div className="text-[11px] font-semibold text-blue-100">Test Layers</div>
-        <div className="mt-2 grid gap-2 text-[10px] text-gray-400 md:grid-cols-3">
+        <div className="mt-2 grid gap-2 text-[10px] text-gray-400 md:grid-cols-4">
           <div className="rounded-lg border border-white/[0.06] bg-black/20 p-2">
             <div className="font-semibold text-gray-200">Credential Check</div>
             <div className="mt-1">Checks required key fields only. No upstream call and no generation task.</div>
@@ -901,6 +1102,10 @@ const AdminProviderKeysPanel: React.FC = () => {
           <div className="rounded-lg border border-white/[0.06] bg-black/20 p-2">
             <div className="font-semibold text-gray-200">Route Check</div>
             <div className="mt-1">Checks published model route, adapter readiness, and platform key availability.</div>
+          </div>
+          <div className="rounded-lg border border-white/[0.06] bg-black/20 p-2">
+            <div className="font-semibold text-gray-200">Generation Test</div>
+            <div className="mt-1">Creates a minimal text or image job and checks the returned output.</div>
           </div>
         </div>
       </div>
@@ -999,6 +1204,15 @@ const AdminProviderKeysPanel: React.FC = () => {
             </button>
             <button
               type="button"
+              disabled={!canWriteOps || savingModelOps || runningPublishedDiagnostics || selectedCanonicalModelIds.length === 0}
+              title="Runs Route + Generation diagnostics for ready published text/image models"
+              onClick={() => void runPublishedModelDiagnostics()}
+              className="rounded-lg border border-cyan-500/25 bg-cyan-950/20 px-3 py-1.5 text-[10px] font-semibold text-cyan-100 disabled:opacity-40"
+            >
+              {runningPublishedDiagnostics ? 'Running diagnostics...' : 'Run published diagnostics'}
+            </button>
+            <button
+              type="button"
               disabled={!canWriteOps || savingModelOps || selectedCanonicalModelIds.length === 0}
               onClick={() => void savePublishedModels()}
               className="rounded-lg bg-[#2563eb] px-3 py-1.5 text-[10px] font-semibold text-white disabled:opacity-40"
@@ -1019,6 +1233,8 @@ const AdminProviderKeysPanel: React.FC = () => {
                   {models.map((model) => {
                     const checked = selectedCanonicalSet.has(model.canonicalModelId);
                     const availability = modelAvailabilityById.get(model.canonicalModelId);
+                    const canRunGenerationTest = canWriteOps && availability?.workspaceSelectable && (model.modality === 'text' || model.modality === 'image');
+                    const diagnostics = modelDiagnostics[model.canonicalModelId] || {};
                     return (
                       <label
                         key={model.canonicalModelId}
@@ -1063,18 +1279,69 @@ const AdminProviderKeysPanel: React.FC = () => {
                               {availability.reason}
                             </span>
                           ) : null}
-                          <button
-                            type="button"
-                            disabled={routeTestingId === model.canonicalModelId}
-                            onClick={(event) => {
-                              event.preventDefault();
-                              event.stopPropagation();
-                              void runModelRouteTest(model.canonicalModelId);
-                            }}
-                            className="mt-2 rounded-md border border-white/[0.08] bg-black/20 px-2 py-1 text-[10px] text-gray-300 disabled:opacity-40"
-                          >
-                            {routeTestingId === model.canonicalModelId ? 'Checking...' : 'Route Check'}
-                          </button>
+                          <span className="mt-2 flex flex-wrap gap-1.5">
+                            <button
+                              type="button"
+                              disabled={routeTestingId === model.canonicalModelId}
+                              onClick={(event) => {
+                                event.preventDefault();
+                                event.stopPropagation();
+                                void runModelRouteTest(model.canonicalModelId);
+                              }}
+                              className="rounded-md border border-white/[0.08] bg-black/20 px-2 py-1 text-[10px] text-gray-300 disabled:opacity-40"
+                            >
+                              {routeTestingId === model.canonicalModelId ? 'Checking...' : 'Route Check'}
+                            </button>
+                            <button
+                              type="button"
+                              disabled={!canRunGenerationTest || generationTestingId === model.canonicalModelId}
+                              title={canRunGenerationTest ? 'Creates a real minimal generation task' : 'Generation Test is enabled for ready text/image models'}
+                              onClick={(event) => {
+                                event.preventDefault();
+                                event.stopPropagation();
+                                void runModelGenerationTest(model.canonicalModelId);
+                              }}
+                              className="rounded-md border border-emerald-500/25 bg-emerald-950/20 px-2 py-1 text-[10px] text-emerald-100 disabled:opacity-40"
+                            >
+                              {generationTestingId === model.canonicalModelId ? 'Generating...' : 'Generation Test'}
+                            </button>
+                          </span>
+                          <span className="mt-2 grid gap-1.5 sm:grid-cols-2">
+                            {[
+                              { key: 'route' as const, label: 'Route', entry: diagnostics.route },
+                              { key: 'generation' as const, label: 'Gen', entry: diagnostics.generation },
+                            ].map((item) => (
+                              <span
+                                key={`${model.canonicalModelId}:${item.key}`}
+                                className={`block min-w-0 rounded-md border px-2 py-1 ${diagnosticStatusClass(item.entry?.status)}`}
+                                title={
+                                  item.entry
+                                    ? [
+                                        item.entry.message,
+                                        item.entry.code ? `code: ${item.entry.code}` : '',
+                                        item.entry.providerId ? `provider: ${item.entry.providerId}` : '',
+                                        item.entry.jobId ? `job: ${item.entry.jobId}` : '',
+                                        item.entry.nextAction || '',
+                                      ]
+                                        .filter(Boolean)
+                                        .join('\n')
+                                    : `${item.label} not tested`
+                                }
+                              >
+                                <span className="flex items-center justify-between gap-2">
+                                  <span className="font-semibold">{item.label}</span>
+                                  <span>{diagnosticStatusLabel(item.entry?.status)}</span>
+                                </span>
+                                {item.entry ? (
+                                  <span className="mt-0.5 block truncate text-[9px] opacity-80">
+                                    {item.entry.jobId || item.entry.code || item.entry.providerId || item.entry.message}
+                                  </span>
+                                ) : (
+                                  <span className="mt-0.5 block text-[9px] opacity-70">No result</span>
+                                )}
+                              </span>
+                            ))}
+                          </span>
                         </span>
                       </label>
                     );

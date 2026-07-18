@@ -1,4 +1,5 @@
 import type { CustomAppModule } from '../types';
+import { DEFAULT_IMAGE_MODEL_REGISTRY_ID } from './modelRegistry/imageModels';
 
 /** 与 WorkflowSection 运行日志中性前缀一致（避免在能力库展示） */
 export const QUICK_COMPOSE_BAR_LOG_LABEL = '底部输入';
@@ -53,7 +54,7 @@ function plainT2IModule(): CustomAppModule {
     order: -999,
     instruction: '',
     skipUnderstand: true,
-    imageModelRegistryId: 'gemini-3.1-flash-image',
+    imageModelRegistryId: DEFAULT_IMAGE_MODEL_REGISTRY_ID,
   };
 }
 
@@ -68,7 +69,7 @@ function plainI2IModule(): CustomAppModule {
     instruction:
       '根据用户文字说明调整、细化或重新生成画面，保持主体与构图合理；若用户未补充说明，则在保持内容的前提下适度增强细节与观感。',
     skipUnderstand: true,
-    imageModelRegistryId: 'gemini-3.1-flash-image',
+    imageModelRegistryId: DEFAULT_IMAGE_MODEL_REGISTRY_ID,
   };
 }
 

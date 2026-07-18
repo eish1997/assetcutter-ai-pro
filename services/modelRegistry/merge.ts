@@ -116,7 +116,9 @@ export function buildEffectiveImageGearRows(_provider: unknown, ops: ModelOpsCon
 
 function defaultModelPreference(rows?: readonly PublishedWorkspaceModelRow[]): string[] {
   const source = rows?.length ? rows : listPublishedWorkspaceImageModels();
-  return source.map((e) => e.registryId);
+  return [DEFAULT_IMAGE_MODEL_REGISTRY_ID, ...source.map((e) => e.registryId)].filter(
+    (id, index, arr) => arr.indexOf(id) === index
+  );
 }
 
 function normalizeModelPreference(pref: string[] | undefined): string[] {

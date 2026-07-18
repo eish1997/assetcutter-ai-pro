@@ -2,6 +2,7 @@ export const AI_GATEWAY_MODEL_ROUTE_EXECUTABLE_RULES = Object.freeze([
   {
     id: 'gemini-gateway',
     modelPattern: /^gemini-/i,
+    excludedModelPatterns: Object.freeze([/^gemini-3\.1-flash-image(?:-preview)?$/i]),
     modalities: Object.freeze(['text', 'image']),
     catalogProviderIds: Object.freeze(['vertex-site', 'gemini-aistudio']),
     gatewayProviderIds: Object.freeze(['vertex-site', 'gemini-aistudio']),
@@ -113,6 +114,15 @@ export const AI_GATEWAY_MODEL_ROUTE_EXECUTABLE_RULES = Object.freeze([
 
 export const AI_GATEWAY_MODEL_ROUTE_PENDING_RULES = Object.freeze([
   {
+    id: 'gemini-31-flash-image-pending',
+    modelPattern: /^gemini-3\.1-flash-image(?:-preview)?$/i,
+    modalities: Object.freeze(['image']),
+    catalogProviderIds: Object.freeze(['vertex-site', 'gemini-aistudio']),
+    gatewayProviderIds: Object.freeze(['vertex-site', 'gemini-aistudio']),
+    gatewayExecutionStatus: 'adapter_pending',
+    executionStatus: 'adapter_pending',
+  },
+  {
     id: 'volcengine-ark-pending',
     modelPattern: /^(doubao-|seedream-|seedance-|seed3d-)/i,
     catalogProviderIds: Object.freeze(['volcengine-ark']),
@@ -175,6 +185,11 @@ function modalityMatches(rule, modality) {
   return rule.modalities.includes(id);
 }
 
+function modelExcluded(rule, canonicalModelId) {
+  const patterns = Array.isArray(rule.excludedModelPatterns) ? rule.excludedModelPatterns : [];
+  return patterns.some((pattern) => pattern.test(canonicalModelId));
+}
+
 function resolveRuntimeRule(rules, input, providerField) {
   return listRuntimeRules(rules, input, providerField)[0] || null;
 }
@@ -199,6 +214,7 @@ function listRuntimeRules(rules, input, providerField) {
   const out = [];
   for (const rule of rules) {
     if (!rule.modelPattern.test(canonicalModelId)) continue;
+    if (modelExcluded(rule, canonicalModelId)) continue;
     if (!modalityMatches(rule, raw.modality)) continue;
     if (!providerMatches(rule, explicitProviderId, providerField, disabledProviders)) continue;
     if (explicitProviderId) {

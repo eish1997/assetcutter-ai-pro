@@ -1,0 +1,260 @@
+import { createAuthAiGatewayJob, publicAuthAiJobDetail } from './auth-api-handler.js';
+import { persistentAiGatewayJobStore } from './persistent-job-store.js';
+
+const SUPPORTED_MODALITIES = new Set(['text', 'image']);
+const TERMINAL_STATUSES = new Set(['succeeded', 'failed', 'cancelled']);
+
+function nonEmptyString(value) {
+  return typeof value === 'string' && value.trim() ? value.trim() : '';
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function normalizeGenerationTestInput(input) {
+  const raw = input && typeof input === 'object' ? input : {};
+  const canonicalModelId = nonEmptyString(raw.canonicalModelId || raw.registryId || raw.model);
+  const modality = nonEmptyString(raw.modality).toLowerCase();
+  return {
+    canonicalModelId,
+    registryId: nonEmptyString(raw.registryId) || canonicalModelId,
+    modality,
+    provider: nonEmptyString(raw.providerId || raw.provider),
+    executionStatus: nonEmptyString(raw.executionStatus),
+    requiresEndpointMapping: raw.requiresEndpointMapping === true,
+  };
+}
+
+function failedResult(input, code, message, extra = {}) {
+  return {
+    ok: false,
+    status: 'failed',
+    mode: 'real_generation',
+    testLayer: 'generation_test',
+    createsGenerationTask: extra.createsGenerationTask === true || Boolean(extra.jobId),
+    canonicalModelId: input.canonicalModelId || null,
+    providerId: input.provider || null,
+    modality: input.modality || null,
+    code,
+    message,
+    jobId: extra.jobId || null,
+    jobStatus: extra.jobStatus || null,
+    route: extra.route || null,
+    artifacts: extra.artifacts || [],
+    outputSummary: extra.outputSummary || null,
+    nextAction: extra.nextAction || null,
+    testedAt: new Date().toISOString(),
+  };
+}
+
+function summarizeRoute(planOrDetail) {
+  const route = planOrDetail?.route || planOrDetail?.job?.metadata?.modelRouteGuard || null;
+  if (!route || typeof route !== 'object') return null;
+  return {
+    ruleId: route.ruleId || null,
+    providerId: route.providerId || null,
+    workerId: route.workerId || null,
+    adapterId: route.adapterId || null,
+    gatewayExecutionStatus: route.gatewayExecutionStatus || null,
+    executionStatus: route.executionStatus || null,
+    platformKeyRequired: route.platformKeyRequired ?? null,
+  };
+}
+
+function summarizeArtifacts(artifacts) {
+  return (Array.isArray(artifacts) ? artifacts : [])
+    .map((artifact) => ({
+      kind: nonEmptyString(artifact?.kind) || null,
+      hasUrl: Boolean(nonEmptyString(artifact?.url || artifact?.publicUrl || artifact?.downloadUrl || artifact?.src)),
+      source: nonEmptyString(artifact?.source) || null,
+    }))
+    .slice(0, 10);
+}
+
+function hasImageOutput(plan) {
+  const artifacts = Array.isArray(plan?.job?.artifacts) ? plan.job.artifacts : [];
+  if (artifacts.some((artifact) => artifact?.kind === 'image' && nonEmptyString(artifact?.url || artifact?.publicUrl || artifact?.downloadUrl || artifact?.src))) {
+    return true;
+  }
+  const output = plan?.job?.output;
+  if (!output || typeof output !== 'object') return false;
+  const outputArtifacts = Array.isArray(output.artifacts) ? output.artifacts : [];
+  return outputArtifacts.some((artifact) => artifact?.kind === 'image' && nonEmptyString(artifact?.url || artifact?.publicUrl || artifact?.downloadUrl || artifact?.src));
+}
+
+function extractTextOutput(output) {
+  if (typeof output === 'string') return output.trim();
+  if (!output || typeof output !== 'object') return '';
+  return (
+    nonEmptyString(output.text) ||
+    nonEmptyString(output.resultText) ||
+    nonEmptyString(output.content) ||
+    nonEmptyString(output.message) ||
+    nonEmptyString(output.raw?.choices?.[0]?.message?.content)
+  );
+}
+
+function validateOutput(plan, modality) {
+  if (modality === 'text') {
+    const text = extractTextOutput(plan?.job?.output);
+    if (text) return { ok: true, summary: { kind: 'text', textPreview: text.slice(0, 120) } };
+    return { ok: false, code: 'AI_GATEWAY_GENERATION_TEXT_EMPTY', message: 'Generation task succeeded but no text output was found' };
+  }
+  if (modality === 'image') {
+    if (hasImageOutput(plan)) return { ok: true, summary: { kind: 'image' } };
+    return { ok: false, code: 'AI_GATEWAY_GENERATION_IMAGE_EMPTY', message: 'Generation task succeeded but no image artifact was found' };
+  }
+  return { ok: false, code: 'AI_GATEWAY_GENERATION_MODALITY_UNSUPPORTED', message: `Generation Test supports text and image only, got ${modality || 'empty'}` };
+}
+
+function buildJobBody(input) {
+  const prompt =
+    input.modality === 'text'
+      ? 'Reply with exactly: ok'
+      : 'A simple red square icon centered on a plain white background.';
+  return {
+    modality: input.modality,
+    capability: input.modality === 'image' ? 'image.generate' : 'text.generate',
+    ...(input.provider ? { provider: input.provider } : {}),
+    model: input.canonicalModelId,
+    canonicalModelId: input.canonicalModelId,
+    registryId: input.registryId,
+    estimatedCredits: input.modality === 'image' ? 50 : 1,
+    input: {
+      prompt,
+      contents: [{ role: 'user', parts: [{ text: prompt }] }],
+      canonicalModelId: input.canonicalModelId,
+      registryId: input.registryId,
+      estimatedCredits: input.modality === 'image' ? 50 : 1,
+      config: input.modality === 'image' ? { imageConfig: { size: '1024x1024', aspectRatio: '1:1' } } : {},
+    },
+    metadata: {
+      adminGenerationTest: true,
+      uiSource: 'admin.model_generation_test',
+    },
+  };
+}
+
+async function waitForTerminalJob(jobId, options = {}) {
+  const store = options.store || persistentAiGatewayJobStore;
+  const timeoutMs = Math.max(1000, Number(options.timeoutMs || process.env.AI_GATEWAY_ADMIN_GENERATION_TEST_TIMEOUT_MS || 180_000));
+  const intervalMs = Math.max(250, Number(options.intervalMs || process.env.AI_GATEWAY_ADMIN_GENERATION_TEST_INTERVAL_MS || 1500));
+  const startedAt = Date.now();
+  let plan = await store.get(jobId);
+  while (plan && !TERMINAL_STATUSES.has(plan.job?.status)) {
+    if (Date.now() - startedAt >= timeoutMs) return { timedOut: true, plan };
+    await sleep(intervalMs);
+    plan = await store.get(jobId);
+  }
+  return { timedOut: false, plan };
+}
+
+export async function testAiGatewayModelGeneration(req, input = {}, user = {}, options = {}) {
+  const normalized = normalizeGenerationTestInput(input);
+  if (!normalized.canonicalModelId) {
+    return failedResult(normalized, 'AI_GATEWAY_MODEL_ID_REQUIRED', 'Missing canonical model id');
+  }
+  if (!SUPPORTED_MODALITIES.has(normalized.modality)) {
+    return failedResult(
+      normalized,
+      'AI_GATEWAY_GENERATION_TEST_MODALITY_UNSUPPORTED',
+      'Generation Test supports text and image only in this first pass',
+      { nextAction: 'Use Route Check for video and 3D until their real generation probes are added.' }
+    );
+  }
+  if (normalized.requiresEndpointMapping || normalized.executionStatus === 'requires_endpoint_mapping') {
+    return failedResult(
+      normalized,
+      'AI_GATEWAY_MODEL_PARAMETER_PENDING',
+      'Model route still needs parameter or endpoint mapping before it can run a real Generation Test'
+    );
+  }
+
+  const createJob = options.createJob || createAuthAiGatewayJob;
+  const createResult = await createJob(req, buildJobBody(normalized), user, {
+    ...(options.createJobOptions || {}),
+    store: options.store || persistentAiGatewayJobStore,
+  });
+  const createdJob = createResult?.body?.job || null;
+  const jobId = nonEmptyString(createdJob?.id);
+  if (!jobId || createResult.status < 200 || createResult.status >= 300) {
+    return failedResult(
+      normalized,
+      createResult?.body?.error || 'AI_GATEWAY_GENERATION_JOB_CREATE_FAILED',
+      createResult?.body?.message || 'Generation Test could not create an AI job',
+      { jobStatus: createdJob?.status || null, route: summarizeRoute(createResult?.body) }
+    );
+  }
+
+  const initialPlan = options.store ? await options.store.get(jobId) : null;
+  const initialStatus = initialPlan?.job?.status || createdJob.status;
+  const terminal =
+    initialPlan && TERMINAL_STATUSES.has(initialStatus)
+      ? { timedOut: false, plan: initialPlan }
+      : await waitForTerminalJob(jobId, options);
+  const plan = terminal.plan;
+  if (!plan) {
+    return failedResult(normalized, 'AI_GATEWAY_GENERATION_JOB_NOT_FOUND', 'Generation Test created a job but could not read it back', {
+      jobId,
+      jobStatus: initialStatus || null,
+      createsGenerationTask: true,
+    });
+  }
+  const detail = publicAuthAiJobDetail(plan);
+  const route = summarizeRoute(detail);
+  const artifacts = summarizeArtifacts(detail.job.artifacts);
+  if (terminal.timedOut) {
+    return failedResult(normalized, 'AI_GATEWAY_GENERATION_TEST_TIMEOUT', 'Generation Test timed out before the job reached a final state', {
+      jobId,
+      jobStatus: detail.job.status,
+      route,
+      artifacts,
+      nextAction: 'Open the AI jobs panel with this job id and inspect the running worker/upstream status.',
+    });
+  }
+  if (detail.job.status !== 'succeeded') {
+    return failedResult(
+      normalized,
+      detail.job.error?.code || 'AI_GATEWAY_GENERATION_JOB_FAILED',
+      detail.job.error?.message || `Generation task ended as ${detail.job.status}`,
+      {
+        jobId,
+        jobStatus: detail.job.status,
+        route,
+        artifacts,
+        nextAction: 'Check the job detail error, provider key health, and upstream quota/rate limit.',
+      }
+    );
+  }
+  const validation = validateOutput(plan, normalized.modality);
+  if (!validation.ok) {
+    return failedResult(normalized, validation.code, validation.message, {
+      jobId,
+      jobStatus: detail.job.status,
+      route,
+      artifacts,
+      outputSummary: validation.summary || null,
+      nextAction: 'The upstream task succeeded; inspect adapter output extraction and workspace restore handling.',
+    });
+  }
+  return {
+    ok: true,
+    status: 'passed',
+    mode: 'real_generation',
+    testLayer: 'generation_test',
+    createsGenerationTask: true,
+    canonicalModelId: normalized.canonicalModelId,
+    providerId: detail.job.provider || route?.providerId || normalized.provider || null,
+    modality: normalized.modality,
+    code: 'AI_GATEWAY_GENERATION_READY',
+    message: 'Generation task created, completed, and returned the expected output type.',
+    jobId,
+    jobStatus: detail.job.status,
+    route,
+    artifacts,
+    outputSummary: validation.summary,
+    nextAction: null,
+    testedAt: new Date().toISOString(),
+  };
+}

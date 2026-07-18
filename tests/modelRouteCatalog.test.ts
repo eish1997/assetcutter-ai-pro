@@ -40,9 +40,9 @@ describe("model route catalog", () => {
     });
   });
 
-  it("marks Vertex Gemini routes as platform ready site-proxy routes", () => {
+  it("marks stable Vertex Gemini routes as platform ready site-proxy routes", () => {
     const textRoute = listModelRoutes("gemini-3-flash-preview").find((route) => route.providerId === "vertex-site");
-    const imageRoute = listModelRoutes("gemini-3.1-flash-image").find((route) => route.providerId === "vertex-site");
+    const imageRoute = listModelRoutes("gemini-3-pro-image").find((route) => route.providerId === "vertex-site");
 
     expect(textRoute).toMatchObject({
       executionStatus: "platform_ready",
@@ -51,6 +51,13 @@ describe("model route catalog", () => {
     expect(imageRoute).toMatchObject({
       executionStatus: "platform_ready",
       gatewayExecutionStatus: "gateway_ready",
+    });
+  });
+
+  it("does not advertise Gemini 3.1 Flash Image as Gateway executable until verified", () => {
+    const route = listModelRoutes("gemini-3.1-flash-image").find((row) => row.providerId === "vertex-site");
+    expect(route).toMatchObject({
+      gatewayExecutionStatus: "adapter_pending",
     });
   });
 

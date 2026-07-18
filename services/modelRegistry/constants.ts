@@ -3,5 +3,5 @@
  * 设置页 / App 初始化应从这里取默认值，避免与注册表漂移。
  */
 export const DEFAULT_MODEL_TEXT = "gemini-3-flash-preview";
-export const DEFAULT_MODEL_IMAGE = "gemini-3.1-flash-image";
+export const DEFAULT_MODEL_IMAGE = "gemini-3-pro-image";
 export const DEFAULT_MODEL_PRO = "gemini-3-pro-image";

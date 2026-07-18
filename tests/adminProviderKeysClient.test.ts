@@ -17,9 +17,11 @@ import {
   fetchAdminProviderKeys,
   fetchAdminModelOpsConfig,
   restoreAdminProviderKey,
+  runAdminModelDiagnostics,
   saveAdminModelOpsConfig,
   saveAdminProviderKeys,
   smokeTestAdminProviderKey,
+  testAdminModelGeneration,
   testAdminModelRoute,
 } from '../services/adminProviderKeysClient';
 import { requestJson } from '../services/httpClient';
@@ -133,6 +135,31 @@ describe('adminProviderKeysClient', () => {
     };
     await testAdminModelRoute(input);
     expect(requestJson).toHaveBeenCalledWith('https://auth.example/api/admin/model-route-test', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    });
+  });
+
+  it('runs model generation tests through the admin auth-api', async () => {
+    const input = {
+      canonicalModelId: 'gpt-image-2',
+      modality: 'image',
+      providerId: 'openai-official',
+    };
+    await testAdminModelGeneration(input);
+    expect(requestJson).toHaveBeenCalledWith('https://auth.example/api/admin/model-generation-test', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    });
+  });
+
+  it('runs batch model diagnostics through the admin auth-api', async () => {
+    const input = {
+      layers: ['route', 'generation'] as const,
+      models: [{ canonicalModelId: 'gpt-image-2', modality: 'image', providerId: 'openai-official' }],
+    };
+    await runAdminModelDiagnostics(input);
+    expect(requestJson).toHaveBeenCalledWith('https://auth.example/api/admin/model-diagnostics/run', {
       method: 'POST',
       body: JSON.stringify(input),
     });

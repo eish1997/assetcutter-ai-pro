@@ -113,6 +113,22 @@ describe("modelRegistry merge", () => {
     ).toBe("gemini-2.5-flash-image");
   });
 
+  it("default image fallback prefers the verified Pro image model over unavailable Gemini 3.1 Flash Image", () => {
+    vi.spyOn(settingsStore, "getEnabledChannels").mockReturnValue([
+      "vertex-proxy",
+      "gemini-aistudio",
+      "openai-official",
+    ]);
+    vi.spyOn(settingsStore, "isChannelReady").mockReturnValue(true);
+    vi.spyOn(settingsStore, "getUserApiKey").mockReturnValue("gemini-key");
+    vi.spyOn(settingsStore, "getOpenaiApiKey").mockReturnValue("openai-key");
+
+    const rows = buildEffectiveImageModelRows({ ...DEFAULT_MODEL_OPS_CONFIG, imageRegistryAllowlist: null });
+
+    expect(rows.find((x) => x.registryId === "gemini-3.1-flash-image")?.disabled).toBe(true);
+    expect(pickCoercedImageModelId("gemini-3.1-flash-image", rows, undefined)).toBe("gemini-3-pro-image");
+  });
+
   it("migrates legacy gearPreference from remote ops JSON", () => {
     const rows = buildEffectiveImageModelRows({
       version: 1,
