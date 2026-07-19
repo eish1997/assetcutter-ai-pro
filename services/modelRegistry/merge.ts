@@ -11,6 +11,8 @@ import {
   listPublishedWorkspaceVideoModels,
   type PublishedWorkspaceModelRow,
 } from "./publishedModelCatalog";
+import { listModelRoutes } from "./modelRouteCatalog";
+import { providerDisplayName } from "./providerCatalog";
 import { setBindingDegradedHint } from "../settingsStore";
 import type { ModelOpsConfig } from "./opsTypes";
 import { modelRegistryLog } from "./log";
@@ -28,6 +30,8 @@ export type EffectiveTextModelRow = EffectiveImageModelRow;
 export type EffectiveCapabilityModelRow = EffectiveImageModelRow & {
   canonicalModelId: string;
   gatewayReady: boolean;
+  providerId?: string;
+  providerLabel?: string;
 };
 
 /** @deprecated 请用 `EffectiveImageModelRow` */
@@ -82,15 +86,37 @@ export function buildEffectiveTextModelRows(
   });
 }
 
+function primaryGatewayProvider(canonicalModelId: string): { providerId?: string; providerLabel?: string } {
+  const routes = listModelRoutes(canonicalModelId).sort((a, b) => a.priority - b.priority);
+  const route = routes.find((row) => row.gatewayExecutionStatus === "gateway_ready") || routes[0];
+  if (!route?.providerId) return {};
+  return {
+    providerId: route.providerId,
+    providerLabel: providerDisplayName(route.providerId),
+  };
+}
+
+function labelWithProvider(row: PublishedWorkspaceModelRow, providerLabel?: string): string {
+  const base = String(row.label || row.registryId).trim();
+  const provider = String(providerLabel || "").trim();
+  if (!provider) return base;
+  if (base.includes(`(${provider})`)) return base;
+  return `${base} (${provider})`;
+}
+
 function buildEffectiveGatewayModelRows(rows: PublishedWorkspaceModelRow[]): EffectiveCapabilityModelRow[] {
-  return rows.map((e) => ({
-    canonicalModelId: e.canonicalModelId,
-    registryId: e.registryId,
-    label: e.label,
-    gatewayReady: e.gatewayReady === true,
-    disabled: e.gatewayReady !== true,
-    disabledReason: e.gatewayReady === true ? undefined : "Gateway 尚未接通该模型",
-  }));
+  return rows.map((e) => {
+    const provider = primaryGatewayProvider(e.canonicalModelId);
+    return {
+      canonicalModelId: e.canonicalModelId,
+      registryId: e.registryId,
+      label: labelWithProvider(e, provider.providerLabel),
+      gatewayReady: e.gatewayReady === true,
+      disabled: e.gatewayReady !== true,
+      disabledReason: e.gatewayReady === true ? undefined : "Gateway 尚未接通该模型",
+      ...provider,
+    };
+  });
 }
 
 export function buildEffectiveVideoModelRows(

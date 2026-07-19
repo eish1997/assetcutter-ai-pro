@@ -51,18 +51,42 @@ function pickString(obj: Record<string, unknown>, keys: string[]): string | null
   return null;
 }
 
+function looksLikeBase64Payload(value: string): boolean {
+  const s = value.trim();
+  if (s.length < 32 || /^data:/i.test(s) || /^https?:\/\//i.test(s) || s.startsWith('/')) return false;
+  return /^[A-Za-z0-9+/=\r\n]+$/.test(s);
+}
+
+function normalizeVideoResultUrl(obj: Record<string, unknown>): WorkflowVideoJobResult | null {
+  const mimeType = pickString(obj, ['mimeType', 'mime_type', 'contentType', 'content_type']);
+  const dataUrl = pickString(obj, ['videoDataUrl', 'video_data_url', 'dataUrl', 'data_url']);
+  if (dataUrl) return { videoUrl: dataUrl, ...(mimeType ? { mimeType } : {}) };
+  const url = pickString(obj, ['videoUrl', 'video_url', 'url', 'uri', 'src', 'downloadUrl', 'download_url']);
+  if (url) {
+    if (looksLikeBase64Payload(url)) {
+      return { videoUrl: `data:${mimeType || 'video/mp4'};base64,${url}`, mimeType: mimeType || 'video/mp4' };
+    }
+    return { videoUrl: url, ...(mimeType ? { mimeType } : {}) };
+  }
+  const base64 = pickString(obj, ['videoBase64', 'video_base64', 'base64', 'data']);
+  if (base64 && looksLikeBase64Payload(base64)) {
+    return { videoUrl: `data:${mimeType || 'video/mp4'};base64,${base64}`, mimeType: mimeType || 'video/mp4' };
+  }
+  return null;
+}
+
 function extractVideoUrl(detail: AiJobDetail): WorkflowVideoJobResult | null {
   const output = detail.job?.output && typeof detail.job.output === 'object'
     ? (detail.job.output as Record<string, unknown>)
     : {};
-  const outputUrl = pickString(output, ['videoUrl', 'video_url', 'url']);
-  if (outputUrl) return { videoUrl: outputUrl };
+  const outputUrl = normalizeVideoResultUrl(output);
+  if (outputUrl) return outputUrl;
   const artifacts = Array.isArray(detail.job?.artifacts) ? detail.job.artifacts : [];
   for (const artifact of artifacts) {
     const obj = artifact && typeof artifact === 'object' ? artifact : {};
     if (String(obj.kind || '').toLowerCase() !== 'video') continue;
-    const artifactUrl = pickString(obj, ['url', 'videoUrl', 'video_url']);
-    if (artifactUrl) return { videoUrl: artifactUrl };
+    const artifactUrl = normalizeVideoResultUrl(obj);
+    if (artifactUrl) return artifactUrl;
   }
   return null;
 }

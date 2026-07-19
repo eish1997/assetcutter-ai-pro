@@ -115,4 +115,23 @@ describe('aiGatewayVideoExecution', () => {
     );
     expect(vi.mocked(createAiJob).mock.calls[0]?.[0]).not.toHaveProperty('provider');
   });
+
+  it('normalizes base64 video output into a playable data URL', async () => {
+    process.env.VITE_AI_GATEWAY_VIDEO_EXECUTION = 'true';
+    const payload = 'QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo=';
+    vi.mocked(createAiJob).mockResolvedValue({
+      job: {
+        id: 'aijob_video_base64_1',
+        status: 'succeeded',
+        output: { videoBase64: payload, mimeType: 'video/webm' },
+        artifacts: [],
+      },
+    } as unknown as Awaited<ReturnType<typeof createAiJob>>);
+
+    await expect(
+      createAndPollAiGatewayVideoJob({
+        prompt: 'product spin',
+      })
+    ).resolves.toEqual({ videoUrl: `data:video/webm;base64,${payload}`, mimeType: 'video/webm' });
+  });
 });

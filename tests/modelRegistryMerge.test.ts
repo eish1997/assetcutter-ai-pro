@@ -2,6 +2,7 @@ import { describe, expect, it, afterEach, vi } from "vitest";
 import {
   buildEffectiveImageModelRows,
   buildEffectiveTextModelRows,
+  buildEffectiveVideoModelRows,
   pickCoercedImageModelId,
 } from "../services/modelRegistry/merge";
 import {
@@ -90,6 +91,17 @@ describe("modelRegistry merge", () => {
 
     expect(rows.map((row) => row.registryId)).toEqual(["gpt-4o-mini"]);
     expect(rows[0]?.disabled).toBe(false);
+  });
+
+  it("shows the provider beside video model options", () => {
+    const rows = buildEffectiveVideoModelRows({
+      publishedCanonicalModelAllowlist: ["doubao-seedance-2-0", "jimeng-video-ti2v-v30-pro"],
+    });
+
+    expect(rows.find((row) => row.registryId === "doubao-seedance-2-0")?.label).toContain("(");
+    expect(rows.find((row) => row.registryId === "doubao-seedance-2-0")?.providerId).toBe("volcengine-ark");
+    expect(rows.find((row) => row.registryId === "jimeng-video-ti2v-v30-pro")?.label).toContain("(");
+    expect(rows.find((row) => row.registryId === "jimeng-video-ti2v-v30-pro")?.providerId).toBe("volcengine-jimeng");
   });
 
   it("pickCoercedImageModelId falls back along preference", () => {

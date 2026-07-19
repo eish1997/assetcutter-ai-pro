@@ -51,8 +51,12 @@ const TEXT_FIELD_NAMES = new Set([
   'markdown',
 ]);
 
-function classifyUrl(url: string, mimeType?: string | null): RestorableAiJobArtifact['kind'] {
+function classifyUrl(url: string, mimeType?: string | null, kindHint?: unknown): RestorableAiJobArtifact['kind'] {
   const mime = String(mimeType || '').toLowerCase();
+  const kind = String(kindHint || '').toLowerCase();
+  if (kind === 'image' || kind === 'video' || kind === 'audio' || kind === 'model3d' || kind === 'file') {
+    return kind;
+  }
   if (mime.startsWith('image/') || url.startsWith('data:image/') || IMAGE_EXT.test(url)) return 'image';
   if (mime.startsWith('video/') || url.startsWith('data:video/') || VIDEO_EXT.test(url)) return 'video';
   if (mime.startsWith('audio/') || url.startsWith('data:audio/') || AUDIO_EXT.test(url)) return 'audio';
@@ -67,6 +71,23 @@ function looksLikeRestorableUrl(value: string): boolean {
   if (/^data:(image|video|audio)\//i.test(s)) return true;
   if (!/^https?:\/\//i.test(s) && !s.startsWith('/')) return false;
   return IMAGE_EXT.test(s) || VIDEO_EXT.test(s) || AUDIO_EXT.test(s) || MODEL_EXT.test(s);
+}
+
+function mimeOrKindSuggestsMedia(mimeType: string | null, kind: unknown): boolean {
+  const mime = String(mimeType || '').toLowerCase();
+  const k = String(kind || '').toLowerCase();
+  return (
+    mime.startsWith('image/') ||
+    mime.startsWith('video/') ||
+    mime.startsWith('audio/') ||
+    mime.includes('model') ||
+    mime.includes('gltf') ||
+    k === 'image' ||
+    k === 'video' ||
+    k === 'audio' ||
+    k === 'model3d' ||
+    k === 'file'
+  );
 }
 
 function readStringField(record: Record<string, unknown>, names: string[]): string {
@@ -121,7 +142,11 @@ export function buildAiJobArtifactSource(detail: AiJobDetail): GeneratedAssetSou
   };
 }
 
-function collectCandidates(value: unknown, out: Array<{ url: string; mimeType: string | null; label: string }>, depth = 0) {
+function collectCandidates(
+  value: unknown,
+  out: Array<{ url: string; mimeType: string | null; label: string; kindHint?: unknown }>,
+  depth = 0
+) {
   if (out.length >= 40 || depth > 5 || value == null) return;
   if (typeof value === 'string') {
     if (looksLikeRestorableUrl(value)) out.push({ url: value.trim(), mimeType: null, label: '' });
@@ -136,9 +161,14 @@ function collectCandidates(value: unknown, out: Array<{ url: string; mimeType: s
   const record = value as Record<string, unknown>;
   const label = readStringField(record, ['label', 'name', 'filename', 'fileName', 'title']);
   const mimeType = readStringField(record, ['mimeType', 'mime_type', 'contentType', 'content_type']) || null;
+  const mediaHint = mimeOrKindSuggestsMedia(mimeType, record.kind);
   for (const [key, child] of Object.entries(record)) {
-    if (typeof child === 'string' && URL_FIELD_NAMES.has(key) && looksLikeRestorableUrl(child)) {
-      out.push({ url: child.trim(), mimeType, label });
+    if (
+      typeof child === 'string' &&
+      URL_FIELD_NAMES.has(key) &&
+      (looksLikeRestorableUrl(child) || (mediaHint && (/^https?:\/\//i.test(child.trim()) || child.trim().startsWith('/'))))
+    ) {
+      out.push({ url: child.trim(), mimeType, label, kindHint: record.kind });
     } else {
       collectCandidates(child, out, depth + 1);
     }
@@ -181,7 +211,7 @@ function collectTextCandidates(value: unknown, out: Array<{ text: string; label:
 }
 
 export function extractRestorableAiJobArtifacts(detail: AiJobDetail): RestorableAiJobArtifact[] {
-  const candidates: Array<{ url: string; mimeType: string | null; label: string }> = [];
+  const candidates: Array<{ url: string; mimeType: string | null; label: string; kindHint?: unknown }> = [];
   collectCandidates(detail.job.artifacts, candidates);
   collectCandidates(detail.job.output, candidates);
   const textCandidates: Array<{ text: string; label: string }> = [];
@@ -200,7 +230,7 @@ export function extractRestorableAiJobArtifacts(detail: AiJobDetail): Restorable
     })
     .slice(0, 12)
     .map((candidate, index) => {
-      const kind = classifyUrl(candidate.url, candidate.mimeType);
+      const kind = classifyUrl(candidate.url, candidate.mimeType, candidate.kindHint);
       return {
         id: `${detail.job.id}:${index}`,
         label: candidate.label || `${kind === 'image' ? '图片' : kind === 'video' ? '视频' : kind === 'model3d' ? '模型' : '文件'} ${index + 1}`,

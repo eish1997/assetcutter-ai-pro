@@ -117,6 +117,22 @@ describe('aiJobArtifacts', () => {
     });
   });
 
+  it('keeps extensionless video artifact URLs restorable when kind is video', () => {
+    const artifacts = extractRestorableAiJobArtifacts(
+      makeDetail({
+        modality: 'video',
+        capability: 'workflow_generate_video',
+        artifacts: [{ kind: 'video', url: 'https://cdn.example.com/signed-video-token' }],
+      })
+    );
+
+    expect(artifacts).toHaveLength(1);
+    expect(artifacts[0]).toMatchObject({
+      kind: 'video',
+      url: 'https://cdn.example.com/signed-video-token',
+    });
+  });
+
   it('extracts text outputs only for text jobs', () => {
     const artifacts = extractRestorableAiJobArtifacts(
       makeDetail({

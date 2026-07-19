@@ -3,7 +3,7 @@
  * AK/SK 仅服务端；由 auth-api 内联挂载 /api/jimeng/*。
  */
 import { signVolcengineRequest } from './jimeng-sign.js';
-import { resolveVerifiedJimengReqKey } from '../shared/jimengVerifiedRegistry.js';
+import { resolveSupportedJimengReqKey } from '../shared/jimengSupportedRegistry.js';
 
 const DEFAULT_HOST = 'visual.volcengineapi.com';
 const DEFAULT_REGION = 'cn-north-1';
@@ -78,7 +78,7 @@ export function jimengNotConfiguredBody() {
  * @returns {{ reqKey: string, modality: 'image' | 'video' } | null}
  */
 export function resolveJimengReqKey(registryId) {
-  return resolveVerifiedJimengReqKey(registryId);
+  return resolveSupportedJimengReqKey(registryId);
 }
 
 function volcCredentials(options = {}) {
@@ -201,7 +201,8 @@ export async function buildJimengSubmitPayload(input, reqKey) {
       const b64 = await referenceImageToBase64(ref);
       if (b64) binaryList.push(b64);
     }
-    if (binaryList.length === 1) payload.binary_data_base64 = binaryList[0];
+    const expectsImageArray = /^jimeng_(?:ti2v|i2v|motion|video)_/i.test(String(reqKey || ''));
+    if (binaryList.length === 1) payload.binary_data_base64 = expectsImageArray ? binaryList : binaryList[0];
     else if (binaryList.length > 1) payload.binary_data_base64 = binaryList;
   }
   return payload;

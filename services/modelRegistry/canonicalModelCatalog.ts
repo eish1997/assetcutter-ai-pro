@@ -42,13 +42,20 @@ const IMAGE_CANONICAL_MODELS: CanonicalModelCatalogEntry[] = DIALOG_IMAGE_REGIST
   sourceRegistryId: row.registryId,
 }));
 
+const JIMENG_WORKSPACE_READY_IDS = new Set([
+  "jimeng-image-t2i-v40",
+  "jimeng-image-t2i-v30",
+  "jimeng-image-t2i-v31",
+  "jimeng-video-ti2v-v30-pro",
+]);
+
 const JIMENG_CANONICAL_MODELS: CanonicalModelCatalogEntry[] = JIMENG_CATALOG.map((row) => ({
   canonicalModelId: row.registryId,
   label: row.label,
   modality: row.modality === "digital_human" ? "digital_human" : row.modality,
   category:
     row.modality === "video" ? "video_generation" : row.modality === "digital_human" ? "digital_human" : "image_generation",
-  visibleInWorkspace: row.verified === true,
+  visibleInWorkspace: JIMENG_WORKSPACE_READY_IDS.has(row.registryId),
   supportedWorkflows: row.modality === "video" ? ["workflow"] : ["warehouse", "workflow"],
   status: row.verified ? "published" : "draft",
   sourceRegistryId: row.registryId,

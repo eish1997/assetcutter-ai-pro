@@ -9,6 +9,7 @@ vi.mock('../server/jimeng-credits-gate.js', () => ({
 
 import { assertJimengCreditsGate } from '../server/jimeng-credits-gate.js';
 import {
+  buildJimengSubmitPayload,
   callJimengVisualApi,
   getJimengStatusResponse,
   isJimengServiceAvailable,
@@ -77,7 +78,11 @@ describe('jimeng api routes (mock upstream)', () => {
       reqKey: 'jimeng_ti2v_v30_pro',
       modality: 'video',
     });
-    expect(resolveJimengReqKey('jimeng-image-t2i-v30')).toBeNull();
+    expect(resolveJimengReqKey('jimeng-image-t2i-v30')).toEqual({
+      reqKey: 'jimeng_t2i_v30',
+      modality: 'image',
+    });
+    expect(resolveJimengReqKey('jimeng-image-missing')).toBeNull();
   });
 
   it('POST submit 成功返回 taskId', async () => {
@@ -101,8 +106,21 @@ describe('jimeng api routes (mock upstream)', () => {
     expect(body.prompt).toBe('a cat');
   });
 
+  it('video submit payload keeps a single reference image as an array', async () => {
+    const payload = await buildJimengSubmitPayload(
+      {
+        registryId: 'jimeng-video-ti2v-v30-pro',
+        prompt: 'spin',
+        referenceImages: ['data:image/png;base64,AAAA'],
+      },
+      'jimeng_ti2v_v30_pro'
+    );
+
+    expect(payload.binary_data_base64).toEqual(['AAAA']);
+  });
+
   it('POST submit 未知 registryId → 400', async () => {
-    const result = await submitJimengTask({ registryId: 'jimeng-image-t2i-v30', prompt: 'x' });
+    const result = await submitJimengTask({ registryId: 'jimeng-image-missing', prompt: 'x' });
     expect(result.ok).toBe(false);
     assertNotOk(result);
     expect(result.status).toBe(400);

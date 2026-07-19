@@ -73,4 +73,13 @@ describe("published workspace model catalog", () => {
     expect(model3dRows.find((row) => row.registryId === "doubao-seed3d-2-0")?.gatewayReady).toBe(true);
     expect(model3dRows.find((row) => row.registryId === "tripo-p1")?.gatewayReady).toBe(true);
   });
+
+  it("allows ops to publish smoke-tested Jimeng draft image models", () => {
+    const imageRows = listPublishedWorkspaceImageModels({
+      publishedCanonicalModelAllowlist: ["jimeng-image-t2i-v30", "jimeng-image-t2i-v31", "jimeng-image-t2i-v46"],
+    });
+
+    expect(imageRows.map((row) => row.registryId)).toEqual(["jimeng-image-t2i-v30", "jimeng-image-t2i-v31"]);
+    expect(imageRows.every((row) => row.gatewayReady)).toBe(true);
+  });
 });

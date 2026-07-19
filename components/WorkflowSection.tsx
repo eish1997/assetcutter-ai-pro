@@ -5086,6 +5086,7 @@ ${lineSvg}
           }
           for (let i = 0; i < countN; i += 1) {
             const newId = uuid();
+            const startsAsVideoTask = m.category === 'generate_video';
             newAssets.push(
               attachInitialVgpToNewAsset({
                 id: newId,
@@ -5094,7 +5095,7 @@ ${lineSvg}
                 results: {},
                 resultOrder: [],
                 archived: false,
-                hiddenInGrid: true,
+                hiddenInGrid: !startsAsVideoTask,
                 createdAt: Date.now(),
               })
             );
@@ -5315,7 +5316,7 @@ ${lineSvg}
         results: {},
         resultOrder: [],
         archived: false,
-        hiddenInGrid: true,
+        hiddenInGrid: false,
         createdAt: Date.now(),
         ...(primary ? {} : { assetKind: 'text' as const, textTitle: '', textBody: clampWorkflowTextBody(plainText) }),
       });

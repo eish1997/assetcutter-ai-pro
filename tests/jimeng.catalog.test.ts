@@ -12,6 +12,7 @@ import { JIMENG_IMAGE_BINDINGS, JIMENG_IMAGE_CHANNEL } from "../services/modelRe
 import { JIMENG_IMAGE_REGISTRY } from "../services/modelRegistry/jimengImageRegistry";
 import { JIMENG_VIDEO_REGISTRY } from "../services/modelRegistry/jimengVideoRegistry";
 import { resolveVerifiedJimengReqKey } from "../shared/jimengVerifiedRegistry.js";
+import { resolveSupportedJimengReqKey } from "../shared/jimengSupportedRegistry.js";
 
 const EXPECTED_IMAGE_IDS = [
   "jimeng-image-t2i-v40",
@@ -42,6 +43,13 @@ const EXPECTED_VIDEO_IDS = [
 const EXPECTED_VERIFIED = {
   "jimeng-image-t2i-v40": "jimeng_t2i_v40",
   "jimeng-video-ti2v-v30-pro": "jimeng_ti2v_v30_pro",
+} as const;
+
+const EXPECTED_SUPPORTED = {
+  "jimeng-image-t2i-v40": { reqKey: "jimeng_t2i_v40", modality: "image" },
+  "jimeng-image-t2i-v30": { reqKey: "jimeng_t2i_v30", modality: "image" },
+  "jimeng-image-t2i-v31": { reqKey: "jimeng_t2i_v31", modality: "image" },
+  "jimeng-video-ti2v-v30-pro": { reqKey: "jimeng_ti2v_v30_pro", modality: "video" },
 } as const;
 
 describe("jimeng catalog", () => {
@@ -120,6 +128,16 @@ describe("jimeng catalog", () => {
     }
     for (const entry of JIMENG_CATALOG.filter((e) => !e.verified)) {
       expect(resolveVerifiedJimengReqKey(entry.registryId)).toBeNull();
+    }
+  });
+
+  it("shared supported registry covers smoke-tested SKUs for gateway execution", () => {
+    for (const [registryId, expected] of Object.entries(EXPECTED_SUPPORTED)) {
+      expect(resolveSupportedJimengReqKey(registryId)).toEqual(expected);
+    }
+    for (const entry of JIMENG_CATALOG) {
+      if (entry.registryId in EXPECTED_SUPPORTED) continue;
+      expect(resolveSupportedJimengReqKey(entry.registryId)).toBeNull();
     }
   });
 });
