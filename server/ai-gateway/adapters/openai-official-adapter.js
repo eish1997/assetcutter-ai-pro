@@ -21,6 +21,7 @@ const VOLCENGINE_ARK_IMAGE_MODEL_MAP = Object.freeze({
   'doubao-seedream-5-0': 'doubao-seedream-5-0-260128',
   'doubao-seedream-5-0-lite': 'doubao-seedream-5-0-lite-260128',
 });
+const VOLCENGINE_ARK_IMAGE_MIN_PIXELS = 3_686_400;
 
 function nonEmptyString(value) {
   return typeof value === 'string' && value.trim() ? value.trim() : '';
@@ -121,13 +122,25 @@ function buildOpenAiTextBody(job, route) {
 
 function aspectRatioToArkSize(aspectRatio) {
   const raw = nonEmptyString(aspectRatio);
-  if (raw === '16:9') return '1280x720';
-  if (raw === '9:16') return '720x1280';
-  if (raw === '4:3') return '1024x768';
-  if (raw === '3:4') return '768x1024';
-  if (raw === '3:2') return '1152x768';
-  if (raw === '2:3') return '768x1152';
-  return '1024x1024';
+  if (raw === '16:9') return '2560x1440';
+  if (raw === '9:16') return '1440x2560';
+  if (raw === '4:3') return '2304x1728';
+  if (raw === '3:4') return '1728x2304';
+  if (raw === '3:2') return '2496x1664';
+  if (raw === '2:3') return '1664x2496';
+  return '1920x1920';
+}
+
+function normalizeArkImageSize(size, aspectRatio) {
+  const explicit = nonEmptyString(size);
+  const raw = explicit || aspectRatioToArkSize(aspectRatio);
+  const m = /^(\d{2,5})x(\d{2,5})$/i.exec(raw);
+  if (!m) return aspectRatioToArkSize(aspectRatio);
+  const width = Math.max(1, Number(m[1]));
+  const height = Math.max(1, Number(m[2]));
+  if (width * height >= VOLCENGINE_ARK_IMAGE_MIN_PIXELS) return `${width}x${height}`;
+  const scale = Math.sqrt(VOLCENGINE_ARK_IMAGE_MIN_PIXELS / (width * height));
+  return `${Math.ceil(width * scale)}x${Math.ceil(height * scale)}`;
 }
 
 function buildArkImageBody(job) {
@@ -139,7 +152,7 @@ function buildArkImageBody(job) {
   if (!prompt) {
     throw new AiGatewayValidationError('Volcengine Ark image generation requires a prompt', 'AI_GATEWAY_ARK_PROMPT_REQUIRED');
   }
-  const size = nonEmptyString(imageConfig.size) || aspectRatioToArkSize(imageConfig.aspectRatio);
+  const size = normalizeArkImageSize(imageConfig.size, imageConfig.aspectRatio);
   return {
     model: mapOpenAiImageModel(input.upstreamModelId || input.model || job?.model, 'volcengine-ark'),
     prompt: prompt.slice(0, 32000),

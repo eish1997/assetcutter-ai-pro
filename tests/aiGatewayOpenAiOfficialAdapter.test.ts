@@ -243,7 +243,7 @@ describe('OpenAI official AI Gateway adapter', () => {
     expect(JSON.parse(String(calls[0].init.body))).toMatchObject({
       model: 'doubao-seedream-5-0-260128',
       prompt: 'draw a clean package',
-      size: '1024x1024',
+      size: '1920x1920',
       response_format: 'b64_json',
     });
     const stored = await store.get('aijob_ark_image');

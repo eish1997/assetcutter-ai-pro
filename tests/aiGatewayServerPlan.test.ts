@@ -291,7 +291,7 @@ describe('server AI gateway job planning', () => {
       body: {
         model: 'doubao-seedream-5-0-260128',
         prompt: 'draw a packaging concept',
-        size: '1280x720',
+        size: '2560x1440',
         response_format: 'b64_json',
       },
     });
@@ -331,6 +331,23 @@ describe('server AI gateway job planning', () => {
         image: 'data:image/png;base64,cmVm',
         images: ['data:image/png;base64,cmVm'],
       },
+    });
+  });
+
+  it('upscales explicit small Volcengine Ark Seedream image sizes to the upstream minimum pixel count', () => {
+    const plan = createAiGatewayJobPlan({
+      modality: 'image',
+      provider: 'volcengine-ark',
+      model: 'doubao-seedream-5-0',
+      input: {
+        contents: [{ role: 'user', parts: [{ text: 'draw a clean icon' }] }],
+        config: { imageConfig: { size: '1024x1024', aspectRatio: '1:1' } },
+      },
+    });
+
+    expect(plan.adapterRequest.body).toMatchObject({
+      model: 'doubao-seedream-5-0-260128',
+      size: '1920x1920',
     });
   });
 
