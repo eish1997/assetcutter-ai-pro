@@ -2912,6 +2912,9 @@ const server = http.createServer(async (req, res) => {
           return {
             ...row,
             secret: normalizeTrimmed(row?.secret) || prev?.secret || '',
+            credentials: row?.credentials && typeof row.credentials === 'object' && !Array.isArray(row.credentials)
+              ? row.credentials
+              : prev?.credentials || {},
           };
         });
       const saved = await saveProviderKeys(rows, { updatedByUserId: staff.user.id });
