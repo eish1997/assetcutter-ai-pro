@@ -52,7 +52,7 @@ export function shouldRecoverAiGatewayJob(plan, options = {}) {
 
   const gatewayExecution = gatewayExecutionOf(plan);
   if (gatewayExecution.deferredAttempt != null || gatewayExecution.lastHandoffError) return true;
-  return String(plan.job.status || '') === 'created';
+  return true;
 }
 
 export async function recoverAiGatewayQueuedJobs(options = {}) {

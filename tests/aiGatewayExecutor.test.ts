@@ -345,4 +345,42 @@ describe('AI gateway execution handoff', () => {
       }),
     });
   });
+
+  it('recovers queued jobs that never received a proxy job id', async () => {
+    process.env.AI_GATEWAY_EXECUTION_ENABLED = 'false';
+    process.env.AI_WORKER_PROXY_CREDITS_HMAC_SECRET = 'test_recovery_secret';
+    const store = createInMemoryAiJobStore();
+    await createAuthAiGatewayJob({}, imageJobBody('aijob_exec_recover_no_proxy'), user, { store });
+    await store.update('aijob_exec_recover_no_proxy', {
+      status: 'queued',
+      error: null,
+      metadata: {
+        gatewayExecution: {
+          deferredAt: '2026-07-19T10:00:00.000Z',
+        },
+      },
+    });
+    const storedBefore = await store.get('aijob_exec_recover_no_proxy');
+    expect(shouldRecoverAiGatewayJob(storedBefore, { minAgeMs: 0 })).toBe(true);
+
+    process.env.AI_GATEWAY_EXECUTION_ENABLED = 'true';
+    const fetchImpl = vi.fn().mockResolvedValue(proxyResponse({ jobId: 'gasync_recovered_no_proxy', status: 'queued' }));
+
+    const result = await recoverAiGatewayQueuedJobs({
+      store,
+      fetchImpl,
+      minAgeMs: 0,
+      disableBackgroundPoll: true,
+    });
+
+    expect(result).toMatchObject({ recovered: 1, candidates: 1 });
+    const recovered = await store.get('aijob_exec_recover_no_proxy');
+    expect(recovered.job).toMatchObject({
+      status: 'queued',
+      error: null,
+      metadata: expect.objectContaining({
+        proxyJobId: 'gasync_recovered_no_proxy',
+      }),
+    });
+  });
 });

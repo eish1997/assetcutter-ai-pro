@@ -234,7 +234,7 @@ import {
   retryAuthAiGatewayJob,
   summarizeAuthAiGatewayJobs,
 } from './ai-gateway/auth-api-handler.js';
-import { startAiGatewayQueueRecoveryLoop } from './ai-gateway/recovery.js';
+import { recoverAiGatewayQueuedJobs, startAiGatewayQueueRecoveryLoop } from './ai-gateway/recovery.js';
 import { buildAiGatewayTrendReport, refreshAiGatewayTrendSnapshot } from './ai-gateway/trend-report.js';
 import { listPublicPriceCatalog } from './pricing-engine.js';
 import { buildUsageReceipt, quoteJobKinds } from './pricing-read-model.js';
@@ -2509,6 +2509,32 @@ const server = http.createServer(async (req, res) => {
         q: u.searchParams.get('q') || '',
       }, { admin: true });
       json(res, result.status, result.body);
+      return;
+    }
+
+    if (path === '/api/admin/ai/jobs/recover-queued' && req.method === 'POST') {
+      const staff = await requirePermission(req, res, PERMISSIONS.AI_GATEWAY_OPS_WRITE);
+      if (!staff) return;
+      let body = {};
+      try {
+        body = await readBody(req);
+      } catch {
+        body = {};
+      }
+      const result = await recoverAiGatewayQueuedJobs({
+        limit: body?.limit,
+        minAgeMs: body?.minAgeMs,
+        maxAgeMs: body?.maxAgeMs,
+      });
+      await createAuditLog({
+        actorUserId: staff.user.id,
+        actorIdentifier: staff.user.username,
+        action: 'admin.ai_gateway_jobs_recover_queued',
+        meta: { result },
+        ip: getClientIp(req),
+        userAgent: req.headers['user-agent'],
+      });
+      json(res, 200, result);
       return;
     }
 
