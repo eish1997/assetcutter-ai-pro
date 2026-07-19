@@ -192,6 +192,7 @@ export const PROVIDER_CATALOG: readonly ProviderCatalogEntry[] = [
       backendAdapterReady: true,
       platformKeyReady: true,
       byokSupported: false,
+      smokeTestReady: true,
     }),
   },
   {

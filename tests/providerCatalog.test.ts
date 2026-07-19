@@ -76,6 +76,7 @@ describe("provider catalog", () => {
     expect(getProviderCatalogEntry("volcengine-jimeng")?.capabilityStatus).toMatchObject({
       backendAdapterReady: true,
       platformKeyReady: true,
+      smokeTestReady: true,
     });
     expect(getProviderCatalogEntry("openai-official")?.capabilityStatus).toMatchObject({
       backendAdapterReady: true,

@@ -569,6 +569,101 @@ describe('AI gateway provider key store', () => {
     expect(calls[0].url).toBe('https://ark.cn-beijing.volces.com/api/v3/models');
   });
 
+  it('runs a real upstream smoke probe for Volcengine Jimeng AK/SK without creating a generation task', async () => {
+    useTempStore();
+
+    await saveProviderKeys([
+      {
+        id: 'key_jimeng_smoke_real',
+        provider: 'volcengine-jimeng',
+        label: 'Jimeng real smoke',
+        enabled: true,
+        credentials: {
+          accessKeyId: 'ak-jimeng-smoke',
+          secretAccessKey: 'sk-jimeng-smoke',
+        },
+      },
+    ]);
+
+    const calls: Array<{ url: string; init: RequestInit }> = [];
+    const fetchImpl = async (url: string, init: RequestInit) => {
+      calls.push({ url, init });
+      return new Response(JSON.stringify({ code: 10000, data: { status: 'failed', message: 'task not found' } }), {
+        status: 200,
+      });
+    };
+
+    await expect(smokeTestProviderKey('key_jimeng_smoke_real', { fetchImpl })).resolves.toMatchObject({
+      ok: true,
+      provider: 'volcengine-jimeng',
+      status: 'passed',
+      mode: 'real_upstream',
+      route: 'POST CVSync2AsyncGetResult',
+      upstreamStatus: 200,
+      createsGenerationTask: false,
+    });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0].url).toBe('https://visual.volcengineapi.com/?Action=CVSync2AsyncGetResult&Version=2022-08-31');
+    expect(calls[0].init).toMatchObject({
+      method: 'POST',
+      headers: expect.objectContaining({
+        Authorization: expect.stringContaining('HMAC-SHA256 Credential=ak-jimeng-smoke/'),
+      }),
+    });
+    expect(JSON.parse(String(calls[0].init.body))).toMatchObject({
+      req_key: 'jimeng_t2i_v40',
+      task_id: 'assetcutter_provider_key_smoke',
+    });
+  });
+
+  it('records Volcengine Jimeng InvalidAccessKey smoke failures with the upstream reason', async () => {
+    useTempStore();
+
+    await saveProviderKeys([
+      {
+        id: 'key_jimeng_smoke_bad',
+        provider: 'volcengine-jimeng',
+        label: 'Jimeng bad smoke',
+        enabled: true,
+        credentials: {
+          accessKeyId: 'bad-ak',
+          secretAccessKey: 'bad-sk',
+        },
+      },
+    ]);
+
+    const fetchImpl = async () =>
+      new Response(
+        JSON.stringify({
+          ResponseMetadata: {
+            Error: {
+              Code: 'InvalidAccessKey',
+              Message: 'The security token[bad-ak] included in the request is invalid.',
+            },
+          },
+        }),
+        { status: 401 }
+      );
+
+    await expect(smokeTestProviderKey('key_jimeng_smoke_bad', { fetchImpl })).resolves.toMatchObject({
+      ok: false,
+      provider: 'volcengine-jimeng',
+      status: 'failed',
+      mode: 'real_upstream',
+      route: 'POST CVSync2AsyncGetResult',
+      upstreamStatus: 401,
+      message: expect.stringContaining('InvalidAccessKey'),
+    });
+
+    const events = await listProviderKeyHealthEvents({ keyId: 'key_jimeng_smoke_bad', limit: 10 });
+    expect(events[0]).toMatchObject({
+      type: 'error',
+      providerKeyId: 'key_jimeng_smoke_bad',
+      status: 401,
+    });
+  });
+
   it('records Tripo real upstream smoke failures as provider key errors', async () => {
     useTempStore();
 

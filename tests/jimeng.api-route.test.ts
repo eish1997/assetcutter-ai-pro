@@ -110,6 +110,33 @@ describe('jimeng api routes (mock upstream)', () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
+  it('POST submit surfaces Volcengine auth errors instead of a generic failure', async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          ResponseMetadata: {
+            Error: {
+              Code: 'InvalidAccessKey',
+              Message: 'The security token[ak-test] included in the request is invalid.',
+            },
+          },
+        }),
+        { status: 401 }
+      )
+    );
+
+    const result = await submitJimengTask({
+      registryId: 'jimeng-image-t2i-v40',
+      prompt: 'x',
+    });
+
+    expect(result.ok).toBe(false);
+    assertNotOk(result);
+    expect(result.status).toBe(401);
+    expect(result.body.error).toContain('InvalidAccessKey');
+    expect(result.body.error).toContain('security token');
+  });
+
   it('GET poll 归一化 done', async () => {
     const poll = await pollJimengTask('task-mock-001', 'jimeng-image-t2i-v40', { userId: 'u1' });
     expect(poll.ok).toBe(true);

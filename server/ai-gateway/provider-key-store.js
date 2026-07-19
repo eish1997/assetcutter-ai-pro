@@ -5,6 +5,7 @@ import crypto from 'crypto';
 import { fetch as undiciFetch } from 'undici';
 import { USE_POSTGRES, ensurePostgres, getPool } from '../auth-store.js';
 import { withAiGatewayPostgresRetry } from './postgres-transient-retry.js';
+import { signVolcengineRequest } from '../jimeng-sign.js';
 
 const DEFAULT_PROVIDER = 'tripo';
 const RETRYABLE_STATUS_RE = /\b(429|500|502|503|504|529)\b|too many requests|rate limit|timeout|econnreset|econnrefused|fetch failed|temporarily unavailable/i;
@@ -281,6 +282,8 @@ async function readSmokeJsonSafe(response) {
 function smokeErrorMessage(data, fallback) {
   if (!data || typeof data !== 'object') return fallback;
   return (
+    nonEmptyString(data.ResponseMetadata?.Error?.Message) ||
+    nonEmptyString(data.ResponseMetadata?.Error?.Code) ||
     nonEmptyString(data.message) ||
     nonEmptyString(data.msg) ||
     nonEmptyString(data.error?.message) ||
@@ -290,8 +293,75 @@ function smokeErrorMessage(data, fallback) {
   );
 }
 
+function volcengineVisualSmokeError(data, fallback) {
+  const meta = data?.ResponseMetadata && typeof data.ResponseMetadata === 'object' ? data.ResponseMetadata : {};
+  const err = meta.Error && typeof meta.Error === 'object' ? meta.Error : {};
+  const code = nonEmptyString(err.Code) || nonEmptyString(data?.code);
+  const message = nonEmptyString(err.Message) || nonEmptyString(data?.message);
+  if (code && message) return `${code}: ${message}`;
+  return message || code || smokeErrorMessage(data, fallback);
+}
+
+async function runVolcengineJimengSmoke(row, options = {}) {
+  const fetchImpl = options.fetchImpl || undiciFetch;
+  const credentials = row.credentials && typeof row.credentials === 'object' ? row.credentials : {};
+  const host = nonEmptyString(options.jimengVisualHost || process.env.JIMENG_VISUAL_HOST) || 'visual.volcengineapi.com';
+  const region = nonEmptyString(credentials.region || options.jimengVisualRegion || process.env.JIMENG_VISUAL_REGION) || 'cn-north-1';
+  const version = nonEmptyString(options.jimengVisualVersion || process.env.JIMENG_VISUAL_VERSION) || '2022-08-31';
+  const service = nonEmptyString(options.jimengVisualService || process.env.JIMENG_VISUAL_SERVICE) || 'cv';
+  const query = { Action: 'CVSync2AsyncGetResult', Version: version };
+  const body = JSON.stringify({
+    req_key: nonEmptyString(options.jimengSmokeReqKey) || 'jimeng_t2i_v40',
+    task_id: nonEmptyString(options.jimengSmokeTaskId) || 'assetcutter_provider_key_smoke',
+  });
+  const signed = signVolcengineRequest({
+    method: 'POST',
+    host,
+    path: '/',
+    query,
+    body,
+    accessKeyId: credentials.accessKeyId,
+    secretAccessKey: credentials.secretAccessKey,
+    region,
+    service,
+  });
+  const started = Date.now();
+  const response = await fetchImpl(`https://${host}/?Action=${encodeURIComponent(query.Action)}&Version=${encodeURIComponent(version)}`, {
+    method: 'POST',
+    headers: {
+      Host: signed.host,
+      'Content-Type': signed.contentType,
+      'X-Date': signed.xDate,
+      'X-Content-Sha256': signed.xContentSha256,
+      Authorization: signed.authorization,
+    },
+    body,
+    signal: AbortSignal.timeout(Number(options.timeoutMs || process.env.AI_GATEWAY_PROVIDER_KEY_SMOKE_TIMEOUT_MS || 15_000)),
+  });
+  const data = await readSmokeJsonSafe(response);
+  const latencyMs = Date.now() - started;
+  const upstreamError = data?.ResponseMetadata?.Error;
+  if (!response.ok || upstreamError?.Code === 'InvalidAccessKey' || upstreamError?.Code === 'SignatureDoesNotMatch') {
+    const message = `Smoke test failed: upstream HTTP ${response.status} ${volcengineVisualSmokeError(data, 'Volcengine Visual probe rejected')}`;
+    const error = new Error(message);
+    error.status = response.status;
+    throw error;
+  }
+  return {
+    supported: true,
+    mode: 'real_upstream',
+    route: 'POST CVSync2AsyncGetResult',
+    upstreamStatus: response.status,
+    latencyMs,
+    message: 'Smoke test passed: Volcengine Visual credentials were accepted',
+  };
+}
+
 async function runRealProviderKeySmoke(row, options = {}) {
   const fetchImpl = options.fetchImpl || undiciFetch;
+  if (row.provider === 'volcengine-jimeng') {
+    return runVolcengineJimengSmoke(row, options);
+  }
   const compatibleConfig = openAiCompatibleSmokeConfig(row, options);
   if (compatibleConfig?.baseUrl) {
     const baseUrl = compatibleConfig.baseUrl.replace(/\/+$/, '');
@@ -1196,7 +1266,11 @@ export async function smokeTestProviderKey(id, options = {}) {
       ok: false,
       status: 'failed',
       mode: 'real_upstream',
-      route: row.provider === 'tripo' ? 'GET /user/balance' : null,
+      route: row.provider === 'tripo'
+        ? 'GET /user/balance'
+        : row.provider === 'volcengine-jimeng'
+          ? 'POST CVSync2AsyncGetResult'
+          : null,
       upstreamStatus: error?.status || null,
       message: error instanceof Error ? error.message : String(error || 'Smoke test failed'),
       nextAction: 'Check key validity, upstream permissions, base URL, quota, and network reachability',

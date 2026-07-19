@@ -99,6 +99,19 @@ async function readJsonSafe(resp) {
   }
 }
 
+function upstreamVolcengineError(data, fallback) {
+  const root = data && typeof data === 'object' ? data : {};
+  const meta = root.ResponseMetadata && typeof root.ResponseMetadata === 'object' ? root.ResponseMetadata : {};
+  const err = meta.Error && typeof meta.Error === 'object' ? meta.Error : {};
+  const code = typeof err.Code === 'string' && err.Code.trim() ? err.Code.trim() : '';
+  const message = typeof err.Message === 'string' && err.Message.trim() ? err.Message.trim() : '';
+  if (code && message) return `${code}: ${message}`;
+  if (message) return message;
+  if (code) return code;
+  if (typeof root.message === 'string' && root.message.trim()) return root.message.trim();
+  return fallback;
+}
+
 /**
  * @param {string} action CVSync2AsyncSubmitTask | CVSync2AsyncGetResult
  * @param {Record<string, unknown>} payload
@@ -231,7 +244,7 @@ export async function submitJimengTask(input, options = {}) {
       ok: false,
       status: upstream.status >= 400 ? upstream.status : 502,
       body: {
-        error: upstream.data?.message || '即梦 Submit 失败',
+        error: upstreamVolcengineError(upstream.data, '即梦 Submit 失败'),
         code: code ?? 'JIMENG_UPSTREAM_ERROR',
         message: upstream.data?.message,
         upstream: upstream.data,
