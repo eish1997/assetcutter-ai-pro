@@ -409,9 +409,9 @@ describe('AI gateway provider key store', () => {
         },
       },
       {
-        id: 'key_smoke_missing',
+        id: 'key_smoke_default_base',
         provider: 'volcengine-ark',
-        label: 'Ark missing',
+        label: 'Ark default base',
         secret: 'ark-key',
         enabled: true,
         credentials: {},
@@ -423,18 +423,17 @@ describe('AI gateway provider key store', () => {
       provider: 'volcengine-ark',
       status: 'passed',
     });
-    await expect(smokeTestProviderKey('key_smoke_missing')).resolves.toMatchObject({
-      ok: false,
+    await expect(smokeTestProviderKey('key_smoke_default_base', { mode: 'credentials_only' })).resolves.toMatchObject({
+      ok: true,
       provider: 'volcengine-ark',
-      status: 'failed',
-      missingFields: ['credentials.baseUrl'],
+      status: 'passed',
+      missingFields: [],
     });
-
     const events = await listProviderKeyHealthEvents({ provider: 'volcengine-ark', limit: 10 });
-    expect(events.map((event) => event.type)).toEqual(['error', 'success']);
+    expect(events.map((event) => event.type)).toEqual(['success', 'success']);
     expect(events[0]).toMatchObject({
-      providerKeyId: 'key_smoke_missing',
-      status: 400,
+      providerKeyId: 'key_smoke_default_base',
+      status: null,
       retryable: false,
     });
   });
@@ -516,6 +515,38 @@ describe('AI gateway provider key store', () => {
       method: 'GET',
       headers: { Authorization: 'Bearer ark-test-key' },
     });
+  });
+
+  it('uses the default Ark base URL when smoke testing a key-only Ark credential', async () => {
+    useTempStore();
+
+    await saveProviderKeys([
+      {
+        id: 'key_ark_default_base_smoke',
+        provider: 'volcengine-ark',
+        label: 'Ark default base smoke',
+        secret: 'ark-test-key',
+        enabled: true,
+      },
+    ]);
+
+    const calls: Array<{ url: string; init: RequestInit }> = [];
+    const fetchImpl = async (url: string, init: RequestInit) => {
+      calls.push({ url, init });
+      return new Response(JSON.stringify({ data: [] }), { status: 200 });
+    };
+
+    await expect(smokeTestProviderKey('key_ark_default_base_smoke', { fetchImpl })).resolves.toMatchObject({
+      ok: true,
+      provider: 'volcengine-ark',
+      status: 'passed',
+      mode: 'real_upstream',
+      route: 'GET /models',
+      upstreamStatus: 200,
+    });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0].url).toBe('https://ark.cn-beijing.volces.com/api/v3/models');
   });
 
   it('records Tripo real upstream smoke failures as provider key errors', async () => {

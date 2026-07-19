@@ -190,8 +190,8 @@ function providerKeySmokeRequirements(provider) {
   }
   if (provider === 'volcengine-ark') {
     return {
-      fields: ['secret', 'credentials.baseUrl'],
-      label: 'API Key / Base URL',
+      fields: ['secret'],
+      label: 'API Key',
     };
   }
   if (provider === 'openai-official') {
@@ -200,7 +200,13 @@ function providerKeySmokeRequirements(provider) {
       label: 'API Key',
     };
   }
-  if (provider === 'toapis' || provider === 'vectorengine') {
+  if (provider === 'toapis') {
+    return {
+      fields: ['secret'],
+      label: 'API Key',
+    };
+  }
+  if (provider === 'vectorengine') {
     return {
       fields: ['secret', 'credentials.baseUrl'],
       label: 'API Key / Base URL',
