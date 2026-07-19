@@ -1,10 +1,14 @@
 // @vitest-environment jsdom
 
-import { render, screen } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { cleanup, render, screen } from '@testing-library/react';
+import { afterEach, describe, expect, it } from 'vitest';
 
 import type { WorkflowAsset } from '../types';
 import { AssetCardPreviewRenderer } from '../components/workflow/AssetCardPreviewRenderer';
+
+afterEach(() => {
+  cleanup();
+});
 
 function makeAsset(partial?: Partial<WorkflowAsset>): WorkflowAsset {
   return {
@@ -54,7 +58,32 @@ describe('AssetCardPreviewRenderer', () => {
     );
 
     expect(screen.getByText('Video')).toBeTruthy();
-    expect(document.querySelector('video')?.getAttribute('src')).toBe('blob:video');
+    const video = document.querySelector('video');
+    expect(video?.getAttribute('src')).toBe('blob:video');
+    expect(video?.autoplay).toBe(false);
+    expect(video?.loop).toBe(false);
+    expect(video?.getAttribute('preload')).toBe('metadata');
+  });
+
+  it('only autoplays video variants when the asset card is active', () => {
+    render(
+      <AssetCardPreviewRenderer
+        asset={makeAsset({
+          displayKey: 'video_step',
+          results: { video_step: 'blob:video' },
+          resultOrder: ['video_step'],
+          resultMeta: { video_step: { executedAt: 2, mediaKind: 'video' } },
+        })}
+        previewSrc="blob:video"
+        cacheKey="video"
+        autoPlayVideo
+      />
+    );
+
+    const video = document.querySelector('video');
+    expect(video?.autoplay).toBe(true);
+    expect(video?.loop).toBe(true);
+    expect(video?.getAttribute('preload')).toBe('auto');
   });
 
   it('renders model3d variants with format badge and poster image', () => {

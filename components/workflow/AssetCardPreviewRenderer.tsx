@@ -15,6 +15,7 @@ type AssetCardPreviewRendererProps = {
   thumbDecodePriority?: 'high' | 'low';
   imageFetchPriority?: 'high' | 'low' | 'auto';
   thumbMaxEdge?: number;
+  autoPlayVideo?: boolean;
   onIntrinsicSize?: (width: number, height: number) => void;
 };
 
@@ -85,6 +86,7 @@ export const AssetCardPreviewRenderer: React.FC<AssetCardPreviewRendererProps> =
   thumbDecodePriority,
   imageFetchPriority,
   thumbMaxEdge,
+  autoPlayVideo = false,
   onIntrinsicSize,
 }) => {
   const activeVariant = resolveWorkflowAssetActiveVariant(asset);
@@ -120,9 +122,11 @@ export const AssetCardPreviewRenderer: React.FC<AssetCardPreviewRendererProps> =
         width: 896,
         height: 560,
         timeoutMs: 55_000,
-      }).finally(() => {
-        modelThumbnailPending.delete(modelThumbCacheKey);
-      });
+      })
+        .catch(() => null)
+        .finally(() => {
+          modelThumbnailPending.delete(modelThumbCacheKey);
+        });
     if (!modelThumbnailPending.has(modelThumbCacheKey)) {
       modelThumbnailPending.set(modelThumbCacheKey, pending);
     }
@@ -182,6 +186,8 @@ export const AssetCardPreviewRenderer: React.FC<AssetCardPreviewRendererProps> =
         fullSrc={displaySrc}
         cacheKey={cacheKey}
         mediaVariant={activeKind === 'video' ? 'video' : 'image'}
+        autoPlayVideo={activeKind === 'video' && autoPlayVideo}
+        videoPosterSrc={activeKind === 'video' ? activeVariant?.posterUrl : undefined}
         thumbMaxEdge={thumbMaxEdge}
         deferThumbnail={deferThumbnail}
         thumbDecodePriority={thumbDecodePriority}

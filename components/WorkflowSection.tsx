@@ -544,7 +544,7 @@ import {
 } from '../services/workflowModelBlob';
 import { captureWorkflowModelThumbnailDataUrl } from '../services/workflowModelPreviewCapture';
 import { getCompanionLocalBaseUrl, normalizeCompanionBaseUrl } from '../services/companionLocalPrefs';
-import { probeCompanionSamSegmentHealth, revealCompanionAssetFolder } from '../services/companionClient';
+import { deleteCompanionAsset, probeCompanionSamSegmentHealth, revealCompanionAssetFolder } from '../services/companionClient';
 import {
   cloneWorkflowModelSlotsForDuplicatedAsset,
   companionRasterSlotNeedsHydrate,
@@ -568,6 +568,7 @@ import {
   buildCompanionHydrateSessionKey,
   runWorkflowCompanionEagerRasterHydrate,
 } from '../services/workflowCompanionLazyHydrate';
+import { collectReferencedCompanionKeys } from '../services/workflowManifestCrossCheck';
 
 const WORKFLOW_MODEL_EXT_RE = /\.(glb|gltf|fbx|obj)$/i;
 const WORKFLOW_VIDEO_EXT_RE = /\.(mp4|webm|mov|m4v)$/i;
@@ -8479,6 +8480,7 @@ ${lineSvg}
         onLog?.('warn', '当前资产尚未落到本地，无法打开资产文件夹');
         return;
       }
+      onLog?.('info', '正在打开资产文件夹...', key);
       const out = await revealCompanionAssetFolder(base, projectId, key);
       if (out.ok) {
         onLog?.('info', `已打开资产文件夹：${out.data.filename}`);
@@ -8487,6 +8489,50 @@ ${lineSvg}
       onLog?.('warn', `打开资产文件夹失败：${'error' in out ? out.error : 'unknown_error'}`);
     },
     [getWorkflowAssetActiveCompanionKey, onLog, workspaceProjectChrome?.activeProjectId]
+  );
+
+  const deleteWorkflowAssetCompanionObjects = useCallback(
+    (removed: WorkflowAsset, remainingAssets: WorkflowAsset[]) => {
+      const projectId = String(workspaceProjectChrome?.activeProjectId || '').trim();
+      const base = String(getCompanionLocalBaseUrl() || '').trim();
+      if (!projectId || !base) return;
+      const removedKeys = collectReferencedCompanionKeys([removed]);
+      if (removedKeys.size === 0) return;
+      const stillReferenced = collectReferencedCompanionKeys(remainingAssets);
+      const keys = [...removedKeys].filter((key) => !stillReferenced.has(key));
+      if (keys.length === 0) return;
+      void (async () => {
+        let deleted = 0;
+        let missing = 0;
+        const failed: string[] = [];
+        for (const key of keys) {
+          const out = await deleteCompanionAsset(base, projectId, key);
+          if (out.ok) {
+            deleted += 1;
+            continue;
+          }
+          if (out.status === 404 || out.code === 'STORAGE_NOT_FOUND') {
+            missing += 1;
+            continue;
+          }
+          failed.push(`${key}: ${out.error}`);
+        }
+        if (deleted > 0) {
+          onLog?.('info', `已同步删除本地资产文件：${deleted} 项`);
+        }
+        if (missing > 0) {
+          onLog?.('warn', `本地资产文件已不存在，已清理画布引用：${missing} 项`);
+        }
+        if (failed.length > 0) {
+          onLog?.(
+            'warn',
+            `本地资产文件删除失败：${failed.length} 项，刷新后可能被 manifest 补回`,
+            failed.slice(0, 3).join('\n')
+          );
+        }
+      })();
+    },
+    [onLog, workspaceProjectChrome?.activeProjectId]
   );
 
   const handleLightboxWheelCycleDisplay = useCallback((deltaSteps: number) => {
@@ -9307,10 +9353,30 @@ ${lineSvg}
           onStoryboardTableAssetRemoved?.(assetId);
         }
         revokeWorkflowModelBlobUrlsAfterAssetRemoved(removed, next);
+        deleteWorkflowAssetCompanionObjects(removed, next);
       }
       return next;
     });
     setPending((prev) => prev.filter((t) => t.assetId !== assetId));
+    setSelectedAssetIds((prev) => {
+      if (!prev.has(assetId)) return prev;
+      const next = new Set(prev);
+      next.delete(assetId);
+      return next;
+    });
+    setSelectedGroupItemKeys((prev) => {
+      let changed = false;
+      const next = new Set<string>();
+      for (const key of prev) {
+        if (key === assetId || key.startsWith(`${assetId}::`)) {
+          changed = true;
+          continue;
+        }
+        next.add(key);
+      }
+      return changed ? next : prev;
+    });
+    setWorkflowAssetContextMenu((prev) => (prev?.assetId === assetId ? null : prev));
     if (lightboxAssetId === assetId) {
       setLightboxInstantShellAssetId(null);
       setLightboxOverlayMounted(false);
@@ -9324,7 +9390,7 @@ ${lineSvg}
     if (storyboardPanelAssetId === assetId) setStoryboardPanelAssetId(null);
     // 如果删除的是当前查看的组，清除组筛选
     if (groupFilterId === assetId) setGroupFilterId(null);
-  }, [lightboxAssetId, archivedDetailAssetId, groupFilterId, storyboardPanelAssetId, assetSetPanelAssetId, onStoryboardTableAssetRemoved, resetLightboxBoot, setAssets, setPending]);
+  }, [deleteWorkflowAssetCompanionObjects, lightboxAssetId, archivedDetailAssetId, groupFilterId, storyboardPanelAssetId, assetSetPanelAssetId, onStoryboardTableAssetRemoved, resetLightboxBoot, setAssets, setPending]);
 
   const archivedDetailAsset = archivedDetailAssetId ? assets.find((a) => a.id === archivedDetailAssetId) : null;
 
@@ -13488,6 +13554,7 @@ ${lineSvg}
                                         previewSrc={childGridPreviewSrcEffective}
                                         cacheKey={childGridCacheKeyEffective}
                                         textDisplay={childTextDisplay}
+                                        autoPlayVideo={selectedGroupItemKeys.has(groupKey)}
                                         deferThumbnail={!thumbUnlockKeys.has(groupKey)}
                                         thumbDecodePriority={thumbHotKeys.has(groupKey) ? 'high' : 'low'}
                                         imageFetchPriority={thumbHotKeys.has(groupKey) ? 'high' : 'auto'}
@@ -14210,6 +14277,7 @@ ${lineSvg}
                               previewSrc={gridPreviewSrcEffective}
                               cacheKey={gridPreviewCacheKeyEffective}
                               textDisplay={textDisplay}
+                              autoPlayVideo={selectedAssetIds.has(a.id)}
                               thumbMaxEdge={
                                 resolveWorkflowStepModelUrls(a, a.displayKey).length > 0 ? 896 : undefined
                               }

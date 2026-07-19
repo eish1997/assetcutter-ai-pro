@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import type { CompanionManifestV1 } from '../services/companionClient/storage';
-import { mergeUnlinkedManifestEntriesIntoWorkflowAssets } from '../services/workflowManifestCrossCheck';
+import {
+  collectReferencedCompanionKeys,
+  mergeUnlinkedManifestEntriesIntoWorkflowAssets,
+} from '../services/workflowManifestCrossCheck';
 import {
   workflowModelCompanionStorageKey,
   workflowOriginalCompanionStorageKey,
@@ -16,6 +19,24 @@ function man(entries: CompanionManifestV1['entries']): CompanionManifestV1 {
 }
 
 describe('mergeUnlinkedManifestEntriesIntoWorkflowAssets', () => {
+  it('collects step-scoped 3D companion keys as referenced assets', () => {
+    const keys = collectReferencedCompanionKeys([
+      {
+        id: ASSET_ID,
+        original: '',
+        displayKey: 'generate_3d',
+        results: {},
+        resultOrder: ['generate_3d'],
+        archived: false,
+        hiddenInGrid: false,
+        createdAt: 1,
+        stepModelCompanionKeys: { generate_3d: ['wf-mdl-step-glb', 'wf-mdl-step-fbx'] },
+      },
+    ]);
+
+    expect([...keys].sort()).toEqual(['wf-mdl-step-fbx', 'wf-mdl-step-glb']);
+  });
+
   it('将 wf-orig 与 wf-res 合并为一张卡片且 id 与伴侣键一致', () => {
     const ok = workflowOriginalCompanionStorageKey(ASSET_ID);
     const rk = workflowResultCompanionStorageKey(ASSET_ID, STEP);

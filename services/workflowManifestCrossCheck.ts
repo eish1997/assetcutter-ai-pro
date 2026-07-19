@@ -267,6 +267,17 @@ export function collectReferencedCompanionKeys(assets: WorkflowAsset[]): Set<str
         if (k) keys.add(k);
       }
     }
+    const smck = a.stepModelCompanionKeys;
+    if (smck && typeof smck === 'object') {
+      for (const stepId of Object.keys(smck)) {
+        const list = smck[stepId];
+        if (!Array.isArray(list)) continue;
+        for (const mk of list) {
+          const k = String(mk || '').trim();
+          if (k) keys.add(k);
+        }
+      }
+    }
     if (isWorkflowStoryboardTableAsset(a) && a.storyboardTable?.rows?.length) {
       for (const row of a.storyboardTable.rows) {
         const fk = String(row.frameImageCompanionKey || '').trim();

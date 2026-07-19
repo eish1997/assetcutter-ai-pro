@@ -132,6 +132,7 @@ export default function WorkflowLightboxAssetThumbStrip({
                       cacheKey={`lightbox-strip:${asset.id}:${asset.displayKey}`}
                       thumbMaxEdge={128}
                       deferThumbnail={false}
+                      autoPlayVideo={active}
                     />
                   ) : (
                     <WorkflowGridImage
@@ -139,6 +140,7 @@ export default function WorkflowLightboxAssetThumbStrip({
                       cacheKey={`lightbox-strip:${asset.id}:${asset.displayKey}`}
                       thumbMaxEdge={128}
                       mediaVariant={getMediaVariant?.(asset) ?? 'image'}
+                      autoPlayVideo={active}
                       className="h-full w-full"
                       imgClassName="block h-full w-full object-cover"
                       alt=""

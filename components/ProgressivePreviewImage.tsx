@@ -367,24 +367,89 @@ export const ProgressivePreviewImage = forwardRef<HTMLImageElement, ProgressiveP
 );
 
 /** 工作区主网格：略大缩略边，与 ProgressivePreviewImage 同源逻辑 */
+type WorkflowGridVideoProps = {
+  className?: string;
+  imgClassName?: string;
+  fullSrc: string;
+  autoPlayVideo: boolean;
+  videoPosterSrc?: string;
+};
+
+const WorkflowGridVideo = forwardRef<HTMLImageElement, WorkflowGridVideoProps>(function WorkflowGridVideo(
+  { className, imgClassName, fullSrc, autoPlayVideo, videoPosterSrc },
+  ref
+) {
+  const videoRef = React.useRef<HTMLVideoElement | null>(null);
+  React.useImperativeHandle(ref, () => videoRef.current as unknown as HTMLImageElement, []);
+  React.useEffect(() => {
+    const el = videoRef.current;
+    if (!el) return;
+    if (typeof navigator !== 'undefined' && /jsdom/i.test(navigator.userAgent || '')) return;
+    if (!autoPlayVideo) {
+      try {
+        el.pause();
+      } catch {
+        /* jsdom and older browsers can expose media methods without playback support. */
+      }
+      return;
+    }
+    try {
+      const pending = el.play();
+      if (pending && typeof pending.catch === 'function') {
+        pending.catch(() => {
+          // Browser autoplay policy may still block playback; the card remains usable as a static cover.
+        });
+      }
+    } catch {
+      /* Keep the card as a static cover when playback cannot start. */
+    }
+  }, [autoPlayVideo, fullSrc]);
+
+  return (
+    <div className={className ?? 'relative w-full h-full'}>
+      <video
+        ref={videoRef}
+        src={workflowSafeImgSrc(fullSrc)}
+        poster={videoPosterSrc ? workflowSafeImgSrc(videoPosterSrc) : undefined}
+        className={imgClassName ?? 'block w-full h-full object-cover'}
+        muted
+        playsInline
+        loop={autoPlayVideo}
+        autoPlay={autoPlayVideo}
+        preload={autoPlayVideo ? 'auto' : 'metadata'}
+      />
+    </div>
+  );
+});
+
 export const WorkflowGridImage = forwardRef<
   HTMLImageElement,
-  Omit<ProgressivePreviewImageProps, 'thumbMaxEdge'> & { thumbMaxEdge?: number; mediaVariant?: 'image' | 'video' }
->(function WorkflowGridImage({ thumbMaxEdge = 640, mediaVariant = 'image', className, imgClassName, fullSrc, ...rest }, ref) {
+  Omit<ProgressivePreviewImageProps, 'thumbMaxEdge'> & {
+    thumbMaxEdge?: number;
+    mediaVariant?: 'image' | 'video';
+    autoPlayVideo?: boolean;
+    videoPosterSrc?: string;
+  }
+>(function WorkflowGridImage({
+  thumbMaxEdge = 640,
+  mediaVariant = 'image',
+  className,
+  imgClassName,
+  fullSrc,
+  autoPlayVideo = false,
+  videoPosterSrc,
+  ...rest
+}, ref) {
   if (mediaVariant === 'video') {
     return (
-      <div className={className ?? 'relative w-full h-full'}>
-        <video
-          ref={ref as React.Ref<HTMLVideoElement>}
-          src={workflowSafeImgSrc(fullSrc)}
-          className={imgClassName ?? 'block w-full h-full object-cover'}
-          muted
-          playsInline
-          loop
-          autoPlay
-          preload="metadata"
-        />
-      </div>
+      <WorkflowGridVideo
+        ref={ref}
+        fullSrc={fullSrc}
+        className={className}
+        imgClassName={imgClassName}
+        autoPlayVideo={autoPlayVideo}
+        videoPosterSrc={videoPosterSrc}
+      />
     );
   }
   return (
