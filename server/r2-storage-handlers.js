@@ -155,6 +155,10 @@ function safeRelativeObjectPath(raw) {
   return key;
 }
 
+function isPublicAiGatewayResultKey(objectKey) {
+  return String(objectKey || '').trim().startsWith('public/ai-gateway-results/');
+}
+
 function toYmd(ts) {
   const d = new Date(ts);
   const y = d.getFullYear();
@@ -648,6 +652,22 @@ async function handleHeadObject(req, res, objectKey, sessionUser, s3) {
   sendJson(res, 200, { ok: true, objectKey });
 }
 
+async function handlePublicObjectGet(req, res, objectKey, s3) {
+  const got = await s3.send(
+    new GetObjectCommand({
+      Bucket: R2_BUCKET(),
+      Key: objectKey,
+    })
+  );
+  const bin = await streamBodyToBuffer(got.Body);
+  res.writeHead(200, {
+    'Content-Type': got.ContentType || 'application/octet-stream',
+    'Content-Length': String(bin.length),
+    'Cache-Control': 'public, max-age=31536000, immutable',
+  });
+  res.end(bin);
+}
+
 async function handleDeleteObject(req, res, objectKey, sessionUser, s3) {
   try {
     assertUserObjectKey(sessionUser, objectKey);
@@ -1136,6 +1156,10 @@ export async function handleR2StorageRequest(req, res, inject = {}) {
     if (pathname.startsWith('/api/r2/objects/')) {
       const objectKey = safeObjectKey(decodeURIComponent(pathname.slice('/api/r2/objects/'.length)));
       if (req.method === 'GET') {
+        if (isPublicAiGatewayResultKey(objectKey)) {
+          await handlePublicObjectGet(req, res, objectKey, s3);
+          return;
+        }
         await handleHeadObject(req, res, objectKey, sessionUser, s3);
         return;
       }
