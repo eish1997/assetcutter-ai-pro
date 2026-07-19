@@ -9,6 +9,8 @@ export type WorkflowAssetContextMenuProps = {
   canCopyImage: boolean;
   onCopyImage: () => void;
   onCopyId: () => void;
+  canOpenFolder?: boolean;
+  onOpenFolder?: () => void;
   canAddToComposeInput?: boolean;
   onAddToComposeInput?: () => void;
   onClose: () => void;
@@ -24,6 +26,8 @@ export default function WorkflowAssetContextMenu({
   canCopyImage,
   onCopyImage,
   onCopyId,
+  canOpenFolder = false,
+  onOpenFolder,
   canAddToComposeInput = false,
   onAddToComposeInput,
   onClose,
@@ -47,7 +51,7 @@ export default function WorkflowAssetContextMenu({
     setPosition(
       computeContextMenuPosition(x, y, rect.width, rect.height, vw, vh)
     );
-  }, [open, x, y, canAddToComposeInput, canCopyImage]);
+  }, [open, x, y, canAddToComposeInput, canCopyImage, canOpenFolder]);
 
   useEffect(() => {
     if (!open) return;
@@ -121,6 +125,20 @@ export default function WorkflowAssetContextMenu({
       >
         复制 ID
       </button>
+      {onOpenFolder ? (
+        <button
+          type="button"
+          disabled={!canOpenFolder}
+          className="block w-full px-2.5 py-1.5 text-left text-[11px] text-gray-200 transition-colors hover:bg-white/[0.06] disabled:cursor-not-allowed disabled:opacity-35"
+          onClick={() => {
+            if (!canOpenFolder) return;
+            onOpenFolder();
+            onClose();
+          }}
+        >
+          打开资产文件夹
+        </button>
+      ) : null}
       {onAddToComposeInput ? (
         <button
           type="button"

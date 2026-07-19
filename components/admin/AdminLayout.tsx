@@ -88,7 +88,7 @@ const AdminLayout: React.FC<AdminLayoutProps> = ({ children, currentPath, onNavi
           <button
             type="button"
             onClick={() => navigateMainSite()}
-            className="flex items-center justify-center gap-2 w-full py-2.5 rounded-xl border border-[#2e2e32] bg-[#1c1c22] text-[9px] font-black uppercase tracking-widest text-gray-300 hover:bg-[#2e2e36] hover:border-[#3a3a40] transition-all"
+            className="flex items-center justify-center gap-2 w-full py-2.5 rounded-xl border border-[#2e2e32] bg-[#1c1c22] text-[10px] font-semibold text-gray-300 hover:bg-[#2e2e36] hover:border-[#3a3a40] transition-all"
           >
             回到主站
           </button>
@@ -99,7 +99,7 @@ const AdminLayout: React.FC<AdminLayoutProps> = ({ children, currentPath, onNavi
                 window.location.href = '/';
               });
             }}
-            className="flex items-center justify-center gap-2 w-full py-2.5 rounded-xl border border-[#2e2e32] bg-[#1c1c22] text-[9px] font-black uppercase tracking-widest text-gray-400 hover:bg-[#3d3018] hover:border-[#b45309] hover:text-amber-200 transition-all"
+            className="flex items-center justify-center gap-2 w-full py-2.5 rounded-xl border border-[#2e2e32] bg-[#1c1c22] text-[10px] font-semibold text-gray-400 hover:bg-[#3d3018] hover:border-[#b45309] hover:text-amber-200 transition-all"
           >
             退出登录
           </button>
@@ -107,7 +107,7 @@ const AdminLayout: React.FC<AdminLayoutProps> = ({ children, currentPath, onNavi
       </aside>
       <main className="flex-1 flex flex-col">
         <header className="h-14 border-b border-[#2e2e32] flex items-center justify-between px-6 bg-[#16161a]">
-          <h1 className="text-[12px] font-black uppercase tracking-[0.2em] text-gray-300">Admin Console</h1>
+          <h1 className="text-[12px] font-semibold text-gray-300">管理控制台</h1>
           <button
             type="button"
             onClick={() => navigateMainSite()}

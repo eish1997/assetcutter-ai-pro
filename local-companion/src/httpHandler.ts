@@ -1,4 +1,5 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
+import { spawn } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -16,6 +17,7 @@ import {
 import { listProjectIds } from './storage/projectPaths.js';
 import {
   deleteAsset,
+  ensureAssetVisibleObjectFile,
   getAssetMeta,
   getManifestJson,
   putAsset,
@@ -187,6 +189,25 @@ function ensureCompanionDownloadFilename(hinted: string | null, key: string, mim
   );
   if (/\.[a-z0-9]{2,8}$/i.test(base)) return base;
   return `${base}${extensionFromCompanionMime(mime)}`;
+}
+
+function openFolderInSystem(folderPath: string): { ok: true } | { error: string; code: string } {
+  try {
+    const platform = process.platform;
+    const command = platform === 'win32' ? 'explorer.exe' : platform === 'darwin' ? 'open' : 'xdg-open';
+    const child = spawn(command, [folderPath], {
+      detached: true,
+      stdio: 'ignore',
+      windowsHide: true,
+    });
+    child.unref();
+    return { ok: true };
+  } catch (e) {
+    return {
+      error: e instanceof Error ? e.message : 'open_folder_failed',
+      code: 'STORAGE_OPEN_FOLDER_FAILED',
+    };
+  }
 }
 
 function writeSse(res: ServerResponse, event: string, payload: unknown): void {
@@ -727,6 +748,46 @@ export async function handleRequest(
           origin,
         );
       }
+      return;
+    }
+
+    const mAssetReveal = path.match(/^\/v1\/projects\/([^/]+)\/assets\/([^/]+)\/reveal$/);
+    if (mAssetReveal && method === 'POST') {
+      const pid = mAssetReveal[1]!;
+      const key = mAssetReveal[2]!;
+      const meta = getAssetMeta(pid, key);
+      if ('error' in meta) {
+        const status = meta.code === 'STORAGE_NOT_FOUND' ? 404 : 400;
+        sendJson(res, status, { error: meta.error, code: meta.code }, origin);
+        return;
+      }
+      if (!meta.exists) {
+        sendJson(res, 404, { error: 'object_missing', code: 'STORAGE_NOT_FOUND' }, origin);
+        return;
+      }
+      const visible = ensureAssetVisibleObjectFile(pid, key, meta.entry.mime);
+      if ('error' in visible) {
+        sendJson(res, 400, { error: visible.error, code: visible.code }, origin);
+        return;
+      }
+      const opened = openFolderInSystem(visible.dir);
+      if ('error' in opened) {
+        sendJson(res, 500, { error: opened.error, code: opened.code }, origin);
+        return;
+      }
+      sendJson(
+        res,
+        200,
+        {
+          ok: true,
+          projectId: pid,
+          key,
+          dir: visible.dir,
+          visibleRelPath: visible.visibleRelPath,
+          filename: visible.filename,
+        },
+        origin,
+      );
       return;
     }
 

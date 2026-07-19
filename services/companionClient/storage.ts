@@ -39,6 +39,14 @@ export type CompanionAssetMetaV1 = {
   updatedAt: number;
   onDisk: boolean;
 };
+export type CompanionAssetRevealResultV1 = {
+  ok: true;
+  projectId: string;
+  key: string;
+  dir: string;
+  visibleRelPath: string;
+  filename: string;
+};
 
 
 export async function listCompanionProjects(baseUrl: string) {
@@ -115,6 +123,16 @@ export async function deleteCompanionAsset(baseUrl: string, projectId: string, k
   return companionFetchJson<{ ok: boolean }>(baseUrl, `/v1/projects/${p}/assets/${k}`, {
     method: 'DELETE',
   });
+}
+
+export async function revealCompanionAssetFolder(baseUrl: string, projectId: string, key: string) {
+  const p = encodeURIComponent(projectId);
+  const k = encodeURIComponent(key);
+  return companionFetchJson<CompanionAssetRevealResultV1>(
+    baseUrl,
+    `/v1/projects/${p}/assets/${k}/reveal`,
+    { method: 'POST' },
+  );
 }
 
 function perfNowMs(): number {

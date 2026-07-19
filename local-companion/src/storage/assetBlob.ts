@@ -1,6 +1,8 @@
 import {
   closeSync,
+  copyFileSync,
   existsSync,
+  linkSync,
   mkdirSync,
   openSync,
   readSync,
@@ -11,12 +13,97 @@ import {
   statSync,
 } from 'node:fs';
 import { join } from 'node:path';
-import { getAssetObjectPath, ensureProjectLayout, getProjectRoot } from './projectPaths.js';
+import { getAssetObjectPath, getAssetVisibleObjectPath, ensureProjectLayout, getProjectRoot } from './projectPaths.js';
 import { readManifestOrEmpty, writeManifestSync } from './manifestIO.js';
 import { assertSafeId, assertSafeWorkspaceFolderName, isSafeWorkspaceFolderName } from './safeIds.js';
 import type { ManifestEntryV1, ProjectManifestV1 } from './manifestTypes.js';
 
 const DEFAULT_MIME = 'application/octet-stream';
+const VISIBLE_ASSET_FILENAMES = [
+  'asset.jpg',
+  'asset.png',
+  'asset.webp',
+  'asset.gif',
+  'asset.svg',
+  'asset.txt',
+  'asset.md',
+  'asset.json',
+  'asset.bin',
+  'model.glb',
+  'model.gltf',
+  'model.fbx',
+  'model.obj',
+];
+
+function extensionFromMime(mime: string, key = ''): { stem: 'asset' | 'model'; ext: string } {
+  const ct = String(mime || '').split(';')[0]!.trim().toLowerCase();
+  const k = String(key || '').toLowerCase();
+  if (ct === 'image/jpeg' || ct === 'image/jpg') return { stem: 'asset', ext: 'jpg' };
+  if (ct === 'image/png') return { stem: 'asset', ext: 'png' };
+  if (ct === 'image/webp') return { stem: 'asset', ext: 'webp' };
+  if (ct === 'image/gif') return { stem: 'asset', ext: 'gif' };
+  if (ct === 'image/svg+xml') return { stem: 'asset', ext: 'svg' };
+  if (ct === 'application/json') return { stem: 'asset', ext: 'json' };
+  if (ct === 'text/markdown') return { stem: 'asset', ext: 'md' };
+  if (ct === 'text/plain') return { stem: 'asset', ext: 'txt' };
+  if (ct.includes('fbx') || k.includes('fbx')) return { stem: 'model', ext: 'fbx' };
+  if (ct.includes('gltf+json') || k.includes('gltf')) return { stem: 'model', ext: 'gltf' };
+  if (ct.includes('gltf-binary') || ct.includes('model/gltf') || k.includes('glb')) {
+    return { stem: 'model', ext: 'glb' };
+  }
+  if (k.includes('obj')) return { stem: 'model', ext: 'obj' };
+  return { stem: 'asset', ext: 'bin' };
+}
+
+function visibleFilenameForAsset(mime: string, key: string): string {
+  const { stem, ext } = extensionFromMime(mime, key);
+  return `${stem}.${ext}`;
+}
+
+function removeStaleVisibleFiles(projectId: string, key: string, keepFilename: string): void {
+  for (const filename of VISIBLE_ASSET_FILENAMES) {
+    if (filename === keepFilename) continue;
+    const { visibleFile } = getAssetVisibleObjectPath(projectId, key, filename);
+    if (!existsSync(visibleFile)) continue;
+    try {
+      rmSync(visibleFile, { force: true });
+    } catch {
+      /* best effort */
+    }
+  }
+}
+
+function linkOrCopyObjectFile(objectFile: string, visibleFile: string): void {
+  if (existsSync(visibleFile)) {
+    rmSync(visibleFile, { force: true });
+  }
+  try {
+    linkSync(objectFile, visibleFile);
+  } catch {
+    copyFileSync(objectFile, visibleFile);
+  }
+}
+
+export function ensureAssetVisibleObjectFile(
+  projectId: string,
+  key: string,
+  mime?: string,
+): { ok: true; dir: string; visibleFile: string; visibleRelPath: string; filename: string } | { error: string; code: string } {
+  try {
+    const pid = assertSafeWorkspaceFolderName(projectId, 'projectId');
+    const k = assertSafeId(key, 'key');
+    const { dir, objectFile } = getAssetObjectPath(pid, k);
+    if (!existsSync(objectFile)) return { error: 'object_missing', code: 'STORAGE_NOT_FOUND' };
+    const filename = visibleFilenameForAsset(mime || DEFAULT_MIME, k);
+    const { visibleFile, visibleRelPath } = getAssetVisibleObjectPath(pid, k, filename);
+    if (!existsSync(visibleFile)) {
+      linkOrCopyObjectFile(objectFile, visibleFile);
+    }
+    return { ok: true, dir, visibleFile, visibleRelPath, filename };
+  } catch {
+    return { error: 'visible_file_failed', code: 'STORAGE_IO' };
+  }
+}
 
 function upsertEntry(
   m: ProjectManifestV1,
@@ -56,6 +143,10 @@ export function putAsset(
   writeFileSync(objectFile, body);
   const st = statSync(objectFile);
   const mime = (contentType && contentType.split(';')[0].trim()) || DEFAULT_MIME;
+  const filename = visibleFilenameForAsset(mime, k);
+  const { visibleFile } = getAssetVisibleObjectPath(pid, k, filename);
+  linkOrCopyObjectFile(objectFile, visibleFile);
+  removeStaleVisibleFiles(pid, k, filename);
   const m = readManifestOrEmpty(pid);
   upsertEntry(m, k, relPath, st.size, mime);
   writeManifestSync(m);
@@ -121,8 +212,7 @@ export function deleteAsset(projectId: string, key: string): { ok: true } | { er
     m.entries.splice(i, 1);
     if (existsSync(dir)) {
       try {
-        const left = readdirOrEmpty(dir);
-        if (left.length === 0) rmSync(dir, { recursive: true, force: true });
+        rmSync(dir, { recursive: true, force: true });
       } catch {
         /* 忽略 */
       }

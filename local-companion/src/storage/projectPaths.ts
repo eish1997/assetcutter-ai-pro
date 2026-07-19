@@ -26,6 +26,19 @@ export function getAssetObjectPath(projectId: string, key: string): { dir: strin
   return { dir, objectFile, relPath };
 }
 
+export function getAssetVisibleObjectPath(
+  projectId: string,
+  key: string,
+  filename: string,
+): { dir: string; visibleFile: string; visibleRelPath: string } {
+  const k = assertSafeId(key, 'key');
+  const safeFilename = assertSafeId(filename, 'filename');
+  const dir = join(getProjectRoot(projectId), 'assets', k);
+  const visibleFile = join(dir, safeFilename);
+  const visibleRelPath = `assets/${k}/${safeFilename}`.replace(/\\/g, '/');
+  return { dir, visibleFile, visibleRelPath };
+}
+
 export function ensureProjectLayout(projectId: string): void {
   const root = getProjectRoot(projectId);
   if (!existsSync(root)) {

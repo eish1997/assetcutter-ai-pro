@@ -16,6 +16,8 @@ export type WorkflowLightboxAssetThumbStripProps = {
   canCopyImage?: (asset: WorkflowAsset) => boolean;
   onCopyImage?: (asset: WorkflowAsset) => void | Promise<void>;
   onCopyId?: (asset: WorkflowAsset) => void | Promise<void>;
+  canOpenFolder?: (asset: WorkflowAsset) => boolean;
+  onOpenFolder?: (asset: WorkflowAsset) => void | Promise<void>;
   onAddToComposeInput?: (asset: WorkflowAsset) => void | Promise<void>;
   canAddToComposeInput?: (asset: WorkflowAsset) => boolean;
   getMediaVariant?: (asset: WorkflowAsset) => 'image' | 'video';
@@ -32,6 +34,8 @@ export default function WorkflowLightboxAssetThumbStrip({
   canCopyImage,
   onCopyImage,
   onCopyId,
+  canOpenFolder,
+  onOpenFolder,
   onAddToComposeInput,
   canAddToComposeInput,
   getMediaVariant,
@@ -45,12 +49,12 @@ export default function WorkflowLightboxAssetThumbStrip({
 
   const handleThumbContextMenu = useCallback(
     (asset: WorkflowAsset, e: React.MouseEvent) => {
-      if (!onCopyImage && !onCopyId && !onAddToComposeInput) return;
+      if (!onCopyImage && !onCopyId && !onOpenFolder && !onAddToComposeInput) return;
       e.preventDefault();
       e.stopPropagation();
       setContextMenu({ asset, x: e.clientX, y: e.clientY });
     },
-    [onAddToComposeInput, onCopyId, onCopyImage]
+    [onAddToComposeInput, onCopyId, onCopyImage, onOpenFolder]
   );
 
   useEffect(() => {
@@ -173,6 +177,14 @@ export default function WorkflowLightboxAssetThumbStrip({
           onCopyId={() => {
             if (onCopyId) void onCopyId(contextMenu.asset);
           }}
+          canOpenFolder={canOpenFolder?.(contextMenu.asset) ?? Boolean(onOpenFolder)}
+          onOpenFolder={
+            onOpenFolder
+              ? () => {
+                  void onOpenFolder(contextMenu.asset);
+                }
+              : undefined
+          }
           canAddToComposeInput={
             (canAddToComposeInput?.(contextMenu.asset) ??
               (canCopyImage?.(contextMenu.asset) ?? Boolean(onCopyImage))) &&

@@ -544,7 +544,7 @@ import {
 } from '../services/workflowModelBlob';
 import { captureWorkflowModelThumbnailDataUrl } from '../services/workflowModelPreviewCapture';
 import { getCompanionLocalBaseUrl, normalizeCompanionBaseUrl } from '../services/companionLocalPrefs';
-import { probeCompanionSamSegmentHealth } from '../services/companionClient';
+import { probeCompanionSamSegmentHealth, revealCompanionAssetFolder } from '../services/companionClient';
 import {
   cloneWorkflowModelSlotsForDuplicatedAsset,
   companionRasterSlotNeedsHydrate,
@@ -2367,6 +2367,11 @@ const WorkflowSection: React.FC<{
     if (!key) return '';
     return `${base}/v1/projects/${encodeURIComponent(projectId)}/assets/${encodeURIComponent(key)}`;
   }, [workspaceProjectChrome?.activeProjectId]);
+  const getWorkflowAssetActiveCompanionKey = useCallback((a: WorkflowAsset): string => {
+    const dk = String(a.displayKey || 'original').trim() || 'original';
+    if (dk !== 'original') return String(a.resultsCompanionKeys?.[dk] || '').trim();
+    return String(a.originalCompanionKey || '').trim();
+  }, []);
   const getAssetDisplayImage = useCallback((
     a: WorkflowAsset,
     _assetsList?: WorkflowAsset[],
@@ -8289,6 +8294,11 @@ ${lineSvg}
     [getAssetDisplayImage]
   );
 
+  const canWorkflowAssetOpenFolder = useCallback(
+    (asset: WorkflowAsset) => Boolean(getWorkflowAssetActiveCompanionKey(asset)),
+    [getWorkflowAssetActiveCompanionKey]
+  );
+
   const openWorkflowAssetContextMenu = useCallback((asset: WorkflowAsset, e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
@@ -8325,6 +8335,33 @@ ${lineSvg}
   );
 
   /** 大图预览：普通滚轮在本资产内切换 displayKey */
+  const handleWorkflowAssetOpenFolder = useCallback(
+    async (asset: WorkflowAsset) => {
+      const projectId = String(workspaceProjectChrome?.activeProjectId || '').trim();
+      const base = String(getCompanionLocalBaseUrl() || '').trim();
+      const key = getWorkflowAssetActiveCompanionKey(asset);
+      if (!projectId) {
+        onLog?.('warn', '当前没有本机项目，无法打开资产文件夹');
+        return;
+      }
+      if (!base) {
+        onLog?.('warn', '本机伴侣未连接，无法打开资产文件夹');
+        return;
+      }
+      if (!key) {
+        onLog?.('warn', '当前资产尚未落到本地，无法打开资产文件夹');
+        return;
+      }
+      const out = await revealCompanionAssetFolder(base, projectId, key);
+      if (out.ok) {
+        onLog?.('info', `已打开资产文件夹：${out.data.filename}`);
+        return;
+      }
+      onLog?.('warn', `打开资产文件夹失败：${'error' in out ? out.error : 'unknown_error'}`);
+    },
+    [getWorkflowAssetActiveCompanionKey, onLog, workspaceProjectChrome?.activeProjectId]
+  );
+
   const handleLightboxWheelCycleDisplay = useCallback((deltaSteps: number) => {
     setAssets((prev) => {
       const id = lightboxAssetId;
@@ -14351,6 +14388,8 @@ ${lineSvg}
                 canCopyImage={canWorkflowAssetCopyImage}
                 onCopyImage={handleWorkflowAssetCopyImage}
                 onCopyId={handleWorkflowAssetCopyId}
+                canOpenFolder={canWorkflowAssetOpenFolder}
+                onOpenFolder={handleWorkflowAssetOpenFolder}
                 onAddToComposeInput={handleWorkflowAssetAddToComposeInput}
                 canAddToComposeInput={canWorkflowAssetAddToComposeInput}
                 getMediaVariant={(asset) => (workflowResultUsesVideoPreview(asset) ? 'video' : 'image')}
@@ -15582,6 +15621,10 @@ ${lineSvg}
               }}
               onCopyId={() => {
                 void handleWorkflowAssetCopyId(menuAsset);
+              }}
+              canOpenFolder={canWorkflowAssetOpenFolder(menuAsset)}
+              onOpenFolder={() => {
+                void handleWorkflowAssetOpenFolder(menuAsset);
               }}
               canAddToComposeInput={canWorkflowAssetAddToComposeInput(menuAsset)}
               onAddToComposeInput={() => {
