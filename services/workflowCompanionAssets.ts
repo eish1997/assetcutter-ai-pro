@@ -83,6 +83,30 @@ function sniffModelMimeFromBytes(bytes: Uint8Array, fileName?: string): string {
   return 'application/octet-stream';
 }
 
+function sniffOriginalMediaMimeFromBytes(bytes: Uint8Array): string {
+  const imageMime = sniffImageMimeFromBytes(bytes);
+  if (imageMime !== 'application/octet-stream') return imageMime;
+  if (
+    bytes.length >= 4 &&
+    bytes[0] === 0x1a &&
+    bytes[1] === 0x45 &&
+    bytes[2] === 0xdf &&
+    bytes[3] === 0xa3
+  ) {
+    return 'video/webm';
+  }
+  if (
+    bytes.length >= 12 &&
+    bytes[4] === 0x66 &&
+    bytes[5] === 0x74 &&
+    bytes[6] === 0x79 &&
+    bytes[7] === 0x70
+  ) {
+    return 'video/mp4';
+  }
+  return 'application/octet-stream';
+}
+
 const companionProjectIdsByBase = new Map<string, Promise<string[]>>();
 const companionAssetProjectByKey = new Map<string, string>();
 
@@ -444,6 +468,22 @@ export async function putWorkflowOriginalImageToCompanion(
   const key = workflowOriginalCompanionStorageKey(assetId);
   const base = normalizeCompanionBaseUrl(baseUrl);
   const res = await putCompanionAsset(base, projectId, key, parsed.blob, parsed.mime);
+  if (res.ok === false) {
+    return { ok: false, error: `${res.error}${res.status != null ? ` (HTTP ${res.status})` : ''}` };
+  }
+  return { ok: true, key };
+}
+
+export async function putWorkflowOriginalBlobToCompanion(
+  baseUrl: string,
+  projectId: string,
+  assetId: string,
+  blob: Blob
+): Promise<{ ok: true; key: string } | { ok: false; error: string }> {
+  const key = workflowOriginalCompanionStorageKey(assetId);
+  const base = normalizeCompanionBaseUrl(baseUrl);
+  const mime = (blob.type && blob.type.split(';')[0].trim()) || 'application/octet-stream';
+  const res = await putCompanionAsset(base, projectId, key, blob, mime);
   if (res.ok === false) {
     return { ok: false, error: `${res.error}${res.status != null ? ` (HTTP ${res.status})` : ''}` };
   }
@@ -1013,7 +1053,7 @@ export async function fetchWorkflowOriginalFromCompanionAsObjectUrl(
     return { ok: false, error: `${res.error}${res.status != null ? ` (HTTP ${res.status})` : ''}` };
   }
   const u8 = new Uint8Array(res.data);
-  const mime = sniffImageMimeFromBytes(u8);
+  const mime = sniffOriginalMediaMimeFromBytes(u8);
   const blob = new Blob([res.data], { type: mime });
   return { ok: true, objectUrl: URL.createObjectURL(blob), mime };
 }

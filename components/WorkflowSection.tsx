@@ -552,6 +552,7 @@ import {
   fetchWorkflowOriginalFromCompanionAsObjectUrl,
   parseDataUrlToBlob,
   putWorkflowModelFileToCompanion,
+  putWorkflowOriginalBlobToCompanion,
   putWorkflowOriginalImageFromAnyUrl,
   putWorkflowOriginalImageToCompanion,
   putWorkflowResultImageFromAnyUrl,
@@ -569,6 +570,7 @@ import {
 } from '../services/workflowCompanionLazyHydrate';
 
 const WORKFLOW_MODEL_EXT_RE = /\.(glb|gltf|fbx|obj)$/i;
+const WORKFLOW_VIDEO_EXT_RE = /\.(mp4|webm|mov|m4v)$/i;
 
 type InsertManualGroupResult = {
   next: WorkflowAsset[];
@@ -581,6 +583,13 @@ function isWorkflowModelFile(file: File): boolean {
   const t = (file.type || '').toLowerCase();
   if (t === 'model/gltf-binary' || t.includes('gltf')) return true;
   return false;
+}
+
+function isWorkflowVideoFile(file: File): boolean {
+  const name = file.name || '';
+  if (WORKFLOW_VIDEO_EXT_RE.test(name)) return true;
+  const t = (file.type || '').toLowerCase();
+  return t.startsWith('video/');
 }
 
 function workflowModelItemLooksLikeModel(it: DataTransferItem): boolean {
@@ -7124,6 +7133,120 @@ ${lineSvg}
     });
   }, [groupFilterId, setAssets, scheduleCompanionPersistOriginalAny]);
 
+  const addVideosFromFiles = useCallback(
+    (files: File[]) => {
+      const videoFiles = files.filter((f) => isWorkflowVideoFile(f)).slice(0, 50);
+      const batchBase = Date.now();
+      const n = videoFiles.length;
+      const fallbackRatio = clampWorkflowCardAspectRatio(1600, 900);
+      videoFiles.forEach((file, fileIdx) => {
+        const newId = uuid();
+        const blobUrl = URL.createObjectURL(file);
+        setCardAspectByAssetId((prev) => (prev[newId] != null ? prev : { ...prev, [newId]: fallbackRatio }));
+        setThumbUnlockKeys((prev) => {
+          if (prev.has(newId)) return prev;
+          const next = new Set(prev);
+          next.add(newId);
+          return next;
+        });
+        setThumbHotKeys((prev) => {
+          if (prev.has(newId)) return prev;
+          const next = new Set(prev);
+          next.add(newId);
+          return next;
+        });
+        setAssets((prev) => {
+          const parentGroup = groupFilterId ? prev.find((a) => a.id === groupFilterId) : null;
+          const newAsset: WorkflowAsset = attachInitialVgpToNewAsset({
+            id: newId,
+            assetKind: 'video',
+            original: blobUrl,
+            displayKey: 'original',
+            results: {},
+            resultOrder: [],
+            archived: false,
+            hiddenInGrid: false,
+            createdAt: batchBase + (n - 1 - fileIdx),
+            gridCardAspectRatio: fallbackRatio,
+            resultMeta: {
+              original: {
+                executedAt: Date.now(),
+                mediaKind: 'video',
+                displayStepLabel: file.name || 'Video',
+              },
+            },
+            ...(parentGroup ? { groupId: parentGroup.id } : {}),
+          });
+          if (!parentGroup) {
+            return [...prev, newAsset];
+          }
+          return prev
+            .map((a) => {
+              if (a.id === parentGroup.id) {
+                return { ...a, assetIds: [...(a.assetIds ?? []), newId] };
+              }
+              return a;
+            })
+            .concat(newAsset);
+        });
+
+        const video = document.createElement('video');
+        video.preload = 'metadata';
+        video.onloadedmetadata = () => {
+          const width = video.videoWidth || 1600;
+          const height = video.videoHeight || 900;
+          const ratio = clampWorkflowCardAspectRatio(width, height);
+          setCardAspectByAssetId((prev) => ({ ...prev, [newId]: ratio }));
+          setAssets((prev) => prev.map((x) => (x.id === newId ? { ...x, gridCardAspectRatio: ratio } : x)));
+        };
+        video.src = blobUrl;
+
+        void (async () => {
+          const pid = String(workspaceProjectChrome?.activeProjectId || '').trim();
+          const base = String(getCompanionLocalBaseUrl() || '').trim();
+          if (!pid || !base) {
+            onLog?.(
+              'warn',
+              '本地伴侣未连接',
+              '视频仅保存在浏览器会话内，刷新后可能无法预览；请连接本地伴侣以写入项目资产目录。'
+            );
+            return;
+          }
+          const put = await putWorkflowOriginalBlobToCompanion(base, pid, newId, file);
+          if (put.ok === false) {
+            onLog?.('warn', '视频写入本地伴侣失败', put.error);
+            return;
+          }
+          const got = await fetchWorkflowOriginalFromCompanionAsObjectUrl(base, pid, put.key);
+          if (got.ok === false) {
+            setAssets((prev) =>
+              prev.map((x) => (x.id === newId ? { ...x, originalCompanionKey: put.key } : x))
+            );
+            onLog?.('warn', '视频落盘后读取预览失败', got.error);
+            return;
+          }
+          try {
+            URL.revokeObjectURL(blobUrl);
+          } catch {
+            /* ignore */
+          }
+          setAssets((prev) =>
+            prev.map((x) =>
+              x.id === newId
+                ? {
+                    ...x,
+                    original: got.objectUrl,
+                    originalCompanionKey: put.key,
+                  }
+                : x
+            )
+          );
+        })();
+      });
+    },
+    [groupFilterId, onLog, setAssets, workspaceProjectChrome?.activeProjectId]
+  );
+
   const addModelsFromFiles = useCallback(
     (files: File[]) => {
       const skippedOversized: string[] = [];
@@ -7266,6 +7389,7 @@ ${lineSvg}
       for (let i = 0; i < dt.files.length; i += 1) {
         const f = dt.files[i];
         if (f.type?.startsWith('image/')) return true;
+        if (isWorkflowVideoFile(f)) return true;
         if (isWorkflowModelFile(f)) return true;
       }
     }
@@ -7273,6 +7397,7 @@ ${lineSvg}
       for (let i = 0; i < dt.items.length; i += 1) {
         const it = dt.items[i];
         if (it.kind === 'file' && it.type?.startsWith('image/')) return true;
+        if (it.kind === 'file' && it.type?.startsWith('video/')) return true;
         if (workflowModelItemLooksLikeModel(it)) return true;
         // dragover 阶段：.glb/.fbx 等常为 '' 或 application/octet-stream，且 getAsFile 可能为空
         if (it.kind === 'file') {
@@ -7292,12 +7417,14 @@ ${lineSvg}
     if (!dt) return false;
     const allFiles = Array.from(dt.files || []);
     const imageFiles = allFiles.filter((f) => f.type?.startsWith('image/'));
+    const videoFiles = allFiles.filter((f) => isWorkflowVideoFile(f));
     const modelFiles = allFiles.filter((f) => isWorkflowModelFile(f));
-    if (imageFiles.length === 0 && modelFiles.length === 0) return false;
+    if (imageFiles.length === 0 && videoFiles.length === 0 && modelFiles.length === 0) return false;
     if (imageFiles.length) addImagesFromFiles(imageFiles);
+    if (videoFiles.length) addVideosFromFiles(videoFiles);
     if (modelFiles.length) addModelsFromFiles(modelFiles);
     return true;
-  }, [addImagesFromFiles, addModelsFromFiles]);
+  }, [addImagesFromFiles, addModelsFromFiles, addVideosFromFiles]);
   const collectImageLikeUrlsFromDataTransfer = useCallback(async (dt?: DataTransfer | null) => {
     if (!dt) return [] as string[];
     const urls = new Set<string>();

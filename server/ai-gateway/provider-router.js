@@ -110,7 +110,7 @@ export const DEFAULT_AI_PROVIDER_ROUTES = Object.freeze([
     channel: 'volcengine-ark',
     upstreamBackend: 'volcengine-ark',
     modalities: ['image'],
-    capabilities: ['image.generate', 'workflow_text_to_image'],
+    capabilities: ['image.generate', 'image.edit', 'workflow_text_to_image', 'workflow_image_edit'],
     priority: 35,
   },
   {
@@ -140,7 +140,7 @@ export const DEFAULT_AI_PROVIDER_ROUTES = Object.freeze([
     channel: 'jimeng-visual',
     upstreamBackend: 'volcengine-jimeng',
     modalities: ['image'],
-    capabilities: ['image.generate', 'workflow_text_to_image', 'workflow_image_edit'],
+    capabilities: ['image.generate', 'image.edit', 'workflow_text_to_image', 'workflow_image_edit'],
     priority: 15,
   },
   {

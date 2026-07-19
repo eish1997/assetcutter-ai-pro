@@ -37,6 +37,15 @@ describe('local companion asset visible files', () => {
     expect(existsSync(getAssetVisibleObjectPath('project-a', 'asset_png', 'asset.png').visibleFile)).toBe(true);
   });
 
+  it('writes visible video suffix files while keeping object compatibility', () => {
+    useTempVolume();
+
+    putAsset('project-a', 'clip_mp4', Buffer.from('video bytes'), 'video/mp4');
+
+    expect(existsSync(getAssetObjectPath('project-a', 'clip_mp4').objectFile)).toBe(true);
+    expect(existsSync(getAssetVisibleObjectPath('project-a', 'clip_mp4', 'asset.mp4').visibleFile)).toBe(true);
+  });
+
   it('writes model suffix files and can backfill a visible file before reveal', () => {
     useTempVolume();
 

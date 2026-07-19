@@ -297,6 +297,43 @@ describe('server AI gateway job planning', () => {
     });
   });
 
+  it('plans Volcengine Ark Seedream image edit jobs with reference images through the Ark image adapter', () => {
+    const plan = createAiGatewayJobPlan({
+      modality: 'image',
+      capability: 'workflow_image_edit',
+      provider: 'volcengine-ark',
+      model: 'doubao-seedream-5-0',
+      input: {
+        contents: [
+          {
+            role: 'user',
+            parts: [
+              { text: 'turn this product into a clean catalog render' },
+              { inlineData: { mimeType: 'image/png', data: 'cmVm' } },
+            ],
+          },
+        ],
+        config: { imageConfig: { aspectRatio: '1:1' } },
+      },
+    });
+
+    expect(plan.route).toMatchObject({
+      providerId: 'volcengine-ark',
+      workerId: 'image-worker',
+      adapterId: 'volcengine-ark-image',
+    });
+    expect(plan.adapterRequest).toMatchObject({
+      method: 'POST',
+      path: '/images/generations',
+      body: {
+        model: 'doubao-seedream-5-0-260128',
+        prompt: 'turn this product into a clean catalog render',
+        image: 'data:image/png;base64,cmVm',
+        images: ['data:image/png;base64,cmVm'],
+      },
+    });
+  });
+
   it('plans explicit Volcengine Ark Seedance video jobs through the Ark async adapter', () => {
     const plan = createAiGatewayJobPlan({
       modality: 'video',

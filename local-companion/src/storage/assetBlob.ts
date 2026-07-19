@@ -29,6 +29,10 @@ const VISIBLE_ASSET_FILENAMES = [
   'asset.md',
   'asset.json',
   'asset.bin',
+  'asset.mp4',
+  'asset.webm',
+  'asset.mov',
+  'asset.m4v',
   'model.glb',
   'model.gltf',
   'model.fbx',
@@ -46,6 +50,10 @@ function extensionFromMime(mime: string, key = ''): { stem: 'asset' | 'model'; e
   if (ct === 'application/json') return { stem: 'asset', ext: 'json' };
   if (ct === 'text/markdown') return { stem: 'asset', ext: 'md' };
   if (ct === 'text/plain') return { stem: 'asset', ext: 'txt' };
+  if (ct === 'video/mp4') return { stem: 'asset', ext: 'mp4' };
+  if (ct === 'video/webm') return { stem: 'asset', ext: 'webm' };
+  if (ct === 'video/quicktime') return { stem: 'asset', ext: 'mov' };
+  if (ct === 'video/x-m4v') return { stem: 'asset', ext: 'm4v' };
   if (ct.includes('fbx') || k.includes('fbx')) return { stem: 'model', ext: 'fbx' };
   if (ct.includes('gltf+json') || k.includes('gltf')) return { stem: 'model', ext: 'gltf' };
   if (ct.includes('gltf-binary') || ct.includes('model/gltf') || k.includes('glb')) {

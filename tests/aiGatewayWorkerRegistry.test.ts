@@ -46,6 +46,28 @@ describe('AI gateway worker registry', () => {
     }
   });
 
+  it('declares the standard workflow capabilities for each implemented route family', () => {
+    const expectedByModality = {
+      text: ['text.generate'],
+      image: ['image.generate', 'image.edit', 'workflow_text_to_image', 'workflow_image_edit'],
+      video: ['video.generate', 'workflow_generate_video'],
+      model3d: ['model3d.generate'],
+    };
+
+    for (const route of DEFAULT_AI_PROVIDER_ROUTES) {
+      for (const modality of route.modalities) {
+        const expected = expectedByModality[modality];
+        if (!expected) continue;
+        for (const capability of expected) {
+          expect(
+            route.capabilities,
+            `${route.providerId}:${route.adapterId}:${modality} should declare ${capability}`
+          ).toContain(capability);
+        }
+      }
+    }
+  });
+
   it('builds AI Worker Proxy requests only through active workers', () => {
     const request = buildAiGatewayWorkerRequest(
       {

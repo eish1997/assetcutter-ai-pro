@@ -2512,6 +2512,9 @@ export function normalizeApiErrorMessage(err: unknown): string {
   if (structuredGatewayMessage) return structuredGatewayMessage;
   const raw = String((err as any)?.message ?? err);
   if (detectPipelineStepFromMessage(raw)) return raw;
+  if (/Volcengine Ark rejected AI job handoff/i.test(raw) && /real person|contain real person|真人|人像/i.test(raw)) {
+    return '火山方舟已拒绝本次视频任务：输入图可能包含真人/人像，触发了上游安全策略。秘钥和本地链路不一定有问题；请换一张非真人输入图，或切换到支持该场景的供应商/模型后重试。';
+  }
   if (/maximum call stack size exceeded/i.test(raw)) {
     return '执行时发生内部栈溢出（多为模块循环依赖或图片过大）。请硬刷新页面后重试；若仍失败请打开浏览器控制台查看 stack 并反馈。';
   }
