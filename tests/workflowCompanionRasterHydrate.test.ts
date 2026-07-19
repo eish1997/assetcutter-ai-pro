@@ -1,6 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   companionRasterSlotNeedsHydrate,
+  imageSrcToDataUrlForCompanion,
   prepareWorkflowBundleAfterLoad,
   workflowAssetNeedsCompanionOriginalHydrate,
   workflowAssetNeedsCompanionResultHydrate,
@@ -9,6 +10,10 @@ import {
 import type { WorkflowAsset, WorkflowPendingTask } from '../types';
 
 describe('workflowCompanionRasterHydrate', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   it('companionRasterSlotNeedsHydrate treats stale blob as needing fetch', () => {
     expect(companionRasterSlotNeedsHydrate('', 'ck-1')).toBe(true);
     expect(companionRasterSlotNeedsHydrate('blob:http://localhost/x', 'ck-1')).toBe(false);
@@ -85,5 +90,37 @@ describe('workflowCompanionRasterHydrate', () => {
       },
     };
     expect(workflowBundleNeedsCompanionHydrateForCloudPack({ assets: [asset] })).toBe(true);
+  });
+
+  it('normalizes public R2 object URLs through the auth R2 object endpoint before companion persistence', async () => {
+    class TestFileReader {
+      result: string | ArrayBuffer | null = null;
+      error: Error | null = null;
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+
+      readAsDataURL(_blob: Blob) {
+        this.result = 'data:image/png;base64,ok';
+        queueMicrotask(() => this.onload?.());
+      }
+    }
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        blob: vi.fn().mockResolvedValue(new Blob([new Uint8Array([1, 2, 3])], { type: 'image/png' })),
+      });
+    vi.stubGlobal('FileReader', TestFileReader);
+    vi.stubGlobal('fetch', fetchMock);
+
+    const out = await imageSrcToDataUrlForCompanion(
+      'https://files.adrazzo.com/public/ai-gateway-results/user/job/out.png'
+    );
+
+    expect(out).toBe('data:image/png;base64,ok');
+    expect(String(fetchMock.mock.calls[0]?.[0] || '')).toContain(
+      '/api/r2/objects/public/ai-gateway-results/user/job/out.png'
+    );
+    expect(fetchMock.mock.calls[0]?.[1]).toEqual({ mode: 'cors', credentials: 'include' });
   });
 });

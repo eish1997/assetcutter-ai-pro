@@ -288,6 +288,22 @@ function blobToDataUrl(blob: Blob): Promise<string> {
   });
 }
 
+function r2PublicObjectUrlToSitePath(raw: string): string | null {
+  const s = String(raw || '').trim();
+  if (!/^https?:\/\//i.test(s)) return null;
+  try {
+    const u = new URL(s);
+    const path = decodeURIComponent(u.pathname || '');
+    const publicIndex = path.indexOf('/public/');
+    if (publicIndex < 0) return null;
+    const objectKey = path.slice(publicIndex + 1).replace(/^\/+/, '');
+    if (!objectKey || objectKey.includes('..')) return null;
+    return `/api/r2/objects/${objectKey}${u.search}${u.hash}`;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * 将画布上可能出现的原图串（data / blob / http / 旧版裸 base64）规范为 data URL，供伴侣 PUT。
  * http 受 CORS 限制可能失败，返回 null。
@@ -334,6 +350,19 @@ export async function imageSrcToDataUrlForCompanion(src: string, depth = 0): Pro
       if (/\/api\/r2\//i.test(u.pathname || '')) {
         const sitePath = `${u.pathname}${u.search}${u.hash}`;
         const fetchUrl = mapSiteR2PathToFetchUrl(sitePath);
+        try {
+          const res = await fetch(fetchUrl, { mode: 'cors', credentials: 'include' });
+          if (res.ok) {
+            const blob = await res.blob();
+            return await blobToDataUrl(blob);
+          }
+        } catch {
+          /* fall through to direct URL */
+        }
+      }
+      const publicObjectSitePath = r2PublicObjectUrlToSitePath(s);
+      if (publicObjectSitePath) {
+        const fetchUrl = mapSiteR2PathToFetchUrl(publicObjectSitePath);
         try {
           const res = await fetch(fetchUrl, { mode: 'cors', credentials: 'include' });
           if (res.ok) {
