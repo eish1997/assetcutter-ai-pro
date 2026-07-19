@@ -671,6 +671,10 @@ const AdminProviderKeysPanel: React.FC = () => {
 
   const runSmokeTest = async (row: AdminProviderKeyRow) => {
     if (blockIfRolePreview(isRolePreview)) return;
+    if (String(row.id || '').startsWith('draft_')) {
+      setError('这张密钥还没有保存。请先点击右上角“保存密钥配置”，保存后再测试。');
+      return;
+    }
     setActingId(row.id);
     setError('');
     setMessage('');
@@ -1088,6 +1092,7 @@ const AdminProviderKeysPanel: React.FC = () => {
                       const authFields = providerAuthFields(row.provider);
                       const rowProvider = getProviderCatalogEntry(row.provider);
                       const isEnvKey = String(row.id || '').startsWith('env_');
+                      const isDraftKey = String(row.id || '').startsWith('draft_');
                       const isActing = actingId === row.id;
                       return (
                         <div key={row.id} className="rounded-md border border-white/[0.06] bg-black/20 p-3">
@@ -1150,8 +1155,8 @@ const AdminProviderKeysPanel: React.FC = () => {
                           ) : null}
 
                           <div className="mt-3 flex flex-wrap justify-end gap-2">
-                            <button type="button" disabled={!canWrite || saving || isActing || isEnvKey} onClick={() => void runSmokeTest(row)} className="rounded-md border border-blue-900/50 bg-blue-950/25 px-3 py-1.5 text-[11px] text-blue-100 disabled:opacity-40">
-                              测试密钥
+                            <button type="button" disabled={!canWrite || saving || isActing || isEnvKey || isDraftKey} onClick={() => void runSmokeTest(row)} className="rounded-md border border-blue-900/50 bg-blue-950/25 px-3 py-1.5 text-[11px] text-blue-100 disabled:opacity-40" title={isDraftKey ? '请先保存密钥配置，再测试密钥' : undefined}>
+                              {isDraftKey ? '保存后测试' : '测试密钥'}
                             </button>
                             <button type="button" disabled={!canWrite || saving || isActing || isEnvKey} onClick={() => void runKeyAction(row, 'cooldown')} className="rounded-md border border-amber-900/50 bg-amber-950/25 px-3 py-1.5 text-[11px] text-amber-100 disabled:opacity-40">
                               冷却 10 分钟

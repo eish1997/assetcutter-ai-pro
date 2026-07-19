@@ -2934,8 +2934,20 @@ const server = http.createServer(async (req, res) => {
       const keyId = decodeURIComponent(providerKeySmokeTestMatch[1] || '').trim();
       const existing = await listProviderKeys({ includeSecrets: true });
       const target = existing.find((row) => row.id === keyId);
+      if (String(keyId || '').startsWith('draft_')) {
+        json(res, 400, {
+          error: 'PROVIDER_KEY_NOT_SAVED',
+          code: 'PROVIDER_KEY_NOT_SAVED',
+          message: '这张密钥还没有保存。请先保存密钥配置，再测试密钥。',
+        });
+        return;
+      }
       if (!target || String(target.id || '').startsWith('env_')) {
-        json(res, 404, { error: 'PROVIDER_KEY_NOT_FOUND', code: 'PROVIDER_KEY_NOT_FOUND' });
+        json(res, 404, {
+          error: 'PROVIDER_KEY_NOT_FOUND',
+          code: 'PROVIDER_KEY_NOT_FOUND',
+          message: '没有找到这张供应商密钥，请刷新供应商中心后重试。',
+        });
         return;
       }
       const result = await smokeTestProviderKey(keyId, { reason: '管理员手动 Smoke Test' });
