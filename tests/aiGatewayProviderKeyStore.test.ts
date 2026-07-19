@@ -300,6 +300,26 @@ describe('AI gateway provider key store', () => {
     expect(new Set([first?.id, second?.id])).toEqual(new Set(['key_a', 'key_b']));
   });
 
+  it('replaces draft provider key ids with stable saved ids', async () => {
+    useTempStore();
+
+    await saveProviderKeys([
+      {
+        id: 'draft_123',
+        provider: 'volcengine-ark',
+        label: 'Ark draft',
+        secret: 'ark-key',
+        enabled: true,
+      },
+    ]);
+
+    const listed = await listProviderKeys();
+    expect(listed).toHaveLength(1);
+    expect(listed[0].provider).toBe('volcengine-ark');
+    expect(listed[0].id).not.toBe('draft_123');
+    expect(listed[0].id).toMatch(/^aigkey_volcengine-ark_/);
+  });
+
   it('honors per-key RPM and cooldown runtime state', async () => {
     useTempStore();
 

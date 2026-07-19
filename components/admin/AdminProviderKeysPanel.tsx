@@ -606,34 +606,41 @@ const AdminProviderKeysPanel: React.FC = () => {
     updateRow(id, { provider, label: providerLabel(provider), secret: '', credentials: {} });
   };
 
+  const saveRows = async () => {
+    if (blockIfRolePreview(isRolePreview)) return;
+    const cleaned = rows
+      .map((row) => {
+        const provider = String(row.provider || 'tripo').trim();
+        const credentials = Object.fromEntries(
+          Object.entries(row.credentials || {})
+            .map(([key, value]) => [key, String(value || '').trim()])
+            .filter(([, value]) => value)
+        );
+        return {
+          ...row,
+          id: String(row.id || '').startsWith('draft_') ? '' : row.id,
+          provider,
+          label: String(row.label || providerLabel(provider)).trim(),
+          priority: Math.max(1, Math.floor(Number(row.priority) || 100)),
+          rpm: Math.max(0, Math.floor(Number(row.rpm) || 0)),
+          secret: String(row.secret || '').trim(),
+          credentials,
+        };
+      })
+      .filter((row) => row.provider && (row.secret || row.hasSecret || Object.keys(row.credentials || {}).length || row.hasCredentials));
+    const saved = await saveAdminProviderKeys(cleaned);
+    setRows(saved.keys.length ? saved.keys : [createDraft()]);
+    await refreshModelAvailability();
+    return saved.keys;
+  };
+
   const save = async () => {
     if (blockIfRolePreview(isRolePreview)) return;
     setSaving(true);
     setError('');
     setMessage('');
     try {
-      const cleaned = rows
-        .map((row) => {
-          const provider = String(row.provider || 'tripo').trim();
-          const credentials = Object.fromEntries(
-            Object.entries(row.credentials || {})
-              .map(([key, value]) => [key, String(value || '').trim()])
-              .filter(([, value]) => value)
-          );
-          return {
-            ...row,
-            provider,
-            label: String(row.label || providerLabel(provider)).trim(),
-            priority: Math.max(1, Math.floor(Number(row.priority) || 100)),
-            rpm: Math.max(0, Math.floor(Number(row.rpm) || 0)),
-            secret: String(row.secret || '').trim(),
-            credentials,
-          };
-        })
-        .filter((row) => row.provider && (row.secret || row.hasSecret || Object.keys(row.credentials || {}).length || row.hasCredentials));
-      const saved = await saveAdminProviderKeys(cleaned);
-      setRows(saved.keys.length ? saved.keys : [createDraft()]);
-      await refreshModelAvailability();
+      await saveRows();
       setMessage('供应商凭证已保存');
     } catch (err) {
       setError(err instanceof Error ? err.message : '保存供应商凭证失败');
@@ -672,7 +679,7 @@ const AdminProviderKeysPanel: React.FC = () => {
   const runSmokeTest = async (row: AdminProviderKeyRow) => {
     if (blockIfRolePreview(isRolePreview)) return;
     if (String(row.id || '').startsWith('draft_')) {
-      setError('这张密钥还没有保存。请先点击右上角“保存密钥配置”，保存后再测试。');
+      await saveAndSmokeTest(row);
       return;
     }
     setActingId(row.id);
@@ -700,6 +707,39 @@ const AdminProviderKeysPanel: React.FC = () => {
     } catch (err) {
       setError(err instanceof Error ? err.message : '测试失败');
     } finally {
+      setActingId('');
+    }
+  };
+
+  const findSavedKeyForDraft = (draft: AdminProviderKeyRow, savedRows: AdminProviderKeyRow[]) => {
+    const label = String(draft.label || providerLabel(draft.provider)).trim();
+    const provider = String(draft.provider || '').trim();
+    return [...savedRows]
+      .reverse()
+      .find((item) => item.provider === provider && String(item.label || '').trim() === label && !String(item.id || '').startsWith('draft_'));
+  };
+
+  const saveAndSmokeTest = async (row: AdminProviderKeyRow) => {
+    if (blockIfRolePreview(isRolePreview)) return;
+    setSaving(true);
+    setActingId(row.id);
+    setError('');
+    setMessage('');
+    try {
+      const savedRows = await saveRows();
+      const savedRow = String(row.id || '').startsWith('draft_')
+        ? findSavedKeyForDraft(row, savedRows)
+        : savedRows.find((item) => item.id === row.id);
+      if (!savedRow) {
+        setError('密钥已保存，但没有找到可测试的密钥卡片。请刷新供应商中心后重试。');
+        return;
+      }
+      setMessage('密钥已保存，正在测试...');
+      await runSmokeTest(savedRow);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '保存并测试失败');
+    } finally {
+      setSaving(false);
       setActingId('');
     }
   };
@@ -1155,8 +1195,8 @@ const AdminProviderKeysPanel: React.FC = () => {
                           ) : null}
 
                           <div className="mt-3 flex flex-wrap justify-end gap-2">
-                            <button type="button" disabled={!canWrite || saving || isActing || isEnvKey || isDraftKey} onClick={() => void runSmokeTest(row)} className="rounded-md border border-blue-900/50 bg-blue-950/25 px-3 py-1.5 text-[11px] text-blue-100 disabled:opacity-40" title={isDraftKey ? '请先保存密钥配置，再测试密钥' : undefined}>
-                              {isDraftKey ? '保存后测试' : '测试密钥'}
+                            <button type="button" disabled={!canWrite || saving || isActing || isEnvKey} onClick={() => void (isDraftKey ? saveAndSmokeTest(row) : runSmokeTest(row))} className="rounded-md border border-blue-900/50 bg-blue-950/25 px-3 py-1.5 text-[11px] text-blue-100 disabled:opacity-40">
+                              {isDraftKey ? '保存并测试' : '测试密钥'}
                             </button>
                             <button type="button" disabled={!canWrite || saving || isActing || isEnvKey} onClick={() => void runKeyAction(row, 'cooldown')} className="rounded-md border border-amber-900/50 bg-amber-950/25 px-3 py-1.5 text-[11px] text-amber-100 disabled:opacity-40">
                               冷却 10 分钟

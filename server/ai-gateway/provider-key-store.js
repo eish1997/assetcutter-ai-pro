@@ -71,8 +71,10 @@ export function normalizeProviderKeyRow(input, existing = null) {
   const provider = nonEmptyString(raw.provider) || nonEmptyString(existing?.provider) || DEFAULT_PROVIDER;
   const secret = nonEmptyString(raw.secret) || nonEmptyString(raw.apiKey) || nonEmptyString(existing?.secret);
   const credentials = normalizeCredentials(raw.credentials, existing?.credentials);
+  const rawId = nonEmptyString(raw.id);
+  const id = rawId.startsWith('draft_') ? '' : rawId;
   return {
-    id: nonEmptyString(raw.id) || nonEmptyString(existing?.id) || createKeyId(provider),
+    id: id || nonEmptyString(existing?.id) || createKeyId(provider),
     provider,
     label: nonEmptyString(raw.label) || nonEmptyString(existing?.label) || provider,
     secret,
