@@ -8,6 +8,7 @@ import {
   verifyCreditsGateSignature,
   verifyFairnessKeySignature,
 } from './credits-gate-hmac.js';
+import { AI_GATEWAY_HANDOFF_HEADER_LOWER } from './ai-gateway/handoff-token.js';
 
 /** ai-worker-proxy 可能设全局 HTTPS_PROXY；auth-api loopback 须直连（见 ai-worker-proxy-relay.js） */
 const authApiDirectDispatcher = new Agent();
@@ -117,6 +118,29 @@ async function precheckViaInternalUserId(userId, estimatedCredits, reserveKey) {
   return { ok: res.ok, status: res.status, data };
 }
 
+async function validateAiGatewayHandoffViaAuthApi(token, userId, reserveKey, estimatedCredits) {
+  const t = String(token || '').trim();
+  const uid = String(userId || '').trim();
+  const key = String(reserveKey || '').trim();
+  if (!t || !uid || !key) {
+    return { ok: false, status: 400, data: { error: 'AI Gateway handoff token missing' } };
+  }
+  const url = `${authApiBase()}/api/internal/ai-gateway/validate-handoff`;
+  const res = await authApiFetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      token: t,
+      userId: uid,
+      reserveKey: key,
+      estimatedCredits: normalizeEstimatedCredits(estimatedCredits),
+    }),
+    signal: AbortSignal.timeout(12_000),
+  });
+  const data = await readJsonSafe(res);
+  return { ok: res.ok, status: res.status, data };
+}
+
 function userIdFromFairnessKey(rawKey) {
   const k = String(rawKey || '').trim();
   if (!k.startsWith('user:')) return null;
@@ -148,6 +172,7 @@ export async function assertAiWorkerProxyCreditsGate(req, estimatedCredits = 50)
   const gateSig = String(req.headers['x-ac-credits-gate-signature'] || '').trim();
   const fairnessSig = String(req.headers['x-ac-fairness-signature'] || '').trim();
   const gateEstimateRaw = String(req.headers['x-ac-credits-gate-estimate'] || '').trim();
+  const aiGatewayHandoffToken = String(req.headers[AI_GATEWAY_HANDOFF_HEADER_LOWER] || '').trim();
   const signedEstimatedCredits = gateEstimateRaw ? Number(gateEstimateRaw) : undefined;
   const userId = userIdFromFairnessKey(fairnessKey);
 
@@ -159,24 +184,41 @@ export async function assertAiWorkerProxyCreditsGate(req, estimatedCredits = 50)
       reserveKey,
       sigHeader: gateSig,
     });
-    if (!sigOk.ok) {
+    if (!sigOk.ok && !aiGatewayHandoffToken) {
       return { ok: false, status: 401, body: { error: '积分准入签名无效', code: 'CREDITS_GATE_AUTH_FAILED' } };
     }
-    if (fairnessSig) {
+    if (sigOk.ok && fairnessSig) {
       const fSig = verifyFairnessKeySignature(fairnessKey, fairnessSig);
-      if (!fSig.ok) {
+      if (!fSig.ok && !aiGatewayHandoffToken) {
         return { ok: false, status: 401, body: { error: '公平限流签名无效', code: 'FAIRNESS_AUTH_FAILED' } };
       }
     }
-    const reserveCheck = await validateReserveViaInternal(userId, reserveKey, est);
-    if (reserveCheck.ok) return { ok: true };
-    if (reserveCheck.status === 403) {
+    if (sigOk.ok) {
+      const reserveCheck = await validateReserveViaInternal(userId, reserveKey, est);
+      if (reserveCheck.ok) return { ok: true };
+      if (reserveCheck.status === 403) {
+        return {
+          ok: false,
+          status: 403,
+          body: reserveCheck.data?.code === CREDITS_EXCEEDED_CODE
+            ? creditsExceededBody(reserveCheck.data, est)
+            : { error: reserveCheck.data?.error || '积分预扣无效', code: 'CREDITS_RESERVE_INVALID' },
+        };
+      }
+    }
+  }
+
+  if (userId && reserveKey && aiGatewayHandoffToken) {
+    const handoff = await validateAiGatewayHandoffViaAuthApi(aiGatewayHandoffToken, userId, reserveKey, est);
+    if (handoff.ok) return { ok: true };
+    if (handoff.status === 403) {
       return {
         ok: false,
         status: 403,
-        body: reserveCheck.data?.code === CREDITS_EXCEEDED_CODE
-          ? creditsExceededBody(reserveCheck.data, est)
-          : { error: reserveCheck.data?.error || '积分预扣无效', code: 'CREDITS_RESERVE_INVALID' },
+        body:
+          handoff.data?.code === CREDITS_EXCEEDED_CODE
+            ? creditsExceededBody(handoff.data, est)
+            : { error: handoff.data?.error || 'AI Gateway 任务凭证无效', code: handoff.data?.code || 'AI_GATEWAY_HANDOFF_INVALID' },
       };
     }
   }

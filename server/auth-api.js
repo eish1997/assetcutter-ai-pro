@@ -165,6 +165,7 @@ import {
   fairnessKeyForUserId,
   signCreditsGatePayload,
 } from './credits-gate-hmac.js';
+import { verifyAiGatewayHandoffToken } from './ai-gateway/handoff-token.js';
 import { parseCreditsBatchCsv, runCreditsBatchAdjust } from './credits-batch-adjust.js';
 import {
   grantPromoToUser,
@@ -535,7 +536,9 @@ function assertWriteOrigin(req, res) {
   const origin = String(req.headers.origin || '');
   /** ai-worker-proxy 等同源/loopback 服务 server-to-server 调用 credits-gate，无浏览器 Origin */
   const serverSideCreditsPath =
-    pathOnly === '/api/auth/credits-gate' || pathOnly.startsWith('/api/internal/credits/');
+    pathOnly === '/api/auth/credits-gate' ||
+    pathOnly.startsWith('/api/internal/credits/') ||
+    pathOnly === '/api/internal/ai-gateway/validate-handoff';
   if (serverSideCreditsPath && !origin) return true;
   if (isAllowedOrigin(origin)) return true;
   json(res, 403, { error: 'Origin not allowed' });
@@ -593,6 +596,7 @@ function assertCsrf(req, res) {
   if (pathOnly === '/api/ai/jobs' || pathOnly.startsWith('/api/ai/jobs/')) return true;
   if (pathOnly === '/api/internal/credits/precheck') return true;
   if (pathOnly === '/api/internal/credits/validate-reserve') return true;
+  if (pathOnly === '/api/internal/ai-gateway/validate-handoff') return true;
   /** 伴侣 Agent：partition Cookie 无法带 X-CSRF-Token，由 requireAgentAuth + 会话 Cookie 约束 */
   if (pathOnly.startsWith('/api/agent/workbench')) return true;
   if (pathOnly.startsWith('/api/debug/client-log')) return true;
@@ -1355,6 +1359,48 @@ const server = http.createServer(async (req, res) => {
         return;
       }
       json(res, 200, { ok: true, amount: valid.amount });
+      return;
+    }
+
+    if (path === '/api/internal/ai-gateway/validate-handoff' && req.method === 'POST') {
+      const body = await readBody(req);
+      const verified = verifyAiGatewayHandoffToken(body?.token);
+      if (!verified.ok) {
+        json(res, 403, { error: 'AI Gateway 任务凭证无效或已过期', code: verified.code });
+        return;
+      }
+      const tokenPayload = verified.payload;
+      const bodyUserId = String(body?.userId || '').trim();
+      const bodyReserveKey = String(body?.reserveKey || '').trim();
+      const requestedCredits = Math.max(1, Math.floor(Number(body?.estimatedCredits) || 1));
+      if (
+        bodyUserId !== tokenPayload.userId ||
+        bodyReserveKey !== tokenPayload.reserveKey ||
+        requestedCredits > tokenPayload.estimatedCredits
+      ) {
+        json(res, 403, { error: 'AI Gateway 任务凭证与请求不匹配', code: 'AI_GATEWAY_HANDOFF_MISMATCH' });
+        return;
+      }
+      if (!isCreditsBillingEnabled()) {
+        json(res, 200, { ok: true, disabled: true });
+        return;
+      }
+      const valid = await validateActiveCreditReserve(
+        tokenPayload.userId,
+        tokenPayload.reserveKey,
+        requestedCredits
+      );
+      if (!valid.ok) {
+        json(res, 403, { error: '积分预扣无效或已过期', code: 'CREDITS_RESERVE_INVALID' });
+        return;
+      }
+      json(res, 200, {
+        ok: true,
+        userId: tokenPayload.userId,
+        reserveKey: tokenPayload.reserveKey,
+        amount: valid.amount,
+        jobId: tokenPayload.jobId,
+      });
       return;
     }
 

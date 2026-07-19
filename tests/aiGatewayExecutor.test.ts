@@ -3,6 +3,7 @@ import { createAuthAiGatewayJob } from '../server/ai-gateway/auth-api-handler.js
 import { recoverAiGatewayQueuedJobs, shouldRecoverAiGatewayJob } from '../server/ai-gateway/recovery.js';
 import { createInMemoryAiJobStore } from '../server/ai-gateway/job-store.js';
 import { pollAiWorkerProxyJob } from '../server/ai-gateway/adapters/ai-worker-proxy-execution.js';
+import { verifyAiGatewayHandoffToken } from '../server/ai-gateway/handoff-token.js';
 
 function imageJobBody(id: string) {
   return {
@@ -23,6 +24,23 @@ function proxyResponse(body: unknown, ok = true, status = 202) {
     status,
     text: vi.fn().mockResolvedValue(typeof body === 'string' ? body : JSON.stringify(body)),
   };
+}
+
+function mockedReservedCreditsGate(reserveKey: string, estimatedCredits = 2) {
+  return vi.fn().mockResolvedValue({
+    ok: true,
+    metadata: {
+      creditsGate: {
+        mode: 'reserve',
+        enabled: true,
+        estimatedCredits,
+        reserveKey,
+        checked: true,
+        reserved: true,
+        reserveAmount: estimatedCredits,
+      },
+    },
+  });
 }
 
 describe('AI gateway execution handoff', () => {
@@ -67,7 +85,7 @@ describe('AI gateway execution handoff', () => {
       { headers: { cookie: 'ac_session=session_1; ac_csrf=csrf_1' } },
       imageJobBody('aijob_exec_start'),
       user,
-      { store, fetchImpl }
+      { store, fetchImpl, evaluateCreditsGate: mockedReservedCreditsGate('aijob:aijob_exec_start') }
     );
 
     expect(result.status).toBe(202);
@@ -86,6 +104,16 @@ describe('AI gateway execution handoff', () => {
       'X-AC-Fairness-Key': 'user:user_exec_1',
     });
     expect(init.headers['X-AC-Fairness-Signature']).toMatch(/^\d+\.[a-f0-9]+$/);
+    const handoff = verifyAiGatewayHandoffToken(init.headers['X-AC-AI-Gateway-Handoff']);
+    expect(handoff).toMatchObject({
+      ok: true,
+      payload: {
+        jobId: 'aijob_exec_start',
+        userId: 'user_exec_1',
+        reserveKey: 'aijob:aijob_exec_start',
+        estimatedCredits: 2,
+      },
+    });
     expect(JSON.parse(init.body)).toMatchObject({
       model: 'gemini-3-pro-image-preview',
       aiBackend: 'vertex',
@@ -309,7 +337,12 @@ describe('AI gateway execution handoff', () => {
     process.env.AI_GATEWAY_EXECUTION_ENABLED = 'false';
     process.env.AI_WORKER_PROXY_CREDITS_HMAC_SECRET = 'test_recovery_secret';
     const store = createInMemoryAiJobStore();
-    await createAuthAiGatewayJob({}, imageJobBody('aijob_exec_recover'), user, { store });
+    await createAuthAiGatewayJob(
+      {},
+      imageJobBody('aijob_exec_recover'),
+      user,
+      { store, evaluateCreditsGate: mockedReservedCreditsGate('aijob:aijob_exec_recover') }
+    );
     await store.update('aijob_exec_recover', {
       status: 'queued',
       error: { code: 'AI_GATEWAY_EXECUTION_HANDOFF_FAILED', message: 'old 502' },
@@ -336,6 +369,14 @@ describe('AI gateway execution handoff', () => {
     expect(result).toMatchObject({ recovered: 1, candidates: 1 });
     expect(fetchImpl).toHaveBeenCalledTimes(1);
     expect(fetchImpl.mock.calls[0][1].headers['X-AC-Fairness-Signature']).toMatch(/^\d+\.[a-f0-9]+$/);
+    expect(verifyAiGatewayHandoffToken(fetchImpl.mock.calls[0][1].headers['X-AC-AI-Gateway-Handoff'])).toMatchObject({
+      ok: true,
+      payload: {
+        jobId: 'aijob_exec_recover',
+        userId: 'user_exec_1',
+        reserveKey: 'aijob:aijob_exec_recover',
+      },
+    });
     const recovered = await store.get('aijob_exec_recover');
     expect(recovered.job).toMatchObject({
       status: 'queued',

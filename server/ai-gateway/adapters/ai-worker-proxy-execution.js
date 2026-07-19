@@ -7,6 +7,7 @@ import {
   signCreditsGatePayload,
   signFairnessKeyHeader,
 } from '../../credits-gate-hmac.js';
+import { AI_GATEWAY_HANDOFF_HEADER, signAiGatewayHandoffToken } from '../handoff-token.js';
 import { settleAiGatewayJobCredits, settlementMetadataPatch } from '../settlement.js';
 import { maybeAutoPauseAiGatewayProvider } from '../ops-control.js';
 import {
@@ -76,6 +77,13 @@ function executionHeaders(plan, options = {}) {
   if (userId && reserveKey && estimatedCredits) {
     Object.assign(headers, creditsProxyHeadersFromSigned(signCreditsGatePayload({ userId, reserveKey, estimatedCredits })));
     if (!headers['X-AC-Credits-Reserve']) headers['X-AC-Credits-Reserve'] = reserveKey;
+    const handoffToken = signAiGatewayHandoffToken({
+      jobId: plan.job?.id,
+      userId,
+      reserveKey,
+      estimatedCredits,
+    });
+    if (handoffToken) headers[AI_GATEWAY_HANDOFF_HEADER] = handoffToken;
   }
   return headers;
 }
