@@ -170,11 +170,52 @@ function guessCompanionAssetDownloadFilename(key: string, mime: string): string 
   if (ct.includes('image/webp')) return 'asset.webp';
   if (ct.includes('image/gif')) return 'asset.gif';
   if (ct.includes('image/svg')) return 'asset.svg';
+  if (ct.includes('video/mp4')) return 'asset.mp4';
+  if (ct.includes('video/webm')) return 'asset.webm';
+  if (ct.includes('video/quicktime')) return 'asset.mov';
+  if (ct.includes('video/x-m4v')) return 'asset.m4v';
   if (ct.includes('text/plain')) return 'asset.txt';
   if (k.includes('fbx') || ct.includes('fbx')) return 'model.fbx';
   if (k.includes('gltf') || ct.includes('gltf+json')) return 'model.gltf';
   if (ct.includes('gltf-binary') || ct.includes('model/gltf')) return 'model.glb';
   return 'asset.bin';
+}
+
+function sniffMediaMimeFromHead(buf: Buffer): string | null {
+  if (buf.length >= 3 && buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return 'image/jpeg';
+  if (buf.length >= 4 && buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) return 'image/png';
+  if (
+    buf.length >= 12 &&
+    buf[0] === 0x52 &&
+    buf[1] === 0x49 &&
+    buf[2] === 0x46 &&
+    buf[3] === 0x46 &&
+    buf[8] === 0x57 &&
+    buf[9] === 0x45 &&
+    buf[10] === 0x42 &&
+    buf[11] === 0x50
+  ) {
+    return 'image/webp';
+  }
+  if (
+    buf.length >= 12 &&
+    buf[4] === 0x66 &&
+    buf[5] === 0x74 &&
+    buf[6] === 0x79 &&
+    buf[7] === 0x70
+  ) {
+    return 'video/mp4';
+  }
+  if (buf.length >= 4 && buf[0] === 0x1a && buf[1] === 0x45 && buf[2] === 0xdf && buf[3] === 0xa3) {
+    return 'video/webm';
+  }
+  return null;
+}
+
+function normalizeImportedContentType(header: string | null, body: Buffer): string {
+  const ct = String(header || '').split(';')[0]!.trim().toLowerCase();
+  if (ct && ct !== 'application/octet-stream' && ct !== 'binary/octet-stream') return ct;
+  return sniffMediaMimeFromHead(body) || 'application/octet-stream';
 }
 
 function extensionFromCompanionMime(mime: string): string {
@@ -788,6 +829,58 @@ export async function handleRequest(
         },
         origin,
       );
+      return;
+    }
+
+    const mAssetImportUrl = path.match(/^\/v1\/projects\/([^/]+)\/assets\/([^/]+)\/import-url$/);
+    if (mAssetImportUrl && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+          return;
+        }
+      }
+      const sourceUrl = typeof body.url === 'string' ? body.url.trim() : '';
+      if (!/^https?:\/\//i.test(sourceUrl)) {
+        sendJson(res, 400, { error: 'invalid_url', code: 'STORAGE_INVALID_BODY' }, origin);
+        return;
+      }
+      try {
+        const upstream = await fetch(sourceUrl, { redirect: 'follow' });
+        if (!upstream.ok) {
+          sendJson(res, 502, { error: `upstream_http_${upstream.status}`, code: 'STORAGE_IMPORT_FAILED' }, origin);
+          return;
+        }
+        const buf = Buffer.from(await upstream.arrayBuffer());
+        if (buf.length === 0) {
+          sendJson(res, 400, { error: 'empty_upstream_body', code: 'STORAGE_INVALID_BODY' }, origin);
+          return;
+        }
+        const contentType = normalizeImportedContentType(upstream.headers.get('content-type'), buf);
+        const out = putAsset(mAssetImportUrl[1]!, mAssetImportUrl[2]!, buf, contentType);
+        sendJson(
+          res,
+          201,
+          {
+            key: mAssetImportUrl[2],
+            projectId: mAssetImportUrl[1],
+            contentType,
+            ...out,
+          },
+          origin,
+        );
+      } catch (e) {
+        sendJson(
+          res,
+          502,
+          { error: e instanceof Error ? e.message : 'import_url_failed', code: 'STORAGE_IMPORT_FAILED' },
+          origin,
+        );
+      }
       return;
     }
 

@@ -18,21 +18,7 @@ describe('archiveAiGatewayJobMedia', () => {
     vi.restoreAllMocks();
   });
 
-  it('archives remote video URLs to R2 so browser previews use stable media', async () => {
-    const mp4Header = Buffer.from('000000206674797069736f6d00000200', 'hex');
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async () =>
-        new Response(mp4Header, {
-          status: 206,
-          headers: {
-            'content-type': 'video/mp4',
-            'content-range': `bytes 0-${mp4Header.length - 1}/${mp4Header.length}`,
-          },
-        })
-      )
-    );
-
+  it('does not archive remote video URLs into cloud object storage', async () => {
     const archived = await archiveAiGatewayJobMedia({
       job: {
         id: 'aijob_video_archive',
@@ -49,11 +35,24 @@ describe('archiveAiGatewayJobMedia', () => {
       },
     });
 
+    expect(putPublicR2Object).not.toHaveBeenCalled();
+    expect(archived.job.output.videoUrl).toBe('https://upstream.example.com/signed-video');
+    expect(archived.job.artifacts[0].url).toBe('https://upstream.example.com/signed-video');
+  });
+
+  it('still archives inline data URLs to avoid persisting large base64 job payloads', async () => {
+    const archived = await archiveAiGatewayJobMedia({
+      job: {
+        id: 'aijob_image_archive',
+        userId: 'user_1',
+        output: {
+          imageUrl: 'data:image/png;base64,QUJD',
+        },
+      },
+    });
+
     expect(putPublicR2Object).toHaveBeenCalled();
-    expect(archived.job.output.videoUrl).toMatch(/^https:\/\/cdn\.example\.com\/public\/ai-gateway-results\//);
-    expect(archived.job.output.upstreamUrl).toBe('https://upstream.example.com/signed-video');
-    expect(archived.job.artifacts[0].url).toMatch(/^https:\/\/cdn\.example\.com\/public\/ai-gateway-results\//);
-    expect(archived.job.artifacts[0].mimeType).toBe('video/mp4');
-    expect(archived.job.artifacts[0].archived).toBe(true);
+    expect(archived.job.output.imageUrl).toMatch(/^https:\/\/cdn\.example\.com\/public\/ai-gateway-results\//);
+    expect(archived.job.output.archived).toBe(true);
   });
 });

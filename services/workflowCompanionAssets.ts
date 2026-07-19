@@ -3,6 +3,7 @@ import type { WorkflowProjectBundle } from './workspaceProjectStore';
 import {
   fetchCompanionAssetBlob,
   getCompanionManifest,
+  importCompanionAssetFromUrl,
   listCompanionProjects,
   putCompanionAsset,
 } from './companionClient/storage';
@@ -519,6 +520,64 @@ export async function putWorkflowResultImageFromAnyUrl(
   const dataUrl = await imageSrcToDataUrlForCompanion(imageSrc);
   if (!dataUrl) return { ok: false, error: 'cannot_normalize_image_src' };
   return putWorkflowResultImageToCompanion(baseUrl, projectId, assetId, resultKey, dataUrl);
+}
+
+function sniffVideoMimeFromUrl(value: string): string {
+  const s = String(value || '').split('?')[0]!.split('#')[0]!.toLowerCase();
+  if (s.endsWith('.webm')) return 'video/webm';
+  if (s.endsWith('.mov')) return 'video/quicktime';
+  if (s.endsWith('.m4v')) return 'video/x-m4v';
+  return 'video/mp4';
+}
+
+async function mediaSrcToBlobForCompanion(src: string, fallbackMime: string): Promise<{ blob: Blob; mime: string } | null> {
+  const s = String(src || '').trim();
+  if (!s) return null;
+  const parsed = parseDataUrlToBlob(s);
+  if (parsed) return parsed;
+  if (/^blob:/i.test(s) || s.startsWith('/')) {
+    try {
+      const res = await fetch(s, { credentials: 'include' });
+      if (!res.ok) return null;
+      const blob = await res.blob();
+      const mime = (blob.type && blob.type.split(';')[0]!.trim()) || fallbackMime;
+      return { blob: blob.type ? blob : new Blob([blob], { type: mime }), mime };
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+export async function putWorkflowResultMediaFromAnyUrl(
+  baseUrl: string,
+  projectId: string,
+  assetId: string,
+  resultKey: string,
+  mediaSrc: string,
+  opts?: { fallbackMime?: string }
+): Promise<{ ok: true; key: string } | { ok: false; error: string }> {
+  const source = String(mediaSrc || '').trim();
+  if (!source) return { ok: false, error: 'empty_media_src' };
+  const key = workflowResultCompanionStorageKey(assetId, resultKey);
+  const base = normalizeCompanionBaseUrl(baseUrl);
+  const fallbackMime = opts?.fallbackMime || sniffVideoMimeFromUrl(source);
+
+  if (/^https?:\/\//i.test(source)) {
+    const imported = await importCompanionAssetFromUrl(base, projectId, key, source);
+    if (imported.ok === false) {
+      return { ok: false, error: `${imported.error}${imported.status != null ? ` (HTTP ${imported.status})` : ''}` };
+    }
+    return { ok: true, key };
+  }
+
+  const parsed = await mediaSrcToBlobForCompanion(source, fallbackMime);
+  if (!parsed) return { ok: false, error: 'cannot_normalize_media_src' };
+  const put = await putCompanionAsset(base, projectId, key, parsed.blob, parsed.mime);
+  if (put.ok === false) {
+    return { ok: false, error: `${put.error}${put.status != null ? ` (HTTP ${put.status})` : ''}` };
+  }
+  return { ok: true, key };
 }
 
 function shouldStripOriginalForPersist(original: string): boolean {

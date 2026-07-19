@@ -557,6 +557,7 @@ import {
   putWorkflowOriginalImageToCompanion,
   putWorkflowResultImageFromAnyUrl,
   putWorkflowResultImageToCompanion,
+  putWorkflowResultMediaFromAnyUrl,
   resolveCapabilityInputImageForExecute,
   shouldKeepExistingCompanionRasterUrl,
   workflowAssetNeedsCompanionModelHydrate,
@@ -2869,6 +2870,55 @@ const WorkflowSection: React.FC<{
     [onLog, setAssets, workspaceProjectChrome?.activeProjectId]
   );
 
+  const persistCompanionResultMedia = useCallback(
+    async (assetId: string, resultKey: string, mediaSrc: string, fallbackMime = 'video/mp4') => {
+      const source = String(mediaSrc || '').trim();
+      if (!source) return;
+      const base = String(getCompanionLocalBaseUrl() || '').trim();
+      const pid = String(workspaceProjectChrome?.activeProjectId || '').trim();
+      if (!base || !pid) {
+        onLog?.('warn', '本地伴侣未连接，视频结果仅保留临时预览；请连接本地伴侣后重新生成以写入项目资产目录');
+        return;
+      }
+      const put = await putWorkflowResultMediaFromAnyUrl(base, pid, assetId, resultKey, source, { fallbackMime });
+      if (put.ok === false) {
+        onLog?.('warn', '视频结果写入本地伴侣失败（仍保留临时预览）', put.error);
+        return;
+      }
+      const got = await fetchWorkflowOriginalFromCompanionAsObjectUrl(base, pid, put.key);
+      if (got.ok === false) {
+        setAssets((prev) =>
+          prev.map((x) =>
+            x.id === assetId
+              ? { ...x, resultsCompanionKeys: { ...(x.resultsCompanionKeys || {}), [resultKey]: put.key } }
+              : x
+          )
+        );
+        onLog?.('warn', '视频落盘后读取预览失败', got.error);
+        return;
+      }
+      setAssets((prev) =>
+        prev.map((x) =>
+          x.id === assetId
+            ? {
+                ...x,
+                results: { ...(x.results || {}), [resultKey]: got.objectUrl },
+                resultsCompanionKeys: { ...(x.resultsCompanionKeys || {}), [resultKey]: put.key },
+                resultMeta: {
+                  ...(x.resultMeta || {}),
+                  [resultKey]: {
+                    ...(x.resultMeta?.[resultKey] || { executedAt: Date.now() }),
+                    mediaKind: 'video' as const,
+                  },
+                },
+              }
+            : x
+        )
+      );
+    },
+    [onLog, setAssets, workspaceProjectChrome?.activeProjectId]
+  );
+
   const getAssetDisplayText = useCallback((a: WorkflowAsset): string => {
     if (!isWorkflowTextAsset(a)) return '';
     if (a.displayKey === 'original') return (a.textBody ?? '').trim();
@@ -4323,15 +4373,18 @@ ${lineSvg}
                 skipCancelledWrite();
                 return;
               }
+              const videoBaseId = task.actionType;
+              let videoResultKey = videoBaseId;
               flushSync(() => {
                 setAssets((prev) =>
                   prev.map((a) => {
                     if (a.id !== task.assetId) return a;
-                    const baseId = task.actionType;
+                    const baseId = videoBaseId;
                     const hasAnyVersion =
                       Object.keys(a.results || {}).some((k) => baseActionId(k) === baseId) ||
                       (a.resultOrder || []).some((k) => baseActionId(k) === baseId);
-                    const key = hasAnyVersion ? makeVersionKey(baseId) : baseId;
+                    videoResultKey = hasAnyVersion ? makeVersionKey(baseId) : baseId;
+                    const key = videoResultKey;
                     const nextResults = { ...a.results, [key]: videoUrl };
                     const nextOrder = [...(a.resultOrder || []), key];
                     const nextMeta = {
@@ -4374,6 +4427,11 @@ ${lineSvg}
                   })
                 );
               });
+              await persistCompanionResultMedia(task.assetId, videoResultKey, videoUrl, 'video/mp4');
+              if (isTaskCancelled()) {
+                skipCancelledWrite();
+                return;
+              }
               markTaskCompleted(task);
             } else {
               if (isTaskCancelled()) {
@@ -4594,6 +4652,7 @@ ${lineSvg}
       actionModules,
       setAssetError,
       scheduleCompanionPersistResult,
+      persistCompanionResultMedia,
       workspaceProjectChrome?.activeProjectId,
       buildWorkflowCreditsSteps,
       preferenceScope,

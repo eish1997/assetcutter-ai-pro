@@ -201,6 +201,7 @@ export function buildCapabilitiesPayload() {
       getManifest: 'GET /v1/projects/:projectId/manifest',
       reconcileManifest: 'POST /v1/projects/:projectId/manifest/reconcile',
       putAsset: 'PUT /v1/projects/:projectId/assets/:key',
+      importAssetFromUrl: 'POST /v1/projects/:projectId/assets/:key/import-url',
       getAsset: 'GET /v1/projects/:projectId/assets/:key',
       getMeta: 'GET /v1/projects/:projectId/assets/:key/meta',
       revealAssetFolder: 'POST /v1/projects/:projectId/assets/:key/reveal',

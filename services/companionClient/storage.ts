@@ -251,3 +251,21 @@ export async function putCompanionAsset(
     { method: 'PUT', headers, body: body instanceof Blob ? body : new Blob([body]) },
   );
 }
+
+export async function importCompanionAssetFromUrl(
+  baseUrl: string,
+  projectId: string,
+  key: string,
+  url: string,
+) {
+  const p = encodeURIComponent(projectId);
+  const k = encodeURIComponent(key);
+  return companionFetchJson<{ key: string; projectId: string; relPath: string; byteSize: number; contentType?: string }>(
+    baseUrl,
+    `/v1/projects/${p}/assets/${k}/import-url`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ url }),
+    },
+  );
+}
