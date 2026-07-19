@@ -341,7 +341,12 @@ async function runVolcengineJimengSmoke(row, options = {}) {
   const data = await readSmokeJsonSafe(response);
   const latencyMs = Date.now() - started;
   const upstreamError = data?.ResponseMetadata?.Error;
-  if (!response.ok || upstreamError?.Code === 'InvalidAccessKey' || upstreamError?.Code === 'SignatureDoesNotMatch') {
+  const upstreamErrorCode = nonEmptyString(upstreamError?.Code);
+  const isAuthFailure =
+    response.status === 401 ||
+    response.status === 403 ||
+    /invalidaccesskey|signature|auth|permission|accessdenied/i.test(upstreamErrorCode);
+  if (isAuthFailure) {
     const message = `Smoke test failed: upstream HTTP ${response.status} ${volcengineVisualSmokeError(data, 'Volcengine Visual probe rejected')}`;
     const error = new Error(message);
     error.status = response.status;
@@ -353,7 +358,9 @@ async function runVolcengineJimengSmoke(row, options = {}) {
     route: 'POST CVSync2AsyncGetResult',
     upstreamStatus: response.status,
     latencyMs,
-    message: 'Smoke test passed: Volcengine Visual credentials were accepted',
+    message: response.ok
+      ? 'Smoke test passed: Volcengine Visual credentials were accepted'
+      : `Smoke test passed: Volcengine Visual credentials were accepted; upstream returned non-auth HTTP ${response.status}`,
   };
 }
 

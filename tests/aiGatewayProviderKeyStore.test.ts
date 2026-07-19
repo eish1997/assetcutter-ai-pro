@@ -664,6 +664,38 @@ describe('AI gateway provider key store', () => {
     });
   });
 
+  it('treats Volcengine Jimeng non-auth dummy-task errors as accepted credentials', async () => {
+    useTempStore();
+
+    await saveProviderKeys([
+      {
+        id: 'key_jimeng_smoke_non_auth',
+        provider: 'volcengine-jimeng',
+        label: 'Jimeng non-auth smoke',
+        enabled: true,
+        credentials: {
+          accessKeyId: 'ak-jimeng-smoke',
+          secretAccessKey: 'sk-jimeng-smoke',
+        },
+      },
+    ]);
+
+    const fetchImpl = async () =>
+      new Response(JSON.stringify({ ResponseMetadata: { Error: { Code: 'InternalError', Message: 'Internal Error' } } }), {
+        status: 500,
+      });
+
+    await expect(smokeTestProviderKey('key_jimeng_smoke_non_auth', { fetchImpl })).resolves.toMatchObject({
+      ok: true,
+      provider: 'volcengine-jimeng',
+      status: 'passed',
+      mode: 'real_upstream',
+      route: 'POST CVSync2AsyncGetResult',
+      upstreamStatus: 500,
+      message: expect.stringContaining('credentials were accepted'),
+    });
+  });
+
   it('records Tripo real upstream smoke failures as provider key errors', async () => {
     useTempStore();
 
