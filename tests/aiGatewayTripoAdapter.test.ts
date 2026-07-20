@@ -172,20 +172,9 @@ describe('Tripo OpenAPI AI gateway worker', () => {
         texture: true,
       },
     }));
-    s3Mocks.send.mockResolvedValueOnce({});
     const fetchImpl = vi
       .fn()
-      .mockResolvedValueOnce(jsonResponse({
-        code: 0,
-        data: {
-          s3_host: 's3.us-west-2.amazonaws.com',
-          resource_bucket: 'tripo-data',
-          resource_uri: 'uploads/input.png',
-          session_token: 'session-token',
-          sts_ak: 'sts-ak',
-          sts_sk: 'sts-sk',
-        },
-      }, true, 200))
+      .mockResolvedValueOnce(jsonResponse({ code: 0, data: { image_token: 'image_token_1' } }, true, 200))
       .mockResolvedValueOnce(jsonResponse({ task_id: 'tripo_task_img', status: 'queued' }, true, 200));
 
     const result = await startAiGatewayJobExecution(plan, {
@@ -196,35 +185,19 @@ describe('Tripo OpenAPI AI gateway worker', () => {
 
     expect(result.started).toBe(true);
     expect(fetchImpl).toHaveBeenCalledTimes(2);
-    expect(fetchImpl.mock.calls[0][0]).toBe('https://api.tripo3d.ai/v2/openapi/upload/sts');
-    expect(JSON.parse(fetchImpl.mock.calls[0][1].body)).toEqual({ format: 'png' });
-    expect(s3Mocks.S3Client).toHaveBeenCalledWith(expect.objectContaining({
-      region: 'us-west-2',
-      endpoint: 'https://s3.us-west-2.amazonaws.com',
-      credentials: {
-        accessKeyId: 'sts-ak',
-        secretAccessKey: 'sts-sk',
-        sessionToken: 'session-token',
-      },
-      forcePathStyle: true,
-    }));
-    expect(s3Mocks.PutObjectCommand).toHaveBeenCalledWith(expect.objectContaining({
-      Bucket: 'tripo-data',
-      Key: 'uploads/input.png',
-      Body: expect.any(Buffer),
-      ContentType: 'image/png',
-    }));
-    expect(s3Mocks.send).toHaveBeenCalledTimes(1);
+    expect(fetchImpl.mock.calls[0][0]).toBe('https://api.tripo3d.ai/v2/openapi/upload');
+    expect(fetchImpl.mock.calls[0][1].body).toBeInstanceOf(FormData);
+    expect(s3Mocks.send).not.toHaveBeenCalled();
     expect(fetchImpl.mock.calls[1][0]).toBe('https://api.tripo3d.ai/v2/openapi/task');
     expect(JSON.parse(fetchImpl.mock.calls[1][1].body)).toMatchObject({
       type: 'image_to_model',
       texture: true,
-      file: { type: 'png', file_token: 'uploads/input.png' },
+      file: { type: 'png', file_token: 'image_token_1' },
     });
     expect(JSON.parse(fetchImpl.mock.calls[1][1].body).imageBase64DataUrl).toBeUndefined();
   });
 
-  it('retries Tripo STS with alternate parameter shape before failing image upload', async () => {
+  it('falls back to Tripo STS when direct upload is rejected', async () => {
     useTempKeyStore();
     await saveProviderKeys([
       { id: 'tripo_key_img_retry', provider: 'tripo', label: 'Tripo image retry', secret: 'tripo-secret', enabled: true, priority: 1 },
@@ -264,9 +237,10 @@ describe('Tripo OpenAPI AI gateway worker', () => {
 
     expect(result.started).toBe(true);
     expect(fetchImpl).toHaveBeenCalledTimes(3);
-    expect(JSON.parse(fetchImpl.mock.calls[0][1].body)).toEqual({ format: 'jpeg' });
-    expect(fetchImpl.mock.calls[1][1].headers['Content-Type']).toBe('application/x-www-form-urlencoded');
-    expect(fetchImpl.mock.calls[1][1].body).toBe('format=jpeg');
+    expect(fetchImpl.mock.calls[0][0]).toBe('https://api.tripo3d.ai/v2/openapi/upload');
+    expect(fetchImpl.mock.calls[1][0]).toBe('https://api.tripo3d.ai/v2/openapi/upload/sts');
+    expect(JSON.parse(fetchImpl.mock.calls[1][1].body)).toEqual({ format: 'jpeg' });
+    expect(s3Mocks.send).toHaveBeenCalledTimes(1);
     expect(JSON.parse(fetchImpl.mock.calls[2][1].body)).toMatchObject({
       type: 'image_to_model',
       file: { type: 'jpg', file_token: 'uploads/input.jpg' },

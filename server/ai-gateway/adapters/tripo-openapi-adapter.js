@@ -175,6 +175,32 @@ async function requestTripoUploadSts(apiKey, parsed, options = {}) {
   );
 }
 
+async function requestTripoDirectUpload(apiKey, parsed, options = {}) {
+  const fetchImpl = options.fetchImpl || undiciFetch;
+  const timeoutMs = Number(options.uploadTimeoutMs || process.env.AI_GATEWAY_TRIPO_UPLOAD_TIMEOUT_MS || 60_000);
+  const form = new FormData();
+  form.append('file', new Blob([parsed.bytes], { type: parsed.mime }), parsed.filename);
+  const response = await fetchImpl(`${TRIPO_OPENAPI_BASE_URL}/upload`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${apiKey}` },
+    body: form,
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  const data = await readJsonSafe(response);
+  if (!response.ok) {
+    throw new Error(`Tripo direct upload rejected: HTTP ${response.status} ${tripoErrorMessage(data)}`);
+  }
+  const token =
+    nonEmptyString(data?.data?.image_token) ||
+    nonEmptyString(data?.image_token) ||
+    nonEmptyString(data?.data?.file_token) ||
+    nonEmptyString(data?.file_token);
+  if (!token) {
+    throw new Error(`Tripo direct upload response missing image_token: ${tripoErrorMessage(data)}`);
+  }
+  return { type: parsed.ext, file_token: token };
+}
+
 async function uploadImageToTripo(apiKey, imageBase64DataUrl, options = {}) {
   const parsed = parseDataUrlImage(imageBase64DataUrl);
   if (!parsed) {
@@ -183,6 +209,13 @@ async function uploadImageToTripo(apiKey, imageBase64DataUrl, options = {}) {
   const dims = imageDimensions(parsed.bytes, parsed.mime);
   if (dims && Math.max(dims.width, dims.height) < 257) {
     throw new AiGatewayValidationError('Tripo image task requires a reference image larger than 256px; please use the full asset instead of a tiny thumbnail', 'AI_GATEWAY_TRIPO_IMAGE_TOO_SMALL');
+  }
+  try {
+    return await requestTripoDirectUpload(apiKey, parsed, options);
+  } catch (error) {
+    if (!/HTTP (400|404|415|422)\b/i.test(error instanceof Error ? error.message : String(error))) {
+      throw error;
+    }
   }
   const { data } = await requestTripoUploadSts(apiKey, parsed, options);
   const sts = data?.data && typeof data.data === 'object' ? data.data : data;
