@@ -594,6 +594,7 @@ function assertCsrf(req, res) {
   if (pathOnly === '/api/auth/credits-precharge') return true;
   if (pathOnly === '/api/auth/credits-release') return true;
   if (pathOnly === '/api/ai/jobs' || pathOnly.startsWith('/api/ai/jobs/')) return true;
+  if (pathOnly.startsWith('/api/ai/provider-artifacts/')) return true;
   if (pathOnly === '/api/internal/credits/precheck') return true;
   if (pathOnly === '/api/internal/credits/validate-reserve') return true;
   if (pathOnly === '/api/internal/ai-gateway/validate-handoff') return true;
