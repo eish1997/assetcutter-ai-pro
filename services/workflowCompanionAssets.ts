@@ -535,9 +535,9 @@ async function mediaSrcToBlobForCompanion(src: string, fallbackMime: string): Pr
   if (!s) return null;
   const parsed = parseDataUrlToBlob(s);
   if (parsed) return parsed;
-  if (/^blob:/i.test(s) || s.startsWith('/')) {
+  if (/^blob:/i.test(s) || /^https?:\/\//i.test(s) || s.startsWith('/')) {
     try {
-      const res = await fetch(s, { credentials: 'include' });
+      const res = await fetch(s, { credentials: /^https?:\/\//i.test(s) ? 'omit' : 'include' });
       if (!res.ok) return null;
       const blob = await res.blob();
       const mime = (blob.type && blob.type.split(';')[0]!.trim()) || fallbackMime;
@@ -565,10 +565,12 @@ export async function putWorkflowResultMediaFromAnyUrl(
 
   if (/^https?:\/\//i.test(source)) {
     const imported = await importCompanionAssetFromUrl(base, projectId, key, source);
-    if (imported.ok === false) {
+    if (imported.ok !== false) {
+      return { ok: true, key };
+    }
+    if (imported.status !== 404) {
       return { ok: false, error: `${imported.error}${imported.status != null ? ` (HTTP ${imported.status})` : ''}` };
     }
-    return { ok: true, key };
   }
 
   const parsed = await mediaSrcToBlobForCompanion(source, fallbackMime);
