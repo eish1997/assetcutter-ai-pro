@@ -223,4 +223,53 @@ describe('Tripo OpenAPI AI gateway worker', () => {
     });
     expect(JSON.parse(fetchImpl.mock.calls[1][1].body).imageBase64DataUrl).toBeUndefined();
   });
+
+  it('retries Tripo STS with alternate parameter shape before failing image upload', async () => {
+    useTempKeyStore();
+    await saveProviderKeys([
+      { id: 'tripo_key_img_retry', provider: 'tripo', label: 'Tripo image retry', secret: 'tripo-secret', enabled: true, priority: 1 },
+    ]);
+
+    const store = createInMemoryAiJobStore();
+    const plan = await store.put(createAiGatewayJobPlan({
+      id: 'aijob_tripo_image_retry',
+      modality: 'model3d',
+      input: {
+        type: 'image_to_model',
+        imageBase64DataUrl: 'data:image/jpeg;base64,QUJDRA==',
+      },
+    }));
+    s3Mocks.send.mockResolvedValueOnce({});
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({ code: 1004, message: 'One or more of your parameter is invalid' }, false, 400))
+      .mockResolvedValueOnce(jsonResponse({
+        code: 0,
+        data: {
+          s3_host: 's3.us-west-2.amazonaws.com',
+          resource_bucket: 'tripo-data',
+          resource_uri: 'uploads/input.jpg',
+          session_token: 'session-token',
+          sts_ak: 'sts-ak',
+          sts_sk: 'sts-sk',
+        },
+      }, true, 200))
+      .mockResolvedValueOnce(jsonResponse({ task_id: 'tripo_task_img_retry', status: 'queued' }, true, 200));
+
+    const result = await startAiGatewayJobExecution(plan, {
+      store,
+      fetchImpl,
+      disableBackgroundPoll: true,
+    });
+
+    expect(result.started).toBe(true);
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+    expect(JSON.parse(fetchImpl.mock.calls[0][1].body)).toEqual({ format: 'jpeg' });
+    expect(fetchImpl.mock.calls[1][1].headers['Content-Type']).toBe('application/x-www-form-urlencoded');
+    expect(fetchImpl.mock.calls[1][1].body).toBe('format=jpeg');
+    expect(JSON.parse(fetchImpl.mock.calls[2][1].body)).toMatchObject({
+      type: 'image_to_model',
+      file: { type: 'jpg', file_token: 'uploads/input.jpg' },
+    });
+  });
 });

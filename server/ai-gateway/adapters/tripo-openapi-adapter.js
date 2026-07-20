@@ -126,6 +126,55 @@ function imageDimensions(bytes, mime) {
   return null;
 }
 
+async function requestTripoUploadSts(apiKey, parsed, options = {}) {
+  const fetchImpl = options.fetchImpl || undiciFetch;
+  const timeoutMs = Number(options.uploadTimeoutMs || process.env.AI_GATEWAY_TRIPO_UPLOAD_TIMEOUT_MS || 60_000);
+  const formats = [parsed.format, parsed.ext].filter((value, index, arr) => value && arr.indexOf(value) === index);
+  const attempts = [];
+  for (const format of formats) {
+    attempts.push({
+      label: `json:${format}`,
+      url: `${TRIPO_OPENAPI_BASE_URL}/upload/sts`,
+      init: {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ format }),
+        signal: AbortSignal.timeout(timeoutMs),
+      },
+    });
+    attempts.push({
+      label: `form:${format}`,
+      url: `${TRIPO_OPENAPI_BASE_URL}/upload/sts`,
+      init: {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ format }).toString(),
+        signal: AbortSignal.timeout(timeoutMs),
+      },
+    });
+    attempts.push({
+      label: `query:${format}`,
+      url: `${TRIPO_OPENAPI_BASE_URL}/upload/sts?format=${encodeURIComponent(format)}`,
+      init: {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${apiKey}` },
+        signal: AbortSignal.timeout(timeoutMs),
+      },
+    });
+  }
+  let last = null;
+  for (const attempt of attempts) {
+    const response = await fetchImpl(attempt.url, attempt.init);
+    const data = await readJsonSafe(response);
+    if (response.ok) return { data, attempt: attempt.label };
+    last = { status: response.status, data, attempt: attempt.label };
+    if (![400, 404, 415, 422].includes(Number(response.status))) break;
+  }
+  throw new Error(
+    `Tripo upload STS rejected: HTTP ${last?.status || 0} ${tripoErrorMessage(last?.data)} (${last?.attempt || 'no-attempt'})`
+  );
+}
+
 async function uploadImageToTripo(apiKey, imageBase64DataUrl, options = {}) {
   const parsed = parseDataUrlImage(imageBase64DataUrl);
   if (!parsed) {
@@ -135,17 +184,7 @@ async function uploadImageToTripo(apiKey, imageBase64DataUrl, options = {}) {
   if (dims && Math.max(dims.width, dims.height) < 257) {
     throw new AiGatewayValidationError('Tripo image task requires a reference image larger than 256px; please use the full asset instead of a tiny thumbnail', 'AI_GATEWAY_TRIPO_IMAGE_TOO_SMALL');
   }
-  const fetchImpl = options.fetchImpl || undiciFetch;
-  const response = await fetchImpl(`${TRIPO_OPENAPI_BASE_URL}/upload/sts`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ format: parsed.format }),
-    signal: AbortSignal.timeout(Number(options.uploadTimeoutMs || process.env.AI_GATEWAY_TRIPO_UPLOAD_TIMEOUT_MS || 60_000)),
-  });
-  const data = await readJsonSafe(response);
-  if (!response.ok) {
-    throw new Error(`Tripo image upload rejected: HTTP ${response.status} ${tripoErrorMessage(data)}`);
-  }
+  const { data } = await requestTripoUploadSts(apiKey, parsed, options);
   const sts = data?.data && typeof data.data === 'object' ? data.data : data;
   const bucket = nonEmptyString(sts?.resource_bucket);
   const key = nonEmptyString(sts?.resource_uri);
