@@ -75,18 +75,34 @@ function normalizeVideoResultUrl(obj: Record<string, unknown>): WorkflowVideoJob
   return null;
 }
 
+function extractProviderId(detail: AiJobDetail): string | undefined {
+  const metadata = detail.job?.metadata && typeof detail.job.metadata === 'object'
+    ? (detail.job.metadata as Record<string, unknown>)
+    : {};
+  const route = detail.route || detail.job?.route || null;
+  const routeRecord = route && typeof route === 'object' ? (route as Record<string, unknown>) : {};
+  const provider =
+    route?.providerId ||
+    detail.job?.provider ||
+    (typeof metadata.providerId === 'string' ? metadata.providerId : '') ||
+    (typeof metadata.provider === 'string' ? metadata.provider : '') ||
+    (typeof routeRecord.providerId === 'string' ? routeRecord.providerId : '');
+  return typeof provider === 'string' && provider.trim() ? provider.trim() : undefined;
+}
+
 function extractVideoUrl(detail: AiJobDetail): WorkflowVideoJobResult | null {
   const output = detail.job?.output && typeof detail.job.output === 'object'
     ? (detail.job.output as Record<string, unknown>)
     : {};
+  const providerId = extractProviderId(detail);
   const outputUrl = normalizeVideoResultUrl(output);
-  if (outputUrl) return outputUrl;
+  if (outputUrl) return { ...outputUrl, ...(providerId ? { providerId } : {}) };
   const artifacts = Array.isArray(detail.job?.artifacts) ? detail.job.artifacts : [];
   for (const artifact of artifacts) {
     const obj = artifact && typeof artifact === 'object' ? artifact : {};
     if (String(obj.kind || '').toLowerCase() !== 'video') continue;
     const artifactUrl = normalizeVideoResultUrl(obj);
-    if (artifactUrl) return artifactUrl;
+    if (artifactUrl) return { ...artifactUrl, ...(providerId ? { providerId } : {}) };
   }
   return null;
 }

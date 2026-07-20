@@ -131,7 +131,10 @@ async function uploadImageToTripo(apiKey, imageBase64DataUrl, options = {}) {
 function buildTripoTaskBody(job) {
   const input = job?.input && typeof job.input === 'object' ? job.input : {};
   const prompt = nonEmptyString(input.prompt) || nonEmptyString(input.text) || nonEmptyString(input.contents?.[0]?.parts?.[0]?.text);
-  const type = nonEmptyString(input.type) || 'text_to_model';
+  const firstReferenceImage = Array.isArray(input.referenceImages)
+    ? input.referenceImages.map((value) => nonEmptyString(value)).find(Boolean)
+    : '';
+  const type = nonEmptyString(input.type) || (firstReferenceImage ? 'image_to_model' : 'text_to_model');
   if (type === 'text_to_model' && !prompt) {
     throw new AiGatewayValidationError('Tripo text_to_model requires input.prompt', 'AI_GATEWAY_TRIPO_PROMPT_REQUIRED');
   }
@@ -165,6 +168,8 @@ function buildTripoTaskBody(job) {
   if (type === 'image_to_model') {
     if (nonEmptyString(input.imageUrl)) body.file = { type: 'url', url: nonEmptyString(input.imageUrl) };
     else if (nonEmptyString(input.imageBase64DataUrl)) body.imageBase64DataUrl = input.imageBase64DataUrl;
+    else if (firstReferenceImage && /^https?:\/\//i.test(firstReferenceImage)) body.file = { type: 'url', url: firstReferenceImage };
+    else if (firstReferenceImage) body.imageBase64DataUrl = firstReferenceImage;
     else throw new AiGatewayValidationError('Tripo image_to_model requires image input', 'AI_GATEWAY_TRIPO_IMAGE_REQUIRED');
   }
   if (type === 'multiview_to_model') {

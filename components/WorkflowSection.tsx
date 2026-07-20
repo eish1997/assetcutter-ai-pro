@@ -2871,7 +2871,7 @@ const WorkflowSection: React.FC<{
   );
 
   const persistCompanionResultMedia = useCallback(
-    async (assetId: string, resultKey: string, mediaSrc: string, fallbackMime = 'video/mp4') => {
+    async (assetId: string, resultKey: string, mediaSrc: string, fallbackMime = 'video/mp4', providerId?: string) => {
       const source = String(mediaSrc || '').trim();
       if (!source) return;
       const base = String(getCompanionLocalBaseUrl() || '').trim();
@@ -2880,7 +2880,7 @@ const WorkflowSection: React.FC<{
         onLog?.('warn', '本地伴侣未连接，视频结果仅保留临时预览；请连接本地伴侣后重新生成以写入项目资产目录');
         return;
       }
-      const put = await putWorkflowResultMediaFromAnyUrl(base, pid, assetId, resultKey, source, { fallbackMime });
+      const put = await putWorkflowResultMediaFromAnyUrl(base, pid, assetId, resultKey, source, { fallbackMime, providerId });
       if (put.ok === false) {
         onLog?.('warn', '视频结果写入本地伴侣失败（仍保留临时预览）', put.error);
         return;
@@ -3235,6 +3235,7 @@ ${lineSvg}
     text?: string;
     videoUrl?: string;
     videoMime?: string;
+    videoProviderId?: string;
     vgpSteps?: VgpGenStepCapture[];
     geminiRecoveryJobId?: string;
   }> => {
@@ -3479,7 +3480,7 @@ ${lineSvg}
               return { image: null, text: result.text };
             }
             if (result.kind === 'video') {
-              return { image: null, videoUrl: result.videoUrl, videoMime: result.mimeType, vgpSteps: result.vgpSteps };
+              return { image: null, videoUrl: result.videoUrl, videoMime: result.mimeType, videoProviderId: result.providerId, vgpSteps: result.vgpSteps };
             }
             return result.kind === 'image'
               ? { image: result.image, vgpSteps: result.vgpSteps }
@@ -3689,7 +3690,7 @@ ${lineSvg}
             return { image: null, text: out.text };
           }
           if (out.kind === 'video') {
-            return { image: null, videoUrl: out.videoUrl, videoMime: out.mimeType, vgpSteps: out.vgpSteps };
+            return { image: null, videoUrl: out.videoUrl, videoMime: out.mimeType, videoProviderId: out.providerId, vgpSteps: out.vgpSteps };
           }
           if (out.kind === 'image' && out.image) {
             setCapabilitySetRunByAssetId((prev) => {
@@ -4309,6 +4310,7 @@ ${lineSvg}
               image: result,
               text: textResult,
               videoUrl: videoResultUrl,
+              videoProviderId,
               vgpSteps,
               geminiRecoveryJobId,
             } = await runTaskRef.current(task, batchGroup);
@@ -4427,7 +4429,7 @@ ${lineSvg}
                   })
                 );
               });
-              await persistCompanionResultMedia(task.assetId, videoResultKey, videoUrl, 'video/mp4');
+              await persistCompanionResultMedia(task.assetId, videoResultKey, videoUrl, 'video/mp4', videoProviderId);
               if (isTaskCancelled()) {
                 skipCancelledWrite();
                 return;

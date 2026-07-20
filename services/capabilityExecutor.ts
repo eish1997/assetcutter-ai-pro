@@ -132,6 +132,7 @@ export type CapabilityExecuteResult =
       kind: 'video';
       videoUrl: string;
       mimeType?: string;
+      providerId?: string;
       durationMs: number;
       vgpSteps?: VgpGenStepCapture[];
       nodeImageOutputs?: Record<string, string>;
@@ -490,6 +491,7 @@ async function executeGenerateVideoPath(
       kind: 'video',
       videoUrl: out.videoUrl,
       mimeType: out.mimeType,
+      providerId: out.providerId,
       durationMs: Date.now() - start,
     };
   } catch (e) {

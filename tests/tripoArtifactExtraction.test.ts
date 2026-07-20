@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { extractTripoTaskArtifacts } from '../server/ai-gateway/adapters/tripo-openapi-adapter.js';
+import { buildTripoWorkerRequest, extractTripoTaskArtifacts } from '../server/ai-gateway/adapters/tripo-openapi-adapter.js';
 import { extractTripoTaskArtifactUrls } from '../services/tripoService';
 import { extractTripoModelAndPreviewUrls } from '../services/generate3d/tripoWorkflow';
 
@@ -52,6 +52,28 @@ describe('Tripo artifact extraction', () => {
     expect(extractTripoTaskArtifactUrls(payload)).toEqual({
       modelUrls: ['https://tripo-cdn.example.com/model.glb'],
       previewUrl: 'https://tripo-cdn.example.com/preview.png',
+    });
+  });
+
+  it('treats referenceImages as image_to_model input for AI Gateway Tripo jobs', () => {
+    const request = buildTripoWorkerRequest(
+      {
+        id: 'aijob_tripo_ref',
+        correlationId: 'corr_1',
+        model: 'tripo-p1',
+        input: {
+          prompt: 'toy robot',
+          referenceImages: ['data:image/png;base64,AAAA'],
+        },
+      },
+      { adapterId: 'tripo-openapi' }
+    );
+
+    expect(request.body).toMatchObject({
+      type: 'image_to_model',
+      prompt: 'toy robot',
+      imageBase64DataUrl: 'data:image/png;base64,AAAA',
+      model_version: 'P1-20260311',
     });
   });
 });

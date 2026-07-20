@@ -14,6 +14,7 @@ import {
   isWorkflowStoryboardTableAsset,
   isWorkflowTextAsset,
 } from './workflowAssetKind';
+import { fetchProviderArtifactBlob } from './providerArtifactFetch';
 import { workflowModelSlotMayNeedCompanionHydrate, isWorkflowModelUrlReadable } from './workflowModelBlob';
 import { normalizeDataUrlForVisionApi } from './workflowImageDataUrlCompress';
 
@@ -578,7 +579,7 @@ export async function putWorkflowResultMediaFromAnyUrl(
   assetId: string,
   resultKey: string,
   mediaSrc: string,
-  opts?: { fallbackMime?: string }
+  opts?: { fallbackMime?: string; providerId?: string }
 ): Promise<{ ok: true; key: string } | { ok: false; error: string }> {
   const source = String(mediaSrc || '').trim();
   if (!source) return { ok: false, error: 'empty_media_src' };
@@ -593,7 +594,17 @@ export async function putWorkflowResultMediaFromAnyUrl(
     }
   }
 
-  const parsed = await mediaSrcToBlobForCompanion(source, fallbackMime);
+  let parsed = await mediaSrcToBlobForCompanion(source, fallbackMime);
+  const providerId = String(opts?.providerId || '').trim();
+  if (!parsed && providerId && /^https?:\/\//i.test(source)) {
+    try {
+      const blob = await fetchProviderArtifactBlob({ providerId, url: source });
+      const mime = (blob.type && blob.type.split(';')[0]!.trim()) || fallbackMime;
+      parsed = { blob: blob.type ? blob : new Blob([blob], { type: mime }), mime };
+    } catch {
+      parsed = null;
+    }
+  }
   if (!parsed) return { ok: false, error: 'cannot_normalize_media_src' };
   const put = await putCompanionAsset(base, projectId, key, parsed.blob, parsed.mime);
   if (put.ok === false) {

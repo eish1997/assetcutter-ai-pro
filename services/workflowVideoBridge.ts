@@ -30,6 +30,7 @@ export type WorkflowVideoJobInput = {
 export type WorkflowVideoJobResult = {
   videoUrl: string;
   mimeType?: string;
+  providerId?: string;
 };
 
 /** 供应商未就绪或未配置桥 URL 时抛出 */
