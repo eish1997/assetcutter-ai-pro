@@ -36,29 +36,46 @@ function extractTaskId(data) {
   );
 }
 
-function normalizeModelUrls(task) {
-  const out = [];
-  const push = (value, key = '') => {
+function classifyTripoUrl(value, keyPath = '') {
+  const url = nonEmptyString(value);
+  if (!/^https?:\/\//i.test(url)) return null;
+  const key = String(keyPath || '').toLowerCase();
+  const modelLikeKey = /(model|mesh|glb|gltf|fbx|obj|stl|usdz|3mf|download|file_3d|file3d)/i.test(key);
+  const imageLikeKey = /(preview|thumbnail|render|rendered|image|poster|cover)/i.test(key);
+  const modelLikeUrl = /\.(glb|gltf|fbx|obj|stl|usdz|3mf|zip)(\?|#|$)/i.test(url);
+  const imageLikeUrl = /\.(png|jpe?g|webp|gif|avif)(\?|#|$)/i.test(url);
+  if (modelLikeUrl || (modelLikeKey && !imageLikeUrl)) return 'model';
+  if (imageLikeUrl || imageLikeKey) return 'preview';
+  return null;
+}
+
+export function extractTripoTaskArtifacts(task) {
+  const modelUrls = [];
+  let previewUrl = '';
+  const push = (value, keyPath = '') => {
     const url = nonEmptyString(value);
-    if (!/^https?:\/\//i.test(url)) return;
-    const modelLikeKey = /(model|glb|gltf|fbx|obj|usdz|download)/i.test(key);
-    const modelLikeUrl = /\.(glb|gltf|fbx|obj|usdz|zip)(\?|#|$)/i.test(url);
-    if (!modelLikeKey && !modelLikeUrl) return;
-    if (!out.includes(url)) out.push(url);
+    const kind = classifyTripoUrl(url, keyPath);
+    if (kind === 'model' && !modelUrls.includes(url)) modelUrls.push(url);
+    if (kind === 'preview' && !previewUrl) previewUrl = url;
   };
-  const walk = (obj) => {
+  const walk = (obj, path = '') => {
     if (!obj || typeof obj !== 'object') return;
     if (Array.isArray(obj)) {
-      obj.forEach(walk);
+      obj.forEach((item, index) => walk(item, `${path}[${index}]`));
       return;
     }
     for (const [key, value] of Object.entries(obj)) {
-      if (typeof value === 'string') push(value, key);
-      else walk(value);
+      const nextPath = path ? `${path}.${key}` : key;
+      if (typeof value === 'string') push(value, nextPath);
+      else walk(value, nextPath);
     }
   };
   walk(task);
-  return out;
+  return { modelUrls, previewUrl };
+}
+
+function normalizeModelUrls(task) {
+  return extractTripoTaskArtifacts(task).modelUrls;
 }
 
 function tripoErrorMessage(data, fallback = 'Tripo request failed') {
@@ -238,7 +255,7 @@ async function pollTripoTask(plan, taskId, apiKey, options = {}) {
       if (!response.ok) continue;
       const status = normalizeTaskStatus(data?.status ?? data?.data?.status ?? data?.task?.status);
       if (status === 'succeeded') {
-        const modelUrls = normalizeModelUrls(data);
+        const { modelUrls, previewUrl } = extractTripoTaskArtifacts(data);
         const completedAtMs = Date.now();
         const outputBytes = collectByteSize(data);
         const usage = buildProviderTaskUsage(plan, {
@@ -259,19 +276,31 @@ async function pollTripoTask(plan, taskId, apiKey, options = {}) {
             provider: 'tripo',
             taskId,
             modelUrls,
+            previewUrl: previewUrl || undefined,
             usage,
             raw: data,
           },
-          artifacts: modelUrls.map((url) => ({
-            kind: 'model3d',
-            url,
-            source: 'tripo',
-            taskId,
-            billing: {
-              actualCredits: usage.actualCredits,
-              settlementSource: usage.settlementSource,
-            },
-          })),
+          artifacts: [
+            ...modelUrls.map((url) => ({
+              kind: 'model3d',
+              url,
+              source: 'tripo',
+              taskId,
+              billing: {
+                actualCredits: usage.actualCredits,
+                settlementSource: usage.settlementSource,
+              },
+            })),
+            ...(previewUrl
+              ? [{
+                  kind: 'image',
+                  url: previewUrl,
+                  source: 'tripo',
+                  taskId,
+                  role: 'preview',
+                }]
+              : []),
+          ],
           metadata: {
             tripoTaskId: taskId,
             upstreamTaskId: taskId,

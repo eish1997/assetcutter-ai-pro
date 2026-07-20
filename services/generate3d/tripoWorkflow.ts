@@ -1,5 +1,5 @@
 import { createTripoTask, getTripoTask, waitTripoTaskDone } from '../unifiedAiGateway';
-import { isAiGatewayTripoPlatformKey } from '../tripoService';
+import { extractTripoTaskArtifactUrls, isAiGatewayTripoPlatformKey } from '../tripoService';
 import type { TripoCreateTaskInput, TripoTaskResult, TripoTaskType } from '../tripoService';
 import type { CustomAppModule } from '../../types';
 import { normalizeGenerate3DPresetForRun } from './normalizePreset';
@@ -63,8 +63,10 @@ export function extractTripoModelAndPreviewUrls(done: TripoTaskResult): {
   modelUrls: string[];
   previewUrl: string;
 } {
-  const allUrls = done.modelUrls;
-  const modelUrls = allUrls.filter((u) => /\.(glb|gltf|fbx|obj|stl|usdz?|3mf)(\?|#|$)/i.test(u));
+  const fromRaw = extractTripoTaskArtifactUrls(done.raw);
+  const modelUrls = fromRaw.modelUrls.length
+    ? fromRaw.modelUrls
+    : done.modelUrls.map((url) => String(url || '').trim()).filter(Boolean);
   const raw = done.raw as Record<string, unknown> | null | undefined;
   const dataOut =
     raw && typeof raw.data === 'object' && raw.data !== null
@@ -79,7 +81,7 @@ export function extractTripoModelAndPreviewUrls(done: TripoTaskResult): {
       ? String(((raw.output as Record<string, unknown>).rendered_image as string) || '')
       : '';
   const previewUrl =
-    allUrls.find((u) => /\.(png|jpe?g|webp)(\?|#|$)/i.test(u)) || dataRendered || topRendered || '';
+    fromRaw.previewUrl || dataRendered || topRendered || '';
   return { modelUrls, previewUrl };
 }
 
@@ -154,9 +156,13 @@ function gatewayDetailToTripoResult(detail: AiJobDetail): TripoTaskResult {
             ? 'running'
             : 'unknown';
   const output = detail.job.output as Record<string, unknown> | null | undefined;
-  const modelUrls = Array.isArray(output?.modelUrls)
+  const rawArtifacts = extractTripoTaskArtifactUrls(output?.raw || output || detail);
+  const modelUrls = rawArtifacts.modelUrls.length
+    ? rawArtifacts.modelUrls
+    : Array.isArray(output?.modelUrls)
     ? output.modelUrls.map((url) => String(url || '').trim()).filter(Boolean)
     : detail.job.artifacts
+        .filter((artifact) => String(artifact.kind || '').toLowerCase() === 'model3d')
         .map((artifact) => String(artifact.url || '').trim())
         .filter(Boolean);
   return {

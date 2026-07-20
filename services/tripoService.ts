@@ -70,28 +70,48 @@ function mapStatus(raw: unknown): TripoTaskStatus {
   return 'unknown';
 }
 
-function normalizeModelUrlsFromTask(task: unknown): string[] {
-  const out: string[] = [];
-  const push = (v: unknown) => {
-    const t = String(v || '').trim();
-    if (!t || !/^https?:\/\//i.test(t)) return;
-    if (!out.includes(t)) out.push(t);
+function classifyTripoArtifactUrl(value: unknown, keyPath = ''): 'model' | 'preview' | null {
+  const url = String(value || '').trim();
+  if (!/^https?:\/\//i.test(url)) return null;
+  const key = String(keyPath || '').toLowerCase();
+  const modelLikeKey = /(model|mesh|glb|gltf|fbx|obj|stl|usdz|3mf|download|file_3d|file3d)/i.test(key);
+  const imageLikeKey = /(preview|thumbnail|render|rendered|image|poster|cover)/i.test(key);
+  const modelLikeUrl = /\.(glb|gltf|fbx|obj|stl|usdz|3mf|zip)(\?|#|$)/i.test(url);
+  const imageLikeUrl = /\.(png|jpe?g|webp|gif|avif)(\?|#|$)/i.test(url);
+  if (modelLikeUrl || (modelLikeKey && !imageLikeUrl)) return 'model';
+  if (imageLikeUrl || imageLikeKey) return 'preview';
+  return null;
+}
+
+export function extractTripoTaskArtifactUrls(task: unknown): { modelUrls: string[]; previewUrl: string } {
+  const modelUrls: string[] = [];
+  let previewUrl = '';
+  const push = (v: unknown, keyPath = '') => {
+    const url = String(v || '').trim();
+    const kind = classifyTripoArtifactUrl(url, keyPath);
+    if (kind === 'model' && !modelUrls.includes(url)) modelUrls.push(url);
+    if (kind === 'preview' && !previewUrl) previewUrl = url;
   };
-  const walk = (obj: unknown) => {
+  const walk = (obj: unknown, path = '') => {
     if (!obj || typeof obj !== 'object') return;
     if (Array.isArray(obj)) {
-      obj.forEach(walk);
+      obj.forEach((item, index) => walk(item, `${path}[${index}]`));
       return;
     }
     const rec = obj as Record<string, unknown>;
     Object.keys(rec).forEach((k) => {
       const v = rec[k];
-      if (typeof v === 'string' && /(url|model|glb|gltf|fbx|obj|download)/i.test(k)) push(v);
-      else walk(v);
+      const nextPath = path ? `${path}.${k}` : k;
+      if (typeof v === 'string') push(v, nextPath);
+      else walk(v, nextPath);
     });
   };
   walk(task);
-  return out;
+  return { modelUrls, previewUrl };
+}
+
+function normalizeModelUrlsFromTask(task: unknown): string[] {
+  return extractTripoTaskArtifactUrls(task).modelUrls;
 }
 
 function normalizeErrorMessage(error: unknown): string {
