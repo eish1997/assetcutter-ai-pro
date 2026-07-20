@@ -2,6 +2,23 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+
+const s3Mocks = vi.hoisted(() => ({
+  send: vi.fn(),
+  PutObjectCommand: vi.fn(function PutObjectCommand(input) {
+    this.input = input;
+  }),
+  S3Client: vi.fn(function S3Client(config) {
+    this.config = config;
+    this.send = s3Mocks.send;
+  }),
+}));
+
+vi.mock('@aws-sdk/client-s3', () => ({
+  PutObjectCommand: s3Mocks.PutObjectCommand,
+  S3Client: s3Mocks.S3Client,
+}));
+
 import { createAiGatewayJobPlan } from '../server/ai-gateway/index.js';
 import { createInMemoryAiJobStore } from '../server/ai-gateway/job-store.js';
 import { saveProviderKeys } from '../server/ai-gateway/provider-key-store.js';
@@ -34,6 +51,9 @@ describe('Tripo OpenAPI AI gateway worker', () => {
       }
     }
     tempFiles.clear();
+    s3Mocks.send.mockReset();
+    s3Mocks.PutObjectCommand.mockClear();
+    s3Mocks.S3Client.mockClear();
   });
 
   function useTempKeyStore() {
@@ -152,9 +172,20 @@ describe('Tripo OpenAPI AI gateway worker', () => {
         texture: true,
       },
     }));
+    s3Mocks.send.mockResolvedValueOnce({});
     const fetchImpl = vi
       .fn()
-      .mockResolvedValueOnce(jsonResponse({ file_token: 'file_token_1' }, true, 200))
+      .mockResolvedValueOnce(jsonResponse({
+        code: 0,
+        data: {
+          s3_host: 's3.us-west-2.amazonaws.com',
+          resource_bucket: 'tripo-data',
+          resource_uri: 'uploads/input.png',
+          session_token: 'session-token',
+          sts_ak: 'sts-ak',
+          sts_sk: 'sts-sk',
+        },
+      }, true, 200))
       .mockResolvedValueOnce(jsonResponse({ task_id: 'tripo_task_img', status: 'queued' }, true, 200));
 
     const result = await startAiGatewayJobExecution(plan, {
@@ -166,11 +197,29 @@ describe('Tripo OpenAPI AI gateway worker', () => {
     expect(result.started).toBe(true);
     expect(fetchImpl).toHaveBeenCalledTimes(2);
     expect(fetchImpl.mock.calls[0][0]).toBe('https://api.tripo3d.ai/v2/openapi/upload/sts');
+    expect(JSON.parse(fetchImpl.mock.calls[0][1].body)).toEqual({ format: 'png' });
+    expect(s3Mocks.S3Client).toHaveBeenCalledWith(expect.objectContaining({
+      region: 'us-west-2',
+      endpoint: 'https://s3.us-west-2.amazonaws.com',
+      credentials: {
+        accessKeyId: 'sts-ak',
+        secretAccessKey: 'sts-sk',
+        sessionToken: 'session-token',
+      },
+      forcePathStyle: true,
+    }));
+    expect(s3Mocks.PutObjectCommand).toHaveBeenCalledWith(expect.objectContaining({
+      Bucket: 'tripo-data',
+      Key: 'uploads/input.png',
+      Body: expect.any(Buffer),
+      ContentType: 'image/png',
+    }));
+    expect(s3Mocks.send).toHaveBeenCalledTimes(1);
     expect(fetchImpl.mock.calls[1][0]).toBe('https://api.tripo3d.ai/v2/openapi/task');
     expect(JSON.parse(fetchImpl.mock.calls[1][1].body)).toMatchObject({
       type: 'image_to_model',
       texture: true,
-      file: { type: 'png', file_token: 'file_token_1' },
+      file: { type: 'png', file_token: 'uploads/input.png' },
     });
     expect(JSON.parse(fetchImpl.mock.calls[1][1].body).imageBase64DataUrl).toBeUndefined();
   });

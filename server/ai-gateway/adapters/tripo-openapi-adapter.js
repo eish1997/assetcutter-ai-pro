@@ -1,4 +1,5 @@
 import { fetch as undiciFetch } from 'undici';
+import { PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { acquireProviderKey, recordProviderKeyError, recordProviderKeySuccess } from '../provider-key-store.js';
 import { AiGatewayValidationError } from '../job.js';
 import { finalizeAiGatewayTerminalPlan } from '../execution-finalize.js';
@@ -98,7 +99,8 @@ function parseDataUrlImage(dataUrl) {
   const bytes = Buffer.from(m[2] || '', 'base64');
   if (!bytes.byteLength) return null;
   const ext = mime.includes('jpeg') || mime.includes('jpg') ? 'jpg' : mime.includes('webp') ? 'webp' : 'png';
-  return { mime, bytes, ext, filename: `input.${ext}` };
+  const format = ext === 'jpg' ? 'jpeg' : ext;
+  return { mime, bytes, ext, format, filename: `input.${ext}` };
 }
 
 function imageDimensions(bytes, mime) {
@@ -134,24 +136,39 @@ async function uploadImageToTripo(apiKey, imageBase64DataUrl, options = {}) {
     throw new AiGatewayValidationError('Tripo image task requires a reference image larger than 256px; please use the full asset instead of a tiny thumbnail', 'AI_GATEWAY_TRIPO_IMAGE_TOO_SMALL');
   }
   const fetchImpl = options.fetchImpl || undiciFetch;
-  const form = new FormData();
-  form.append('file', new Blob([parsed.bytes], { type: parsed.mime }), parsed.filename);
   const response = await fetchImpl(`${TRIPO_OPENAPI_BASE_URL}/upload/sts`, {
     method: 'POST',
-    headers: { Authorization: `Bearer ${apiKey}` },
-    body: form,
+    headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ format: parsed.format }),
     signal: AbortSignal.timeout(Number(options.uploadTimeoutMs || process.env.AI_GATEWAY_TRIPO_UPLOAD_TIMEOUT_MS || 60_000)),
   });
   const data = await readJsonSafe(response);
   if (!response.ok) {
     throw new Error(`Tripo image upload rejected: HTTP ${response.status} ${tripoErrorMessage(data)}`);
   }
-  const token =
-    nonEmptyString(data?.file_token) ||
-    nonEmptyString(data?.data?.file_token) ||
-    nonEmptyString(data?.image_token) ||
-    nonEmptyString(data?.data?.image_token);
-  if (!token) throw new Error('Tripo upload did not return file_token');
+  const sts = data?.data && typeof data.data === 'object' ? data.data : data;
+  const bucket = nonEmptyString(sts?.resource_bucket);
+  const key = nonEmptyString(sts?.resource_uri);
+  const sessionToken = nonEmptyString(sts?.session_token);
+  const accessKeyId = nonEmptyString(sts?.sts_ak);
+  const secretAccessKey = nonEmptyString(sts?.sts_sk);
+  if (!bucket || !key || !sessionToken || !accessKeyId || !secretAccessKey) {
+    throw new Error(`Tripo upload STS response missing S3 credentials: ${tripoErrorMessage(data)}`);
+  }
+  const s3Host = nonEmptyString(sts?.s3_host) || 's3.us-west-2.amazonaws.com';
+  const s3Client = options.s3Client || new S3Client({
+    region: 'us-west-2',
+    endpoint: /^https?:\/\//i.test(s3Host) ? s3Host : `https://${s3Host}`,
+    credentials: { accessKeyId, secretAccessKey, sessionToken },
+    forcePathStyle: true,
+  });
+  await s3Client.send(new PutObjectCommand({
+    Bucket: bucket,
+    Key: key,
+    Body: parsed.bytes,
+    ContentType: parsed.mime,
+  }));
+  const token = key;
   return { type: parsed.ext, file_token: token };
 }
 

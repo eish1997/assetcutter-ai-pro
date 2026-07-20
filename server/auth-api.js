@@ -4121,11 +4121,17 @@ const server = http.createServer(async (req, res) => {
         return;
       }
       try {
-        const upstreamResp = await fetch(fileUrl, {
+        let upstreamResp = await fetch(fileUrl, {
           method: 'GET',
           headers: { Authorization: `Bearer ${artifactSecret}` },
           signal: AbortSignal.timeout(TRIPO_TIMEOUT_MS),
         });
+        if (!upstreamResp.ok && [401, 403, 404].includes(Number(upstreamResp.status))) {
+          upstreamResp = await fetch(fileUrl, {
+            method: 'GET',
+            signal: AbortSignal.timeout(TRIPO_TIMEOUT_MS),
+          });
+        }
         if (!upstreamResp.ok) {
           const data = await readJsonSafe(upstreamResp);
           json(res, upstreamResp.status, data);
