@@ -537,7 +537,30 @@ async function mediaSrcToBlobForCompanion(src: string, fallbackMime: string): Pr
   if (parsed) return parsed;
   if (/^blob:/i.test(s) || /^https?:\/\//i.test(s) || s.startsWith('/')) {
     try {
-      const res = await fetch(s, { credentials: /^https?:\/\//i.test(s) ? 'omit' : 'include' });
+      let fetchUrl = s;
+      let credentials: RequestCredentials = s.startsWith('/') ? 'include' : 'omit';
+      if (s.startsWith('/') && (s.includes('/api/') || s.includes('/r2/'))) {
+        fetchUrl = /\/api\/r2/i.test(s) ? mapSiteR2PathToFetchUrl(s) : s;
+      } else if (/^https?:\/\//i.test(s)) {
+        try {
+          const u = new URL(s);
+          const sameOrigin = typeof window !== 'undefined' && u.origin === window.location.origin;
+          if (sameOrigin) credentials = 'include';
+          if (/\/api\/r2\//i.test(u.pathname || '')) {
+            fetchUrl = mapSiteR2PathToFetchUrl(`${u.pathname}${u.search}${u.hash}`);
+            credentials = 'include';
+          } else {
+            const publicObjectSitePath = r2PublicObjectUrlToSitePath(s);
+            if (publicObjectSitePath) {
+              fetchUrl = mapSiteR2PathToFetchUrl(publicObjectSitePath);
+              credentials = 'include';
+            }
+          }
+        } catch {
+          /* use original URL */
+        }
+      }
+      const res = await fetch(fetchUrl, { credentials });
       if (!res.ok) return null;
       const blob = await res.blob();
       const mime = (blob.type && blob.type.split(';')[0]!.trim()) || fallbackMime;
@@ -567,9 +590,6 @@ export async function putWorkflowResultMediaFromAnyUrl(
     const imported = await importCompanionAssetFromUrl(base, projectId, key, source);
     if (imported.ok !== false) {
       return { ok: true, key };
-    }
-    if (imported.status !== 404) {
-      return { ok: false, error: `${imported.error}${imported.status != null ? ` (HTTP ${imported.status})` : ''}` };
     }
   }
 
