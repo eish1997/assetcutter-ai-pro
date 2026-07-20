@@ -27,7 +27,7 @@ import { loadSnippets } from './services/snippetStore';
 import { AppMode, LibraryItem, SystemConfig, AppTask, AssetCategory, type CustomAppModule, type CapabilitySet, type WorkflowAsset, type WorkflowPendingTask, type ArenaCurrentStep, type ArenaStepEntry, type ArenaTimelineBlock } from './types';
 import { runCapabilityTest } from './services/capabilityTestRunner';
 import { executeCapability } from './services/capabilityExecutor';
-import { initAgentWorkbenchBridge } from './services/agentWorkbenchBridge';
+import { buildAgentCapabilityOutputAsset, initAgentWorkbenchBridge, summarizeAgentCapabilityPreset, summarizeAgentWorkflowAsset, summarizeAgentWorkflowAssetDetail } from './services/agentWorkbenchBridge';
 import { loadCapabilityPresets, saveCapabilityPresets, CAPABILITY_PRESETS_KEY } from './services/capabilityPresetStore';
 import { loadCapabilitySets, saveCapabilitySets, CAPABILITY_SETS_KEY } from './services/capabilitySetStore';
 import { useWorkflowMainScrollCapture, type WorkflowCapabilityGutterDropConfig } from './hooks/useWorkflowMainScrollCapture';
@@ -124,6 +124,8 @@ import {
   getAiProviderToolbarLabel,
   getOpenaiApiKey,
   getOpenaiBaseUrl,
+  getTinysnowApiKey,
+  getTinysnowBaseUrl,
   getToapisApiKey,
   getToapisBaseUrl,
   getTripoApiKey,
@@ -138,6 +140,8 @@ import {
   setEnabledChannelsFromCloud,
   setOpenaiApiKey,
   setOpenaiBaseUrl,
+  setTinysnowApiKey,
+  setTinysnowBaseUrl,
   setToapisApiKey,
   setToapisBaseUrl,
   setUserApiKey,
@@ -790,6 +794,8 @@ const MainApp: React.FC = () => {
           setToapisBaseUrl(cfg.settings.toapisBaseUrl || null);
           setOpenaiApiKey(cfg.settings.openaiApiKey || null);
           setOpenaiBaseUrl(cfg.settings.openaiBaseUrl || null);
+          setTinysnowApiKey(cfg.settings.tinysnowApiKey || null);
+          setTinysnowBaseUrl(cfg.settings.tinysnowBaseUrl || null);
           setVolcengineArkApiKey(cfg.settings.volcengineArkApiKey || null);
           setVolcengineArkBaseUrl(cfg.settings.volcengineArkBaseUrl || null);
           setVectorengineApiKey(cfg.settings.vectorengineApiKey || null);
@@ -849,6 +855,8 @@ const MainApp: React.FC = () => {
           toapisBaseUrl: getToapisBaseUrl() || '',
           openaiApiKey: getOpenaiApiKey() || '',
           openaiBaseUrl: getOpenaiBaseUrl() || '',
+          tinysnowApiKey: getTinysnowApiKey() || '',
+          tinysnowBaseUrl: getTinysnowBaseUrl() || '',
           volcengineArkApiKey: getVolcengineArkApiKey() || '',
           volcengineArkBaseUrl: getVolcengineArkBaseUrl() || '',
           vectorengineApiKey: getVectorengineApiKey() || '',
@@ -1924,55 +1932,348 @@ const MainApp: React.FC = () => {
     [loadWorkspaceProjectInternal, markWorkspaceLocalIdbHydrateReady, refreshAuthUser]
   );
 
+  const createWorkspaceProjectForAgent = useCallback(
+    async (name: string): Promise<WorkspaceProject | null> => {
+      const scope = user?.id ?? null;
+      const base = getCompanionLocalBaseUrl();
+      const trimmed = String(name || '').trim();
+      /** 未填名称时伴侣会返回 workspace_project_name_required；给默认目录名避免回退成 UUID 导致 manifest project_not_found */
+      const nameForCompanion = trimmed || `proj-${Date.now().toString(36)}`;
+      let next: WorkspaceProject[];
+      let project: WorkspaceProject;
+      if (base) {
+        const createdRemote = await createCompanionWorkspaceProject(base, nameForCompanion);
+        if (createdRemote.ok === false) {
+          addGlobalLog('工作区', 'error', '本地伴侣新建项目失败', createdRemote.error);
+          return null;
+        }
+        project = createdRemote.data.project;
+        next = [...workspaceProjects, project];
+      } else {
+        project = createWorkspaceProject(trimmed || nameForCompanion);
+        next = [...workspaceProjects, project];
+      }
+      setWorkspaceProjects(next);
+      workspaceProjectsRef.current = next;
+      saveWorkspaceProjects(next, scope);
+      if (
+        shouldAutoPushWorkspaceProjectIndex() &&
+        user?.id &&
+        user?.username &&
+        workspaceCloudPushAllowedUserIdRef.current === user.id &&
+        !workspaceCloudQuotaSuspendedRef.current
+      ) {
+        void pushWorkspaceIndex(user.id, next, getLastOpenedWorkspaceProjectId(user.id), user.username).catch((e) =>
+          console.warn('[workspace cloud] index', e)
+        );
+      }
+      return project;
+    },
+    [addGlobalLog, workspaceProjects, user?.id, user?.username]
+  );
+
   useEffect(() => {
     initAgentWorkbenchBridge({
-      getContext: async () => ({
-        authenticated: Boolean(user?.id),
-        userId: user?.id ?? null,
-        activeProjectId: activeWorkspaceProjectId,
-        activeProjectName:
-          workspaceProjects.find((p) => p.id === activeWorkspaceProjectId)?.name ?? null,
-        projects: workspaceProjects.map((p) => ({ id: p.id, name: p.name })),
-        capabilityPresets: capabilityPresets.map((p) => ({
-          id: p.id,
-          name: p.label || p.id,
-          category: p.category,
-        })),
-      }),
-      openProject: async (projectId) => {
-        const id = String(projectId || '').trim();
-        if (!id) return { ok: false, error: 'missing projectId' };
+      getContext: async () => {
+        const activeProject =
+          workspaceProjects.find((p) => p.id === activeWorkspaceProjectId) ?? null;
+        return {
+          ok: true,
+          action: 'getContext',
+          authenticated: Boolean(user?.id),
+          userId: user?.id ?? null,
+          activeProjectId: activeWorkspaceProjectId,
+          activeProjectName: activeProject?.name ?? null,
+          activeProject: activeProject
+            ? { id: activeProject.id, name: activeProject.name }
+            : null,
+          projects: workspaceProjects.map((p) => ({ id: p.id, name: p.name })),
+          capabilityPresets: capabilityPresets.map(summarizeAgentCapabilityPreset),
+          counts: {
+            projects: workspaceProjects.length,
+            capabilityPresets: capabilityPresets.length,
+          },
+          nextStep: activeWorkspaceProjectId
+            ? '可以调用 ac.workbench.run_capability 执行支持直接运行的能力。'
+            : '请先调用 ac.workbench.create_project 创建项目，或打开已有工作区项目。',
+        };
+      },
+      createProject: async (name) => {
+        const projectName = String(name || '').trim() || `Agent 项目 ${new Date().toLocaleString('zh-CN')}`;
         try {
-          await openWorkspaceProject(id);
-          return { ok: true, projectId: id };
+          const project = await createWorkspaceProjectForAgent(projectName);
+          if (!project) {
+            return {
+              ok: false,
+              error: 'create_project_failed',
+              nextStep: '请检查本地伴侣项目目录或工作台状态后重试。',
+            };
+          }
+          await openWorkspaceProject(project.id);
+          return {
+            ok: true,
+            action: 'createProject',
+            project: { id: project.id, name: project.name },
+            projectId: project.id,
+            projectName: project.name,
+            nextStep: 'done',
+          };
         } catch (e) {
           return { ok: false, error: e instanceof Error ? e.message : String(e) };
         }
       },
-      runCapability: async ({ presetId, projectId, inputText }) => {
+      openProject: async (projectId) => {
+        const id = String(projectId || '').trim();
+        if (!id) return { ok: false, error: 'missing projectId' };
+        if (!workspaceProjects.some((p) => p.id === id)) {
+          return {
+            ok: false,
+            error: 'project_not_found',
+            projectId: id,
+            nextStep: '请先调用 ac.workbench.get_context 查看可用项目 id。',
+          };
+        }
+        try {
+          await openWorkspaceProject(id);
+          return { ok: true, action: 'openProject', projectId: id, nextStep: 'done' };
+        } catch (e) {
+          return { ok: false, error: e instanceof Error ? e.message : String(e) };
+        }
+      },
+      listAssets: async ({ projectId, limit }) => {
+        const targetProjectId = projectId ? String(projectId) : activeWorkspaceProjectId;
+        if (!targetProjectId) {
+          return {
+            ok: false,
+            error: 'project_required',
+            nextStep: '请先调用 ac.workbench.create_project 创建项目，或打开已有工作区项目。',
+          };
+        }
+        if (!workspaceProjects.some((p) => p.id === targetProjectId)) {
+          return {
+            ok: false,
+            error: 'project_not_found',
+            projectId: targetProjectId,
+            nextStep: '请先调用 ac.workbench.get_context 查看可用项目 id。',
+          };
+        }
+        if (targetProjectId && targetProjectId !== activeWorkspaceProjectId) {
+          await openWorkspaceProject(targetProjectId);
+        }
+        const max = Math.min(200, Math.max(1, Number(limit) || 50));
+        const assets = workflowAssetsRef.current.slice(0, max).map(summarizeAgentWorkflowAsset);
+        return {
+          ok: true,
+          action: 'listAssets',
+          projectId: targetProjectId,
+          count: workflowAssetsRef.current.length,
+          returned: assets.length,
+          assets,
+          nextStep: assets.length ? '可使用 assetId 继续引用工作台资产。' : '当前项目还没有资产，可调用 ac.workbench.run_capability 生成。',
+        };
+      },
+      getAsset: async ({ projectId, assetId }) => {
+        const id = String(assetId || '').trim();
+        if (!id) return { ok: false, error: 'missing assetId' };
+        const targetProjectId = projectId ? String(projectId) : activeWorkspaceProjectId;
+        if (!targetProjectId) {
+          return {
+            ok: false,
+            error: 'project_required',
+            nextStep: '请先调用 ac.workbench.create_project 创建项目，或打开已有工作区项目。',
+          };
+        }
+        if (!workspaceProjects.some((p) => p.id === targetProjectId)) {
+          return {
+            ok: false,
+            error: 'project_not_found',
+            projectId: targetProjectId,
+            nextStep: '请先调用 ac.workbench.get_context 查看可用项目 id。',
+          };
+        }
+        if (targetProjectId && targetProjectId !== activeWorkspaceProjectId) {
+          await openWorkspaceProject(targetProjectId);
+        }
+        const asset = workflowAssetsRef.current.find((a) => a.id === id);
+        if (!asset) {
+          return {
+            ok: false,
+            error: 'asset_not_found',
+            assetId: id,
+            projectId: targetProjectId,
+            nextStep: '请先调用 ac.workbench.list_assets 查看可用 assetId。',
+          };
+        }
+        return {
+          ok: true,
+          action: 'getAsset',
+          projectId: targetProjectId,
+          asset: summarizeAgentWorkflowAssetDetail(asset),
+          nextStep: 'done',
+        };
+      },
+      runCapability: async ({ presetId, projectId, inputText, imageDataUrl, inputAssetId, inputAssetDisplayKey }) => {
         const pid = String(presetId || '').trim();
         if (!pid) return { ok: false, error: 'missing presetId' };
         const preset = capabilityPresets.find((p) => p.id === pid);
         if (!preset) return { ok: false, error: 'preset_not_found' };
+        const presetSummary = summarizeAgentCapabilityPreset(preset);
+        if (!presetSummary.directRunSupported) {
+          return {
+            ok: false,
+            error: 'preset_not_direct_runnable',
+            preset: presetSummary,
+            nextStep: presetSummary.unsupportedReason || '请在工作流界面中手动执行该能力。',
+          };
+        }
         const targetProjectId = projectId ? String(projectId) : activeWorkspaceProjectId;
+        if (!targetProjectId) {
+          return {
+            ok: false,
+            error: 'project_required',
+            preset: presetSummary,
+            nextStep: '请先在工作台打开或创建一个项目，再调用 ac.workbench.run_capability。',
+          };
+        }
+        if (targetProjectId && !workspaceProjects.some((p) => p.id === targetProjectId)) {
+          return {
+            ok: false,
+            error: 'project_not_found',
+            projectId: targetProjectId,
+            nextStep: '请先调用 ac.workbench.get_context 查看可用项目 id。',
+          };
+        }
         if (targetProjectId && targetProjectId !== activeWorkspaceProjectId) {
           await openWorkspaceProject(targetProjectId);
         }
+        let imageInput = String(imageDataUrl || '').trim();
+        let effectiveInputText = inputText != null ? String(inputText) : undefined;
+        const sourceAssetId = String(inputAssetId || '').trim();
+        let sourceDisplayKey: string | null = null;
+        if (sourceAssetId) {
+          const sourceAsset = workflowAssetsRef.current.find((a) => a.id === sourceAssetId);
+          if (!sourceAsset) {
+            return {
+              ok: false,
+              error: 'asset_not_found',
+              assetId: sourceAssetId,
+              projectId: targetProjectId,
+              nextStep: '请先调用 ac.workbench.list_assets 查看可用 assetId。',
+            };
+          }
+          sourceDisplayKey =
+            String(inputAssetDisplayKey || sourceAsset.displayKey || 'original').trim() || 'original';
+          if (!imageInput) {
+            imageInput =
+              sourceDisplayKey === 'original'
+                ? String(sourceAsset.original || '').trim()
+                : String((sourceAsset.results || {})[sourceDisplayKey] || '').trim();
+          }
+          if (!effectiveInputText) {
+            effectiveInputText =
+              sourceDisplayKey === 'original'
+                ? String(sourceAsset.textBody || '').trim() || undefined
+                : String((sourceAsset.textResults || {})[sourceDisplayKey] || sourceAsset.textBody || '').trim() ||
+                  undefined;
+          }
+        }
+        if (presetSummary.requiresImage && !imageInput) {
+          return {
+            ok: false,
+            error: 'input_image_required',
+            requiresInput: true,
+            requiredInput: 'imageDataUrl',
+            preset: presetSummary,
+            assetId: sourceAssetId || undefined,
+            nextStep: sourceAssetId
+              ? '该资产当前版本没有可直接用作图片输入的数据。请换一个 displayKey，或传入 imageDataUrl。'
+              : '该能力需要图片输入。请传入 imageDataUrl，或传入包含图片的 inputAssetId。',
+          };
+        }
         const result = await executeCapability(
           preset,
-          '',
-          { companionProjectId: targetProjectId || 'default' },
-          { inputText }
+          imageInput,
+          {
+            companionProjectId: targetProjectId || 'default',
+            ...(sourceAssetId ? { workflowAssetId: sourceAssetId } : {}),
+            ...(sourceDisplayKey ? { workflowSourceDisplayKey: sourceDisplayKey } : {}),
+          },
+          { inputText: effectiveInputText }
         );
+        let output:
+          | { kind: 'text'; text: string; assetId: string; resultKey: string }
+          | { kind: 'video'; videoUrl: string; mimeType: string | null; assetId: string; resultKey: string }
+          | { kind: 'image'; imageAvailable: true; imageLength: number; assetId: string; resultKey: string }
+          | { kind: 'none'; error: string };
+        let error: string | undefined;
+        let createdAssetId: string | null = null;
+        let resultKey: string | null = null;
+        if (result.ok) {
+          const built = buildAgentCapabilityOutputAsset({
+            preset,
+            result,
+            imageInput,
+            inputText: effectiveInputText,
+            sourceAssetId,
+            sourceDisplayKey: sourceDisplayKey || undefined,
+          });
+          createdAssetId = built.assetId;
+          resultKey = built.resultKey;
+          setWorkflowAssets((prev) => {
+            const next = [built.asset, ...prev];
+            workflowAssetsRef.current = next;
+            workflowSessionHadNonEmptyAssetsRef.current = true;
+            if (workspaceLocalIdbHydrateReadyRef.current && workflowProjectLoadCompleteRef.current) {
+              trySaveWorkflowBundle(
+                targetProjectId,
+                { assets: next, pending: workflowPendingRef.current },
+                userIdRef.current ?? null,
+                workflowBundleSaveOpts()
+              );
+            }
+            return next;
+          });
+          output = built.output;
+          addGlobalLog(
+            'Copilot',
+            'info',
+            `Agent 已写入能力结果：${preset.label || preset.id}`,
+            createdAssetId || undefined
+          );
+        } else if (result.kind === 'none') {
+          error = result.error;
+          output = { kind: result.kind, error };
+        } else {
+          error = 'unexpected capability result';
+          output = { kind: 'none', error };
+        }
         return {
           ok: result.ok,
+          action: 'runCapability',
+          preset: presetSummary,
+          projectId: targetProjectId || null,
+          inputAssetId: sourceAssetId || null,
+          inputAssetDisplayKey: sourceDisplayKey,
           kind: result.kind,
-          error: result.error,
+          error,
+          assetId: createdAssetId,
+          resultKey,
           durationMs: result.durationMs,
+          output,
+          nextStep: result.ok ? 'done' : '请查看 error，调整输入或切换能力后重试。',
         };
       },
     });
-  }, [user?.id, activeWorkspaceProjectId, workspaceProjects, capabilityPresets, openWorkspaceProject]);
+  }, [
+    addGlobalLog,
+    user?.id,
+    activeWorkspaceProjectId,
+    workspaceProjects,
+    capabilityPresets,
+    createWorkspaceProjectForAgent,
+    openWorkspaceProject,
+    workflowBundleSaveOpts,
+  ]);
 
   const backToWorkspaceProjectShell = useCallback(
     async (opts?: { skipQuotaBackConfirm?: boolean }) => {
@@ -2032,37 +2333,9 @@ const MainApp: React.FC = () => {
 
   const createWorkspaceProjectEntry = useCallback(
     async (name: string) => {
-      const scope = user?.id ?? null;
-      const base = getCompanionLocalBaseUrl();
-      const trimmed = String(name || '').trim();
-      /** 未填名称时伴侣会返回 workspace_project_name_required；给默认目录名避免回退成 UUID 导致 manifest project_not_found */
-      const nameForCompanion = trimmed || `proj-${Date.now().toString(36)}`;
-      let next: WorkspaceProject[];
-      if (base) {
-        const createdRemote = await createCompanionWorkspaceProject(base, nameForCompanion);
-        if (createdRemote.ok === false) {
-          addGlobalLog('工作区', 'error', '本地伴侣新建项目失败', createdRemote.error);
-          return;
-        }
-        next = [...workspaceProjects, createdRemote.data.project];
-      } else {
-        next = [...workspaceProjects, createWorkspaceProject(trimmed || nameForCompanion)];
-      }
-      setWorkspaceProjects(next);
-      saveWorkspaceProjects(next, scope);
-      if (
-        shouldAutoPushWorkspaceProjectIndex() &&
-        user?.id &&
-        user?.username &&
-        workspaceCloudPushAllowedUserIdRef.current === user.id &&
-        !workspaceCloudQuotaSuspendedRef.current
-      ) {
-        void pushWorkspaceIndex(user.id, next, getLastOpenedWorkspaceProjectId(user.id), user.username).catch((e) =>
-          console.warn('[workspace cloud] index', e)
-        );
-      }
+      await createWorkspaceProjectForAgent(name);
     },
-    [addGlobalLog, workspaceProjects, user?.id, user?.username]
+    [createWorkspaceProjectForAgent]
   );
 
   const exportWorkspaceProjectEntry = useCallback(async (id: string) => {

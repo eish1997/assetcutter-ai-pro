@@ -3,6 +3,7 @@ export type ProviderCatalogId =
   | "gemini-aistudio"
   | "vertex-site"
   | "toapis"
+  | "tinysnow"
   | "vectorengine"
   | "volcengine-ark"
   | "volcengine-jimeng"
@@ -303,6 +304,40 @@ export const PROVIDER_CATALOG: readonly ProviderCatalogEntry[] = [
     homepageUrl: "https://toapis.com/",
     consoleUrl: "https://toapis.com/",
     docsUrl: "https://toapis.com/",
+    keyPoolSupported: true,
+    byokSupported: true,
+    modelDiscovery: "manual",
+    capabilityStatus: capabilityStatus({
+      keyPoolSupported: true,
+      backendAdapterReady: true,
+      platformKeyReady: true,
+      byokSupported: true,
+      smokeTestReady: true,
+    }),
+  },
+  {
+    id: "tinysnow",
+    displayName: "TinySnow",
+    shortName: "TinySnow",
+    supportedModalities: ["text", "image"],
+    authSchemes: [
+      {
+        ...API_KEY_BASE_URL_SCHEME,
+        fields: [
+          {
+            ...API_KEY_FIELD,
+            placeholder: "TinySnow API Key",
+          },
+          {
+            ...BASE_URL_FIELD,
+            placeholder: "https://tinysnow.one/v1",
+          },
+        ],
+      },
+    ],
+    homepageUrl: "https://tinysnow.one",
+    consoleUrl: "https://tinysnow.one",
+    docsUrl: "https://www.yuque.com/tiny_snow/nrm7nk/rzpfzwmx9wtc64xg?singleDoc",
     keyPoolSupported: true,
     byokSupported: true,
     modelDiscovery: "manual",

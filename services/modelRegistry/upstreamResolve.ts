@@ -16,7 +16,7 @@ export function resolveUpstreamModelIdForProvider(
 
   if (role === "text") {
     if (provider === "volcengine-ark" || provider === "volcengine-jimeng") return m;
-    if (provider === "openai") {
+    if (provider === "openai" || provider === "tinysnow") {
       if (ml.startsWith("gpt-") || ml.startsWith("o1") || ml.startsWith("o3") || ml.startsWith("o4")) return m;
       if (ml.includes("pro-preview") || ml.includes("3-pro")) return "gpt-4o";
       if (ml.includes("flash")) return "gpt-4o-mini";
@@ -31,7 +31,7 @@ export function resolveUpstreamModelIdForProvider(
 
   if (provider === "volcengine-ark" || provider === "volcengine-jimeng") return m;
 
-  if (provider === "openai") {
+  if (provider === "openai" || provider === "tinysnow") {
     if (ml.includes("gpt-image") || ml.includes("dall-e")) {
       if (ml === "gpt-image-1" || ml.startsWith("dall-e")) return "gpt-image-1.5";
       return m;

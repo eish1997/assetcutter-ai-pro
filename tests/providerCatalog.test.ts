@@ -43,11 +43,20 @@ describe("provider catalog", () => {
 
   it("keeps provider identity separate from provider model rows", () => {
     const openai = getProviderCatalogEntry("openai-official");
+    const tinySnow = getProviderCatalogEntry("tinysnow");
     const openaiModels = listProviderModels("openai-official");
+    const tinySnowModels = listProviderModels("tinysnow");
     const arkModels = listProviderModels("volcengine-ark");
 
     expect(openai?.displayName).toBe("OpenAI");
+    expect(tinySnow).toMatchObject({
+      displayName: "TinySnow",
+      keyPoolSupported: true,
+      byokSupported: true,
+      docsUrl: "https://www.yuque.com/tiny_snow/nrm7nk/rzpfzwmx9wtc64xg?singleDoc",
+    });
     expect(openaiModels.map((model) => model.registryId)).toContain("gpt-image-2");
+    expect(tinySnowModels.map((model) => model.registryId)).toContain("gpt-image-2");
     expect(arkModels.map((model) => model.registryId)).not.toContain("gpt-image-2");
     expect(arkModels.map((model) => model.providerModelId)).toEqual(
       expect.arrayContaining([

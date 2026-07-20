@@ -7,8 +7,15 @@ import { acquireProviderKey, recordProviderKeyError, recordProviderKeySuccess } 
 const OPENAI_DEFAULT_BASE_URL = 'https://api.openai.com/v1';
 const OPENAI_PROVIDER_ID = 'openai-official';
 const TOAPIS_DEFAULT_BASE_URL = 'https://toapis.com/v1';
+const TINYSNOW_DEFAULT_BASE_URL = 'https://tinysnow.one/v1';
 const VOLCENGINE_ARK_DEFAULT_BASE_URL = 'https://ark.cn-beijing.volces.com/api/v3';
-const OPENAI_COMPATIBLE_ADAPTERS = new Set(['openai-official', 'toapis-openai', 'volcengine-ark-openai', 'volcengine-ark-image']);
+const OPENAI_COMPATIBLE_ADAPTERS = new Set([
+  'openai-official',
+  'toapis-openai',
+  'tinysnow-openai',
+  'volcengine-ark-openai',
+  'volcengine-ark-image',
+]);
 const GPT_IMAGE_MAX_REFERENCE_IMAGES = 16;
 const VOLCENGINE_ARK_TEXT_MODEL_MAP = Object.freeze({
   'doubao-seed-2-0-pro': 'doubao-seed-2-0-pro-260215',
@@ -29,6 +36,7 @@ function nonEmptyString(value) {
 
 function defaultBaseUrlForProvider(providerId) {
   if (providerId === 'volcengine-ark') return VOLCENGINE_ARK_DEFAULT_BASE_URL;
+  if (providerId === 'tinysnow') return TINYSNOW_DEFAULT_BASE_URL;
   return providerId === 'toapis' ? TOAPIS_DEFAULT_BASE_URL : OPENAI_DEFAULT_BASE_URL;
 }
 

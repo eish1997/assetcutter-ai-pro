@@ -13,7 +13,7 @@ const MAX_TOOL_STEPS = 8;
  *   getBrain?: () => import('../agent-types.d.ts').AgentBrainPort;
  *   ensureBrainReady?: () => Promise<void>;
  *   gateTool?: (tool: { name: string; risk: string }) => 'allow' | 'confirm' | 'deny';
- *   waitForConfirm?: (confirmId: string, meta: object) => Promise<boolean>;
+ *   waitForConfirm?: (confirmId: string, meta: object) => Promise<boolean | { approved: boolean; reason?: string }>;
  *   cancelPendingConfirms?: () => void;
  *   onEvent?: (payload: object) => void;
  * }} deps
@@ -78,7 +78,7 @@ function createAgentSessionService(deps) {
     };
   }
 
-  function appendToolAudit(ctx, name, ok, errorCode, args) {
+  function appendToolAudit(ctx, name, ok, errorCode, args, extra) {
     deps.store.appendAudit({
       ts: new Date().toISOString(),
       clientId: 'copilot',
@@ -88,6 +88,7 @@ function createAgentSessionService(deps) {
       ok,
       errorCode: errorCode || null,
       argsDigest: argsDigest(args),
+      ...(extra && typeof extra === 'object' ? extra : {}),
     });
   }
 
@@ -107,6 +108,7 @@ function createAgentSessionService(deps) {
       args = safeParseJsonObject(argsRaw, {});
     }
 
+    const startedAt = Date.now();
     let result;
     if (name.startsWith('ac.')) {
       result = await deps.bodyHost.executeTool(name, args, ctx);
@@ -118,7 +120,10 @@ function createAgentSessionService(deps) {
       };
     }
 
-    appendToolAudit(ctx, name, result.ok, result.error?.code || null, args);
+    appendToolAudit(ctx, name, result.ok, result.error?.code || null, args, {
+      durationMs: Date.now() - startedAt,
+      policyDecision: 'allow',
+    });
 
     emit({
       type: 'tool_status',
@@ -126,6 +131,8 @@ function createAgentSessionService(deps) {
       name,
       phase: result.ok ? 'done' : 'error',
       detail: result.ok ? undefined : result.error?.message,
+      errorCode: result.ok ? undefined : result.error?.code,
+      structured: result.ok ? undefined : result.structured,
     });
 
     return result;
@@ -168,6 +175,56 @@ function createAgentSessionService(deps) {
       const messages = deps.store.readMessages(sessionId);
       const tools = await deps.bodyHost.listTools();
       const brain = getBrain();
+      let codexEscalated = false;
+      const settings =
+        deps.store && typeof deps.store.readSettings === 'function' ? deps.store.readSettings() : {};
+      const codexPermissionMode = String(settings.codexPermissionMode || 'ask');
+      if (brain.id === 'codex' && codexPermissionMode === 'full') {
+        codexEscalated = true;
+        deps.store.appendAudit({
+          ts: new Date().toISOString(),
+          clientId: 'copilot',
+          sessionId,
+          brainId: brain.id,
+          action: 'codex_full_access_turn',
+          approved: true,
+          reason: 'permission_mode_full',
+        });
+      } else if (brain.id === 'codex' && codexPermissionMode !== 'sandbox' && typeof deps.waitForConfirm === 'function') {
+        const confirmId = `cfm_${randomUUID()}`;
+        emit({
+          type: 'confirm_required',
+          confirmId,
+          name: 'codex.full_access_turn',
+          arguments: {
+            scope: 'this_turn',
+            description:
+              'Allow Codex CLI to run this turn with full local execution permissions. Reject to keep the normal sandbox.',
+          },
+          sessionId,
+        });
+        const confirmResult = normalizeConfirmResult(
+          await deps.waitForConfirm(confirmId, {
+            name: 'codex.full_access_turn',
+            arguments: { scope: 'this_turn' },
+            broadcast: false,
+          }),
+        );
+        if (ac.signal.aborted) {
+          emit({ type: 'done', sessionId, stopReason: 'aborted' });
+          return { ok: false, error: 'aborted' };
+        }
+        codexEscalated = Boolean(confirmResult.approved);
+        deps.store.appendAudit({
+          ts: new Date().toISOString(),
+          clientId: 'copilot',
+          sessionId,
+          brainId: brain.id,
+          action: 'codex_full_access_turn',
+          approved: codexEscalated,
+          reason: confirmResult.reason,
+        });
+      }
       let steps = 0;
 
       while (steps < MAX_TOOL_STEPS) {
@@ -179,7 +236,7 @@ function createAgentSessionService(deps) {
         const toolCalls = [];
         let assistantText = '';
 
-        for await (const ev of brain.streamTurn({ messages, tools, signal: ac.signal })) {
+        for await (const ev of brain.streamTurn({ messages, tools, signal: ac.signal, sessionId, codexEscalated })) {
           if (ac.signal.aborted) break;
           if (ev.type === 'text_delta') {
             assistantText += ev.text;
@@ -196,6 +253,17 @@ function createAgentSessionService(deps) {
           } else if (ev.type === 'error') {
             emit({ type: 'error', message: ev.message, sessionId });
             return { ok: false, error: ev.message };
+          } else if (ev.type === 'activity') {
+            emit({ ...ev, sessionId });
+          } else if (ev.type === 'usage') {
+            deps.store.appendAudit({
+              ts: new Date().toISOString(),
+              clientId: 'copilot',
+              sessionId,
+              brainId: brain.id,
+              usage: ev.usage || {},
+            });
+            emit({ type: 'usage', usage: ev.usage || {}, sessionId });
           } else if (ev.type === 'done') {
             break;
           }
@@ -239,7 +307,10 @@ function createAgentSessionService(deps) {
           if (schema && typeof deps.gateTool === 'function') {
             const gate = deps.gateTool(schema);
             if (gate === 'deny') {
-              appendToolAudit(ctx, tc.name, false, 'AGENT_TOOL_DENIED', parsedArgs);
+              appendToolAudit(ctx, tc.name, false, 'AGENT_TOOL_DENIED', parsedArgs, {
+                durationMs: 0,
+                policyDecision: 'deny',
+              });
               const denied = {
                 role: 'tool',
                 toolCallId: tc.id,
@@ -271,6 +342,7 @@ function createAgentSessionService(deps) {
                 await deps.waitForConfirm(confirmId, {
                   name: tc.name,
                   arguments: parsedArgs,
+                  broadcast: false,
                 }),
               );
               if (ac.signal.aborted) {
@@ -289,7 +361,10 @@ function createAgentSessionService(deps) {
                     : confirmResult.reason === 'timeout'
                       ? 'AGENT_CONFIRM_TIMEOUT'
                       : 'AGENT_CONFIRM_REJECTED';
-                appendToolAudit(ctx, tc.name, false, rejectCode, parsedArgs);
+                appendToolAudit(ctx, tc.name, false, rejectCode, parsedArgs, {
+                  durationMs: 0,
+                  policyDecision: 'confirm_rejected',
+                });
                 const rejected = {
                   role: 'tool',
                   toolCallId: tc.id,

@@ -8,6 +8,7 @@ const {
   ALL_TOOL_SCHEMAS,
   VALID_SHELL_VIEWS,
   validateArgs,
+  buildToolCatalog,
 } = require('../companion-desktop/agent-body-host.cjs');
 
 describe('agent P0 tool schemas', () => {
@@ -50,11 +51,47 @@ describe('agent P0 tool schemas', () => {
 });
 
 describe('agent P1 tool schemas', () => {
-  it('registers ten P1 tools', () => {
-    expect(P1_TOOL_SCHEMAS).toHaveLength(10);
+  it('registers fourteen P1 tools', () => {
+    expect(P1_TOOL_SCHEMAS).toHaveLength(14);
   });
 
   it('ALL_TOOL_SCHEMAS combines P0 P1 P2', () => {
-    expect(ALL_TOOL_SCHEMAS).toHaveLength(17);
+    expect(ALL_TOOL_SCHEMAS).toHaveLength(25);
+  });
+
+  it('buildToolCatalog groups tools by surface and summarizes risk', () => {
+    const catalog = buildToolCatalog(ALL_TOOL_SCHEMAS);
+    expect(catalog.total).toBe(25);
+    expect(catalog.riskCounts.safe).toBeGreaterThan(0);
+    expect(catalog.riskCounts.confirm).toBeGreaterThan(0);
+    const workbench = catalog.surfaces.find((s: { id: string }) => s.id === 'workbench');
+    expect(workbench?.tools.some((t: { name: string }) => t.name === 'ac.workbench.ensure_ready')).toBe(true);
+    expect(workbench?.tools.some((t: { name: string }) => t.name === 'ac.workbench.create_project')).toBe(true);
+    expect(workbench?.tools.some((t: { name: string }) => t.name === 'ac.workbench.list_assets')).toBe(true);
+    expect(workbench?.tools.some((t: { name: string }) => t.name === 'ac.workbench.get_asset')).toBe(true);
+    expect(workbench?.tools.some((t: { name: string }) => t.name === 'ac.workbench.run_capability')).toBe(true);
+    const ensureReady = workbench?.tools.find((t: { name: string }) => t.name === 'ac.workbench.ensure_ready');
+    expect(ensureReady?.risk).toBe('safe');
+    expect(ensureReady?.title).toBe('准备工作台');
+    expect(ensureReady?.inputSchema.properties.createIfMissing).toBeTruthy();
+    const createProject = workbench?.tools.find((t: { name: string }) => t.name === 'ac.workbench.create_project');
+    expect(createProject?.risk).toBe('safe');
+    expect(createProject?.title).toBe('创建项目');
+    const listAssets = workbench?.tools.find((t: { name: string }) => t.name === 'ac.workbench.list_assets');
+    expect(listAssets?.risk).toBe('safe');
+    expect(listAssets?.title).toBe('列出资产');
+    const getAsset = workbench?.tools.find((t: { name: string }) => t.name === 'ac.workbench.get_asset');
+    expect(getAsset?.risk).toBe('safe');
+    expect(getAsset?.input.required).toContain('assetId');
+    const runCapability = workbench?.tools.find((t: { name: string }) => t.name === 'ac.workbench.run_capability');
+    expect(runCapability?.risk).toBe('confirm');
+    expect(runCapability?.input.required).toContain('presetId');
+    expect(runCapability?.inputSchema.properties.imageDataUrl).toBeTruthy();
+    expect(runCapability?.inputSchema).toBeTruthy();
+    expect(runCapability?.title).toBe('执行工作台能力');
+    expect(runCapability?.whenToUse).toContain('能力预设');
+    expect(runCapability?.exampleArguments.presetId).toBe('preset-id');
+    expect(runCapability?.successSignals[0]).toContain('run_capability');
+    expect(catalog.recommendedFlow[0]).toContain('ac.shell.get_state');
   });
 });

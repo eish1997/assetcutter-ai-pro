@@ -102,7 +102,7 @@ function createAgentStore(deps) {
   function readSettings() {
     ensureLayout();
     const defaults = {
-      defaultBrainId: 'hermes',
+      defaultBrainId: 'codex',
       copilotWidth: 360,
       copilotCollapsed: false,
       defaultSessionId: DEFAULT_SESSION_ID,
@@ -114,6 +114,18 @@ function createAgentStore(deps) {
       hermesModel: 'hermes-agent',
       hermesManagedGateway: true,
       hermesGatewayKind: 'official',
+      codexCommand: process.platform === 'win32' ? 'codex.cmd' : 'codex',
+      codexCwd: path.resolve(__dirname, '..'),
+      codexModel: '',
+      codexSandbox: 'workspace-write',
+      codexPermissionMode: 'ask',
+      codexSharedAuthEnabled: false,
+      codexSharedAuthUrl: '',
+      codexSharedAuthToken: '',
+      codexSharedAuthAutoUpdate: false,
+      codexSharedAuthLastSyncAt: '',
+      codexSharedAuthLastError: '',
+      codexDefaultMigrated: false,
       brainSetupCompleted: false,
     };
     try {
@@ -122,7 +134,7 @@ function createAgentStore(deps) {
         ...defaults,
         ...j,
         copilotWidth: Number.isFinite(Number(j.copilotWidth))
-          ? Math.min(640, Math.max(240, Number(j.copilotWidth)))
+          ? Math.min(720, Math.max(360, Number(j.copilotWidth)))
           : defaults.copilotWidth,
         copilotCollapsed: Boolean(j.copilotCollapsed),
         mcpEnabled: Boolean(j.mcpEnabled),
@@ -142,6 +154,41 @@ function createAgentStore(deps) {
           j.hermesGatewayKind === 'dev' || j.hermesGatewayKind === 'official'
             ? j.hermesGatewayKind
             : defaults.hermesGatewayKind,
+        codexCommand:
+          j.codexCommand != null ? String(j.codexCommand).trim() || defaults.codexCommand : defaults.codexCommand,
+        codexCwd:
+          j.codexCwd != null ? String(j.codexCwd).trim() || defaults.codexCwd : defaults.codexCwd,
+        codexModel: j.codexModel != null ? String(j.codexModel).trim() : defaults.codexModel,
+        codexSandbox:
+          j.codexSandbox === 'read-only' ||
+          j.codexSandbox === 'workspace-write' ||
+          j.codexSandbox === 'danger-full-access'
+            ? j.codexSandbox
+            : defaults.codexSandbox,
+        codexPermissionMode:
+          j.codexPermissionMode === 'ask' || j.codexPermissionMode === 'sandbox' || j.codexPermissionMode === 'full'
+            ? j.codexPermissionMode
+            : defaults.codexPermissionMode,
+        codexSharedAuthEnabled:
+          j.codexSharedAuthEnabled != null ? Boolean(j.codexSharedAuthEnabled) : defaults.codexSharedAuthEnabled,
+        codexSharedAuthUrl:
+          j.codexSharedAuthUrl != null ? String(j.codexSharedAuthUrl).trim() : defaults.codexSharedAuthUrl,
+        codexSharedAuthToken:
+          j.codexSharedAuthToken != null ? String(j.codexSharedAuthToken).trim() : defaults.codexSharedAuthToken,
+        codexSharedAuthAutoUpdate:
+          j.codexSharedAuthAutoUpdate != null
+            ? Boolean(j.codexSharedAuthAutoUpdate)
+            : defaults.codexSharedAuthAutoUpdate,
+        codexSharedAuthLastSyncAt:
+          j.codexSharedAuthLastSyncAt != null
+            ? String(j.codexSharedAuthLastSyncAt).trim()
+            : defaults.codexSharedAuthLastSyncAt,
+        codexSharedAuthLastError:
+          j.codexSharedAuthLastError != null
+            ? String(j.codexSharedAuthLastError).trim()
+            : defaults.codexSharedAuthLastError,
+        codexDefaultMigrated:
+          j.codexDefaultMigrated != null ? Boolean(j.codexDefaultMigrated) : defaults.codexDefaultMigrated,
         brainSetupCompleted: j.brainSetupCompleted != null ? Boolean(j.brainSetupCompleted) : defaults.brainSetupCompleted,
       };
     } catch {
@@ -172,6 +219,48 @@ function createAgentStore(deps) {
     }
     if (raw.brainSetupCompleted != null) {
       normalized.brainSetupCompleted = Boolean(raw.brainSetupCompleted);
+    }
+    if (raw.codexCommand != null) {
+      normalized.codexCommand = String(raw.codexCommand).trim() || cur.codexCommand;
+    }
+    if (raw.codexCwd != null) {
+      normalized.codexCwd = String(raw.codexCwd).trim() || cur.codexCwd;
+    }
+    if (raw.codexModel != null) {
+      normalized.codexModel = String(raw.codexModel).trim();
+    }
+    if (raw.codexSandbox != null) {
+      const s = String(raw.codexSandbox).trim();
+      if (s === 'read-only' || s === 'workspace-write' || s === 'danger-full-access') {
+        normalized.codexSandbox = s;
+      }
+    }
+    if (raw.codexPermissionMode != null) {
+      const m = String(raw.codexPermissionMode).trim();
+      if (m === 'ask' || m === 'sandbox' || m === 'full') {
+        normalized.codexPermissionMode = m;
+      }
+    }
+    if (raw.codexSharedAuthEnabled != null) {
+      normalized.codexSharedAuthEnabled = Boolean(raw.codexSharedAuthEnabled);
+    }
+    if (raw.codexSharedAuthUrl != null) {
+      normalized.codexSharedAuthUrl = String(raw.codexSharedAuthUrl).trim();
+    }
+    if (raw.codexSharedAuthToken != null) {
+      normalized.codexSharedAuthToken = String(raw.codexSharedAuthToken).trim();
+    }
+    if (raw.codexSharedAuthAutoUpdate != null) {
+      normalized.codexSharedAuthAutoUpdate = Boolean(raw.codexSharedAuthAutoUpdate);
+    }
+    if (raw.codexSharedAuthLastSyncAt != null) {
+      normalized.codexSharedAuthLastSyncAt = String(raw.codexSharedAuthLastSyncAt).trim();
+    }
+    if (raw.codexSharedAuthLastError != null) {
+      normalized.codexSharedAuthLastError = String(raw.codexSharedAuthLastError).trim();
+    }
+    if (raw.codexDefaultMigrated != null) {
+      normalized.codexDefaultMigrated = Boolean(raw.codexDefaultMigrated);
     }
     const next = { ...cur, ...normalized };
     fs.writeFileSync(settingsPath(), `${JSON.stringify(next, null, 2)}\n`, 'utf8');
@@ -277,6 +366,126 @@ function createAgentStore(deps) {
     fs.appendFileSync(file, `${JSON.stringify(entry)}\n`, 'utf8');
   }
 
+  function readAuditEntries(options) {
+    ensureLayout();
+    const opts = options && typeof options === 'object' ? options : {};
+    const days = Number.isFinite(Number(opts.days)) ? Math.min(90, Math.max(1, Number(opts.days))) : 7;
+    const limit = Number.isFinite(Number(opts.limit)) ? Math.min(10000, Math.max(1, Number(opts.limit))) : 5000;
+    const auditDir = path.join(rootDir(), 'audit');
+    const wanted = new Set();
+    const now = new Date();
+    for (let i = 0; i < days; i += 1) {
+      const d = new Date(now.getTime() - i * 86400000);
+      wanted.add(d.toISOString().slice(0, 10));
+    }
+    const out = [];
+    for (const f of fs.readdirSync(auditDir).filter((name) => name.endsWith('.jsonl')).sort()) {
+      const day = f.replace(/\.jsonl$/, '');
+      if (!wanted.has(day)) continue;
+      const lines = fs.readFileSync(path.join(auditDir, f), 'utf8').split(/\r?\n/).filter(Boolean);
+      for (const line of lines) {
+        try {
+          out.push(JSON.parse(line));
+        } catch {
+          /* skip */
+        }
+      }
+    }
+    return out.sort((a, b) => String(b.ts || '').localeCompare(String(a.ts || ''))).slice(0, limit);
+  }
+
+  function summarizeUsageAudit(options) {
+    const entries = readAuditEntries(options);
+    const totals = {
+      turns: 0,
+      inputTokens: 0,
+      cachedInputTokens: 0,
+      freshInputTokens: 0,
+      outputTokens: 0,
+      reasoningOutputTokens: 0,
+      totalTokens: 0,
+    };
+    const bySessionMap = new Map();
+    const byBrainMap = new Map();
+    for (const entry of entries) {
+      const usage = entry && entry.usage && typeof entry.usage === 'object' ? entry.usage : null;
+      if (!usage) continue;
+      const input = Number(usage.input_tokens) || 0;
+      const cached = Math.min(input, Number(usage.cached_input_tokens) || 0);
+      const output = Number(usage.output_tokens) || 0;
+      const reasoning = Number(usage.reasoning_output_tokens) || 0;
+      const total = Number(usage.total_tokens) || input + output + reasoning;
+      const fresh = Math.max(0, input - cached);
+      totals.turns += 1;
+      totals.inputTokens += input;
+      totals.cachedInputTokens += cached;
+      totals.freshInputTokens += fresh;
+      totals.outputTokens += output;
+      totals.reasoningOutputTokens += reasoning;
+      totals.totalTokens += total;
+      const sessionId = String(entry.sessionId || 'default');
+      const brainId = String(entry.brainId || 'unknown');
+      const addRow = (map, key) => {
+        const row = map.get(key) || {
+          key,
+          turns: 0,
+          inputTokens: 0,
+          cachedInputTokens: 0,
+          freshInputTokens: 0,
+          outputTokens: 0,
+          reasoningOutputTokens: 0,
+          totalTokens: 0,
+          lastAt: '',
+        };
+        row.turns += 1;
+        row.inputTokens += input;
+        row.cachedInputTokens += cached;
+        row.freshInputTokens += fresh;
+        row.outputTokens += output;
+        row.reasoningOutputTokens += reasoning;
+        row.totalTokens += total;
+        if (String(entry.ts || '') > row.lastAt) row.lastAt = String(entry.ts || '');
+        map.set(key, row);
+      };
+      addRow(bySessionMap, sessionId);
+      addRow(byBrainMap, brainId);
+    }
+    return {
+      generatedAt: new Date().toISOString(),
+      windowDays: Number.isFinite(Number(options && options.days)) ? Number(options.days) : 7,
+      totals,
+      bySession: Array.from(bySessionMap.values()).sort((a, b) => b.totalTokens - a.totalTokens),
+      byBrain: Array.from(byBrainMap.values()).sort((a, b) => b.totalTokens - a.totalTokens),
+    };
+  }
+
+  function listToolExecutions(options) {
+    const opts = options && typeof options === 'object' ? options : {};
+    const limit = Number.isFinite(Number(opts.limit)) ? Math.min(500, Math.max(1, Number(opts.limit))) : 80;
+    const entries = readAuditEntries({
+      days: Number.isFinite(Number(opts.days)) ? opts.days : 7,
+      limit: Math.max(limit * 4, 200),
+    });
+    return entries
+      .filter((entry) => entry && entry.tool)
+      .slice(0, limit)
+      .map((entry) => ({
+        ts: String(entry.ts || ''),
+        clientId: String(entry.clientId || 'unknown'),
+        sessionId: String(entry.sessionId || ''),
+        brainId: String(entry.brainId || ''),
+        tool: String(entry.tool || ''),
+        ok: Boolean(entry.ok),
+        errorCode: entry.errorCode ? String(entry.errorCode) : null,
+        durationMs: Number.isFinite(Number(entry.durationMs)) ? Math.max(0, Math.round(Number(entry.durationMs))) : null,
+        argsDigest: entry.argsDigest ? String(entry.argsDigest) : null,
+        policyDecision: entry.policyDecision ? String(entry.policyDecision) : null,
+        toolCallId: entry.toolCallId ? String(entry.toolCallId) : null,
+        traceId: entry.traceId ? String(entry.traceId) : null,
+        jsonRpcId: entry.jsonRpcId != null ? String(entry.jsonRpcId) : null,
+      }));
+  }
+
   function getOrCreateDefaultSessionId() {
     return readSettings().defaultSessionId || DEFAULT_SESSION_ID;
   }
@@ -299,6 +508,9 @@ function createAgentStore(deps) {
     appendMessage,
     writeContextSnapshot,
     appendAudit,
+    readAuditEntries,
+    summarizeUsageAudit,
+    listToolExecutions,
     getOrCreateDefaultSessionId,
     newMessage,
     skillsDir,

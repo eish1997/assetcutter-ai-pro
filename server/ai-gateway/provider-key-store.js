@@ -209,6 +209,12 @@ function providerKeySmokeRequirements(provider) {
       label: 'API Key',
     };
   }
+  if (provider === 'tinysnow') {
+    return {
+      fields: ['secret'],
+      label: 'API Key',
+    };
+  }
   if (provider === 'vectorengine') {
     return {
       fields: ['secret', 'credentials.baseUrl'],
@@ -251,6 +257,12 @@ function openAiCompatibleSmokeConfig(row, options = {}) {
   if (provider === 'toapis') {
     return {
       baseUrl: nonEmptyString(options.toapisBaseUrl || row.credentials?.baseUrl) || 'https://toapis.com/v1',
+      route: 'GET /models',
+    };
+  }
+  if (provider === 'tinysnow') {
+    return {
+      baseUrl: nonEmptyString(options.tinysnowBaseUrl || row.credentials?.baseUrl) || 'https://tinysnow.one/v1',
       route: 'GET /models',
     };
   }

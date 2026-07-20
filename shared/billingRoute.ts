@@ -35,6 +35,7 @@ const BYOK_CHANNELS = new Set([
   'toapis-openai',
   'vectorengine',
   'openai-official',
+  'tinysnow-openai',
   'volcengine-ark',
 ]);
 

@@ -15,6 +15,7 @@ Read-only:
 
 Mutating commands require --apply:
   $env:PROVIDER_API_KEY='...'; npm run admin:online-config -- provider-key-upsert --provider google-agent-platform --label "Agent Platform primary" --apply
+  $env:PROVIDER_API_KEY='...'; npm run admin:online-config -- provider-key-upsert --provider tinysnow --label "TinySnow primary" --base-url "https://tinysnow.one/v1" --apply
   npm run admin:online-config -- publish-add --models gemini-3-pro-image --apply
   npm run admin:online-config -- publish-remove --models gemini-3-pro-preview --apply
   npm run admin:online-config -- publish-set --models gemini-3-flash-preview,gemini-3-pro-image --apply
@@ -27,7 +28,7 @@ Required env:
   ADMIN_IDENTIFIER, ADMIN_PASSWORD
 
 Optional env:
-  AUTH_API_BASE, ADMIN_ORIGIN, PROVIDER_API_KEY, AGENT_PLATFORM_API_KEY
+  AUTH_API_BASE, ADMIN_ORIGIN, PROVIDER_API_KEY, PROVIDER_BASE_URL, AGENT_PLATFORM_API_KEY
 `);
 }
 
@@ -275,7 +276,12 @@ async function providerKeyUpsert(client, args) {
     priority: Number(args.priority || existing?.priority || 100),
     rpm: Number(args.rpm || existing?.rpm || 0),
     secret,
-    credentials: existing?.credentials || {},
+    credentials: {
+      ...(existing?.credentials || {}),
+      ...(args['base-url'] || process.env.PROVIDER_BASE_URL
+        ? { baseUrl: String(args['base-url'] || process.env.PROVIDER_BASE_URL).trim() }
+        : {}),
+    },
   };
   const nextRows = existing
     ? rows.map((row) => (row.id === existing.id ? nextRow : row))

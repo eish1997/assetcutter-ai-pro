@@ -5,6 +5,12 @@ const path = require('path');
 const os = require('os');
 const { randomBytes } = require('node:crypto');
 const hermesGatewayHost = require('./hermes-gateway-host.cjs');
+const companionSandboxPaths = require('./companion-sandbox-paths.cjs');
+const { ALL_TOOL_SCHEMAS } = require('./agent-tool-schemas.cjs');
+const {
+  DEFAULT_CODEX_MCP_TOKEN_ENV,
+  upsertCodexMcpServerFromClientConfig,
+} = require('./codex-mcp-config.cjs');
 
 const DEFAULT_HERMES_API_KEY = 'hermes-local';
 const DEFAULT_SCRIPT_HUB_API = 'http://localhost:8787/';
@@ -30,6 +36,8 @@ function defaultCompanionUserDataDir() {
   if (process.env.AC_COMPANION_USER_DATA && String(process.env.AC_COMPANION_USER_DATA).trim()) {
     return path.resolve(String(process.env.AC_COMPANION_USER_DATA).trim());
   }
+  const sandboxUserData = companionSandboxPaths.getDesktopShellUserDataPath();
+  if (sandboxUserData) return sandboxUserData;
   const appData = process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming');
   return path.join(appData, 'AssetCutterCompanion');
 }
@@ -38,6 +46,11 @@ function agentStoreRootFromUserData(userDataDir) {
   const sandbox = process.env.AC_COMPANION_SANDBOX_ROOT;
   if (sandbox && String(sandbox).trim()) {
     return path.join(path.resolve(String(sandbox).trim()), 'agent-store');
+  }
+  const sandboxUserData = companionSandboxPaths.getDesktopShellUserDataPath();
+  const sandboxStore = companionSandboxPaths.getAgentStoreRoot();
+  if (sandboxUserData && sandboxStore && path.resolve(userDataDir) === path.resolve(sandboxUserData)) {
+    return sandboxStore;
   }
   return path.join(userDataDir, 'agent-store');
 }
@@ -190,6 +203,7 @@ function buildMcpClientConfigFromSettings(settings) {
 function buildConnectBundle(ctx) {
   const agentSettings = ctx.readAgentSettings();
   const shellSettings = ctx.readShellSettings();
+  const toolCount = Array.isArray(ALL_TOOL_SCHEMAS) ? ALL_TOOL_SCHEMAS.length : 0;
   const mcpConfig =
     typeof ctx.buildMcpClientConfig === 'function'
       ? ctx.buildMcpClientConfig()
@@ -211,9 +225,12 @@ function buildConnectBundle(ctx) {
       integrationVersion: 2,
     },
     instructions: [
-      '在 Hermes 中导入 mcp 配置，即可调用 AssetCutter 平台 17 个 ac.* 身体工具。',
+      `在 Hermes / Codex / Pi 等 MCP 客户端中导入 mcp 配置，即可调用 AssetCutter 平台 ${toolCount} 个 ac.* 身体工具。`,
       'ScriptHub Tool Bridge 地址见 scriptHub.apiUrl；伴侣 Copilot 已通过 ac.script_hub.* 对齐。',
-      '壳内 Copilot 对话无需 Hermes 桌面 UI；外部 Hermes 经 MCP 共用同一身体。',
+      '壳内 Copilot 对话无需外部桌面 UI；外部 agent 经 MCP 共用同一身体、权限策略和审计。',
+      '外部 agent 应先读取 assetcutter://mcp/server-status 和 assetcutter://mcp/tool-catalog；工作台任务统一从 ac.workbench.ensure_ready 开始，再执行 run_capability/list_assets/get_asset。',
+      '导入后可运行 npm run smoke:agent-mcp -- --config <hermes-mcp-import.json> 验证连接。',
+      '工作台已登录后，可运行 npm run smoke:agent-mcp:e2e -- --config <hermes-mcp-import.json> 验证创建项目、执行能力、读回资产的完整闭环。',
     ],
   };
 }
@@ -244,6 +261,30 @@ function writeHermesMcpImport(mcpConfig, options) {
   return { written, skipped };
 }
 
+function writeCodexMcpConfig(mcpConfig, options) {
+  const opts = options && typeof options === 'object' ? options : {};
+  try {
+    const result = upsertCodexMcpServerFromClientConfig(mcpConfig, {
+      codexHome: opts.codexHome,
+      configPath: opts.configPath,
+      name: opts.name,
+      tokenEnvVar: opts.tokenEnvVar || DEFAULT_CODEX_MCP_TOKEN_ENV,
+    });
+    return { ok: true, written: result.path ? [result.path] : [], skipped: [], result };
+  } catch (e) {
+    return {
+      ok: false,
+      written: [],
+      skipped: [
+        {
+          path: opts.configPath || opts.codexHome || 'codex-config',
+          error: e instanceof Error ? e.message : String(e),
+        },
+      ],
+    };
+  }
+}
+
 function exportConnectBundle(exportRoot, bundle) {
   ensureDir(exportRoot);
   const bundlePath = path.join(exportRoot, 'assetcutter-connect-bundle.json');
@@ -258,6 +299,29 @@ function ensureMcpTokenInSettings(writeAgentSettings, readAgentSettings) {
   if (cur.mcpToken && String(cur.mcpToken).length >= 16) return cur;
   const token = randomBytes(24).toString('hex');
   return writeAgentSettings({ mcpToken: token, mcpEnabled: true });
+}
+
+function exportCurrentConnectionBundle(ctx, options) {
+  const opts = options && typeof options === 'object' ? options : {};
+  if (opts.enableMcp !== false) {
+    ctx.writeAgentSettings({ mcpEnabled: true });
+    ensureMcpTokenInSettings(ctx.writeAgentSettings.bind(ctx), ctx.readAgentSettings.bind(ctx));
+  }
+  const bundle = buildConnectBundle(ctx);
+  const exportRoot =
+    typeof ctx.getExportRoot === 'function'
+      ? ctx.getExportRoot()
+      : path.join(agentStoreRootFromUserData(defaultCompanionUserDataDir()), EXPORT_DIR_NAME);
+  const exported = exportConnectBundle(exportRoot, bundle);
+  const mcpWrite = opts.writeMcp ? writeHermesMcpImport(bundle.mcp, { paths: opts.mcpPaths }) : { written: [], skipped: [] };
+  const codexMcpWrite = opts.writeCodexMcp
+    ? writeCodexMcpConfig(bundle.mcp, {
+        codexHome: opts.codexHome,
+        configPath: opts.codexConfigPath,
+        tokenEnvVar: opts.codexTokenEnvVar,
+      })
+    : { ok: true, written: [], skipped: [] };
+  return { bundle, exported, mcpWrite, codexMcpWrite };
 }
 
 /**
@@ -321,6 +385,14 @@ async function connectExistingHermes(ctx, options) {
   if (opts.writeMcp !== false) {
     mcpWrite = writeHermesMcpImport(bundle.mcp, { paths: opts.mcpPaths });
   }
+  const codexMcpWrite =
+    opts.writeCodexMcp === false
+      ? { ok: true, written: [], skipped: [] }
+      : writeCodexMcpConfig(bundle.mcp, {
+          codexHome: opts.codexHome,
+          configPath: opts.codexConfigPath,
+          tokenEnvVar: opts.codexTokenEnvVar,
+        });
 
   return {
     ok: true,
@@ -330,6 +402,7 @@ async function connectExistingHermes(ctx, options) {
     bundle,
     exported,
     mcpWrite,
+    codexMcpWrite,
     message: '已连接已有 Hermes Gateway；MCP 配置已导出/写入（若路径可写）',
   };
 }
@@ -378,7 +451,9 @@ module.exports = {
   buildConnectBundle,
   buildMcpClientConfigFromSettings,
   writeHermesMcpImport,
+  writeCodexMcpConfig,
   exportConnectBundle,
+  exportCurrentConnectionBundle,
   connectExistingHermes,
   connectScriptHub,
   connectAll,

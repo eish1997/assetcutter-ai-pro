@@ -19,6 +19,8 @@ export function channelToResolveProvider(channel: ChannelId, family: ModelFamily
       return "vectorengine";
     case "openai-official":
       return "openai";
+    case "tinysnow-openai":
+      return "tinysnow";
     case "volcengine-ark":
       return "volcengine-ark";
     case "volcengine-jimeng":

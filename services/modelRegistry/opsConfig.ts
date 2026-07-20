@@ -35,6 +35,7 @@ function readViteEnvTrim(key: string): string {
 const SUPPLIER_IDS = new Set<SupplierId>([
   "vertex-site",
   "toapis",
+  "tinysnow",
   "vectorengine",
   "openai-official",
   "volcengine-ark",

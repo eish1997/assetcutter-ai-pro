@@ -1,7 +1,20 @@
 'use strict';
 
-const { ALL_TOOL_SCHEMAS, P0_TOOL_SCHEMAS, P1_TOOL_SCHEMAS, P2_TOOL_SCHEMAS } = require('./agent-tool-schemas.cjs');
-const { listSkillEntries, readSkillById } = require('./agent-skills.cjs');
+const {
+  ALL_TOOL_SCHEMAS,
+  P0_TOOL_SCHEMAS,
+  P1_TOOL_SCHEMAS,
+  P2_TOOL_SCHEMAS,
+  buildToolCatalog,
+} = require('./agent-tool-schemas.cjs');
+const {
+  listSkillEntries,
+  readSkillById,
+  listSkillRevisions,
+  readSkillRevision,
+  saveSkill,
+  deleteSkill,
+} = require('./agent-skills.cjs');
 const { listMemoryNotes, appendMemoryNote } = require('./agent-memory.cjs');
 
 const VALID_SHELL_VIEWS = new Set(['home', 'workbench', 'scripts', 'tools', 'settings']);
@@ -175,6 +188,18 @@ function createAgentBodyHost(deps) {
         return out;
       }
 
+      if (name === 'ac.workbench.ensure_ready') {
+        if (!deps.workbenchClient) {
+          return toolUnavailable('workbench_client');
+        }
+        let aborted = abortIfNeeded(ctx);
+        if (aborted) return aborted;
+        const out = await deps.workbenchClient.ensureReady(safeArgs);
+        aborted = abortIfNeeded(ctx);
+        if (aborted) return aborted;
+        return out;
+      }
+
       if (name === 'ac.workbench.open_project') {
         if (!deps.workbenchClient) {
           return toolUnavailable('workbench_client');
@@ -182,6 +207,42 @@ function createAgentBodyHost(deps) {
         let aborted = abortIfNeeded(ctx);
         if (aborted) return aborted;
         const out = await deps.workbenchClient.openProject(safeArgs.projectId);
+        aborted = abortIfNeeded(ctx);
+        if (aborted) return aborted;
+        return out;
+      }
+
+      if (name === 'ac.workbench.create_project') {
+        if (!deps.workbenchClient) {
+          return toolUnavailable('workbench_client');
+        }
+        let aborted = abortIfNeeded(ctx);
+        if (aborted) return aborted;
+        const out = await deps.workbenchClient.createProject(safeArgs);
+        aborted = abortIfNeeded(ctx);
+        if (aborted) return aborted;
+        return out;
+      }
+
+      if (name === 'ac.workbench.list_assets') {
+        if (!deps.workbenchClient) {
+          return toolUnavailable('workbench_client');
+        }
+        let aborted = abortIfNeeded(ctx);
+        if (aborted) return aborted;
+        const out = await deps.workbenchClient.listAssets(safeArgs);
+        aborted = abortIfNeeded(ctx);
+        if (aborted) return aborted;
+        return out;
+      }
+
+      if (name === 'ac.workbench.get_asset') {
+        if (!deps.workbenchClient) {
+          return toolUnavailable('workbench_client');
+        }
+        let aborted = abortIfNeeded(ctx);
+        if (aborted) return aborted;
+        const out = await deps.workbenchClient.getAsset(safeArgs);
         aborted = abortIfNeeded(ctx);
         if (aborted) return aborted;
         return out;
@@ -335,6 +396,74 @@ function createAgentBodyHost(deps) {
         return { ok: true, content: JSON.stringify(skill, null, 2), structured: skill };
       }
 
+      if (name === 'ac.skills.save') {
+        const root = typeof deps.getSkillsRoot === 'function' ? deps.getSkillsRoot() : '';
+        const r = saveSkill(root, safeArgs);
+        if (!r.ok) {
+          return {
+            ok: false,
+            content: '',
+            error: { code: 'AGENT_SKILL_SAVE_FAILED', message: r.error || 'save failed' },
+          };
+        }
+        return {
+          ok: true,
+          content: JSON.stringify(
+            {
+              skill: r.skill,
+              resourceUri: r.resourceUri,
+              promptName: r.promptName,
+            },
+            null,
+            2,
+          ),
+          structured: {
+            skill: r.skill,
+            resourceUri: r.resourceUri,
+            promptName: r.promptName,
+          },
+        };
+      }
+
+      if (name === 'ac.skills.revisions') {
+        const root = typeof deps.getSkillsRoot === 'function' ? deps.getSkillsRoot() : '';
+        const r = listSkillRevisions(root, safeArgs.skillId);
+        if (!r.ok) {
+          return {
+            ok: false,
+            content: '',
+            error: { code: 'AGENT_SKILL_REVISIONS_FAILED', message: r.error || 'list revisions failed' },
+          };
+        }
+        return { ok: true, content: JSON.stringify(r, null, 2), structured: r };
+      }
+
+      if (name === 'ac.skills.revision_get') {
+        const root = typeof deps.getSkillsRoot === 'function' ? deps.getSkillsRoot() : '';
+        const r = readSkillRevision(root, safeArgs.skillId, safeArgs.revision);
+        if (!r.ok) {
+          return {
+            ok: false,
+            content: '',
+            error: { code: 'AGENT_SKILL_REVISION_GET_FAILED', message: r.error || 'read revision failed' },
+          };
+        }
+        return { ok: true, content: JSON.stringify(r, null, 2), structured: r };
+      }
+
+      if (name === 'ac.skills.delete') {
+        const root = typeof deps.getSkillsRoot === 'function' ? deps.getSkillsRoot() : '';
+        const r = deleteSkill(root, safeArgs.skillId);
+        if (!r.ok) {
+          return {
+            ok: false,
+            content: '',
+            error: { code: 'AGENT_SKILL_DELETE_FAILED', message: r.error || 'delete failed' },
+          };
+        }
+        return { ok: true, content: JSON.stringify(r, null, 2), structured: r };
+      }
+
       if (name === 'ac.memory.list') {
         const root = typeof deps.getMemoryRoot === 'function' ? deps.getMemoryRoot() : '';
         let notes = listMemoryNotes(root);
@@ -399,4 +528,5 @@ module.exports = {
   P2_TOOL_SCHEMAS,
   VALID_SHELL_VIEWS,
   validateArgs,
+  buildToolCatalog,
 };

@@ -163,7 +163,7 @@ async function main() {
   console.log('\n=== P2/P3 ScriptHub 集成冒烟 ===\n');
 
   console.log('[1] 工具注册（含 export_maya_selection）');
-  if (ALL_TOOL_SCHEMAS.length === 17) pass('tools.count', '17 ac.*');
+  if (ALL_TOOL_SCHEMAS.length === 21) pass('tools.count', '21 ac.*');
   else fail('tools.count', String(ALL_TOOL_SCHEMAS.length));
 
   const hasExportTool = ALL_TOOL_SCHEMAS.some((t) => t.name === 'ac.script_hub.export_maya_selection');

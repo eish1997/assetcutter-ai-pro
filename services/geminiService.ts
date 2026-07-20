@@ -9,6 +9,8 @@ import { createVectorengineGeminiClient } from "./vectorengineAdapter";
 import {
   getOpenaiApiKey,
   getOpenaiBaseUrl,
+  getTinysnowApiKey,
+  getTinysnowBaseUrl,
   getToapisApiKey,
   getToapisBaseUrl,
   getUserApiKey,
@@ -1724,6 +1726,16 @@ function getClientForChannel(channel: ChannelId, role: "text" | "image" = "text"
       }
       return createOpenAiGeminiClient(getOpenaiBaseUrl(), k) as unknown as GeminiClientLike;
     }
+    case "tinysnow-openai": {
+      const k = getTinysnowApiKey();
+      if (!k?.trim()) {
+        throw new Error("TinySnow channel requires a TinySnow API Key in settings.");
+      }
+      return createOpenAiGeminiClient(getTinysnowBaseUrl(), k, {
+        meteringProvider: "tinysnow",
+        imageResponseFormat: "b64_json",
+      }) as unknown as GeminiClientLike;
+    }
     case "volcengine-ark": {
       const k = getVolcengineArkApiKey();
       if (!k?.trim()) {
@@ -1788,7 +1800,12 @@ function formatRequestTimeoutMessage(timeoutMs: number, phase?: string): string 
 function usesOpenAiRouteForImage(registryId: string): boolean {
   const id = coerceImageModelRegistryId(registryId);
   const picked = pickBinding(id, "image");
-  if (picked?.channel === "openai-official" || picked?.channel === "toapis-openai" || picked?.channel === "volcengine-ark") return true;
+  if (
+    picked?.channel === "openai-official" ||
+    picked?.channel === "tinysnow-openai" ||
+    picked?.channel === "toapis-openai" ||
+    picked?.channel === "volcengine-ark"
+  ) return true;
   return imageModelProviderRoute(id) === "openai";
 }
 

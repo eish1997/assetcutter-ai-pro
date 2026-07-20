@@ -31,15 +31,45 @@ function createAgentPolicy(deps) {
     ensurePolicyFile();
     try {
       const j = JSON.parse(fs.readFileSync(policyPath(), 'utf8'));
-      return {
-        ...DEFAULT_POLICY,
-        ...j,
-        autoConfirmTools: Array.isArray(j.autoConfirmTools) ? j.autoConfirmTools : [],
-        forbiddenTools: Array.isArray(j.forbiddenTools) ? j.forbiddenTools : [],
-      };
+      return normalizePolicy(j);
     } catch {
       return { ...DEFAULT_POLICY };
     }
+  }
+
+  function normalizeToolNames(value) {
+    const seen = new Set();
+    const out = [];
+    for (const raw of Array.isArray(value) ? value : []) {
+      const name = String(raw || '').trim();
+      if (!name || seen.has(name)) continue;
+      seen.add(name);
+      out.push(name);
+    }
+    return out.sort();
+  }
+
+  function normalizePolicy(raw) {
+    const j = raw && typeof raw === 'object' ? raw : {};
+    const forbiddenTools = normalizeToolNames(j.forbiddenTools);
+    const forbidden = new Set(forbiddenTools);
+    return {
+      ...DEFAULT_POLICY,
+      ...j,
+      schemaVersion: 1,
+      confirmTools: j.confirmTools != null ? Boolean(j.confirmTools) : DEFAULT_POLICY.confirmTools,
+      autoConfirmTools: normalizeToolNames(j.autoConfirmTools).filter((name) => !forbidden.has(name)),
+      forbiddenTools,
+      directoryAllowlist: normalizeToolNames(j.directoryAllowlist),
+    };
+  }
+
+  function writePolicy(patch) {
+    ensurePolicyFile();
+    const next = normalizePolicy({ ...readPolicy(), ...(patch && typeof patch === 'object' ? patch : {}) });
+    fs.mkdirSync(path.dirname(policyPath()), { recursive: true });
+    fs.writeFileSync(policyPath(), `${JSON.stringify(next, null, 2)}\n`, 'utf8');
+    return next;
   }
 
   /**
@@ -59,7 +89,7 @@ function createAgentPolicy(deps) {
     return 'confirm';
   }
 
-  return { readPolicy, gateTool, DEFAULT_POLICY };
+  return { readPolicy, writePolicy, gateTool, DEFAULT_POLICY };
 }
 
 module.exports = { createAgentPolicy, DEFAULT_POLICY };

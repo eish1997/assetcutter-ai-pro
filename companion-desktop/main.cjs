@@ -23,12 +23,14 @@ const { createCompanionAutoUpdate } = require('./companion-auto-update.cjs');
 const { computeEmbeddedBrowserBounds, detachBrowserViews } = require('./embedded-browser-manager.cjs');
 const { createAgentStore } = require('./agent-store.cjs');
 const { createAgentBodyHost } = require('./agent-body-host.cjs');
+const { buildToolCatalog } = require('./agent-tool-schemas.cjs');
 const { createAgentSessionService } = require('./agent-session/index.cjs');
 const { createAgentPolicy } = require('./agent-policy.cjs');
 const { createAgentWorkbenchClient } = require('./agent-workbench-client.cjs');
 const { createAgentScriptHubClient } = require('./agent-script-hub-client.cjs');
 const { createBrainAdapter, listBrainCatalog } = require('./brain-adapters/index.cjs');
 const { createAgentBodyMcpServer } = require('./agent-body-mcp.cjs');
+const { codexAuthStatus, syncCodexAuthFromCloud } = require('./codex-auth-sync.cjs');
 const hermesGatewayHost = require('./hermes-gateway-host.cjs');
 const hermesOfficialHost = require('./hermes-official-host.cjs');
 const companionConnect = require('./companion-connect.cjs');
@@ -87,6 +89,7 @@ const DEFAULT_HTTP_PORT = 18765;
 /** 开发：`npm start`；安装包：未保存过主站时的「打开网站」默认 */
 const DEFAULT_SHELL_SITE_DEV = 'http://localhost:3000';
 const DEFAULT_SHELL_SITE_PACKAGED = 'https://assetcutter-ai-pro.vercel.app/';
+const DEFAULT_AUTH_API_ORIGIN_DEV = 'http://127.0.0.1:9100';
 const DEFAULT_SCRIPT_HUB_DEV = 'http://localhost:5173/';
 const DEFAULT_SCRIPT_HUB_API_DEV = 'http://localhost:8787/';
 const DEFAULT_SCRIPT_HUB_PACKAGED = 'https://scripts.adrazzo.com/';
@@ -135,6 +138,15 @@ function defaultScriptHubApiUrl() {
   }
 }
 
+function isLocalDevWorkbenchUrl(raw) {
+  try {
+    const u = new URL(String(raw || '').trim());
+    return (u.hostname === 'localhost' || u.hostname === '127.0.0.1') && (u.port === '3000' || u.port === '5173');
+  } catch {
+    return false;
+  }
+}
+
 /** @type {import('child_process').ChildProcess | null} */
 let companion = null;
 /** @type {Tray | null} */
@@ -159,6 +171,8 @@ const SHELL_SIDEBAR_WIDTH_EXPANDED = 56;
 /** @type {number} */
 let shellWorkbenchSidebarInsetPx = SHELL_SIDEBAR_WIDTH_EXPANDED;
 const SHELL_COPILOT_WIDTH_DEFAULT = 360;
+const SHELL_COPILOT_WIDTH_MIN = 360;
+const SHELL_COPILOT_WIDTH_MAX = 720;
 const SHELL_COPILOT_WIDTH_COLLAPSED = 48;
 /** @type {boolean} */
 let shellCopilotCollapsed = false;
@@ -410,12 +424,37 @@ function waitForAgentConfirm(confirmId, meta) {
     meta && Number.isFinite(Number(meta.timeoutMs))
       ? Math.min(600000, Math.max(5000, Number(meta.timeoutMs)))
       : 120000;
+  const signal = meta && meta.signal ? meta.signal : null;
+  if (signal && signal.aborted) return Promise.resolve({ approved: false, reason: 'cancelled' });
+  if (!meta || meta.broadcast !== false) {
+    broadcastAgentSessionEvent({
+      type: 'confirm_required',
+      confirmId: id,
+      name: meta && meta.name ? String(meta.name) : 'tool',
+      arguments: meta && meta.arguments && typeof meta.arguments === 'object' ? meta.arguments : {},
+      sessionId: meta && meta.sessionId ? String(meta.sessionId) : 'default',
+      clientId: meta && meta.clientId ? String(meta.clientId) : 'copilot',
+      toolCallId: meta && meta.toolCallId ? String(meta.toolCallId) : undefined,
+      traceId: meta && meta.traceId ? String(meta.traceId) : undefined,
+    });
+  }
   return new Promise((resolve) => {
-    const timer = setTimeout(() => {
+    let timer = null;
+    let settled = false;
+    const settle = (value) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      if (signal) signal.removeEventListener('abort', onAbort);
       agentConfirmWaiters.delete(id);
-      resolve({ approved: false, reason: 'timeout' });
+      resolve(value);
+    };
+    const onAbort = () => settle({ approved: false, reason: 'cancelled' });
+    timer = setTimeout(() => {
+      settle({ approved: false, reason: 'timeout' });
     }, timeoutMs);
-    agentConfirmWaiters.set(id, { resolve, timer });
+    if (signal) signal.addEventListener('abort', onAbort, { once: true });
+    agentConfirmWaiters.set(id, { resolve: settle, timer });
   });
 }
 
@@ -562,6 +601,48 @@ function resetAgentBrainCache() {
   agentBrainInstanceId = null;
 }
 
+async function syncCodexSharedAuthIfEnabled(reason) {
+  if (!agentStore) return { ok: false, error: 'agent_not_ready' };
+  const settings = agentStore.readSettings();
+  if (!settings.codexSharedAuthEnabled) {
+    return { ok: true, skipped: true, status: codexAuthStatus() };
+  }
+  if (reason === 'startup' && !settings.codexSharedAuthAutoUpdate) {
+    return { ok: true, skipped: true, status: codexAuthStatus() };
+  }
+  try {
+    const result = await syncCodexAuthFromCloud(settings);
+    agentStore.writeSettings({
+      codexSharedAuthLastSyncAt: result.updatedAt || new Date().toISOString(),
+      codexSharedAuthLastError: '',
+    });
+    resetAgentBrainCache();
+    return { ...result, status: codexAuthStatus() };
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    agentStore.writeSettings({
+      codexSharedAuthLastError: message,
+    });
+    return { ok: false, error: message, status: codexAuthStatus() };
+  }
+}
+
+function migrateAgentSettingsToCodexDefault() {
+  if (!agentStore) return;
+  const settings = agentStore.readSettings();
+  if (settings.codexDefaultMigrated) return;
+  const current = String(settings.defaultBrainId || '').trim();
+  if (current === 'hermes' || current === 'stub' || !current) {
+    agentStore.writeSettings({
+      defaultBrainId: 'codex',
+      codexDefaultMigrated: true,
+    });
+    resetAgentBrainCache();
+    return;
+  }
+  agentStore.writeSettings({ codexDefaultMigrated: true });
+}
+
 function hermesSettingsChanged(prev, next) {
   if (!prev || !next) return false;
   return (
@@ -570,6 +651,16 @@ function hermesSettingsChanged(prev, next) {
     prev.hermesModel !== next.hermesModel ||
     prev.hermesManagedGateway !== next.hermesManagedGateway ||
     prev.hermesGatewayKind !== next.hermesGatewayKind
+  );
+}
+
+function codexSettingsChanged(prev, next) {
+  if (!prev || !next) return false;
+  return (
+    prev.codexCommand !== next.codexCommand ||
+    prev.codexCwd !== next.codexCwd ||
+    prev.codexModel !== next.codexModel ||
+    prev.codexSandbox !== next.codexSandbox
   );
 }
 
@@ -1096,6 +1187,13 @@ function resolveAuthApiOriginForCompanionApi() {
     } catch {
       /* ignore */
     }
+  }
+  try {
+    if (!app.isPackaged && isLocalDevWorkbenchUrl(settings.siteUrl)) {
+      return DEFAULT_AUTH_API_ORIGIN_DEV;
+    }
+  } catch {
+    /* ignore */
   }
   try {
     const bakedPath = path.join(__dirname, 'build-constants.json');
@@ -2605,10 +2703,11 @@ async function getAgentShellStateSummary() {
 function initAgentPlatform() {
   agentStore = createAgentStore({ getRoot: getAgentStoreRoot });
   agentStore.ensureLayout();
+  migrateAgentSettingsToCodexDefault();
   const agentSettings = agentStore.readSettings();
   shellCopilotCollapsed = Boolean(agentSettings.copilotCollapsed);
   shellCopilotWidthPx = Number.isFinite(Number(agentSettings.copilotWidth))
-    ? Math.min(640, Math.max(240, Number(agentSettings.copilotWidth)))
+    ? Math.min(SHELL_COPILOT_WIDTH_MAX, Math.max(SHELL_COPILOT_WIDTH_MIN, Number(agentSettings.copilotWidth)))
     : SHELL_COPILOT_WIDTH_DEFAULT;
 
   agentPolicy = createAgentPolicy({
@@ -2618,6 +2717,7 @@ function initAgentPlatform() {
 
   const workbenchClient = createAgentWorkbenchClient({
     getSiteUrl: () => readShellSettings().siteUrl,
+    getAgentApiOrigin: () => resolveAuthApiOriginForCompanionApi(),
     normalizeSiteUrl: normalizeWorkbenchSiteUrl,
     invokeBridge: invokeWorkbenchBridge,
     navigateShell: navigateShellFromAgent,
@@ -2661,15 +2761,28 @@ function initAgentPlatform() {
     bodyHost: agentBodyHost,
     gateTool: (tool) => agentPolicy.gateTool(tool),
     readPolicy: () => agentPolicy.readPolicy(),
+    waitForConfirm: waitForAgentConfirm,
     appendAudit: (entry) => agentStore.appendAudit(entry),
+    listToolExecutions: (options) => agentStore.listToolExecutions(options && typeof options === 'object' ? options : {}),
     getShellView: () => shellMainProcessActiveView,
     getSkillsRoot: () => agentStore.skillsDir(),
     log: companionLog.bind(null, 'log'),
   });
 
-  void ensureAgentBrainReady();
+  void (async () => {
+    await syncCodexSharedAuthIfEnabled('startup');
+    await ensureAgentBrainReady();
+  })();
   void agentMcpServer.syncFromSettings();
   void bootstrapHermesGatewayIfNeeded();
+}
+
+async function buildAgentMcpToolCatalog() {
+  if (!agentBodyHost || typeof agentBodyHost.listTools !== 'function') {
+    return buildToolCatalog([]);
+  }
+  const tools = await agentBodyHost.listTools();
+  return buildToolCatalog(tools);
 }
 
 function bindMainWindowWorkbenchLayoutHandlers() {
@@ -3163,8 +3276,10 @@ if (!gotLock) {
     const col = Boolean(layout && layout.collapsed);
     shellCopilotCollapsed = col;
     const w = Number(layout && layout.widthPx);
-    if (Number.isFinite(w) && w >= 240 && w <= 640) {
-      shellCopilotWidthPx = Math.round(w);
+    if (Number.isFinite(w)) {
+      shellCopilotWidthPx = Math.round(
+        Math.min(SHELL_COPILOT_WIDTH_MAX, Math.max(SHELL_COPILOT_WIDTH_MIN, w)),
+      );
     }
     if (agentStore) {
       agentStore.writeSettings({
@@ -3218,13 +3333,18 @@ if (!gotLock) {
     const settings = agentStore.readSettings();
     const mcp = agentMcpServer ? agentMcpServer.status() : { enabled: false, running: false };
     const mcpConfig = agentMcpServer ? agentMcpServer.buildMcpClientConfig() : null;
+    const mcpToolCatalog = await buildAgentMcpToolCatalog();
+    const agentPolicyConfig = agentPolicy ? agentPolicy.readPolicy() : null;
     const hermesGateway = await buildHermesGatewayStatus(settings);
     return {
       ok: true,
       settings,
       mcp,
       mcpConfig,
+      mcpToolCatalog,
+      agentPolicy: agentPolicyConfig,
       hermesGateway,
+      codexAuth: codexAuthStatus(),
       brains: listBrainCatalog(),
       brainMetas: agentStore.listBrainMetas(),
       activeBrainId: agentSessionService ? agentSessionService.getBrainId() : 'stub',
@@ -3233,9 +3353,13 @@ if (!gotLock) {
 
   ipcMain.handle('agent-settings-save', async (_e, patch) => {
     if (!agentStore) return { ok: false, error: 'agent_not_ready' };
+    const normalizedPatch = patch && typeof patch === 'object' ? patch : {};
     const prev = agentStore.readSettings();
-    const next = agentStore.writeSettings(patch && typeof patch === 'object' ? patch : {});
-    if (prev.defaultBrainId !== next.defaultBrainId || hermesSettingsChanged(prev, next)) {
+    const next = agentStore.writeSettings(normalizedPatch);
+    if (agentPolicy && Object.prototype.hasOwnProperty.call(normalizedPatch, 'codexPermissionMode')) {
+      agentPolicy.writePolicy({ confirmTools: next.codexPermissionMode !== 'full' });
+    }
+    if (prev.defaultBrainId !== next.defaultBrainId || hermesSettingsChanged(prev, next) || codexSettingsChanged(prev, next)) {
       resetAgentBrainCache();
       await ensureAgentBrainReady();
     }
@@ -3248,9 +3372,34 @@ if (!gotLock) {
       settings: next,
       mcp: agentMcpServer ? agentMcpServer.status() : null,
       mcpConfig: agentMcpServer ? agentMcpServer.buildMcpClientConfig() : null,
+      mcpToolCatalog: await buildAgentMcpToolCatalog(),
+      agentPolicy: agentPolicy ? agentPolicy.readPolicy() : null,
       hermesGateway,
+      codexAuth: codexAuthStatus(),
       activeBrainId: agentSessionService ? agentSessionService.getBrainId() : 'stub',
     };
+  });
+
+  ipcMain.handle('agent-codex-auth-sync', async () => {
+    const result = await syncCodexSharedAuthIfEnabled('manual');
+    if (result.ok) {
+      await ensureAgentBrainReady();
+    }
+    return {
+      ...result,
+      settings: agentStore ? agentStore.readSettings() : null,
+      activeBrainId: agentSessionService ? agentSessionService.getBrainId() : 'stub',
+    };
+  });
+
+  ipcMain.handle('agent-usage-summary', async (_e, options) => {
+    if (!agentStore) return { ok: false, error: 'agent_not_ready' };
+    return { ok: true, summary: agentStore.summarizeUsageAudit(options && typeof options === 'object' ? options : {}) };
+  });
+
+  ipcMain.handle('agent-tool-executions', async (_e, options) => {
+    if (!agentStore) return { ok: false, error: 'agent_not_ready' };
+    return { ok: true, executions: agentStore.listToolExecutions(options && typeof options === 'object' ? options : {}) };
   });
 
   ipcMain.handle('agent-mcp-regenerate-token', async () => {
@@ -3259,15 +3408,73 @@ if (!gotLock) {
     if (agentStore.readSettings().mcpEnabled) {
       await agentMcpServer.syncFromSettings();
     }
-    return { ok: true, ...r, settings: agentStore.readSettings(), mcp: agentMcpServer.status() };
+    return {
+      ok: true,
+      ...r,
+      settings: agentStore.readSettings(),
+      mcp: agentMcpServer.status(),
+      mcpConfig: agentMcpServer.buildMcpClientConfig(),
+      mcpToolCatalog: await buildAgentMcpToolCatalog(),
+    };
   });
 
-  ipcMain.handle('agent-mcp-status', () => {
+  ipcMain.handle('agent-mcp-status', async () => {
     if (!agentMcpServer) return { ok: false, error: 'agent_not_ready' };
     return {
       ok: true,
       mcp: agentMcpServer.status(),
       mcpConfig: agentMcpServer.buildMcpClientConfig(),
+      mcpToolCatalog: await buildAgentMcpToolCatalog(),
+    };
+  });
+
+  ipcMain.handle('agent-mcp-probe', async () => {
+    if (!agentMcpServer) return { ok: false, error: 'agent_not_ready' };
+    const probe = await agentMcpServer.probeSelf();
+    return {
+      ok: true,
+      probe,
+      mcp: agentMcpServer.status(),
+      mcpConfig: agentMcpServer.buildMcpClientConfig(),
+      mcpToolCatalog: await buildAgentMcpToolCatalog(),
+    };
+  });
+
+  ipcMain.handle('agent-mcp-workbench-e2e', async (_event, options) => {
+    if (!agentMcpServer || typeof agentMcpServer.runWorkbenchE2eSelf !== 'function') {
+      return { ok: false, error: 'agent_not_ready' };
+    }
+    const e2e = await agentMcpServer.runWorkbenchE2eSelf(options && typeof options === 'object' ? options : {});
+    return {
+      ok: true,
+      e2e,
+      mcp: agentMcpServer.status(),
+      mcpConfig: agentMcpServer.buildMcpClientConfig(),
+      mcpToolCatalog: await buildAgentMcpToolCatalog(),
+    };
+  });
+
+  ipcMain.handle('agent-mcp-tool-catalog', async () => {
+    if (!agentBodyHost) return { ok: false, error: 'agent_not_ready' };
+    return { ok: true, mcpToolCatalog: await buildAgentMcpToolCatalog() };
+  });
+
+  ipcMain.handle('agent-policy-load', async () => {
+    if (!agentPolicy) return { ok: false, error: 'agent_not_ready' };
+    return {
+      ok: true,
+      agentPolicy: agentPolicy.readPolicy(),
+      mcpToolCatalog: await buildAgentMcpToolCatalog(),
+    };
+  });
+
+  ipcMain.handle('agent-policy-save', async (_e, patch) => {
+    if (!agentPolicy) return { ok: false, error: 'agent_not_ready' };
+    const next = agentPolicy.writePolicy(patch && typeof patch === 'object' ? patch : {});
+    return {
+      ok: true,
+      agentPolicy: next,
+      mcpToolCatalog: await buildAgentMcpToolCatalog(),
     };
   });
 

@@ -229,6 +229,7 @@ export default defineConfig(({ mode }) => {
         host: '0.0.0.0',
         proxy: {
           '/api/auth': authApiProxy,
+          '/api/agent': authApiProxy,
           '/api/admin': authApiProxy,
           '/api/companion-artifacts': authApiProxy,
           '/api/bridge': authApiProxy,

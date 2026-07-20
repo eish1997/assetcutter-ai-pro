@@ -156,6 +156,56 @@ describe('OpenAI official AI Gateway adapter', () => {
     ]);
   });
 
+  it('executes TinySnow OpenAI-compatible jobs through the TinySnow key pool', async () => {
+    useTempStore();
+    await saveProviderKeys([
+      {
+        id: 'key_tinysnow',
+        provider: 'tinysnow',
+        label: 'TinySnow',
+        secret: 'sk-tinysnow',
+        enabled: true,
+      },
+    ]);
+    const store = createInMemoryAiJobStore();
+    const plan = await store.put(createAiGatewayJobPlan({
+      id: 'aijob_tinysnow_text',
+      modality: 'text',
+      provider: 'tinysnow',
+      model: 'gpt-4o-mini',
+      input: {
+        contents: [{ role: 'user', parts: [{ text: 'hello' }] }],
+      },
+    }));
+    const calls: Array<{ url: string; init: RequestInit }> = [];
+    const fetchImpl = async (url: string, init: RequestInit) => {
+      calls.push({ url, init });
+      return new Response(JSON.stringify({
+        id: 'chatcmpl_tinysnow',
+        choices: [{ message: { content: 'ok' } }],
+        usage: { total_tokens: 8 },
+      }), { status: 200 });
+    };
+
+    const result = await startOpenAiOfficialExecution(plan, { store, fetchImpl });
+
+    expect(result.started).toBe(true);
+    expect(calls[0].url).toBe('https://tinysnow.one/v1/chat/completions');
+    expect(calls[0].init).toMatchObject({
+      method: 'POST',
+      headers: { Authorization: 'Bearer sk-tinysnow', 'Content-Type': 'application/json' },
+    });
+    const stored = await store.get('aijob_tinysnow_text');
+    expect(stored?.job.status).toBe('succeeded');
+    expect(stored?.job.output).toMatchObject({
+      provider: 'tinysnow',
+      text: 'ok',
+    });
+    expect(await listProviderKeyHealthEvents({ keyId: 'key_tinysnow', limit: 5 })).toEqual([
+      expect.objectContaining({ type: 'success', provider: 'tinysnow' }),
+    ]);
+  });
+
   it('executes Volcengine Ark text jobs through the Ark key pool', async () => {
     useTempStore();
     await saveProviderKeys([

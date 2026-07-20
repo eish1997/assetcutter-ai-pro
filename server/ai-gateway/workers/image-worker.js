@@ -8,13 +8,14 @@ export const imageWorker = Object.freeze({
   id: 'image-worker',
   modalities: Object.freeze(['image']),
   capabilities: Object.freeze(['image.generate', 'image.edit', 'workflow_text_to_image', 'workflow_image_edit']),
-  adapters: Object.freeze(['ai-worker-proxy', 'openai-official', 'toapis-openai', 'volcengine-ark-image', 'jimeng-visual']),
+  adapters: Object.freeze(['ai-worker-proxy', 'openai-official', 'toapis-openai', 'tinysnow-openai', 'volcengine-ark-image', 'jimeng-visual']),
   status: 'active',
   buildRequest(job, route) {
     assertWorkerSupportsAdapter(imageWorker, route?.adapterId);
     if (
       route?.adapterId === 'openai-official' ||
       route?.adapterId === 'toapis-openai' ||
+      route?.adapterId === 'tinysnow-openai' ||
       route?.adapterId === 'volcengine-ark-image'
     ) return buildOpenAiOfficialRequest(job, route);
     if (route?.adapterId === 'jimeng-visual') return buildJimengImageWorkerRequest(job, route);
@@ -25,6 +26,7 @@ export const imageWorker = Object.freeze({
     if (
       plan?.route?.adapterId === 'openai-official' ||
       plan?.route?.adapterId === 'toapis-openai' ||
+      plan?.route?.adapterId === 'tinysnow-openai' ||
       plan?.route?.adapterId === 'volcengine-ark-image'
     ) {
       return startOpenAiOfficialExecution(plan, options);

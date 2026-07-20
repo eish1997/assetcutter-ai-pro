@@ -537,6 +537,42 @@ describe('AI gateway provider key store', () => {
     });
   });
 
+  it('runs a real upstream smoke probe for TinySnow keys with the default Base URL', async () => {
+    useTempStore();
+
+    await saveProviderKeys([
+      {
+        id: 'key_tinysnow_models_smoke',
+        provider: 'tinysnow',
+        label: 'TinySnow models smoke',
+        secret: 'sk-tinysnow',
+        enabled: true,
+      },
+    ]);
+
+    const calls: Array<{ url: string; init: RequestInit }> = [];
+    const fetchImpl = async (url: string, init: RequestInit) => {
+      calls.push({ url, init });
+      return new Response(JSON.stringify({ data: [] }), { status: 200 });
+    };
+
+    await expect(smokeTestProviderKey('key_tinysnow_models_smoke', { fetchImpl })).resolves.toMatchObject({
+      ok: true,
+      provider: 'tinysnow',
+      status: 'passed',
+      mode: 'real_upstream',
+      route: 'GET /models',
+      upstreamStatus: 200,
+    });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0].url).toBe('https://tinysnow.one/v1/models');
+    expect(calls[0].init).toMatchObject({
+      method: 'GET',
+      headers: { Authorization: 'Bearer sk-tinysnow' },
+    });
+  });
+
   it('uses the default Ark base URL when smoke testing a key-only Ark credential', async () => {
     useTempStore();
 

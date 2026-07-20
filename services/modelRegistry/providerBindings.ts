@@ -24,6 +24,7 @@ const GEMINI_CHANNELS: readonly ChannelTemplate[] = [
 
 const OPENAI_CHANNELS: readonly ChannelTemplate[] = [
   { channel: "openai-official", priority: 10, defaultEnabled: true },
+  { channel: "tinysnow-openai", priority: 20, defaultEnabled: false },
   { channel: "toapis-openai", priority: 30 },
 ];
 

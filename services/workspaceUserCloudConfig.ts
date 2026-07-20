@@ -32,6 +32,8 @@ export type WorkspaceUserCloudConfig = {
     toapisBaseUrl: string;
     openaiApiKey: string;
     openaiBaseUrl: string;
+    tinysnowApiKey: string;
+    tinysnowBaseUrl: string;
     volcengineArkApiKey: string;
     volcengineArkBaseUrl: string;
     vectorengineApiKey: string;
@@ -253,6 +255,8 @@ export async function fetchWorkspaceUserCloudConfig(
         toapisBaseUrl: String(parsed.settings?.toapisBaseUrl || ''),
         openaiApiKey: String(parsed.settings?.openaiApiKey || ''),
         openaiBaseUrl: String(parsed.settings?.openaiBaseUrl || ''),
+        tinysnowApiKey: String((parsed.settings as { tinysnowApiKey?: unknown } | undefined)?.tinysnowApiKey || ''),
+        tinysnowBaseUrl: String((parsed.settings as { tinysnowBaseUrl?: unknown } | undefined)?.tinysnowBaseUrl || ''),
         volcengineArkApiKey: String((parsed.settings as { volcengineArkApiKey?: unknown } | undefined)?.volcengineArkApiKey || ''),
         volcengineArkBaseUrl: String((parsed.settings as { volcengineArkBaseUrl?: unknown } | undefined)?.volcengineArkBaseUrl || ''),
         vectorengineApiKey: String(parsed.settings?.vectorengineApiKey || ''),
@@ -294,6 +298,8 @@ export async function pushWorkspaceUserCloudConfig(
       toapisBaseUrl: String(input.settings.toapisBaseUrl || ''),
       openaiApiKey: String(input.settings.openaiApiKey || ''),
       openaiBaseUrl: String(input.settings.openaiBaseUrl || ''),
+      tinysnowApiKey: String(input.settings.tinysnowApiKey || ''),
+      tinysnowBaseUrl: String(input.settings.tinysnowBaseUrl || ''),
       volcengineArkApiKey: String(input.settings.volcengineArkApiKey || ''),
       volcengineArkBaseUrl: String(input.settings.volcengineArkBaseUrl || ''),
       vectorengineApiKey: String(input.settings.vectorengineApiKey || ''),

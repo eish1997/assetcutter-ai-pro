@@ -346,7 +346,7 @@ async function main() {
   }
 
   console.log('\n[2] 工具注册');
-  if (ALL_TOOL_SCHEMAS.length === 17) pass('tools.count', '17 ac.*');
+  if (ALL_TOOL_SCHEMAS.length === 21) pass('tools.count', '21 ac.*');
   else fail('tools.count', String(ALL_TOOL_SCHEMAS.length));
 
   console.log('\n[3] 主站 Agent API（未登录）');

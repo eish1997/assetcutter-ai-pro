@@ -44,6 +44,14 @@ export const STATIC_SUPPLIER_OUTLETS: readonly SupplierOutlet[] = [
     channelId: "openai-official",
   },
   {
+    outletId: "tinysnow-openai",
+    supplierId: "tinysnow",
+    label: "TinySnow / OpenAI",
+    upstreamModelId: "*",
+    apiShape: "openai",
+    channelId: "tinysnow-openai",
+  },
+  {
     outletId: "volcengine-ark",
     supplierId: "volcengine-ark",
     label: "火山方舟",

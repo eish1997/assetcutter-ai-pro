@@ -32,7 +32,7 @@ describe("model route catalog", () => {
     const providers = routeProvidersForCanonicalModel("gpt-image-2");
     const routes = listModelRoutes("gpt-image-2");
 
-    expect(providers).toEqual(expect.arrayContaining(["openai-official", "toapis"]));
+    expect(providers).toEqual(expect.arrayContaining(["openai-official", "tinysnow", "toapis"]));
     expect(providers).not.toContain("volcengine-ark");
     expect(routes.find((route) => route.providerId === "openai-official")).toMatchObject({
       enabled: true,
@@ -43,6 +43,11 @@ describe("model route catalog", () => {
     });
     expect(routes.find((route) => route.providerId === "toapis")).toMatchObject({
       executionStatus: "platform_ready",
+      gatewayExecutionStatus: "gateway_ready",
+    });
+    expect(routes.find((route) => route.providerId === "tinysnow")).toMatchObject({
+      channel: "tinysnow-openai",
+      executionStatus: "disabled",
       gatewayExecutionStatus: "gateway_ready",
     });
   });

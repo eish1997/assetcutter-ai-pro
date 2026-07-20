@@ -52,6 +52,8 @@ const STORAGE_KEY_TOAPIS_API_KEY = 'ac_toapis_api_key';
 const STORAGE_KEY_TOAPIS_BASE_URL = 'ac_toapis_base_url';
 const STORAGE_KEY_OPENAI_API_KEY = 'ac_openai_api_key';
 const STORAGE_KEY_OPENAI_BASE_URL = 'ac_openai_base_url';
+const STORAGE_KEY_TINYSNOW_API_KEY = 'ac_tinysnow_api_key';
+const STORAGE_KEY_TINYSNOW_BASE_URL = 'ac_tinysnow_base_url';
 const STORAGE_KEY_VOLCENGINE_ARK_API_KEY = 'ac_volcengine_ark_api_key';
 const STORAGE_KEY_VOLCENGINE_ARK_BASE_URL = 'ac_volcengine_ark_base_url';
 const STORAGE_KEY_VECTORENGINE_API_KEY = 'ac_vectorengine_api_key';
@@ -160,6 +162,7 @@ export function isChannelReady(channel: ChannelId): boolean {
   if (channel === 'toapis-gemini' || channel === 'toapis-openai') return Boolean(getToapisApiKey()?.trim());
   if (channel === 'vectorengine') return Boolean(getVectorengineApiKey()?.trim());
   if (channel === 'openai-official') return Boolean(getOpenaiApiKey()?.trim());
+  if (channel === 'tinysnow-openai') return Boolean(getTinysnowApiKey()?.trim());
   if (channel === 'volcengine-ark') return Boolean(getVolcengineArkApiKey()?.trim());
   return false;
 }
@@ -195,6 +198,8 @@ export function isAiSettingsStorageKey(key: string | null): boolean {
     key === STORAGE_KEY_TOAPIS_BASE_URL ||
     key === STORAGE_KEY_OPENAI_API_KEY ||
     key === STORAGE_KEY_OPENAI_BASE_URL ||
+    key === STORAGE_KEY_TINYSNOW_API_KEY ||
+    key === STORAGE_KEY_TINYSNOW_BASE_URL ||
     key === STORAGE_KEY_VOLCENGINE_ARK_API_KEY ||
     key === STORAGE_KEY_VOLCENGINE_ARK_BASE_URL ||
     key === STORAGE_KEY_VECTORENGINE_API_KEY ||
@@ -305,6 +310,23 @@ export function setOpenaiBaseUrl(value: string | null): void {
   writeLocalNonEmptyTrimmedOrRemove(STORAGE_KEY_OPENAI_BASE_URL, value);
 }
 
+export function getTinysnowApiKey(): string | null {
+  return readLocalNonEmptyTrimmed(STORAGE_KEY_TINYSNOW_API_KEY);
+}
+
+export function setTinysnowApiKey(value: string | null): void {
+  writeLocalNonEmptyTrimmedOrRemove(STORAGE_KEY_TINYSNOW_API_KEY, value);
+}
+
+export function getTinysnowBaseUrl(): string {
+  const t = readLocalNonEmptyTrimmed(STORAGE_KEY_TINYSNOW_BASE_URL) ?? '';
+  return t.trim() ? normalizeOpenAiBaseUrl(t) : normalizeOpenAiBaseUrl('https://tinysnow.one/v1');
+}
+
+export function setTinysnowBaseUrl(value: string | null): void {
+  writeLocalNonEmptyTrimmedOrRemove(STORAGE_KEY_TINYSNOW_BASE_URL, value);
+}
+
 export function getVolcengineArkApiKey(): string | null {
   return readLocalNonEmptyTrimmed(STORAGE_KEY_VOLCENGINE_ARK_API_KEY);
 }
@@ -361,6 +383,10 @@ export function getApiKey(): string | undefined {
     }
     if (ch === 'openai-official') {
       const k = getOpenaiApiKey();
+      if (k?.trim()) return k;
+    }
+    if (ch === 'tinysnow-openai') {
+      const k = getTinysnowApiKey();
       if (k?.trim()) return k;
     }
     if (ch === 'volcengine-ark') {

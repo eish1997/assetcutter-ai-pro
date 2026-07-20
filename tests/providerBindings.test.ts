@@ -37,6 +37,7 @@ describe("providerBindings", () => {
     const fromFlags = defaultEnabledChannelIds();
     expect(fromFlags).toContain("vertex-proxy");
     expect(fromFlags).toContain("openai-official");
+    expect(fromFlags).not.toContain("tinysnow-openai");
     expect(fromFlags).not.toContain("volcengine-ark");
     expect(fromFlags).not.toContain("gemini-aistudio");
   });
@@ -44,6 +45,17 @@ describe("providerBindings", () => {
   it("does not attach Volcengine Ark to OpenAI model bindings by default", () => {
     const bindings = getBindingsForRegistry("gpt-4o-mini", "text");
     expect(bindings.some((b) => b.channel === "volcengine-ark")).toBe(false);
+  });
+
+  it("offers TinySnow as an opt-in OpenAI-compatible binding", () => {
+    const bindings = getBindingsForRegistry("gpt-image-2", "image");
+    const tinySnow = bindings.find((b) => b.channel === "tinysnow-openai");
+    expect(tinySnow).toMatchObject({
+      registryId: "gpt-image-2",
+      role: "image",
+      priority: 20,
+      defaultEnabled: false,
+    });
   });
 
   it("gemini-aistudio bindings are not defaultEnabled", () => {

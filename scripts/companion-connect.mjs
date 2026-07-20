@@ -110,6 +110,12 @@ async function main() {
     const hermes = await companionConnect.detectHermesGateway(connectOpts);
     const sh = await companionConnect.detectScriptHubBridge(connectOpts);
     result = { ok: hermes.ok || sh.ok, hermes, scriptHub: sh };
+    if (opts.writeMcp) {
+      result.exported = companionConnect.exportCurrentConnectionBundle(ctx, {
+        writeMcp: true,
+        enableMcp: opts.enableMcp,
+      });
+    }
   } else {
     console.error(`Unknown command: ${opts.cmd}`);
     process.exit(2);

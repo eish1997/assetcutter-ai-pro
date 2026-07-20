@@ -18,6 +18,8 @@ import {
   getEnabledChannels,
   getOpenaiApiKey,
   getOpenaiBaseUrl,
+  getTinysnowApiKey,
+  getTinysnowBaseUrl,
   getToapisApiKey,
   getToapisBaseUrl,
   getUserApiKey,
@@ -28,6 +30,8 @@ import {
   isChannelReady,
   isVertexSiteProxyConfigured,
   setChannelEnabled,
+  setTinysnowApiKey,
+  setTinysnowBaseUrl,
   setToapisGatewayEnabled,
   setOpenaiApiKey,
   setOpenaiBaseUrl,
@@ -63,6 +67,8 @@ function readChannelDraft(channel: ChannelId): ChannelDraft {
       return readToapisDraft();
     case 'openai-official':
       return { apiKey: getOpenaiApiKey() ?? '', baseUrl: getOpenaiBaseUrl() };
+    case 'tinysnow-openai':
+      return { apiKey: getTinysnowApiKey() ?? '', baseUrl: getTinysnowBaseUrl() };
     case 'volcengine-ark':
       return { apiKey: getVolcengineArkApiKey() ?? '', baseUrl: getVolcengineArkBaseUrl() };
     case 'vectorengine':
@@ -85,6 +91,10 @@ function saveChannelDraft(channel: ChannelId, draft: ChannelDraft): void {
     case 'openai-official':
       setOpenaiApiKey(draft.apiKey.trim() || null);
       setOpenaiBaseUrl(draft.baseUrl.trim() || null);
+      break;
+    case 'tinysnow-openai':
+      setTinysnowApiKey(draft.apiKey.trim() || null);
+      setTinysnowBaseUrl(draft.baseUrl.trim() || null);
       break;
     case 'volcengine-ark':
       setVolcengineArkApiKey(draft.apiKey.trim() || null);

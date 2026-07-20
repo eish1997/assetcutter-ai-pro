@@ -9,6 +9,7 @@ export type ChannelId =
   | "toapis-openai"
   | "vectorengine"
   | "openai-official"
+  | "tinysnow-openai"
   | "volcengine-ark"
   | "volcengine-jimeng";
 
@@ -20,6 +21,7 @@ export type UpstreamProviderId =
   | "vertex"
   | "toapis"
   | "openai"
+  | "tinysnow"
   | "vectorengine"
   | "volcengine-ark"
   | "volcengine-jimeng"

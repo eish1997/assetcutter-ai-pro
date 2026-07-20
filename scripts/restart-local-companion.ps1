@@ -30,4 +30,53 @@ foreach ($port in @(18765, 18082)) {
 
 Start-Sleep -Milliseconds 500
 Write-Host "[restart-local-companion] Starting companion-desktop (spawns local-companion child)..."
-npm run companion-desktop:start
+$logDir = Join-Path $env:TEMP 'assetcutter-companion'
+New-Item -ItemType Directory -Force -Path $logDir | Out-Null
+$outLog = Join-Path $logDir 'restart-local-companion.out.log'
+$errLog = Join-Path $logDir 'restart-local-companion.err.log'
+
+$child = Start-Process `
+  -FilePath 'npm.cmd' `
+  -ArgumentList @('run', 'companion-desktop:start') `
+  -WorkingDirectory $repo `
+  -WindowStyle Hidden `
+  -RedirectStandardOutput $outLog `
+  -RedirectStandardError $errLog `
+  -PassThru
+
+Write-Host "[restart-local-companion] Started desktop launcher PID $($child.Id)"
+
+$deadline = (Get-Date).AddSeconds(30)
+$healthOk = $false
+$electronOk = $false
+while ((Get-Date) -lt $deadline) {
+  try {
+    $r = Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:18765/v1/health' -TimeoutSec 2
+    if ($r.StatusCode -ge 200 -and $r.StatusCode -lt 500) {
+      $healthOk = $true
+      break
+    }
+  } catch {
+    # Keep waiting; Electron may still be starting the local companion child.
+  }
+  $electronOk = [bool](Get-Process electron -ErrorAction SilentlyContinue)
+  if ($electronOk) {
+    Start-Sleep -Milliseconds 600
+  } else {
+    Start-Sleep -Milliseconds 300
+  }
+}
+
+if ($healthOk) {
+  Write-Host "[restart-local-companion] Local companion health is ready."
+  exit 0
+}
+
+$electronOk = [bool](Get-Process electron -ErrorAction SilentlyContinue)
+if ($electronOk) {
+  Write-Host "[restart-local-companion] Electron is running; local companion health is not ready yet. Logs: $outLog / $errLog"
+  exit 0
+}
+
+Write-Host "[restart-local-companion] Failed to observe Electron or local companion health. Logs: $outLog / $errLog"
+exit 1

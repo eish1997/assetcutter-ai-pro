@@ -14,8 +14,8 @@ export const AI_GATEWAY_MODEL_ROUTE_EXECUTABLE_RULES = Object.freeze([
     id: 'openai-official-gateway',
     modelPattern: /^(gpt-|dall-e|o1|o3|o4)/i,
     modalities: Object.freeze(['text', 'image']),
-    catalogProviderIds: Object.freeze(['openai-official']),
-    gatewayProviderIds: Object.freeze(['openai-official']),
+    catalogProviderIds: Object.freeze(['openai-official', 'tinysnow']),
+    gatewayProviderIds: Object.freeze(['openai-official', 'tinysnow']),
     gatewayExecutionStatus: 'gateway_ready',
     executionStatus: 'platform_ready',
     platformKeyRequired: true,
@@ -157,6 +157,7 @@ export function normalizeAiGatewayProviderId(value) {
     return 'vertex-site';
   }
   if (id === 'toapis-openai' || id === 'toapis-gemini') return 'toapis';
+  if (id === 'tinysnow-openai') return 'tinysnow';
   if (id === 'vertex-gemini') return 'vertex-site';
   return id;
 }

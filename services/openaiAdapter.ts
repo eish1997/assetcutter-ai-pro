@@ -513,6 +513,7 @@ function buildGptImageRequestBody(args: {
   prompt: string;
   imageConfig: { aspectRatio?: string; imageSize?: string };
   inlineImages: string[];
+  responseFormat?: "b64_json";
 }): Record<string, unknown> {
   const mappedModel = mapOpenAiImageModel(args.model);
   const effectiveImageSize = coerceImageSizeForOpenAiImageModel(mappedModel, args.imageConfig.imageSize);
@@ -526,6 +527,7 @@ function buildGptImageRequestBody(args: {
     quality,
     output_format: "png",
   };
+  if (args.responseFormat) body.response_format = args.responseFormat;
   if (args.inlineImages.length > 0) {
     body.images = args.inlineImages.slice(0, GPT_IMAGE_MAX_REFERENCE_IMAGES).map((dataUrl) => ({
       image_url: dataUrl,
@@ -545,6 +547,7 @@ async function openAiImageGenerateContent(args: {
   config?: Record<string, unknown>;
   signal?: AbortSignal;
   meteringProvider?: string;
+  imageResponseFormat?: "b64_json";
 }): Promise<{ text?: string; candidates?: unknown[] }> {
   const cfg = args.config || {};
   const systemInstruction = typeof cfg.systemInstruction === "string" ? cfg.systemInstruction : "";
@@ -571,6 +574,7 @@ async function openAiImageGenerateContent(args: {
     prompt,
     imageConfig,
     inlineImages,
+    responseFormat: args.imageResponseFormat,
   });
   const endpoint = inlineImages.length > 0 ? "edits" : "generations";
 
@@ -614,7 +618,7 @@ async function openAiImageGenerateContent(args: {
 export function createOpenAiGeminiClient(
   baseUrl: string,
   apiKey: string,
-  options?: { meteringProvider?: string; baseUrlMode?: "openai-v1" | "raw" }
+  options?: { meteringProvider?: string; baseUrlMode?: "openai-v1" | "raw"; imageResponseFormat?: "b64_json" }
 ): GeminiClientLike {
   const base = options?.baseUrlMode === "raw" ? baseUrl.trim().replace(/\/+$/, "") : resolveOpenAiBaseUrl(baseUrl);
   const meteringProvider = options?.meteringProvider;
@@ -632,6 +636,7 @@ export function createOpenAiGeminiClient(
             config: cfg,
             signal,
             meteringProvider,
+            imageResponseFormat: options?.imageResponseFormat,
           });
         }
         return openAiChatGenerateContent({
@@ -655,6 +660,7 @@ export function createOpenAiGeminiClient(
             config: cfg,
             signal: cfg.abortSignal as AbortSignal | undefined,
             meteringProvider,
+            imageResponseFormat: options?.imageResponseFormat,
           });
           return;
         }

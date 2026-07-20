@@ -191,6 +191,7 @@ export const VOLCENGINE_ARK_MODEL_CATALOG: readonly ProviderModelCatalogEntry[] 
 
 export const PROVIDER_MODEL_CATALOG: readonly ProviderModelCatalogEntry[] = [
   ...openAiCatalogRows("openai-official"),
+  ...openAiCatalogRows("tinysnow"),
   ...VOLCENGINE_ARK_MODEL_CATALOG,
   ...openAiCatalogRows("toapis"),
   ...geminiCatalogRows("vertex-site"),

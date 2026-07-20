@@ -7,13 +7,14 @@ export const textWorker = Object.freeze({
   id: 'text-worker',
   modalities: Object.freeze(['text']),
   capabilities: Object.freeze(['text.generate']),
-  adapters: Object.freeze(['ai-worker-proxy', 'openai-official', 'toapis-openai', 'volcengine-ark-openai']),
+  adapters: Object.freeze(['ai-worker-proxy', 'openai-official', 'toapis-openai', 'tinysnow-openai', 'volcengine-ark-openai']),
   status: 'active',
   buildRequest(job, route) {
     assertWorkerSupportsAdapter(textWorker, route?.adapterId);
     if (
       route?.adapterId === 'openai-official' ||
       route?.adapterId === 'toapis-openai' ||
+      route?.adapterId === 'tinysnow-openai' ||
       route?.adapterId === 'volcengine-ark-openai'
     ) return buildOpenAiOfficialRequest(job, route);
     return buildAiWorkerProxyAsyncRequest(job, route);
@@ -23,6 +24,7 @@ export const textWorker = Object.freeze({
     if (
       plan?.route?.adapterId === 'openai-official' ||
       plan?.route?.adapterId === 'toapis-openai' ||
+      plan?.route?.adapterId === 'tinysnow-openai' ||
       plan?.route?.adapterId === 'volcengine-ark-openai'
     ) {
       return startOpenAiOfficialExecution(plan, options);

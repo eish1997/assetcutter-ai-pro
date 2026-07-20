@@ -35,6 +35,7 @@ const CHANNEL_PROVIDER_MAP: Record<ChannelId, ProviderCatalogId> = {
   "gemini-aistudio": "gemini-aistudio",
   "toapis-gemini": "toapis",
   "toapis-openai": "toapis",
+  "tinysnow-openai": "tinysnow",
   vectorengine: "vectorengine",
   "openai-official": "openai-official",
   "volcengine-ark": "volcengine-ark",
@@ -61,7 +62,8 @@ function routeExecutionStatus(row: {
     row.providerId === "vertex-site" ||
     row.providerId === "volcengine-jimeng" ||
     row.providerId === "tripo" ||
-    row.providerId === "openai-official"
+    row.providerId === "openai-official" ||
+    row.providerId === "tinysnow"
   ) {
     return "platform_ready";
   }

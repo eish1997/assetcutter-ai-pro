@@ -4,6 +4,7 @@ import type { ChannelId, ModelResolveRole } from "../types";
 export type SupplierId =
   | "vertex-site"
   | "toapis"
+  | "tinysnow"
   | "vectorengine"
   | "openai-official"
   | "volcengine-ark"
