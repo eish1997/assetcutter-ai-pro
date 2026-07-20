@@ -98,13 +98,40 @@ function parseDataUrlImage(dataUrl) {
   const bytes = Buffer.from(m[2] || '', 'base64');
   if (!bytes.byteLength) return null;
   const ext = mime.includes('jpeg') || mime.includes('jpg') ? 'jpg' : mime.includes('webp') ? 'webp' : 'png';
-  return { mime, bytes, filename: `input.${ext}` };
+  return { mime, bytes, ext, filename: `input.${ext}` };
+}
+
+function imageDimensions(bytes, mime) {
+  const type = String(mime || '').toLowerCase();
+  if (type.includes('png') && bytes.byteLength >= 24) {
+    const sig = [0x89, 0x50, 0x4e, 0x47];
+    if (sig.every((value, index) => bytes[index] === value)) {
+      return { width: bytes.readUInt32BE(16), height: bytes.readUInt32BE(20) };
+    }
+  }
+  if ((type.includes('jpeg') || type.includes('jpg')) && bytes.byteLength >= 4) {
+    let offset = 2;
+    while (offset + 9 < bytes.byteLength) {
+      if (bytes[offset] !== 0xff) break;
+      const marker = bytes[offset + 1];
+      const length = bytes.readUInt16BE(offset + 2);
+      if (marker >= 0xc0 && marker <= 0xc3 && offset + 8 < bytes.byteLength) {
+        return { height: bytes.readUInt16BE(offset + 5), width: bytes.readUInt16BE(offset + 7) };
+      }
+      offset += 2 + Math.max(2, length);
+    }
+  }
+  return null;
 }
 
 async function uploadImageToTripo(apiKey, imageBase64DataUrl, options = {}) {
   const parsed = parseDataUrlImage(imageBase64DataUrl);
   if (!parsed) {
     throw new AiGatewayValidationError('Tripo image task requires a valid imageBase64DataUrl', 'AI_GATEWAY_TRIPO_IMAGE_REQUIRED');
+  }
+  const dims = imageDimensions(parsed.bytes, parsed.mime);
+  if (dims && Math.max(dims.width, dims.height) < 257) {
+    throw new AiGatewayValidationError('Tripo image task requires a reference image larger than 256px; please use the full asset instead of a tiny thumbnail', 'AI_GATEWAY_TRIPO_IMAGE_TOO_SMALL');
   }
   const fetchImpl = options.fetchImpl || undiciFetch;
   const form = new FormData();
@@ -125,7 +152,7 @@ async function uploadImageToTripo(apiKey, imageBase64DataUrl, options = {}) {
     nonEmptyString(data?.image_token) ||
     nonEmptyString(data?.data?.image_token);
   if (!token) throw new Error('Tripo upload did not return file_token');
-  return { type: 'jpg', file_token: token };
+  return { type: parsed.ext, file_token: token };
 }
 
 function buildTripoTaskBody(job) {

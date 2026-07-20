@@ -1,5 +1,6 @@
 import { getCachedCreditsProxyHeaders } from './creditsProxyBridge';
 import { createAiJob, getMyAiJob, type AiJobDetail } from './aiJobsClient';
+import { prepareImageDataUrlForTripoUpload } from './tripoUploadImagePrep';
 
 export type AiGatewayModel3dExecutionInput = {
   prompt: string;
@@ -118,6 +119,9 @@ export async function createAndPollAiGatewayModel3dJob(
   if (!prompt) throw new Error('Missing 3D prompt');
   const estimatedCredits = Math.max(1, Math.floor(Number(input.estimatedCredits || 800)));
   const cachedHeaders = getCachedCreditsProxyHeaders(estimatedCredits) || {};
+  const referenceImages = registryId.startsWith('tripo-') && input.referenceImages?.length
+    ? await Promise.all(input.referenceImages.map((src) => prepareImageDataUrlForTripoUpload(src)))
+    : input.referenceImages;
   const created = await createAiJob(
     {
       modality: 'model3d',
@@ -130,7 +134,7 @@ export async function createAndPollAiGatewayModel3dJob(
         canonicalModelId: registryId,
         registryId,
         prompt,
-        referenceImages: input.referenceImages,
+        referenceImages,
         quality: input.quality,
         format: input.format,
         texture: input.texture,

@@ -102,14 +102,22 @@ describe('Tripo OpenAPI AI gateway worker', () => {
         artifactCount: 1,
       },
     });
-    expect(stored.job.artifacts).toEqual([
-      expect.objectContaining({
-        kind: 'model3d',
-        url: 'https://cdn.example.com/model.glb',
-        source: 'tripo',
-        billing: expect.objectContaining({ settlementSource: 'provider_task_usage' }),
-      }),
-    ]);
+    expect(stored.job.artifacts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: 'model3d',
+          url: 'https://cdn.example.com/model.glb',
+          source: 'tripo',
+          billing: expect.objectContaining({ settlementSource: 'provider_task_usage' }),
+        }),
+        expect.objectContaining({
+          kind: 'image',
+          url: 'https://cdn.example.com/preview.png',
+          source: 'tripo',
+          role: 'preview',
+        }),
+      ])
+    );
   });
 
   it('returns an explicit soft-cancel result when Tripo hard cancel is unavailable', async () => {
@@ -162,7 +170,7 @@ describe('Tripo OpenAPI AI gateway worker', () => {
     expect(JSON.parse(fetchImpl.mock.calls[1][1].body)).toMatchObject({
       type: 'image_to_model',
       texture: true,
-      file: { type: 'jpg', file_token: 'file_token_1' },
+      file: { type: 'png', file_token: 'file_token_1' },
     });
     expect(JSON.parse(fetchImpl.mock.calls[1][1].body).imageBase64DataUrl).toBeUndefined();
   });

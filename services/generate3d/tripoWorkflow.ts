@@ -5,6 +5,7 @@ import type { CustomAppModule } from '../../types';
 import { normalizeGenerate3DPresetForRun } from './normalizePreset';
 import { createAiJob, getMyAiJob, type AiJobDetail } from '../aiJobsClient';
 import { upsertAiJobSummary } from '../aiJobsStore';
+import { prepareImageDataUrlForTripoUpload } from '../tripoUploadImagePrep';
 
 const TRIPO_REGISTRY_MODEL_VERSION: Record<string, string> = {
   'tripo-p1': 'P1-20260311',
@@ -98,11 +99,31 @@ export async function tripoWorkflowCreateOrResumeTaskId(params: {
   if (existing && !forceNew) {
     return { taskId: existing, resumed: true };
   }
+  const presetForInput = normalizeGenerate3DPresetForRun(params.preset.generate3D!);
+  const taskTypeForInput: TripoTaskType =
+    presetForInput.tripoTaskType === 'text_to_model'
+      ? 'text_to_model'
+      : presetForInput.tripoTaskType === 'multiview_to_model'
+        ? 'multiview_to_model'
+        : 'image_to_model';
+  const imageDataUrl = taskTypeForInput === 'image_to_model'
+    ? await prepareImageDataUrlForTripoUpload(params.imageDataUrl)
+    : params.imageDataUrl;
+  const multiviewImageDataUrls = taskTypeForInput === 'multiview_to_model'
+    ? Object.fromEntries(
+        await Promise.all(
+          Object.entries(params.multiviewImageDataUrls || {}).map(async ([key, value]) => [
+            key,
+            value ? await prepareImageDataUrlForTripoUpload(value) : value,
+          ])
+        )
+      ) as Partial<Record<'front' | 'back' | 'left' | 'right', string>>
+    : params.multiviewImageDataUrls;
   const input = buildTripoCreateTaskInputFromPreset({
     apiKey: params.apiKey,
     preset: params.preset,
-    imageDataUrl: params.imageDataUrl,
-    multiviewImageDataUrls: params.multiviewImageDataUrls,
+    imageDataUrl,
+    multiviewImageDataUrls,
   });
   if (isAiGatewayTripoPlatformKey(params.apiKey)) {
     const { apiKey: _apiKey, ...gatewayInput } = input;

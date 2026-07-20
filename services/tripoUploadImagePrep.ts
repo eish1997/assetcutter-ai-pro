@@ -6,6 +6,7 @@
 export const TRIPO_UPLOAD_DATA_URL_SAFE_CHARS = 3_400_000;
 
 export const TRIPO_UPLOAD_MAX_EDGE_DEFAULT = 2048;
+export const TRIPO_UPLOAD_MIN_EDGE_DEFAULT = 512;
 
 const EDGE_STEPS = [2048, 1536, 1280, 1024, 768] as const;
 const QUALITY_STEPS = [0.88, 0.8, 0.72, 0.65] as const;
@@ -37,7 +38,9 @@ async function resizeDataUrlToJpeg(dataUrl: string, maxEdge: number, quality: nu
   const sw = img.naturalWidth || img.width;
   const sh = img.naturalHeight || img.height;
   if (!sw || !sh) throw new Error('参考图尺寸无效');
-  const scale = Math.min(1, maxEdge / Math.max(sw, sh));
+  const maxDim = Math.max(sw, sh);
+  const targetMaxDim = Math.min(maxEdge, Math.max(TRIPO_UPLOAD_MIN_EDGE_DEFAULT, maxDim));
+  const scale = targetMaxDim / maxDim;
   const w = Math.max(1, Math.round(sw * scale));
   const h = Math.max(1, Math.round(sh * scale));
   const canvas = document.createElement('canvas');
@@ -68,7 +71,11 @@ export async function prepareImageDataUrlForTripoUpload(imageInput: string): Pro
       const img = await loadImageElement(dataUrl);
       const sw = img.naturalWidth || img.width;
       const sh = img.naturalHeight || img.height;
-      if (Math.max(sw, sh) <= TRIPO_UPLOAD_MAX_EDGE_DEFAULT && /^data:image\/jpe?g;/i.test(dataUrl)) {
+      if (
+        Math.max(sw, sh) <= TRIPO_UPLOAD_MAX_EDGE_DEFAULT &&
+        Math.max(sw, sh) >= TRIPO_UPLOAD_MIN_EDGE_DEFAULT &&
+        /^data:image\/jpe?g;/i.test(dataUrl)
+      ) {
         return dataUrl;
       }
     } catch {
