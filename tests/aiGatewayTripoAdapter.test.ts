@@ -14,9 +14,19 @@ const s3Mocks = vi.hoisted(() => ({
   }),
 }));
 
+const r2Mocks = vi.hoisted(() => ({
+  isR2Configured: vi.fn(() => false),
+  putPublicR2Object: vi.fn(),
+}));
+
 vi.mock('@aws-sdk/client-s3', () => ({
   PutObjectCommand: s3Mocks.PutObjectCommand,
   S3Client: s3Mocks.S3Client,
+}));
+
+vi.mock('../server/r2-storage-handlers.js', () => ({
+  isR2Configured: r2Mocks.isR2Configured,
+  putPublicR2Object: r2Mocks.putPublicR2Object,
 }));
 
 import { createAiGatewayJobPlan } from '../server/ai-gateway/index.js';
@@ -54,6 +64,9 @@ describe('Tripo OpenAPI AI gateway worker', () => {
     s3Mocks.send.mockReset();
     s3Mocks.PutObjectCommand.mockClear();
     s3Mocks.S3Client.mockClear();
+    r2Mocks.isR2Configured.mockReset();
+    r2Mocks.isR2Configured.mockReturnValue(false);
+    r2Mocks.putPublicR2Object.mockReset();
   });
 
   function useTempKeyStore() {
@@ -244,6 +257,50 @@ describe('Tripo OpenAPI AI gateway worker', () => {
     expect(JSON.parse(fetchImpl.mock.calls[2][1].body)).toMatchObject({
       type: 'image_to_model',
       file: { type: 'jpg', file_token: 'uploads/input.jpg' },
+    });
+  });
+
+  it('publishes data URL references to public R2 before creating Tripo image tasks', async () => {
+    useTempKeyStore();
+    await saveProviderKeys([
+      { id: 'tripo_key_img_r2', provider: 'tripo', label: 'Tripo image R2', secret: 'tripo-secret', enabled: true, priority: 1 },
+    ]);
+    r2Mocks.isR2Configured.mockReturnValue(true);
+    r2Mocks.putPublicR2Object.mockResolvedValueOnce({
+      objectKey: 'public/ai-gateway-inputs/user/aijob/input.jpg',
+      publicUrl: 'https://cdn.example.com/public/ai-gateway-inputs/user/aijob/input.jpg',
+    });
+
+    const store = createInMemoryAiJobStore();
+    const plan = await store.put(createAiGatewayJobPlan({
+      id: 'aijob_tripo_image_r2',
+      modality: 'model3d',
+      input: {
+        type: 'image_to_model',
+        imageBase64DataUrl: 'data:image/jpeg;base64,QUJDRA==',
+      },
+    }));
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({ task_id: 'tripo_task_img_r2', status: 'queued' }, true, 200));
+
+    const result = await startAiGatewayJobExecution(plan, {
+      store,
+      fetchImpl,
+      disableBackgroundPoll: true,
+    });
+
+    expect(result.started).toBe(true);
+    expect(r2Mocks.putPublicR2Object).toHaveBeenCalledWith(
+      expect.stringMatching(/^public\/ai-gateway-inputs\/anonymous\/aijob_tripo_image_r2\//),
+      expect.any(Buffer),
+      { contentType: 'image/jpeg' }
+    );
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(fetchImpl.mock.calls[0][0]).toBe('https://api.tripo3d.ai/v2/openapi/task');
+    expect(JSON.parse(fetchImpl.mock.calls[0][1].body)).toMatchObject({
+      type: 'image_to_model',
+      file: { type: 'url', url: 'https://cdn.example.com/public/ai-gateway-inputs/user/aijob/input.jpg' },
     });
   });
 });

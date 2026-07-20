@@ -1,9 +1,11 @@
 import { fetch as undiciFetch } from 'undici';
 import { PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import crypto from 'crypto';
 import { acquireProviderKey, recordProviderKeyError, recordProviderKeySuccess } from '../provider-key-store.js';
 import { AiGatewayValidationError } from '../job.js';
 import { finalizeAiGatewayTerminalPlan } from '../execution-finalize.js';
 import { buildProviderTaskUsage, collectByteSize } from '../execution-usage.js';
+import { isR2Configured, putPublicR2Object } from '../../r2-storage-handlers.js';
 
 export const TRIPO_OPENAPI_BASE_URL = 'https://api.tripo3d.ai/v2/openapi';
 
@@ -126,6 +128,13 @@ function imageDimensions(bytes, mime) {
   return null;
 }
 
+function validateTripoParsedImage(parsed) {
+  const dims = imageDimensions(parsed.bytes, parsed.mime);
+  if (dims && Math.max(dims.width, dims.height) < 257) {
+    throw new AiGatewayValidationError('Tripo image task requires a reference image larger than 256px; please use the full asset instead of a tiny thumbnail', 'AI_GATEWAY_TRIPO_IMAGE_TOO_SMALL');
+  }
+}
+
 async function requestTripoUploadSts(apiKey, parsed, options = {}) {
   const fetchImpl = options.fetchImpl || undiciFetch;
   const timeoutMs = Number(options.uploadTimeoutMs || process.env.AI_GATEWAY_TRIPO_UPLOAD_TIMEOUT_MS || 60_000);
@@ -206,10 +215,7 @@ async function uploadImageToTripo(apiKey, imageBase64DataUrl, options = {}) {
   if (!parsed) {
     throw new AiGatewayValidationError('Tripo image task requires a valid imageBase64DataUrl', 'AI_GATEWAY_TRIPO_IMAGE_REQUIRED');
   }
-  const dims = imageDimensions(parsed.bytes, parsed.mime);
-  if (dims && Math.max(dims.width, dims.height) < 257) {
-    throw new AiGatewayValidationError('Tripo image task requires a reference image larger than 256px; please use the full asset instead of a tiny thumbnail', 'AI_GATEWAY_TRIPO_IMAGE_TOO_SMALL');
-  }
+  validateTripoParsedImage(parsed);
   try {
     return await requestTripoDirectUpload(apiKey, parsed, options);
   } catch (error) {
@@ -242,6 +248,23 @@ async function uploadImageToTripo(apiKey, imageBase64DataUrl, options = {}) {
   }));
   const token = key;
   return { type: parsed.ext, file_token: token };
+}
+
+function archiveKeyForTripoInput(plan, ext) {
+  const userId = nonEmptyString(plan?.job?.userId) || 'anonymous';
+  const jobId = nonEmptyString(plan?.job?.id) || `job-${Date.now()}`;
+  const safeExt = nonEmptyString(ext).replace(/[^a-z0-9]+/gi, '').toLowerCase() || 'jpg';
+  return `public/ai-gateway-inputs/${encodeURIComponent(userId)}/${encodeURIComponent(jobId)}/${Date.now()}-${crypto.randomUUID()}.${safeExt}`;
+}
+
+async function publishTripoInputImageUrl(imageBase64DataUrl, options = {}) {
+  const parsed = parseDataUrlImage(imageBase64DataUrl);
+  if (!parsed || !isR2Configured()) return '';
+  validateTripoParsedImage(parsed);
+  const { publicUrl } = await putPublicR2Object(archiveKeyForTripoInput(options.plan, parsed.ext), parsed.bytes, {
+    contentType: parsed.mime,
+  });
+  return nonEmptyString(publicUrl);
 }
 
 function buildTripoTaskBody(job) {
@@ -307,6 +330,8 @@ function buildTripoTaskBody(job) {
 async function prepareTripoTaskBodyForUpstream(apiKey, body, options = {}) {
   if (body.type === 'image_to_model' && body.imageBase64DataUrl) {
     const { imageBase64DataUrl, ...rest } = body;
+    const publicUrl = await publishTripoInputImageUrl(imageBase64DataUrl, options).catch(() => '');
+    if (publicUrl) return { ...rest, file: { type: 'url', url: publicUrl } };
     return { ...rest, file: await uploadImageToTripo(apiKey, imageBase64DataUrl, options) };
   }
   if (body.type === 'multiview_to_model') {
@@ -483,7 +508,7 @@ export async function startTripoExecution(plan, options = {}) {
     upstreamBody = await prepareTripoTaskBodyForUpstream(
       key.secret,
       plan.workerRequest?.body || plan.adapterRequest?.body || {},
-      options
+      { ...options, plan }
     );
   } catch (error) {
     recordProviderKeyError(key.id, error, { cooldownMs: 0 });
