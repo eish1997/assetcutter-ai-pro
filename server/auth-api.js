@@ -4115,18 +4115,25 @@ const server = http.createServer(async (req, res) => {
           ''
       );
       if (!artifactSecret) {
-        json(res, 503, {
-          error: 'AI_GATEWAY_PROVIDER_KEY_MISSING',
-          message: `No enabled ${providerId} API key in provider key pool`,
-        });
-        return;
+        if (providerId !== 'volcengine-jimeng') {
+          json(res, 503, {
+            error: 'AI_GATEWAY_PROVIDER_KEY_MISSING',
+            message: `No enabled ${providerId} API key in provider key pool`,
+          });
+          return;
+        }
       }
       try {
-        let upstreamResp = await fetch(fileUrl, {
-          method: 'GET',
-          headers: { Authorization: `Bearer ${artifactSecret}` },
-          signal: AbortSignal.timeout(TRIPO_TIMEOUT_MS),
-        });
+        let upstreamResp = artifactSecret
+          ? await fetch(fileUrl, {
+              method: 'GET',
+              headers: { Authorization: `Bearer ${artifactSecret}` },
+              signal: AbortSignal.timeout(TRIPO_TIMEOUT_MS),
+            })
+          : await fetch(fileUrl, {
+              method: 'GET',
+              signal: AbortSignal.timeout(TRIPO_TIMEOUT_MS),
+            });
         if (!upstreamResp.ok && [401, 403, 404].includes(Number(upstreamResp.status))) {
           upstreamResp = await fetch(fileUrl, {
             method: 'GET',
@@ -4145,7 +4152,7 @@ const server = http.createServer(async (req, res) => {
           'Content-Type': contentType,
           'Content-Length': String(buf.byteLength),
           'Cache-Control': 'no-store',
-          'X-AC-Provider-Key-Id': key.id,
+          ...(key?.id ? { 'X-AC-Provider-Key-Id': key.id } : {}),
         });
         res.end(buf);
       } catch (e) {
