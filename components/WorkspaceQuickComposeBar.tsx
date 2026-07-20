@@ -945,6 +945,7 @@ export default function WorkspaceQuickComposeBar({
 
   const activeVideoModel = effectiveVideoModelRows.find((row) => row.registryId === genSettings.videoModelRegistryId);
   const activeModel3d = effectiveModel3dRows.find((row) => row.registryId === genSettings.model3dRegistryId);
+  const imageCapability = resolveModelParameterCapabilities({ registryId: genSettings.imageModelRegistryId, modality: 'image' });
   const videoCapability = resolveModelParameterCapabilities({ registryId: genSettings.videoModelRegistryId, modality: 'video' });
   const model3dCapability = resolveModelParameterCapabilities({ registryId: genSettings.model3dRegistryId, modality: 'model3d' });
   const supportsCap = (
@@ -964,6 +965,20 @@ export default function WorkspaceQuickComposeBar({
     const options = capOptions(caps, key);
     return options.length > 0 ? options : fallback;
   };
+  const displayParamLabel = (value: string): string => {
+    const raw = String(value || '');
+    if (!raw.includes('\\u')) return raw;
+    try {
+      return raw.replace(/\\u([0-9a-fA-F]{4})/g, (_m, hex) => String.fromCharCode(Number.parseInt(hex, 16)));
+    } catch {
+      return raw;
+    }
+  };
+  const imageAspectOptions = fallbackOptions(
+    imageCapability,
+    'aspectRatio',
+    QC_ASPECT_PRIMARY.map((value) => ({ value, label: value }))
+  );
 
   const modelShortLabel = shortLabelForImageModelRegistryId(genSettings.imageModelRegistryId);
   const modelFullLabel = labelForImageModelRegistryId(genSettings.imageModelRegistryId);
@@ -1074,8 +1089,10 @@ export default function WorkspaceQuickComposeBar({
     <>
       {showGenImageSettings ? (
         <>
-          <span className="shrink-0 text-[9px] text-gray-400">{aspectSummary}</span>
-          {sizeSummary ? (
+          {supportsCap(imageCapability, 'aspectRatio') ? (
+            <span className="shrink-0 text-[9px] text-gray-400">{aspectSummary}</span>
+          ) : null}
+          {supportsCap(imageCapability, 'imageSize') && sizeSummary ? (
             <>
               <span className="shrink-0 text-[9px] text-gray-600">/</span>
               <span className="shrink-0 text-[9px] font-mono text-gray-400">{sizeSummary}</span>
@@ -1103,38 +1120,44 @@ export default function WorkspaceQuickComposeBar({
           {genSettings.videoMotionStrength ? (
             <>
               <span className="shrink-0 text-[9px] text-gray-600">/</span>
-              <span className="shrink-0 text-[9px] text-gray-400">\u8fd0\u52a8{genSettings.videoMotionStrength}</span>
+              <span className="shrink-0 text-[9px] text-gray-400">运动{genSettings.videoMotionStrength}</span>
             </>
           ) : null}
         </>
       ) : null}
       {showGenModel3dSettings ? (
         <>
-          <span className="shrink-0 text-[9px] text-gray-400">{genSettings.model3dQuality || '\u9ed8\u8ba4'}</span>
-          {genSettings.model3dGeometryQuality ? (
+          {supportsCap(model3dCapability, 'quality') ? (
+            <span className="shrink-0 text-[9px] text-gray-400">{genSettings.model3dQuality || '默认'}</span>
+          ) : null}
+          {supportsCap(model3dCapability, 'geometryQuality') && genSettings.model3dGeometryQuality ? (
             <>
               <span className="shrink-0 text-[9px] text-gray-600">/</span>
-              <span className="shrink-0 text-[9px] text-gray-400">\u51e0\u4f55{genSettings.model3dGeometryQuality}</span>
+              <span className="shrink-0 text-[9px] text-gray-400">几何{genSettings.model3dGeometryQuality}</span>
             </>
           ) : null}
-          {genSettings.model3dTextureQuality ? (
+          {supportsCap(model3dCapability, 'textureQuality') && genSettings.model3dTextureQuality ? (
             <>
               <span className="shrink-0 text-[9px] text-gray-600">/</span>
-              <span className="shrink-0 text-[9px] text-gray-400">\u7eb9\u7406{genSettings.model3dTextureQuality}</span>
+              <span className="shrink-0 text-[9px] text-gray-400">纹理{genSettings.model3dTextureQuality}</span>
             </>
           ) : null}
-          {genSettings.model3dFormat ? (
+          {supportsCap(model3dCapability, 'format') && genSettings.model3dFormat ? (
             <>
               <span className="shrink-0 text-[9px] text-gray-600">/</span>
               <span className="shrink-0 text-[9px] text-gray-400">{genSettings.model3dFormat}</span>
             </>
           ) : null}
-          <span className="shrink-0 text-[9px] text-gray-600">/</span>
-          <span className="shrink-0 text-[9px] text-gray-400">{genSettings.model3dTexture ? '\u8d34\u56fe' : '\u65e0\u8d34\u56fe'}</span>
+          {supportsCap(model3dCapability, 'texture') ? (
+            <>
+              <span className="shrink-0 text-[9px] text-gray-600">/</span>
+              <span className="shrink-0 text-[9px] text-gray-400">{genSettings.model3dTexture ? '贴图' : '无贴图'}</span>
+            </>
+          ) : null}
           {supportsCap(model3dCapability, 'pbr') ? (
             <>
               <span className="shrink-0 text-[9px] text-gray-600">/</span>
-              <span className="shrink-0 text-[9px] text-gray-400">{genSettings.model3dPbr ? 'PBR' : '\u65e0 PBR'}</span>
+              <span className="shrink-0 text-[9px] text-gray-400">{genSettings.model3dPbr ? 'PBR' : '无 PBR'}</span>
             </>
           ) : null}
         </>
@@ -1239,6 +1262,16 @@ export default function WorkspaceQuickComposeBar({
                             if (genSettings.imageSize && !allowed.includes(genSettings.imageSize)) {
                               genSettings.onImageSize('');
                             }
+                            const nextImageCaps = resolveModelParameterCapabilities({ registryId: g.registryId, modality: 'image' });
+                            const allowedRatios = capOptions(nextImageCaps, 'aspectRatio').map((s) => s.value);
+                            if (
+                              genSettings.aspectRatio &&
+                              genSettings.aspectRatio !== 'adaptive' &&
+                              allowedRatios.length > 0 &&
+                              !allowedRatios.includes(genSettings.aspectRatio)
+                            ) {
+                              genSettings.onAspectRatio('adaptive');
+                            }
                             setSettingsOpen(false);
                           }}
                           className={modelOptionChipCls(genSettings.imageModelRegistryId === g.registryId, g.disabled)}
@@ -1314,6 +1347,12 @@ export default function WorkspaceQuickComposeBar({
                           onClick={() => {
                             if (g.disabled) return;
                             genSettings.onModel3dRegistryId(g.registryId);
+                            const nextModel3dCaps = resolveModelParameterCapabilities({ registryId: g.registryId, modality: 'model3d' });
+                            if (!supportsCap(nextModel3dCaps, 'quality')) genSettings.onModel3dQuality('');
+                            if (!supportsCap(nextModel3dCaps, 'format')) genSettings.onModel3dFormat('');
+                            if (!supportsCap(nextModel3dCaps, 'geometryQuality')) genSettings.onModel3dGeometryQuality('');
+                            if (!supportsCap(nextModel3dCaps, 'textureQuality')) genSettings.onModel3dTextureQuality('');
+                            if (!supportsCap(nextModel3dCaps, 'pbr')) genSettings.onModel3dPbr(false);
                             setSettingsOpen(false);
                           }}
                           className={modelOptionChipCls(genSettings.model3dRegistryId === g.registryId, g.disabled)}
@@ -1328,44 +1367,48 @@ export default function WorkspaceQuickComposeBar({
 
               {panelAnchor === 'params' && showGenImageSettings ? (
                 <>
-                  <div className="table-row">
-                    <div className="table-cell p-0 align-middle">
-                      <div className="flex flex-nowrap items-center gap-1">
-                        <button type="button" onClick={() => genSettings.onAspectRatio('adaptive')} className={chipCls(genSettings.aspectRatio === 'adaptive')}>
-                          \u81ea\u9002\u5e94
-                        </button>
-                        {QC_ASPECT_PRIMARY.map((r) => (
-                          <button key={r} type="button" onClick={() => genSettings.onAspectRatio(r)} className={chipCls(genSettings.aspectRatio === r)}>
-                            {r}
+                  {supportsCap(imageCapability, 'aspectRatio') ? (
+                    <div className="table-row">
+                      <div className="table-cell p-0 align-middle">
+                        <div className="flex flex-nowrap items-center gap-1">
+                          <button type="button" onClick={() => genSettings.onAspectRatio('adaptive')} className={chipCls(genSettings.aspectRatio === 'adaptive')}>
+                            自适应
                           </button>
-                        ))}
+                          {imageAspectOptions.map((r) => (
+                            <button key={r.value} type="button" onClick={() => genSettings.onAspectRatio(r.value)} className={chipCls(genSettings.aspectRatio === r.value)}>
+                              {displayParamLabel(r.label)}
+                            </button>
+                          ))}
+                        </div>
                       </div>
                     </div>
-                  </div>
+                  ) : null}
 
-                  <div className="table-row">
-                    <div className="table-cell w-full min-w-0 p-0 align-middle">
-                      <div className="flex min-w-0 w-full flex-nowrap items-stretch gap-1">
-                        <button type="button" onClick={() => genSettings.onImageSize('')} className={chipClsStretch(!genSettings.imageSize)} title="\u4e0d\u6307\u5b9a\u8f93\u51fa\u5c3a\u5bf8">
-                          -
-                        </button>
-                        {imageSizeOptions.map((s) => (
-                          <button key={s.value} type="button" onClick={() => genSettings.onImageSize(s.value)} className={chipClsStretch(genSettings.imageSize === s.value)}>
-                            {s.label}
+                  {supportsCap(imageCapability, 'imageSize') ? (
+                    <div className="table-row">
+                      <div className="table-cell w-full min-w-0 p-0 align-middle">
+                        <div className="flex min-w-0 w-full flex-nowrap items-stretch gap-1">
+                          <button type="button" onClick={() => genSettings.onImageSize('')} className={chipClsStretch(!genSettings.imageSize)} title="\u4e0d\u6307\u5b9a\u8f93\u51fa\u5c3a\u5bf8">
+                            -
                           </button>
-                        ))}
+                          {imageSizeOptions.map((s) => (
+                            <button key={s.value} type="button" onClick={() => genSettings.onImageSize(s.value)} className={chipClsStretch(genSettings.imageSize === s.value)}>
+                              {displayParamLabel(s.label)}
+                            </button>
+                          ))}
+                        </div>
                       </div>
                     </div>
-                  </div>
+                  ) : null}
 
                   <div className="table-row">
                     <div className="table-cell w-full min-w-0 p-0 align-middle">
                       <div className="flex min-w-0 w-full flex-nowrap items-stretch gap-1">
                         <button type="button" onClick={() => genSettings.onUnderstand(true)} className={chipClsStretch(genSettings.understand)} title="\u5148\u7406\u89e3\u610f\u56fe\uff0c\u518d\u751f\u6210\u753b\u9762">
-                          \u7406\u89e3
+                          理解
                         </button>
                         <button type="button" onClick={() => genSettings.onUnderstand(false)} className={chipClsStretch(!genSettings.understand)} title="\u8df3\u8fc7\u7406\u89e3\uff0c\u76f4\u63a5\u53d1\u9001\u63d0\u793a\u8bcd\u751f\u6210">
-                          \u76f4\u53d1
+                          直发
                         </button>
                       </div>
                     </div>
@@ -1378,21 +1421,21 @@ export default function WorkspaceQuickComposeBar({
                   {supportsCap(videoCapability, 'durationSeconds') ? (
                     <div className="table-row"><div className="table-cell w-full min-w-0 p-0 align-middle"><div className="flex min-w-0 w-full flex-nowrap items-stretch gap-1">
                       {capOptions(videoCapability, 'durationSeconds').map((s) => (
-                        <button key={s.value} type="button" onClick={() => genSettings.onVideoDurationSeconds(s.value)} className={chipClsStretch((genSettings.videoDurationSeconds || '5') === s.value)}>{s.label}</button>
+                        <button key={s.value} type="button" onClick={() => genSettings.onVideoDurationSeconds(s.value)} className={chipClsStretch((genSettings.videoDurationSeconds || '5') === s.value)}>{displayParamLabel(s.label)}</button>
                       ))}
                     </div></div></div>
                   ) : null}
                   {supportsCap(videoCapability, 'aspectRatio') ? (
                     <div className="table-row"><div className="table-cell w-full min-w-0 p-0 align-middle"><div className="flex min-w-0 w-full flex-nowrap items-stretch gap-1">
                       {capOptions(videoCapability, 'aspectRatio').map((s) => (
-                        <button key={s.value} type="button" onClick={() => genSettings.onVideoAspectRatio(s.value)} className={chipClsStretch((genSettings.videoAspectRatio || '16:9') === s.value)}>{s.label}</button>
+                        <button key={s.value} type="button" onClick={() => genSettings.onVideoAspectRatio(s.value)} className={chipClsStretch((genSettings.videoAspectRatio || '16:9') === s.value)}>{displayParamLabel(s.label)}</button>
                       ))}
                     </div></div></div>
                   ) : null}
                   {supportsCap(videoCapability, 'resolution') ? (
                     <div className="table-row"><div className="table-cell w-full min-w-0 p-0 align-middle"><div className="flex min-w-0 w-full flex-nowrap items-stretch gap-1">
                       {capOptions(videoCapability, 'resolution').map((s) => (
-                        <button key={s.value} type="button" onClick={() => genSettings.onVideoResolution(s.value)} className={chipClsStretch((genSettings.videoResolution || '1080p') === s.value)}>{s.label}</button>
+                        <button key={s.value} type="button" onClick={() => genSettings.onVideoResolution(s.value)} className={chipClsStretch((genSettings.videoResolution || '1080p') === s.value)}>{displayParamLabel(s.label)}</button>
                       ))}
                     </div></div></div>
                   ) : null}
@@ -1404,7 +1447,7 @@ export default function WorkspaceQuickComposeBar({
                         { value: '0.75', label: '\u8fd0\u52a8\u5f3a' },
                         { value: '1', label: '\u8fd0\u52a8\u6ee1' },
                       ]).map((s) => (
-                        <button key={s.value} type="button" onClick={() => genSettings.onVideoMotionStrength(s.value)} className={chipClsStretch(genSettings.videoMotionStrength === s.value)}>{s.label}</button>
+                        <button key={s.value} type="button" onClick={() => genSettings.onVideoMotionStrength(s.value)} className={chipClsStretch(genSettings.videoMotionStrength === s.value)}>{displayParamLabel(s.label)}</button>
                       ))}
                     </div></div></div>
                   ) : null}
@@ -1415,38 +1458,38 @@ export default function WorkspaceQuickComposeBar({
                 <>
                   {supportsCap(model3dCapability, 'quality') ? (
                     <div className="table-row"><div className="table-cell w-full min-w-0 p-0 align-middle"><div className="flex min-w-0 w-full flex-nowrap items-stretch gap-1">
-                      <button type="button" onClick={() => genSettings.onModel3dQuality('')} className={chipClsStretch(!genSettings.model3dQuality)}>\u9ed8\u8ba4</button>
-                      {capOptions(model3dCapability, 'quality').map((s) => <button key={s.value} type="button" onClick={() => genSettings.onModel3dQuality(s.value)} className={chipClsStretch(genSettings.model3dQuality === s.value)}>{s.label}</button>)}
+                      <button type="button" onClick={() => genSettings.onModel3dQuality('')} className={chipClsStretch(!genSettings.model3dQuality)}>默认</button>
+                      {capOptions(model3dCapability, 'quality').map((s) => <button key={s.value} type="button" onClick={() => genSettings.onModel3dQuality(s.value)} className={chipClsStretch(genSettings.model3dQuality === s.value)}>{displayParamLabel(s.label)}</button>)}
                     </div></div></div>
                   ) : null}
                   {supportsCap(model3dCapability, 'format') ? (
                     <div className="table-row"><div className="table-cell w-full min-w-0 p-0 align-middle"><div className="flex min-w-0 w-full flex-nowrap items-stretch gap-1">
-                      <button type="button" onClick={() => genSettings.onModel3dFormat('')} className={chipClsStretch(!genSettings.model3dFormat)}>\u9ed8\u8ba4</button>
-                      {capOptions(model3dCapability, 'format').slice(0, 5).map((s) => <button key={s.value} type="button" onClick={() => genSettings.onModel3dFormat(s.value)} className={chipClsStretch(genSettings.model3dFormat === s.value)}>{s.label}</button>)}
+                      <button type="button" onClick={() => genSettings.onModel3dFormat('')} className={chipClsStretch(!genSettings.model3dFormat)}>默认</button>
+                      {capOptions(model3dCapability, 'format').slice(0, 5).map((s) => <button key={s.value} type="button" onClick={() => genSettings.onModel3dFormat(s.value)} className={chipClsStretch(genSettings.model3dFormat === s.value)}>{displayParamLabel(s.label)}</button>)}
                     </div></div></div>
                   ) : null}
                   {supportsCap(model3dCapability, 'geometryQuality') ? (
                     <div className="table-row"><div className="table-cell w-full min-w-0 p-0 align-middle"><div className="flex min-w-0 w-full flex-nowrap items-stretch gap-1">
-                      <button type="button" onClick={() => genSettings.onModel3dGeometryQuality('')} className={chipClsStretch(!genSettings.model3dGeometryQuality)}>\u51e0\u4f55\u9ed8\u8ba4</button>
-                      {capOptions(model3dCapability, 'geometryQuality').map((s) => <button key={s.value} type="button" onClick={() => genSettings.onModel3dGeometryQuality(s.value)} className={chipClsStretch(genSettings.model3dGeometryQuality === s.value)}>{s.label}</button>)}
+                      <button type="button" onClick={() => genSettings.onModel3dGeometryQuality('')} className={chipClsStretch(!genSettings.model3dGeometryQuality)}>几何默认</button>
+                      {capOptions(model3dCapability, 'geometryQuality').map((s) => <button key={s.value} type="button" onClick={() => genSettings.onModel3dGeometryQuality(s.value)} className={chipClsStretch(genSettings.model3dGeometryQuality === s.value)}>{displayParamLabel(s.label)}</button>)}
                     </div></div></div>
                   ) : null}
                   {supportsCap(model3dCapability, 'textureQuality') ? (
                     <div className="table-row"><div className="table-cell w-full min-w-0 p-0 align-middle"><div className="flex min-w-0 w-full flex-nowrap items-stretch gap-1">
-                      <button type="button" onClick={() => genSettings.onModel3dTextureQuality('')} className={chipClsStretch(!genSettings.model3dTextureQuality)}>\u7eb9\u7406\u9ed8\u8ba4</button>
-                      {capOptions(model3dCapability, 'textureQuality').map((s) => <button key={s.value} type="button" onClick={() => genSettings.onModel3dTextureQuality(s.value)} className={chipClsStretch(genSettings.model3dTextureQuality === s.value)}>{s.label}</button>)}
+                      <button type="button" onClick={() => genSettings.onModel3dTextureQuality('')} className={chipClsStretch(!genSettings.model3dTextureQuality)}>纹理默认</button>
+                      {capOptions(model3dCapability, 'textureQuality').map((s) => <button key={s.value} type="button" onClick={() => genSettings.onModel3dTextureQuality(s.value)} className={chipClsStretch(genSettings.model3dTextureQuality === s.value)}>{displayParamLabel(s.label)}</button>)}
                     </div></div></div>
                   ) : null}
                   {supportsCap(model3dCapability, 'texture') ? (
                     <div className="table-row"><div className="table-cell w-full min-w-0 p-0 align-middle"><div className="flex min-w-0 w-full flex-nowrap items-stretch gap-1">
-                      <button type="button" onClick={() => genSettings.onModel3dTexture(true)} className={chipClsStretch(genSettings.model3dTexture)}>\u8d34\u56fe</button>
-                      <button type="button" onClick={() => genSettings.onModel3dTexture(false)} className={chipClsStretch(!genSettings.model3dTexture)}>\u65e0\u8d34\u56fe</button>
+                      <button type="button" onClick={() => genSettings.onModel3dTexture(true)} className={chipClsStretch(genSettings.model3dTexture)}>贴图</button>
+                      <button type="button" onClick={() => genSettings.onModel3dTexture(false)} className={chipClsStretch(!genSettings.model3dTexture)}>无贴图</button>
                     </div></div></div>
                   ) : null}
                   {supportsCap(model3dCapability, 'pbr') ? (
                     <div className="table-row"><div className="table-cell w-full min-w-0 p-0 align-middle"><div className="flex min-w-0 w-full flex-nowrap items-stretch gap-1">
                       <button type="button" onClick={() => genSettings.onModel3dPbr(true)} className={chipClsStretch(genSettings.model3dPbr)}>PBR</button>
-                      <button type="button" onClick={() => genSettings.onModel3dPbr(false)} className={chipClsStretch(!genSettings.model3dPbr)}>\u65e0 PBR</button>
+                      <button type="button" onClick={() => genSettings.onModel3dPbr(false)} className={chipClsStretch(!genSettings.model3dPbr)}>无 PBR</button>
                     </div></div></div>
                   ) : null}
                 </>
@@ -1477,7 +1520,7 @@ export default function WorkspaceQuickComposeBar({
                       }}
                       className="mt-0.5 w-full rounded-md py-1 text-[9px] font-semibold text-gray-500 ring-1 ring-white/[0.07] hover:bg-white/[0.05] hover:text-gray-300"
                     >
-                      \u6e05\u7a7a @ \u5f15\u7528
+                      清空 @ 引用
                     </button>
                   </div>
                 </div>
