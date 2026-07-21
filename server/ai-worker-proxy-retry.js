@@ -20,7 +20,7 @@ export function isRetryable(e) {
   // 上游 429 可重试，但次数由 aiWorkerProxyMaxAttempts 严格限制（默认仅 2 次、长退避）
   if (isUpstreamRateLimitError(e)) return true;
   const msg = String((e && e.message) || e);
-  if (/503|504|overloaded|UNAVAILABLE|DEADLINE_EXCEEDED|Deadline expired|500|INTERNAL|Internal error|high demand|try again later|The operation was cancelled|operation was canceled|CANCELLED/i.test(msg)) return true;
+  if (/503|504|overloaded|UNAVAILABLE|DEADLINE_EXCEEDED|Deadline expired|500|INTERNAL|Internal error|high demand|try again later|The operation was cancelled|operation was canceled|CANCELLED|terminated|connection terminated|UND_ERR_SOCKET|other side closed/i.test(msg)) return true;
   const code = e && e.code;
   const status = e && e.status;
   if (code === 504 || code === 503 || status === 'DEADLINE_EXCEEDED' || status === 'UNAVAILABLE') return true;

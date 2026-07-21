@@ -691,7 +691,7 @@ async function withAiWorkerProxySlot(fn, throttle = {}) {
   }
 }
 
-const GEMINI_ASYNC_JOB_MAX_WAIT_MS = Number(process.env.GEMINI_ASYNC_JOB_MAX_WAIT_MS) || 300_000;
+const GEMINI_ASYNC_JOB_MAX_WAIT_MS = Number(process.env.GEMINI_ASYNC_JOB_MAX_WAIT_MS) || 600_000;
 const GEMINI_ASYNC_BATCH_MAX_ITEMS = Number(process.env.GEMINI_ASYNC_BATCH_MAX_ITEMS) || 20;
 
 function asyncJobPollPayload(job, jobId) {

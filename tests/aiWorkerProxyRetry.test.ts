@@ -17,6 +17,8 @@ describe('ai-worker-proxy-retry isRetryable', () => {
     expect(isRetryable(new Error('503 Service Unavailable'))).toBe(true);
     expect(isRetryable(new Error('504 Gateway Timeout'))).toBe(true);
     expect(isRetryable(new Error('Resource exhausted, high demand, try again later'))).toBe(true);
+    expect(isRetryable(new Error('terminated'))).toBe(true);
+    expect(isRetryable(new Error('UND_ERR_SOCKET other side closed'))).toBe(true);
   });
 
   it('returns true for numeric code/status fields (non-429)', () => {

@@ -692,15 +692,34 @@ type GeminiAsyncPollStep =
   | { kind: "failed"; error: string }
   | { kind: "pending" };
 
+function isTransientAsyncPollError(error: unknown): boolean {
+  const msg = String((error as Error)?.message ?? error ?? "");
+  return /terminated|connection terminated|UND_ERR_SOCKET|other side closed|fetch failed|failed to fetch|ECONNRESET|ETIMEDOUT/i.test(msg);
+}
+
 async function fetchGeminiAsyncPollStep(
   jobId: string,
   tracker: GeminiAsyncPollTracker,
   abortSignal?: AbortSignal
 ): Promise<GeminiAsyncPollStep> {
-  const pollRes = await aiWorkerProxyFetchOrExplain(aiWorkerProxyApiUrl(`/proxy/gemini/async/${encodeURIComponent(jobId)}`), {
-    signal: abortSignal,
-    cache: "no-store",
-  });
+  let pollRes: Response;
+  try {
+    pollRes = await aiWorkerProxyFetchOrExplain(aiWorkerProxyApiUrl(`/proxy/gemini/async/${encodeURIComponent(jobId)}`), {
+      signal: abortSignal,
+      cache: "no-store",
+    });
+  } catch (error) {
+    if (!abortSignal?.aborted && isTransientAsyncPollError(error)) {
+      logAiPipelineDev("error", {
+        step: "image_poll",
+        code: "ASYNC_POLL_TRANSIENT_NETWORK",
+        jobId,
+        raw: String((error as Error)?.message || error),
+      });
+      return { kind: "pending" };
+    }
+    throw error;
+  }
   const pollText = await pollRes.text();
   if (!pollRes.ok) {
     const pt = (pollText || "").trim();
@@ -2533,10 +2552,17 @@ function aiGatewayStructuredErrorMessage(err: unknown): string | null {
 }
 
 export function normalizeApiErrorMessage(err: unknown): string {
+  const earlyRaw = String((err as any)?.message ?? err);
+  if (/terminated|connection terminated|UND_ERR_SOCKET|other side closed|ECONNRESET|ETIMEDOUT/i.test(earlyRaw)) {
+    return "生图连接中断，系统已尽量重试。请单次重试；如果仍失败，请先把参考图缩小或减少参考图数量后再生成 4K。";
+  }
   if (isAiPipelineStepError(err)) return err.message;
   const structuredGatewayMessage = aiGatewayStructuredErrorMessage(err);
   if (structuredGatewayMessage) return structuredGatewayMessage;
   const raw = String((err as any)?.message ?? err);
+  if (/terminated|connection terminated|UND_ERR_SOCKET|other side closed|ECONNRESET|ETIMEDOUT/i.test(raw)) {
+    return "生图连接中断，系统已尽量重试。请单次重试；如果仍失败，请先把参考图缩小或减少参考图数量后再生成 4K。";
+  }
   if (detectPipelineStepFromMessage(raw)) return raw;
   if (/Volcengine Ark rejected AI job handoff/i.test(raw) && /real person|contain real person|真人|人像/i.test(raw)) {
     return '火山方舟已拒绝本次视频任务：输入图可能包含真人/人像，触发了上游安全策略。秘钥和本地链路不一定有问题；请换一张非真人输入图，或切换到支持该场景的供应商/模型后重试。';

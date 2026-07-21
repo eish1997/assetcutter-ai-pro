@@ -57,6 +57,14 @@ describe('mapRateLimitErrorText', () => {
   });
 });
 
+describe('normalizeApiErrorMessage network termination', () => {
+  it('maps terminated image generation failures to an actionable retry hint', () => {
+    const msg = normalizeApiErrorMessage(new AiPipelineStepError('image_create', 'NETWORK_TERMINATED', 'terminated'));
+    expect(msg).toContain('生图连接中断');
+    expect(msg).toContain('参考图');
+  });
+});
+
 describe('normalizeApiErrorMessage', () => {
   it('prioritizes credits reserve invalid over UUID 429 substring', () => {
     const msg = normalizeApiErrorMessage(
