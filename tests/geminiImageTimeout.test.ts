@@ -26,7 +26,15 @@ function usesOpenAiRouteForImage(registryId: string): boolean {
 const OPENAI_IMAGE_REQUEST_TIMEOUT_MS = 600_000;
 const GEMINI_IMAGE_REQUEST_TIMEOUT_MS = 120_000;
 
-function imageGenTimeoutMsForModel(registryId: string, baseTimeout: number): number {
+function isLongImageSizeTier(imageSize?: string): boolean {
+  const s = (imageSize || "").trim().toUpperCase();
+  return s === "4K" || s === "4";
+}
+
+function imageGenTimeoutMsForModel(registryId: string, baseTimeout: number, imageSize?: string): number {
+  if (isLongImageSizeTier(imageSize)) {
+    return Math.max(baseTimeout, OPENAI_IMAGE_REQUEST_TIMEOUT_MS);
+  }
   if (usesOpenAiRouteForImage(registryId)) {
     return Math.max(baseTimeout, OPENAI_IMAGE_REQUEST_TIMEOUT_MS);
   }
@@ -65,5 +73,17 @@ describe("OpenAI image generation timeout", () => {
     expect(imageGenTimeoutMsForModel("gemini-3.1-flash-image-preview", GEMINI_IMAGE_REQUEST_TIMEOUT_MS)).toBe(
       120_000
     );
+  });
+
+  it("extends timeout to 600s for Gemini 4K image generation", () => {
+    vi.mocked(pickBinding).mockReturnValue({
+      bindingId: "gemini-3-pro-image:gemini-aistudio:image",
+      registryId: "gemini-3-pro-image",
+      role: "image",
+      channel: "gemini-aistudio",
+      priority: 40,
+      upstreamModelId: "gemini-3-pro-image",
+    });
+    expect(imageGenTimeoutMsForModel("gemini-3-pro-image", GEMINI_IMAGE_REQUEST_TIMEOUT_MS, "4K")).toBe(600_000);
   });
 });

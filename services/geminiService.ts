@@ -1824,7 +1824,15 @@ function shouldUseAiWorkerProxyImageQueueForModel(registryId: string): boolean {
   return false;
 }
 
-function imageGenTimeoutMsForModel(registryId: string, baseTimeout: number): number {
+function isLongImageSizeTier(imageSize?: string): boolean {
+  const s = (imageSize || "").trim().toUpperCase();
+  return s === "4K" || s === "4";
+}
+
+function imageGenTimeoutMsForModel(registryId: string, baseTimeout: number, imageSize?: string): number {
+  if (isLongImageSizeTier(imageSize)) {
+    return Math.max(baseTimeout, GEMINI_VERTEX_IMAGE_TIMEOUT_MS);
+  }
   if (shouldUseAiWorkerProxyImageQueueForModel(registryId)) {
     return Math.max(baseTimeout, GEMINI_VERTEX_IMAGE_TIMEOUT_MS);
   }
@@ -2215,10 +2223,11 @@ const AI_WORKER_PROXY_IMAGE_TIMEOUT_MS = 600_000;
 function effectiveImageGenControlTimeoutMs(
   baseTimeout: number,
   useLongAiWorkerProxyWait: boolean,
-  registryId: string
+  registryId: string,
+  imageSize?: string
 ): number {
   let floor = baseTimeout;
-  if (useLongAiWorkerProxyWait || usesVertexProxyForImage(registryId)) {
+  if (isLongImageSizeTier(imageSize) || useLongAiWorkerProxyWait || usesVertexProxyForImage(registryId)) {
     floor = Math.max(floor, GEMINI_VERTEX_IMAGE_TIMEOUT_MS);
   }
   if (usesOpenAiRouteForImage(registryId)) {
@@ -3004,13 +3013,18 @@ export async function dialogGenerateImage(
 ): Promise<string> {
   const baseTimeout = requestOptions?.timeoutMs ?? GEMINI_IMAGE_REQUEST_TIMEOUT_MS;
   const useAiWorkerProxyImageQueue = shouldUseAiWorkerProxyImageQueueForModel(model);
-  const controlTimeoutMs = effectiveImageGenControlTimeoutMs(baseTimeout, useAiWorkerProxyImageQueue, model);
+  const controlTimeoutMs = effectiveImageGenControlTimeoutMs(
+    baseTimeout,
+    useAiWorkerProxyImageQueue,
+    model,
+    options?.imageSize
+  );
   // 429/503/UNAVAILABLE 等自动退避重试；成功返回图片后不会再次请求。
   return callWithRetry(async (signal) => {
     const ai = getAIForImageModel(model);
     const isTextToImage = !imageBase64;
     const systemInstruction = (customSystemPrompt || (isTextToImage ? DEFAULT_PROMPTS.dialog_text_to_image : DEFAULT_PROMPTS.edit)).replace('{instruction}', instruction);
-    const timeoutMs = imageGenTimeoutMsForModel(model, baseTimeout);
+    const timeoutMs = imageGenTimeoutMsForModel(model, baseTimeout, options?.imageSize);
     const config: { systemInstruction: string; imageConfig?: { aspectRatio?: string; imageSize?: string } } = {
       systemInstruction
     };
@@ -3077,11 +3091,16 @@ export async function dialogGenerateImageMulti(
   const modelId = coerceImageModelRegistryId(model);
   const baseTimeout = requestOptions?.timeoutMs ?? GEMINI_IMAGE_REQUEST_TIMEOUT_MS;
   const useAiWorkerProxyImageQueue = shouldUseAiWorkerProxyImageQueueForModel(modelId);
-  const controlTimeoutMs = effectiveImageGenControlTimeoutMs(baseTimeout, useAiWorkerProxyImageQueue, modelId);
+  const controlTimeoutMs = effectiveImageGenControlTimeoutMs(
+    baseTimeout,
+    useAiWorkerProxyImageQueue,
+    modelId,
+    options?.imageSize
+  );
   return callWithRetry(async (signal) => {
     const ai = getAIForImageModel(modelId);
     const systemInstruction = (DEFAULT_PROMPTS.edit || '').replace('{instruction}', instruction);
-    const timeoutMs = imageGenTimeoutMsForModel(modelId, baseTimeout);
+    const timeoutMs = imageGenTimeoutMsForModel(modelId, baseTimeout, options?.imageSize);
     const config: { systemInstruction: string; imageConfig?: { aspectRatio?: string; imageSize?: string } } = {
       systemInstruction
     };
