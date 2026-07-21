@@ -79,7 +79,7 @@ Vercel 一般能自动识别 Vite 项目，你只需确认：
 2. **试用 / Vertex 生图（必配，与 Render 线上一致）**  
    - `VITE_AI_WORKER_PROXY_API` = `https://assetcutter-ai-worker-proxy.onrender.com`
    - `VITE_AI_WORKER_PROXY_API_VERTEX` = `https://assetcutter-ai-worker-proxy.onrender.com`
-   - 新部署统一使用 `VITE_AI_WORKER_PROXY_API` / `VITE_AI_WORKER_PROXY_API_VERTEX`；历史 `GEMINI_PROXY_*` / `BULK_IMAGE_*` 仅在服务端保留隐藏迁移兜底。
+   - 新部署统一使用 `VITE_AI_WORKER_PROXY_API` / `VITE_AI_WORKER_PROXY_API_VERTEX`；历史 `GEMINI_PROXY_*` 仅在服务端保留隐藏迁移兜底。
    - 仓库内 `.env.production` 已含上述默认值；**若 Vercel 面板里曾填过 `same-origin` 或前端自己的域名，请删掉或改成上面地址**，否则会覆盖默认值并导致其它电脑报 **405**。  
    - 改完后需 **Redeploy** 一次（`VITE_*` 在构建时写入 `dist`）。
 2. 默认**不要**再添加 `GEMINI_API_KEY`（试用走云端代理上的密钥）。
