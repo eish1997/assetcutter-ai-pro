@@ -118,6 +118,25 @@ describe('AI gateway auth-api facade', () => {
     });
   });
 
+  it('prefers AI Studio for Gemini auth jobs when both Google provider keys are usable', async () => {
+    const store = createInMemoryAiJobStore();
+    const user = { id: 'user_1', username: 'alice' };
+    const result = await createAuthAiGatewayJob({}, imageJobBody('aijob_auth_gemini_aistudio_ready'), user, {
+      store,
+      modelOpsConfig: { publishedCanonicalModelAllowlist: ['gemini-3-pro-image-preview'] },
+      listProviderKeys: async () => [
+        { provider: 'vertex-site', enabled: true, hasSecret: true },
+        { provider: 'gemini-aistudio', enabled: true, hasSecret: true },
+      ],
+    });
+
+    expect(result.status).toBe(202);
+    const stored = await store.get('aijob_auth_gemini_aistudio_ready');
+    expect(stored.job.provider).toBe('gemini-aistudio');
+    expect(stored.route.providerId).toBe('gemini-aistudio');
+    expect(stored.adapterRequest.body.aiBackend).toBeUndefined();
+  });
+
   it('rejects published Ark async models when no usable provider key exists', async () => {
     const store = createInMemoryAiJobStore();
     const user = { id: 'user_1', username: 'alice' };

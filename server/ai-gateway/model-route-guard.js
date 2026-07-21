@@ -50,6 +50,19 @@ function routeHasUsableKey(route, keys) {
   );
 }
 
+function preferGeminiAiStudioWhenReady(routes, keys) {
+  if (!Array.isArray(routes) || routes.length < 2) return routes;
+  const hasReadyAiStudio = routes.some(
+    (route) => route.providerId === 'gemini-aistudio' && routeHasUsableKey(route, keys)
+  );
+  if (!hasReadyAiStudio) return routes;
+  return [...routes].sort((a, b) => {
+    const ap = a.providerId === 'gemini-aistudio' ? -1 : 0;
+    const bp = b.providerId === 'gemini-aistudio' ? -1 : 0;
+    return ap - bp;
+  });
+}
+
 export async function validateAiGatewayModelRouteExecutable(input, options = {}) {
   const canonicalModelId = resolveRequestedCanonicalModelId(input);
   if (!canonicalModelId) return { ok: true, canonicalModelId: null, route: null, checked: false };
@@ -98,7 +111,7 @@ export async function validateAiGatewayModelRouteExecutable(input, options = {})
 
   if (options.checkProviderKeys !== false) {
     const keys = await (options.listProviderKeys || listProviderKeys)();
-    const readyRoute = routes.find((candidate) => routeHasUsableKey(candidate, keys));
+    const readyRoute = preferGeminiAiStudioWhenReady(routes, keys).find((candidate) => routeHasUsableKey(candidate, keys));
     if (readyRoute) {
       return { ok: true, canonicalModelId, route: readyRoute, checked: true };
     }
