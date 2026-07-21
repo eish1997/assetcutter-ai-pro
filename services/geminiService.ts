@@ -79,7 +79,7 @@ import {
   dispatchGeminiQueueProgress,
   type GeminiQueueMeta,
 } from "./geminiQueueProgress";
-import { DEFAULT_MODEL_TEXT } from "./modelRegistry/constants";
+import { DEFAULT_MODEL_IMAGE, DEFAULT_MODEL_TEXT } from "./modelRegistry/constants";
 import type { ChannelId } from "./modelRegistry/types";
 import { pickBinding } from "./modelRegistry/pickBinding";
 import {
@@ -2996,7 +2996,7 @@ export async function understandImageEditIntent(
 export async function dialogGenerateImage(
   imageBase64: string | null,
   instruction: string,
-  model = 'gemini-2.5-flash-image',
+  model = DEFAULT_MODEL_IMAGE,
   options?: { aspectRatio?: string; imageSize?: string },
   customSystemPrompt?: string,
   abortSignal?: AbortSignal,
@@ -3068,16 +3068,16 @@ export async function dialogGenerateImage(
 export async function dialogGenerateImageMulti(
   imagesBase64: string[],
   instruction: string,
-  model = 'gemini-2.5-flash-image',
+  model = DEFAULT_MODEL_IMAGE,
   options?: { aspectRatio?: string; imageSize?: string },
   abortSignal?: AbortSignal,
   requestOptions?: Omit<GeminiRequestOptions, 'abortSignal'>
 ): Promise<string> {
   if (imagesBase64.length === 0) throw new Error('多图生图至少需要一张图片');
-  const modelId = 'gemini-2.5-flash-image';
+  const modelId = coerceImageModelRegistryId(model);
   const baseTimeout = requestOptions?.timeoutMs ?? GEMINI_IMAGE_REQUEST_TIMEOUT_MS;
   const useAiWorkerProxyImageQueue = shouldUseAiWorkerProxyImageQueueForModel(modelId);
-  const controlTimeoutMs = effectiveImageGenControlTimeoutMs(baseTimeout, useAiWorkerProxyImageQueue, model);
+  const controlTimeoutMs = effectiveImageGenControlTimeoutMs(baseTimeout, useAiWorkerProxyImageQueue, modelId);
   return callWithRetry(async (signal) => {
     const ai = getAIForImageModel(modelId);
     const systemInstruction = (DEFAULT_PROMPTS.edit || '').replace('{instruction}', instruction);
@@ -3098,11 +3098,11 @@ export async function dialogGenerateImageMulti(
       throw new Error(buildDiagMessage("INPUT_IMAGE_EMPTY", "多图输入中存在空图片或无效 base64"));
     }
     parts.push({ text: instruction });
-    const resolvedImageModel = resolveUpstreamImageModelIdForRegistry(model);
+    const resolvedImageModel = resolveUpstreamImageModelIdForRegistry(modelId);
     const response = await ai.models.generateContent({
       model: resolvedImageModel,
       contents: [{ role: 'user' as const, parts }],
-      config: buildGeminiConfig(config, signal, timeoutMs, model)
+      config: buildGeminiConfig(config, signal, timeoutMs, modelId)
     });
     const images = collectInlineImagesFromGeminiResponse(response);
     if (images.length > 0) {
@@ -3488,7 +3488,7 @@ export async function generatePBRTexture(
   options?: GeminiRequestOptions
 ): Promise<string> {
   return callWithRetry(async (signal) => {
-    const modelId = 'gemini-2.5-flash-image';
+    const modelId = DEFAULT_MODEL_IMAGE;
     const ai = getAIForImageModel(modelId);
     const imageModel = resolveUpstreamImageModelIdForRegistry(modelId);
     const parts: { inlineData?: { mimeType: string; data: string }; text?: string }[] = [];

@@ -94,6 +94,7 @@ const TOAPIS_API_KEY = normalizeSecret(process.env.TOAPIS_API_KEY || '');
 const ENABLE_TOAPIS_FALLBACK = String(process.env.ENABLE_TOAPIS_FALLBACK || '').trim().toLowerCase() === 'true';
 const TOAPIS_IMAGE_POLL_MS = Number(process.env.TOAPIS_IMAGE_POLL_MS) || 3000;
 const TOAPIS_IMAGE_MAX_WAIT_MS = Number(process.env.TOAPIS_IMAGE_MAX_WAIT_MS) || 600_000;
+const DEFAULT_GEMINI_TEXT_MODEL = 'gemini-3-flash-preview';
 
 /** 本地 dev + 已知生产前端 Origin；与 `AUTH_ALLOWED_ORIGINS` 对齐，避免仅配 auth 却漏配 ai-worker-proxy */
 const BUILTIN_PROXY_ALLOWED_ORIGINS = [
@@ -368,7 +369,7 @@ async function proxyVertexGenerateContent(model, contents, config) {
   };
   const ai = getVertexAI(model, { apiKey: agentPlatformApiKey });
   const response = await ai.models.generateContent({
-    model: model || 'gemini-2.5-flash',
+    model: model || DEFAULT_GEMINI_TEXT_MODEL,
     contents,
     config: mergedConfig,
   });
@@ -617,7 +618,7 @@ async function proxyGenerateContent(model, contents, config) {
     // “API keys are not supported… Expected OAuth2 access token”。
     ai = new GoogleGenAI({ apiKey: key, vertexai: false });
     const response = await ai.models.generateContent({
-      model: model || 'gemini-2.5-flash',
+      model: model || DEFAULT_GEMINI_TEXT_MODEL,
       contents,
       config: mergedConfig,
     });
