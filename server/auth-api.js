@@ -2636,7 +2636,8 @@ const server = http.createServer(async (req, res) => {
         json(res, 400, { error: err?.message || 'Invalid JSON' });
         return;
       }
-      const summary = await buildModelAvailabilitySummary(body || {});
+      const modelOpsConfig = await readModelOpsConfig();
+      const summary = await buildModelAvailabilitySummary(body || {}, { modelOpsConfig });
       json(res, 200, { ok: true, ...summary });
       return;
     }
@@ -2693,7 +2694,8 @@ const server = http.createServer(async (req, res) => {
         json(res, 400, { error: err?.message || 'Invalid JSON' });
         return;
       }
-      const result = await testAiGatewayModelRoute(body || {});
+      const modelOpsConfig = await readModelOpsConfig();
+      const result = await testAiGatewayModelRoute(body || {}, { modelOpsConfig });
       json(res, 200, { ok: result.ok, result });
       return;
     }
@@ -2708,7 +2710,10 @@ const server = http.createServer(async (req, res) => {
         json(res, 400, { error: err?.message || 'Invalid JSON' });
         return;
       }
-      const result = await testAiGatewayModelGeneration(req, body || {}, staff.user);
+      const modelOpsConfig = await readModelOpsConfig();
+      const result = await testAiGatewayModelGeneration(req, body || {}, staff.user, {
+        createJobOptions: { modelOpsConfig },
+      });
       await createAuditLog({
         actorUserId: staff.user.id,
         actorIdentifier: staff.user.username,
@@ -2739,7 +2744,11 @@ const server = http.createServer(async (req, res) => {
         json(res, 400, { error: err?.message || 'Invalid JSON' });
         return;
       }
-      const result = await runAiGatewayModelDiagnostics(req, body || {}, staff.user);
+      const modelOpsConfig = await readModelOpsConfig();
+      const result = await runAiGatewayModelDiagnostics(req, body || {}, staff.user, {
+        routeTestOptions: { modelOpsConfig },
+        generationTestOptions: { createJobOptions: { modelOpsConfig } },
+      });
       await createAuditLog({
         actorUserId: staff.user.id,
         actorIdentifier: staff.user.username,

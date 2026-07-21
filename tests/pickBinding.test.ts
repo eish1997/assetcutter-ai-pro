@@ -29,12 +29,21 @@ describe("pickBinding", () => {
     expect(picked?.channel).toBe("toapis-gemini");
   });
 
-  it("prefers AI Studio for Gemini when the user key is present", () => {
+  it("uses ops priority to choose the first ready Gemini channel", () => {
     vi.spyOn(settingsStore, "getEnabledChannels").mockReturnValue(["vertex-proxy", "gemini-aistudio"]);
-    vi.spyOn(settingsStore, "getUserApiKey").mockReturnValue("AQ.test");
     vi.spyOn(settingsStore, "isChannelReady").mockImplementation(
       (ch) => ch === "vertex-proxy" || ch === "gemini-aistudio"
     );
+    _setModelOpsConfigForTests({
+      version: 1,
+      imageRegistryAllowlist: null,
+      bindingOverrides: [
+        {
+          bindingId: "gemini-3-pro-image:gemini-aistudio:image",
+          priority: 5,
+        },
+      ],
+    });
     const picked = pickBinding("gemini-3-pro-image", "image");
     expect(picked?.channel).toBe("gemini-aistudio");
   });

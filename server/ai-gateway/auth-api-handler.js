@@ -142,6 +142,7 @@ export async function createAuthAiGatewayJob(req, body, user, options = {}) {
     listProviderKeys: options.listProviderKeys,
     checkProviderKeys: options.checkProviderKeys,
     disabledProviders: opsControl.disabledProviders,
+    modelOpsConfig,
   });
   if (executableRoute.checked) {
     const shouldPinProvider =
@@ -314,6 +315,7 @@ export async function retryAuthAiGatewayJob(id, user, body = {}, options = {}) {
     listProviderKeys: options.listProviderKeys,
     checkProviderKeys: options.checkProviderKeys,
     disabledProviders: opsControl.disabledProviders,
+    modelOpsConfig,
   });
   if (executableRoute.checked) {
     const shouldPinProvider =

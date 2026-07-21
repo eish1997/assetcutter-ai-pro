@@ -52,6 +52,49 @@ describe('AI gateway model availability summary', () => {
     });
   });
 
+  it('orders Gemini route summaries by model ops priority and falls back when the preferred key is missing', async () => {
+    const input = {
+      models: [
+        {
+          canonicalModelId: 'gemini-3-pro-image-preview',
+          modality: 'image',
+          routes: [
+            { providerId: 'vertex-site', modality: 'image' },
+            { providerId: 'gemini-aistudio', modality: 'image' },
+          ],
+        },
+      ],
+    };
+    const modelOpsConfig = {
+      bindingOverrides: [
+        {
+          bindingId: 'gemini-3-pro-image-preview:gemini-aistudio:image',
+          priority: 5,
+        },
+      ],
+    };
+
+    const ready = await buildModelAvailabilitySummary(input, {
+      modelOpsConfig,
+      listProviderKeys: async () => [
+        { provider: 'vertex-site', enabled: true, hasSecret: true },
+        { provider: 'gemini-aistudio', enabled: true, hasSecret: true },
+      ],
+    });
+    expect(ready.models[0].routes[0]).toMatchObject({ providerId: 'gemini-aistudio', selectable: true });
+
+    const fallback = await buildModelAvailabilitySummary(input, {
+      modelOpsConfig,
+      listProviderKeys: async () => [
+        { provider: 'gemini-aistudio', enabled: true, hasSecret: false },
+        { provider: 'vertex-site', enabled: true, hasSecret: true },
+      ],
+    });
+    expect(fallback.models[0].routes[0]).toMatchObject({ providerId: 'gemini-aistudio', selectable: false });
+    expect(fallback.models[0].routes[1]).toMatchObject({ providerId: 'vertex-site', selectable: true });
+    expect(fallback.models[0]).toMatchObject({ status: 'ready', workspaceSelectable: true });
+  });
+
   it('marks ToAPIs, Jimeng video, and Tripo P1 ready when matching platform keys exist', async () => {
     const summary = await buildModelAvailabilitySummary(
       {

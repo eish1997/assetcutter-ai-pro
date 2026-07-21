@@ -52,6 +52,7 @@ export async function testAiGatewayModelRoute(input = {}, options = {}) {
     const result = await validateAiGatewayModelRouteExecutable(normalized, {
       listProviderKeys: options.listProviderKeys,
       checkProviderKeys: options.checkProviderKeys,
+      modelOpsConfig: options.modelOpsConfig,
     });
     return {
       ok: true,

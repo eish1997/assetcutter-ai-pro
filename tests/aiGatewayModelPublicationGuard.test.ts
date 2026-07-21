@@ -333,4 +333,54 @@ describe('AI gateway model publication guard', () => {
       route: { providerId: 'volcengine-ark' },
     });
   });
+
+  it('orders executable Gemini routes by model ops binding priority and skips unusable keys', async () => {
+    await expect(
+      validateAiGatewayModelRouteExecutable(
+        { modality: 'image', model: 'gemini-3-pro-image-preview' },
+        {
+          modelOpsConfig: {
+            bindingOverrides: [
+              {
+                bindingId: 'gemini-3-pro-image-preview:gemini-aistudio:image',
+                priority: 5,
+              },
+            ],
+          },
+          listProviderKeys: async () => [
+            { provider: 'vertex-site', enabled: true, hasSecret: true },
+            { provider: 'gemini-aistudio', enabled: true, hasSecret: true },
+          ],
+        }
+      )
+    ).resolves.toMatchObject({
+      ok: true,
+      checked: true,
+      route: { providerId: 'gemini-aistudio' },
+    });
+
+    await expect(
+      validateAiGatewayModelRouteExecutable(
+        { modality: 'image', model: 'gemini-3-pro-image-preview' },
+        {
+          modelOpsConfig: {
+            bindingOverrides: [
+              {
+                bindingId: 'gemini-3-pro-image-preview:gemini-aistudio:image',
+                priority: 5,
+              },
+            ],
+          },
+          listProviderKeys: async () => [
+            { provider: 'gemini-aistudio', enabled: true, hasSecret: false },
+            { provider: 'vertex-site', enabled: true, hasSecret: true },
+          ],
+        }
+      )
+    ).resolves.toMatchObject({
+      ok: true,
+      checked: true,
+      route: { providerId: 'vertex-site' },
+    });
+  });
 });

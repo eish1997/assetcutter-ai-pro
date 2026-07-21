@@ -188,6 +188,7 @@ export async function handleAiGatewayRequest(req, res, options = {}) {
         listProviderKeys: options.listProviderKeys,
         checkProviderKeys: options.checkProviderKeys,
         disabledProviders: opsControl.disabledProviders,
+        modelOpsConfig,
       });
       if (executableRoute.checked) {
         const shouldPinProvider =

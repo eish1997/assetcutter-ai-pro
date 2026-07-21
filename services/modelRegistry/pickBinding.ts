@@ -1,4 +1,4 @@
-import { getEnabledChannels, getUserApiKey, isChannelReady } from "../settingsStore";
+import { getEnabledChannels, isChannelReady } from "../settingsStore";
 import { resolveUpstreamForBinding } from "./channelCredentials";
 import { wiringEdgesToProviderBindings } from "./hubGraph/compile";
 import { buildHubInPorts } from "./hubGraph/hubPorts";
@@ -60,14 +60,6 @@ export function resolvedBindingsForRegistry(registryId: string, role: ModelResol
   return applyOpsBindingOverrides(base);
 }
 
-function prioritizeUserGeminiAiStudioKey(bindings: ProviderBinding[]): ProviderBinding[] {
-  if (!getUserApiKey()?.trim()) return bindings;
-  const aiStudio = bindings.filter((binding) => binding.channel === "gemini-aistudio");
-  if (aiStudio.length === 0) return bindings;
-  const rest = bindings.filter((binding) => binding.channel !== "gemini-aistudio");
-  return [...aiStudio, ...rest];
-}
-
 /**
  * 按 registryId + role 选第一条「已启用且 ready」的 binding。
  * Failover：固定 priority 升序，无运行时重试链；文本与生图独立选型（role=text|image）。
@@ -76,7 +68,7 @@ export function pickBinding(registryId: string, role: ModelResolveRole): PickedB
   const id = (registryId || "").trim();
   if (!id) return null;
   const enabled = new Set(getEnabledChannels());
-  const bindings = prioritizeUserGeminiAiStudioKey(resolvedBindingsForRegistry(id, role));
+  const bindings = resolvedBindingsForRegistry(id, role);
   for (const binding of bindings) {
     if (!enabled.has(binding.channel)) continue;
     if (!isChannelReady(binding.channel)) continue;

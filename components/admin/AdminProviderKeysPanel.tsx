@@ -78,6 +78,13 @@ type ModelDiagnosticEntry = {
   testedAt?: string | null;
 };
 type ModelDiagnosticState = Record<string, Partial<Record<ModelDiagnosticLayer, ModelDiagnosticEntry>>>;
+type AdminBindingOverride = {
+  bindingId: string;
+  enabled?: boolean;
+  priority?: number;
+  upstreamOverride?: string;
+};
+type RoutePriorityDraft = Record<string, number>;
 
 const MODALITY_LABELS: Record<ProviderModality, string> = {
   text: '文本',
@@ -383,6 +390,70 @@ function workspaceModelAvailabilityPayload() {
   };
 }
 
+function routeRole(route: ModelRouteCatalogEntry): 'text' | 'image' | null {
+  if (route.modality === 'text') return 'text';
+  if (route.modality === 'image') return 'image';
+  return null;
+}
+
+function routeBindingId(route: ModelRouteCatalogEntry): string | null {
+  const role = routeRole(route);
+  if (!role || !route.channel) return null;
+  return `${route.canonicalModelId}:${route.channel}:${role}`;
+}
+
+function knownRouteBindingIds(): Set<string> {
+  const out = new Set<string>();
+  for (const route of listModelRoutes()) {
+    const id = routeBindingId(route);
+    if (id) out.add(id);
+  }
+  return out;
+}
+
+function normalizeBindingOverrideRows(value: unknown): AdminBindingOverride[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => {
+      const row = item && typeof item === 'object' ? (item as Record<string, unknown>) : {};
+      const bindingId = String(row.bindingId || '').trim();
+      if (!bindingId) return null;
+      const priority = Number(row.priority);
+      return {
+        bindingId,
+        ...(row.enabled !== undefined ? { enabled: row.enabled === true } : {}),
+        ...(Number.isFinite(priority) ? { priority: Math.floor(priority) } : {}),
+        ...(typeof row.upstreamOverride === 'string' && row.upstreamOverride.trim()
+          ? { upstreamOverride: row.upstreamOverride.trim() }
+          : {}),
+      };
+    })
+    .filter((row): row is AdminBindingOverride => Boolean(row));
+}
+
+function routePriorityDraftFromConfig(config?: AdminModelOpsConfig | null): RoutePriorityDraft {
+  const routeIds = knownRouteBindingIds();
+  const out: RoutePriorityDraft = {};
+  for (const row of normalizeBindingOverrideRows(config?.bindingOverrides)) {
+    if (!routeIds.has(row.bindingId) || row.priority == null) continue;
+    out[row.bindingId] = row.priority;
+  }
+  return out;
+}
+
+function mergeRoutePriorityOverrides(
+  existing: unknown,
+  routePriorityDraft: RoutePriorityDraft
+): AdminBindingOverride[] | null {
+  const routeIds = knownRouteBindingIds();
+  const preserved = normalizeBindingOverrideRows(existing).filter((row) => !routeIds.has(row.bindingId));
+  const priorityRows = Object.entries(routePriorityDraft)
+    .filter(([bindingId, priority]) => routeIds.has(bindingId) && Number.isFinite(Number(priority)))
+    .map(([bindingId, priority]) => ({ bindingId, priority: Math.max(1, Math.floor(Number(priority))) }));
+  const rows = [...preserved, ...priorityRows].sort((a, b) => a.bindingId.localeCompare(b.bindingId));
+  return rows.length ? rows : null;
+}
+
 function Pill({ children, className = '' }: { children: React.ReactNode; className?: string }) {
   return <span className={`inline-flex rounded-md border px-2 py-0.5 text-[10px] ${className}`}>{children}</span>;
 }
@@ -510,6 +581,7 @@ const AdminProviderKeysPanel: React.FC = () => {
   const [routeTestingId, setRouteTestingId] = React.useState('');
   const [generationTestingId, setGenerationTestingId] = React.useState('');
   const [modelDiagnostics, setModelDiagnostics] = React.useState<ModelDiagnosticState>({});
+  const [routePriorityDraft, setRoutePriorityDraft] = React.useState<RoutePriorityDraft>({});
   const [error, setError] = React.useState('');
   const [message, setMessage] = React.useState('');
   const [selectedProviderId, setSelectedProviderId] = React.useState(PROVIDERS[0]?.id || 'tripo');
@@ -534,6 +606,7 @@ const AdminProviderKeysPanel: React.FC = () => {
       setOpsControl(opsControlRes?.config || null);
       if (modelOpsRes?.config) {
         setModelOpsConfig(modelOpsRes.config);
+        setRoutePriorityDraft(routePriorityDraftFromConfig(modelOpsRes.config));
         const allow = modelOpsRes.config.publishedCanonicalModelAllowlist;
         setSelectedCanonicalModelIds(Array.isArray(allow) ? allow : defaultPublishedCanonicalIds());
       }
@@ -566,6 +639,11 @@ const AdminProviderKeysPanel: React.FC = () => {
 
   const updateRow = (id: string, patch: Partial<AdminProviderKeyRow>) => {
     setRows((prev) => prev.map((row) => (row.id === id ? { ...row, ...patch } : row)));
+  };
+
+  const updateRoutePriority = (bindingId: string, priority: number) => {
+    const next = Math.max(1, Math.floor(Number(priority) || 1));
+    setRoutePriorityDraft((prev) => ({ ...prev, [bindingId]: next }));
   };
 
   const updateCredential = (id: string, key: string, value: string) => {
@@ -835,8 +913,13 @@ const AdminProviderKeysPanel: React.FC = () => {
         );
         return;
       }
-      const saved = await saveAdminModelOpsConfig({ ...base, publishedCanonicalModelAllowlist: selected });
+      const saved = await saveAdminModelOpsConfig({
+        ...base,
+        publishedCanonicalModelAllowlist: selected,
+        bindingOverrides: mergeRoutePriorityOverrides(base.bindingOverrides, routePriorityDraft),
+      });
       setModelOpsConfig(saved.config);
+      setRoutePriorityDraft(routePriorityDraftFromConfig(saved.config));
       setSelectedCanonicalModelIds(saved.config.publishedCanonicalModelAllowlist || selected);
       await refreshModelOpsConfig();
       setMessage('工作区模型发布范围已保存');
@@ -1282,6 +1365,14 @@ const AdminProviderKeysPanel: React.FC = () => {
                         const availability = modelAvailabilityById.get(model.canonicalModelId);
                         const canRunGenerationTest = canWriteOps && availability?.workspaceSelectable && (model.modality === 'text' || model.modality === 'image');
                         const diagnostics = modelDiagnostics[model.canonicalModelId] || {};
+                        const routePriorityRows = listModelRoutes(model.canonicalModelId)
+                          .map((route) => ({ route, bindingId: routeBindingId(route) }))
+                          .filter((item): item is { route: ModelRouteCatalogEntry; bindingId: string } => Boolean(item.bindingId))
+                          .sort((a, b) => {
+                            const ap = routePriorityDraft[a.bindingId] ?? a.route.priority;
+                            const bp = routePriorityDraft[b.bindingId] ?? b.route.priority;
+                            return ap - bp || a.route.providerId.localeCompare(b.route.providerId);
+                          });
                         return (
                           <label key={model.canonicalModelId} className={`block rounded-md border p-3 text-[10px] ${checked ? 'border-blue-500/45 bg-blue-950/20 text-blue-50' : 'border-white/[0.06] bg-black/20 text-gray-500'}`}>
                             <div className="flex items-start gap-3">
@@ -1298,6 +1389,26 @@ const AdminProviderKeysPanel: React.FC = () => {
                                 </div>
                                 {availability && !availability.workspaceSelectable ? (
                                   <div className="mt-1 truncate text-[10px] text-amber-200" title={availability.reason}>{availability.reason}</div>
+                                ) : null}
+                                {routePriorityRows.length > 1 ? (
+                                  <div className="mt-2 grid gap-1.5">
+                                    {routePriorityRows.map(({ route, bindingId }) => (
+                                      <div key={bindingId} className="grid grid-cols-[1fr_72px] items-center gap-2 rounded-md border border-white/[0.06] bg-black/20 px-2 py-1">
+                                        <div className="min-w-0">
+                                          <div className="truncate text-[10px] font-semibold text-gray-200">{providerShortName(route.providerId)}</div>
+                                          <div className="truncate text-[9px] text-gray-500">{route.channel || route.providerModelId}</div>
+                                        </div>
+                                        <input
+                                          inputMode="numeric"
+                                          value={String(routePriorityDraft[bindingId] ?? route.priority)}
+                                          disabled={!canWriteOps || savingModelOps}
+                                          onClick={(event) => event.stopPropagation()}
+                                          onChange={(event) => updateRoutePriority(bindingId, Number(event.target.value) || route.priority)}
+                                          className="w-full rounded-md border border-white/[0.08] bg-[#0a0a0c] px-2 py-1 text-right text-[10px] text-gray-100 disabled:opacity-40"
+                                        />
+                                      </div>
+                                    ))}
+                                  </div>
                                 ) : null}
                                 <div className="mt-2 flex flex-wrap gap-1.5">
                                   <button type="button" disabled={routeTestingId === model.canonicalModelId} onClick={(event) => { event.preventDefault(); event.stopPropagation(); void runModelRouteTest(model.canonicalModelId); }} className="rounded-md border border-white/[0.08] bg-black/20 px-2 py-1 text-[10px] text-gray-300 disabled:opacity-40">

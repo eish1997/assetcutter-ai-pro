@@ -62,6 +62,52 @@ function routeCheckInputs(model) {
   return out;
 }
 
+function routeRole(input) {
+  const modality = nonEmptyString(input?.modality);
+  if (modality === 'text') return 'text';
+  if (modality === 'image') return 'image';
+  return '';
+}
+
+function bindingIdsForRouteInput(input) {
+  const model = nonEmptyString(input?.canonicalModelId);
+  const provider = nonEmptyString(input?.provider);
+  const role = routeRole(input);
+  if (!model || !provider || !role) return [];
+  if (provider === 'vertex-site') return [`${model}:vertex-proxy:${role}`];
+  if (provider === 'gemini-aistudio') return [`${model}:gemini-aistudio:${role}`];
+  if (provider === 'openai-official') return [`${model}:openai-official:${role}`];
+  if (provider === 'tinysnow') return [`${model}:tinysnow-openai:${role}`];
+  if (provider === 'vectorengine') return [`${model}:vectorengine:${role}`];
+  if (provider === 'volcengine-ark') return [`${model}:volcengine-ark:${role}`];
+  if (provider === 'volcengine-jimeng') return [`${model}:volcengine-jimeng:${role}`];
+  if (provider === 'toapis') return [`${model}:toapis-gemini:${role}`, `${model}:toapis-openai:${role}`];
+  return [];
+}
+
+function priorityOverridesByBindingId(modelOpsConfig) {
+  const rows = Array.isArray(modelOpsConfig?.bindingOverrides) ? modelOpsConfig.bindingOverrides : [];
+  const out = new Map();
+  for (const row of rows) {
+    const bindingId = nonEmptyString(row?.bindingId);
+    const priority = Number(row?.priority);
+    if (!bindingId || !Number.isFinite(priority)) continue;
+    out.set(bindingId, Math.floor(priority));
+  }
+  return out;
+}
+
+function sortRouteInputsByAdminPriority(inputs, modelOpsConfig) {
+  const priorityByBindingId = priorityOverridesByBindingId(modelOpsConfig);
+  if (!priorityByBindingId.size) return inputs;
+  return [...inputs].sort((a, b) => {
+    const ap = bindingIdsForRouteInput(a).map((id) => priorityByBindingId.get(id)).find((v) => v != null) ?? Number.POSITIVE_INFINITY;
+    const bp = bindingIdsForRouteInput(b).map((id) => priorityByBindingId.get(id)).find((v) => v != null) ?? Number.POSITIVE_INFINITY;
+    if (ap !== bp) return ap - bp;
+    return 0;
+  });
+}
+
 function routeSummary(input, keys) {
   if (input.requiresEndpointMapping || input.executionStatus === 'requires_endpoint_mapping') {
     return {
@@ -126,8 +172,10 @@ function routeSummary(input, keys) {
   };
 }
 
-function summarizeModel(model, keys) {
-  const routeSummaries = routeCheckInputs(model).map((input) => routeSummary(input, keys));
+function summarizeModel(model, keys, modelOpsConfig) {
+  const routeSummaries = sortRouteInputsByAdminPriority(routeCheckInputs(model), modelOpsConfig).map((input) =>
+    routeSummary(input, keys)
+  );
   const ready = routeSummaries.find((route) => route.selectable);
   if (ready) {
     return {
@@ -197,7 +245,7 @@ export async function buildModelAvailabilitySummary(input = {}, options = {}) {
     .filter(Boolean)
     .slice(0, 500);
   const keys = await (options.listProviderKeys || listProviderKeys)();
-  const summaries = models.map((model) => summarizeModel(model, Array.isArray(keys) ? keys : []));
+  const summaries = models.map((model) => summarizeModel(model, Array.isArray(keys) ? keys : [], options.modelOpsConfig));
   const totals = summaries.reduce(
     (acc, row) => {
       acc.total += 1;
