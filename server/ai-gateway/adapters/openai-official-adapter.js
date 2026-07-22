@@ -17,6 +17,11 @@ const OPENAI_COMPATIBLE_ADAPTERS = new Set([
   'volcengine-ark-image',
 ]);
 const GPT_IMAGE_MAX_REFERENCE_IMAGES = 16;
+const GPT_IMAGE2_DEFAULT_TIMEOUT_MS = 600_000;
+const GPT_IMAGE2_MAX_LONG_EDGE = 3840;
+const GPT_IMAGE2_MIN_TOTAL_PIXELS = 655_360;
+const GPT_IMAGE2_MAX_TOTAL_PIXELS = 8_294_400;
+const GPT_IMAGE2_DEFAULT_LONG_EDGE = 1536;
 const VOLCENGINE_ARK_TEXT_MODEL_MAP = Object.freeze({
   'doubao-seed-2-0-pro': 'doubao-seed-2-0-pro-260215',
   'doubao-seed-2-0-lite': 'doubao-seed-2-0-lite-260428',
@@ -75,6 +80,89 @@ function mapOpenAiImageModel(value, providerId = OPENAI_PROVIDER_ID) {
 function isImageModel(value) {
   const lower = nonEmptyString(value).toLowerCase();
   return lower.includes('gpt-image') || lower.startsWith('dall-e');
+}
+
+function isGptImage2Model(value) {
+  const lower = nonEmptyString(value).toLowerCase();
+  return lower === 'gpt-image-2' || lower.startsWith('gpt-image-2-');
+}
+
+function parseAspectRatioParts(aspect) {
+  const parts = nonEmptyString(aspect || '1:1').split(':');
+  if (parts.length !== 2) return { rw: 1, rh: 1 };
+  const rw = Number(parts[0]);
+  const rh = Number(parts[1]);
+  if (!Number.isFinite(rw) || !Number.isFinite(rh) || rw <= 0 || rh <= 0) return { rw: 1, rh: 1 };
+  return { rw, rh };
+}
+
+function roundGptImage2Dimension(value) {
+  return Math.max(16, Math.round(value / 16) * 16);
+}
+
+function gptImage2TargetPixelsFromImageSize(imageSize) {
+  const s = nonEmptyString(imageSize).toUpperCase();
+  if (s === '1K') return 1_048_576;
+  if (s === '2K') return 3_686_400;
+  if (s === '4K') return GPT_IMAGE2_MAX_TOTAL_PIXELS;
+  return null;
+}
+
+function finalizeGptImage2Dimensions(width, height) {
+  let w = width;
+  let h = height;
+  for (let i = 0; i < 4; i += 1) {
+    const maxDim = Math.max(w, h);
+    if (maxDim > GPT_IMAGE2_MAX_LONG_EDGE) {
+      const scale = GPT_IMAGE2_MAX_LONG_EDGE / maxDim;
+      w *= scale;
+      h *= scale;
+    }
+    w = roundGptImage2Dimension(w);
+    h = roundGptImage2Dimension(h);
+    const pixels = w * h;
+    if (pixels >= GPT_IMAGE2_MIN_TOTAL_PIXELS && pixels <= GPT_IMAGE2_MAX_TOTAL_PIXELS) break;
+    const target = Math.max(GPT_IMAGE2_MIN_TOTAL_PIXELS, Math.min(GPT_IMAGE2_MAX_TOTAL_PIXELS, pixels));
+    const scale = Math.sqrt(target / Math.max(1, pixels));
+    w *= scale;
+    h *= scale;
+  }
+  return { width: roundGptImage2Dimension(w), height: roundGptImage2Dimension(h) };
+}
+
+function aspectRatioToGptImage2Size(aspectRatio, imageSize) {
+  const { rw, rh } = parseAspectRatioParts(aspectRatio);
+  const targetPixels = gptImage2TargetPixelsFromImageSize(imageSize);
+  const width =
+    targetPixels != null
+      ? Math.sqrt((targetPixels * rw) / rh)
+      : rw >= rh
+        ? GPT_IMAGE2_DEFAULT_LONG_EDGE
+        : (GPT_IMAGE2_DEFAULT_LONG_EDGE * rw) / rh;
+  const height =
+    targetPixels != null
+      ? Math.sqrt((targetPixels * rh) / rw)
+      : rw >= rh
+        ? (GPT_IMAGE2_DEFAULT_LONG_EDGE * rh) / rw
+        : GPT_IMAGE2_DEFAULT_LONG_EDGE;
+  const out = finalizeGptImage2Dimensions(width, height);
+  return `${out.width}x${out.height}`;
+}
+
+function resolveOpenAiImageSize(model, imageConfig) {
+  const explicit = nonEmptyString(imageConfig.size);
+  if (explicit && !/^[124]K$/i.test(explicit)) return explicit;
+  if (isGptImage2Model(model)) {
+    return aspectRatioToGptImage2Size(imageConfig.aspectRatio, nonEmptyString(imageConfig.imageSize) || explicit);
+  }
+  return explicit || '1024x1024';
+}
+
+function resolveOpenAiRequestTimeoutMs(plan, options = {}) {
+  const explicit = Number(options.timeoutMs || process.env.AI_GATEWAY_OPENAI_TIMEOUT_MS || 0);
+  if (Number.isFinite(explicit) && explicit > 0) return explicit;
+  const requestModel = plan?.workerRequest?.body?.model || plan?.adapterRequest?.body?.model || plan?.job?.model;
+  return isGptImage2Model(requestModel) ? GPT_IMAGE2_DEFAULT_TIMEOUT_MS : 120_000;
 }
 
 function textFromContents(contents) {
@@ -182,11 +270,12 @@ function buildOpenAiImageBody(job, route) {
   if (!prompt) {
     throw new AiGatewayValidationError('OpenAI image generation requires a prompt', 'AI_GATEWAY_OPENAI_PROMPT_REQUIRED');
   }
+  const model = mapOpenAiImageModel(input.upstreamModelId || input.model || job?.model, route?.providerId);
   return {
-    model: mapOpenAiImageModel(input.upstreamModelId || input.model || job?.model, route?.providerId),
+    model,
     prompt: prompt.slice(0, 32000),
     n: 1,
-    size: nonEmptyString(imageConfig.size) || '1024x1024',
+    size: resolveOpenAiImageSize(model, imageConfig),
     quality: nonEmptyString(imageConfig.quality) || 'auto',
     output_format: 'png',
     ...(parsed.inlineImages.length
@@ -286,7 +375,7 @@ export async function startOpenAiOfficialExecution(plan, options = {}) {
       'Content-Type': 'application/json',
     },
     body: JSON.stringify(request.body || {}),
-    signal: AbortSignal.timeout(Number(options.timeoutMs || process.env.AI_GATEWAY_OPENAI_TIMEOUT_MS || 120_000)),
+    signal: AbortSignal.timeout(resolveOpenAiRequestTimeoutMs(plan, options)),
   });
   const data = await readJsonSafe(response);
   if (!response.ok) {

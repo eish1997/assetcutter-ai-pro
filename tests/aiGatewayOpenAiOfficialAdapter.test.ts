@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createAiGatewayJobPlan } from '../server/ai-gateway/index.js';
 import { createInMemoryAiJobStore } from '../server/ai-gateway/job-store.js';
 import { listProviderKeyHealthEvents, resetProviderKeyRuntimeForTests, saveProviderKeys } from '../server/ai-gateway/provider-key-store.js';
@@ -26,6 +26,7 @@ describe('OpenAI official AI Gateway adapter', () => {
     }
     tempFiles.clear();
     resetProviderKeyRuntimeForTests();
+    vi.restoreAllMocks();
   });
 
   function useTempStore() {
@@ -78,6 +79,43 @@ describe('OpenAI official AI Gateway adapter', () => {
     expect(await listProviderKeyHealthEvents({ keyId: 'key_openai', limit: 5 })).toEqual([
       expect.objectContaining({ type: 'success', provider: 'openai-official' }),
     ]);
+  });
+
+  it('maps gpt-image-2 imageSize tiers and allows longer upstream execution', async () => {
+    useTempStore();
+    await saveProviderKeys([
+      { id: 'key_openai_gpt2', provider: 'openai-official', label: 'OpenAI', secret: 'sk-openai', enabled: true },
+    ]);
+    const timeoutSpy = vi.spyOn(AbortSignal, 'timeout').mockImplementation((ms: number) => {
+      const controller = new AbortController();
+      Object.defineProperty(controller.signal, '__timeoutMs', { value: ms });
+      return controller.signal;
+    });
+    const store = createInMemoryAiJobStore();
+    const plan = await store.put(createAiGatewayJobPlan({
+      id: 'aijob_openai_image_4k',
+      modality: 'image',
+      provider: 'openai-official',
+      model: 'gpt-image-2',
+      input: {
+        contents: [{ role: 'user', parts: [{ text: 'wide cinematic product render' }] }],
+        config: { imageConfig: { aspectRatio: '16:9', imageSize: '4K' } },
+      },
+    }));
+    const calls: Array<{ url: string; init: RequestInit }> = [];
+    const fetchImpl = async (url: string, init: RequestInit) => {
+      calls.push({ url, init });
+      return new Response(JSON.stringify({ id: 'img_4k', data: [{ b64_json: 'aW1hZ2U=' }] }), { status: 200 });
+    };
+
+    await startOpenAiOfficialExecution(plan, { store, fetchImpl });
+
+    expect(JSON.parse(String(calls[0].init.body))).toMatchObject({
+      model: 'gpt-image-2',
+      size: '3840x2160',
+      quality: 'auto',
+    });
+    expect(timeoutSpy).toHaveBeenCalledWith(600_000);
   });
 
   it('records OpenAI upstream failures against the provider key', async () => {
