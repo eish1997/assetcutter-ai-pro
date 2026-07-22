@@ -61,6 +61,7 @@ describe('AI gateway execution handoff', () => {
     if (prevAgentPlatformKey === undefined) delete process.env.GOOGLE_AGENT_PLATFORM_API_KEY;
     else process.env.GOOGLE_AGENT_PLATFORM_API_KEY = prevAgentPlatformKey;
     vi.useRealTimers();
+    vi.restoreAllMocks();
   });
 
   it('keeps auth-api job creation as planning-only when execution is explicitly disabled', async () => {
@@ -122,6 +123,37 @@ describe('AI gateway execution handoff', () => {
         costWeight: 2,
       },
     });
+  });
+
+  it('can return queued immediately while execution continues in the background', async () => {
+    process.env.AI_GATEWAY_EXECUTION_ENABLED = 'true';
+    process.env.AI_WORKER_PROXY_CREDITS_HMAC_SECRET = 'test_handoff_secret';
+    vi.spyOn(AbortSignal, 'timeout').mockImplementation(() => new AbortController().signal);
+    const store = createInMemoryAiJobStore();
+    const fetchImpl = vi.fn().mockImplementation(() => new Promise(() => {}));
+
+    const result = await createAuthAiGatewayJob(
+      { headers: { cookie: 'ac_session=session_1' } },
+      imageJobBody('aijob_exec_background'),
+      user,
+      {
+        store,
+        fetchImpl,
+        awaitExecution: false,
+        evaluateCreditsGate: mockedReservedCreditsGate('aijob:aijob_exec_background'),
+      }
+    );
+
+    expect(result.status).toBe(202);
+    expect(result.body.job).toMatchObject({
+      id: 'aijob_exec_background',
+      status: 'queued',
+    });
+    expect(result.body.job.metadata.gatewayExecution).toMatchObject({
+      background: true,
+      targetPath: '/proxy/gemini/async',
+    });
+    await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(1));
   });
 
   it('marks the job failed when proxy handoff is rejected with a non-transient error', async () => {

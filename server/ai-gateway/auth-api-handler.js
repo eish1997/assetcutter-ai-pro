@@ -10,6 +10,7 @@ import { readModelOpsConfig } from './model-ops-config-store.js';
 import { validateAiGatewayModelPublication } from './model-publication-guard.js';
 import { validateAiGatewayModelRouteExecutable } from './model-route-guard.js';
 import { aiGatewayTransientPostgresBody, isTransientPostgresError } from './postgres-transient-retry.js';
+import { isAiGatewayExecutionEnabled } from './health.js';
 
 const DEFAULT_LIST_LIMIT = 20;
 const MAX_LIST_LIMIT = 100;
@@ -41,6 +42,20 @@ function errorSummary(error) {
     };
   }
   return { code: null, message: String(error) };
+}
+
+function shouldAwaitAuthAiGatewayExecution(options = {}) {
+  if (typeof options.awaitExecution === 'boolean') return options.awaitExecution;
+  const raw = String(process.env.AI_GATEWAY_CREATE_AWAIT_EXECUTION || '').trim().toLowerCase();
+  if (raw === '1' || raw === 'true' || raw === 'on' || raw === 'yes') return true;
+  if (raw === '0' || raw === 'false' || raw === 'off' || raw === 'no') return false;
+  return String(process.env.NODE_ENV || '').toLowerCase() === 'test';
+}
+
+function startAuthAiGatewayExecutionInBackground(plan, executionOptions) {
+  void startAiGatewayJobExecution(plan, executionOptions).catch((error) => {
+    console.error('[ai-gateway] background execution failed:', error instanceof Error ? error.message : String(error));
+  });
 }
 
 export function publicAuthAiJobSummary(plan) {
@@ -160,7 +175,7 @@ export async function createAuthAiGatewayJob(req, body, user, options = {}) {
     };
   }
   let plan = await store.put(createAiGatewayJobPlan(planInput, { opsControl }));
-  const execution = await startAiGatewayJobExecution(plan, {
+  const executionOptions = {
     store,
     fetchImpl: options.fetchImpl,
     timeoutMs: options.executionStartTimeoutMs,
@@ -183,8 +198,28 @@ export async function createAuthAiGatewayJob(req, body, user, options = {}) {
     deferredHandoffAttempt: options.deferredHandoffAttempt,
     awaitBackgroundPoll: options.awaitBackgroundPoll,
     disableBackgroundPoll: options.disableBackgroundPoll,
-  });
-  plan = execution.plan || plan;
+  };
+  if (isAiGatewayExecutionEnabled()) {
+    if (shouldAwaitAuthAiGatewayExecution(options)) {
+      const execution = await startAiGatewayJobExecution(plan, executionOptions);
+      plan = execution.plan || plan;
+    } else {
+      plan = await store.update(plan.job.id, {
+        status: 'queued',
+        error: null,
+        metadata: {
+          gatewayExecution: {
+            queuedAt: new Date().toISOString(),
+            targetPath: plan.adapterRequest?.path || null,
+            workerId: plan.route?.workerId || null,
+            adapterId: plan.route?.adapterId || null,
+            background: true,
+          },
+        },
+      });
+      startAuthAiGatewayExecutionInBackground(plan, executionOptions);
+    }
+  }
   return { status: 202, body: publicAuthAiJobDetail(plan) };
 }
 
