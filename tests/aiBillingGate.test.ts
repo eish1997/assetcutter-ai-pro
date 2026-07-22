@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { CREDITS_EXCEEDED_CODE, LOGIN_REQUIRED_CODE } from '../shared/credits';
 import { HttpRequestError } from '../services/httpClient';
+import type { CustomAppModule } from '../types';
 
 vi.mock('../services/geminiFairnessBridge', () => ({
   getGeminiFairnessUserId: vi.fn(() => null),
@@ -47,6 +48,7 @@ import {
   assertAiGateForSteps,
   isSubmitBlockedForPlatformPlan,
   planCapabilityModuleRoutes,
+  planWorkflowActionRoutes,
   planQuickComposeRoutes,
   requiresPlatformCredits,
   resolveJobKindBillingStep,
@@ -93,6 +95,22 @@ describe('aiBillingGate', () => {
     vi.mocked(getTencentCreds).mockReturnValue({ secretId: 'sid', secretKey: 'skey' });
     const step = resolveJobKindBillingStep('workflow_generate_3d');
     expect(step.kind).toBe('exempt');
+  });
+
+  it('workflow Tripo 3D presets stay platform metered even when an old local key exists', () => {
+    vi.mocked(getTencentCreds).mockReturnValue({ secretId: 'sid', secretKey: 'skey' });
+    const steps = planWorkflowActionRoutes(
+      'tripo_3d',
+      {
+        id: 'tripo_3d',
+        label: 'Tripo 3D',
+        category: 'generate_3d',
+        generate3D: { provider: 'tripo', modelRegistryId: 'tripo-p1' },
+      } as CustomAppModule
+    );
+    expect(steps).toHaveLength(1);
+    expect(steps[0]?.kind).toBe('platform');
+    expect(steps[0]?.jobKind).toBe('workflow_generate_3d');
   });
 
   it('planCapabilityModuleRoutes adds understand step for gen_image', () => {

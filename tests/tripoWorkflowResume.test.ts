@@ -13,9 +13,13 @@ vi.mock('../services/tripoUploadImagePrep', () => ({
   prepareImageDataUrlForTripoUpload: vi.fn(async (value: string) => value),
 }));
 
-import { createAiJob } from '../services/aiJobsClient';
+import { createAiJob, getMyAiJob } from '../services/aiJobsClient';
 import { AI_GATEWAY_TRIPO_PLATFORM_KEY } from '../services/tripoService';
-import { tripoWorkflowCreateOrResumeTaskId } from '../services/generate3d/tripoWorkflow';
+import {
+  extractTripoModelAndPreviewUrls,
+  tripoWorkflowCreateOrResumeTaskId,
+  tripoWorkflowPollUntilDone,
+} from '../services/generate3d/tripoWorkflow';
 import type { CustomAppModule } from '../types';
 
 function tripoPreset(): CustomAppModule {
@@ -69,5 +73,45 @@ describe('tripoWorkflowCreateOrResumeTaskId', () => {
 
     expect(result).toEqual({ taskId: 'aijob_old_failed', resumed: true });
     expect(createAiJob).not.toHaveBeenCalled();
+  });
+
+  it('reads model URLs from AI Gateway artifacts when output raw is sparse', async () => {
+    const modelUrl = 'https://cdn.example.com/result.glb';
+    vi.mocked(getMyAiJob).mockResolvedValue({
+      job: {
+        id: 'aijob_sparse_tripo',
+        status: 'succeeded',
+        output: { provider: 'tripo', taskId: 'tripo_upstream_1', raw: { status: 'success' } },
+        artifacts: [{ kind: 'model_3d', publicUrl: modelUrl }],
+      },
+    } as Awaited<ReturnType<typeof getMyAiJob>>);
+
+    const result = await tripoWorkflowPollUntilDone({
+      apiKey: AI_GATEWAY_TRIPO_PLATFORM_KEY,
+      taskId: 'aijob_sparse_tripo',
+      normalizeApiErrorMessage: (e) => (e instanceof Error ? e.message : String(e)),
+      timeoutMs: 10,
+      intervalMs: 1,
+    });
+
+    expect(result.status).toBe('success');
+    expect(result.modelUrls).toEqual([modelUrl]);
+  });
+
+  it('extracts latest Tripo output field names', () => {
+    const result = extractTripoModelAndPreviewUrls({
+      taskId: 'tripo_1',
+      status: 'success',
+      modelUrls: [],
+      raw: {
+        output: {
+          model_url: 'https://cdn.example.com/model',
+          rendered_image_url: 'https://cdn.example.com/preview.webp',
+        },
+      },
+    });
+
+    expect(result.modelUrls).toEqual(['https://cdn.example.com/model']);
+    expect(result.previewUrl).toBe('https://cdn.example.com/preview.webp');
   });
 });

@@ -81,9 +81,30 @@ export function extractTripoModelAndPreviewUrls(done: TripoTaskResult): {
     raw && typeof raw.output === 'object' && raw.output !== null
       ? String(((raw.output as Record<string, unknown>).rendered_image as string) || '')
       : '';
+  const output = raw && typeof raw.output === 'object' && raw.output !== null
+    ? (raw.output as Record<string, unknown>)
+    : {};
+  const directModelUrl = String(output.model_url || output.modelUrl || '').trim();
+  const directPreviewUrl = String(output.rendered_image_url || output.renderedImageUrl || '').trim();
+  if (directModelUrl && !modelUrls.includes(directModelUrl)) modelUrls.push(directModelUrl);
   const previewUrl =
-    fromRaw.previewUrl || dataRendered || topRendered || '';
+    fromRaw.previewUrl || directPreviewUrl || dataRendered || topRendered || '';
   return { modelUrls, previewUrl };
+}
+
+function extractAiGatewayArtifactUrl(artifact: Record<string, unknown>): string {
+  for (const key of ['url', 'publicUrl', 'signedUrl', 'href', 'downloadUrl']) {
+    const value = String(artifact[key] || '').trim();
+    if (/^https?:\/\//i.test(value)) return value;
+  }
+  return '';
+}
+
+function isAiGatewayModel3dArtifact(artifact: Record<string, unknown>): boolean {
+  const kind = String(artifact.kind || artifact.type || artifact.mediaKind || '').toLowerCase();
+  if (/(model3d|model_3d|3d|mesh|glb|gltf|fbx|obj|stl|usdz)/.test(kind)) return true;
+  const url = extractAiGatewayArtifactUrl(artifact);
+  return /\.(glb|gltf|fbx|obj|stl|usdz|3mf|zip)(\?|#|$)/i.test(url);
 }
 
 export async function tripoWorkflowCreateOrResumeTaskId(params: {
@@ -179,14 +200,15 @@ function gatewayDetailToTripoResult(detail: AiJobDetail): TripoTaskResult {
             : 'unknown';
   const output = detail.job.output as Record<string, unknown> | null | undefined;
   const rawArtifacts = extractTripoTaskArtifactUrls(output?.raw || output || detail);
+  const artifactModelUrls = detail.job.artifacts
+    .filter((artifact) => isAiGatewayModel3dArtifact(artifact))
+    .map((artifact) => extractAiGatewayArtifactUrl(artifact))
+    .filter(Boolean);
   const modelUrls = rawArtifacts.modelUrls.length
     ? rawArtifacts.modelUrls
     : Array.isArray(output?.modelUrls)
     ? output.modelUrls.map((url) => String(url || '').trim()).filter(Boolean)
-    : detail.job.artifacts
-        .filter((artifact) => String(artifact.kind || '').toLowerCase() === 'model3d')
-        .map((artifact) => String(artifact.url || '').trim())
-        .filter(Boolean);
+    : artifactModelUrls;
   return {
     taskId: extractGatewayTripoTaskId(detail),
     status,

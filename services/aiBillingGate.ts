@@ -91,6 +91,14 @@ function billingStepForJobKind(jobKind: string, kind: AiBillingRouteKind): AiBil
   };
 }
 
+function workflowGenerate3dBillingStep(module?: CustomAppModule | null): AiBillingRouteStep {
+  const provider = module?.generate3D?.provider ?? 'tripo';
+  if (provider === 'tencent') {
+    return resolveJobKindBillingStep('workflow_generate_3d');
+  }
+  return billingStepForJobKind('workflow_generate_3d', 'platform');
+}
+
 function effectiveTextRegistryId(module: CustomAppModule, ov?: CapabilityCreditOverrides): string {
   const raw = ov?.overrideTextModelRegistryId ?? module.textModelRegistryId ?? DEFAULT_MODEL_TEXT;
   return coerceTextModelRegistryId(String(raw || DEFAULT_MODEL_TEXT));
@@ -192,7 +200,7 @@ export function planCapabilityModuleRoutes(
   }
   const cat = String(module.category || '').trim();
   if (cat === 'generate_3d') {
-    return [resolveJobKindBillingStep('workflow_generate_3d')];
+    return [workflowGenerate3dBillingStep(module)];
   }
   if (cat === 'generate_video') {
     return [billingStepForJobKind('workflow_generate_video', 'platform')];
@@ -239,7 +247,7 @@ export function planWorkflowActionRoutes(
     return planCapabilitySetRoutes(set, opts?.presets ?? []);
   }
   if (branch === 'branch_generate_3d') {
-    return [resolveJobKindBillingStep('workflow_generate_3d')];
+    return [workflowGenerate3dBillingStep(module)];
   }
   if (branch === 'branch_preset_execute_capability' && module) {
     return planCapabilityModuleRoutes(module, opts?.overrides);
