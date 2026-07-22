@@ -98,6 +98,29 @@ describe('tripoWorkflowCreateOrResumeTaskId', () => {
     expect(result.modelUrls).toEqual([modelUrl]);
   });
 
+  it('reads model URLs from alternate AI Gateway artifact URL fields', async () => {
+    const modelUrl = 'https://cdn.example.com/result-from-model-url';
+    vi.mocked(getMyAiJob).mockResolvedValue({
+      job: {
+        id: 'aijob_sparse_tripo_model_url',
+        status: 'succeeded',
+        output: { provider: 'tripo', taskId: 'tripo_upstream_model_url', raw: { status: 'success' } },
+        artifacts: [{ kind: 'model3d', modelUrl }],
+      },
+    } as Awaited<ReturnType<typeof getMyAiJob>>);
+
+    const result = await tripoWorkflowPollUntilDone({
+      apiKey: AI_GATEWAY_TRIPO_PLATFORM_KEY,
+      taskId: 'aijob_sparse_tripo_model_url',
+      normalizeApiErrorMessage: (e) => (e instanceof Error ? e.message : String(e)),
+      timeoutMs: 10,
+      intervalMs: 1,
+    });
+
+    expect(result.status).toBe('success');
+    expect(result.modelUrls).toEqual([modelUrl]);
+  });
+
   it('extracts latest Tripo output field names', () => {
     const result = extractTripoModelAndPreviewUrls({
       taskId: 'tripo_1',

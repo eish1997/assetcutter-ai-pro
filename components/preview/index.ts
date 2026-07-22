@@ -20,3 +20,24 @@ export type { LazyImagePreviewViewerProps, Model3DDisplayMode } from './registry
 export { PreviewViewerFallback } from './PreviewSuspenseFallback';
 export { PreviewImageLoadingState } from './PreviewImageLoadingState';
 export { default as PreviewViewerErrorBoundary } from './PreviewViewerErrorBoundary';
+export { AssetPreviewShell } from './AssetPreviewShell';
+export type {
+  AssetCapability,
+  AssetCapabilityInputField,
+  AssetCapabilityInputSchema,
+  AssetCapabilityOutputAsset,
+  AssetCapabilityRunResult,
+  AssetPreviewAction,
+  AssetPreviewActionHandler,
+  AssetPreviewAdapter,
+  AssetPreviewContext,
+  AssetPreviewInspectorSection,
+} from './assetPreviewTypes';
+export {
+  assetPreviewAdapterRegistry,
+  assetPreviewCapabilities,
+  getAssetPreviewAdapter,
+  getAssetPreviewCapability,
+  imagePreviewAdapter,
+  model3dPreviewAdapter,
+} from './assetPreviewAdapters';

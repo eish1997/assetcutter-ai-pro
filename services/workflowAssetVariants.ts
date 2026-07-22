@@ -149,7 +149,7 @@ function buildModelVariant(asset: WorkflowAsset, key: string): WorkflowAssetVari
   const formatsFromStep = resolveWorkflowStepModelFormats(asset, key);
   const modelFormats = modelUrls.map((url, index) => {
     const fromStep = formatsFromStep[index];
-    if (fromStep === 'glb' || fromStep === 'fbx') return fromStep;
+    if (fromStep) return fromStep;
     return modelFormatFromUrlOrKey(url, modelCompanionKeys[index] || '');
   });
   const posterUrl = cleanString((asset.results || {})[key]);

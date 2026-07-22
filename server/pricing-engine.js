@@ -16,6 +16,11 @@ function getRuntimeCatalog() {
   return DEFAULT_PRICE_CATALOG;
 }
 
+function isTextTokenBillingSku(billingSku) {
+  const sku = String(billingSku || '');
+  return sku.startsWith('llm.') || sku.startsWith('copilot.');
+}
+
 const CATEGORY_LABELS = {
   text: '文本',
   image: '图片',
@@ -87,7 +92,7 @@ const SKU_PRESENTATION = {
 };
 
 function categoryFromSku(sku) {
-  if (sku.startsWith('llm.')) return 'text';
+  if (isTextTokenBillingSku(sku)) return 'text';
   if (sku.startsWith('image.')) return 'image';
   if (sku.startsWith('3d.')) return '3d';
   if (sku.startsWith('video.') || sku.startsWith('digital_human.')) return 'video';
@@ -148,7 +153,7 @@ export function userCreditsPerUnit(entry) {
     return Math.ceil(entry.perUnit * CREDITS_PER_USD);
   }
   const sku = String(entry.billingSku || '');
-  if (sku.startsWith('llm.')) return 1;
+  if (isTextTokenBillingSku(sku)) return 1;
   return 0;
 }
 
@@ -270,7 +275,7 @@ export function priceUsageQuote(input, catalogEntry) {
     creditsFloor = unitCredits;
     creditsCharge = Math.max(tokenCredits, unitCredits);
     floorApplied = creditsCharge > tokenCredits;
-  } else if (entry.billingSku.startsWith('llm.') && input.meterKind === 'token' && hasBillableQuantity(input)) {
+  } else if (isTextTokenBillingSku(entry.billingSku) && input.meterKind === 'token' && hasBillableQuantity(input)) {
     creditsFloor = unitCredits;
     creditsCharge = Math.max(tokenCredits, unitCredits);
     floorApplied = creditsCharge > tokenCredits;

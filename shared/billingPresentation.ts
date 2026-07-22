@@ -10,6 +10,7 @@ export type BillingPresentation = {
 };
 
 const SKU_OVERRIDES: Record<string, Partial<BillingPresentation>> = {
+  'copilot.codex.tokens': { label: 'Copilot Codex tokens', unitLabel: 'times', category: 'text' },
   'llm.gemini.flash': { label: 'Gemini 2.5 Flash 文本', unitLabel: '次', category: 'text' },
   'llm.gemini.pro': { label: 'Gemini 2.5 Pro 文本', unitLabel: '次', category: 'text' },
   'llm.openai.gpt4o-mini': { label: 'GPT-4o Mini 文本', unitLabel: '次', category: 'text' },
@@ -33,6 +34,7 @@ const SKU_OVERRIDES: Record<string, Partial<BillingPresentation>> = {
 
 function categoryFromSku(sku: string): BillingPresentationCategory {
   if (sku.startsWith('llm.')) return 'text';
+  if (sku.startsWith('copilot.')) return 'text';
   if (sku.startsWith('image.')) return 'image';
   if (sku.startsWith('3d.')) return '3d';
   if (sku.startsWith('video.') || sku.startsWith('digital_human.')) return 'video';

@@ -153,6 +153,51 @@ describe('Tripo OpenAPI AI gateway worker', () => {
     );
   });
 
+  it('keeps polling when Tripo reports success before model artifacts are ready', async () => {
+    useTempKeyStore();
+    delete process.env.AI_GATEWAY_EXECUTION_ENABLED;
+    await saveProviderKeys([
+      { id: 'tripo_key_pending', provider: 'tripo', label: 'Tripo primary', secret: 'tripo-secret', enabled: true, priority: 1 },
+    ]);
+
+    const store = createInMemoryAiJobStore();
+    const plan = await store.put(createAiGatewayJobPlan({
+      id: 'aijob_tripo_pending_artifact',
+      modality: 'model3d',
+      input: { prompt: 'small stylized crate' },
+    }));
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({ task_id: 'tripo_task_pending', status: 'queued' }, true, 200))
+      .mockResolvedValueOnce(jsonResponse({
+        status: 'success',
+        output: {
+          rendered_image: 'https://cdn.example.com/preview.png',
+        },
+      }, true, 200))
+      .mockResolvedValueOnce(jsonResponse({
+        status: 'success',
+        output: {
+          model: 'https://cdn.example.com/model.glb',
+          rendered_image: 'https://cdn.example.com/preview.png',
+        },
+      }, true, 200));
+
+    await startAiGatewayJobExecution(plan, {
+      store,
+      fetchImpl,
+      pollIntervalMs: 1,
+      pollTimeoutMs: 50,
+      awaitBackgroundPoll: true,
+    });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+    const stored = await store.get('aijob_tripo_pending_artifact');
+    expect(stored.job.status).toBe('succeeded');
+    expect(stored.job.output.modelUrls).toEqual(['https://cdn.example.com/model.glb']);
+    expect(stored.job.metadata.gatewayExecution.artifactCount).toBe(1);
+  });
+
   it('returns an explicit soft-cancel result when Tripo hard cancel is unavailable', async () => {
     const plan = createAiGatewayJobPlan({
       id: 'aijob_tripo_cancel',

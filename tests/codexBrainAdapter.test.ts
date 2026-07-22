@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { EventEmitter } from 'node:events';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { PassThrough, Writable } from 'node:stream';
 import { createRequire } from 'node:module';
 
@@ -44,6 +47,7 @@ function createFakeCodexProcess(onPrompt: (prompt: string) => void, outputEvents
 
 describe('Codex brain adapter', () => {
   it('configures AssetCutter MCP and passes the MCP token as an environment variable', async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ac-codex-brain-'));
     const spawns: Array<{ command: string; args: string[]; options: any }> = [];
     const mcpWrites: any[] = [];
     const prompts: string[] = [];
@@ -51,11 +55,12 @@ describe('Codex brain adapter', () => {
       readSettings: () => ({
         codexCommand: 'codex-test',
         codexCwd: process.cwd(),
+        codexModel: 'gpt-5-codex',
         codexSandbox: 'workspace-write',
         mcpToken: 'assetcutter-secret-token',
         mcpPort: 19120,
       }),
-      brainsDir: () => process.cwd(),
+      brainsDir: () => tmp,
     };
     const adapter = createCodexBrainAdapter({
       store,
@@ -88,6 +93,9 @@ describe('Codex brain adapter', () => {
     expect(spawns[0].command).toBe('codex-test');
     expect(spawns[0].options.env.ASSETCUTTER_MCP_TOKEN).toBe('assetcutter-secret-token');
     expect(spawns[0].args).toContain('exec');
+    expect(spawns[0].args).toEqual(
+      expect.arrayContaining(['--model', 'gpt-5-codex', '--sandbox', 'workspace-write', '-C', process.cwd()]),
+    );
     expect(prompts.join('\n')).toContain('AssetCutter Copilot context');
     expect(events.some((ev: any) => ev.type === 'usage')).toBe(true);
     expect(events.some((ev: any) => ev.type === 'done')).toBe(true);

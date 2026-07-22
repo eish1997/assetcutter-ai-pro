@@ -13,6 +13,7 @@ const {
   shell,
   BrowserWindow,
   BrowserView,
+  session,
   ipcMain,
   dialog,
 } = require('electron');
@@ -23,11 +24,26 @@ const { createCompanionAutoUpdate } = require('./companion-auto-update.cjs');
 const { computeEmbeddedBrowserBounds, detachBrowserViews } = require('./embedded-browser-manager.cjs');
 const { createAgentStore } = require('./agent-store.cjs');
 const { createAgentBodyHost } = require('./agent-body-host.cjs');
+const { listSkillEntries } = require('./agent-skills.cjs');
 const { buildToolCatalog } = require('./agent-tool-schemas.cjs');
 const { createAgentSessionService } = require('./agent-session/index.cjs');
 const { createAgentPolicy } = require('./agent-policy.cjs');
-const { createAgentWorkbenchClient } = require('./agent-workbench-client.cjs');
+const { createAgentWorkbenchClient, TEAM_WEB_PARTITION } = require('./agent-workbench-client.cjs');
 const { createAgentScriptHubClient } = require('./agent-script-hub-client.cjs');
+const { COPILOT_USAGE_PRIVACY_EXCLUDES, buildCopilotUsageCloudDraft } = require('./agent-usage-cloud-draft.cjs');
+const {
+  appendProjectMemoryNote,
+  listProjectMemoryNotes,
+  updateProjectMemoryNote,
+  summarizeProjectMemory,
+} = require('./agent-memory.cjs');
+const {
+  STATUS_COMMAND,
+  WORKBENCH_OPEN_LOGIN_WAIT_COMMAND,
+  workbenchLoginActions,
+  workflowPromotionActions,
+  usageGovernanceActions,
+} = require('./agent-blocker-actions.cjs');
 const { createBrainAdapter, listBrainCatalog } = require('./brain-adapters/index.cjs');
 const { createAgentBodyMcpServer } = require('./agent-body-mcp.cjs');
 const { codexAuthStatus, syncCodexAuthFromCloud } = require('./codex-auth-sync.cjs');
@@ -159,12 +175,14 @@ const shellToolWindows = new Map();
 let workbenchBrowserView = null;
 /** @type {import('electron').BrowserView | null} */
 let scriptsBrowserView = null;
+const FIRST_PARTY_WEB_PARTITION = TEAM_WEB_PARTITION || 'persist:assetcutter-team';
+const LEGACY_FIRST_PARTY_WEB_PARTITIONS = ['persist:assetcutter-workbench', 'persist:assetcutter-script-hub'];
 /** 避免给同一 BrowserView 重复注册 `did-finish-load` */
 const workbenchPairingInjectHooked = new WeakSet();
 /** 避免给同一 BrowserView 重复注册下载接管 */
 const workbenchDownloadHooked = new WeakSet();
-/** @type {'home' | 'workbench' | 'scripts' | 'tools' | 'settings'} */
-let shellMainProcessActiveView = 'home';
+/** @type {'workbench' | 'scripts' | 'tools' | 'settings'} */
+let shellMainProcessActiveView = 'workbench';
 
 /** 与 `shell/index.html` 侧栏展开宽度一致；收起时为 0（由渲染进程 IPC 同步） */
 const SHELL_SIDEBAR_WIDTH_EXPANDED = 56;
@@ -203,6 +221,8 @@ let agentSessionService = null;
 let agentPolicy = null;
 /** @type {ReturnType<createAgentBodyMcpServer> | null} */
 let agentMcpServer = null;
+/** @type {ReturnType<createAgentWorkbenchClient> | null} */
+let agentWorkbenchClient = null;
 /** @type {import('./agent-types.d.ts').AgentBrainPort | null} */
 let agentBrainInstance = null;
 /** @type {string | null} */
@@ -664,6 +684,29 @@ function codexSettingsChanged(prev, next) {
   );
 }
 
+function buildCodexRuntimeStatus(settings) {
+  const s = settings && typeof settings === 'object' ? settings : {};
+  const command = String(s.codexCommand || (process.platform === 'win32' ? 'codex.cmd' : 'codex')).trim();
+  const cwd = String(s.codexCwd || path.resolve(__dirname, '..')).trim();
+  const cwdExists = Boolean(cwd && fs.existsSync(cwd));
+  const auth = codexAuthStatus();
+  const defaultBrain = String(s.defaultBrainId || 'codex').trim();
+  return {
+    command,
+    cwd,
+    cwdExists,
+    model: String(s.codexModel || '').trim(),
+    sandbox: String(s.codexSandbox || 'workspace-write').trim(),
+    defaultBrain,
+    isDefaultBrain: defaultBrain === 'codex',
+    auth: {
+      exists: Boolean(auth.exists),
+      path: auth.path ? String(auth.path) : '',
+    },
+    readyHint: Boolean(command && cwdExists),
+  };
+}
+
 async function buildHermesGatewayStatus(settings) {
   const state = hermesOfficialHost.getState(settings, getHermesUserRoot());
   const apiKey = state.apiKey === '<unset>' ? '' : state.apiKey;
@@ -852,11 +895,10 @@ function detachAllEmbeddedBrowserViews() {
 function normalizeShellViewName(view) {
   return view === 'workbench' ||
     view === 'settings' ||
-    view === 'home' ||
     view === 'tools' ||
     view === 'scripts'
     ? view
-    : 'home';
+    : 'workbench';
 }
 
 async function restoreEmbeddedViewForShellState(view) {
@@ -1213,6 +1255,841 @@ function resolveAuthApiOriginForCompanionApi() {
 }
 
 /** 发行 catalog 的 publicInstallUrl 常走 auth-api /api/r2 代理，须把该主机注入伴侣子进程白名单 */
+function isLikelyShellAuthCookieName(name) {
+  const value = String(name || '');
+  return value === 'ac_session' || /(^|[_-])(auth|session|token|jwt|access|refresh|sid)([_-]|$)|next-auth|supabase|sb-/i.test(value);
+}
+
+function cookieSetUrlForOrigin(origin, cookie) {
+  try {
+    const u = new URL(origin);
+    const pathValue = String((cookie && cookie.path) || '/');
+    u.pathname = pathValue.startsWith('/') ? pathValue : `/${pathValue}`;
+    u.search = '';
+    u.hash = '';
+    return u.href;
+  } catch {
+    return String(origin || '');
+  }
+}
+
+function electronCookieSetDetails(origin, cookie) {
+  const detail = {
+    url: cookieSetUrlForOrigin(origin, cookie),
+    name: String(cookie && cookie.name ? cookie.name : ''),
+    value: String(cookie && cookie.value != null ? cookie.value : ''),
+    path: String((cookie && cookie.path) || '/'),
+    secure: Boolean(cookie && cookie.secure),
+    httpOnly: Boolean(cookie && cookie.httpOnly),
+  };
+  if (cookie && cookie.domain && !cookie.hostOnly) detail.domain = cookie.domain;
+  if (cookie && Number.isFinite(Number(cookie.expirationDate))) detail.expirationDate = Number(cookie.expirationDate);
+  if (cookie && cookie.sameSite) detail.sameSite = cookie.sameSite;
+  return detail;
+}
+
+async function migrateLegacyFirstPartyCookies(authOrigin, siteOrigin) {
+  const out = {
+    attempted: false,
+    copiedCount: 0,
+    skippedReason: '',
+    sources: [],
+  };
+  const origins = [...new Set([authOrigin, siteOrigin].filter(Boolean))];
+  if (!origins.length) {
+    out.skippedReason = 'origin_unavailable';
+    return out;
+  }
+  const target = session.fromPartition(FIRST_PARTY_WEB_PARTITION);
+  const targetAuthCookies = await target.cookies.get({ url: authOrigin || origins[0] });
+  const targetHasAuth = (Array.isArray(targetAuthCookies) ? targetAuthCookies : []).some((c) =>
+    isLikelyShellAuthCookieName(c && c.name),
+  );
+  if (targetHasAuth) {
+    out.skippedReason = 'target_has_auth_cookie';
+    return out;
+  }
+  out.attempted = true;
+  for (const partitionName of LEGACY_FIRST_PARTY_WEB_PARTITIONS) {
+    if (partitionName === FIRST_PARTY_WEB_PARTITION) continue;
+    const source = session.fromPartition(partitionName);
+    const sourceOut = { partition: partitionName, cookieCount: 0, copiedCount: 0, authCookieCount: 0, error: null };
+    try {
+      for (const origin of origins) {
+        const cookies = await source.cookies.get({ url: origin });
+        sourceOut.cookieCount += Array.isArray(cookies) ? cookies.length : 0;
+        for (const cookie of Array.isArray(cookies) ? cookies : []) {
+          if (!cookie || !cookie.name || cookie.value == null) continue;
+          if (isLikelyShellAuthCookieName(cookie.name)) sourceOut.authCookieCount += 1;
+          await target.cookies.set(electronCookieSetDetails(origin, cookie));
+          sourceOut.copiedCount += 1;
+          out.copiedCount += 1;
+        }
+      }
+    } catch (e) {
+      sourceOut.error = e instanceof Error ? e.message : String(e);
+    }
+    out.sources.push(sourceOut);
+  }
+  if (!out.copiedCount) out.skippedReason = 'no_legacy_cookies';
+  return out;
+}
+
+async function readShellAccountStatus() {
+  const authOrigin = resolveAuthApiOriginForCompanionApi();
+  const siteUrl = readShellSettings().siteUrl;
+  let siteOrigin = null;
+  try {
+    siteOrigin = new URL(siteUrl).origin;
+  } catch {
+    siteOrigin = null;
+  }
+  const out = {
+    ok: true,
+    partition: FIRST_PARTY_WEB_PARTITION,
+    authOrigin,
+    siteOrigin,
+    loggedIn: false,
+    user: null,
+    cookieCount: 0,
+    cookieNames: [],
+    hasAuthCookie: false,
+    statusCode: 0,
+    migration: null,
+    error: null,
+  };
+  if (!authOrigin) {
+    out.ok = false;
+    out.error = 'auth_origin_unavailable';
+    return out;
+  }
+  try {
+    out.migration = await migrateLegacyFirstPartyCookies(authOrigin, siteOrigin);
+    const ses = session.fromPartition(FIRST_PARTY_WEB_PARTITION);
+    const cookies = await ses.cookies.get({ url: authOrigin });
+    const names = Array.isArray(cookies)
+      ? cookies.map((c) => String(c && c.name ? c.name : '')).filter(Boolean)
+      : [];
+    out.cookieCount = names.length;
+    out.cookieNames = names.slice(0, 20);
+    out.hasAuthCookie = names.some((name) => isLikelyShellAuthCookieName(name));
+    const res = await ses.fetch(`${authOrigin}/api/auth/me`, {
+      method: 'GET',
+      credentials: 'include',
+      headers: { Accept: 'application/json' },
+    });
+    out.statusCode = res.status;
+    let json = null;
+    try {
+      const text = await res.text();
+      json = text ? JSON.parse(text) : null;
+    } catch {
+      json = null;
+    }
+    out.loggedIn = Boolean(res.ok && json && (json.user || json.id || json.username));
+    out.user = json && json.user ? json.user : out.loggedIn ? json : null;
+    if (!out.loggedIn && res.status === 401) out.error = 'not_logged_in';
+  } catch (e) {
+    out.ok = false;
+    out.error = e instanceof Error ? e.message : String(e);
+  }
+  return out;
+}
+
+function splitSetCookieHeader(value) {
+  const text = String(value || '');
+  if (!text) return [];
+  const parts = [];
+  let start = 0;
+  let inExpires = false;
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i];
+    if (ch === ',') {
+      const segment = text.slice(start, i);
+      if (/expires\s*=/i.test(segment) && !/;\s*/.test(text.slice(i + 1, i + 16))) {
+        inExpires = true;
+        continue;
+      }
+      if (inExpires) {
+        inExpires = false;
+        continue;
+      }
+      const rest = text.slice(i + 1);
+      if (/^\s*[^=;,\s]+=/.test(rest)) {
+        parts.push(text.slice(start, i).trim());
+        start = i + 1;
+      }
+    }
+  }
+  const last = text.slice(start).trim();
+  if (last) parts.push(last);
+  return parts;
+}
+
+function parseSetCookieForElectron(origin, rawCookie) {
+  const raw = String(rawCookie || '').trim();
+  if (!raw) return null;
+  const parts = raw.split(';').map((p) => p.trim()).filter(Boolean);
+  const [nameValue, ...attrs] = parts;
+  const eq = nameValue.indexOf('=');
+  if (eq <= 0) return null;
+  const detail = {
+    url: origin,
+    name: nameValue.slice(0, eq),
+    value: decodeURIComponent(nameValue.slice(eq + 1)),
+    path: '/',
+    secure: false,
+    httpOnly: false,
+  };
+  for (const attr of attrs) {
+    const attrEq = attr.indexOf('=');
+    const key = (attrEq >= 0 ? attr.slice(0, attrEq) : attr).trim().toLowerCase();
+    const value = attrEq >= 0 ? attr.slice(attrEq + 1).trim() : '';
+    if (key === 'path' && value) detail.path = value;
+    else if (key === 'domain' && value) detail.domain = value;
+    else if (key === 'max-age') {
+      const seconds = Number(value);
+      if (Number.isFinite(seconds) && seconds > 0) detail.expirationDate = Math.floor(Date.now() / 1000) + seconds;
+    } else if (key === 'expires') {
+      const ms = Date.parse(value);
+      if (Number.isFinite(ms)) detail.expirationDate = Math.floor(ms / 1000);
+    } else if (key === 'secure') detail.secure = true;
+    else if (key === 'httponly') detail.httpOnly = true;
+    else if (key === 'samesite' && value) {
+      const normalized = value.toLowerCase();
+      if (normalized === 'lax') detail.sameSite = 'lax';
+      else if (normalized === 'strict') detail.sameSite = 'strict';
+      else if (normalized === 'none') detail.sameSite = 'no_restriction';
+    }
+  }
+  detail.url = cookieSetUrlForOrigin(origin, detail);
+  return detail;
+}
+
+async function loginShellAccountWithPassword(args = {}) {
+  const identifier = String(args.identifier || '').trim();
+  const password = String(args.password || '');
+  const authOrigin = resolveAuthApiOriginForCompanionApi();
+  const siteUrl = readShellSettings().siteUrl;
+  let siteOrigin = '';
+  try {
+    siteOrigin = new URL(siteUrl).origin;
+  } catch {
+    siteOrigin = '';
+  }
+  if (!identifier || !password) {
+    return { ok: false, code: 'AGENT_SHELL_LOGIN_INVALID_ARGS', error: 'identifier and password are required' };
+  }
+  if (!authOrigin) {
+    return { ok: false, code: 'AGENT_SHELL_LOGIN_ORIGIN_UNAVAILABLE', error: 'auth origin unavailable' };
+  }
+  const ses = session.fromPartition(FIRST_PARTY_WEB_PARTITION);
+  const res = await ses.fetch(`${authOrigin}/api/auth/login`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+      ...(siteOrigin ? { Origin: siteOrigin } : {}),
+    },
+    body: JSON.stringify({ identifier, password }),
+  });
+  const setCookies =
+    typeof res.headers.getSetCookie === 'function'
+      ? res.headers.getSetCookie()
+      : splitSetCookieHeader(res.headers.get('set-cookie') || '');
+  for (const rawCookie of setCookies) {
+    const detail = parseSetCookieForElectron(authOrigin, rawCookie);
+    if (!detail || !detail.name) continue;
+    await ses.cookies.set(detail);
+  }
+  let json = null;
+  let text = '';
+  try {
+    text = await res.text();
+    json = text ? JSON.parse(text) : null;
+  } catch {
+    json = null;
+  }
+  const account = await readShellAccountStatus();
+  if (!res.ok || !account.loggedIn) {
+    return {
+      ok: false,
+      code: res.status === 401 ? 'AGENT_AUTH_REQUIRED' : 'AGENT_SHELL_LOGIN_HTTP',
+      statusCode: res.status,
+      error: json && json.error ? String(json.error) : text || `login failed with HTTP ${res.status}`,
+      account: summarizeShellAccountForAgent(account),
+      cookieNames: Array.isArray(setCookies) ? setCookies.map((c) => String(c).split('=')[0]).filter(Boolean) : [],
+    };
+  }
+  return {
+    ok: true,
+    statusCode: res.status,
+    account: summarizeShellAccountForAgent(account),
+    cookieNames: Array.isArray(setCookies) ? setCookies.map((c) => String(c).split('=')[0]).filter(Boolean) : [],
+  };
+}
+
+async function uploadCopilotUsageCloudDraft(opts = {}) {
+  const daysRaw = Number(opts && opts.days);
+  const limitRaw = Number(opts && opts.limit);
+  const days = Number.isFinite(daysRaw) && daysRaw > 0 ? Math.min(30, Math.floor(daysRaw)) : 1;
+  const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(50000, Math.floor(limitRaw)) : 5000;
+  const dryRun = Boolean(opts && opts.dryRun);
+  const account = await readShellAccountStatus();
+  const accountSummary = summarizeShellAccountForAgent(account);
+  const summary =
+    agentStore && typeof agentStore.summarizeUsageAudit === 'function'
+      ? agentStore.summarizeUsageAudit({ days, limit })
+      : null;
+  const draft = buildCopilotUsageCloudDraft(summary, { quotaPolicy: readCopilotUsageQuotaPolicy() });
+  const base = {
+    ok: false,
+    uploaded: false,
+    dryRun,
+    endpoint: draft.targetApi,
+    partition: FIRST_PARTY_WEB_PARTITION,
+    account: accountSummary,
+    eventCount: draft.eventCount,
+    idempotencyScope: draft.idempotencyScope,
+    privacyExcludes: Array.isArray(draft.privacy && draft.privacy.excludes)
+      ? draft.privacy.excludes.map(String)
+      : [...COPILOT_USAGE_PRIVACY_EXCLUDES],
+  };
+  if (!draft.events.length) {
+    return {
+      ...base,
+      ok: true,
+      code: 'AGENT_USAGE_UPLOAD_NO_EVENTS',
+      noEvents: true,
+      message: 'No local Copilot usage events are available for this window.',
+      nextStep: 'Run Copilot work first, then retry when local token usage exists.',
+    };
+  }
+  if (dryRun) {
+    return {
+      ...base,
+      ok: true,
+      validated: true,
+      message: 'Usage cloud draft is valid; real upload still requires the shell team session.',
+      nextStep: 'Retry with dryRun=false after admin approval and an authenticated shell team session.',
+    };
+  }
+  if (!accountSummary.loggedIn) {
+    return {
+      ...base,
+      code: 'AGENT_AUTH_REQUIRED',
+      authRequired: true,
+      message: 'Shell team session is not logged in; open the embedded Workbench and finish login before uploading usage.',
+      recoveryTool: { name: 'ac.shell.navigate', arguments: { view: 'workbench' } },
+      nextStep: 'Open the embedded Workbench, finish login, then retry ac.usage.upload_cloud_draft.',
+    };
+  }
+  const authOrigin = resolveAuthApiOriginForCompanionApi();
+  if (!authOrigin) {
+    return {
+      ...base,
+      code: 'AGENT_USAGE_UPLOAD_ORIGIN_UNAVAILABLE',
+      message: 'Auth API origin is unavailable.',
+    };
+  }
+  try {
+    const ses = session.fromPartition(FIRST_PARTY_WEB_PARTITION);
+    const res = await ses.fetch(`${authOrigin}/api/usage/events`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ events: draft.events }),
+    });
+    const text = await res.text();
+    let json = null;
+    try {
+      json = text ? JSON.parse(text) : null;
+    } catch {
+      json = null;
+    }
+    if (!res.ok) {
+      return {
+        ...base,
+        code: res.status === 401 ? 'AGENT_AUTH_REQUIRED' : 'AGENT_USAGE_UPLOAD_HTTP',
+        authRequired: res.status === 401,
+        statusCode: res.status,
+        message: json && json.error ? String(json.error) : text || `Usage upload failed with HTTP ${res.status}.`,
+        nextStep:
+          res.status === 401
+            ? 'Open the embedded Workbench, finish login, then retry ac.usage.upload_cloud_draft.'
+            : 'Check the team usage API and retry with the same idempotency scope.',
+      };
+    }
+    return {
+      ...base,
+      ok: true,
+      uploaded: true,
+      statusCode: res.status,
+      inserted: Number(json && json.inserted) || 0,
+      skipped: Number(json && json.skipped) || 0,
+      disabled: Boolean(json && json.disabled),
+      serverOk: Boolean(json && json.ok),
+      message:
+        json && json.disabled
+          ? 'Usage billing API accepted the request but billing is disabled.'
+          : 'Sanitized Copilot usage events were uploaded through the shell session.',
+      nextStep:
+        json && json.disabled
+          ? 'Enable team usage billing/quota policy before treating uploads as enforced governance.'
+          : 'Use the team usage/audit UI or API to review the uploaded Copilot usage events.',
+    };
+  } catch (e) {
+    return {
+      ...base,
+      code: 'AGENT_USAGE_UPLOAD_FAILED',
+      message: e instanceof Error ? e.message : String(e),
+      nextStep: 'Check the local auth API connection and retry with the same idempotency scope.',
+    };
+  }
+}
+
+function readCopilotUsageQuotaPolicy() {
+  const settings = agentStore && typeof agentStore.readSettings === 'function' ? agentStore.readSettings() : null;
+  const policy = settings && settings.copilotUsageQuotaPolicy && typeof settings.copilotUsageQuotaPolicy === 'object'
+    ? settings.copilotUsageQuotaPolicy
+    : {};
+  return {
+    cloudQuotaEnforced: Boolean(policy.cloudQuotaEnforced),
+    usageBillingEnabled: Boolean(policy.usageBillingEnabled),
+    currentPhase: policy.currentPhase ? String(policy.currentPhase) : '',
+    enforcementSource: policy.enforcementSource ? String(policy.enforcementSource) : '',
+    policyId: policy.policyId ? String(policy.policyId) : '',
+    billingSku: policy.billingSku ? String(policy.billingSku) : '',
+    checkedAt: policy.checkedAt ? String(policy.checkedAt) : '',
+  };
+}
+
+function listWorkflowPromotionDraftSummaries() {
+  if (!agentStore || typeof agentStore.skillsDir !== 'function') return { ok: false, error: 'agent_not_ready', drafts: [] };
+  const skillsRoot = agentStore.skillsDir();
+  const drafts = listSkillEntries(skillsRoot)
+    .map((skill) => ({
+      id: skill.id ? String(skill.id) : '',
+      name: skill.name ? String(skill.name) : '',
+      description: skill.description ? String(skill.description) : '',
+      revision: Number.isFinite(Number(skill.revision)) ? Number(skill.revision) : 1,
+      updatedAt: skill.updatedAt ? String(skill.updatedAt) : '',
+      createdAt: skill.createdAt ? String(skill.createdAt) : '',
+      hasWorkbenchPreset: Boolean(skill.workbenchPreset),
+      hasScriptManifest: Boolean(skill.scriptManifest),
+      promptName: skill.id ? `skill:${skill.id}` : '',
+      resourceUri: skill.id ? `skill://${skill.id}` : '',
+    }))
+    .filter((skill) => skill.id)
+    .sort((a, b) => String(b.updatedAt || b.createdAt).localeCompare(String(a.updatedAt || a.createdAt)));
+  return {
+    ok: true,
+    skillsRoot,
+    count: drafts.length,
+    latest: drafts[0] || null,
+    drafts,
+  };
+}
+
+async function probeCopilotUsageQuotaPolicy() {
+  const account = await readShellAccountStatus();
+  const accountSummary = summarizeShellAccountForAgent(account);
+  const base = {
+    ok: false,
+    account: accountSummary,
+    partition: FIRST_PARTY_WEB_PARTITION,
+    endpoint: '/api/usage/policy',
+  };
+  if (!accountSummary.loggedIn) {
+    return {
+      ...base,
+      code: 'AGENT_AUTH_REQUIRED',
+      authRequired: true,
+      message: 'Shell team session is not logged in; open the embedded Workbench before probing usage policy.',
+      recoveryTool: { name: 'ac.shell.navigate', arguments: { view: 'workbench' } },
+      quotaPolicy: readCopilotUsageQuotaPolicy(),
+    };
+  }
+  const authOrigin = resolveAuthApiOriginForCompanionApi();
+  if (!authOrigin) {
+    return {
+      ...base,
+      code: 'AGENT_USAGE_POLICY_ORIGIN_UNAVAILABLE',
+      message: 'Auth API origin is unavailable.',
+      quotaPolicy: readCopilotUsageQuotaPolicy(),
+    };
+  }
+  try {
+    const ses = session.fromPartition(FIRST_PARTY_WEB_PARTITION);
+    const res = await ses.fetch(`${authOrigin}/api/usage/policy`, {
+      method: 'GET',
+      credentials: 'include',
+      headers: { Accept: 'application/json' },
+    });
+    const text = await res.text();
+    let json = null;
+    try {
+      json = text ? JSON.parse(text) : null;
+    } catch {
+      json = null;
+    }
+    if (!res.ok) {
+      return {
+        ...base,
+        code: res.status === 401 ? 'AGENT_AUTH_REQUIRED' : 'AGENT_USAGE_POLICY_HTTP',
+        authRequired: res.status === 401,
+        statusCode: res.status,
+        message: json && json.error ? String(json.error) : text || `Usage policy probe failed with HTTP ${res.status}.`,
+        quotaPolicy: readCopilotUsageQuotaPolicy(),
+      };
+    }
+    const quotaPolicy = {
+      cloudQuotaEnforced: Boolean(json && json.cloudQuotaEnforced),
+      usageBillingEnabled: Boolean(json && json.usageBillingEnabled),
+      currentPhase: json && json.currentPhase ? String(json.currentPhase) : '',
+      enforcementSource: json && json.enforcementSource ? String(json.enforcementSource) : 'auth_api_usage_policy',
+      policyId: json && json.policyId ? String(json.policyId) : '',
+      billingSku: json && json.billingSku ? String(json.billingSku) : 'copilot.codex.tokens',
+      checkedAt: json && json.checkedAt ? String(json.checkedAt) : new Date().toISOString(),
+    };
+    if (agentStore) agentStore.writeSettings({ copilotUsageQuotaPolicy: quotaPolicy });
+    return {
+      ...base,
+      ok: true,
+      statusCode: res.status,
+      usageBillingEnabled: Boolean(json && json.usageBillingEnabled),
+      quotaPolicy,
+      message: quotaPolicy.cloudQuotaEnforced
+        ? 'Team usage billing/quota policy is enabled.'
+        : 'Usage billing API is reachable, but quota enforcement is disabled.',
+    };
+  } catch (e) {
+    return {
+      ...base,
+      code: 'AGENT_USAGE_POLICY_PROBE_FAILED',
+      message: e instanceof Error ? e.message : String(e),
+      quotaPolicy: readCopilotUsageQuotaPolicy(),
+    };
+  }
+}
+
+function summarizeCopilotUsageAudit(options) {
+  const summary =
+    agentStore && typeof agentStore.summarizeUsageAudit === 'function'
+      ? agentStore.summarizeUsageAudit(options && typeof options === 'object' ? options : {})
+      : null;
+  if (!summary || typeof summary !== 'object') return summary;
+  const quotaPolicy = readCopilotUsageQuotaPolicy();
+  return {
+    ...summary,
+    currentPhase: 'local_usage_signal',
+    cloudEnforced: Boolean(quotaPolicy.cloudQuotaEnforced),
+    cloudDraft: buildCopilotUsageCloudDraft(summary, { quotaPolicy }),
+  };
+}
+
+function extractWorkbenchProjectForMemory(context) {
+  const ctx = context && typeof context === 'object' ? context : {};
+  const structured = ctx.structured && typeof ctx.structured === 'object' ? ctx.structured : ctx;
+  const activeProject = structured.activeProject && typeof structured.activeProject === 'object' ? structured.activeProject : null;
+  const projectId = String(
+    structured.activeProjectId ||
+      (activeProject && (activeProject.id || activeProject.projectId)) ||
+      structured.projectId ||
+      '',
+  ).trim();
+  const projectName = String(
+    structured.activeProjectName ||
+      (activeProject && (activeProject.name || activeProject.title)) ||
+      structured.projectName ||
+      projectId ||
+      '',
+  ).trim();
+  return { projectId, projectName, structured };
+}
+
+async function readCurrentProjectMemoryScope(options) {
+  const opts = options && typeof options === 'object' ? options : {};
+  if (opts.projectId) {
+    return {
+      projectId: String(opts.projectId),
+      projectName: opts.projectName ? String(opts.projectName) : '',
+      context: null,
+    };
+  }
+  if (!agentWorkbenchClient || typeof agentWorkbenchClient.getContext !== 'function') {
+    return { projectId: 'unscoped', projectName: '', context: null };
+  }
+  try {
+    const context = await agentWorkbenchClient.getContext();
+    const project = extractWorkbenchProjectForMemory(context);
+    return {
+      projectId: project.projectId || 'unscoped',
+      projectName: project.projectName,
+      context,
+    };
+  } catch {
+    return { projectId: 'unscoped', projectName: '', context: null };
+  }
+}
+
+async function listCopilotProjectMemory(options) {
+  if (!agentStore) return { ok: false, error: 'agent_not_ready' };
+  const scope = await readCurrentProjectMemoryScope(options);
+  const opts = options && typeof options === 'object' ? options : {};
+  const notes = listProjectMemoryNotes(agentStore.memoryDir(), {
+    projectId: scope.projectId,
+    includeDisabled: Boolean(opts.includeDisabled),
+    includeDeleted: Boolean(opts.includeDeleted),
+    kind: opts.kind,
+    limit: opts.limit || 50,
+  });
+  const summary = summarizeProjectMemory(agentStore.memoryDir(), { projectId: scope.projectId, limit: 200 });
+  return {
+    ok: true,
+    projectId: scope.projectId,
+    projectName: scope.projectName,
+    notes,
+    summary,
+  };
+}
+
+async function saveCopilotProjectMemory(entry) {
+  if (!agentStore) return { ok: false, error: 'agent_not_ready' };
+  const payload = entry && typeof entry === 'object' ? entry : {};
+  const scope = await readCurrentProjectMemoryScope(payload);
+  const result = appendProjectMemoryNote(agentStore.memoryDir(), {
+    ...payload,
+    projectId: scope.projectId,
+    projectName: payload.projectName || scope.projectName,
+    source: payload.source || 'copilot-ui',
+    confirmedBy: payload.confirmedBy || 'user',
+  });
+  if (!result.ok) return result;
+  const summary = summarizeProjectMemory(agentStore.memoryDir(), { projectId: scope.projectId, limit: 200 });
+  return {
+    ok: true,
+    projectId: scope.projectId,
+    projectName: payload.projectName || scope.projectName,
+    note: result.note,
+    summary,
+  };
+}
+
+function summarizeShellAccountForAgent(status) {
+  const s = status && typeof status === 'object' ? status : {};
+  const user = s.user && typeof s.user === 'object' ? s.user : {};
+  const migration = s.migration && typeof s.migration === 'object' ? s.migration : null;
+  return {
+    loggedIn: Boolean(s.loggedIn),
+    user: s.loggedIn
+      ? {
+          id: user.id != null ? String(user.id) : '',
+          username: user.username != null ? String(user.username) : '',
+          email: user.email != null ? String(user.email) : '',
+          name: user.name != null ? String(user.name) : '',
+        }
+      : null,
+    partition: String(s.partition || FIRST_PARTY_WEB_PARTITION),
+    authOrigin: s.authOrigin || null,
+    siteOrigin: s.siteOrigin || null,
+    cookieCount: Number(s.cookieCount) || 0,
+    hasAuthCookie: Boolean(s.hasAuthCookie),
+    statusCode: Number(s.statusCode) || 0,
+    error: s.error || null,
+    migration: migration
+      ? {
+          attempted: Boolean(migration.attempted),
+          copiedCount: Number(migration.copiedCount) || 0,
+          skippedReason: migration.skippedReason || '',
+          sourceCount: Array.isArray(migration.sources) ? migration.sources.length : 0,
+        }
+      : null,
+    nextStep: s.loggedIn
+      ? 'Use ac.workbench.ensure_ready before creating projects or running capabilities.'
+      : 'Call ac.shell.navigate with { "view": "workbench" }, let the user log in, then retry ac.workbench.ensure_ready.',
+  };
+}
+
+function summarizeWorkbenchE2eEntrance(e2e, shellAccount) {
+  const r = e2e && typeof e2e === 'object' ? e2e : {};
+  const account = summarizeShellAccountForAgent(shellAccount);
+  return {
+    checkedAt: new Date().toISOString(),
+    ok: Boolean(r.ok),
+    failedStep: r.failedStep ? String(r.failedStep) : '',
+    errorCode: r.errorCode ? String(r.errorCode) : '',
+    authRequired: Boolean(r.authRequired || r.errorCode === 'AGENT_AUTH_REQUIRED'),
+    action: r.action ? String(r.action) : '',
+    projectId: r.projectId ? String(r.projectId) : '',
+    assetId: r.assetId ? String(r.assetId) : '',
+    nextStep: r.nextStep ? String(r.nextStep).slice(0, 500) : '',
+    account: {
+      loggedIn: account.loggedIn,
+      partition: account.partition,
+      authOrigin: account.authOrigin,
+      siteOrigin: account.siteOrigin,
+      cookieCount: account.cookieCount,
+      hasAuthCookie: account.hasAuthCookie,
+      statusCode: account.statusCode,
+      error: account.error,
+    },
+  };
+}
+
+function buildAgentMcpEntranceBlockers(status, settings) {
+  const s = status && typeof status === 'object' ? status : {};
+  const shellAccount = s.shellAccount && typeof s.shellAccount === 'object' ? s.shellAccount : {};
+  const workbenchEntrance = s.workbenchEntrance && typeof s.workbenchEntrance === 'object' ? s.workbenchEntrance : {};
+  const workflow = s.workflowPublication && typeof s.workflowPublication === 'object' ? s.workflowPublication : {};
+  const usage = s.usageAudit && typeof s.usageAudit === 'object' ? s.usageAudit : {};
+  const codexRuntime = buildCodexRuntimeStatus(settings);
+  const blockers = [];
+  const add = (id, severity, owner, nextStep, detail) => {
+    blockers.push({ id, severity, owner, nextStep, ...(detail && typeof detail === 'object' ? detail : {}) });
+  };
+  if (!agentMcpServer || !agentMcpServer.status || !agentMcpServer.status().running) {
+    add('mcp_unavailable', 'critical', 'local_shell', 'Enable and restart the local MCP server before using Copilot as an external Agent body.');
+  }
+  if (!codexRuntime || !codexRuntime.readyHint) {
+    add('codex_runtime_not_ready', 'action_required', 'admin', 'Configure the Codex command/cwd/auth state in Companion Settings.');
+  }
+  if (!shellAccount.loggedIn) {
+    add('workbench_login_required', 'action_required', 'user', 'Open the embedded Workbench and finish login.', {
+      command: WORKBENCH_OPEN_LOGIN_WAIT_COMMAND,
+      actions: workbenchLoginActions(),
+    });
+  }
+  const entranceStatus = workbenchEntrance.status ? String(workbenchEntrance.status) : '';
+  if (entranceStatus && entranceStatus !== 'ready' && entranceStatus !== 'login_required') {
+    add(`workbench_${entranceStatus}`, 'action_required', 'admin', workbenchEntrance.nextStep || 'Rerun the Workbench E2E validation.', {
+      command: workbenchEntrance.waitLoginCommand || 'npm run smoke:agent-mcp:e2e:wait-login',
+      actions: workbenchLoginActions(),
+    });
+  }
+  const promotion = workflow.promotionReadiness && typeof workflow.promotionReadiness === 'object' ? workflow.promotionReadiness : null;
+  if (promotion && promotion.publishableNow === false) {
+    const promotionTargets = Array.isArray(promotion.targets)
+      ? promotion.targets.map((target) => ({
+          id: target && target.id ? String(target.id) : '',
+          status: target && target.status ? String(target.status) : '',
+          plannedTool: target && target.plannedTool ? String(target.plannedTool) : '',
+          passedGates: Array.isArray(target && target.passedGates) ? target.passedGates.map(String) : [],
+          missingGates: Array.isArray(target && target.missing) ? target.missing.map(String) : [],
+          unevaluatedGates: Array.isArray(target && target.unevaluatedGates) ? target.unevaluatedGates.map(String) : [],
+          adminConfirmation:
+            target && target.adminConfirmation && typeof target.adminConfirmation === 'object'
+              ? {
+                  required: Boolean(target.adminConfirmation.required),
+                  passed: Boolean(target.adminConfirmation.passed),
+                  sourceRequired: target.adminConfirmation.sourceRequired
+                    ? String(target.adminConfirmation.sourceRequired)
+                    : 'copilot_ui',
+                  autoConfirmCountsAsAdminApproval: Boolean(target.adminConfirmation.autoConfirmCountsAsAdminApproval),
+                }
+              : null,
+        }))
+      : [];
+    add('workflow_promotion_draft_only', 'info', 'admin', promotion.reason || 'Workflow drafts are not yet publishable as governed team tools.', {
+      command: STATUS_COMMAND,
+      phase: promotion.currentPhase || 'draft_only',
+      publishableNow: false,
+      promotionTargets,
+      missingGates: [...new Set(promotionTargets.flatMap((target) => target.missingGates || []))],
+      actions: workflowPromotionActions(),
+    });
+  }
+  const usagePhase =
+    usage.currentPhase
+      ? String(usage.currentPhase)
+      : usage.totals && typeof usage.totals === 'object'
+        ? 'local_usage_signal'
+        : '';
+  if (usagePhase === 'local_usage_signal' && !usage.cloudEnforced) {
+    const usageCloudDraft = usage.cloudDraft && typeof usage.cloudDraft === 'object' ? usage.cloudDraft : null;
+    const usageMissingGates =
+      usageCloudDraft && Array.isArray(usageCloudDraft.blockedBy)
+        ? [...new Set(usageCloudDraft.blockedBy.map(String).filter(Boolean))]
+        : [];
+    add('usage_governance_local_only', 'info', 'admin', 'Local Copilot usage is visible, but team quota enforcement and cloud audit are not connected yet.', {
+      command: STATUS_COMMAND,
+      phase: usagePhase,
+      cloudEnforced: false,
+      resource: 'assetcutter://mcp/usage-audit',
+      missingGates: usageMissingGates,
+      actions: usageGovernanceActions(),
+      cloudDraft: usageCloudDraft
+        ? {
+            currentPhase: usageCloudDraft.currentPhase || 'cloud_event_draft',
+            targetApi: usageCloudDraft.targetApi || '/api/usage/events',
+            eventCount: Number(usageCloudDraft.eventCount) || 0,
+            uploadReady: Boolean(usageCloudDraft.uploadReady),
+            blockedBy: Array.isArray(usageCloudDraft.blockedBy) ? usageCloudDraft.blockedBy.map(String) : [],
+            uploadPlan:
+              usageCloudDraft.uploadPlan && typeof usageCloudDraft.uploadPlan === 'object'
+                ? {
+                    endpoint: usageCloudDraft.uploadPlan.endpoint || '/api/usage/events',
+                    method: usageCloudDraft.uploadPlan.method || 'POST',
+                    credentials: usageCloudDraft.uploadPlan.credentials || 'include',
+                    tool: usageCloudDraft.uploadPlan.tool || 'ac.usage.upload_cloud_draft',
+                    idempotencyScope: usageCloudDraft.uploadPlan.idempotencyScope || '',
+                    safeToRetry: Boolean(
+                      usageCloudDraft.uploadPlan.retry && usageCloudDraft.uploadPlan.retry.safeToRetry,
+                    ),
+                  }
+                : null,
+            quotaPolicy:
+              usageCloudDraft.quotaPolicy && typeof usageCloudDraft.quotaPolicy === 'object'
+                ? {
+                    currentPhase: usageCloudDraft.quotaPolicy.currentPhase || 'usage_event_ingestion_ready',
+                    billingSku: usageCloudDraft.quotaPolicy.billingSku || 'copilot.codex.tokens',
+                    billingSkuRegisteredInDefaultCatalog: Boolean(
+                      usageCloudDraft.quotaPolicy.billingSkuRegisteredInDefaultCatalog,
+                    ),
+                    usageBillingApiConfigured: Boolean(usageCloudDraft.quotaPolicy.usageBillingApiConfigured),
+                    cloudQuotaEnforced: Boolean(usageCloudDraft.quotaPolicy.cloudQuotaEnforced),
+                    usageBillingEnabled: Boolean(usageCloudDraft.quotaPolicy.usageBillingEnabled),
+                    enforcementSource: usageCloudDraft.quotaPolicy.enforcementSource
+                      ? String(usageCloudDraft.quotaPolicy.enforcementSource)
+                      : '',
+                    policyId: usageCloudDraft.quotaPolicy.policyId ? String(usageCloudDraft.quotaPolicy.policyId) : '',
+                    probeTool: usageCloudDraft.quotaPolicy.probeTool || 'ac.usage.probe_quota_policy',
+                    policyEndpoint: usageCloudDraft.quotaPolicy.policyEndpoint || '/api/usage/policy',
+                  }
+                : null,
+          }
+        : null,
+    });
+  }
+  return blockers;
+}
+
+async function buildAgentMcpEntranceStatus() {
+  if (!agentMcpServer || typeof agentMcpServer.summarizeWorkbenchEntranceState !== 'function') return null;
+  const shellAccount = await readShellAccountStatus();
+  const settings = agentStore ? agentStore.readSettings() : null;
+  const status = {
+    shellAccount,
+    ...agentMcpServer.summarizeWorkbenchEntranceState(summarizeShellAccountForAgent(shellAccount)),
+  };
+  if (typeof agentMcpServer.summarizeWorkflowPublicationState === 'function') {
+    status.workflowPublication = await agentMcpServer.summarizeWorkflowPublicationState();
+  }
+  if (agentStore && typeof agentStore.summarizeUsageAudit === 'function') {
+    status.usageAudit = summarizeCopilotUsageAudit({ days: 1, limit: 5000 });
+  }
+  status.blockers = buildAgentMcpEntranceBlockers(status, settings);
+  status.workbenchUsable = Boolean(status.workbenchEntrance && status.workbenchEntrance.ready);
+  status.teamEntranceReady = Boolean(status.workbenchUsable && status.blockers.length === 0);
+  status.teamEntrancePhase = status.teamEntranceReady ? 'ready' : status.workbenchUsable ? 'governance_blocked' : 'workbench_blocked';
+  status.teamEntranceBlockers = status.blockers.map((blocker) => String(blocker && blocker.id ? blocker.id : 'unknown'));
+  return status;
+}
+
 function applyCompanionBundleDownloadTrustEnv(env) {
   const authOrigin = resolveAuthApiOriginForCompanionApi();
   if (authOrigin) {
@@ -2488,7 +3365,7 @@ function ensureWorkbenchBrowserView() {
 
   const view = new BrowserView({
     webPreferences: {
-      partition: 'persist:assetcutter-workbench',
+      partition: FIRST_PARTY_WEB_PARTITION,
       preload: path.join(__dirname, 'preload-workbench.cjs'),
       contextIsolation: true,
       nodeIntegration: false,
@@ -2596,7 +3473,7 @@ function ensureScriptsBrowserView() {
 
   const view = new BrowserView({
     webPreferences: {
-      partition: 'persist:assetcutter-script-hub',
+      partition: FIRST_PARTY_WEB_PARTITION,
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
@@ -2679,8 +3556,10 @@ async function getAgentShellStateSummary() {
   const port = readHttpPort();
   const alive = await probeCompanionHealth();
   const brainProbe = agentSessionService ? await agentSessionService.probeBrain() : { ok: false };
+  const shellAccount = summarizeShellAccountForAgent(await readShellAccountStatus());
   return {
     shellView: shellMainProcessActiveView,
+    account: shellAccount,
     companion: {
       connected: alive,
       port,
@@ -2722,6 +3601,7 @@ function initAgentPlatform() {
     invokeBridge: invokeWorkbenchBridge,
     navigateShell: navigateShellFromAgent,
   });
+  agentWorkbenchClient = workbenchClient;
 
   const scriptHubClient = createAgentScriptHubClient({
     getScriptHubApiUrl: () => readShellSettings().scriptHubApiUrl,
@@ -2735,10 +3615,13 @@ function initAgentPlatform() {
     navigateShell: navigateShellFromAgent,
     companionApiRequest,
     getStateSummary: getAgentShellStateSummary,
+    shellLogin: loginShellAccountWithPassword,
     workbenchClient,
     scriptHubClient,
     runShellTool: agentRunShellTool,
     runShellBootstrap: agentRunShellBootstrap,
+    uploadCopilotUsageCloudDraft,
+    probeCopilotUsageQuotaPolicy,
     getSkillsRoot: () => agentStore.skillsDir(),
     getMemoryRoot: () => agentStore.memoryDir(),
   });
@@ -2764,7 +3647,10 @@ function initAgentPlatform() {
     waitForConfirm: waitForAgentConfirm,
     appendAudit: (entry) => agentStore.appendAudit(entry),
     listToolExecutions: (options) => agentStore.listToolExecutions(options && typeof options === 'object' ? options : {}),
+    summarizeUsageAudit: (options) => summarizeCopilotUsageAudit(options && typeof options === 'object' ? options : {}),
     getShellView: () => shellMainProcessActiveView,
+    getStateSummary: getAgentShellStateSummary,
+    getCodexRuntimeStatus: () => buildCodexRuntimeStatus(agentStore.readSettings()),
     getSkillsRoot: () => agentStore.skillsDir(),
     log: companionLog.bind(null, 'log'),
   });
@@ -2828,7 +3714,7 @@ function openMainWindow() {
   mainWindow.on('closed', () => {
     workbenchBrowserView = null;
     scriptsBrowserView = null;
-    shellMainProcessActiveView = 'home';
+    shellMainProcessActiveView = 'workbench';
     mainWindow = null;
   });
 
@@ -2974,6 +3860,7 @@ if (!gotLock) {
   });
 
   ipcMain.handle('shell-settings-load', () => readShellSettings());
+  ipcMain.handle('shell-account-status', () => readShellAccountStatus());
 
   ipcMain.handle('shell-settings-save', (_e, patch) => {
     try {
@@ -3334,6 +4221,7 @@ if (!gotLock) {
     const mcp = agentMcpServer ? agentMcpServer.status() : { enabled: false, running: false };
     const mcpConfig = agentMcpServer ? agentMcpServer.buildMcpClientConfig() : null;
     const mcpToolCatalog = await buildAgentMcpToolCatalog();
+    const mcpEntranceStatus = await buildAgentMcpEntranceStatus();
     const agentPolicyConfig = agentPolicy ? agentPolicy.readPolicy() : null;
     const hermesGateway = await buildHermesGatewayStatus(settings);
     return {
@@ -3342,8 +4230,11 @@ if (!gotLock) {
       mcp,
       mcpConfig,
       mcpToolCatalog,
+      mcpEntranceStatus,
       agentPolicy: agentPolicyConfig,
+      policyTemplates: agentPolicy && typeof agentPolicy.listPolicyTemplates === 'function' ? agentPolicy.listPolicyTemplates() : [],
       hermesGateway,
+      codexRuntime: buildCodexRuntimeStatus(settings),
       codexAuth: codexAuthStatus(),
       brains: listBrainCatalog(),
       brainMetas: agentStore.listBrainMetas(),
@@ -3367,14 +4258,18 @@ if (!gotLock) {
       await agentMcpServer.syncFromSettings();
     }
     const hermesGateway = await buildHermesGatewayStatus(next);
+    const mcpEntranceStatus = await buildAgentMcpEntranceStatus();
     return {
       ok: true,
       settings: next,
       mcp: agentMcpServer ? agentMcpServer.status() : null,
       mcpConfig: agentMcpServer ? agentMcpServer.buildMcpClientConfig() : null,
       mcpToolCatalog: await buildAgentMcpToolCatalog(),
+      mcpEntranceStatus,
       agentPolicy: agentPolicy ? agentPolicy.readPolicy() : null,
+      policyTemplates: agentPolicy && typeof agentPolicy.listPolicyTemplates === 'function' ? agentPolicy.listPolicyTemplates() : [],
       hermesGateway,
+      codexRuntime: buildCodexRuntimeStatus(next),
       codexAuth: codexAuthStatus(),
       activeBrainId: agentSessionService ? agentSessionService.getBrainId() : 'stub',
     };
@@ -3385,21 +4280,127 @@ if (!gotLock) {
     if (result.ok) {
       await ensureAgentBrainReady();
     }
+    const settings = agentStore ? agentStore.readSettings() : null;
     return {
       ...result,
-      settings: agentStore ? agentStore.readSettings() : null,
+      settings,
+      codexRuntime: buildCodexRuntimeStatus(settings),
       activeBrainId: agentSessionService ? agentSessionService.getBrainId() : 'stub',
     };
   });
 
   ipcMain.handle('agent-usage-summary', async (_e, options) => {
     if (!agentStore) return { ok: false, error: 'agent_not_ready' };
-    return { ok: true, summary: agentStore.summarizeUsageAudit(options && typeof options === 'object' ? options : {}) };
+    return { ok: true, summary: summarizeCopilotUsageAudit(options && typeof options === 'object' ? options : {}) };
+  });
+
+  ipcMain.handle('agent-usage-upload-cloud-draft', async (_e, options) => {
+    if (!agentStore) return { ok: false, error: 'agent_not_ready' };
+    return uploadCopilotUsageCloudDraft(options && typeof options === 'object' ? options : {});
+  });
+
+  ipcMain.handle('agent-usage-quota-policy-probe', async () => {
+    if (!agentStore) return { ok: false, error: 'agent_not_ready' };
+    return probeCopilotUsageQuotaPolicy();
+  });
+
+  ipcMain.handle('agent-workflow-promotion-preflight', async (_e, options) => {
+    if (!agentBodyHost || !agentStore) return { ok: false, error: 'agent_not_ready' };
+    const opts = options && typeof options === 'object' ? options : {};
+    const target = String(opts.target || '').trim();
+    const name =
+      target === 'script_hub_tool'
+        ? 'ac.workflow.promote_script_hub_tool'
+        : target === 'workbench_preset'
+          ? 'ac.workflow.promote_workbench_preset'
+          : '';
+    if (!name) return { ok: false, error: 'invalid_target' };
+    const args = {
+      skillId: String(opts.skillId || '').trim(),
+      ...(opts.presetName ? { presetName: String(opts.presetName) } : {}),
+      ...(opts.toolName ? { toolName: String(opts.toolName) } : {}),
+    };
+    if (!args.skillId) return { ok: false, error: 'missing_skill_id' };
+    const startedAt = Date.now();
+    const toolCallId = `shell_tool_${randomBytes(16).toString('hex')}`;
+    const result = await agentBodyHost.executeTool(name, args, {
+      sessionId: 'shell-settings',
+      brainId: 'copilot-ui',
+      shellView: currentShellView,
+      clientId: 'shell',
+      toolCallId,
+      policyDecision: 'copilot_ui_admin_confirm',
+      adminConfirmationPassed: true,
+      adminConfirmationSource: 'copilot_ui',
+      auditRecordWritten: true,
+    });
+    agentStore.appendAudit({
+      ts: new Date().toISOString(),
+      clientId: 'shell',
+      sessionId: 'shell-settings',
+      brainId: 'copilot-ui',
+      toolCallId,
+      tool: name,
+      ok: Boolean(result && result.ok),
+      errorCode: result && result.error && result.error.code ? result.error.code : null,
+      argsDigest: JSON.stringify({ skillId: args.skillId, target }).slice(0, 500),
+      durationMs: Date.now() - startedAt,
+      policyDecision: 'copilot_ui_admin_confirm',
+    });
+    const mcpEntranceStatus = await buildAgentMcpEntranceStatus();
+    return {
+      ok: true,
+      tool: name,
+      target,
+      toolCallId,
+      result,
+      preflight: result && result.structured ? result.structured : null,
+      mcpEntranceStatus,
+    };
+  });
+
+  ipcMain.handle('agent-workflow-promotion-drafts', async () => {
+    return listWorkflowPromotionDraftSummaries();
   });
 
   ipcMain.handle('agent-tool-executions', async (_e, options) => {
     if (!agentStore) return { ok: false, error: 'agent_not_ready' };
     return { ok: true, executions: agentStore.listToolExecutions(options && typeof options === 'object' ? options : {}) };
+  });
+
+  ipcMain.handle('agent-workbench-context', async () => {
+    if (!agentWorkbenchClient || typeof agentWorkbenchClient.getContext !== 'function') {
+      return { ok: false, error: 'agent_not_ready' };
+    }
+    const context = await agentWorkbenchClient.getContext();
+    const executions = agentStore ? agentStore.listToolExecutions({ limit: 5 }) : [];
+    return {
+      ok: Boolean(context && context.ok),
+      context,
+      structured: context && context.structured ? context.structured : null,
+      executions,
+    };
+  });
+
+  ipcMain.handle('agent-project-memory-list', async (_event, options) => {
+    return listCopilotProjectMemory(options && typeof options === 'object' ? options : {});
+  });
+
+  ipcMain.handle('agent-project-memory-save', async (_event, entry) => {
+    return saveCopilotProjectMemory(entry && typeof entry === 'object' ? entry : {});
+  });
+
+  ipcMain.handle('agent-project-memory-update', async (_event, payload) => {
+    if (!agentStore) return { ok: false, error: 'agent_not_ready' };
+    const p = payload && typeof payload === 'object' ? payload : {};
+    const result = updateProjectMemoryNote(agentStore.memoryDir(), p.id, p.patch && typeof p.patch === 'object' ? p.patch : {});
+    if (!result.ok) return result;
+    const scope = await readCurrentProjectMemoryScope(p);
+    return {
+      ok: true,
+      note: result.note,
+      summary: summarizeProjectMemory(agentStore.memoryDir(), { projectId: scope.projectId, limit: 200 }),
+    };
   });
 
   ipcMain.handle('agent-mcp-regenerate-token', async () => {
@@ -3420,23 +4421,27 @@ if (!gotLock) {
 
   ipcMain.handle('agent-mcp-status', async () => {
     if (!agentMcpServer) return { ok: false, error: 'agent_not_ready' };
+    const mcpEntranceStatus = await buildAgentMcpEntranceStatus();
     return {
       ok: true,
       mcp: agentMcpServer.status(),
       mcpConfig: agentMcpServer.buildMcpClientConfig(),
       mcpToolCatalog: await buildAgentMcpToolCatalog(),
+      mcpEntranceStatus,
     };
   });
 
   ipcMain.handle('agent-mcp-probe', async () => {
     if (!agentMcpServer) return { ok: false, error: 'agent_not_ready' };
     const probe = await agentMcpServer.probeSelf();
+    const mcpEntranceStatus = await buildAgentMcpEntranceStatus();
     return {
       ok: true,
       probe,
       mcp: agentMcpServer.status(),
       mcpConfig: agentMcpServer.buildMcpClientConfig(),
       mcpToolCatalog: await buildAgentMcpToolCatalog(),
+      mcpEntranceStatus,
     };
   });
 
@@ -3445,12 +4450,19 @@ if (!gotLock) {
       return { ok: false, error: 'agent_not_ready' };
     }
     const e2e = await agentMcpServer.runWorkbenchE2eSelf(options && typeof options === 'object' ? options : {});
+    const shellAccount = await readShellAccountStatus();
+    const mcpWorkbenchLastE2e = summarizeWorkbenchE2eEntrance(e2e, shellAccount);
+    if (agentStore) agentStore.writeSettings({ mcpWorkbenchLastE2e });
+    const mcpEntranceStatus = await buildAgentMcpEntranceStatus();
     return {
       ok: true,
       e2e,
+      shellAccount,
+      mcpWorkbenchLastE2e,
       mcp: agentMcpServer.status(),
       mcpConfig: agentMcpServer.buildMcpClientConfig(),
       mcpToolCatalog: await buildAgentMcpToolCatalog(),
+      mcpEntranceStatus,
     };
   });
 
@@ -3464,16 +4476,25 @@ if (!gotLock) {
     return {
       ok: true,
       agentPolicy: agentPolicy.readPolicy(),
+      policyTemplates: typeof agentPolicy.listPolicyTemplates === 'function' ? agentPolicy.listPolicyTemplates() : [],
       mcpToolCatalog: await buildAgentMcpToolCatalog(),
     };
   });
 
   ipcMain.handle('agent-policy-save', async (_e, patch) => {
     if (!agentPolicy) return { ok: false, error: 'agent_not_ready' };
-    const next = agentPolicy.writePolicy(patch && typeof patch === 'object' ? patch : {});
+    const body = patch && typeof patch === 'object' ? patch : {};
+    const templateId = body.templateId ? String(body.templateId) : '';
+    const applied = templateId && typeof agentPolicy.applyPolicyTemplate === 'function'
+      ? agentPolicy.applyPolicyTemplate(templateId)
+      : null;
+    if (applied && !applied.ok) return applied;
+    const next = applied && applied.ok ? applied.policy : agentPolicy.writePolicy(body);
     return {
       ok: true,
       agentPolicy: next,
+      appliedTemplate: applied && applied.ok ? applied.template : '',
+      policyTemplates: typeof agentPolicy.listPolicyTemplates === 'function' ? agentPolicy.listPolicyTemplates() : [],
       mcpToolCatalog: await buildAgentMcpToolCatalog(),
     };
   });

@@ -93,7 +93,7 @@ export function extractTripoModelAndPreviewUrls(done: TripoTaskResult): {
 }
 
 function extractAiGatewayArtifactUrl(artifact: Record<string, unknown>): string {
-  for (const key of ['url', 'publicUrl', 'signedUrl', 'href', 'downloadUrl']) {
+  for (const key of ['url', 'modelUrl', 'model_url', 'fileUrl', 'file_url', 'publicUrl', 'signedUrl', 'href', 'downloadUrl', 'download_url']) {
     const value = String(artifact[key] || '').trim();
     if (/^https?:\/\//i.test(value)) return value;
   }

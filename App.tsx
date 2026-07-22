@@ -27,7 +27,7 @@ import { loadSnippets } from './services/snippetStore';
 import { AppMode, LibraryItem, SystemConfig, AppTask, AssetCategory, type CustomAppModule, type CapabilitySet, type WorkflowAsset, type WorkflowPendingTask, type ArenaCurrentStep, type ArenaStepEntry, type ArenaTimelineBlock } from './types';
 import { runCapabilityTest } from './services/capabilityTestRunner';
 import { executeCapability } from './services/capabilityExecutor';
-import { buildAgentCapabilityOutputAsset, initAgentWorkbenchBridge, summarizeAgentCapabilityPreset, summarizeAgentWorkflowAsset, summarizeAgentWorkflowAssetDetail } from './services/agentWorkbenchBridge';
+import { AGENT_WORKBENCH_SMOKE_PRESET_ID, buildAgentCapabilityOutputAsset, getAgentWorkbenchSmokePresetSummary, initAgentWorkbenchBridge, summarizeAgentCapabilityPreset, summarizeAgentWorkflowAsset, summarizeAgentWorkflowAssetDetail } from './services/agentWorkbenchBridge';
 import { loadCapabilityPresets, saveCapabilityPresets, CAPABILITY_PRESETS_KEY } from './services/capabilityPresetStore';
 import { loadCapabilitySets, saveCapabilitySets, CAPABILITY_SETS_KEY } from './services/capabilitySetStore';
 import { useWorkflowMainScrollCapture, type WorkflowCapabilityGutterDropConfig } from './hooks/useWorkflowMainScrollCapture';
@@ -1988,10 +1988,13 @@ const MainApp: React.FC = () => {
             ? { id: activeProject.id, name: activeProject.name }
             : null,
           projects: workspaceProjects.map((p) => ({ id: p.id, name: p.name })),
-          capabilityPresets: capabilityPresets.map(summarizeAgentCapabilityPreset),
+          capabilityPresets: [
+            getAgentWorkbenchSmokePresetSummary(),
+            ...capabilityPresets.map(summarizeAgentCapabilityPreset),
+          ],
           counts: {
             projects: workspaceProjects.length,
-            capabilityPresets: capabilityPresets.length,
+            capabilityPresets: capabilityPresets.length + 1,
           },
           nextStep: activeWorkspaceProjectId
             ? '可以调用 ac.workbench.run_capability 执行支持直接运行的能力。'
@@ -2115,9 +2118,10 @@ const MainApp: React.FC = () => {
       runCapability: async ({ presetId, projectId, inputText, imageDataUrl, inputAssetId, inputAssetDisplayKey }) => {
         const pid = String(presetId || '').trim();
         if (!pid) return { ok: false, error: 'missing presetId' };
+        const isSmokePreset = pid === AGENT_WORKBENCH_SMOKE_PRESET_ID;
         const preset = capabilityPresets.find((p) => p.id === pid);
-        if (!preset) return { ok: false, error: 'preset_not_found' };
-        const presetSummary = summarizeAgentCapabilityPreset(preset);
+        if (!preset && !isSmokePreset) return { ok: false, error: 'preset_not_found' };
+        const presetSummary = isSmokePreset ? getAgentWorkbenchSmokePresetSummary() : summarizeAgentCapabilityPreset(preset!);
         if (!presetSummary.directRunSupported) {
           return {
             ok: false,
@@ -2190,8 +2194,51 @@ const MainApp: React.FC = () => {
               : '该能力需要图片输入。请传入 imageDataUrl，或传入包含图片的 inputAssetId。',
           };
         }
+        if (isSmokePreset) {
+          const startedAt = Date.now();
+          const note = [
+            'Copilot workbench E2E verification note.',
+            `Project: ${targetProjectId}`,
+            `Input: ${String(effectiveInputText || '').trim() || 'no input text'}`,
+            `Created at: ${new Date(startedAt).toISOString()}`,
+          ].join('\n');
+          const built = buildAgentCapabilityOutputAsset({
+            preset: { id: presetSummary.id, label: presetSummary.name },
+            result: { ok: true, kind: 'text', text: note, durationMs: 0 },
+            inputText: effectiveInputText,
+          });
+          setWorkflowAssets((prev) => {
+            const next = [built.asset, ...prev];
+            workflowAssetsRef.current = next;
+            workflowSessionHadNonEmptyAssetsRef.current = true;
+            if (workspaceLocalIdbHydrateReadyRef.current && workflowProjectLoadCompleteRef.current) {
+              trySaveWorkflowBundle(
+                targetProjectId,
+                { assets: next, pending: workflowPendingRef.current },
+                userIdRef.current ?? null,
+                workflowBundleSaveOpts()
+              );
+            }
+            return next;
+          });
+          addGlobalLog('Copilot', 'info', `Agent 已写入能力结果：${presetSummary.name}`, built.assetId);
+          return {
+            ok: true,
+            action: 'runCapability',
+            preset: presetSummary,
+            projectId: targetProjectId || null,
+            inputAssetId: sourceAssetId || null,
+            inputAssetDisplayKey: sourceDisplayKey,
+            kind: 'text',
+            assetId: built.assetId,
+            resultKey: built.resultKey,
+            durationMs: Date.now() - startedAt,
+            output: built.output,
+            nextStep: 'done',
+          };
+        }
         const result = await executeCapability(
-          preset,
+          preset!,
           imageInput,
           {
             companionProjectId: targetProjectId || 'default',

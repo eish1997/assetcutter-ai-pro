@@ -44,6 +44,8 @@ function normalizeSkill(raw, fallbackId, dir) {
     description: String(raw.description || '').trim(),
     prompt: String(raw.prompt || raw.instructions || '').trim(),
     toolHints: Array.isArray(raw.toolHints) ? raw.toolHints.map(String) : [],
+    workbenchPreset: raw.workbenchPreset && typeof raw.workbenchPreset === 'object' ? raw.workbenchPreset : null,
+    scriptManifest: raw.scriptManifest && typeof raw.scriptManifest === 'object' ? raw.scriptManifest : null,
     revision: Number.isFinite(Number(raw.revision)) ? Math.max(1, Math.floor(Number(raw.revision))) : 1,
     createdAt: raw.createdAt ? String(raw.createdAt) : '',
     updatedAt: raw.updatedAt ? String(raw.updatedAt) : '',
@@ -248,7 +250,7 @@ function archiveExistingSkill(file, dir, now) {
 
 /**
  * @param {string} skillsRoot
- * @param {{ id?: string; skillId?: string; name?: string; description?: string; prompt?: string; instructions?: string; toolHints?: string[] }} input
+ * @param {{ id?: string; skillId?: string; name?: string; description?: string; prompt?: string; instructions?: string; toolHints?: string[]; workbenchPreset?: object; scriptManifest?: object }} input
  */
 function saveSkill(skillsRoot, input) {
   const root = String(skillsRoot || '').trim();
@@ -266,12 +268,28 @@ function saveSkill(skillsRoot, input) {
   const archived = archiveExistingSkill(file, dir, now);
   const previous = archived.previous && typeof archived.previous === 'object' ? archived.previous : null;
   const previousRevision = previous && Number.isFinite(Number(previous.revision)) ? Math.max(1, Number(previous.revision)) : 0;
+  const hasScriptManifest = Object.prototype.hasOwnProperty.call(raw, 'scriptManifest');
+  const hasWorkbenchPreset = Object.prototype.hasOwnProperty.call(raw, 'workbenchPreset');
+  const workbenchPreset =
+    hasWorkbenchPreset && raw.workbenchPreset && typeof raw.workbenchPreset === 'object'
+      ? raw.workbenchPreset
+      : !hasWorkbenchPreset && previous && previous.workbenchPreset && typeof previous.workbenchPreset === 'object'
+        ? previous.workbenchPreset
+        : null;
+  const scriptManifest =
+    hasScriptManifest && raw.scriptManifest && typeof raw.scriptManifest === 'object'
+      ? raw.scriptManifest
+      : !hasScriptManifest && previous && previous.scriptManifest && typeof previous.scriptManifest === 'object'
+        ? previous.scriptManifest
+        : null;
   const skill = {
     id,
     name: String(raw.name || id).trim().slice(0, 120) || id,
     description: String(raw.description || '').trim().slice(0, 500),
     prompt,
     toolHints: normalizeToolHints(raw.toolHints),
+    ...(workbenchPreset ? { workbenchPreset } : {}),
+    ...(scriptManifest ? { scriptManifest } : {}),
     revision: previousRevision + 1,
     createdAt: previous && previous.createdAt ? String(previous.createdAt) : now,
     updatedAt: now,

@@ -1,6 +1,6 @@
 # 桌面壳 · 全局 Agent（Copilot）— 产品与架构规格
 
-本文定义 **AssetCutter 本机平台** 的 **Agent 身体层（`ac.*`）**、可选 **内置 Copilot 门面**，以及与 **工作台 / Script Hub / 伴侣 / 壳** 的衔接。大脑（Hermes、Codex、Claude Code 等）可插拔；**平台控制能力为长期资产**，不随大脑或是否使用右侧面板而变。
+本文定义 **AssetCutter 本机平台** 的 **Copilot 统一 Agent 入口**、**Agent 身体层（`ac.*` / Body MCP）**，以及与 **工作台 / Script Hub / 伴侣 / 壳** 的衔接。第一阶段优先接 Codex CLI；长期允许 Hermes、Pi、Claude Code 等成熟 Agent 接入。**平台控制能力、团队权限、用量和审计为长期资产**。
 
 **读者**：
 
@@ -21,57 +21,60 @@
 
 ### 1.1 一句话与定位
 
-> **AssetCutter 提供「本机身体」；用户自选「大脑」；内置 Copilot 是默认门面，不是唯一入口。**
+> **Copilot 是团队进入工作台的统一 Agent 入口，不是另一个网页聊天机器人。**
 
 | 对比 | 说明 |
 |------|------|
-| **不是** | 又一个聊天机器人、Hermes 安装包、工作流里云端 AI 的替代品 |
-| **是** | 把 **壳导航、工作台、Script Hub、伴侣算力** 收成一套 **稳定可调用能力（`ac.*`）**，用自然语言或外部 Agent 驱动 |
-| **用户得到** | 在一个窗口里 **看（中间页）+ 说（右侧 Copilot）+ 干（身体工具）**；高级用户可用 **自有 Hermes/Codex 前端 + Body MCP** 达到同等「干活」能力 |
+| **不是** | 又一个网页聊天机器人、Codex 的替代品、工作流里云端 AI 的替代品 |
+| **是** | 把 **Codex 等成熟 Agent 能力、工作台资产/项目/能力、团队权限和用量管理** 接到一起 |
+| **用户得到** | 团队成员从右侧 Copilot 开始工作，通过统一入口安全调用工作台：`准备工作台 -> 创建/打开项目 -> 运行能力 -> 列资产 -> 读取产物` |
 
 ### 1.2 已决产品形态
 
 | 项 | 决策 |
 |----|------|
-| **全局 UI** | **C：主窗右侧固定 Copilot**（可折叠；不强制使用） |
+| **全局 UI** | **C：主窗右侧固定 Copilot**，作为团队进入工作台的统一 Agent 入口 |
 | **Script Hub** | **B：第五导航「脚本」+ BrowserView**（`scriptHubUrl`）→ **真源独立仓** `F:/AI/ScriptHub`；主仓 `script-hub/` **已废弃**（2026-06-30） |
 | **工作台** | **B：主站 Agent API**（不 CDP 点页面） |
-| **大脑** | 可插拔；**Hermes 推荐默认**（P1 生产）；Copilot 不绑死 |
-| **外部大脑** | **P2：Body MCP**，用户自带 Hermes/Codex 前端也可调平台（§2.4、A-8） |
+| **大脑** | 第一阶段默认接 **Codex CLI**，复用成熟本机执行和文件操作能力；后续可插拔 |
+| **工作台控制层** | **Body MCP / `ac.*`** 暴露标准工作台能力，所有 Agent 必须经同一权限和审计链路 |
+| **团队治理** | 凭据分发、权限授权、自动执行策略、Token 用量、日志、审计集中管理 |
 
 ### 1.3 用户画像与典型场景
 
 | 画像 | 诉求 | 首选入口 | 典型一句话 |
 |------|------|----------|------------|
-| **日常创作者** | 少记菜单，串联本机活 | 右侧 Copilot | 「打开脚本页，跑烟雾测试脚本」 |
-| **技术美术** | Maya / 本机分割 / 卷内资产 | Copilot 或 Script Hub 页 | 「伴侣 SamLocal 好了吗？好了就分割当前项目」 |
-| **进阶用户** | 已有 Hermes/Codex 工作流 | 自有 Agent + **Body MCP（P2）** | 在 Hermes 里调 `ac.workbench.run_capability` |
-| **仅浏览器用户** | 不用 Copilot | 工作台 / Script Hub 手动 | 不享受 Agent 编排，**资产与页面仍正常** |
+| **日常创作者** | 少记菜单，串联工作台能力 | 右侧 Copilot | 「帮我准备工作台，创建项目，跑这个能力并把产物列出来」 |
+| **技术美术** | Maya / 本机分割 / 卷内资产 | 右侧 Copilot + Codex | 「检查当前项目资产，整理一版预览，再导到 Maya」 |
+| **工作流研发 / 管理员** | 研发流程、沉淀预设、治理团队用量 | Copilot / Codex / Body MCP | 「把这个外部 Agent 流程整理成工作台预设，给团队成员使用」 |
+| **仅浏览器用户** | 不用 Agent 编排 | 工作台 / Script Hub 手动 | 资产与页面仍正常，但不走统一 Agent 入口 |
 
 ### 1.4 用户旅程（Happy Path）
 
-**旅程 A — 内置 Copilot（P0 起）**
+**旅程 A — 团队 Copilot 入口**
 
 ```text
-打开壳 →（可选）扫一眼首页状态 → 右侧输入意图
-  → Agent 调 ac.shell.navigate / get_state
-  → 中间区切到脚本/工作台（P1 起可执行 run）
-  → 结果在对话中反馈；高危操作卡片确认
+打开壳 → 右侧 Copilot 输入意图
+  → Codex CLI / 成熟 Agent 规划
+  → Body MCP / ac.* 准备工作台、创建或打开项目、运行能力、列资产、读取产物
+  → Copilot 展示状态、授权、用量、日志和失败恢复
+  → 结果落到工作台项目和资产库
 ```
 
-**旅程 B — 不用 Copilot（始终成立）**
+**旅程 B — 手动工作台（始终成立）**
 
 ```text
 侧栏手动切页 → 工作台 / Script Hub / 工具页照常使用
 伴侣 compute、小工具、扩展包路径不变
 ```
 
-**旅程 C — 外部大脑（P2 起）**
+**旅程 C — 外部 Agent / 工作流研发**
 
 ```text
-设置开启「允许外部 Agent 控制本平台」→ 配置 Hermes MCP 指向本机 Body
-  → 用户在 Hermes 桌面聊天 → 调用 ac.* → 壳/伴侣/主站 API 执行
-  → 会话在 Hermes；平台审计在 agent-store/audit（clientId=mcp）
+管理员或研发人员在 Codex / Hermes / Pi 中研发流程
+  → 通过 Body MCP 调用工作台能力验证
+  → 沉淀为预设能力或 Script Hub 工具
+  → 团队成员从 Copilot 或工作台界面直接使用
 ```
 
 ### 1.5 设置信息架构（产品）
@@ -80,18 +83,19 @@
 
 | 分组 | 内容 | 阶段 |
 |------|------|------|
-| **门面** | Copilot 展开/宽度；快捷键（P1） | P0 |
-| **大脑** | 默认大脑；各适配器启用/连接状态；「模型在大脑设置里配」说明 | P0/P1 |
-| **权限** | 目录白名单；删改/跑 Job 是否每次确认 | P0 简版 / P1 完整 |
-| **外部接入** | 「允许 MCP 控制本平台」开关 + Token | P2 |
-| **数据** | 会话存储位置；导出/清空 audit | P1 |
+| **统一入口** | Copilot 展开/宽度；快捷键；成员首次引导 | P0 |
+| **大脑** | Codex CLI 状态；各适配器启用/连接状态；命令/cwd/model 配置 | P0/P1 |
+| **工作台控制** | Body MCP Token；工作台登录态；工具链 e2e 状态 | P0/P1 |
+| **团队治理** | 权限模式；自动执行策略；凭据分发；Token 用量；日志和审计 | P1/P2 |
+| **数据** | 会话存储位置；导出/清空 audit；团队用量汇总 | P1/P2 |
 
-**文案原则**：区分 **「工作台里的 AI 生成」** 与 **「本机 Agent 助手」**；区分 **「大脑账号」** 与 **「伴侣配对密码」**。
+**文案原则**：区分 **「工作台里的 AI 生成」** 与 **「团队 Copilot 入口」**；区分 **「大脑账号 / Codex 凭据」** 与 **「伴侣配对密码」**。
 
 ### 1.6 非目标（产品）
 
 - 替代工作流画布上的 **云端模型节点**。
-- 强迫用户使用 Copilot（可折叠、可忽略；P2 可完全用外部大脑）。
+- 把 Copilot 做成另一个网页聊天机器人。
+- 重新发明比 Codex 更强的大脑。
 - P0 承诺「用 Hermes 官方 UI 嵌在壳里」。
 - 跨产品同步 Copilot 与 Hermes 的 **聊天记忆**（L3 仅保证 **技能/身体能力** 可共享，见 §14）。
 
@@ -208,7 +212,7 @@
 | **A-1** | Session 在 **`companion-desktop` 主进程** | 身体触达壳 IPC；伴侣保持无 UI 可独立演进 |
 | **A-2** | **`ac.*` 唯一稳定身体契约**；原生 `brain.<id>.*` | L2 资产可版本化、可对外 MCP |
 | **A-3** | **单槽 BrowserView**（工作台/脚本二选一） | 控制实现成本；中间区仍是「一个主舞台」 |
-| **A-4** | 工作台/Script Hub：**分 partition Cookie** → 中长期 **session-token** | 两域资产不假设单点登录 |
+| **A-4** | 工作台 / Script Hub / 后续一方网页：统一本地壳一方网页 session partition `persist:assetcutter-team` | 壳内登录一次，工作台、Script Hub、Copilot/MCP 复用同一主站登录态；第三方外链仍外部打开 |
 | **A-5** | P0：**openai_compat** 验证身体；**Hermes P1** 默认大脑 | 大脑供货商不阻塞身体资产落地 |
 | **A-6** | **profile.yaml** 为产品 system 真源 | 换大脑门面行为一致 |
 | **A-7** | L2 跨脑 E2E **P2 验收** | P0 只交付协议与存储 |
@@ -231,7 +235,7 @@ BrowserView: x=56, y=30,
 
 切换视图时 **`layoutShellChrome()`** 统一重算；离嵌入页 **`detachEmbeddedBrowserView()`**。
 
-Script Hub：`scriptHubUrl`；partition `persist:assetcutter-script-hub`；与工作台 partition **隔离**。
+Script Hub：`scriptHubUrl`；与工作台、后续一方网页和 Copilot/MCP 共用本地壳一方网页 partition `persist:assetcutter-team`，复用同一主站登录态；第三方外链不进入该 partition。
 
 ---
 
@@ -423,7 +427,7 @@ Hermes：Gateway `127.0.0.1:19119`；`hermes-bootstrap/`；开工前 **spike** �
 | 风险 | 用户影响 | 缓解 |
 |------|----------|------|
 | 大脑 API 不确定 | 晚上线 Hermes | P0 不依赖 Hermes |
-| 双域登录 | 口述跑脚本失败 | 明确提示去脚本页登录 |
+| 工作台未登录 | 口述跑工作台能力失败 | 明确提示打开壳内工作台登录，并通过 `persist:assetcutter-team` 复用登录态 |
 | 右栏占空间 | 小屏憋屈 | 默认折叠策略 |
 
 ---

@@ -127,6 +127,7 @@ function createAgentStore(deps) {
       codexSharedAuthLastError: '',
       codexDefaultMigrated: false,
       brainSetupCompleted: false,
+      mcpWorkbenchLastE2e: null,
     };
     try {
       const j = JSON.parse(fs.readFileSync(settingsPath(), 'utf8'));
@@ -190,6 +191,8 @@ function createAgentStore(deps) {
         codexDefaultMigrated:
           j.codexDefaultMigrated != null ? Boolean(j.codexDefaultMigrated) : defaults.codexDefaultMigrated,
         brainSetupCompleted: j.brainSetupCompleted != null ? Boolean(j.brainSetupCompleted) : defaults.brainSetupCompleted,
+        mcpWorkbenchLastE2e:
+          j.mcpWorkbenchLastE2e && typeof j.mcpWorkbenchLastE2e === 'object' ? j.mcpWorkbenchLastE2e : null,
       };
     } catch {
       return { ...defaults };
@@ -233,12 +236,16 @@ function createAgentStore(deps) {
       const s = String(raw.codexSandbox).trim();
       if (s === 'read-only' || s === 'workspace-write' || s === 'danger-full-access') {
         normalized.codexSandbox = s;
+      } else {
+        delete normalized.codexSandbox;
       }
     }
     if (raw.codexPermissionMode != null) {
       const m = String(raw.codexPermissionMode).trim();
       if (m === 'ask' || m === 'sandbox' || m === 'full') {
         normalized.codexPermissionMode = m;
+      } else {
+        delete normalized.codexPermissionMode;
       }
     }
     if (raw.codexSharedAuthEnabled != null) {
@@ -261,6 +268,10 @@ function createAgentStore(deps) {
     }
     if (raw.codexDefaultMigrated != null) {
       normalized.codexDefaultMigrated = Boolean(raw.codexDefaultMigrated);
+    }
+    if (raw.mcpWorkbenchLastE2e != null) {
+      normalized.mcpWorkbenchLastE2e =
+        raw.mcpWorkbenchLastE2e && typeof raw.mcpWorkbenchLastE2e === 'object' ? raw.mcpWorkbenchLastE2e : null;
     }
     const next = { ...cur, ...normalized };
     fs.writeFileSync(settingsPath(), `${JSON.stringify(next, null, 2)}\n`, 'utf8');
@@ -483,6 +494,84 @@ function createAgentStore(deps) {
         toolCallId: entry.toolCallId ? String(entry.toolCallId) : null,
         traceId: entry.traceId ? String(entry.traceId) : null,
         jsonRpcId: entry.jsonRpcId != null ? String(entry.jsonRpcId) : null,
+        workflowPromotionPreflight:
+          entry.workflowPromotionPreflight && typeof entry.workflowPromotionPreflight === 'object'
+            ? {
+                target: entry.workflowPromotionPreflight.target ? String(entry.workflowPromotionPreflight.target) : '',
+                skillId: entry.workflowPromotionPreflight.skillId ? String(entry.workflowPromotionPreflight.skillId) : '',
+                currentPhase: entry.workflowPromotionPreflight.currentPhase
+                  ? String(entry.workflowPromotionPreflight.currentPhase)
+                  : '',
+                publishable: Boolean(entry.workflowPromotionPreflight.publishable),
+                passedGates: Array.isArray(entry.workflowPromotionPreflight.passedGates)
+                  ? entry.workflowPromotionPreflight.passedGates.map(String)
+                  : [],
+                missingGates: Array.isArray(entry.workflowPromotionPreflight.missingGates)
+                  ? entry.workflowPromotionPreflight.missingGates.map(String)
+                  : [],
+                adminConfirmation:
+                  entry.workflowPromotionPreflight.adminConfirmation &&
+                  typeof entry.workflowPromotionPreflight.adminConfirmation === 'object'
+                    ? {
+                        required: Boolean(entry.workflowPromotionPreflight.adminConfirmation.required),
+                        passed: Boolean(entry.workflowPromotionPreflight.adminConfirmation.passed),
+                        sourceRequired: entry.workflowPromotionPreflight.adminConfirmation.sourceRequired
+                          ? String(entry.workflowPromotionPreflight.adminConfirmation.sourceRequired)
+                          : 'copilot_ui',
+                        source: entry.workflowPromotionPreflight.adminConfirmation.source
+                          ? String(entry.workflowPromotionPreflight.adminConfirmation.source)
+                          : '',
+                        autoConfirmCountsAsAdminApproval: Boolean(
+                          entry.workflowPromotionPreflight.adminConfirmation.autoConfirmCountsAsAdminApproval,
+                        ),
+                      }
+                    : null,
+              }
+            : undefined,
+        usageGovernance:
+          entry.usageGovernance && typeof entry.usageGovernance === 'object'
+            ? {
+                action: entry.usageGovernance.action ? String(entry.usageGovernance.action) : '',
+                endpoint: entry.usageGovernance.endpoint ? String(entry.usageGovernance.endpoint) : '',
+                partition: entry.usageGovernance.partition ? String(entry.usageGovernance.partition) : '',
+                ok: Boolean(entry.usageGovernance.ok),
+                code: entry.usageGovernance.code ? String(entry.usageGovernance.code) : '',
+                authRequired: Boolean(entry.usageGovernance.authRequired),
+                dryRun: Boolean(entry.usageGovernance.dryRun),
+                uploaded: Boolean(entry.usageGovernance.uploaded),
+                validated: Boolean(entry.usageGovernance.validated),
+                noEvents: Boolean(entry.usageGovernance.noEvents),
+                eventCount: Number.isFinite(Number(entry.usageGovernance.eventCount))
+                  ? Math.max(0, Math.round(Number(entry.usageGovernance.eventCount)))
+                  : 0,
+                exitReady: Boolean(entry.usageGovernance.exitReady),
+                clearedGates: Array.isArray(entry.usageGovernance.clearedGates)
+                  ? entry.usageGovernance.clearedGates.map(String)
+                  : [],
+                remainingGates: Array.isArray(entry.usageGovernance.remainingGates)
+                  ? entry.usageGovernance.remainingGates.map(String)
+                  : [],
+                quotaPolicy:
+                  entry.usageGovernance.quotaPolicy && typeof entry.usageGovernance.quotaPolicy === 'object'
+                    ? {
+                        currentPhase: entry.usageGovernance.quotaPolicy.currentPhase
+                          ? String(entry.usageGovernance.quotaPolicy.currentPhase)
+                          : '',
+                        billingSku: entry.usageGovernance.quotaPolicy.billingSku
+                          ? String(entry.usageGovernance.quotaPolicy.billingSku)
+                          : '',
+                        cloudQuotaEnforced: Boolean(entry.usageGovernance.quotaPolicy.cloudQuotaEnforced),
+                        usageBillingEnabled: Boolean(entry.usageGovernance.quotaPolicy.usageBillingEnabled),
+                        enforcementSource: entry.usageGovernance.quotaPolicy.enforcementSource
+                          ? String(entry.usageGovernance.quotaPolicy.enforcementSource)
+                          : '',
+                        policyId: entry.usageGovernance.quotaPolicy.policyId
+                          ? String(entry.usageGovernance.quotaPolicy.policyId)
+                          : '',
+                      }
+                    : null,
+              }
+            : undefined,
       }));
   }
 

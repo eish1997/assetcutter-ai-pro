@@ -552,6 +552,7 @@ export type WorkflowAssetKind =
   | 'file';
 
 export type WorkflowAssetVariantKind = 'text' | 'image' | 'video' | 'model3d' | 'audio' | 'file';
+export type WorkflowModelFormat = 'glb' | 'gltf' | 'fbx' | 'obj' | 'stl' | 'usdz' | 'zip';
 
 export type GeneratedAssetSourceMeta = {
   source: 'ai_gateway' | 'provider' | 'local' | 'unknown';
@@ -588,7 +589,7 @@ export type WorkflowAssetVariant = {
   height?: number;
   modelUrls?: string[];
   modelCompanionKeys?: string[];
-  modelFormats?: Array<'glb' | 'gltf' | 'fbx' | 'obj'>;
+  modelFormats?: WorkflowModelFormat[];
   meta?: Record<string, unknown>;
 };
 
@@ -635,7 +636,7 @@ export type WorkflowAsset = {
   /** 与 `stepModelUrls` 同结构：各步骤模型在本地伴侣下的键 */
   stepModelCompanionKeys?: Record<string, string[]>;
   /** 与 `stepModelUrls` 同结构：各步骤模型格式（glb 预览 / fbx 归档） */
-  stepModelFormats?: Record<string, Array<'glb' | 'fbx'>>;
+  stepModelFormats?: Record<string, WorkflowModelFormat[]>;
   /** 本地 blob 模型无 URL 后缀时，用原始文件名推断格式（.glb/.fbx/.obj 等） */
   modelSourceName?: string;
   /** 各步骤结果在 R2 的键，hydrate 后写回 results */

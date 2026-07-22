@@ -85,6 +85,20 @@ export type AgentCapabilityAssetBuildResult = {
   resultKey: string;
 };
 
+export const AGENT_WORKBENCH_SMOKE_PRESET_ID = 'agent_workbench_smoke_text_note';
+
+export function getAgentWorkbenchSmokePresetSummary(): AgentCapabilityPresetSummary {
+  return {
+    id: AGENT_WORKBENCH_SMOKE_PRESET_ID,
+    name: '工作台链路验收',
+    category: 'text_to_text',
+    engine: 'builtin',
+    acceptsText: true,
+    requiresImage: false,
+    directRunSupported: true,
+  };
+}
+
 type BridgeHandlers = {
   getContext: () => Promise<AgentWorkbenchBridgeContext | AgentWorkbenchBridgeResult>;
   createProject: (name: string) => Promise<AgentWorkbenchBridgeResult>;

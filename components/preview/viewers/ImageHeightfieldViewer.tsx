@@ -7,6 +7,7 @@ import { frameCameraToObject } from '../../../services/workflowModelThreeShared'
 import {
   aimHeightfieldReliefLightsAtBox,
   applyHeightfieldMatcapSceneLighting,
+  configureWorkflowModelSoftShadows,
   createStudioGroundMesh,
   createWorkflowModelViewerStageAsync,
 } from '../../../services/workflowModelViewerStage';
@@ -245,8 +246,7 @@ const ImageHeightfieldViewer: React.FC<LazyImagePreviewViewerProps> = ({
     renderer.toneMappingExposure = 0.92;
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, quality.pixelRatioCap));
     renderer.setSize(width, height);
-    renderer.shadowMap.enabled = true;
-    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    configureWorkflowModelSoftShadows(renderer);
 
     while (mount.firstChild) mount.removeChild(mount.firstChild);
     mount.appendChild(renderer.domElement);

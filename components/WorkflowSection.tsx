@@ -26,6 +26,7 @@ import {
 } from 'lucide-react';
 import type {
   WorkflowAsset,
+  WorkflowAssetVariant,
   WorkflowPendingTask,
   CapabilitySet,
   VgpGenStepCapture,
@@ -183,6 +184,7 @@ import type {
   ImagePreviewCanvasAdjustControl,
   ImagePreviewLayoutMode,
   ImagePreviewWebCaptureApi,
+  AssetCapabilityOutputAsset,
   Model3DDisplayMode,
 } from './preview';
 import {
@@ -216,12 +218,6 @@ import {
 } from '../services/panoLocalInpaintPano';
 import { CustomDropdown } from './ui/CustomDropdown';
 
-const MODEL_3D_DISPLAY_MODES: Array<{ key: Model3DDisplayMode; label: string; title: string }> = [
-  { key: 'material', label: '材质', title: '显示模型自带材质与贴图' },
-  { key: 'clay', label: '白模', title: '使用 50% 灰白模材质查看形体' },
-  { key: 'wire', label: '线框', title: '仅显示模型拓扑线框' },
-  { key: 'normal', label: '法线', title: '用法线颜色检查表面方向' },
-];
 import { resolveCapabilityPreviewSrc } from '../services/capabilityPreviewUrl';
 import { WorkflowCapabilityHoverPreview } from './WorkflowCapabilityHoverPreview';
 import { WorkflowGridImage } from './ProgressivePreviewImage';
@@ -411,7 +407,10 @@ import {
 import {
   resolveWorkflowAssetStepBadge,
 } from '../services/workflowAssetStepCount';
-import { resolveWorkflowAssetActiveVariant } from '../services/workflowAssetVariants';
+import {
+  resolveWorkflowAssetActiveVariant,
+  resolveWorkflowAssetVariants,
+} from '../services/workflowAssetVariants';
 import { groupCapabilityPresetsByCategory } from './workflow/workflowCapabilityGroups';
 import { WorkflowSidebarColumn, type WorkflowSidebarFavoriteEntry } from './workflow/WorkflowSidebarColumn';
 import WorkflowSpaceMarqueeChrome from './workflow/WorkflowSpaceMarqueeChrome';
@@ -544,7 +543,12 @@ import {
 } from '../services/workflowModelBlob';
 import { captureWorkflowModelThumbnailDataUrl } from '../services/workflowModelPreviewCapture';
 import { getCompanionLocalBaseUrl, normalizeCompanionBaseUrl } from '../services/companionLocalPrefs';
-import { deleteCompanionAsset, probeCompanionSamSegmentHealth, revealCompanionAssetFolder } from '../services/companionClient';
+import {
+  deleteCompanionAsset,
+  getCompanionAssetMeta,
+  probeCompanionSamSegmentHealth,
+  revealCompanionAssetFolderWithProjectFallback,
+} from '../services/companionClient';
 import {
   cloneWorkflowModelSlotsForDuplicatedAsset,
   companionRasterSlotNeedsHydrate,
@@ -574,6 +578,19 @@ import { collectReferencedCompanionKeys } from '../services/workflowManifestCros
 const WORKFLOW_MODEL_EXT_RE = /\.(glb|gltf|fbx|obj)$/i;
 const WORKFLOW_VIDEO_EXT_RE = /\.(mp4|webm|mov|m4v)$/i;
 
+function workflowAssetVariantHasDirectModelUrl(variant: WorkflowAssetVariant | null | undefined): boolean {
+  if (!variant || variant.kind !== 'model3d') return false;
+  return Boolean(
+    String(variant.url || '').trim() ||
+      (variant.modelUrls || []).some((url) => String(url || '').trim())
+  );
+}
+
+function workflowAssetVariantHasModelCompanionKey(variant: WorkflowAssetVariant | null | undefined): boolean {
+  if (!variant || variant.kind !== 'model3d') return false;
+  return (variant.modelCompanionKeys || []).some((key) => String(key || '').trim());
+}
+
 type InsertManualGroupResult = {
   next: WorkflowAsset[];
   createdGroup: { id: string; coverImage: string } | null;
@@ -585,6 +602,15 @@ function isWorkflowModelFile(file: File): boolean {
   const t = (file.type || '').toLowerCase();
   if (t === 'model/gltf-binary' || t.includes('gltf')) return true;
   return false;
+}
+
+function inferWorkflowModelFileFormat(file: File): 'glb' | 'gltf' | 'fbx' | 'obj' {
+  const name = String(file.name || '').split(/[?#]/)[0].toLowerCase();
+  const type = String(file.type || '').toLowerCase();
+  if (name.endsWith('.gltf') || type.includes('gltf+json')) return 'gltf';
+  if (name.endsWith('.fbx') || type.includes('fbx')) return 'fbx';
+  if (name.endsWith('.obj') || type.includes('model/obj')) return 'obj';
+  return 'glb';
 }
 
 function isWorkflowVideoFile(file: File): boolean {
@@ -1202,6 +1228,10 @@ const WorkflowSection: React.FC<{
   /** 与 `ImagePreviewOverlay` 同步：平面 / 全景 / 高度 3D / 3D 模型（非平面时标注写入对应桶） */
   const [lightboxPreviewLayout, setLightboxPreviewLayout] = useState<ImagePreviewLayoutMode>('flat');
   const [lightboxModel3dDisplayMode, setLightboxModel3dDisplayMode] = useState<Model3DDisplayMode>('material');
+  const [lightboxModel3dResetViewNonce, setLightboxModel3dResetViewNonce] = useState(0);
+  const [lightboxModel3dShowGrid, setLightboxModel3dShowGrid] = useState(true);
+  const [lightboxModel3dBackfaceCulling, setLightboxModel3dBackfaceCulling] = useState(true);
+  const [lightboxMediaCapturePreviewNonce, setLightboxMediaCapturePreviewNonce] = useState(0);
   const [lightboxCanvasSplitStretchEnabled, setLightboxCanvasSplitStretchEnabled] = useState(false);
   const [lightboxCanvasSplitStretchWriteBackPopOpen, setLightboxCanvasSplitStretchWriteBackPopOpen] =
     useState(false);
@@ -2380,6 +2410,8 @@ const WorkflowSection: React.FC<{
   }, [workspaceProjectChrome?.activeProjectId]);
   const getWorkflowAssetActiveCompanionKey = useCallback((a: WorkflowAsset): string => {
     const dk = String(a.displayKey || 'original').trim() || 'original';
+    const modelKey = resolveWorkflowStepModelCompanionKeys(a, dk).find((key) => String(key || '').trim());
+    if (modelKey) return String(modelKey).trim();
     if (dk !== 'original') return String(a.resultsCompanionKeys?.[dk] || '').trim();
     return String(a.originalCompanionKey || '').trim();
   }, []);
@@ -7338,6 +7370,7 @@ ${lineSvg}
       modelFiles.forEach((file, fileIdx) => {
         const newId = uuid();
         const blobUrl = URL.createObjectURL(file);
+        const modelFormat = inferWorkflowModelFileFormat(file);
         const placeholder = buildWorkflowModelPlaceholderDataUrl(file.name);
         setCardAspectByAssetId((prev) => (prev[newId] != null ? prev : { ...prev, [newId]: ratio }));
         setAssets((prev) => {
@@ -7349,6 +7382,7 @@ ${lineSvg}
             results: {},
             resultOrder: [],
             stepModelUrls: { original: [blobUrl] },
+            stepModelFormats: { original: [modelFormat] },
             modelUrls: [blobUrl],
             modelSourceName: file.name,
             archived: false,
@@ -7370,25 +7404,6 @@ ${lineSvg}
             .concat(newAsset);
         });
         void (async () => {
-          const thumb = await captureWorkflowModelThumbnailDataUrl({
-            modelSrc: blobUrl,
-            modelFileName: file.name,
-          });
-          if (thumb) {
-            const thumbRatio = clampWorkflowCardAspectRatio(1280, 800);
-            setAssets((prev) => {
-              if (!prev.some((x) => x.id === newId)) return prev;
-              return prev.map((x) => {
-                if (x.id !== newId) return x;
-                const stillBlob = (x.modelUrls || []).some((u) => u === blobUrl);
-                if (!stillBlob) return x;
-                const o = String(x.original || '');
-                if (!o.includes('image/svg+xml')) return x;
-                return { ...x, original: thumb, gridCardAspectRatio: thumbRatio };
-              });
-            });
-            setCardAspectByAssetId((prev) => ({ ...prev, [newId]: thumbRatio }));
-          }
           const pid = String(workspaceProjectChrome?.activeProjectId || '').trim();
           const base = String(getCompanionLocalBaseUrl() || '').trim();
           if (!pid || !base) {
@@ -7406,6 +7421,8 @@ ${lineSvg}
           }
           const got = await fetchWorkflowModelFromCompanionAsObjectUrl(base, pid, put.key, file.name);
           if (got.ok === false) {
+            const meta = await getCompanionAssetMeta(base, pid, put.key);
+            if (meta.ok && meta.data.onDisk) {
             setAssets((prev) =>
               prev.map((x) =>
                 x.id === newId
@@ -7417,6 +7434,7 @@ ${lineSvg}
                   : x
               )
             );
+            }
             onLog?.('warn', '3D 模型落盘后读取预览失败', got.error);
             return;
           }
@@ -7436,9 +7454,45 @@ ${lineSvg}
                 modelCompanionKeys: [put.key],
                 stepModelUrls: { ...(x.stepModelUrls || {}), original: [got.objectUrl] },
                 stepModelCompanionKeys: { ...(x.stepModelCompanionKeys || {}), original: [put.key] },
+                stepModelFormats: { ...(x.stepModelFormats || {}), original: [modelFormat] },
               };
             })
           );
+        })();
+        void (async () => {
+          const thumb = await captureWorkflowModelThumbnailDataUrl({
+            modelSrc: blobUrl,
+            modelFileName: file.name,
+          });
+          if (thumb) {
+            const thumbRatio = clampWorkflowCardAspectRatio(1280, 800);
+            let thumbCompanionKey = '';
+            const pid = String(workspaceProjectChrome?.activeProjectId || '').trim();
+            const base = String(getCompanionLocalBaseUrl() || '').trim();
+            if (pid && base) {
+              const putThumb = await putWorkflowOriginalImageToCompanion(base, pid, newId, thumb);
+              if (putThumb.ok === false) {
+                onLog?.('warn', '3D 缩略图写入本地 companion 失败', putThumb.error);
+              } else {
+                thumbCompanionKey = putThumb.key;
+              }
+            }
+            setAssets((prev) => {
+              if (!prev.some((x) => x.id === newId)) return prev;
+              return prev.map((x) => {
+                if (x.id !== newId) return x;
+                const o = String(x.original || '');
+                if (!o.includes('image/svg+xml')) return x;
+                return {
+                  ...x,
+                  original: thumb,
+                  ...(thumbCompanionKey ? { originalCompanionKey: thumbCompanionKey } : {}),
+                  gridCardAspectRatio: thumbRatio,
+                };
+              });
+            });
+            setCardAspectByAssetId((prev) => ({ ...prev, [newId]: thumbRatio }));
+          }
         })();
       });
     },
@@ -7836,16 +7890,34 @@ ${lineSvg}
     () => (lightboxAsset ? resolveWorkflowAssetActiveVariant(lightboxAsset) : null),
     [lightboxAsset]
   );
+  const lightboxPreviewVariant = useMemo(() => {
+    if (!lightboxAsset || !lightboxActiveVariant) return lightboxActiveVariant;
+    if (lightboxActiveVariant.kind !== 'model3d') return lightboxActiveVariant;
+    if (
+      workflowAssetVariantHasDirectModelUrl(lightboxActiveVariant) ||
+      workflowAssetVariantHasModelCompanionKey(lightboxActiveVariant)
+    ) {
+      return lightboxActiveVariant;
+    }
+    return (
+      resolveWorkflowAssetVariants(lightboxAsset).find(
+        (variant) =>
+          variant.kind === 'model3d' &&
+          (workflowAssetVariantHasDirectModelUrl(variant) ||
+            workflowAssetVariantHasModelCompanionKey(variant))
+      ) || lightboxActiveVariant
+    );
+  }, [lightboxActiveVariant, lightboxAsset]);
   const lightboxShowsImage = Boolean(lightboxAsset && getAssetDisplayImage(lightboxAsset).trim());
   const lightboxMediaCenterVariant =
-    lightboxActiveVariant &&
+    lightboxPreviewVariant &&
     (
-      lightboxActiveVariant.kind === 'video' ||
-      lightboxActiveVariant.kind === 'audio' ||
-      lightboxActiveVariant.kind === 'file' ||
-      lightboxActiveVariant.kind === 'model3d'
+      lightboxPreviewVariant.kind === 'video' ||
+      lightboxPreviewVariant.kind === 'audio' ||
+      lightboxPreviewVariant.kind === 'file' ||
+      lightboxPreviewVariant.kind === 'model3d'
     )
-      ? lightboxActiveVariant
+      ? lightboxPreviewVariant
       : null;
   /** 文字资产当前版本按文本通道展示（非 results 中的位图版本） */
   const lightboxTextAssetOnTextChannel = Boolean(
@@ -7883,7 +7955,9 @@ ${lineSvg}
     const fmts = lightboxAsset.stepModelFormats?.[dk];
     const first = fmts?.[0];
     const stub = `workflow-${lightboxAsset.id.slice(0, 8)}`;
+    if (first === 'gltf') return `${stub}.gltf`;
     if (first === 'fbx') return `${stub}.fbx`;
+    if (first === 'obj') return `${stub}.obj`;
     if (first === 'glb') return `${stub}.glb`;
     return raw || `${stub}.glb`;
   }, [lightboxAsset]);
@@ -8076,6 +8150,45 @@ ${lineSvg}
     if (!lightboxModelPersistDetail || lightboxModelPersistDetail.status === 'none') return '';
     return workflowModelPersistStatusLabel(lightboxModelPersistDetail);
   }, [lightboxModelPersistDetail]);
+
+  useEffect(() => {
+    const variant = lightboxMediaCenterVariant;
+    if (!lightboxAsset || variant?.kind !== 'model3d') return;
+    if (workflowAssetVariantHasDirectModelUrl(variant)) return;
+    if (!workflowAssetVariantHasModelCompanionKey(variant)) return;
+    const base = String(getCompanionLocalBaseUrl() || '').trim();
+    const projectId = String(workspaceProjectChrome?.activeProjectId || '').trim();
+    const resultKey = String(variant.id || lightboxAsset.displayKey || '').trim();
+    if (!base || !projectId || !resultKey) return;
+    let cancelled = false;
+    void (async () => {
+      const current = assetsRef.current.find((x) => x.id === lightboxAsset.id);
+      if (!current) return;
+      const hydrated = await hydrateWorkflowAssetSingle3dResultKeyFromCompanion({
+        asset: current,
+        resultKey,
+        baseUrl: base,
+        projectId,
+        onLog: (level, message, detail) => onLogRef.current?.(level, message, detail),
+      });
+      if (cancelled || hydrated.nextAsset === current) return;
+      setAssets((prev) => prev.map((x) => (x.id === current.id ? hydrated.nextAsset : x)));
+      queueMicrotask(() => {
+        for (const u of hydrated.revokeBlobUrls) {
+          revokeWorkflowModelBlobUrlsIfOrphaned(u, assetsRef.current);
+        }
+      });
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    lightboxAsset,
+    lightboxMediaCenterVariant,
+    setAssets,
+    workspaceProjectChrome?.activeProjectId,
+  ]);
+
 
   const handleLightboxDownloadModel = useCallback(
     async (slotIndex: number) => {
@@ -8543,7 +8656,7 @@ ${lineSvg}
         return;
       }
       onLog?.('info', '正在打开资产文件夹...', key);
-      const out = await revealCompanionAssetFolder(base, projectId, key);
+      const out = await revealCompanionAssetFolderWithProjectFallback(base, projectId, key);
       if (out.ok) {
         onLog?.('info', `已打开资产文件夹：${out.data.filename}`);
         return;
@@ -8569,7 +8682,7 @@ ${lineSvg}
         const failed: string[] = [];
         for (const key of keys) {
           const out = await deleteCompanionAsset(base, projectId, key);
-          if (out.ok) {
+          if (out.ok === true) {
             deleted += 1;
             continue;
           }
@@ -11199,6 +11312,193 @@ ${lineSvg}
     getLightboxPreviewImageSrc,
     onLog,
   ]);
+
+  const handleLightboxDownloadCurrent = useCallback(async () => {
+    const asset = lightboxAsset;
+    if (!asset) return;
+    const variant = resolveWorkflowAssetActiveVariant(asset);
+    const mediaUrl =
+      variant?.kind === 'model3d'
+        ? variant.modelUrls?.find((url) => String(url || '').trim()) || variant.url || ''
+        : variant?.kind && variant.kind !== 'image' && variant.kind !== 'text'
+          ? variant.url || ''
+          : '';
+    if (mediaUrl.trim()) {
+      const fileName =
+        String(variant?.label || asset.modelSourceName || asset.textTitle || asset.id || 'asset')
+          .trim()
+          .replace(/[\\/:*?"<>|]+/g, '-') || 'asset';
+      const a = document.createElement('a');
+      a.href = mediaUrl;
+      a.download = fileName;
+      a.rel = 'noopener';
+      a.click();
+      appendWorkflowAuditEvent({
+        level: 'info',
+        code: WORKFLOW_AUDIT_CODES.EXPORT_IMAGE,
+        assetId: asset.id,
+        displayKey: asset.displayKey,
+        message: '工作流大图：下载当前媒体预览文件',
+        detail: { context: 'workflow_asset_preview_shell', kind: variant?.kind },
+      });
+      return;
+    }
+    if (!lightboxShowsImage) {
+      const title = (asset.textTitle || '').trim();
+      const body = getAssetDisplayText(asset);
+      const text = title ? `${title}\n\n${body}` : body;
+      if (!text.trim()) {
+        onLog?.('warn', '当前预览没有可下载的直接文件链接');
+        return;
+      }
+      const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      try {
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `workflow-text-${asset.id.slice(0, 6)}.txt`;
+        a.click();
+      } finally {
+        URL.revokeObjectURL(url);
+      }
+      appendWorkflowAuditEvent({
+        level: 'info',
+        code: WORKFLOW_AUDIT_CODES.EXPORT_TEXT_PREVIEW,
+        assetId: asset.id,
+        displayKey: asset.displayKey,
+        message: '工作流大图：下载文字预览为 TXT',
+        detail: { context: 'workflow_asset_preview_shell' },
+      });
+      return;
+    }
+    appendWorkflowAuditEvent({
+      level: 'info',
+      code: WORKFLOW_AUDIT_CODES.EXPORT_IMAGE,
+      assetId: asset.id,
+      displayKey: asset.displayKey,
+      message: '工作流大图：下载当前预览图',
+      detail: { context: 'workflow_asset_preview_shell' },
+    });
+    await triggerImageDownload(getAssetDisplayImage(asset), `workflow-preview-${asset.id.slice(0, 6)}`);
+  }, [getAssetDisplayImage, getAssetDisplayText, lightboxAsset, lightboxShowsImage, onLog]);
+
+  const handleLightboxCopyCurrent = useCallback(async () => {
+    if (!lightboxAsset) return;
+    const variant = resolveWorkflowAssetActiveVariant(lightboxAsset);
+    if (lightboxShowsImage) {
+      await handleWorkflowAssetCopyImage(lightboxAsset);
+      return;
+    }
+    const mediaReference =
+      variant?.kind && variant.kind !== 'text'
+        ? variant.url ||
+          variant.objectKey ||
+          variant.companionKey ||
+          variant.modelUrls?.find((url) => String(url || '').trim()) ||
+          ''
+        : '';
+    if (mediaReference.trim() && navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(mediaReference);
+      onLog?.('info', '已复制当前媒体预览引用');
+      return;
+    }
+    if (navigator.clipboard?.writeText) {
+      const title = (lightboxAsset.textTitle || '').trim();
+      const body = getAssetDisplayText(lightboxAsset);
+      await navigator.clipboard.writeText(title ? `${title}\n\n${body}` : body);
+      onLog?.('info', '已复制当前文本预览');
+      return;
+    }
+    await handleWorkflowAssetCopyId(lightboxAsset);
+  }, [getAssetDisplayText, handleWorkflowAssetCopyId, handleWorkflowAssetCopyImage, lightboxAsset, lightboxShowsImage, onLog]);
+
+  const handleLightboxStartCrop = useCallback(() => {
+    applyLightboxToolChange(lightboxRememberedCrop);
+  }, [applyLightboxToolChange, lightboxRememberedCrop]);
+
+  const handleLightboxCapturePreview = useCallback(async () => {
+    const asset = lightboxAsset;
+    if (!asset) return;
+    const dataUrl =
+      lightboxPreviewLayoutRef.current === 'pano'
+        ? lightboxPanoViewerRef.current?.captureViewDataUrl('image/png')
+        : lightboxWebPreviewCaptureApiRef.current?.captureCurrentViewAsDataUrl();
+    if (!dataUrl) {
+      onLog?.('warn', '当前预览画面暂不可截图，请等待预览加载完成');
+      return;
+    }
+    await triggerImageDownload(dataUrl, `workflow-preview-view-${asset.id.slice(0, 6)}`);
+  }, [lightboxAsset, onLog]);
+
+  const handleLightboxAddCurrentToInput = useCallback(() => {
+    const asset = lightboxAsset;
+    if (!asset) return;
+    const variant = resolveWorkflowAssetActiveVariant(asset);
+    if (variant?.kind === 'text') {
+      const title = (asset.textTitle || '').trim();
+      const body = variant.text || getAssetDisplayText(asset);
+      appendQuickComposeTextInput(title ? `${title}\n\n${body}` : body, '文本预览');
+      return;
+    }
+    const location =
+      variant?.url ||
+      variant?.objectKey ||
+      variant?.companionKey ||
+      variant?.modelUrls?.find(Boolean) ||
+      getAssetDisplayImage(asset);
+    const lines = [
+      `[${(variant?.kind || asset.assetKind || 'image').toUpperCase()}资产] ${variant?.label || asset.id}`,
+      `assetId: ${asset.id}`,
+      `displayKey: ${asset.displayKey}`,
+    ];
+    if (location) lines.push(`location: ${location}`);
+    appendQuickComposeTextInput(lines.join('\n'), '媒体资产引用');
+  }, [appendQuickComposeTextInput, getAssetDisplayImage, getAssetDisplayText, lightboxAsset]);
+
+  const handleLightboxUseCapabilityOutputAsInput = useCallback(
+    (output: AssetCapabilityOutputAsset) => {
+      const text =
+        (output.kind === 'text' ? output.text : '') ||
+        output.url ||
+        output.objectKey ||
+        output.companionKey ||
+        output.label;
+      if (!text.trim()) return;
+      appendQuickComposeTextInput(text, '预览能力输出');
+    },
+    [appendQuickComposeTextInput]
+  );
+
+  const handleLightboxSaveCapabilityOutput = useCallback(
+    (output: AssetCapabilityOutputAsset) => {
+      const text =
+        (output.kind === 'text' ? output.text : '') ||
+        output.url ||
+        output.objectKey ||
+        output.companionKey;
+      if (!text.trim()) {
+        onLog?.('warn', '当前能力输出没有可保存内容');
+        return;
+      }
+      const newId = uuid();
+      const asset = attachInitialVgpToNewAsset({
+        id: newId,
+        original: '',
+        displayKey: 'original',
+        results: {},
+        resultOrder: [],
+        archived: false,
+        hiddenInGrid: false,
+        createdAt: Date.now(),
+        assetKind: 'text',
+        textTitle: output.label || '预览能力输出',
+        textBody: clampWorkflowTextBody(text),
+      });
+      setAssets((prev) => [...prev, asset]);
+      onLog?.('info', '已将预览能力输出保存为文本资产');
+    },
+    [onLog, setAssets]
+  );
 
   const exitLightboxSamAuto = useCallback(() => {
     setLightboxSamUxMode('prompt');
@@ -14555,6 +14855,9 @@ ${lineSvg}
         <AssetPreviewOverlay
           open
           resetKey={lightboxAsset.id}
+          asset={lightboxAsset}
+          variant={lightboxActiveVariant}
+          previewLayout={lightboxPreviewLayout}
           bootPhase={lightboxBootPhase}
           onPrimaryImageReady={notifyLightboxPrimaryReady}
           backdropImageSrc={lightboxListBackdropUrl}
@@ -14606,7 +14909,10 @@ ${lineSvg}
               <AssetMediaPreviewCenter
                 variant={lightboxMediaCenterVariant}
                 model3dDisplayMode={lightboxModel3dDisplayMode}
-                onModel3dDisplayModeChange={setLightboxModel3dDisplayMode}
+                model3dResetViewNonce={lightboxModel3dResetViewNonce}
+                model3dShowGrid={lightboxModel3dShowGrid}
+                model3dBackfaceCulling={lightboxModel3dBackfaceCulling}
+                capturePreviewNonce={lightboxMediaCapturePreviewNonce}
                 onAddToComposeInput={(text) => appendQuickComposeTextInput(text, '媒体资产引用')}
               />
             ) : undefined
@@ -14664,6 +14970,25 @@ ${lineSvg}
           modelUrls={lightboxModelUrls}
           modelFileName={lightboxModelFileNameHint}
           model3dDisplayMode={lightboxModel3dDisplayMode}
+          model3dResetViewNonce={lightboxModel3dResetViewNonce}
+          model3dShowGrid={lightboxModel3dShowGrid}
+          model3dBackfaceCulling={lightboxModel3dBackfaceCulling}
+          onModel3dDisplayModeChange={setLightboxModel3dDisplayMode}
+          onDownloadCurrent={handleLightboxDownloadCurrent}
+          onCopyCurrent={handleLightboxCopyCurrent}
+          onStartCrop={handleLightboxStartCrop}
+          onRunRembg={runLightboxRembg}
+          onCapturePreview={
+            lightboxMediaCenterVariant
+              ? () => setLightboxMediaCapturePreviewNonce((nonce) => nonce + 1)
+              : handleLightboxCapturePreview
+          }
+          onAddCurrentToInput={handleLightboxAddCurrentToInput}
+          onModel3dResetView={() => setLightboxModel3dResetViewNonce((nonce) => nonce + 1)}
+          onModel3dToggleGrid={() => setLightboxModel3dShowGrid((visible) => !visible)}
+          onModel3dToggleBackfaceCulling={() => setLightboxModel3dBackfaceCulling((enabled) => !enabled)}
+          onUseCapabilityOutputAsInput={handleLightboxUseCapabilityOutputAsInput}
+          onSaveCapabilityOutput={handleLightboxSaveCapabilityOutput}
           layoutReferenceSrc={
             lightboxShowsImage && asWorkflowImageString(lightboxAsset.original).trim()
               ? workflowSafeImgSrc(lightboxAsset.original)
@@ -14722,7 +15047,7 @@ ${lineSvg}
               : undefined
           }
           topRightExtra={
-            lightboxChromeReady && !lightboxMediaCenterVariant ? (
+            lightboxChromeReady && !lightboxMediaCenterVariant && lightboxPreviewLayout !== 'model3d' ? (
             <>
               <button
                 type="button"
@@ -14841,34 +15166,7 @@ ${lineSvg}
                   >
                     {lightboxModelPersistLabel}
                   </span>
-                ) : null}
-                {lightboxPreviewLayout === 'model3d' ? (
-                  <div
-                    className="flex min-w-0 shrink-0 overflow-hidden rounded-lg border border-white/10 bg-black/35 p-0.5"
-                    role="group"
-                    aria-label="3D 显示模式"
-                  >
-                    {MODEL_3D_DISPLAY_MODES.map((mode) => (
-                      <button
-                        key={mode.key}
-                        type="button"
-                        title={mode.title}
-                        aria-pressed={lightboxModel3dDisplayMode === mode.key}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setLightboxModel3dDisplayMode(mode.key);
-                        }}
-                        className={`h-7 px-2 text-[10px] font-black transition-colors ${
-                          lightboxModel3dDisplayMode === mode.key
-                            ? 'rounded-md bg-white text-black'
-                            : 'rounded-md text-white/65 hover:bg-white/10 hover:text-white'
-                        }`}
-                      >
-                        {mode.label}
-                      </button>
-                    ))}
-                  </div>
-                ) : null}
+                ) : null}
                 {lightboxTencentRehydrateCtx ? (
                   <button
                     type="button"
@@ -15087,6 +15385,7 @@ ${lineSvg}
         !showArchived &&
         lightboxChromeReady &&
         lightboxRasterChrome &&
+        lightboxPreviewLayout !== 'model3d' &&
         !lightboxUiHidden &&
         typeof document !== 'undefined' &&
         createPortal(

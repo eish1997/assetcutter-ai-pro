@@ -6,7 +6,8 @@ const {
   classifyAgentHttpStatus,
 } = require('./agent-partition-fetch.cjs');
 
-const WORKBENCH_PARTITION = 'persist:assetcutter-workbench';
+const TEAM_WEB_PARTITION = 'persist:assetcutter-team';
+const WORKBENCH_PARTITION = TEAM_WEB_PARTITION;
 
 /**
  * @param {{
@@ -67,9 +68,9 @@ function createAgentWorkbenchClient(deps) {
     let last = null;
     for (const candidate of bases) {
       const url = `${candidate.base}${path}`;
+      const requestOrigin = new URL(candidate.base).origin;
       try {
         const method = String((init && init.method) || 'GET').toUpperCase();
-        const requestOrigin = new URL(candidate.base).origin;
         const headers = {
           Accept: 'application/json',
           ...(init && init.headers ? init.headers : {}),
@@ -196,6 +197,12 @@ function createAgentWorkbenchClient(deps) {
   function classifyBridgeError(bridge) {
     const b = bridge && typeof bridge === 'object' ? bridge : {};
     const bridgeError = String(b.error || '');
+    if (/积分不足|credits?\s*(insufficient|required)|insufficient\s*credits/i.test(bridgeError)) {
+      return { code: 'AGENT_CREDITS_REQUIRED', message: bridgeError || 'credits required' };
+    }
+    if (/平台\s*Key|provider key|api key|供应商.*key|key.*不可用/i.test(bridgeError)) {
+      return { code: 'AGENT_PROVIDER_KEY_REQUIRED', message: bridgeError || 'provider key required' };
+    }
     if (b.requiresInput || bridgeError === 'input_image_required') {
       return { code: 'AGENT_INPUT_REQUIRED', message: bridgeError || 'input required' };
     }
@@ -611,4 +618,4 @@ function createAgentWorkbenchClient(deps) {
   return { ensureReady, getContext, createProject, openProject, listAssets, getAsset, runCapability, agentFetch };
 }
 
-module.exports = { createAgentWorkbenchClient, WORKBENCH_PARTITION };
+module.exports = { createAgentWorkbenchClient, WORKBENCH_PARTITION, TEAM_WEB_PARTITION };

@@ -30,7 +30,7 @@ function computeUserCreditsPerUnit(entry) {
     return null;
   }
   const sku = String(entry.billingSku || entry.billing_sku || '');
-  if (sku.startsWith('llm.')) return 1;
+  if (sku.startsWith('llm.') || sku.startsWith('copilot.')) return 1;
   return null;
 }
 
@@ -162,6 +162,41 @@ async function seedPostgresIfEmpty(client) {
   );
 }
 
+async function seedMissingDefaultPostgresEntries(client) {
+  for (const raw of DEFAULT_PRICE_CATALOG) {
+    const billingSku = String(raw.billingSku || '').trim();
+    if (!billingSku) continue;
+    const exists = await client.query(`SELECT 1 FROM price_catalog WHERE billing_sku = $1 LIMIT 1`, [billingSku]);
+    if (exists.rows[0]) continue;
+    const row = seedEntryFromDefault(raw, SEED_CATALOG_VERSION);
+    if (!row) continue;
+    await client.query(
+      `INSERT INTO price_catalog
+       (billing_sku, version, effective_from, display_name, meter_kind,
+        input_per_1m, output_per_1m, image_output_per_1m, per_unit, user_credits_per_unit,
+        enabled, catalog_version, vendor_sku_ref, markup_pct)
+       VALUES ($1,$2,$3::timestamptz,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+       ON CONFLICT (billing_sku, version) DO NOTHING`,
+      [
+        row.billingSku,
+        row.version,
+        row.effectiveFrom,
+        row.displayName,
+        row.meterKind,
+        row.inputPer1m,
+        row.outputPer1m,
+        row.imageOutputPer1m,
+        row.perUnit,
+        row.userCreditsPerUnit,
+        row.enabled,
+        row.catalogVersion,
+        row.vendorSkuRef,
+        row.markupPct,
+      ]
+    );
+  }
+}
+
 function seedJsonIfEmpty(db) {
   const section = ensureJsonSection(db);
   if (section.entries.length > 0) return false;
@@ -170,6 +205,22 @@ function seedJsonIfEmpty(db) {
   section.catalogVersion = catalogVersion;
   section.entries = DEFAULT_PRICE_CATALOG.map((raw) => seedEntryFromDefault(raw, catalogVersion)).filter(Boolean);
   return true;
+}
+
+function seedMissingDefaultJsonEntries(db) {
+  const section = ensureJsonSection(db);
+  const existing = new Set(section.entries.map((entry) => String(entry && entry.billingSku ? entry.billingSku : '')));
+  let changed = false;
+  for (const raw of DEFAULT_PRICE_CATALOG) {
+    const billingSku = String(raw.billingSku || '').trim();
+    if (!billingSku || existing.has(billingSku)) continue;
+    const row = seedEntryFromDefault(raw, section.catalogVersion || SEED_CATALOG_VERSION);
+    if (!row) continue;
+    section.entries.push(row);
+    existing.add(billingSku);
+    changed = true;
+  }
+  return changed;
 }
 
 export async function ensurePriceCatalogStore() {
@@ -204,12 +255,14 @@ export async function ensurePriceCatalogStore() {
     `);
     await p.query(`ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS catalog_version TEXT NULL;`);
     await seedPostgresIfEmpty(p);
+    await seedMissingDefaultPostgresEntries(p);
     await refreshRuntimeCatalogCache();
     return;
   }
 
   const db = readDb();
-  if (seedJsonIfEmpty(db)) writeDb(db);
+  const changed = seedJsonIfEmpty(db) || seedMissingDefaultJsonEntries(db);
+  if (changed) writeDb(db);
 }
 
 function effectiveAtIso(effectiveAt) {
@@ -337,6 +390,8 @@ export function listActiveCatalogSync(effectiveAt) {
   if (section.entries.length === 0) {
     seedJsonIfEmpty(db);
     writeDb(db);
+  } else if (seedMissingDefaultJsonEntries(db)) {
+    writeDb(db);
   }
   return pickLatestPerSku(section.entries.map(mapJsonRow), at);
 }
@@ -349,6 +404,8 @@ export function getCatalogVersionSync() {
   const section = ensureJsonSection(db);
   if (section.entries.length === 0) {
     seedJsonIfEmpty(db);
+    writeDb(db);
+  } else if (seedMissingDefaultJsonEntries(db)) {
     writeDb(db);
   }
   return String(section.catalogVersion || SEED_CATALOG_VERSION);

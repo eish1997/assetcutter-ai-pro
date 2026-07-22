@@ -41,6 +41,24 @@ describe('priceCatalogStore (JSON mode)', () => {
     expect(flash?.enabled).toBe(true);
   });
 
+  it('backfills new default SKUs into an existing seeded catalog', async () => {
+    await ensurePriceCatalogStore();
+    const db = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
+    db.priceCatalog.entries = db.priceCatalog.entries.filter(
+      (entry: { billingSku?: string }) => entry.billingSku !== 'copilot.codex.tokens',
+    );
+    fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2), 'utf8');
+
+    await ensurePriceCatalogStore();
+    const entry = await getCatalogEntry('copilot.codex.tokens');
+    expect(entry).toMatchObject({
+      billingSku: 'copilot.codex.tokens',
+      meterKind: 'token',
+      userCreditsPerUnit: 1,
+      enabled: true,
+    });
+  });
+
   it('listActiveCatalog returns latest version per billing_sku', async () => {
     await ensurePriceCatalogStore();
     const db = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));

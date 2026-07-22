@@ -290,6 +290,20 @@ describe('agent workbench client', () => {
     expect(result.content).toContain('service unavailable');
   });
 
+  it('keeps request origin diagnostics when workbench fetch throws', async () => {
+    const client = createClient({
+      fetchWithPartition: async () => {
+        throw new Error('connection refused');
+      },
+    });
+
+    const result = await client.getContext();
+    expect(result.ok).toBe(false);
+    expect(result.error.code).toBe('AGENT_WORKBENCH_HTTP');
+    expect(result.structured.server.requestOrigin).toBe('https://assetcutter.test');
+    expect(result.structured.server.error).toBe('connection refused');
+  });
+
   it('includes embedded session diagnostics when workbench auth is missing', async () => {
     const client = createClient({
       getAgentApiOrigin: () => 'https://auth.assetcutter.test',
@@ -314,7 +328,7 @@ describe('agent workbench client', () => {
     expect(result.error.code).toBe('AGENT_AUTH_REQUIRED');
     expect(result.structured.authRequired).toBe(true);
     expect(result.structured.authDiagnostics).toMatchObject({
-      partition: 'persist:assetcutter-workbench',
+      partition: 'persist:assetcutter-team',
       apiOrigin: 'https://auth.assetcutter.test',
       siteOrigin: 'https://assetcutter.test',
       sameOrigin: false,

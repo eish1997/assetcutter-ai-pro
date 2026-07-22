@@ -86,6 +86,15 @@ const WORKBENCH_RECOVERY_CONTRACT = {
 const WORKBENCH_E2E_GATES = {
   inProduct: 'Companion Settings -> External Agent (MCP) -> 工作台验收',
   cli: 'npm run smoke:agent-mcp:e2e -- --config <hermes-mcp-import.json>',
+  accountPrerequisite: {
+    source: 'assetcutter://mcp/server-status',
+    field: 'readiness.account.loggedIn',
+    expected: true,
+    partition: 'persist:assetcutter-team',
+    recoveryTool: { name: 'ac.shell.navigate', arguments: { view: 'workbench' } },
+    recovery:
+      'If readiness.account.loggedIn is false, open the embedded Workbench view, let the user log in, then retry the E2E chain.',
+  },
   passingChain: ['ensure_ready', 'create/open project', 'run_capability', 'list_assets', 'get_asset'],
 };
 
@@ -103,6 +112,13 @@ function buildWorkbenchFlowDocument() {
     canonicalFlow: WORKBENCH_CANONICAL_FLOW.map((step) => ({ ...step })),
     recoveryContract: { ...WORKBENCH_RECOVERY_CONTRACT },
     e2eGates: { ...WORKBENCH_E2E_GATES },
+    accountReadiness: {
+      partition: 'persist:assetcutter-team',
+      statusResources: ['assetcutter://mcp/server-status'],
+      statusTools: ['ac.shell.get_state'],
+      requiredBeforeE2e: true,
+      fields: ['loggedIn', 'partition', 'cookieCount', 'hasAuthCookie', 'migration', 'nextStep'],
+    },
     extensionGuidance: {
       addWorkbenchTool:
         'Add the schema to agent-tool-schemas.cjs, dispatch in agent-body-host.cjs/client bridge, add successSignals to tool-catalog, and extend agent-workbench-flow.cjs if it changes the canonical chain.',

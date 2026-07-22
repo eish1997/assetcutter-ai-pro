@@ -135,6 +135,98 @@ export async function revealCompanionAssetFolder(baseUrl: string, projectId: str
   );
 }
 
+const companionRevealProjectIdsByBase = new Map<string, Promise<string[]>>();
+const companionRevealProjectByKey = new Map<string, string>();
+
+function companionRevealProjectCacheKey(baseUrl: string, key: string): string {
+  return `${normalizeCompanionBaseUrl(baseUrl)}\0${String(key || '').trim()}`;
+}
+
+function sanitizeLegacyCompanionPathSegment(s: string): string {
+  return String(s || '')
+    .trim()
+    .replace(/[^a-zA-Z0-9_.-]/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 120) || 'x';
+}
+
+function legacyRevealCompanionAssetKeyCandidates(key: string): string[] {
+  const k = String(key || '').trim();
+  if (!k || k.startsWith('wf-')) return [];
+
+  const parts = k.split(/[\\/]+/).map((p) => p.trim()).filter(Boolean);
+  const out: string[] = [];
+  if (parts.length >= 2) {
+    const assetId = sanitizeLegacyCompanionPathSegment(parts[0]).slice(0, 48);
+    const resultKey = sanitizeLegacyCompanionPathSegment(parts.slice(1).join('_')).slice(0, 72);
+    out.push(`wf-res-${assetId}-${resultKey}`.slice(0, 128));
+  } else if (parts.length === 1 && !/^[a-z][a-z0-9+.-]*:/i.test(parts[0])) {
+    out.push(`wf-orig-${sanitizeLegacyCompanionPathSegment(parts[0])}`.slice(0, 128));
+  }
+
+  return Array.from(new Set(out.filter((candidate) => candidate && candidate !== k)));
+}
+
+async function listCompanionProjectIdsForRevealFallback(baseUrl: string, preferredProjectId: string): Promise<string[]> {
+  const base = normalizeCompanionBaseUrl(baseUrl);
+  let p = companionRevealProjectIdsByBase.get(base);
+  if (!p) {
+    p = listCompanionProjects(base).then((r) => {
+      if (r.ok === false) return [];
+      return Array.isArray(r.data.projectIds)
+        ? r.data.projectIds.map((id) => String(id || '').trim()).filter(Boolean)
+        : [];
+    });
+    companionRevealProjectIdsByBase.set(base, p);
+  }
+  const preferred = String(preferredProjectId || '').trim();
+  const ids = await p.catch(() => []);
+  return Array.from(new Set([preferred, ...ids].filter(Boolean)));
+}
+
+export async function revealCompanionAssetFolderWithProjectFallback(
+  baseUrl: string,
+  projectId: string,
+  key: string,
+): Promise<CompanionClientResult<CompanionAssetRevealResultV1>> {
+  const base = normalizeCompanionBaseUrl(baseUrl);
+  const pid = String(projectId || '').trim();
+  const k = String(key || '').trim();
+  const first = await revealCompanionAssetFolder(base, pid, k);
+  if (first.ok || (first.status !== 404 && first.status !== 400)) return first;
+
+  const cacheKey = companionRevealProjectCacheKey(base, k);
+  const cachedProjectId = companionRevealProjectByKey.get(cacheKey);
+  if (cachedProjectId && cachedProjectId !== pid) {
+    const meta = await getCompanionAssetMeta(base, cachedProjectId, k);
+    if (meta.ok && meta.data.onDisk) {
+      const cached = await revealCompanionAssetFolder(base, cachedProjectId, k);
+      if (cached.ok) return cached;
+    }
+    companionRevealProjectByKey.delete(cacheKey);
+  }
+
+  const ids = await listCompanionProjectIdsForRevealFallback(base, pid);
+  for (const candidateId of ids) {
+    if (!candidateId || candidateId === pid || candidateId === cachedProjectId) continue;
+    const meta = await getCompanionAssetMeta(base, candidateId, k);
+    if (!meta.ok || !meta.data.onDisk) continue;
+    const got = await revealCompanionAssetFolder(base, candidateId, k);
+    if (got.ok) {
+      companionRevealProjectByKey.set(cacheKey, candidateId);
+      return got;
+    }
+  }
+
+  for (const candidateKey of legacyRevealCompanionAssetKeyCandidates(k)) {
+    const got = await revealCompanionAssetFolderWithProjectFallback(base, pid, candidateKey);
+    if (got.ok) return got;
+  }
+
+  return first;
+}
+
 function perfNowMs(): number {
   return typeof performance !== 'undefined' ? performance.now() : Date.now();
 }

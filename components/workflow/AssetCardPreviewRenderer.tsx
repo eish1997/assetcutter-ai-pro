@@ -26,6 +26,16 @@ function firstModelPreviewSrc(modelUrls?: string[], fallbackUrl?: string): strin
   return (modelUrls || []).find((value) => String(value || '').trim())?.trim() || String(fallbackUrl || '').trim();
 }
 
+function modelFileNameHint(asset: WorkflowAsset, activeVariant: ReturnType<typeof resolveWorkflowAssetActiveVariant>, modelSrc: string): string {
+  const sourceName = String(asset.modelSourceName || '').trim();
+  if (sourceName) return sourceName;
+  const key = String(activeVariant?.modelCompanionKeys?.[0] || '').trim();
+  if (key) return key;
+  const format = String(activeVariant?.modelFormats?.[0] || '').trim();
+  if (format === 'glb' || format === 'gltf' || format === 'fbx' || format === 'obj') return `model.${format}`;
+  return modelSrc;
+}
+
 function readableText(asset: WorkflowAsset, textDisplay?: string): { title: string; body: string } {
   const title = String(asset.textTitle || '').trim();
   const active = resolveWorkflowAssetActiveVariant(asset);
@@ -118,7 +128,7 @@ export const AssetCardPreviewRenderer: React.FC<AssetCardPreviewRendererProps> =
       modelThumbnailPending.get(modelThumbCacheKey) ||
       captureWorkflowModelThumbnailDataUrl({
         modelSrc,
-        modelFileName: asset.modelSourceName || activeVariant?.modelCompanionKeys?.[0] || modelSrc,
+        modelFileName: modelFileNameHint(asset, activeVariant, modelSrc),
         width: 896,
         height: 560,
         timeoutMs: 55_000,
@@ -141,6 +151,7 @@ export const AssetCardPreviewRenderer: React.FC<AssetCardPreviewRendererProps> =
     activeKind,
     activeVariant?.id,
     activeVariant?.modelCompanionKeys,
+    activeVariant?.modelFormats,
     asset.id,
     asset.modelSourceName,
     modelSrc,

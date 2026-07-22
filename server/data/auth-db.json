@@ -18,8 +18,9 @@
       "role": "admin",
       "status": "active",
       "createdAt": "2026-03-23T10:18:36.313Z",
-      "updatedAt": "2026-03-23T10:18:36.313Z",
-      "username": "maoer"
+      "updatedAt": "2026-07-21T11:11:22.999Z",
+      "username": "maoer",
+      "staffRoleId": "34de210a-f4c7-4ab6-9f5a-146fa751c293"
     },
     {
       "id": "d3588bd1-327a-426e-a555-b5772c23d3a9",
@@ -28,8 +29,9 @@
       "role": "admin",
       "status": "active",
       "createdAt": "2026-03-23T10:21:11.803Z",
-      "updatedAt": "2026-03-23T10:21:11.804Z",
-      "username": "maoer"
+      "updatedAt": "2026-07-21T11:11:22.999Z",
+      "username": "maoer",
+      "staffRoleId": "34de210a-f4c7-4ab6-9f5a-146fa751c293"
     }
   ],
   "sessions": [
@@ -779,6 +781,50 @@
       "updatedAt": "2026-05-15T09:14:38.946Z",
       "revokedAt": null,
       "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.6998.205 Safari/537.36",
+      "ip": "127.0.0.1"
+    },
+    {
+      "id": "0be7b59b-489b-4e20-950e-776077997374",
+      "userId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "tokenHash": "8ae1f592ce429fb206f82a2b7df2223ddfe400863db797eacf8888ed7139bc37",
+      "expiresAt": "2026-07-29T01:32:17.361Z",
+      "createdAt": "2026-07-22T01:32:17.386Z",
+      "updatedAt": "2026-07-22T01:32:17.386Z",
+      "revokedAt": null,
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.6998.205 Safari/537.36",
+      "ip": "127.0.0.1"
+    },
+    {
+      "id": "854a4d8c-b36d-40d2-84d8-95467341d4b7",
+      "userId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "tokenHash": "baf95682edc9949fe0a1d3b3c88d1532bb658c41b399f104ac99438e877cfbb6",
+      "expiresAt": "2026-07-29T01:41:09.206Z",
+      "createdAt": "2026-07-22T01:41:09.206Z",
+      "updatedAt": "2026-07-22T01:41:09.206Z",
+      "revokedAt": null,
+      "userAgent": "node",
+      "ip": "127.0.0.1"
+    },
+    {
+      "id": "1d5251de-a76c-4f75-9920-6936f8f92891",
+      "userId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "tokenHash": "413653faea7fbc6c131ff54c1f2befdd92e02af40e232f05275a040c42e9b11b",
+      "expiresAt": "2026-07-29T01:41:09.392Z",
+      "createdAt": "2026-07-22T01:41:09.392Z",
+      "updatedAt": "2026-07-22T01:41:09.392Z",
+      "revokedAt": null,
+      "userAgent": "node",
+      "ip": "127.0.0.1"
+    },
+    {
+      "id": "24959881-fba4-4e8b-9599-8ce7a4b2d257",
+      "userId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "tokenHash": "00da8322373e03ddfe564a36e7e33b0c4e44806382b6fc38e682ae1a20b2eb1e",
+      "expiresAt": "2026-07-29T01:46:40.130Z",
+      "createdAt": "2026-07-22T01:46:40.130Z",
+      "updatedAt": "2026-07-22T01:46:40.130Z",
+      "revokedAt": null,
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) AssetCutterCompanion/0.2.1 Chrome/134.0.6998.205 Electron/35.7.5 Safari/537.36",
       "ip": "127.0.0.1"
     }
   ],
@@ -1750,6 +1796,1531 @@
       "ip": "127.0.0.1",
       "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.6998.205 Safari/537.36",
       "createdAt": "2026-05-15T09:14:38.946Z"
+    },
+    {
+      "id": "3ebc354c-e934-4f3a-81da-004d052dafe7",
+      "actorUserId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "actorIdentifier": "maoer",
+      "action": "auth.login_success",
+      "targetUserId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "metaJson": null,
+      "ip": "127.0.0.1",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.6998.205 Safari/537.36",
+      "createdAt": "2026-07-22T01:32:17.389Z"
+    },
+    {
+      "id": "7ba2ca79-3dcc-4835-9591-295e0d7b313b",
+      "actorUserId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "actorIdentifier": "maoer",
+      "action": "auth.login_success",
+      "targetUserId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "metaJson": null,
+      "ip": "127.0.0.1",
+      "userAgent": "node",
+      "createdAt": "2026-07-22T01:41:09.209Z"
+    },
+    {
+      "id": "d5596055-7747-4266-bd4d-69243ed1161b",
+      "actorUserId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "actorIdentifier": "maoer",
+      "action": "auth.login_success",
+      "targetUserId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "metaJson": null,
+      "ip": "127.0.0.1",
+      "userAgent": "node",
+      "createdAt": "2026-07-22T01:41:09.393Z"
+    },
+    {
+      "id": "bfd41b37-b93b-4eaa-97b8-6debcd84020d",
+      "actorUserId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "actorIdentifier": "maoer",
+      "action": "auth.login_success",
+      "targetUserId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "metaJson": null,
+      "ip": "127.0.0.1",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) AssetCutterCompanion/0.2.1 Chrome/134.0.6998.205 Electron/35.7.5 Safari/537.36",
+      "createdAt": "2026-07-22T01:46:40.131Z"
+    },
+    {
+      "id": "cc583c61-0fac-45fe-8619-4edc36cdb2bb",
+      "actorUserId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "actorIdentifier": "maoer",
+      "action": "admin.promo_credits_batch",
+      "targetUserId": null,
+      "metaJson": "{\"successCount\":3,\"failed\":0,\"skipped\":0,\"rowCount\":3}",
+      "ip": "127.0.0.1",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.6998.205 Safari/537.36",
+      "createdAt": "2026-07-22T03:10:12.157Z"
+    }
+  ],
+  "adminRoles": [
+    {
+      "id": "6c03a38e-f6dd-478c-bce1-fe479d7f1347",
+      "slug": "super",
+      "displayName": "超级管理员",
+      "isSystem": true,
+      "description": "全部权限；唯一可管理角色矩阵与提升 super",
+      "createdAt": "2026-07-21T11:11:22.995Z",
+      "updatedAt": "2026-07-22T06:07:14.991Z"
+    },
+    {
+      "id": "34de210a-f4c7-4ab6-9f5a-146fa751c293",
+      "slug": "admin",
+      "displayName": "运营管理员",
+      "isSystem": true,
+      "description": "日常运营；不可改用户后台角色与限流高危项",
+      "createdAt": "2026-07-21T11:11:22.997Z",
+      "updatedAt": "2026-07-22T06:07:14.992Z"
+    },
+    {
+      "id": "6fd1aff1-144b-4d45-aa81-78d7a8749066",
+      "slug": "auditor",
+      "displayName": "审计员",
+      "isSystem": true,
+      "description": "只读：用户列表与审计日志；导出为脱敏版",
+      "createdAt": "2026-07-21T11:11:22.997Z",
+      "updatedAt": "2026-07-22T06:07:14.992Z"
+    }
+  ],
+  "rolePermissions": [
+    {
+      "roleId": "6c03a38e-f6dd-478c-bce1-fe479d7f1347",
+      "permissionKey": "dashboard.read"
+    },
+    {
+      "roleId": "6c03a38e-f6dd-478c-bce1-fe479d7f1347",
+      "permissionKey": "users.read"
+    },
+    {
+      "roleId": "6c03a38e-f6dd-478c-bce1-fe479d7f1347",
+      "permissionKey": "users.write"
+    },
+    {
+      "roleId": "6c03a38e-f6dd-478c-bce1-fe479d7f1347",
+      "permissionKey": "users.role.write"
+    },
+    {
+      "roleId": "6c03a38e-f6dd-478c-bce1-fe479d7f1347",
+      "permissionKey": "users.reconcile"
+    },
+    {
+      "roleId": "6c03a38e-f6dd-478c-bce1-fe479d7f1347",
+      "permissionKey": "audit.read"
+    },
+    {
+      "roleId": "6c03a38e-f6dd-478c-bce1-fe479d7f1347",
+      "permissionKey": "task_events.read"
+    },
+    {
+      "roleId": "6c03a38e-f6dd-478c-bce1-fe479d7f1347",
+      "permissionKey": "usage.read"
+    },
+    {
+      "roleId": "6c03a38e-f6dd-478c-bce1-fe479d7f1347",
+      "permissionKey": "system_status.read"
+    },
+    {
+      "roleId": "6c03a38e-f6dd-478c-bce1-fe479d7f1347",
+      "permissionKey": "companion.read"
+    },
+    {
+      "roleId": "6c03a38e-f6dd-478c-bce1-fe479d7f1347",
+      "permissionKey": "companion.write"
+    },
+    {
+      "roleId": "6c03a38e-f6dd-478c-bce1-fe479d7f1347",
+      "permissionKey": "companion.delete"
+    },
+    {
+      "roleId": "6c03a38e-f6dd-478c-bce1-fe479d7f1347",
+      "permissionKey": "gemini_fairness.read"
+    },
+    {
+      "roleId": "6c03a38e-f6dd-478c-bce1-fe479d7f1347",
+      "permissionKey": "gemini_fairness.write"
+    },
+    {
+      "roleId": "6c03a38e-f6dd-478c-bce1-fe479d7f1347",
+      "permissionKey": "gemini_fairness.strict"
+    },
+    {
+      "roleId": "6c03a38e-f6dd-478c-bce1-fe479d7f1347",
+      "permissionKey": "ai_gateway_ops.read"
+    },
+    {
+      "roleId": "6c03a38e-f6dd-478c-bce1-fe479d7f1347",
+      "permissionKey": "ai_gateway_ops.write"
+    },
+    {
+      "roleId": "6c03a38e-f6dd-478c-bce1-fe479d7f1347",
+      "permissionKey": "ai_gateway_keys.read"
+    },
+    {
+      "roleId": "6c03a38e-f6dd-478c-bce1-fe479d7f1347",
+      "permissionKey": "ai_gateway_keys.write"
+    },
+    {
+      "roleId": "6c03a38e-f6dd-478c-bce1-fe479d7f1347",
+      "permissionKey": "presets.publish"
+    },
+    {
+      "roleId": "6c03a38e-f6dd-478c-bce1-fe479d7f1347",
+      "permissionKey": "roles.read"
+    },
+    {
+      "roleId": "6c03a38e-f6dd-478c-bce1-fe479d7f1347",
+      "permissionKey": "roles.write"
+    },
+    {
+      "roleId": "6c03a38e-f6dd-478c-bce1-fe479d7f1347",
+      "permissionKey": "credits.write"
+    },
+    {
+      "roleId": "6c03a38e-f6dd-478c-bce1-fe479d7f1347",
+      "permissionKey": "pricing.write"
+    },
+    {
+      "roleId": "6c03a38e-f6dd-478c-bce1-fe479d7f1347",
+      "permissionKey": "registration_invites.write"
+    },
+    {
+      "roleId": "34de210a-f4c7-4ab6-9f5a-146fa751c293",
+      "permissionKey": "dashboard.read"
+    },
+    {
+      "roleId": "34de210a-f4c7-4ab6-9f5a-146fa751c293",
+      "permissionKey": "users.read"
+    },
+    {
+      "roleId": "34de210a-f4c7-4ab6-9f5a-146fa751c293",
+      "permissionKey": "users.write"
+    },
+    {
+      "roleId": "34de210a-f4c7-4ab6-9f5a-146fa751c293",
+      "permissionKey": "users.reconcile"
+    },
+    {
+      "roleId": "34de210a-f4c7-4ab6-9f5a-146fa751c293",
+      "permissionKey": "audit.read"
+    },
+    {
+      "roleId": "34de210a-f4c7-4ab6-9f5a-146fa751c293",
+      "permissionKey": "task_events.read"
+    },
+    {
+      "roleId": "34de210a-f4c7-4ab6-9f5a-146fa751c293",
+      "permissionKey": "usage.read"
+    },
+    {
+      "roleId": "34de210a-f4c7-4ab6-9f5a-146fa751c293",
+      "permissionKey": "system_status.read"
+    },
+    {
+      "roleId": "34de210a-f4c7-4ab6-9f5a-146fa751c293",
+      "permissionKey": "companion.read"
+    },
+    {
+      "roleId": "34de210a-f4c7-4ab6-9f5a-146fa751c293",
+      "permissionKey": "companion.write"
+    },
+    {
+      "roleId": "34de210a-f4c7-4ab6-9f5a-146fa751c293",
+      "permissionKey": "companion.delete"
+    },
+    {
+      "roleId": "34de210a-f4c7-4ab6-9f5a-146fa751c293",
+      "permissionKey": "gemini_fairness.read"
+    },
+    {
+      "roleId": "34de210a-f4c7-4ab6-9f5a-146fa751c293",
+      "permissionKey": "gemini_fairness.write"
+    },
+    {
+      "roleId": "34de210a-f4c7-4ab6-9f5a-146fa751c293",
+      "permissionKey": "ai_gateway_ops.read"
+    },
+    {
+      "roleId": "34de210a-f4c7-4ab6-9f5a-146fa751c293",
+      "permissionKey": "ai_gateway_ops.write"
+    },
+    {
+      "roleId": "34de210a-f4c7-4ab6-9f5a-146fa751c293",
+      "permissionKey": "ai_gateway_keys.read"
+    },
+    {
+      "roleId": "34de210a-f4c7-4ab6-9f5a-146fa751c293",
+      "permissionKey": "ai_gateway_keys.write"
+    },
+    {
+      "roleId": "34de210a-f4c7-4ab6-9f5a-146fa751c293",
+      "permissionKey": "credits.write"
+    },
+    {
+      "roleId": "34de210a-f4c7-4ab6-9f5a-146fa751c293",
+      "permissionKey": "pricing.write"
+    },
+    {
+      "roleId": "34de210a-f4c7-4ab6-9f5a-146fa751c293",
+      "permissionKey": "registration_invites.write"
+    },
+    {
+      "roleId": "6fd1aff1-144b-4d45-aa81-78d7a8749066",
+      "permissionKey": "users.read"
+    },
+    {
+      "roleId": "6fd1aff1-144b-4d45-aa81-78d7a8749066",
+      "permissionKey": "audit.read"
+    },
+    {
+      "roleId": "6fd1aff1-144b-4d45-aa81-78d7a8749066",
+      "permissionKey": "task_events.read"
+    },
+    {
+      "roleId": "6fd1aff1-144b-4d45-aa81-78d7a8749066",
+      "permissionKey": "usage.read"
+    },
+    {
+      "roleId": "6fd1aff1-144b-4d45-aa81-78d7a8749066",
+      "permissionKey": "ai_gateway_ops.read"
+    }
+  ],
+  "priceCatalog": {
+    "catalogVersion": "seed-v1",
+    "entries": [
+      {
+        "billingSku": "llm.gemini.flash",
+        "version": 1,
+        "effectiveFrom": "2026-07-21T11:11:23.003Z",
+        "displayName": "Gemini 2.5 Flash (text)",
+        "meterKind": "token",
+        "inputPer1m": 0.15,
+        "outputPer1m": 0.6,
+        "imageOutputPer1m": null,
+        "perUnit": null,
+        "userCreditsPerUnit": null,
+        "enabled": true,
+        "catalogVersion": "seed-v1",
+        "vendorSkuRef": "gemini-2.5-flash",
+        "markupPct": 0
+      },
+      {
+        "billingSku": "llm.gemini.pro",
+        "version": 1,
+        "effectiveFrom": "2026-07-21T11:11:23.003Z",
+        "displayName": "Gemini 2.5 Pro (text)",
+        "meterKind": "token",
+        "inputPer1m": 1.25,
+        "outputPer1m": 10,
+        "imageOutputPer1m": null,
+        "perUnit": null,
+        "userCreditsPerUnit": null,
+        "enabled": true,
+        "catalogVersion": "seed-v1",
+        "vendorSkuRef": "gemini-2.5-pro",
+        "markupPct": 0
+      },
+      {
+        "billingSku": "image.gemini.flash",
+        "version": 1,
+        "effectiveFrom": "2026-07-21T11:11:23.003Z",
+        "displayName": "Gemini Flash Image",
+        "meterKind": "image",
+        "inputPer1m": 0.3,
+        "outputPer1m": 6,
+        "imageOutputPer1m": 60,
+        "perUnit": 0.039,
+        "userCreditsPerUnit": 39,
+        "enabled": true,
+        "catalogVersion": "seed-v1",
+        "vendorSkuRef": "gemini-2.5-flash-image",
+        "markupPct": 0
+      },
+      {
+        "billingSku": "image.gemini.pro",
+        "version": 1,
+        "effectiveFrom": "2026-07-21T11:11:23.003Z",
+        "displayName": "Gemini Pro Image",
+        "meterKind": "image",
+        "inputPer1m": 2,
+        "outputPer1m": 12,
+        "imageOutputPer1m": 120,
+        "perUnit": 0.134,
+        "userCreditsPerUnit": 134,
+        "enabled": true,
+        "catalogVersion": "seed-v1",
+        "vendorSkuRef": "gemini-3-pro-image",
+        "markupPct": 0
+      },
+      {
+        "billingSku": "llm.openai.gpt4o-mini",
+        "version": 1,
+        "effectiveFrom": "2026-07-21T11:11:23.003Z",
+        "displayName": "GPT-4o Mini",
+        "meterKind": "token",
+        "inputPer1m": 0.15,
+        "outputPer1m": 0.6,
+        "imageOutputPer1m": null,
+        "perUnit": null,
+        "userCreditsPerUnit": null,
+        "enabled": true,
+        "catalogVersion": "seed-v1",
+        "vendorSkuRef": "gpt-4o-mini",
+        "markupPct": 0
+      },
+      {
+        "billingSku": "llm.openai.gpt4o",
+        "version": 1,
+        "effectiveFrom": "2026-07-21T11:11:23.003Z",
+        "displayName": "GPT-4o",
+        "meterKind": "token",
+        "inputPer1m": 2.5,
+        "outputPer1m": 10,
+        "imageOutputPer1m": null,
+        "perUnit": null,
+        "userCreditsPerUnit": null,
+        "enabled": true,
+        "catalogVersion": "seed-v1",
+        "vendorSkuRef": "gpt-4o",
+        "markupPct": 0
+      },
+      {
+        "billingSku": "image.openai.gpt15",
+        "version": 1,
+        "effectiveFrom": "2026-07-21T11:11:23.003Z",
+        "displayName": "GPT Image 1.5",
+        "meterKind": "image",
+        "inputPer1m": 5,
+        "outputPer1m": 10,
+        "imageOutputPer1m": 32,
+        "perUnit": 0.133,
+        "userCreditsPerUnit": 133,
+        "enabled": true,
+        "catalogVersion": "seed-v1",
+        "vendorSkuRef": "gpt-image-1.5",
+        "markupPct": 0
+      },
+      {
+        "billingSku": "image.openai.gpt2",
+        "version": 1,
+        "effectiveFrom": "2026-07-21T11:11:23.003Z",
+        "displayName": "GPT Image 2",
+        "meterKind": "image",
+        "inputPer1m": 5,
+        "outputPer1m": 10,
+        "imageOutputPer1m": 30,
+        "perUnit": 0.067,
+        "userCreditsPerUnit": 67,
+        "enabled": true,
+        "catalogVersion": "seed-v1",
+        "vendorSkuRef": "gpt-image-2",
+        "markupPct": 0
+      },
+      {
+        "billingSku": "3d.tripo.task",
+        "version": 1,
+        "effectiveFrom": "2026-07-21T11:11:23.003Z",
+        "displayName": "Tripo 3D task (estimate)",
+        "meterKind": "task",
+        "inputPer1m": null,
+        "outputPer1m": null,
+        "imageOutputPer1m": null,
+        "perUnit": 0.5,
+        "userCreditsPerUnit": 500,
+        "enabled": true,
+        "catalogVersion": "seed-v1",
+        "vendorSkuRef": "tripo-image-to-model",
+        "markupPct": 0
+      },
+      {
+        "billingSku": "3d.tencent.pro",
+        "version": 1,
+        "effectiveFrom": "2026-07-21T11:11:23.003Z",
+        "displayName": "腾讯混元 3D 专业版 (estimate)",
+        "meterKind": "task",
+        "inputPer1m": null,
+        "outputPer1m": null,
+        "imageOutputPer1m": null,
+        "perUnit": 0.8,
+        "userCreditsPerUnit": 800,
+        "enabled": true,
+        "catalogVersion": "seed-v1",
+        "vendorSkuRef": "hunyuan-to3d-pro",
+        "markupPct": 0
+      },
+      {
+        "billingSku": "3d.tencent.rapid",
+        "version": 1,
+        "effectiveFrom": "2026-07-21T11:11:23.003Z",
+        "displayName": "腾讯混元 3D 极速版 (estimate)",
+        "meterKind": "task",
+        "inputPer1m": null,
+        "outputPer1m": null,
+        "imageOutputPer1m": null,
+        "perUnit": 0.4,
+        "userCreditsPerUnit": 400,
+        "enabled": true,
+        "catalogVersion": "seed-v1",
+        "vendorSkuRef": "hunyuan-to3d-rapid",
+        "markupPct": 0
+      },
+      {
+        "billingSku": "video.workflow.task",
+        "version": 1,
+        "effectiveFrom": "2026-07-21T11:11:23.003Z",
+        "displayName": "Workflow video task (estimate)",
+        "meterKind": "task",
+        "inputPer1m": null,
+        "outputPer1m": null,
+        "imageOutputPer1m": null,
+        "perUnit": 0.2,
+        "userCreditsPerUnit": 200,
+        "enabled": true,
+        "catalogVersion": "seed-v1",
+        "vendorSkuRef": null,
+        "markupPct": 0
+      },
+      {
+        "billingSku": "image.jimeng.t2i-v40",
+        "version": 1,
+        "effectiveFrom": "2026-07-21T11:11:23.003Z",
+        "displayName": "即梦 图片 4.0 (estimate)",
+        "meterKind": "task",
+        "inputPer1m": null,
+        "outputPer1m": null,
+        "imageOutputPer1m": null,
+        "perUnit": 0.05,
+        "userCreditsPerUnit": 50,
+        "enabled": true,
+        "catalogVersion": "seed-v1",
+        "vendorSkuRef": "jimeng_t2i_v40",
+        "markupPct": 0
+      },
+      {
+        "billingSku": "video.jimeng.ti2v-v30-pro",
+        "version": 1,
+        "effectiveFrom": "2026-07-21T11:11:23.003Z",
+        "displayName": "即梦 视频 3.0 Pro (estimate)",
+        "meterKind": "task",
+        "inputPer1m": null,
+        "outputPer1m": null,
+        "imageOutputPer1m": null,
+        "perUnit": 0.25,
+        "userCreditsPerUnit": 250,
+        "enabled": true,
+        "catalogVersion": "seed-v1",
+        "vendorSkuRef": "jimeng_ti2v_v30_pro",
+        "markupPct": 0
+      },
+      {
+        "billingSku": "digital_human.jimeng.omnihuman-v10",
+        "version": 1,
+        "effectiveFrom": "2026-07-21T11:11:23.003Z",
+        "displayName": "即梦 OmniHuman 1.0 (estimate)",
+        "meterKind": "task",
+        "inputPer1m": null,
+        "outputPer1m": null,
+        "imageOutputPer1m": null,
+        "perUnit": 0.35,
+        "userCreditsPerUnit": 350,
+        "enabled": true,
+        "catalogVersion": "seed-v1",
+        "vendorSkuRef": "omnihuman_v1",
+        "markupPct": 0
+      },
+      {
+        "billingSku": "copilot.codex.tokens",
+        "version": 1,
+        "effectiveFrom": "2026-07-21T20:09:28.030Z",
+        "displayName": "Copilot Codex tokens",
+        "meterKind": "token",
+        "inputPer1m": 0.15,
+        "outputPer1m": 0.6,
+        "imageOutputPer1m": null,
+        "perUnit": null,
+        "userCreditsPerUnit": 1,
+        "enabled": true,
+        "catalogVersion": "seed-v1",
+        "vendorSkuRef": "codex-cli",
+        "markupPct": 0
+      }
+    ]
+  },
+  "creditPromoLots": [
+    {
+      "id": "8bee87dc-5458-42bd-ae82-aec3fa371bb3",
+      "userId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "campaignId": "test",
+      "amount": 20000,
+      "remaining": 20000,
+      "expiresAt": "2026-08-21T03:10:12.146Z",
+      "status": "active",
+      "idempotencyKey": "promo-batch:acb095e649a6ef79a9fbe062ae096462",
+      "grantLedgerId": "5eedbbf2-1617-4221-9fa3-4464dfaec90e",
+      "note": "测试",
+      "createdBy": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "createdAt": "2026-07-22T03:10:12.148Z",
+      "expiredAt": null
+    },
+    {
+      "id": "3d680c48-0200-470b-aed3-df0f650716ef",
+      "userId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "campaignId": "test",
+      "amount": 20000,
+      "remaining": 20000,
+      "expiresAt": "2026-08-21T03:10:12.150Z",
+      "status": "active",
+      "idempotencyKey": "promo-batch:9b20eeb7421c0c033bb87ff48bedd0da",
+      "grantLedgerId": "a884486c-b3f8-4ae1-9637-cfe6d9c64ee2",
+      "note": "测试",
+      "createdBy": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "createdAt": "2026-07-22T03:10:12.152Z",
+      "expiredAt": null
+    },
+    {
+      "id": "c90b1eb2-0f9a-4ad7-bb77-b8f1b38b686e",
+      "userId": "8cd58de0-ba3c-4e1d-b9cb-06216a07d9c0",
+      "campaignId": "test",
+      "amount": 20000,
+      "remaining": 20000,
+      "expiresAt": "2026-08-21T03:10:12.154Z",
+      "status": "active",
+      "idempotencyKey": "promo-batch:4307ff42ff7bdaf66103b2b11a5f69cf",
+      "grantLedgerId": "37714b53-bcc2-4579-a8f7-908b7b73d493",
+      "note": "测试",
+      "createdBy": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "createdAt": "2026-07-22T03:10:12.155Z",
+      "expiredAt": null
+    }
+  ],
+  "creditLedger": [
+    {
+      "id": "5eedbbf2-1617-4221-9fa3-4464dfaec90e",
+      "userId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "delta": 20000,
+      "balanceAfter": 20000,
+      "kind": "promo_grant",
+      "refType": "promo_lot",
+      "refId": "8bee87dc-5458-42bd-ae82-aec3fa371bb3",
+      "idempotencyKey": "promo-batch:acb095e649a6ef79a9fbe062ae096462",
+      "note": "测试",
+      "createdBy": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "createdAt": "2026-07-22T03:10:12.148Z"
+    },
+    {
+      "id": "a884486c-b3f8-4ae1-9637-cfe6d9c64ee2",
+      "userId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "delta": 20000,
+      "balanceAfter": 40000,
+      "kind": "promo_grant",
+      "refType": "promo_lot",
+      "refId": "3d680c48-0200-470b-aed3-df0f650716ef",
+      "idempotencyKey": "promo-batch:9b20eeb7421c0c033bb87ff48bedd0da",
+      "note": "测试",
+      "createdBy": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "createdAt": "2026-07-22T03:10:12.152Z"
+    },
+    {
+      "id": "37714b53-bcc2-4579-a8f7-908b7b73d493",
+      "userId": "8cd58de0-ba3c-4e1d-b9cb-06216a07d9c0",
+      "delta": 20000,
+      "balanceAfter": 20000,
+      "kind": "promo_grant",
+      "refType": "promo_lot",
+      "refId": "c90b1eb2-0f9a-4ad7-bb77-b8f1b38b686e",
+      "idempotencyKey": "promo-batch:4307ff42ff7bdaf66103b2b11a5f69cf",
+      "note": "测试",
+      "createdBy": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "createdAt": "2026-07-22T03:10:12.155Z"
+    },
+    {
+      "id": "c178d395-7b78-4453-8a96-38b9a864dc57",
+      "userId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "delta": 10,
+      "balanceAfter": 40000,
+      "kind": "refund",
+      "refType": "precharge",
+      "refId": "proxy:7aa73151-60a0-4000-a308-7098853f2f6b",
+      "idempotencyKey": "refund:proxy:7aa73151-60a0-4000-a308-7098853f2f6b",
+      "note": "预扣未用退还",
+      "createdBy": null,
+      "createdAt": "2026-07-22T06:00:34.497Z"
+    },
+    {
+      "id": "d1e4e74d-704b-4c86-85b1-b68ca2374fc2",
+      "userId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "delta": 15,
+      "balanceAfter": 40000,
+      "kind": "refund",
+      "refType": "precharge",
+      "refId": "proxy:cd9af44d-4fe3-48eb-b942-899227ba6156",
+      "idempotencyKey": "refund:proxy:cd9af44d-4fe3-48eb-b942-899227ba6156",
+      "note": "预扣未用退还",
+      "createdBy": null,
+      "createdAt": "2026-07-22T06:00:35.233Z"
+    },
+    {
+      "id": "aa1252f6-cea3-4ae7-85ea-9b6a2822afd9",
+      "userId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "delta": 10,
+      "balanceAfter": 40000,
+      "kind": "refund",
+      "refType": "precharge",
+      "refId": "proxy:11fef454-b0fd-47a9-8725-323efbc93aae",
+      "idempotencyKey": "refund:proxy:11fef454-b0fd-47a9-8725-323efbc93aae",
+      "note": "预扣未用退还",
+      "createdBy": null,
+      "createdAt": "2026-07-22T06:00:35.915Z"
+    },
+    {
+      "id": "c847f23a-04d5-46f0-b8ce-2f941c10a027",
+      "userId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "delta": 15,
+      "balanceAfter": 40000,
+      "kind": "refund",
+      "refType": "precharge",
+      "refId": "proxy:fc013fa9-e036-4556-a11c-6c9ce8bf8364",
+      "idempotencyKey": "refund:proxy:fc013fa9-e036-4556-a11c-6c9ce8bf8364",
+      "note": "预扣未用退还",
+      "createdBy": null,
+      "createdAt": "2026-07-22T06:00:36.587Z"
+    },
+    {
+      "id": "194e190a-ed39-4cf1-87e6-47d7e9d2a9cd",
+      "userId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "delta": 10,
+      "balanceAfter": 40000,
+      "kind": "refund",
+      "refType": "precharge",
+      "refId": "proxy:942e4bb4-c84b-49d2-8e2c-3fac16eb763c",
+      "idempotencyKey": "refund:proxy:942e4bb4-c84b-49d2-8e2c-3fac16eb763c",
+      "note": "预扣未用退还",
+      "createdBy": null,
+      "createdAt": "2026-07-22T06:00:37.263Z"
+    },
+    {
+      "id": "66e2c59d-8b32-4289-84de-c7d797198a09",
+      "userId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "delta": 15,
+      "balanceAfter": 40000,
+      "kind": "refund",
+      "refType": "precharge",
+      "refId": "proxy:8a897c2a-bb03-4e56-8585-d6c575e61056",
+      "idempotencyKey": "refund:proxy:8a897c2a-bb03-4e56-8585-d6c575e61056",
+      "note": "预扣未用退还",
+      "createdBy": null,
+      "createdAt": "2026-07-22T06:00:37.928Z"
+    },
+    {
+      "id": "7038d751-06a1-48d1-adbd-f043ae6b619a",
+      "userId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "delta": 10,
+      "balanceAfter": 40000,
+      "kind": "refund",
+      "refType": "precharge",
+      "refId": "proxy:29f1dc7e-321c-4f79-9de6-15524d065324",
+      "idempotencyKey": "refund:proxy:29f1dc7e-321c-4f79-9de6-15524d065324",
+      "note": "预扣未用退还",
+      "createdBy": null,
+      "createdAt": "2026-07-22T06:00:38.607Z"
+    },
+    {
+      "id": "9d9eedeb-ce76-4ad6-857c-2141d26730e0",
+      "userId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "delta": 15,
+      "balanceAfter": 40000,
+      "kind": "refund",
+      "refType": "precharge",
+      "refId": "proxy:2797aea5-3518-4c1d-b660-1d4f4b2920fe",
+      "idempotencyKey": "refund:proxy:2797aea5-3518-4c1d-b660-1d4f4b2920fe",
+      "note": "预扣未用退还",
+      "createdBy": null,
+      "createdAt": "2026-07-22T06:00:39.299Z"
+    },
+    {
+      "id": "ca0e3c12-9567-448b-a3a5-b25c2e9b116b",
+      "userId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "delta": 10,
+      "balanceAfter": 40000,
+      "kind": "refund",
+      "refType": "precharge",
+      "refId": "proxy:ef73c937-628b-4937-a544-2535cc04864b",
+      "idempotencyKey": "refund:proxy:ef73c937-628b-4937-a544-2535cc04864b",
+      "note": "预扣未用退还",
+      "createdBy": null,
+      "createdAt": "2026-07-22T06:00:39.989Z"
+    },
+    {
+      "id": "8d4b84fd-338a-451e-bd13-16e6c3fa8841",
+      "userId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "delta": 15,
+      "balanceAfter": 40000,
+      "kind": "refund",
+      "refType": "precharge",
+      "refId": "proxy:9b496176-96a3-4766-b578-c2b575561894",
+      "idempotencyKey": "refund:proxy:9b496176-96a3-4766-b578-c2b575561894",
+      "note": "预扣未用退还",
+      "createdBy": null,
+      "createdAt": "2026-07-22T06:00:40.666Z"
+    },
+    {
+      "id": "cc2d9aa1-2a26-444e-8e14-c1ee88d511d4",
+      "userId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "delta": 10,
+      "balanceAfter": 40000,
+      "kind": "refund",
+      "refType": "precharge",
+      "refId": "proxy:da0949ca-814a-4aa6-b0fa-9b0f6156d67f",
+      "idempotencyKey": "refund:proxy:da0949ca-814a-4aa6-b0fa-9b0f6156d67f",
+      "note": "预扣未用退还",
+      "createdBy": null,
+      "createdAt": "2026-07-22T06:00:41.345Z"
+    },
+    {
+      "id": "30eb5259-d541-4d45-aa3f-d7df059ea506",
+      "userId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "delta": 15,
+      "balanceAfter": 40000,
+      "kind": "refund",
+      "refType": "precharge",
+      "refId": "proxy:21a32bda-4753-4afc-a950-7ebbab6f9f95",
+      "idempotencyKey": "refund:proxy:21a32bda-4753-4afc-a950-7ebbab6f9f95",
+      "note": "预扣未用退还",
+      "createdBy": null,
+      "createdAt": "2026-07-22T06:00:42.088Z"
+    },
+    {
+      "id": "05dc0d57-9ec8-4277-b919-aa51497e9fd6",
+      "userId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "delta": 10,
+      "balanceAfter": 40000,
+      "kind": "refund",
+      "refType": "precharge",
+      "refId": "proxy:4b61eba2-8ca4-4648-8854-4705554fab55",
+      "idempotencyKey": "refund:proxy:4b61eba2-8ca4-4648-8854-4705554fab55",
+      "note": "预扣未用退还",
+      "createdBy": null,
+      "createdAt": "2026-07-22T06:00:42.805Z"
+    },
+    {
+      "id": "0f2ea8db-b41d-43c6-8429-82ca6838fd04",
+      "userId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "delta": 15,
+      "balanceAfter": 40000,
+      "kind": "refund",
+      "refType": "precharge",
+      "refId": "proxy:d0d470a0-7383-473f-8cda-805c58505bc2",
+      "idempotencyKey": "refund:proxy:d0d470a0-7383-473f-8cda-805c58505bc2",
+      "note": "预扣未用退还",
+      "createdBy": null,
+      "createdAt": "2026-07-22T06:00:43.604Z"
+    },
+    {
+      "id": "a5201c85-c495-4e02-bbd7-a9d441eb22d3",
+      "userId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "delta": 10,
+      "balanceAfter": 40000,
+      "kind": "refund",
+      "refType": "precharge",
+      "refId": "proxy:e960bf6d-5a5f-4294-b42a-f574b384b070",
+      "idempotencyKey": "refund:proxy:e960bf6d-5a5f-4294-b42a-f574b384b070",
+      "note": "预扣未用退还",
+      "createdBy": null,
+      "createdAt": "2026-07-22T06:00:44.365Z"
+    },
+    {
+      "id": "c0ffdbb7-9f64-476c-991d-419a26e025bc",
+      "userId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "delta": 15,
+      "balanceAfter": 40000,
+      "kind": "refund",
+      "refType": "precharge",
+      "refId": "proxy:8b6551e6-9e91-4618-8260-9240121527cc",
+      "idempotencyKey": "refund:proxy:8b6551e6-9e91-4618-8260-9240121527cc",
+      "note": "预扣未用退还",
+      "createdBy": null,
+      "createdAt": "2026-07-22T06:00:45.058Z"
+    },
+    {
+      "id": "46937071-8e3d-4dd1-982f-50adc6e1f315",
+      "userId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "delta": 10,
+      "balanceAfter": 40000,
+      "kind": "refund",
+      "refType": "precharge",
+      "refId": "proxy:d9076750-9bd9-4be3-8235-c3913f4ced04",
+      "idempotencyKey": "refund:proxy:d9076750-9bd9-4be3-8235-c3913f4ced04",
+      "note": "预扣未用退还",
+      "createdBy": null,
+      "createdAt": "2026-07-22T06:00:45.738Z"
+    },
+    {
+      "id": "02b60390-d997-4243-a2da-b56d49740bae",
+      "userId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "delta": 15,
+      "balanceAfter": 40000,
+      "kind": "refund",
+      "refType": "precharge",
+      "refId": "proxy:9ff078b3-6785-4635-bf6d-d84179d1bb84",
+      "idempotencyKey": "refund:proxy:9ff078b3-6785-4635-bf6d-d84179d1bb84",
+      "note": "预扣未用退还",
+      "createdBy": null,
+      "createdAt": "2026-07-22T06:00:46.409Z"
+    },
+    {
+      "id": "f09b0182-505d-4feb-8915-fa4c161a0581",
+      "userId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "delta": 10,
+      "balanceAfter": 40000,
+      "kind": "refund",
+      "refType": "precharge",
+      "refId": "proxy:c669b504-6ac5-4c2a-835b-c5c85ca7afe3",
+      "idempotencyKey": "refund:proxy:c669b504-6ac5-4c2a-835b-c5c85ca7afe3",
+      "note": "预扣未用退还",
+      "createdBy": null,
+      "createdAt": "2026-07-22T06:00:47.103Z"
+    },
+    {
+      "id": "152fcff4-648b-4d95-9f38-8bba77b481ac",
+      "userId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "delta": 15,
+      "balanceAfter": 40000,
+      "kind": "refund",
+      "refType": "precharge",
+      "refId": "proxy:8af622ae-fe8b-4e29-b786-4912dc25fc4e",
+      "idempotencyKey": "refund:proxy:8af622ae-fe8b-4e29-b786-4912dc25fc4e",
+      "note": "预扣未用退还",
+      "createdBy": null,
+      "createdAt": "2026-07-22T06:00:47.791Z"
+    },
+    {
+      "id": "4e114ae2-7010-4182-8e89-ccfc063f57aa",
+      "userId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "delta": 10,
+      "balanceAfter": 40000,
+      "kind": "refund",
+      "refType": "precharge",
+      "refId": "proxy:168d8956-8e93-4c89-abdc-db6a84518e23",
+      "idempotencyKey": "refund:proxy:168d8956-8e93-4c89-abdc-db6a84518e23",
+      "note": "预扣未用退还",
+      "createdBy": null,
+      "createdAt": "2026-07-22T06:00:48.483Z"
+    },
+    {
+      "id": "8e198e59-e749-4561-b9a4-e6fed1a640e1",
+      "userId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "delta": 15,
+      "balanceAfter": 40000,
+      "kind": "refund",
+      "refType": "precharge",
+      "refId": "proxy:29505fe0-6bcd-4e78-970d-331c8247f497",
+      "idempotencyKey": "refund:proxy:29505fe0-6bcd-4e78-970d-331c8247f497",
+      "note": "预扣未用退还",
+      "createdBy": null,
+      "createdAt": "2026-07-22T06:00:49.177Z"
+    },
+    {
+      "id": "d8948c6b-195c-4462-8b3c-7675cb4a9027",
+      "userId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "delta": 10,
+      "balanceAfter": 40000,
+      "kind": "refund",
+      "refType": "precharge",
+      "refId": "proxy:db32e85a-6b90-4c2b-8250-083506e99b19",
+      "idempotencyKey": "refund:proxy:db32e85a-6b90-4c2b-8250-083506e99b19",
+      "note": "预扣未用退还",
+      "createdBy": null,
+      "createdAt": "2026-07-22T06:00:50.006Z"
+    },
+    {
+      "id": "0c8d28a5-f90e-44bb-8625-2c68ecf9c4e2",
+      "userId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "delta": 15,
+      "balanceAfter": 40000,
+      "kind": "refund",
+      "refType": "precharge",
+      "refId": "proxy:25ee07f3-a42a-448b-84f2-d15d4e0a0a1b",
+      "idempotencyKey": "refund:proxy:25ee07f3-a42a-448b-84f2-d15d4e0a0a1b",
+      "note": "预扣未用退还",
+      "createdBy": null,
+      "createdAt": "2026-07-22T06:00:50.666Z"
+    },
+    {
+      "id": "94cc093e-aca2-4902-9781-3d2dcd8f7b2c",
+      "userId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "delta": 10,
+      "balanceAfter": 40000,
+      "kind": "refund",
+      "refType": "precharge",
+      "refId": "proxy:a66cf70b-9621-4120-b7d0-0d2f6f0faf5a",
+      "idempotencyKey": "refund:proxy:a66cf70b-9621-4120-b7d0-0d2f6f0faf5a",
+      "note": "预扣未用退还",
+      "createdBy": null,
+      "createdAt": "2026-07-22T06:00:51.345Z"
+    },
+    {
+      "id": "52d644dd-5369-47f7-8f30-2f008e79ad63",
+      "userId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "delta": 15,
+      "balanceAfter": 40000,
+      "kind": "refund",
+      "refType": "precharge",
+      "refId": "proxy:8c051588-083c-46e6-a462-58b4b7cac16e",
+      "idempotencyKey": "refund:proxy:8c051588-083c-46e6-a462-58b4b7cac16e",
+      "note": "预扣未用退还",
+      "createdBy": null,
+      "createdAt": "2026-07-22T06:00:52.076Z"
+    },
+    {
+      "id": "1103fc6c-d3df-4652-a1e2-d522ec1fae5c",
+      "userId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "delta": 10,
+      "balanceAfter": 40000,
+      "kind": "refund",
+      "refType": "precharge",
+      "refId": "proxy:326337e0-3cc6-4310-8c3a-ee0949244d76",
+      "idempotencyKey": "refund:proxy:326337e0-3cc6-4310-8c3a-ee0949244d76",
+      "note": "预扣未用退还",
+      "createdBy": null,
+      "createdAt": "2026-07-22T06:00:52.902Z"
+    },
+    {
+      "id": "e5746938-2913-4714-a2e4-59da1a9697ec",
+      "userId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "delta": 15,
+      "balanceAfter": 40000,
+      "kind": "refund",
+      "refType": "precharge",
+      "refId": "proxy:669d17a2-8f16-4f16-9239-0d3a5fcb00fa",
+      "idempotencyKey": "refund:proxy:669d17a2-8f16-4f16-9239-0d3a5fcb00fa",
+      "note": "预扣未用退还",
+      "createdBy": null,
+      "createdAt": "2026-07-22T06:00:53.557Z"
+    },
+    {
+      "id": "996eb99a-c2bc-416d-8c2f-d05d54b66a6f",
+      "userId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "delta": 10,
+      "balanceAfter": 40000,
+      "kind": "refund",
+      "refType": "precharge",
+      "refId": "proxy:23f17812-c9f7-4168-a375-28705ec8526c",
+      "idempotencyKey": "refund:proxy:23f17812-c9f7-4168-a375-28705ec8526c",
+      "note": "预扣未用退还",
+      "createdBy": null,
+      "createdAt": "2026-07-22T06:00:54.259Z"
+    },
+    {
+      "id": "d22792aa-8f2e-45eb-813c-500a84a281e5",
+      "userId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "delta": 15,
+      "balanceAfter": 40000,
+      "kind": "refund",
+      "refType": "precharge",
+      "refId": "proxy:2887f149-2c77-4c52-b339-de88b66afa8f",
+      "idempotencyKey": "refund:proxy:2887f149-2c77-4c52-b339-de88b66afa8f",
+      "note": "预扣未用退还",
+      "createdBy": null,
+      "createdAt": "2026-07-22T06:00:54.984Z"
+    }
+  ],
+  "creditBalances": {
+    "d93ce5f5-38f9-4b66-8f40-b64028b53fae": {
+      "balance": 40000,
+      "reserved": 0,
+      "available": 40000,
+      "lifetimeGranted": 0,
+      "lifetimeSpent": 0,
+      "updatedAt": "2026-07-22T06:00:54.984Z"
+    },
+    "8cd58de0-ba3c-4e1d-b9cb-06216a07d9c0": {
+      "balance": 20000,
+      "reserved": 0,
+      "available": 0,
+      "lifetimeGranted": 0,
+      "lifetimeSpent": 0,
+      "updatedAt": "2026-07-22T03:10:12.155Z"
+    }
+  },
+  "creditReserves": [
+    {
+      "id": "3f385b72-9735-4a89-b636-e2cd92048945",
+      "userId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "amount": 10,
+      "allocated": 0,
+      "status": "released",
+      "idempotencyKey": "proxy:7aa73151-60a0-4000-a308-7098853f2f6b",
+      "createdAt": "2026-07-22T06:00:34.424Z",
+      "expiresAt": "2026-07-22T06:15:34.423Z",
+      "promoLotDeltas": [
+        {
+          "lotId": "8bee87dc-5458-42bd-ae82-aec3fa371bb3",
+          "amount": 10
+        }
+      ]
+    },
+    {
+      "id": "065b3372-5f3b-48ca-8b7b-ec37283de637",
+      "userId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "amount": 15,
+      "allocated": 0,
+      "status": "released",
+      "idempotencyKey": "proxy:cd9af44d-4fe3-48eb-b942-899227ba6156",
+      "createdAt": "2026-07-22T06:00:34.828Z",
+      "expiresAt": "2026-07-22T06:15:34.828Z",
+      "promoLotDeltas": [
+        {
+          "lotId": "8bee87dc-5458-42bd-ae82-aec3fa371bb3",
+          "amount": 15
+        }
+      ]
+    },
+    {
+      "id": "43b2a36c-275b-410c-9d44-16feee5c066c",
+      "userId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "amount": 10,
+      "allocated": 0,
+      "status": "released",
+      "idempotencyKey": "proxy:11fef454-b0fd-47a9-8725-323efbc93aae",
+      "createdAt": "2026-07-22T06:00:35.822Z",
+      "expiresAt": "2026-07-22T06:15:35.822Z",
+      "promoLotDeltas": [
+        {
+          "lotId": "8bee87dc-5458-42bd-ae82-aec3fa371bb3",
+          "amount": 10
+        }
+      ]
+    },
+    {
+      "id": "3f6923e3-4c2b-4222-866d-92648e39c5e1",
+      "userId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "amount": 15,
+      "allocated": 0,
+      "status": "released",
+      "idempotencyKey": "proxy:fc013fa9-e036-4556-a11c-6c9ce8bf8364",
+      "createdAt": "2026-07-22T06:00:36.235Z",
+      "expiresAt": "2026-07-22T06:15:36.235Z",
+      "promoLotDeltas": [
+        {
+          "lotId": "8bee87dc-5458-42bd-ae82-aec3fa371bb3",
+          "amount": 15
+        }
+      ]
+    },
+    {
+      "id": "1d71c10e-5b70-4de9-a7eb-4b5ed35404b5",
+      "userId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "amount": 10,
+      "allocated": 0,
+      "status": "released",
+      "idempotencyKey": "proxy:942e4bb4-c84b-49d2-8e2c-3fac16eb763c",
+      "createdAt": "2026-07-22T06:00:36.949Z",
+      "expiresAt": "2026-07-22T06:15:36.949Z",
+      "promoLotDeltas": [
+        {
+          "lotId": "8bee87dc-5458-42bd-ae82-aec3fa371bb3",
+          "amount": 10
+        }
+      ]
+    },
+    {
+      "id": "6fe8524d-c372-4cd1-8852-22bdd4c58060",
+      "userId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "amount": 15,
+      "allocated": 0,
+      "status": "released",
+      "idempotencyKey": "proxy:8a897c2a-bb03-4e56-8585-d6c575e61056",
+      "createdAt": "2026-07-22T06:00:37.586Z",
+      "expiresAt": "2026-07-22T06:15:37.586Z",
+      "promoLotDeltas": [
+        {
+          "lotId": "8bee87dc-5458-42bd-ae82-aec3fa371bb3",
+          "amount": 15
+        }
+      ]
+    },
+    {
+      "id": "2ed7aede-6d14-4040-84f6-7cea788628bc",
+      "userId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "amount": 10,
+      "allocated": 0,
+      "status": "released",
+      "idempotencyKey": "proxy:29f1dc7e-321c-4f79-9de6-15524d065324",
+      "createdAt": "2026-07-22T06:00:38.293Z",
+      "expiresAt": "2026-07-22T06:15:38.293Z",
+      "promoLotDeltas": [
+        {
+          "lotId": "8bee87dc-5458-42bd-ae82-aec3fa371bb3",
+          "amount": 10
+        }
+      ]
+    },
+    {
+      "id": "5bbcb9b2-5360-4c4d-a162-a1e72d7f5587",
+      "userId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "amount": 15,
+      "allocated": 0,
+      "status": "released",
+      "idempotencyKey": "proxy:2797aea5-3518-4c1d-b660-1d4f4b2920fe",
+      "createdAt": "2026-07-22T06:00:38.932Z",
+      "expiresAt": "2026-07-22T06:15:38.932Z",
+      "promoLotDeltas": [
+        {
+          "lotId": "8bee87dc-5458-42bd-ae82-aec3fa371bb3",
+          "amount": 15
+        }
+      ]
+    },
+    {
+      "id": "8721951d-e0d8-490b-bad0-55009e1b0d32",
+      "userId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "amount": 10,
+      "allocated": 0,
+      "status": "released",
+      "idempotencyKey": "proxy:ef73c937-628b-4937-a544-2535cc04864b",
+      "createdAt": "2026-07-22T06:00:39.678Z",
+      "expiresAt": "2026-07-22T06:15:39.678Z",
+      "promoLotDeltas": [
+        {
+          "lotId": "8bee87dc-5458-42bd-ae82-aec3fa371bb3",
+          "amount": 10
+        }
+      ]
+    },
+    {
+      "id": "13358cf9-1f6f-48cd-97a9-d54af93755b9",
+      "userId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "amount": 15,
+      "allocated": 0,
+      "status": "released",
+      "idempotencyKey": "proxy:9b496176-96a3-4766-b578-c2b575561894",
+      "createdAt": "2026-07-22T06:00:40.312Z",
+      "expiresAt": "2026-07-22T06:15:40.312Z",
+      "promoLotDeltas": [
+        {
+          "lotId": "8bee87dc-5458-42bd-ae82-aec3fa371bb3",
+          "amount": 15
+        }
+      ]
+    },
+    {
+      "id": "6bdf22e6-14d1-488b-8040-606494b1e3e4",
+      "userId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "amount": 10,
+      "allocated": 0,
+      "status": "released",
+      "idempotencyKey": "proxy:da0949ca-814a-4aa6-b0fa-9b0f6156d67f",
+      "createdAt": "2026-07-22T06:00:41.031Z",
+      "expiresAt": "2026-07-22T06:15:41.031Z",
+      "promoLotDeltas": [
+        {
+          "lotId": "8bee87dc-5458-42bd-ae82-aec3fa371bb3",
+          "amount": 10
+        }
+      ]
+    },
+    {
+      "id": "caa9f5b6-1678-4da3-9563-9fbbe614a469",
+      "userId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "amount": 15,
+      "allocated": 0,
+      "status": "released",
+      "idempotencyKey": "proxy:21a32bda-4753-4afc-a950-7ebbab6f9f95",
+      "createdAt": "2026-07-22T06:00:41.673Z",
+      "expiresAt": "2026-07-22T06:15:41.673Z",
+      "promoLotDeltas": [
+        {
+          "lotId": "8bee87dc-5458-42bd-ae82-aec3fa371bb3",
+          "amount": 15
+        }
+      ]
+    },
+    {
+      "id": "5406974a-d00d-4ae6-811d-329748f9eaca",
+      "userId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "amount": 10,
+      "allocated": 0,
+      "status": "released",
+      "idempotencyKey": "proxy:4b61eba2-8ca4-4648-8854-4705554fab55",
+      "createdAt": "2026-07-22T06:00:42.474Z",
+      "expiresAt": "2026-07-22T06:15:42.474Z",
+      "promoLotDeltas": [
+        {
+          "lotId": "8bee87dc-5458-42bd-ae82-aec3fa371bb3",
+          "amount": 10
+        }
+      ]
+    },
+    {
+      "id": "2d6f0d37-a16a-46bf-8900-cdc68dc2f2b5",
+      "userId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "amount": 15,
+      "allocated": 0,
+      "status": "released",
+      "idempotencyKey": "proxy:d0d470a0-7383-473f-8cda-805c58505bc2",
+      "createdAt": "2026-07-22T06:00:43.128Z",
+      "expiresAt": "2026-07-22T06:15:43.128Z",
+      "promoLotDeltas": [
+        {
+          "lotId": "8bee87dc-5458-42bd-ae82-aec3fa371bb3",
+          "amount": 15
+        }
+      ]
+    },
+    {
+      "id": "e7595a90-c9cf-40bc-a06c-48c2701d8c25",
+      "userId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "amount": 10,
+      "allocated": 0,
+      "status": "released",
+      "idempotencyKey": "proxy:e960bf6d-5a5f-4294-b42a-f574b384b070",
+      "createdAt": "2026-07-22T06:00:44.040Z",
+      "expiresAt": "2026-07-22T06:15:44.040Z",
+      "promoLotDeltas": [
+        {
+          "lotId": "8bee87dc-5458-42bd-ae82-aec3fa371bb3",
+          "amount": 10
+        }
+      ]
+    },
+    {
+      "id": "3bdd0857-32aa-4b04-8f79-e7601fac8d56",
+      "userId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "amount": 15,
+      "allocated": 0,
+      "status": "released",
+      "idempotencyKey": "proxy:8b6551e6-9e91-4618-8260-9240121527cc",
+      "createdAt": "2026-07-22T06:00:44.694Z",
+      "expiresAt": "2026-07-22T06:15:44.694Z",
+      "promoLotDeltas": [
+        {
+          "lotId": "8bee87dc-5458-42bd-ae82-aec3fa371bb3",
+          "amount": 15
+        }
+      ]
+    },
+    {
+      "id": "ea2fc601-fdb7-48bb-b959-5ec56399dfe9",
+      "userId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "amount": 10,
+      "allocated": 0,
+      "status": "released",
+      "idempotencyKey": "proxy:d9076750-9bd9-4be3-8235-c3913f4ced04",
+      "createdAt": "2026-07-22T06:00:45.425Z",
+      "expiresAt": "2026-07-22T06:15:45.425Z",
+      "promoLotDeltas": [
+        {
+          "lotId": "8bee87dc-5458-42bd-ae82-aec3fa371bb3",
+          "amount": 10
+        }
+      ]
+    },
+    {
+      "id": "21ad0d6c-c9e4-4b1c-98c6-615d157b0123",
+      "userId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "amount": 15,
+      "allocated": 0,
+      "status": "released",
+      "idempotencyKey": "proxy:9ff078b3-6785-4635-bf6d-d84179d1bb84",
+      "createdAt": "2026-07-22T06:00:46.058Z",
+      "expiresAt": "2026-07-22T06:15:46.058Z",
+      "promoLotDeltas": [
+        {
+          "lotId": "8bee87dc-5458-42bd-ae82-aec3fa371bb3",
+          "amount": 15
+        }
+      ]
+    },
+    {
+      "id": "e9d0b2e5-c5ae-42b4-9902-b16fe12f2774",
+      "userId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "amount": 10,
+      "allocated": 0,
+      "status": "released",
+      "idempotencyKey": "proxy:c669b504-6ac5-4c2a-835b-c5c85ca7afe3",
+      "createdAt": "2026-07-22T06:00:46.782Z",
+      "expiresAt": "2026-07-22T06:15:46.782Z",
+      "promoLotDeltas": [
+        {
+          "lotId": "8bee87dc-5458-42bd-ae82-aec3fa371bb3",
+          "amount": 10
+        }
+      ]
+    },
+    {
+      "id": "39a640a2-d6bc-478c-bc83-bc6989d53b9e",
+      "userId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "amount": 15,
+      "allocated": 0,
+      "status": "released",
+      "idempotencyKey": "proxy:8af622ae-fe8b-4e29-b786-4912dc25fc4e",
+      "createdAt": "2026-07-22T06:00:47.440Z",
+      "expiresAt": "2026-07-22T06:15:47.440Z",
+      "promoLotDeltas": [
+        {
+          "lotId": "8bee87dc-5458-42bd-ae82-aec3fa371bb3",
+          "amount": 15
+        }
+      ]
+    },
+    {
+      "id": "364eda60-e373-49a3-a172-33cebb26d975",
+      "userId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "amount": 10,
+      "allocated": 0,
+      "status": "released",
+      "idempotencyKey": "proxy:168d8956-8e93-4c89-abdc-db6a84518e23",
+      "createdAt": "2026-07-22T06:00:48.158Z",
+      "expiresAt": "2026-07-22T06:15:48.158Z",
+      "promoLotDeltas": [
+        {
+          "lotId": "8bee87dc-5458-42bd-ae82-aec3fa371bb3",
+          "amount": 10
+        }
+      ]
+    },
+    {
+      "id": "eec1b4ba-aa77-4a94-83ab-af6ef3f5c3ed",
+      "userId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "amount": 15,
+      "allocated": 0,
+      "status": "released",
+      "idempotencyKey": "proxy:29505fe0-6bcd-4e78-970d-331c8247f497",
+      "createdAt": "2026-07-22T06:00:48.807Z",
+      "expiresAt": "2026-07-22T06:15:48.807Z",
+      "promoLotDeltas": [
+        {
+          "lotId": "8bee87dc-5458-42bd-ae82-aec3fa371bb3",
+          "amount": 15
+        }
+      ]
+    },
+    {
+      "id": "acf5fe04-531a-46fc-9083-2336efb8566e",
+      "userId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "amount": 10,
+      "allocated": 0,
+      "status": "released",
+      "idempotencyKey": "proxy:db32e85a-6b90-4c2b-8250-083506e99b19",
+      "createdAt": "2026-07-22T06:00:49.682Z",
+      "expiresAt": "2026-07-22T06:15:49.682Z",
+      "promoLotDeltas": [
+        {
+          "lotId": "8bee87dc-5458-42bd-ae82-aec3fa371bb3",
+          "amount": 10
+        }
+      ]
+    },
+    {
+      "id": "b74af0a7-bcfd-409d-ad0f-86145f41d1e2",
+      "userId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "amount": 15,
+      "allocated": 0,
+      "status": "released",
+      "idempotencyKey": "proxy:25ee07f3-a42a-448b-84f2-d15d4e0a0a1b",
+      "createdAt": "2026-07-22T06:00:50.327Z",
+      "expiresAt": "2026-07-22T06:15:50.327Z",
+      "promoLotDeltas": [
+        {
+          "lotId": "8bee87dc-5458-42bd-ae82-aec3fa371bb3",
+          "amount": 15
+        }
+      ]
+    },
+    {
+      "id": "ec0797d7-7e70-4fed-8ac4-dc0a3ebbaaab",
+      "userId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "amount": 10,
+      "allocated": 0,
+      "status": "released",
+      "idempotencyKey": "proxy:a66cf70b-9621-4120-b7d0-0d2f6f0faf5a",
+      "createdAt": "2026-07-22T06:00:51.034Z",
+      "expiresAt": "2026-07-22T06:15:51.034Z",
+      "promoLotDeltas": [
+        {
+          "lotId": "8bee87dc-5458-42bd-ae82-aec3fa371bb3",
+          "amount": 10
+        }
+      ]
+    },
+    {
+      "id": "b6e23fd8-60ba-4d0c-905d-24510504ebf0",
+      "userId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "amount": 15,
+      "allocated": 0,
+      "status": "released",
+      "idempotencyKey": "proxy:8c051588-083c-46e6-a462-58b4b7cac16e",
+      "createdAt": "2026-07-22T06:00:51.671Z",
+      "expiresAt": "2026-07-22T06:15:51.671Z",
+      "promoLotDeltas": [
+        {
+          "lotId": "8bee87dc-5458-42bd-ae82-aec3fa371bb3",
+          "amount": 15
+        }
+      ]
+    },
+    {
+      "id": "5b0c17b0-61d1-4c82-bdbe-6f01160304cd",
+      "userId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "amount": 10,
+      "allocated": 0,
+      "status": "released",
+      "idempotencyKey": "proxy:326337e0-3cc6-4310-8c3a-ee0949244d76",
+      "createdAt": "2026-07-22T06:00:52.578Z",
+      "expiresAt": "2026-07-22T06:15:52.578Z",
+      "promoLotDeltas": [
+        {
+          "lotId": "8bee87dc-5458-42bd-ae82-aec3fa371bb3",
+          "amount": 10
+        }
+      ]
+    },
+    {
+      "id": "f016e578-fe5c-4426-8c59-ee1d5b8af5bc",
+      "userId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "amount": 15,
+      "allocated": 0,
+      "status": "released",
+      "idempotencyKey": "proxy:669d17a2-8f16-4f16-9239-0d3a5fcb00fa",
+      "createdAt": "2026-07-22T06:00:53.220Z",
+      "expiresAt": "2026-07-22T06:15:53.220Z",
+      "promoLotDeltas": [
+        {
+          "lotId": "8bee87dc-5458-42bd-ae82-aec3fa371bb3",
+          "amount": 15
+        }
+      ]
+    },
+    {
+      "id": "7245627c-11f2-4553-b30d-4059dc8cfeec",
+      "userId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "amount": 10,
+      "allocated": 0,
+      "status": "released",
+      "idempotencyKey": "proxy:23f17812-c9f7-4168-a375-28705ec8526c",
+      "createdAt": "2026-07-22T06:00:53.932Z",
+      "expiresAt": "2026-07-22T06:15:53.932Z",
+      "promoLotDeltas": [
+        {
+          "lotId": "8bee87dc-5458-42bd-ae82-aec3fa371bb3",
+          "amount": 10
+        }
+      ]
+    },
+    {
+      "id": "397b31af-33fa-44bb-9b79-64f69b7c2215",
+      "userId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "amount": 15,
+      "allocated": 0,
+      "status": "released",
+      "idempotencyKey": "proxy:2887f149-2c77-4c52-b339-de88b66afa8f",
+      "createdAt": "2026-07-22T06:00:54.586Z",
+      "expiresAt": "2026-07-22T06:15:54.586Z",
+      "promoLotDeltas": [
+        {
+          "lotId": "8bee87dc-5458-42bd-ae82-aec3fa371bb3",
+          "amount": 15
+        }
+      ]
     }
   ]
 }

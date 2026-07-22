@@ -10,6 +10,7 @@ import {
 } from './workflowModelThreeShared';
 import {
   aimWorkflowModelLightsAtBox,
+  configureWorkflowModelSoftShadows,
   createStudioGroundMesh,
   createWorkflowModelViewerStageAsync,
   enhanceLoadedModelMaterials,
@@ -63,8 +64,7 @@ export function captureWorkflowModelThumbnailDataUrl(
     renderer.toneMappingExposure = 1.02;
     renderer.setPixelRatio(1);
     renderer.setSize(w, h);
-    renderer.shadowMap.enabled = true;
-    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    configureWorkflowModelSoftShadows(renderer);
 
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
@@ -128,7 +128,11 @@ export function captureWorkflowModelThumbnailDataUrl(
           }
         });
         scene.add(object);
-        frameCameraToObject(camera, controls, object, { defaultView: '+x' });
+        frameCameraToObject(camera, controls, object, {
+          defaultView: '+x',
+          viewDirection: new THREE.Vector3(1, Math.SQRT2, 1),
+          fitPadding: 1.24,
+        });
         const box = new THREE.Box3().setFromObject(object);
         aimWorkflowModelLightsAtBox(stage.keyLight, stage.fillLight, stage.rimLight, stage.bounceFill, box);
         groundMesh = createStudioGroundMesh(box);

@@ -64,6 +64,11 @@ export function findPriceCatalogEntry(
   return catalog.find((e) => e.billingSku === sku) ?? null;
 }
 
+function isTextTokenBillingSku(billingSku: string): boolean {
+  const sku = String(billingSku || '');
+  return sku.startsWith('llm.') || sku.startsWith('copilot.');
+}
+
 /** 价目表每单位用户积分（token SKU 为单次计费保守下限，非百万 token 公示价） */
 export function userCreditsPerUnit(entry: PriceCatalogEntry): number {
   if (entry.userCreditsPerUnit != null && Number.isFinite(Number(entry.userCreditsPerUnit))) {
@@ -73,7 +78,7 @@ export function userCreditsPerUnit(entry: PriceCatalogEntry): number {
     return Math.ceil(entry.perUnit * CREDITS_PER_USD);
   }
   const sku = String(entry.billingSku || '');
-  if (sku.startsWith('llm.')) return 1;
+  if (isTextTokenBillingSku(sku)) return 1;
   return 0;
 }
 
@@ -212,7 +217,7 @@ export function priceUsageQuote(
     creditsFloor = unitCredits;
     creditsCharge = Math.max(tokenCredits, unitCredits);
     floorApplied = creditsCharge > tokenCredits;
-  } else if (entry.billingSku.startsWith('llm.') && input.meterKind === 'token' && hasBillableQuantity(input)) {
+  } else if (isTextTokenBillingSku(entry.billingSku) && input.meterKind === 'token' && hasBillableQuantity(input)) {
     creditsFloor = unitCredits;
     creditsCharge = Math.max(tokenCredits, unitCredits);
     floorApplied = creditsCharge > tokenCredits;

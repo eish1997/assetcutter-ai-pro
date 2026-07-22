@@ -12,6 +12,7 @@ import {
 } from '../../../services/workflowModelThreeShared';
 import {
   aimWorkflowModelLightsAtBox,
+  configureWorkflowModelSoftShadows,
   createStudioGroundMesh,
   createWorkflowModelViewerStageAsync,
   enhanceLoadedModelMaterials,
@@ -23,12 +24,20 @@ const ImageModel3DViewer: React.FC<LazyImagePreviewViewerProps> = ({
   modelSrc,
   modelFileName,
   model3dDisplayMode = 'material',
+  model3dResetViewNonce = 0,
+  model3dShowGrid = true,
+  model3dBackfaceCulling = true,
   className,
 }) => {
   const rootRef = useRef<HTMLDivElement>(null);
   const mountRef = useRef<HTMLDivElement>(null);
   const applyDisplayModeRef = useRef<((mode: NonNullable<LazyImagePreviewViewerProps['model3dDisplayMode']>) => void) | null>(null);
+  const resetCameraRef = useRef<(() => void) | null>(null);
+  const setGridVisibleRef = useRef<((visible: boolean) => void) | null>(null);
+  const setBackfaceCullingRef = useRef<((enabled: boolean) => void) | null>(null);
   const displayModeRef = useRef<NonNullable<LazyImagePreviewViewerProps['model3dDisplayMode']>>('material');
+  const showGridRef = useRef(model3dShowGrid);
+  const backfaceCullingRef = useRef(model3dBackfaceCulling);
   const [status, setStatus] = useState<ViewerStatus>('loading');
   const [message, setMessage] = useState<string>('');
 
@@ -36,6 +45,21 @@ const ImageModel3DViewer: React.FC<LazyImagePreviewViewerProps> = ({
     displayModeRef.current = model3dDisplayMode;
     applyDisplayModeRef.current?.(model3dDisplayMode);
   }, [model3dDisplayMode]);
+
+  useEffect(() => {
+    if (model3dResetViewNonce <= 0) return;
+    resetCameraRef.current?.();
+  }, [model3dResetViewNonce]);
+
+  useEffect(() => {
+    showGridRef.current = model3dShowGrid;
+    setGridVisibleRef.current?.(model3dShowGrid);
+  }, [model3dShowGrid]);
+
+  useEffect(() => {
+    backfaceCullingRef.current = model3dBackfaceCulling;
+    setBackfaceCullingRef.current?.(model3dBackfaceCulling);
+  }, [model3dBackfaceCulling]);
 
   useEffect(() => {
     const root = rootRef.current;
@@ -89,8 +113,7 @@ const ImageModel3DViewer: React.FC<LazyImagePreviewViewerProps> = ({
     renderer.toneMappingExposure = 1.02;
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
     renderer.setSize(width, height);
-    renderer.shadowMap.enabled = true;
-    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    configureWorkflowModelSoftShadows(renderer);
 
     while (mount.firstChild) mount.removeChild(mount.firstChild);
     mount.appendChild(renderer.domElement);
@@ -100,6 +123,8 @@ const ImageModel3DViewer: React.FC<LazyImagePreviewViewerProps> = ({
     renderer.domElement.style.background = 'transparent';
     renderer.domElement.style.cursor = 'grab';
     renderer.domElement.style.touchAction = 'none';
+    renderer.domElement.tabIndex = 0;
+    renderer.domElement.setAttribute('aria-label', '3D model viewport');
 
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
@@ -110,6 +135,7 @@ const ImageModel3DViewer: React.FC<LazyImagePreviewViewerProps> = ({
     controls.target.set(0, 0, 0);
 
     const onMouseDown = () => {
+      renderer.domElement.focus({ preventScroll: true });
       renderer.domElement.style.cursor = 'grabbing';
     };
     const onMouseUp = () => {
@@ -118,6 +144,18 @@ const ImageModel3DViewer: React.FC<LazyImagePreviewViewerProps> = ({
     renderer.domElement.addEventListener('mousedown', onMouseDown);
     renderer.domElement.addEventListener('mouseup', onMouseUp);
     renderer.domElement.addEventListener('mouseleave', onMouseUp);
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      if (e.code !== 'KeyF') return;
+      if (!loadedRoot) return;
+      e.preventDefault();
+      e.stopPropagation();
+      frameCameraToObject(camera, controls, loadedRoot, {
+        defaultView: '+x',
+        preserveViewDirection: true,
+      });
+    };
+    renderer.domElement.addEventListener('keydown', onKeyDown);
 
     const onGlLost = (e: Event) => {
       try {
@@ -145,19 +183,54 @@ const ImageModel3DViewer: React.FC<LazyImagePreviewViewerProps> = ({
       });
     };
 
+    const applyBackfaceCullingToMaterial = (material: THREE.Material | THREE.Material[]) => {
+      const side = backfaceCullingRef.current ? THREE.FrontSide : THREE.DoubleSide;
+      const mats = Array.isArray(material) ? material : [material];
+      for (const mat of mats) {
+        mat.side = side;
+        mat.needsUpdate = true;
+      }
+    };
+
+    const applyBackfaceCulling = () => {
+      if (!loadedRoot) return;
+      loadedRoot.traverse((obj) => {
+        if (!(obj instanceof THREE.Mesh)) return;
+        applyBackfaceCullingToMaterial(obj.material);
+      });
+    };
+
     applyDisplayModeRef.current = (mode: NonNullable<LazyImagePreviewViewerProps['model3dDisplayMode']>) => {
       if (!loadedRoot) return;
       restoreOriginalMaterials();
       const useGround = mode !== 'wire' && mode !== 'normal';
-      if (groundMesh) groundMesh.visible = useGround;
-      if (mode === 'material') return;
-      loadedRoot.traverse((obj) => {
-        if (!(obj instanceof THREE.Mesh)) return;
-        if (!originalMaterials.has(obj)) originalMaterials.set(obj, obj.material);
-        if (mode === 'clay') obj.material = clayMaterial;
-        if (mode === 'wire') obj.material = wireMaterial;
-        if (mode === 'normal') obj.material = normalMaterial;
+      if (groundMesh) groundMesh.visible = useGround && showGridRef.current;
+      if (mode !== 'material') {
+        loadedRoot.traverse((obj) => {
+          if (!(obj instanceof THREE.Mesh)) return;
+          if (!originalMaterials.has(obj)) originalMaterials.set(obj, obj.material);
+          if (mode === 'clay') obj.material = clayMaterial;
+          if (mode === 'wire') obj.material = wireMaterial;
+          if (mode === 'normal') obj.material = normalMaterial;
+        });
+      }
+      applyBackfaceCulling();
+    };
+
+    resetCameraRef.current = () => {
+      if (!loadedRoot) return;
+      frameCameraToObject(camera, controls, loadedRoot, {
+        defaultView: '+x',
+        preserveViewDirection: true,
       });
+    };
+
+    setGridVisibleRef.current = (visible: boolean) => {
+      if (groundMesh) groundMesh.visible = visible && displayModeRef.current !== 'wire' && displayModeRef.current !== 'normal';
+    };
+
+    setBackfaceCullingRef.current = () => {
+      applyBackfaceCulling();
     };
 
     const onLoadError = () => {
@@ -176,6 +249,7 @@ const ImageModel3DViewer: React.FC<LazyImagePreviewViewerProps> = ({
           originalMaterials.set(m, m.material);
           m.castShadow = true;
           m.receiveShadow = true;
+          applyBackfaceCullingToMaterial(m.material);
         }
       });
       scene.add(object);
@@ -183,7 +257,10 @@ const ImageModel3DViewer: React.FC<LazyImagePreviewViewerProps> = ({
       const box = new THREE.Box3().setFromObject(object);
       aimWorkflowModelLightsAtBox(stage.keyLight, stage.fillLight, stage.rimLight, stage.bounceFill, box);
       groundMesh = createStudioGroundMesh(box);
-      if (groundMesh) scene.add(groundMesh);
+      if (groundMesh) {
+        groundMesh.visible = showGridRef.current && displayModeRef.current !== 'wire' && displayModeRef.current !== 'normal';
+        scene.add(groundMesh);
+      }
       applyDisplayModeRef.current?.(displayModeRef.current);
       setStatus('ready');
     };
@@ -246,8 +323,12 @@ const ImageModel3DViewer: React.FC<LazyImagePreviewViewerProps> = ({
       renderer.domElement.removeEventListener('mousedown', onMouseDown);
       renderer.domElement.removeEventListener('mouseup', onMouseUp);
       renderer.domElement.removeEventListener('mouseleave', onMouseUp);
+      renderer.domElement.removeEventListener('keydown', onKeyDown);
       renderer.domElement.removeEventListener('webglcontextlost', onGlLost);
       applyDisplayModeRef.current = null;
+      resetCameraRef.current = null;
+      setGridVisibleRef.current = null;
+      setBackfaceCullingRef.current = null;
       restoreOriginalMaterials();
       if (loadedRoot) {
         scene.remove(loadedRoot);

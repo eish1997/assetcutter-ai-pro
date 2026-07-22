@@ -402,6 +402,20 @@ async function pollTripoTask(plan, taskId, apiKey, options = {}) {
       const status = normalizeTaskStatus(data?.status ?? data?.data?.status ?? data?.task?.status);
       if (status === 'succeeded') {
         const { modelUrls, previewUrl } = extractTripoTaskArtifacts(data);
+        if (modelUrls.length === 0) {
+          await store.update(plan.job.id, {
+            status: 'running',
+            metadata: {
+              tripoTaskId: taskId,
+              upstreamTaskId: taskId,
+              tripoStatus: 'succeeded_artifacts_pending',
+              gatewayExecution: {
+                lastEmptySuccessAt: new Date().toISOString(),
+              },
+            },
+          });
+          continue;
+        }
         const completedAtMs = Date.now();
         const outputBytes = collectByteSize(data);
         const usage = buildProviderTaskUsage(plan, {

@@ -3,8 +3,9 @@
 const os = require('os');
 const path = require('path');
 const { fetchWithPartition, classifyAgentHttpStatus } = require('./agent-partition-fetch.cjs');
+const { TEAM_WEB_PARTITION } = require('./agent-workbench-client.cjs');
 
-const SCRIPT_HUB_PARTITION = 'persist:assetcutter-script-hub';
+const SCRIPT_HUB_PARTITION = TEAM_WEB_PARTITION || 'persist:assetcutter-team';
 const INTEGRATION_VERSION = 2;
 const CALLER_AGENT = {
   id: 'companion-copilot',

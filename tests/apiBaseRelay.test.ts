@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   apiUrl,
+  authApiDirectUrl,
   authApiRelayConfigured,
+  DEFAULT_PRODUCTION_AUTH_API_BASE,
   resolvedAuthApiBaseUrl,
   staticHostUsesSameOriginApiRelay,
 } from '../services/apiBase';
@@ -49,5 +51,22 @@ describe('resolvedAuthApiBaseUrl on Vercel', () => {
       '/api/ai-worker-proxy/proxy/gemini/async'
     );
     expect(authApiRelayConfigured()).toBe(true);
+  });
+
+  it('keeps a direct auth-api URL available as a login fallback', () => {
+    expect(authApiDirectUrl('/api/auth/login')).toBe(
+      'https://assetcutter-auth-api.onrender.com/api/auth/login'
+    );
+  });
+});
+
+describe('authApiDirectUrl fallback base', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('uses the default production auth-api when same-origin is explicitly configured', () => {
+    vi.stubEnv('VITE_AUTH_API_BASE_URL', 'same-origin');
+    expect(authApiDirectUrl('/api/auth/me')).toBe(`${DEFAULT_PRODUCTION_AUTH_API_BASE}/api/auth/me`);
   });
 });

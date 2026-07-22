@@ -27,6 +27,21 @@ const P0_TOOL_SCHEMAS = [
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
   },
   {
+    name: 'ac.shell.login',
+    description: 'Sign in the local shell first-party web session so Workbench, Script Hub, and Copilot share one team account partition.',
+    risk: 'safe',
+    surfaces: ['shell'],
+    inputSchema: {
+      type: 'object',
+      properties: {
+        identifier: { type: 'string', description: 'Team account username or email.' },
+        password: { type: 'string', description: 'Team account password. Never store or echo this value.' },
+      },
+      required: ['identifier', 'password'],
+      additionalProperties: false,
+    },
+  },
+  {
     name: 'ac.companion.runtime_status',
     description: 'GET /v1/runtime-status 本机引擎与伴侣运行摘要',
     risk: 'safe',
@@ -300,6 +315,18 @@ const P2_TOOL_SCHEMAS = [
         description: { type: 'string' },
         prompt: { type: 'string' },
         toolHints: { type: 'array', items: { type: 'string' } },
+        workbenchPreset: {
+          type: 'object',
+          description:
+            'Optional Workbench preset route schema for later ac.workflow.promote_workbench_preset preflight validation.',
+          additionalProperties: true,
+        },
+        scriptManifest: {
+          type: 'object',
+          description:
+            'Optional Script Hub tool.json-style manifest for later ac.workflow.promote_script_hub_tool preflight validation.',
+          additionalProperties: true,
+        },
       },
       required: ['name', 'prompt'],
       additionalProperties: false,
@@ -349,13 +376,76 @@ const P2_TOOL_SCHEMAS = [
     },
   },
   {
+    name: 'ac.workflow.promote_workbench_preset',
+    description: 'Governed preflight entrance for promoting an agent skill/workflow draft into a Workbench preset. The current implementation only reports missing gates and does not publish.',
+    risk: 'confirm',
+    surfaces: ['workbench', 'shell'],
+    inputSchema: {
+      type: 'object',
+      properties: {
+        skillId: { type: 'string', description: 'Skill/workflow id to promote' },
+        presetName: { type: 'string', description: 'Target Workbench preset name' },
+      },
+      required: ['skillId'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'ac.workflow.promote_script_hub_tool',
+    description: 'Governed preflight entrance for promoting an agent skill/workflow draft into a Script Hub tool. The current implementation only reports missing gates and does not publish.',
+    risk: 'confirm',
+    surfaces: ['script_hub', 'shell'],
+    inputSchema: {
+      type: 'object',
+      properties: {
+        skillId: { type: 'string', description: 'Skill/workflow id to promote' },
+        toolName: { type: 'string', description: 'Target Script Hub tool name' },
+      },
+      required: ['skillId'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'ac.usage.upload_cloud_draft',
+    description:
+      'Confirm-risk governance tool for uploading sanitized local Copilot usage events through the shell first-party session. Cookies and tokens never leave the shell.',
+    risk: 'confirm',
+    surfaces: ['shell', 'companion'],
+    inputSchema: {
+      type: 'object',
+      properties: {
+        days: { type: 'number', description: 'Local usage window to upload; defaults to 1 day.' },
+        limit: { type: 'number', description: 'Maximum local audit rows to summarize; defaults to 5000.' },
+        dryRun: { type: 'boolean', description: 'Build and validate the upload payload without posting it.' },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'ac.usage.probe_quota_policy',
+    description:
+      'Read-only governance probe for the team Copilot usage quota policy through the shell first-party session. Cookies and tokens never leave the shell.',
+    risk: 'safe',
+    surfaces: ['shell', 'companion'],
+    inputSchema: {
+      type: 'object',
+      properties: {},
+      additionalProperties: false,
+    },
+  },
+  {
     name: 'ac.memory.list',
     description: '列出持久化用户记忆条目',
     risk: 'safe',
     surfaces: ['shell'],
     inputSchema: {
       type: 'object',
-      properties: { limit: { type: 'number' } },
+      properties: {
+        limit: { type: 'number' },
+        projectId: { type: 'string' },
+        kind: { type: 'string', enum: ['decision', 'workflow', 'parameter', 'recovery', 'project_note'] },
+        includeDisabled: { type: 'boolean' },
+      },
       additionalProperties: false,
     },
   },
@@ -369,6 +459,10 @@ const P2_TOOL_SCHEMAS = [
       properties: {
         text: { type: 'string' },
         tags: { type: 'array', items: { type: 'string' } },
+        projectId: { type: 'string' },
+        projectName: { type: 'string' },
+        kind: { type: 'string', enum: ['decision', 'workflow', 'parameter', 'recovery', 'project_note'] },
+        contextEnabled: { type: 'boolean' },
       },
       required: ['text'],
       additionalProperties: false,
@@ -541,6 +635,20 @@ const TOOL_GUIDANCE = {
     whenToUse: '管理员或工作流研发人员要下线一个不再可用、测试失败或被替代的 skill/workflow 时使用。',
     exampleArguments: { skillId: 'cinematic-scene-character' },
     successSignals: ['返回 deleted=true 后，prompts/list、resources/list 和 ac.skills.list 不再展示该 workflow。'],
+  },
+  'ac.workflow.promote_workbench_preset': {
+    title: 'Workbench preset promotion preflight',
+    whenToUse:
+      'Use after a reusable skill/workflow draft is saved and an admin wants to check whether it can become a governed Workbench preset.',
+    exampleArguments: { skillId: 'cinematic-scene-character', presetName: 'Cinematic scene kit' },
+    successSignals: ['Returns publishable=false plus required, passed, and missing gates until governed promotion is enabled.'],
+  },
+  'ac.workflow.promote_script_hub_tool': {
+    title: 'Script Hub tool promotion preflight',
+    whenToUse:
+      'Use after a reusable skill/workflow draft is saved and an admin wants to check whether it can become a governed Script Hub tool.',
+    exampleArguments: { skillId: 'cinematic-scene-character', toolName: 'Cinematic scene kit' },
+    successSignals: ['Returns publishable=false plus required, passed, and missing gates until governed promotion is enabled.'],
   },
   'ac.memory.list': {
     title: '读取记忆',

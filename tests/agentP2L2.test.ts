@@ -67,6 +67,23 @@ describe('agent P2 body host concurrency', () => {
       getStateSummary: async () => ({}),
       getSkillsRoot: () => tmp,
     });
+    const scriptManifest = {
+      schemaVersion: 1,
+      id: 'cinematic-scene-kit',
+      name: 'Cinematic scene kit',
+      description: 'Reusable Script Hub wrapper for the workflow draft.',
+      semver: '0.1.0',
+      launch: { kind: 'shell_module', module: 'module/panel.json' },
+      run: { command: ['node', 'scripts/run.mjs'], paramsMode: 'env' },
+      permissions: ['tool.run'],
+    };
+    const workbenchPreset = {
+      capability: 'workflow_text_to_image',
+      modality: 'image',
+      canonicalModelId: 'doubao-seedream-5-0',
+      providerId: 'volcengine-ark',
+      assetContext: { mode: 'current_project' },
+    };
     const result = await host.executeTool(
       'ac.skills.save',
       {
@@ -75,6 +92,8 @@ describe('agent P2 body host concurrency', () => {
         description: '团队工作流',
         prompt: '先读取工作台上下文，再执行影视级场景和角色生成。',
         toolHints: ['ac.workbench.get_context', 'ac.workbench.run_capability'],
+        workbenchPreset,
+        scriptManifest,
       },
       {},
     );
@@ -83,6 +102,12 @@ describe('agent P2 body host concurrency', () => {
 
     const read = await host.executeTool('ac.skills.get', { skillId: 'cinematic-scene-character' }, {});
     expect(read.ok).toBe(true);
+    expect(read.structured.workbenchPreset).toMatchObject({
+      capability: 'workflow_text_to_image',
+      modality: 'image',
+      canonicalModelId: 'doubao-seedream-5-0',
+    });
+    expect(read.structured.scriptManifest).toMatchObject({ id: 'cinematic-scene-kit', semver: '0.1.0' });
     expect(read.structured.prompt).toContain('影视级场景');
 
     await host.executeTool(
@@ -98,6 +123,56 @@ describe('agent P2 body host concurrency', () => {
     expect(revisions.ok).toBe(true);
     expect(revisions.structured.currentRevision).toBe(2);
     expect(revisions.structured.revisions).toHaveLength(2);
+    const readV2 = await host.executeTool('ac.skills.get', { skillId: 'cinematic-scene-character' }, {});
+    expect(readV2.ok).toBe(true);
+    expect(readV2.structured.workbenchPreset).toMatchObject({
+      capability: 'workflow_text_to_image',
+      modality: 'image',
+      canonicalModelId: 'doubao-seedream-5-0',
+    });
+    expect(readV2.structured.scriptManifest).toMatchObject({ id: 'cinematic-scene-kit', semver: '0.1.0' });
+    const promotion = await host.executeTool(
+      'ac.workflow.promote_workbench_preset',
+      { skillId: 'cinematic-scene-character', presetName: 'Cinematic scene kit' },
+      {},
+    );
+    expect(promotion.ok).toBe(false);
+    expect(promotion.error.code).toBe('AGENT_WORKFLOW_PROMOTION_NOT_READY');
+    expect(promotion.structured).toMatchObject({
+      publishable: false,
+      currentPhase: 'draft_only',
+      target: 'workbench_preset',
+      plannedTool: 'ac.workflow.promote_workbench_preset',
+      skillId: 'cinematic-scene-character',
+    });
+    expect(promotion.structured.passedGates).toContain('skill_draft_exists');
+    expect(promotion.structured.passedGates).toContain('capability_route_schema_valid');
+    expect(promotion.structured.passedGates).toContain('model_provider_readiness_checked');
+    expect(promotion.structured.missingGates).not.toContain('capability_route_schema_valid');
+    expect(promotion.structured.missingGates).not.toContain('model_provider_readiness_checked');
+    expect(promotion.structured.missingGates).toContain('workbench_login_e2e_ready');
+    expect(promotion.structured.modelProviderReadiness).toMatchObject({
+      ok: true,
+      route: {
+        providerId: 'volcengine-ark',
+        gatewayExecutionStatus: 'gateway_ready',
+      },
+    });
+    const scriptPromotion = await host.executeTool(
+      'ac.workflow.promote_script_hub_tool',
+      { skillId: 'cinematic-scene-character', toolName: 'Cinematic scene kit' },
+      {},
+    );
+    expect(scriptPromotion.ok).toBe(false);
+    expect(scriptPromotion.error.code).toBe('AGENT_WORKFLOW_PROMOTION_NOT_READY');
+    expect(scriptPromotion.structured.passedGates).toContain('skill_draft_exists');
+    expect(scriptPromotion.structured.passedGates).toContain('script_manifest_valid');
+    expect(scriptPromotion.structured.passedGates).toContain('script_hub_permission_checked');
+    expect(scriptPromotion.structured.passedGates).toContain('sandbox_policy_checked');
+    expect(scriptPromotion.structured.missingGates).not.toContain('script_manifest_valid');
+    expect(scriptPromotion.structured.missingGates).not.toContain('script_hub_permission_checked');
+    expect(scriptPromotion.structured.missingGates).not.toContain('sandbox_policy_checked');
+    expect(scriptPromotion.structured.missingGates).toContain('admin_confirmation');
     const firstRevision = await host.executeTool(
       'ac.skills.revision_get',
       { skillId: 'cinematic-scene-character', revision: 1 },

@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self' data:; connect-src 'none';" />
-  <title>本地伴侣</title>
+  <title>&#26412;&#22320;&#20276;&#20387;</title>
   <style>
     :root {
       --copilot-width: 360px;
@@ -721,12 +721,81 @@
       color: rgba(148, 163, 184, 0.86);
       font-size: 9px;
     }
+    .shell-account-card {
+      margin: 8px 0 2px;
+      padding: 10px;
+      border-radius: 8px;
+      border: 1px solid rgba(148, 163, 184, 0.18);
+      background: rgba(255, 255, 255, 0.035);
+    }
+    .shell-account-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+    .shell-account-title {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      font-size: 11px;
+      font-weight: 800;
+      color: rgba(244, 244, 245, 0.92);
+    }
+    .shell-account-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #71717a;
+      flex: 0 0 auto;
+    }
+    .shell-account-dot.is-ok { background: #22c55e; box-shadow: 0 0 8px rgba(34, 197, 94, 0.36); }
+    .shell-account-dot.is-warn { background: #eab308; }
+    .shell-account-dot.is-bad { background: #ef4444; }
+    .shell-account-detail {
+      color: rgba(161, 170, 184, 0.92);
+      font-size: 10px;
+      line-height: 1.45;
+      word-break: break-word;
+      white-space: pre-wrap;
+    }
+    .shell-account-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 6px;
+      margin-top: 8px;
+    }
+    .shell-account-grid div {
+      min-width: 0;
+      padding: 6px;
+      border-radius: 6px;
+      background: rgba(0, 0, 0, 0.22);
+    }
+    .shell-account-grid span {
+      display: block;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-family: ui-monospace, monospace;
+      color: #e5e7eb;
+      font-size: 11px;
+    }
+    .shell-account-grid small {
+      display: block;
+      margin-top: 2px;
+      color: rgba(148, 163, 184, 0.86);
+      font-size: 9px;
+    }
     .agent-mcp-card {
       margin: 9px 0 10px;
       padding: 10px;
       border-radius: 8px;
       border: 1px solid rgba(148, 163, 184, 0.18);
       background: rgba(15, 23, 42, 0.36);
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
     }
     .agent-mcp-head,
     .agent-mcp-metrics {
@@ -737,7 +806,7 @@
       min-width: 0;
     }
     .agent-mcp-head {
-      margin-bottom: 8px;
+      margin-bottom: 0;
     }
     .agent-mcp-title {
       min-width: 0;
@@ -794,10 +863,12 @@
       display: flex;
       flex-wrap: wrap;
       gap: 6px;
-      margin-top: 9px;
+      margin-top: 4px;
     }
     .agent-mcp-tools {
-      margin-top: 10px;
+      width: 100%;
+      box-sizing: border-box;
+      margin-top: 2px;
       padding-top: 10px;
       border-top: 1px solid rgba(148, 163, 184, 0.12);
     }
@@ -928,6 +999,8 @@
       white-space: pre-wrap;
     }
     .agent-policy-card {
+      width: 100%;
+      box-sizing: border-box;
       margin-top: 10px;
       padding-top: 10px;
       border-top: 1px solid rgba(148, 163, 184, 0.12);
@@ -996,6 +1069,12 @@
       border-radius: 7px;
       background: rgba(0, 0, 0, 0.24);
       border: 1px solid rgba(148, 163, 184, 0.09);
+    }
+    .agent-policy-templates {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin: 8px 0;
     }
     .agent-policy-choice {
       min-width: 36px;
@@ -1274,6 +1353,178 @@
       border-color: rgba(96, 165, 250, 0.42);
       background: rgba(37, 99, 235, 0.28);
       color: #eff6ff;
+    }
+    #shell-copilot .copilot-work-home {
+      gap: 12px;
+      background: rgba(16, 20, 29, 0.82);
+      border-color: rgba(148, 163, 184, 0.18);
+    }
+    #shell-copilot .copilot-work-home-header {
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+    }
+    #shell-copilot .copilot-work-home-title {
+      font-size: 13px;
+      font-weight: 820;
+      color: rgba(250, 250, 250, 0.96);
+    }
+    #shell-copilot .copilot-work-home-subtitle,
+    #shell-copilot .copilot-work-save-outlet {
+      font-size: 11px;
+      line-height: 1.45;
+      color: rgba(186, 194, 208, 0.92);
+    }
+    #shell-copilot .copilot-work-status-grid,
+    #shell-copilot .copilot-work-context-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 7px;
+    }
+    #shell-copilot .copilot-work-status-item,
+    #shell-copilot .copilot-work-context-item {
+      min-width: 0;
+      padding: 8px;
+      border-radius: 8px;
+      border: 1px solid rgba(255, 255, 255, 0.075);
+      background: rgba(255, 255, 255, 0.035);
+    }
+    #shell-copilot .copilot-work-status-item.is-ok {
+      border-color: rgba(34, 197, 94, 0.22);
+      background: rgba(20, 83, 45, 0.14);
+    }
+    #shell-copilot .copilot-work-status-item.is-warn {
+      border-color: rgba(234, 179, 8, 0.22);
+      background: rgba(113, 63, 18, 0.14);
+    }
+    #shell-copilot .copilot-work-status-item.is-bad {
+      border-color: rgba(248, 113, 113, 0.24);
+      background: rgba(127, 29, 29, 0.14);
+    }
+    #shell-copilot .copilot-work-status-label {
+      margin-bottom: 3px;
+      font-size: 10px;
+      color: rgba(148, 163, 184, 0.94);
+    }
+    #shell-copilot .copilot-work-status-value {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-size: 11px;
+      font-weight: 780;
+      color: rgba(244, 244, 245, 0.94);
+    }
+    #shell-copilot .copilot-work-context {
+      display: flex;
+      flex-direction: column;
+      gap: 7px;
+    }
+    #shell-copilot .copilot-work-section-title {
+      font-size: 11px;
+      font-weight: 780;
+      color: rgba(226, 232, 240, 0.94);
+    }
+    #shell-copilot .copilot-work-context-grid {
+      grid-template-columns: 1fr;
+    }
+    #shell-copilot .copilot-work-context-item {
+      font-size: 11px;
+      line-height: 1.42;
+      color: rgba(203, 213, 225, 0.9);
+    }
+    #shell-copilot .copilot-work-actions {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 7px;
+    }
+    #shell-copilot .copilot-work-actions .copilot-onboard-btn {
+      min-width: 0;
+      width: 100%;
+    }
+      #shell-copilot .copilot-work-save-outlet {
+        display: flex;
+        flex-direction: column;
+        gap: 7px;
+        padding: 8px;
+        border-radius: 8px;
+        border: 1px solid rgba(96, 165, 250, 0.18);
+        background: rgba(30, 64, 175, 0.12);
+        color: rgba(219, 234, 254, 0.92);
+    }
+    #shell-copilot .copilot-task-thread-card {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      padding: 11px;
+      border-radius: 8px;
+      border: 1px solid rgba(96, 165, 250, 0.2);
+      background: rgba(15, 23, 42, 0.5);
+      color: rgba(226, 232, 240, 0.94);
+    }
+    #shell-copilot .copilot-task-thread-card.is-done {
+      border-color: rgba(34, 197, 94, 0.24);
+      background: rgba(20, 83, 45, 0.14);
+    }
+    #shell-copilot .copilot-task-thread-card.is-error {
+      border-color: rgba(248, 113, 113, 0.28);
+      background: rgba(127, 29, 29, 0.16);
+    }
+    #shell-copilot .copilot-task-thread-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+    #shell-copilot .copilot-task-thread-kicker {
+      font-size: 11px;
+      font-weight: 820;
+    }
+    #shell-copilot .copilot-task-thread-state {
+      flex: 0 0 auto;
+      padding: 2px 6px;
+      border-radius: 999px;
+      background: rgba(96, 165, 250, 0.14);
+      color: rgba(191, 219, 254, 0.96);
+      font-size: 10px;
+      font-weight: 780;
+    }
+    #shell-copilot .copilot-task-thread-grid {
+      display: grid;
+      gap: 5px;
+    }
+    #shell-copilot .copilot-task-thread-row {
+      font-size: 11px;
+      line-height: 1.42;
+      color: rgba(203, 213, 225, 0.92);
+      overflow-wrap: anywhere;
+    }
+    #shell-copilot .copilot-result-card {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      padding: 11px;
+      border-radius: 8px;
+      border: 1px solid rgba(34, 197, 94, 0.22);
+      background: rgba(20, 83, 45, 0.14);
+      color: rgba(220, 252, 231, 0.94);
+    }
+    #shell-copilot .copilot-result-title {
+      font-size: 12px;
+      font-weight: 820;
+    }
+    #shell-copilot .copilot-result-desc {
+      font-size: 11px;
+      line-height: 1.45;
+      color: rgba(203, 213, 225, 0.92);
+    }
+    #shell-copilot .copilot-result-actions {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 7px;
+    }
+    #shell-copilot .copilot-result-actions .copilot-onboard-btn {
+      min-width: 0;
+      width: 100%;
     }
     .copilot-status-card {
       left: 12px;
@@ -3078,6 +3329,207 @@
       color: #fecaca !important;
     }
 
+    /* copilot-workbench-composer-skin: align the shell Copilot with the Workbench global composer. */
+    #shell-copilot {
+      background: #0f0f12 !important;
+      border-left: 1px solid rgba(255, 255, 255, 0.08) !important;
+      box-shadow: -18px 0 44px rgba(0, 0, 0, 0.36) !important;
+    }
+    #shell-copilot .copilot-head {
+      min-height: 46px !important;
+      padding: 8px 12px !important;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.06) !important;
+      background: #0f0f12 !important;
+      box-shadow: none !important;
+    }
+    #shell-copilot .copilot-head-title {
+      color: rgba(244, 244, 245, 0.94) !important;
+      font-size: 12px !important;
+      font-weight: 700 !important;
+    }
+    #shell-copilot .copilot-brain {
+      border-radius: 7px !important;
+      border: 1px solid rgba(255, 255, 255, 0.08) !important;
+      background: rgba(255, 255, 255, 0.05) !important;
+      color: rgba(203, 213, 225, 0.86) !important;
+      padding: 2px 7px !important;
+      font-size: 10px !important;
+    }
+    #shell-copilot .copilot-toggle,
+    #shell-copilot .copilot-head-btn {
+      width: 30px !important;
+      height: 30px !important;
+      border-radius: 8px !important;
+      border: 0 !important;
+      background: transparent !important;
+      color: rgba(148, 163, 184, 0.78) !important;
+      box-shadow: none !important;
+    }
+    #shell-copilot .copilot-toggle:hover,
+    #shell-copilot .copilot-head-btn:hover,
+    #shell-copilot .copilot-head-btn.is-active {
+      background: rgba(255, 255, 255, 0.08) !important;
+      color: #fff !important;
+    }
+    #shell-copilot .copilot-body {
+      padding: 12px 10px 10px 12px !important;
+      background: #0f0f12 !important;
+    }
+    #shell-copilot .copilot-messages {
+      gap: 9px !important;
+      padding-right: 2px !important;
+    }
+    #shell-copilot .copilot-msg {
+      max-width: 92% !important;
+      border-radius: 14px !important;
+      padding: 9px 11px !important;
+      font-size: 12px !important;
+      line-height: 1.55 !important;
+      box-shadow: none !important;
+    }
+    #shell-copilot .copilot-msg-user {
+      align-self: flex-end !important;
+      border: 1px solid rgba(96, 165, 250, 0.24) !important;
+      background: rgba(37, 99, 235, 0.18) !important;
+      color: rgba(248, 250, 252, 0.96) !important;
+    }
+    #shell-copilot .copilot-msg-assistant {
+      align-self: flex-start !important;
+      border: 1px solid rgba(255, 255, 255, 0.08) !important;
+      background: rgba(255, 255, 255, 0.035) !important;
+      color: rgba(244, 244, 245, 0.94) !important;
+    }
+    #shell-copilot .copilot-msg-tool,
+    #shell-copilot .copilot-msg-tool-call {
+      max-width: 96% !important;
+      border: 1px solid rgba(255, 255, 255, 0.07) !important;
+      background: rgba(0, 0, 0, 0.24) !important;
+      color: rgba(148, 163, 184, 0.92) !important;
+      font-size: 10px !important;
+    }
+    #shell-copilot .copilot-footer {
+      gap: 8px !important;
+      padding: 10px 12px 12px !important;
+      border-top: 1px solid rgba(255, 255, 255, 0.06) !important;
+      background: #0f0f12 !important;
+      box-shadow: 0 -18px 34px rgba(0, 0, 0, 0.26) !important;
+    }
+    #shell-copilot .copilot-status {
+      order: 0 !important;
+      min-height: 13px !important;
+      padding: 0 2px !important;
+      color: rgba(148, 163, 184, 0.75) !important;
+      font-size: 10px !important;
+      line-height: 1.3 !important;
+    }
+    #shell-copilot .copilot-input-row {
+      order: 1 !important;
+      position: relative !important;
+      display: block !important;
+      min-height: 104px !important;
+      padding: 10px 56px 44px 11px !important;
+      border-radius: 12px !important;
+      border: 1px solid rgba(255, 255, 255, 0.10) !important;
+      background: #0f0f12 !important;
+      box-shadow:
+        0 18px 38px rgba(0, 0, 0, 0.38),
+        0 0 0 1px rgba(255, 255, 255, 0.05) inset !important;
+      transition: border-color 0.14s ease, box-shadow 0.14s ease, background 0.14s ease !important;
+    }
+    #shell-copilot .copilot-input-row:focus-within {
+      border-color: rgba(96, 165, 250, 0.46) !important;
+      background: #111116 !important;
+      box-shadow:
+        0 20px 44px rgba(0, 0, 0, 0.44),
+        0 0 0 2px rgba(59, 130, 246, 0.22),
+        0 0 0 1px rgba(255, 255, 255, 0.06) inset !important;
+    }
+    #shell-copilot .copilot-input {
+      width: 100% !important;
+      min-height: 46px !important;
+      max-height: 160px !important;
+      padding: 0 !important;
+      border: 0 !important;
+      background: transparent !important;
+      color: rgba(244, 244, 245, 0.96) !important;
+      font-size: 12px !important;
+      line-height: 1.55 !important;
+      resize: none !important;
+      outline: none !important;
+      box-shadow: none !important;
+    }
+    #shell-copilot .copilot-input::placeholder {
+      color: rgba(148, 163, 184, 0.58) !important;
+    }
+    #shell-copilot .copilot-send,
+    #shell-copilot .copilot-abort {
+      position: absolute !important;
+      bottom: 8px !important;
+      z-index: 2 !important;
+      display: inline-flex !important;
+      align-items: center !important;
+      justify-content: center !important;
+      width: 36px !important;
+      height: 36px !important;
+      min-width: 36px !important;
+      padding: 0 !important;
+      border-radius: 999px !important;
+      font-size: 0 !important;
+      line-height: 0 !important;
+      transition: transform 0.12s ease, opacity 0.12s ease, background 0.12s ease !important;
+    }
+    #shell-copilot .copilot-send {
+      right: 8px !important;
+      border: 1px solid rgba(255, 255, 255, 0.9) !important;
+      background: #fff !important;
+      color: #0a0a0c !important;
+      box-shadow: 0 8px 22px rgba(0, 0, 0, 0.36) !important;
+    }
+    #shell-copilot .copilot-send:hover:not(:disabled) {
+      transform: scale(1.035) !important;
+      background: #f8fafc !important;
+    }
+    #shell-copilot .copilot-abort {
+      right: 50px !important;
+      border: 1px solid rgba(255, 255, 255, 0.09) !important;
+      background: rgba(255, 255, 255, 0.055) !important;
+      color: rgba(203, 213, 225, 0.76) !important;
+      box-shadow: none !important;
+    }
+    #shell-copilot.is-busy .copilot-abort:not(:disabled) {
+      border-color: rgba(248, 113, 113, 0.28) !important;
+      background: rgba(127, 29, 29, 0.28) !important;
+      color: #fecaca !important;
+    }
+    #shell-copilot .copilot-abort:hover:not(:disabled) {
+      transform: scale(1.035) !important;
+      background: rgba(255, 255, 255, 0.09) !important;
+    }
+    #shell-copilot .copilot-send:disabled,
+    #shell-copilot .copilot-abort:disabled {
+      opacity: 0.34 !important;
+      transform: none !important;
+      cursor: default !important;
+    }
+    #shell-copilot .copilot-token-bar {
+      order: 2 !important;
+      margin: 0 !important;
+      padding: 0 2px !important;
+      background: transparent !important;
+      border: 0 !important;
+      box-shadow: none !important;
+    }
+    #shell-copilot .copilot-token-line {
+      margin-bottom: 5px !important;
+      color: rgba(148, 163, 184, 0.68) !important;
+      font-size: 9px !important;
+    }
+    #shell-copilot .copilot-token-track {
+      height: 4px !important;
+      border-radius: 999px !important;
+      background: rgba(255, 255, 255, 0.08) !important;
+    }
+
     .shell-brain-picker {
       display: flex;
       flex-wrap: wrap;
@@ -3097,6 +3549,89 @@
       border-color: rgba(96, 165, 250, 0.55);
       background: rgba(59, 130, 246, 0.18);
       color: #bfdbfe;
+    }
+    .codex-runtime-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+      margin: 6px 0 10px;
+    }
+    .codex-runtime-grid label {
+      margin: 0 0 4px;
+    }
+    .codex-runtime-grid input {
+      width: 100%;
+      box-sizing: border-box;
+    }
+    .codex-sandbox-picker {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin: 6px 0 10px;
+    }
+    .codex-sandbox-option {
+      padding: 4px 10px;
+      border-radius: 6px;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      background: rgba(255, 255, 255, 0.04);
+      color: rgba(255, 255, 255, 0.75);
+      font-size: 12px;
+      cursor: pointer;
+    }
+    .codex-sandbox-option.is-active {
+      border-color: rgba(34, 197, 94, 0.52);
+      background: rgba(34, 197, 94, 0.14);
+      color: #bbf7d0;
+    }
+    .agent-mcp-e2e-chain {
+      margin: 6px 0 0;
+      padding-left: 16px;
+      color: rgba(203, 213, 225, 0.9);
+    }
+    .agent-mcp-e2e-chain li {
+      margin: 2px 0;
+    }
+    .agent-mcp-e2e-diag {
+      margin: 7px 0 0;
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 4px 8px;
+    }
+    .agent-mcp-e2e-diag div {
+      min-width: 0;
+      padding: 5px 6px;
+      border-radius: 6px;
+      background: rgba(0, 0, 0, 0.22);
+    }
+    .agent-mcp-e2e-diag dt {
+      margin: 0 0 2px;
+      color: rgba(148, 163, 184, 0.88);
+      font-size: 9px;
+    }
+    .agent-mcp-e2e-diag dd {
+      margin: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-family: ui-monospace, monospace;
+      color: rgba(226, 232, 240, 0.94);
+      font-size: 10px;
+    }
+    .agent-mcp-e2e-freshness {
+      margin-top: 8px;
+      padding: 8px 10px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.03);
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.5;
+    }
+    .agent-mcp-e2e-freshness strong {
+      display: block;
+      color: var(--text);
+      font-size: 12px;
+      margin-bottom: 2px;
     }
     #inpMcpConfig {
       width: 100%;
@@ -3124,6 +3659,101 @@
       background: var(--panel);
       padding: 12px 14px;
       margin-bottom: 12px;
+    }
+    #view-settings {
+      padding: 0;
+      overflow: hidden;
+    }
+    .settings-shell {
+      height: 100%;
+      min-height: 0;
+      display: grid;
+      grid-template-columns: 156px minmax(0, 1fr);
+      background: var(--bg);
+    }
+    .settings-section-nav {
+      min-height: 0;
+      padding: 16px 10px;
+      border-right: 1px solid rgba(255, 255, 255, 0.08);
+      background: rgba(18, 18, 20, 0.72);
+      overflow-y: auto;
+    }
+    .settings-section-nav-title {
+      padding: 0 8px 10px;
+      font-size: 13px;
+      font-weight: 700;
+      color: rgba(228, 228, 231, 0.92);
+    }
+    .settings-section-nav a {
+      display: block;
+      padding: 8px 9px;
+      border-radius: 8px;
+      color: rgba(161, 161, 170, 0.92);
+      text-decoration: none;
+      font-size: 11px;
+      font-weight: 600;
+    }
+    .settings-section-nav a:hover,
+    .settings-section-nav a.active {
+      background: rgba(255, 255, 255, 0.07);
+      color: rgba(244, 244, 245, 0.98);
+    }
+    .settings-section-nav a.active {
+      box-shadow: inset 2px 0 0 #f4f4f5;
+    }
+    .settings-content {
+      min-height: 0;
+      padding: 16px 18px 22px;
+      overflow: auto;
+      display: flex;
+      justify-content: center;
+    }
+    .settings-group {
+      min-width: 0;
+      display: none;
+      gap: 10px;
+      scroll-margin-top: 16px;
+      width: 100%;
+      max-width: 820px;
+      margin: 0 auto;
+    }
+    .settings-group.is-active {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .settings-group-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      min-height: 22px;
+    }
+    .settings-group-head h1,
+    .settings-group-head h2 {
+      margin: 0;
+      font-size: 14px;
+      font-weight: 700;
+      color: rgba(244, 244, 245, 0.94);
+    }
+    .settings-group .set-section,
+    .settings-group .status-card,
+    .settings-group h2.section-title {
+      margin-bottom: 0;
+      width: 100%;
+      box-sizing: border-box;
+    }
+    .settings-overview .home-updater-top,
+    .settings-overview #section-local-engines,
+    .settings-overview h2.section-title,
+    .settings-overview .status-card {
+      min-width: 0;
+      width: 100%;
+      box-sizing: border-box;
+    }
+    @media (max-width: 980px) {
+      .settings-shell { grid-template-columns: 132px minmax(0, 1fr); }
+      .settings-group { max-width: 100%; }
     }
     .set-section h3 {
       margin: 0 0 10px;
@@ -3493,8 +4123,8 @@
         type="button"
         class="titlebar-sidebar-toggle"
         id="btnShellSidebarToggle"
-        aria-label="收起侧栏"
-        title="收起侧栏"
+        aria-label="&#25910;&#36215;&#20391;&#26639;"
+        title="&#25910;&#36215;&#20391;&#26639;"
         aria-pressed="false"
         aria-expanded="true"
         aria-controls="shell-sidebar-nav"
@@ -3517,9 +4147,9 @@
     </div>
     <div class="app-titlebar-title" aria-hidden="true"></div>
     <div class="titlebar-trailing">
-      <button type="button" class="traffic minimize" id="btnTrafficMin" aria-label="最小化" title="最小化">─</button>
-      <button type="button" class="traffic zoom" id="btnTrafficZoom" aria-label="最大化" title="最大化">□</button>
-      <button type="button" class="traffic close" id="btnTrafficClose" aria-label="关闭" title="关闭">×</button>
+      <button type="button" class="traffic minimize" id="btnTrafficMin" aria-label="&#26368;&#23567;&#21270;" title="&#26368;&#23567;&#21270;">-</button>
+      <button type="button" class="traffic zoom" id="btnTrafficZoom" aria-label="&#26368;&#22823;&#21270;" title="&#26368;&#22823;&#21270;">&#9633;</button>
+      <button type="button" class="traffic close" id="btnTrafficClose" aria-label="&#20851;&#38381;" title="&#20851;&#38381;">&#215;</button>
     </div>
   </header>
   <div class="shell-body">
@@ -3530,22 +4160,7 @@
       aria-label="主导航"
       title="在侧栏空白或图标上右键可打开工作台菜单"
     >
-      <button type="button" role="tab" data-view="home" class="active" aria-selected="true" aria-label="首页" title="首页">
-        <svg
-          class="sidebar-nav-icon"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="1.75"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-          aria-hidden="true"
-        >
-          <path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
-          <polyline points="9 22 9 12 15 12 15 22" />
-        </svg>
-      </button>
-      <button type="button" role="tab" data-view="workbench" aria-selected="false" aria-label="工作台" title="工作台（侧栏右键：刷新 / 硬刷新 / 浏览器打开）">
+      <button type="button" role="tab" data-view="workbench" class="active" aria-selected="true" aria-label="&#24037;&#20316;&#21488;" title="&#24037;&#20316;&#21488;&#65288;&#20391;&#26639;&#21491;&#38190;&#65306;&#21047;&#26032; / &#30828;&#21047;&#26032; / &#27983;&#35272;&#22120;&#25171;&#24320;&#65289;">
         <svg
           class="sidebar-nav-icon"
           viewBox="0 0 24 24"
@@ -3560,7 +4175,7 @@
           <path d="M2.5 9h19M8 22h8" />
         </svg>
       </button>
-      <button type="button" role="tab" data-view="scripts" aria-selected="false" aria-label="脚本" title="Script Hub">
+      <button type="button" role="tab" data-view="scripts" aria-selected="false" aria-label="&#33050;&#26412;" title="Script Hub">
         <svg
           class="sidebar-nav-icon"
           viewBox="0 0 24 24"
@@ -3575,7 +4190,7 @@
           <polyline points="8 6 2 12 8 18" />
         </svg>
       </button>
-      <button type="button" role="tab" data-view="tools" aria-selected="false" aria-label="工具" title="工具">
+      <button type="button" role="tab" data-view="tools" aria-selected="false" aria-label="&#24037;&#20855;" title="&#24037;&#20855;">
         <svg
           class="sidebar-nav-icon"
           viewBox="0 0 24 24"
@@ -3590,7 +4205,7 @@
         </svg>
         <span id="toolsNavBadge" class="shell-nav-badge hidden" aria-hidden="true"></span>
       </button>
-      <button type="button" role="tab" data-view="settings" aria-selected="false" aria-label="设置" title="设置">
+      <button type="button" role="tab" data-view="settings" aria-selected="false" aria-label="&#35774;&#32622;" title="&#35774;&#32622;">
         <svg
           class="sidebar-nav-icon"
           viewBox="0 0 24 24"
@@ -3609,7 +4224,50 @@
       </button>
     </nav>
     <div class="shell-main" id="shell-main">
-  <div id="view-home" class="view">
+  <div id="view-tools" class="view hidden">
+    <div id="tools-rack">
+      <div class="tools-page-header">
+        <h1>工具</h1>
+        <div class="tools-header-actions">
+          <button type="button" class="tools-icon-btn" id="btnToolsRefresh" title="刷新（本地列表 + 发行目录）" aria-label="刷新">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <path d="M21 12a9 9 0 1 1-3-6.7" />
+              <path d="M21 3v6h-6" />
+              <path d="M12 3v12" />
+              <path d="m7 10 5 5 5-5" />
+            </svg>
+          </button>
+        </div>
+      </div>
+      <div class="tools-toolbar">
+        <input type="search" class="tools-search" id="toolsSearchInput" placeholder="搜索名称、ID、标签…" autocomplete="off" />
+        <div class="tools-filters" id="toolsFilterRow">
+          <button type="button" class="tools-filter-chip active" data-filter-source="all">全部</button>
+          <button type="button" class="tools-filter-chip" data-filter-source="local">本地</button>
+          <button type="button" class="tools-filter-chip" data-filter-source="cloud">云端</button>
+          <span class="tools-filter-sep" aria-hidden="true"></span>
+          <span id="toolsTagFilters"></span>
+        </div>
+      </div>
+      <p id="toolsStatusHint" class="tools-status-hint hidden"></p>
+      <div id="toolsGrid"></div>
+    </div>
+  </div>
+
+  <div id="view-settings" class="view hidden">
+    <div class="settings-shell">
+      <aside class="settings-section-nav" aria-label="&#35774;&#32622;&#20998;&#31867;">
+        <div class="settings-section-nav-title">&#35774;&#32622;</div>
+        <a href="#settings-overview" class="active" data-settings-section="overview" aria-current="page">&#27010;&#35272;</a>
+        <a href="#settings-entrances" data-settings-section="entrances">&#20837;&#21475;</a>
+        <a href="#settings-account" data-settings-section="account">&#36134;&#21495;</a>
+        <a href="#settings-agent" data-settings-section="agent">Agent</a>
+        <a href="#settings-storage" data-settings-section="storage">&#23384;&#20648;</a>
+        <a href="#settings-service" data-settings-section="service">&#26381;&#21153;</a>
+      </aside>
+      <main class="settings-content">
+        <section class="settings-group settings-overview is-active" id="settings-overview" data-settings-section-panel="overview">
+          <div class="settings-group-head"><h1>&#27010;&#35272;</h1></div>
     <div class="home-updater-top">
       <div id="updaterProgressCard" class="updater-progress-card hidden" aria-live="polite">
         <div class="updater-progress-head">
@@ -3788,173 +4446,147 @@
     <div class="status-card" style="padding: 12px 14px">
       <p id="hostBundleEmptyHint" class="empty" style="margin: 0; padding: 4px 0">暂无扩展包</p>
     </div>
-  </div>
-
-  <div id="view-tools" class="view hidden">
-    <div id="tools-rack">
-      <div class="tools-page-header">
-        <h1>工具</h1>
-        <div class="tools-header-actions">
-          <button type="button" class="tools-icon-btn" id="btnToolsRefresh" title="刷新（本地列表 + 发行目录）" aria-label="刷新">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-              <path d="M21 12a9 9 0 1 1-3-6.7" />
-              <path d="M21 3v6h-6" />
-              <path d="M12 3v12" />
-              <path d="m7 10 5 5 5-5" />
-            </svg>
-          </button>
-        </div>
-      </div>
-      <div class="tools-toolbar">
-        <input type="search" class="tools-search" id="toolsSearchInput" placeholder="搜索名称、ID、标签…" autocomplete="off" />
-        <div class="tools-filters" id="toolsFilterRow">
-          <button type="button" class="tools-filter-chip active" data-filter-source="all">全部</button>
-          <button type="button" class="tools-filter-chip" data-filter-source="local">本地</button>
-          <button type="button" class="tools-filter-chip" data-filter-source="cloud">云端</button>
-          <span class="tools-filter-sep" aria-hidden="true"></span>
-          <span id="toolsTagFilters"></span>
-        </div>
-      </div>
-      <p id="toolsStatusHint" class="tools-status-hint hidden"></p>
-      <div id="toolsGrid"></div>
-    </div>
-  </div>
-
-  <div id="view-settings" class="view hidden">
-    <h1>设置</h1>
+        </section>
+        <section class="settings-group" id="settings-entrances" data-settings-section-panel="entrances" hidden>
+          <div class="settings-group-head"><h2>&#20837;&#21475;</h2></div>
     <div class="set-section">
-      <h3 title="Script Hub 内嵌地址">Script Hub 地址</h3>
-      <label for="inpScriptHubUrl" title="第五导航「脚本」内嵌的 Script Hub 根地址">地址</label>
-      <input
-        type="url"
-        id="inpScriptHubUrl"
-        placeholder="http://localhost:5173/"
-        autocomplete="off"
-        title="Script Hub 根地址"
-      />
+      <h3 title="Script Hub 页面地址">Script Hub 地址</h3>
+      <label for="inpScriptHubUrl" title="本地壳内打开的 Script Hub 页面地址">地址</label>
+      <input type="url" id="inpScriptHubUrl" placeholder="http://localhost:5173/" autocomplete="off" title="Script Hub 页面地址" />
       <div class="btn-row">
         <button type="button" class="btn btn-primary" id="btnSaveScriptHub">保存</button>
       </div>
     </div>
     <div class="set-section">
-      <h3 title="Copilot ac.script_hub.* 调用的 Tool Bridge API">Script Hub API（Tool Bridge）</h3>
-      <label for="inpScriptHubApiUrl" title="与网页分离；开发默认 http://localhost:8787/">API 地址</label>
-      <input
-        type="url"
-        id="inpScriptHubApiUrl"
-        placeholder="http://localhost:8787/"
-        autocomplete="off"
-        title="Tool Bridge 根地址"
-      />
+      <h3 title="Copilot ac.script_hub.* 使用的 Tool Bridge API">Script Hub API（Tool Bridge）</h3>
+      <label for="inpScriptHubApiUrl" title="默认本机地址为 http://localhost:8787/">API 地址</label>
+      <input type="url" id="inpScriptHubApiUrl" placeholder="http://localhost:8787/" autocomplete="off" title="Tool Bridge 服务地址" />
       <div class="btn-row">
         <button type="button" class="btn btn-primary" id="btnSaveScriptHubApi">保存 API</button>
       </div>
-      <label for="inpScriptHubApiToken" class="pair-label-gap" title="与 SCRIPTHUB_TOOL_BRIDGE_TOKEN 一致；本地留空">API Token（可选）</label>
-      <input
-        type="password"
-        id="inpScriptHubApiToken"
-        placeholder="Tool Bridge Bearer Token"
-        autocomplete="off"
-        title="设置后 Copilot 请求带 Authorization: Bearer"
-      />
+      <label for="inpScriptHubApiToken" class="pair-label-gap" title="与 SCRIPTHUB_TOOL_BRIDGE_TOKEN 保持一致">API Token（可选）</label>
+      <input type="password" id="inpScriptHubApiToken" placeholder="Tool Bridge Bearer Token" autocomplete="off" title="用于 Copilot 调用时携带 Authorization: Bearer" />
       <div class="btn-row">
         <button type="button" class="btn btn-primary" id="btnSaveScriptHubApiToken">保存 Token</button>
       </div>
     </div>
     <div class="set-section">
-      <h3 title="工作台内嵌主站用，填以 https:// 开头的根地址">主站地址</h3>
-      <label for="inpSiteUrl" title="工作台内嵌主站用，填以 https:// 开头的根地址">地址</label>
-      <input
-        type="url"
-        id="inpSiteUrl"
-        placeholder="https://…"
-        autocomplete="off"
-        title="工作台内嵌主站用，填以 https:// 开头的根地址"
-      />
+      <h3 title="工作台主站地址，线上环境建议使用 https://">主站地址</h3>
+      <label for="inpSiteUrl" title="工作台主站地址，线上环境建议使用 https://">地址</label>
+      <input type="url" id="inpSiteUrl" placeholder="https://" autocomplete="off" title="工作台主站地址，线上环境建议使用 https://" />
       <div class="btn-row">
         <button type="button" class="btn btn-primary" id="btnSaveSite">保存</button>
       </div>
     </div>
+
+        </section>
+        <section class="settings-group" id="settings-account" data-settings-section-panel="account" hidden>
+          <div class="settings-group-head"><h2>&#36134;&#21495;</h2></div>
     <div class="set-section">
-      <h3 title="通信密码须与浏览器里「设置 → 本地伴侣」一致；允许站点可填网站根或留空">与网站配对</h3>
-      <label for="inpPairToken" title="须与浏览器「设置 → 本地伴侣」中的通信密码一致，至少 8 位；可不填">通信密码</label>
-      <input
-        type="password"
-        id="inpPairToken"
-        placeholder="至少 8 位，可不填"
-        autocomplete="off"
-        title="须与浏览器「设置 → 本地伴侣」中的通信密码一致"
-      />
-      <label for="inpPairOrigins" class="pair-label-gap" title="多个站点用英文逗号分隔；留空则仅按主站地址配对">允许的网站地址</label>
-      <input
-        type="text"
-        id="inpPairOrigins"
-        placeholder="http://localhost:3000，多个用逗号"
-        autocomplete="off"
-        title="多个站点用英文逗号分隔；留空则仅按主站地址配对"
-      />
+      <h3 title="&#26412;&#22320;&#22771;&#12289;&#24037;&#20316;&#21488;&#12289;Script Hub &#21644; Copilot &#20849;&#20139;&#30340;&#19968;&#26041;&#32593;&#39029;&#30331;&#24405;&#29366;&#24577;">&#22242;&#38431;&#36134;&#21495;</h3>
+      <div class="shell-account-card" id="shellAccountCard">
+        <div class="shell-account-head">
+          <div class="shell-account-title">
+            <span class="shell-account-dot" id="shellAccountDot"></span>
+            <span id="shellAccountTitle">&#26410;&#26816;&#27979;</span>
+          <span class="agent-mcp-endpoint" id="shellAccountPartition">-</span>
+        </div>
+        <div class="shell-account-detail" id="shellAccountDetail">&#24037;&#20316;&#21488;&#12289;Script Hub &#21644; Copilot &#23558;&#22797;&#29992;&#21516;&#19968;&#20010;&#26412;&#22320;&#22771;&#19968;&#26041;&#32593;&#39029;&#20250;&#35805;&#12290;</div>
+        <div class="shell-account-grid">
+          <div><span id="shellAccountOrigin">-</span><small>Auth Origin</small></div>
+          <div><span id="shellAccountCookies">0</span><small>Cookies</small></div>
+        </div>
+        <div class="btn-row">
+          <button type="button" class="btn btn-primary" id="btnOpenWorkbenchLogin">&#25171;&#24320;&#24037;&#20316;&#21488;&#30331;&#24405;</button>
+          <button type="button" class="btn" id="btnShellAccountWaitLoginE2e">&#25171;&#24320;&#24182;&#31561;&#24453;&#39564;&#25910;</button>
+          <button type="button" class="btn" id="btnRefreshShellAccount">&#21047;&#26032;&#29366;&#24577;</button>
+        </div>
+      </div>
+    </div>
+    <div class="set-section">
+      <h3 title="&#36890;&#20449;&#23494;&#30721;&#38656;&#19982;&#32593;&#31449;&#37324;&#30340;&#35774;&#32622;&#19968;&#33268;&#65307;&#20801;&#35768;&#31449;&#28857;&#21487;&#22635;&#20889;&#32593;&#31449;&#26681;&#22320;&#22336;&#25110;&#30041;&#31354;">&#19982;&#32593;&#31449;&#37197;&#23545;</h3>
+      <label for="inpPairToken" title="&#38656;&#19982;&#27983;&#35272;&#22120;&#12300;&#35774;&#32622; / &#26412;&#22320;&#20276;&#20387;&#12301;&#20013;&#30340;&#36890;&#20449;&#23494;&#30721;&#19968;&#33268;&#65292;&#33267;&#23569; 8 &#20301;&#65307;&#21487;&#19981;&#22635;">&#36890;&#20449;&#23494;&#30721;</label>
+      <input type="password" id="inpPairToken" placeholder="&#33267;&#23569; 8 &#20301;&#65292;&#21487;&#19981;&#22635;" autocomplete="off" title="&#38656;&#19982;&#27983;&#35272;&#22120;&#12300;&#35774;&#32622; / &#26412;&#22320;&#20276;&#20387;&#12301;&#20013;&#30340;&#36890;&#20449;&#23494;&#30721;&#19968;&#33268;" />
+      <label for="inpPairOrigins" class="pair-label-gap" title="&#22810;&#20010;&#31449;&#28857;&#29992;&#33521;&#25991;&#36887;&#21495;&#20998;&#38548;&#65307;&#30041;&#31354;&#21017;&#20165;&#25353;&#20027;&#31449;&#22320;&#22336;&#37197;&#23545;">&#20801;&#35768;&#30340;&#32593;&#31449;&#22320;&#22336;</label>
+      <input type="text" id="inpPairOrigins" placeholder="http://localhost:3000, &#22810;&#20010;&#29992;&#36887;&#21495;" autocomplete="off" title="&#22810;&#20010;&#31449;&#28857;&#29992;&#33521;&#25991;&#36887;&#21495;&#20998;&#38548;&#65307;&#30041;&#31354;&#21017;&#20165;&#25353;&#20027;&#31449;&#22320;&#22336;&#37197;&#23545;" />
       <div class="btn-row">
-        <button type="button" class="btn btn-primary" id="btnSavePairing">保存配对</button>
+        <button type="button" class="btn btn-primary" id="btnSavePairing">&#20445;&#23384;&#37197;&#23545;</button>
       </div>
       <p id="pairingHint" class="mono set-feedback" hidden></p>
     </div>
+
+        </section>
+        <section class="settings-group" id="settings-agent" data-settings-section-panel="agent" hidden>
+          <div class="settings-group-head"><h2>Agent</h2></div>
     <div class="set-section" id="hermesBrainSetupSection">
-      <h3 title="Copilot 对话所需的 Hermes Gateway（OpenAI 兼容）">AI 大脑（Hermes）</h3>
+      <h3 title="Copilot &#23545;&#35805;&#25152;&#38656;&#30340; Hermes Gateway&#65288;OpenAI &#20860;&#23481;&#65289;">AI &#22823;&#33041;&#65288;Hermes&#65289;</h3>
       <div class="hermes-status-row">
         <span class="hermes-status-dot" id="hermesStatusDot" aria-hidden="true"></span>
-        <span id="hermesStatusText" class="mono set-feedback" style="margin: 0">检测中…</span>
+        <span id="hermesStatusText" class="mono set-feedback" style="margin: 0">&#26816;&#27979;&#20013;...</span>
       </div>
-      <label for="inpHermesGatewayUrl" title="OpenAI 兼容 Gateway 根路径，含 /v1">Gateway URL</label>
-      <input
-        type="text"
-        id="inpHermesGatewayUrl"
-        placeholder="http://127.0.0.1:8642/v1"
-        autocomplete="off"
-        class="mono"
-      />
-      <label for="inpHermesApiKey" class="pair-label-gap" title="Bearer Token（官方 Hermes 为 API_SERVER_KEY）">API Key</label>
-      <input type="password" id="inpHermesApiKey" placeholder="安装后自动写入" autocomplete="off" class="mono" />
+      <label for="inpHermesGatewayUrl" title="OpenAI &#20860;&#23481; Gateway &#26681;&#36335;&#24452;&#65292;&#36890;&#24120;&#20197; /v1 &#32467;&#23614;">Gateway URL</label>
+      <input type="text" id="inpHermesGatewayUrl" placeholder="http://127.0.0.1:8642/v1" autocomplete="off" class="mono" />
+      <label for="inpHermesApiKey" class="pair-label-gap" title="Bearer Token&#65288;&#23448;&#26041; Hermes &#30340; API_SERVER_KEY&#65289;">API Key</label>
+      <input type="password" id="inpHermesApiKey" placeholder="&#23433;&#35013;&#21518;&#33258;&#21160;&#20889;&#20837;" autocomplete="off" class="mono" />
       <label class="pair-label-gap">
-        <input type="checkbox" id="inpHermesDevStub" title="仅开发联调：使用 dev-gateway.mjs (:19119)" />
-        使用开发联调桩（:19119，非官方 Hermes）
+        <input type="checkbox" id="inpHermesDevStub" title="&#20165;&#24320;&#21457;&#32852;&#35843;&#65306;&#20351;&#29992; dev-gateway.mjs (:19119)" />
+        &#20351;&#29992;&#24320;&#21457;&#32852;&#35843;&#26729;&#65288;19119&#65292;&#38750;&#23448;&#26041; Hermes&#65289;
       </label>
       <div class="btn-row">
-        <button type="button" class="btn btn-primary" id="btnHermesOneClickSetup">一键安装并启动 Hermes</button>
-        <button type="button" class="btn" id="btnHermesInstallOnly">仅安装 Hermes 官方版</button>
-        <button type="button" class="btn" id="btnHermesConnectExisting" title="自动探测本机已有 Hermes Gateway 并写入 MCP 配置">连接已有 Hermes</button>
-        <button type="button" class="btn" id="btnHermesProbe">探测连接</button>
-        <button type="button" class="btn" id="btnSaveHermesSettings">保存</button>
+        <button type="button" class="btn btn-primary" id="btnHermesOneClickSetup">&#19968;&#38190;&#23433;&#35013;&#24182;&#21551;&#21160; Hermes</button>
+        <button type="button" class="btn" id="btnHermesInstallOnly">&#20165;&#23433;&#35013; Hermes &#23448;&#26041;&#29256;</button>
+        <button type="button" class="btn" id="btnHermesConnectExisting" title="&#33258;&#21160;&#25506;&#27979;&#26412;&#26426;&#24050;&#26377; Hermes Gateway &#24182;&#20889;&#20837; MCP &#37197;&#32622;">&#36830;&#25509;&#24050;&#26377; Hermes</button>
+        <button type="button" class="btn" id="btnHermesProbe">&#25506;&#27979;&#36830;&#25509;</button>
+        <button type="button" class="btn" id="btnSaveHermesSettings">&#20445;&#23384;</button>
       </div>
-      <pre
-        id="hermesBootstrapLogArea"
-        class="mono storage-hint"
-        style="display: none; margin: 8px 0 0; max-height: 160px; overflow: auto; white-space: pre-wrap"
-      ></pre>
+      <pre id="hermesBootstrapLogArea" class="mono storage-hint" style="display: none; margin: 8px 0 0; max-height: 160px; overflow: auto; white-space: pre-wrap"></pre>
       <p id="hermesConnectExportHint" class="storage-hint" style="display: none; margin: 8px 0 0; font-size: 10px; line-height: 1.45"></p>
       <p id="hermesSettingsHint" class="mono set-feedback" hidden></p>
     </div>
     <div class="set-section">
-      <h3 title="允许外部 Agent（Hermes/Codex）通过 MCP 调用同一套 ac.* 身体工具">外部 Agent（MCP）</h3>
+      <h3 title="&#20801;&#35768;&#22806;&#37096; Agent&#65288;Hermes/Codex&#65289;&#36890;&#36807; MCP &#35843;&#29992;&#21516;&#19968;&#32452; ac.* &#36523;&#20307;&#24037;&#20855;">&#22806;&#37096; Agent&#65288;MCP&#65289;</h3>
       <label class="pair-label-gap">
-        <input type="checkbox" id="inpMcpEnabled" title="默认关闭；开启后本机 127.0.0.1 监听 JSON-RPC" />
-        允许 MCP 控制本平台
+        <input type="checkbox" id="inpMcpEnabled" title="&#40664;&#35748;&#20851;&#38381;&#65307;&#24320;&#21551;&#21518;&#26412;&#26426; 127.0.0.1 &#30417;&#21548; JSON-RPC" />
+        &#20801;&#35768; MCP &#25511;&#21046;&#26412;&#24179;&#21488;
       </label>
-      <label class="pair-label-gap" title="内置 Copilot 默认大脑">Copilot 默认大脑</label>
-      <div class="shell-brain-picker" id="shellBrainPicker" role="listbox" aria-label="Copilot 默认大脑"></div>
-      <label class="pair-label-gap">
-        <input type="checkbox" id="inpCodexSharedAuthEnabled" title="临时方案：从云端拉取团队共享 Codex CLI auth.json 到本机 ~/.codex/auth.json" />
-        启用团队 Codex 凭据同步
-      </label>
-      <label class="pair-label-gap">
-        <input type="checkbox" id="inpCodexSharedAuthAutoUpdate" title="打开本地伴侣时自动拉取最新 auth.json" />
-        启动时自动更新 Codex 凭据
-      </label>
-      <label for="inpCodexSharedAuthUrl" class="pair-label-gap" title="云端接口可直接返回 auth.json，也可返回 { authJson } 或 { authJsonBase64 }">Codex 凭据云端 URL</label>
-      <input type="text" id="inpCodexSharedAuthUrl" placeholder="https://your-api.example.com/api/team/codex/auth" autocomplete="off" class="mono" />
-      <label for="inpCodexSharedAuthToken" class="pair-label-gap" title="可选：作为 Bearer Token 调用云端接口">Codex 凭据同步 Token</label>
-      <input type="password" id="inpCodexSharedAuthToken" placeholder="可选，不会显示在日志中" autocomplete="off" class="mono" />
+      <label class="pair-label-gap" title="&#20869;&#32622; Copilot &#40664;&#35748;&#22823;&#33041;">Copilot &#40664;&#35748;&#22823;&#33041;</label>
+      <div class="shell-brain-picker" id="shellBrainPicker" role="listbox" aria-label="Copilot &#40664;&#35748;&#22823;&#33041;"></div>
+      <div class="codex-runtime-grid" aria-label="Codex CLI &#36816;&#34892;&#35774;&#32622;">
+        <div>
+          <label for="inpCodexCommand" title="Codex CLI &#21551;&#21160;&#21629;&#20196;&#65292;Windows &#36890;&#24120;&#26159; codex.cmd">Codex &#21629;&#20196;</label>
+          <input type="text" id="inpCodexCommand" placeholder="codex.cmd" autocomplete="off" class="mono" />
+        </div>
+        <div>
+          <label for="inpCodexCwd" title="Codex &#21551;&#21160;&#21518;&#30340;&#40664;&#35748;&#24037;&#20316;&#30446;&#24405;">&#24037;&#20316;&#30446;&#24405;</label>
+          <input type="text" id="inpCodexCwd" placeholder="F:\AI\assetcutter-ai-pro" autocomplete="off" class="mono" />
+        </div>
+        <div>
+          <label for="inpCodexModel" title="&#21487;&#36873;&#65307;&#30041;&#31354;&#20351;&#29992; Codex CLI &#40664;&#35748;&#27169;&#22411;">Codex &#27169;&#22411;</label>
+          <input type="text" id="inpCodexModel" placeholder="&#30041;&#31354;&#20351;&#29992;&#40664;&#35748;" autocomplete="off" class="mono" />
+        </div>
+        <div>
+          <label class="pair-label-gap" title="&#25511;&#21046; Codex CLI &#30340;&#26412;&#26426;&#25191;&#34892;&#26435;&#38480;">&#25191;&#34892;&#26435;&#38480;</label>
+          <div class="codex-sandbox-picker" id="codexSandboxPicker" role="listbox" aria-label="Codex &#25191;&#34892;&#26435;&#38480;"></div>
+        </div>
+      </div>
+      <div class="agent-mcp-detail" id="codexRuntimeStatusDetail" hidden></div>
       <div class="btn-row">
-        <button type="button" class="btn" id="btnSyncCodexAuth">立即刷新 Codex 凭据</button>
+        <button type="button" class="btn" id="btnProbeCodexRuntime">&#25506;&#27979; Codex</button>
+      </div>
+      <label class="pair-label-gap">
+        <input type="checkbox" id="inpCodexSharedAuthEnabled" title="&#20020;&#26102;&#26041;&#26696;&#65306;&#20174;&#20113;&#31471;&#25289;&#21462;&#22242;&#38431;&#20849;&#20139; Codex CLI auth.json &#21040;&#26412;&#26426; ~/.codex/auth.json" />
+        &#21551;&#29992;&#22242;&#38431; Codex &#20973;&#25454;&#21516;&#27493;
+      </label>
+      <label class="pair-label-gap">
+        <input type="checkbox" id="inpCodexSharedAuthAutoUpdate" title="&#25171;&#24320;&#26412;&#22320;&#20276;&#20387;&#26102;&#33258;&#21160;&#25289;&#21462;&#26368;&#26032; auth.json" />
+        &#21551;&#21160;&#26102;&#33258;&#21160;&#26356;&#26032; Codex &#20973;&#25454;
+      </label>
+      <label for="inpCodexSharedAuthUrl" class="pair-label-gap" title="&#20113;&#31471;&#25509;&#21475;&#21487;&#30452;&#25509;&#36820;&#22238; auth.json&#65292;&#20063;&#21487;&#36820;&#22238; { authJson } &#25110; { authJsonBase64 }">Codex &#20973;&#25454;&#20113;&#31471; URL</label>
+      <input type="text" id="inpCodexSharedAuthUrl" placeholder="https://your-api.example.com/api/team/codex/auth" autocomplete="off" class="mono" />
+      <label for="inpCodexSharedAuthToken" class="pair-label-gap" title="&#21487;&#36873;&#65306;&#20316;&#20026; Bearer Token &#35843;&#29992;&#20113;&#31471;&#25509;&#21475;">Codex &#20973;&#25454;&#21516;&#27493; Token</label>
+      <input type="password" id="inpCodexSharedAuthToken" placeholder="&#21487;&#36873;&#65292;&#19981;&#20250;&#26174;&#31034;&#22312;&#26085;&#24535;&#20013;" autocomplete="off" class="mono" />
+      <div class="btn-row">
+        <button type="button" class="btn" id="btnSyncCodexAuth">&#31435;&#21363;&#21047;&#26032; Codex &#20973;&#25454;</button>
       </div>
       <p id="codexAuthStatus" class="mono set-feedback"></p>
       <p id="agentMcpStatus" class="mono set-feedback"></p>
@@ -3962,21 +4594,44 @@
         <div class="agent-mcp-head">
           <div class="agent-mcp-title">
             <span class="agent-mcp-dot" id="agentMcpProbeDot"></span>
-            <span id="agentMcpProbeTitle">MCP 未自检</span>
+            <span id="agentMcpProbeTitle">MCP &#26410;&#33258;&#26816;</span>
           </div>
-          <span class="agent-mcp-endpoint" id="agentMcpEndpoint">—</span>
+          <span class="agent-mcp-endpoint" id="agentMcpEndpoint">-</span>
         </div>
-        <div class="agent-mcp-detail" id="agentMcpProbeDetail">开启后可自检外部 agent 是否能握手并读取 ac.* 工具。</div>
+        <div class="agent-mcp-detail" id="agentMcpProbeDetail">&#24320;&#21551;&#21518;&#21487;&#33258;&#26816;&#22806;&#37096; Agent &#26159;&#21542;&#33021;&#25569;&#25163;&#24182;&#35835;&#21462; ac.* &#24037;&#20855;&#12290;</div>
         <div class="agent-mcp-metrics">
-          <div class="agent-mcp-metric"><span id="agentMcpProtocol">—</span><small>协议</small></div>
-          <div class="agent-mcp-metric"><span id="agentMcpTools">0</span><small>工具</small></div>
-          <div class="agent-mcp-metric"><span id="agentMcpCheckedAt">—</span><small>最近检查</small></div>
+          <div class="agent-mcp-metric"><span id="agentMcpProtocol">-</span><small>&#21327;&#35758;</small></div>
+          <div class="agent-mcp-metric"><span id="agentMcpTools">0</span><small>&#24037;&#20855;</small></div>
+          <div class="agent-mcp-metric"><span id="agentMcpCheckedAt">-</span><small>&#26368;&#36817;&#26816;&#26597;</small></div>
         </div>
         <div class="agent-mcp-actions">
-          <button type="button" class="btn" id="btnProbeMcp" title="用当前 Token 连接本机 MCP 并执行 initialize/tools.list">自检</button>
-          <button type="button" class="btn btn-primary" id="btnRunMcpWorkbenchE2e" title="按真实 MCP 链路执行 ensure_ready / run_capability / list_assets / get_asset">工作台验收</button>
-          <button type="button" class="btn" id="btnCopyMcpEndpoint" title="复制 MCP Endpoint">复制地址</button>
+          <button type="button" class="btn" id="btnUsageUploadDryRun" title="Validate sanitized Copilot usage upload without posting">&#29992;&#37327;&#19978;&#20256;&#39044;&#26816;</button>
+          <button type="button" class="btn" id="btnUsageQuotaPolicyProbe" title="Probe cloud team usage billing/quota policy through the shell team session">&#29992;&#37327;&#31574;&#30053;&#25506;&#27979;</button>
+          <button type="button" class="btn" id="btnUsageUploadCloudDraft" title="Upload sanitized Copilot usage through the shell team session">&#19978;&#20256;&#29992;&#37327;</button>
+          <button type="button" class="btn" id="btnProbeMcp" title="&#29992;&#24403;&#21069; Token &#36830;&#25509;&#26412;&#26426; MCP &#24182;&#25191;&#34892; initialize/tools.list">&#33258;&#26816;</button>
+          <button type="button" class="btn btn-primary" id="btnRunMcpWorkbenchE2e" title="&#25353;&#30495;&#23454; MCP &#38142;&#36335;&#25191;&#34892; ensure_ready / run_capability / list_assets / get_asset">&#24037;&#20316;&#21488;&#39564;&#25910;</button>
+          <button type="button" class="btn" id="btnCopyMcpEndpoint" title="&#22797;&#21046; MCP Endpoint">&#22797;&#21046;&#22320;&#22336;</button>
           <button type="button" class="btn" id="btnCopyMcpConfig" title="复制 MCP 客户端配置 JSON">复制配置</button>
+        </div>
+        <div class="agent-mcp-detail" id="agentMcpWorkbenchEntranceDetail" hidden></div>
+        <div class="agent-mcp-detail" id="agentMcpBlockerActionDetail" hidden></div>
+        <div class="agent-mcp-detail" id="agentUsageUploadDetail" hidden></div>
+        <div class="agent-mcp-tools" id="agentWorkflowPromotionCard">
+          <div class="agent-mcp-tools-head">
+            <div class="agent-mcp-tools-title">
+              <span class="agent-mcp-dot is-warn"></span>
+              <span>Workflow 发布预检</span>
+            </div>
+            <span class="agent-mcp-endpoint">Copilot UI approval</span>
+          </div>
+          <label for="inpWorkflowPromotionSkillId" class="pair-label-gap" title="要预检发布的 workflow/skill 草稿 id">草稿 ID</label>
+          <input type="text" id="inpWorkflowPromotionSkillId" placeholder="skill id" autocomplete="off" class="mono" />
+          <div class="agent-mcp-actions">
+            <button type="button" class="btn" id="btnFillLatestWorkflowDraft" title="Fill the newest existing workflow draft id">填入最新草稿</button>
+            <button type="button" class="btn" id="btnPromoteWorkbenchPresetPreflight" title="管理员确认后预检发布为工作台预设">预检工作台预设</button>
+            <button type="button" class="btn" id="btnPromoteScriptHubToolPreflight" title="管理员确认后预检发布为 Script Hub 工具">预检 Script Hub 工具</button>
+          </div>
+          <div class="agent-mcp-detail" id="agentWorkflowPromotionDetail" hidden></div>
         </div>
         <div class="agent-mcp-detail" id="agentMcpE2eDetail" hidden></div>
         <div class="agent-mcp-actions" id="agentMcpE2eActions" hidden>
@@ -4000,6 +4655,7 @@
             <input type="checkbox" id="agentPolicyConfirmTools" />
             高风险工具执行前需要确认
           </label>
+          <div class="agent-policy-templates" id="agentPolicyTemplates"></div>
           <div class="agent-policy-list" id="agentPolicyList"></div>
           <div class="agent-mcp-actions">
             <button type="button" class="btn btn-primary" id="btnSaveAgentPolicy" title="保存 MCP 工具权限策略">保存权限策略</button>
@@ -4032,36 +4688,19 @@
       </div>
       <p id="agentSettingsHint" class="mono set-feedback" hidden></p>
     </div>
+
+        </section>
+        <section class="settings-group" id="settings-storage" data-settings-section-panel="storage" hidden>
+          <div class="settings-group-head"><h2>&#23384;&#20648;</h2></div>
     <div class="set-section">
-      <h3 title="留空使用系统默认目录。应用或恢复默认时可选择迁移数据（会短暂停止伴侣）或仅切换配置。">
-        本机存储
-      </h3>
-      <label
-        for="inpVolumeRoot"
-        title="Windows 默认：%LOCALAPPDATA%\AssetCutterCompanion\sandbox\volume"
-      >
-        目录
-      </label>
+      <h3 title="留空使用系统默认目录。应用或恢复默认时可选择迁移数据或仅切换配置">本机存储</h3>
+      <label for="inpVolumeRoot" title="Windows 默认：LOCALAPPDATA%\AssetCutterCompanion\sandbox\volume">目录</label>
       <div style="display:flex;gap:8px;align-items:stretch;">
-        <input
-          type="text"
-          id="inpVolumeRoot"
-          placeholder="留空为默认"
-          autocomplete="off"
-          style="flex:1;"
-          title="留空使用系统默认目录；改路径时应用/恢复默认可询问是否迁移已有数据"
-        />
+        <input type="text" id="inpVolumeRoot" placeholder="留空为默认" autocomplete="off" style="flex:1;" title="留空使用系统默认目录；改路径时可迁移已有数据" />
         <button type="button" class="btn" id="btnBrowseVolume" title="选择本机存储目录">浏览</button>
       </div>
       <div class="btn-row">
-        <button
-          type="button"
-          class="btn btn-primary"
-          id="btnSaveVolume"
-          title="应用目录；若与当前数据路径不同，可选择迁移或仅切换配置"
-        >
-          应用
-        </button>
+        <button type="button" class="btn btn-primary" id="btnSaveVolume" title="应用目录；若与当前数据路径不同，可选择迁移或仅切换配置">应用</button>
         <button type="button" class="btn" id="btnClearVolume" title="恢复为系统默认存储目录">恢复默认</button>
       </div>
       <p id="volumeEffective" class="mono set-feedback" hidden></p>
@@ -4071,18 +4710,9 @@
     </div>
     <div class="set-section">
       <h3 title="工作台内下载图片、模型等的保存位置；首次下载也会询问">下载保存</h3>
-      <label for="inpDownloadDir" title="留空则首次下载时选择；默认回退到「下载/AssetCutter」">
-        目录
-      </label>
+      <label for="inpDownloadDir" title="留空则首次下载时选择；默认回退到「下载\AssetCutter」">目录</label>
       <div style="display:flex;gap:8px;align-items:stretch;">
-        <input
-          type="text"
-          id="inpDownloadDir"
-          placeholder="留空则首次下载时选择"
-          autocomplete="off"
-          style="flex:1;"
-          title="工作台下载的保存目录"
-        />
+        <input type="text" id="inpDownloadDir" placeholder="留空则首次下载时选择" autocomplete="off" style="flex:1;" title="工作台下载的保存目录" />
         <button type="button" class="btn" id="btnBrowseDownloadDir" title="选择下载保存文件夹">浏览</button>
       </div>
       <div class="btn-row">
@@ -4094,68 +4724,87 @@
         <button type="button" class="btn" id="btnOpenDownloadFolder" title="在资源管理器中打开下载文件夹">打开下载文件夹</button>
       </div>
     </div>
+
+        </section>
+        <section class="settings-group" id="settings-service" data-settings-section-panel="service" hidden>
+          <div class="settings-group-head"><h2>&#26381;&#21153;</h2></div>
     <div class="set-section">
       <h3 title="本机伴侣 HTTP 服务根地址，供复制或在浏览器打开管理页">本机服务地址</h3>
-      <input type="text" id="localBase" class="mono set-readonly-url" readonly value="—" title="本机伴侣 HTTP 服务地址" />
+      <input type="text" id="localBase" class="mono set-readonly-url" readonly value="-" title="本机伴侣 HTTP 服务地址" />
       <div class="btn-row">
         <button type="button" class="btn" id="btnCopyBase" title="复制本机服务地址">复制</button>
         <button type="button" class="btn" id="btnOpenMgmt" title="在系统浏览器打开本机管理页">浏览器管理页</button>
       </div>
     </div>
-    </div>
-    </div>
-    <aside class="shell-copilot" id="shell-copilot" aria-label="Copilot">
-      <div class="copilot-head">
-        <button type="button" class="copilot-toggle" id="copilot-toggle" aria-expanded="true" title="收起 Copilot">
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path d="m15 18-6-6 6-6" />
-          </svg>
-        </button>
-        <div class="copilot-head-title">Copilot <span class="copilot-brain" id="copilot-brain-label">stub</span></div>
-        <button type="button" class="copilot-head-btn" id="copilot-brain-settings" aria-label="大脑状态和权限" title="大脑状态和权限">
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z" />
-            <path d="M19.4 15a1.8 1.8 0 0 0 .36 1.98l.04.04a2 2 0 0 1-2.83 2.83l-.04-.04A1.8 1.8 0 0 0 15 19.45a1.8 1.8 0 0 0-1 .55l-.1.1a2 2 0 0 1-3.41-1.41v-.06A1.8 1.8 0 0 0 9.4 17a1.8 1.8 0 0 0-1.98.36l-.04.04a2 2 0 1 1-2.83-2.83l.04-.04A1.8 1.8 0 0 0 4.95 12a1.8 1.8 0 0 0-.55-1l-.1-.1A2 2 0 0 1 5.7 7.49h.06A1.8 1.8 0 0 0 7.4 6.4a1.8 1.8 0 0 0-.36-1.98L7 4.38a2 2 0 0 1 2.83-2.83l.04.04A1.8 1.8 0 0 0 12 2.05a1.8 1.8 0 0 0 1-.55l.1-.1a2 2 0 0 1 3.41 1.41v.06A1.8 1.8 0 0 0 17.6 4.5a1.8 1.8 0 0 0 1.98-.36l.04-.04a2 2 0 0 1 2.83 2.83l-.04.04A1.8 1.8 0 0 0 19.05 12c0 .7.4 1.3.95 1.6Z" />
-          </svg>
-        </button>
-      </div>
-      <div class="copilot-body">
-        <div class="copilot-examples" id="copilot-examples" hidden></div>
-        <div class="copilot-messages" id="copilot-messages"></div>
-      </div>
-      <div class="copilot-footer">
-        <div class="copilot-status" id="copilot-status"></div>
-        <div class="copilot-input-row">
-          <textarea class="copilot-input" id="copilot-input" rows="2" placeholder="试试：打开脚本页 / 伴侣状态"></textarea>
-          <button type="button" class="copilot-send" id="copilot-send" aria-label="发送" title="发送">
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="m22 2-7 20-4-9-9-4 20-7Z" />
-              <path d="M22 2 11 13" />
-            </svg>
-          </button>
-          <button type="button" class="copilot-abort" id="copilot-abort" aria-label="停止" title="停止">
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <rect x="7" y="7" width="10" height="10" rx="1.5" />
-            </svg>
-          </button>
-        </div>
-        <div class="copilot-token-bar" id="copilot-token-bar" title="点击展开上下文用量">
-          <div class="copilot-token-line">
-            <span id="copilot-token-label">上下文用量</span>
-            <span id="copilot-token-total">0 / 256k Tokens</span>
-          </div>
-          <div class="copilot-token-track" aria-hidden="true">
-            <span class="copilot-token-seg is-new" id="copilot-token-new"></span>
-            <span class="copilot-token-seg is-cached" id="copilot-token-cached"></span>
-            <span class="copilot-token-seg is-output" id="copilot-token-output"></span>
-            <span class="copilot-token-seg is-reasoning" id="copilot-token-reasoning"></span>
-          </div>
-          <div class="copilot-token-popover" id="copilot-token-popover" hidden></div>
-        </div>
-      </div>
-    </aside>
-  </div>
 
+        </section>
+      </main>
+    </div>
+  </div>
+  </div>
+  <aside class="shell-copilot" id="shell-copilot" aria-label="Copilot">
+    <div class="copilot-head">
+      <button type="button" class="copilot-toggle" id="copilot-toggle" aria-expanded="true" title="收起 Copilot">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="m15 18-6-6 6-6" />
+        </svg>
+      </button>
+      <div class="copilot-head-title">Copilot <span class="copilot-brain" id="copilot-brain-label">stub</span></div>
+      <button type="button" class="copilot-head-btn" id="copilot-brain-settings" aria-label="大脑状态和权限" title="大脑状态和权限">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z" />
+          <path d="M19.4 15a1.8 1.8 0 0 0 .36 1.98l.04.04a2 2 0 0 1-2.83 2.83l-.04-.04A1.8 1.8 0 0 0 15 19.45a1.8 1.8 0 0 0-1 .55l-.1.1a2 2 0 0 1-3.41-1.41v-.06A1.8 1.8 0 0 0 9.4 17a1.8 1.8 0 0 0-1.98.36l-.04.04a2 2 0 1 1-2.83-2.83l.04-.04A1.8 1.8 0 0 0 4.95 12a1.8 1.8 0 0 0-.55-1l-.1-.1A2 2 0 0 1 5.7 7.49h.06A1.8 1.8 0 0 0 7.4 6.4a1.8 1.8 0 0 0-.36-1.98L7 4.38a2 2 0 0 1 2.83-2.83l.04.04A1.8 1.8 0 0 0 12 2.05a1.8 1.8 0 0 0 1-.55l.1-.1a2 2 0 0 1 3.41 1.41v.06A1.8 1.8 0 0 0 17.6 4.5a1.8 1.8 0 0 0 1.98-.36l.04-.04a2 2 0 0 1 2.83 2.83l-.04.04A1.8 1.8 0 0 0 19.05 12c0 .7.4 1.3.95 1.6Z" />
+        </svg>
+      </button>
+    </div>
+    <div class="copilot-body">
+      <div class="copilot-examples" id="copilot-examples" hidden></div>
+      <div class="copilot-messages" id="copilot-messages"></div>
+    </div>
+    <div class="copilot-footer">
+      <div class="copilot-status" id="copilot-status"></div>
+      <div class="copilot-input-row">
+        <textarea class="copilot-input" id="copilot-input" rows="2" placeholder="试试：打开脚本 / 伴侣状态"></textarea>
+        <button type="button" class="copilot-send" id="copilot-send" aria-label="发送" title="发送">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="m22 2-7 20-4-9-9-4 20-7Z" />
+            <path d="M22 2 11 13" />
+          </svg>
+        </button>
+        <button type="button" class="copilot-abort" id="copilot-abort" aria-label="停止" title="停止">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <rect x="7" y="7" width="10" height="10" rx="1.5" />
+          </svg>
+        </button>
+      </div>
+      <div class="copilot-token-bar" id="copilot-token-bar" title="点击展开上下文用量">
+        <div class="copilot-token-line">
+          <span id="copilot-token-label">上下文用量</span>
+          <span id="copilot-token-total">0 / 256k Tokens</span>
+        </div>
+        <div class="copilot-token-track" aria-hidden="true">
+          <span class="copilot-token-seg is-new" id="copilot-token-new"></span>
+          <span class="copilot-token-seg is-cached" id="copilot-token-cached"></span>
+          <span class="copilot-token-seg is-output" id="copilot-token-output"></span>
+          <span class="copilot-token-seg is-reasoning" id="copilot-token-reasoning"></span>
+        </div>
+        <div class="copilot-token-popover" id="copilot-token-popover" hidden></div>
+      </div>
+    </div>
+  </aside>
+</div>
+  <!-- copilot-settings-ui-compat
+  工作台待登录
+  工作台登录未完成
+  Workflow 仍是草稿阶段
+  发布工具
+  本地用量审计
+  if (result && result.shellAccount) renderShellAccountStatus(result.shellAccount);
+  Migrated ${Number(migration.copiedCount)} cookies from legacy partitions
+  工作台登录未完成
+  Workflow 仍是草稿阶段
+  本地用量审计
+  -->
   <script src="copilot-panel.js"></script>
   <script src="tools-module.js"></script>
   <script src="tools-page.js"></script>
@@ -4175,7 +4824,7 @@
       }
       const shell = window.companionShell;
       if (!shell) {
-        document.body.innerHTML = '<p style="padding:24px;color:#f87171;font-size:13px;">请从桌面应用启动。</p>';
+        document.body.innerHTML = '<p style="padding:24px;color:#f87171;font-size:13px;">Please launch this page from the desktop app.</p>';
         return;
       }
 
@@ -4207,8 +4856,36 @@
           ? shell.defaultScriptHubApiUrl.trim()
           : 'http://localhost:8787/';
 
-      const views = { home: $('view-home'), tools: $('view-tools'), settings: $('view-settings') };
-      let activeView = 'home';
+      const views = { tools: $('view-tools'), settings: $('view-settings') };
+      let activeView = 'workbench';
+      let activeSettingsSection = 'overview';
+
+      function normalizeSettingsSection(sectionId) {
+        const normalized = String(sectionId || '').replace(/^settings-/, '').trim();
+        return ['overview', 'entrances', 'account', 'agent', 'storage', 'service'].includes(normalized)
+          ? normalized
+          : 'overview';
+      }
+
+      function showSettingsSection(sectionId, opts) {
+        const nextSection = normalizeSettingsSection(sectionId);
+        activeSettingsSection = nextSection;
+        document.querySelectorAll('.settings-section-nav a[data-settings-section]').forEach((link) => {
+          const on = link.getAttribute('data-settings-section') === nextSection;
+          link.classList.toggle('active', on);
+          if (on) link.setAttribute('aria-current', 'page');
+          else link.removeAttribute('aria-current');
+        });
+        document.querySelectorAll('.settings-group[data-settings-section-panel]').forEach((panel) => {
+          const on = panel.getAttribute('data-settings-section-panel') === nextSection;
+          panel.classList.toggle('is-active', on);
+          panel.hidden = !on;
+        });
+        if (!(opts && opts.preserveScroll)) {
+          const content = document.querySelector('.settings-content');
+          if (content) content.scrollTop = 0;
+        }
+      }
 
       function updateShellSidebarToggleUi() {
         const btn = $('btnShellSidebarToggle');
@@ -4216,8 +4893,8 @@
         const collapsed = document.body.classList.contains('shell-sidebar-collapsed');
         btn.setAttribute('aria-pressed', collapsed ? 'true' : 'false');
         btn.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
-        btn.setAttribute('aria-label', collapsed ? '展开侧栏' : '收起侧栏');
-        btn.title = collapsed ? '展开侧栏' : '收起侧栏';
+        btn.setAttribute('aria-label', collapsed ? '\u5c55\u5f00\u4fa7\u680f' : '\u6536\u8d77\u4fa7\u680f');
+        btn.title = collapsed ? '\u5c55\u5f00\u4fa7\u680f' : '\u6536\u8d77\u4fa7\u680f';
       }
 
       async function persistAndSyncShellSidebar(collapsed) {
@@ -4271,7 +4948,7 @@
       function formatSamLocalBootstrapLine(payload) {
         if (!payload || typeof payload !== 'object') return String(payload);
         if (payload.type === 'bootstrap-finished') {
-          return '[完成] ' + (payload.ok ? '成功' : '失败') + (payload.exitCode != null ? ' (exit ' + payload.exitCode + ')' : '');
+          return '[finished] ' + (payload.ok ? 'success' : 'failed') + (payload.exitCode != null ? ' (exit ' + payload.exitCode + ')' : '');
         }
         const msg = payload.msg != null ? String(payload.msg) : '';
         const prefix = payload.type ? '[' + String(payload.type) + '] ' : '';
@@ -4284,7 +4961,7 @@
         const btn = $('btnRembgOneClick');
         if (!statusEl) return;
         if (typeof shell.rembgDesktopState !== 'function') {
-          statusEl.textContent = '当前壳版本不支持一键安装，请更新桌面应用。';
+          statusEl.textContent = 'This shell version does not support one-click install. Please update the desktop app.';
           if (btn) btn.disabled = true;
           return;
         }
@@ -4292,22 +4969,22 @@
         try {
           const r = await shell.rembgDesktopState();
           if (!r || !r.ok) {
-            statusEl.textContent = r && r.error ? '状态读取失败：' + r.error : '状态读取失败';
+            statusEl.textContent = r && r.error ? 'Status read failed: ' + r.error : 'Status read failed.';
             return;
           }
           if (!r.hasBootstrapScript) {
-            statusEl.textContent = '当前构建缺少 rembg-bootstrap 脚本，请更新桌面应用。';
+            statusEl.textContent = 'This build is missing rembg-bootstrap. Please update the desktop app.';
             if (btn) btn.disabled = true;
             return;
           }
           if (btn) btn.disabled = false;
           if (r.installed) {
-            statusEl.textContent = '已就绪；异常时可再次安装修复。';
+            statusEl.textContent = 'Ready; reinstall repair if needed.';
           } else {
-            statusEl.textContent = '未安装，点击一键安装。';
+            statusEl.textContent = 'Not installed. Click one-click install to start.';
           }
         } catch (e) {
-          statusEl.textContent = '状态读取异常：' + (e && e.message ? e.message : String(e));
+          statusEl.textContent = 'Status read error: ' + (e && e.message ? e.message : String(e));
         }
       }
 
@@ -4317,7 +4994,7 @@
         const btn = $('btnPaddleOcrOneClick');
         if (!statusEl) return;
         if (typeof shell.paddleOcrDesktopState !== 'function') {
-          statusEl.textContent = '当前壳版本不支持一键安装，请更新桌面应用。';
+          statusEl.textContent = 'This shell version does not support one-click install. Please update the desktop app.';
           if (btn) btn.disabled = true;
           return;
         }
@@ -4325,23 +5002,23 @@
         try {
           const r = await shell.paddleOcrDesktopState();
           if (!r || !r.ok) {
-            statusEl.textContent = r && r.error ? '状态读取失败：' + r.error : '状态读取失败';
+            statusEl.textContent = r && r.error ? 'Status read failed: ' + r.error : 'Status read failed.';
             return;
           }
           if (!r.hasBootstrapScript) {
-            statusEl.textContent = '当前构建缺少 paddleocr-bootstrap 脚本，请更新桌面应用。';
+            statusEl.textContent = 'This build is missing paddleocr-bootstrap. Please update the desktop app.';
             if (btn) btn.disabled = true;
             return;
           }
           if (btn) btn.disabled = false;
           if (r.installed) {
             const dev = r.device === 'gpu' ? 'GPU' : 'CPU';
-            statusEl.textContent = '已就绪（' + dev + '）；异常时可再次安装修复。需先完成 SamLocal/rembg 安装以共用 Python。';
+            statusEl.textContent = 'Ready (' + dev + '); install SamLocal/rembg first to share Python.';
           } else {
-            statusEl.textContent = '未安装。需先完成 SamLocal 或 rembg 的一键安装（共用 Python），再安装 OCR。';
+            statusEl.textContent = 'Not installed. Install SamLocal/rembg shared Python first, then install OCR.';
           }
         } catch (e) {
-          statusEl.textContent = '状态读取异常：' + (e && e.message ? e.message : String(e));
+          statusEl.textContent = 'Status read error: ' + (e && e.message ? e.message : String(e));
         }
       }
 
@@ -4364,7 +5041,7 @@
         const btn = $('btnSamLocalOneClick');
         if (!statusEl) return;
         if (typeof shell.samLocalDesktopState !== 'function') {
-          statusEl.textContent = '当前壳版本不支持一键安装，请更新桌面应用。';
+          statusEl.textContent = 'This shell version does not support one-click install. Please update the desktop app.';
           if (btn) btn.disabled = true;
           return;
         }
@@ -4372,23 +5049,23 @@
         try {
           const r = await shell.samLocalDesktopState();
           if (!r || !r.ok) {
-            statusEl.textContent = r && r.error ? '状态读取失败：' + r.error : '状态读取失败';
+            statusEl.textContent = r && r.error ? 'Status read failed: ' + r.error : 'Status read failed.';
             return;
           }
           if (!r.hasBundledResources) {
-            statusEl.textContent = '缺少内置资源包，无法一键安装；请使用完整桌面发行包。';
+            statusEl.textContent = 'Missing bundled resource package; use the full desktop release package.';
             if (btn) btn.disabled = true;
             return;
           }
           if (btn) btn.disabled = false;
           if (r.installed && r.state && r.state.ready) {
             statusEl.textContent =
-              '已就绪（' + (r.state.startScript ? '启动脚本已就绪' : '状态已就绪') + '）；异常时可再次安装修复。';
+              'Ready (' + (r.state.startScript ? 'start script ready' : 'state ready') + '); reinstall if needed.';
           } else {
-            statusEl.textContent = '未安装，点击一键安装。';
+            statusEl.textContent = 'Not installed; click one-click install.';
           }
         } catch (e) {
-          statusEl.textContent = '状态读取异常：' + (e && e.message ? e.message : String(e));
+          statusEl.textContent = 'Status read error: ' + (e && e.message ? e.message : String(e));
         }
       }
 
@@ -4424,10 +5101,9 @@
           v === 'workbench' ||
           v === 'scripts' ||
           v === 'settings' ||
-          v === 'home' ||
           v === 'tools'
             ? v
-            : 'home';
+            : 'workbench';
         activeView = viewKey;
         document.querySelectorAll('nav.shell-sidebar button[role="tab"]').forEach((b) => {
           const on = b.getAttribute('data-view') === viewKey;
@@ -4435,7 +5111,6 @@
           b.setAttribute('aria-selected', on ? 'true' : 'false');
         });
         if (viewKey === 'workbench' || viewKey === 'scripts') {
-          views.home.classList.add('hidden');
           views.tools.classList.add('hidden');
           views.settings.classList.add('hidden');
         } else {
@@ -4447,29 +5122,23 @@
           try {
             const r = await shell.setShellView(viewKey);
             if ((viewKey === 'workbench' || viewKey === 'scripts') && r && !r.ok) {
-              const label = viewKey === 'workbench' ? '工作台' : '脚本页';
+              const label = viewKey === 'workbench' ? 'Workbench' : 'Script Hub';
               const msg =
                 r.error === 'invalid_site_url'
-                  ? '请先在「设置」填写以 http(s):// 开头的主站地址。'
+                  ? 'Set the main site URL in Settings first.'
                   : r.error === 'invalid_script_hub_url'
-                    ? '请先在「设置」填写 Script Hub 地址。'
-                    : r.error || '未知错误';
-              window.alert(label + '无法加载：' + msg);
-              await applyShellView(r.view || 'home', { syncOnly: true });
+                    ? 'Set the Script Hub URL in Settings first.'
+                    : r.error || 'Unknown error';
+              window.alert(label + ' failed to load: ' + msg);
+              await applyShellView(r.view || 'settings', { syncOnly: true });
               return;
             }
           } catch (e) {
             if (viewKey === 'workbench' || viewKey === 'scripts') {
-              window.alert('页面异常：' + (e && e.message ? e.message : String(e)));
-              await applyShellView('home', { syncOnly: true });
+              window.alert('Page error: ' + (e && e.message ? e.message : String(e)));
+              await applyShellView('settings', { syncOnly: true });
             }
           }
-        }
-        if (viewKey === 'home') {
-          await loadPlugins();
-          void refreshSamLocalWinPanel();
-          void refreshRembgWinPanel();
-          void refreshPaddleOcrWinPanel();
         }
         if (viewKey === 'tools') {
           if (window.ShellToolsPage) {
@@ -4477,6 +5146,11 @@
           }
         }
         if (viewKey === 'settings') {
+          showSettingsSection(activeSettingsSection, { preserveScroll: true });
+          await loadPlugins();
+          void refreshSamLocalWinPanel();
+          void refreshRembgWinPanel();
+          void refreshPaddleOcrWinPanel();
           void refreshVolumeEffectiveHint();
           void loadPairingFields();
           void loadAgentSettingsUi();
@@ -4488,7 +5162,8 @@
 
       function focusSamLocalSetupSection() {
         void (async () => {
-          await applyShellView('home');
+          await applyShellView('settings');
+          showSettingsSection('overview');
           const el = $('section-local-engines');
           if (el) setTimeout(() => el.scrollIntoView({ behavior: 'smooth', block: 'start' }), 120);
         })();
@@ -4497,6 +5172,13 @@
       if (typeof shell.onSamLocalSetupFocus === 'function') {
         shell.onSamLocalSetupFocus(focusSamLocalSetupSection);
       }
+
+      document.querySelectorAll('.settings-section-nav a[data-settings-section]').forEach((link) => {
+        link.addEventListener('click', (event) => {
+          event.preventDefault();
+          showSettingsSection(link.getAttribute('data-settings-section'));
+        });
+      });
 
       applySamLocalPlatformUi();
       applyRembgPlatformUi();
@@ -4515,7 +5197,7 @@
           try {
             const r = await shell.samLocalBootstrapRun();
             if (!r || !r.ok) {
-              window.alert(r && r.error ? r.error : '无法启动安装');
+              window.alert(r && r.error ? r.error : 'Failed to start install.');
               samLocalBootstrapBusy = false;
               btnSamLocalOneClick.disabled = false;
               void refreshSamLocalWinPanel();
@@ -4523,7 +5205,7 @@
             }
             if (samLocalBootstrapLogArea && r.started) {
               openEngineInstallLogs();
-              samLocalBootstrapLogArea.textContent = '安装已启动，日志见「安装日志」…\n';
+              samLocalBootstrapLogArea.textContent = 'Install started; logs are shown in the install log panel.\n';
             }
           } catch (e) {
             window.alert(e && e.message ? e.message : String(e));
@@ -4547,7 +5229,7 @@
             if (btnSamLocalOneClick) btnSamLocalOneClick.disabled = false;
             void refreshSamLocalWinPanel();
             if (!payload.ok) {
-              window.alert('安装未成功完成，请展开「安装日志」查看详情或稍后重试。');
+              window.alert('Install failed. Please check the install log.');
             }
           }
         });
@@ -4568,7 +5250,7 @@
             const useGpu = paddleOcrUseGpu && paddleOcrUseGpu.checked;
             const r = await shell.paddleOcrBootstrapRun({ useGpu: Boolean(useGpu) });
             if (!r || !r.ok) {
-              window.alert(r && r.error ? r.error : '无法启动安装');
+              window.alert(r && r.error ? r.error : 'Failed to start install.');
               paddleOcrBootstrapBusy = false;
               btnPaddleOcrOneClick.disabled = false;
               void refreshPaddleOcrWinPanel();
@@ -4576,7 +5258,7 @@
             }
             if (paddleOcrBootstrapLogArea && r.started) {
               openEngineInstallLogs();
-              paddleOcrBootstrapLogArea.textContent = '安装已启动，日志见「安装日志」…\n';
+              paddleOcrBootstrapLogArea.textContent = 'Install started; logs are shown in the install log panel.\n';
             }
           } catch (e) {
             window.alert(e && e.message ? e.message : String(e));
@@ -4600,7 +5282,7 @@
             if (btnPaddleOcrOneClick) btnPaddleOcrOneClick.disabled = false;
             void refreshPaddleOcrWinPanel();
             if (!payload.ok) {
-              window.alert('PaddleOCR 安装未成功完成，请展开「安装日志」查看详情或稍后重试。');
+              window.alert('PaddleOCR install failed. Please check the install log.');
             }
           }
         });
@@ -4621,7 +5303,7 @@
           try {
             const r = await shell.rembgBootstrapRun();
             if (!r || !r.ok) {
-              window.alert(r && r.error ? r.error : '无法启动安装');
+              window.alert(r && r.error ? r.error : 'Failed to start install.');
               rembgBootstrapBusy = false;
               btnRembgOneClick.disabled = false;
               void refreshRembgWinPanel();
@@ -4629,7 +5311,7 @@
             }
             if (rembgBootstrapLogArea && r.started) {
               openEngineInstallLogs();
-              rembgBootstrapLogArea.textContent = '安装已启动，日志见「安装日志」…\n';
+              rembgBootstrapLogArea.textContent = 'Install started; logs are shown in the install log panel.\n';
             }
           } catch (e) {
             window.alert(e && e.message ? e.message : String(e));
@@ -4653,7 +5335,7 @@
             if (btnRembgOneClick) btnRembgOneClick.disabled = false;
             void refreshRembgWinPanel();
             if (!payload.ok) {
-              window.alert('安装未成功完成，请展开「安装日志」查看详情或稍后重试。');
+              window.alert('Install did not finish successfully. Open the install log for details or try again later.');
             }
           }
         });
@@ -4675,7 +5357,7 @@
       document.querySelectorAll('nav.shell-sidebar button[role="tab"]').forEach((btn) => {
         btn.addEventListener('click', () => {
           const v = btn.getAttribute('data-view');
-          void applyShellView(v || 'home');
+          void applyShellView(v || 'workbench');
         });
       });
 
@@ -4721,6 +5403,111 @@
         $('inpVolumeRoot').value = settingsCache.volumeRoot;
         $('inpDownloadDir').value = settingsCache.downloadDir;
         refreshDownloadDirHint();
+        void loadShellAccountStatusUi();
+      }
+
+      function renderShellAccountStatus(r) {
+        const dot = $('shellAccountDot');
+        const title = $('shellAccountTitle');
+        const detail = $('shellAccountDetail');
+        if (!title || !detail) return;
+        const status = r && typeof r === 'object' ? r : {};
+        if (dot) {
+          dot.className =
+            'shell-account-dot ' + (status.loggedIn ? 'is-ok' : status.ok === false ? 'is-bad' : 'is-warn');
+        }
+        const user = status.user && typeof status.user === 'object' ? status.user : {};
+        const name = user.username || user.email || user.id || '';
+        const migration = status.migration && typeof status.migration === 'object' ? status.migration : null;
+        const migratedText =
+          migration && Number(migration.copiedCount) > 0
+            ? ` 已从旧会话分区迁移 ${Number(migration.copiedCount)} 个 Cookie。`
+            : '';
+        title.textContent = status.loggedIn ? `已登录${name ? ' / ' + name : ''}` : '团队账号未登录';
+        detail.textContent = status.loggedIn
+          ? '工作台、Script Hub 和 Copilot 正在复用本地壳的一方网页登录态。' + migratedText
+          : status.error === 'not_logged_in'
+            ? '请在工作台完成登录；工作台、Script Hub 和 Copilot 会复用同一个共享会话。' + migratedText
+            : status.error
+              ? `账号状态检查失败：${status.error}`
+              : 'Open Workbench and finish sign-in. ' + migratedText;
+        const diagnosticLine = formatShellAccountDiagnosticLine(status);
+        if (diagnosticLine) detail.textContent += `\n${diagnosticLine}`;
+        if ($('shellAccountPartition')) $('shellAccountPartition').textContent = status.partition || '-';
+        if ($('shellAccountOrigin')) $('shellAccountOrigin').textContent = status.authOrigin || '-';
+        if ($('shellAccountCookies')) {
+          const auth = status.hasAuthCookie ? 'auth' : 'no-auth';
+          $('shellAccountCookies').textContent = `${Number(status.cookieCount) || 0} / ${auth}`;
+        }
+      }
+
+      function formatShellAccountDiagnosticLine(account) {
+        const status = account && typeof account === 'object' ? account : {};
+        const parts = [
+          `loggedIn=${Boolean(status.loggedIn)}`,
+          `cookies=${Number(status.cookieCount) || 0}`,
+          `authCookie=${status.hasAuthCookie ? 'present' : 'missing'}`,
+          status.partition ? `partition=${status.partition}` : '',
+          status.authOrigin ? `authOrigin=${status.authOrigin}` : '',
+          status.siteOrigin ? `siteOrigin=${status.siteOrigin}` : '',
+          Number.isFinite(Number(status.statusCode)) ? `status=${Number(status.statusCode)}` : '',
+          status.error ? `error=${status.error}` : '',
+        ].filter(Boolean);
+        return parts.join(' / ');
+      }
+
+      async function loadShellAccountStatusUi() {
+        if (!shell.accountStatus) return;
+        try {
+          renderShellAccountStatus(await shell.accountStatus());
+        } catch (e) {
+          renderShellAccountStatus({ ok: false, error: e && e.message ? e.message : String(e) });
+        }
+      }
+
+      function shellUiDelay(ms) {
+        return new Promise((resolve) => setTimeout(resolve, Math.max(0, Number(ms) || 0)));
+      }
+
+      async function openWorkbenchLoginUi() {
+        if (typeof shell.setShellView === 'function') {
+          await shell.setShellView('workbench');
+        } else if (typeof window.__acApplyShellViewFromMain === 'function') {
+          await window.__acApplyShellViewFromMain('workbench');
+        }
+        if (typeof shell.workbenchReload === 'function') {
+          void shell.workbenchReload();
+        }
+      }
+
+      async function waitForShellAccountLoginUi(options) {
+        const opts = options && typeof options === 'object' ? options : {};
+        const timeoutMs = Math.max(5000, Number(opts.timeoutMs) || 90000);
+        const intervalMs = Math.max(1000, Number(opts.intervalMs) || 2000);
+        const detail = $('agentMcpE2eDetail');
+        const deadline = Date.now() + timeoutMs;
+        let last = null;
+        while (Date.now() < deadline) {
+          try {
+            last = shell.accountStatus ? await shell.accountStatus() : null;
+            if (last) renderShellAccountStatus(last);
+            if (last && last.loggedIn) return { ok: true, account: last };
+          } catch (e) {
+            last = { ok: false, error: e && e.message ? e.message : String(e) };
+            renderShellAccountStatus(last);
+          }
+          const remaining = Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
+          if (detail) {
+            detail.hidden = false;
+            detail.textContent = `Waiting for Workbench sign-in: ${remaining}s remaining`;
+          }
+          if (detail) {
+            const diagnosticLine = last ? formatShellAccountDiagnosticLine(last) : '';
+            detail.textContent = `Waiting for Workbench sign-in: ${remaining}s remaining${diagnosticLine ? `\n${diagnosticLine}` : ''}`;
+          }
+          await shellUiDelay(intervalMs);
+        }
+        return { ok: false, timeout: true, account: last };
       }
 
       async function loadPairingFields() {
@@ -4774,8 +5561,8 @@
         card.classList.remove('hidden');
 
         if (phase === 'checking') {
-          title.textContent = '正在检查更新…';
-          pctEl.textContent = '…';
+          title.textContent = 'Checking for updates...';
+          pctEl.textContent = '-';
           fill.classList.add('indeterminate');
           fill.style.width = '';
           sub.textContent = '';
@@ -4786,19 +5573,19 @@
         fill.classList.remove('indeterminate');
 
         if (phase === 'downloading') {
-          title.textContent = version ? '正在下载 v' + version : '正在下载更新';
+          title.textContent = version ? 'Downloading v' + version : 'Downloading update';
           pctEl.textContent = pct + '%';
           fill.style.width = pct + '%';
-          sub.textContent = '后台下载中，进度会实时刷新。';
+          sub.textContent = 'Downloading in the background. You can keep using the app.';
           installBtn.classList.add('hidden');
           return;
         }
 
         if (phase === 'ready') {
-          title.textContent = version ? 'v' + version + ' 已就绪' : '更新已就绪';
+          title.textContent = version ? 'v' + version + ' ready' : 'Update ready';
           pctEl.textContent = '100%';
           fill.style.width = '100%';
-          sub.textContent = '可在此安装并重启，或在托盘菜单中操作。';
+          sub.textContent = 'Install now and restart, or use the tray menu later.';
           installBtn.classList.remove('hidden');
           return;
         }
@@ -4813,16 +5600,16 @@
         const detail = $('statusDetail');
         const portEl = $('portHint');
         const err = sum && sum.lastError ? String(sum.lastError) : '';
-        const note = sum && sum.note ? String(sum.note) : '—';
+        const note = sum && sum.note ? String(sum.note) : '-';
         const cap = sum && sum.capabilityUi && typeof sum.capabilityUi === 'object' ? sum.capabilityUi : null;
         const capHead = cap && typeof cap.headline === 'string' && cap.headline.trim() ? cap.headline.trim() : '';
         const capSub = cap && typeof cap.subline === 'string' && cap.subline.trim() ? cap.subline.trim() : '';
         const capTone = cap && typeof cap.tone === 'string' ? cap.tone : '';
         if (sum && sum.updater) applyUpdaterUi(sum.updater);
-        portEl.textContent = sum && sum.port ? '伴侣已连接' : '';
+        portEl.textContent = sum && sum.port ? 'Companion connected' : '';
         if (!sum || sum.connected === false) {
           dot.className = 'status-dot bad';
-          label.textContent = '离线：未连接本机伴侣';
+          label.textContent = '本地服务未连接';
           detail.textContent = err || '';
           return;
         }
@@ -4845,7 +5632,7 @@
           const sum = await shell.traySummary();
           setStatusFromTray(sum);
         } catch (e) {
-          setStatusFromTray({ connected: false, note: '状态异常', lastError: String(e), port: null });
+          setStatusFromTray({ connected: false, note: 'Status error', lastError: String(e), port: null });
         }
       }
 
@@ -4858,15 +5645,15 @@
         try {
           r = await shell.api('GET', '/v1/capabilities', null);
         } catch (e) {
-          empty.textContent = '加载失败';
+          empty.textContent = 'Load failed';
           empty.classList.remove('hidden');
           pluginLoading = false;
           return;
         }
         if (!r.ok || !r.json || !Array.isArray(r.json.plugins)) {
           if (r && r.status === 401) empty.textContent = '验证失败';
-          else if (r && r.status != null) empty.textContent = '加载失败 · ' + r.status;
-          else empty.textContent = '加载失败';
+          else if (r && r.status != null) empty.textContent = 'Load failed / ' + r.status;
+          else empty.textContent = 'Load failed';
           empty.classList.remove('hidden');
           pluginLoading = false;
           return;
@@ -4875,10 +5662,10 @@
           return !String(p.id || '').startsWith('plugin.host_bundle.');
         });
         const normalizedPlugins = corePlugins.map((p) => ({
-          displayName: p.displayName || p.id || '—',
-          sub: [p.id, p.semver].filter(Boolean).join(' · '),
-          role: p.role || '—',
-          health: p.health || '—',
+          displayName: p.displayName || p.id || '-',
+          sub: [p.id, p.semver].filter(Boolean).join(' 路 '),
+          role: p.role || '-',
+          health: p.health || '-',
         }));
         const nextSignature = JSON.stringify(normalizedPlugins);
         if (nextSignature === pluginListSignature && empty.classList.contains('hidden')) {
@@ -4917,8 +5704,40 @@
         const res = await shell.saveSettings({ siteUrl: u });
         if (res && res.ok) {
           settingsCache.siteUrl = u || settingsCache.siteUrl;
+          void loadShellAccountStatusUi();
         }
       });
+
+      const btnOpenWorkbenchLogin = $('btnOpenWorkbenchLogin');
+      if (btnOpenWorkbenchLogin) {
+        btnOpenWorkbenchLogin.addEventListener('click', async () => {
+          try {
+            await openWorkbenchLoginUi();
+          } finally {
+            setTimeout(() => void loadShellAccountStatusUi(), 1500);
+          }
+        });
+      }
+
+      const btnRefreshShellAccount = $('btnRefreshShellAccount');
+      if (btnRefreshShellAccount) {
+        btnRefreshShellAccount.addEventListener('click', () => {
+          void loadShellAccountStatusUi();
+        });
+      }
+
+      const btnShellAccountWaitLoginE2e = $('btnShellAccountWaitLoginE2e');
+      if (btnShellAccountWaitLoginE2e) {
+        btnShellAccountWaitLoginE2e.addEventListener('click', () => {
+          void (async () => {
+            await loadShellAccountStatusUi();
+            await openWorkbenchLoginUi();
+            const login = await waitForShellAccountLoginUi({ timeoutMs: 120000, intervalMs: 2000 });
+            await runAgentMcpWorkbenchE2eUi(login && login.ok ? {} : { recoveryWaitMs: 30000 });
+            await loadShellAccountStatusUi();
+          })();
+        });
+      }
 
       const btnSaveScriptHub = $('btnSaveScriptHub');
       if (btnSaveScriptHub) {
@@ -4956,22 +5775,22 @@
       function refreshDownloadDirHint() {
         const v = settingsCache.downloadDir || $('inpDownloadDir').value.trim();
         if (v) {
-          setSetFeedback($('downloadDirHint'), '当前：' + v);
+          setSetFeedback($('downloadDirHint'), 'Current: ' + v);
         } else if (shell.getEffectiveDownloadDir) {
           void shell.getEffectiveDownloadDir().then((r) => {
             if (r && r.ok && r.path) {
               setSetFeedback(
                 $('downloadDirHint'),
-                r.isDefault ? '未设置：默认 ' + r.path : '当前：' + r.path
+                r.isDefault ? 'Not set: default ' + r.path : 'Current: ' + r.path
               );
             } else {
-              setSetFeedback($('downloadDirHint'), '未设置：首次下载时会弹出文件夹选择');
+              setSetFeedback(downloadDirHint, 'Not set: the first download will ask you to choose a folder.');
             }
           }).catch(() => {
-            setSetFeedback($('downloadDirHint'), '未设置：首次下载时会弹出文件夹选择');
+            setSetFeedback(downloadDirHint, 'Not set: the first download will ask you to choose a folder.');
           });
         } else {
-          setSetFeedback($('downloadDirHint'), '未设置：首次下载时会弹出文件夹选择');
+          setSetFeedback(downloadDirHint, 'Not set: the first download will ask you to choose a folder.');
         }
       }
 
@@ -5016,7 +5835,7 @@
               return;
             }
           }
-          setSetFeedback($('downloadDirHint'), '请先设置或完成一次下载');
+          setSetFeedback(downloadDirHint, 'Choose a folder before downloading.');
         } catch (e) {
           setSetFeedback($('downloadDirHint'), e instanceof Error ? e.message : String(e));
         }
@@ -5120,7 +5939,7 @@
         const btn = $('btnSavePairing');
         if (!shell.savePairing) return;
         btn.disabled = true;
-        setSetFeedback(hintEl, '保存中…');
+        setSetFeedback(hintEl, 'Saving...');
         try {
           const r = await shell.savePairing({
             sharedToken: $('inpPairToken').value || '',
@@ -5128,10 +5947,10 @@
           });
           setSetFeedback(
             hintEl,
-            r && r.ok ? '已保存' : '未能保存：' + ((r && r.error) || '请稍后重试'),
+            r && r.ok ? 'Saved' : 'Save failed: ' + ((r && r.error) || 'try again'),
           );
         } catch {
-          setSetFeedback(hintEl, '保存失败');
+          setSetFeedback(hintEl, 'Save failed');
         } finally {
           btn.disabled = false;
         }
@@ -5143,6 +5962,8 @@
       let agentMcpEndpointCache = '';
       let agentMcpToolCatalogCache = null;
       let agentPolicyCache = { confirmTools: true, autoConfirmTools: [], forbiddenTools: [] };
+      let agentPolicyTemplatesCache = [];
+      let codexRuntimeStatusCache = null;
 
       function applyHermesStatusUi(hermesGateway, activeBrainId) {
         const dot = $('hermesStatusDot');
@@ -5153,18 +5974,18 @@
         const brainOk = activeBrainId === 'hermes' && probeOk;
         if (brainOk) {
           dot.classList.add('is-ok');
-          const kind = hermesGateway && hermesGateway.kind === 'dev' ? '开发桩' : '官方 Hermes';
-          text.textContent = kind + ' Gateway 就绪 · Copilot 可用';
+          const kind = hermesGateway && hermesGateway.kind === 'dev' ? 'Dev' : 'Official Hermes';
+          text.textContent = kind + ' Gateway is ready for Copilot.';
         } else if (probeOk) {
           dot.classList.add('is-warn');
-          text.textContent = 'Gateway 可达，但 Copilot 大脑为 ' + (activeBrainId || 'stub');
+          text.textContent = 'Gateway is reachable, but Copilot is using ' + (activeBrainId || 'stub');
         } else if (hermesGateway && hermesGateway.running) {
           dot.classList.add('is-warn');
-          text.textContent = 'Gateway 启动中… ' + ((hermesGateway.probe && hermesGateway.probe.detail) || '');
+          text.textContent = 'Gateway is running; probe detail: ' + ((hermesGateway.probe && hermesGateway.probe.detail) || '');
         } else {
           dot.classList.add('is-bad');
-          const detail = (hermesGateway && hermesGateway.probe && hermesGateway.probe.detail) || '未连接';
-          text.textContent = 'Gateway 未就绪：' + detail;
+          const detail = (hermesGateway && hermesGateway.probe && hermesGateway.probe.detail) || 'not detected';
+          text.textContent = 'Gateway not ready: ' + detail;
         }
       }
 
@@ -5192,10 +6013,10 @@
             const lastError = r.settings && r.settings.codexSharedAuthLastError;
             $('codexAuthStatus').textContent =
               'Codex auth: ' +
-              (auth.exists ? '本机已存在' : '本机未写入') +
-              (auth.path ? ' · ' + auth.path : '') +
-              (lastSync ? '\n最近同步: ' + lastSync : '') +
-              (lastError ? '\n最近错误: ' + lastError : '');
+              (auth.exists ? 'local auth present' : 'local auth missing') +
+              (auth.path ? ' 路 ' + auth.path : '') +
+              (lastSync ? '\nLast sync: ' + lastSync : '') +
+              (lastError ? '\nLast error: ' + lastError : '');
           }
           applyHermesStatusUi(r.hermesGateway, r.activeBrainId);
         } catch {
@@ -5211,10 +6032,10 @@
         logEl.style.display = 'block';
         let msg = '';
         if (payload.type === 'phase') {
-          msg = '\n▶ ' + (payload.msg || '');
+          msg = '\n' + (payload.msg || '');
         } else if (payload.type === 'bootstrap-finished') {
           const ok = payload.ok !== false && payload.msg !== 'fail';
-          msg = ok ? '\n✓ 安装配置完成' : '\n✗ 安装失败';
+          msg = ok ? '\nInstall configured.' : '\nInstall failed.';
         } else if (typeof payload.msg === 'string') {
           msg = payload.msg;
         } else if (payload.msg != null) {
@@ -5240,14 +6061,14 @@
           logEl.style.display = 'block';
           logEl.textContent = '';
         }
-        setSetFeedback(hintEl, '正在安装 Hermes 官方版（可能需要数分钟）…');
+        setSetFeedback(hintEl, 'Installing official Hermes; this may take a few minutes.');
         try {
           const r = await shell.hermesBootstrapRun();
           if (r && r.ok) {
-            setSetFeedback(hintEl, 'Hermes 安装完成，可点击「一键安装并启动」');
+            setSetFeedback(hintEl, 'Hermes install finished; click one-click setup to start.');
             void loadHermesSettingsUi();
           } else {
-            setSetFeedback(hintEl, '安装失败：' + ((r && r.error) || '未知错误'));
+            setSetFeedback(hintEl, 'Install failed: ' + ((r && r.error) || 'unknown error'));
           }
         } catch (e) {
           setSetFeedback(hintEl, e && e.message ? e.message : String(e));
@@ -5273,7 +6094,7 @@
             logEl.style.display = 'block';
             logEl.textContent = '';
           }
-          setSetFeedback(hintEl, '正在安装/启动 Hermes 官方 Gateway（首次可能较久）…');
+          setSetFeedback(hintEl, 'Installing/starting Hermes Gateway; first run may take a while.');
           try {
             const r = await agent.hermesGatewaySetup({
               useDevStub: Boolean($('inpHermesDevStub') && $('inpHermesDevStub').checked),
@@ -5288,8 +6109,8 @@
               setSetFeedback(
                 hintEl,
                 r.settings && r.settings.hermesGatewayKind === 'dev'
-                  ? '开发桩已就绪'
-                  : 'Hermes 官方 Gateway 已就绪（若无法对话请运行 hermes model 配置模型）',
+                  ? 'Dev stub is ready'
+                  : 'Hermes Gateway is ready; configure the model if chat still fails.',
               );
               void loadAgentSettingsUi();
               if (typeof window.__acCopilotRefreshOnboarding === 'function') {
@@ -5297,7 +6118,7 @@
               }
             } else {
               applyHermesStatusUi(r && r.hermesGateway, r && r.activeBrainId);
-              setSetFeedback(hintEl, '配置失败：' + ((r && r.error) || '未知错误'));
+              setSetFeedback(hintEl, 'Setup failed: ' + ((r && r.error) || 'unknown error'));
             }
           } catch (e) {
             setSetFeedback(hintEl, e && e.message ? e.message : String(e));
@@ -5315,7 +6136,7 @@
           const btn = $('btnHermesConnectExisting');
           if (!agent || typeof agent.companionConnect !== 'function') return;
           btn.disabled = true;
-          setSetFeedback(hintEl, '正在探测并连接已有 Hermes…');
+          setSetFeedback(hintEl, 'Detecting and connecting existing Hermes...');
           try {
             const gatewayUrl = $('inpHermesGatewayUrl') ? $('inpHermesGatewayUrl').value.trim() : '';
             const apiKey = $('inpHermesApiKey') ? $('inpHermesApiKey').value.trim() : '';
@@ -5340,14 +6161,14 @@
               if ($('inpMcpConfig') && r.mcpConfig) {
                 $('inpMcpConfig').value = JSON.stringify(r.mcpConfig, null, 2);
               }
-              setSetFeedback(hintEl, r.message || '已连接已有 Hermes');
+              setSetFeedback(hintEl, r.message || 'Connected to Hermes');
               if (exportHint && r.exported) {
                 exportHint.style.display = 'block';
                 exportHint.textContent =
-                  '导出：' +
+                  'Exported: ' +
                   (r.exported.bundlePath || '') +
                   (r.mcpWrite && r.mcpWrite.written && r.mcpWrite.written.length
-                    ? ' · MCP 已写入 ' + r.mcpWrite.written.join(', ')
+                    ? ' / MCP written: ' + r.mcpWrite.written.join(', ')
                     : '');
               }
               void loadAgentSettingsUi();
@@ -5356,7 +6177,7 @@
               }
             } else {
               applyHermesStatusUi(r && r.hermesGateway, r && r.activeBrainId);
-              setSetFeedback(hintEl, '连接失败：' + ((r && r.error) || '未检测到 Gateway'));
+              setSetFeedback(hintEl, 'Connect failed: ' + ((r && r.error) || 'Gateway not detected'));
             }
           } catch (e) {
             setSetFeedback(hintEl, e && e.message ? e.message : String(e));
@@ -5371,12 +6192,12 @@
           const agent = shell.agentSession;
           const hintEl = $('hermesSettingsHint');
           if (!agent || typeof agent.hermesGatewayProbe !== 'function') return;
-          setSetFeedback(hintEl, '探测中…');
+          setSetFeedback(hintEl, 'Probing...');
           try {
             const r = await agent.hermesGatewayProbe();
             if (r && r.ok && r.probe) {
               applyHermesStatusUi(r.hermesGateway, null);
-              setSetFeedback(hintEl, r.probe.ok ? '连接正常' : '连接失败：' + (r.probe.detail || ''));
+              setSetFeedback(hintEl, r.probe.ok ? 'Connection ok' : 'Connection failed: ' + (r.probe.detail || ''));
             }
           } catch (e) {
             setSetFeedback(hintEl, e && e.message ? e.message : String(e));
@@ -5391,7 +6212,7 @@
           if (!agent || typeof agent.saveSettings !== 'function') return;
           const btn = $('btnSaveHermesSettings');
           btn.disabled = true;
-          setSetFeedback(hintEl, '保存中…');
+          setSetFeedback(hintEl, 'Saving...');
           try {
             const useDev = Boolean($('inpHermesDevStub') && $('inpHermesDevStub').checked);
             const patch = {
@@ -5406,13 +6227,13 @@
             const r = await agent.saveSettings(patch);
             if (r && r.ok) {
               applyHermesStatusUi(r.hermesGateway, r.activeBrainId);
-              setSetFeedback(hintEl, 'Hermes 设置已保存');
+              setSetFeedback(hintEl, 'Hermes settings saved.');
               void loadAgentSettingsUi();
               if (typeof window.__acCopilotRefreshOnboarding === 'function') {
                 window.__acCopilotRefreshOnboarding();
               }
             } else {
-              setSetFeedback(hintEl, '保存失败');
+              setSetFeedback(hintEl, 'Save failed.');
             }
           } catch (e) {
             setSetFeedback(hintEl, e && e.message ? e.message : String(e));
@@ -5433,7 +6254,7 @@
           const btn = document.createElement('button');
           btn.type = 'button';
           btn.className = 'shell-brain-option' + (b.id === activeId ? ' is-active' : '');
-          btn.textContent = b.displayName ? b.id + ' · ' + b.displayName : b.id;
+          btn.textContent = b.displayName ? b.id + ' 路 ' + b.displayName : b.id;
           btn.dataset.brainId = b.id;
           btn.addEventListener('click', () => {
             for (const el of host.querySelectorAll('.shell-brain-option')) {
@@ -5443,6 +6264,64 @@
           });
           host.appendChild(btn);
         }
+      }
+
+      function renderCodexSandboxPicker(activeValue) {
+        const host = $('codexSandboxPicker');
+        if (!host) return;
+        const modes = [
+          { id: 'read-only', label: 'Read only' },
+          { id: 'workspace-write', label: 'Workspace write' },
+          { id: 'danger-full-access', label: 'Full access' },
+        ];
+        const active = modes.some((m) => m.id === activeValue) ? activeValue : 'workspace-write';
+        host.innerHTML = '';
+        for (const mode of modes) {
+          const btn = document.createElement('button');
+          btn.type = 'button';
+          btn.className = 'codex-sandbox-option' + (mode.id === active ? ' is-active' : '');
+          btn.textContent = mode.label;
+          btn.dataset.sandbox = mode.id;
+          btn.addEventListener('click', () => {
+            for (const el of host.querySelectorAll('.codex-sandbox-option')) {
+              el.classList.toggle('is-active', el.dataset.sandbox === mode.id);
+            }
+            agentSettingsCache.codexSandbox = mode.id;
+          });
+          host.appendChild(btn);
+        }
+        agentSettingsCache.codexSandbox = active;
+      }
+
+      function renderCodexRuntimeStatus(status, probe) {
+        const el = $('codexRuntimeStatusDetail');
+        if (!el) return;
+        const s = status && typeof status === 'object' ? status : null;
+        if (!s) {
+          el.hidden = true;
+          el.textContent = '';
+          return;
+        }
+        codexRuntimeStatusCache = s;
+        const auth = s.auth && typeof s.auth === 'object' ? s.auth : {};
+        const rows = [
+          ['Command', s.command || 'unset'],
+          ['Working directory', s.cwdExists ? s.cwd : `${s.cwd || 'unset'} (missing)`],
+          ['Model', s.model || 'Codex default'],
+          ['Sandbox', s.sandbox || 'workspace-write'],
+          ['Default brain', s.isDefaultBrain ? 'Codex' : s.defaultBrain || 'unset'],
+          ['Auth', auth.exists ? 'present' : 'missing'],
+        ];
+        if (probe && typeof probe === 'object') {
+          rows.push(['Probe', probe.ok ? passed  : ailed ]);
+        }
+        el.hidden = false;
+        el.innerHTML =
+          '<dl class="agent-mcp-e2e-diag">' +
+          rows
+            .map(([key, value]) => `<div><dt>${escapeAgentMcpHtml(key)}</dt><dd>${escapeAgentMcpHtml(value)}</dd></div>`)
+            .join('') +
+          '</dl>';
       }
 
       function compactAgentUsageNumber(value) {
@@ -5469,9 +6348,9 @@
       }
 
       function formatShortTime(value) {
-        if (!value) return '—';
+        if (!value) return '-';
         const d = new Date(value);
-        if (!Number.isFinite(d.getTime())) return '—';
+        if (!Number.isFinite(d.getTime())) return '-';
         const pad = (n) => String(n).padStart(2, '0');
         return pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
       }
@@ -5484,7 +6363,7 @@
         if (!list.length) {
           const empty = document.createElement('div');
           empty.className = 'agent-mcp-detail';
-          empty.textContent = '暂无工具执行记录。';
+          empty.textContent = 'No tool execution records yet.';
           host.appendChild(empty);
           return;
         }
@@ -5498,13 +6377,13 @@
           name.textContent = item.tool || '';
           const meta = document.createElement('div');
           meta.className = 'agent-exec-meta';
-          const ms = item.durationMs == null ? '—' : String(item.durationMs) + 'ms';
-          const decision = item.policyDecision ? ' · ' + item.policyDecision : '';
-          const trace = item.traceId ? ' · trace ' + String(item.traceId).slice(0, 12) : '';
-          const callId = item.toolCallId ? ' · call ' + String(item.toolCallId).slice(-8) : '';
+          const ms = item.durationMs == null ? '-' : String(item.durationMs) + 'ms';
+          const decision = item.policyDecision ? ' 路 ' + item.policyDecision : '';
+          const trace = item.traceId ? ' 路 trace ' + String(item.traceId).slice(0, 12) : '';
+          const callId = item.toolCallId ? ' 路 call ' + String(item.toolCallId).slice(-8) : '';
           meta.textContent =
-            formatShortTime(item.ts) + ' · ' + (item.clientId || 'unknown') + ' · ' + ms + decision +
-            trace + callId + (item.errorCode ? ' · ' + item.errorCode : '');
+            formatShortTime(item.ts) + ' 路 ' + (item.clientId || 'unknown') + ' 路 ' + ms + decision +
+            trace + callId + (item.errorCode ? ' 路 ' + item.errorCode : '');
           main.appendChild(name);
           main.appendChild(meta);
 
@@ -5530,9 +6409,9 @@
       }
 
       function formatMcpCheckedAt(value) {
-        if (!value) return '—';
+        if (!value) return '-';
         const d = new Date(value);
-        if (!Number.isFinite(d.getTime())) return '—';
+        if (!Number.isFinite(d.getTime())) return '-';
         const pad = (n) => String(n).padStart(2, '0');
         return pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
       }
@@ -5549,8 +6428,9 @@
         agentMcpEndpointCache = endpoint || agentMcpEndpointCache || '';
         if (result && result.mcpConfig) agentMcpConfigCache = result.mcpConfig;
         if (result && result.mcpToolCatalog) renderAgentMcpToolCatalog(result.mcpToolCatalog);
-        if ($('agentMcpEndpoint')) $('agentMcpEndpoint').textContent = agentMcpEndpointCache || '—';
-        if ($('agentMcpProtocol')) $('agentMcpProtocol').textContent = (probe && probe.protocolVersion) || '—';
+        renderAgentMcpWorkbenchEntrance(result && result.mcpEntranceStatus);
+        if ($('agentMcpEndpoint')) $('agentMcpEndpoint').textContent = agentMcpEndpointCache || '-';
+        if ($('agentMcpProtocol')) $('agentMcpProtocol').textContent = (probe && probe.protocolVersion) || '-';
         if ($('agentMcpTools')) $('agentMcpTools').textContent = String((probe && probe.toolCount) || 0);
         if ($('agentMcpCheckedAt')) $('agentMcpCheckedAt').textContent = formatMcpCheckedAt(probe && probe.checkedAt);
 
@@ -5561,29 +6441,368 @@
         }
         if ($('agentMcpProbeTitle')) {
           $('agentMcpProbeTitle').textContent =
-            probe && probe.ok ? 'MCP 可被外部 Agent 调用' : mcp && mcp.enabled ? 'MCP 等待自检' : 'MCP 未开启';
+            probe && probe.ok ? 'MCP callable by external Agents' : mcp && mcp.enabled ? 'MCP waiting for self-check' : 'MCP disabled';
         }
         if ($('agentMcpProbeDetail')) {
           if (probe && probe.ok) {
-            const sample = Array.isArray(probe.toolsSample) && probe.toolsSample.length ? ' · ' + probe.toolsSample.join(', ') : '';
+            const sample = Array.isArray(probe.toolsSample) && probe.toolsSample.length ? ' 路 ' + probe.toolsSample.join(', ') : '';
             $('agentMcpProbeDetail').textContent =
-              '握手成功，外部 agent 可读取 ' + probe.toolCount + ' 个 ac.* 工具' + sample;
+              'Handshake ok; external agents can read ' + probe.toolCount + ' ac.* tools' + sample;
           } else if (probe && probe.error) {
-            $('agentMcpProbeDetail').textContent = '自检未通过：' + probe.error;
+            $('agentMcpProbeDetail').textContent = 'Self-check failed: ' + probe.error;
           } else if (probe && probe.step) {
-            $('agentMcpProbeDetail').textContent = '自检停在 ' + probe.step + '，请检查端口、Token 或客户端配置。';
+            $('agentMcpProbeDetail').textContent = 'Self-check stopped at ' + probe.step + '; check port, token, or client config.';
           } else {
             $('agentMcpProbeDetail').textContent = mcp && mcp.enabled
-              ? '已开启，点击自检确认 initialize 与 tools/list。'
-              : '开启后可自检外部 agent 是否能握手并读取 ac.* 工具。';
+              ? 'Enabled. Run self-check to confirm initialize and tools/list.'
+              : 'After enabling, self-check verifies external agents can handshake and read ac.* tools.';
+          }
+        }
+      }
+
+      function renderAgentMcpWorkbenchEntrance(status) {
+        const el = $('agentMcpWorkbenchEntranceDetail');
+        if (!el) return;
+        const entrance =
+          status && status.workbenchEntrance && typeof status.workbenchEntrance === 'object'
+            ? status.workbenchEntrance
+            : null;
+        const acceptance =
+          status && status.workbenchE2eAcceptance && typeof status.workbenchE2eAcceptance === 'object'
+            ? status.workbenchE2eAcceptance
+            : null;
+        if (!entrance) {
+          el.hidden = true;
+          el.textContent = '';
+          return;
+        }
+        const labels = {
+          ready: 'Workbench entrance ready',
+          login_required: 'Workbench login required',
+          e2e_missing: 'Workbench E2E missing',
+          e2e_stale: 'Workbench E2E stale',
+          e2e_failed: 'Workbench E2E failed',
+          e2e_invalid: 'Workbench E2E invalid',
+          mcp_unavailable: 'MCP unavailable',
+        };
+        const label = labels[entrance.status] || 'Workbench entrance needs confirmation';
+        const chain =
+          Array.isArray(entrance.requiredChain) && entrance.requiredChain.length
+            ? `Required chain: ${entrance.requiredChain.join(' -> ')}`
+            : '';
+        const next = entrance.nextStep ? String(entrance.nextStep) : '';
+        const teamReady =
+          status && Object.prototype.hasOwnProperty.call(status, 'teamEntranceReady')
+            ? Boolean(status.teamEntranceReady)
+            : false;
+        const teamPhase = status && status.teamEntrancePhase ? String(status.teamEntrancePhase) : '';
+        const teamBlockers = status && Array.isArray(status.teamEntranceBlockers) ? status.teamEntranceBlockers.length : 0;
+        const teamLine = teamPhase
+          ? `Team entrance: ${teamReady ? 'ready' : 'blocked'} / ${teamPhase}${teamBlockers ? ` / blockers=${teamBlockers}` : ''}`
+          : '';
+        const account =
+          status && status.account && typeof status.account === 'object'
+            ? status.account
+            : status && status.shellAccount && typeof status.shellAccount === 'object'
+              ? status.shellAccount
+              : null;
+        const accountDiagnosticLine = account ? `Account: ${formatShellAccountDiagnosticLine(account)}` : '';
+        const checked = entrance.checkedAt ? `Checked at: ${entrance.checkedAt}` : '';
+        el.hidden = false;
+        el.innerHTML =
+          '<div class="agent-mcp-e2e-freshness">' +
+          `<strong>${escapeAgentMcpHtml(label)}</strong>` +
+          `<div>${escapeAgentMcpHtml(next || chain || 'Run MCP self-check first.')}</div>` +
+          (chain ? `<div>${escapeAgentMcpHtml(chain)}</div>` : '') +
+          (checked ? `<div>${escapeAgentMcpHtml(checked)}</div>` : '') +
+          (acceptance
+            ? `<div>${escapeAgentMcpHtml(`Workbench E2E acceptance: ${acceptance.passed ? 'accepted' : 'not accepted'}${acceptance.blockingReason ? ` / ${acceptance.blockingReason}` : ''}`)}</div>`
+            : '') +
+          (acceptance && acceptance.proofSource
+            ? `<div>${escapeAgentMcpHtml(`Proof: ${acceptance.proofSource}`)}</div>`
+            : '') +
+          (teamLine ? `<div>${escapeAgentMcpHtml(teamLine)}</div>` : '') +
+          (accountDiagnosticLine ? `<div>${escapeAgentMcpHtml(accountDiagnosticLine)}</div>` : '') +
+          '</div>';
+        const blockers = Array.isArray(status.blockers) ? status.blockers : [];
+        if (blockers.length) {
+          const blockerLabels = {
+            workbench_login_required: '工作台登录未完成',
+            workflow_promotion_draft_only: 'Workflow 仍是草稿阶段',
+            usage_governance_local_only: '用量治理仍是本地信号',
+            codex_runtime_not_ready: 'Codex runtime needs confirmation',
+            mcp_unavailable: 'MCP unavailable',
+          };
+          const blockerLines = blockers.slice(0, 4).map((blocker) => {
+            const id = String((blocker && blocker.id) || 'unknown');
+            const title = blockerLabels[id] || id;
+            const owner = blocker && blocker.owner ? `owner=${blocker.owner}` : '';
+            const command = blocker && blocker.command ? `command=${blocker.command}` : '';
+            const step = blocker && blocker.nextStep ? String(blocker.nextStep) : '';
+            const actions = Array.isArray(blocker && blocker.actions)
+              ? blocker.actions
+                  .map((action) => String((action && (action.tool || action.command || action.id)) || '').trim())
+                  .filter(Boolean)
+                  .slice(0, 3)
+              : [];
+            const actionLine = actions.length ? `Actions: ${actions.join(', ')}` : '';
+            return [title, owner, command, actionLine, step].filter(Boolean).join(' / ');
+          });
+          el.innerHTML +=
+            '<div class="agent-mcp-e2e-freshness">' +
+            '<strong>Remaining blockers</strong>' +
+            blockerLines.map((line) => `<div>${escapeAgentMcpHtml(line)}</div>`).join('') +
+            '</div>';
+          renderAgentMcpBlockerActionButtons(el, blockers);
+        }
+        const workflow =
+          status && status.workflowPublication && typeof status.workflowPublication === 'object'
+            ? status.workflowPublication
+            : null;
+        if (workflow) {
+          const workflowLabels = {
+            ready: 'Workflow draft registry ready',
+            confirmation_required: 'Workflow draft registry needs approval',
+            policy_denied: 'Workflow draft registry blocked by policy',
+            tools_missing: 'Workflow draft registry tools missing',
+          };
+          const workflowLabel = workflowLabels[workflow.status] || 'Workflow draft registry pending';
+          const draftTool = workflow.draftTool ? `entry=${workflow.draftTool}` : '';
+          const phase = workflow.phase ? `phase=${workflow.phase}` : '';
+          const workflowNext = workflow.nextStep ? String(workflow.nextStep) : '';
+          const promotion =
+            workflow.promotionReadiness && typeof workflow.promotionReadiness === 'object'
+              ? workflow.promotionReadiness
+              : null;
+          const promotionPhase = promotion && promotion.currentPhase ? String(promotion.currentPhase) : '';
+          const promotionReady =
+            promotion && Object.prototype.hasOwnProperty.call(promotion, 'publishableNow')
+              ? Boolean(promotion.publishableNow)
+              : null;
+          const promotionTargets =
+            promotion && Array.isArray(promotion.targets)
+              ? promotion.targets
+                  .map((target) => String((target && (target.plannedTool || target.id)) || '').trim())
+                  .filter(Boolean)
+                  .slice(0, 3)
+              : [];
+          const promotionGateLabels = {
+            workbench_login_e2e_ready: '\u5de5\u4f5c\u53f0 E2E \u9a8c\u6536',
+            admin_confirmation: '\u7ba1\u7406\u5458\u524d\u7aef\u6279\u51c6',
+            capability_route_schema_valid: '\u80fd\u529b\u8def\u7531 schema',
+            model_provider_readiness_checked: '\u6a21\u578b/\u4f9b\u5e94\u5546\u53ef\u7528\u6027',
+            script_manifest_valid: 'Script manifest',
+            script_hub_permission_checked: 'Script Hub \u6743\u9650',
+            sandbox_policy_checked: '\u6c99\u7bb1\u7b56\u7565',
+            skill_draft_exists: 'Workflow \u8349\u7a3f',
+          };
+          const formatPromotionGateList = (items) =>
+            (Array.isArray(items) ? items : [])
+              .map((item) => String(item || '').trim())
+              .filter(Boolean)
+              .slice(0, 3)
+              .map((item) => promotionGateLabels[item] || item);
+          const promotionTargetLines =
+            promotion && Array.isArray(promotion.targets)
+              ? promotion.targets
+                  .slice(0, 2)
+                  .map((target) => {
+                    const tool = String((target && (target.plannedTool || target.id)) || '').trim();
+                    const statusText = String((target && target.status) || '').trim();
+                    const missing = Array.isArray(target && target.missing)
+                      ? target.missing.map((item) => String(item || '').trim()).filter(Boolean).slice(0, 2)
+                      : [];
+                    return [tool, statusText, missing.length ? '\u7f3a\u53e3: ' + missing.join(', ') : '']
+                      .filter(Boolean)
+                      .join(' 路 ');
+                  })
+                  .filter(Boolean)
+              : [];
+          const promotionTargetDetailLines =
+            promotion && Array.isArray(promotion.targets)
+              ? promotion.targets
+                  .slice(0, 2)
+                  .map((target) => {
+                    const tool = String((target && (target.plannedTool || target.id)) || '').trim();
+                    const missing = formatPromotionGateList(target && target.missing);
+                    const unevaluated = formatPromotionGateList(target && target.unevaluatedGates);
+                    const adminGate =
+                      target && target.adminConfirmation && typeof target.adminConfirmation === 'object'
+                        ? target.adminConfirmation
+                        : null;
+                    const adminText =
+                      adminGate && adminGate.required
+                        ? '\u7ba1\u7406\u5458\u6279\u51c6: ' +
+                          (adminGate.passed ? '\u5df2\u901a\u8fc7' : '\u5f85 Copilot \u524d\u7aef\u786e\u8ba4')
+                        : '';
+                    return [
+                      tool,
+                      missing.length ? '\u7f3a\u53e3: ' + missing.join(', ') : '',
+                      unevaluated.length ? '\u8349\u7a3f\u9884\u68c0: ' + unevaluated.join(', ') : '',
+                      adminText,
+                    ]
+                      .filter(Boolean)
+                      .join(' / ');
+                  })
+                  .filter(Boolean)
+              : [];
+          const promotionLine = promotionPhase
+            ? `Promotion phase: ${promotionPhase} / ${promotionReady ? 'publishable' : 'not publishable'}`
+            : '';
+          el.innerHTML +=
+            '<div class="agent-mcp-e2e-freshness">' +
+            `<strong>${escapeAgentMcpHtml(workflowLabel)}</strong>` +
+            `<div>${escapeAgentMcpHtml(workflowNext || 'External Agents can save a skill draft first, then use governed publication.')}</div>` +
+            (phase ? `<div>${escapeAgentMcpHtml(phase)}</div>` : '') +
+            (draftTool ? `<div>${escapeAgentMcpHtml(draftTool)}</div>` : '') +
+            (promotionLine ? `<div>${escapeAgentMcpHtml(promotionLine)}</div>` : '') +
+            (promotionTargets.length
+              ? `<div>${escapeAgentMcpHtml(`发布工具?${promotionTargets.join(' / ')}`)}</div>`
+              : '') +
+            '</div>';
+          if (promotionTargetLines.length) {
+            el.innerHTML +=
+              '<div class="agent-mcp-e2e-freshness">' +
+              '<strong>Workflow promotion preflight</strong>' +
+              promotionTargetLines.map((line) => `<div>${escapeAgentMcpHtml(line)}</div>`).join('') +
+              '</div>';
+          }
+          if (promotionTargetDetailLines.length) {
+            el.innerHTML +=
+              '<div class="agent-mcp-e2e-freshness">' +
+              '<strong>Workflow promotion gates</strong>' +
+              promotionTargetDetailLines.map((line) => `<div>${escapeAgentMcpHtml(line)}</div>`).join('') +
+              '</div>';
+          }
+          const promotionEvidence =
+            workflow.promotionPreflightEvidence && typeof workflow.promotionPreflightEvidence === 'object'
+              ? workflow.promotionPreflightEvidence
+              : null;
+          const latestPromotionEvidence =
+            promotionEvidence && promotionEvidence.latest && typeof promotionEvidence.latest === 'object'
+              ? promotionEvidence.latest
+              : null;
+          if (latestPromotionEvidence) {
+            const passed = Array.isArray(latestPromotionEvidence.passedGates)
+              ? latestPromotionEvidence.passedGates.map((item) => String(item || '').trim()).filter(Boolean).slice(0, 4)
+              : [];
+            const missing = Array.isArray(latestPromotionEvidence.missingGates)
+              ? latestPromotionEvidence.missingGates.map((item) => String(item || '').trim()).filter(Boolean).slice(0, 4)
+              : [];
+            const admin =
+              latestPromotionEvidence.adminConfirmation && typeof latestPromotionEvidence.adminConfirmation === 'object'
+                ? latestPromotionEvidence.adminConfirmation
+                : {};
+            el.innerHTML +=
+              '<div class="agent-mcp-e2e-freshness">' +
+              '<strong>Workflow promotion evidence</strong>' +
+              `<div>${escapeAgentMcpHtml(`Source: ${promotionEvidence.resource || 'assetcutter://mcp/tool-executions'}`)}</div>` +
+              `<div>${escapeAgentMcpHtml(`Latest: ${latestPromotionEvidence.target || 'unknown'} / ${latestPromotionEvidence.skillId || 'unknown'}`)}</div>` +
+              `<div>${escapeAgentMcpHtml(`Skill exists: ${Boolean(latestPromotionEvidence.skillExists)}`)}</div>` +
+              `<div>${escapeAgentMcpHtml(`Evidence current: ${Boolean(latestPromotionEvidence.evidenceCurrent)}${latestPromotionEvidence.staleReason ? ` / ${latestPromotionEvidence.staleReason}` : ''}`)}</div>` +
+              `<div>${escapeAgentMcpHtml(`Admin: ${admin.passed ? 'passed' : 'missing'} / ${admin.sourceRequired || 'copilot_ui'}`)}</div>` +
+              (passed.length ? `<div>${escapeAgentMcpHtml(`Passed: ${passed.join(', ')}`)}</div>` : '') +
+              (missing.length ? `<div>${escapeAgentMcpHtml(`Missing: ${missing.join(', ')}`)}</div>` : '') +
+              '</div>';
+          }
+        }
+        const usage =
+          status && status.usageAudit && typeof status.usageAudit === 'object'
+            ? status.usageAudit
+            : null;
+        if (usage) {
+          const totals = usage.totals && typeof usage.totals === 'object' ? usage.totals : {};
+          const windowDays = Number(usage.windowDays) || 0;
+          const turns = compactAgentUsageNumber(totals.turns);
+          const totalTokens = compactAgentUsageNumber(totals.totalTokens);
+          const freshInputTokens = compactAgentUsageNumber(totals.freshInputTokens);
+          const cachedInputTokens = compactAgentUsageNumber(totals.cachedInputTokens);
+          const outputTokens = compactAgentUsageNumber(totals.outputTokens);
+          const usageGeneratedAt = usage.generatedAt ? String(usage.generatedAt) : '';
+          const usageCloudDraft = usage.cloudDraft && typeof usage.cloudDraft === 'object' ? usage.cloudDraft : null;
+          const usageUploadPlan =
+            usageCloudDraft && usageCloudDraft.uploadPlan && typeof usageCloudDraft.uploadPlan === 'object'
+              ? usageCloudDraft.uploadPlan
+              : null;
+          const usageUploadTool =
+            usageUploadPlan && usageUploadPlan.tool ? String(usageUploadPlan.tool) : 'ac.usage.upload_cloud_draft';
+          const usageUploadReady = usageCloudDraft ? Boolean(usageCloudDraft.uploadReady) : false;
+          const usageEventCount = usageCloudDraft ? Number(usageCloudDraft.eventCount) || 0 : 0;
+          const usageBlockedBy =
+            usageCloudDraft && Array.isArray(usageCloudDraft.blockedBy)
+              ? usageCloudDraft.blockedBy.map((item) => String(item || '').trim()).filter(Boolean).slice(0, 4)
+              : [];
+          const usageQuotaPolicy =
+            usageCloudDraft && usageCloudDraft.quotaPolicy && typeof usageCloudDraft.quotaPolicy === 'object'
+              ? usageCloudDraft.quotaPolicy
+              : null;
+          const usageQuotaSource =
+            usageQuotaPolicy && usageQuotaPolicy.enforcementSource ? String(usageQuotaPolicy.enforcementSource) : '';
+          const usageQuotaPolicyId =
+            usageQuotaPolicy && usageQuotaPolicy.policyId ? String(usageQuotaPolicy.policyId) : '';
+          const usageQuotaProbeTool =
+            usageQuotaPolicy && usageQuotaPolicy.probeTool ? String(usageQuotaPolicy.probeTool) : '';
+          const usageQuotaExit =
+            usageQuotaPolicy && Array.isArray(usageQuotaPolicy.requiredToExitBlocker)
+              ? usageQuotaPolicy.requiredToExitBlocker.map((item) => String(item || '').trim()).filter(Boolean).slice(0, 3)
+              : [];
+          const usageEvidence =
+            usage.governanceEvidence && typeof usage.governanceEvidence === 'object'
+              ? usage.governanceEvidence
+              : null;
+          const latestUsageEvidence =
+            usageEvidence && usageEvidence.latest && typeof usageEvidence.latest === 'object'
+              ? usageEvidence.latest
+              : null;
+          el.innerHTML +=
+            '<div class="agent-mcp-e2e-freshness">' +
+            '<strong>本地用量审计</strong>' +
+            `<div>${escapeAgentMcpHtml(`窗口：${windowDays} 天`)}</div>` +
+            `<div>${escapeAgentMcpHtml(`轮次：${turns} 次 / Tokens：${totalTokens}`)}</div>` +
+            `<div>${escapeAgentMcpHtml(`输入：${freshInputTokens} / ${cachedInputTokens} 缓存 / 输出：${outputTokens}`)}</div>` +
+            '<div>资源：assetcutter://mcp/usage-audit</div>' +
+            '<div>隐私：不上传 prompt 原文、Cookie 或 MCP Token</div>' +
+            (usageGeneratedAt ? `<div>${escapeAgentMcpHtml(`生成时间：${usageGeneratedAt}`)}</div>` : '') +
+            (usageUploadTool ? `<div>${escapeAgentMcpHtml(`Upload tool: ${usageUploadTool}`)}</div>` : '') +
+            `<div>${escapeAgentMcpHtml(`Upload ready: ${usageUploadReady} / events: ${usageEventCount}`)}</div>` +
+            (usageBlockedBy.length
+              ? `<div>${escapeAgentMcpHtml(`Upload blockers: ${usageBlockedBy.join(', ')}`)}</div>`
+              : '') +
+            (usageQuotaPolicy
+              ? `<div>${escapeAgentMcpHtml(`Quota enforced: ${Boolean(usageQuotaPolicy.cloudQuotaEnforced)}`)}</div>`
+              : '') +
+            (usageQuotaSource ? `<div>${escapeAgentMcpHtml(`Quota source: ${usageQuotaSource}`)}</div>` : '') +
+            (usageQuotaPolicyId ? `<div>${escapeAgentMcpHtml(`Quota policy: ${usageQuotaPolicyId}`)}</div>` : '') +
+            (usageQuotaProbeTool ? `<div>${escapeAgentMcpHtml(`Quota probe: ${usageQuotaProbeTool}`)}</div>` : '') +
+            (usageQuotaExit.length
+              ? `<div>${escapeAgentMcpHtml(`Required to exit blocker: ${usageQuotaExit.join(', ')}`)}</div>`
+              : '') +
+            '</div>';
+          if (latestUsageEvidence) {
+            const usageRemainingGates = Array.isArray(latestUsageEvidence.remainingGates)
+              ? latestUsageEvidence.remainingGates.map((item) => String(item || '').trim()).filter(Boolean).slice(0, 4)
+              : [];
+            el.innerHTML +=
+              '<div class="agent-mcp-e2e-freshness">' +
+              '<strong>Usage governance evidence</strong>' +
+              `<div>${escapeAgentMcpHtml(`Source: ${usageEvidence.resource || 'assetcutter://mcp/tool-executions'}`)}</div>` +
+              `<div>${escapeAgentMcpHtml(`Latest: ${latestUsageEvidence.action || 'usage'} / ${latestUsageEvidence.code || (latestUsageEvidence.ok ? 'ok' : 'not_ok')}`)}</div>` +
+              `<div>${escapeAgentMcpHtml(`Endpoint: ${latestUsageEvidence.endpoint || ''}`)}</div>` +
+              `<div>${escapeAgentMcpHtml(`Partition: ${latestUsageEvidence.partition || ''}`)}</div>` +
+              `<div>${escapeAgentMcpHtml(`Dry run: ${Boolean(latestUsageEvidence.dryRun)} / events: ${Number(latestUsageEvidence.eventCount) || 0}`)}</div>` +
+              `<div>${escapeAgentMcpHtml(`Exit ready: ${Boolean(latestUsageEvidence.exitReady)}`)}</div>` +
+              (usageRemainingGates.length
+                ? `<div>${escapeAgentMcpHtml(`Remaining: ${usageRemainingGates.join(', ')}`)}</div>`
+                : '') +
+              '</div>';
           }
         }
       }
 
       function riskLabel(risk) {
-        if (risk === 'confirm') return '确认';
-        if (risk === 'forbidden') return '禁止';
-        return '安全';
+        if (risk === 'confirm') return 'Confirm';
+        if (risk === 'forbidden') return 'Forbidden';
+        return 'Safe';
       }
 
       function normalizePolicyList(value) {
@@ -5633,6 +6852,42 @@
         });
       }
 
+      function renderAgentPolicyTemplates(templates) {
+        if (Array.isArray(templates)) agentPolicyTemplatesCache = templates;
+        const host = $('agentPolicyTemplates');
+        if (!host) return;
+        host.innerHTML = '';
+        for (const template of agentPolicyTemplatesCache) {
+          const id = String(template && template.id ? template.id : '');
+          if (!id) continue;
+          const btn = document.createElement('button');
+          btn.type = 'button';
+          btn.className = 'btn';
+          btn.textContent = String(template.name || id);
+          btn.title = String(template.description || '');
+          btn.addEventListener('click', async () => {
+            if (!agent || typeof agent.savePolicy !== 'function') return;
+            btn.disabled = true;
+            setSetFeedback($('agentSettingsHint'), 'Applying permission template...');
+            try {
+              const r = await agent.savePolicy({ templateId: id });
+              if (r && r.ok) {
+                renderAgentPolicyTemplates(r.policyTemplates);
+                renderAgentPolicy(r.agentPolicy);
+                setSetFeedback($('agentSettingsHint'), 'Permission template applied');
+              } else {
+                setSetFeedback($('agentSettingsHint'), 'Permission template failed');
+              }
+            } catch {
+              setSetFeedback($('agentSettingsHint'), 'Permission template failed');
+            } finally {
+              btn.disabled = false;
+            }
+          });
+          host.appendChild(btn);
+        }
+      }
+
       function renderAgentPolicy(policy) {
         if (policy) {
           agentPolicyCache = {
@@ -5647,7 +6902,7 @@
         const deny = new Set(normalizePolicyList(agentPolicyCache.forbiddenTools));
         if ($('agentPolicyConfirmTools')) $('agentPolicyConfirmTools').checked = Boolean(agentPolicyCache.confirmTools);
         if ($('agentPolicySummary')) {
-          $('agentPolicySummary').textContent = '自动 ' + auto.size + ' · 禁止 ' + deny.size;
+          $('agentPolicySummary').textContent = 'Auto ' + auto.size + ' / Deny ' + deny.size;
         }
         const host = $('agentPolicyList');
         if (!host) return;
@@ -5656,7 +6911,7 @@
         if (!tools.length) {
           const empty = document.createElement('div');
           empty.className = 'agent-mcp-detail';
-          empty.textContent = '当前没有需要单独管理的高风险工具。';
+          empty.textContent = 'No high-risk tools need separate management right now.';
           host.appendChild(empty);
           return;
         }
@@ -5673,17 +6928,17 @@
           title.textContent = name;
           const meta = document.createElement('div');
           meta.className = 'agent-policy-tool-meta';
-          const defaultLabel = tool.risk === 'confirm' && agentPolicyCache.confirmTools ? '默认询问' : '默认允许';
-          meta.textContent = (tool.surfaceLabel || '') + ' · ' + riskLabel(tool.risk) + ' · ' + defaultLabel;
+          const defaultLabel = tool.risk === 'confirm' && agentPolicyCache.confirmTools ? 'Ask by default' : 'Allow by default';
+          meta.textContent = (tool.surfaceLabel || '') + ' / ' + riskLabel(tool.risk) + ' / ' + defaultLabel;
           main.appendChild(title);
           main.appendChild(meta);
 
           const actions = document.createElement('div');
           actions.className = 'agent-policy-actions';
           const choices = [
-            ['default', tool.risk === 'confirm' && agentPolicyCache.confirmTools ? '询问' : '默认'],
-            ['allow', '自动'],
-            ['deny', '禁止'],
+            ['default', tool.risk === 'confirm' && agentPolicyCache.confirmTools ? 'Ask' : 'Default'],
+            ['allow', 'Auto'],
+            ['deny', 'Deny'],
           ];
           for (const pair of choices) {
             const btn = document.createElement('button');
@@ -5710,13 +6965,13 @@
         const risk = (catalog && catalog.riskCounts) || {};
         if ($('agentMcpToolsSummary')) {
           $('agentMcpToolsSummary').textContent =
-            total + ' tools · 安全 ' + (risk.safe || 0) + ' · 确认 ' + (risk.confirm || 0);
+            total + ' tools / safe ' + (risk.safe || 0) + ' / confirm ' + (risk.confirm || 0);
         }
         const groups = Array.isArray(catalog && catalog.surfaces) ? catalog.surfaces : [];
         if (!groups.length) {
           const empty = document.createElement('div');
           empty.className = 'agent-mcp-detail';
-          empty.textContent = '暂无可暴露工具。';
+          empty.textContent = 'No exposed tools yet.';
           host.appendChild(empty);
           return;
         }
@@ -5756,8 +7011,8 @@
             const desc = document.createElement('div');
             desc.className = 'agent-mcp-tool-desc';
             const input = tool.input || {};
-            const required = Array.isArray(input.required) && input.required.length ? ' · 必填 ' + input.required.join(', ') : '';
-            desc.textContent = (tool.description || '') + ' · 参数 ' + (input.propertyCount || 0) + required;
+            const required = Array.isArray(input.required) && input.required.length ? ' 路 蹇呭～ ' + input.required.join(', ') : '';
+            desc.textContent = (tool.description || '') + ' / params ' + (input.propertyCount || 0) + required;
             item.appendChild(desc);
 
             const schema = document.createElement('pre');
@@ -5780,19 +7035,246 @@
         const btn = $('btnProbeMcp');
         if (!agent || typeof agent.mcpProbe !== 'function') return;
         if (btn) btn.disabled = true;
-        if ($('agentMcpProbeTitle')) $('agentMcpProbeTitle').textContent = 'MCP 自检中…';
+        if (agentMcpProbeTitle) agentMcpProbeTitle.textContent = 'MCP self-check running...';
         try {
           const r = await agent.mcpProbe();
           if (r && r.ok) {
             renderAgentMcpProbe(r);
           } else if ($('agentMcpProbeDetail')) {
-            $('agentMcpProbeDetail').textContent = '自检失败：' + ((r && r.error) || '未知错误');
+            $('agentMcpProbeDetail').textContent = 'Self-check failed: ' + ((r && r.error) || 'unknown error');
           }
+          return r;
         } catch (e) {
           if ($('agentMcpProbeDetail')) $('agentMcpProbeDetail').textContent = e && e.message ? e.message : String(e);
+          return { ok: false, error: e && e.message ? e.message : String(e) };
         } finally {
           if (btn) btn.disabled = false;
         }
+      }
+
+      function escapeAgentMcpHtml(value) {
+        return String(value == null ? '' : value)
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;')
+          .replace(/'/g, '&#39;');
+      }
+
+      function renderAgentMcpBlockerActionButtons(host, blockers) {
+        if (!host || !Array.isArray(blockers) || !blockers.length) return;
+        const seen = new Set();
+        const actions = [];
+        for (const blocker of blockers) {
+          for (const action of Array.isArray(blocker && blocker.actions) ? blocker.actions : []) {
+            const key = String((action && (action.tool || action.command || action.id)) || '').trim();
+            if (!key || seen.has(key)) continue;
+            seen.add(key);
+            actions.push(action);
+          }
+        }
+        if (!actions.length) return;
+        const wrap = document.createElement('div');
+        wrap.className = 'agent-mcp-e2e-freshness';
+        const title = document.createElement('strong');
+        title.textContent = 'Blocker actions';
+        wrap.appendChild(title);
+        const row = document.createElement('div');
+        row.className = 'set-actions';
+        for (const action of actions.slice(0, 6)) {
+          const btn = document.createElement('button');
+          btn.type = 'button';
+          btn.className = 'btn';
+          btn.textContent = String(action.label || action.tool || action.command || action.id || 'Action');
+          btn.title = String(action.tool || action.command || action.id || '');
+          btn.addEventListener('click', () => {
+            void runAgentMcpBlockerAction(action);
+          });
+          row.appendChild(btn);
+        }
+        wrap.appendChild(row);
+        host.appendChild(wrap);
+      }
+
+      function renderAgentMcpBlockerActionResult(label, state, result) {
+        const detail = $('agentMcpBlockerActionDetail');
+        if (!detail) return;
+        detail.hidden = false;
+        const r = result && typeof result === 'object' ? result : {};
+        const parts = [
+          `action=${label || 'Action'}`,
+          `state=${state || 'unknown'}`,
+          Object.prototype.hasOwnProperty.call(r, 'ok') ? `ok=${Boolean(r.ok)}` : '',
+          Object.prototype.hasOwnProperty.call(r, 'loggedIn') ? `loggedIn=${Boolean(r.loggedIn)}` : '',
+          Object.prototype.hasOwnProperty.call(r, 'uploaded') ? `uploaded=${Boolean(r.uploaded)}` : '',
+          Object.prototype.hasOwnProperty.call(r, 'eventCount') ? `events=${Number(r.eventCount) || 0}` : '',
+          r.code ? `code=${r.code}` : '',
+          r.error ? `error=${r.error}` : '',
+          r.endpoint ? `endpoint=${r.endpoint}` : '',
+          r.partition ? `partition=${r.partition}` : '',
+          r.target ? `target=${r.target}` : '',
+          r.skillId ? `skill=${r.skillId}` : '',
+          Array.isArray(r.requiredInputs) && r.requiredInputs.length
+            ? `inputs=${r.requiredInputs.map((input) => input && input.name ? String(input.name) : '').filter(Boolean).join(',')}`
+            : '',
+        ].filter(Boolean);
+        detail.textContent = parts.join(' / ') + (r.nextStep ? `\n${r.nextStep}` : r.message ? `\n${r.message}` : '');
+      }
+
+      async function runAgentMcpBlockerAction(action) {
+        const tool = String(action && action.tool || '');
+        const command = String(action && action.command || '');
+        const label = String(action && (action.label || action.tool || action.command || action.id) || 'Action');
+        renderAgentMcpBlockerActionResult(label, 'started', {});
+        try {
+          if (tool === 'ac.usage.probe_quota_policy') {
+            const r = await runAgentUsageQuotaPolicyProbeUi();
+            renderAgentMcpBlockerActionResult(label, r && r.ok ? 'finished' : 'needs_input', r);
+            return;
+          }
+          if (tool === 'ac.usage.upload_cloud_draft') {
+            const r = await runAgentUsageUploadUi({ dryRun: true });
+            renderAgentMcpBlockerActionResult(label, r && r.ok ? 'finished' : 'needs_input', r);
+            return;
+          }
+          if (tool === 'ac.workflow.promote_workbench_preset') {
+            const r = await runWorkflowPromotionPreflightUi('workbench_preset');
+            renderAgentMcpBlockerActionResult(label, r && r.ok ? 'finished' : 'needs_input', {
+              ...(r || {}),
+              target: 'workbench_preset',
+              requiredInputs: Array.isArray(action.requiredInputs) ? action.requiredInputs : [],
+            });
+            return;
+          }
+          if (tool === 'ac.workflow.promote_script_hub_tool') {
+            const r = await runWorkflowPromotionPreflightUi('script_hub_tool');
+            renderAgentMcpBlockerActionResult(label, r && r.ok ? 'finished' : 'needs_input', {
+              ...(r || {}),
+              target: 'script_hub_tool',
+              requiredInputs: Array.isArray(action.requiredInputs) ? action.requiredInputs : [],
+            });
+            return;
+          }
+          if (command.includes('smoke:agent-mcp:e2e:open-login-wait')) {
+            await openWorkbenchLoginUi();
+            const login = await waitForShellAccountLoginUi({ timeoutMs: 120000, intervalMs: 2000 });
+            const e2e = await runAgentMcpWorkbenchE2eUi(login && login.ok ? {} : { recoveryWaitMs: 30000 });
+            renderAgentMcpBlockerActionResult(label, e2e && e2e.ok ? 'finished' : 'needs_input', {
+              ...(e2e || {}),
+              loggedIn: Boolean(login && login.ok),
+              nextStep: e2e && e2e.error ? e2e.error : '',
+            });
+            return;
+          }
+          if (command.includes('smoke:agent-mcp:e2e:wait-login')) {
+            const e2e = await runAgentMcpWorkbenchE2eUi({ recoveryWaitMs: 120000 });
+            renderAgentMcpBlockerActionResult(label, e2e && e2e.ok ? 'finished' : 'needs_input', e2e);
+            return;
+          }
+          if (command.includes('smoke:agent-mcp:status')) {
+            const r = await probeAgentMcpUi();
+            renderAgentMcpBlockerActionResult(label, r && r.ok ? 'finished' : 'needs_input', r);
+            return;
+          }
+          if (command && shell.copyText) {
+            shell.copyText(command);
+            setSetFeedback($('agentSettingsHint'), 'Copied: ' + command);
+            renderAgentMcpBlockerActionResult(label, 'finished', { ok: true, message: 'Copied command' });
+            return;
+          }
+          renderAgentMcpBlockerActionResult(label, 'needs_input', { ok: false, error: 'unsupported_action' });
+        } catch (e) {
+          renderAgentMcpBlockerActionResult(label, 'failed', { ok: false, error: e && e.message ? e.message : String(e) });
+        }
+      }
+
+      function formatAgentMcpE2eAuthDiagnostics(e2e) {
+        const response = e2e && e2e.response && e2e.response.json ? e2e.response.json : null;
+        const result = response && response.result ? response.result : {};
+        const structured = result.structuredContent && typeof result.structuredContent === 'object' ? result.structuredContent : {};
+        const details = structured.details && typeof structured.details === 'object' ? structured.details : {};
+        const auth = structured.authDiagnostics && typeof structured.authDiagnostics === 'object'
+          ? structured.authDiagnostics
+          : details.authDiagnostics && typeof details.authDiagnostics === 'object'
+            ? details.authDiagnostics
+            : null;
+        const server = details.server && typeof details.server === 'object' ? details.server : {};
+        const session = auth && auth.session && typeof auth.session === 'object' ? auth.session : null;
+        const account = e2e && e2e.account && typeof e2e.account === 'object' ? e2e.account : null;
+        const rows = [];
+        const origin = (auth && auth.apiOrigin) || server.requestOrigin || (account && account.authOrigin) || '';
+        if (origin) rows.push(['Origin', origin]);
+        const cookieCount =
+          session && Number.isFinite(Number(session.cookieCount))
+            ? Number(session.cookieCount)
+            : account && Number.isFinite(Number(account.cookieCount))
+              ? Number(account.cookieCount)
+              : null;
+        if (cookieCount != null) rows.push(['Cookies', String(cookieCount)]);
+        const hasAuthCookie =
+          session && typeof session.hasLikelyAuthCookie === 'boolean'
+            ? session.hasLikelyAuthCookie
+            : account && typeof account.hasAuthCookie === 'boolean'
+              ? account.hasAuthCookie
+              : null;
+        if (hasAuthCookie === false) rows.push(['Auth Cookie', 'missing']);
+        const partition = (auth && auth.partition) || (account && account.partition) || '';
+        if (partition) rows.push(['Partition', partition]);
+        if (!rows.length) return '';
+        return (
+          '<dl class="agent-mcp-e2e-diag">' +
+          rows
+            .map(([key, value]) => `<div><dt>${escapeAgentMcpHtml(key)}</dt><dd>${escapeAgentMcpHtml(value)}</dd></div>`)
+            .join('') +
+          '</dl>'
+        );
+      }
+
+      function formatAgentMcpE2eFreshness(e2e) {
+        const freshness = e2e && e2e.freshness && typeof e2e.freshness === 'object' ? e2e.freshness : null;
+        const checkedAt = freshness && freshness.checkedAt ? freshness.checkedAt : e2e && e2e.checkedAt ? e2e.checkedAt : '';
+        const checkedMs = checkedAt ? Date.parse(checkedAt) : NaN;
+        const maxAgeMs =
+          freshness && Number.isFinite(Number(freshness.maxAgeMs))
+            ? Number(freshness.maxAgeMs)
+            : 15 * 60 * 1000;
+        let status = freshness && freshness.status ? String(freshness.status) : '';
+        let ageMs =
+          freshness && Number.isFinite(Number(freshness.ageMs))
+            ? Number(freshness.ageMs)
+            : Number.isFinite(checkedMs)
+              ? Math.max(0, Date.now() - checkedMs)
+              : null;
+        if (!status) {
+          status = Number.isFinite(checkedMs) ? (ageMs > maxAgeMs ? 'stale' : 'fresh') : 'missing';
+        }
+        const stale = freshness && typeof freshness.stale === 'boolean' ? freshness.stale : status !== 'fresh';
+        const ageText =
+          ageMs == null
+            ? ''
+            : ageMs < 60 * 60 * 1000
+              ? `${Math.max(1, Math.round(ageMs / 60000))} minutes ago`
+              : `${Math.round(ageMs / 3600000)} hours ago`;
+        const checkedText = checkedAt ? `Checked at: ${checkedAt}${ageText ? ` (${ageText})` : ''}` : 'No complete validation yet';
+        const stateText =
+          status === 'missing'
+            ? 'Workbench E2E missing'
+            : status === 'invalid'
+              ? 'Workbench E2E invalid'
+              : stale
+                ? 'Last validation: stale'
+                : e2e && e2e.ok
+                  ? 'Workbench MCP chain passed'
+                  : 'Workbench E2E missing';
+        return (
+          '<div class="agent-mcp-e2e-freshness">' +
+          '<strong>' +
+          escapeAgentMcpHtml(stateText) +
+          '</strong>' +
+          `<div>${escapeAgentMcpHtml(checkedText)}</div>` +
+          `<div>${escapeAgentMcpHtml(stale ? 'Run validation again' : 'Validation is still fresh')}</div>` +
+          '</div>'
+        );
       }
 
       function renderAgentMcpE2e(result) {
@@ -5800,24 +7282,39 @@
         const actions = $('agentMcpE2eActions');
         const openBtn = $('btnOpenWorkbenchForMcpE2e');
         if (!el) return;
-        const e2e = result && result.e2e ? result.e2e : result;
+        const e2e = result && result.e2e ? result.e2e : result || null;
         if (!e2e) {
           el.hidden = true;
-          el.textContent = '';
           if (actions) actions.hidden = true;
           return;
         }
         el.hidden = false;
+        const freshness = formatAgentMcpE2eFreshness(e2e);
         if (e2e.ok) {
-          const assetText = e2e.assetId ? `，产物 ${e2e.assetId}` : '';
-          el.textContent = `工作台验收通过：ensure_ready → run_capability → list_assets → get_asset 已打通${assetText}。`;
+          const assetText = e2e.assetId ? `; asset ${e2e.assetId}` : '';
+          el.innerHTML =
+            '<strong>Workbench MCP chain passed</strong>' +
+            '<ol class="agent-mcp-e2e-chain">' +
+            '<li>ensure_ready</li>' +
+            '<li>create_project</li>' +
+            '<li>run_capability</li>' +
+            '<li>list_assets</li>' +
+            '<li>get_asset</li>' +
+            '</ol>' +
+            `<div>External Agents can use Workbench through MCP${assetText}.</div>`;
+          el.innerHTML += freshness;
           if (actions) actions.hidden = true;
           return;
         }
-        const step = e2e.failedStep ? `停在 ${e2e.failedStep}` : '未通过';
-        const code = e2e.errorCode ? `（${e2e.errorCode}）` : '';
+        const step = e2e.failedStep ? `Stopped at ${e2e.failedStep}` : 'Not passed';
+        const code = e2e.errorCode ? ` (${e2e.errorCode})` : '';
         const next = e2e.nextStep ? ` ${e2e.nextStep}` : '';
-        el.textContent = `工作台验收${step}${code}。${next}`;
+        const diagnostics = formatAgentMcpE2eAuthDiagnostics(e2e);
+        el.innerHTML =
+          '<strong>Workbench chain needs attention</strong>' +
+          `<div>${escapeAgentMcpHtml(step)}${escapeAgentMcpHtml(code)}${escapeAgentMcpHtml(next)}</div>` +
+          diagnostics;
+        el.innerHTML += freshness;
         if (actions) actions.hidden = false;
         if (openBtn) {
           openBtn.hidden =
@@ -5838,8 +7335,8 @@
         if (detail) {
           detail.hidden = false;
           detail.textContent = opts.recoveryWaitMs
-            ? '正在打开工作台并等待登录，完成登录后会自动继续验收…'
-            : '正在按真实 MCP 链路验收工作台，请保持工作台已登录并停留在可操作状态…';
+            ? 'Opening Workbench and waiting for login; validation will continue after sign-in.'
+            : 'Running the real MCP Workbench validation chain; keep Workbench signed in and ready.';
         }
         if (actions) actions.hidden = true;
         try {
@@ -5848,15 +7345,211 @@
             renderAgentMcpE2e(r);
             renderAgentMcpProbe(r);
           } else if (detail) {
-            detail.textContent = '工作台验收失败：' + ((r && r.error) || '未知错误');
+            detail.textContent = '\u5de5\u4f5c\u53f0\u9a8c\u6536\u672a\u5b8c\u6210\uff1a' + ((r && r.error) || '\u672a\u77e5\u9519\u8bef');
           }
+          return r;
         } catch (e) {
           if (detail) {
             detail.hidden = false;
             detail.textContent = e && e.message ? e.message : String(e);
           }
+          return { ok: false, error: e && e.message ? e.message : String(e) };
         } finally {
           if (btn) btn.disabled = false;
+        }
+      }
+      async function runAgentUsageUploadUi(options) {
+        const opts = options && typeof options === 'object' ? options : {};
+        const agent = shell.agentSession;
+        if (!agent || typeof agent.usageUploadCloudDraft !== 'function') return;
+        const dryRun = Boolean(opts.dryRun);
+        const btn = dryRun ? $('btnUsageUploadDryRun') : $('btnUsageUploadCloudDraft');
+        const detail = $('agentUsageUploadDetail');
+        if (btn) btn.disabled = true;
+        if (detail) {
+          detail.hidden = false;
+          detail.textContent = dryRun
+            ? '\u6b63\u5728\u6a21\u62df\u4e0a\u4f20 Copilot \u7528\u91cf\u8349\u7a3f...'
+            : '\u6b63\u5728\u4e0a\u4f20 Copilot \u7528\u91cf\u8349\u7a3f...';
+        }
+        try {
+          const r = await agent.usageUploadCloudDraft({ days: 1, limit: 5000, dryRun });
+          if (detail) {
+            const parts = [
+              r && r.ok ? 'ok=true' : 'ok=false',
+              `uploaded=${Boolean(r && r.uploaded)}`,
+              `eventCount=${Number(r && r.eventCount) || 0}`,
+              `inserted=${Number(r && r.inserted) || 0}`,
+              `skipped=${Number(r && r.skipped) || 0}`,
+              r && r.code ? `code=${r.code}` : '',
+              r && r.authRequired ? 'authRequired=true' : '',
+              r && r.noEvents ? 'noEvents=true' : '',
+              r && r.endpoint ? `endpoint=${r.endpoint}` : '',
+              r && r.partition ? `partition=${r.partition}` : '',
+              r && r.idempotencyScope ? `idempotency=${r.idempotencyScope}` : '',
+            ].filter(Boolean);
+            detail.textContent =
+              parts.join(' / ') +
+              (r && r.nextStep ? `\n${r.nextStep}` : r && r.message ? `\n${r.message}` : '');
+          }
+          await loadAgentSettingsUi();
+          return r;
+        } catch (e) {
+          if (detail) {
+            detail.hidden = false;
+            detail.textContent = e && e.message ? e.message : String(e);
+          }
+          return { ok: false, error: e && e.message ? e.message : String(e) };
+        } finally {
+          if (btn) btn.disabled = false;
+        }
+      }
+      async function runAgentUsageQuotaPolicyProbeUi() {
+        const agent = shell.agentSession;
+        if (!agent || typeof agent.usageQuotaPolicyProbe !== 'function') return;
+        const btn = $('btnUsageQuotaPolicyProbe');
+        const detail = $('agentUsageUploadDetail');
+        if (btn) btn.disabled = true;
+        if (detail) {
+          detail.hidden = false;
+          detail.textContent = '\u6b63\u5728\u68c0\u67e5 Copilot \u7528\u91cf\u7b56\u7565...';
+        }
+        try {
+          const r = await agent.usageQuotaPolicyProbe();
+          const quota = r && r.quotaPolicy && typeof r.quotaPolicy === 'object' ? r.quotaPolicy : {};
+          if (detail) {
+            const parts = [
+              r && r.ok ? 'ok=true' : 'ok=false',
+              `quotaEnforced=${Boolean(quota.cloudQuotaEnforced)}`,
+              r && Object.prototype.hasOwnProperty.call(r, 'usageBillingEnabled')
+                ? `usageBillingEnabled=${Boolean(r.usageBillingEnabled)}`
+                : '',
+              quota.enforcementSource ? `source=${quota.enforcementSource}` : '',
+              quota.policyId ? `policy=${quota.policyId}` : '',
+              r && r.code ? `code=${r.code}` : '',
+              r && r.authRequired ? 'authRequired=true' : '',
+              r && r.endpoint ? `endpoint=${r.endpoint}` : '',
+              r && r.partition ? `partition=${r.partition}` : '',
+            ].filter(Boolean);
+            detail.textContent = parts.join(' / ') + (r && r.message ? `\n${r.message}` : '');
+          }
+          await loadAgentSettingsUi();
+          return r;
+        } catch (e) {
+          if (detail) {
+            detail.hidden = false;
+            detail.textContent = e && e.message ? e.message : String(e);
+          }
+          return { ok: false, error: e && e.message ? e.message : String(e) };
+        } finally {
+          if (btn) btn.disabled = false;
+        }
+      }
+
+      function renderWorkflowPromotionPreflight(result) {
+        const detail = $('agentWorkflowPromotionDetail');
+        if (!detail) return;
+        detail.hidden = false;
+        const preflight = result && result.preflight && typeof result.preflight === 'object' ? result.preflight : null;
+        const toolResult = result && result.result && typeof result.result === 'object' ? result.result : null;
+        const error = toolResult && toolResult.error && toolResult.error.code ? toolResult.error.code : result && result.error ? result.error : '';
+        if (!preflight) {
+          detail.textContent = '\u5de5\u4f5c\u6d41\u9884\u53d1\u5e03\u68c0\u67e5\u672a\u8fd4\u56de\u7ed3\u679c' + (error ? ': ' + error : '');
+          return;
+        }
+        const passed = Array.isArray(preflight.passedGates) ? preflight.passedGates : [];
+        const missing = Array.isArray(preflight.missingGates) ? preflight.missingGates : [];
+        const lines = [
+          `target=${preflight.target || result.target || ''}`,
+          `publishable=${Boolean(preflight.publishable)}`,
+          `phase=${preflight.currentPhase || ''}`,
+          `adminApproved=${Boolean(preflight.adminConfirmation && preflight.adminConfirmation.passed)}`,
+          `passed=${passed.join(', ') || '-'}`,
+          `missing=${missing.join(', ') || '-'}`,
+          preflight.nextStep ? `next=${preflight.nextStep}` : '',
+          result.toolCallId ? `audit=${result.toolCallId}` : '',
+        ].filter(Boolean);
+        detail.textContent = lines.join('\n');
+      }
+
+      async function fillLatestWorkflowPromotionDraftUi() {
+        const agent = shell.agentSession;
+        const detail = $('agentWorkflowPromotionDetail');
+        const input = $('inpWorkflowPromotionSkillId');
+        const btn = $('btnFillLatestWorkflowDraft');
+        if (!agent || typeof agent.workflowPromotionDrafts !== 'function') return;
+        if (btn) btn.disabled = true;
+        try {
+          const r = await agent.workflowPromotionDrafts();
+          const latest = r && r.latest && typeof r.latest === 'object' ? r.latest : null;
+          if (!latest || !latest.id) {
+            if (detail) {
+              detail.hidden = false;
+              detail.textContent = 'No existing workflow drafts. Save one with ac.skills.save first.';
+            }
+            return { ok: false, error: 'no_workflow_drafts' };
+          }
+          if (input) input.value = latest.id;
+          if (detail) {
+            const caps = [
+              latest.hasWorkbenchPreset ? 'workbenchPreset' : '',
+              latest.hasScriptManifest ? 'scriptManifest' : '',
+            ].filter(Boolean);
+            detail.hidden = false;
+            detail.textContent = [
+              `selected=${latest.id}`,
+              latest.name ? `name=${latest.name}` : '',
+              `revision=${Number(latest.revision) || 1}`,
+              caps.length ? `targets=${caps.join(',')}` : 'targets=none',
+              latest.updatedAt ? `updatedAt=${latest.updatedAt}` : '',
+            ].filter(Boolean).join('\n');
+          }
+          return { ok: true, draft: latest };
+        } catch (e) {
+          if (detail) {
+            detail.hidden = false;
+            detail.textContent = e && e.message ? e.message : String(e);
+          }
+          return { ok: false, error: e && e.message ? e.message : String(e) };
+        } finally {
+          if (btn) btn.disabled = false;
+        }
+      }
+
+      async function runWorkflowPromotionPreflightUi(target) {
+        const agent = shell.agentSession;
+        if (!agent || typeof agent.workflowPromotionPreflight !== 'function') return;
+        const skillId = $('inpWorkflowPromotionSkillId') ? $('inpWorkflowPromotionSkillId').value.trim() : '';
+        const detail = $('agentWorkflowPromotionDetail');
+        const workbenchBtn = $('btnPromoteWorkbenchPresetPreflight');
+        const scriptBtn = $('btnPromoteScriptHubToolPreflight');
+        if (!skillId) {
+          if (detail) {
+            detail.hidden = false;
+            detail.textContent = '\u8bf7\u5148\u586b\u5199 workflow/skill ID\u3002';
+          }
+          return { ok: false, error: 'skill_id_required', target };
+        }
+        if (workbenchBtn) workbenchBtn.disabled = true;
+        if (scriptBtn) scriptBtn.disabled = true;
+        if (detail) {
+          detail.hidden = false;
+          detail.textContent = '\u6b63\u5728\u901a\u8fc7 Copilot UI \u6267\u884c\u5de5\u4f5c\u6d41\u9884\u53d1\u5e03\u68c0\u67e5...';
+        }
+        try {
+          const r = await agent.workflowPromotionPreflight({ target, skillId });
+          renderWorkflowPromotionPreflight(r);
+          if (r && r.mcpEntranceStatus) renderAgentMcpWorkbenchEntrance(r.mcpEntranceStatus);
+          return r;
+        } catch (e) {
+          if (detail) {
+            detail.hidden = false;
+            detail.textContent = e && e.message ? e.message : String(e);
+          }
+          return { ok: false, error: e && e.message ? e.message : String(e), target, skillId };
+        } finally {
+          if (workbenchBtn) workbenchBtn.disabled = false;
+          if (scriptBtn) scriptBtn.disabled = false;
         }
       }
 
@@ -5882,9 +7575,20 @@
             $('inpCodexSharedAuthToken').value =
               r.settings && r.settings.codexSharedAuthToken ? String(r.settings.codexSharedAuthToken) : '';
           }
+          if ($('inpCodexCommand')) {
+            $('inpCodexCommand').value = r.settings && r.settings.codexCommand ? String(r.settings.codexCommand) : '';
+          }
+          if ($('inpCodexCwd')) {
+            $('inpCodexCwd').value = r.settings && r.settings.codexCwd ? String(r.settings.codexCwd) : '';
+          }
+          if ($('inpCodexModel')) {
+            $('inpCodexModel').value = r.settings && r.settings.codexModel ? String(r.settings.codexModel) : '';
+          }
           renderBrainPicker(
             (r.settings && r.settings.defaultBrainId) || (r.activeBrainId || 'codex'),
           );
+          renderCodexSandboxPicker(r.settings && r.settings.codexSandbox);
+          renderCodexRuntimeStatus(r.codexRuntime);
           if ($('inpMcpToken')) {
             $('inpMcpToken').value = r.settings && r.settings.mcpToken ? String(r.settings.mcpToken) : '';
           }
@@ -5893,14 +7597,18 @@
           }
           agentMcpConfigCache = r.mcpConfig || null;
           renderAgentMcpProbe({ mcp: r.mcp, mcpConfig: r.mcpConfig, mcpToolCatalog: r.mcpToolCatalog });
+          if (r.settings && r.settings.mcpWorkbenchLastE2e) {
+            renderAgentMcpE2e({ e2e: r.settings.mcpWorkbenchLastE2e });
+          }
+          renderAgentPolicyTemplates(r.policyTemplates);
           renderAgentPolicy(r.agentPolicy);
           const st = $('agentMcpStatus');
           if (st && r.mcp) {
             st.textContent = r.mcp.running
-              ? `MCP 运行中 http://127.0.0.1:${r.mcp.port}/mcp`
+              ? `MCP running: http://127.0.0.1:${r.mcp.port}/mcp`
               : r.mcp.enabled
-                ? 'MCP 已启用但未运行'
-                : 'MCP 已关闭';
+                ? 'MCP enabled but not running'
+                : 'MCP disabled';
           }
           if ($('codexAuthStatus')) {
             const auth = r.codexAuth || {};
@@ -5908,10 +7616,10 @@
             const lastError = r.settings && r.settings.codexSharedAuthLastError;
             $('codexAuthStatus').textContent =
               'Codex auth: ' +
-              (auth.exists ? '本机已存在' : '本机未写入') +
-              (auth.path ? ' · ' + auth.path : '') +
-              (lastSync ? '\n最近同步: ' + lastSync : '') +
-              (lastError ? '\n最近错误: ' + lastError : '');
+              (auth.exists ? 'local auth present' : 'local auth missing') +
+              (auth.path ? ' 路 ' + auth.path : '') +
+              (lastSync ? '\nLast sync: ' + lastSync : '') +
+              (lastError ? '\nLast error: ' + lastError : '');
           }
           applyHermesStatusUi(r.hermesGateway, r.activeBrainId);
           void loadAgentUsageSummaryUi();
@@ -5928,7 +7636,7 @@
           if (!agent || typeof agent.saveSettings !== 'function') return;
           const btn = $('btnSaveAgentSettings');
           btn.disabled = true;
-          setSetFeedback(hintEl, '保存中…');
+          setSetFeedback(hintEl, 'Saving...');
           try {
             const patch = {
               mcpEnabled: Boolean($('inpMcpEnabled') && $('inpMcpEnabled').checked),
@@ -5941,11 +7649,17 @@
               ),
               codexSharedAuthUrl: $('inpCodexSharedAuthUrl') ? $('inpCodexSharedAuthUrl').value.trim() : '',
               codexSharedAuthToken: $('inpCodexSharedAuthToken') ? $('inpCodexSharedAuthToken').value.trim() : '',
+              codexCommand: $('inpCodexCommand') ? $('inpCodexCommand').value.trim() : '',
+              codexCwd: $('inpCodexCwd') ? $('inpCodexCwd').value.trim() : '',
+              codexModel: $('inpCodexModel') ? $('inpCodexModel').value.trim() : '',
+              codexSandbox: agentSettingsCache.codexSandbox || 'workspace-write',
             };
             const r = await agent.saveSettings(patch);
             if (r && r.ok) {
               agentSettingsCache = { ...(r.settings || {}) };
               renderBrainPicker(r.settings && r.settings.defaultBrainId);
+              renderCodexSandboxPicker(r.settings && r.settings.codexSandbox);
+              renderCodexRuntimeStatus(r.codexRuntime);
               if ($('inpMcpToken') && r.settings && r.settings.mcpToken) {
                 $('inpMcpToken').value = String(r.settings.mcpToken);
               }
@@ -5956,14 +7670,14 @@
               renderAgentMcpProbe({ mcp: r.mcp, mcpConfig: r.mcpConfig, mcpToolCatalog: r.mcpToolCatalog });
               if ($('agentMcpStatus') && r.mcp) {
                 $('agentMcpStatus').textContent = r.mcp.running
-                  ? `MCP 运行中 http://127.0.0.1:${r.mcp.port}/mcp`
+                  ? `MCP running: http://127.0.0.1:${r.mcp.port}/mcp`
                   : r.mcp.enabled
-                    ? 'MCP 已启用但未运行'
-                    : 'MCP 已关闭';
+                    ? 'MCP enabled but not running'
+                    : 'MCP disabled';
               }
-              setSetFeedback(hintEl, 'Agent 设置已保存');
+              setSetFeedback(hintEl, 'Agent settings saved');
             } else {
-              setSetFeedback(hintEl, '保存失败：' + ((r && r.error) || '未知错误'));
+              setSetFeedback(hintEl, 'Save failed: ' + ((r && r.error) || 'unknown error'));
             }
           } catch (e) {
             setSetFeedback(hintEl, e && e.message ? e.message : String(e));
@@ -5980,7 +7694,7 @@
           const btn = $('btnSyncCodexAuth');
           if (!agent || typeof agent.saveSettings !== 'function' || typeof agent.syncCodexAuth !== 'function') return;
           btn.disabled = true;
-          setSetFeedback(hintEl, '正在刷新 Codex 凭据...');
+          setSetFeedback(hintEl, 'Refreshing Codex credentials...');
           try {
             await agent.saveSettings({
               codexSharedAuthEnabled: Boolean(
@@ -5993,25 +7707,47 @@
               codexSharedAuthToken: $('inpCodexSharedAuthToken') ? $('inpCodexSharedAuthToken').value.trim() : '',
             });
             const r = await agent.syncCodexAuth();
+            renderCodexRuntimeStatus(r && r.codexRuntime);
             if (r && r.ok) {
-              setSetFeedback(hintEl, 'Codex 凭据已刷新');
+              setSetFeedback(hintEl, 'Codex credentials refreshed.');
               if ($('codexAuthStatus')) {
                 const auth = r.status || {};
                 $('codexAuthStatus').textContent =
                   'Codex auth: ' +
-                  (auth.exists ? '本机已存在' : '本机未写入') +
-                  (auth.path ? ' · ' + auth.path : '') +
+                  (auth.exists ? 'local auth present' : 'local auth missing') +
+                  (auth.path ? ' path=' + auth.path : '') +
                   (r.settings && r.settings.codexSharedAuthLastSyncAt
-                    ? '\n最近同步: ' + r.settings.codexSharedAuthLastSyncAt
+                    ? '\nLast sync: ' + r.settings.codexSharedAuthLastSyncAt
                     : '');
               }
               if (typeof window.__acCopilotRefreshOnboarding === 'function') {
                 window.__acCopilotRefreshOnboarding();
               }
             } else {
-              setSetFeedback(hintEl, 'Codex 凭据刷新失败：' + ((r && r.error) || '未知错误'));
+              setSetFeedback(hintEl, 'Codex credential refresh failed: ' + ((r && r.error) || 'unknown error'));
               void loadAgentSettingsUi();
             }
+          } catch (e) {
+            setSetFeedback(hintEl, e && e.message ? e.message : String(e));
+          } finally {
+            btn.disabled = false;
+          }
+        });
+      }
+
+      if ($('btnProbeCodexRuntime')) {
+        $('btnProbeCodexRuntime').addEventListener('click', async () => {
+          const agent = shell.agentSession;
+          const btn = $('btnProbeCodexRuntime');
+          const hintEl = $('agentSettingsHint');
+          if (!agent || typeof agent.probeAllBrains !== 'function') return;
+          btn.disabled = true;
+          setSetFeedback(hintEl, 'Testing Codex...');
+          try {
+            const r = await agent.probeAllBrains();
+            const codex = r && Array.isArray(r.brains) ? r.brains.find((b) => b && b.id === 'codex') : null;
+            renderCodexRuntimeStatus(codexRuntimeStatusCache, codex && codex.probe);
+            setSetFeedback(hintEl, codex && codex.probe && codex.probe.ok ? 'Codex ready' : 'Codex test failed');
           } catch (e) {
             setSetFeedback(hintEl, e && e.message ? e.message : String(e));
           } finally {
@@ -6034,7 +7770,7 @@
               }
               agentMcpConfigCache = r.mcpConfig || null;
               renderAgentMcpProbe({ mcp: r.mcp, mcpConfig: r.mcpConfig, mcpToolCatalog: r.mcpToolCatalog });
-              setSetFeedback(hintEl, 'Token 已重新生成');
+              setSetFeedback(hintEl, 'Token regenerated.');
             }
           } catch (e) {
             setSetFeedback(hintEl, e && e.message ? e.message : String(e));
@@ -6054,6 +7790,42 @@
         });
       }
 
+      if ($('btnUsageUploadDryRun')) {
+        $('btnUsageUploadDryRun').addEventListener('click', () => {
+          void runAgentUsageUploadUi({ dryRun: true });
+        });
+      }
+
+      if ($('btnUsageQuotaPolicyProbe')) {
+        $('btnUsageQuotaPolicyProbe').addEventListener('click', () => {
+          void runAgentUsageQuotaPolicyProbeUi();
+        });
+      }
+
+      if ($('btnUsageUploadCloudDraft')) {
+        $('btnUsageUploadCloudDraft').addEventListener('click', () => {
+          void runAgentUsageUploadUi({ dryRun: false });
+        });
+      }
+
+      if ($('btnPromoteWorkbenchPresetPreflight')) {
+        $('btnPromoteWorkbenchPresetPreflight').addEventListener('click', () => {
+          void runWorkflowPromotionPreflightUi('workbench_preset');
+        });
+      }
+
+      if ($('btnFillLatestWorkflowDraft')) {
+        $('btnFillLatestWorkflowDraft').addEventListener('click', () => {
+          void fillLatestWorkflowPromotionDraftUi();
+        });
+      }
+
+      if ($('btnPromoteScriptHubToolPreflight')) {
+        $('btnPromoteScriptHubToolPreflight').addEventListener('click', () => {
+          void runWorkflowPromotionPreflightUi('script_hub_tool');
+        });
+      }
+
       if ($('btnRetryMcpWorkbenchE2e')) {
         $('btnRetryMcpWorkbenchE2e').addEventListener('click', () => {
           void runAgentMcpWorkbenchE2eUi();
@@ -6062,29 +7834,28 @@
 
       if ($('btnWaitLoginMcpWorkbenchE2e')) {
         $('btnWaitLoginMcpWorkbenchE2e').addEventListener('click', () => {
-          void runAgentMcpWorkbenchE2eUi({ recoveryWaitMs: 60000 });
+          void (async () => {
+            await loadShellAccountStatusUi();
+            await openWorkbenchLoginUi();
+            const login = await waitForShellAccountLoginUi({ timeoutMs: 120000, intervalMs: 2000 });
+            await runAgentMcpWorkbenchE2eUi(login && login.ok ? {} : { recoveryWaitMs: 30000 });
+            await loadShellAccountStatusUi();
+          })();
         });
       }
 
       if ($('btnOpenWorkbenchForMcpE2e')) {
         $('btnOpenWorkbenchForMcpE2e').addEventListener('click', async () => {
-          if (typeof shell.setShellView === 'function') {
-            await shell.setShellView('workbench');
-          } else if (typeof window.__acApplyShellViewFromMain === 'function') {
-            await window.__acApplyShellViewFromMain('workbench');
-          }
-          if (typeof shell.workbenchReload === 'function') {
-            void shell.workbenchReload();
-          }
+          await openWorkbenchLoginUi();
         });
       }
 
       if ($('btnCopyMcpEndpoint')) {
         $('btnCopyMcpEndpoint').addEventListener('click', () => {
           const text = agentMcpEndpointCache || ($('agentMcpEndpoint') && $('agentMcpEndpoint').textContent) || '';
-          if (text && text !== '—') {
+          if (text && text !== '-') {
             shell.copyText(text);
-            setSetFeedback($('agentSettingsHint'), 'MCP 地址已复制');
+            setSetFeedback($('agentSettingsHint'), 'MCP address copied');
           }
         });
       }
@@ -6094,7 +7865,7 @@
           const text = agentMcpConfigCache ? JSON.stringify(agentMcpConfigCache, null, 2) : ($('inpMcpConfig') && $('inpMcpConfig').value) || '';
           if (text) {
             shell.copyText(text);
-            setSetFeedback($('agentSettingsHint'), 'MCP 配置已复制');
+            setSetFeedback(agentSettingsHint, 'MCP config copied');
           }
         });
       }
@@ -6115,7 +7886,7 @@
           const btn = $('btnSaveAgentPolicy');
           if (!agent || typeof agent.savePolicy !== 'function') return;
           btn.disabled = true;
-          setSetFeedback($('agentSettingsHint'), '正在保存权限策略...');
+          setSetFeedback(agentSettingsHint, 'Saving permission policy...');
           try {
             const r = await agent.savePolicy({
               confirmTools: Boolean(agentPolicyCache.confirmTools),
@@ -6124,10 +7895,11 @@
             });
             if (r && r.ok) {
               if (r.mcpToolCatalog) renderAgentMcpToolCatalog(r.mcpToolCatalog);
+              renderAgentPolicyTemplates(r.policyTemplates);
               renderAgentPolicy(r.agentPolicy);
-              setSetFeedback($('agentSettingsHint'), '权限策略已保存');
+              setSetFeedback($('agentSettingsHint'), 'Permission policy saved');
             } else {
-              setSetFeedback($('agentSettingsHint'), '保存失败：' + ((r && r.error) || '未知错误'));
+              setSetFeedback($('agentSettingsHint'), 'Save failed: ' + ((r && r.error) || 'unknown error'));
             }
           } catch (e) {
             setSetFeedback($('agentSettingsHint'), e && e.message ? e.message : String(e));
@@ -6147,17 +7919,17 @@
         await refreshTray();
         void refreshSamLocalWinPanel();
         void refreshRembgWinPanel();
-        if (activeView === 'home') {
+        if (activeView === 'settings') {
           await loadPlugins();
         }
       }
 
-      /** 定时轮询：只更新托盘摘要与内置服务能力表。 */
+      /** Periodic polling: refresh tray summary and built-in service capability tables only. */
       async function refreshHomePeriodic() {
         await refreshTray();
         void refreshSamLocalWinPanel();
         void refreshRembgWinPanel();
-        if (activeView === 'home') {
+        if (activeView === 'settings') {
           await loadPlugins();
         }
       }
@@ -6177,11 +7949,11 @@
       }
 
       async function init() {
-        $('statusLabel').textContent = '连接中…';
+        statusLabel.textContent = 'Connecting...';
         try {
           await Promise.race([
             loadSettingsUi(),
-            new Promise((_, rej) => setTimeout(() => rej(new Error('loadSettings 超时')), 8000)),
+            new Promise((_, rej) => setTimeout(() => rej(new Error('loadSettings timeout')), 8000)),
           ]);
         } catch {
           $('inpSiteUrl').value = settingsCache.siteUrl;
@@ -6202,6 +7974,7 @@
         } catch (e) {
           setStatusFromTray({ connected: false, note: '异常', lastError: String(e && e.message ? e.message : e), port: null });
         }
+        await applyShellView('workbench');
         void refreshVolumeEffectiveHint();
         setInterval(() => {
           void refreshHomePeriodic().catch(() => {});

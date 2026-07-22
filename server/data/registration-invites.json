@@ -1,0 +1,16 @@
+{
+  "invites": [
+    {
+      "id": "4bc270a7-f525-4372-bea6-3e639407d60b",
+      "codeKey": "ACWYXFKSQ2",
+      "note": "",
+      "createdAt": "2026-07-06T08:45:08.267Z",
+      "expiresAt": "2026-08-05T08:45:08.267Z",
+      "usedAt": null,
+      "usedByUserId": null,
+      "revokedAt": null,
+      "createdByUserId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "createdByIdentifier": "maoer"
+    }
+  ]
+}

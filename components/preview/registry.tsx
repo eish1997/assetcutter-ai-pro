@@ -14,6 +14,12 @@ export type LazyImagePreviewViewerProps = {
   modelFileName?: string;
   /** 3D 模型显示模式：由外层工具条控制 */
   model3dDisplayMode?: Model3DDisplayMode;
+  /** 3D 模型：递增后重置相机视角 */
+  model3dResetViewNonce?: number;
+  /** 3D 模型：是否显示地面网格 */
+  model3dShowGrid?: boolean;
+  /** 3D 模型：true=背面消隐，false=双面显示。 */
+  model3dBackfaceCulling?: boolean;
   className?: string;
   /** 全景：与上次卸载前相同 key 时换纹理后恢复相机位姿（如大图内切换版本，传 `innerLayoutStableKey`） */
   panoPreserveViewKey?: string;

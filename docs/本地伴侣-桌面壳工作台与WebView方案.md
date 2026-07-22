@@ -75,7 +75,7 @@
 1. `preload-shell.cjs` 暴露例如 `**shell:setShellView(view)`**（`'home' | 'workbench' | 'settings'`）或细分 `**shell:workbenchNavigate`**。
 2. `shell/index.html` 左侧按钮点击 → `**ipcRenderer.invoke**` 通知主进程。
 3. `main.cjs`：
-  - `view === 'workbench'`：创建或复用 `**BrowserView**`，`webPreferences` 建议 `**nodeIntegration: false**`、`**contextIsolation: true**`；`**partition**` 使用 **独立 persistent partition**（如 `persist:assetcutter-workbench`）以便登录态与壳其它能力隔离。
+  - `view === 'workbench'`：创建或复用 `**BrowserView**`，`webPreferences` 建议 `**nodeIntegration: false**`、`**contextIsolation: true**`；`**partition**` 使用本地壳统一一方网页会话（`persist:assetcutter-team`），让工作台、Script Hub、后续一方网页和 Copilot/MCP 复用同一主站登录态；第三方外链仍外部浏览器打开。
   - 读取当前 `**siteUrl`**（与现有 `readShellSettings()` 一致），`**view.webContents.loadURL(siteUrl)`**。
   - `view === 'home' | 'settings'`：从窗口移除或隐藏 BrowserView，壳内 HTML 通过现有机制显示对应 `div.view`（或由主进程发 IPC 让渲染进程切换 `hidden` 类）。
 

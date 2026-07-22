@@ -56,6 +56,15 @@ export const DEFAULT_PRICE_CATALOG = [
     vendorSkuRef: 'gpt-4o',
   },
   {
+    billingSku: 'copilot.codex.tokens',
+    meterKind: 'token',
+    inputPer1m: 0.15,
+    outputPer1m: 0.6,
+    userCreditsPerUnit: 1,
+    displayName: 'Copilot Codex tokens',
+    vendorSkuRef: 'codex-cli',
+  },
+  {
     billingSku: 'image.openai.gpt15',
     meterKind: 'image',
     inputPer1m: 5.0,

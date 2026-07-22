@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildAgentCapabilityOutputAsset, summarizeAgentCapabilityPreset, summarizeAgentWorkflowAsset, summarizeAgentWorkflowAssetDetail } from '../services/agentWorkbenchBridge';
+import { AGENT_WORKBENCH_SMOKE_PRESET_ID, buildAgentCapabilityOutputAsset, getAgentWorkbenchSmokePresetSummary, summarizeAgentCapabilityPreset, summarizeAgentWorkflowAsset, summarizeAgentWorkflowAssetDetail } from '../services/agentWorkbenchBridge';
 import type { CustomAppModule, WorkflowAsset } from '../types';
 
 function preset(patch: Partial<CustomAppModule>): CustomAppModule {
@@ -13,6 +13,15 @@ function preset(patch: Partial<CustomAppModule>): CustomAppModule {
 }
 
 describe('agent workbench bridge', () => {
+  it('exposes a local smoke preset for workbench E2E without provider keys', () => {
+    const summary = getAgentWorkbenchSmokePresetSummary();
+    expect(summary.id).toBe(AGENT_WORKBENCH_SMOKE_PRESET_ID);
+    expect(summary.engine).toBe('builtin');
+    expect(summary.acceptsText).toBe(true);
+    expect(summary.requiresImage).toBe(false);
+    expect(summary.directRunSupported).toBe(true);
+  });
+
   it('summarizes text capabilities as directly runnable without images', () => {
     const summary = summarizeAgentCapabilityPreset(preset({ category: 'text_to_text' }));
     expect(summary.engine).toBe('gen_text');

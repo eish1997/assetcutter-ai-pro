@@ -15,6 +15,12 @@ export type WorkflowModelViewerStage = {
   dispose: () => void;
 };
 
+export function configureWorkflowModelSoftShadows(renderer: THREE.WebGLRenderer): void {
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.VSMShadowMap;
+  renderer.shadowMap.autoUpdate = true;
+}
+
 /** 默认 HDR：Poly Haven CC0「studio_small_09」1k（仓库内 `public/hdr/`），用于金属 IBL 反射 */
 export function getDefaultWorkflowViewerHdrUrl(): string {
   const base = import.meta.env.BASE_URL ?? '/';
@@ -59,33 +65,34 @@ function attachWorkflowModelViewerLights(scene: THREE.Scene): {
   rimLight: THREE.DirectionalLight;
   bounceFill: THREE.DirectionalLight;
 } {
-  const hemi = new THREE.HemisphereLight(0xd2dff0, 0x6b5e52, 0.66);
+  const hemi = new THREE.HemisphereLight(0xdde7f5, 0x8a7f74, 0.82);
   scene.add(hemi);
 
-  const ambient = new THREE.AmbientLight(0xe8ecf2, 0.09);
+  const ambient = new THREE.AmbientLight(0xf2f4f8, 0.14);
   scene.add(ambient);
 
-  const keyLight = new THREE.DirectionalLight(0xfff5eb, 1.05);
+  const keyLight = new THREE.DirectionalLight(0xfff7ef, 0.82);
   keyLight.position.set(4.8, 12, 6);
   keyLight.castShadow = true;
   keyLight.shadow.mapSize.set(2048, 2048);
-  keyLight.shadow.bias = -0.00025;
-  keyLight.shadow.normalBias = 0.038;
-  keyLight.shadow.radius = 5;
+  keyLight.shadow.bias = -0.000025;
+  keyLight.shadow.normalBias = 0.03;
+  keyLight.shadow.radius = 12;
+  keyLight.shadow.blurSamples = 18;
   scene.add(keyLight);
   scene.add(keyLight.target);
 
-  const fillLight = new THREE.DirectionalLight(0xb4c8ec, 0.52);
+  const fillLight = new THREE.DirectionalLight(0xc9d8f0, 0.72);
   fillLight.position.set(-7, 4.5, -4.5);
   scene.add(fillLight);
   scene.add(fillLight.target);
 
-  const rimLight = new THREE.DirectionalLight(0xc8e4ff, 0.62);
+  const rimLight = new THREE.DirectionalLight(0xd5e9ff, 0.48);
   rimLight.position.set(1.5, 3.5, -8);
   scene.add(rimLight);
   scene.add(rimLight.target);
 
-  const bounceFill = new THREE.DirectionalLight(0xffefe0, 0.46);
+  const bounceFill = new THREE.DirectionalLight(0xfff3e8, 0.58);
   bounceFill.castShadow = false;
   bounceFill.position.set(0, -10, 2);
   scene.add(bounceFill);
@@ -179,14 +186,40 @@ export function aimWorkflowModelLightsAtBox(
   bounceFill.target.updateMatrixWorld();
 
   const cam = keyLight.shadow.camera as THREE.OrthographicCamera;
-  cam.near = 0.05;
-  cam.far = e * 26;
-  const ext = e * 4.2;
-  cam.left = -ext;
-  cam.right = ext;
-  cam.top = ext;
-  cam.bottom = -ext;
+  keyLight.shadow.updateMatrices(keyLight);
+  const corners = [
+    new THREE.Vector3(box.min.x, box.min.y, box.min.z),
+    new THREE.Vector3(box.min.x, box.min.y, box.max.z),
+    new THREE.Vector3(box.min.x, box.max.y, box.min.z),
+    new THREE.Vector3(box.min.x, box.max.y, box.max.z),
+    new THREE.Vector3(box.max.x, box.min.y, box.min.z),
+    new THREE.Vector3(box.max.x, box.min.y, box.max.z),
+    new THREE.Vector3(box.max.x, box.max.y, box.min.z),
+    new THREE.Vector3(box.max.x, box.max.y, box.max.z),
+  ].map((v) => v.applyMatrix4(cam.matrixWorldInverse));
+  const min = new THREE.Vector3(Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY);
+  const max = new THREE.Vector3(Number.NEGATIVE_INFINITY, Number.NEGATIVE_INFINITY, Number.NEGATIVE_INFINITY);
+  for (const corner of corners) {
+    min.min(corner);
+    max.max(corner);
+  }
+  const shadowWidth = Math.max(max.x - min.x, e * 0.42, 0.1);
+  const shadowHeight = Math.max(max.y - min.y, e * 0.42, 0.1);
+  const pad = Math.max(shadowWidth, shadowHeight, e * 0.22, 0.05) * 0.34;
+  const depthPad = Math.max(e * 1.8, 0.25);
+  cam.left = min.x - pad;
+  cam.right = max.x + pad;
+  cam.bottom = min.y - pad;
+  cam.top = max.y + pad;
+  cam.near = Math.max(0.01, -max.z - depthPad);
+  cam.far = Math.max(cam.near + 0.1, -min.z + depthPad);
   cam.updateProjectionMatrix();
+  const biasScale = Math.max(e, 0.08);
+  keyLight.shadow.bias = -Math.min(0.00005, 0.000016 * biasScale);
+  keyLight.shadow.normalBias = Math.min(0.07, Math.max(0.018, biasScale * 0.012));
+  keyLight.shadow.radius = 12;
+  keyLight.shadow.blurSamples = 18;
+  keyLight.shadow.needsUpdate = true;
 }
 
 /**
@@ -241,7 +274,8 @@ export function applyHeightfieldMatcapSceneLighting(stage: WorkflowModelViewerSt
   stage.bounceFill.intensity *= 1.12;
   stage.bounceFill.color.setHex(0xfff4eb);
 
-  stage.keyLight.shadow.radius = 4.4;
+  stage.keyLight.shadow.radius = 9;
+  stage.keyLight.shadow.blurSamples = 14;
 }
 
 export function enhanceLoadedModelMaterials(root: THREE.Object3D): void {
@@ -275,7 +309,7 @@ export function createStudioGroundMesh(box: THREE.Box3, margin = 10): THREE.Mesh
   const geo = new THREE.PlaneGeometry(half * 2, half * 2, 1, 1);
   const mat = new THREE.ShadowMaterial({
     color: 0x000000,
-    opacity: 0.3,
+    opacity: 0.22,
     transparent: true,
   });
   const ground = new THREE.Mesh(geo, mat);

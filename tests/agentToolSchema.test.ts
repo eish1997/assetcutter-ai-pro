@@ -12,8 +12,8 @@ const {
 } = require('../companion-desktop/agent-body-host.cjs');
 
 describe('agent P0 tool schemas', () => {
-  it('registers exactly three P0 ac.* tools', () => {
-    expect(P0_TOOL_SCHEMAS).toHaveLength(3);
+  it('registers exactly four P0 ac.* tools', () => {
+    expect(P0_TOOL_SCHEMAS).toHaveLength(4);
     for (const t of P0_TOOL_SCHEMAS) {
       expect(t.name.startsWith('ac.')).toBe(true);
       expect(t.risk).toBe('safe');
@@ -22,6 +22,7 @@ describe('agent P0 tool schemas', () => {
     expect(names).toEqual([
       'ac.shell.navigate',
       'ac.shell.get_state',
+      'ac.shell.login',
       'ac.companion.runtime_status',
     ]);
   });
@@ -56,12 +57,12 @@ describe('agent P1 tool schemas', () => {
   });
 
   it('ALL_TOOL_SCHEMAS combines P0 P1 P2', () => {
-    expect(ALL_TOOL_SCHEMAS).toHaveLength(25);
+    expect(ALL_TOOL_SCHEMAS).toHaveLength(30);
   });
 
   it('buildToolCatalog groups tools by surface and summarizes risk', () => {
     const catalog = buildToolCatalog(ALL_TOOL_SCHEMAS);
-    expect(catalog.total).toBe(25);
+    expect(catalog.total).toBe(30);
     expect(catalog.riskCounts.safe).toBeGreaterThan(0);
     expect(catalog.riskCounts.confirm).toBeGreaterThan(0);
     const workbench = catalog.surfaces.find((s: { id: string }) => s.id === 'workbench');

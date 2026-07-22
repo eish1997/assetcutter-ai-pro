@@ -67,6 +67,15 @@ export function apiUrl(path: string) {
   return `${base}${path.startsWith('/') ? path : `/${path}`}`;
 }
 
+export function authApiDirectUrl(path: string): string {
+  const fromEnv = String(import.meta.env?.VITE_AUTH_API_BASE_URL || '').trim();
+  const base =
+    fromEnv && fromEnv.toLowerCase() !== 'same-origin' && /^https?:\/\//i.test(fromEnv)
+      ? trimSlash(fromEnv)
+      : DEFAULT_PRODUCTION_AUTH_API_BASE;
+  return `${base}${path.startsWith('/') ? path : `/${path}`}`;
+}
+
 /**
  * 工作区 R2 中间层（与 auth 同源时会话 Cookie 才能带上）。
  * 未设 `VITE_R2_API_BASE_URL` 时回退到 `VITE_AUTH_API_BASE_URL`；皆空则用同源 `/api/r2`（本地 Vite 代理到 auth）。

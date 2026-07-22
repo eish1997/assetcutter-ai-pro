@@ -1,4 +1,4 @@
-import React, { Suspense, useCallback, useMemo } from 'react';
+import React, { Suspense } from 'react';
 
 import type { WorkflowAssetVariant } from '../../types';
 import {
@@ -10,17 +10,14 @@ import {
 import AppIcon from '../ui/AppIcon';
 
 const LazyImageModel3DViewer = getLazyImagePreviewViewer('image.model3d');
-const MODEL_3D_DISPLAY_MODES: Array<{ key: Model3DDisplayMode; label: string; title: string }> = [
-  { key: 'material', label: '材质', title: '使用模型原始材质' },
-  { key: 'clay', label: '素模', title: '灰模预览，便于观察形体' },
-  { key: 'wire', label: '线框', title: '线框预览，便于检查网格' },
-  { key: 'normal', label: '法线', title: '法线色预览' },
-];
 
 type Props = {
   variant: WorkflowAssetVariant;
   model3dDisplayMode?: Model3DDisplayMode;
-  onModel3dDisplayModeChange?: (mode: Model3DDisplayMode) => void;
+  model3dResetViewNonce?: number;
+  model3dShowGrid?: boolean;
+  model3dBackfaceCulling?: boolean;
+  capturePreviewNonce?: number;
   onAddToComposeInput?: (text: string) => void;
 };
 
@@ -36,111 +33,17 @@ function pickModelUrl(variant: WorkflowAssetVariant): string {
 function inferFileName(variant: WorkflowAssetVariant): string {
   const label = clean(variant.label) || clean(variant.id) || variant.kind;
   const fromUrl = clean(variant.url || pickModelUrl(variant)).split('?')[0]?.split('#')[0]?.split('/').pop();
-  return fromUrl || `${label}.${variant.kind === 'audio' ? 'mp3' : variant.kind === 'video' ? 'mp4' : 'asset'}`;
-}
-
-function copyToClipboard(text: string) {
-  if (!text) return;
-  void navigator.clipboard?.writeText(text);
-}
-
-function openDownload(url: string, filename: string) {
-  if (!url || typeof document === 'undefined') return;
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = filename;
-  a.rel = 'noopener';
-  a.click();
-}
-
-function variantReferenceText(variant: WorkflowAssetVariant, url: string, filename: string): string {
-  const lines = [
-    `[${variant.kind.toUpperCase()}资产] ${variant.label || variant.id}`,
-    `版本: ${variant.id}`,
-    `文件: ${filename}`,
-  ];
-  if (url) lines.push(`链接: ${url}`);
-  if (variant.objectKey) lines.push(`objectKey: ${variant.objectKey}`);
-  if (variant.companionKey) lines.push(`companionKey: ${variant.companionKey}`);
-  return lines.join('\n');
-}
-
-function MediaActionBar({
-  variant,
-  url,
-  model3dDisplayMode,
-  onModel3dDisplayModeChange,
-  onAddToComposeInput,
-}: {
-  variant: WorkflowAssetVariant;
-  url: string;
-  model3dDisplayMode: Model3DDisplayMode;
-  onModel3dDisplayModeChange?: (mode: Model3DDisplayMode) => void;
-  onAddToComposeInput?: (text: string) => void;
-}) {
-  const filename = useMemo(() => inferFileName(variant), [variant]);
-  const copy = useCallback(() => copyToClipboard(url || variant.objectKey || variant.companionKey || variant.id), [url, variant]);
-  const download = useCallback(() => openDownload(url, filename), [filename, url]);
-  const addReference = useCallback(() => {
-    onAddToComposeInput?.(variantReferenceText(variant, url, filename));
-  }, [filename, onAddToComposeInput, url, variant]);
-
-  return (
-    <div className="pointer-events-auto absolute left-4 right-4 top-4 z-10 flex items-start justify-between gap-3">
-      <div className="min-w-0 rounded-xl border border-white/10 bg-[#0f0f12]/90 px-3 py-2 shadow-xl ring-1 ring-white/[0.05] backdrop-blur-md">
-        <p className="truncate text-[13px] font-bold text-gray-100">{variant.label || variant.id}</p>
-        <p className="mt-0.5 truncate text-[10px] text-gray-500">
-          {variant.kind.toUpperCase()} · {filename}
-        </p>
-      </div>
-      <div className="flex shrink-0 flex-wrap justify-end gap-1.5 rounded-xl border border-white/10 bg-[#0f0f12]/90 p-1.5 shadow-xl ring-1 ring-white/[0.05] backdrop-blur-md">
-        {variant.kind === 'model3d' && onModel3dDisplayModeChange ? (
-          <div className="flex shrink-0 overflow-hidden rounded-lg border border-white/10 bg-black/30 p-0.5">
-            {MODEL_3D_DISPLAY_MODES.map((mode) => (
-              <button
-                key={mode.key}
-                type="button"
-                title={mode.title}
-                aria-pressed={model3dDisplayMode === mode.key}
-                onClick={() => onModel3dDisplayModeChange(mode.key)}
-                className={`h-7 rounded-md px-2 text-[10px] font-bold transition-colors ${
-                  model3dDisplayMode === mode.key
-                    ? 'bg-white text-black'
-                    : 'text-white/65 hover:bg-white/10 hover:text-white'
-                }`}
-              >
-                {mode.label}
-              </button>
-            ))}
-          </div>
-        ) : null}
-        <button
-          type="button"
-          onClick={copy}
-          className="h-8 rounded-lg border border-white/10 bg-white/[0.04] px-2 text-[10px] font-bold text-gray-300 hover:bg-white/[0.08] hover:text-white"
-        >
-          复制链接
-        </button>
-        {onAddToComposeInput ? (
-          <button
-            type="button"
-            onClick={addReference}
-            className="h-8 rounded-lg border border-white/10 bg-white/[0.04] px-2 text-[10px] font-bold text-gray-300 hover:bg-white/[0.08] hover:text-white"
-          >
-            加入输入框
-          </button>
-        ) : null}
-        <button
-          type="button"
-          disabled={!url}
-          onClick={download}
-          className="h-8 rounded-lg border border-white/10 bg-white/[0.04] px-2 text-[10px] font-bold text-gray-300 hover:bg-white/[0.08] hover:text-white disabled:cursor-not-allowed disabled:opacity-35"
-        >
-          下载
-        </button>
-      </div>
-    </div>
-  );
+  const formatHint = variant.kind === 'model3d' ? clean(variant.modelFormats?.[0]) : '';
+  const ext =
+    formatHint === 'glb' || formatHint === 'gltf' || formatHint === 'fbx' || formatHint === 'obj'
+      ? formatHint
+      : variant.kind === 'audio'
+        ? 'mp3'
+        : variant.kind === 'video'
+          ? 'mp4'
+          : 'asset';
+  if (fromUrl && /\.[a-z0-9]{2,8}$/i.test(fromUrl)) return fromUrl;
+  return `${label}.${ext}`;
 }
 
 function MissingMedia({ variant }: { variant: WorkflowAssetVariant }) {
@@ -156,6 +59,13 @@ function MissingMedia({ variant }: { variant: WorkflowAssetVariant }) {
       <div className="mt-3 max-w-full rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-left text-[10px] text-gray-400">
         {variant.objectKey ? <p className="max-w-[32rem] truncate">objectKey: {variant.objectKey}</p> : null}
         {variant.companionKey ? <p className="max-w-[32rem] truncate">companionKey: {variant.companionKey}</p> : null}
+        {(variant.modelCompanionKeys || []).map((key, index) =>
+          key ? (
+            <p key={`${key}:${index}`} className="max-w-[32rem] truncate">
+              modelKey {index + 1}: {key}
+            </p>
+          ) : null
+        )}
         <p className="max-w-[32rem] truncate">variant: {variant.id}</p>
       </div>
     </div>
@@ -181,10 +91,42 @@ function ViewerSurface({ children, className = '' }: { children: React.ReactNode
   return <div className={`min-h-0 flex-1 overflow-hidden ${className}`}>{children}</div>;
 }
 
-function VideoAssetViewer({ url }: { url: string }) {
+function downloadDataUrl(dataUrl: string, filename: string) {
+  if (!dataUrl || typeof document === 'undefined') return;
+  const a = document.createElement('a');
+  a.href = dataUrl;
+  a.download = filename;
+  a.rel = 'noopener';
+  a.click();
+}
+
+function VideoAssetViewer({
+  url,
+  capturePreviewNonce,
+  filename,
+}: {
+  url: string;
+  capturePreviewNonce?: number;
+  filename: string;
+}) {
+  const videoRef = React.useRef<HTMLVideoElement | null>(null);
+
+  React.useEffect(() => {
+    if (!capturePreviewNonce) return;
+    const video = videoRef.current;
+    if (!video || video.videoWidth <= 0 || video.videoHeight <= 0) return;
+    const canvas = document.createElement('canvas');
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    downloadDataUrl(canvas.toDataURL('image/png'), `${filename.replace(/\.[^.]+$/, '') || 'video-frame'}.png`);
+  }, [capturePreviewNonce, filename]);
+
   return (
     <ViewerSurface className="flex items-center justify-center bg-black/20 p-4">
-      <video src={url} controls className="max-h-full max-w-full rounded-lg shadow-2xl" />
+      <video ref={videoRef} src={url} controls className="max-h-full max-w-full rounded-lg shadow-2xl" />
     </ViewerSurface>
   );
 }
@@ -204,23 +146,49 @@ function Model3DAssetViewer({
   variant,
   url,
   model3dDisplayMode,
+  model3dResetViewNonce,
+  model3dShowGrid,
+  model3dBackfaceCulling,
+  capturePreviewNonce,
 }: {
   variant: WorkflowAssetVariant;
   url: string;
   model3dDisplayMode: Model3DDisplayMode;
+  model3dResetViewNonce?: number;
+  model3dShowGrid?: boolean;
+  model3dBackfaceCulling?: boolean;
+  capturePreviewNonce?: number;
 }) {
+  const hostRef = React.useRef<HTMLDivElement | null>(null);
+
+  React.useEffect(() => {
+    if (!capturePreviewNonce) return;
+    const canvas = hostRef.current?.querySelector('canvas');
+    if (!(canvas instanceof HTMLCanvasElement) || canvas.width < 2 || canvas.height < 2) return;
+    try {
+      downloadDataUrl(canvas.toDataURL('image/png'), `${inferFileName(variant).replace(/\.[^.]+$/, '') || 'model-view'}.png`);
+    } catch {
+      /* Canvas may be tainted by cross-origin model textures; ignore and keep the preview usable. */
+    }
+  }, [capturePreviewNonce, variant]);
+
   if (!LazyImageModel3DViewer) return <MissingMedia variant={variant} />;
   return (
     <ViewerSurface>
       <PreviewViewerErrorBoundary mode="image.model3d" label="3D">
         <Suspense fallback={<PreviewViewerFallback label="3D 模块加载中..." />}>
-          <LazyImageModel3DViewer
-            imageSrc={variant.posterUrl || ''}
-            modelSrc={url}
-            modelFileName={inferFileName(variant)}
-            model3dDisplayMode={model3dDisplayMode}
-            className="h-full w-full min-h-0"
-          />
+          <div ref={hostRef} className="h-full w-full min-h-0">
+            <LazyImageModel3DViewer
+              imageSrc={variant.posterUrl || ''}
+              modelSrc={url}
+              modelFileName={inferFileName(variant)}
+              model3dDisplayMode={model3dDisplayMode}
+              model3dResetViewNonce={model3dResetViewNonce}
+              model3dShowGrid={model3dShowGrid}
+              model3dBackfaceCulling={model3dBackfaceCulling}
+              className="h-full w-full min-h-0"
+            />
+          </div>
         </Suspense>
       </PreviewViewerErrorBoundary>
     </ViewerSurface>
@@ -244,32 +212,37 @@ function FileAssetViewer({ url }: { url: string }) {
 
 export const AssetMediaPreviewCenter: React.FC<Props> = ({
   variant,
-  model3dDisplayMode = 'material',
-  onModel3dDisplayModeChange,
-  onAddToComposeInput,
+  model3dDisplayMode: model3dDisplayModeProp,
+  model3dResetViewNonce = 0,
+  model3dShowGrid = true,
+  model3dBackfaceCulling = true,
+  capturePreviewNonce = 0,
 }) => {
   const url = clean(variant.url);
   const modelUrl = variant.kind === 'model3d' ? pickModelUrl(variant) : '';
   const usableUrl = variant.kind === 'model3d' ? modelUrl : url;
+  const resolvedModel3dDisplayMode: Model3DDisplayMode = model3dDisplayModeProp ?? 'material';
+  const filename = inferFileName(variant);
 
   return (
     <div
       className="pointer-events-auto relative flex h-full w-full min-h-0 min-w-0 flex-col overflow-hidden"
       data-image-preview-no-wheel
     >
-      <MediaActionBar
-        variant={variant}
-        url={usableUrl}
-        model3dDisplayMode={model3dDisplayMode}
-        onModel3dDisplayModeChange={onModel3dDisplayModeChange}
-        onAddToComposeInput={onAddToComposeInput}
-      />
       {variant.kind === 'video' && usableUrl ? (
-        <VideoAssetViewer url={usableUrl} />
+        <VideoAssetViewer url={usableUrl} filename={filename} capturePreviewNonce={capturePreviewNonce} />
       ) : variant.kind === 'audio' && usableUrl ? (
         <AudioAssetViewer url={usableUrl} />
       ) : variant.kind === 'model3d' && usableUrl ? (
-        <Model3DAssetViewer variant={variant} url={usableUrl} model3dDisplayMode={model3dDisplayMode} />
+        <Model3DAssetViewer
+          variant={variant}
+          url={usableUrl}
+          model3dDisplayMode={resolvedModel3dDisplayMode}
+          model3dResetViewNonce={model3dResetViewNonce}
+          model3dShowGrid={model3dShowGrid}
+          model3dBackfaceCulling={model3dBackfaceCulling}
+          capturePreviewNonce={capturePreviewNonce}
+        />
       ) : usableUrl ? (
         <FileAssetViewer url={usableUrl} />
       ) : (

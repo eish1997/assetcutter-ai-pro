@@ -22,6 +22,7 @@ export type PersistTencentModelsResult = {
 
 function inferSlotFormat(file: File3D): WorkflowModelSlotFormat {
   const type = String(file.Type || '').toUpperCase();
+  if (type === 'OBJ') return 'obj';
   if (type === 'FBX') return 'fbx';
   return 'glb';
 }

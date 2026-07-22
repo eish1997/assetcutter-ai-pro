@@ -76,6 +76,10 @@ function plainFromSubject(subject) {
   const lower = raw.toLowerCase();
   const rules = [
     [
+      /codex.*mcp|mcp.*codex|workbench.*copilot|copilot.*workbench|agent.*mcp|mcp.*workbench/i,
+      'Copilot 接上了 Codex 和工作台 MCP，开始从聊天入口真正操作工作台',
+    ],
+    [
       /project\s*agent\s*u4|ship\s+project\s*agent|experts?\s+and\s+optimistic|optimistic\s+send/i,
       '项目 Agent 大升级：@专家、自动挡、进度卡、导出记录，发送立刻有反馈',
     ],
@@ -153,11 +157,37 @@ function buildWorkSummaryBullets(nameStats, commits, _stats) {
   const isProviderOpsPack = has(
     /services\/modelRegistry\/(canonicalModelCatalog|providerCatalog|providerModelCatalog|modelRouteCatalog|publishedModelCatalog)|server\/ai-gateway\/(model-ops-config-store|model-publication-guard|model-route-guard)|shared\/aiGatewayModelRoutes|AdminProviderKeysPanel|adminProviderKeysClient/
   );
+  const isCodexCopilotMcpPack = has(
+    /companion-desktop\/(agent-body-mcp|agent-body-host|agent-session\/index|agent-policy|agent-workbench-client|agent-workbench-flow|codex-auth-sync|codex-mcp-config|brain-adapters\/codex|shell\/copilot-panel|shell\/index|main|preload-shell)\.(cjs|js|html)|scripts\/agent-mcp-smoke|tests\/(agentMcpSmokeScript|agentWorkbenchBridge|agentWorkbenchClient|codexBrainAdapter|codexMcpConfig)\.test/
+  );
   const isAssetPreviewPack = has(
     /workflowAssetVariants|AssetCardPreviewRenderer|AssetMediaPreviewCenter|AssetPreviewOverlay|WorkflowLightboxAssetThumbStrip|WorkflowTextLightboxCenter/
   );
 
   // 大包功能按文件拆条，避免一条 commit 压成一句旧文案
+  if (isCodexCopilotMcpPack) {
+    pushUnique('北极星：把 Copilot 做成团队统一入口，让成熟 Agent 能通过标准 MCP 安全地操作工作台');
+    pushUnique('这次打通了 Codex 大脑：成员在右侧 Copilot 里对话，也能走 Codex CLI 的执行能力和本机上下文');
+    if (has(/agent-body-mcp|agent-tool-schemas|agent-workbench-flow|agent-workbench-client/)) {
+      pushUnique('工作台能力开始按标准 MCP 暴露：外部 Agent 可以准备项目、运行能力、列资产、读产物，不再只能靠网页内置提示词');
+    }
+    if (has(/agent-policy|agent-session\/index|shell\/copilot-panel|shell\/index/)) {
+      pushUnique('权限体验补了一层产品闭环：用户在前端授权，允许、拒绝、超时和自动执行都有明确状态');
+    }
+    if (has(/codex-auth-sync|codex-mcp-config|brain-adapters\/codex/)) {
+      pushUnique('团队上手更快了：支持 Codex 凭据同步和 MCP 配置生成，管理员可以先统一配置，再让成员直接用');
+    }
+    if (has(/shell\/copilot-panel|shell\/index/)) {
+      pushUnique('右侧 Copilot 也做了一轮产品化：更宽、更稳，滚动条、输入框、停止按钮和上下文用量都统一成暗色界面');
+    }
+    if (has(/agent-partition-fetch|vite\.config|server\/agent-workbench-api|services\/agentWorkbenchBridge/)) {
+      pushUnique('登录和工作台桥接更稳：同源代理、Cookie 分区和 Origin 处理补齐，减少“明明登录了却不能操作”的情况');
+    }
+    if (has(/scripts\/agent-mcp-smoke|tests\/agentMcpSmokeScript|tests\/agentWorkbenchClient|tests\/agentWorkbenchBridge/)) {
+      pushUnique('验收也补上了：新增 MCP smoke 和工作台链路测试，能检查 ensure_ready、运行能力、读资产这条主路径');
+    }
+  }
+
   if (isAgentPack) {
     pushUnique('北极星：把工作区右侧 Agent 做成一个轻输入、懂现场、能连续推进的产品助手');
     pushUnique('这次更靠近目标了：用户只要说一句话，Agent 会先理解现场、给出计划，再把结果推进到画布');
@@ -184,7 +214,7 @@ function buildWorkSummaryBullets(nameStats, commits, _stats) {
     }
   }
 
-  if (isProviderOpsPack) {
+  if (isProviderOpsPack && !isCodexCopilotMcpPack) {
     pushUnique('北极星是：把供应商、模型、Key 和发布状态收进同一个运营面板，管理员不再靠记文档和手工找控制台来维护模型');
     if (has(/providerCatalog|providerModelCatalog|canonicalModelCatalog|modelRouteCatalog/)) {
       pushUnique('供应商模型中心有了主清单：OpenAI、火山方舟/即梦、Tripo、腾讯混元等供应商，按能提供哪些模型和类型统一维护');

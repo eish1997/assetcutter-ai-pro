@@ -9,4 +9,7 @@ describe('inferModelFormat', () => {
   it('仍可从文件名识别 FBX（含 _fbx 片段）', () => {
     expect(inferModelFormat('blob:http://x/y', 'slot_fbx_v1')).toBe('fbx');
   });
+  it('uses the file-name hint to identify OBJ blob previews', () => {
+    expect(inferModelFormat('blob:http://x/y', 'uploaded-model.obj')).toBe('obj');
+  });
 });

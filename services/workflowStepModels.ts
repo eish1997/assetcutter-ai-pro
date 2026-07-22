@@ -1,4 +1,4 @@
-import type { WorkflowAsset } from '../types';
+import type { WorkflowAsset, WorkflowModelFormat } from '../types';
 
 const RESULT_VER_SEP = '__v__';
 
@@ -66,14 +66,19 @@ export function resolveWorkflowStepModelCompanionKeys(asset: WorkflowAsset, resu
 export function resolveWorkflowStepModelFormats(
   asset: WorkflowAsset,
   resultKey: string
-): Array<'glb' | 'fbx'> {
+): WorkflowModelFormat[] {
   const fromStep = asset.stepModelFormats?.[resultKey];
   if (fromStep?.length) return fromStep;
   const urls = resolveWorkflowStepModelUrls(asset, resultKey);
   return urls.map((u, i) => {
     const s = String(u || '').toLowerCase();
     const key = resolveWorkflowStepModelCompanionKeys(asset, resultKey)[i]?.toLowerCase() || '';
+    if (s.includes('.gltf') || key.includes('.gltf') || key.includes('_gltf')) return 'gltf';
     if (s.includes('.fbx') || key.includes('.fbx') || key.includes('_fbx')) return 'fbx';
+    if (s.includes('.obj') || key.includes('.obj') || key.includes('_obj')) return 'obj';
+    if (s.includes('.stl') || key.includes('.stl') || key.includes('_stl')) return 'stl';
+    if (s.includes('.usdz') || key.includes('.usdz') || key.includes('_usdz')) return 'usdz';
+    if (s.includes('.zip') || key.includes('.zip') || key.includes('_zip')) return 'zip';
     return 'glb';
   });
 }
@@ -94,7 +99,7 @@ export type WorkflowStepModelPersistDetail = {
   tencentJobId?: string;
 };
 
-function slotHasCompanionKey(keys: string[], formats: Array<'glb' | 'fbx'>, format: 'glb' | 'fbx'): boolean {
+function slotHasCompanionKey(keys: string[], formats: WorkflowModelFormat[], format: 'glb' | 'fbx'): boolean {
   const idx = formats.indexOf(format);
   const i = idx >= 0 ? idx : format === 'glb' ? 0 : 1;
   return Boolean(String(keys[i] ?? '').trim());

@@ -210,6 +210,12 @@ export type ImagePreviewOverlayProps = {
   modelFileName?: string;
   /** 3D 模型显示模式，由父级工具条控制 */
   model3dDisplayMode?: Model3DDisplayMode;
+  /** 3D 模型：递增后重置相机视角 */
+  model3dResetViewNonce?: number;
+  /** 3D 模型：是否显示地面网格 */
+  model3dShowGrid?: boolean;
+  /** 3D 模型：是否背面消隐。 */
+  model3dBackfaceCulling?: boolean;
   /** 右侧占位宽度（如常驻侧栏），用于将主图居中到左侧可用区域 */
   contentRightInset?: string;
   /**
@@ -355,6 +361,9 @@ export function ImagePreviewOverlay({
   modelUrls,
   modelFileName,
   model3dDisplayMode = 'material',
+  model3dResetViewNonce = 0,
+  model3dShowGrid = true,
+  model3dBackfaceCulling = true,
   contentRightInset = '0px',
   contentLeftInset = '0px',
   rightRail,
@@ -1509,6 +1518,9 @@ export function ImagePreviewOverlay({
                   modelSrc={previewModelSrc ?? undefined}
                   modelFileName={modelFileName}
                   model3dDisplayMode={model3dDisplayMode}
+                  model3dResetViewNonce={model3dResetViewNonce}
+                  model3dShowGrid={model3dShowGrid}
+                  model3dBackfaceCulling={model3dBackfaceCulling}
                   className="h-full w-full min-h-0"
                 />
               </Suspense>
@@ -1753,8 +1765,13 @@ export function ImagePreviewOverlay({
 
         {!uiHidden ? (
         <div
-          className="absolute right-4 z-10 flex max-w-[calc(100vw-2rem)] flex-row flex-wrap items-start justify-end gap-2"
-          style={{ top: 'max(0.5rem, env(safe-area-inset-top, 0px))' }}
+          className="absolute z-10 flex max-w-[calc(100vw-2rem)] flex-row flex-wrap items-start justify-end gap-2"
+          style={{
+            top: 'max(0.5rem, env(safe-area-inset-top, 0px))',
+            right: rightRailOverlayActive
+              ? `calc(${contentRightInset} + max(0.5rem, env(safe-area-inset-right, 0px)))`
+              : 'max(1rem, env(safe-area-inset-right, 0px))',
+          }}
         >
           {showToolbarHeavyChrome && heightfieldLayoutActive && !heightfieldToolbarHostRef ? (
             <div

@@ -34,15 +34,29 @@
   let brainStateEls = null;
   let lastSettingsSnapshot = null;
   let lastProbeSnapshot = null;
+  let lastAccountSnapshot = null;
+  let lastWorkbenchEntranceSnapshot = null;
+  let lastWorkbenchAcceptanceSnapshot = null;
+  let lastTeamEntranceSnapshot = null;
+  let lastWorkbenchContextSnapshot = null;
+  let lastToolExecutionsSnapshot = [];
+  let lastProjectMemorySnapshot = null;
   let lastUsageSnapshot = null;
   let lastUserPrompt = '';
+  let activeTaskThreadCard = null;
+  let activeTaskThreadEls = null;
+  let pendingTaskThreadPrompt = '';
   let permissionPolicySyncedForMode = '';
   const COPILOT_EXPANDED_MIN_WIDTH = 360;
   const COPILOT_EXPANDED_DEFAULT_WIDTH = 380;
   const COPILOT_EXPANDED_MAX_WIDTH = 720;
   const COPILOT_COLLAPSED_WIDTH = 48;
 
-  const EXAMPLE_PHRASES = ['打开脚本页', '伴侣运行状态怎么样？', '切换到设置页'];
+  const EXAMPLE_PHRASES = [
+    '\u6253\u5f00\u811a\u672c\u9875',
+    '\u4f34\u4fa3\u8fd0\u884c\u72b6\u6001\u600e\u4e48\u6837\uff1f',
+    '\u5207\u6362\u5230\u8bbe\u7f6e\u9875',
+  ];
 
   function setStatus(text) {
     if (!statusEl) return;
@@ -67,10 +81,528 @@
     void sendMessage();
   }
 
+  function startCopilotWorkTask(prompt) {
+    const text = String(prompt || '').trim();
+    if (!text) return;
+    pendingTaskThreadPrompt = text;
+    appendTaskThreadCard(text, { source: 'quick_task' });
+    fillAndSend(text);
+  }
+
   function switchToWorkbench() {
     if (typeof shell.setShellView === 'function') void shell.setShellView('workbench');
     if (typeof window.__acApplyShellViewFromMain === 'function') {
       void window.__acApplyShellViewFromMain('workbench');
+    }
+  }
+
+  function delay(ms) {
+    return new Promise((resolve) => setTimeout(resolve, Math.max(0, Number(ms) || 0)));
+  }
+
+  async function loadTeamAccountStatus() {
+    if (typeof shell.accountStatus !== 'function') return null;
+    try {
+      const status = await shell.accountStatus();
+      lastAccountSnapshot = status && typeof status === 'object' ? status : null;
+    } catch {
+      lastAccountSnapshot = null;
+    }
+    return lastAccountSnapshot;
+  }
+
+  function workbenchEntranceFromSettings(response) {
+    const entrance =
+      response &&
+      response.mcpEntranceStatus &&
+      response.mcpEntranceStatus.workbenchEntrance &&
+      typeof response.mcpEntranceStatus.workbenchEntrance === 'object'
+        ? response.mcpEntranceStatus.workbenchEntrance
+        : null;
+    if (entrance) lastWorkbenchEntranceSnapshot = entrance;
+    return entrance || lastWorkbenchEntranceSnapshot;
+  }
+
+  function workbenchAcceptanceFromSettings(response) {
+    const acceptance =
+      response &&
+      response.mcpEntranceStatus &&
+      response.mcpEntranceStatus.workbenchE2eAcceptance &&
+      typeof response.mcpEntranceStatus.workbenchE2eAcceptance === 'object'
+        ? response.mcpEntranceStatus.workbenchE2eAcceptance
+        : null;
+    if (acceptance) lastWorkbenchAcceptanceSnapshot = acceptance;
+    return acceptance || lastWorkbenchAcceptanceSnapshot;
+  }
+
+  function blockersFromSettings(response) {
+    return response &&
+      response.mcpEntranceStatus &&
+      Array.isArray(response.mcpEntranceStatus.blockers)
+      ? response.mcpEntranceStatus.blockers
+      : [];
+  }
+
+  function formatBlockerActions(blocker, limit = 3) {
+    const actions = Array.isArray(blocker && blocker.actions) ? blocker.actions : [];
+    return actions
+      .map((action) => String((action && (action.tool || action.command || action.id)) || '').trim())
+      .filter(Boolean)
+      .slice(0, limit);
+  }
+
+  function blockerActionKey(action) {
+    return String((action && (action.tool || action.command || action.id)) || '').trim();
+  }
+
+  function formatRequiredInputs(action) {
+    const inputs = Array.isArray(action && action.requiredInputs) ? action.requiredInputs : [];
+    const names = inputs
+      .map((input) => String((input && (input.name || input.label)) || '').trim())
+      .filter(Boolean);
+    return names.length ? `inputs=${names.join(',')}` : '';
+  }
+
+  function formatTeamAccountDiagnostics(account) {
+    const status = account && typeof account === 'object' ? account : {};
+    return [
+      `loggedIn=${Boolean(status.loggedIn)}`,
+      `cookies=${Number(status.cookieCount) || 0}`,
+      `authCookie=${status.hasAuthCookie ? 'present' : 'missing'}`,
+      status.partition ? `partition=${status.partition}` : '',
+      status.authOrigin ? `authOrigin=${status.authOrigin}` : '',
+      status.siteOrigin ? `siteOrigin=${status.siteOrigin}` : '',
+      Number.isFinite(Number(status.statusCode)) ? `status=${Number(status.statusCode)}` : '',
+      status.error ? `error=${status.error}` : '',
+    ].filter(Boolean).join(' / ');
+  }
+
+  async function loadWorkbenchContextSnapshot() {
+    if (!agent || typeof agent.workbenchContext !== 'function') return null;
+    try {
+      const r = await agent.workbenchContext();
+      const structured = r && r.structured && typeof r.structured === 'object' ? r.structured : null;
+      if (structured) lastWorkbenchContextSnapshot = structured;
+      if (r && Array.isArray(r.executions)) lastToolExecutionsSnapshot = r.executions;
+      return { context: structured, executions: Array.isArray(r && r.executions) ? r.executions : [] };
+    } catch {
+      return null;
+    }
+  }
+
+  async function loadProjectMemorySnapshot() {
+    if (!agent || typeof agent.projectMemory !== 'function') return null;
+    try {
+      const r = await agent.projectMemory({ limit: 20, includeDisabled: true });
+      if (r && r.ok !== false) {
+        lastProjectMemorySnapshot = r;
+        return r;
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
+  function summarizeProjectMemorySnapshot(memory) {
+    const m = memory && typeof memory === 'object' ? memory : lastProjectMemorySnapshot || {};
+    const summary = m.summary && typeof m.summary === 'object' ? m.summary : {};
+    const active = Number(summary.active) || 0;
+    const latest = Array.isArray(summary.latest) ? summary.latest : Array.isArray(m.notes) ? m.notes.slice(-3).reverse() : [];
+    const projectLabel = String(m.projectName || m.projectId || '').trim();
+    const kindSummary = summary.byKind && typeof summary.byKind === 'object'
+      ? Object.keys(summary.byKind)
+          .filter((key) => Number(summary.byKind[key]) > 0)
+          .map((key) => `${key}:${summary.byKind[key]}`)
+          .slice(0, 3)
+          .join(' / ')
+      : '';
+    return {
+      label: active ? `${active} saved${kindSummary ? ' / ' + kindSummary : ''}` : '\u672a\u5efa\u7acb',
+      projectLabel,
+      latestText: latest.length ? String(latest[0].text || '').slice(0, 90) : '',
+    };
+  }
+
+  async function saveProjectMemoryFromCopilot(kind, text, btn) {
+    if (!agent || typeof agent.saveProjectMemory !== 'function') {
+      appendBubble('tool', 'project memory unavailable', 'copilot-msg-tool');
+      return null;
+    }
+    const value = String(text || '').trim();
+    if (!value) {
+      appendBubble('tool', 'memory skipped: empty text', 'copilot-msg-tool');
+      return null;
+    }
+    if (btn) btn.disabled = true;
+    try {
+      const r = await agent.saveProjectMemory({
+        kind,
+        text: value,
+        tags: ['copilot', kind],
+        source: 'copilot-result-card',
+        contextEnabled: true,
+      });
+      if (r && r.ok) {
+        lastProjectMemorySnapshot = {
+          ok: true,
+          projectId: r.projectId,
+          projectName: r.projectName,
+          summary: r.summary,
+          notes: r.note ? [r.note] : [],
+        };
+        appendBubble('tool', `project memory saved: ${kind}`, 'copilot-msg-tool');
+        return r;
+      }
+      appendBubble('tool', `project memory failed: ${(r && (r.error || r.message)) || 'unknown'}`, 'copilot-msg-tool');
+      return r;
+    } catch (e) {
+      appendBubble('tool', `project memory failed: ${e && e.message ? e.message : e}`, 'copilot-msg-tool');
+      return null;
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
+  function summarizeWorkbenchContext(context, executions) {
+    const ctx = context && typeof context === 'object' ? context : lastWorkbenchContextSnapshot || {};
+    const activeProject =
+      ctx.activeProject && typeof ctx.activeProject === 'object'
+        ? ctx.activeProject
+        : null;
+    const projectName = String(
+      ctx.activeProjectName ||
+        (activeProject && (activeProject.name || activeProject.title)) ||
+        ctx.activeProjectId ||
+        '',
+    ).trim();
+    const projects = Array.isArray(ctx.projects) ? ctx.projects : [];
+    const presets = Array.isArray(ctx.capabilityPresets) ? ctx.capabilityPresets : [];
+    const directPresets = presets.filter((preset) => preset && preset.directRunSupported === true);
+    const activeAssets = activeProject && Array.isArray(activeProject.assets) ? activeProject.assets : [];
+    const execs = Array.isArray(executions) && executions.length ? executions : lastToolExecutionsSnapshot;
+    const latestTask = Array.isArray(execs) && execs.length
+      ? execs
+          .slice(0, 3)
+          .map((item) => {
+            const tool = String((item && (item.tool || item.name)) || '').trim();
+            const ok = item && Object.prototype.hasOwnProperty.call(item, 'ok') ? Boolean(item.ok) : null;
+            return [tool || 'task', ok === null ? '' : ok ? 'ok' : 'failed'].filter(Boolean).join(' ');
+          })
+          .join(' / ')
+      : '';
+    return {
+      projectLabel: projectName || (projects.length ? projects.length + ' projects available' : '\u672a\u8bfb\u5230\u9879\u76ee'),
+      assetLabel: activeAssets.length ? activeAssets.length + ' assets in current project' : '\u7b49\u5f85\u5217\u53d6\u5f53\u524d\u9879\u76ee\u8d44\u4ea7',
+      capabilityLabel: directPresets.length
+        ? directPresets.length + ' runnable capabilities'
+        : presets.length
+          ? presets.length + ' capabilities, direct run unknown'
+          : '\u7b49\u5f85\u8bfb\u53d6\u53ef\u8fd0\u884c\u80fd\u529b',
+      taskLabel: latestTask || '\u6682\u65e0\u6700\u8fd1\u4efb\u52a1\u8bb0\u5f55',
+    };
+  }
+
+  function makeCopilotText(className, text) {
+    const el = document.createElement('div');
+    el.className = className;
+    el.textContent = text || '';
+    return el;
+  }
+
+  function makeCopilotButton(label, className, onClick) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = className || 'copilot-onboard-btn';
+    btn.textContent = label;
+    btn.addEventListener('click', onClick);
+    return btn;
+  }
+
+  function appendStatusPill(host, label, value, tone) {
+    const item = document.createElement('div');
+    item.className = 'copilot-work-status-item ' + (tone || 'is-warn');
+    item.appendChild(makeCopilotText('copilot-work-status-label', label));
+    item.appendChild(makeCopilotText('copilot-work-status-value', value));
+    host.appendChild(item);
+  }
+
+  function governanceReadyFrom(blockers, teamEntrance) {
+    if (teamEntrance && teamEntrance.ready) return true;
+    const governanceBlockers = new Set(['workflow_promotion_draft_only', 'usage_governance_local_only']);
+    return !Array.isArray(blockers) || !blockers.some((blocker) => governanceBlockers.has(String(blocker && blocker.id ? blocker.id : '')));
+  }
+
+  function appendTaskThreadCard(prompt, meta) {
+    if (!messagesEl) return null;
+    const text = String(prompt || '').trim();
+    const source = meta && meta.source ? String(meta.source) : 'composer';
+    const card = document.createElement('div');
+    card.className = 'copilot-task-thread-card';
+    card.dataset.taskSource = source;
+
+    const head = document.createElement('div');
+    head.className = 'copilot-task-thread-head';
+    head.appendChild(makeCopilotText('copilot-task-thread-kicker', '\u4efb\u52a1\u7ebf\u7a0b'));
+    head.appendChild(makeCopilotText('copilot-task-thread-state', '\u8fdb\u884c\u4e2d'));
+    card.appendChild(head);
+
+    const grid = document.createElement('div');
+    grid.className = 'copilot-task-thread-grid';
+    const goal = makeCopilotText('copilot-task-thread-row is-goal', '\u76ee\u6807\uff1a' + (text || '\u7b49\u5f85\u8f93\u5165'));
+    const plan = makeCopilotText('copilot-task-thread-row is-plan', '\u8ba1\u5212\uff1a\u8bfb\u53d6\u4e0a\u4e0b\u6587 \u2192 \u6267\u884c\u5fc5\u8981\u52a8\u4f5c \u2192 \u56de\u4f20\u7ed3\u679c');
+    const progress = makeCopilotText('copilot-task-thread-row is-progress', '\u8fdb\u5ea6\uff1a\u5df2\u63a5\u5165 Copilot \u6267\u884c');
+    const result = makeCopilotText('copilot-task-thread-row is-result', '\u7ed3\u679c\uff1a\u7b49\u5f85 Agent \u8fd4\u56de');
+    const recovery = makeCopilotText('copilot-task-thread-row is-recovery', '\u6062\u590d\uff1a\u5931\u8d25\u65f6\u4f1a\u7ed9\u51fa\u91cd\u8bd5\u3001\u767b\u5f55\u6216\u8bfb\u53d6\u4e0a\u4e0b\u6587\u52a8\u4f5c');
+    const save = makeCopilotText('copilot-task-thread-row is-save-outlet', '\u4fdd\u5b58\u51fa\u53e3\uff1a\u7ed3\u679c\u5165\u8d44\u4ea7\u5e93\uff0c\u6210\u529f\u6d41\u7a0b\u53ef\u4fdd\u5b58\u4e3a\u5de5\u4f5c\u6d41\u8349\u7a3f');
+    [goal, plan, progress, result, recovery, save].forEach((row) => grid.appendChild(row));
+    card.appendChild(grid);
+
+    messagesEl.appendChild(card);
+    activeTaskThreadCard = card;
+    activeTaskThreadEls = { state: head.querySelector('.copilot-task-thread-state'), progress, result, recovery };
+    scrollMessagesToBottom();
+    return card;
+  }
+
+  function updateActiveTaskThread(phase, detail) {
+    if (!activeTaskThreadCard || !activeTaskThreadEls) return;
+    const text = detail ? String(detail) : '';
+    if (phase === 'progress') {
+      activeTaskThreadEls.progress.textContent = '\u8fdb\u5ea6\uff1a' + (text || '\u6b63\u5728\u6267\u884c');
+      activeTaskThreadEls.state.textContent = '\u8fdb\u884c\u4e2d';
+    } else if (phase === 'done') {
+      activeTaskThreadEls.result.textContent = '\u7ed3\u679c\uff1a' + (text || '\u5df2\u5b8c\u6210\uff0c\u8bf7\u67e5\u770b\u4e0a\u65b9\u8f93\u51fa');
+      activeTaskThreadEls.state.textContent = '\u5df2\u5b8c\u6210';
+      activeTaskThreadCard.classList.add('is-done');
+    } else if (phase === 'error') {
+      activeTaskThreadEls.recovery.textContent = '\u6062\u590d\uff1a' + (text || '\u5df2\u751f\u6210\u6062\u590d\u52a8\u4f5c');
+      activeTaskThreadEls.state.textContent = '\u9700\u6062\u590d';
+      activeTaskThreadCard.classList.add('is-error');
+    }
+  }
+
+  function appendResultCard(detail) {
+    if (!messagesEl) return;
+    const card = document.createElement('div');
+    card.className = 'copilot-result-card';
+    card.appendChild(makeCopilotText('copilot-result-title', '\u7ed3\u679c\u5361\u7247'));
+    card.appendChild(
+      makeCopilotText(
+        'copilot-result-desc',
+        detail || '\u4efb\u52a1\u5df2\u7ed3\u675f\u3002\u53ef\u7ee7\u7eed\u67e5\u770b\u8d44\u4ea7\u3001\u5904\u7406\u7ed3\u679c\uff0c\u6216\u5c06\u8dd1\u901a\u7684\u6b65\u9aa4\u4fdd\u5b58\u4e3a\u5de5\u4f5c\u6d41\u8349\u7a3f\u3002',
+      ),
+    );
+    const actions = document.createElement('div');
+    actions.className = 'copilot-result-actions';
+    actions.appendChild(
+      makeCopilotButton('\u770b\u8d44\u4ea7', 'copilot-onboard-btn is-primary', () =>
+        startCopilotWorkTask('Read the current Workbench project context, list recent assets, and identify which outputs can be processed next.'),
+      ),
+    );
+    actions.appendChild(
+      makeCopilotButton('\u4fdd\u5b58\u6d41\u7a0b\u8349\u7a3f', 'copilot-onboard-btn', () =>
+        startCopilotWorkTask('Summarize the successful steps from the current task and save them as a governed workflow draft when enough information is available.'),
+      ),
+    );
+    actions.appendChild(
+      makeCopilotButton('\u8bb0\u4f4f\u7ed3\u8bba', 'copilot-onboard-btn', (event) =>
+        saveProjectMemoryFromCopilot('decision', detail || 'Task result completed from Copilot result card.', event && event.currentTarget),
+      ),
+    );
+    actions.appendChild(
+      makeCopilotButton('\u8bb0\u4f4f\u53c2\u6570', 'copilot-onboard-btn', (event) =>
+        saveProjectMemoryFromCopilot('parameter', detail || 'Successful parameters should be reused for this project.', event && event.currentTarget),
+      ),
+    );
+    actions.appendChild(
+      makeCopilotButton('\u7ee7\u7eed\u5904\u7406', 'copilot-onboard-btn', () =>
+        fillPrompt('Continue from the latest result. Read the current Workbench context first, then propose the next action.'),
+      ),
+    );
+    card.appendChild(actions);
+    messagesEl.appendChild(card);
+    scrollMessagesToBottom();
+  }
+
+  async function runCopilotBlockerAction(action, btn) {
+    const tool = String(action && action.tool ? action.tool : '');
+    const command = String(action && action.command ? action.command : '');
+    const label = String((action && action.label) || tool || command || (action && action.id) || 'Blocker action');
+    const requiredInputLine = formatRequiredInputs(action);
+    if (btn) btn.disabled = true;
+    appendBubble('tool', `action started: ${label}`, 'copilot-msg-tool');
+    try {
+      if (command.includes('smoke:agent-mcp:e2e:open-login-wait')) {
+        switchToWorkbench();
+        const login = await waitForTeamAccountLogin(120000);
+        await runWorkbenchEntranceValidation(btn, login && login.loggedIn ? {} : { recoveryWaitMs: 30000 });
+        appendBubble(
+          'tool',
+          `action finished: ${label}\n${formatTeamAccountDiagnostics(login)}\nnext=Workbench E2E status refreshed`,
+          'copilot-msg-tool',
+        );
+        return;
+      }
+      if (command.includes('smoke:agent-mcp:e2e:wait-login')) {
+        await runWorkbenchEntranceValidation(btn, { recoveryWaitMs: 120000 });
+        appendBubble('tool', `action finished: ${label}\nnext=Workbench E2E status refreshed`, 'copilot-msg-tool');
+        return;
+      }
+      if (command.includes('smoke:agent-mcp:status')) {
+        await refreshOnboardingState();
+        appendBubble('tool', `action finished: ${label}\nnext=Entrance status refreshed`, 'copilot-msg-tool');
+        return;
+      }
+      if (tool === 'ac.usage.probe_quota_policy' && typeof agent.usageQuotaPolicyProbe === 'function') {
+        setStatus('Checking usage policy...');
+        const r = await agent.usageQuotaPolicyProbe();
+        await refreshOnboardingState();
+        setStatus('Usage policy checked');
+        appendBubble(
+          'tool',
+          `action finished: ${label}\nok=${Boolean(r && r.ok)}${r && r.code ? `\ncode=${r.code}` : ''}${
+            r && r.endpoint ? `\nendpoint=${r.endpoint}` : ''
+          }`,
+          'copilot-msg-tool',
+        );
+        return;
+      }
+      if (tool === 'ac.usage.upload_cloud_draft' && typeof agent.usageUploadCloudDraft === 'function') {
+        setStatus('Dry-running usage upload...');
+        const r = await agent.usageUploadCloudDraft({ days: 1, limit: 5000, dryRun: true });
+        await refreshOnboardingState();
+        setStatus('Usage upload preflight done');
+        appendBubble(
+          'tool',
+          `action finished: ${label}\nok=${Boolean(r && r.ok)} eventCount=${Number(r && r.eventCount) || 0}${
+            r && r.code ? `\ncode=${r.code}` : ''
+          }${r && r.noEvents ? '\nnoEvents=true' : ''}`,
+          'copilot-msg-tool',
+        );
+        return;
+      }
+      if (tool === 'ac.workflow.promote_workbench_preset' || tool === 'ac.workflow.promote_script_hub_tool') {
+        setStatus('Open Settings and enter a workflow draft id for promotion preflight.');
+        openCopilotSettings();
+        appendBubble(
+          'tool',
+          `action needs input: ${label}${requiredInputLine ? `\n${requiredInputLine}` : ''}\nOpen Settings and enter a workflow draft id for promotion preflight.`,
+          'copilot-msg-tool',
+        );
+        return;
+      }
+      if (command) {
+        fillPrompt(`Run ${command}`);
+        appendBubble('tool', `action prepared: ${label}\ncommand copied into composer`, 'copilot-msg-tool');
+        return;
+      }
+      openCopilotSettings();
+      appendBubble('tool', `action routed: ${label}\nopened Settings`, 'copilot-msg-tool');
+    } catch (e) {
+      const message = e && e.message ? e.message : String(e);
+      setStatus(message);
+      appendBubble('tool', `action failed: ${label}\n${message}`, 'copilot-msg-tool');
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
+  function appendBlockerActionButtons(host, blockers) {
+    if (!host || !Array.isArray(blockers) || !blockers.length) return;
+    const seen = new Set();
+    const actionItems = [];
+    blockers.forEach((blocker) => {
+      (Array.isArray(blocker && blocker.actions) ? blocker.actions : []).forEach((action) => {
+        const key = blockerActionKey(action);
+        if (!key || seen.has(key)) return;
+        seen.add(key);
+        actionItems.push(action);
+      });
+    });
+    actionItems.slice(0, 4).forEach((action) => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'copilot-onboard-btn';
+      btn.textContent = String(action.label || action.tool || action.command || action.id || 'Action');
+      const inputTitle = formatRequiredInputs(action);
+      btn.title = [blockerActionKey(action), inputTitle].filter(Boolean).join(' / ');
+      btn.addEventListener('click', () => void runCopilotBlockerAction(action, btn));
+      host.appendChild(btn);
+    });
+  }
+
+  function teamEntranceFromSettings(response) {
+    const status = response && response.mcpEntranceStatus && typeof response.mcpEntranceStatus === 'object'
+      ? response.mcpEntranceStatus
+      : null;
+    const teamEntrance = status
+      ? {
+          ready: Boolean(status.teamEntranceReady),
+          phase: status.teamEntrancePhase ? String(status.teamEntrancePhase) : '',
+          workbenchUsable: Boolean(status.workbenchUsable),
+          blockers: Array.isArray(status.teamEntranceBlockers) ? status.teamEntranceBlockers.map(String) : [],
+        }
+      : null;
+    if (teamEntrance) lastTeamEntranceSnapshot = teamEntrance;
+    return teamEntrance || lastTeamEntranceSnapshot;
+  }
+
+  function workflowPublicationFromSettings(response) {
+    return response &&
+      response.mcpEntranceStatus &&
+      response.mcpEntranceStatus.workflowPublication &&
+      typeof response.mcpEntranceStatus.workflowPublication === 'object'
+      ? response.mcpEntranceStatus.workflowPublication
+      : null;
+  }
+
+  function usageAuditFromSettings(response) {
+    return response &&
+      response.mcpEntranceStatus &&
+      response.mcpEntranceStatus.usageAudit &&
+      typeof response.mcpEntranceStatus.usageAudit === 'object'
+      ? response.mcpEntranceStatus.usageAudit
+      : null;
+  }
+
+  async function waitForTeamAccountLogin(timeoutMs = 90000) {
+    if (typeof shell.accountStatus !== 'function') return null;
+    const deadline = Date.now() + Math.max(5000, Number(timeoutMs) || 90000);
+    let account = null;
+    while (Date.now() <= deadline) {
+      account = await loadTeamAccountStatus();
+      if (account && account.loggedIn) return account;
+      if (Date.now() >= deadline) break;
+      await delay(Math.min(2000, Math.max(250, deadline - Date.now())));
+    }
+    return account;
+  }
+
+  async function runWorkbenchEntranceValidation(btn, options) {
+    if (!agent || typeof agent.mcpWorkbenchE2e !== 'function') {
+      openCopilotSettings();
+      return null;
+    }
+    const opts = options && typeof options === 'object' ? options : {};
+    if (btn) btn.disabled = true;
+    setStatus('\u5de5\u4f5c\u53f0\u9a8c\u6536\u4e2d...');
+    try {
+      const r = await agent.mcpWorkbenchE2e(opts);
+      if (r && r.mcpEntranceStatus && r.mcpEntranceStatus.workbenchEntrance) {
+        lastWorkbenchEntranceSnapshot = r.mcpEntranceStatus.workbenchEntrance;
+      }
+      if (r && r.shellAccount) lastAccountSnapshot = r.shellAccount;
+      await refreshOnboardingState();
+      const ok = Boolean(r && r.ok && r.e2e && r.e2e.ok);
+      setStatus(ok ? '\u5de5\u4f5c\u53f0\u94fe\u8def\u5df2\u9a8c\u6536' : '\u5de5\u4f5c\u53f0\u9a8c\u6536\u4ecd\u9700\u5904\u7406');
+      setTimeout(() => setStatus(''), 3500);
+      return r || null;
+    } catch (e) {
+      setStatus((e && e.message) ? e.message : String(e));
+      return null;
+    } finally {
+      if (btn) btn.disabled = false;
     }
   }
 
@@ -133,15 +665,15 @@
     if (tokenCachedEl) tokenCachedEl.style.width = segPct(parts.cached) + '%';
     if (tokenOutputEl) tokenOutputEl.style.width = segPct(parts.output) + '%';
     if (tokenReasoningEl) tokenReasoningEl.style.width = segPct(parts.reasoning) + '%';
-    tokenBarEl.title = '上下文用量 ' + Math.round(pct) + '%，点击展开';
+    tokenBarEl.title = '上下文已使用 ' + Math.round(pct) + '%';
     if (tokenPopoverEl) {
       tokenPopoverEl.innerHTML = '';
       const head = document.createElement('div');
-      head.textContent = '上下文用量 · 已用 ' + Math.round(pct) + '%';
+      head.textContent = '上下文使用率：' + Math.round(pct) + '%';
       tokenPopoverEl.appendChild(head);
       const rows = [
-        ['新增输入', parts.freshInput],
-        ['缓存命中', parts.cached],
+        ['新输入', parts.freshInput],
+        ['缓存输入', parts.cached],
         ['输出', parts.output],
         ['推理输出', parts.reasoning],
       ];
@@ -158,18 +690,16 @@
       }
       const note = document.createElement('div');
       note.className = 'copilot-token-popover-row';
-      note.textContent = 'cached_input_tokens 已包含在 input_tokens 内';
+      note.textContent = 'cached_input_tokens is included in input_tokens.';
       tokenPopoverEl.appendChild(note);
     }
   }
 
   function permissionModeLabel(mode) {
-    if (mode === 'full') return '自动执行';
-    if (mode === 'sandbox') return '安全模式';
-    if (mode === 'ask' || !mode) return '需要时询问';
-    if (mode === 'full') return '管理员全权限';
-    if (mode === 'sandbox') return '普通沙箱';
-    return '每轮询问';
+    if (mode === 'full') return 'Auto';
+    if (mode === 'sandbox') return 'Sandbox';
+    if (mode === 'ask' || !mode) return 'Ask';
+    return 'Ask';
   }
 
   function ensureBrainStateCard() {
@@ -187,7 +717,7 @@
     const dot = document.createElement('span');
     dot.className = 'copilot-status-dot';
     const title = document.createElement('span');
-    title.textContent = '大脑状态';
+    title.textContent = 'Brain status';
     main.appendChild(dot);
     main.appendChild(title);
     const mode = document.createElement('span');
@@ -203,18 +733,18 @@
     const useCodex = document.createElement('button');
     useCodex.type = 'button';
     useCodex.className = 'copilot-mini-btn';
-    useCodex.textContent = '使用 Codex';
+    useCodex.textContent = 'Use Codex';
     const testCodex = document.createElement('button');
     testCodex.type = 'button';
     testCodex.className = 'copilot-mini-btn';
-    testCodex.textContent = '测试';
+    testCodex.textContent = 'Test';
     const openSettings = document.createElement('button');
     openSettings.type = 'button';
     openSettings.className = 'copilot-mini-btn';
-    openSettings.textContent = '设置';
-    useCodex.textContent = '使用 Codex';
-    testCodex.textContent = '测试';
-    openSettings.textContent = '设置';
+    openSettings.textContent = 'Settings';
+    useCodex.textContent = 'Use Codex';
+    testCodex.textContent = 'Test';
+    openSettings.textContent = 'Settings';
     actions.appendChild(useCodex);
     actions.appendChild(testCodex);
     actions.appendChild(openSettings);
@@ -224,18 +754,18 @@
     const askBtn = document.createElement('button');
     askBtn.type = 'button';
     askBtn.className = 'copilot-mode-btn';
-    askBtn.textContent = '每轮询问';
+    askBtn.textContent = 'Ask';
     const sandboxBtn = document.createElement('button');
     sandboxBtn.type = 'button';
     sandboxBtn.className = 'copilot-mode-btn';
-    sandboxBtn.textContent = '沙箱';
+    sandboxBtn.textContent = 'Sandbox';
     const fullBtn = document.createElement('button');
     fullBtn.type = 'button';
     fullBtn.className = 'copilot-mode-btn';
-    fullBtn.textContent = '全权限';
-    askBtn.textContent = '需要时询问';
-    sandboxBtn.textContent = '安全模式';
-    fullBtn.textContent = '自动执行';
+    fullBtn.textContent = 'Auto';
+    askBtn.textContent = 'Ask';
+    sandboxBtn.textContent = 'Sandbox';
+    fullBtn.textContent = 'Auto';
     modes.appendChild(askBtn);
     modes.appendChild(sandboxBtn);
     modes.appendChild(fullBtn);
@@ -282,7 +812,7 @@
 
   async function setPermissionMode(mode) {
     if (!agent || typeof agent.saveSettings !== 'function') return;
-    setStatus('保存权限模式...');
+    setStatus('Saving permission mode...');
     try {
       const r = await agent.saveSettings({ codexPermissionMode: mode });
       if (r && r.ok && typeof agent.savePolicy === 'function') {
@@ -294,7 +824,7 @@
         lastSettingsSnapshot = r.settings || lastSettingsSnapshot;
         updatePermissionButtons(mode);
         await refreshBrainStateCard();
-        setStatus('权限模式：' + permissionModeLabel(mode));
+        setStatus('Permission mode: ' + permissionModeLabel(mode));
         setTimeout(() => setStatus(''), 1600);
       }
     } catch (e) {
@@ -318,7 +848,7 @@
 
   async function switchToCodex() {
     if (!agent || typeof agent.saveSettings !== 'function') return;
-    setStatus('切换到 Codex...');
+    setStatus('Switching to Codex...');
     try {
       const r = await agent.saveSettings({ defaultBrainId: 'codex' });
       if (r && r.ok) {
@@ -326,7 +856,7 @@
         await refreshBrainStateCard({ forceProbe: true });
         await refreshBrainLabel();
         await refreshOnboardingState();
-        setStatus('已切换到 Codex');
+        setStatus('Switched to Codex');
         setTimeout(() => setStatus(''), 1800);
       }
     } catch (e) {
@@ -337,12 +867,12 @@
   async function refreshTeamCodexAndTest(btn) {
     if (!agent || typeof agent.saveSettings !== 'function') return;
     if (btn) btn.disabled = true;
-    setStatus('正在准备 Copilot...');
+    setStatus('Preparing Copilot...');
     try {
       if (typeof agent.syncCodexAuth === 'function') {
         const sync = await agent.syncCodexAuth();
         if (sync && sync.ok === false && !sync.skipped) {
-          setStatus('团队凭据刷新失败：' + (sync.error || '请检查设置'));
+          setStatus('Team credential refresh failed: ' + (sync.error || 'check settings'));
           return;
         }
       }
@@ -382,12 +912,12 @@
       void syncPolicyForPermissionMode(permissionMode);
       els.mode.textContent = permissionModeLabel(permissionMode);
       const cwd = s.settings && s.settings.codexCwd ? s.settings.codexCwd : '';
-      const detail = probe && probe.detail ? probe.detail : '未检测';
+      const detail = probe && probe.detail ? probe.detail : 'not detected';
       els.sub.textContent =
-        'Codex: ' + detail + (cwd ? '\n目录: ' + cwd : '') + (desired !== active ? '\n当前已回退，请测试或切回 Codex。' : '');
+        'Codex: ' + detail + (cwd ? '\nCWD: ' + cwd : '') + (desired !== active ? '\nFallback is active. Test or switch back to Codex.' : '');
       updatePermissionButtons(permissionMode);
       if (options && options.toast) {
-        setStatus(ok ? 'Codex 可用' : detail);
+        setStatus(ok ? 'Codex ready' : detail);
         setTimeout(() => setStatus(''), 2200);
       }
     } catch (e) {
@@ -411,7 +941,7 @@
       return;
     }
     examplesEl.hidden = false;
-    const phrases = ['帮我检查当前项目状态', '帮我启动工作台', '帮我修复刚才的报错', '帮我整理这个项目能做什么'];
+    const phrases = ['Check current project status', 'Open Workbench', 'Fix the last error', 'Summarize project capabilities'];
     for (const phrase of phrases) {
       const chip = document.createElement('button');
       chip.type = 'button';
@@ -425,164 +955,372 @@
     }
   }
 
-  function showOnboardCard(detail) {
-    removeOnboardCard();
-    showExampleChips(false);
+  function showOnboardCard(detail, opts) {
+    if (!messagesEl) return;
+    const options = opts && typeof opts === 'object' ? opts : {};
+    const sourceOpts = options; // opts.blockers opts.teamEntrance opts.workflowPublication opts.usageAudit
+    const ready = detail === undefined || detail === null || detail === '';
+    const account = sourceOpts.account && typeof sourceOpts.account === 'object' ? sourceOpts.account : lastAccountSnapshot;
+    const accountReady = Boolean(account && account.loggedIn);
+    const entrance = sourceOpts.workbenchEntrance && typeof sourceOpts.workbenchEntrance === 'object'
+      ? sourceOpts.workbenchEntrance
+      : lastWorkbenchEntranceSnapshot;
+    const acceptance = sourceOpts.workbenchAcceptance && typeof sourceOpts.workbenchAcceptance === 'object'
+      ? sourceOpts.workbenchAcceptance
+      : lastWorkbenchAcceptanceSnapshot;
+    const teamEntrance = sourceOpts.teamEntrance && typeof sourceOpts.teamEntrance === 'object'
+      ? sourceOpts.teamEntrance
+      : lastTeamEntranceSnapshot;
+    const workflowPublication =
+      sourceOpts.workflowPublication && typeof sourceOpts.workflowPublication === 'object' ? sourceOpts.workflowPublication : null;
+    const usageAudit = sourceOpts.usageAudit && typeof sourceOpts.usageAudit === 'object' ? sourceOpts.usageAudit : null;
+    const blockers = Array.isArray(sourceOpts.blockers) ? sourceOpts.blockers : [];
+    const entranceStatus = entrance && entrance.status ? String(entrance.status) : accountReady ? 'ready' : 'login_required';
+    const entranceReady = entranceStatus === 'ready';
+    const teamEntranceReady = Boolean(teamEntrance && teamEntrance.ready);
+    const teamEntrancePhase = teamEntrance && teamEntrance.phase ? String(teamEntrance.phase) : '';
+    const entranceLabels = {
+      ready: 'Copilot \u5df2\u5c31\u7eea',
+      login_required: '\u5de5\u4f5c\u53f0\u5f85\u767b\u5f55',
+      e2e_missing: '\u5de5\u4f5c\u53f0\u9a8c\u6536\u7f3a\u5931',
+      e2e_stale: '\u5de5\u4f5c\u53f0\u9a8c\u6536\u5df2\u8fc7\u671f',
+      e2e_failed: '\u5de5\u4f5c\u53f0\u9a8c\u6536\u5931\u8d25',
+      e2e_invalid: '\u5de5\u4f5c\u53f0\u9a8c\u6536\u65e0\u6548',
+      mcp_unavailable: 'MCP \u672a\u8fde\u63a5',
+    };
+    if (onboardEl && onboardEl.parentNode) onboardEl.remove();
     const card = document.createElement('div');
     card.className = 'copilot-onboard';
-    const title = document.createElement('div');
-    title.className = 'copilot-onboard-title';
-    title.textContent = '配置 AI 大脑';
-    const desc = document.createElement('div');
-    desc.className = 'copilot-onboard-desc';
-    desc.textContent =
-      detail ||
-      'Copilot 需要 Hermes Gateway。点击下方一键配置，或在设置 → AI 大脑 中手动填写 Gateway URL。';
-    const actions = document.createElement('div');
-    actions.className = 'copilot-onboard-actions';
-    const setupBtn = document.createElement('button');
-    setupBtn.type = 'button';
-    setupBtn.className = 'copilot-onboard-btn';
-    setupBtn.textContent = '一键安装并启动 Hermes';
-    setupBtn.addEventListener('click', () => void runHermesSetup(setupBtn));
-    const connectBtn = document.createElement('button');
-    connectBtn.type = 'button';
-    connectBtn.className = 'copilot-onboard-btn';
-    connectBtn.textContent = '连接已有 Hermes';
-    connectBtn.addEventListener('click', () => void runHermesConnect(connectBtn));
-    const settingsBtn = document.createElement('button');
-    settingsBtn.type = 'button';
-    settingsBtn.className = 'copilot-onboard-btn';
-    settingsBtn.textContent = '打开设置';
-    settingsBtn.addEventListener('click', () => {
-      if (typeof shell.setShellView === 'function') {
-        void shell.setShellView('settings');
-      }
-      if (typeof window.__acApplyShellViewFromMain === 'function') {
-        void window.__acApplyShellViewFromMain('settings');
-      }
-    });
-    actions.appendChild(setupBtn);
-    actions.appendChild(connectBtn);
-    actions.appendChild(settingsBtn);
-    card.appendChild(title);
-    card.appendChild(desc);
-    card.appendChild(actions);
-    messagesEl.insertBefore(card, messagesEl.firstChild);
     onboardEl = card;
-  }
-
-  function showMemberOnboardCard(detail, options) {
-    removeOnboardCard();
-    showExampleChips(false);
-    const opts = options && typeof options === 'object' ? options : {};
-    const ready = Boolean(opts.ready);
-    const card = document.createElement('div');
-    card.className = 'copilot-onboard';
     const title = document.createElement('div');
     title.className = 'copilot-onboard-title';
-    title.textContent = ready ? 'Copilot 已就绪' : '还差一步';
+    title.textContent = ready ? (accountReady ? 'Copilot \u5df2\u5c31\u7eea' : '\u5de5\u4f5c\u53f0\u767b\u5f55\u5f85\u5b8c\u6210') : '\u9700\u8981\u914d\u7f6e';
     const desc = document.createElement('div');
     desc.className = 'copilot-onboard-desc';
     desc.textContent = ready
-      ? '可以直接让 Copilot 检查项目、启动工作台、修复报错或整理当前项目。'
-      : detail || '没有检测到可用的 Codex。可以先刷新团队凭据并测试连接。';
-    const actions = document.createElement('div');
-    actions.className = 'copilot-onboard-actions';
-
+      ? accountReady
+        ? '\u53ef\u4ee5\u76f4\u63a5\u8ba9 Copilot \u68c0\u67e5\u9879\u76ee\u3001\u542f\u52a8\u5de5\u4f5c\u53f0\u3001\u4fee\u590d\u62a5\u9519\u6216\u6574\u7406\u5f53\u524d\u9879\u76ee\u3002'
+        : 'Copilot \u5927\u8111\u5df2\u5c31\u7eea\uff0c\u4f46\u5de5\u4f5c\u53f0\u5171\u4eab\u767b\u5f55\u6001\u8fd8\u4e0d\u53ef\u7528\u3002'
+      : String(detail || 'Codex is not ready yet. Refresh team credentials and test the connection.');
     if (ready) {
-      const rows = [
-        ['检查当前项目', '帮我检查当前项目状态'],
-        ['启动工作台', '帮我启动工作台'],
-        ['修复刚才的报错', '帮我修复刚才的报错'],
-        ['整理项目能力', '帮我整理这个项目能做什么'],
-      ];
-      rows.forEach((row, idx) => {
-        const btn = document.createElement('button');
-        btn.type = 'button';
-        btn.className = idx === 0 ? 'copilot-onboard-btn is-primary' : 'copilot-onboard-btn';
-        btn.textContent = row[0];
-        btn.addEventListener('click', () => fillPrompt(row[1]));
-        actions.appendChild(btn);
-      });
-    } else {
-      const fixBtn = document.createElement('button');
-      fixBtn.type = 'button';
-      fixBtn.className = 'copilot-onboard-btn is-primary';
-      fixBtn.textContent = '刷新团队凭据并测试';
-      fixBtn.addEventListener('click', () => void refreshTeamCodexAndTest(fixBtn));
-      const codexBtn = document.createElement('button');
-      codexBtn.type = 'button';
-      codexBtn.className = 'copilot-onboard-btn';
-      codexBtn.textContent = '切换到 Codex';
-      codexBtn.addEventListener('click', () => void switchToCodex());
-      const settingsBtn = document.createElement('button');
-      settingsBtn.type = 'button';
-      settingsBtn.className = 'copilot-onboard-btn';
-      settingsBtn.textContent = '打开设置';
-      settingsBtn.addEventListener('click', openCopilotSettings);
-      actions.appendChild(fixBtn);
-      actions.appendChild(codexBtn);
-      actions.appendChild(settingsBtn);
+      const teamEntranceLabels = {
+        ready: 'Copilot \u5df2\u5c31\u7eea',
+        workbench_blocked: '\u5de5\u4f5c\u53f0\u5165\u53e3\u5f85\u6536\u53e3',
+        governance_blocked: '\u56e2\u961f\u6cbb\u7406\u5f85\u6536\u53e3',
+      };
+      title.textContent = teamEntranceLabels[teamEntrancePhase] || entranceLabels[entranceStatus] || '\u5de5\u4f5c\u53f0\u5165\u53e3\u5f85\u786e\u8ba4';
+      desc.textContent = teamEntranceReady
+        ? '\u53ef\u4ee5\u76f4\u63a5\u8ba9 Copilot \u68c0\u67e5\u9879\u76ee\u3001\u542f\u52a8\u5de5\u4f5c\u53f0\u3001\u4fee\u590d\u62a5\u9519\u6216\u6574\u7406\u5f53\u524d\u9879\u76ee\u3002'
+        : teamEntrancePhase === 'governance_blocked'
+          ? '\u5de5\u4f5c\u53f0\u94fe\u8def\u53ef\u7528\uff0c\u4f46\u56e2\u961f\u53d1\u5e03\u6cbb\u7406\u3001\u989d\u5ea6\u6216\u4e91\u7aef\u5ba1\u8ba1\u4ecd\u9700\u7ba1\u7406\u5458\u6536\u53e3\u3002'
+          : entrance && entrance.nextStep
+            ? String(entrance.nextStep)
+            : 'Copilot \u5927\u8111\u5df2\u5c31\u7eea\uff0c\u4f46\u5de5\u4f5c\u53f0\u5165\u53e3\u8fd8\u9700\u8981\u5b8c\u6210\u767b\u5f55\u6216\u9a8c\u6536\u3002';
     }
-
     card.appendChild(title);
     card.appendChild(desc);
+
+    if (ready) {
+      const blockerList = document.createElement('div');
+      blockerList.className = 'copilot-onboard-desc';
+      const blockerLabels = {
+        workbench_login_required: '\u5de5\u4f5c\u53f0\u767b\u5f55\u672a\u5b8c\u6210',
+        workbench_e2e_failed: '\u5de5\u4f5c\u53f0\u94fe\u8def\u9a8c\u6536\u5931\u8d25',
+        workbench_e2e_missing: '\u5de5\u4f5c\u53f0\u94fe\u8def\u5f85\u9a8c\u6536',
+        workbench_e2e_stale: '\u5de5\u4f5c\u53f0\u94fe\u8def\u9a8c\u6536\u5df2\u8fc7\u671f',
+        workflow_promotion_draft_only: 'Workflow \u4ecd\u662f\u8349\u7a3f\u9636\u6bb5',
+        usage_governance_local_only: '\u7528\u91cf\u6cbb\u7406\u4ecd\u662f\u672c\u5730\u4fe1\u53f7',
+        codex_runtime_not_ready: 'Codex \u8fd0\u884c\u73af\u5883\u5f85\u786e\u8ba4',
+        mcp_unavailable: 'MCP \u672a\u8fde\u63a5',
+      };
+      const blockerText = blockers
+        .slice(0, 3)
+        .map((blocker) => blockerLabels[String(blocker && blocker.id ? blocker.id : '')] || String(blocker && blocker.id ? blocker.id : 'unknown'))
+        .join(' / ');
+      const lines = [];
+      if (blockerText) lines.push(blockerText);
+      const blockerActions = blockers.flatMap((blocker) => formatBlockerActions(blocker, 2)).slice(0, 4);
+      if (blockerActions.length) lines.push('Actions: ' + blockerActions.join(', '));
+      const workflowBlocker = blockers.find((blocker) => blocker && blocker.id === 'workflow_promotion_draft_only');
+      const workflowMissing = Array.isArray(workflowBlocker && workflowBlocker.missingGates)
+        ? workflowBlocker.missingGates
+            .map((gate) => {
+              const id = String(gate || '');
+              if (id === 'workbench_login_e2e_ready') return 'Workbench E2E';
+              if (id === 'admin_confirmation') return 'admin approval';
+              return id;
+            })
+            .filter(Boolean)
+            .slice(0, 2)
+        : [];
+      if (workflowMissing.length) lines.push('Workflow gates: ' + workflowMissing.join(', '));
+      const promotionEvidence = workflowPublication && workflowPublication.promotionPreflightEvidence
+        ? workflowPublication.promotionPreflightEvidence
+        : null;
+      const latestPromotionEvidence = promotionEvidence && promotionEvidence.latest ? promotionEvidence.latest : null;
+      if (latestPromotionEvidence) {
+        const missing = Array.isArray(latestPromotionEvidence.missingGates)
+          ? latestPromotionEvidence.missingGates.map((item) => String(item || '').trim()).filter(Boolean).slice(0, 2)
+          : [];
+        lines.push(
+          'Workflow evidence: ' +
+            (latestPromotionEvidence.tool || 'promotion') +
+            (latestPromotionEvidence.skillExists === false ? ' deleted draft' : '') +
+            (latestPromotionEvidence.evidenceCurrent === false ? ' stale ' + (latestPromotionEvidence.staleReason || 'not_current') : '') +
+            (missing.length ? ' missing ' + missing.join(', ') : ''),
+        );
+      }
+      const usageBlocker = blockers.find((blocker) => blocker && blocker.id === 'usage_governance_local_only');
+      if (usageBlocker && usageBlocker.cloudDraft) {
+        const usageUploadTool = usageBlocker.cloudDraft.uploadPlan && usageBlocker.cloudDraft.uploadPlan.tool
+          ? String(usageBlocker.cloudDraft.uploadPlan.tool)
+          : 'ac.usage.upload_cloud_draft';
+        lines.push('Usage upload: ' + usageUploadTool);
+        const usageQuotaPolicy = usageBlocker.cloudDraft.quotaPolicy && typeof usageBlocker.cloudDraft.quotaPolicy === 'object'
+          ? usageBlocker.cloudDraft.quotaPolicy
+          : null;
+        if (usageQuotaPolicy) lines.push('Usage quota: ' + (usageQuotaPolicy.cloudQuotaEnforced ? 'enforced' : 'not enforced'));
+        if (usageQuotaPolicy && usageQuotaPolicy.probeTool) lines.push('Usage policy probe: ' + usageQuotaPolicy.probeTool);
+        const usageBlockedBy = Array.isArray(usageBlocker.cloudDraft.blockedBy)
+          ? usageBlocker.cloudDraft.blockedBy.map((item) => String(item || '').trim()).filter(Boolean).slice(0, 2)
+          : [];
+        if (usageBlockedBy.length) lines.push('Usage blockers: ' + usageBlockedBy.join(', '));
+      }
+      const usageEvidence = usageAudit && usageAudit.governanceEvidence ? usageAudit.governanceEvidence : null;
+      const latestUsageEvidence = usageEvidence && usageEvidence.latest ? usageEvidence.latest : null;
+      if (latestUsageEvidence) {
+        const usageRemaining = Array.isArray(latestUsageEvidence.remainingGates)
+          ? latestUsageEvidence.remainingGates.map((item) => String(item || '').trim()).filter(Boolean).slice(0, 2)
+          : [];
+        lines.push(
+          'Usage evidence: ' +
+            (latestUsageEvidence.code || (latestUsageEvidence.ok ? 'ok' : 'not_ok')) +
+            (latestUsageEvidence.exitReady ? ' exit ready' : '') +
+            (usageRemaining.length ? ' remaining ' + usageRemaining.join(', ') : ''),
+        );
+      }
+      if (acceptance) lines.push('Workbench acceptance: ' + (acceptance.passed ? 'accepted' : 'not accepted'));
+      if (account) lines.push('Account: ' + formatTeamAccountDiagnostics(account));
+      if (lines.length) {
+        blockerList.textContent = lines.join(' / ');
+        card.appendChild(blockerList);
+      }
+    }
+
+    const actions = document.createElement('div');
+    actions.className = 'copilot-onboard-actions';
+    if (!accountReady) {
+      const loginBtn = document.createElement('button');
+      loginBtn.type = 'button';
+      loginBtn.className = 'copilot-onboard-btn is-primary';
+      loginBtn.textContent = '\u6253\u5f00\u5de5\u4f5c\u53f0\u767b\u5f55';
+      loginBtn.addEventListener('click', () => {
+        switchToWorkbench();
+        void (async () => {
+          loginBtn.disabled = true;
+          const login = await waitForTeamAccountLogin(120000);
+          loginBtn.disabled = false;
+          if (login && login.loggedIn) setStatus('\u767b\u5f55\u540e\u9a8c\u6536 ' + formatTeamAccountDiagnostics(login));
+          await refreshOnboardingState();
+        })();
+      });
+      actions.appendChild(loginBtn);
+    }
+    const validateBtn = document.createElement('button');
+    validateBtn.type = 'button';
+    validateBtn.className = accountReady ? 'copilot-onboard-btn is-primary' : 'copilot-onboard-btn';
+    validateBtn.textContent = accountReady
+      ? '\u8fd0\u884c\u5de5\u4f5c\u53f0\u9a8c\u6536'
+      : entranceStatus !== 'login_required'
+        ? '\u6253\u5f00\u8bbe\u7f6e\u9a8c\u6536'
+        : '\u767b\u5f55\u540e\u9a8c\u6536';
+    validateBtn.addEventListener('click', () => {
+      void (async () => {
+        validateBtn.disabled = true;
+        if (!accountReady) {
+          switchToWorkbench();
+          const login = await waitForTeamAccountLogin(120000);
+          await runWorkbenchEntranceValidation(validateBtn, login && login.loggedIn ? {} : { recoveryWaitMs: 30000 });
+        } else {
+          await runWorkbenchEntranceValidation(validateBtn, {});
+        }
+        validateBtn.disabled = false;
+      })();
+    });
+    actions.appendChild(validateBtn);
+    const settingsBtn = document.createElement('button');
+    settingsBtn.type = 'button';
+    settingsBtn.className = 'copilot-onboard-btn';
+    settingsBtn.textContent = '\u6253\u5f00\u8bbe\u7f6e';
+    settingsBtn.addEventListener('click', openCopilotSettings);
+    actions.appendChild(settingsBtn);
     card.appendChild(actions);
-    messagesEl.insertBefore(card, messagesEl.firstChild);
+    if (ready && blockers.length) appendBlockerActionButtons(actions, blockers);
+    messagesEl.appendChild(card);
+    scrollMessagesToBottom();
+  }
+
+  function showMemberOnboardCard(detail, opts) {
+    const options = opts && typeof opts === 'object' ? opts : {};
+    if (options.ready === false) {
+      showOnboardCard(detail, options);
+      return;
+    }
+    showLongWorkHomeCard(detail, options);
+  }
+
+  function showLongWorkHomeCard(detail, opts) {
+    if (!messagesEl) return;
+    const options = opts && typeof opts === 'object' ? opts : {};
+    const account = options.account && typeof options.account === 'object' ? options.account : lastAccountSnapshot;
+    const accountReady = Boolean(account && account.loggedIn);
+    const entrance = options.workbenchEntrance && typeof options.workbenchEntrance === 'object'
+      ? options.workbenchEntrance
+      : lastWorkbenchEntranceSnapshot;
+    const acceptance = options.workbenchAcceptance && typeof options.workbenchAcceptance === 'object'
+      ? options.workbenchAcceptance
+      : lastWorkbenchAcceptanceSnapshot;
+    const teamEntrance = options.teamEntrance && typeof options.teamEntrance === 'object' ? options.teamEntrance : lastTeamEntranceSnapshot;
+    const blockers = Array.isArray(options.blockers) ? options.blockers : [];
+    const workbenchContext = options.workbenchContext && typeof options.workbenchContext === 'object'
+      ? options.workbenchContext
+      : lastWorkbenchContextSnapshot;
+    const recentExecutions = Array.isArray(options.recentExecutions) ? options.recentExecutions : lastToolExecutionsSnapshot;
+    const projectMemory = options.projectMemory && typeof options.projectMemory === 'object'
+      ? options.projectMemory
+      : lastProjectMemorySnapshot;
+    const contextSummary = summarizeWorkbenchContext(workbenchContext, recentExecutions);
+    const memorySummary = summarizeProjectMemorySnapshot(projectMemory);
+    const entranceStatus = entrance && entrance.status ? String(entrance.status) : accountReady ? 'ready' : 'login_required';
+    const entranceReady = entranceStatus === 'ready' || Boolean(acceptance && acceptance.passed);
+    const agentReady = detail === undefined || detail === null || detail === '';
+    const governanceReady = governanceReadyFrom(blockers, teamEntrance);
+
+    if (onboardEl && onboardEl.parentNode) onboardEl.remove();
+    const card = document.createElement('div');
+    card.className = 'copilot-onboard copilot-work-home';
     onboardEl = card;
-  }
 
-  async function runHermesConnect(btn) {
-    if (typeof agent.companionConnect !== 'function') return;
-    if (btn) btn.disabled = true;
-    setStatus('正在连接已有 Hermes…');
-    try {
-      const r = await agent.companionConnect({ mode: 'all', detect: true, writeMcp: true });
-      if (r && r.ok) {
-        brainReady = true;
-        removeOnboardCard();
-        await refreshBrainLabel();
-        const hasHistory = messagesEl.querySelectorAll('.copilot-msg').length > 0;
-        if (!hasHistory) showExampleChips(true);
-        setStatus('已连接 Hermes');
-        setTimeout(() => setStatus(''), 2500);
-      } else {
-        showOnboardCard('未检测到 Gateway：' + ((r && r.error) || '请在设置中填写 URL'));
-        setStatus('');
-      }
-    } catch (e) {
-      showOnboardCard(e && e.message ? e.message : String(e));
-      setStatus('');
-    } finally {
-      if (btn) btn.disabled = false;
-    }
-  }
+    const header = document.createElement('div');
+    header.className = 'copilot-work-home-header';
+    header.appendChild(makeCopilotText('copilot-work-home-title', 'Copilot \u5de5\u4f5c\u5165\u53e3'));
+    header.appendChild(
+      makeCopilotText(
+        'copilot-work-home-subtitle',
+        '\u56e2\u961f\u4ece\u8fd9\u91cc\u8fdb\u5165\u5de5\u4f5c\u53f0\uff0c\u8ba9 Agent \u590d\u7528\u9879\u76ee\u3001\u8d44\u4ea7\u3001\u6743\u9650\u548c\u7528\u91cf\u6cbb\u7406\u3002',
+      ),
+    );
+    card.appendChild(header);
 
-  async function runHermesSetup(btn) {
-    if (typeof agent.hermesGatewaySetup !== 'function') return;
-    if (btn) btn.disabled = true;
-    setStatus('正在配置 Hermes Gateway…');
-    try {
-      const r = await agent.hermesGatewaySetup({ useDevStub: false });
-      if (r && r.ok) {
-        brainReady = true;
-        removeOnboardCard();
-        await refreshBrainLabel();
-        const hasHistory = messagesEl.querySelectorAll('.copilot-msg').length > 0;
-        if (!hasHistory) showExampleChips(true);
-        setStatus('Hermes 已就绪');
-        setTimeout(() => setStatus(''), 2500);
-      } else {
-        showOnboardCard('Gateway 未就绪：' + ((r && r.error) || (r && r.probe && r.probe.detail) || '请重试'));
-        setStatus('');
-      }
-    } catch (e) {
-      showOnboardCard(e && e.message ? e.message : String(e));
-      setStatus('');
-    } finally {
-      if (btn) btn.disabled = false;
+    const statusGrid = document.createElement('div');
+    statusGrid.className = 'copilot-work-status-grid';
+    appendStatusPill(statusGrid, '\u8d26\u53f7', accountReady ? '\u5df2\u767b\u5f55' : '\u5f85\u767b\u5f55', accountReady ? 'is-ok' : 'is-warn');
+    appendStatusPill(
+      statusGrid,
+      '\u5de5\u4f5c\u53f0',
+      entranceReady ? '\u53ef\u7528' : '\u5f85\u9a8c\u6536',
+      entranceReady ? 'is-ok' : 'is-warn',
+    );
+    appendStatusPill(statusGrid, 'Agent', agentReady ? '\u5df2\u63a5\u5165' : '\u5f85\u914d\u7f6e', agentReady ? 'is-ok' : 'is-bad');
+    appendStatusPill(
+      statusGrid,
+      '\u6cbb\u7406',
+      governanceReady ? '\u53ef\u8ffd\u8e2a' : '\u5f85\u6536\u53e3',
+      governanceReady ? 'is-ok' : 'is-warn',
+    );
+    card.appendChild(statusGrid);
+
+    const context = document.createElement('div');
+    context.className = 'copilot-work-context';
+    context.appendChild(makeCopilotText('copilot-work-section-title', '\u5f53\u524d\u4e0a\u4e0b\u6587'));
+    const contextGrid = document.createElement('div');
+    contextGrid.className = 'copilot-work-context-grid';
+    contextGrid.appendChild(makeCopilotText('copilot-work-context-item', '\u9879\u76ee\uff1a' + contextSummary.projectLabel));
+    contextGrid.appendChild(makeCopilotText('copilot-work-context-item', '\u8d44\u4ea7\uff1a' + contextSummary.assetLabel));
+    contextGrid.appendChild(makeCopilotText('copilot-work-context-item', '\u80fd\u529b\uff1a' + contextSummary.capabilityLabel));
+    contextGrid.appendChild(makeCopilotText('copilot-work-context-item', '\u6700\u8fd1\u4efb\u52a1\uff1a' + contextSummary.taskLabel));
+    contextGrid.appendChild(makeCopilotText('copilot-work-context-item is-memory', '\u9879\u76ee\u8bb0\u5fc6\uff1a' + memorySummary.label));
+    if (memorySummary.latestText) {
+      contextGrid.appendChild(makeCopilotText('copilot-work-context-item is-memory-latest', '\u6700\u8fd1\u6c89\u6dc0\uff1a' + memorySummary.latestText));
     }
+    context.appendChild(contextGrid);
+    card.appendChild(context);
+
+    const actions = document.createElement('div');
+    actions.className = 'copilot-work-actions';
+    actions.appendChild(
+      makeCopilotButton(
+        accountReady ? '\u6253\u5f00\u5de5\u4f5c\u53f0' : '\u767b\u5f55\u5de5\u4f5c\u53f0',
+        'copilot-onboard-btn is-primary',
+        () => {
+          switchToWorkbench();
+          if (!accountReady) {
+            void (async () => {
+              await waitForTeamAccountLogin(120000);
+              await refreshOnboardingState();
+            })();
+          }
+        },
+      ),
+    );
+    actions.appendChild(
+      makeCopilotButton('\u521b\u5efa\u9879\u76ee', 'copilot-onboard-btn', () =>
+        startCopilotWorkTask('Prepare Workbench, create a new project, then return the project status and next required inputs.'),
+      ),
+    );
+    actions.appendChild(
+      makeCopilotButton('\u8fd0\u884c\u80fd\u529b', 'copilot-onboard-btn', () =>
+        startCopilotWorkTask(
+          'Prepare Workbench, choose one directly runnable capability, explain required inputs, and stop before running if anything is missing.',
+        ),
+      ),
+    );
+    actions.appendChild(
+      makeCopilotButton('\u770b\u8d44\u4ea7', 'copilot-onboard-btn', () =>
+        startCopilotWorkTask('Read the current Workbench project context and list recent assets.'),
+      ),
+    );
+    actions.appendChild(
+      makeCopilotButton('\u8dd1\u901a\u94fe\u8def', 'copilot-onboard-btn', () =>
+        startCopilotWorkTask(
+          'Use ac.workbench.ensure_ready with requireProject=true and createIfMissing=true, then get Workbench context, list assets, and return a concise result card with next actions.',
+        ),
+      ),
+    );
+    actions.appendChild(
+      makeCopilotButton('\u9a8c\u6536\u94fe\u8def', 'copilot-onboard-btn', () => {
+        void runWorkbenchEntranceValidation(null, accountReady ? {} : { recoveryWaitMs: 30000 });
+      }),
+    );
+    actions.appendChild(makeCopilotButton('\u8bbe\u7f6e', 'copilot-onboard-btn', openCopilotSettings));
+    card.appendChild(actions);
+
+    const saveOutlet = document.createElement('div');
+    saveOutlet.className = 'copilot-work-save-outlet';
+    saveOutlet.appendChild(
+      makeCopilotText(
+        'copilot-work-save-copy',
+        '\u4fdd\u5b58\u51fa\u53e3\uff1a\u7ed3\u679c\u5199\u56de\u8d44\u4ea7\u5e93\uff1b\u51b3\u7b56\u3001\u53c2\u6570\u548c\u8dd1\u901a\u6d41\u7a0b\u6c89\u6dc0\u5230\u5f53\u524d\u9879\u76ee\u3002',
+      ),
+    );
+    const saveCurrent = makeCopilotButton('\u8bb0\u5f55\u5f53\u524d\u72b6\u6001', 'copilot-onboard-btn', (event) =>
+      saveProjectMemoryFromCopilot(
+        'project_note',
+        [
+          'Project: ' + contextSummary.projectLabel,
+          'Assets: ' + contextSummary.assetLabel,
+          'Capabilities: ' + contextSummary.capabilityLabel,
+          'Recent task: ' + contextSummary.taskLabel,
+        ].join('\n'),
+        event && event.currentTarget,
+      ),
+    );
+    saveOutlet.appendChild(saveCurrent);
+    card.appendChild(saveOutlet);
+
+    if (blockers.length) appendBlockerActionButtons(actions, blockers);
+    messagesEl.appendChild(card);
+    scrollMessagesToBottom();
   }
 
   async function refreshOnboardingState() {
@@ -594,34 +1332,61 @@
         if (probeResp && probeResp.ok !== false) activeId = probeResp.brainId || activeId;
       }
       brainReady = Boolean(probeResp && probeResp.ok !== false && probeResp.probe && probeResp.probe.ok);
+      let settingsResp = null;
+      if (typeof agent.loadSettings === 'function') {
+        settingsResp = await agent.loadSettings();
+      }
+      const workbenchEntrance = workbenchEntranceFromSettings(settingsResp);
+      const workbenchAcceptance = workbenchAcceptanceFromSettings(settingsResp);
+      const teamEntrance = teamEntranceFromSettings(settingsResp);
+      const workflowPublication = workflowPublicationFromSettings(settingsResp);
+      const usageAudit = usageAuditFromSettings(settingsResp);
+      const blockers = blockersFromSettings(settingsResp);
+      const account = await loadTeamAccountStatus();
+      const workbenchContextInfo = await loadWorkbenchContextSnapshot();
+      const projectMemory = await loadProjectMemorySnapshot();
       const hasMessages = messagesEl.querySelectorAll('.copilot-msg').length > 0;
       if (brainReady) {
         removeOnboardCard();
-        if (!hasMessages && !turnBusy) showMemberOnboardCard('', { ready: true });
+        if (!hasMessages && !turnBusy) {
+          showMemberOnboardCard('', {
+            ready: true,
+            account,
+            workbenchEntrance,
+            workbenchAcceptance,
+            teamEntrance,
+            workflowPublication,
+            usageAudit,
+            blockers,
+            workbenchContext: workbenchContextInfo && workbenchContextInfo.context,
+            recentExecutions: workbenchContextInfo && workbenchContextInfo.executions,
+            projectMemory,
+          });
+        }
         else if (hasMessages) showExampleChips(false);
       } else {
         showExampleChips(false);
         let detail;
-        if (typeof agent.loadSettings === 'function') {
-          const s = await agent.loadSettings();
+        if (settingsResp) {
+          const s = settingsResp;
           const wantHermes = s && s.settings && s.settings.defaultBrainId === 'hermes';
           const gwOk = s && s.hermesGateway && s.hermesGateway.probe && s.hermesGateway.probe.ok;
           const wantCodex = s && s.settings && s.settings.defaultBrainId === 'codex';
           const authExists = s && s.codexAuth && s.codexAuth.exists;
           const sharedEnabled = s && s.settings && s.settings.codexSharedAuthEnabled;
           if (wantHermes && !gwOk) {
-            detail = '已选择 Hermes，但 Gateway 未响应。请一键启动或检查 URL。';
+            detail = 'Hermes Gateway is selected but not responding. Start it or check the URL.';
           } else if (s && s.settings && s.settings.defaultBrainId === 'codex') {
-            detail = '已选择 Codex CLI，但未检测到可用的 codex 命令。请先安装/登录 Codex CLI，或在设置中切换大脑。';
+            detail = 'Codex CLI is selected but not available. Install/login Codex CLI or check settings.';
           }
           if (!wantCodex) {
-            detail = '当前还没有切到团队推荐的 Codex。点击“切换到 Codex”即可。';
+            detail = 'Switch to the team-recommended Codex brain first.';
           } else if (sharedEnabled && !authExists) {
-            detail = '团队凭据还没有写入本机。点击“刷新团队凭据并测试”。';
+            detail = 'Team credentials have not been synced to this machine yet.';
           } else if (!authExists) {
-            detail = '本机还没有 Codex 登录态。可以刷新团队凭据，或在设置里配置凭据同步。';
+            detail = 'Local Codex auth is missing. Refresh credentials or configure auth sync in settings.';
           } else if (wantCodex) {
-            detail = 'Codex 命令暂时不可用。请确认已安装 Codex CLI，或打开设置检查命令路径。';
+            detail = 'Codex command is not available. Check the command path in settings.';
           }
         }
         showMemberOnboardCard(detail, { ready: false });
@@ -681,9 +1446,9 @@
     const isExternalMcp = ev && ev.clientId === 'mcp';
     const title = document.createElement('div');
     title.className = 'copilot-confirm-title';
-    title.textContent = (isExternalMcp ? '外部 Agent 请求执行：' : '确认执行：') + (ev.name || 'tool');
+    title.textContent = (isExternalMcp ? 'External Agent requests: ' : 'Confirm tool: ') + (ev.name || 'tool');
     const argsEl = document.createElement('div');
-    if (isCodexFullAccess) title.textContent = '授权 Codex 本轮全权限';
+    if (isCodexFullAccess) title.textContent = 'Authorize Codex full access for this turn';
     argsEl.className = 'copilot-confirm-args';
     try {
       argsEl.textContent = JSON.stringify(ev.arguments || {}, null, 2);
@@ -691,25 +1456,25 @@
       argsEl.textContent = String(ev.arguments || '');
     }
     if (isCodexFullAccess) {
-      argsEl.textContent = '允许后，本轮 Codex 可以读写工作目录并执行本机命令。拒绝则继续使用普通沙箱。';
+      argsEl.textContent = 'After approval, this Codex turn can read/write the workspace and run local commands.';
     }
     const actions = document.createElement('div');
     actions.className = 'copilot-confirm-actions';
     const approveBtn = document.createElement('button');
     approveBtn.type = 'button';
     approveBtn.className = 'copilot-confirm-approve';
-    approveBtn.textContent = '允许';
+    approveBtn.textContent = 'Allow';
     const rejectBtn = document.createElement('button');
-    approveBtn.textContent = '允许';
+    rejectBtn.textContent = 'Deny';
     rejectBtn.type = 'button';
     rejectBtn.className = 'copilot-confirm-reject';
-    rejectBtn.textContent = '拒绝';
+    rejectBtn.textContent = 'Deny';
     actions.appendChild(approveBtn);
-    rejectBtn.textContent = '拒绝';
+    rejectBtn.textContent = '鎷掔粷';
     actions.appendChild(rejectBtn);
     const status = document.createElement('div');
     status.className = 'copilot-confirm-status';
-    status.textContent = '等待你确认';
+    status.textContent = 'Waiting for your confirmation';
     card.appendChild(title);
     card.appendChild(argsEl);
     card.appendChild(actions);
@@ -723,7 +1488,7 @@
       settled = true;
       card.classList.remove('is-error');
       card.classList.add('is-submitting');
-      status.textContent = approved ? '已点击允许，正在继续...' : '已点击拒绝，正在取消...';
+      status.textContent = approved ? 'Submitting approval...' : 'Submitting rejection...';
       approveBtn.disabled = true;
       rejectBtn.disabled = true;
       try {
@@ -733,22 +1498,22 @@
         }
         card.classList.remove('is-submitting');
         card.classList.add('copilot-confirm-settled');
-        status.textContent = approved ? '已允许，Copilot 正在继续' : '已拒绝';
-        setStatus(approved ? '已允许，正在继续...' : '已拒绝');
+        status.textContent = approved ? 'Approved, Copilot is continuing' : 'Rejected';
+        setStatus(approved ? 'Approved, continuing...' : 'Rejected');
       } catch (e) {
         settled = false;
         approveBtn.disabled = false;
         rejectBtn.disabled = false;
         card.classList.remove('is-submitting');
         card.classList.add('is-error');
-        status.textContent = '提交失败：' + (e && e.message ? e.message : String(e));
+        status.textContent = 'Submit failed: ' + (e && e.message ? e.message : String(e));
         setStatus(status.textContent);
       }
     };
     approveBtn.addEventListener('click', () => void settle(true));
     rejectBtn.addEventListener('click', () => void settle(false));
-    setTimeout(() => setStatus(isCodexFullAccess ? '等待授权...' : '等待确认...'), 0);
-    setStatus('等待确认…');
+    setTimeout(() => setStatus(isCodexFullAccess ? 'Waiting for authorization...' : 'Waiting for confirmation...'), 0);
+    setStatus('Waiting for confirmation...');
   }
 
   function appendActivityCard(ev) {
@@ -757,8 +1522,8 @@
     card.className = 'copilot-activity-card';
     if (ev.phase === 'error') card.classList.add('is-error');
     if (ev.phase === 'done') card.classList.add('is-done');
-    const phaseText = ev.phase === 'start' ? '开始' : ev.phase === 'done' ? '完成' : '失败';
-    const nameText = ev.name === 'codex.command' ? 'Codex 执行命令' : ev.name || '执行事件';
+    const phaseText = ev.phase === 'start' ? 'started' : ev.phase === 'done' ? 'done' : 'failed';
+    const nameText = ev.name === 'codex.command' ? 'Codex command' : ev.name || 'activity';
     const summary = document.createElement('div');
     summary.className = 'copilot-activity-summary';
     const title = document.createElement('span');
@@ -812,81 +1577,88 @@
     const msg = String(message || m.nextStep || '').trim();
     const code = String(m.errorCode || m.code || '').trim();
     const isWorkbench = m.view === 'workbench' || /^ac\.workbench\./.test(String(m.tool || ''));
+    if (code === 'AGENT_CREDITS_REQUIRED') {
+      return {
+        kind: 'credits-required',
+        title: '\u989d\u5ea6\u4e0d\u8db3',
+        description: msg || '\u5de5\u4f5c\u53f0\u94fe\u8def\u5df2\u8fde\u4e0a\uff0c\u4f46\u8fd0\u884c\u80fd\u529b\u9700\u8981\u5148\u8865\u8db3\u56e2\u961f\u989d\u5ea6\u6216\u5207\u6362\u5230\u53ef\u7528\u7684\u8ba1\u8d39\u7b56\u7565\u3002',
+      };
+    }
     if (m.authRequired || code === 'AGENT_AUTH_REQUIRED') {
       const session = authDiagnostics && authDiagnostics.session && typeof authDiagnostics.session === 'object'
         ? authDiagnostics.session
         : null;
       const diagnosticLine = authDiagnostics
-        ? ' 当前 API：' + (authDiagnostics.apiOrigin || '-') +
-          '，工作台：' + (authDiagnostics.siteOrigin || '-') +
-          '，会话 Cookie：' + (session ? String(session.cookieCount || 0) : '未知') + '。'
+        ? ' API: ' + (authDiagnostics.apiOrigin || '-') +
+          ', Workbench: ' + (authDiagnostics.siteOrigin || '-') +
+          ', cookies: ' + (session ? String(session.cookieCount || 0) : 'unknown') + '.'
         : '';
       return {
         kind: 'workbench-auth',
-        title: '需要先登录工作台',
-        description: (msg || 'Copilot 已经连到工作台接口，但当前工作台会话还没有登录。打开工作台完成登录后，可以直接重试。') + diagnosticLine,
+        title: 'Workbench login required',
+        description: (msg || 'Copilot can reach Workbench, but the embedded Workbench session is not logged in. Open Workbench, finish login, then retry.') + diagnosticLine,
       };
     }
     if (m.forbidden || code === 'AGENT_FORBIDDEN' || server.status === 403) {
       return {
         kind: 'forbidden',
-        title: '当前账号没有权限',
-        description: msg || '这次操作被工作台拒绝了。请切换到有权限的账号，或让管理员调整项目/能力权限后再试。',
+        title: 'Current account has no permission',
+        description: msg || 'Workbench rejected this action. Switch to an authorized account or ask an admin to adjust permissions.',
       };
     }
     if (m.requiresFrontendAuthorization) {
       return {
         kind: 'frontend-auth',
-        title: '需要在 Copilot 里授权',
-        description: msg || '这个动作需要你在前端确认后才会继续执行，请保持 Copilot 打开并处理授权卡片。',
+        title: 'Authorization required in Copilot',
+        description: msg || 'This action requires frontend confirmation before it can continue. Keep Copilot open and handle the authorization card.',
       };
     }
     if (m.projectRequired || code === 'AGENT_PROJECT_REQUIRED') {
       return {
         kind: 'project-required',
-        title: '需要先有一个工作区项目',
-        description: msg || '这次操作需要一个项目来承载结果。可以让 Copilot 先创建项目，再继续执行刚才的能力。',
+        title: 'A workspace project is required',
+        description: msg || 'Create or open a Workbench project before continuing this action.',
       };
     }
     if (m.projectNotFound || code === 'AGENT_PROJECT_NOT_FOUND') {
       return {
         kind: 'project-not-found',
-        title: '找不到这个项目',
-        description: msg || '指定的项目不在当前工作台上下文里。先读取工作台上下文，确认可用项目后再继续。',
+        title: 'Project not found',
+        description: msg || 'Read the Workbench context, choose an available project, then continue.',
       };
     }
     if (m.assetNotFound || code === 'AGENT_ASSET_NOT_FOUND') {
       return {
         kind: 'asset-not-found',
-        title: '找不到这个资产',
-        description: msg || '指定的资产不在当前项目里。先列出当前项目资产，选择正确的 assetId 后再继续。',
+        title: 'Asset not found',
+        description: msg || 'List the current project assets, choose a valid assetId, then continue.',
       };
     }
     if (m.presetNotFound || code === 'AGENT_PRESET_NOT_FOUND') {
       return {
         kind: 'preset-not-found',
-        title: '找不到这个能力',
-        description: msg || '指定的能力预设不存在。先读取工作台上下文，确认 capabilityPresets 后再执行。',
+        title: 'Capability not found',
+        description: msg || 'Read Workbench context and choose a valid capability preset before running.',
       };
     }
     if (m.presetNotRunnable || code === 'AGENT_PRESET_NOT_DIRECT_RUNNABLE') {
       return {
         kind: 'preset-not-runnable',
-        title: '这个能力不能直接由 Agent 执行',
-        description: msg || '该能力需要工作台交互。请换用 directRunSupported=true 的能力，或在工作台里手动操作。',
+        title: 'Capability is not directly runnable by Agent',
+        description: msg || 'Use a directRunSupported capability or run this interaction manually in Workbench.',
       };
     }
     if (isWorkbench && m.retryable) {
       return {
         kind: 'workbench-retry',
-        title: '工作台还没准备好',
-        description: msg || '请确认主站服务可访问、工作台页面已经加载完成，然后重试。',
+        title: 'Workbench is not ready yet',
+        description: msg || 'Confirm the site is reachable and the Workbench page is fully loaded, then retry.',
       };
     }
     return {
       kind: 'generic',
-      title: '需要处理一下',
-      description: msg || '刚才的任务没有顺利完成，可以让 Copilot 自己检查，或刷新团队凭据后再试。',
+      title: 'Needs attention',
+      description: msg || 'The last task did not complete. Ask Copilot to inspect it or refresh credentials and try again.',
     };
   }
 
@@ -910,15 +1682,23 @@
     retryBtn.type = 'button';
     retryBtn.className = 'copilot-onboard-btn';
     retryBtn.textContent = '重试';
-    retryBtn.addEventListener('click', () => fillAndSend(lastUserPrompt || '请重试刚才的工作台操作。'));
+    retryBtn.addEventListener('click', () => fillAndSend(lastUserPrompt || 'Retry the last Workbench action.'));
 
     if (info.kind === 'workbench-auth' || info.kind === 'workbench-retry') {
       fixBtn.className = 'copilot-onboard-btn is-primary';
-      fixBtn.textContent = info.kind === 'workbench-auth' ? '打开工作台登录' : '打开工作台';
+      fixBtn.textContent = info.kind === 'workbench-auth' ? 'Open Workbench login' : 'Open Workbench';
       fixBtn.addEventListener('click', () => {
         switchToWorkbench();
         if (info.kind === 'workbench-retry' && typeof shell.workbenchReload === 'function') {
           void shell.workbenchReload();
+        }
+        if (info.kind === 'workbench-auth') {
+          void (async () => {
+            fixBtn.disabled = true;
+            await waitForTeamAccountLogin(120000);
+            fixBtn.disabled = false;
+            await refreshOnboardingState();
+          })();
         }
       });
       actions.appendChild(fixBtn);
@@ -927,13 +1707,13 @@
         const externalBtn = document.createElement('button');
         externalBtn.type = 'button';
         externalBtn.className = 'copilot-onboard-btn';
-        externalBtn.textContent = '浏览器打开';
+        externalBtn.textContent = 'Open in browser';
         externalBtn.addEventListener('click', () => void shell.workbenchOpenExternal());
         actions.appendChild(externalBtn);
       }
     } else if (info.kind === 'forbidden') {
       fixBtn.className = 'copilot-onboard-btn is-primary';
-      fixBtn.textContent = '切到工作台';
+      fixBtn.textContent = 'Switch to Workbench';
       fixBtn.addEventListener('click', switchToWorkbench);
       actions.appendChild(fixBtn);
       actions.appendChild(retryBtn);
@@ -943,32 +1723,46 @@
       fixBtn.addEventListener('click', scrollMessagesToBottom);
       actions.appendChild(fixBtn);
       actions.appendChild(retryBtn);
+    } else if (info.kind === 'credits-required') {
+      fixBtn.className = 'copilot-onboard-btn is-primary';
+      fixBtn.textContent = '\u6253\u5f00\u8bbe\u7f6e';
+      fixBtn.addEventListener('click', openCopilotSettings);
+      const inspectBtn = document.createElement('button');
+      inspectBtn.type = 'button';
+      inspectBtn.className = 'copilot-onboard-btn';
+      inspectBtn.textContent = '\u68c0\u67e5\u989d\u5ea6';
+      inspectBtn.addEventListener('click', () =>
+        startCopilotWorkTask('Inspect the latest AGENT_CREDITS_REQUIRED Workbench failure, check usage and quota settings, then recommend the shortest recovery path.'),
+      );
+      actions.appendChild(fixBtn);
+      actions.appendChild(inspectBtn);
+      actions.appendChild(retryBtn);
     } else if (info.kind === 'project-required') {
       fixBtn.className = 'copilot-onboard-btn is-primary';
-      fixBtn.textContent = '创建项目并继续';
-      fixBtn.addEventListener('click', () => fillAndSend('请先创建一个工作台项目，然后继续刚才的任务。'));
+      fixBtn.textContent = 'Create project and continue';
+      fixBtn.addEventListener('click', () => fillAndSend('Create a Workbench project first, then continue the previous task.'));
       actions.appendChild(fixBtn);
       actions.appendChild(retryBtn);
     } else if (info.kind === 'project-not-found' || info.kind === 'preset-not-found' || info.kind === 'preset-not-runnable') {
       fixBtn.className = 'copilot-onboard-btn is-primary';
       fixBtn.textContent = '读取工作台上下文';
-      fixBtn.addEventListener('click', () => fillAndSend('请读取工作台上下文，确认当前项目和可用能力，然后继续。'));
+      fixBtn.addEventListener('click', () => fillAndSend('Read Workbench context, confirm the current project and capabilities, then continue.'));
       actions.appendChild(fixBtn);
       actions.appendChild(retryBtn);
     } else if (info.kind === 'asset-not-found') {
       fixBtn.className = 'copilot-onboard-btn is-primary';
       fixBtn.textContent = '列出当前资产';
-      fixBtn.addEventListener('click', () => fillAndSend('请列出当前工作台项目的资产，确认正确的 assetId。'));
+      fixBtn.addEventListener('click', () => fillAndSend('List the current Workbench project assets and confirm the correct assetId.'));
       actions.appendChild(fixBtn);
       actions.appendChild(retryBtn);
     } else {
       fixBtn.className = 'copilot-onboard-btn is-primary';
-      fixBtn.textContent = '让 Copilot 自己检查';
-      fixBtn.addEventListener('click', () => fillAndSend('刚才的任务失败了，请检查原因并给我一个修复方案。'));
+      fixBtn.textContent = 'Ask Copilot to inspect';
+      fixBtn.addEventListener('click', () => fillAndSend('The last task failed. Inspect the cause and propose a fix.'));
       const authBtn = document.createElement('button');
       authBtn.type = 'button';
       authBtn.className = 'copilot-onboard-btn';
-      authBtn.textContent = '刷新凭据并测试';
+      authBtn.textContent = 'Refresh credentials and test';
       authBtn.addEventListener('click', () => void refreshTeamCodexAndTest(authBtn));
       actions.appendChild(fixBtn);
       actions.appendChild(authBtn);
@@ -996,7 +1790,7 @@
         btn.disabled = true;
       });
       const status = card.querySelector('.copilot-confirm-status');
-      if (status) status.textContent = '已处理';
+      if (status) status.textContent = 'Handled';
       card.classList.add('copilot-confirm-settled');
     });
   }
@@ -1039,7 +1833,7 @@
           const desired = (s.settings && s.settings.defaultBrainId) || 'stub';
           const active = s.activeBrainId || desired;
           brainLabel.textContent = active === desired ? desired : desired + ' -> ' + active;
-          brainLabel.title = '点击切换大脑（L2 跨脑，会话共用 messages.jsonl）';
+          brainLabel.title = 'Click to switch brain';
           return;
         }
       }
@@ -1061,16 +1855,16 @@
       const cur = (s.settings && s.settings.defaultBrainId) || s.activeBrainId || ids[0];
       const idx = Math.max(0, ids.indexOf(cur));
       const next = cur !== 'codex' && ids.includes('codex') ? 'codex' : ids[(idx + 1) % ids.length];
-      setStatus('切换大脑…');
+      setStatus('Switching brain...');
       const r = await agent.saveSettings({ defaultBrainId: next });
       if (r && r.ok) {
         await refreshBrainLabel();
         await refreshBrainStateCard({ forceProbe: true });
         await refreshOnboardingState();
-        setStatus('已切换至 ' + next);
+        setStatus('Switched to ' + next);
         setTimeout(() => setStatus(''), 2000);
       } else {
-        setStatus('切换失败');
+        setStatus('Switch failed');
       }
     } catch (e) {
       setStatus(e && e.message ? e.message : String(e));
@@ -1142,26 +1936,31 @@
         bubble.textContent = streamingText;
         scrollMessagesToBottom();
       } else if (ev.type === 'tool_call') {
-        appendBubble('tool', '▶ ' + (ev.name || 'tool'), 'copilot-msg-tool-call');
+        updateActiveTaskThread('progress', (ev.name || 'tool') + ' \u5df2\u5f00\u59cb');
+        appendBubble('tool', '> ' + (ev.name || 'tool'), 'copilot-msg-tool-call');
       } else if (ev.type === 'confirm_required') {
         showConfirmCard(ev);
       } else if (ev.type === 'confirm_cancelled') {
         dismissPendingConfirmCards(ev.confirmId);
         if (ev.reason === 'timeout') {
-          setStatus('确认已超时');
+          setStatus('Confirmation timed out');
           setTimeout(() => setStatus(''), 2500);
         }
       } else if (ev.type === 'tool_status') {
         if (ev.phase === 'error') {
           const structured = ev.structured && typeof ev.structured === 'object' ? ev.structured : {};
-          appendRecoveryCard(ev.detail || structured.nextStep || '工具执行失败，可以查看详情或让 Copilot 自己检查。', {
+          updateActiveTaskThread('error', ev.detail || structured.nextStep || '\u5de5\u5177\u6267\u884c\u5931\u8d25\uff0c\u5df2\u751f\u6210\u6062\u590d\u52a8\u4f5c');
+          appendRecoveryCard(ev.detail || structured.nextStep || 'Tool execution failed. Inspect details or ask Copilot to check it.', {
             ...structured,
             tool: ev.name,
             errorCode: ev.errorCode,
           });
-          appendBubble('tool', '✗ ' + (ev.name || '') + (ev.detail ? ': ' + ev.detail : ''), 'copilot-msg-tool');
+          appendBubble('tool', 'done ' + (ev.name || '') + (ev.detail ? ': ' + ev.detail : ''), 'copilot-msg-tool');
+        } else if (ev.phase) {
+          updateActiveTaskThread('progress', (ev.name || 'tool') + ' ' + ev.phase);
         }
       } else if (ev.type === 'activity') {
+        updateActiveTaskThread('progress', ev.summary || ev.title || ev.message || '\u6709\u65b0\u8fdb\u5ea6');
         appendActivityCard(ev);
       } else if (ev.type === 'usage') {
         appendUsageCard(ev.usage);
@@ -1170,13 +1969,19 @@
         finishStream();
         dismissPendingConfirmCards();
         if (ev.stopReason === 'aborted') {
-          setStatus('已停止');
+          updateActiveTaskThread('error', '\u5df2\u505c\u6b62\uff0c\u53ef\u4ece\u539f\u76ee\u6807\u91cd\u8bd5');
+          setStatus('Stopped');
         } else {
+          const doneText = '\u5df2\u5b8c\u6210\uff0c\u7ed3\u679c\u53ef\u7ee7\u7eed\u5199\u56de\u8d44\u4ea7\u5e93\u6216\u4fdd\u5b58\u4e3a\u6d41\u7a0b\u8349\u7a3f';
+          updateActiveTaskThread('done', doneText);
+          appendResultCard(doneText);
+          void loadWorkbenchContextSnapshot();
           setStatus('');
         }
       } else if (ev.type === 'error') {
         finishStream();
-        appendRecoveryCard(ev.message || '任务失败了，可以刷新凭据、打开设置，或让 Copilot 自己检查。');
+        updateActiveTaskThread('error', ev.message || '\u4efb\u52a1\u5931\u8d25\uff0c\u5df2\u751f\u6210\u6062\u590d\u52a8\u4f5c');
+        appendRecoveryCard(ev.message || 'Task failed. Refresh credentials, open settings, or ask Copilot to inspect it.');
         setStatus(ev.message || '出错');
       }
     });
@@ -1198,20 +2003,27 @@
     lastUserPrompt = text;
     if (sendBtn) sendBtn.disabled = true;
     if (abortBtn) abortBtn.disabled = false;
+    if (pendingTaskThreadPrompt === text) {
+      pendingTaskThreadPrompt = '';
+    } else {
+      appendTaskThreadCard(text, { source: 'composer' });
+    }
     appendBubble('user', text);
     inputEl.value = '';
     resizeComposer();
     showExampleChips(false);
-    setStatus('思考中…');
+    setStatus('Thinking...');
     finishStream();
     try {
       const r = await agent.send(text);
       if (r && !r.ok && r.error) {
         setStatus(String(r.error));
+        updateActiveTaskThread('error', String(r.error));
         appendRecoveryCard(String(r.error));
       }
     } catch (e) {
       setStatus(e && e.message ? e.message : String(e));
+      updateActiveTaskThread('error', e && e.message ? e.message : String(e));
       appendRecoveryCard(e && e.message ? e.message : String(e));
     } finally {
       turnBusy = false;

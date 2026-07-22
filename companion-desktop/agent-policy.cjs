@@ -11,6 +11,52 @@ const DEFAULT_POLICY = {
   directoryAllowlist: [],
 };
 
+const ADMIN_POLICY_TEMPLATES = [
+  {
+    id: 'member_safe',
+    name: 'Member safe',
+    description: 'Default member mode: safe reads run, risky writes ask, memory writes ask.',
+    patch: {
+      confirmTools: true,
+      autoConfirmTools: ['ac.shell.get_state', 'ac.workbench.get_context', 'ac.workbench.list_assets', 'ac.workbench.get_asset'],
+      forbiddenTools: [],
+    },
+  },
+  {
+    id: 'workflow_admin',
+    name: 'Workflow admin',
+    description: 'Workflow builder mode: allow draft lifecycle and read-only probes, keep promotion gated.',
+    patch: {
+      confirmTools: true,
+      autoConfirmTools: [
+        'ac.shell.get_state',
+        'ac.workbench.get_context',
+        'ac.workbench.list_assets',
+        'ac.workbench.get_asset',
+        'ac.skills.save',
+        'ac.skills.delete',
+        'ac.usage.probe_quota_policy',
+      ],
+      forbiddenTools: [],
+    },
+  },
+  {
+    id: 'locked_down',
+    name: 'Locked down',
+    description: 'Review mode: no persistent memory writes, workflow promotion, or cloud usage upload.',
+    patch: {
+      confirmTools: true,
+      autoConfirmTools: ['ac.shell.get_state', 'ac.workbench.get_context'],
+      forbiddenTools: [
+        'ac.memory.append',
+        'ac.workflow.promote_workbench_preset',
+        'ac.workflow.promote_script_hub_tool',
+        'ac.usage.upload_cloud_draft',
+      ],
+    },
+  },
+];
+
 /**
  * @param {{ getPolicyPath: () => string }} deps
  */
@@ -72,6 +118,22 @@ function createAgentPolicy(deps) {
     return next;
   }
 
+  function listPolicyTemplates() {
+    return ADMIN_POLICY_TEMPLATES.map((template) => ({
+      id: template.id,
+      name: template.name,
+      description: template.description,
+      patch: normalizePolicy(template.patch),
+    }));
+  }
+
+  function applyPolicyTemplate(templateId) {
+    const id = String(templateId || '').trim();
+    const template = ADMIN_POLICY_TEMPLATES.find((item) => item.id === id);
+    if (!template) return { ok: false, error: 'template_not_found' };
+    return { ok: true, template: template.id, policy: writePolicy(template.patch) };
+  }
+
   /**
    * @param {{ risk: string; name: string }} tool
    * @returns {'allow' | 'confirm' | 'deny'}
@@ -89,7 +151,7 @@ function createAgentPolicy(deps) {
     return 'confirm';
   }
 
-  return { readPolicy, writePolicy, gateTool, DEFAULT_POLICY };
+  return { readPolicy, writePolicy, listPolicyTemplates, applyPolicyTemplate, gateTool, DEFAULT_POLICY };
 }
 
-module.exports = { createAgentPolicy, DEFAULT_POLICY };
+module.exports = { createAgentPolicy, DEFAULT_POLICY, ADMIN_POLICY_TEMPLATES };

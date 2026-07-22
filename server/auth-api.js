@@ -3305,6 +3305,23 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (path === '/api/usage/policy' && req.method === 'GET') {
+      const user = await requireAuth(req, res);
+      if (!user) return;
+      const usageBillingEnabled = isUsageBillingEnabled();
+      json(res, 200, {
+        ok: true,
+        currentPhase: usageBillingEnabled ? 'usage_event_ingestion_enforced' : 'usage_event_ingestion_disabled',
+        usageBillingEnabled,
+        cloudQuotaEnforced: usageBillingEnabled,
+        enforcementSource: 'auth_api_usage_policy',
+        policyId: usageBillingEnabled ? 'usage-billing-enabled' : '',
+        billingSku: 'copilot.codex.tokens',
+        checkedAt: new Date().toISOString(),
+      });
+      return;
+    }
+
     if (path === '/api/usage/events' && req.method === 'POST') {
       const user = await requireAuth(req, res);
       if (!user) return;

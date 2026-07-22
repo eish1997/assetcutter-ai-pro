@@ -37,36 +37,55 @@ export function frameCameraToObject(
   camera: THREE.PerspectiveCamera,
   controls: OrbitControls,
   object: THREE.Object3D,
-  options?: { defaultView?: WorkflowModelDefaultView }
+  options?: {
+    defaultView?: WorkflowModelDefaultView;
+    preserveViewDirection?: boolean;
+    viewDirection?: THREE.Vector3;
+    fitPadding?: number;
+  }
 ): void {
   const box = new THREE.Box3().setFromObject(object);
   if (box.isEmpty()) return;
   const size = box.getSize(new THREE.Vector3());
   const center = box.getCenter(new THREE.Vector3());
   const maxDim = Math.max(size.x, size.y, size.z, 0.001);
-  const fov = THREE.MathUtils.degToRad(camera.fov);
-  const distance = (maxDim / 2) / Math.tan(fov / 2);
-  const safeDist = distance * 1.6;
+  const sphere = box.getBoundingSphere(new THREE.Sphere());
+  const radius = Math.max(sphere.radius, maxDim * 0.5, 0.001);
+  const verticalFov = THREE.MathUtils.degToRad(camera.fov);
+  const horizontalFov = 2 * Math.atan(Math.tan(verticalFov / 2) * Math.max(camera.aspect, 0.001));
+  const fitVertical = radius / Math.sin(verticalFov / 2);
+  const fitHorizontal = radius / Math.sin(horizontalFov / 2);
+  const safeDist = Math.max(fitVertical, fitHorizontal) * (options?.fitPadding ?? 1.12);
   const lift = center.y + maxDim * 0.2;
-  const view = options?.defaultView ?? '+x';
-  switch (view) {
-    case '-x':
-      camera.position.set(center.x - safeDist, lift, center.z);
-      break;
-    case '-z':
-      camera.position.set(center.x, lift, center.z - safeDist);
-      break;
-    case '+z':
-      camera.position.set(center.x, lift, center.z + safeDist);
-      break;
-    case '+x':
-    default:
-      camera.position.set(center.x + safeDist, lift, center.z);
-      break;
+  const previousDirection = camera.position.clone().sub(controls.target);
+  const customDirection = options?.viewDirection?.clone();
+  if (customDirection && customDirection.lengthSq() > 1e-8) {
+    camera.position.copy(center).add(customDirection.normalize().multiplyScalar(safeDist));
+  } else if (options?.preserveViewDirection && previousDirection.lengthSq() > 1e-8) {
+    camera.position.copy(center).add(previousDirection.normalize().multiplyScalar(safeDist));
+  } else {
+    const view = options?.defaultView ?? '+x';
+    switch (view) {
+      case '-x':
+        camera.position.set(center.x - safeDist, lift, center.z);
+        break;
+      case '-z':
+        camera.position.set(center.x, lift, center.z - safeDist);
+        break;
+      case '+z':
+        camera.position.set(center.x, lift, center.z + safeDist);
+        break;
+      case '+x':
+      default:
+        camera.position.set(center.x + safeDist, lift, center.z);
+        break;
+    }
   }
-  camera.near = Math.max(0.01, safeDist / 200);
-  camera.far = Math.max(100, safeDist * 10);
+  camera.near = Math.max(0.001, radius / 1000);
+  camera.far = Math.max(100000, safeDist + radius * 10000);
   camera.updateProjectionMatrix();
+  controls.minDistance = Math.max(0.001, radius * 0.015);
+  controls.maxDistance = Math.max(100000, safeDist + radius * 10000);
   controls.target.copy(center);
   controls.update();
 }

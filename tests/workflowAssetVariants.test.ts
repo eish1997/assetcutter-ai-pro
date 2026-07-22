@@ -139,6 +139,48 @@ describe('workflowAssetVariants', () => {
     expect(workflowAssetActiveVariantUsesModel3dPreview(asset)).toBe(true);
   });
 
+  it('keeps step-scoped model files off unrelated active versions', () => {
+    const asset = makeAsset({
+      displayKey: 'remove_bg',
+      results: {
+        remove_bg: 'data:image/png;base64,PNG',
+        generate_3d: 'data:image/png;base64,POSTER',
+      },
+      resultOrder: ['remove_bg', 'generate_3d'],
+      stepModelUrls: { generate_3d: ['blob:model.obj'] },
+      stepModelFormats: { generate_3d: ['obj'] },
+      resultMeta: {
+        remove_bg: { executedAt: 2, mediaKind: 'image' },
+        generate_3d: { executedAt: 3, mediaKind: 'model3d' },
+      },
+    });
+
+    expect(resolveWorkflowAssetActiveVariant(asset)).toMatchObject({
+      id: 'remove_bg',
+      kind: 'image',
+      url: 'data:image/png;base64,PNG',
+    });
+    expect(workflowAssetActiveVariantUsesModel3dPreview(asset)).toBe(false);
+  });
+
+  it('preserves OBJ model format on the owning 3D step', () => {
+    const asset = makeAsset({
+      displayKey: 'generate_3d',
+      results: { generate_3d: 'data:image/png;base64,POSTER' },
+      resultOrder: ['generate_3d'],
+      stepModelUrls: { generate_3d: ['blob:model-without-ext'] },
+      stepModelFormats: { generate_3d: ['obj'] },
+      resultMeta: { generate_3d: { executedAt: 2, mediaKind: 'model3d' } },
+    });
+
+    expect(resolveWorkflowAssetActiveVariant(asset)).toMatchObject({
+      id: 'generate_3d',
+      kind: 'model3d',
+      modelFormats: ['obj'],
+      modelUrls: ['blob:model-without-ext'],
+    });
+  });
+
   it('attaches legacy modelUrls to their inferred 3D owner step', () => {
     const asset = makeAsset({
       original: '',

@@ -8,6 +8,14 @@ const {
   WORKBENCH_FLOW_RESOURCE_URI,
   buildWorkbenchFlowDocument,
 } = require('./agent-workbench-flow.cjs');
+const { buildCopilotUsageCloudDraft } = require('./agent-usage-cloud-draft.cjs');
+const {
+  STATUS_COMMAND,
+  WORKBENCH_OPEN_LOGIN_WAIT_COMMAND,
+  workbenchLoginActions,
+  workflowPromotionActions,
+  usageGovernanceActions,
+} = require('./agent-blocker-actions.cjs');
 const { createHash, randomBytes, randomUUID } = require('node:crypto');
 
 const DEFAULT_MCP_PORT = 19120;
@@ -19,6 +27,8 @@ const MCP_SERVER_TITLE = 'AssetCutter Agent Body';
 const MCP_SERVER_VERSION = '0.4.0';
 const MCP_LIST_PAGE_SIZE = 100;
 const MCP_LOG_LEVELS = ['debug', 'info', 'notice', 'warning', 'error', 'critical', 'alert', 'emergency'];
+const WORKBENCH_E2E_FRESH_MS = 24 * 60 * 60 * 1000;
+const AGENT_WORKBENCH_SMOKE_PRESET_ID = 'agent_workbench_smoke_text_note';
 
 /**
  * @param {{
@@ -30,7 +40,10 @@ const MCP_LOG_LEVELS = ['debug', 'info', 'notice', 'warning', 'error', 'critical
  *   waitForConfirm?: (confirmId: string, meta: object) => Promise<boolean | { approved: boolean; reason?: string }>;
  *   appendAudit: (entry: object) => void;
  *   listToolExecutions?: (options?: object) => object[];
+ *   summarizeUsageAudit?: (options?: object) => object;
  *   getShellView: () => string;
+ *   getStateSummary?: () => Promise<Record<string, unknown>>;
+ *   getCodexRuntimeStatus?: () => object;
  *   getSkillsRoot?: () => string;
  *   log?: (...args: unknown[]) => void;
  * }} deps
@@ -53,6 +66,189 @@ function createAgentBodyMcpServer(deps) {
     } catch {
       return null;
     }
+  }
+
+  function workflowPromotionAuditSummary(toolName, result) {
+    if (toolName !== 'ac.workflow.promote_workbench_preset' && toolName !== 'ac.workflow.promote_script_hub_tool') {
+      return null;
+    }
+    const structured = result && result.structured && typeof result.structured === 'object' ? result.structured : null;
+    if (!structured) return null;
+    const admin =
+      structured.adminConfirmation && typeof structured.adminConfirmation === 'object'
+        ? structured.adminConfirmation
+        : {};
+    return {
+      target: structured.target ? String(structured.target) : '',
+      skillId: structured.skillId ? String(structured.skillId) : '',
+      currentPhase: structured.currentPhase ? String(structured.currentPhase) : '',
+      publishable: Boolean(structured.publishable),
+      passedGates: Array.isArray(structured.passedGates) ? structured.passedGates.map(String) : [],
+      missingGates: Array.isArray(structured.missingGates) ? structured.missingGates.map(String) : [],
+      adminConfirmation: {
+        required: Boolean(admin.required),
+        passed: Boolean(admin.passed),
+        sourceRequired: admin.sourceRequired ? String(admin.sourceRequired) : 'copilot_ui',
+        source: admin.source ? String(admin.source) : '',
+        autoConfirmCountsAsAdminApproval: Boolean(admin.autoConfirmCountsAsAdminApproval),
+      },
+    };
+  }
+
+  function usageGovernanceAuditSummary(toolName, result) {
+    if (toolName !== 'ac.usage.probe_quota_policy' && toolName !== 'ac.usage.upload_cloud_draft') {
+      return null;
+    }
+    const structured = result && result.structured && typeof result.structured === 'object' ? result.structured : null;
+    if (!structured) return null;
+    const quotaPolicy =
+      structured.quotaPolicy && typeof structured.quotaPolicy === 'object' ? structured.quotaPolicy : null;
+    const action = toolName === 'ac.usage.probe_quota_policy' ? 'probe_quota_policy' : 'upload_cloud_draft';
+    const eventCount = Number.isFinite(Number(structured.eventCount)) ? Math.max(0, Math.round(Number(structured.eventCount))) : 0;
+    const clearedGates = [];
+    if (action === 'probe_quota_policy' && result && result.ok) clearedGates.push('authenticated_team_session_required');
+    if (quotaPolicy && quotaPolicy.cloudQuotaEnforced) clearedGates.push('cloud_quota_policy_not_enabled');
+    if (action === 'upload_cloud_draft' && eventCount > 0) clearedGates.push('local_usage_events_available');
+    if (action === 'upload_cloud_draft' && structured.uploaded) {
+      clearedGates.push('authenticated_team_session_required', 'cloud_upload_verified');
+    }
+    const remainingGates = [
+      'authenticated_team_session_required',
+      'cloud_quota_policy_not_enabled',
+      'local_usage_events_available',
+      'cloud_upload_verified',
+    ].filter((gate) => !clearedGates.includes(gate));
+    return {
+      action,
+      endpoint: structured.endpoint ? String(structured.endpoint) : '',
+      partition: structured.partition ? String(structured.partition) : '',
+      ok: Boolean(result && result.ok),
+      code: structured.code ? String(structured.code) : result && result.error && result.error.code ? String(result.error.code) : '',
+      authRequired: Boolean(structured.authRequired),
+      dryRun: Boolean(structured.dryRun),
+      uploaded: Boolean(structured.uploaded),
+      validated: Boolean(structured.validated),
+      noEvents: Boolean(structured.noEvents),
+      eventCount,
+      exitReady: remainingGates.length === 0,
+      clearedGates: [...new Set(clearedGates)],
+      remainingGates,
+      quotaPolicy: quotaPolicy
+        ? {
+            currentPhase: quotaPolicy.currentPhase ? String(quotaPolicy.currentPhase) : '',
+            billingSku: quotaPolicy.billingSku ? String(quotaPolicy.billingSku) : '',
+            cloudQuotaEnforced: Boolean(quotaPolicy.cloudQuotaEnforced),
+            usageBillingEnabled: Boolean(quotaPolicy.usageBillingEnabled),
+            enforcementSource: quotaPolicy.enforcementSource ? String(quotaPolicy.enforcementSource) : '',
+            policyId: quotaPolicy.policyId ? String(quotaPolicy.policyId) : '',
+          }
+        : null,
+    };
+  }
+
+  function summarizeWorkflowPromotionPreflightEvidence(executions) {
+    const skillsRoot = typeof deps.getSkillsRoot === 'function' ? deps.getSkillsRoot() : '';
+    const skillExists = (skillId) => {
+      const id = String(skillId || '').trim();
+      if (!id || !skillsRoot) return false;
+      try {
+        return Boolean(readSkillById(skillsRoot, id));
+      } catch {
+        return false;
+      }
+    };
+    const items = Array.isArray(executions)
+      ? executions
+          .filter((entry) => entry && entry.workflowPromotionPreflight && typeof entry.workflowPromotionPreflight === 'object')
+          .slice(0, 6)
+          .map((entry) => {
+            const preflight = entry.workflowPromotionPreflight;
+            const exists = skillExists(preflight.skillId);
+            const admin =
+              preflight.adminConfirmation && typeof preflight.adminConfirmation === 'object'
+                ? preflight.adminConfirmation
+                : {};
+            return {
+              ts: entry.ts ? String(entry.ts) : '',
+              tool: entry.tool ? String(entry.tool) : '',
+              toolCallId: entry.toolCallId ? String(entry.toolCallId) : '',
+              traceId: entry.traceId ? String(entry.traceId) : '',
+              target: preflight.target ? String(preflight.target) : '',
+              skillId: preflight.skillId ? String(preflight.skillId) : '',
+              skillExists: exists,
+              evidenceCurrent: exists,
+              staleReason: exists ? '' : 'workflow_draft_deleted',
+              currentPhase: preflight.currentPhase ? String(preflight.currentPhase) : '',
+              publishable: Boolean(preflight.publishable),
+              passedGates: Array.isArray(preflight.passedGates) ? preflight.passedGates.map(String) : [],
+              missingGates: Array.isArray(preflight.missingGates) ? preflight.missingGates.map(String) : [],
+              adminConfirmation: {
+                required: Boolean(admin.required),
+                passed: Boolean(admin.passed),
+                sourceRequired: admin.sourceRequired ? String(admin.sourceRequired) : 'copilot_ui',
+                source: admin.source ? String(admin.source) : '',
+                autoConfirmCountsAsAdminApproval: Boolean(admin.autoConfirmCountsAsAdminApproval),
+              },
+            };
+          })
+      : [];
+    return {
+      resource: 'assetcutter://mcp/tool-executions',
+      windowDays: 1,
+      count: items.length,
+      latest: items[0] || null,
+      items,
+    };
+  }
+
+  function summarizeUsageGovernanceEvidence(executions) {
+    const items = Array.isArray(executions)
+      ? executions
+          .filter((entry) => entry && entry.usageGovernance && typeof entry.usageGovernance === 'object')
+          .slice(0, 8)
+          .map((entry) => {
+            const usage = entry.usageGovernance;
+            const quotaPolicy =
+              usage.quotaPolicy && typeof usage.quotaPolicy === 'object' ? usage.quotaPolicy : null;
+            return {
+              ts: entry.ts ? String(entry.ts) : '',
+              tool: entry.tool ? String(entry.tool) : '',
+              toolCallId: entry.toolCallId ? String(entry.toolCallId) : '',
+              traceId: entry.traceId ? String(entry.traceId) : '',
+              action: usage.action ? String(usage.action) : '',
+              endpoint: usage.endpoint ? String(usage.endpoint) : '',
+              partition: usage.partition ? String(usage.partition) : '',
+              ok: Boolean(usage.ok),
+              code: usage.code ? String(usage.code) : '',
+              authRequired: Boolean(usage.authRequired),
+              dryRun: Boolean(usage.dryRun),
+              uploaded: Boolean(usage.uploaded),
+              validated: Boolean(usage.validated),
+              noEvents: Boolean(usage.noEvents),
+              eventCount: Number.isFinite(Number(usage.eventCount)) ? Math.max(0, Math.round(Number(usage.eventCount))) : 0,
+              exitReady: Boolean(usage.exitReady),
+              clearedGates: Array.isArray(usage.clearedGates) ? usage.clearedGates.map(String) : [],
+              remainingGates: Array.isArray(usage.remainingGates) ? usage.remainingGates.map(String) : [],
+              quotaPolicy: quotaPolicy
+                ? {
+                    currentPhase: quotaPolicy.currentPhase ? String(quotaPolicy.currentPhase) : '',
+                    billingSku: quotaPolicy.billingSku ? String(quotaPolicy.billingSku) : '',
+                    cloudQuotaEnforced: Boolean(quotaPolicy.cloudQuotaEnforced),
+                    usageBillingEnabled: Boolean(quotaPolicy.usageBillingEnabled),
+                    enforcementSource: quotaPolicy.enforcementSource ? String(quotaPolicy.enforcementSource) : '',
+                    policyId: quotaPolicy.policyId ? String(quotaPolicy.policyId) : '',
+                  }
+                : null,
+            };
+          })
+      : [];
+    return {
+      resource: 'assetcutter://mcp/tool-executions',
+      windowDays: 1,
+      count: items.length,
+      latest: items[0] || null,
+      items,
+    };
   }
 
   function ensureMcpToken(settings) {
@@ -103,6 +299,593 @@ function createAgentBodyMcpServer(deps) {
 
   function makeConfirmId() {
     return `cfm_${randomUUID()}`;
+  }
+
+  function summarizeWorkbenchE2eFreshness(last, nowMs = Date.now()) {
+    const e2e = last && typeof last === 'object' ? last : null;
+    if (!e2e) {
+      return {
+        status: 'missing',
+        stale: true,
+        checkedAt: null,
+        ageMs: null,
+        maxAgeMs: WORKBENCH_E2E_FRESH_MS,
+        ok: false,
+        nextStep: 'Run npm run smoke:agent-mcp:e2e:wait-login after opening the embedded Workbench login.',
+      };
+    }
+    const checkedAt = typeof e2e.checkedAt === 'string' ? e2e.checkedAt : '';
+    const checkedMs = checkedAt ? Date.parse(checkedAt) : NaN;
+    if (!Number.isFinite(checkedMs)) {
+      return {
+        status: 'invalid',
+        stale: true,
+        checkedAt: checkedAt || null,
+        ageMs: null,
+        maxAgeMs: WORKBENCH_E2E_FRESH_MS,
+        ok: Boolean(e2e.ok),
+        errorCode: e2e.errorCode ? String(e2e.errorCode) : '',
+        failedStep: e2e.failedStep ? String(e2e.failedStep) : '',
+        nextStep: 'Discard the invalid cached result and rerun npm run smoke:agent-mcp:e2e:wait-login.',
+      };
+    }
+    const ageMs = Math.max(0, Math.round(nowMs - checkedMs));
+    const stale = ageMs > WORKBENCH_E2E_FRESH_MS;
+    return {
+      status: stale ? 'stale' : 'fresh',
+      stale,
+      checkedAt,
+      ageMs,
+      maxAgeMs: WORKBENCH_E2E_FRESH_MS,
+      ok: Boolean(e2e.ok),
+      errorCode: e2e.errorCode ? String(e2e.errorCode) : '',
+      failedStep: e2e.failedStep ? String(e2e.failedStep) : '',
+      nextStep: stale
+        ? 'The cached Workbench E2E result is older than 24h; rerun npm run smoke:agent-mcp:e2e:wait-login.'
+        : 'Use the cached result as the latest entrance signal, then rerun full E2E after login-sensitive changes.',
+    };
+  }
+
+  function summarizeWorkbenchEntrance(readiness) {
+    const r = readiness && typeof readiness === 'object' ? readiness : {};
+    const account = r.account && typeof r.account === 'object' ? r.account : null;
+    const freshness = r.freshness && typeof r.freshness === 'object' ? r.freshness : null;
+    const last = r.lastWorkbenchE2e && typeof r.lastWorkbenchE2e === 'object' ? r.lastWorkbenchE2e : null;
+    const base = {
+      ready: false,
+      status: 'unknown',
+      severity: 'warn',
+      command: 'npm run smoke:agent-mcp:e2e',
+      waitLoginCommand: 'npm run smoke:agent-mcp:e2e:wait-login',
+      requiredChain: ['ensure_ready', 'create_project', 'run_capability', 'list_assets', 'get_asset'],
+    };
+    if (!r.mcpReady) {
+      return {
+        ...base,
+        status: 'mcp_unavailable',
+        severity: 'error',
+        nextStep: 'Enable and start MCP before validating the Workbench entrance.',
+      };
+    }
+    if (!account || account.loggedIn !== true) {
+      return {
+        ...base,
+        status: 'login_required',
+        severity: 'action_required',
+        partition: account && account.partition ? String(account.partition) : '',
+        nextStep: 'Open the embedded Workbench, finish login, then run npm run smoke:agent-mcp:e2e:wait-login.',
+      };
+    }
+    if (!freshness || freshness.status === 'missing') {
+      return {
+        ...base,
+        status: 'e2e_missing',
+        severity: 'action_required',
+        nextStep: 'Run npm run smoke:agent-mcp:e2e:wait-login to prove the full Workbench chain.',
+      };
+    }
+    if (freshness.status === 'invalid') {
+      return {
+        ...base,
+        status: 'e2e_invalid',
+        severity: 'warn',
+        checkedAt: freshness.checkedAt || null,
+        nextStep: 'The cached E2E result is invalid; rerun npm run smoke:agent-mcp:e2e:wait-login.',
+      };
+    }
+    if (freshness.stale) {
+      return {
+        ...base,
+        status: 'e2e_stale',
+        severity: 'warn',
+        checkedAt: freshness.checkedAt || null,
+        ageMs: freshness.ageMs == null ? null : Number(freshness.ageMs),
+        nextStep: 'The cached E2E result is stale; rerun npm run smoke:agent-mcp:e2e:wait-login.',
+      };
+    }
+    if (!last || last.ok !== true) {
+      return {
+        ...base,
+        status: 'e2e_failed',
+        severity: 'action_required',
+        checkedAt: freshness.checkedAt || null,
+        failedStep: last && last.failedStep ? String(last.failedStep) : '',
+        errorCode: last && last.errorCode ? String(last.errorCode) : '',
+        nextStep: 'Fix the last Workbench E2E failure, then rerun npm run smoke:agent-mcp:e2e:wait-login.',
+      };
+    }
+    return {
+      ...base,
+      ready: true,
+      status: 'ready',
+      severity: 'ok',
+      checkedAt: freshness.checkedAt || null,
+      projectId: last.projectId ? String(last.projectId) : '',
+      assetId: last.assetId ? String(last.assetId) : '',
+      nextStep: 'Workbench entrance is ready for external Agents through MCP.',
+    };
+  }
+
+  function summarizeWorkbenchE2eAcceptance({ account, workbenchEntrance, lastWorkbenchE2e, freshness }) {
+    const entrance = workbenchEntrance && typeof workbenchEntrance === 'object' ? workbenchEntrance : {};
+    const last = lastWorkbenchE2e && typeof lastWorkbenchE2e === 'object' ? lastWorkbenchE2e : null;
+    const fresh = freshness && typeof freshness === 'object' ? freshness : {};
+    const requiredChain = Array.isArray(entrance.requiredChain) && entrance.requiredChain.length
+      ? entrance.requiredChain.map(String)
+      : ['ensure_ready', 'create_project', 'run_capability', 'list_assets', 'get_asset'];
+    const passed = Boolean(entrance.ready && last && last.ok === true && fresh.status === 'fresh' && fresh.stale === false);
+    const blockingReason =
+      passed
+        ? ''
+        : !account || account.loggedIn !== true
+          ? 'workbench_login_required'
+          : fresh.status === 'missing'
+            ? 'workbench_e2e_missing'
+            : fresh.status === 'stale'
+              ? 'workbench_e2e_stale'
+              : fresh.status === 'invalid'
+                ? 'workbench_e2e_invalid'
+                : last && last.ok === false
+                  ? last.errorCode || last.failedStep || 'workbench_e2e_failed'
+                  : 'workbench_e2e_not_ready';
+    return {
+      passed,
+      status: passed ? 'accepted' : 'not_accepted',
+      proofSource: last && last.proofSource ? String(last.proofSource) : 'settings.mcpWorkbenchLastE2e',
+      statusResource: 'assetcutter://mcp/server-status',
+      statusField: 'readiness.lastWorkbenchE2e',
+      freshnessField: 'readiness.lastWorkbenchE2eFreshness',
+      maxAgeMs: WORKBENCH_E2E_FRESH_MS,
+      requiredChain,
+      commands: {
+        status: 'npm run smoke:agent-mcp:status',
+        waitLogin: entrance.waitLoginCommand || 'npm run smoke:agent-mcp:e2e:wait-login',
+        openLoginWait: entrance.openLoginWaitCommand || 'npm run smoke:agent-mcp:e2e:open-login-wait',
+        e2e: entrance.command || 'npm run smoke:agent-mcp:e2e',
+      },
+      completionCriteria: [
+        'readiness.account.loggedIn === true',
+        'readiness.lastWorkbenchE2e.ok === true',
+        'readiness.lastWorkbenchE2eFreshness.status === "fresh"',
+        'readiness.workbenchEntrance.ready === true',
+        'last E2E proves ensure_ready -> create_project -> run_capability -> list_assets -> get_asset',
+      ],
+      blockingReason,
+      checkedAt: last && last.checkedAt ? String(last.checkedAt) : '',
+      projectId: last && last.projectId ? String(last.projectId) : '',
+      assetId: last && last.assetId ? String(last.assetId) : '',
+      nextStep: passed
+        ? 'Workbench MCP E2E acceptance is fresh; continue with remaining team governance blockers.'
+        : entrance.nextStep || 'Run npm run smoke:agent-mcp:e2e:wait-login after embedded Workbench login.',
+    };
+  }
+
+  function synthesizeWorkbenchE2eFromExecutions(executions, account) {
+    if (!Array.isArray(executions) || !executions.length) return null;
+    const candidates = executions
+      .filter((entry) => {
+        const tool = entry && entry.tool ? String(entry.tool) : '';
+        return tool.startsWith('ac.workbench.') && entry && entry.ok === false;
+      })
+      .map((entry) => {
+        const ts = entry && entry.ts ? String(entry.ts) : '';
+        const time = ts ? Date.parse(ts) : NaN;
+        return { entry, ts, time: Number.isFinite(time) ? time : 0 };
+      })
+      .sort((a, b) => b.time - a.time);
+    const accountLoggedIn = Boolean(account && typeof account === 'object' && account.loggedIn === true);
+    const authRequired = accountLoggedIn
+      ? null
+      : candidates.find(({ entry }) => String(entry.errorCode || '') === 'AGENT_AUTH_REQUIRED');
+    const latest = authRequired || candidates[0];
+    if (!latest) return null;
+    const entry = latest.entry || {};
+    const errorCode = entry.errorCode ? String(entry.errorCode) : 'workbench_e2e_failed';
+    const authBlocked = errorCode === 'AGENT_AUTH_REQUIRED';
+    const safeAccount = account && typeof account === 'object' ? account : {};
+    return {
+      ok: false,
+      checkedAt: latest.ts || new Date().toISOString(),
+      failedStep: entry.tool ? String(entry.tool) : 'ac.workbench.unknown',
+      errorCode,
+      authRequired: authBlocked,
+      action: authBlocked ? 'open_workbench_login' : '',
+      nextStep: authBlocked
+        ? 'Open the embedded Workbench and finish login, then rerun npm run smoke:agent-mcp:e2e:wait-login.'
+        : 'Inspect the latest failed Workbench MCP tool, fix it, then rerun npm run smoke:agent-mcp:e2e:wait-login.',
+      proofSource: 'audit.tool-executions',
+      toolCallId: entry.toolCallId ? String(entry.toolCallId) : '',
+      account: {
+        loggedIn: safeAccount.loggedIn === true,
+        partition: safeAccount.partition ? String(safeAccount.partition) : '',
+        authOrigin: safeAccount.authOrigin ? String(safeAccount.authOrigin) : '',
+        siteOrigin: safeAccount.siteOrigin ? String(safeAccount.siteOrigin) : '',
+        cookieCount: Number.isFinite(Number(safeAccount.cookieCount)) ? Number(safeAccount.cookieCount) : 0,
+        hasAuthCookie: safeAccount.hasAuthCookie === true,
+        statusCode: Number.isFinite(Number(safeAccount.statusCode)) ? Number(safeAccount.statusCode) : null,
+        error: safeAccount.error ? String(safeAccount.error) : '',
+      },
+    };
+  }
+
+  function summarizeWorkbenchEntranceState(account) {
+    const settings = deps.readSettings();
+    const s = status();
+    const lastWorkbenchE2e =
+      settings.mcpWorkbenchLastE2e && typeof settings.mcpWorkbenchLastE2e === 'object'
+        ? settings.mcpWorkbenchLastE2e
+        : null;
+    const lastWorkbenchE2eFreshness = summarizeWorkbenchE2eFreshness(lastWorkbenchE2e);
+    return {
+      workbenchEntrance: summarizeWorkbenchEntrance({
+        mcpReady: Boolean(s.enabled && s.running && s.hasToken),
+        account,
+        lastWorkbenchE2e,
+        freshness: lastWorkbenchE2eFreshness,
+      }),
+      lastWorkbenchE2eFreshness,
+    };
+  }
+
+  function policyDecisionForTool(policy, tools, toolName) {
+    const schema = Array.isArray(tools) ? tools.find((tool) => tool && tool.name === toolName) : null;
+    if (!schema) {
+      return {
+        name: toolName,
+        present: false,
+        risk: 'missing',
+        decision: 'missing',
+        requiresFrontendAuthorization: false,
+      };
+    }
+    const risk = String(schema.risk || 'safe');
+    const forbidden = Array.isArray(policy && policy.forbiddenTools) ? policy.forbiddenTools.map(String) : [];
+    const auto = Array.isArray(policy && policy.autoConfirmTools) ? policy.autoConfirmTools.map(String) : [];
+    const confirmTools = policy && Object.prototype.hasOwnProperty.call(policy, 'confirmTools') ? Boolean(policy.confirmTools) : true;
+    let decision = 'allow';
+    if (forbidden.includes(toolName)) decision = 'deny';
+    else if (risk === 'confirm' && confirmTools && !auto.includes(toolName)) decision = 'confirm';
+    return {
+      name: toolName,
+      present: true,
+      risk,
+      decision,
+      requiresFrontendAuthorization: decision === 'confirm',
+    };
+  }
+
+  function summarizeWorkflowPublicationReadiness(policy, tools) {
+    const save = policyDecisionForTool(policy, tools, 'ac.skills.save');
+    const read = policyDecisionForTool(policy, tools, 'ac.skills.get');
+    const revisions = policyDecisionForTool(policy, tools, 'ac.skills.revisions');
+    const remove = policyDecisionForTool(policy, tools, 'ac.skills.delete');
+    const decisions = { save, read, revisions, delete: remove };
+    const missing = Object.values(decisions).filter((entry) => !entry.present).map((entry) => entry.name);
+    const denied = Object.values(decisions).filter((entry) => entry.decision === 'deny').map((entry) => entry.name);
+    const confirm = Object.values(decisions).filter((entry) => entry.decision === 'confirm').map((entry) => entry.name);
+    const ready = missing.length === 0 && denied.length === 0 && confirm.length === 0;
+    const draftInventory = summarizeWorkflowDraftInventory();
+    return {
+      ready,
+      status: missing.length ? 'tools_missing' : denied.length ? 'policy_denied' : confirm.length ? 'confirmation_required' : 'ready',
+      phase: 'skill_draft_registry',
+      resource: 'assetcutter://mcp/workflow-publication',
+      draftTool: 'ac.skills.save',
+      discoverableVia: ['prompts/list', 'resources/list', 'skill://{skillId}', 'ac.skills.list'],
+      draftInventory,
+      promotionTargets: ['workbench_preset', 'script_hub_tool'],
+      promotionReadiness: buildWorkflowPromotionReadiness(tools, draftInventory),
+      decisions,
+      nextStep: ready
+        ? 'External Agents can save workflow drafts through ac.skills.save, verify prompt/resource discovery, then retire drafts with ac.skills.delete.'
+        : missing.length
+          ? `Register missing workflow draft tools before accepting external Agent workflows: ${missing.join(', ')}.`
+          : denied.length
+            ? `Ask an admin to unblock workflow draft tools before saving external Agent workflows: ${denied.join(', ')}.`
+            : `Copilot frontend authorization is required for workflow draft writes: ${confirm.join(', ')}. Keep Copilot open or ask an admin to auto-confirm trusted draft tools.`,
+    };
+  }
+
+  function summarizeWorkflowDraftInventory() {
+    const skillsRoot = typeof deps.getSkillsRoot === 'function' ? deps.getSkillsRoot() : '';
+    const drafts = skillsRoot
+      ? listSkillEntries(skillsRoot)
+          .map((skill) => ({
+            id: skill.id ? String(skill.id) : '',
+            name: skill.name ? String(skill.name) : '',
+            revision: Number.isFinite(Number(skill.revision)) ? Number(skill.revision) : 1,
+            updatedAt: skill.updatedAt ? String(skill.updatedAt) : '',
+            createdAt: skill.createdAt ? String(skill.createdAt) : '',
+            hasWorkbenchPreset: Boolean(skill.workbenchPreset),
+            hasScriptManifest: Boolean(skill.scriptManifest),
+            resourceUri: skill.id ? `skill://${skill.id}` : '',
+          }))
+          .filter((skill) => skill.id)
+          .sort((a, b) => String(b.updatedAt || b.createdAt).localeCompare(String(a.updatedAt || a.createdAt)))
+      : [];
+    return {
+      count: drafts.length,
+      latest: drafts[0] || null,
+      nextStep: drafts.length
+        ? 'Use the latest current draft id in the Settings promotion preflight or call a promotion preflight tool directly.'
+        : 'Save a workflow draft with ac.skills.save before running promotion preflight.',
+    };
+  }
+
+  function buildWorkflowPromotionReadiness(tools, draftInventory) {
+    const toolNames = new Set((Array.isArray(tools) ? tools : []).map((tool) => String(tool && tool.name ? tool.name : '')));
+    const platformPassedGates = typeof deps.appendAudit === 'function' ? ['audit_record_written'] : [];
+    const target = (id, plannedTool, requiredGates, draftEvaluatedGates, globalBlockedGates) => {
+      const toolPresent = toolNames.has(plannedTool);
+      const passedGates = requiredGates.filter((gate) => platformPassedGates.includes(gate));
+      const unevaluatedGates = requiredGates.filter(
+        (gate) => draftEvaluatedGates.includes(gate) && !passedGates.includes(gate),
+      );
+      const blockedGates = requiredGates.filter(
+        (gate) => globalBlockedGates.includes(gate) && !passedGates.includes(gate),
+      );
+      const missingGates = toolPresent ? blockedGates : [plannedTool, ...blockedGates];
+      return {
+        id,
+        status: toolPresent ? 'preflight_registered_gated' : 'planned_tool_missing',
+        ready: false,
+        plannedTool,
+        toolPresent,
+        evaluationMode: 'global_status_without_concrete_draft',
+        requiredGates,
+        passedGates,
+        missing: missingGates,
+        blockedGates,
+        unevaluatedGates,
+        adminConfirmation: {
+          required: requiredGates.includes('admin_confirmation'),
+          passed: false,
+          sourceRequired: 'copilot_ui',
+          autoConfirmCountsAsAdminApproval: false,
+        },
+        nextStep: toolPresent
+          ? `Run ${plannedTool} against a concrete workflow draft; global status only reports platform gates, while draft schema and sandbox gates are evaluated during preflight.`
+          : `Implement governed promotion tool ${plannedTool} after draft workflow registry validation is stable.`,
+      };
+    };
+    return {
+      currentPhase: 'draft_only',
+      publishableNow: false,
+      draftInventory: draftInventory && typeof draftInventory === 'object' ? draftInventory : summarizeWorkflowDraftInventory(),
+      reason:
+        'Workflow drafts are discoverable team assets, but promotion to executable workbench presets or Script Hub tools is not open until governed promotion tools and E2E gates exist.',
+      targets: [
+        target('workbench_preset', 'ac.workflow.promote_workbench_preset', [
+          'skill_draft_exists',
+          'capability_route_schema_valid',
+          'workbench_login_e2e_ready',
+          'model_provider_readiness_checked',
+          'admin_confirmation',
+          'audit_record_written',
+        ], ['skill_draft_exists', 'capability_route_schema_valid', 'model_provider_readiness_checked'], [
+          'workbench_login_e2e_ready',
+          'admin_confirmation',
+        ]),
+        target('script_hub_tool', 'ac.workflow.promote_script_hub_tool', [
+          'skill_draft_exists',
+          'script_manifest_valid',
+          'script_hub_permission_checked',
+          'sandbox_policy_checked',
+          'admin_confirmation',
+          'audit_record_written',
+        ], ['skill_draft_exists', 'script_manifest_valid', 'script_hub_permission_checked', 'sandbox_policy_checked'], [
+          'admin_confirmation',
+        ]),
+      ],
+    };
+  }
+
+  async function summarizeWorkflowPublicationState() {
+    const policy = deps.readPolicy();
+    const tools = await deps.bodyHost.listTools();
+    return summarizeWorkflowPublicationReadiness(policy, tools);
+  }
+
+  function summarizeReadinessBlockers({ mcpReady, codexRuntime, account, workbenchEntrance, workflowPublication, usageAudit }) {
+    const blockers = [];
+    const add = (id, severity, owner, nextStep, detail) => {
+      blockers.push({
+        id,
+        severity,
+        owner,
+        nextStep,
+        ...(detail && typeof detail === 'object' ? detail : {}),
+      });
+    };
+    if (!mcpReady) {
+      add('mcp_unavailable', 'critical', 'local_shell', 'Enable and restart the local MCP server before using Copilot as an external Agent body.');
+    }
+    if (!codexRuntime || !codexRuntime.readyHint) {
+      add('codex_runtime_not_ready', 'action_required', 'admin', 'Configure the Codex command/cwd/auth state in Companion Settings.');
+    }
+    if (!account || !account.loggedIn) {
+      add('workbench_login_required', 'action_required', 'user', 'Open the embedded Workbench and finish login.', {
+        command: WORKBENCH_OPEN_LOGIN_WAIT_COMMAND,
+        actions: workbenchLoginActions(),
+      });
+    }
+    const entranceStatus = workbenchEntrance && workbenchEntrance.status ? String(workbenchEntrance.status) : '';
+    if (entranceStatus && entranceStatus !== 'ready' && entranceStatus !== 'login_required') {
+      add(`workbench_${entranceStatus}`, 'action_required', 'admin', workbenchEntrance.nextStep || 'Rerun the Workbench E2E validation.', {
+        command: workbenchEntrance.waitLoginCommand || 'npm run smoke:agent-mcp:e2e:wait-login',
+        actions: workbenchLoginActions(),
+      });
+    }
+    const promotion = workflowPublication && workflowPublication.promotionReadiness;
+    if (promotion && promotion.publishableNow === false) {
+      const promotionTargets = Array.isArray(promotion.targets)
+        ? promotion.targets.map((target) => ({
+            id: target && target.id ? String(target.id) : '',
+            status: target && target.status ? String(target.status) : '',
+            plannedTool: target && target.plannedTool ? String(target.plannedTool) : '',
+            passedGates: Array.isArray(target && target.passedGates) ? target.passedGates.map(String) : [],
+            missingGates: Array.isArray(target && target.missing) ? target.missing.map(String) : [],
+            unevaluatedGates: Array.isArray(target && target.unevaluatedGates) ? target.unevaluatedGates.map(String) : [],
+            adminConfirmation:
+              target && target.adminConfirmation && typeof target.adminConfirmation === 'object'
+                ? {
+                    required: Boolean(target.adminConfirmation.required),
+                    passed: Boolean(target.adminConfirmation.passed),
+                    sourceRequired: target.adminConfirmation.sourceRequired
+                      ? String(target.adminConfirmation.sourceRequired)
+                      : 'copilot_ui',
+                    autoConfirmCountsAsAdminApproval: Boolean(target.adminConfirmation.autoConfirmCountsAsAdminApproval),
+                  }
+                : null,
+          }))
+        : [];
+      const missingGates = [...new Set(promotionTargets.flatMap((target) => target.missingGates || []))];
+      add('workflow_promotion_draft_only', 'info', 'admin', promotion.reason || 'Workflow drafts are not yet publishable as governed team tools.', {
+        command: STATUS_COMMAND,
+        phase: promotion.currentPhase || 'draft_only',
+        publishableNow: false,
+        draftInventory:
+          promotion.draftInventory && typeof promotion.draftInventory === 'object'
+            ? {
+                count: Number(promotion.draftInventory.count) || 0,
+                latest:
+                  promotion.draftInventory.latest && typeof promotion.draftInventory.latest === 'object'
+                    ? {
+                        id: promotion.draftInventory.latest.id ? String(promotion.draftInventory.latest.id) : '',
+                        name: promotion.draftInventory.latest.name ? String(promotion.draftInventory.latest.name) : '',
+                        revision: Number.isFinite(Number(promotion.draftInventory.latest.revision))
+                          ? Number(promotion.draftInventory.latest.revision)
+                          : 1,
+                        hasWorkbenchPreset: Boolean(promotion.draftInventory.latest.hasWorkbenchPreset),
+                        hasScriptManifest: Boolean(promotion.draftInventory.latest.hasScriptManifest),
+                        resourceUri: promotion.draftInventory.latest.resourceUri
+                          ? String(promotion.draftInventory.latest.resourceUri)
+                          : '',
+                      }
+                    : null,
+              }
+            : null,
+        promotionTargets,
+        missingGates,
+        actions: workflowPromotionActions(),
+      });
+    }
+    const usageCloudDraft =
+      usageAudit && usageAudit.cloudDraft && typeof usageAudit.cloudDraft === 'object' ? usageAudit.cloudDraft : null;
+    const usagePhase =
+      usageAudit && usageAudit.currentPhase
+        ? String(usageAudit.currentPhase)
+        : usageAudit && usageAudit.totals && typeof usageAudit.totals === 'object'
+          ? 'local_usage_signal'
+          : '';
+    const cloudEnforced = Boolean(usageAudit && usageAudit.cloudEnforced);
+    if (usagePhase === 'local_usage_signal' && !cloudEnforced) {
+      const usageMissingGates =
+        usageCloudDraft && Array.isArray(usageCloudDraft.blockedBy)
+          ? [...new Set(usageCloudDraft.blockedBy.map(String).filter(Boolean))]
+          : [];
+      add(
+        'usage_governance_local_only',
+        'info',
+        'admin',
+        'Local Copilot usage is visible, but team quota enforcement and cloud audit are not connected yet.',
+        {
+          command: STATUS_COMMAND,
+          phase: usagePhase,
+          cloudEnforced: false,
+          resource: 'assetcutter://mcp/usage-audit',
+          missingGates: usageMissingGates,
+          actions: usageGovernanceActions(),
+          cloudDraft: usageCloudDraft
+            ? {
+                currentPhase: usageCloudDraft.currentPhase || 'cloud_event_draft',
+                targetApi: usageCloudDraft.targetApi || '/api/usage/events',
+                eventCount: Number(usageCloudDraft.eventCount) || 0,
+                uploadReady: Boolean(usageCloudDraft.uploadReady),
+                blockedBy: Array.isArray(usageCloudDraft.blockedBy) ? usageCloudDraft.blockedBy.map(String) : [],
+                uploadPlan:
+                  usageCloudDraft.uploadPlan && typeof usageCloudDraft.uploadPlan === 'object'
+                    ? {
+                        endpoint: usageCloudDraft.uploadPlan.endpoint || '/api/usage/events',
+                        method: usageCloudDraft.uploadPlan.method || 'POST',
+                        credentials: usageCloudDraft.uploadPlan.credentials || 'include',
+                        tool: usageCloudDraft.uploadPlan.tool || 'ac.usage.upload_cloud_draft',
+                        idempotencyScope: usageCloudDraft.uploadPlan.idempotencyScope || '',
+                        safeToRetry: Boolean(
+                          usageCloudDraft.uploadPlan.retry && usageCloudDraft.uploadPlan.retry.safeToRetry,
+                        ),
+                      }
+                    : null,
+                quotaPolicy:
+                  usageCloudDraft.quotaPolicy && typeof usageCloudDraft.quotaPolicy === 'object'
+                    ? {
+                        currentPhase: usageCloudDraft.quotaPolicy.currentPhase || 'usage_event_ingestion_ready',
+                        billingSku: usageCloudDraft.quotaPolicy.billingSku || 'copilot.codex.tokens',
+                        billingSkuRegisteredInDefaultCatalog: Boolean(
+                          usageCloudDraft.quotaPolicy.billingSkuRegisteredInDefaultCatalog,
+                        ),
+                        usageBillingApiConfigured: Boolean(usageCloudDraft.quotaPolicy.usageBillingApiConfigured),
+                        cloudQuotaEnforced: Boolean(usageCloudDraft.quotaPolicy.cloudQuotaEnforced),
+                        usageBillingEnabled: Boolean(usageCloudDraft.quotaPolicy.usageBillingEnabled),
+                        enforcementSource: usageCloudDraft.quotaPolicy.enforcementSource
+                          ? String(usageCloudDraft.quotaPolicy.enforcementSource)
+                          : '',
+                        policyId: usageCloudDraft.quotaPolicy.policyId ? String(usageCloudDraft.quotaPolicy.policyId) : '',
+                        probeTool: usageCloudDraft.quotaPolicy.probeTool || 'ac.usage.probe_quota_policy',
+                        policyEndpoint: usageCloudDraft.quotaPolicy.policyEndpoint || '/api/usage/policy',
+                      }
+                    : null,
+              }
+            : null,
+        },
+      );
+    }
+    return blockers;
+  }
+
+  function readCodexRuntimeStatus() {
+    if (typeof deps.getCodexRuntimeStatus !== 'function') return null;
+    try {
+      const raw = deps.getCodexRuntimeStatus();
+      if (!raw || typeof raw !== 'object') return null;
+      const auth = raw.auth && typeof raw.auth === 'object' ? raw.auth : {};
+      return {
+        command: raw.command ? String(raw.command) : '',
+        cwd: raw.cwd ? String(raw.cwd) : '',
+        cwdExists: Boolean(raw.cwdExists),
+        model: raw.model ? String(raw.model) : '',
+        sandbox: raw.sandbox ? String(raw.sandbox) : '',
+        defaultBrain: raw.defaultBrain ? String(raw.defaultBrain) : '',
+        isDefaultBrain: Boolean(raw.isDefaultBrain),
+        auth: {
+          exists: Boolean(auth.exists),
+          path: auth.path ? String(auth.path) : '',
+        },
+        readyHint: Boolean(raw.readyHint),
+      };
+    } catch {
+      return null;
+    }
   }
 
   function normalizeConfirmResult(raw) {
@@ -288,6 +1071,8 @@ function createAgentBodyMcpServer(deps) {
     const traceId = traceIdFromArgs(args);
     const append = (result, policyDecision) => {
       const durationMs = Date.now() - startedAt;
+      const workflowPromotionPreflight = workflowPromotionAuditSummary(name, result);
+      const usageGovernance = usageGovernanceAuditSummary(name, result);
       deps.appendAudit({
         ts: new Date().toISOString(),
         clientId: 'mcp',
@@ -302,6 +1087,8 @@ function createAgentBodyMcpServer(deps) {
         argsDigest: argsDigest(args),
         durationMs,
         policyDecision: policyDecision || null,
+        ...(workflowPromotionPreflight ? { workflowPromotionPreflight } : {}),
+        ...(usageGovernance ? { usageGovernance } : {}),
       });
       result.mcp = {
         toolCallId,
@@ -338,6 +1125,7 @@ function createAgentBodyMcpServer(deps) {
       append(result, 'deny');
       return result;
     }
+    let frontendConfirmationApproved = false;
     if (gate === 'confirm') {
       const policy = deps.readPolicy();
       const auto = Array.isArray(policy.autoConfirmTools) ? policy.autoConfirmTools : [];
@@ -410,6 +1198,7 @@ function createAgentBodyMcpServer(deps) {
           append(result, confirmResult.reason === 'timeout' ? 'confirm_timeout' : 'confirm_rejected');
           return result;
         }
+        frontendConfirmationApproved = true;
       }
     }
     if (isAbortSignalAborted(signal)) {
@@ -417,6 +1206,7 @@ function createAgentBodyMcpServer(deps) {
       append(result, 'cancelled');
       return result;
     }
+    const policyDecision = gate === 'confirm' ? 'auto_confirm' : 'allow';
     const ctx = {
       sessionId: 'mcp',
       brainId: 'external',
@@ -424,10 +1214,13 @@ function createAgentBodyMcpServer(deps) {
       clientId: 'mcp',
       toolCallId,
       traceId,
+      policyDecision,
+      adminConfirmationPassed: frontendConfirmationApproved,
+      adminConfirmationSource: frontendConfirmationApproved ? 'copilot_ui' : '',
       signal,
     };
     const result = await deps.bodyHost.executeTool(name, args && typeof args === 'object' ? args : {}, ctx);
-    append(result, gate === 'confirm' ? 'auto_confirm' : 'allow');
+    append(result, policyDecision);
     return result;
   }
 
@@ -560,7 +1353,17 @@ function createAgentBodyMcpServer(deps) {
 
     if (argName === 'document' || String(ref.uri || ref.uriTemplate || '').startsWith('assetcutter://mcp/')) {
       return completionResult(
-        ['manifest', 'tool-catalog', 'quickstart', 'workbench-flow', 'policy', 'server-status', 'tool-executions'],
+        [
+          'manifest',
+          'tool-catalog',
+          'quickstart',
+          'workbench-flow',
+          'policy',
+          'server-status',
+          'tool-executions',
+          'usage-audit',
+          'workflow-publication',
+        ],
         value,
       );
     }
@@ -631,6 +1434,18 @@ function createAgentBodyMcpServer(deps) {
         description: 'Recent sanitized tool execution records for external agent traceability.',
         mimeType: 'application/json',
       },
+      {
+        uri: 'assetcutter://mcp/usage-audit',
+        name: 'AssetCutter MCP Usage Audit',
+        description: 'Sanitized local Copilot usage audit summaries for team governance and quota preflight.',
+        mimeType: 'application/json',
+      },
+      {
+        uri: 'assetcutter://mcp/workflow-publication',
+        name: 'AssetCutter Workflow Publication Contract',
+        description: 'Machine-readable path for external Agents to turn reusable workflows into governed team assets.',
+        mimeType: 'application/json',
+      },
     ];
   }
 
@@ -640,7 +1455,7 @@ function createAgentBodyMcpServer(deps) {
         uriTemplate: 'assetcutter://mcp/{document}',
         name: 'AssetCutter MCP Documents',
         title: 'AssetCutter MCP Documents',
-        description: 'Read built-in MCP documents such as manifest, tool-catalog, workbench-flow, server-status, and tool-executions.',
+        description: 'Read built-in MCP documents such as manifest, tool-catalog, workbench-flow, server-status, usage-audit, and tool-executions.',
         mimeType: 'application/json',
       },
       {
@@ -721,7 +1536,15 @@ function createAgentBodyMcpServer(deps) {
             },
             instructions: serverInstructions(),
             namespaces: {
-              tools: ['ac.shell.*', 'ac.workbench.*', 'ac.script_hub.*', 'ac.companion.*', 'ac.skills.*', 'ac.memory.*'],
+              tools: [
+                'ac.shell.*',
+                'ac.workbench.*',
+                'ac.script_hub.*',
+                'ac.companion.*',
+                'ac.skills.*',
+                'ac.usage.*',
+                'ac.memory.*',
+              ],
               resources: ['assetcutter://mcp/*', 'skill://*'],
               prompts: ['skill:*'],
             },
@@ -742,6 +1565,9 @@ function createAgentBodyMcpServer(deps) {
               },
               workbenchFlowResource: WORKBENCH_FLOW_RESOURCE_URI,
               serverStatusResource: 'assetcutter://mcp/server-status',
+              workflowPublicationResource: 'assetcutter://mcp/workflow-publication',
+              blockerActions:
+                'Read assetcutter://mcp/server-status readiness.blockers[].actions; each action may contain a shell command for humans, an MCP tool name plus args for Agents, owner, and risk.',
             },
             resources: builtInResources().map((r) => ({
               uri: r.uri,
@@ -751,6 +1577,7 @@ function createAgentBodyMcpServer(deps) {
             extensionGuidance: {
               addTool: 'Register the tool schema in agent-tool-schemas.cjs and dispatch it in agent-body-host.cjs.',
               addPrompt: 'Add a skill under agent-store/skills with skill.json or SKILL.md.',
+              publishWorkflow: 'Read assetcutter://mcp/workflow-publication, then save reusable drafts through ac.skills.save before any governed Script Hub or workbench preset promotion.',
               policy: 'High-risk tools should use risk=confirm and can be managed through policy.json.',
             },
           },
@@ -779,7 +1606,7 @@ function createAgentBodyMcpServer(deps) {
           'Recommended flow:',
           '',
           '1. Call `initialize`, then `tools/list`.',
-          '2. Call `ac.shell.get_state` to inspect the current shell, pairing, brain, and workbench state.',
+          '2. Call `ac.shell.get_state` to inspect the current shell, team account, pairing, brain, and workbench state.',
           '3. Call `ac.workbench.ensure_ready` before opening projects or running workbench capabilities; it navigates to the workbench, checks login/project/capability readiness, and can create a project when `requireProject=true` and `createIfMissing=true`.',
           '4. If you need an explicit project creation step, call `ac.workbench.create_project`; after generation, call `ac.workbench.list_assets` and `ac.workbench.get_asset` to verify outputs.',
           '5. Read `assetcutter://mcp/policy` before confirm-risk tools to know whether they will run, prompt, or be denied.',
@@ -789,7 +1616,9 @@ function createAgentBodyMcpServer(deps) {
           '9. Use `completion/complete` for resource template arguments such as `document`, `skillId`, and `revision`.',
           '10. For `ac.workbench.run_capability`, first ensure there is an active project, then inspect `capabilityPresets` from `ac.workbench.ensure_ready`/`ac.workbench.get_context`: only call presets with `directRunSupported=true`; pass `inputText` for text/prompt input, `imageDataUrl` for direct image input, or `inputAssetId`/`inputAssetDisplayKey` to use an existing workbench asset as input.',
           '11. Treat `authRequired`, `forbidden`, `requiresFrontendAuthorization`, `retryable`, `requiresInput`, `nextStep`, and `recoveryTool` in `structuredContent` as the recovery contract; if `authRequired` is true, call `ac.shell.navigate` with `{ "view": "workbench" }`, wait for the user to log in, then retry the failed workbench tool.',
-          '12. Read `assetcutter://mcp/server-status` before workbench E2E validation. After the workbench is logged in, run `npm run smoke:agent-mcp:e2e -- --config <hermes-mcp-import.json>` to verify create project -> run capability -> list assets -> get asset.',
+          '12. Read `assetcutter://mcp/server-status` before workbench E2E validation. Check `readiness.codexRuntime.readyHint`, `readiness.workbenchEntrance.status`, `readiness.account.loggedIn`, `readiness.account.partition`, and `readiness.lastWorkbenchE2eFreshness`; after the embedded workbench is logged in, run `npm run smoke:agent-mcp:e2e -- --config <hermes-mcp-import.json>` to verify create project -> run capability -> list assets -> get asset. If login may happen during validation, use `npm run smoke:agent-mcp:e2e:wait-login`.',
+          '13. Treat `assetcutter://mcp/server-status` `readiness.blockers[].actions` as the canonical next-step list. Prefer safe actions first; for actions with `tool`, call the named MCP tool with the provided `args` when policy allows; for actions with `command`, report or run the command only in the local shell context. Login actions should open the embedded Workbench and then rerun the wait-login E2E command.',
+          '14. For usage governance, read `assetcutter://mcp/usage-audit`, call safe `ac.usage.probe_quota_policy` to refresh the team quota policy through the shell session, and use `ac.usage.upload_cloud_draft` with `dryRun=true` before any real upload. Real upload is confirm-risk and still runs only through the shell first-party session.',
           '',
           'Important resources:',
           '',
@@ -798,9 +1627,89 @@ function createAgentBodyMcpServer(deps) {
           '- `assetcutter://mcp/workbench-flow`: machine-readable workbench task flow, recovery contract, and E2E gates.',
           '- `assetcutter://mcp/policy`: sanitized permission policy and per-tool gate decisions.',
           '- `assetcutter://mcp/server-status`: local server status without exposing the bearer token.',
+          '- `assetcutter://mcp/usage-audit`: sanitized local Copilot usage summaries for team governance and quota preflight.',
           '- `assetcutter://mcp/tool-executions`: recent sanitized tool execution records for traceability.',
+          '- `assetcutter://mcp/workflow-publication`: governed workflow assetization path for external Agent drafts.',
           '- `skill://{skillId}`: reusable skill/workflow definition.',
         ].join('\n'),
+      };
+    }
+    if (uri === 'assetcutter://mcp/workflow-publication') {
+      const tools = await deps.bodyHost.listTools();
+      const toolNames = new Set((Array.isArray(tools) ? tools : []).map((tool) => String(tool && tool.name ? tool.name : '')));
+      return {
+        uri,
+        mimeType: 'application/json',
+        text: JSON.stringify(
+          {
+            schemaVersion: 1,
+            generatedAt: new Date().toISOString(),
+            northStar:
+              'Copilot is the unified Agent entrance into the team workbench, not another web chatbot.',
+            objective:
+              'Let external Agents research and draft reusable workflows, then bring them back into AssetCutter as governed team assets.',
+            currentPhase: 'skill_draft_registry',
+            entrypoints: {
+              draftWorkflow: {
+                tool: 'ac.skills.save',
+                risk: 'confirm',
+                stores: 'agent-store/skills',
+                discoverableVia: ['prompts/list', 'resources/list', 'skill://{skillId}', 'ac.skills.list'],
+                requiredFields: ['name', 'prompt'],
+                recommendedFields: ['description', 'toolHints'],
+              },
+              inspectWorkflow: {
+                tools: ['ac.skills.list', 'ac.skills.get', 'ac.skills.revisions', 'ac.skills.revision_get'],
+                resources: ['skill://{skillId}', 'skill://{skillId}/revisions/{revision}'],
+              },
+              retireWorkflow: {
+                tool: 'ac.skills.delete',
+                risk: 'confirm',
+                audit: 'Tool execution is recorded through the local MCP audit log.',
+              },
+            },
+            promotionTargets: [
+              {
+                id: 'workbench_preset',
+                status: toolNames.has('ac.workflow.promote_workbench_preset') ? 'preflight_registered_gated' : 'planned',
+                plannedTool: 'ac.workflow.promote_workbench_preset',
+                boundary:
+                  'Promotion to a workbench preset must validate capability route, input/output schema, model/provider readiness, permissions, and E2E result.',
+              },
+              {
+                id: 'script_hub_tool',
+                status: toolNames.has('ac.workflow.promote_script_hub_tool') ? 'preflight_registered_gated' : 'planned',
+                plannedTool: 'ac.workflow.promote_script_hub_tool',
+                boundary:
+                  'Promotion to Script Hub must go through the Script Hub tool asset, revision, permission, run, and audit chain; external Agents should not bypass this by executing arbitrary scripts.',
+              },
+            ],
+            promotionReadiness: buildWorkflowPromotionReadiness(tools),
+            governance: {
+              policyResource: 'assetcutter://mcp/policy',
+              statusResource: 'assetcutter://mcp/server-status',
+              auditResources: ['assetcutter://mcp/tool-executions'],
+              usageSignal: 'assetcutter://mcp/usage-audit',
+              confirmations:
+                'Workflow writes and retirements are confirm-risk actions unless an admin explicitly changes policy.',
+            },
+            recommendedExternalAgentFlow: [
+              'Read assetcutter://mcp/server-status and assetcutter://mcp/policy.',
+              'Draft the reusable workflow using only stable ac.* tools and documented recovery contracts.',
+              'Call ac.skills.save with a concise prompt and toolHints for the ac.* tools it needs.',
+              'Verify it appears in prompts/list, resources/list, and skill://{skillId}.',
+              'Use ac.skills.revisions before replacing a published draft.',
+              'Treat workbench preset or Script Hub promotion as a separate governed release step until the promotion tools are implemented.',
+            ],
+            notAllowed: [
+              'Do not claim a skill draft is a published Script Hub tool.',
+              'Do not bypass ac.* tools to operate the workbench or local shell directly.',
+              'Do not embed secrets in skill prompts or descriptions.',
+            ],
+          },
+          null,
+          2,
+        ),
       };
     }
     if (uri === WORKBENCH_FLOW_RESOURCE_URI) {
@@ -856,7 +1765,28 @@ function createAgentBodyMcpServer(deps) {
       const policy = deps.readPolicy();
       const tools = await deps.bodyHost.listTools();
       const executions =
-        typeof deps.listToolExecutions === 'function' ? deps.listToolExecutions({ days: 1, limit: 12 }) : [];
+        typeof deps.listToolExecutions === 'function' ? deps.listToolExecutions({ days: 1, limit: 80 }) : [];
+      const usageAudit =
+        typeof deps.summarizeUsageAudit === 'function' ? deps.summarizeUsageAudit({ days: 1, limit: 5000 }) : null;
+      if (usageAudit && typeof usageAudit === 'object') {
+        usageAudit.currentPhase = usageAudit.currentPhase || 'local_usage_signal';
+        usageAudit.cloudEnforced = Boolean(usageAudit.cloudEnforced);
+        usageAudit.cloudDraft =
+          usageAudit.cloudDraft && typeof usageAudit.cloudDraft === 'object'
+            ? usageAudit.cloudDraft
+            : buildCopilotUsageCloudDraft(usageAudit);
+        usageAudit.governanceEvidence = summarizeUsageGovernanceEvidence(executions);
+      }
+      let shellState = null;
+      try {
+        shellState = typeof deps.getStateSummary === 'function' ? await deps.getStateSummary() : null;
+      } catch {
+        shellState = null;
+      }
+      const account =
+        shellState && typeof shellState === 'object' && shellState.account && typeof shellState.account === 'object'
+          ? shellState.account
+          : null;
       const riskCounts = tools.reduce(
         (acc, tool) => {
           const risk = String(tool && tool.risk ? tool.risk : 'safe');
@@ -880,6 +1810,47 @@ function createAgentBodyMcpServer(deps) {
         arguments: { view: 'workbench' },
         after: 'Wait for the user to finish login in the workbench view, then retry the failed workbench tool.',
       };
+      const storedLastWorkbenchE2e =
+        settings.mcpWorkbenchLastE2e && typeof settings.mcpWorkbenchLastE2e === 'object'
+          ? settings.mcpWorkbenchLastE2e
+          : null;
+      const lastWorkbenchE2e = storedLastWorkbenchE2e || synthesizeWorkbenchE2eFromExecutions(executions, account);
+      const mcpReady = Boolean(s.enabled && s.running && s.hasToken);
+      const lastWorkbenchE2eFreshness = summarizeWorkbenchE2eFreshness(lastWorkbenchE2e);
+      const codexRuntime = readCodexRuntimeStatus();
+      const workbenchEntrance = summarizeWorkbenchEntrance({
+        mcpReady,
+        account,
+        lastWorkbenchE2e,
+        freshness: lastWorkbenchE2eFreshness,
+      });
+      const workbenchE2eAcceptance = summarizeWorkbenchE2eAcceptance({
+        account,
+        workbenchEntrance,
+        lastWorkbenchE2e,
+        freshness: lastWorkbenchE2eFreshness,
+      });
+      const workflowPublication = summarizeWorkflowPublicationReadiness(policy, tools);
+      const workflowPromotionPreflightEvidence = summarizeWorkflowPromotionPreflightEvidence(executions);
+      if (workflowPublication && typeof workflowPublication === 'object') {
+        workflowPublication.promotionPreflightEvidence = workflowPromotionPreflightEvidence;
+      }
+      const blockers = summarizeReadinessBlockers({
+        mcpReady,
+        codexRuntime,
+        account,
+        workbenchEntrance,
+        workflowPublication,
+        usageAudit,
+      });
+      const teamEntranceReady = Boolean(
+        mcpReady &&
+          codexRuntime &&
+          codexRuntime.readyHint &&
+          workbenchEntrance &&
+          workbenchEntrance.ready &&
+          blockers.length === 0,
+      );
       return {
         uri,
         mimeType: 'application/json',
@@ -900,13 +1871,31 @@ function createAgentBodyMcpServer(deps) {
             },
             recentToolExecutionCount: Array.isArray(executions) ? executions.length : 0,
             readiness: {
-              mcp: Boolean(s.enabled && s.running && s.hasToken),
+              mcp: mcpReady,
+              workbenchUsable: Boolean(workbenchEntrance && workbenchEntrance.ready),
+              teamEntranceReady,
+              teamEntrancePhase: teamEntranceReady
+                ? 'ready'
+                : workbenchEntrance && workbenchEntrance.ready
+                  ? 'governance_blocked'
+                  : 'workbench_blocked',
+              teamEntranceBlockers: blockers.map((blocker) => String(blocker && blocker.id ? blocker.id : 'unknown')),
+              codexRuntime,
+              usageAudit,
+              workflowPublication,
+              blockers,
+              account,
+              workbenchEntrance,
+              workbenchE2eAcceptance,
+              lastWorkbenchE2e,
+              lastWorkbenchE2eFreshness,
               frontendAuthorizationAvailable: shellView !== 'unknown',
               workbenchLikelyVisible: workbenchVisible,
               workbenchOperation: workbenchVisible ? 'probe_context' : 'navigate_first',
               workbenchNextStep,
               inAppE2e: 'Open Companion Settings -> External Agent (MCP) -> 工作台验收 to run the same MCP workbench chain inside the product.',
               e2eCommand: 'npm run smoke:agent-mcp:e2e -- --config <hermes-mcp-import.json>',
+              waitLoginE2eCommand: 'npm run smoke:agent-mcp:e2e:wait-login -- --config <hermes-mcp-import.json>',
               recoveryTools: {
                 authRequired: workbenchLoginRecoveryTool,
               },
@@ -918,6 +1907,78 @@ function createAgentBodyMcpServer(deps) {
               ],
               note: workbenchNextStep,
             },
+          },
+          null,
+          2,
+        ),
+      };
+    }
+    if (uri === 'assetcutter://mcp/usage-audit') {
+      const summarize =
+        typeof deps.summarizeUsageAudit === 'function'
+          ? (days, limit) => deps.summarizeUsageAudit({ days, limit })
+          : () => null;
+      const current = summarize(1, 5000);
+      const windows = {
+        day1: current,
+        day7: summarize(7, 10000),
+        day30: summarize(30, 10000),
+      };
+      const cloudDraft =
+        current && current.cloudDraft && typeof current.cloudDraft === 'object'
+          ? current.cloudDraft
+          : buildCopilotUsageCloudDraft(current);
+      return {
+        uri,
+        mimeType: 'application/json',
+        text: JSON.stringify(
+          {
+            schemaVersion: 1,
+            generatedAt: new Date().toISOString(),
+            northStar:
+              'Copilot turns personal Agent execution into a governed team entrance by centralizing permission, usage, logs, and audit.',
+            scope: {
+              source: 'local_companion_audit_log',
+              localStore: 'agent-store/audit/*.jsonl',
+              includes: [
+                'Codex/Copilot turns with token usage reported by the local brain adapter.',
+                'By-brain and by-session local aggregates.',
+                'Traceability references through assetcutter://mcp/tool-executions.',
+              ],
+              excludes: [
+                'Cloud team quota enforcement.',
+                'Cross-device consolidated billing.',
+                'Raw prompts, secrets, MCP bearer tokens, cookie values, and tool arguments.',
+              ],
+            },
+            readiness: {
+              statusResource: 'assetcutter://mcp/server-status',
+              statusField: 'readiness.usageAudit',
+              toolExecutionsResource: 'assetcutter://mcp/tool-executions',
+              workflowPublicationResource: 'assetcutter://mcp/workflow-publication',
+              governanceTools: {
+                probeQuotaPolicy: 'ac.usage.probe_quota_policy',
+                uploadCloudDraft: 'ac.usage.upload_cloud_draft',
+                dryRunArgs: { days: 1, limit: 5000, dryRun: true },
+              },
+              currentPhase: current && current.currentPhase ? String(current.currentPhase) : 'local_usage_signal',
+              cloudEnforced: Boolean(current && current.cloudEnforced),
+              cloudDraft,
+              nextGovernanceStep:
+                'Connect this local summary to the cloud team quota/audit API so admins can set budgets, enforce limits, and review cross-device usage.',
+            },
+            current,
+            windows,
+            cloudDraft,
+            recommendedExternalAgentUse: [
+              'Read this resource before long-running or expensive workflow automation.',
+              'Use current.totals and windows.day7/day30 to estimate local Copilot load.',
+              'Use byBrain and bySession to identify which Agent/runtime is consuming the most tokens.',
+              'Use assetcutter://mcp/tool-executions for execution traceability, not for raw prompt recovery.',
+              'Call ac.usage.probe_quota_policy before treating quotaPolicy as current.',
+              'Call ac.usage.upload_cloud_draft with dryRun=true before requesting a confirm-risk real upload.',
+              'Do not treat local usage as cloud billing or enforced quota until the team quota API is connected.',
+            ],
           },
           null,
           2,
@@ -1590,6 +2651,31 @@ function createAgentBodyMcpServer(deps) {
     return new Promise((resolve) => setTimeout(resolve, n));
   }
 
+  async function waitForAccountLoggedIn(timeoutMs) {
+    const maxMs = Math.max(0, Number(timeoutMs) || 0);
+    if (!maxMs || typeof deps.getStateSummary !== 'function') {
+      if (maxMs > 0) await delay(maxMs);
+      return { ok: false, waitedMs: maxMs, account: null, fallbackDelay: true };
+    }
+    const startedAt = Date.now();
+    const deadline = startedAt + maxMs;
+    let lastAccount = null;
+    while (Date.now() <= deadline) {
+      try {
+        const state = await deps.getStateSummary();
+        lastAccount = state && typeof state.account === 'object' ? state.account : null;
+        if (lastAccount && lastAccount.loggedIn === true) {
+          return { ok: true, waitedMs: Date.now() - startedAt, account: lastAccount };
+        }
+      } catch {
+        /* keep polling until timeout */
+      }
+      if (Date.now() >= deadline) break;
+      await delay(Math.min(2000, Math.max(250, deadline - Date.now())));
+    }
+    return { ok: false, waitedMs: Date.now() - startedAt, account: lastAccount };
+  }
+
   function isToolSuccess(call) {
     return Boolean(call && call.ok && call.json && call.json.result && call.json.result.isError === false);
   }
@@ -1603,9 +2689,25 @@ function createAgentBodyMcpServer(deps) {
 
   function chooseWorkbenchPreset(context) {
     const presets = Array.isArray(context && context.capabilityPresets) ? context.capabilityPresets : [];
+    const direct = presets.filter((p) => p && p.directRunSupported === true && p.requiresImage !== true);
+    const isLightTextPreset = (preset) => {
+      const text = JSON.stringify({
+        id: preset && preset.id,
+        label: preset && preset.label,
+        name: preset && preset.name,
+        kind: preset && preset.kind,
+        category: preset && preset.category,
+        outputKind: preset && preset.outputKind,
+        acceptsText: preset && preset.acceptsText,
+      }).toLowerCase();
+      if (/video|3d|image|photo|render|generate_video|generate_image|t2i|i2v|text[_-]?to[_-]?image/.test(text)) return false;
+      return preset && (preset.acceptsText === true || /text|note|summary|summar|caption|verify|smoke/.test(text));
+    };
     return (
-      presets.find((p) => p && p.directRunSupported === true && p.acceptsText === true && p.requiresImage !== true) ||
-      presets.find((p) => p && p.directRunSupported === true && p.requiresImage !== true) ||
+      direct.find((p) => p && p.id === AGENT_WORKBENCH_SMOKE_PRESET_ID) ||
+      direct.find(isLightTextPreset) ||
+      direct.find((p) => p && p.acceptsText === true) ||
+      direct[0] ||
       null
     );
   }
@@ -1654,14 +2756,14 @@ function createAgentBodyMcpServer(deps) {
     const state = status();
     const settings = deps.readSettings();
     const endpoint = `http://${MCP_BIND}:${runningPort || settings.mcpPort || DEFAULT_MCP_PORT}/mcp`;
-    if (!state.enabled) return { ok: false, endpoint, checkedAt, failedStep: 'mcp.enabled', errorCode: 'MCP_DISABLED', nextStep: '请先开启 MCP 控制本平台。' };
-    if (!state.running) return { ok: false, endpoint, checkedAt, failedStep: 'mcp.running', errorCode: 'MCP_NOT_RUNNING', nextStep: '请保存设置或重启本地伴侣，让 MCP 服务启动。' };
-    if (!settings.mcpToken) return { ok: false, endpoint, checkedAt, failedStep: 'mcp.token', errorCode: 'MCP_TOKEN_MISSING', nextStep: '请重新生成 MCP Token 后重试。' };
+    if (!state.enabled) return { ok: false, endpoint, checkedAt, failedStep: 'mcp.enabled', errorCode: 'MCP_DISABLED', nextStep: '???? MCP ??????' };
+    if (!state.running) return { ok: false, endpoint, checkedAt, failedStep: 'mcp.running', errorCode: 'MCP_NOT_RUNNING', nextStep: '?????????????? MCP ?????' };
+    if (!settings.mcpToken) return { ok: false, endpoint, checkedAt, failedStep: 'mcp.token', errorCode: 'MCP_TOKEN_MISSING', nextStep: '????? MCP Token ????' };
 
     const steps = [];
     const toolsCall = await requestJsonRpc({ jsonrpc: '2.0', id: 'workbench-e2e-tools', method: 'tools/list', params: {} }, 10000);
     if (!toolsCall.ok || !toolsCall.json || toolsCall.json.error) {
-      return e2eFail('tools/list', toolsCall, 'MCP 握手失败，请先运行协议自检。');
+      return e2eFail('tools/list', toolsCall, 'MCP ??????????????');
     }
     const tools = Array.isArray(toolsCall.json.result && toolsCall.json.result.tools) ? toolsCall.json.result.tools : [];
     const advertised = new Set(tools.map((t) => t && t.name).filter(Boolean));
@@ -1674,7 +2776,7 @@ function createAgentBodyMcpServer(deps) {
         checkedAt,
         failedStep: 'tools.required',
         errorCode: 'MCP_WORKBENCH_TOOLS_MISSING',
-        nextStep: `缺少工作台工具：${missing.join(', ')}。请检查工具注册。`,
+          nextStep: `????????${missing.join(', ')}?????????`,
         missingTools: missing,
       };
     }
@@ -1696,7 +2798,7 @@ function createAgentBodyMcpServer(deps) {
           30000,
         );
         if (!isToolSuccess(recoveryCall)) {
-          return e2eFail('ac.shell.navigate', recoveryCall, '请手动打开工作台登录后重试。');
+          return e2eFail('ac.shell.navigate', recoveryCall, '??????????????');
         }
         steps.push({
           id: 'recovery_tool',
@@ -1705,7 +2807,23 @@ function createAgentBodyMcpServer(deps) {
           arguments: recoveryTool.arguments,
           waitMs: recoveryWaitMs,
         });
-        if (recoveryWaitMs > 0) await delay(recoveryWaitMs);
+        if (recoveryWaitMs > 0) {
+          const loginWait = await waitForAccountLoggedIn(recoveryWaitMs);
+          steps.push({
+            id: 'account_login_wait',
+            ok: Boolean(loginWait.ok),
+            waitedMs: loginWait.waitedMs,
+            fallbackDelay: Boolean(loginWait.fallbackDelay),
+            account: loginWait.account
+              ? {
+                  loggedIn: Boolean(loginWait.account.loggedIn),
+                  partition: loginWait.account.partition || '',
+                  cookieCount: Number(loginWait.account.cookieCount) || 0,
+                  hasAuthCookie: Boolean(loginWait.account.hasAuthCookie),
+                }
+              : null,
+          });
+        }
         readyCall = await callMcpTool(
           'ac.workbench.ensure_ready',
           { requireProject: false },
@@ -1714,7 +2832,7 @@ function createAgentBodyMcpServer(deps) {
         );
       }
       if (!isToolSuccess(readyCall)) {
-        const failed = e2eFail('ac.workbench.ensure_ready', readyCall, '请打开工作台并完成登录后重试。');
+        const failed = e2eFail('ac.workbench.ensure_ready', readyCall, '???????????????');
         failed.steps = steps;
         return failed;
       }
@@ -1736,12 +2854,12 @@ function createAgentBodyMcpServer(deps) {
     if (!projectId) {
       const createCall = await callMcpTool(
         'ac.workbench.create_project',
-        { name: `MCP 验收 ${new Date().toISOString().replace(/[:.]/g, '-')}` },
+        { name: `MCP ?? ${new Date().toISOString().replace(/[:.]/g, '-')}` },
         'workbench-e2e-create-project',
         30000,
       );
       if (!isToolSuccess(createCall)) {
-        return e2eFail('ac.workbench.create_project', createCall, '请确认当前账号有创建项目权限。');
+        return e2eFail('ac.workbench.create_project', createCall, '???????????????');
       }
       const created = toolStructured(createCall);
       projectId = String(created.projectId || (created.project && created.project.id) || '').trim();
@@ -1752,7 +2870,7 @@ function createAgentBodyMcpServer(deps) {
           checkedAt,
           failedStep: 'ac.workbench.create_project',
           errorCode: 'PROJECT_ID_MISSING',
-          nextStep: '创建项目成功但没有返回 projectId，请检查桥接返回结构。',
+          nextStep: '??????????? projectId???????????',
         };
       }
       steps.push({ id: 'create_project', ok: true, detail: projectId });
@@ -1768,7 +2886,7 @@ function createAgentBodyMcpServer(deps) {
         checkedAt,
         failedStep: 'capability.preset',
         errorCode: 'DIRECT_RUN_PRESET_MISSING',
-        nextStep: '当前工作台没有可直接运行的文本能力预设，请先添加或开放 directRunSupported 能力。',
+        nextStep: '??????????????????????????? directRunSupported ???',
       };
     }
     steps.push({ id: 'preset', ok: true, detail: preset.id });
@@ -1778,13 +2896,13 @@ function createAgentBodyMcpServer(deps) {
       {
         projectId,
         presetId: preset.id,
-        inputText: 'MCP 验收：请生成一句 AssetCutter 工作台链路已打通的简短说明。',
+        inputText: 'MCP ???????? AssetCutter ??????????????',
       },
       'workbench-e2e-run-capability',
       120000,
     );
     if (!isToolSuccess(runCall)) {
-      return e2eFail('ac.workbench.run_capability', runCall, '请确认该能力支持直接运行，并检查模型/额度/输入要求。');
+      return e2eFail('ac.workbench.run_capability', runCall, '???????????????????????????');
     }
     const run = toolStructured(runCall);
     const assetId = String(run.assetId || (run.output && run.output.assetId) || '').trim();
@@ -1795,7 +2913,7 @@ function createAgentBodyMcpServer(deps) {
         checkedAt,
         failedStep: 'ac.workbench.run_capability',
         errorCode: 'RUN_OUTPUT_MISSING',
-        nextStep: '能力运行成功但没有返回 assetId/resultKey，请检查桥接输出结构。',
+        nextStep: '??????????? assetId/resultKey???????????',
         run,
       };
     }
@@ -1808,7 +2926,7 @@ function createAgentBodyMcpServer(deps) {
       30000,
     );
     if (!isToolSuccess(listCall)) {
-      return e2eFail('ac.workbench.list_assets', listCall, '请确认项目资产列表可读取。');
+      return e2eFail('ac.workbench.list_assets', listCall, '?????????????');
     }
     const list = toolStructured(listCall);
     const assets = Array.isArray(list.assets) ? list.assets : [];
@@ -1819,7 +2937,7 @@ function createAgentBodyMcpServer(deps) {
         checkedAt,
         failedStep: 'ac.workbench.list_assets',
         errorCode: 'CREATED_ASSET_NOT_LISTED',
-        nextStep: '能力产物没有出现在资产列表，请检查持久化和列表过滤条件。',
+        nextStep: '????????????????????????????',
         assetId,
       };
     }
@@ -1832,7 +2950,7 @@ function createAgentBodyMcpServer(deps) {
       30000,
     );
     if (!isToolSuccess(getCall)) {
-      return e2eFail('ac.workbench.get_asset', getCall, '请确认新资产详情可读取。');
+      return e2eFail('ac.workbench.get_asset', getCall, '????????????');
     }
     const detail = toolStructured(getCall);
     if (!detail || (!detail.text && !detail.resultMeta && !detail.media)) {
@@ -1842,7 +2960,7 @@ function createAgentBodyMcpServer(deps) {
         checkedAt,
         failedStep: 'ac.workbench.get_asset',
         errorCode: 'ASSET_DETAIL_EMPTY',
-        nextStep: '资产详情缺少文本或结果元数据，请检查 get_asset 返回结构。',
+        nextStep: '?????????????????? get_asset ?????',
         assetId,
       };
     }
@@ -1857,7 +2975,7 @@ function createAgentBodyMcpServer(deps) {
       assetId,
       resultKey: run.resultKey,
       steps,
-      nextStep: 'MCP 工作台链路已通过验收，外部 agent 可以按 ensure_ready → run_capability → list_assets → get_asset 调用。',
+      nextStep: 'MCP ????????????? Agent ??? ensure_ready -> run_capability -> list_assets -> get_asset ???',
     };
   }
 
@@ -1925,6 +3043,8 @@ function createAgentBodyMcpServer(deps) {
     regenerateToken,
     probeSelf,
     runWorkbenchE2eSelf,
+    summarizeWorkbenchEntranceState,
+    summarizeWorkflowPublicationState,
     ensureMcpToken,
     buildMcpClientConfig,
     DEFAULT_MCP_PORT,

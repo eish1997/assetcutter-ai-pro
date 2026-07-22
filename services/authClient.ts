@@ -1,5 +1,5 @@
-import { apiUrl } from './apiBase';
-import { requestJson } from './httpClient';
+import { apiUrl, authApiDirectUrl } from './apiBase';
+import { HttpRequestError, requestJson } from './httpClient';
 
 export type AuthRole = 'user' | 'admin';
 
@@ -31,6 +31,27 @@ export function canAccessAdminPanel(user: AuthUser | null | undefined): boolean 
 
 type AuthResponse = { user: AuthUser };
 
+let preferDirectAuthApi = false;
+
+function shouldRetryAuthDirect(path: string, error: unknown): boolean {
+  if (!(error instanceof HttpRequestError) || error.status !== 0) return false;
+  const sameOriginUrl = apiUrl(path);
+  const directUrl = authApiDirectUrl(path);
+  return sameOriginUrl === path && directUrl !== sameOriginUrl;
+}
+
+async function requestAuthJson<T>(path: string, init?: RequestInit): Promise<T> {
+  if (preferDirectAuthApi) return requestJson<T>(authApiDirectUrl(path), init);
+  try {
+    return await requestJson<T>(apiUrl(path), init);
+  } catch (error) {
+    if (!shouldRetryAuthDirect(path, error)) throw error;
+    const result = await requestJson<T>(authApiDirectUrl(path), init);
+    preferDirectAuthApi = true;
+    return result;
+  }
+}
+
 export type RegistrationPolicy = {
   mode: 'open' | 'invite_only';
   inviteRequired: boolean;
@@ -43,12 +64,12 @@ export type RegistrationInviteValidation = {
 };
 
 export async function fetchRegistrationPolicy() {
-  return requestJson<RegistrationPolicy>(apiUrl('/api/auth/registration-policy'), { cache: 'no-store' });
+  return requestAuthJson<RegistrationPolicy>('/api/auth/registration-policy', { cache: 'no-store' });
 }
 
 export async function validateRegistrationInvite(code: string) {
   const q = encodeURIComponent(String(code || '').trim());
-  return requestJson<RegistrationInviteValidation>(apiUrl(`/api/auth/invite/validate?code=${q}`), {
+  return requestAuthJson<RegistrationInviteValidation>(`/api/auth/invite/validate?code=${q}`, {
     cache: 'no-store',
   });
 }
@@ -64,24 +85,23 @@ export async function registerByEmail(
   if (staffInvite) body.staffInvite = staffInvite;
   const inviteCode = String(opts?.inviteCode || '').trim();
   if (inviteCode) body.inviteCode = inviteCode;
-  return requestJson<AuthResponse>(apiUrl('/api/auth/register'), {
+  return requestAuthJson<AuthResponse>('/api/auth/register', {
     method: 'POST',
     body: JSON.stringify(body),
   });
 }
 
 export async function loginByEmail(identifier: string, password: string) {
-  return requestJson<AuthResponse>(apiUrl('/api/auth/login'), {
+  return requestAuthJson<AuthResponse>('/api/auth/login', {
     method: 'POST',
     body: JSON.stringify({ identifier, password }),
   });
 }
 
 export async function logoutSession() {
-  return requestJson<{ ok: boolean }>(apiUrl('/api/auth/logout'), { method: 'POST' });
+  return requestAuthJson<{ ok: boolean }>('/api/auth/logout', { method: 'POST' });
 }
 
 export async function fetchMe() {
-  return requestJson<AuthResponse>(apiUrl('/api/auth/me'));
+  return requestAuthJson<AuthResponse>('/api/auth/me');
 }
-

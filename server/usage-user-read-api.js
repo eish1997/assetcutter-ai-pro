@@ -6,6 +6,7 @@ export const USER_USAGE_READ_HTTP_PATHS = Object.freeze([
   '/api/usage/summary',
   '/api/usage/events/list',
   '/api/usage/events/export',
+  '/api/usage/policy',
 ]);
 
 export function isUserUsageReadHttpPath(pathname) {

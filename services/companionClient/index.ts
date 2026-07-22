@@ -24,6 +24,7 @@ export {
   getCompanionAssetMeta,
   deleteCompanionAsset,
   revealCompanionAssetFolder,
+  revealCompanionAssetFolderWithProjectFallback,
   putCompanionAsset,
   fetchCompanionAssetBlob,
   fetchCompanionAssetForDownload,

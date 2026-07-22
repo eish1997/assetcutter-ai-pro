@@ -80,7 +80,7 @@ function sniffModelMimeFromBytes(bytes: Uint8Array, fileName?: string): string {
   const lower = String(fileName || '').toLowerCase();
   if (lower.endsWith('.glb')) return 'model/gltf-binary';
   if (lower.endsWith('.gltf')) return 'model/gltf+json';
-  if (lower.endsWith('.fbx')) return 'application/octet-stream';
+  if (lower.endsWith('.fbx')) return 'application/vnd.autodesk.fbx';
   if (lower.endsWith('.obj')) return 'model/obj';
   return 'application/octet-stream';
 }
@@ -116,6 +116,21 @@ function companionAssetProjectCacheKey(baseUrl: string, key: string): string {
   return `${normalizeCompanionBaseUrl(baseUrl)}\0${String(key || '').trim()}`;
 }
 
+export function legacyWorkflowCompanionAssetKeyCandidates(key: string): string[] {
+  const k = String(key || '').trim();
+  if (!k || k.startsWith('wf-')) return [];
+
+  const parts = k.split(/[\\/]+/).map((p) => p.trim()).filter(Boolean);
+  const out: string[] = [];
+  if (parts.length >= 2) {
+    out.push(workflowResultCompanionStorageKey(parts[0], parts.slice(1).join('_')));
+  } else if (parts.length === 1 && !/^[a-z][a-z0-9+.-]*:/i.test(parts[0])) {
+    out.push(workflowOriginalCompanionStorageKey(parts[0]));
+  }
+
+  return Array.from(new Set(out.filter((candidate) => candidate && candidate !== k)));
+}
+
 async function listCompanionProjectIdsForAssetFallback(baseUrl: string, preferredProjectId: string): Promise<string[]> {
   const base = normalizeCompanionBaseUrl(baseUrl);
   let p = companionProjectIdsByBase.get(base);
@@ -139,7 +154,7 @@ async function manifestHasCompanionAssetKey(baseUrl: string, projectId: string, 
   return Array.isArray(r.data.entries) && r.data.entries.some((e) => String(e?.key || '').trim() === key);
 }
 
-async function fetchCompanionAssetBlobWithProjectFallback(
+async function fetchCompanionAssetBlobWithProjectFallbackExact(
   baseUrl: string,
   projectId: string,
   key: string
@@ -176,6 +191,24 @@ async function fetchCompanionAssetBlobWithProjectFallback(
       companionAssetProjectByKey.set(cacheKey, candidateId);
       return got;
     }
+  }
+
+  return first;
+}
+
+async function fetchCompanionAssetBlobWithProjectFallback(
+  baseUrl: string,
+  projectId: string,
+  key: string
+): Promise<ReturnType<typeof fetchCompanionAssetBlob> extends Promise<infer T> ? T : never> {
+  const base = normalizeCompanionBaseUrl(baseUrl);
+  const k = String(key || '').trim();
+  const first = await fetchCompanionAssetBlobWithProjectFallbackExact(base, projectId, k);
+  if (first.ok || (first.status !== 404 && first.status !== 400)) return first;
+
+  for (const candidate of legacyWorkflowCompanionAssetKeyCandidates(k)) {
+    const got = await fetchCompanionAssetBlobWithProjectFallbackExact(base, projectId, candidate);
+    if (got.ok) return got;
   }
 
   return first;

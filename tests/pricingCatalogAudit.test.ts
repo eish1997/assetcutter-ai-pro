@@ -14,6 +14,7 @@ const EXPECTED_PUBLIC: Record<
   string,
   { credits: number; unitHint: string; category: 'text' | 'image' | '3d' | 'video' }
 > = {
+  'copilot.codex.tokens': { credits: 10, unitHint: 'times', category: 'text' },
   'llm.gemini.flash': { credits: 10, unitHint: '起', category: 'text' },
   'llm.gemini.pro': { credits: 15, unitHint: '起', category: 'text' },
   'llm.openai.gpt4o-mini': { credits: 10, unitHint: '起', category: 'text' },
@@ -59,6 +60,21 @@ describe('pricing catalog audit', () => {
   it('userCreditsPerUnit billing floor stays 1 for token SKUs without override', () => {
     const entry = DEFAULT_PRICE_CATALOG.find((e) => e.billingSku === 'llm.gemini.flash')!;
     expect(userCreditsPerUnit(entry)).toBe(1);
+  });
+
+  it('prices Copilot Codex token usage through the shared token quota path', () => {
+    const entry = DEFAULT_PRICE_CATALOG.find((e) => e.billingSku === 'copilot.codex.tokens')!;
+    expect(entry).toBeDefined();
+    expect(userCreditsPerUnit(entry)).toBe(1);
+    const quote = priceUsageQuote({
+      billingSku: 'copilot.codex.tokens',
+      meterKind: 'token',
+      quantityIn: 100,
+      quantityOut: 35,
+      quantity: 135,
+    });
+    expect(quote.creditsCharge).toBeGreaterThanOrEqual(1);
+    expect(quote.creditsFloor).toBe(1);
   });
 
   it('settlement quotes align with per-task/per-image catalog', () => {
