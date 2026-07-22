@@ -192,6 +192,18 @@ function extractImageUrl(detail: AiJobDetail): string | null {
     const value = usable(output[key]);
     if (value) return value;
   }
+  const outputImages = Array.isArray(output.images) ? output.images : [];
+  for (const item of outputImages) {
+    if (typeof item === 'string') {
+      const value = usable(item);
+      if (value) return value;
+      continue;
+    }
+    const obj = item && typeof item === 'object' ? item as Record<string, unknown> : null;
+    if (!obj) continue;
+    const value = imageUrlFromObject(obj);
+    if (value) return value;
+  }
   return null;
 }
 

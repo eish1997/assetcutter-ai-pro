@@ -486,4 +486,26 @@ describe('runUnifiedGeneration', () => {
       })
     ).resolves.toBe('https://files.example.com/public/ai-gateway-results/aijob_image_public_url/out.png');
   });
+
+  it('extracts image URLs from gateway output image arrays', async () => {
+    vi.mocked(createAiJob).mockResolvedValue({
+      job: {
+        id: 'aijob_image_output_images',
+        status: 'succeeded',
+        output: {
+          provider: 'volcengine-jimeng',
+          images: ['https://files.example.com/public/ai-gateway-results/aijob_image_output_images/out.png'],
+        },
+        artifacts: [],
+      },
+    } as unknown as Awaited<ReturnType<typeof createAiJob>>);
+
+    await expect(
+      runUnifiedImageGeneration({
+        prompt: 'clean package',
+        model: 'jimeng-image-t2i-v31',
+        uiSource: 'test',
+      })
+    ).resolves.toBe('https://files.example.com/public/ai-gateway-results/aijob_image_output_images/out.png');
+  });
 });

@@ -28,6 +28,27 @@ function parseDataUrl(value) {
   return { mimeType, buffer, bytes: buffer.length };
 }
 
+function looksLikeBareBase64Media(value) {
+  const text = nonEmptyString(value).replace(/\s/g, '');
+  if (text.length < 8000) return false;
+  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(text)) return false;
+  try {
+    const buffer = Buffer.from(text, 'base64');
+    return buffer.length > 0 && buffer.length <= MAX_ARCHIVE_BYTES;
+  } catch {
+    return false;
+  }
+}
+
+function parseInlineMedia(value) {
+  const dataUrl = parseDataUrl(value);
+  if (dataUrl) return dataUrl;
+  const text = nonEmptyString(value).replace(/\s/g, '');
+  if (!looksLikeBareBase64Media(text)) return null;
+  const buffer = Buffer.from(text, 'base64');
+  return { mimeType: 'image/png', buffer, bytes: buffer.length };
+}
+
 function archiveKeyFor(plan, mimeType) {
   const userId = nonEmptyString(plan?.job?.userId) || 'anonymous';
   const jobId = nonEmptyString(plan?.job?.id) || `aijob_${crypto.randomUUID()}`;
@@ -35,38 +56,42 @@ function archiveKeyFor(plan, mimeType) {
   return `public/ai-gateway-results/${encodeURIComponent(userId)}/${encodeURIComponent(jobId)}/${Date.now()}-${crypto.randomUUID()}.${ext}`;
 }
 
-async function archiveDataUrl(plan, value) {
-  const parsed = parseDataUrl(value);
+async function archiveInlineMedia(plan, value, archiveCache) {
+  const parsed = parseInlineMedia(value);
   if (!parsed || !isR2Configured()) return null;
+  const cacheKey = nonEmptyString(value).replace(/\s/g, '');
+  if (archiveCache?.has(cacheKey)) return archiveCache.get(cacheKey);
   const { publicUrl, objectKey } = await putPublicR2Object(archiveKeyFor(plan, parsed.mimeType), parsed.buffer, {
     contentType: parsed.mimeType,
   });
   if (!publicUrl) return null;
-  return {
+  const archived = {
     url: publicUrl,
     objectKey,
     mimeType: parsed.mimeType,
     bytes: parsed.bytes,
     archived: true,
   };
+  if (archiveCache && cacheKey) archiveCache.set(cacheKey, archived);
+  return archived;
 }
 
-async function replaceDataUrls(plan, value, depth = 0) {
+async function replaceDataUrls(plan, value, depth = 0, archiveCache = new Map()) {
   if (value == null || depth > 8) return value;
   if (typeof value === 'string') {
-    const archived = await archiveDataUrl(plan, value);
+    const archived = await archiveInlineMedia(plan, value, archiveCache);
     return archived?.url || value;
   }
   if (Array.isArray(value)) {
     const out = [];
-    for (const item of value) out.push(await replaceDataUrls(plan, item, depth + 1));
+    for (const item of value) out.push(await replaceDataUrls(plan, item, depth + 1, archiveCache));
     return out;
   }
   if (typeof value !== 'object') return value;
   const out = {};
   for (const [key, raw] of Object.entries(value)) {
     if (typeof raw === 'string') {
-      const archived = await archiveDataUrl(plan, raw);
+      const archived = await archiveInlineMedia(plan, raw, archiveCache);
       if (archived) {
         out[key] = archived.url;
         if (['url', 'dataUrl', 'imageUrl', 'previewUrl'].includes(key)) {
@@ -81,7 +106,7 @@ async function replaceDataUrls(plan, value, depth = 0) {
         continue;
       }
     }
-    out[key] = await replaceDataUrls(plan, raw, depth + 1);
+    out[key] = await replaceDataUrls(plan, raw, depth + 1, archiveCache);
   }
   return out;
 }
@@ -89,7 +114,8 @@ async function replaceDataUrls(plan, value, depth = 0) {
 export async function archiveAiGatewayJobMedia(plan) {
   if (!plan?.job || !isR2Configured()) return plan;
   const job = { ...plan.job };
-  if (job.output !== undefined) job.output = await replaceDataUrls(plan, job.output);
-  if (Array.isArray(job.artifacts)) job.artifacts = await replaceDataUrls(plan, job.artifacts);
+  const archiveCache = new Map();
+  if (job.output !== undefined) job.output = await replaceDataUrls(plan, job.output, 0, archiveCache);
+  if (Array.isArray(job.artifacts)) job.artifacts = await replaceDataUrls(plan, job.artifacts, 0, archiveCache);
   return { ...plan, job };
 }
