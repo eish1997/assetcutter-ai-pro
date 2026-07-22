@@ -2917,7 +2917,7 @@ const MainApp: React.FC = () => {
     imageBase64: string,
     task?: WorkflowPendingTask,
     multiviewImages?: WorkflowPendingTask['tripoMultiviewImages'],
-    options?: { forceNewTask?: boolean }
+    options?: { forceNewTask?: boolean; resumeExistingTask?: boolean }
   ) => {
     if (preset.category !== 'generate_3d' || !preset.generate3D) return;
     const g = normalizeGenerate3DPresetForRun(preset.generate3D);
@@ -3228,6 +3228,7 @@ const MainApp: React.FC = () => {
         multiviewImageDataUrls: multiviewImages,
         existingTaskId: recoverTaskId || undefined,
         forceNewTask,
+        resumeExistingTask: options?.resumeExistingTask === true,
       });
       const createdTaskId = createdTripoId;
       tripoCatchTaskId = createdTaskId;
@@ -3751,7 +3752,7 @@ const MainApp: React.FC = () => {
                           tripoRecoveryContext.imageBase64,
                           tripoRecoveryContext.task,
                           tripoRecoveryContext.multiviewImages,
-                          { forceNewTask: false }
+                          { forceNewTask: false, resumeExistingTask: true }
                         );
                       } finally {
                         setTripoRecoveryActionRunning(null);

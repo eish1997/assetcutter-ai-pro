@@ -906,7 +906,7 @@ const WorkflowSection: React.FC<{
     imageBase64: string,
     task?: WorkflowPendingTask,
     multiviewImages?: WorkflowPendingTask['tripoMultiviewImages'],
-    options?: { forceNewTask?: boolean }
+    options?: { forceNewTask?: boolean; resumeExistingTask?: boolean }
   ) => Promise<void> | void;
   /** 与设置页 `SystemConfig.modelText` 一致：能力理解 / gen_text / 切割视觉检测等 */
   textModelRegistryId?: string;

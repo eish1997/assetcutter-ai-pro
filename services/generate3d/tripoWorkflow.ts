@@ -93,10 +93,11 @@ export async function tripoWorkflowCreateOrResumeTaskId(params: {
   multiviewImageDataUrls?: Partial<Record<'front' | 'back' | 'left' | 'right', string>>;
   existingTaskId?: string;
   forceNewTask?: boolean;
+  resumeExistingTask?: boolean;
 }): Promise<{ taskId: string; resumed: boolean; aiGatewayJobId?: string }> {
   const forceNew = Boolean(params.forceNewTask);
   const existing = String(params.existingTaskId || '').trim();
-  if (existing && !forceNew) {
+  if (existing && !forceNew && params.resumeExistingTask === true) {
     return { taskId: existing, resumed: true };
   }
   const presetForInput = normalizeGenerate3DPresetForRun(params.preset.generate3D!);
