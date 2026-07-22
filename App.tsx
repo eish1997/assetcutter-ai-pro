@@ -3164,8 +3164,8 @@ const MainApp: React.FC = () => {
       }
       return;
     }
-    const tripoApiKey = getTripoApiKey() || AI_GATEWAY_TRIPO_PLATFORM_KEY;
-    const usingPlatformTripo = tripoApiKey === AI_GATEWAY_TRIPO_PLATFORM_KEY;
+    const tripoApiKey = AI_GATEWAY_TRIPO_PLATFORM_KEY;
+    const usingPlatformTripo = true;
     const taskId = addTask('GENERATE_3D', `${preset.label}（Tripo）`);
     let tripoCatchTaskId = '';
     let tripoCatchResumedFromExisting = false;
