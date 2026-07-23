@@ -7,6 +7,7 @@ import { previewSrcCacheFingerprint } from '../services/workflowImageThumb';
 import {
   workflowVersionTextThumbLines,
 } from '../services/workflowTextAsset';
+import { resolveParentVersionIdForInput } from '../services/vgp/vgpStore';
 import { WorkflowGridImage } from './ProgressivePreviewImage';
 import { AssetCardPreviewRenderer } from './workflow/AssetCardPreviewRenderer';
 import WorkflowVersionTextThumbCell from './workflow/WorkflowVersionTextThumbCell';
@@ -268,6 +269,7 @@ export type WorkflowStepNodeGraphOverlayProps = {
   onNodeMenuAction?: (action: WorkflowStepNodeGraphMenuAction, node: WorkflowStepNodeGraphNodeContext) => void;
   /** 当前资产在执行队列或 pending 中：在选中步骤下方追加占位节点并显示生成动画（不盖在原缩略图上） */
   pixelBusy?: boolean;
+  pixelBusyInputDisplayKeys?: string[];
 };
 
 /**
@@ -281,6 +283,7 @@ export function WorkflowStepNodeGraphOverlay({
   activePreviewTextureSrc = '',
   onNodeMenuAction,
   pixelBusy = false,
+  pixelBusyInputDisplayKeys = [],
 }: WorkflowStepNodeGraphOverlayProps) {
   const displayAsset = useMemo(() => ensureWorkflowAssetVgp(asset), [asset]);
   const vgp = displayAsset.vgp;
@@ -402,10 +405,20 @@ export function WorkflowStepNodeGraphOverlay({
     };
   }, [displayAsset, selectedId, vgp]);
 
+  const busyParentVersionId = useMemo(() => {
+    if (!pixelBusy || !vgp) return null;
+    const keys = pixelBusyInputDisplayKeys.map((key) => String(key || '').trim()).filter(Boolean);
+    for (const key of keys) {
+      const parentId = resolveParentVersionIdForInput(vgp, key);
+      if (parentId && positions[parentId]) return parentId;
+    }
+    return selectedId && positions[selectedId] ? selectedId : null;
+  }, [pixelBusy, pixelBusyInputDisplayKeys, positions, selectedId, vgp]);
+
   const generatingPlaceholder = useMemo(() => {
     const baseW = graphW > 0 ? graphW : 80;
     const baseH = graphH > 0 ? graphH : NODE + PAD_Y;
-    if (!pixelBusy || !vgp || ordered.length === 0 || !selectedId) {
+    if (!pixelBusy || !vgp || ordered.length === 0 || !busyParentVersionId) {
       return {
         contentW: baseW,
         contentH: baseH,
@@ -413,7 +426,7 @@ export function WorkflowStepNodeGraphOverlay({
         edgeD: null as string | null,
       };
     }
-    const p = positions[selectedId];
+    const p = positions[busyParentVersionId];
     if (!p) {
       return { contentW: baseW, contentH: baseH, box: null, edgeD: null };
     }
@@ -442,7 +455,7 @@ export function WorkflowStepNodeGraphOverlay({
     const midY = (y1 + y2) / 2;
     const edgeD = `M ${x1} ${y1} C ${x1} ${midY} ${x2} ${midY} ${x2} ${y2}`;
     return { contentW, contentH, box: { x, y }, edgeD };
-  }, [pixelBusy, vgp, ordered.length, selectedId, positions, graphW, graphH]);
+  }, [pixelBusy, vgp, ordered.length, busyParentVersionId, positions, graphW, graphH]);
 
   const canvasViewportRef = useRef<HTMLDivElement | null>(null);
   const [canvasMode, setCanvasMode] = useState(false);

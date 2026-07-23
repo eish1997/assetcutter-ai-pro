@@ -8014,6 +8014,30 @@ ${lineSvg}
     return map;
   }, [executingQueue, completedTaskIds]);
 
+  const busyInputDisplayKeysByAssetId = useMemo(() => {
+    const map = new Map<string, string[]>();
+    const push = (task: WorkflowPendingTask) => {
+      const assetId = String(task.assetId || '').trim();
+      if (!assetId) return;
+      const key = String(task.inputSourceDisplayKey || '').trim() || 'original';
+      const list = map.get(assetId) || [];
+      if (!list.includes(key)) {
+        list.push(key);
+        map.set(assetId, list);
+      }
+    };
+    if (executingQueue) {
+      for (const task of executingQueue.tasks) {
+        if (activeTaskIds.has(task.id) && !completedTaskIds.has(task.id)) push(task);
+      }
+      for (const task of executingQueue.tasks) {
+        if (!activeTaskIds.has(task.id) && !completedTaskIds.has(task.id)) push(task);
+      }
+    }
+    for (const task of pending) push(task);
+    return map;
+  }, [activeTaskIds, completedTaskIds, executingQueue, pending]);
+
   const executingQueueDoneCount = useMemo(() => {
     if (!executingQueue) return 0;
     return executingQueue.tasks.reduce((n, t) => n + (completedTaskIds.has(t.id) ? 1 : 0), 0);
@@ -15752,6 +15776,7 @@ ${lineSvg}
             activePreviewTextureSrc={lightboxTexturePreviewSrc}
             onNodeMenuAction={handleLightboxNodeGraphMenuAction}
             pixelBusy={busyAssetIds.has(lightboxAsset.id)}
+            pixelBusyInputDisplayKeys={busyInputDisplayKeysByAssetId.get(lightboxAsset.id) || []}
           />
         </React.Fragment>
       ) : null}

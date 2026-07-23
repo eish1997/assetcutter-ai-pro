@@ -96,6 +96,61 @@ describe('WorkflowStepNodeGraphOverlay', () => {
     expect(onSelectDisplayKey).not.toHaveBeenCalled();
   });
 
+  it('anchors the generating placeholder to the task input node instead of the selected node', async () => {
+    Object.defineProperty(window, 'matchMedia', {
+      writable: true,
+      value: vi.fn().mockReturnValue({
+        matches: false,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      }),
+    });
+    class ResizeObserverStub {
+      observe = vi.fn();
+      unobserve = vi.fn();
+      disconnect = vi.fn();
+    }
+    vi.stubGlobal('ResizeObserver', ResizeObserverStub);
+    const asset = {
+      ...modelAsset(),
+      displayKey: 'step_a',
+      results: { step_a: 'data:image/png;base64,STEP_A' },
+      resultOrder: ['step_a'],
+      vgp: {
+        ...modelAsset().vgp!,
+        headVersionId: 'v-step-a',
+        versionOrder: ['v-original', 'v-step-a'],
+        versionsById: {
+          ...modelAsset().vgp!.versionsById,
+          'v-step-a': {
+            id: 'v-step-a',
+            role: 'generated',
+            stepKey: 'step_a',
+            stepIndex: 1,
+            createdAt: 2,
+            parentVersionId: 'v-original',
+            semanticStateId: 's-original',
+            imageRef: { kind: 'result_key', key: 'step_a' },
+            lineageRootId: 'v-original',
+          },
+        },
+      },
+    } satisfies WorkflowAsset;
+
+    render(
+      <WorkflowStepNodeGraphOverlay
+        asset={asset}
+        getStepLabel={(key) => key}
+        onSelectDisplayKey={vi.fn()}
+        pixelBusy
+        pixelBusyInputDisplayKeys={['original']}
+      />
+    );
+
+    const placeholder = await screen.findByRole('status');
+    expect(placeholder.style.top).toBe('76px');
+  });
+
   it('toggles canvas mode from the preview tab event', async () => {
     render(
       <WorkflowStepNodeGraphOverlay
