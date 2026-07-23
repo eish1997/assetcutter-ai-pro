@@ -515,7 +515,7 @@ export async function runUnifiedImageGeneration(request: UnifiedImageGenerationR
   }
   if (created.job.status === 'failed' || created.job.status === 'cancelled') throw terminalError(created);
 
-  const timeoutMs = Math.max(30_000, Number(readEnv('VITE_AI_GATEWAY_IMAGE_POLL_TIMEOUT_MS') || 660_000));
+  const timeoutMs = Math.max(30_000, Number(readEnv('VITE_AI_GATEWAY_IMAGE_POLL_TIMEOUT_MS') || 720_000));
   let intervalMs = Math.max(1, Number(readEnv('VITE_AI_GATEWAY_IMAGE_POLL_INTERVAL_MS') || 2000));
   const startedAt = Date.now();
   let missingImageOutputDetail: AiJobDetail | null = null;
@@ -544,6 +544,21 @@ export async function runUnifiedImageGeneration(request: UnifiedImageGenerationR
   }
   if (missingImageOutputDetail) {
     throw new Error(`AI Gateway image job succeeded without image output (${imageOutputDebug(missingImageOutputDetail)})`);
+  }
+  try {
+    const finalDetail = await getMyAiJob(created.job.id);
+    lastDetail = finalDetail;
+    if (finalDetail.job.status === 'succeeded') {
+      const imageUrl = extractImageUrl(finalDetail);
+      if (imageUrl != null) {
+        rememberAiGatewayImageResult(imageUrl, finalDetail.job.id);
+        return imageUrl;
+      }
+      throw new Error(`AI Gateway image job succeeded without image output (${imageOutputDebug(finalDetail)})`);
+    }
+    if (finalDetail.job.status === 'failed' || finalDetail.job.status === 'cancelled') throw terminalError(finalDetail);
+  } catch (err) {
+    if (err instanceof Error && !/Invalid AI job id/i.test(err.message)) throw err;
   }
   throw new Error(imagePollTimeoutMessage(created, lastDetail, timeoutMs));
 }

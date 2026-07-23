@@ -546,4 +546,49 @@ describe('runUnifiedGeneration', () => {
     await vi.advanceTimersByTimeAsync(30_000);
     await assertion;
   });
+
+  it('uses the final gateway job failure when it appears at the image poll deadline', async () => {
+    vi.useFakeTimers();
+    process.env.VITE_AI_GATEWAY_IMAGE_POLL_INTERVAL_MS = '30000';
+    process.env.VITE_AI_GATEWAY_IMAGE_POLL_TIMEOUT_MS = '30';
+    vi.mocked(createAiJob).mockResolvedValue({
+      job: {
+        id: 'aijob_image_timeout_failed',
+        status: 'queued',
+        output: null,
+        artifacts: [],
+      },
+    } as unknown as Awaited<ReturnType<typeof createAiJob>>);
+    vi.mocked(getMyAiJob)
+      .mockResolvedValueOnce({
+        job: {
+          id: 'aijob_image_timeout_failed',
+          status: 'running',
+          output: null,
+          artifacts: [],
+        },
+      } as unknown as Awaited<ReturnType<typeof getMyAiJob>>)
+      .mockResolvedValueOnce({
+        job: {
+          id: 'aijob_image_timeout_failed',
+          status: 'failed',
+          error: {
+            code: 'AI_WORKER_PROXY_POLL_TIMEOUT',
+            message: 'AI Worker Proxy job polling timed out',
+          },
+          output: null,
+          artifacts: [],
+        },
+      } as unknown as Awaited<ReturnType<typeof getMyAiJob>>);
+
+    const runPromise = runUnifiedImageGeneration({
+      prompt: 'clean package',
+      model: 'gemini-3.1-flash-image',
+      uiSource: 'test',
+    });
+    const assertion = expect(runPromise).rejects.toThrow('AI Worker Proxy job polling timed out');
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(30_000);
+    await assertion;
+  });
 });
