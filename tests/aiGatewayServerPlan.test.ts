@@ -334,6 +334,30 @@ describe('server AI gateway job planning', () => {
     });
   });
 
+  it('normalizes data URL inline image payloads before AI worker proxy handoff', () => {
+    const plan = createAiGatewayJobPlan({
+      modality: 'image',
+      capability: 'workflow_image_edit',
+      provider: 'vertex-site',
+      model: 'gemini-2.5-flash-image',
+      input: {
+        upstreamModelId: 'gemini-2.5-flash-image',
+        contents: [
+          {
+            role: 'user',
+            parts: [
+              { text: 'make a white clay render' },
+              { inlineData: { mimeType: 'image/png', data: 'data:image/png;base64, QUJD\\nRA== ' } },
+            ],
+          },
+        ],
+        config: { imageConfig: { aspectRatio: '1:1' } },
+      },
+    });
+
+    expect(plan.adapterRequest.body.contents[0].parts[1].inlineData.data).toBe('QUJDRA==');
+  });
+
   it('upscales explicit small Volcengine Ark Seedream image sizes to the upstream minimum pixel count', () => {
     const plan = createAiGatewayJobPlan({
       modality: 'image',

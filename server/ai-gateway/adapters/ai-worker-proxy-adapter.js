@@ -1,4 +1,5 @@
 import { AiGatewayValidationError } from '../job.js';
+import { normalizeInlineDataPayload } from '../inline-data-normalize.js';
 
 export const AI_WORKER_PROXY_ASYNC_PATH = '/proxy/gemini/async';
 
@@ -33,7 +34,7 @@ export function buildAiWorkerProxyAsyncRequest(job, route) {
 
   const input = job.input || {};
   const model = requireValue(input.upstreamModelId || input.model || job.model, 'model');
-  const contents = requireValue(input.contents, 'input.contents');
+  const contents = normalizeInlineDataPayload(requireValue(input.contents, 'input.contents'));
   const body = {
     model,
     contents,

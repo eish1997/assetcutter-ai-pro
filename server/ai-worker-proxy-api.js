@@ -16,6 +16,7 @@ import { ProxyAgent, setGlobalDispatcher } from 'undici';
 import { GoogleGenAI } from '@google/genai';
 import { handleAiGatewayRequest, updateAiGatewayJobStatus } from './ai-gateway/http-handler.js';
 import { aiGatewayHealthSnapshot } from './ai-gateway/health.js';
+import { normalizeInlineDataPayload } from './ai-gateway/inline-data-normalize.js';
 import {
   AI_WORKER_PROXY_MAX_BODY_BYTES as MAX_BODY_BYTES,
   BODY_TOO_LARGE_MESSAGE,
@@ -370,7 +371,7 @@ async function proxyVertexGenerateContent(model, contents, config) {
   const ai = getVertexAI(model, { apiKey: agentPlatformApiKey });
   const response = await ai.models.generateContent({
     model: model || DEFAULT_GEMINI_TEXT_MODEL,
-    contents,
+    contents: normalizeInlineDataPayload(contents),
     config: mergedConfig,
   });
   const text = typeof response.text === 'string' ? response.text : '';
@@ -619,7 +620,7 @@ async function proxyGenerateContent(model, contents, config) {
     ai = new GoogleGenAI({ apiKey: key, vertexai: false });
     const response = await ai.models.generateContent({
       model: model || DEFAULT_GEMINI_TEXT_MODEL,
-      contents,
+      contents: normalizeInlineDataPayload(contents),
       config: mergedConfig,
     });
     const text = typeof response.text === 'string' ? response.text : '';

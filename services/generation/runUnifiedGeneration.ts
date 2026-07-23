@@ -211,7 +211,7 @@ function inlineDataFromDataUrl(input: string): { mimeType: string; data: string 
   const raw = String(input || '').trim();
   if (!raw) return null;
   const matched = raw.match(/^data:([^;,]+);base64,(.+)$/i);
-  if (matched) return { mimeType: matched[1] || 'image/png', data: matched[2] || '' };
+  if (matched) return { mimeType: matched[1] || 'image/png', data: (matched[2] || '').replace(/\\r|\\n/g, '').replace(/\s+/g, '') };
   const stripped = raw.replace(/\s/g, '');
   if (stripped.length >= 64 && /^[A-Za-z0-9+/]+=*$/.test(stripped)) {
     return { mimeType: 'image/png', data: stripped };
