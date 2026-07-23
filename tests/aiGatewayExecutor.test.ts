@@ -18,11 +18,60 @@ function imageJobBody(id: string) {
   };
 }
 
+function imageEditJobBody(id: string) {
+  return {
+    id,
+    modality: 'image',
+    capability: 'workflow_image_edit',
+    model: 'gemini-3-pro-image-preview',
+    input: {
+      contents: [
+        {
+          role: 'user',
+          parts: [
+            { text: 'make a clean product render' },
+            { inlineData: { mimeType: 'image/png', data: 'QUJDRA==' } },
+          ],
+        },
+      ],
+      config: { responseModalities: ['IMAGE'] },
+      costWeight: 2,
+    },
+  };
+}
+
 function proxyResponse(body: unknown, ok = true, status = 202) {
   return {
     ok,
     status,
     text: vi.fn().mockResolvedValue(typeof body === 'string' ? body : JSON.stringify(body)),
+  };
+}
+
+function redactAdapterInlineData(plan: any) {
+  if (!plan?.adapterRequest?.body?.contents?.[0]?.parts?.[1]?.inlineData) return plan;
+  return {
+    ...plan,
+    adapterRequest: {
+      ...plan.adapterRequest,
+      body: {
+        ...plan.adapterRequest.body,
+        contents: [
+          {
+            ...plan.adapterRequest.body.contents[0],
+            parts: [
+              plan.adapterRequest.body.contents[0].parts[0],
+              {
+                inlineData: {
+                  ...plan.adapterRequest.body.contents[0].parts[1].inlineData,
+                  data: '[REDACTED_MEDIA:8 chars]',
+                },
+              },
+            ],
+          },
+        ],
+      },
+    },
   };
 }
 
@@ -154,6 +203,40 @@ describe('AI gateway execution handoff', () => {
       targetPath: '/proxy/gemini/async',
     });
     await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(1));
+  });
+
+  it('uses the unredacted request body for background image edit execution', async () => {
+    process.env.AI_GATEWAY_EXECUTION_ENABLED = 'true';
+    process.env.AI_WORKER_PROXY_CREDITS_HMAC_SECRET = 'test_handoff_secret';
+    vi.spyOn(AbortSignal, 'timeout').mockImplementation(() => new AbortController().signal);
+    const baseStore = createInMemoryAiJobStore();
+    const store = {
+      ...baseStore,
+      async update(id: string, patch: any, options?: any) {
+        const updated = await baseStore.update(id, patch, options);
+        return redactAdapterInlineData(updated);
+      },
+    };
+    const fetchImpl = vi.fn().mockImplementation(() => new Promise(() => {}));
+
+    const result = await createAuthAiGatewayJob(
+      { headers: { cookie: 'ac_session=session_1' } },
+      imageEditJobBody('aijob_exec_background_image_edit'),
+      user,
+      {
+        store,
+        fetchImpl,
+        awaitExecution: false,
+        evaluateCreditsGate: mockedReservedCreditsGate('aijob:aijob_exec_background_image_edit'),
+      }
+    );
+
+    expect(result.status).toBe(202);
+    await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(1));
+    const [, init] = fetchImpl.mock.calls[0];
+    const body = JSON.parse(init.body);
+    expect(body.contents[0].parts[1].inlineData.data).toBe('QUJDRA==');
+    expect(body.contents[0].parts[1].inlineData.data).not.toContain('REDACTED_MEDIA');
   });
 
   it('marks the job failed when proxy handoff is rejected with a non-transient error', async () => {

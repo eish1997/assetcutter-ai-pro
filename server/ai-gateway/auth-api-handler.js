@@ -1,5 +1,6 @@
 import { evaluateAiGatewayCreditsGate } from './credits-gate.js';
 import { AiGatewayValidationError, cancelAiGatewayWorkerExecution, createAiGatewayJobPlan } from './index.js';
+import { applyAiJobStatusPatch } from './job.js';
 import { persistentAiGatewayJobStore } from './persistent-job-store.js';
 import { AiGatewayRouteError } from './provider-router.js';
 import { settleAiGatewayJobCredits, settlementMetadataPatch } from './settlement.js';
@@ -204,7 +205,7 @@ export async function createAuthAiGatewayJob(req, body, user, options = {}) {
       const execution = await startAiGatewayJobExecution(plan, executionOptions);
       plan = execution.plan || plan;
     } else {
-      plan = await store.update(plan.job.id, {
+      const queuedPatch = {
         status: 'queued',
         error: null,
         metadata: {
@@ -216,8 +217,10 @@ export async function createAuthAiGatewayJob(req, body, user, options = {}) {
             background: true,
           },
         },
-      });
-      startAuthAiGatewayExecutionInBackground(plan, executionOptions);
+      };
+      const executionPlan = applyAiJobStatusPatch(plan, queuedPatch);
+      plan = await store.update(plan.job.id, queuedPatch);
+      startAuthAiGatewayExecutionInBackground(executionPlan, executionOptions);
     }
   }
   return { status: 202, body: publicAuthAiJobDetail(plan) };
