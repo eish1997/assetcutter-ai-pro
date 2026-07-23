@@ -1,13 +1,29 @@
 // @vitest-environment jsdom
 
-import { cleanup, render, screen } from '@testing-library/react';
-import { afterEach, describe, expect, it } from 'vitest';
+import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import type { ReactNode } from 'react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { WorkflowAsset } from '../types';
 import { AssetCardPreviewRenderer } from '../components/workflow/AssetCardPreviewRenderer';
+import { captureWorkflowModelThumbnailDataUrl } from '../services/workflowModelPreviewCapture';
+
+vi.mock('../components/preview', () => ({
+  getLazyImagePreviewViewer: () =>
+    function MockModel3DViewer({ modelSrc }: { modelSrc: string }) {
+      return <canvas data-testid="asset-card-model3d" data-model-src={modelSrc} />;
+    },
+  PreviewViewerErrorBoundary: ({ children }: { children: ReactNode }) => <>{children}</>,
+  PreviewViewerFallback: ({ label }: { label: string }) => <div>{label}</div>,
+}));
+
+vi.mock('../services/workflowModelPreviewCapture', () => ({
+  captureWorkflowModelThumbnailDataUrl: vi.fn(() => Promise.resolve(null)),
+}));
 
 afterEach(() => {
   cleanup();
+  vi.mocked(captureWorkflowModelThumbnailDataUrl).mockResolvedValue(null);
 });
 
 function makeAsset(partial?: Partial<WorkflowAsset>): WorkflowAsset {
@@ -104,6 +120,56 @@ describe('AssetCardPreviewRenderer', () => {
 
     expect(screen.getByText('glb + fbx')).toBeTruthy();
     expect(document.querySelector('img')?.getAttribute('src')).toBe('data:image/png;base64,POSTER');
+  });
+
+  it('renders an inline 3D preview for imported models before a thumbnail is captured', () => {
+    render(
+      <AssetCardPreviewRenderer
+        asset={makeAsset({
+          original: 'data:image/svg+xml;base64,PLACEHOLDER',
+          displayKey: 'original',
+          stepModelUrls: { original: ['blob:local-model'] },
+          stepModelFormats: { original: ['fbx'] },
+          modelUrls: ['blob:local-model'],
+          modelSourceName: 'temp.fbx',
+        })}
+        previewSrc="data:image/svg+xml;base64,PLACEHOLDER"
+        cacheKey="local-model"
+      />
+    );
+
+    expect(screen.getByTestId('asset-card-model3d').getAttribute('data-model-src')).toBe('blob:local-model');
+    expect(screen.getByText('fbx')).toBeTruthy();
+  });
+
+  it('notifies when a model thumbnail is captured for persistence', async () => {
+    vi.mocked(captureWorkflowModelThumbnailDataUrl).mockResolvedValueOnce('data:image/jpeg;base64,THUMB');
+    const onModelThumbnailCaptured = vi.fn();
+
+    render(
+      <AssetCardPreviewRenderer
+        asset={makeAsset({
+          id: 'asset-model-thumb',
+          original: 'data:image/svg+xml;base64,PLACEHOLDER',
+          displayKey: 'original',
+          stepModelUrls: { original: ['blob:model-thumb'] },
+          stepModelFormats: { original: ['obj'] },
+          modelUrls: ['blob:model-thumb'],
+          modelSourceName: 'person.obj',
+        })}
+        previewSrc="data:image/svg+xml;base64,PLACEHOLDER"
+        cacheKey="model-thumb"
+        onModelThumbnailCaptured={onModelThumbnailCaptured}
+      />
+    );
+
+    await waitFor(() => {
+      expect(onModelThumbnailCaptured).toHaveBeenCalledWith(
+        'asset-model-thumb',
+        'original',
+        'data:image/jpeg;base64,THUMB'
+      );
+    });
   });
 
   it('renders audio assets with a waveform placeholder', () => {

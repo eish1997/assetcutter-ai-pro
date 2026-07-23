@@ -31,6 +31,8 @@ type Props = {
   getDisplayImage: (a: WorkflowAsset) => string;
   deferThumbnail?: boolean;
   thumbDecodePriority?: 'high' | 'low';
+  companionBaseUrl?: string;
+  companionProjectId?: string;
 };
 
 function WorkflowGroupCardStackPreviewsInner({
@@ -39,6 +41,8 @@ function WorkflowGroupCardStackPreviewsInner({
   getDisplayImage,
   deferThumbnail = false,
   thumbDecodePriority = 'low',
+  companionBaseUrl,
+  companionProjectId,
 }: Props) {
   const memberCount = resolveGroupMemberCount(groupAsset);
   if (memberCount <= 1) return null;
@@ -63,6 +67,8 @@ function WorkflowGroupCardStackPreviewsInner({
               thumbDecodePriority={thumbDecodePriority}
               imageFetchPriority="low"
               thumbMaxEdge={320}
+              companionBaseUrl={companionBaseUrl}
+              companionProjectId={companionProjectId}
               className="relative h-full w-full"
               imgClassName="block h-full w-full scale-110 object-cover blur-2xl brightness-[0.72] saturate-[0.85]"
               draggable={false}

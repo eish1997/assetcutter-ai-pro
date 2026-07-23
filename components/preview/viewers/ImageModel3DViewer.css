@@ -1,0 +1,146 @@
+.workflow-model-view-cube-host {
+  width: 88px;
+  height: 88px;
+  display: grid;
+  place-items: center;
+}
+
+.workflow-model-view-cube-scene {
+  width: 64px;
+  height: 64px;
+  perspective: 360px;
+  perspective-origin: 50% 50%;
+}
+
+.workflow-model-view-cube {
+  position: relative;
+  width: 64px;
+  height: 64px;
+  transform-style: preserve-3d;
+  transition: transform 0.08s linear;
+  --view-cube-corner-tilt: 0rad;
+  --view-cube-corner-turn: 0rad;
+}
+
+.workflow-model-view-cube-face,
+.workflow-model-view-cube-corner {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  border: 0;
+  padding: 0;
+  transform-style: preserve-3d;
+  pointer-events: auto;
+}
+
+.workflow-model-view-cube-face {
+  width: 42px;
+  height: 42px;
+  margin: -21px 0 0 -21px;
+  display: grid;
+  place-items: center;
+  border-radius: 7px;
+  background: rgba(242, 244, 248, 0.88);
+  color: rgba(13, 14, 18, 0.92);
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1;
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.72),
+    inset 0 -10px 18px rgba(95, 103, 116, 0.16),
+    0 4px 10px rgba(0, 0, 0, 0.26);
+  backface-visibility: visible;
+  cursor: pointer;
+  user-select: none;
+}
+
+.workflow-model-view-cube-face:hover {
+  background: rgba(255, 255, 255, 0.98);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.86),
+    0 0 0 2px rgba(255, 255, 255, 0.22),
+    0 8px 18px rgba(0, 0, 0, 0.28);
+}
+
+.workflow-model-view-cube-face:active {
+  filter: brightness(0.88);
+}
+
+.workflow-model-view-cube-face--front {
+  transform: rotateY(90deg) translateZ(21px);
+}
+
+.workflow-model-view-cube-face--back {
+  transform: rotateY(-90deg) translateZ(21px);
+}
+
+.workflow-model-view-cube-face--right {
+  transform: translateZ(21px);
+}
+
+.workflow-model-view-cube-face--left {
+  transform: rotateY(180deg) translateZ(21px);
+}
+
+.workflow-model-view-cube-face--top {
+  transform: rotateX(90deg) translateZ(21px);
+}
+
+.workflow-model-view-cube-face--bottom {
+  transform: rotateX(-90deg) translateZ(21px);
+}
+
+.workflow-model-view-cube-corner {
+  width: 14px;
+  height: 14px;
+  margin: -7px 0 0 -7px;
+  border-radius: 9999px;
+  background:
+    radial-gradient(circle at 34% 28%, rgba(255, 255, 255, 0.98), rgba(226, 232, 240, 0.9) 38%, rgba(128, 138, 152, 0.78) 100%);
+  box-shadow:
+    inset -2px -3px 5px rgba(28, 31, 38, 0.2),
+    0 0 0 1px rgba(16, 17, 20, 0.3),
+    0 2px 7px rgba(0, 0, 0, 0.36);
+  backface-visibility: visible;
+  cursor: pointer;
+}
+
+.workflow-model-view-cube-corner:hover {
+  background:
+    radial-gradient(circle at 34% 28%, #ffffff, rgba(248, 250, 252, 0.96) 42%, rgba(164, 174, 188, 0.86) 100%);
+  box-shadow:
+    0 0 0 2px rgba(255, 255, 255, 0.24),
+    0 3px 10px rgba(0, 0, 0, 0.36);
+}
+
+.workflow-model-view-cube-corner--ftr {
+  transform: translate3d(21px, -21px, 21px) rotateY(var(--view-cube-corner-turn)) rotateX(var(--view-cube-corner-tilt));
+}
+
+.workflow-model-view-cube-corner--ftl {
+  transform: translate3d(21px, -21px, -21px) rotateY(var(--view-cube-corner-turn)) rotateX(var(--view-cube-corner-tilt));
+}
+
+.workflow-model-view-cube-corner--fbr {
+  transform: translate3d(21px, 21px, 21px) rotateY(var(--view-cube-corner-turn)) rotateX(var(--view-cube-corner-tilt));
+}
+
+.workflow-model-view-cube-corner--fbl {
+  transform: translate3d(21px, 21px, -21px) rotateY(var(--view-cube-corner-turn)) rotateX(var(--view-cube-corner-tilt));
+}
+
+.workflow-model-view-cube-corner--btr {
+  transform: translate3d(-21px, -21px, 21px) rotateY(var(--view-cube-corner-turn)) rotateX(var(--view-cube-corner-tilt));
+}
+
+.workflow-model-view-cube-corner--btl {
+  transform: translate3d(-21px, -21px, -21px) rotateY(var(--view-cube-corner-turn)) rotateX(var(--view-cube-corner-tilt));
+}
+
+.workflow-model-view-cube-corner--bbr {
+  transform: translate3d(-21px, 21px, 21px) rotateY(var(--view-cube-corner-turn)) rotateX(var(--view-cube-corner-tilt));
+}
+
+.workflow-model-view-cube-corner--bbl {
+  transform: translate3d(-21px, 21px, -21px) rotateY(var(--view-cube-corner-turn)) rotateX(var(--view-cube-corner-tilt));
+}

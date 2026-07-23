@@ -32,6 +32,7 @@ export type {
   AssetPreviewAdapter,
   AssetPreviewContext,
   AssetPreviewInspectorSection,
+  Model3DInspectionStats,
 } from './assetPreviewTypes';
 export {
   assetPreviewAdapterRegistry,

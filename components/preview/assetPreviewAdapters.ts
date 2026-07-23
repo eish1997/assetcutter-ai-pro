@@ -22,6 +22,43 @@ function variantLocation(context: AssetPreviewContext): string {
   );
 }
 
+function formatCount(value: number | undefined): string {
+  return Number.isFinite(value) ? Math.max(0, Math.round(value || 0)).toLocaleString('en-US') : '读取中';
+}
+
+function formatDimension(value: number | undefined): string {
+  if (!Number.isFinite(value)) return '读取中';
+  const rounded = Math.round((value || 0) * 1000) / 1000;
+  return Number.isInteger(rounded) ? String(rounded) : String(rounded.toFixed(3)).replace(/0+$/, '').replace(/\.$/, '');
+}
+
+function model3dStatsRows(context: AssetPreviewContext) {
+  const stats = context.model3dStats;
+  if (!stats) {
+    return [
+      { label: '格式', value: '读取中' },
+      { label: 'Mesh 数', value: '读取中' },
+      { label: '材质数', value: '读取中' },
+      { label: '贴图数', value: '读取中' },
+      { label: '顶点数', value: '读取中' },
+      { label: '三角面数', value: '读取中' },
+      { label: '尺寸', value: '读取中' },
+    ];
+  }
+  return [
+    { label: '格式', value: stats.format.toUpperCase() },
+    { label: 'Mesh 数', value: formatCount(stats.meshCount) },
+    { label: '材质数', value: formatCount(stats.materialCount) },
+    { label: '贴图数', value: formatCount(stats.textureCount) },
+    { label: '顶点数', value: formatCount(stats.vertexCount) },
+    { label: '三角面数', value: formatCount(stats.triangleCount) },
+    {
+      label: '尺寸',
+      value: `${formatDimension(stats.dimensions.width)} x ${formatDimension(stats.dimensions.height)} x ${formatDimension(stats.dimensions.depth)}`,
+    },
+  ];
+}
+
 function commonInspectorSections(context: AssetPreviewContext) {
   const variant = context.variant;
   return [
@@ -159,6 +196,11 @@ export const model3dPreviewAdapter: AssetPreviewAdapter = {
   ],
   getInspectorSections: (context) => [
     ...commonInspectorSections(context),
+    {
+      id: 'model3d-stats',
+      title: '当前资产信息',
+      rows: model3dStatsRows(context),
+    },
     {
       id: 'model3d-view',
       title: '3D 预览',

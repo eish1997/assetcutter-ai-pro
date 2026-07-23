@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import type { WorkflowAsset } from '../../types';
+import { resolveWorkflowStepModelUrls } from '../../services/workflowStepModels';
 import { resolveWorkflowAssetActiveVariant, resolveWorkflowAssetKind } from '../../services/workflowAssetVariants';
 import { workflowVersionTextThumbLines } from '../../services/workflowTextAsset';
 import { WorkflowGridImage } from '../ProgressivePreviewImage';
@@ -21,6 +22,9 @@ export type WorkflowLightboxAssetThumbStripProps = {
   onAddToComposeInput?: (asset: WorkflowAsset) => void | Promise<void>;
   canAddToComposeInput?: (asset: WorkflowAsset) => boolean;
   getMediaVariant?: (asset: WorkflowAsset) => 'image' | 'video';
+  onModelThumbnailCaptured?: (assetId: string, variantId: string, dataUrl: string) => void;
+  companionBaseUrl?: string;
+  companionProjectId?: string;
 };
 
 /**
@@ -39,6 +43,9 @@ export default function WorkflowLightboxAssetThumbStrip({
   onAddToComposeInput,
   canAddToComposeInput,
   getMediaVariant,
+  onModelThumbnailCaptured,
+  companionBaseUrl,
+  companionProjectId,
 }: WorkflowLightboxAssetThumbStripProps) {
   const activeBtnRef = useRef<HTMLButtonElement>(null);
   const [contextMenu, setContextMenu] = useState<{
@@ -89,6 +96,12 @@ export default function WorkflowLightboxAssetThumbStrip({
               const previewSrc = getPreviewSrc(asset);
               const activeVariant = resolveWorkflowAssetActiveVariant(asset);
               const activeKind = activeVariant?.kind ?? resolveWorkflowAssetKind(asset);
+              const hasModelPreview =
+                activeKind === 'model3d' ||
+                Boolean(activeVariant?.modelUrls?.some((url) => String(url || '').trim())) ||
+                resolveWorkflowStepModelUrls(asset, asset.displayKey || 'original').some((url) =>
+                  String(url || '').trim()
+                );
               const title = String((asset as { label?: unknown }).label || '').trim() || asset.id.slice(0, 8);
               const textThumb =
                 !String(previewSrc || '').trim()
@@ -125,7 +138,7 @@ export default function WorkflowLightboxAssetThumbStrip({
                       lines={textThumb}
                       textClassName="text-[7px] leading-[1.1] text-gray-300"
                     />
-                  ) : activeKind === 'model3d' ? (
+                  ) : hasModelPreview ? (
                     <AssetCardPreviewRenderer
                       asset={asset}
                       previewSrc={previewSrc}
@@ -133,6 +146,10 @@ export default function WorkflowLightboxAssetThumbStrip({
                       thumbMaxEdge={128}
                       deferThumbnail={false}
                       autoPlayVideo={active}
+                      onModelThumbnailCaptured={onModelThumbnailCaptured}
+                      companionBaseUrl={companionBaseUrl}
+                      companionProjectId={companionProjectId}
+                      compactBadges
                     />
                   ) : (
                     <WorkflowGridImage
@@ -141,6 +158,8 @@ export default function WorkflowLightboxAssetThumbStrip({
                       thumbMaxEdge={128}
                       mediaVariant={getMediaVariant?.(asset) ?? 'image'}
                       autoPlayVideo={active}
+                      companionBaseUrl={companionBaseUrl}
+                      companionProjectId={companionProjectId}
                       className="h-full w-full"
                       imgClassName="block h-full w-full object-cover"
                       alt=""

@@ -1,4 +1,5 @@
 import type { WorkflowAsset } from '../types';
+import type { WorkflowModelPbrTextureRewriteTarget } from './workflowModelPbrEdits';
 import { isWorkflowTextAsset, workflowAssetToInputText } from './workflowTextAsset';
 
 export const QUICK_COMPOSE_CURRENT_VIEW_LABEL = '当前画面';
@@ -15,6 +16,7 @@ export type QuickComposeDropSlot = {
   previewSrc: string;
   /** 无障碍 / 解析用，UI 默认不展示标题 */
   label: string;
+  modelPbrTextureRewriteTarget?: WorkflowModelPbrTextureRewriteTarget;
 };
 
 export type QuickComposeMentionCandidate = {
@@ -631,7 +633,7 @@ function segmentHintForMention(draft: string, mention: QuickComposeMention, all:
   const re = new RegExp(`@${escapeRegExp(mention.label)}`);
   const match = re.exec(draft);
   if (!match) return '';
-  let start = match.index + match[0].length;
+  const start = match.index + match[0].length;
   let end: number | null = null;
   for (const other of all) {
     if (other.id === mention.id) continue;

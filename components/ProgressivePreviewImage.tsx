@@ -7,6 +7,11 @@ import {
   shouldUsePreviewThumbnail,
   type PreviewThumbDecodePriority,
 } from '../services/workflowImageThumb';
+import {
+  fetchWorkflowPreviewThumbFromCompanion,
+  putWorkflowPreviewThumbToCompanion,
+  workflowPreviewThumbCompanionStorageKey,
+} from '../services/workflowPreviewThumbCompanion';
 
 /**
  * 缩略图 / 微图 data URL 的 **仅内存 LRU**（`thumb:` / `micro:` 前缀键）。
@@ -101,6 +106,8 @@ export type ProgressivePreviewImageProps = {
   title?: string;
   /** 直链模式（非渐进缩略）下全部 URL 加载失败时渲染 */
   directLoadFallback?: React.ReactNode;
+  companionBaseUrl?: string;
+  companionProjectId?: string;
 };
 
 /**
@@ -130,6 +137,8 @@ export const ProgressivePreviewImage = forwardRef<HTMLImageElement, ProgressiveP
       onClick,
       title,
       directLoadFallback,
+      companionBaseUrl,
+      companionProjectId,
     },
     ref
   ) {
@@ -201,6 +210,15 @@ export const ProgressivePreviewImage = forwardRef<HTMLImageElement, ProgressiveP
       const mKey = microCacheKey(cacheKey);
       const thumbHit = cacheGet(tKey) ?? cacheGet(cacheKey);
       const microHit = cacheGet(mKey);
+      const companionBase = String(companionBaseUrl || '').trim();
+      const companionProject = String(companionProjectId || '').trim();
+      const canUseCompanionThumbs = Boolean(companionBase && companionProject);
+      const companionThumbKey = canUseCompanionThumbs
+        ? workflowPreviewThumbCompanionStorageKey(cacheKey, 'thumb', thumbMaxEdge)
+        : '';
+      const companionMicroKey = canUseCompanionThumbs
+        ? workflowPreviewThumbCompanionStorageKey(cacheKey, 'micro', microEdge)
+        : '';
 
       let cancelled = false;
 
@@ -225,6 +243,9 @@ export const ProgressivePreviewImage = forwardRef<HTMLImageElement, ProgressiveP
           void createPreviewMicroThumbnail(s, microEdge, 0.62, 0.72, decodePri).then((m) => {
             if (cancelled) return;
             cacheSet(mKey, m);
+            if (companionMicroKey) {
+              void putWorkflowPreviewThumbToCompanion(companionBase, companionProject, companionMicroKey, m);
+            }
           });
         }
         return () => {
@@ -240,10 +261,14 @@ export const ProgressivePreviewImage = forwardRef<HTMLImageElement, ProgressiveP
       const thumbDoneRef = { current: false };
 
       const runThumb = () => {
+        if (thumbDoneRef.current) return;
         void createPreviewThumbnail(s, thumbMaxEdge, 0.82, decodePri).then(async (t) => {
-          if (cancelled) return;
+          if (cancelled || thumbDoneRef.current) return;
           thumbDoneRef.current = true;
           cacheSet(tKey, t);
+          if (companionThumbKey) {
+            void putWorkflowPreviewThumbToCompanion(companionBase, companionProject, companionThumbKey, t);
+          }
           thumbRevealSkipTransitionRef.current = !microPaintedRef.current;
 
           if (microPaintedRef.current) {
@@ -261,22 +286,67 @@ export const ProgressivePreviewImage = forwardRef<HTMLImageElement, ProgressiveP
         });
       };
 
-      if (!microHit) {
+      const runMicro = () => {
         void createPreviewMicroThumbnail(s, microEdge, 0.62, 0.72, decodePri).then((m) => {
           if (cancelled) return;
           cacheSet(mKey, m);
+          if (companionMicroKey) {
+            void putWorkflowPreviewThumbToCompanion(companionBase, companionProject, companionMicroKey, m);
+          }
           if (thumbDoneRef.current) return;
           microPaintedRef.current = true;
           setMicroSrc(m);
         });
+      };
+
+      if (!microHit) {
+        if (companionMicroKey) {
+          void fetchWorkflowPreviewThumbFromCompanion(companionBase, companionProject, companionMicroKey).then((m) => {
+            if (cancelled) return;
+            if (m) {
+              cacheSet(mKey, m);
+              if (thumbDoneRef.current) return;
+              microPaintedRef.current = true;
+              setMicroSrc(m);
+              return;
+            }
+            runMicro();
+          });
+        } else {
+          runMicro();
+        }
       }
 
-      runThumb();
+      if (companionThumbKey) {
+        void fetchWorkflowPreviewThumbFromCompanion(companionBase, companionProject, companionThumbKey).then(async (t) => {
+          if (cancelled) return;
+          if (!t) {
+            runThumb();
+            return;
+          }
+          if (thumbDoneRef.current) return;
+          thumbDoneRef.current = true;
+          cacheSet(tKey, t);
+          thumbRevealSkipTransitionRef.current = !microPaintedRef.current;
+          if (microPaintedRef.current) {
+            setThumbSrc(t);
+            await preloadImageDataUrl(t);
+            if (!cancelled) setThumbReady(true);
+            return;
+          }
+          await preloadImageDataUrl(t);
+          if (cancelled) return;
+          setThumbSrc(t);
+          setThumbReady(true);
+        });
+      } else {
+        runThumb();
+      }
 
       return () => {
         cancelled = true;
       };
-    }, [deferThumbnail, fullSrc, cacheKey, thumbMaxEdge, microEdge, safe, decodePri]);
+    }, [deferThumbnail, fullSrc, cacheKey, thumbMaxEdge, microEdge, safe, decodePri, companionBaseUrl, companionProjectId]);
 
     const baseImg = imgClassName ?? '';
     const layerClass = `${baseImg} absolute inset-0 max-w-none max-h-none`;

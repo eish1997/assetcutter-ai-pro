@@ -8,6 +8,44 @@
   overscroll-behavior-y: contain;
 }
 
+.workflow-pbr-param-slider-shell {
+  cursor: ns-resize;
+  touch-action: none;
+}
+
+.workflow-pbr-param-slider-shell[aria-disabled='true'] {
+  cursor: not-allowed;
+}
+
+.workflow-pbr-param-slider-track {
+  position: absolute;
+  left: 50%;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  transform: translateX(-50%);
+  border-radius: 9999px;
+  background: linear-gradient(180deg, rgba(248, 250, 252, 0.96), rgba(156, 163, 175, 0.5));
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.18),
+    0 0 0 1px rgba(0, 0, 0, 0.22);
+  pointer-events: none;
+}
+
+.workflow-pbr-param-slider-thumb {
+  position: absolute;
+  left: 50%;
+  width: 13px;
+  height: 3px;
+  transform: translate(-50%, 50%);
+  border-radius: 9999px;
+  background: rgba(248, 250, 252, 0.96);
+  box-shadow:
+    0 0 0 1px rgba(15, 17, 22, 0.42),
+    0 1px 3px rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+}
+
 /* —— 工作流全屏 ↔ 右下角 Dock：收起 / 展开动效（WorkflowComposerOverlay） —— */
 .ac-workflow-dock-backdrop {
   opacity: 1;

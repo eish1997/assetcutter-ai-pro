@@ -34,20 +34,78 @@ export function sanitizeCompanionPathSegment(s: string): string {
     .slice(0, 120) || 'x';
 }
 
+function workflowAssetDirectoryKey(assetId: string, filename: string): string {
+  const id = sanitizeCompanionPathSegment(String(assetId || '').trim() || 'unknown').slice(0, 96);
+  const file = sanitizeCompanionPathSegment(filename).slice(0, 120);
+  return `${id}/${file}`;
+}
+
+function mediaExtFromMime(mime: string | undefined): string {
+  const m = String(mime || '').split(';')[0]!.trim().toLowerCase();
+  if (m === 'image/png') return 'png';
+  if (m === 'image/webp') return 'webp';
+  if (m === 'image/gif') return 'gif';
+  if (m === 'image/svg+xml') return 'svg';
+  if (m === 'video/mp4') return 'mp4';
+  if (m === 'video/webm') return 'webm';
+  if (m === 'video/quicktime') return 'mov';
+  if (m === 'video/x-m4v') return 'm4v';
+  return 'jpg';
+}
+
+type WorkflowOriginalAssetType = 'image' | 'video' | 'model' | 'text' | 'binary';
+
+function originalAssetTypeFromMimeOrExt(mime: string | undefined, ext?: string): WorkflowOriginalAssetType {
+  const m = String(mime || '').split(';')[0]!.trim().toLowerCase();
+  const e = String(ext || '').replace(/^\./, '').trim().toLowerCase();
+  if (m.startsWith('image/') || /^(png|jpe?g|webp|gif|svg|bmp|avif)$/.test(e)) return 'image';
+  if (m.startsWith('video/') || /^(mp4|webm|mov|m4v)$/.test(e)) return 'video';
+  if (
+    m.startsWith('model/') ||
+    m.includes('fbx') ||
+    m.includes('obj') ||
+    m.includes('gltf') ||
+    /^(glb|gltf|fbx|obj|stl)$/.test(e)
+  ) {
+    return 'model';
+  }
+  if (m.startsWith('text/') || /^(txt|md|json)$/.test(e)) return 'text';
+  return 'binary';
+}
+
+function modelExtFromMimeOrName(mime: string | undefined, fileName?: string): 'glb' | 'gltf' | 'fbx' | 'obj' | 'bin' {
+  const m = String(mime || '').toLowerCase();
+  const n = String(fileName || '').toLowerCase();
+  if (n.endsWith('.fbx') || m.includes('fbx')) return 'fbx';
+  if (n.endsWith('.obj') || m.includes('obj')) return 'obj';
+  if (n.endsWith('.gltf') || m.includes('gltf+json')) return 'gltf';
+  if (n.endsWith('.glb') || m.includes('gltf-binary') || m.includes('model/gltf')) return 'glb';
+  return 'bin';
+}
+
 /**
  * 工作流原图在本地伴侣项目下的稳定对象键（按资产 id，便于覆盖同卡更新）。
  * 必须与 `local-companion` 的 `isSafeIdPart` 一致：单段、无 `/`，否则 PUT 会 400 `invalid_key`。
  */
-export function workflowOriginalCompanionStorageKey(assetId: string): string {
-  const id = sanitizeCompanionPathSegment(String(assetId || '').trim() || 'unknown');
-  return `wf-orig-${id}`.slice(0, 128);
+export function workflowOriginalCompanionStorageKey(
+  assetId: string,
+  ext = 'jpg',
+  assetType: WorkflowOriginalAssetType = 'image'
+): string {
+  const id = sanitizeCompanionPathSegment(String(assetId || '').trim() || 'unknown').slice(0, 96);
+  const kind = sanitizeCompanionPathSegment(assetType).slice(0, 16) || 'image';
+  const safeExt = sanitizeCompanionPathSegment(ext).slice(0, 12) || 'jpg';
+  return workflowAssetDirectoryKey(assetId, `original-${kind}-${id}.${safeExt}`);
+}
+
+export function workflowOriginalModelCompanionStorageKey(assetId: string, ext = 'bin'): string {
+  return workflowOriginalCompanionStorageKey(assetId, ext, 'model');
 }
 
 /** 某资产某步骤结果图在伴侣下的键（含版本 key；长度受 128 字符上限约束） */
-export function workflowResultCompanionStorageKey(assetId: string, resultKey: string): string {
-  const a = sanitizeCompanionPathSegment(assetId).slice(0, 48);
+export function workflowResultCompanionStorageKey(assetId: string, resultKey: string, ext = 'jpg'): string {
   const r = sanitizeCompanionPathSegment(resultKey).slice(0, 72);
-  return `wf-res-${a}-${r}`.slice(0, 128);
+  return workflowAssetDirectoryKey(assetId, `result-${r}.${sanitizeCompanionPathSegment(ext).slice(0, 12) || 'jpg'}`);
 }
 
 /** 与 `local-companion` `samSegmentAdapter.companionSamAltOutputKey` 一致：多 mask 备选文件键 */
@@ -66,10 +124,13 @@ export function workflowSamMultimaskCompanionKeys(primaryOutputKey: string, coun
 }
 
 /** 工作流 3D 模型在伴侣下的键（按资产 id + 槽位，与 `modelUrls` 下标对齐） */
-export function workflowModelCompanionStorageKey(assetId: string, slotIndex: number): string {
-  const id = sanitizeCompanionPathSegment(String(assetId || '').trim() || 'unknown');
+export function workflowModelCompanionStorageKey(assetId: string, slotIndex: number, ext = 'bin'): string {
   const slot = Math.max(0, Math.floor(slotIndex));
-  return `wf-mdl-${id}-${slot}`.slice(0, 128);
+  return workflowAssetDirectoryKey(assetId, `model-${slot}.${sanitizeCompanionPathSegment(ext).slice(0, 12) || 'bin'}`);
+}
+
+function legacyOriginalCompanionStorageKey(assetId: string, ext = 'jpg'): string {
+  return workflowAssetDirectoryKey(assetId, `original.${sanitizeCompanionPathSegment(ext).slice(0, 12) || 'jpg'}`);
 }
 
 function sniffModelMimeFromBytes(bytes: Uint8Array, fileName?: string): string {
@@ -123,9 +184,41 @@ export function legacyWorkflowCompanionAssetKeyCandidates(key: string): string[]
   const parts = k.split(/[\\/]+/).map((p) => p.trim()).filter(Boolean);
   const out: string[] = [];
   if (parts.length >= 2) {
-    out.push(workflowResultCompanionStorageKey(parts[0], parts.slice(1).join('_')));
+    const assetId = sanitizeCompanionPathSegment(parts[0]);
+    const file = parts.slice(1).join('_');
+    const stem = file.replace(/\.[^.]+$/, '');
+    const hasNamedFileExt = /\.[^.]+$/.test(file);
+    const ext = hasNamedFileExt ? file.split('.').pop() || 'jpg' : 'jpg';
+    if (stem === 'original') {
+      const kind = originalAssetTypeFromMimeOrExt(undefined, ext);
+      if (kind === 'model') out.push(workflowOriginalModelCompanionStorageKey(assetId, ext));
+      else out.push(workflowOriginalCompanionStorageKey(assetId, ext, kind));
+      if (hasNamedFileExt) out.push(`wf-orig-${assetId}`.slice(0, 128));
+    } else if (stem.startsWith('original-')) {
+      if (stem.startsWith('original-model-')) {
+        out.push(workflowModelCompanionStorageKey(assetId, 0, ext));
+        out.push(`wf-mdl-${assetId}-0`.slice(0, 128));
+      } else {
+        out.push(legacyOriginalCompanionStorageKey(assetId, ext));
+        out.push(`wf-orig-${assetId}`.slice(0, 128));
+      }
+    } else if (stem.startsWith('result-')) {
+      const resultKey = sanitizeCompanionPathSegment(stem.slice('result-'.length)).slice(0, 72);
+      out.push(workflowResultCompanionStorageKey(assetId, resultKey));
+      if (hasNamedFileExt) out.push(`wf-res-${assetId.slice(0, 48)}-${resultKey}`.slice(0, 128));
+    } else if (stem.startsWith('model-')) {
+      const slot = Math.max(0, Number.parseInt(stem.slice('model-'.length), 10) || 0);
+      out.push(workflowModelCompanionStorageKey(assetId, slot));
+      if (hasNamedFileExt) out.push(`wf-mdl-${assetId}-${slot}`.slice(0, 128));
+    } else {
+      out.push(workflowResultCompanionStorageKey(assetId, stem));
+      if (hasNamedFileExt) {
+        out.push(`wf-res-${assetId.slice(0, 48)}-${sanitizeCompanionPathSegment(stem).slice(0, 72)}`.slice(0, 128));
+      }
+    }
   } else if (parts.length === 1 && !/^[a-z][a-z0-9+.-]*:/i.test(parts[0])) {
     out.push(workflowOriginalCompanionStorageKey(parts[0]));
+    out.push(legacyOriginalCompanionStorageKey(parts[0]));
   }
 
   return Array.from(new Set(out.filter((candidate) => candidate && candidate !== k)));
@@ -222,7 +315,6 @@ export async function putWorkflowModelFileToCompanion(
   slotIndex: number,
   file: File
 ): Promise<{ ok: true; key: string } | { ok: false; error: string }> {
-  const key = workflowModelCompanionStorageKey(assetId, slotIndex);
   const base = normalizeCompanionBaseUrl(baseUrl);
   let head = new Uint8Array();
   try {
@@ -232,6 +324,11 @@ export async function putWorkflowModelFileToCompanion(
   }
   const mime =
     (file.type && file.type.split(';')[0].trim()) || sniffModelMimeFromBytes(head, file.name);
+  const ext = modelExtFromMimeOrName(mime, file.name);
+  const key =
+    Math.max(0, Math.floor(slotIndex)) === 0
+      ? workflowOriginalModelCompanionStorageKey(assetId, ext)
+      : workflowModelCompanionStorageKey(assetId, slotIndex, ext);
   const res = await putCompanionAsset(base, projectId, key, file, mime);
   if (res.ok === false) {
     return { ok: false, error: `${res.error}${res.status != null ? ` (HTTP ${res.status})` : ''}` };
@@ -247,11 +344,11 @@ export async function putWorkflowModelBlobToCompanion(
   blob: Blob,
   fileNameHint?: string
 ): Promise<{ ok: true; key: string } | { ok: false; error: string }> {
-  const key = workflowModelCompanionStorageKey(assetId, slotIndex);
   const base = normalizeCompanionBaseUrl(baseUrl);
   const buf = new Uint8Array(await blob.arrayBuffer());
   const mime =
     (blob.type && blob.type.split(';')[0].trim()) || sniffModelMimeFromBytes(buf, fileNameHint);
+  const key = workflowModelCompanionStorageKey(assetId, slotIndex, modelExtFromMimeOrName(mime, fileNameHint));
   const res = await putCompanionAsset(base, projectId, key, new Blob([buf], { type: mime }), mime);
   if (res.ok === false) {
     return { ok: false, error: `${res.error}${res.status != null ? ` (HTTP ${res.status})` : ''}` };
@@ -500,7 +597,8 @@ export async function putWorkflowOriginalImageToCompanion(
 ): Promise<{ ok: true; key: string } | { ok: false; error: string }> {
   const parsed = parseDataUrlToBlob(imageBase64OrDataUrl);
   if (!parsed) return { ok: false, error: 'not_data_url' };
-  const key = workflowOriginalCompanionStorageKey(assetId);
+  const ext = mediaExtFromMime(parsed.mime);
+  const key = workflowOriginalCompanionStorageKey(assetId, ext, originalAssetTypeFromMimeOrExt(parsed.mime, ext));
   const base = normalizeCompanionBaseUrl(baseUrl);
   const res = await putCompanionAsset(base, projectId, key, parsed.blob, parsed.mime);
   if (res.ok === false) {
@@ -515,9 +613,10 @@ export async function putWorkflowOriginalBlobToCompanion(
   assetId: string,
   blob: Blob
 ): Promise<{ ok: true; key: string } | { ok: false; error: string }> {
-  const key = workflowOriginalCompanionStorageKey(assetId);
   const base = normalizeCompanionBaseUrl(baseUrl);
   const mime = (blob.type && blob.type.split(';')[0].trim()) || 'application/octet-stream';
+  const ext = mediaExtFromMime(mime);
+  const key = workflowOriginalCompanionStorageKey(assetId, ext, originalAssetTypeFromMimeOrExt(mime, ext));
   const res = await putCompanionAsset(base, projectId, key, blob, mime);
   if (res.ok === false) {
     return { ok: false, error: `${res.error}${res.status != null ? ` (HTTP ${res.status})` : ''}` };
@@ -534,7 +633,7 @@ export async function putWorkflowResultImageToCompanion(
 ): Promise<{ ok: true; key: string } | { ok: false; error: string }> {
   const parsed = parseDataUrlToBlob(imageDataUrl);
   if (!parsed) return { ok: false, error: 'not_data_url' };
-  const key = workflowResultCompanionStorageKey(assetId, resultKey);
+  const key = workflowResultCompanionStorageKey(assetId, resultKey, mediaExtFromMime(parsed.mime));
   const base = normalizeCompanionBaseUrl(baseUrl);
   const res = await putCompanionAsset(base, projectId, key, parsed.blob, parsed.mime);
   if (res.ok === false) {
@@ -616,9 +715,9 @@ export async function putWorkflowResultMediaFromAnyUrl(
 ): Promise<{ ok: true; key: string } | { ok: false; error: string }> {
   const source = String(mediaSrc || '').trim();
   if (!source) return { ok: false, error: 'empty_media_src' };
-  const key = workflowResultCompanionStorageKey(assetId, resultKey);
   const base = normalizeCompanionBaseUrl(baseUrl);
   const fallbackMime = opts?.fallbackMime || sniffVideoMimeFromUrl(source);
+  let key = workflowResultCompanionStorageKey(assetId, resultKey, mediaExtFromMime(fallbackMime));
 
   if (/^https?:\/\//i.test(source)) {
     const imported = await importCompanionAssetFromUrl(base, projectId, key, source);
@@ -639,6 +738,7 @@ export async function putWorkflowResultMediaFromAnyUrl(
     }
   }
   if (!parsed) return { ok: false, error: 'cannot_normalize_media_src' };
+  key = workflowResultCompanionStorageKey(assetId, resultKey, mediaExtFromMime(parsed.mime));
   const put = await putCompanionAsset(base, projectId, key, parsed.blob, parsed.mime);
   if (put.ok === false) {
     return { ok: false, error: `${put.error}${put.status != null ? ` (HTTP ${put.status})` : ''}` };

@@ -178,6 +178,7 @@ import {
 import {
   attemptRepairCompanionManifestKeyGaps,
   findCompanionKeysMissingFromManifest,
+  removeMissingCompanionKeyReferences,
   mergeUnlinkedManifestEntriesIntoWorkflowAssets,
 } from './services/workflowManifestCrossCheck';
 import { fetchCompanionAssetAsDataUrl } from './services/workflowCompanionAssets';
@@ -1728,6 +1729,26 @@ const MainApp: React.FC = () => {
             void attemptRepairCompanionManifestKeyGaps(companionBase, id, assetsSnap, gaps, (level, title, detail) =>
               addGlobalLog('工作区', level, title, detail)
             );
+          }
+          if (gaps.length > 0) {
+            setWorkflowAssets((prev) => {
+              const cleaned = removeMissingCompanionKeyReferences(prev, gaps);
+              if (cleaned.removed === 0) return prev;
+              const scopeInner = userIdRef.current ?? null;
+              const saveResult = trySaveWorkflowBundle(
+                id,
+                { assets: cleaned.assets, pending: workflowPendingRef.current },
+                scopeInner,
+                workflowBundleSaveOpts()
+              );
+              addGlobalLog(
+                '工作区',
+                'warn',
+                '已清理项目中丢失的本地资产引用',
+                `${cleaned.removed} 项；资产卡片和其它步骤结果已保留`
+              );
+              return applyStoryboardRestoresFromSave(cleaned.assets, saveResult);
+            });
           }
           const newAssetId = () =>
             typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'

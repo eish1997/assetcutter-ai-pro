@@ -23,6 +23,7 @@ export {
   reconcileCompanionManifestFromDisk,
   getCompanionAssetMeta,
   deleteCompanionAsset,
+  deleteCompanionAssetDirectory,
   revealCompanionAssetFolder,
   revealCompanionAssetFolderWithProjectFallback,
   putCompanionAsset,

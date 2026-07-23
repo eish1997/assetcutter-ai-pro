@@ -35,6 +35,7 @@ import { ImagePreviewSplitStretchOverlay, type ImagePreviewSplitStretchExportSta
 import { ImagePreviewSplitStretchWriteBackPopover } from './ImagePreviewSplitStretchWriteBackPopover';
 import { ImagePreviewWorkflowResizePopover } from './ImagePreviewWorkflowResizePopover';
 import type { WorkflowLightboxImageWriteBackPayload } from '../services/imagePreviewWorkflowResize';
+import type { WorkflowModelPbrEditDoc } from '../services/workflowModelPbrEdits';
 
 const NO_WHEEL = '[data-image-preview-no-wheel]';
 const SCROLL = '[data-image-preview-scroll]';
@@ -65,6 +66,7 @@ const PV_MODE_SEG_OFF = 'text-gray-300 hover:bg-white/[0.08]';
 const MODEL_PREVIEW_EXT_RE = /\.(glb|gltf|fbx|obj)$/i;
 
 const LIGHTBOX_BACKDROP_STORAGE_KEY = 'ac_image_lightbox_backdrop_v1';
+const WORKFLOW_PREVIEW_CANVAS_MODE_TOGGLE_EVENT = 'asset-preview:canvas-mode-toggle';
 
 export type ImageLightboxBackdropId = 'frosted' | 'black' | 'gray50' | 'white';
 
@@ -208,6 +210,10 @@ export type ImagePreviewOverlayProps = {
   modelUrls?: string[];
   /** 本地拖入模型的原始文件名（用于 blob URL 推断格式） */
   modelFileName?: string;
+  model3dAssetId?: string;
+  model3dVariantId?: string;
+  model3dModelKey?: string;
+  model3dPbrEditDoc?: WorkflowModelPbrEditDoc | null;
   /** 3D 模型显示模式，由父级工具条控制 */
   model3dDisplayMode?: Model3DDisplayMode;
   /** 3D 模型：递增后重置相机视角 */
@@ -360,6 +366,10 @@ export function ImagePreviewOverlay({
   enablePanoramaMode = true,
   modelUrls,
   modelFileName,
+  model3dAssetId,
+  model3dVariantId,
+  model3dModelKey,
+  model3dPbrEditDoc,
   model3dDisplayMode = 'material',
   model3dResetViewNonce = 0,
   model3dShowGrid = true,
@@ -977,9 +987,10 @@ export function ImagePreviewOverlay({
         onClose();
         return;
       }
-      if (e.key === 'Tab') {
+      if (e.key === 'Tab' && !e.ctrlKey && !e.metaKey && !e.altKey && !isKeyboardTypingTarget(e.target)) {
         e.preventDefault();
-        setUiHidden((v) => !v);
+        e.stopPropagation();
+        window.dispatchEvent(new CustomEvent(WORKFLOW_PREVIEW_CANVAS_MODE_TOGGLE_EVENT));
         return;
       }
       if (!e.ctrlKey && !e.metaKey && !e.altKey && !isKeyboardTypingTarget(e.target)) {
@@ -1072,6 +1083,7 @@ export function ImagePreviewOverlay({
   useEffect(() => {
     if (!open) return;
     const onWheel = (e: WheelEvent) => {
+      if (document.documentElement.hasAttribute('data-ac-preview-canvas-mode')) return;
       const viewerCapturesWheel =
         (enablePanoramaMode && previewLayout === 'pano' && previewPolicyForMode('image.equirect').captureGlobalWheel) ||
         (hasModel3DMode && previewLayout === 'model3d' && previewPolicyForMode('image.model3d').captureGlobalWheel) ||
@@ -1516,6 +1528,10 @@ export function ImagePreviewOverlay({
                 <LazyImageModel3DViewer
                   imageSrc={imageSrc!}
                   modelSrc={previewModelSrc ?? undefined}
+                  model3dAssetId={model3dAssetId}
+                  model3dVariantId={model3dVariantId}
+                  model3dModelKey={model3dModelKey || previewModelSrc || modelFileName}
+                  model3dPbrEditDoc={model3dPbrEditDoc}
                   modelFileName={modelFileName}
                   model3dDisplayMode={model3dDisplayMode}
                   model3dResetViewNonce={model3dResetViewNonce}

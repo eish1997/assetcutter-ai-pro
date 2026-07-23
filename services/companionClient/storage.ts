@@ -125,6 +125,16 @@ export async function deleteCompanionAsset(baseUrl: string, projectId: string, k
   });
 }
 
+export async function deleteCompanionAssetDirectory(baseUrl: string, projectId: string, assetId: string) {
+  const p = encodeURIComponent(projectId);
+  const a = encodeURIComponent(assetId);
+  return companionFetchJson<{ ok: true; assetId: string; projectId: string; deletedKeys: string[] }>(
+    baseUrl,
+    `/v1/projects/${p}/asset-directories/${a}`,
+    { method: 'DELETE' },
+  );
+}
+
 export async function revealCompanionAssetFolder(baseUrl: string, projectId: string, key: string) {
   const p = encodeURIComponent(projectId);
   const k = encodeURIComponent(key);
@@ -158,11 +168,39 @@ function legacyRevealCompanionAssetKeyCandidates(key: string): string[] {
   const parts = k.split(/[\\/]+/).map((p) => p.trim()).filter(Boolean);
   const out: string[] = [];
   if (parts.length >= 2) {
-    const assetId = sanitizeLegacyCompanionPathSegment(parts[0]).slice(0, 48);
-    const resultKey = sanitizeLegacyCompanionPathSegment(parts.slice(1).join('_')).slice(0, 72);
-    out.push(`wf-res-${assetId}-${resultKey}`.slice(0, 128));
+    const assetFull = sanitizeLegacyCompanionPathSegment(parts[0]);
+    const assetId = assetFull.slice(0, 48);
+    const file = parts.slice(1).join('_');
+    const stem = sanitizeLegacyCompanionPathSegment(file.replace(/\.[^.]+$/, ''));
+    const ext = sanitizeLegacyCompanionPathSegment(file.split('.').pop() || 'jpg').slice(0, 12) || 'jpg';
+    if (stem === 'original') {
+      const modelExt = /^(glb|gltf|fbx|obj|stl)$/i.test(ext);
+      out.push(`${assetFull}/original-${modelExt ? 'model' : 'image'}-${assetFull}.${ext}`);
+      out.push(`${assetFull}/original.${ext}`);
+      out.push(`wf-orig-${assetFull}`.slice(0, 128));
+    } else if (stem.startsWith('original-model-')) {
+      out.push(`${assetFull}/model-0.${ext}`);
+      out.push(`wf-mdl-${assetFull}-0`.slice(0, 128));
+    } else if (stem.startsWith('original-')) {
+      out.push(`${assetFull}/original.${ext}`);
+      out.push(`wf-orig-${assetFull}`.slice(0, 128));
+    } else if (stem.startsWith('result-')) {
+      const resultKey = sanitizeLegacyCompanionPathSegment(stem.slice('result-'.length)).slice(0, 72);
+      out.push(`${assetFull}/result-${resultKey}.jpg`);
+      out.push(`wf-res-${assetId}-${resultKey}`.slice(0, 128));
+    } else if (stem.startsWith('model-')) {
+      const slot = Math.max(0, Number.parseInt(stem.slice('model-'.length), 10) || 0);
+      out.push(`${assetFull}/model-${slot}.bin`);
+      out.push(`wf-mdl-${assetFull}-${slot}`.slice(0, 128));
+    } else {
+      out.push(`${assetFull}/result-${stem.slice(0, 72)}.jpg`);
+      out.push(`wf-res-${assetId}-${stem.slice(0, 72)}`.slice(0, 128));
+    }
   } else if (parts.length === 1 && !/^[a-z][a-z0-9+.-]*:/i.test(parts[0])) {
-    out.push(`wf-orig-${sanitizeLegacyCompanionPathSegment(parts[0])}`.slice(0, 128));
+    const assetFull = sanitizeLegacyCompanionPathSegment(parts[0]);
+    out.push(`${assetFull}/original-image-${assetFull}.jpg`);
+    out.push(`${assetFull}/original.jpg`);
+    out.push(`wf-orig-${assetFull}`.slice(0, 128));
   }
 
   return Array.from(new Set(out.filter((candidate) => candidate && candidate !== k)));

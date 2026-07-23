@@ -44,6 +44,22 @@ export type AssetPreviewInputPolicy = {
   captureGlobalWheel: boolean;
 };
 
+export type Model3DInspectionStats = {
+  source: string;
+  fileName?: string;
+  format: string;
+  meshCount: number;
+  materialCount: number;
+  textureCount: number;
+  vertexCount: number;
+  triangleCount: number;
+  dimensions: {
+    width: number;
+    height: number;
+    depth: number;
+  };
+};
+
 export type AssetCapabilityInputField =
   | { name: string; type: 'text'; label: string; defaultValue?: string; required?: boolean }
   | { name: string; type: 'number'; label: string; defaultValue?: number; min?: number; max?: number; step?: number }
@@ -117,6 +133,7 @@ export type AssetPreviewContext = {
   model3dDisplayMode?: Model3DDisplayMode;
   model3dGridVisible?: boolean;
   model3dBackfaceCulling?: boolean;
+  model3dStats?: Model3DInspectionStats | null;
 };
 
 export type AssetPreviewAdapter = {

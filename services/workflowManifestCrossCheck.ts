@@ -5,6 +5,7 @@ import { isWorkflowStoryboardTableAsset } from './storyboardTableAsset';
 import { isWorkflowTextAsset } from './workflowTextAsset';
 import {
   imageSrcToDataUrlForCompanion,
+  legacyWorkflowCompanionAssetKeyCandidates,
   putWorkflowModelBlobToCompanion,
   putWorkflowOriginalImageToCompanion,
   putWorkflowResultImageToCompanion,
@@ -17,9 +18,16 @@ import {
 export type CompanionManifestKeyGap =
   | { kind: 'original'; assetId: string; key: string }
   | { kind: 'result'; assetId: string; stepId: string; key: string }
-  | { kind: 'model'; assetId: string; slotIndex: number; key: string }
+  | { kind: 'model'; assetId: string; slotIndex: number; key: string; stepId?: string }
   | { kind: 'storyboard_frame'; assetId: string; rowId: string; key: string }
   | { kind: 'storyboard_history'; assetId: string; rowId: string; versionId: string; key: string };
+
+function companionManifestHasKeyOrLegacyCandidate(keys: Set<string>, key: string): boolean {
+  const k = String(key || '').trim();
+  if (!k) return true;
+  if (keys.has(k)) return true;
+  return legacyWorkflowCompanionAssetKeyCandidates(k).some((candidate) => keys.has(candidate));
+}
 
 /**
  * 打开项目后比对：画布上 `originalCompanionKey` 与各步 `resultsCompanionKeys` 是否出现在 manifest.entries。
@@ -36,7 +44,7 @@ export function findCompanionKeysMissingFromManifest(
   for (const a of assets) {
     if (isWorkflowTextAsset(a)) continue;
     const ok = String(a.originalCompanionKey || '').trim();
-    if (ok && !keys.has(ok)) {
+    if (ok && !companionManifestHasKeyOrLegacyCandidate(keys, ok)) {
       out.push({ kind: 'original', assetId: String(a.id || '').trim() || '?', key: ok });
     }
     const rck = a.resultsCompanionKeys;
@@ -44,7 +52,7 @@ export function findCompanionKeysMissingFromManifest(
       for (const stepId of Object.keys(rck)) {
         const rk = String(rck[stepId] || '').trim();
         if (!rk) continue;
-        if (!keys.has(rk)) {
+        if (!companionManifestHasKeyOrLegacyCandidate(keys, rk)) {
           out.push({
             kind: 'result',
             assetId: String(a.id || '').trim() || '?',
@@ -59,11 +67,28 @@ export function findCompanionKeysMissingFromManifest(
       for (let slot = 0; slot < mck.length; slot += 1) {
         const mk = String(mck[slot] || '').trim();
         if (!mk) continue;
-        if (!keys.has(mk)) {
+        if (!companionManifestHasKeyOrLegacyCandidate(keys, mk)) {
           out.push({
             kind: 'model',
             assetId: String(a.id || '').trim() || '?',
             slotIndex: slot,
+            key: mk,
+          });
+        }
+      }
+    }
+    const smck = a.stepModelCompanionKeys;
+    if (smck && typeof smck === 'object') {
+      for (const stepId of Object.keys(smck)) {
+        const keysForStep = Array.isArray(smck[stepId]) ? smck[stepId] : [];
+        for (let slot = 0; slot < keysForStep.length; slot += 1) {
+          const mk = String(keysForStep[slot] || '').trim();
+          if (!mk || companionManifestHasKeyOrLegacyCandidate(keys, mk)) continue;
+          out.push({
+            kind: 'model',
+            assetId: String(a.id || '').trim() || '?',
+            slotIndex: slot,
+            stepId,
             key: mk,
           });
         }
@@ -74,12 +99,12 @@ export function findCompanionKeysMissingFromManifest(
       for (const row of a.storyboardTable.rows) {
         const rowId = String(row.id || '').trim();
         const frameKey = String(row.frameImageCompanionKey || '').trim();
-        if (frameKey && !keys.has(frameKey)) {
+        if (frameKey && !companionManifestHasKeyOrLegacyCandidate(keys, frameKey)) {
           out.push({ kind: 'storyboard_frame', assetId, rowId, key: frameKey });
         }
         for (const ver of row.frameImageHistory || []) {
           const histKey = String(ver.frameImageCompanionKey || '').trim();
-          if (!histKey || keys.has(histKey)) continue;
+          if (!histKey || companionManifestHasKeyOrLegacyCandidate(keys, histKey)) continue;
           out.push({
             kind: 'storyboard_history',
             assetId,
@@ -92,6 +117,109 @@ export function findCompanionKeysMissingFromManifest(
     }
   }
   return out;
+}
+
+export function removeMissingCompanionKeyReferences(
+  assets: WorkflowAsset[],
+  gaps: CompanionManifestKeyGap[]
+): { assets: WorkflowAsset[]; removed: number } {
+  if (!gaps.length) return { assets, removed: 0 };
+  const gapsByAsset = new Map<string, CompanionManifestKeyGap[]>();
+  for (const gap of gaps) {
+    const list = gapsByAsset.get(gap.assetId) ?? [];
+    list.push(gap);
+    gapsByAsset.set(gap.assetId, list);
+  }
+
+  let removed = 0;
+  const nextAssets = assets.map((asset) => {
+    const assetGaps = gapsByAsset.get(String(asset.id || '').trim());
+    if (!assetGaps?.length) return asset;
+    let next = asset;
+
+    for (const gap of assetGaps) {
+      if (gap.kind === 'original') {
+        if (String(next.originalCompanionKey || '').trim() === gap.key) {
+          const original = String(next.original || '').trim();
+          next = {
+            ...next,
+            originalCompanionKey: undefined,
+            ...(original === gap.key ? { original: '' } : {}),
+          };
+          removed += 1;
+        }
+        continue;
+      }
+
+      if (gap.kind === 'result') {
+        const rck = { ...(next.resultsCompanionKeys || {}) };
+        if (String(rck[gap.stepId] || '').trim() === gap.key) {
+          delete rck[gap.stepId];
+          const resultValue = String((next.results || {})[gap.stepId] ?? '').trim();
+          next = {
+            ...next,
+            resultsCompanionKeys: Object.keys(rck).length ? rck : undefined,
+            ...(next.displayKey === gap.stepId && !resultValue ? { displayKey: 'original' } : {}),
+          };
+          removed += 1;
+        }
+        continue;
+      }
+
+      if (gap.kind === 'model') {
+        const mck = [...(next.modelCompanionKeys || [])];
+        let touched = false;
+        if (String(mck[gap.slotIndex] || '').trim() === gap.key) {
+          mck[gap.slotIndex] = '';
+          touched = true;
+        }
+        const smck = { ...(next.stepModelCompanionKeys || {}) };
+        const stepIds = gap.stepId ? [gap.stepId] : Object.keys(smck);
+        for (const stepId of stepIds) {
+          const arr = Array.isArray(smck[stepId]) ? [...smck[stepId]] : [];
+          if (String(arr[gap.slotIndex] || '').trim() === gap.key) {
+            arr[gap.slotIndex] = '';
+            smck[stepId] = arr;
+            touched = true;
+          }
+        }
+        if (touched) {
+          next = {
+            ...next,
+            modelCompanionKeys: mck.some(Boolean) ? mck : undefined,
+            stepModelCompanionKeys: Object.keys(smck).some((stepId) => (smck[stepId] || []).some(Boolean))
+              ? smck
+              : undefined,
+          };
+          removed += 1;
+        }
+        continue;
+      }
+
+      if (isWorkflowStoryboardTableAsset(next) && next.storyboardTable?.rows?.length) {
+        const rows = next.storyboardTable.rows.map((row) => {
+          if (gap.kind === 'storyboard_frame' && row.id === gap.rowId && row.frameImageCompanionKey === gap.key) {
+            removed += 1;
+            return { ...row, frameImageCompanionKey: undefined };
+          }
+          if (gap.kind !== 'storyboard_history' || row.id !== gap.rowId) return row;
+          let rowTouched = false;
+          const frameImageHistory = (row.frameImageHistory || []).map((ver) => {
+            if (ver.id !== gap.versionId || ver.frameImageCompanionKey !== gap.key) return ver;
+            rowTouched = true;
+            removed += 1;
+            return { ...ver, frameImageCompanionKey: undefined };
+          });
+          return rowTouched ? { ...row, frameImageHistory } : row;
+        });
+        next = { ...next, storyboardTable: { ...next.storyboardTable, rows } };
+      }
+    }
+
+    return next;
+  });
+
+  return removed > 0 ? { assets: nextAssets, removed } : { assets, removed: 0 };
 }
 
 /**
@@ -148,9 +276,8 @@ export async function attemptRepairCompanionManifestKeyGaps(
     }
 
     if (gap.kind === 'original') {
-      const expectKey = workflowOriginalCompanionStorageKey(gap.assetId);
-      if (expectKey !== gap.key) {
-        onLog?.('warn', '伴侣原图键与资产 id 推导不一致，跳过修复', `asset=${gap.assetId} stored=${gap.key} expected=${expectKey}`);
+      if (!companionKeyMatchesWorkflowSlot(gap)) {
+        onLog?.('warn', '伴侣原图键与资产 id 推导不一致，跳过修复', `asset=${gap.assetId} stored=${gap.key}`);
         skipped += 1;
         continue;
       }
@@ -171,8 +298,7 @@ export async function attemptRepairCompanionManifestKeyGaps(
     }
 
     if (gap.kind === 'model') {
-      const expectKey = workflowModelCompanionStorageKey(gap.assetId, gap.slotIndex);
-      if (expectKey !== gap.key) {
+      if (!companionKeyMatchesWorkflowSlot(gap)) {
         onLog?.('warn', '伴侣 3D 模型键与推导不一致，跳过修复', `asset=${gap.assetId} slot=${gap.slotIndex}`);
         skipped += 1;
         continue;
@@ -208,8 +334,7 @@ export async function attemptRepairCompanionManifestKeyGaps(
       continue;
     }
 
-    const expectKey = workflowResultCompanionStorageKey(gap.assetId, gap.stepId);
-    if (expectKey !== gap.key) {
+    if (!companionKeyMatchesWorkflowSlot(gap)) {
       onLog?.('warn', '伴侣步骤结果键与推导不一致，跳过修复', `asset=${gap.assetId} step=${gap.stepId}`);
       skipped += 1;
       continue;
@@ -301,9 +426,11 @@ function classifyManifestEntryForAutoImport(entry: {
   if (!key) return null;
   const mime = String(entry.mime || '').trim().toLowerCase();
   if (mime.startsWith('image/')) return 'image';
-  if (mime.startsWith('model/')) return 'model';
+  if (mime.startsWith('model/') || mime.includes('fbx') || mime.includes('obj') || mime.includes('gltf')) return 'model';
   if (key.includes('wf-mdl-')) return 'model';
   if (key.includes('wf-res-') || key.includes('wf-orig-')) return 'image';
+  if (/\/original-model-[^/]+\.(glb|gltf|fbx|obj|stl)(\?|#|$)/i.test(key)) return 'model';
+  if (/\/original-(image|video|text|binary)-[^/]+\./i.test(key)) return 'image';
   if (mime === 'application/octet-stream' || !mime) {
     const rp = String(entry.relPath || '').toLowerCase();
     if (/\.(glb|gltf|fbx|obj|stl)(\?|#|$)/.test(rp)) return 'model';
@@ -315,6 +442,53 @@ function classifyManifestEntryForAutoImport(entry: {
 const WF_ORIG_P = 'wf-orig-';
 const WF_RES_P = 'wf-res-';
 const WF_MDL_P = 'wf-mdl-';
+
+function parseAssetDirectoryCompanionKey(
+  key: string
+):
+  | { kind: 'original'; assetId: string }
+  | { kind: 'result'; assetId: string; resultKey: string }
+  | { kind: 'model'; assetId: string; slot: number }
+  | null {
+  const parts = String(key || '').trim().split('/');
+  if (parts.length !== 2 || !parts[0] || !parts[1]) return null;
+  const assetId = parts[0];
+  const stem = parts[1].replace(/\.[^.]+$/, '');
+  if (stem === 'original') return { kind: 'original', assetId };
+  if (stem.startsWith('original-model-')) return { kind: 'model', assetId, slot: 0 };
+  if (stem.startsWith('original-')) return { kind: 'original', assetId };
+  if (stem.startsWith('result-')) {
+    const resultKey = stem.slice('result-'.length).trim();
+    if (resultKey) return { kind: 'result', assetId, resultKey };
+  }
+  if (stem.startsWith('model-')) {
+    const slotStr = stem.slice('model-'.length);
+    const slot = Number(slotStr);
+    if (Number.isFinite(slot) && slot >= 0 && String(slot) === slotStr) {
+      return { kind: 'model', assetId, slot };
+    }
+  }
+  return null;
+}
+
+function companionKeyMatchesWorkflowSlot(gap: CompanionManifestKeyGap): boolean {
+  const key = String(gap.key || '').trim();
+  const dirKey = parseAssetDirectoryCompanionKey(key);
+  if (dirKey) {
+    if (sanitizeCompanionPathSegment(gap.assetId) !== sanitizeCompanionPathSegment(dirKey.assetId)) return false;
+    if (gap.kind === 'original') return dirKey.kind === 'original';
+    if (gap.kind === 'result') return dirKey.kind === 'result' && dirKey.resultKey === gap.stepId;
+    if (gap.kind === 'model') return dirKey.kind === 'model' && dirKey.slot === gap.slotIndex;
+  }
+  if (gap.kind === 'original') return key === `${WF_ORIG_P}${sanitizeCompanionPathSegment(gap.assetId)}`;
+  if (gap.kind === 'model') {
+    return key === `${WF_MDL_P}${sanitizeCompanionPathSegment(gap.assetId)}-${gap.slotIndex}`;
+  }
+  if (gap.kind === 'result') {
+    return key.startsWith(`${WF_RES_P}${sanitizeCompanionPathSegment(gap.assetId).slice(0, 48)}-`);
+  }
+  return false;
+}
 
 function parseMdlCompanionKey(key: string): { assetSanitizedId: string; slot: number } | null {
   if (!key.startsWith(WF_MDL_P)) return null;
@@ -352,6 +526,8 @@ function collectResMatchPrefixes(
   for (const p of origP48ToFull.keys()) S.add(p);
   for (const e of manifest.entries) {
     const k = String(e?.key || '').trim();
+    const dirKey = parseAssetDirectoryCompanionKey(k);
+    if (dirKey) S.add(sanitizeCompanionPathSegment(dirKey.assetId).slice(0, 48));
     const mdl = parseMdlCompanionKey(k);
     if (mdl) S.add(mdl.assetSanitizedId.slice(0, 48));
     if (k.startsWith(WF_RES_P)) {
@@ -448,6 +624,7 @@ function findExistingAssetIndexForCompanionGroup(assets: WorkflowAsset[], canoni
     if (sid === canonicalAssetId) return true;
     if (sid.slice(0, 48) === g48) return true;
     const ok = String(a.originalCompanionKey || '').trim();
+    if (ok.startsWith(`${canonicalAssetId}/`)) return true;
     if (ok === `${WF_ORIG_P}${canonicalAssetId}`) return true;
     if (ok.startsWith(WF_ORIG_P) && ok.slice(WF_ORIG_P.length) === canonicalAssetId) return true;
     return false;
@@ -486,6 +663,18 @@ export function mergeUnlinkedManifestEntriesIntoWorkflowAssets(
     if (!key || referenced.has(key)) continue;
     const kind = classifyManifestEntryForAutoImport({ key, mime: e.mime, relPath: e.relPath });
     if (!kind) continue;
+
+    const dirKey = parseAssetDirectoryCompanionKey(key);
+    if (dirKey) {
+      const g = ensureGroup(wfGroups, sanitizeCompanionPathSegment(dirKey.assetId));
+      if (dirKey.kind === 'original') g.origCompanionKey = key;
+      else if (dirKey.kind === 'result') g.results[dirKey.resultKey] = key;
+      else g.models[dirKey.slot] = key;
+      g.importedKeys.push(key);
+      referenced.add(key);
+      importedKeys.push(key);
+      continue;
+    }
 
     if (key.startsWith(WF_ORIG_P)) {
       const full = key.slice(WF_ORIG_P.length);

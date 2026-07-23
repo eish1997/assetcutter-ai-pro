@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { getRepositoryRoot } from '../repositoryVolume.js';
-import { assertSafeId, assertSafeWorkspaceFolderName, isSafeWorkspaceFolderName } from './safeIds.js';
+import { assertSafeAssetKey, assertSafeId, assertSafeWorkspaceFolderName, isSafeWorkspaceFolderName } from './safeIds.js';
 
 const MANIFEST_NAME = 'manifest.json';
 
@@ -19,7 +19,14 @@ export function getProjectManifestPath(projectId: string): string {
 }
 
 export function getAssetObjectPath(projectId: string, key: string): { dir: string; objectFile: string; relPath: string } {
-  const k = assertSafeId(key, 'key');
+  const k = assertSafeAssetKey(key, 'key');
+  const parts = k.split('/');
+  if (parts.length === 2) {
+    const dir = join(getProjectRoot(projectId), 'assets', parts[0]!);
+    const objectFile = join(dir, parts[1]!);
+    const relPath = `assets/${parts[0]}/${parts[1]}`.replace(/\\/g, '/');
+    return { dir, objectFile, relPath };
+  }
   const dir = join(getProjectRoot(projectId), 'assets', k);
   const objectFile = join(dir, 'object');
   const relPath = `assets/${k}/object`.replace(/\\/g, '/');
@@ -31,8 +38,15 @@ export function getAssetVisibleObjectPath(
   key: string,
   filename: string,
 ): { dir: string; visibleFile: string; visibleRelPath: string } {
-  const k = assertSafeId(key, 'key');
+  const k = assertSafeAssetKey(key, 'key');
   const safeFilename = assertSafeId(filename, 'filename');
+  const parts = k.split('/');
+  if (parts.length === 2) {
+    const dir = join(getProjectRoot(projectId), 'assets', parts[0]!);
+    const visibleFile = join(dir, parts[1]!);
+    const visibleRelPath = `assets/${parts[0]}/${parts[1]}`.replace(/\\/g, '/');
+    return { dir, visibleFile, visibleRelPath };
+  }
   const dir = join(getProjectRoot(projectId), 'assets', k);
   const visibleFile = join(dir, safeFilename);
   const visibleRelPath = `assets/${k}/${safeFilename}`.replace(/\\/g, '/');

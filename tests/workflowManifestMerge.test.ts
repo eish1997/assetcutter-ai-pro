@@ -2,10 +2,13 @@ import { describe, expect, it } from 'vitest';
 import type { CompanionManifestV1 } from '../services/companionClient/storage';
 import {
   collectReferencedCompanionKeys,
+  findCompanionKeysMissingFromManifest,
   mergeUnlinkedManifestEntriesIntoWorkflowAssets,
+  removeMissingCompanionKeyReferences,
 } from '../services/workflowManifestCrossCheck';
 import {
   workflowModelCompanionStorageKey,
+  workflowOriginalModelCompanionStorageKey,
   workflowOriginalCompanionStorageKey,
   workflowResultCompanionStorageKey,
 } from '../services/workflowCompanionAssets';
@@ -19,6 +22,75 @@ function man(entries: CompanionManifestV1['entries']): CompanionManifestV1 {
 }
 
 describe('mergeUnlinkedManifestEntriesIntoWorkflowAssets', () => {
+  it('does not report legacy result keys as missing when their stable key exists', () => {
+    const m = man([
+      {
+        key: workflowResultCompanionStorageKey('asset-1', 'ac_internal_quick_compose_plain_i2i'),
+        relPath: 'a',
+        byteSize: 1,
+        tags: [],
+        lineage: null,
+        updatedAt: 1,
+        mime: 'image/png',
+      },
+    ]);
+    const asset = {
+      id: 'asset-1',
+      original: '',
+      displayKey: 'ac_internal_quick_compose_plain_i2i',
+      results: {},
+      resultsCompanionKeys: {
+        ac_internal_quick_compose_plain_i2i: 'asset-1/ac_internal_quick_compose_plain_i2i',
+      },
+      resultOrder: ['ac_internal_quick_compose_plain_i2i'],
+      archived: false,
+      hiddenInGrid: false,
+      createdAt: 1,
+    } satisfies WorkflowAsset;
+
+    expect(findCompanionKeysMissingFromManifest([asset], m)).toEqual([]);
+  });
+
+  it('removes only missing companion references from a broken project asset', () => {
+    const asset = {
+      id: 'asset-1',
+      original: '',
+      originalCompanionKey: 'missing-orig',
+      displayKey: 'step-a',
+      results: { 'step-a': '', 'step-b': 'blob:keep' },
+      resultsCompanionKeys: { 'step-a': 'missing-result', 'step-b': 'wf-res-asset-1-step-b' },
+      resultOrder: ['step-a', 'step-b'],
+      modelCompanionKeys: ['missing-model'],
+      stepModelCompanionKeys: { 'step-a': ['missing-model'] },
+      archived: false,
+      hiddenInGrid: false,
+      createdAt: 1,
+    } satisfies WorkflowAsset;
+    const gaps = findCompanionKeysMissingFromManifest(
+      [asset],
+      man([
+        {
+          key: 'wf-res-asset-1-step-b',
+          relPath: 'b',
+          byteSize: 1,
+          tags: [],
+          lineage: null,
+          updatedAt: 1,
+          mime: 'image/png',
+        },
+      ])
+    );
+
+    const cleaned = removeMissingCompanionKeyReferences([asset], gaps);
+
+    expect(cleaned.removed).toBe(3);
+    expect(cleaned.assets[0]?.originalCompanionKey).toBeUndefined();
+    expect(cleaned.assets[0]?.resultsCompanionKeys).toEqual({ 'step-b': 'wf-res-asset-1-step-b' });
+    expect(cleaned.assets[0]?.modelCompanionKeys).toBeUndefined();
+    expect(cleaned.assets[0]?.stepModelCompanionKeys).toBeUndefined();
+    expect(cleaned.assets[0]?.resultOrder).toEqual(['step-a', 'step-b']);
+  });
+
   it('collects step-scoped 3D companion keys as referenced assets', () => {
     const keys = collectReferencedCompanionKeys([
       {
@@ -139,5 +211,25 @@ describe('mergeUnlinkedManifestEntriesIntoWorkflowAssets', () => {
     });
     expect(nextAssets.length).toBe(1);
     expect(importedKeys).toEqual(['legacy-blob-key-1']);
+  });
+  it('restores typed original model source files as model slots, not image originals', () => {
+    const mk = workflowOriginalModelCompanionStorageKey(ASSET_ID, 'fbx');
+    const m = man([
+      {
+        key: mk,
+        relPath: `assets/${mk}`,
+        byteSize: 1,
+        tags: [],
+        lineage: null,
+        updatedAt: 1,
+        mime: 'application/vnd.autodesk.fbx',
+      },
+    ]);
+    const { nextAssets, importedKeys } = mergeUnlinkedManifestEntriesIntoWorkflowAssets([], m, () => 'x');
+    expect(nextAssets.length).toBe(1);
+    expect(nextAssets[0]!.id).toBe(ASSET_ID);
+    expect(nextAssets[0]!.originalCompanionKey).toBeUndefined();
+    expect(nextAssets[0]!.modelCompanionKeys?.[0]).toBe(mk);
+    expect(importedKeys).toEqual([mk]);
   });
 });

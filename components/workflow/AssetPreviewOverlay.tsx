@@ -8,7 +8,7 @@ import type {
   Model3DDisplayMode,
 } from '../preview';
 import { AssetPreviewShell } from '../preview';
-import type { WorkflowAsset, WorkflowAssetVariant } from '../../types';
+import type { WorkflowAsset, WorkflowAssetKind, WorkflowAssetVariant } from '../../types';
 
 export type AssetPreviewOverlayProps = ImagePreviewOverlayProps & {
   /**
@@ -25,6 +25,7 @@ export type AssetPreviewOverlayProps = ImagePreviewOverlayProps & {
   variant?: WorkflowAssetVariant | null;
   /** 当前预览 layout：用于 adapter 判断图片/3D 当前状态。 */
   previewLayout?: ImagePreviewLayoutMode;
+  previewKindOverride?: WorkflowAssetKind;
   onModel3dDisplayModeChange?: (mode: Model3DDisplayMode) => void;
   onDownloadCurrent?: () => void | Promise<void>;
   onCopyCurrent?: () => void | Promise<void>;
@@ -66,6 +67,7 @@ export const AssetPreviewOverlay: React.FC<AssetPreviewOverlayProps> = ({
   asset,
   variant,
   previewLayout,
+  previewKindOverride,
   model3dDisplayMode,
   onModel3dDisplayModeChange,
   onDownloadCurrent,
@@ -120,6 +122,10 @@ export const AssetPreviewOverlay: React.FC<AssetPreviewOverlayProps> = ({
     ...(props as ImagePreviewOverlayProps),
     centerSlot: assetCenterSlot,
     model3dDisplayMode,
+    model3dAssetId: asset?.id,
+    model3dVariantId: variant?.id,
+    model3dModelKey: variant?.modelUrls?.[0] || variant?.url || props.modelUrls?.[0],
+    model3dPbrEditDoc: asset?.modelPbrEdits ?? null,
   };
 
   return (
@@ -128,6 +134,7 @@ export const AssetPreviewOverlay: React.FC<AssetPreviewOverlayProps> = ({
         <AssetPreviewShell
           asset={asset}
           variant={variant ?? null}
+          previewKindOverride={previewKindOverride}
           previewLayout={previewLayout}
           model3dDisplayMode={model3dDisplayMode}
           model3dGridVisible={props.model3dShowGrid}

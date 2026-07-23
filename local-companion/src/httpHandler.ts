@@ -17,6 +17,7 @@ import {
 import { listProjectIds } from './storage/projectPaths.js';
 import {
   deleteAsset,
+  deleteAssetDirectory,
   ensureAssetVisibleObjectFile,
   getAssetMeta,
   getManifestJson,
@@ -767,9 +768,10 @@ export async function handleRequest(
       return;
     }
 
-    const mMeta = path.match(/^\/v1\/projects\/([^/]+)\/assets\/([^/]+)\/meta$/);
+    const mMeta = path.match(/^\/v1\/projects\/([^/]+)\/assets\/(.+)\/meta$/);
     if (mMeta && method === 'GET') {
-      const r = getAssetMeta(mMeta[1]!, mMeta[2]!);
+      const key = decodeURIComponent(mMeta[2]!);
+      const r = getAssetMeta(mMeta[1]!, key);
       if ('error' in r) {
         const status = r.code === 'STORAGE_NOT_FOUND' ? 404 : 400;
         sendJson(res, status, { error: r.error, code: r.code }, origin);
@@ -792,10 +794,10 @@ export async function handleRequest(
       return;
     }
 
-    const mAssetReveal = path.match(/^\/v1\/projects\/([^/]+)\/assets\/([^/]+)\/reveal$/);
+    const mAssetReveal = path.match(/^\/v1\/projects\/([^/]+)\/assets\/(.+)\/reveal$/);
     if (mAssetReveal && method === 'POST') {
       const pid = mAssetReveal[1]!;
-      const key = mAssetReveal[2]!;
+      const key = decodeURIComponent(mAssetReveal[2]!);
       const meta = getAssetMeta(pid, key);
       if ('error' in meta) {
         const status = meta.code === 'STORAGE_NOT_FOUND' ? 404 : 400;
@@ -832,8 +834,9 @@ export async function handleRequest(
       return;
     }
 
-    const mAssetImportUrl = path.match(/^\/v1\/projects\/([^/]+)\/assets\/([^/]+)\/import-url$/);
+    const mAssetImportUrl = path.match(/^\/v1\/projects\/([^/]+)\/assets\/(.+)\/import-url$/);
     if (mAssetImportUrl && method === 'POST') {
+      const importKey = decodeURIComponent(mAssetImportUrl[2]!);
       const raw = await readRequestBodyRaw(req);
       let body: Record<string, unknown> = {};
       if (raw.length > 0) {
@@ -861,12 +864,12 @@ export async function handleRequest(
           return;
         }
         const contentType = normalizeImportedContentType(upstream.headers.get('content-type'), buf);
-        const out = putAsset(mAssetImportUrl[1]!, mAssetImportUrl[2]!, buf, contentType);
+        const out = putAsset(mAssetImportUrl[1]!, importKey, buf, contentType);
         sendJson(
           res,
           201,
           {
-            key: mAssetImportUrl[2],
+            key: importKey,
             projectId: mAssetImportUrl[1],
             contentType,
             ...out,
@@ -884,10 +887,22 @@ export async function handleRequest(
       return;
     }
 
-    const mAsset = path.match(/^\/v1\/projects\/([^/]+)\/assets\/([^/]+)$/);
+    const mAssetDirectory = path.match(/^\/v1\/projects\/([^/]+)\/asset-directories\/([^/]+)$/);
+    if (mAssetDirectory && method === 'DELETE') {
+      const d = deleteAssetDirectory(mAssetDirectory[1]!, decodeURIComponent(mAssetDirectory[2]!));
+      if ('ok' in d) {
+        sendJson(res, 200, { ok: true, assetId: decodeURIComponent(mAssetDirectory[2]!), projectId: mAssetDirectory[1], deletedKeys: d.deletedKeys }, origin);
+      } else {
+        const st = d.code === 'STORAGE_NOT_FOUND' ? 404 : 400;
+        sendJson(res, st, { error: d.error, code: d.code }, origin);
+      }
+      return;
+    }
+
+    const mAsset = path.match(/^\/v1\/projects\/([^/]+)\/assets\/(.+)$/);
     if (mAsset && method === 'GET') {
       const pid = mAsset[1]!;
-      const key = mAsset[2]!;
+      const key = decodeURIComponent(mAsset[2]!);
       const meta = getAssetMeta(pid, key);
       if ('error' in meta) {
         const status = meta.code === 'STORAGE_NOT_FOUND' ? 404 : 400;
@@ -914,7 +929,7 @@ export async function handleRequest(
       };
       if (wantDownload) {
         const hinted = u.searchParams.get('filename');
-        const fn = ensureCompanionDownloadFilename(hinted, key, ct);
+        const fn = ensureCompanionDownloadFilename(hinted, key.split('/').pop() || key, ct);
         headers['Content-Disposition'] = `attachment; filename="${fn}"`;
       }
       res.writeHead(200, headers);
@@ -930,12 +945,13 @@ export async function handleRequest(
       }
       const ct = req.headers['content-type'];
       const ctStr = Array.isArray(ct) ? ct[0] : ct;
-      const out = putAsset(mAsset[1]!, mAsset[2]!, body, ctStr);
+      const key = decodeURIComponent(mAsset[2]!);
+      const out = putAsset(mAsset[1]!, key, body, ctStr);
       sendJson(
         res,
         201,
         {
-          key: mAsset[2],
+          key,
           projectId: mAsset[1],
           ...out,
         },
@@ -945,8 +961,9 @@ export async function handleRequest(
     }
 
     if (mAsset && method === 'DELETE') {
-      const d = deleteAsset(mAsset[1]!, mAsset[2]!);
-      if ('ok' in d) sendJson(res, 200, { ok: true, key: mAsset[2], projectId: mAsset[1] }, origin);
+      const key = decodeURIComponent(mAsset[2]!);
+      const d = deleteAsset(mAsset[1]!, key);
+      if ('ok' in d) sendJson(res, 200, { ok: true, key, projectId: mAsset[1] }, origin);
       else {
         const st = d.code === 'STORAGE_NOT_FOUND' ? 404 : 400;
         sendJson(res, st, { error: d.error, code: d.code }, origin);

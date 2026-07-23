@@ -66,6 +66,12 @@ import { useCreditBalance } from '../hooks/useCreditBalance';
 import { useUsageQuoteForSteps } from '../hooks/useUsageQuoteForSteps';
 import WorkflowZeroBalanceBanner from './WorkflowZeroBalanceBanner';
 import { DEFAULT_MODEL_TEXT } from '../services/modelRegistry/constants';
+import {
+  normalizeWorkflowModelPbrEditDoc,
+  WORKFLOW_MODEL_PBR_EDIT_PERSIST_EVENT,
+  type WorkflowModelPbrEditPersistEventDetail,
+  type WorkflowModelPbrTextureRewriteTarget,
+} from '../services/workflowModelPbrEdits';
 import { detectCutImageBoxes, FALLBACK_CUT_IMAGE_PRESET, FULL_IMAGE_BOX } from '../services/cutImageExecution';
 import {
   isCutImageCapabilityPreset,
@@ -140,7 +146,11 @@ import { compareWorkflowOverlayDraftToPersisted } from '../services/workflowOver
 import { WorkflowStepTimelineDetailPanel } from './WorkflowStepTimelineDetailPanel';
 import { WorkflowStepTimelinePanel } from './WorkflowStepTimelinePanel';
 import { WorkflowOverlaySnapshotRecoverPanel } from './workflow/WorkflowOverlaySnapshotRecoverPanel';
-import { WorkflowStepNodeGraphOverlay } from './WorkflowStepNodeGraphOverlay';
+import {
+  WorkflowStepNodeGraphOverlay,
+  type WorkflowStepNodeGraphMenuAction,
+  type WorkflowStepNodeGraphNodeContext,
+} from './WorkflowStepNodeGraphOverlay';
 import { triggerImageDownload } from '../services/imageDataUrl';
 import type { WorkflowLightboxImageWriteBackPayload } from '../services/imagePreviewWorkflowResize';
 import { readLocalJson, scopedStorageKey, workflowFavoritesStorageKey, writeLocalJson } from '../services/clientPersist';
@@ -545,6 +555,7 @@ import { captureWorkflowModelThumbnailDataUrl } from '../services/workflowModelP
 import { getCompanionLocalBaseUrl, normalizeCompanionBaseUrl } from '../services/companionLocalPrefs';
 import {
   deleteCompanionAsset,
+  deleteCompanionAssetDirectory,
   getCompanionAssetMeta,
   probeCompanionSamSegmentHealth,
   revealCompanionAssetFolderWithProjectFallback,
@@ -563,6 +574,7 @@ import {
   putWorkflowResultImageToCompanion,
   putWorkflowResultMediaFromAnyUrl,
   resolveCapabilityInputImageForExecute,
+  sanitizeCompanionPathSegment,
   shouldKeepExistingCompanionRasterUrl,
   workflowAssetNeedsCompanionModelHydrate,
   workflowAssetNeedsCompanionOriginalHydrate,
@@ -577,6 +589,12 @@ import { collectReferencedCompanionKeys } from '../services/workflowManifestCros
 
 const WORKFLOW_MODEL_EXT_RE = /\.(glb|gltf|fbx|obj)$/i;
 const WORKFLOW_VIDEO_EXT_RE = /\.(mp4|webm|mov|m4v)$/i;
+
+function companionAssetDirectoryIdFromKey(key: string): string {
+  const k = String(key || '').trim();
+  if (!k.includes('/')) return '';
+  return sanitizeCompanionPathSegment(k.split('/')[0] || '');
+}
 
 function workflowAssetVariantHasDirectModelUrl(variant: WorkflowAssetVariant | null | undefined): boolean {
   if (!variant || variant.kind !== 'model3d') return false;
@@ -713,6 +731,7 @@ type WorkflowPendingTaskOptions = {
   overrideSkipUnderstand?: boolean;
   logContext?: WorkflowPendingTask['logContext'];
   tripoMultiviewImages?: WorkflowPendingTask['tripoMultiviewImages'];
+  modelPbrTextureRewriteTarget?: WorkflowPendingTask['modelPbrTextureRewriteTarget'];
 };
 
 type WorkflowGroupOverrides = {
@@ -1020,6 +1039,7 @@ const WorkflowSection: React.FC<{
   const geminiRecoveryTasksRef = React.useRef<Map<string, WorkflowPendingTask>>(new Map());
   const assetsRef = React.useRef(assets);
   assetsRef.current = assets;
+  const persistedModelThumbnailSlotsRef = useRef<Set<string>>(new Set());
   const onLogRef = React.useRef(onLog);
   onLogRef.current = onLog;
 
@@ -1227,6 +1247,7 @@ const WorkflowSection: React.FC<{
   lightboxOverlayByModeRef.current = lightboxOverlayByMode;
   /** 与 `ImagePreviewOverlay` 同步：平面 / 全景 / 高度 3D / 3D 模型（非平面时标注写入对应桶） */
   const [lightboxPreviewLayout, setLightboxPreviewLayout] = useState<ImagePreviewLayoutMode>('flat');
+  const [lightboxTexturePreview, setLightboxTexturePreview] = useState<{ assetId: string; src: string } | null>(null);
   const [lightboxModel3dDisplayMode, setLightboxModel3dDisplayMode] = useState<Model3DDisplayMode>('material');
   const [lightboxModel3dResetViewNonce, setLightboxModel3dResetViewNonce] = useState(0);
   const [lightboxModel3dShowGrid, setLightboxModel3dShowGrid] = useState(true);
@@ -2902,6 +2923,74 @@ const WorkflowSection: React.FC<{
     [onLog, setAssets, workspaceProjectChrome?.activeProjectId]
   );
 
+  const persistCapturedWorkflowModelThumbnail = useCallback(
+    (assetId: string, variantIdRaw: string, dataUrl: string) => {
+      const id = String(assetId || '').trim();
+      const variantId = String(variantIdRaw || '').trim() || 'original';
+      const thumb = String(dataUrl || '').trim();
+      if (!id || !thumb || !parseDataUrlToBlob(thumb)) return;
+      const slotKey = `${id}:${variantId}`;
+      if (persistedModelThumbnailSlotsRef.current.has(slotKey)) return;
+      persistedModelThumbnailSlotsRef.current.add(slotKey);
+      const thumbRatio = clampWorkflowCardAspectRatio(1280, 800);
+
+      setAssets((prev) => {
+        const asset = prev.find((x) => x.id === id);
+        if (!asset) return prev;
+        if (variantId === 'original') {
+          const current = asWorkflowImageString(asset.original).trim();
+          if (current && !/^data:image\/svg\+xml/i.test(current)) return prev;
+          return prev.map((x) =>
+            x.id === id
+              ? {
+                  ...x,
+                  original: thumb,
+                  gridCardAspectRatio: thumbRatio,
+                }
+              : x
+          );
+        }
+        const current = asWorkflowImageString(asset.results?.[variantId]).trim();
+        if (current && !/^data:image\/svg\+xml/i.test(current)) return prev;
+        return prev.map((x) =>
+          x.id === id
+            ? {
+                ...x,
+                results: { ...(x.results || {}), [variantId]: thumb },
+                gridCardAspectRatio: thumbRatio,
+              }
+            : x
+        );
+      });
+      setCardAspectByAssetId((prev) => ({ ...prev, [id]: thumbRatio }));
+
+      const base = String(getCompanionLocalBaseUrl() || '').trim();
+      const pid = String(workspaceProjectChrome?.activeProjectId || '').trim();
+      if (!base || !pid) return;
+      void (async () => {
+        const put =
+          variantId === 'original'
+            ? await putWorkflowOriginalImageToCompanion(base, pid, id, thumb)
+            : await putWorkflowResultImageToCompanion(base, pid, id, variantId, thumb);
+        if (put.ok === false) {
+          onLog?.('warn', '3D 缩略图持久化失败', put.error);
+          return;
+        }
+        setAssets((prev) =>
+          prev.map((x) => {
+            if (x.id !== id) return x;
+            if (variantId === 'original') return { ...x, originalCompanionKey: put.key };
+            return {
+              ...x,
+              resultsCompanionKeys: { ...(x.resultsCompanionKeys || {}), [variantId]: put.key },
+            };
+          })
+        );
+      })();
+    },
+    [onLog, setAssets, workspaceProjectChrome?.activeProjectId]
+  );
+
   const persistCompanionResultMedia = useCallback(
     async (assetId: string, resultKey: string, mediaSrc: string, fallbackMime = 'video/mp4', providerId?: string) => {
       const source = String(mediaSrc || '').trim();
@@ -3136,6 +3225,7 @@ ${lineSvg}
           : {}),
         ...(options?.logContext ? { logContext: options.logContext } : {}),
         ...(options?.tripoMultiviewImages ? { tripoMultiviewImages: options.tripoMultiviewImages } : {}),
+        ...(options?.modelPbrTextureRewriteTarget ? { modelPbrTextureRewriteTarget: options.modelPbrTextureRewriteTarget } : {}),
       };
       return task;
     },
@@ -4052,6 +4142,74 @@ ${lineSvg}
     [getModule, getSet, actionModules]
   );
 
+  const applyModelPbrTextureRewriteResult = useCallback(
+    (
+      target: WorkflowModelPbrTextureRewriteTarget,
+      resultSrc: string,
+      actionType: string
+    ): boolean => {
+      const assetId = String(target.assetId || '').trim();
+      const sourceSrc = String(target.sourceTextureSrc || '').trim();
+      const result = String(resultSrc || '').trim();
+      const targetSlots = new Set(target.slots || []);
+      const targetMaterials = new Set((target.materialIds || []).map((id) => String(id || '').trim()).filter(Boolean));
+      if (!assetId || !sourceSrc || !result || targetSlots.size === 0) return false;
+      let applied = false;
+      setAssets((prev) =>
+        prev.map((asset) => {
+          if (asset.id !== assetId) return asset;
+          const doc = normalizeWorkflowModelPbrEditDoc(asset.modelPbrEdits);
+          if (!doc) return asset;
+          const nextDoc = {
+            ...doc,
+            updatedAt: Date.now(),
+            materials: { ...doc.materials },
+          };
+          let changed = false;
+          for (const [materialId, material] of Object.entries(doc.materials)) {
+            if (targetMaterials.size > 0 && !targetMaterials.has(materialId)) continue;
+            const nextSlots = { ...(material.slots || {}) };
+            let materialChanged = false;
+            for (const slot of targetSlots) {
+              const edit = nextSlots[slot];
+              if (!edit?.enabled || String(edit.dataUrl || '').trim() !== sourceSrc) continue;
+              nextSlots[slot] = {
+                ...edit,
+                dataUrl: result,
+                fileName: target.textureLabel ? `${target.textureLabel}-regen.png` : 'texture-regen.png',
+                mimeType: result.startsWith('data:image/') ? result.slice(5, result.indexOf(';')) || edit.mimeType : edit.mimeType,
+                updatedAt: Date.now(),
+              };
+              materialChanged = true;
+              changed = true;
+            }
+            if (materialChanged) {
+              nextDoc.materials[materialId] = { ...material, slots: nextSlots };
+            }
+          }
+          if (!changed) return asset;
+          applied = true;
+          return {
+            ...asset,
+            modelPbrEdits: nextDoc,
+            modelPbrTextureLineage: [
+              ...(asset.modelPbrTextureLineage || []),
+              {
+                ...target,
+                id: uuid(),
+                resultTextureSrc: result,
+                actionType,
+                createdAt: Date.now(),
+              },
+            ].slice(-48),
+          };
+        })
+      );
+      return applied;
+    },
+    [setAssets]
+  );
+
   const executePending = useCallback(
     async (overridePending?: WorkflowPendingTask[]) => {
       const queue = overridePending ? [...overridePending] : [...pendingRef.current];
@@ -4479,6 +4637,19 @@ ${lineSvg}
                   actionType: task.actionType,
                   module: getModule(task.actionType),
                 }) === 'branch_generate_3d';
+              if (result && task.modelPbrTextureRewriteTarget) {
+                const written = applyModelPbrTextureRewriteResult(
+                  task.modelPbrTextureRewriteTarget,
+                  result,
+                  task.actionType
+                );
+                if (written) {
+                  onLog?.('info', `${logBatch} ${taskLabel} texture written back to 3D asset`);
+                  markTaskCompleted(task);
+                  return;
+                }
+                onLog?.('warn', `${logBatch} ${taskLabel} texture target was not found; saved as a normal result`);
+              }
               if (!delegatedGenerate3D) {
               flushSync(() => {
                 setAssets((prev) =>
@@ -4689,6 +4860,7 @@ ${lineSvg}
       persistCompanionResultMedia,
       workspaceProjectChrome?.activeProjectId,
       buildWorkflowCreditsSteps,
+      applyModelPbrTextureRewriteResult,
       preferenceScope,
       creditBalance,
       creditBalanceLoading,
@@ -5232,6 +5404,13 @@ ${lineSvg}
     /** 无拖入预设：按快捷条「文 / 图 / 3D」内置逻辑，不读侧栏默认能力或「上次预设」 */
     const plainLog: WorkflowPendingTask['logContext'] = 'quick_compose_bar_plain';
     const plainText = effectiveUserText;
+    const textureRewriteTargetForInput = (src: string): WorkflowPendingTask['modelPbrTextureRewriteTarget'] => {
+      const cleanSrc = String(src || '').trim();
+      if (!cleanSrc) return undefined;
+      return quickComposeMainDropSlotsRef.current.find(
+        (slot) => slot.modelPbrTextureRewriteTarget && String(slot.previewSrc || '').trim() === cleanSrc
+      )?.modelPbrTextureRewriteTarget;
+    };
 
     const runPlainBatch = (newAssets: WorkflowAsset[], newTasks: WorkflowPendingTask[]): string[] => {
       if (newTasks.length === 0) {
@@ -5543,6 +5722,7 @@ ${lineSvg}
     for (const mainUrl of plainMainUrls) {
       const built = buildQuickComposeTaskPromptOverride(effectiveUserText, mainUrl, plainRefUrls, maxRef);
       const { primary, references, promptOverride } = built;
+      const textureRewriteTarget = textureRewriteTargetForInput(mainUrl);
       if (!primary) continue;
       for (let i = 0; i < countN; i += 1) {
         const newId = uuid();
@@ -5567,6 +5747,7 @@ ${lineSvg}
           inputSourceDisplayKey: 'original',
           ...(references.length > 0 ? { inputImages: references } : {}),
           ...(promptOverride || plainText ? { promptOverride: promptOverride || plainText } : {}),
+          ...(textureRewriteTarget ? { modelPbrTextureRewriteTarget: textureRewriteTarget } : {}),
           ...taskOverrides,
           logContext: plainLog,
         });
@@ -7909,7 +8090,12 @@ ${lineSvg}
     );
   }, [lightboxActiveVariant, lightboxAsset]);
   const lightboxShowsImage = Boolean(lightboxAsset && getAssetDisplayImage(lightboxAsset).trim());
+  const lightboxTexturePreviewSrc =
+    lightboxTexturePreview && lightboxAsset && lightboxTexturePreview.assetId === lightboxAsset.id
+      ? lightboxTexturePreview.src
+      : '';
   const lightboxMediaCenterVariant =
+    !lightboxTexturePreviewSrc &&
     lightboxPreviewVariant &&
     (
       lightboxPreviewVariant.kind === 'video' ||
@@ -7938,10 +8124,23 @@ ${lineSvg}
     notifyLightboxPrimaryReady,
   ]);
 
+  useEffect(() => {
+    setLightboxTexturePreview((prev) => {
+      if (!prev) return prev;
+      if (!lightboxAsset || prev.assetId !== lightboxAsset.id) return null;
+      return prev;
+    });
+  }, [lightboxAsset]);
+
   /** 大图按位图预览：工具条、标注、快捷输入、SAM 等完整图片 chrome */
   const lightboxRasterChrome = Boolean(lightboxAsset && assetLightboxRasterEligible(lightboxAsset));
   /** 右侧步骤时间线 / 左侧 VGP 缩略图树（含文字源资产） */
   const lightboxStepSideChrome = Boolean(lightboxAsset && !isGroupAsset(lightboxAsset));
+  const lightboxModelPreviewActive = Boolean(
+    !lightboxTexturePreviewSrc &&
+    lightboxMediaCenterVariant?.kind === 'model3d' ||
+      (!lightboxTexturePreviewSrc && !lightboxMediaCenterVariant && lightboxPreviewLayout === 'model3d')
+  );
   const lightboxModelUrls = useMemo(() => {
     if (!lightboxAsset) return [];
     return resolveWorkflowStepModelUrls(lightboxAsset, lightboxAsset.displayKey);
@@ -8672,10 +8871,14 @@ ${lineSvg}
       const base = String(getCompanionLocalBaseUrl() || '').trim();
       if (!projectId || !base) return;
       const removedKeys = collectReferencedCompanionKeys([removed]);
-      if (removedKeys.size === 0) return;
       const stillReferenced = collectReferencedCompanionKeys(remainingAssets);
       const keys = [...removedKeys].filter((key) => !stillReferenced.has(key));
-      if (keys.length === 0) return;
+      const removedDirId = sanitizeCompanionPathSegment(String(removed.id || '').trim());
+      const stillReferencedDirs = new Set(
+        [...stillReferenced].map(companionAssetDirectoryIdFromKey).filter(Boolean)
+      );
+      const shouldDeleteWholeDirectory = Boolean(removedDirId && !stillReferencedDirs.has(removedDirId));
+      if (keys.length === 0 && !shouldDeleteWholeDirectory) return;
       void (async () => {
         let deleted = 0;
         let missing = 0;
@@ -8691,6 +8894,16 @@ ${lineSvg}
             continue;
           }
           failed.push(`${key}: ${out.error}`);
+        }
+        if (shouldDeleteWholeDirectory) {
+          const out = await deleteCompanionAssetDirectory(base, projectId, removedDirId);
+          if (out.ok === true) {
+            deleted += Math.max(0, out.data.deletedKeys?.length || 0);
+          } else if (out.status === 404 || out.code === 'STORAGE_NOT_FOUND') {
+            missing += 1;
+          } else {
+            failed.push(`${removedDirId}/: ${out.error}`);
+          }
         }
         if (deleted > 0) {
           onLog?.('info', `已同步删除本地资产文件：${deleted} 项`);
@@ -8754,6 +8967,28 @@ ${lineSvg}
   }, [lightboxAssetId, onLog, setAssets]);
 
   /** 关闭大图前写入资产，使再次打开仍为上次的标注/裁切/局部重绘状态 */
+  useEffect(() => {
+    const onPersistModelPbrEdit = (event: Event) => {
+      const detail = (event as CustomEvent<WorkflowModelPbrEditPersistEventDetail>).detail;
+      const assetId = String(detail?.assetId || '').trim();
+      const doc = normalizeWorkflowModelPbrEditDoc(detail?.doc);
+      if (!assetId || !doc) return;
+      setAssets((prev) => {
+        let touched = false;
+        const next = prev.map((asset) => {
+          if (asset.id !== assetId) return asset;
+          touched = true;
+          return { ...asset, modelPbrEdits: doc };
+        });
+        return touched ? next : prev;
+      });
+    };
+    window.addEventListener(WORKFLOW_MODEL_PBR_EDIT_PERSIST_EVENT, onPersistModelPbrEdit);
+    return () => {
+      window.removeEventListener(WORKFLOW_MODEL_PBR_EDIT_PERSIST_EVENT, onPersistModelPbrEdit);
+    };
+  }, [setAssets]);
+
   const flushLightboxOverlayToAsset = useCallback(() => {
     const id = lightboxAssetIdRef.current;
     if (!id) return;
@@ -10693,6 +10928,97 @@ ${lineSvg}
     [appendQuickComposeDropSlotsForAssetIds, appendQuickComposeTextInput]
   );
 
+  const handleWorkflowTextureAddToComposeInput = useCallback(
+    (asset: WorkflowAsset, node: Extract<WorkflowStepNodeGraphNodeContext, { kind: 'texture' }>) => {
+      const src = String(node.src || '').trim();
+      if (!src) {
+        onLog?.('warn', '搴曢儴蹇嵎鏍忥細璐村浘娌℃湁鍙敤棰勮');
+        return;
+      }
+      const inputAssetId = uuid();
+      const label = node.label || 'Texture';
+      const rewriteTarget: WorkflowModelPbrTextureRewriteTarget = {
+        assetId: asset.id,
+        sourceTextureSrc: src,
+        slots: node.slots,
+        ...(node.materialIds && node.materialIds.length > 0 ? { materialIds: node.materialIds } : {}),
+        textureLabel: label,
+      };
+      const inputAsset = attachInitialVgpToNewAsset({
+        id: inputAssetId,
+        original: src,
+        displayKey: 'original',
+        results: {},
+        resultOrder: [],
+        archived: false,
+        hiddenInGrid: true,
+        createdAt: Date.now(),
+      });
+      setAssets((prev) => [...prev, inputAsset]);
+      setQuickComposeMainDropSlots((prev) =>
+        renumberQuickComposeMainDropSlotLabels([
+          ...prev.filter((slot) => slot.assetId !== inputAssetId),
+          {
+            assetId: inputAssetId,
+            previewSrc: src,
+            label,
+            modelPbrTextureRewriteTarget: rewriteTarget,
+          },
+        ])
+      );
+      setQuickComposeReferenceDropSlots((prev) => prev.filter((slot) => slot.assetId !== inputAssetId));
+      onLog?.('info', '搴曢儴蹇嵎鏍忥細璐村浘宸插姞鍏ヤ富鍥撅紝鐢熸垚缁撴灉灏嗗啓鍥?3D 璧勪骇');
+    },
+    [onLog, setAssets]
+  );
+
+  const handleLightboxNodeGraphMenuAction = useCallback(
+    (action: WorkflowStepNodeGraphMenuAction, node: WorkflowStepNodeGraphNodeContext) => {
+      const asset = lightboxAsset;
+      if (!asset) return;
+      if (action === 'add-to-input') {
+        if (node.kind === 'texture') {
+          handleWorkflowTextureAddToComposeInput(asset, node);
+          return;
+        }
+        handleWorkflowAssetAddToComposeInput(asset);
+        return;
+      }
+      if (action === 'copy-original') {
+        void handleWorkflowAssetCopyImage(asset);
+        return;
+      }
+      if (action === 'copy-id') {
+        void handleWorkflowAssetCopyId(asset);
+        return;
+      }
+      if (action === 'open-folder') {
+        void handleWorkflowAssetOpenFolder(asset);
+        return;
+      }
+      if (action === 'show-current') {
+        if (node.kind === 'texture') {
+          if (lightboxTexturePreviewSrc === node.src) return;
+          setLightboxTexturePreview({ assetId: asset.id, src: node.src });
+          setLightboxPreviewLayout('flat');
+          return;
+        }
+        if (!lightboxTexturePreviewSrc && asset.displayKey === node.displayKey) return;
+        setLightboxTexturePreview(null);
+        setDisplayKey(asset.id, node.displayKey);
+      }
+    },
+    [
+      handleWorkflowAssetAddToComposeInput,
+      handleWorkflowAssetCopyId,
+      handleWorkflowAssetCopyImage,
+      handleWorkflowAssetOpenFolder,
+      handleWorkflowTextureAddToComposeInput,
+      lightboxAsset,
+      lightboxTexturePreviewSrc,
+    ]
+  );
+
   const removeQuickComposeMainDropSlot = useCallback((assetId: string) => {
     const id = assetId.trim();
     if (!id) return;
@@ -11316,6 +11642,10 @@ ${lineSvg}
   const handleLightboxDownloadCurrent = useCallback(async () => {
     const asset = lightboxAsset;
     if (!asset) return;
+    if (lightboxTexturePreviewSrc) {
+      await triggerImageDownload(lightboxTexturePreviewSrc, `workflow-texture-${asset.id.slice(0, 6)}`);
+      return;
+    }
     const variant = resolveWorkflowAssetActiveVariant(asset);
     const mediaUrl =
       variant?.kind === 'model3d'
@@ -11380,10 +11710,15 @@ ${lineSvg}
       detail: { context: 'workflow_asset_preview_shell' },
     });
     await triggerImageDownload(getAssetDisplayImage(asset), `workflow-preview-${asset.id.slice(0, 6)}`);
-  }, [getAssetDisplayImage, getAssetDisplayText, lightboxAsset, lightboxShowsImage, onLog]);
+  }, [getAssetDisplayImage, getAssetDisplayText, lightboxAsset, lightboxShowsImage, lightboxTexturePreviewSrc, onLog]);
 
   const handleLightboxCopyCurrent = useCallback(async () => {
     if (!lightboxAsset) return;
+    if (lightboxTexturePreviewSrc) {
+      const outcome = await copyWorkflowAssetOriginalImageToClipboard({ imageSrc: lightboxTexturePreviewSrc });
+      onLog?.(outcome === 'ok' ? 'info' : 'warn', outcome === 'ok' ? '已复制当前贴图预览' : '当前贴图预览复制失败');
+      return;
+    }
     const variant = resolveWorkflowAssetActiveVariant(lightboxAsset);
     if (lightboxShowsImage) {
       await handleWorkflowAssetCopyImage(lightboxAsset);
@@ -11410,7 +11745,15 @@ ${lineSvg}
       return;
     }
     await handleWorkflowAssetCopyId(lightboxAsset);
-  }, [getAssetDisplayText, handleWorkflowAssetCopyId, handleWorkflowAssetCopyImage, lightboxAsset, lightboxShowsImage, onLog]);
+  }, [
+    getAssetDisplayText,
+    handleWorkflowAssetCopyId,
+    handleWorkflowAssetCopyImage,
+    lightboxAsset,
+    lightboxShowsImage,
+    lightboxTexturePreviewSrc,
+    onLog,
+  ]);
 
   const handleLightboxStartCrop = useCallback(() => {
     applyLightboxToolChange(lightboxRememberedCrop);
@@ -13920,6 +14263,9 @@ ${lineSvg}
                                         deferThumbnail={!thumbUnlockKeys.has(groupKey)}
                                         thumbDecodePriority={thumbHotKeys.has(groupKey) ? 'high' : 'low'}
                                         imageFetchPriority={thumbHotKeys.has(groupKey) ? 'high' : 'auto'}
+                                        onModelThumbnailCaptured={persistCapturedWorkflowModelThumbnail}
+                                        companionBaseUrl={String(getCompanionLocalBaseUrl() || '')}
+                                        companionProjectId={String(workspaceProjectChrome?.activeProjectId || '')}
                                         onIntrinsicSize={(w, h) => {
                                           applyIntrinsicAspectToAsset(childAsset.id, w, h);
                                           setCardAspectByAssetId(
@@ -14463,6 +14809,8 @@ ${lineSvg}
                           getDisplayImage={getAssetDisplayImage}
                           deferThumbnail={!thumbUnlockKeys.has(a.id)}
                           thumbDecodePriority={thumbHotKeys.has(a.id) ? 'high' : 'low'}
+                          companionBaseUrl={String(getCompanionLocalBaseUrl() || '')}
+                          companionProjectId={String(workspaceProjectChrome?.activeProjectId || '')}
                         />
                       ) : null}
                       <div
@@ -14646,6 +14994,9 @@ ${lineSvg}
                               deferThumbnail={!thumbUnlockKeys.has(a.id)}
                               thumbDecodePriority={thumbHotKeys.has(a.id) ? 'high' : 'low'}
                               imageFetchPriority={thumbHotKeys.has(a.id) ? 'high' : 'auto'}
+                              onModelThumbnailCaptured={persistCapturedWorkflowModelThumbnail}
+                              companionBaseUrl={String(getCompanionLocalBaseUrl() || '')}
+                              companionProjectId={String(workspaceProjectChrome?.activeProjectId || '')}
                               onIntrinsicSize={(w, h) => {
                                 applyIntrinsicAspectToAsset(a.id, w, h);
                               }}
@@ -14856,7 +15207,8 @@ ${lineSvg}
           open
           resetKey={lightboxAsset.id}
           asset={lightboxAsset}
-          variant={lightboxActiveVariant}
+          variant={lightboxTexturePreviewSrc ? null : lightboxActiveVariant}
+          previewKindOverride={lightboxTexturePreviewSrc ? 'image' : undefined}
           previewLayout={lightboxPreviewLayout}
           bootPhase={lightboxBootPhase}
           onPrimaryImageReady={notifyLightboxPrimaryReady}
@@ -14871,7 +15223,9 @@ ${lineSvg}
             )
           }
           imageSrc={
-            lightboxMediaCenterVariant
+            lightboxTexturePreviewSrc
+              ? lightboxTexturePreviewSrc
+              : lightboxMediaCenterVariant
               ? undefined
               : lightboxShowsImage || !lightboxTextAssetOnTextChannel
               ? lightboxShowsImage
@@ -14880,7 +15234,7 @@ ${lineSvg}
               : undefined
           }
           centerSlot={
-            lightboxTextAssetOnTextChannel && !lightboxShowsImage ? (
+            !lightboxTexturePreviewSrc && lightboxTextAssetOnTextChannel && !lightboxShowsImage ? (
               <WorkflowTextLightboxCenter
                 ref={textLightboxCenterRef}
                 resetKey={`${lightboxAsset.id}:${lightboxAsset.displayKey}`}
@@ -14905,10 +15259,12 @@ ${lineSvg}
                   );
                 }}
               />
-            ) : lightboxMediaCenterVariant ? (
-              <AssetMediaPreviewCenter
-                variant={lightboxMediaCenterVariant}
-                model3dDisplayMode={lightboxModel3dDisplayMode}
+            ) : !lightboxTexturePreviewSrc && lightboxMediaCenterVariant ? (
+                <AssetMediaPreviewCenter
+                  variant={lightboxMediaCenterVariant}
+                  assetId={lightboxAsset.id}
+                  model3dPbrEditDoc={lightboxAsset.modelPbrEdits ?? null}
+                  model3dDisplayMode={lightboxModel3dDisplayMode}
                 model3dResetViewNonce={lightboxModel3dResetViewNonce}
                 model3dShowGrid={lightboxModel3dShowGrid}
                 model3dBackfaceCulling={lightboxModel3dBackfaceCulling}
@@ -14917,7 +15273,7 @@ ${lineSvg}
               />
             ) : undefined
           }
-          centerSlotFullBleed={Boolean(lightboxMediaCenterVariant)}
+          centerSlotFullBleed={Boolean(!lightboxTexturePreviewSrc && lightboxMediaCenterVariant)}
           onClose={handleLightboxClose}
           wheelListLength={lightboxList.length}
           onWheelNavigate={handleLightboxWheelNavigate}
@@ -14956,6 +15312,9 @@ ${lineSvg}
                 onAddToComposeInput={handleWorkflowAssetAddToComposeInput}
                 canAddToComposeInput={canWorkflowAssetAddToComposeInput}
                 getMediaVariant={(asset) => (workflowResultUsesVideoPreview(asset) ? 'video' : 'image')}
+                onModelThumbnailCaptured={persistCapturedWorkflowModelThumbnail}
+                companionBaseUrl={String(getCompanionLocalBaseUrl() || '')}
+                companionProjectId={String(workspaceProjectChrome?.activeProjectId || '')}
               />
             ) : undefined
           }
@@ -14966,14 +15325,15 @@ ${lineSvg}
                 : '0px'
               : '0px'
           }
-          enablePanoramaMode={lightboxShowsImage}
-          modelUrls={lightboxModelUrls}
-          modelFileName={lightboxModelFileNameHint}
+          enablePanoramaMode={Boolean(lightboxTexturePreviewSrc || lightboxShowsImage)}
+          modelUrls={lightboxTexturePreviewSrc ? [] : lightboxModelUrls}
+          modelFileName={lightboxTexturePreviewSrc ? undefined : lightboxModelFileNameHint}
+          model3dPbrEditDoc={lightboxTexturePreviewSrc ? null : lightboxAsset.modelPbrEdits ?? null}
           model3dDisplayMode={lightboxModel3dDisplayMode}
           model3dResetViewNonce={lightboxModel3dResetViewNonce}
           model3dShowGrid={lightboxModel3dShowGrid}
           model3dBackfaceCulling={lightboxModel3dBackfaceCulling}
-          onModel3dDisplayModeChange={setLightboxModel3dDisplayMode}
+          onModel3dDisplayModeChange={lightboxTexturePreviewSrc ? undefined : setLightboxModel3dDisplayMode}
           onDownloadCurrent={handleLightboxDownloadCurrent}
           onCopyCurrent={handleLightboxCopyCurrent}
           onStartCrop={handleLightboxStartCrop}
@@ -14984,9 +15344,15 @@ ${lineSvg}
               : handleLightboxCapturePreview
           }
           onAddCurrentToInput={handleLightboxAddCurrentToInput}
-          onModel3dResetView={() => setLightboxModel3dResetViewNonce((nonce) => nonce + 1)}
-          onModel3dToggleGrid={() => setLightboxModel3dShowGrid((visible) => !visible)}
-          onModel3dToggleBackfaceCulling={() => setLightboxModel3dBackfaceCulling((enabled) => !enabled)}
+          onModel3dResetView={
+            lightboxTexturePreviewSrc ? undefined : () => setLightboxModel3dResetViewNonce((nonce) => nonce + 1)
+          }
+          onModel3dToggleGrid={
+            lightboxTexturePreviewSrc ? undefined : () => setLightboxModel3dShowGrid((visible) => !visible)
+          }
+          onModel3dToggleBackfaceCulling={
+            lightboxTexturePreviewSrc ? undefined : () => setLightboxModel3dBackfaceCulling((enabled) => !enabled)
+          }
           onUseCapabilityOutputAsInput={handleLightboxUseCapabilityOutputAsInput}
           onSaveCapabilityOutput={handleLightboxSaveCapabilityOutput}
           layoutReferenceSrc={
@@ -15001,9 +15367,9 @@ ${lineSvg}
               : undefined
           }
           heightfieldToolbarHostRef={lightboxHeightfieldToolbarHostRef}
-          canvasAdjustControl={lightboxChromeReady ? lightboxCanvasAdjustControl : null}
+          canvasAdjustControl={lightboxChromeReady && !lightboxModelPreviewActive ? lightboxCanvasAdjustControl : null}
           imageResizeWriteBack={
-            lightboxChromeReady && lightboxRasterChrome
+            lightboxChromeReady && lightboxRasterChrome && !lightboxModelPreviewActive
               ? { onCommit: handleLightboxImageResizeWriteBack }
               : null
           }
@@ -15375,7 +15741,16 @@ ${lineSvg}
           <WorkflowStepNodeGraphOverlay
             asset={lightboxAsset}
             getStepLabel={(k) => getGenerationRecordStepLabel(k, lightboxAsset)}
-            onSelectDisplayKey={(key) => setDisplayKey(lightboxAsset.id, key)}
+            onSelectDisplayKey={(key) => {
+              setLightboxTexturePreview(null);
+              setDisplayKey(lightboxAsset.id, key);
+            }}
+            onPreviewTexture={(src) => {
+              setLightboxTexturePreview({ assetId: lightboxAsset.id, src });
+              setLightboxPreviewLayout('flat');
+            }}
+            activePreviewTextureSrc={lightboxTexturePreviewSrc}
+            onNodeMenuAction={handleLightboxNodeGraphMenuAction}
             pixelBusy={busyAssetIds.has(lightboxAsset.id)}
           />
         </React.Fragment>
@@ -15385,6 +15760,7 @@ ${lineSvg}
         !showArchived &&
         lightboxChromeReady &&
         lightboxRasterChrome &&
+        !lightboxModelPreviewActive &&
         lightboxPreviewLayout !== 'model3d' &&
         !lightboxUiHidden &&
         typeof document !== 'undefined' &&

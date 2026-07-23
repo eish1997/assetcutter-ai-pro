@@ -1,9 +1,15 @@
 import React from 'react';
 
 import type { WorkflowAsset } from '../../types';
+import { resolveWorkflowStepModelUrls } from '../../services/workflowStepModels';
 import { resolveWorkflowAssetActiveVariant, resolveWorkflowAssetKind } from '../../services/workflowAssetVariants';
 import { captureWorkflowModelThumbnailDataUrl } from '../../services/workflowModelPreviewCapture';
 import { WorkflowGridImage } from '../ProgressivePreviewImage';
+import {
+  getLazyImagePreviewViewer,
+  PreviewViewerErrorBoundary,
+  PreviewViewerFallback,
+} from '../preview';
 import AppIcon from '../ui/AppIcon';
 
 type AssetCardPreviewRendererProps = {
@@ -17,10 +23,15 @@ type AssetCardPreviewRendererProps = {
   thumbMaxEdge?: number;
   autoPlayVideo?: boolean;
   onIntrinsicSize?: (width: number, height: number) => void;
+  onModelThumbnailCaptured?: (assetId: string, variantId: string, dataUrl: string) => void;
+  companionBaseUrl?: string;
+  companionProjectId?: string;
+  compactBadges?: boolean;
 };
 
 const modelThumbnailCache = new Map<string, string | null>();
 const modelThumbnailPending = new Map<string, Promise<string | null>>();
+const LazyImageModel3DViewer = getLazyImagePreviewViewer('image.model3d');
 
 function firstModelPreviewSrc(modelUrls?: string[], fallbackUrl?: string): string {
   return (modelUrls || []).find((value) => String(value || '').trim())?.trim() || String(fallbackUrl || '').trim();
@@ -46,7 +57,26 @@ function readableText(asset: WorkflowAsset, textDisplay?: string): { title: stri
   return { title, body };
 }
 
-function Badge({ icon, label }: { icon: 'video' | 'cube' | 'image' | 'package' | 'play' | 'chat'; label: string }) {
+function Badge({
+  icon,
+  label,
+  compact = false,
+}: {
+  icon: 'video' | 'cube' | 'image' | 'package' | 'play' | 'chat';
+  label: string;
+  compact?: boolean;
+}) {
+  if (compact) {
+    return (
+      <div
+        className="absolute left-0.5 top-0.5 z-[2] inline-flex h-3.5 w-3.5 items-center justify-center overflow-hidden rounded-[3px] border border-white/15 bg-black/50 text-white/80 shadow-sm backdrop-blur"
+        title={label}
+        aria-label={label}
+      >
+        <AppIcon name={icon} className="h-2 w-2 shrink-0" />
+      </div>
+    );
+  }
   return (
     <div className="absolute left-2 top-2 z-[2] inline-flex max-w-[calc(100%-1rem)] items-center gap-1 rounded-md border border-white/12 bg-black/55 px-1.5 py-1 text-[9px] font-black uppercase leading-none text-white/85 shadow-sm backdrop-blur">
       <AppIcon name={icon} className="h-3 w-3 shrink-0" />
@@ -87,6 +117,38 @@ function FilePlaceholder({ label }: { label: string }) {
   );
 }
 
+function isWorkflowModelPlaceholderPreview(src: string): boolean {
+  const s = String(src || '').trim();
+  return !s || /^data:image\/svg\+xml/i.test(s);
+}
+
+function InlineModelPreview({
+  modelSrc,
+  modelFileName,
+}: {
+  modelSrc: string;
+  modelFileName: string;
+}) {
+  if (!LazyImageModel3DViewer) return null;
+  return (
+    <div className="pointer-events-none absolute inset-0 z-0 overflow-hidden bg-[#111827]">
+      <PreviewViewerErrorBoundary mode="image.model3d" label="3D">
+        <React.Suspense fallback={<PreviewViewerFallback label="3D" />}>
+          <LazyImageModel3DViewer
+            imageSrc=""
+            modelSrc={modelSrc}
+            modelFileName={modelFileName}
+            model3dDisplayMode="material"
+            model3dShowGrid={false}
+            model3dBackfaceCulling={false}
+            className="h-full w-full min-h-0"
+          />
+        </React.Suspense>
+      </PreviewViewerErrorBoundary>
+    </div>
+  );
+}
+
 export const AssetCardPreviewRenderer: React.FC<AssetCardPreviewRendererProps> = ({
   asset,
   previewSrc,
@@ -98,23 +160,30 @@ export const AssetCardPreviewRenderer: React.FC<AssetCardPreviewRendererProps> =
   thumbMaxEdge,
   autoPlayVideo = false,
   onIntrinsicSize,
+  onModelThumbnailCaptured,
+  companionBaseUrl,
+  companionProjectId,
+  compactBadges = false,
 }) => {
   const activeVariant = resolveWorkflowAssetActiveVariant(asset);
   const activeKind = activeVariant?.kind ?? resolveWorkflowAssetKind(asset);
+  const activeKey = activeVariant?.id || asset.displayKey || 'original';
   const modelSrc =
-    activeKind === 'model3d'
-      ? firstModelPreviewSrc(activeVariant?.modelUrls, activeVariant?.url)
-      : '';
+    firstModelPreviewSrc(
+      activeVariant?.modelUrls,
+      activeVariant?.kind === 'model3d' ? activeVariant?.url : ''
+    ) || firstModelPreviewSrc(resolveWorkflowStepModelUrls(asset, activeKey));
+  const hasModelPreview = Boolean(activeKind === 'model3d' || modelSrc);
   const modelThumbCacheKey =
-    activeKind === 'model3d' && modelSrc
-      ? `${asset.id}:${activeVariant?.id || asset.displayKey || 'original'}:${modelSrc}`
+    hasModelPreview && modelSrc
+      ? `${asset.id}:${activeKey}:${modelSrc}`
       : '';
   const [capturedModelThumb, setCapturedModelThumb] = React.useState<string>(() =>
     modelThumbCacheKey ? modelThumbnailCache.get(modelThumbCacheKey) || '' : ''
   );
 
   React.useEffect(() => {
-    if (activeKind !== 'model3d' || !modelSrc || !modelThumbCacheKey) {
+    if (!hasModelPreview || !modelSrc || !modelThumbCacheKey) {
       setCapturedModelThumb('');
       return;
     }
@@ -143,12 +212,14 @@ export const AssetCardPreviewRenderer: React.FC<AssetCardPreviewRendererProps> =
     pending.then((thumb) => {
       modelThumbnailCache.set(modelThumbCacheKey, thumb || null);
       if (!cancelled) setCapturedModelThumb(thumb || '');
+      if (thumb) onModelThumbnailCaptured?.(asset.id, activeKey, thumb);
     });
     return () => {
       cancelled = true;
     };
   }, [
-    activeKind,
+    hasModelPreview,
+    activeKey,
     activeVariant?.id,
     activeVariant?.modelCompanionKeys,
     activeVariant?.modelFormats,
@@ -156,12 +227,21 @@ export const AssetCardPreviewRenderer: React.FC<AssetCardPreviewRendererProps> =
     asset.modelSourceName,
     modelSrc,
     modelThumbCacheKey,
+    onModelThumbnailCaptured,
   ]);
 
   const displaySrc =
-    activeKind === 'model3d'
+    hasModelPreview
       ? capturedModelThumb || previewSrc || activeVariant?.posterUrl || ''
       : previewSrc || activeVariant?.posterUrl || activeVariant?.url || '';
+  const shouldShowLiveModelPreview =
+    hasModelPreview &&
+    modelSrc &&
+    !capturedModelThumb &&
+    isWorkflowModelPlaceholderPreview(previewSrc || activeVariant?.posterUrl || '');
+  const modelNameHint = shouldShowLiveModelPreview
+    ? modelFileNameHint(asset, activeVariant, modelSrc)
+    : '';
 
   if (activeKind === 'text' && !displaySrc.trim()) {
     const { title, body } = readableText(asset, textDisplay);
@@ -193,25 +273,31 @@ export const AssetCardPreviewRenderer: React.FC<AssetCardPreviewRendererProps> =
 
   return (
     <div className="relative flex h-full w-full justify-center bg-[#141416]">
-      <WorkflowGridImage
-        fullSrc={displaySrc}
-        cacheKey={cacheKey}
-        mediaVariant={activeKind === 'video' ? 'video' : 'image'}
-        autoPlayVideo={activeKind === 'video' && autoPlayVideo}
-        videoPosterSrc={activeKind === 'video' ? activeVariant?.posterUrl : undefined}
-        thumbMaxEdge={thumbMaxEdge}
-        deferThumbnail={deferThumbnail}
-        thumbDecodePriority={thumbDecodePriority}
-        imageFetchPriority={imageFetchPriority}
-        className="relative z-0 block h-full w-full"
-        imgClassName="relative z-0 block h-full w-full object-cover"
-        draggable={false}
-        onDragStart={(e) => e.preventDefault()}
-        onIntrinsicSize={onIntrinsicSize}
-      />
-      {activeKind === 'video' ? <Badge icon="video" label="Video" /> : null}
-      {activeKind === 'model3d' ? (
-        <Badge icon="cube" label={activeVariant?.modelFormats?.filter(Boolean).join(' + ') || '3D'} />
+      {shouldShowLiveModelPreview ? (
+        <InlineModelPreview modelSrc={modelSrc} modelFileName={modelNameHint} />
+      ) : (
+        <WorkflowGridImage
+          fullSrc={displaySrc}
+          cacheKey={cacheKey}
+          mediaVariant={activeKind === 'video' ? 'video' : 'image'}
+          autoPlayVideo={activeKind === 'video' && autoPlayVideo}
+          videoPosterSrc={activeKind === 'video' ? activeVariant?.posterUrl : undefined}
+          thumbMaxEdge={thumbMaxEdge}
+          deferThumbnail={deferThumbnail}
+          thumbDecodePriority={thumbDecodePriority}
+          imageFetchPriority={imageFetchPriority}
+          companionBaseUrl={companionBaseUrl}
+          companionProjectId={companionProjectId}
+          className="relative z-0 block h-full w-full"
+          imgClassName="relative z-0 block h-full w-full object-cover"
+          draggable={false}
+          onDragStart={(e) => e.preventDefault()}
+          onIntrinsicSize={onIntrinsicSize}
+        />
+      )}
+      {activeKind === 'video' ? <Badge icon="video" label="Video" compact={compactBadges} /> : null}
+      {hasModelPreview ? (
+        <Badge icon="cube" label={activeVariant?.modelFormats?.filter(Boolean).join(' + ') || '3D'} compact={compactBadges} />
       ) : null}
       {!displaySrc.trim() && activeKind !== 'image' ? <FilePlaceholder label={activeVariant?.label || activeKind} /> : null}
       <div

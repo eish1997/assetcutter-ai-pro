@@ -15,7 +15,7 @@ import {
 import { join } from 'node:path';
 import { getAssetObjectPath, getAssetVisibleObjectPath, ensureProjectLayout, getProjectRoot } from './projectPaths.js';
 import { readManifestOrEmpty, writeManifestSync } from './manifestIO.js';
-import { assertSafeId, assertSafeWorkspaceFolderName, isSafeWorkspaceFolderName } from './safeIds.js';
+import { assertSafeAssetKey, assertSafeId, assertSafeWorkspaceFolderName, isSafeWorkspaceFolderName } from './safeIds.js';
 import type { ManifestEntryV1, ProjectManifestV1 } from './manifestTypes.js';
 
 const DEFAULT_MIME = 'application/octet-stream';
@@ -69,6 +69,7 @@ function visibleFilenameForAsset(mime: string, key: string): string {
 }
 
 function removeStaleVisibleFiles(projectId: string, key: string, keepFilename: string): void {
+  if (key.includes('/')) return;
   for (const filename of VISIBLE_ASSET_FILENAMES) {
     if (filename === keepFilename) continue;
     const { visibleFile } = getAssetVisibleObjectPath(projectId, key, filename);
@@ -99,9 +100,13 @@ export function ensureAssetVisibleObjectFile(
 ): { ok: true; dir: string; visibleFile: string; visibleRelPath: string; filename: string } | { error: string; code: string } {
   try {
     const pid = assertSafeWorkspaceFolderName(projectId, 'projectId');
-    const k = assertSafeId(key, 'key');
+    const k = assertSafeAssetKey(key, 'key');
     const { dir, objectFile } = getAssetObjectPath(pid, k);
     if (!existsSync(objectFile)) return { error: 'object_missing', code: 'STORAGE_NOT_FOUND' };
+    if (k.includes('/')) {
+      const filename = k.split('/')[1]!;
+      return { ok: true, dir, visibleFile: objectFile, visibleRelPath: `assets/${k}`, filename };
+    }
     const filename = visibleFilenameForAsset(mime || DEFAULT_MIME, k);
     const { visibleFile, visibleRelPath } = getAssetVisibleObjectPath(pid, k, filename);
     if (!existsSync(visibleFile)) {
@@ -142,7 +147,7 @@ export function putAsset(
   contentType: string | undefined,
 ): { relPath: string; byteSize: number } {
   const pid = assertSafeWorkspaceFolderName(projectId, 'projectId');
-  const k = assertSafeId(key, 'key');
+  const k = assertSafeAssetKey(key, 'key');
   ensureProjectLayout(pid);
   const { dir, objectFile, relPath } = getAssetObjectPath(pid, k);
   if (!existsSync(dir)) {
@@ -151,10 +156,12 @@ export function putAsset(
   writeFileSync(objectFile, body);
   const st = statSync(objectFile);
   const mime = (contentType && contentType.split(';')[0].trim()) || DEFAULT_MIME;
-  const filename = visibleFilenameForAsset(mime, k);
-  const { visibleFile } = getAssetVisibleObjectPath(pid, k, filename);
-  linkOrCopyObjectFile(objectFile, visibleFile);
-  removeStaleVisibleFiles(pid, k, filename);
+  if (!k.includes('/')) {
+    const filename = visibleFilenameForAsset(mime, k);
+    const { visibleFile } = getAssetVisibleObjectPath(pid, k, filename);
+    linkOrCopyObjectFile(objectFile, visibleFile);
+    removeStaleVisibleFiles(pid, k, filename);
+  }
   const m = readManifestOrEmpty(pid);
   upsertEntry(m, k, relPath, st.size, mime);
   writeManifestSync(m);
@@ -185,7 +192,7 @@ export function getAssetMeta(
   | { error: string; code: string } {
   try {
     const pid = assertSafeWorkspaceFolderName(projectId, 'projectId');
-    const k = assertSafeId(key, 'key');
+    const k = assertSafeAssetKey(key, 'key');
     if (!existsSync(getProjectRoot(pid))) {
       return { error: 'project_not_found', code: 'STORAGE_NOT_FOUND' };
     }
@@ -202,7 +209,7 @@ export function getAssetMeta(
 export function deleteAsset(projectId: string, key: string): { ok: true } | { error: string; code: string } {
   try {
     const pid = assertSafeWorkspaceFolderName(projectId, 'projectId');
-    const k = assertSafeId(key, 'key');
+    const k = assertSafeAssetKey(key, 'key');
     if (!existsSync(getProjectRoot(pid))) {
       return { error: 'project_not_found', code: 'STORAGE_NOT_FOUND' };
     }
@@ -218,7 +225,7 @@ export function deleteAsset(projectId: string, key: string): { ok: true } | { er
       }
     }
     m.entries.splice(i, 1);
-    if (existsSync(dir)) {
+    if (existsSync(dir) && !k.includes('/')) {
       try {
         rmSync(dir, { recursive: true, force: true });
       } catch {
@@ -227,6 +234,32 @@ export function deleteAsset(projectId: string, key: string): { ok: true } | { er
     }
     writeManifestSync(m);
     return { ok: true };
+  } catch {
+    return { error: 'invalid_id', code: 'STORAGE_INVALID_ID' };
+  }
+}
+
+export function deleteAssetDirectory(projectId: string, assetId: string): { ok: true; deletedKeys: string[] } | { error: string; code: string } {
+  try {
+    const pid = assertSafeWorkspaceFolderName(projectId, 'projectId');
+    const id = assertSafeId(assetId, 'assetId');
+    if (!existsSync(getProjectRoot(pid))) {
+      return { error: 'project_not_found', code: 'STORAGE_NOT_FOUND' };
+    }
+    const m = readManifestOrEmpty(pid);
+    const prefix = `${id}/`;
+    const deletedKeys = m.entries.filter((e) => e.key === id || e.key.startsWith(prefix)).map((e) => e.key);
+    m.entries = m.entries.filter((e) => e.key !== id && !e.key.startsWith(prefix));
+    const dir = join(getProjectRoot(pid), 'assets', id);
+    if (existsSync(dir)) {
+      try {
+        rmSync(dir, { recursive: true, force: true });
+      } catch {
+        return { error: 'remove_failed', code: 'STORAGE_IO' };
+      }
+    }
+    writeManifestSync(m);
+    return { ok: true, deletedKeys };
   } catch {
     return { error: 'invalid_id', code: 'STORAGE_INVALID_ID' };
   }
@@ -286,6 +319,40 @@ export function reconcileManifestOrphansFromDisk(
         key = assertSafeId(ent.name, 'key');
       } catch {
         continue;
+      }
+      for (const file of readdirOrEmpty(join(assetsDir, ent.name))) {
+        if (file === 'object' || VISIBLE_ASSET_FILENAMES.includes(file)) continue;
+        let nestedKey = '';
+        try {
+          nestedKey = assertSafeAssetKey(`${ent.name}/${file}`, 'key');
+        } catch {
+          continue;
+        }
+        if (existing.has(nestedKey)) continue;
+        const nested = getAssetObjectPath(pid, nestedKey);
+        if (!existsSync(nested.objectFile)) continue;
+        let nestedSize = 0;
+        try {
+          nestedSize = statSync(nested.objectFile).size;
+        } catch {
+          continue;
+        }
+        let nestedMime = 'application/octet-stream';
+        try {
+          const fd = openSync(nested.objectFile, 'r');
+          try {
+            const buf = Buffer.alloc(Math.min(512, Math.max(0, nestedSize)));
+            const n = readSync(fd, buf, 0, buf.length, 0);
+            if (n > 0) nestedMime = sniffMimeFromHead(buf.subarray(0, n));
+          } finally {
+            closeSync(fd);
+          }
+        } catch {
+          /* keep default mime */
+        }
+        upsertEntry(m, nestedKey, nested.relPath, nestedSize, nestedMime);
+        existing.add(nestedKey);
+        addedKeys.push(nestedKey);
       }
       if (existing.has(key)) continue;
       const { objectFile, relPath } = getAssetObjectPath(pid, key);

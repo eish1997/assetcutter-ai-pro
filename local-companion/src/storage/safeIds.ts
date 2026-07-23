@@ -12,6 +12,21 @@ export function assertSafeId(s: string | undefined, name: string): string {
   return s;
 }
 
+export function isSafeAssetKey(s: string | undefined): s is string {
+  if (!s || s.length > 260) return false;
+  if (s.includes('..') || s.includes('\\')) return false;
+  const parts = s.split('/');
+  if (parts.length === 1) return isSafeIdPart(parts[0]);
+  if (parts.length !== 2) return false;
+  return parts.every((part) => isSafeIdPart(part));
+}
+
+export function assertSafeAssetKey(s: string | undefined, name: string): string {
+  const value = String(s || '').trim();
+  if (!isSafeAssetKey(value)) throw new Error(`invalid_${name}`);
+  return value;
+}
+
 /**
  * 工作区项目目录名（磁盘文件夹名）：允许 Unicode 作显示名，仍禁止路径穿越与非法文件名字符。
  * 与 `isSafeIdPart`（资产 object key）区分：资产 key 保持 ASCII 单段；项目目录可与 UI 名称一致。

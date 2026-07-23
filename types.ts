@@ -1,6 +1,7 @@
 import type { VgpAssetExtension } from './types/vgp';
 import type { DialogImageGear, DialogImageModelRegistryId } from './services/modelRegistry/imageModels';
 import type { PanoLocalReprojectSnapshot } from './services/panoViewportProjection';
+import type { WorkflowModelPbrEditDoc, WorkflowModelPbrTextureLineage, WorkflowModelPbrTextureRewriteTarget } from './services/workflowModelPbrEdits';
 
 export type { VgpAssetExtension, VgpGenStepCapture } from './types/vgp';
 export type {
@@ -639,6 +640,10 @@ export type WorkflowAsset = {
   stepModelFormats?: Record<string, WorkflowModelFormat[]>;
   /** 本地 blob 模型无 URL 后缀时，用原始文件名推断格式（.glb/.fbx/.obj 等） */
   modelSourceName?: string;
+  /** 3D model PBR texture edits; saved with the project and restored for the same asset. */
+  modelPbrEdits?: WorkflowModelPbrEditDoc;
+  /** Texture rewrite history for the 3D model node graph. */
+  modelPbrTextureLineage?: WorkflowModelPbrTextureLineage[];
   /** 各步骤结果在 R2 的键，hydrate 后写回 results */
   resultsObjectKeys?: Record<string, string>;
   /** 各步骤结果图在本地伴侣下的对象键（与 `results` 中对应 step 的 data/blob 配对；持久化时可清空该步内联串） */
@@ -749,6 +754,8 @@ export type WorkflowPendingTask = {
   };
   /** Tripo multiview slots. Submit order is front/left/back/right. */
   tripoMultiviewImages?: Partial<Record<'front' | 'back' | 'left' | 'right', string>>;
+  /** Generated image should replace a PBR texture on an existing 3D asset instead of becoming a normal result. */
+  modelPbrTextureRewriteTarget?: WorkflowModelPbrTextureRewriteTarget;
   addedAt: number;
   /** 从组内拖到切割时：父组 id 与项下标，用于套娃替换 */
   sourceGroupAssetId?: string;

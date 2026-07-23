@@ -13,6 +13,7 @@ vi.mock('../services/companionClient/storage', () => storageMock);
 import {
   fetchWorkflowOriginalFromCompanionAsObjectUrl,
   legacyWorkflowCompanionAssetKeyCandidates,
+  workflowOriginalModelCompanionStorageKey,
   workflowOriginalCompanionStorageKey,
   workflowResultCompanionStorageKey,
 } from '../services/workflowCompanionAssets';
@@ -32,7 +33,13 @@ describe('workflow companion legacy key fallback', () => {
   it('maps old original companion keys to stable wf-orig keys', () => {
     expect(legacyWorkflowCompanionAssetKeyCandidates('asset-1')).toEqual([
       workflowOriginalCompanionStorageKey('asset-1'),
+      'asset-1/original.jpg',
     ]);
+  });
+
+  it('names typed original image and model source files inside the asset directory', () => {
+    expect(workflowOriginalCompanionStorageKey('asset-1', 'png')).toBe('asset-1/original-image-asset-1.png');
+    expect(workflowOriginalModelCompanionStorageKey('asset-1', 'fbx')).toBe('asset-1/original-model-asset-1.fbx');
   });
 
   it('maps old asset/result companion keys to stable wf-res keys', () => {

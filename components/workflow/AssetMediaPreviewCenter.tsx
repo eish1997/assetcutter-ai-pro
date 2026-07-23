@@ -1,6 +1,7 @@
 import React, { Suspense } from 'react';
 
 import type { WorkflowAssetVariant } from '../../types';
+import type { WorkflowModelPbrEditDoc } from '../../services/workflowModelPbrEdits';
 import {
   getLazyImagePreviewViewer,
   PreviewViewerErrorBoundary,
@@ -13,6 +14,8 @@ const LazyImageModel3DViewer = getLazyImagePreviewViewer('image.model3d');
 
 type Props = {
   variant: WorkflowAssetVariant;
+  assetId?: string;
+  model3dPbrEditDoc?: WorkflowModelPbrEditDoc | null;
   model3dDisplayMode?: Model3DDisplayMode;
   model3dResetViewNonce?: number;
   model3dShowGrid?: boolean;
@@ -144,6 +147,8 @@ function AudioAssetViewer({ url }: { url: string }) {
 
 function Model3DAssetViewer({
   variant,
+  assetId,
+  model3dPbrEditDoc,
   url,
   model3dDisplayMode,
   model3dResetViewNonce,
@@ -152,6 +157,8 @@ function Model3DAssetViewer({
   capturePreviewNonce,
 }: {
   variant: WorkflowAssetVariant;
+  assetId?: string;
+  model3dPbrEditDoc?: WorkflowModelPbrEditDoc | null;
   url: string;
   model3dDisplayMode: Model3DDisplayMode;
   model3dResetViewNonce?: number;
@@ -181,6 +188,10 @@ function Model3DAssetViewer({
             <LazyImageModel3DViewer
               imageSrc={variant.posterUrl || ''}
               modelSrc={url}
+              model3dAssetId={assetId}
+              model3dVariantId={variant.id}
+              model3dModelKey={url || variant.modelCompanionKeys?.[0] || variant.id}
+              model3dPbrEditDoc={model3dPbrEditDoc}
               modelFileName={inferFileName(variant)}
               model3dDisplayMode={model3dDisplayMode}
               model3dResetViewNonce={model3dResetViewNonce}
@@ -212,6 +223,8 @@ function FileAssetViewer({ url }: { url: string }) {
 
 export const AssetMediaPreviewCenter: React.FC<Props> = ({
   variant,
+  assetId,
+  model3dPbrEditDoc,
   model3dDisplayMode: model3dDisplayModeProp,
   model3dResetViewNonce = 0,
   model3dShowGrid = true,
@@ -236,6 +249,8 @@ export const AssetMediaPreviewCenter: React.FC<Props> = ({
       ) : variant.kind === 'model3d' && usableUrl ? (
         <Model3DAssetViewer
           variant={variant}
+          assetId={assetId}
+          model3dPbrEditDoc={model3dPbrEditDoc}
           url={usableUrl}
           model3dDisplayMode={resolvedModel3dDisplayMode}
           model3dResetViewNonce={model3dResetViewNonce}
