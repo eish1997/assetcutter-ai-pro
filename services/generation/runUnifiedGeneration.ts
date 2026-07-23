@@ -244,6 +244,14 @@ function imageOutputDebug(detail: AiJobDetail): string {
   return `status=${detail.job?.status || 'unknown'} artifacts=${artifacts.length} outputKeys=${Object.keys(output).join(',') || '-'}`;
 }
 
+function imagePollTimeoutMessage(created: AiJobDetail, lastDetail: AiJobDetail | null, timeoutMs: number): string {
+  const detail = lastDetail || created;
+  const status = detail.job?.status || created.job?.status || 'unknown';
+  const jobId = detail.job?.id || created.job?.id || '';
+  const seconds = Math.round(timeoutMs / 1000);
+  return `AI Gateway image job polling timed out after ${seconds}s (jobId=${jobId || '-'} status=${status})`;
+}
+
 function gatewayJobKindForCapability(modality: UnifiedGenerationModality, capability: string): string {
   const cap = String(capability || '').trim();
   if (cap === 'workflow_text_to_image' || cap === 'image.generate') return 'workflow_text_to_image';
@@ -512,9 +520,11 @@ export async function runUnifiedImageGeneration(request: UnifiedImageGenerationR
   const startedAt = Date.now();
   let missingImageOutputDetail: AiJobDetail | null = null;
   let missingImageOutputRetries = 0;
+  let lastDetail: AiJobDetail | null = null;
   while (Date.now() - startedAt < timeoutMs) {
     await sleep(intervalMs, request.abortSignal);
     const detail = await getMyAiJob(created.job.id);
+    lastDetail = detail;
     if (detail.job.status === 'succeeded') {
       const imageUrl = extractImageUrl(detail);
       if (imageUrl != null) {
@@ -535,5 +545,5 @@ export async function runUnifiedImageGeneration(request: UnifiedImageGenerationR
   if (missingImageOutputDetail) {
     throw new Error(`AI Gateway image job succeeded without image output (${imageOutputDebug(missingImageOutputDetail)})`);
   }
-  throw new Error('AI Gateway image job polling timed out');
+  throw new Error(imagePollTimeoutMessage(created, lastDetail, timeoutMs));
 }

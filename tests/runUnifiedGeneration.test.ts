@@ -32,8 +32,10 @@ import {
 describe('runUnifiedGeneration', () => {
   const prevInterval = process.env.VITE_AI_GATEWAY_TEXT_POLL_INTERVAL_MS;
   const prevImageInterval = process.env.VITE_AI_GATEWAY_IMAGE_POLL_INTERVAL_MS;
+  const prevImageTimeout = process.env.VITE_AI_GATEWAY_IMAGE_POLL_TIMEOUT_MS;
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.mocked(createAiJob).mockReset();
     vi.mocked(getMyAiJob).mockReset();
     vi.mocked(clearLastCreditsReserveKey).mockReset();
@@ -43,6 +45,8 @@ describe('runUnifiedGeneration', () => {
     else process.env.VITE_AI_GATEWAY_TEXT_POLL_INTERVAL_MS = prevInterval;
     if (prevImageInterval === undefined) delete process.env.VITE_AI_GATEWAY_IMAGE_POLL_INTERVAL_MS;
     else process.env.VITE_AI_GATEWAY_IMAGE_POLL_INTERVAL_MS = prevImageInterval;
+    if (prevImageTimeout === undefined) delete process.env.VITE_AI_GATEWAY_IMAGE_POLL_TIMEOUT_MS;
+    else process.env.VITE_AI_GATEWAY_IMAGE_POLL_TIMEOUT_MS = prevImageTimeout;
   });
 
   it('creates an Ark text Gateway job with canonical model metadata', async () => {
@@ -507,5 +511,39 @@ describe('runUnifiedGeneration', () => {
         uiSource: 'test',
       })
     ).resolves.toBe('https://files.example.com/public/ai-gateway-results/aijob_image_output_images/out.png');
+  });
+
+  it('includes job id and last status when image polling times out', async () => {
+    vi.useFakeTimers();
+    process.env.VITE_AI_GATEWAY_IMAGE_POLL_INTERVAL_MS = '30000';
+    process.env.VITE_AI_GATEWAY_IMAGE_POLL_TIMEOUT_MS = '30';
+    vi.mocked(createAiJob).mockResolvedValue({
+      job: {
+        id: 'aijob_image_timeout',
+        status: 'queued',
+        output: null,
+        artifacts: [],
+      },
+    } as unknown as Awaited<ReturnType<typeof createAiJob>>);
+    vi.mocked(getMyAiJob).mockResolvedValue({
+      job: {
+        id: 'aijob_image_timeout',
+        status: 'running',
+        output: null,
+        artifacts: [],
+      },
+    } as unknown as Awaited<ReturnType<typeof getMyAiJob>>);
+
+    const runPromise = runUnifiedImageGeneration({
+      prompt: 'clean package',
+      model: 'gemini-3.1-flash-image',
+      uiSource: 'test',
+    });
+    const assertion = expect(runPromise).rejects.toThrow(
+      'AI Gateway image job polling timed out after 30s (jobId=aijob_image_timeout status=running)'
+    );
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(30_000);
+    await assertion;
   });
 });

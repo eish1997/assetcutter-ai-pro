@@ -365,6 +365,39 @@ describe('AI gateway execution handoff', () => {
     expect(stored.job.error).toBeNull();
   });
 
+  it('marks proxy jobs failed when background polling times out', async () => {
+    process.env.AI_GATEWAY_EXECUTION_ENABLED = 'false';
+    const store = createInMemoryAiJobStore();
+    await createAuthAiGatewayJob({}, imageJobBody('aijob_exec_poll_timeout'), user, { store });
+    await store.update('aijob_exec_poll_timeout', {
+      status: 'running',
+      metadata: { proxyJobId: 'gasync_timeout_1', proxyStatus: 'running' },
+    });
+    const plan = await store.get('aijob_exec_poll_timeout');
+    const fetchImpl = vi.fn().mockResolvedValue(
+      proxyResponse({ status: 'running' }, true, 200)
+    );
+
+    await pollAiWorkerProxyJob(plan, 'gasync_timeout_1', {
+      store,
+      fetchImpl,
+      pollIntervalMs: 1,
+      pollTimeoutMs: 5,
+    });
+
+    const stored = await store.get('aijob_exec_poll_timeout');
+    expect(stored.job).toMatchObject({
+      status: 'failed',
+      error: {
+        code: 'AI_WORKER_PROXY_POLL_TIMEOUT',
+        message: 'AI Worker Proxy job polling timed out',
+      },
+    });
+    expect(stored.job.metadata.gatewayExecution).toMatchObject({
+      timeoutMs: 5,
+    });
+  });
+
   it('recovers persisted queued jobs whose deferred handoff timer was lost', async () => {
     process.env.AI_GATEWAY_EXECUTION_ENABLED = 'false';
     process.env.AI_WORKER_PROXY_CREDITS_HMAC_SECRET = 'test_recovery_secret';

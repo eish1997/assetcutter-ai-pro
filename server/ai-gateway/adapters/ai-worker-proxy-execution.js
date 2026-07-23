@@ -297,6 +297,23 @@ export async function pollAiWorkerProxyJob(plan, proxyJobId, options = {}) {
       // Polling is best-effort; the next panel refresh can still read the last known state.
     }
   }
+
+  current = await store.update(plan.job.id, {
+    status: 'failed',
+    error: {
+      code: 'AI_WORKER_PROXY_POLL_TIMEOUT',
+      message: 'AI Worker Proxy job polling timed out',
+    },
+    metadata: {
+      proxyJobId,
+      proxyStatus: current?.job?.metadata?.proxyStatus || 'timeout',
+      gatewayExecution: {
+        failedAt: new Date().toISOString(),
+        timeoutMs,
+      },
+    },
+  });
+  await settleIfNeeded(current, store);
 }
 
 export async function startAiWorkerProxyExecution(plan, options = {}) {
