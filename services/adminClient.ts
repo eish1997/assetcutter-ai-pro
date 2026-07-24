@@ -769,6 +769,9 @@ export type AiGatewayTrendJobBucket = {
   creditErrors: number;
   timeoutErrors: number;
   upstreamErrors: number;
+  fallbackAttempts?: number;
+  avgDurationMs?: number | null;
+  maxDurationMs?: number | null;
   failureRate: number;
   rateLimitRate: number;
 };
@@ -800,6 +803,23 @@ export type AiGatewayTrendReport = {
     byProvider: AiGatewayTrendUsageBucket[];
     bySku: AiGatewayTrendUsageBucket[];
   };
+  providerPerformance?: Array<{
+    providerId: string;
+    totalJobs: number;
+    succeededJobs: number;
+    failedJobs: number;
+    activeJobs: number;
+    failureRate: number;
+    rateLimitedJobs: number;
+    rateLimitRate: number;
+    fallbackAttempts: number;
+    avgDurationMs: number | null;
+    maxDurationMs: number | null;
+    usageEvents: number;
+    totalCreditsCharged: number;
+    totalCostUsdEst: number;
+    totalQuantity: number;
+  }>;
   providerKeys?: {
     totals?: {
       totalEvents: number;

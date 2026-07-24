@@ -6,6 +6,8 @@ import { fetch as undiciFetch } from 'undici';
 import { USE_POSTGRES, ensurePostgres, getPool } from '../auth-store.js';
 import { withAiGatewayPostgresRetry } from './postgres-transient-retry.js';
 import { signVolcengineRequest } from '../jimeng-sign.js';
+import { openAiCompatibleConfigForProvider } from './openai-compatible-config.js';
+import { readModelOpsConfig } from './model-ops-config-store.js';
 
 const DEFAULT_PROVIDER = 'tripo';
 const RETRYABLE_STATUS_RE = /\b(429|500|502|503|504|529)\b|too many requests|rate limit|timeout|econnreset|econnrefused|fetch failed|temporarily unavailable/i;
@@ -24,6 +26,30 @@ function eventsDiskPath() {
 
 function nonEmptyString(value) {
   return typeof value === 'string' && value.trim() ? value.trim() : '';
+}
+
+function providerBaseUrlOverride(modelOpsConfig, providerId) {
+  const rows = Array.isArray(modelOpsConfig?.providerOverrides) ? modelOpsConfig.providerOverrides : [];
+  const row = rows.find((item) => nonEmptyString(item?.providerId) === providerId);
+  return nonEmptyString(row?.baseUrl);
+}
+
+function providerRequestTimeoutMsOverride(modelOpsConfig, providerId) {
+  const rows = Array.isArray(modelOpsConfig?.providerOverrides) ? modelOpsConfig.providerOverrides : [];
+  const row = rows.find((item) => nonEmptyString(item?.providerId) === providerId);
+  const n = Number(row?.requestTimeoutMs);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : null;
+}
+
+function credentialsWithProviderOverrides(credentials, providerId, modelOpsConfig) {
+  const base = credentials && typeof credentials === 'object' ? { ...credentials } : {};
+  const baseUrl = providerBaseUrlOverride(modelOpsConfig, providerId);
+  const requestTimeoutMs = providerRequestTimeoutMsOverride(modelOpsConfig, providerId);
+  return {
+    ...base,
+    ...(baseUrl ? { baseUrl } : {}),
+    ...(requestTimeoutMs ? { requestTimeoutMs } : {}),
+  };
 }
 
 function createKeyId(provider = DEFAULT_PROVIDER) {
@@ -203,13 +229,7 @@ function providerKeySmokeRequirements(provider) {
       label: 'API Key',
     };
   }
-  if (provider === 'toapis') {
-    return {
-      fields: ['secret'],
-      label: 'API Key',
-    };
-  }
-  if (provider === 'tinysnow') {
+  if (openAiCompatibleConfigForProvider(provider)) {
     return {
       fields: ['secret'],
       label: 'API Key',
@@ -248,27 +268,23 @@ function providerKeySmokeMode(options = {}) {
 
 function openAiCompatibleSmokeConfig(row, options = {}) {
   const provider = row.provider;
-  if (provider === 'openai-official') {
-    return {
-      baseUrl: nonEmptyString(options.openAiBaseUrl || row.credentials?.baseUrl || process.env.AI_GATEWAY_OPENAI_BASE_URL) || 'https://api.openai.com/v1',
-      route: 'GET /models',
+  const openAiConfig = openAiCompatibleConfigForProvider(provider);
+  if (openAiConfig) {
+    const optionBaseUrls = {
+      'openai-official': options.openAiBaseUrl || process.env.AI_GATEWAY_OPENAI_BASE_URL,
+      toapis: options.toapisBaseUrl,
+      '302ai': options.aihub302BaseUrl,
+      aihubmix: options.aihubmixBaseUrl,
+      tinysnow: options.tinysnowBaseUrl,
+      'volcengine-ark': options.arkBaseUrl,
     };
-  }
-  if (provider === 'toapis') {
     return {
-      baseUrl: nonEmptyString(options.toapisBaseUrl || row.credentials?.baseUrl) || 'https://toapis.com/v1',
-      route: 'GET /models',
-    };
-  }
-  if (provider === 'tinysnow') {
-    return {
-      baseUrl: nonEmptyString(options.tinysnowBaseUrl || row.credentials?.baseUrl) || 'https://tinysnow.one/v1',
-      route: 'GET /models',
-    };
-  }
-  if (provider === 'volcengine-ark') {
-    return {
-      baseUrl: nonEmptyString(options.arkBaseUrl || row.credentials?.baseUrl) || 'https://ark.cn-beijing.volces.com/api/v3',
+      baseUrl:
+        nonEmptyString(optionBaseUrls[provider]) ||
+        providerBaseUrlOverride(options.modelOpsConfig, provider) ||
+        nonEmptyString(row.credentials?.baseUrl) ||
+        openAiConfig.defaultBaseUrl,
+      requestTimeoutMs: providerRequestTimeoutMsOverride(options.modelOpsConfig, provider),
       route: 'GET /models',
     };
   }
@@ -388,7 +404,7 @@ async function runRealProviderKeySmoke(row, options = {}) {
     const response = await fetchImpl(`${baseUrl}/models`, {
       method: 'GET',
       headers: { Authorization: `Bearer ${row.secret}` },
-      signal: AbortSignal.timeout(Number(options.timeoutMs || process.env.AI_GATEWAY_PROVIDER_KEY_SMOKE_TIMEOUT_MS || 15_000)),
+      signal: AbortSignal.timeout(Number(options.timeoutMs || compatibleConfig.requestTimeoutMs || process.env.AI_GATEWAY_PROVIDER_KEY_SMOKE_TIMEOUT_MS || 15_000)),
     });
     const data = await readSmokeJsonSafe(response);
     const latencyMs = Date.now() - started;
@@ -670,6 +686,7 @@ export async function saveProviderKeys(rows, { updatedByUserId = null } = {}) {
 
 export async function acquireProviderKey(provider = DEFAULT_PROVIDER) {
   const rows = await listProviderKeys({ includeSecrets: true });
+  const modelOpsConfig = await readModelOpsConfig().catch(() => null);
   const now = Date.now();
   const minuteBucket = Math.floor(now / 60_000);
   const candidates = rows
@@ -702,7 +719,7 @@ export async function acquireProviderKey(provider = DEFAULT_PROVIDER) {
     provider: key.provider,
     label: key.label,
     secret: key.secret,
-    credentials: key.credentials || {},
+    credentials: credentialsWithProviderOverrides(key.credentials, key.provider, modelOpsConfig),
     rpm: key.rpm || 0,
   };
 }
@@ -1273,7 +1290,8 @@ export async function smokeTestProviderKey(id, options = {}) {
   }
   let probe;
   try {
-    probe = await runRealProviderKeySmoke(row, options);
+    const modelOpsConfig = options.modelOpsConfig || await readModelOpsConfig().catch(() => null);
+    probe = await runRealProviderKeySmoke(row, { ...options, modelOpsConfig });
   } catch (error) {
     recordProviderKeyError(keyId, error, {
       reason: nonEmptyString(options.reason) || 'Admin manual Smoke Test',

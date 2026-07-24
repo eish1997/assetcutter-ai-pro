@@ -1,12 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import {
   aiJobCreditsLabel,
+  aiJobFallbackHint,
   aiJobRouteLabel,
   aiJobStatusLabel,
   aiJobStatusTone,
+  buildAiGatewayProviderPerformanceRows,
   buildAiGatewayOpsRuleRows,
   buildAiGatewayOpsSuggestions,
   cleanAdminAiJobFilters,
+  formatAiGatewayCostUsd,
   formatAiGatewayDuration,
   formatAiGatewayExpiry,
   formatAiGatewayRate,
@@ -78,6 +81,33 @@ describe('AdminAiJobsPanel helpers', () => {
       )
     ).toBe('25 / reserve');
     expect(aiJobCreditsLabel(makeJob())).toBe('未记录');
+  });
+
+  it('summarizes fallback policy and max attempts for task detail cards', () => {
+    expect(
+      aiJobFallbackHint(
+        makeJob({
+          fallback: {
+            active: true,
+            policy: 'on_rate_limit',
+            policies: ['on_rate_limit'],
+            autoSelectedProvider: true,
+            maxAttempts: 2,
+            nextProviderId: 'aihubmix',
+            nextAdapterId: 'aihubmix-openai',
+            lastFallbackAt: '2026-07-24T04:00:00.000Z',
+            attempts: [],
+            skipped: [],
+            attemptCount: 1,
+            skippedCount: 0,
+            lastReason: 'rate_limit',
+            lastSkipReason: null,
+            exhausted: false,
+            exhaustedAt: null,
+          },
+        })
+      )
+    ).toBe('策略 限流切换 / 尝试 1/2 / 下一家 aihubmix / 原因 限流');
   });
 
   it('formats AI Gateway operator summary values', () => {
@@ -204,5 +234,85 @@ describe('AdminAiJobsPanel helpers', () => {
         createdByUserId: null,
       },
     ]);
+  });
+
+  it('sorts provider performance rows by operational risk', () => {
+    const rows = buildAiGatewayProviderPerformanceRows({
+      generatedAt: '2026-07-13T00:00:00.000Z',
+      days: 7,
+      jobs: {
+        totals: {} as any,
+        byDay: [],
+        byProvider: [],
+        byModel: [],
+      },
+      usage: {
+        totals: {} as any,
+        byDay: [],
+        byProvider: [],
+        bySku: [],
+      },
+      providerPerformance: [
+        {
+          providerId: 'stable-provider',
+          totalJobs: 20,
+          succeededJobs: 20,
+          failedJobs: 0,
+          activeJobs: 0,
+          failureRate: 0,
+          rateLimitedJobs: 0,
+          rateLimitRate: 0,
+          fallbackAttempts: 0,
+          avgDurationMs: 1200,
+          maxDurationMs: 2000,
+          usageEvents: 20,
+          totalCreditsCharged: 200,
+          totalCostUsdEst: 0.5,
+          totalQuantity: 20,
+        },
+        {
+          providerId: 'risky-provider',
+          totalJobs: 5,
+          succeededJobs: 2,
+          failedJobs: 3,
+          activeJobs: 0,
+          failureRate: 0.6,
+          rateLimitedJobs: 2,
+          rateLimitRate: 0.4,
+          fallbackAttempts: 1,
+          avgDurationMs: 4500,
+          maxDurationMs: 9000,
+          usageEvents: 2,
+          totalCreditsCharged: 80,
+          totalCostUsdEst: 0.04,
+          totalQuantity: 2,
+        },
+        {
+          providerId: '',
+          totalJobs: 9,
+          succeededJobs: 0,
+          failedJobs: 9,
+          activeJobs: 0,
+          failureRate: 1,
+          rateLimitedJobs: 0,
+          rateLimitRate: 0,
+          fallbackAttempts: 0,
+          avgDurationMs: null,
+          maxDurationMs: null,
+          usageEvents: 0,
+          totalCreditsCharged: 0,
+          totalCostUsdEst: 0,
+          totalQuantity: 0,
+        },
+      ],
+    });
+
+    expect(rows.map((row) => row.providerId)).toEqual(['risky-provider', 'stable-provider']);
+  });
+
+  it('formats tiny provider cost estimates clearly', () => {
+    expect(formatAiGatewayCostUsd(0)).toBe('$0.00');
+    expect(formatAiGatewayCostUsd(0.004)).toBe('<$0.01');
+    expect(formatAiGatewayCostUsd(1.236)).toBe('$1.24');
   });
 });

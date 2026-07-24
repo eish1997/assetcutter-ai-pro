@@ -29,6 +29,40 @@ export type AiJobErrorSummary = {
   message: string;
 };
 
+export type AiJobFallbackAttemptSummary = {
+  at?: string | null;
+  providerId?: string | null;
+  adapterId?: string | null;
+  workerId?: string | null;
+  reason?: string | null;
+  skipReason?: string | null;
+  retryable?: boolean;
+  policyKind?: string | null;
+  policies?: string[];
+  policyAllowed?: boolean;
+  status?: number;
+  message?: string;
+};
+
+export type AiJobFallbackSummary = {
+  active: boolean;
+  policy: string | null;
+  policies: string[];
+  autoSelectedProvider: boolean;
+  maxAttempts: number | null;
+  nextProviderId: string | null;
+  nextAdapterId: string | null;
+  lastFallbackAt: string | null;
+  attempts: AiJobFallbackAttemptSummary[];
+  skipped: AiJobFallbackAttemptSummary[];
+  attemptCount: number;
+  skippedCount: number;
+  lastReason: string | null;
+  lastSkipReason: string | null;
+  exhausted: boolean;
+  exhaustedAt: string | null;
+};
+
 export type AiJobSummary = {
   id: string;
   status: AiJobStatus;
@@ -47,6 +81,7 @@ export type AiJobSummary = {
   proxyPath: string | null;
   proxyJobId: string | null;
   creditsGate: AiJobCreditsGateSummary | null;
+  fallback?: AiJobFallbackSummary | null;
   error: AiJobErrorSummary | null;
 };
 

@@ -1,31 +1,28 @@
 import { buildAiWorkerProxyAsyncRequest } from '../adapters/ai-worker-proxy-adapter.js';
 import { startAiWorkerProxyExecution } from '../adapters/ai-worker-proxy-execution.js';
 import { buildOpenAiOfficialRequest, startOpenAiOfficialExecution } from '../adapters/openai-official-adapter.js';
+import { isOpenAiCompatibleAdapterId, openAiCompatibleAdapterIdsForModality } from '../openai-compatible-config.js';
 import { assertWorkerSupportsAdapter } from './types.js';
+
+const TEXT_OPENAI_COMPATIBLE_ADAPTERS = Object.freeze(openAiCompatibleAdapterIdsForModality('text'));
 
 export const textWorker = Object.freeze({
   id: 'text-worker',
   modalities: Object.freeze(['text']),
   capabilities: Object.freeze(['text.generate']),
-  adapters: Object.freeze(['ai-worker-proxy', 'openai-official', 'toapis-openai', 'tinysnow-openai', 'volcengine-ark-openai']),
+  adapters: Object.freeze(['ai-worker-proxy', ...TEXT_OPENAI_COMPATIBLE_ADAPTERS]),
   status: 'active',
   buildRequest(job, route) {
     assertWorkerSupportsAdapter(textWorker, route?.adapterId);
     if (
-      route?.adapterId === 'openai-official' ||
-      route?.adapterId === 'toapis-openai' ||
-      route?.adapterId === 'tinysnow-openai' ||
-      route?.adapterId === 'volcengine-ark-openai'
+      isOpenAiCompatibleAdapterId(route?.adapterId)
     ) return buildOpenAiOfficialRequest(job, route);
     return buildAiWorkerProxyAsyncRequest(job, route);
   },
   start(plan, options = {}) {
     assertWorkerSupportsAdapter(textWorker, plan?.route?.adapterId);
     if (
-      plan?.route?.adapterId === 'openai-official' ||
-      plan?.route?.adapterId === 'toapis-openai' ||
-      plan?.route?.adapterId === 'tinysnow-openai' ||
-      plan?.route?.adapterId === 'volcengine-ark-openai'
+      isOpenAiCompatibleAdapterId(plan?.route?.adapterId)
     ) {
       return startOpenAiOfficialExecution(plan, options);
     }

@@ -42,6 +42,85 @@ describe('model ops config store', () => {
     });
   });
 
+  it('keeps route fallback policy and endpoint mappings', () => {
+    expect(
+      normalizeModelOpsConfig({
+        version: 4,
+        bindingOverrides: [
+          {
+            bindingId: 'gpt-image-2:302ai-openai:image',
+            priority: 8,
+            fallbackPolicy: 'cost_optimized',
+            fallbackMaxAttempts: 2,
+          },
+        ],
+        providerOverrides: [
+          {
+            providerId: '302ai',
+            baseUrl: 'https://proxy.example/302ai/v1/',
+            requestTimeoutMs: 45_500,
+          },
+          {
+            providerId: 'aihubmix',
+            baseUrl: 'not-a-url',
+            requestTimeoutMs: 0,
+          },
+        ],
+        endpointMappings: [
+          {
+            routeId: '302ai-video-manual:302ai:video',
+            method: 'post',
+            requestPath: '/submit',
+            pollPath: '/tasks/{id}',
+            statusPath: 'data.status',
+            artifactPath: 'data.video.url',
+            taskIdPath: 'data.taskId',
+            errorPath: 'error.message',
+            artifactUrlPath: 'data.video.url',
+            upstreamOverride: 'kling-video-v1',
+            priority: 25,
+          },
+        ],
+      })
+    ).toMatchObject({
+      bindingOverrides: [
+        {
+          bindingId: 'gpt-image-2:302ai-openai:image',
+          priority: 8,
+          fallbackPolicy: 'cost_optimized',
+          fallbackMaxAttempts: 2,
+        },
+      ],
+      providerOverrides: [
+        {
+          providerId: '302ai',
+          baseUrl: 'https://proxy.example/302ai/v1',
+          requestTimeoutMs: 45_500,
+        },
+        {
+          providerId: 'aihubmix',
+          baseUrl: undefined,
+          requestTimeoutMs: undefined,
+        },
+      ],
+      endpointMappings: [
+        {
+          routeId: '302ai-video-manual:302ai:video',
+          method: 'POST',
+          requestPath: '/submit',
+          pollPath: '/tasks/{id}',
+          statusPath: 'data.status',
+          artifactPath: 'data.video.url',
+          taskIdPath: 'data.taskId',
+          errorPath: 'error.message',
+          artifactUrlPath: 'data.video.url',
+          upstreamOverride: 'kling-video-v1',
+          priority: 25,
+        },
+      ],
+    });
+  });
+
   it('writes and reads disk backed model ops config', async () => {
     const file = path.join(os.tmpdir(), `ac-model-ops-${Date.now()}-${Math.random().toString(36).slice(2)}.json`);
     tempFiles.add(file);

@@ -116,4 +116,56 @@ describe('AI gateway model diagnostics runner', () => {
       createsGenerationTask: false,
     });
   });
+
+  it('keeps missing endpoint fields when a diagnostics layer throws a validation error', async () => {
+    const err = new Error('endpoint mapping incomplete') as Error & { details?: unknown };
+    err.details = { missingEndpointFields: ['requestPath', 'pollPath'] };
+
+    const result = await runAiGatewayModelDiagnostics(
+      null,
+      {
+        layers: ['route'],
+        models: [{ canonicalModelId: '302ai-video-manual', modality: 'video', providerId: '302ai' }],
+      },
+      { id: 'admin_1' },
+      {
+        routeTest: vi.fn().mockRejectedValue(err),
+      }
+    );
+
+    expect(result.results[0].route).toMatchObject({
+      status: 'failed',
+      code: 'AI_GATEWAY_BATCH_ROUTE_TEST_FAILED',
+      missingEndpointFields: ['requestPath', 'pollPath'],
+    });
+  });
+
+  it('keeps ambiguous endpoint mapping details when a diagnostics layer throws a validation error', async () => {
+    const err = new Error('multiple endpoint mappings match') as Error & { details?: unknown };
+    err.details = {
+      routeIds: ['302ai-video-manual:302ai:video', '302ai-video-manual:aihubmix:video'],
+      providers: ['302ai', 'aihubmix'],
+      priority: 40,
+    };
+
+    const result = await runAiGatewayModelDiagnostics(
+      null,
+      {
+        layers: ['route'],
+        models: [{ canonicalModelId: '302ai-video-manual', modality: 'video' }],
+      },
+      { id: 'admin_1' },
+      {
+        routeTest: vi.fn().mockRejectedValue(err),
+      }
+    );
+
+    expect(result.results[0].route).toMatchObject({
+      status: 'failed',
+      code: 'AI_GATEWAY_BATCH_ROUTE_TEST_FAILED',
+      routeIds: ['302ai-video-manual:302ai:video', '302ai-video-manual:aihubmix:video'],
+      providers: ['302ai', 'aihubmix'],
+      priority: 40,
+    });
+  });
 });

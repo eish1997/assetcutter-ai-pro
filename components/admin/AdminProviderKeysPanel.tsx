@@ -19,9 +19,14 @@ import {
   smokeTestAdminProviderKey,
   testAdminModelGeneration,
   testAdminModelRoute,
+  type AdminModelDiagnosticsRunInput,
+  type AdminModelDiagnosticsRunResultItem,
+  type AdminModelGenerationTestInput,
+  type AdminModelAvailabilityRouteSummary,
   type AdminModelAvailabilitySummaryItem,
   type AdminModelGenerationTestResult,
   type AdminModelOpsConfig,
+  type AdminModelRouteTestInput,
   type AdminModelRouteTestResult,
   type AdminProviderKeyEvent,
   type AdminProviderKeyHealthSummaryItem,
@@ -53,11 +58,13 @@ import {
   type ProviderModelStatus,
   type ProviderModality,
 } from '../../services/modelRegistry';
+import { CustomDropdown } from '../ui/CustomDropdown';
 import { useAdminStaff } from './AdminStaffContext';
 
 const PROVIDERS = providersForAdminConsole();
 const KEY_POOL_PROVIDERS = providersForAdminKeyPool();
 const WORKSPACE_PUBLISH_MODALITIES: readonly ProviderModality[] = ['text', 'image', 'video', 'model3d', 'music'];
+const GENERATION_TEST_MODALITIES = new Set<ProviderModality>(['text', 'image', 'video', 'model3d']);
 const WORKSPACE_CANONICAL_MODELS = listCanonicalModels().filter(
   (model) =>
     WORKSPACE_PUBLISH_MODALITIES.includes(model.modality) &&
@@ -72,8 +79,12 @@ type ModelDiagnosticEntry = {
   message: string;
   code?: string | null;
   providerId?: string | null;
+  providerIds?: string[];
+  routeIds?: string[];
+  priority?: number | null;
   jobId?: string | null;
   jobStatus?: string | null;
+  missingEndpointFields?: string[];
   nextAction?: string | null;
   testedAt?: string | null;
 };
@@ -82,9 +93,49 @@ type AdminBindingOverride = {
   bindingId: string;
   enabled?: boolean;
   priority?: number;
+  fallbackPolicy?: RouteFallbackPolicy;
+  fallbackMaxAttempts?: number;
   upstreamOverride?: string;
 };
 type RoutePriorityDraft = Record<string, number>;
+type RouteFallbackPolicy = 'none' | 'on_error' | 'on_rate_limit' | 'on_timeout' | 'on_provider_degraded' | 'cost_optimized' | 'quality_first';
+type RouteFallbackPolicyDraft = Record<string, RouteFallbackPolicy>;
+type RouteFallbackMaxAttemptsDraft = Record<string, number>;
+type EndpointMappingDraftRow = {
+  routeId: string;
+  requestPath?: string;
+  pollPath?: string;
+  statusPath?: string;
+  artifactPath?: string;
+  taskIdPath?: string;
+  errorPath?: string;
+  upstreamOverride?: string;
+  priority?: number;
+  enabled?: boolean;
+};
+type EndpointMappingDraft = Record<string, EndpointMappingDraftRow>;
+type PublishedModelDiagnosticsTarget = AdminModelDiagnosticsRunInput['models'][number];
+type ModelDiagnosticsTarget = AdminModelRouteTestInput & AdminModelGenerationTestInput;
+
+const ROUTE_FALLBACK_POLICY_OPTIONS: readonly { value: RouteFallbackPolicy; label: string; title: string }[] = [
+  { value: 'none', label: '不切换', title: '失败后不自动换下一家' },
+  { value: 'on_error', label: '错误切换', title: '供应商报错时换下一家' },
+  { value: 'on_rate_limit', label: '限流切换', title: '遇到 429 或额度限流时换下一家' },
+  { value: 'on_timeout', label: '超时切换', title: '请求超时时换下一家' },
+  { value: 'on_provider_degraded', label: '降级切换', title: '供应商 5xx 或网络异常时换下一家' },
+  { value: 'cost_optimized', label: '成本优先', title: '可重试失败时切换，后续接入成本排序' },
+  { value: 'quality_first', label: '质量优先', title: '可重试失败时切换，后续接入质量排序' },
+];
+const ROUTE_FALLBACK_POLICY_SET = new Set<RouteFallbackPolicy>(ROUTE_FALLBACK_POLICY_OPTIONS.map((item) => item.value));
+const ENDPOINT_MAPPING_FIELDS: readonly { key: keyof EndpointMappingDraftRow; label: string; placeholder: string; required?: boolean }[] = [
+  { key: 'requestPath', label: '提交路径', placeholder: '/v1/video/generations', required: true },
+  { key: 'pollPath', label: '轮询路径', placeholder: '/v1/tasks/{id}', required: true },
+  { key: 'statusPath', label: '状态字段', placeholder: 'data.status', required: true },
+  { key: 'artifactPath', label: '产物字段', placeholder: 'data.output.video_url', required: true },
+  { key: 'taskIdPath', label: '任务字段', placeholder: 'data.taskId' },
+  { key: 'errorPath', label: '错误字段', placeholder: 'error.message' },
+  { key: 'upstreamOverride', label: '上游模型', placeholder: 'provider-specific-model-id' },
+];
 
 const MODALITY_LABELS: Record<ProviderModality, string> = {
   text: '文本',
@@ -281,6 +332,12 @@ function modelStatusClass(status?: ProviderModelStatus) {
   return 'border-white/10 bg-white/[0.03] text-gray-400';
 }
 
+function modelEndpointMappingLabel(model: ProviderModelCatalogEntry): string {
+  const required = Array.isArray(model.endpointMapping?.required) ? model.endpointMapping.required.filter(Boolean) : [];
+  if (!model.requiresEndpointMapping && !required.length) return '';
+  return required.length ? `缺 ${required.join(' / ')}` : '缺 endpoint 映射';
+}
+
 function routeExecutionLabel(status?: ModelRouteExecutionStatus) {
   if (status === 'platform_ready') return '平台可用';
   if (status === 'byok_ready') return '自带密钥';
@@ -324,6 +381,8 @@ function modelAvailabilityLabel(status?: string) {
   if (status === 'key_missing') return '缺密钥';
   if (status === 'parameter_pending') return '参数待映射';
   if (status === 'adapter_pending') return '网关待接';
+  if (status === 'route_ambiguous') return '路线冲突';
+  if (status === 'route_not_executable') return '路线暂停';
   if (status === 'route_not_found') return '无路由';
   return '检测中';
 }
@@ -333,8 +392,65 @@ function modelAvailabilityClass(status?: string) {
   if (status === 'key_missing') return 'border-amber-500/30 bg-amber-950/25 text-amber-100';
   if (status === 'parameter_pending') return 'border-orange-500/30 bg-orange-950/25 text-orange-100';
   if (status === 'adapter_pending') return 'border-purple-500/25 bg-purple-950/20 text-purple-100';
+  if (status === 'route_ambiguous') return 'border-red-500/30 bg-red-950/25 text-red-100';
+  if (status === 'route_not_executable') return 'border-red-500/25 bg-red-950/20 text-red-100';
   if (status === 'route_not_found') return 'border-red-500/25 bg-red-950/20 text-red-100';
   return 'border-white/10 bg-white/[0.03] text-gray-400';
+}
+
+function selectedModelAvailabilityIssueText(selectedIds: string[], availabilityById: Map<string, AdminModelAvailabilitySummaryItem>) {
+  const rows = selectedIds.map((id) => availabilityById.get(id)).filter((row): row is AdminModelAvailabilitySummaryItem => Boolean(row));
+  const ambiguous = rows.filter((row) => row.reasonCode === 'route_ambiguous').length;
+  if (ambiguous) return `${ambiguous} 个路线冲突`;
+  const parameterPending = rows.filter((row) => row.reasonCode === 'parameter_pending').length;
+  if (parameterPending) return `${parameterPending} 个待映射`;
+  const keyMissing = rows.filter((row) => row.reasonCode === 'key_missing').length;
+  if (keyMissing) return `${keyMissing} 个缺密钥`;
+  const adapterPending = rows.filter((row) => row.reasonCode === 'adapter_pending').length;
+  if (adapterPending) return `${adapterPending} 个待接入`;
+  const routeNotExecutable = rows.filter((row) => row.reasonCode === 'route_not_executable').length;
+  if (routeNotExecutable) return `${routeNotExecutable} 个路线暂停`;
+  const routeMissing = rows.filter((row) => row.reasonCode === 'route_not_found').length;
+  if (routeMissing) return `${routeMissing} 个缺路由`;
+  return '已选择且可发布';
+}
+
+function modelAvailabilityIssueText(row?: AdminModelAvailabilitySummaryItem | null) {
+  if (!row) return '';
+  if (row.reasonCode === 'route_ambiguous') {
+    const providers = Array.isArray(row.providers) && row.providers.length ? `：${row.providers.join(' / ')}` : '';
+    return `路线冲突${providers}`;
+  }
+  return row.reason || modelAvailabilityLabel(row.status);
+}
+
+function modelAvailabilityIssueTitle(row?: AdminModelAvailabilitySummaryItem | null) {
+  if (!row) return '';
+  const lines = [row.reason];
+  if (Array.isArray(row.providers) && row.providers.length) lines.push(`providers: ${row.providers.join(', ')}`);
+  if (Array.isArray(row.routeIds) && row.routeIds.length) lines.push(`routes: ${row.routeIds.join(', ')}`);
+  if (Number.isFinite(Number(row.priority))) lines.push(`priority: ${row.priority}`);
+  return lines.filter(Boolean).join('\n');
+}
+
+function routeFallbackPolicyLabel(value?: string | null) {
+  if (value === 'none') return '不切换';
+  if (value === 'on_error') return '错误切换';
+  if (value === 'on_rate_limit') return '限流切换';
+  if (value === 'on_timeout') return '超时切换';
+  if (value === 'on_provider_degraded') return '降级切换';
+  if (value === 'cost_optimized') return '成本优先';
+  if (value === 'quality_first') return '质量优先';
+  return value || '';
+}
+
+function routeFallbackSummaryText(route: AdminModelAvailabilityRouteSummary | undefined) {
+  if (!route?.fallbackPolicy && !route?.fallbackMaxAttempts) return '';
+  const parts = [
+    route.fallbackPolicy ? routeFallbackPolicyLabel(route.fallbackPolicy) : '',
+    route.fallbackMaxAttempts ? `最多 ${route.fallbackMaxAttempts} 次` : '',
+  ].filter(Boolean);
+  return parts.join(' / ');
 }
 
 function diagnosticStatusClass(status?: string) {
@@ -349,6 +465,103 @@ function diagnosticStatusLabel(status?: string) {
   return '未测';
 }
 
+function diagnosticDetailText(entry?: ModelDiagnosticEntry) {
+  if (!entry) return '';
+  const missing = Array.isArray(entry.missingEndpointFields) && entry.missingEndpointFields.length
+    ? `缺 ${entry.missingEndpointFields.join(' / ')}`
+    : '';
+  const conflict = Array.isArray(entry.providerIds) && entry.providerIds.length
+    ? `冲突 ${entry.providerIds.join(' / ')}`
+    : '';
+  return missing || conflict || entry.jobId || entry.code || entry.providerId || entry.message || '';
+}
+
+function diagnosticTitle(entry: ModelDiagnosticEntry | undefined, fallback: string) {
+  if (!entry) return fallback;
+  return [
+    entry.message,
+    entry.code,
+    entry.providerId,
+    Array.isArray(entry.providerIds) && entry.providerIds.length ? `providers: ${entry.providerIds.join(', ')}` : '',
+    Array.isArray(entry.routeIds) && entry.routeIds.length ? `routes: ${entry.routeIds.join(', ')}` : '',
+    Number.isFinite(Number(entry.priority)) ? `priority: ${entry.priority}` : '',
+    entry.jobId,
+    Array.isArray(entry.missingEndpointFields) && entry.missingEndpointFields.length ? `missing: ${entry.missingEndpointFields.join(', ')}` : '',
+    entry.nextAction,
+  ].filter(Boolean).join('\n');
+}
+
+function routeTestFailureMessage(canonicalModelId: string, result: AdminModelRouteTestResult): string {
+  const details: string[] = [];
+  if (Array.isArray(result.missingEndpointFields) && result.missingEndpointFields.length) {
+    details.push(`缺 ${result.missingEndpointFields.join(' / ')}`);
+  }
+  if (Array.isArray(result.providers) && result.providers.length) {
+    details.push(`冲突供应商 ${result.providers.join(' / ')}`);
+  }
+  if (Array.isArray(result.routeIds) && result.routeIds.length) {
+    details.push(`冲突路线 ${result.routeIds.join(' / ')}`);
+  }
+  if (Number.isFinite(Number(result.priority))) {
+    details.push(`优先级 ${result.priority}`);
+  }
+  if (result.nextAction) details.push(result.nextAction);
+  return `${canonicalModelId} 路由检查失败：${result.message}${details.length ? `；${details.join('；')}` : ''}`;
+}
+
+function modelDiagnosticsIssueSummaryText(results: AdminModelDiagnosticsRunResultItem[] | undefined) {
+  const classify = (entry: AdminModelRouteTestResult | AdminModelGenerationTestResult) => {
+    const code = String(entry.code || '');
+    const message = String(entry.message || '');
+    if (code === 'AI_GATEWAY_MODEL_ROUTE_AMBIGUOUS' || (Array.isArray(entry.routeIds) && entry.routeIds.length > 1)) {
+      return 'ambiguous';
+    }
+    if (
+      code === 'AI_GATEWAY_MODEL_PARAMETER_PENDING' ||
+      (Array.isArray(entry.missingEndpointFields) && entry.missingEndpointFields.length) ||
+      /endpoint mapping|parameter/i.test(message)
+    ) {
+      return 'missingEndpoint';
+    }
+    if (
+      code === 'AI_GATEWAY_PROVIDER_KEY_UNAVAILABLE' ||
+      code === 'AI_GATEWAY_PROVIDER_KEY_MISSING' ||
+      /no enabled .*key|no usable .*key|provider key/i.test(message)
+    ) {
+      return 'keyMissing';
+    }
+    if (code === 'AI_GATEWAY_MODEL_ADAPTER_PENDING' || code === 'AI_GATEWAY_MODEL_ROUTE_NOT_EXECUTABLE') {
+      return 'adapterPending';
+    }
+    if (code === 'AI_GATEWAY_MODEL_ROUTE_NOT_FOUND' || code === 'AI_GATEWAY_NO_PROVIDER_ROUTE') {
+      return 'routeMissing';
+    }
+    return '';
+  };
+  const counts = {
+    ambiguous: 0,
+    missingEndpoint: 0,
+    keyMissing: 0,
+    adapterPending: 0,
+    routeMissing: 0,
+  };
+  for (const item of Array.isArray(results) ? results : []) {
+    for (const entry of [item.route, item.generation]) {
+      if (!entry || entry.status !== 'failed') continue;
+      const kind = classify(entry);
+      if (kind && kind in counts) counts[kind as keyof typeof counts] += 1;
+    }
+  }
+  const parts = [
+    counts.ambiguous ? `${counts.ambiguous} 个路线冲突` : '',
+    counts.missingEndpoint ? `${counts.missingEndpoint} 个待映射` : '',
+    counts.keyMissing ? `${counts.keyMissing} 个缺密钥` : '',
+    counts.adapterPending ? `${counts.adapterPending} 个待接入` : '',
+    counts.routeMissing ? `${counts.routeMissing} 个缺路由` : '',
+  ].filter(Boolean);
+  return parts.length ? `；需处理：${parts.join('，')}` : '';
+}
+
 function routeDiagnosticEntry(result: AdminModelRouteTestResult): ModelDiagnosticEntry {
   return {
     layer: 'route',
@@ -356,6 +569,10 @@ function routeDiagnosticEntry(result: AdminModelRouteTestResult): ModelDiagnosti
     message: result.message,
     code: result.code,
     providerId: result.providerId,
+    providerIds: Array.isArray(result.providers) ? result.providers.filter(Boolean) : [],
+    routeIds: Array.isArray(result.routeIds) ? result.routeIds.filter(Boolean) : [],
+    priority: Number.isFinite(Number(result.priority)) ? Number(result.priority) : null,
+    missingEndpointFields: Array.isArray(result.missingEndpointFields) ? result.missingEndpointFields : [],
     nextAction: result.nextAction || null,
     testedAt: result.testedAt,
   };
@@ -368,8 +585,12 @@ function generationDiagnosticEntry(result: AdminModelGenerationTestResult): Mode
     message: result.message,
     code: result.code,
     providerId: result.providerId,
+    providerIds: Array.isArray(result.providers) ? result.providers.filter(Boolean) : [],
+    routeIds: Array.isArray(result.routeIds) ? result.routeIds.filter(Boolean) : [],
+    priority: Number.isFinite(Number(result.priority)) ? Number(result.priority) : null,
     jobId: result.jobId,
     jobStatus: result.jobStatus,
+    missingEndpointFields: Array.isArray(result.missingEndpointFields) ? result.missingEndpointFields : [],
     nextAction: result.nextAction || null,
     testedAt: result.testedAt,
   };
@@ -381,6 +602,7 @@ function workspaceModelAvailabilityPayload() {
       canonicalModelId: model.canonicalModelId,
       modality: model.modality,
       routes: listModelRoutes(model.canonicalModelId).map((route) => ({
+        routeId: route.routeId,
         providerId: route.providerId,
         modality: route.modality,
         executionStatus: route.executionStatus,
@@ -388,6 +610,75 @@ function workspaceModelAvailabilityPayload() {
       })),
     })),
   };
+}
+
+function parseEndpointMappingDraftRouteId(routeId: string) {
+  const parts = String(routeId || '').trim().split(':');
+  if (parts.length < 3) return null;
+  const modality = parts[parts.length - 1] as ProviderModality;
+  const providerId = parts[parts.length - 2];
+  const canonicalModelId = parts.slice(0, -2).join(':');
+  if (!canonicalModelId || !providerId || !modality) return null;
+  return { canonicalModelId, providerId, modality };
+}
+
+function enabledEndpointMappingDraftRoutes(
+  canonicalModelId: string,
+  modality: ProviderModality,
+  endpointMappingDraft: EndpointMappingDraft
+) {
+  return Object.values(endpointMappingDraft)
+    .filter((row) => row.enabled === true)
+    .map((row) => parseEndpointMappingDraftRouteId(row.routeId))
+    .filter((row): row is NonNullable<ReturnType<typeof parseEndpointMappingDraftRouteId>> =>
+      Boolean(row && row.canonicalModelId === canonicalModelId && row.modality === modality)
+    );
+}
+
+function buildModelDiagnosticsTarget(
+  model: (typeof WORKSPACE_CANONICAL_MODELS)[number],
+  availability: AdminModelAvailabilitySummaryItem | undefined,
+  endpointMappingDraft: EndpointMappingDraft = {}
+): ModelDiagnosticsTarget {
+  const catalogRoutes = listModelRoutes(model.canonicalModelId);
+  const endpointDraftRoutes = enabledEndpointMappingDraftRoutes(model.canonicalModelId, model.modality, endpointMappingDraft);
+  const endpointCatalogRoutes = catalogRoutes.filter((route) => route.requiresEndpointMapping && route.modality === model.modality);
+  if (endpointDraftRoutes.length > 1 || endpointCatalogRoutes.length > 1) {
+    return {
+      canonicalModelId: model.canonicalModelId,
+      modality: model.modality,
+      executionStatus: 'requires_endpoint_mapping',
+      requiresEndpointMapping: true,
+    };
+  }
+  const availabilityRoute = availability?.routes.find((route) => route.selectable) || availability?.routes[0];
+  const catalogRoute =
+    listModelRoutes(model.canonicalModelId).find((route) => route.routeId === availabilityRoute?.routeId) ||
+    catalogRoutes[0];
+  return {
+    routeId: availabilityRoute?.routeId || catalogRoute?.routeId,
+    canonicalModelId: model.canonicalModelId,
+    modality: availabilityRoute?.modality || catalogRoute?.modality || model.modality,
+    providerId: availabilityRoute?.providerId || catalogRoute?.providerId,
+    executionStatus: availabilityRoute?.executionStatus || catalogRoute?.executionStatus,
+    requiresEndpointMapping: catalogRoute?.requiresEndpointMapping === true,
+  };
+}
+
+function buildPublishedModelDiagnosticsTargets(
+  models: typeof WORKSPACE_CANONICAL_MODELS,
+  selectedCanonicalSet: Set<string>,
+  availabilityRows: AdminModelAvailabilitySummaryItem[],
+  endpointMappingDraft: EndpointMappingDraft = {}
+): PublishedModelDiagnosticsTarget[] {
+  const availabilityById = new Map<string, AdminModelAvailabilitySummaryItem>(availabilityRows.map((row) => [row.canonicalModelId, row]));
+  const targets: PublishedModelDiagnosticsTarget[] = [];
+  for (const model of models) {
+    if (!selectedCanonicalSet.has(model.canonicalModelId)) continue;
+    if (!GENERATION_TEST_MODALITIES.has(model.modality)) continue;
+    targets.push(buildModelDiagnosticsTarget(model, availabilityById.get(model.canonicalModelId), endpointMappingDraft));
+  }
+  return targets;
 }
 
 function routeRole(route: ModelRouteCatalogEntry): 'text' | 'image' | null {
@@ -419,10 +710,16 @@ function normalizeBindingOverrideRows(value: unknown): AdminBindingOverride[] {
       const bindingId = String(row.bindingId || '').trim();
       if (!bindingId) return null;
       const priority = Number(row.priority);
+      const fallbackPolicy = typeof row.fallbackPolicy === 'string' && ROUTE_FALLBACK_POLICY_SET.has(row.fallbackPolicy as RouteFallbackPolicy)
+        ? (row.fallbackPolicy as RouteFallbackPolicy)
+        : null;
+      const fallbackMaxAttempts = Number(row.fallbackMaxAttempts);
       return {
         bindingId,
         ...(row.enabled !== undefined ? { enabled: row.enabled === true } : {}),
         ...(Number.isFinite(priority) ? { priority: Math.floor(priority) } : {}),
+        ...(fallbackPolicy ? { fallbackPolicy } : {}),
+        ...(Number.isFinite(fallbackMaxAttempts) ? { fallbackMaxAttempts: Math.max(1, Math.min(5, Math.floor(fallbackMaxAttempts))) } : {}),
         ...(typeof row.upstreamOverride === 'string' && row.upstreamOverride.trim()
           ? { upstreamOverride: row.upstreamOverride.trim() }
           : {}),
@@ -441,18 +738,132 @@ function routePriorityDraftFromConfig(config?: AdminModelOpsConfig | null): Rout
   return out;
 }
 
-function mergeRoutePriorityOverrides(
+function routeFallbackPolicyDraftFromConfig(config?: AdminModelOpsConfig | null): RouteFallbackPolicyDraft {
+  const routeIds = knownRouteBindingIds();
+  const out: RouteFallbackPolicyDraft = {};
+  for (const row of normalizeBindingOverrideRows(config?.bindingOverrides)) {
+    if (!routeIds.has(row.bindingId) || !row.fallbackPolicy) continue;
+    out[row.bindingId] = row.fallbackPolicy;
+  }
+  return out;
+}
+
+function routeFallbackMaxAttemptsDraftFromConfig(config?: AdminModelOpsConfig | null): RouteFallbackMaxAttemptsDraft {
+  const routeIds = knownRouteBindingIds();
+  const out: RouteFallbackMaxAttemptsDraft = {};
+  for (const row of normalizeBindingOverrideRows(config?.bindingOverrides)) {
+    if (!routeIds.has(row.bindingId) || !row.fallbackMaxAttempts) continue;
+    out[row.bindingId] = row.fallbackMaxAttempts;
+  }
+  return out;
+}
+
+function mergeRouteBindingOverrides(
   existing: unknown,
-  routePriorityDraft: RoutePriorityDraft
+  routePriorityDraft: RoutePriorityDraft,
+  routeFallbackPolicyDraft: RouteFallbackPolicyDraft,
+  routeFallbackMaxAttemptsDraft: RouteFallbackMaxAttemptsDraft = {}
 ): AdminBindingOverride[] | null {
   const routeIds = knownRouteBindingIds();
-  const preserved = normalizeBindingOverrideRows(existing).filter((row) => !routeIds.has(row.bindingId));
-  const priorityRows = Object.entries(routePriorityDraft)
-    .filter(([bindingId, priority]) => routeIds.has(bindingId) && Number.isFinite(Number(priority)))
-    .map(([bindingId, priority]) => ({ bindingId, priority: Math.max(1, Math.floor(Number(priority))) }));
-  const rows = [...preserved, ...priorityRows].sort((a, b) => a.bindingId.localeCompare(b.bindingId));
+  const normalized = normalizeBindingOverrideRows(existing);
+  const byBindingId = new Map<string, AdminBindingOverride>();
+  const preserved = normalized.filter((row) => !routeIds.has(row.bindingId));
+  for (const row of normalized) {
+    if (routeIds.has(row.bindingId)) byBindingId.set(row.bindingId, { ...row });
+  }
+  for (const [bindingId, priority] of Object.entries(routePriorityDraft)) {
+    if (!routeIds.has(bindingId) || !Number.isFinite(Number(priority))) continue;
+    const existingRow = byBindingId.get(bindingId) || { bindingId };
+    byBindingId.set(bindingId, { ...existingRow, priority: Math.max(1, Math.floor(Number(priority))) });
+  }
+  for (const [bindingId, fallbackPolicy] of Object.entries(routeFallbackPolicyDraft)) {
+    if (!routeIds.has(bindingId) || !ROUTE_FALLBACK_POLICY_SET.has(fallbackPolicy)) continue;
+    const existingRow = byBindingId.get(bindingId) || { bindingId };
+    byBindingId.set(bindingId, { ...existingRow, fallbackPolicy });
+  }
+  for (const [bindingId, maxAttempts] of Object.entries(routeFallbackMaxAttemptsDraft)) {
+    if (!routeIds.has(bindingId) || !Number.isFinite(Number(maxAttempts))) continue;
+    const existingRow = byBindingId.get(bindingId) || { bindingId };
+    byBindingId.set(bindingId, { ...existingRow, fallbackMaxAttempts: Math.max(1, Math.min(5, Math.floor(Number(maxAttempts)))) });
+  }
+  const rows = [...preserved, ...byBindingId.values()].sort((a, b) => a.bindingId.localeCompare(b.bindingId));
   return rows.length ? rows : null;
 }
+
+function normalizeEndpointMappingRows(value: unknown): EndpointMappingDraftRow[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => {
+      const row = item && typeof item === 'object' ? (item as Record<string, unknown>) : {};
+      const routeId = String(row.routeId || '').trim();
+      if (!routeId) return null;
+      const clean = (key: string) => {
+        const value = String(row[key] || '').trim();
+        return value ? value : undefined;
+      };
+      const priority = Number(row.priority);
+      return {
+        routeId,
+        ...(clean('requestPath') ? { requestPath: clean('requestPath') } : {}),
+        ...(clean('pollPath') ? { pollPath: clean('pollPath') } : {}),
+        ...(clean('statusPath') ? { statusPath: clean('statusPath') } : {}),
+        ...(clean('artifactPath') ? { artifactPath: clean('artifactPath') } : {}),
+        ...(clean('taskIdPath') ? { taskIdPath: clean('taskIdPath') } : {}),
+        ...(clean('errorPath') ? { errorPath: clean('errorPath') } : {}),
+        ...(clean('upstreamOverride') ? { upstreamOverride: clean('upstreamOverride') } : {}),
+        ...(Number.isFinite(priority) ? { priority: Math.max(1, Math.floor(priority)) } : {}),
+        ...(row.enabled !== undefined ? { enabled: row.enabled === true } : {}),
+      };
+    })
+    .filter((row): row is EndpointMappingDraftRow => Boolean(row));
+}
+
+function endpointMappingDraftFromConfig(config?: AdminModelOpsConfig | null): EndpointMappingDraft {
+  const out: EndpointMappingDraft = {};
+  for (const row of normalizeEndpointMappingRows(config?.endpointMappings)) {
+    out[row.routeId] = row;
+  }
+  return out;
+}
+
+function mergeEndpointMappings(existing: unknown, draft: EndpointMappingDraft): EndpointMappingDraftRow[] | null {
+  const normalized = normalizeEndpointMappingRows(existing);
+  const byRouteId = new Map<string, EndpointMappingDraftRow>();
+  for (const row of normalized) byRouteId.set(row.routeId, { ...row });
+  for (const [routeId, row] of Object.entries(draft)) {
+    if (!routeId) continue;
+    const merged = { ...(byRouteId.get(routeId) || { routeId }), ...row, routeId };
+    const hasAnyMappingField = ['requestPath', 'pollPath', 'statusPath', 'artifactPath', 'taskIdPath', 'errorPath', 'upstreamOverride'].some((key) =>
+      Boolean(String((merged as Record<string, unknown>)[key] || '').trim())
+    );
+    const hasPriority = Number.isFinite(Number(merged.priority));
+    if (hasAnyMappingField || hasPriority || merged.enabled === false) byRouteId.set(routeId, merged);
+    else byRouteId.delete(routeId);
+  }
+  const rows = [...byRouteId.values()].sort((a, b) => a.routeId.localeCompare(b.routeId));
+  return rows.length ? rows : null;
+}
+
+export const __adminProviderKeysPanelTestUtils = {
+  normalizeBindingOverrideRows,
+  routePriorityDraftFromConfig,
+  routeFallbackPolicyDraftFromConfig,
+  routeFallbackMaxAttemptsDraftFromConfig,
+  mergeRouteBindingOverrides,
+  normalizeEndpointMappingRows,
+  endpointMappingDraftFromConfig,
+  mergeEndpointMappings,
+  buildModelDiagnosticsTarget,
+  buildPublishedModelDiagnosticsTargets,
+  routeTestFailureMessage,
+  selectedModelAvailabilityIssueText,
+  modelAvailabilityIssueText,
+  modelAvailabilityIssueTitle,
+  routeFallbackSummaryText,
+  modelDiagnosticsIssueSummaryText,
+  diagnosticDetailText,
+  diagnosticTitle,
+};
 
 function Pill({ children, className = '' }: { children: React.ReactNode; className?: string }) {
   return <span className={`inline-flex rounded-md border px-2 py-0.5 text-[10px] ${className}`}>{children}</span>;
@@ -503,11 +914,15 @@ function ProviderCapabilityMatrix({ provider }: { provider: ProviderCatalogEntry
 
 function ProviderModelRow({ model }: { model: ProviderModelCatalogEntry; key?: React.Key }) {
   const label = displayModelLabel(model.label, model.registryId || model.providerModelId);
+  const mappingLabel = modelEndpointMappingLabel(model);
   return (
     <div className="grid gap-2 rounded-md border border-white/[0.06] bg-black/20 px-3 py-2 text-[10px] text-gray-500 md:grid-cols-[1fr_86px_86px]">
       <div className="min-w-0">
         <div className="truncate text-[11px] font-semibold text-gray-200" title={label}>{label}</div>
         <div className="mt-0.5 truncate" title={model.providerModelId}>{model.providerModelId}</div>
+        {mappingLabel ? (
+          <div className="mt-1 truncate text-amber-200" title={model.endpointMapping?.notes || mappingLabel}>{mappingLabel}</div>
+        ) : null}
       </div>
       <div>
         <div>{MODALITY_LABELS[model.modality]}</div>
@@ -582,6 +997,9 @@ const AdminProviderKeysPanel: React.FC = () => {
   const [generationTestingId, setGenerationTestingId] = React.useState('');
   const [modelDiagnostics, setModelDiagnostics] = React.useState<ModelDiagnosticState>({});
   const [routePriorityDraft, setRoutePriorityDraft] = React.useState<RoutePriorityDraft>({});
+  const [routeFallbackPolicyDraft, setRouteFallbackPolicyDraft] = React.useState<RouteFallbackPolicyDraft>({});
+  const [routeFallbackMaxAttemptsDraft, setRouteFallbackMaxAttemptsDraft] = React.useState<RouteFallbackMaxAttemptsDraft>({});
+  const [endpointMappingDraft, setEndpointMappingDraft] = React.useState<EndpointMappingDraft>({});
   const [error, setError] = React.useState('');
   const [message, setMessage] = React.useState('');
   const [selectedProviderId, setSelectedProviderId] = React.useState(PROVIDERS[0]?.id || 'tripo');
@@ -607,6 +1025,9 @@ const AdminProviderKeysPanel: React.FC = () => {
       if (modelOpsRes?.config) {
         setModelOpsConfig(modelOpsRes.config);
         setRoutePriorityDraft(routePriorityDraftFromConfig(modelOpsRes.config));
+        setRouteFallbackPolicyDraft(routeFallbackPolicyDraftFromConfig(modelOpsRes.config));
+        setRouteFallbackMaxAttemptsDraft(routeFallbackMaxAttemptsDraftFromConfig(modelOpsRes.config));
+        setEndpointMappingDraft(endpointMappingDraftFromConfig(modelOpsRes.config));
         const allow = modelOpsRes.config.publishedCanonicalModelAllowlist;
         setSelectedCanonicalModelIds(Array.isArray(allow) ? allow : defaultPublishedCanonicalIds());
       }
@@ -636,6 +1057,7 @@ const AdminProviderKeysPanel: React.FC = () => {
   const healthySummaryCount = summary.filter((item) => item.healthStatus === 'healthy').length;
   const unhealthySummaryCount = summary.filter((item) => ['warning', 'degraded', 'rate_limited', 'cooling_down'].includes(item.healthStatus)).length;
   const publishedReadyCount = selectedCanonicalModelIds.filter((id) => modelAvailabilityById.get(id)?.workspaceSelectable).length;
+  const publishedIssueText = selectedModelAvailabilityIssueText(selectedCanonicalModelIds, modelAvailabilityById);
 
   const updateRow = (id: string, patch: Partial<AdminProviderKeyRow>) => {
     setRows((prev) => prev.map((row) => (row.id === id ? { ...row, ...patch } : row)));
@@ -644,6 +1066,26 @@ const AdminProviderKeysPanel: React.FC = () => {
   const updateRoutePriority = (bindingId: string, priority: number) => {
     const next = Math.max(1, Math.floor(Number(priority) || 1));
     setRoutePriorityDraft((prev) => ({ ...prev, [bindingId]: next }));
+  };
+
+  const updateRouteFallbackPolicy = (bindingId: string, fallbackPolicy: RouteFallbackPolicy) => {
+    setRouteFallbackPolicyDraft((prev) => ({ ...prev, [bindingId]: fallbackPolicy }));
+  };
+
+  const updateRouteFallbackMaxAttempts = (bindingId: string, maxAttempts: number) => {
+    const next = Math.max(1, Math.min(5, Math.floor(Number(maxAttempts) || 1)));
+    setRouteFallbackMaxAttemptsDraft((prev) => ({ ...prev, [bindingId]: next }));
+  };
+
+  const updateEndpointMappingDraft = (routeId: string, key: keyof EndpointMappingDraftRow, value: string | boolean | number) => {
+    setEndpointMappingDraft((prev) => ({
+      ...prev,
+      [routeId]: {
+        ...(prev[routeId] || { routeId }),
+        routeId,
+        [key]: value,
+      },
+    }));
   };
 
   const updateCredential = (id: string, key: string, value: string) => {
@@ -908,7 +1350,7 @@ const AdminProviderKeysPanel: React.FC = () => {
         setError(
           `有 ${blocked.length} 个模型暂时不能发布：${blocked
             .slice(0, 4)
-            .map((row) => `${row.canonicalModelId}（${row.reason}）`)
+            .map((row) => `${row.canonicalModelId}（${modelAvailabilityIssueText(row)}）`)
             .join('；')}${blocked.length > 4 ? '；...' : ''}`
         );
         return;
@@ -916,10 +1358,14 @@ const AdminProviderKeysPanel: React.FC = () => {
       const saved = await saveAdminModelOpsConfig({
         ...base,
         publishedCanonicalModelAllowlist: selected,
-        bindingOverrides: mergeRoutePriorityOverrides(base.bindingOverrides, routePriorityDraft),
+        bindingOverrides: mergeRouteBindingOverrides(base.bindingOverrides, routePriorityDraft, routeFallbackPolicyDraft, routeFallbackMaxAttemptsDraft),
+        endpointMappings: mergeEndpointMappings(base.endpointMappings, endpointMappingDraft),
       });
       setModelOpsConfig(saved.config);
       setRoutePriorityDraft(routePriorityDraftFromConfig(saved.config));
+      setRouteFallbackPolicyDraft(routeFallbackPolicyDraftFromConfig(saved.config));
+      setRouteFallbackMaxAttemptsDraft(routeFallbackMaxAttemptsDraftFromConfig(saved.config));
+      setEndpointMappingDraft(endpointMappingDraftFromConfig(saved.config));
       setSelectedCanonicalModelIds(saved.config.publishedCanonicalModelAllowlist || selected);
       await refreshModelOpsConfig();
       setMessage('工作区模型发布范围已保存');
@@ -937,25 +1383,14 @@ const AdminProviderKeysPanel: React.FC = () => {
     setMessage('');
     try {
       const availabilityRows: AdminModelAvailabilitySummaryItem[] = modelAvailability.length ? modelAvailability : await refreshModelAvailability();
-      const availabilityById = new Map<string, AdminModelAvailabilitySummaryItem>(availabilityRows.map((row) => [row.canonicalModelId, row]));
-      const targets = [];
-      for (const model of WORKSPACE_CANONICAL_MODELS) {
-        if (!selectedCanonicalSet.has(model.canonicalModelId)) continue;
-        if (model.modality !== 'text' && model.modality !== 'image') continue;
-        const availability = availabilityById.get(model.canonicalModelId);
-        if (!availability?.workspaceSelectable) continue;
-        const availabilityRoute = availability.routes.find((route) => route.selectable) || availability.routes[0];
-        const catalogRoute = listModelRoutes(model.canonicalModelId)[0];
-        targets.push({
-          canonicalModelId: model.canonicalModelId,
-          modality: availabilityRoute?.modality || catalogRoute?.modality || model.modality,
-          providerId: availabilityRoute?.providerId || catalogRoute?.providerId,
-          executionStatus: availabilityRoute?.executionStatus || catalogRoute?.executionStatus,
-          requiresEndpointMapping: catalogRoute?.requiresEndpointMapping === true,
-        });
-      }
+      const targets = buildPublishedModelDiagnosticsTargets(
+        WORKSPACE_CANONICAL_MODELS,
+        selectedCanonicalSet,
+        availabilityRows,
+        endpointMappingDraft
+      );
       if (!targets.length) {
-        setError('没有可诊断的已发布文本/图像模型');
+        setError('没有可诊断的已发布模型');
         return;
       }
       const res = await runAdminModelDiagnostics({ layers: ['route', 'generation'], models: targets });
@@ -970,8 +1405,9 @@ const AdminProviderKeysPanel: React.FC = () => {
         }
         return next;
       });
+      const issueSummary = modelDiagnosticsIssueSummaryText(res.results);
       setMessage(
-        `批量诊断完成：路由 ${res.summary.route.passed}/${res.summary.route.tested} 通过，真实生成 ${res.summary.generation.passed}/${res.summary.generation.tested} 通过，创建任务 ${res.summary.generation.createdJobs} 个`
+        `批量诊断完成：路由 ${res.summary.route.passed}/${res.summary.route.tested} 通过，真实生成 ${res.summary.generation.passed}/${res.summary.generation.tested} 通过，创建任务 ${res.summary.generation.createdJobs} 个${issueSummary}`
       );
     } catch (err) {
       setError(err instanceof Error ? err.message : '批量诊断失败');
@@ -984,25 +1420,18 @@ const AdminProviderKeysPanel: React.FC = () => {
     const model = WORKSPACE_CANONICAL_MODELS.find((row) => row.canonicalModelId === canonicalModelId);
     if (!model) return;
     const availability = modelAvailabilityById.get(canonicalModelId);
-    const availabilityRoute = availability?.routes.find((route) => route.selectable) || availability?.routes[0];
-    const catalogRoute = listModelRoutes(canonicalModelId)[0];
+    const target = buildModelDiagnosticsTarget(model, availability, endpointMappingDraft);
     setRouteTestingId(canonicalModelId);
     setError('');
     setMessage('');
     try {
-      const res = await testAdminModelRoute({
-        canonicalModelId,
-        modality: availabilityRoute?.modality || catalogRoute?.modality || model.modality,
-        providerId: availabilityRoute?.providerId || catalogRoute?.providerId,
-        executionStatus: availabilityRoute?.executionStatus || catalogRoute?.executionStatus,
-        requiresEndpointMapping: catalogRoute?.requiresEndpointMapping === true,
-      });
+      const res = await testAdminModelRoute(target);
       setModelDiagnostics((prev) => ({ ...prev, [canonicalModelId]: { ...(prev[canonicalModelId] || {}), route: routeDiagnosticEntry(res.result) } }));
       await refreshModelAvailability();
       if (res.result.status === 'passed') {
         setMessage(`${canonicalModelId} ${routeTestModeLabel(res.result.mode)}通过，不创建生成任务`);
       } else {
-      setError(`${canonicalModelId} 路由检查失败：${res.result.message}${res.result.nextAction ? `；${res.result.nextAction}` : ''}`);
+        setError(routeTestFailureMessage(canonicalModelId, res.result));
       }
     } catch (err) {
       const fallbackMessage = err instanceof Error ? err.message : '路由检查失败';
@@ -1015,7 +1444,7 @@ const AdminProviderKeysPanel: React.FC = () => {
             status: 'failed',
             message: fallbackMessage,
             code: 'ADMIN_ROUTE_TEST_REQUEST_FAILED',
-            providerId: availabilityRoute?.providerId || catalogRoute?.providerId || null,
+            providerId: target.providerId || null,
             testedAt: new Date().toISOString(),
           },
         },
@@ -1030,19 +1459,12 @@ const AdminProviderKeysPanel: React.FC = () => {
     const model = WORKSPACE_CANONICAL_MODELS.find((row) => row.canonicalModelId === canonicalModelId);
     if (!model) return;
     const availability = modelAvailabilityById.get(canonicalModelId);
-    const availabilityRoute = availability?.routes.find((route) => route.selectable) || availability?.routes[0];
-    const catalogRoute = listModelRoutes(canonicalModelId)[0];
+    const target = buildModelDiagnosticsTarget(model, availability, endpointMappingDraft);
     setGenerationTestingId(canonicalModelId);
     setError('');
     setMessage('');
     try {
-      const res = await testAdminModelGeneration({
-        canonicalModelId,
-        modality: availabilityRoute?.modality || catalogRoute?.modality || model.modality,
-        providerId: availabilityRoute?.providerId || catalogRoute?.providerId,
-        executionStatus: availabilityRoute?.executionStatus || catalogRoute?.executionStatus,
-        requiresEndpointMapping: catalogRoute?.requiresEndpointMapping === true,
-      });
+      const res = await testAdminModelGeneration(target);
       setModelDiagnostics((prev) => ({ ...prev, [canonicalModelId]: { ...(prev[canonicalModelId] || {}), generation: generationDiagnosticEntry(res.result) } }));
       await refreshModelAvailability();
       const jobLabel = res.result.jobId ? `，任务 ${res.result.jobId}` : '';
@@ -1062,7 +1484,7 @@ const AdminProviderKeysPanel: React.FC = () => {
             status: 'failed',
             message: fallbackMessage,
             code: 'ADMIN_GENERATION_TEST_REQUEST_FAILED',
-            providerId: availabilityRoute?.providerId || catalogRoute?.providerId || null,
+            providerId: target.providerId || null,
             testedAt: new Date().toISOString(),
           },
         },
@@ -1111,7 +1533,7 @@ const AdminProviderKeysPanel: React.FC = () => {
         <div className="rounded-lg border border-white/[0.08] bg-[#121216] p-4">
           <div className="text-[11px] text-gray-500">工作区模型</div>
           <div className="mt-2 text-2xl font-semibold text-white">{publishedReadyCount}/{selectedCanonicalModelIds.length}</div>
-          <div className="mt-1 text-[11px] text-gray-500">已选择且可发布</div>
+          <div className={`mt-1 text-[11px] ${publishedIssueText === '已选择且可发布' ? 'text-gray-500' : 'text-amber-200'}`}>{publishedIssueText}</div>
         </div>
         <div className="rounded-lg border border-white/[0.08] bg-[#121216] p-4">
           <div className="text-[11px] text-gray-500">健康状态</div>
@@ -1363,7 +1785,7 @@ const AdminProviderKeysPanel: React.FC = () => {
                       {models.map((model) => {
                         const checked = selectedCanonicalSet.has(model.canonicalModelId);
                         const availability = modelAvailabilityById.get(model.canonicalModelId);
-                        const canRunGenerationTest = canWriteOps && availability?.workspaceSelectable && (model.modality === 'text' || model.modality === 'image');
+                        const canRunGenerationTest = canWriteOps && availability?.workspaceSelectable && GENERATION_TEST_MODALITIES.has(model.modality);
                         const diagnostics = modelDiagnostics[model.canonicalModelId] || {};
                         const routePriorityRows = listModelRoutes(model.canonicalModelId)
                           .map((route) => ({ route, bindingId: routeBindingId(route) }))
@@ -1373,6 +1795,7 @@ const AdminProviderKeysPanel: React.FC = () => {
                             const bp = routePriorityDraft[b.bindingId] ?? b.route.priority;
                             return ap - bp || a.route.providerId.localeCompare(b.route.providerId);
                           });
+                        const endpointMappingRows = listModelRoutes(model.canonicalModelId).filter((route) => route.requiresEndpointMapping);
                         return (
                           <label key={model.canonicalModelId} className={`block rounded-md border p-3 text-[10px] ${checked ? 'border-blue-500/45 bg-blue-950/20 text-blue-50' : 'border-white/[0.06] bg-black/20 text-gray-500'}`}>
                             <div className="flex items-start gap-3">
@@ -1388,16 +1811,47 @@ const AdminProviderKeysPanel: React.FC = () => {
                                   <Pill className={modelAvailabilityClass(availability?.status)}>{modelAvailabilityLabel(availability?.status)}</Pill>
                                 </div>
                                 {availability && !availability.workspaceSelectable ? (
-                                  <div className="mt-1 truncate text-[10px] text-amber-200" title={availability.reason}>{availability.reason}</div>
+                                  <div className="mt-1 truncate text-[10px] text-amber-200" title={modelAvailabilityIssueTitle(availability)}>{modelAvailabilityIssueText(availability)}</div>
                                 ) : null}
                                 {routePriorityRows.length > 1 ? (
                                   <div className="mt-2 grid gap-1.5">
-                                    {routePriorityRows.map(({ route, bindingId }) => (
-                                      <div key={bindingId} className="grid grid-cols-[1fr_72px] items-center gap-2 rounded-md border border-white/[0.06] bg-black/20 px-2 py-1">
+                                    {routePriorityRows.map(({ route, bindingId }) => {
+                                      const availabilityRoute = availability?.routes.find((item) =>
+                                        (item.routeId && item.routeId === route.routeId) ||
+                                        (item.providerId === route.providerId && item.modality === route.modality)
+                                      );
+                                      const fallbackText = routeFallbackSummaryText(availabilityRoute);
+                                      return (
+                                      <div key={bindingId} className="grid grid-cols-[1fr_96px_64px_72px] items-center gap-2 rounded-md border border-white/[0.06] bg-black/20 px-2 py-1">
                                         <div className="min-w-0">
                                           <div className="truncate text-[10px] font-semibold text-gray-200">{providerShortName(route.providerId)}</div>
                                           <div className="truncate text-[9px] text-gray-500">{route.channel || route.providerModelId}</div>
+                                          {fallbackText ? <div className="truncate text-[9px] text-blue-200/80">{fallbackText}</div> : null}
                                         </div>
+                                        <div onClick={(event) => event.stopPropagation()}>
+                                          <CustomDropdown
+                                            options={[...ROUTE_FALLBACK_POLICY_OPTIONS]}
+                                            value={routeFallbackPolicyDraft[bindingId] ?? route.fallbackPolicy ?? 'none'}
+                                            disabled={!canWriteOps || savingModelOps}
+                                            onChange={(value) => updateRouteFallbackPolicy(bindingId, value as RouteFallbackPolicy)}
+                                            tone="settings"
+                                            listDensity="compact"
+                                            listMinWidth={112}
+                                            triggerClassName="w-full rounded-md border border-white/[0.08] bg-[#0a0a0c] px-2 py-1 text-left text-[10px] text-gray-100 outline-none disabled:opacity-40"
+                                            triggerAriaLabel="fallback policy"
+                                          />
+                                        </div>
+                                        <input
+                                          inputMode="numeric"
+                                          min={1}
+                                          max={5}
+                                          title="最大切换尝试次数"
+                                          value={String(routeFallbackMaxAttemptsDraft[bindingId] ?? 1)}
+                                          disabled={!canWriteOps || savingModelOps}
+                                          onClick={(event) => event.stopPropagation()}
+                                          onChange={(event) => updateRouteFallbackMaxAttempts(bindingId, Number(event.target.value) || 1)}
+                                          className="w-full rounded-md border border-white/[0.08] bg-[#0a0a0c] px-2 py-1 text-right text-[10px] text-gray-100 disabled:opacity-40"
+                                        />
                                         <input
                                           inputMode="numeric"
                                           value={String(routePriorityDraft[bindingId] ?? route.priority)}
@@ -1407,7 +1861,60 @@ const AdminProviderKeysPanel: React.FC = () => {
                                           className="w-full rounded-md border border-white/[0.08] bg-[#0a0a0c] px-2 py-1 text-right text-[10px] text-gray-100 disabled:opacity-40"
                                         />
                                       </div>
-                                    ))}
+                                      );
+                                    })}
+                                  </div>
+                                ) : null}
+                                {endpointMappingRows.length ? (
+                                  <div className="mt-2 grid gap-2">
+                                    {endpointMappingRows.map((route) => {
+                                      const draft = endpointMappingDraft[route.routeId] || { routeId: route.routeId };
+                                      return (
+                                        <div key={`endpoint:${route.routeId}`} className="rounded-md border border-amber-500/15 bg-amber-950/10 p-2" onClick={(event) => event.stopPropagation()}>
+                                          <div className="mb-2 flex items-center justify-between gap-2">
+                                            <div className="min-w-0">
+                                              <div className="truncate text-[10px] font-semibold text-amber-100">{providerShortName(route.providerId)} endpoint 映射</div>
+                                              <div className="truncate text-[9px] text-amber-200/70">{route.providerModelId}</div>
+                                            </div>
+                                            <div className="flex shrink-0 items-center gap-2">
+                                              <label className="grid gap-0.5 text-[9px] text-amber-100/80">
+                                                <span>优先级</span>
+                                                <input
+                                                  inputMode="numeric"
+                                                  value={String(draft.priority ?? route.priority ?? 80)}
+                                                  disabled={!canWriteOps || savingModelOps}
+                                                  onChange={(event) => updateEndpointMappingDraft(route.routeId, 'priority', Math.max(1, Math.floor(Number(event.target.value) || route.priority || 80)))}
+                                                  className="w-16 rounded-md border border-white/[0.08] bg-[#0a0a0c] px-2 py-1 text-right text-[10px] text-gray-100 outline-none disabled:opacity-40"
+                                                />
+                                              </label>
+                                              <label className="inline-flex items-center gap-1 text-[9px] text-amber-100">
+                                                <input
+                                                  type="checkbox"
+                                                  checked={draft.enabled === true}
+                                                  disabled={!canWriteOps || savingModelOps}
+                                                  onChange={(event) => updateEndpointMappingDraft(route.routeId, 'enabled', event.target.checked)}
+                                                />
+                                                启用测试
+                                              </label>
+                                            </div>
+                                          </div>
+                                          <div className="grid gap-1.5 sm:grid-cols-2">
+                                            {ENDPOINT_MAPPING_FIELDS.map((field) => (
+                                              <label key={`${route.routeId}:${field.key}`} className="grid gap-1 text-[9px] text-amber-100/80">
+                                                <span>{field.label}{field.required ? ' *' : ''}</span>
+                                                <input
+                                                  value={String(draft[field.key] || '')}
+                                                  disabled={!canWriteOps || savingModelOps}
+                                                  placeholder={field.placeholder}
+                                                  onChange={(event) => updateEndpointMappingDraft(route.routeId, field.key, event.target.value)}
+                                                  className="w-full rounded-md border border-white/[0.08] bg-[#0a0a0c] px-2 py-1 text-[10px] text-gray-100 outline-none placeholder:text-gray-600 disabled:opacity-40"
+                                                />
+                                              </label>
+                                            ))}
+                                          </div>
+                                        </div>
+                                      );
+                                    })}
                                   </div>
                                 ) : null}
                                 <div className="mt-2 flex flex-wrap gap-1.5">
@@ -1423,12 +1930,12 @@ const AdminProviderKeysPanel: React.FC = () => {
                                     { key: 'route' as const, label: '路由', entry: diagnostics.route },
                                     { key: 'generation' as const, label: '生成', entry: diagnostics.generation },
                                   ].map((item) => (
-                                    <div key={`${model.canonicalModelId}:${item.key}`} className={`min-w-0 rounded-md border px-2 py-1 ${diagnosticStatusClass(item.entry?.status)}`} title={item.entry ? [item.entry.message, item.entry.code, item.entry.providerId, item.entry.jobId, item.entry.nextAction].filter(Boolean).join('\n') : `${item.label}未测试`}>
+                                    <div key={`${model.canonicalModelId}:${item.key}`} className={`min-w-0 rounded-md border px-2 py-1 ${diagnosticStatusClass(item.entry?.status)}`} title={diagnosticTitle(item.entry, `${item.label}未测试`)}>
                                       <div className="flex items-center justify-between gap-2">
                                         <span className="font-semibold">{item.label}</span>
                                         <span>{diagnosticStatusLabel(item.entry?.status)}</span>
                                       </div>
-                                      <div className="mt-0.5 truncate text-[9px] opacity-80">{item.entry ? item.entry.jobId || item.entry.code || item.entry.providerId || item.entry.message : '暂无结果'}</div>
+                                      <div className="mt-0.5 truncate text-[9px] opacity-80">{item.entry ? diagnosticDetailText(item.entry) : '暂无结果'}</div>
                                     </div>
                                   ))}
                                 </div>

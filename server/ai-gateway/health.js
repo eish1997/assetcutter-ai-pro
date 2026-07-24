@@ -1,6 +1,7 @@
 import { USE_POSTGRES } from '../auth-store.js';
 import { aiGatewayCreditsGateMode } from './credits-gate.js';
 import { aiGatewayAutoCircuitConfig, isAiGatewayAutoCircuitEnabled, resolveAiGatewayOpsControlSource } from './ops-control.js';
+import { openAiCompatibleProviderConfigs } from './openai-compatible-config.js';
 import { listAiGatewayWorkers } from './workers/registry.js';
 
 export function isAiGatewayExecutionEnabled() {
@@ -30,11 +31,7 @@ export function aiGatewayHealthSnapshot() {
     workers: listAiGatewayWorkers(),
     adapters: [
       'ai-worker-proxy',
-      'openai-official',
-      'toapis-openai',
-      'tinysnow-openai',
-      'volcengine-ark-openai',
-      'volcengine-ark-image',
+      ...openAiCompatibleProviderConfigs().flatMap((config) => config.adapterIds),
       'volcengine-ark-async',
       'jimeng-visual',
       'tripo-openapi',

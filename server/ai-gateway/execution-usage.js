@@ -1,3 +1,9 @@
+import {
+  meterKindForAiGatewayModality,
+  resolveAiGatewayBillingSku,
+  unitForAiGatewayMeter,
+} from './route-billing.js';
+
 function positiveInt(value) {
   const n = Math.floor(Number(value));
   return Number.isFinite(n) && n > 0 ? n : 0;
@@ -37,12 +43,13 @@ export function buildProviderTaskUsage(plan, input = {}) {
   const completedAtMs = Number(input.completedAtMs || Date.now());
   const durationMs = startedAtMs > 0 ? Math.max(0, Math.round(completedAtMs - startedAtMs)) : null;
   const outputBytes = positiveInt(input.outputBytes);
+  const meterKind = nonEmptyString(input.meterKind) || meterKindForAiGatewayModality(plan?.job?.modality);
   return {
     provider: nonEmptyString(input.provider) || nonEmptyString(plan?.route?.providerId) || nonEmptyString(plan?.job?.provider) || 'ai-gateway',
     upstreamTaskId: nonEmptyString(input.upstreamTaskId) || nonEmptyString(plan?.job?.metadata?.upstreamTaskId) || null,
-    billingSku: nonEmptyString(input.billingSku) || nonEmptyString(plan?.job?.metadata?.billingSku) || `${plan?.job?.modality || 'ai'}.gateway.task`,
-    meterKind: nonEmptyString(input.meterKind) || (plan?.job?.modality === 'video' ? 'second' : 'task'),
-    unit: nonEmptyString(input.unit) || (plan?.job?.modality === 'video' ? 'second' : 'task'),
+    billingSku: nonEmptyString(input.billingSku) || resolveAiGatewayBillingSku(plan),
+    meterKind,
+    unit: nonEmptyString(input.unit) || unitForAiGatewayMeter(meterKind),
     quantity,
     outputBytes,
     artifactCount: positiveInt(input.artifactCount),

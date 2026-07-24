@@ -144,4 +144,36 @@ describe('AI gateway settlement usage extraction', () => {
       },
     });
   });
+
+  it('uses centralized provider/model SKU defaults for aggregator usage events', () => {
+    const built = buildAiGatewayUsageEvent({
+      job: {
+        id: 'aijob_usage_302',
+        status: 'succeeded',
+        modality: 'text',
+        capability: 'text.generate',
+        userId: 'user_1',
+        correlationId: 'corr_302',
+        provider: '302ai',
+        model: 'gpt-4o-mini',
+        input: {},
+        output: { usage: { creditsCharged: 3 } },
+        metadata: {
+          upstreamTaskId: 'chatcmpl_302',
+          creditsGate: { mode: 'reserve', estimatedCredits: 5, reserveAmount: 5 },
+        },
+      },
+      route: { providerId: '302ai' },
+    });
+
+    expect(built).toMatchObject({
+      credits: 3,
+      event: {
+        provider: '302ai',
+        billingSku: 'text.302ai.gpt-4o-mini',
+        meterKind: 'token',
+        unit: 'token',
+      },
+    });
+  });
 });

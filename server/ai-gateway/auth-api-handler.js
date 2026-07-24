@@ -12,6 +12,7 @@ import { validateAiGatewayModelPublication } from './model-publication-guard.js'
 import { validateAiGatewayModelRouteExecutable } from './model-route-guard.js';
 import { aiGatewayTransientPostgresBody, isTransientPostgresError } from './postgres-transient-retry.js';
 import { isAiGatewayExecutionEnabled } from './health.js';
+import { errorSummary, publicAiJobSummary, routeSummary } from './job-public-summary.js';
 
 const DEFAULT_LIST_LIMIT = 20;
 const MAX_LIST_LIMIT = 100;
@@ -20,29 +21,6 @@ const RETRYABLE_STATUSES = new Set(['failed', 'cancelled']);
 
 function clampListLimit(value) {
   return Math.min(MAX_LIST_LIMIT, Math.max(1, Math.floor(Number(value) || DEFAULT_LIST_LIMIT)));
-}
-
-function routeSummary(route) {
-  if (!route || typeof route !== 'object') return null;
-  return {
-    providerId: route.providerId || null,
-    workerId: route.workerId || null,
-    adapterId: route.adapterId || null,
-    legacyAdapterId: route.legacyAdapterId || null,
-    channel: route.channel || null,
-    upstreamBackend: route.upstreamBackend || null,
-  };
-}
-
-function errorSummary(error) {
-  if (!error) return null;
-  if (typeof error === 'object') {
-    return {
-      code: error.code || null,
-      message: error.message || String(error),
-    };
-  }
-  return { code: null, message: String(error) };
 }
 
 function shouldAwaitAuthAiGatewayExecution(options = {}) {
@@ -60,27 +38,7 @@ function startAuthAiGatewayExecutionInBackground(plan, executionOptions) {
 }
 
 export function publicAuthAiJobSummary(plan) {
-  const metadata = plan.job?.metadata && typeof plan.job.metadata === 'object' ? plan.job.metadata : {};
-  return {
-    id: plan.job.id,
-    status: plan.job.status,
-    modality: plan.job.modality,
-    capability: plan.job.capability,
-    provider: plan.job.provider || null,
-    model: plan.job.model || null,
-    userId: plan.job.userId || null,
-    correlationId: plan.job.correlationId,
-    createdAt: plan.job.createdAt,
-    updatedAt: plan.job.updatedAt,
-    startedAt: plan.job.startedAt || null,
-    finishedAt: plan.job.finishedAt || null,
-    route: routeSummary(plan.route),
-    traceOnly: Boolean(metadata.traceOnly),
-    proxyPath: metadata.proxyPath || null,
-    proxyJobId: metadata.proxyJobId || null,
-    creditsGate: metadata.creditsGate || null,
-    error: errorSummary(plan.job.error),
-  };
+  return publicAiJobSummary(plan);
 }
 
 export function publicAuthAiJobDetail(plan) {
@@ -113,6 +71,7 @@ export function mapAuthAiGatewayError(err) {
       err.code === 'AI_GATEWAY_MODEL_ROUTE_NOT_FOUND' ||
       err.code === 'AI_GATEWAY_MODEL_ROUTE_NOT_EXECUTABLE' ||
       err.code === 'AI_GATEWAY_MODEL_ADAPTER_PENDING' ||
+      err.code === 'AI_GATEWAY_MODEL_ROUTE_AMBIGUOUS' ||
       err.code === 'AI_GATEWAY_PROVIDER_PAUSED' ||
       err.code === 'AI_GATEWAY_PROVIDER_KEY_UNAVAILABLE'
     ) {
@@ -165,17 +124,50 @@ export async function createAuthAiGatewayJob(req, body, user, options = {}) {
       Boolean(raw.provider) ||
       Boolean(executableRoute.route?.platformKeyRequired);
     if (shouldPinProvider && !planInput.provider && executableRoute.route?.providerId) {
+      planInput.metadata.aiGatewayFallback = {
+        ...(planInput.metadata.aiGatewayFallback && typeof planInput.metadata.aiGatewayFallback === 'object'
+          ? planInput.metadata.aiGatewayFallback
+          : {}),
+        autoSelectedProvider: true,
+      };
       planInput.provider = executableRoute.route.providerId;
     }
+    if (executableRoute.route?.fallbackPolicy) {
+      planInput.metadata.aiGatewayFallback = {
+        ...(planInput.metadata.aiGatewayFallback && typeof planInput.metadata.aiGatewayFallback === 'object'
+          ? planInput.metadata.aiGatewayFallback
+          : {}),
+        policy: executableRoute.route.fallbackPolicy,
+      };
+    }
+    if (executableRoute.route?.fallbackMaxAttempts) {
+      planInput.metadata.aiGatewayFallback = {
+        ...(planInput.metadata.aiGatewayFallback && typeof planInput.metadata.aiGatewayFallback === 'object'
+          ? planInput.metadata.aiGatewayFallback
+          : {}),
+        maxAttempts: executableRoute.route.fallbackMaxAttempts,
+      };
+    }
     planInput.metadata.modelRouteGuard = {
-      canonicalModelId: executableRoute.canonicalModelId,
-      providerId: executableRoute.route.providerId,
-      executionStatus: executableRoute.route.executionStatus,
-      gatewayExecutionStatus: executableRoute.route.gatewayExecutionStatus,
+        canonicalModelId: executableRoute.canonicalModelId,
+        providerId: executableRoute.route.providerId,
+        executionStatus: executableRoute.route.executionStatus,
+        gatewayExecutionStatus: executableRoute.route.gatewayExecutionStatus,
       platformKeyRequired: executableRoute.route.platformKeyRequired,
-    };
-  }
-  let plan = await store.put(createAiGatewayJobPlan(planInput, { opsControl }));
+      fallbackPolicy: executableRoute.route.fallbackPolicy,
+      fallbackMaxAttempts: executableRoute.route.fallbackMaxAttempts,
+      routeId: executableRoute.route.routeId,
+        upstreamModelId: executableRoute.route.upstreamModelId,
+      };
+      if (executableRoute.route.upstreamModelId) {
+        planInput.input = {
+          ...(planInput.input && typeof planInput.input === 'object' ? planInput.input : {}),
+          upstreamModelId: executableRoute.route.upstreamModelId,
+        };
+      }
+    }
+  const planRoutes = executableRoute.runtimeRoute ? [executableRoute.runtimeRoute] : options.routes;
+  let plan = await store.put(createAiGatewayJobPlan(planInput, { opsControl, routes: planRoutes }));
   const executionOptions = {
     store,
     fetchImpl: options.fetchImpl,
@@ -199,6 +191,7 @@ export async function createAuthAiGatewayJob(req, body, user, options = {}) {
     deferredHandoffAttempt: options.deferredHandoffAttempt,
     awaitBackgroundPoll: options.awaitBackgroundPoll,
     disableBackgroundPoll: options.disableBackgroundPoll,
+    opsControl,
   };
   if (isAiGatewayExecutionEnabled()) {
     if (shouldAwaitAuthAiGatewayExecution(options)) {

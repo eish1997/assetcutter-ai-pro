@@ -10,6 +10,8 @@ import {
 } from "./imageModels";
 import { getCanonicalModel } from "./canonicalModelCatalog";
 
+type BindingFallbackPolicy = NonNullable<NonNullable<ModelOpsConfig["bindingOverrides"]>[number]["fallbackPolicy"]>;
+
 const DEFAULT_IMAGE_MODEL_PREFERENCE: string[] = [
   DEFAULT_IMAGE_MODEL_REGISTRY_ID,
   ...DIALOG_IMAGE_REGISTRY.map((e) => e.registryId),
@@ -35,12 +37,27 @@ function readViteEnvTrim(key: string): string {
 const SUPPLIER_IDS = new Set<SupplierId>([
   "vertex-site",
   "toapis",
+  "302ai",
+  "aihubmix",
   "tinysnow",
   "vectorengine",
   "openai-official",
   "volcengine-ark",
   "gemini-aistudio",
 ]);
+
+const FALLBACK_POLICIES = new Set([
+  "none",
+  "on_error",
+  "on_rate_limit",
+  "on_timeout",
+  "on_provider_degraded",
+  "cost_optimized",
+  "quality_first",
+]);
+const isFallbackPolicy = (value: unknown): value is BindingFallbackPolicy =>
+  typeof value === "string" && FALLBACK_POLICIES.has(value);
+const ENDPOINT_MAPPING_METHODS = new Set(["GET", "POST"]);
 
 function normalizeWiringEdges(raw: unknown): WiringEdge[] | undefined {
   if (!Array.isArray(raw)) return undefined;
@@ -87,6 +104,90 @@ function uniqueStrings(values: readonly string[]): string[] {
     out.push(value);
   }
   return out;
+}
+
+function cleanEndpointPath(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  if (!trimmed || !trimmed.startsWith("/")) return undefined;
+  return trimmed;
+}
+
+function cleanProviderBaseUrl(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim().replace(/\/+$/, "");
+  if (!trimmed) return undefined;
+  try {
+    const url = new URL(trimmed);
+    if (url.protocol !== "http:" && url.protocol !== "https:") return undefined;
+    return trimmed;
+  } catch {
+    return undefined;
+  }
+}
+
+function cleanProviderRequestTimeoutMs(value: unknown): number | undefined {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return undefined;
+  return Math.max(1000, Math.min(900_000, Math.floor(n)));
+}
+
+function normalizeProviderOverrides(raw: unknown): ModelOpsConfig["providerOverrides"] {
+  if (raw === null) return null;
+  if (!Array.isArray(raw)) return undefined;
+  const rows = raw
+    .filter((x): x is Record<string, unknown> => x != null && typeof x === "object")
+    .map((row) => {
+      const providerId = typeof row.providerId === "string" ? row.providerId.trim() : "";
+      if (!providerId) return null;
+      const baseUrl = cleanProviderBaseUrl(row.baseUrl);
+      const requestTimeoutMs = cleanProviderRequestTimeoutMs(row.requestTimeoutMs);
+      return {
+        providerId,
+        ...(baseUrl ? { baseUrl } : {}),
+        ...(requestTimeoutMs ? { requestTimeoutMs } : {}),
+      };
+    })
+    .filter((x): x is NonNullable<typeof x> => x != null);
+  return rows.length > 0 ? rows : null;
+}
+
+function normalizeEndpointMappings(raw: unknown): ModelOpsConfig["endpointMappings"] {
+  if (raw === null) return null;
+  if (!Array.isArray(raw)) return undefined;
+  const rows = raw
+    .filter((x): x is Record<string, unknown> => x != null && typeof x === "object")
+    .map((row) => {
+      const routeId = typeof row.routeId === "string" ? row.routeId.trim() : "";
+      if (!routeId) return null;
+      const methodRaw = typeof row.method === "string" ? row.method.trim().toUpperCase() : "";
+      const method = ENDPOINT_MAPPING_METHODS.has(methodRaw) ? (methodRaw as "GET" | "POST") : undefined;
+      const priority =
+        typeof row.priority === "number" && Number.isFinite(row.priority) ? Math.floor(row.priority) : undefined;
+      return {
+        routeId,
+        ...(method ? { method } : {}),
+        ...(cleanEndpointPath(row.requestPath) ? { requestPath: cleanEndpointPath(row.requestPath) } : {}),
+        ...(cleanEndpointPath(row.pollPath) ? { pollPath: cleanEndpointPath(row.pollPath) } : {}),
+        ...(typeof row.statusPath === "string" && row.statusPath.trim() ? { statusPath: row.statusPath.trim() } : {}),
+        ...(typeof row.artifactPath === "string" && row.artifactPath.trim() ? { artifactPath: row.artifactPath.trim() } : {}),
+        ...(typeof row.taskIdPath === "string" && row.taskIdPath.trim() ? { taskIdPath: row.taskIdPath.trim() } : {}),
+        ...(typeof row.errorPath === "string" && row.errorPath.trim() ? { errorPath: row.errorPath.trim() } : {}),
+        ...(typeof row.statusValuePath === "string" && row.statusValuePath.trim()
+          ? { statusValuePath: row.statusValuePath.trim() }
+          : {}),
+        ...(typeof row.artifactUrlPath === "string" && row.artifactUrlPath.trim()
+          ? { artifactUrlPath: row.artifactUrlPath.trim() }
+          : {}),
+        ...(typeof row.upstreamOverride === "string" && row.upstreamOverride.trim()
+          ? { upstreamOverride: row.upstreamOverride.trim() }
+          : {}),
+        ...(priority !== undefined ? { priority } : {}),
+        ...(row.enabled !== undefined ? { enabled: row.enabled === true } : {}),
+      };
+    })
+    .filter((x): x is NonNullable<typeof x> => x != null);
+  return rows.length > 0 ? rows : null;
 }
 
 function normalizePublishedCanonicalAllowlist(raw: unknown): string[] | null | undefined {
@@ -146,22 +247,31 @@ function normalizeOpsPayload(raw: unknown): ModelOpsConfig {
         const enabled = row.enabled === undefined ? undefined : row.enabled === true;
         const priority =
           typeof row.priority === "number" && Number.isFinite(row.priority) ? Math.floor(row.priority) : undefined;
+        const fallbackMaxAttempts =
+          typeof row.fallbackMaxAttempts === "number" && Number.isFinite(row.fallbackMaxAttempts)
+            ? Math.max(1, Math.min(5, Math.floor(row.fallbackMaxAttempts)))
+            : undefined;
         const upstreamOverride =
           typeof row.upstreamOverride === "string" && row.upstreamOverride.trim()
             ? row.upstreamOverride.trim()
             : undefined;
-        return { bindingId, enabled, priority, upstreamOverride };
+        const fallbackPolicy = isFallbackPolicy(row.fallbackPolicy) ? row.fallbackPolicy : undefined;
+        return { bindingId, enabled, priority, fallbackPolicy, fallbackMaxAttempts, upstreamOverride };
       })
       .filter((x): x is NonNullable<typeof x> => x != null);
     if (rows.length > 0) bindingOverrides = rows;
   }
   const wiringEdges = normalizeWiringEdges(o.wiringEdges);
+  const providerOverrides = normalizeProviderOverrides(o.providerOverrides);
+  const endpointMappings = normalizeEndpointMappings(o.endpointMappings);
   return {
     version,
     imageRegistryAllowlist,
     publishedCanonicalModelAllowlist,
     imageModelPreference: imageModelPreference ?? DEFAULT_MODEL_OPS_CONFIG.imageModelPreference,
     bindingOverrides,
+    providerOverrides,
+    endpointMappings,
     wiringEdges,
   };
 }

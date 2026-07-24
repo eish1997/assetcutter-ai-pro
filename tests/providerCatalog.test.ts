@@ -71,6 +71,31 @@ describe("provider catalog", () => {
     expect(arkModels.find((model) => model.registryId === "doubao-seedance-2-0")?.status).toBe("testing");
   });
 
+  it("advertises 302.AI multimodal gray candidates without marking them verified", () => {
+    const provider = getProviderCatalogEntry("302ai");
+    const models = listProviderModels("302ai");
+
+    expect(provider?.supportedModalities).toEqual(expect.arrayContaining(["text", "image", "video", "model3d"]));
+    expect(models.find((model) => model.registryId === "302ai-video-manual")).toMatchObject({
+      providerId: "302ai",
+      modality: "video",
+      status: "requires_mapping",
+      requiresEndpointMapping: true,
+      endpointMapping: {
+        required: ["requestPath", "pollPath", "statusPath", "artifactPath"],
+      },
+    });
+    expect(models.find((model) => model.registryId === "302ai-model3d-manual")).toMatchObject({
+      providerId: "302ai",
+      modality: "model3d",
+      status: "requires_mapping",
+      requiresEndpointMapping: true,
+      endpointMapping: {
+        required: ["requestPath", "pollPath", "statusPath", "artifactPath"],
+      },
+    });
+  });
+
   it("mirrors Jimeng static catalog into provider model catalog", () => {
     expect(providerModelCount("volcengine-jimeng")).toBeGreaterThan(5);
     expect(listProviderModels("volcengine-jimeng").some((model) => model.modality === "video")).toBe(true);

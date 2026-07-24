@@ -15,6 +15,10 @@ export function channelToResolveProvider(channel: ChannelId, family: ModelFamily
       return "toapis";
     case "toapis-openai":
       return "openai";
+    case "302ai-openai":
+      return "302ai";
+    case "aihubmix-openai":
+      return "aihubmix";
     case "vectorengine":
       return "vectorengine";
     case "openai-official":

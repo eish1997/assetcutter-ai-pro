@@ -1,7 +1,7 @@
 import { createAuthAiGatewayJob, publicAuthAiJobDetail } from './auth-api-handler.js';
 import { persistentAiGatewayJobStore } from './persistent-job-store.js';
 
-const SUPPORTED_MODALITIES = new Set(['text', 'image']);
+const SUPPORTED_MODALITIES = new Set(['text', 'image', 'video', 'model3d']);
 const TERMINAL_STATUSES = new Set(['succeeded', 'failed', 'cancelled']);
 
 function nonEmptyString(value) {
@@ -17,6 +17,7 @@ function normalizeGenerationTestInput(input) {
   const canonicalModelId = nonEmptyString(raw.canonicalModelId || raw.registryId || raw.model);
   const modality = nonEmptyString(raw.modality).toLowerCase();
   return {
+    routeId: nonEmptyString(raw.routeId),
     canonicalModelId,
     registryId: nonEmptyString(raw.registryId) || canonicalModelId,
     modality,
@@ -41,6 +42,7 @@ function failedResult(input, code, message, extra = {}) {
     jobId: extra.jobId || null,
     jobStatus: extra.jobStatus || null,
     route: extra.route || null,
+    fallback: extra.fallback || null,
     artifacts: extra.artifacts || [],
     outputSummary: extra.outputSummary || null,
     nextAction: extra.nextAction || null,
@@ -83,6 +85,17 @@ function hasImageOutput(plan) {
   return outputArtifacts.some((artifact) => artifact?.kind === 'image' && nonEmptyString(artifact?.url || artifact?.publicUrl || artifact?.downloadUrl || artifact?.src));
 }
 
+function hasArtifactOutput(plan, kind) {
+  const artifacts = Array.isArray(plan?.job?.artifacts) ? plan.job.artifacts : [];
+  if (artifacts.some((artifact) => artifact?.kind === kind && nonEmptyString(artifact?.url || artifact?.publicUrl || artifact?.downloadUrl || artifact?.src))) {
+    return true;
+  }
+  const output = plan?.job?.output;
+  if (!output || typeof output !== 'object') return false;
+  const outputArtifacts = Array.isArray(output.artifacts) ? output.artifacts : [];
+  return outputArtifacts.some((artifact) => artifact?.kind === kind && nonEmptyString(artifact?.url || artifact?.publicUrl || artifact?.downloadUrl || artifact?.src));
+}
+
 function extractTextOutput(output) {
   if (typeof output === 'string') return output.trim();
   if (!output || typeof output !== 'object') return '';
@@ -105,28 +118,50 @@ function validateOutput(plan, modality) {
     if (hasImageOutput(plan)) return { ok: true, summary: { kind: 'image' } };
     return { ok: false, code: 'AI_GATEWAY_GENERATION_IMAGE_EMPTY', message: 'Generation task succeeded but no image artifact was found' };
   }
-  return { ok: false, code: 'AI_GATEWAY_GENERATION_MODALITY_UNSUPPORTED', message: `Generation Test supports text and image only, got ${modality || 'empty'}` };
+  if (modality === 'video') {
+    if (hasArtifactOutput(plan, 'video')) return { ok: true, summary: { kind: 'video' } };
+    return { ok: false, code: 'AI_GATEWAY_GENERATION_VIDEO_EMPTY', message: 'Generation task succeeded but no video artifact was found' };
+  }
+  if (modality === 'model3d') {
+    if (hasArtifactOutput(plan, 'model3d')) return { ok: true, summary: { kind: 'model3d' } };
+    return { ok: false, code: 'AI_GATEWAY_GENERATION_MODEL3D_EMPTY', message: 'Generation task succeeded but no 3D artifact was found' };
+  }
+  return { ok: false, code: 'AI_GATEWAY_GENERATION_MODALITY_UNSUPPORTED', message: `Generation Test supports text, image, video, and 3D only, got ${modality || 'empty'}` };
 }
 
 function buildJobBody(input) {
-  const prompt =
-    input.modality === 'text'
-      ? 'Reply with exactly: ok'
-      : 'A simple red square icon centered on a plain white background.';
+  const prompt = input.modality === 'text'
+    ? 'Reply with exactly: ok'
+    : input.modality === 'image'
+      ? 'A simple red square icon centered on a plain white background.'
+      : input.modality === 'video'
+        ? 'A two second product turntable video of a simple red cube on a plain white background.'
+        : 'A simple low-poly red cube 3D model with plain material.';
+  const estimatedCredits = input.modality === 'image' ? 50 : input.modality === 'video' ? 100 : input.modality === 'model3d' ? 100 : 1;
+  const capability = input.modality === 'image'
+    ? 'image.generate'
+    : input.modality === 'video'
+      ? 'video.generate'
+      : input.modality === 'model3d'
+        ? 'model3d.generate'
+        : 'text.generate';
   return {
     modality: input.modality,
-    capability: input.modality === 'image' ? 'image.generate' : 'text.generate',
+    ...(input.routeId ? { routeId: input.routeId } : {}),
+    capability,
     ...(input.provider ? { provider: input.provider } : {}),
     model: input.canonicalModelId,
     canonicalModelId: input.canonicalModelId,
     registryId: input.registryId,
-    estimatedCredits: input.modality === 'image' ? 50 : 1,
+    estimatedCredits,
     input: {
       prompt,
       contents: [{ role: 'user', parts: [{ text: prompt }] }],
       canonicalModelId: input.canonicalModelId,
       registryId: input.registryId,
-      estimatedCredits: input.modality === 'image' ? 50 : 1,
+      estimatedCredits,
+      ...(input.modality === 'video' ? { durationSeconds: 2, aspectRatio: '1:1', resolution: '720p' } : {}),
+      ...(input.modality === 'model3d' ? { format: 'glb', quality: 'standard', texture: true } : {}),
       config: input.modality === 'image' ? { imageConfig: { size: '1024x1024', aspectRatio: '1:1' } } : {},
     },
     metadata: {
@@ -159,11 +194,11 @@ export async function testAiGatewayModelGeneration(req, input = {}, user = {}, o
     return failedResult(
       normalized,
       'AI_GATEWAY_GENERATION_TEST_MODALITY_UNSUPPORTED',
-      'Generation Test supports text and image only in this first pass',
-      { nextAction: 'Use Route Check for video and 3D until their real generation probes are added.' }
+      'Generation Test supports text, image, video, and 3D only',
+      { nextAction: 'Use Route Check until this modality has a real generation probe.' }
     );
   }
-  if (normalized.requiresEndpointMapping || normalized.executionStatus === 'requires_endpoint_mapping') {
+  if (normalized.requiresEndpointMapping && normalized.executionStatus === 'requires_endpoint_mapping') {
     return failedResult(
       normalized,
       'AI_GATEWAY_MODEL_PARAMETER_PENDING',
@@ -209,6 +244,7 @@ export async function testAiGatewayModelGeneration(req, input = {}, user = {}, o
       jobId,
       jobStatus: detail.job.status,
       route,
+      fallback: detail.job.fallback || null,
       artifacts,
       nextAction: 'Open the AI jobs panel with this job id and inspect the running worker/upstream status.',
     });
@@ -222,6 +258,7 @@ export async function testAiGatewayModelGeneration(req, input = {}, user = {}, o
         jobId,
         jobStatus: detail.job.status,
         route,
+        fallback: detail.job.fallback || null,
         artifacts,
         nextAction: 'Check the job detail error, provider key health, and upstream quota/rate limit.',
       }
@@ -233,6 +270,7 @@ export async function testAiGatewayModelGeneration(req, input = {}, user = {}, o
       jobId,
       jobStatus: detail.job.status,
       route,
+      fallback: detail.job.fallback || null,
       artifacts,
       outputSummary: validation.summary || null,
       nextAction: 'The upstream task succeeded; inspect adapter output extraction and workspace restore handling.',
@@ -252,6 +290,7 @@ export async function testAiGatewayModelGeneration(req, input = {}, user = {}, o
     jobId,
     jobStatus: detail.job.status,
     route,
+    fallback: detail.job.fallback || null,
     artifacts,
     outputSummary: validation.summary,
     nextAction: null,

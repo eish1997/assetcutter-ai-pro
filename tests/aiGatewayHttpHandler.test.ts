@@ -30,6 +30,10 @@ function makeRes() {
   };
 }
 
+const testGatewayOptions = {
+  listProviderKeys: async () => [{ provider: 'vertex-site', enabled: true, hasSecret: true }],
+};
+
 describe('AI gateway HTTP job sample', () => {
   it('creates and reads an in-memory image job plan', async () => {
     const store = createInMemoryAiJobStore();
@@ -44,7 +48,7 @@ describe('AI gateway HTTP job sample', () => {
         },
       }),
       createRes,
-      { store }
+      { store, ...testGatewayOptions }
     );
 
     expect(handled).toBe(true);
@@ -73,6 +77,140 @@ describe('AI gateway HTTP job sample', () => {
     expect(getRes.json().job.id).toBe('aijob_http_1');
   });
 
+  it('creates an async gray-route plan from HTTP using endpoint mapping priority', async () => {
+    const store = createInMemoryAiJobStore();
+    const res = makeRes();
+    await handleAiGatewayRequest(
+      makeReq('POST', '/ai-gateway/jobs', {
+        id: 'aijob_http_async_priority',
+        modality: 'video',
+        model: '302ai-video-manual',
+        input: {
+          prompt: 'short product video',
+        },
+      }),
+      res,
+      {
+        store,
+        listProviderKeys: async () => [
+          { provider: '302ai', enabled: true, hasSecret: true },
+          { provider: 'aihubmix', enabled: true, hasSecret: true },
+        ],
+        modelOpsConfig: {
+          publishedCanonicalModelAllowlist: ['302ai-video-manual'],
+          endpointMappings: [
+            {
+              routeId: '302ai-video-manual:302ai:video',
+              enabled: true,
+              priority: 80,
+              requestPath: '/v1/video/generations',
+              pollPath: '/v1/tasks/{id}',
+              statusPath: 'data.status',
+              artifactPath: 'data.output.video_url',
+            },
+            {
+              routeId: '302ai-video-manual:aihubmix:video',
+              enabled: true,
+              priority: 10,
+              requestPath: '/v1/videos',
+              pollPath: '/v1/video-tasks/{id}',
+              statusPath: 'data.status',
+              artifactPath: 'data.video.url',
+              upstreamOverride: 'aihubmix-kling-video',
+            },
+          ],
+        },
+      }
+    );
+
+    expect(res.statusCode).toBe(202);
+    expect(res.json()).toMatchObject({
+      job: {
+        id: 'aijob_http_async_priority',
+        provider: 'aihubmix',
+        metadata: {
+          modelRouteGuard: {
+            routeId: '302ai-video-manual:aihubmix:video',
+            providerId: 'aihubmix',
+            upstreamModelId: 'aihubmix-kling-video',
+          },
+          aiGatewayFallback: {
+            autoSelectedProvider: true,
+          },
+        },
+      },
+      route: {
+        routeId: '302ai-video-manual:aihubmix:video',
+        providerId: 'aihubmix',
+        adapterId: 'openai-compatible-async',
+      },
+      workerRequest: {
+        method: 'POST',
+        path: '/v1/videos',
+        body: {
+          model: 'aihubmix-kling-video',
+          prompt: 'short product video',
+        },
+      },
+    });
+  });
+
+  it('returns a clear HTTP error when endpoint mapping priority is ambiguous', async () => {
+    const store = createInMemoryAiJobStore();
+    const res = makeRes();
+    await handleAiGatewayRequest(
+      makeReq('POST', '/ai-gateway/jobs', {
+        id: 'aijob_http_async_ambiguous',
+        modality: 'video',
+        model: '302ai-video-manual',
+        input: {
+          prompt: 'short product video',
+        },
+      }),
+      res,
+      {
+        store,
+        listProviderKeys: async () => [
+          { provider: '302ai', enabled: true, hasSecret: true },
+          { provider: 'aihubmix', enabled: true, hasSecret: true },
+        ],
+        modelOpsConfig: {
+          publishedCanonicalModelAllowlist: ['302ai-video-manual'],
+          endpointMappings: [
+            {
+              routeId: '302ai-video-manual:302ai:video',
+              enabled: true,
+              priority: 40,
+              requestPath: '/v1/video/generations',
+              pollPath: '/v1/tasks/{id}',
+              statusPath: 'data.status',
+              artifactPath: 'data.output.video_url',
+            },
+            {
+              routeId: '302ai-video-manual:aihubmix:video',
+              enabled: true,
+              priority: 40,
+              requestPath: '/v1/videos',
+              pollPath: '/v1/video-tasks/{id}',
+              statusPath: 'data.status',
+              artifactPath: 'data.video.url',
+            },
+          ],
+        },
+      }
+    );
+
+    expect(res.statusCode).toBe(422);
+    expect(res.json()).toMatchObject({
+      error: 'AI_GATEWAY_MODEL_ROUTE_AMBIGUOUS',
+      details: {
+        routeIds: ['302ai-video-manual:302ai:video', '302ai-video-manual:aihubmix:video'],
+        priority: 40,
+      },
+    });
+    expect(store.size()).toBe(0);
+  });
+
   it('lists recent job summaries without exposing large inputs', async () => {
     const store = createInMemoryAiJobStore();
     await handleAiGatewayRequest(
@@ -83,18 +221,40 @@ describe('AI gateway HTTP job sample', () => {
         input: { contents: [{ role: 'user', parts: [{ text: 'old prompt' }] }] },
       }),
       makeRes(),
-      { store }
+      { store, ...testGatewayOptions }
     );
     await handleAiGatewayRequest(
       makeReq('POST', '/ai-gateway/jobs', {
         id: 'aijob_http_new',
         modality: 'image',
         model: 'gemini-3-pro-image-preview',
-        metadata: { traceOnly: true, proxyPath: '/proxy/gemini/async' },
+        metadata: {
+          traceOnly: true,
+          proxyPath: '/proxy/gemini/async',
+          aiGatewayFallback: {
+            active: true,
+            policy: 'on_rate_limit',
+            nextProviderId: 'tinysnow',
+            nextAdapterId: 'tinysnow-openai',
+            attempts: [
+              {
+                providerId: 'openai-official',
+                adapterId: 'openai-official',
+                reason: 'rate_limit',
+                retryable: true,
+                policyKind: 'on_rate_limit',
+                policies: ['on_rate_limit'],
+                policyAllowed: true,
+                status: 429,
+                message: 'HTTP 429',
+              },
+            ],
+          },
+        },
         input: { contents: [{ role: 'user', parts: [{ text: 'new prompt' }] }] },
       }),
       makeRes(),
-      { store }
+      { store, ...testGatewayOptions }
     );
 
     const listRes = makeRes();
@@ -109,6 +269,13 @@ describe('AI gateway HTTP job sample', () => {
           traceOnly: true,
           proxyPath: '/proxy/gemini/async',
           route: { providerId: 'vertex-site', workerId: 'image-worker', adapterId: 'ai-worker-proxy' },
+          fallback: {
+            active: true,
+            policy: 'on_rate_limit',
+            nextProviderId: 'tinysnow',
+            attemptCount: 1,
+            lastReason: 'rate_limit',
+          },
         },
       ],
     });
@@ -126,7 +293,7 @@ describe('AI gateway HTTP job sample', () => {
         input: { contents: [{ role: 'user', parts: [{ text: 'lifecycle prompt' }] }] },
       }),
       makeRes(),
-      { store }
+      { store, ...testGatewayOptions }
     );
 
     const patchRes = makeRes();

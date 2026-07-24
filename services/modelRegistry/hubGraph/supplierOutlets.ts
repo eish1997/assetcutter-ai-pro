@@ -44,6 +44,22 @@ export const STATIC_SUPPLIER_OUTLETS: readonly SupplierOutlet[] = [
     channelId: "openai-official",
   },
   {
+    outletId: "302ai-openai",
+    supplierId: "302ai",
+    label: "302.AI / OpenAI",
+    upstreamModelId: "*",
+    apiShape: "openai",
+    channelId: "302ai-openai",
+  },
+  {
+    outletId: "aihubmix-openai",
+    supplierId: "aihubmix",
+    label: "AIHubMix / OpenAI",
+    upstreamModelId: "*",
+    apiShape: "openai",
+    channelId: "aihubmix-openai",
+  },
+  {
     outletId: "tinysnow-openai",
     supplierId: "tinysnow",
     label: "TinySnow / OpenAI",

@@ -50,6 +50,10 @@ export function getBindingDegradedHint(): string | null {
 }
 const STORAGE_KEY_TOAPIS_API_KEY = 'ac_toapis_api_key';
 const STORAGE_KEY_TOAPIS_BASE_URL = 'ac_toapis_base_url';
+const STORAGE_KEY_302AI_API_KEY = 'ac_302ai_api_key';
+const STORAGE_KEY_302AI_BASE_URL = 'ac_302ai_base_url';
+const STORAGE_KEY_AIHUBMIX_API_KEY = 'ac_aihubmix_api_key';
+const STORAGE_KEY_AIHUBMIX_BASE_URL = 'ac_aihubmix_base_url';
 const STORAGE_KEY_OPENAI_API_KEY = 'ac_openai_api_key';
 const STORAGE_KEY_OPENAI_BASE_URL = 'ac_openai_base_url';
 const STORAGE_KEY_TINYSNOW_API_KEY = 'ac_tinysnow_api_key';
@@ -160,6 +164,8 @@ export function isChannelReady(channel: ChannelId): boolean {
   if (channel === 'vertex-proxy') return vertexAiWorkerProxyConfigured();
   if (channel === 'gemini-aistudio') return Boolean(getUserApiKey()?.trim()) || aiWorkerProxyConfigured();
   if (channel === 'toapis-gemini' || channel === 'toapis-openai') return Boolean(getToapisApiKey()?.trim());
+  if (channel === '302ai-openai') return Boolean(get302AiApiKey()?.trim());
+  if (channel === 'aihubmix-openai') return Boolean(getAihubmixApiKey()?.trim());
   if (channel === 'vectorengine') return Boolean(getVectorengineApiKey()?.trim());
   if (channel === 'openai-official') return Boolean(getOpenaiApiKey()?.trim());
   if (channel === 'tinysnow-openai') return Boolean(getTinysnowApiKey()?.trim());
@@ -196,6 +202,10 @@ export function isAiSettingsStorageKey(key: string | null): boolean {
     key === STORAGE_KEY_GEMINI ||
     key === STORAGE_KEY_TOAPIS_API_KEY ||
     key === STORAGE_KEY_TOAPIS_BASE_URL ||
+    key === STORAGE_KEY_302AI_API_KEY ||
+    key === STORAGE_KEY_302AI_BASE_URL ||
+    key === STORAGE_KEY_AIHUBMIX_API_KEY ||
+    key === STORAGE_KEY_AIHUBMIX_BASE_URL ||
     key === STORAGE_KEY_OPENAI_API_KEY ||
     key === STORAGE_KEY_OPENAI_BASE_URL ||
     key === STORAGE_KEY_TINYSNOW_API_KEY ||
@@ -292,6 +302,40 @@ export function setToapisBaseUrl(value: string | null): void {
   writeLocalNonEmptyTrimmedOrRemove(STORAGE_KEY_TOAPIS_BASE_URL, value);
 }
 
+export function get302AiApiKey(): string | null {
+  return readLocalNonEmptyTrimmed(STORAGE_KEY_302AI_API_KEY);
+}
+
+export function set302AiApiKey(value: string | null): void {
+  writeLocalNonEmptyTrimmedOrRemove(STORAGE_KEY_302AI_API_KEY, value);
+}
+
+export function get302AiBaseUrl(): string {
+  const t = readLocalNonEmptyTrimmed(STORAGE_KEY_302AI_BASE_URL) ?? '';
+  return t.trim() ? normalizeOpenAiBaseUrl(t) : normalizeOpenAiBaseUrl('https://api.302.ai/v1');
+}
+
+export function set302AiBaseUrl(value: string | null): void {
+  writeLocalNonEmptyTrimmedOrRemove(STORAGE_KEY_302AI_BASE_URL, value);
+}
+
+export function getAihubmixApiKey(): string | null {
+  return readLocalNonEmptyTrimmed(STORAGE_KEY_AIHUBMIX_API_KEY);
+}
+
+export function setAihubmixApiKey(value: string | null): void {
+  writeLocalNonEmptyTrimmedOrRemove(STORAGE_KEY_AIHUBMIX_API_KEY, value);
+}
+
+export function getAihubmixBaseUrl(): string {
+  const t = readLocalNonEmptyTrimmed(STORAGE_KEY_AIHUBMIX_BASE_URL) ?? '';
+  return t.trim() ? normalizeOpenAiBaseUrl(t) : normalizeOpenAiBaseUrl('https://aihubmix.com/v1');
+}
+
+export function setAihubmixBaseUrl(value: string | null): void {
+  writeLocalNonEmptyTrimmedOrRemove(STORAGE_KEY_AIHUBMIX_BASE_URL, value);
+}
+
 export function getOpenaiApiKey(): string | null {
   return readLocalNonEmptyTrimmed(STORAGE_KEY_OPENAI_API_KEY);
 }
@@ -379,6 +423,14 @@ export function getApiKey(): string | undefined {
     }
     if (ch === 'toapis-gemini' || ch === 'toapis-openai') {
       const k = getToapisApiKey();
+      if (k?.trim()) return k;
+    }
+    if (ch === '302ai-openai') {
+      const k = get302AiApiKey();
+      if (k?.trim()) return k;
+    }
+    if (ch === 'aihubmix-openai') {
+      const k = getAihubmixApiKey();
       if (k?.trim()) return k;
     }
     if (ch === 'openai-official') {

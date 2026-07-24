@@ -33,6 +33,8 @@ const BYOK_CHANNELS = new Set([
   'gemini-aistudio',
   'toapis-gemini',
   'toapis-openai',
+  '302ai-openai',
+  'aihubmix-openai',
   'vectorengine',
   'openai-official',
   'tinysnow-openai',

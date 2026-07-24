@@ -1,7 +1,7 @@
 import { JIMENG_CATALOG } from "../jimeng/catalog";
 import { DIALOG_IMAGE_REGISTRY } from "./imageModels";
 import { TEXT_MODEL_REGISTRY } from "./textModels";
-import { VOLCENGINE_ARK_MODEL_CATALOG, listProviderModels } from "./providerModelCatalog";
+import { AGGREGATOR_302AI_MULTIMODAL_CATALOG, VOLCENGINE_ARK_MODEL_CATALOG, listProviderModels } from "./providerModelCatalog";
 import type { ProviderModality } from "./providerCatalog";
 
 export type CanonicalModelStatus = "draft" | "published" | "deprecated" | "disabled";
@@ -88,6 +88,17 @@ const ARK_CANONICAL_MODELS: CanonicalModelCatalogEntry[] = VOLCENGINE_ARK_MODEL_
   sourceRegistryId: row.registryId || row.providerModelId,
 }));
 
+const AGGREGATOR_GRAY_CANONICAL_MODELS: CanonicalModelCatalogEntry[] = AGGREGATOR_302AI_MULTIMODAL_CATALOG.map((row) => ({
+  canonicalModelId: row.registryId || row.providerModelId,
+  label: row.label,
+  modality: row.modality,
+  category: arkCategory(row.modality),
+  visibleInWorkspace: true,
+  supportedWorkflows: arkWorkflows(row.modality),
+  status: "draft",
+  sourceRegistryId: row.registryId || row.providerModelId,
+}));
+
 const TRIPO_CANONICAL_MODELS: CanonicalModelCatalogEntry[] = listProviderModels("tripo")
   .filter((row) => row.modality === "model3d")
   .map((row) => ({
@@ -141,6 +152,7 @@ export const CANONICAL_MODEL_CATALOG: readonly CanonicalModelCatalogEntry[] = un
   ...TEXT_CANONICAL_MODELS,
   ...IMAGE_CANONICAL_MODELS,
   ...ARK_CANONICAL_MODELS,
+  ...AGGREGATOR_GRAY_CANONICAL_MODELS,
   ...JIMENG_CANONICAL_MODELS,
   ...MODEL3D_CANONICAL_MODELS,
 ]);

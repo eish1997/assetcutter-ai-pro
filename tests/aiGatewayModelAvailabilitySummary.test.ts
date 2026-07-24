@@ -52,6 +52,81 @@ describe('AI gateway model availability summary', () => {
     });
   });
 
+  it('marks a disabled binding route as not executable without disabling the provider text route', async () => {
+    const modelOpsConfig = {
+      bindingOverrides: [
+        {
+          bindingId: 'gpt-image-2:302ai-openai:image',
+          enabled: false,
+        },
+      ],
+    };
+    const summary = await buildModelAvailabilitySummary(
+      {
+        models: [
+          model('gpt-image-2', 'image', '302ai'),
+          model('gpt-4o-mini', 'text', '302ai'),
+        ],
+      },
+      {
+        modelOpsConfig,
+        listProviderKeys: async () => [{ provider: '302ai', enabled: true, hasSecret: true }],
+      }
+    );
+
+    expect(summary.models[0]).toMatchObject({
+      canonicalModelId: 'gpt-image-2',
+      status: 'route_not_executable',
+      workspaceSelectable: false,
+      reasonCode: 'route_not_executable',
+      reason: '路线已暂停或不可执行',
+    });
+    expect(summary.models[0].routes[0]).toMatchObject({
+      providerId: '302ai',
+      executionStatus: 'disabled_by_ops',
+      selectable: false,
+      reasonCode: 'route_not_executable',
+    });
+    expect(summary.models[1]).toMatchObject({
+      canonicalModelId: 'gpt-4o-mini',
+      status: 'ready',
+      workspaceSelectable: true,
+    });
+  });
+
+  it('includes fallback policy and max attempts in route availability summaries', async () => {
+    const summary = await buildModelAvailabilitySummary(
+      {
+        models: [
+          model('gpt-4o-mini', 'text', 'aihubmix'),
+        ],
+      },
+      {
+        modelOpsConfig: {
+          bindingOverrides: [
+            {
+              bindingId: 'gpt-4o-mini:aihubmix-openai:text',
+              fallbackPolicy: 'on_rate_limit',
+              fallbackMaxAttempts: 3,
+            },
+          ],
+        },
+        listProviderKeys: async () => [{ provider: 'aihubmix', enabled: true, hasSecret: true }],
+      }
+    );
+
+    expect(summary.models[0]).toMatchObject({
+      status: 'ready',
+      workspaceSelectable: true,
+    });
+    expect(summary.models[0].routes[0]).toMatchObject({
+      providerId: 'aihubmix',
+      selectable: true,
+      fallbackPolicy: 'on_rate_limit',
+      fallbackMaxAttempts: 3,
+    });
+  });
+
   it('orders Gemini route summaries by model ops priority and falls back when the preferred key is missing', async () => {
     const input = {
       models: [
@@ -204,5 +279,273 @@ describe('AI gateway model availability summary', () => {
       reasonCode: 'parameter_pending',
     });
     expect(summary.totals.parameterPending).toBe(1);
+  });
+
+  it('keeps 302.AI video and 3D gray routes unavailable until mapping is configured', async () => {
+    const summary = await buildModelAvailabilitySummary(
+      {
+        models: [
+          {
+            canonicalModelId: '302ai-video-manual',
+            modality: 'video',
+            routes: [
+              {
+                providerId: '302ai',
+                modality: 'video',
+                executionStatus: 'requires_endpoint_mapping',
+                requiresEndpointMapping: true,
+              },
+            ],
+          },
+          {
+            canonicalModelId: '302ai-model3d-manual',
+            modality: 'model3d',
+            routes: [
+              {
+                providerId: '302ai',
+                modality: 'model3d',
+                executionStatus: 'requires_endpoint_mapping',
+                requiresEndpointMapping: true,
+              },
+            ],
+          },
+        ],
+      },
+      { listProviderKeys: async () => [{ provider: '302ai', enabled: true, hasSecret: true }] }
+    );
+
+    expect(summary.models.map((row) => [row.canonicalModelId, row.status])).toEqual([
+      ['302ai-video-manual', 'parameter_pending'],
+      ['302ai-model3d-manual', 'parameter_pending'],
+    ]);
+    expect(summary.models.every((row) => row.workspaceSelectable === false)).toBe(true);
+    expect(summary.totals.parameterPending).toBe(2);
+  });
+
+  it('keeps 302.AI gray routes pending when endpoint mapping is filled but not enabled', async () => {
+    const summary = await buildModelAvailabilitySummary(
+      {
+        models: [
+          {
+            canonicalModelId: '302ai-video-manual',
+            modality: 'video',
+            routes: [
+              {
+                routeId: '302ai-video-manual:302ai:video',
+                providerId: '302ai',
+                modality: 'video',
+                executionStatus: 'requires_endpoint_mapping',
+                requiresEndpointMapping: true,
+              },
+            ],
+          },
+        ],
+      },
+      {
+        listProviderKeys: async () => [{ provider: '302ai', enabled: true, hasSecret: true }],
+        modelOpsConfig: {
+          endpointMappings: [
+            {
+              routeId: '302ai-video-manual:302ai:video',
+              requestPath: '/v1/video/generations',
+              pollPath: '/v1/tasks/{id}',
+              statusPath: 'data.status',
+              artifactPath: 'data.output.video_url',
+            },
+          ],
+        },
+      }
+    );
+
+    expect(summary.models[0]).toMatchObject({
+      status: 'parameter_pending',
+      workspaceSelectable: false,
+      reasonCode: 'parameter_pending',
+      routes: [
+        {
+          routeId: '302ai-video-manual:302ai:video',
+          providerId: '302ai',
+          executionStatus: 'requires_endpoint_mapping',
+          reasonCode: 'parameter_pending',
+        },
+      ],
+    });
+    expect(summary.totals.parameterPending).toBe(1);
+  });
+
+  it('marks 302.AI gray routes ready after endpoint mapping is enabled and key is available', async () => {
+    const summary = await buildModelAvailabilitySummary(
+      {
+        models: [
+          {
+            canonicalModelId: '302ai-video-manual',
+            modality: 'video',
+            routes: [
+              {
+                routeId: '302ai-video-manual:302ai:video',
+                providerId: '302ai',
+                modality: 'video',
+                executionStatus: 'requires_endpoint_mapping',
+                requiresEndpointMapping: true,
+              },
+            ],
+          },
+        ],
+      },
+      {
+        listProviderKeys: async () => [{ provider: '302ai', enabled: true, hasSecret: true }],
+        modelOpsConfig: {
+          endpointMappings: [
+            {
+              routeId: '302ai-video-manual:302ai:video',
+              enabled: true,
+              requestPath: '/v1/video/generations',
+              pollPath: '/v1/tasks/{id}',
+              statusPath: 'data.status',
+              artifactPath: 'data.output.video_url',
+            },
+          ],
+        },
+      }
+    );
+
+    expect(summary.models[0]).toMatchObject({
+      status: 'ready',
+      workspaceSelectable: true,
+      reasonCode: 'ready',
+      routes: [
+        {
+          routeId: '302ai-video-manual:302ai:video',
+          providerId: '302ai',
+          gatewayExecutionStatus: 'gateway_ready',
+          executionStatus: 'platform_ready',
+          reasonCode: 'ready',
+        },
+      ],
+    });
+    expect(summary.totals.ready).toBe(1);
+  });
+
+  it('adds ops endpoint mappings as availability route candidates', async () => {
+    const summary = await buildModelAvailabilitySummary(
+      {
+        models: [
+          {
+            canonicalModelId: '302ai-video-manual',
+            modality: 'video',
+            routes: [
+              {
+                routeId: '302ai-video-manual:302ai:video',
+                providerId: '302ai',
+                modality: 'video',
+                executionStatus: 'requires_endpoint_mapping',
+                requiresEndpointMapping: true,
+              },
+            ],
+          },
+        ],
+      },
+      {
+        listProviderKeys: async () => [
+          { provider: '302ai', enabled: true, hasSecret: true },
+          { provider: 'aihubmix', enabled: true, hasSecret: true },
+        ],
+        modelOpsConfig: {
+          endpointMappings: [
+            {
+              routeId: '302ai-video-manual:302ai:video',
+              enabled: true,
+              priority: 80,
+              requestPath: '/v1/video/generations',
+              pollPath: '/v1/tasks/{id}',
+              statusPath: 'data.status',
+              artifactPath: 'data.output.video_url',
+            },
+            {
+              routeId: '302ai-video-manual:aihubmix:video',
+              enabled: true,
+              priority: 20,
+              requestPath: '/v1/videos',
+              pollPath: '/v1/video-tasks/{id}',
+              statusPath: 'data.status',
+              artifactPath: 'data.video.url',
+            },
+          ],
+        },
+      }
+    );
+
+    expect(summary.models[0]).toMatchObject({
+      status: 'ready',
+      workspaceSelectable: true,
+      reasonCode: 'ready',
+    });
+    expect(summary.models[0].routes.map((route) => route.providerId)).toEqual(['aihubmix', '302ai']);
+    expect(summary.models[0].routes[0]).toMatchObject({
+      routeId: '302ai-video-manual:aihubmix:video',
+      providerId: 'aihubmix',
+      priority: 20,
+      reasonCode: 'ready',
+    });
+  });
+
+  it('marks models ambiguous when enabled endpoint mappings share the best priority', async () => {
+    const summary = await buildModelAvailabilitySummary(
+      {
+        models: [
+          {
+            canonicalModelId: '302ai-video-manual',
+            modality: 'video',
+            routes: [
+              {
+                routeId: '302ai-video-manual:302ai:video',
+                providerId: '302ai',
+                modality: 'video',
+                executionStatus: 'requires_endpoint_mapping',
+                requiresEndpointMapping: true,
+              },
+            ],
+          },
+        ],
+      },
+      {
+        listProviderKeys: async () => [
+          { provider: '302ai', enabled: true, hasSecret: true },
+          { provider: 'aihubmix', enabled: true, hasSecret: true },
+        ],
+        modelOpsConfig: {
+          endpointMappings: [
+            {
+              routeId: '302ai-video-manual:302ai:video',
+              enabled: true,
+              priority: 40,
+              requestPath: '/v1/video/generations',
+              pollPath: '/v1/tasks/{id}',
+              statusPath: 'data.status',
+              artifactPath: 'data.output.video_url',
+            },
+            {
+              routeId: '302ai-video-manual:aihubmix:video',
+              enabled: true,
+              priority: 40,
+              requestPath: '/v1/videos',
+              pollPath: '/v1/video-tasks/{id}',
+              statusPath: 'data.status',
+              artifactPath: 'data.video.url',
+            },
+          ],
+        },
+      }
+    );
+
+    expect(summary.models[0]).toMatchObject({
+      status: 'route_ambiguous',
+      workspaceSelectable: false,
+      reasonCode: 'route_ambiguous',
+      providers: ['302ai', 'aihubmix'],
+      routeIds: ['302ai-video-manual:302ai:video', '302ai-video-manual:aihubmix:video'],
+      priority: 40,
+    });
+    expect(summary.totals.routeAmbiguous).toBe(1);
   });
 });

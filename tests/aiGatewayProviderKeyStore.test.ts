@@ -1,7 +1,10 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import {
+  writeModelOpsConfig,
+} from '../server/ai-gateway/model-ops-config-store.js';
 import {
   acquireProviderKey,
   applyProviderKeyHealthAutomation,
@@ -29,6 +32,8 @@ describe('AI gateway provider key store', () => {
   const prevAutoCooldown = process.env.AI_GATEWAY_PROVIDER_KEY_AUTO_COOLDOWN;
   const prevAutoCooldownErrors = process.env.AI_GATEWAY_PROVIDER_KEY_AUTO_COOLDOWN_ERRORS;
   const prevAutoCooldownMs = process.env.AI_GATEWAY_PROVIDER_KEY_AUTO_COOLDOWN_MS;
+  const prevModelOpsConfigPath = process.env.MODEL_OPS_CONFIG_PATH;
+  const prevModelOpsConfigSource = process.env.MODEL_OPS_CONFIG_SOURCE;
   const tempFiles = new Set<string>();
 
   afterEach(() => {
@@ -52,6 +57,10 @@ describe('AI gateway provider key store', () => {
     else process.env.AI_GATEWAY_PROVIDER_KEY_AUTO_COOLDOWN_ERRORS = prevAutoCooldownErrors;
     if (prevAutoCooldownMs === undefined) delete process.env.AI_GATEWAY_PROVIDER_KEY_AUTO_COOLDOWN_MS;
     else process.env.AI_GATEWAY_PROVIDER_KEY_AUTO_COOLDOWN_MS = prevAutoCooldownMs;
+    if (prevModelOpsConfigPath === undefined) delete process.env.MODEL_OPS_CONFIG_PATH;
+    else process.env.MODEL_OPS_CONFIG_PATH = prevModelOpsConfigPath;
+    if (prevModelOpsConfigSource === undefined) delete process.env.MODEL_OPS_CONFIG_SOURCE;
+    else process.env.MODEL_OPS_CONFIG_SOURCE = prevModelOpsConfigSource;
     for (const file of tempFiles) {
       try {
         fs.rmSync(file, { force: true });
@@ -62,6 +71,14 @@ describe('AI gateway provider key store', () => {
     tempFiles.clear();
     resetProviderKeyRuntimeForTests();
   });
+
+  function useTempModelOpsConfig() {
+    const file = path.join(os.tmpdir(), `ac-model-ops-${Date.now()}-${Math.random().toString(36).slice(2)}.json`);
+    tempFiles.add(file);
+    process.env.MODEL_OPS_CONFIG_PATH = file;
+    process.env.MODEL_OPS_CONFIG_SOURCE = 'disk';
+    return file;
+  }
 
   function useTempStore() {
     const file = path.join(os.tmpdir(), `ac-aig-keys-${Date.now()}-${Math.random().toString(36).slice(2)}.json`);
@@ -78,6 +95,7 @@ describe('AI gateway provider key store', () => {
     delete process.env.AI_GATEWAY_PROVIDER_KEY_AUTO_COOLDOWN;
     delete process.env.AI_GATEWAY_PROVIDER_KEY_AUTO_COOLDOWN_ERRORS;
     delete process.env.AI_GATEWAY_PROVIDER_KEY_AUTO_COOLDOWN_MS;
+    useTempModelOpsConfig();
     return file;
   }
 
@@ -106,6 +124,36 @@ describe('AI gateway provider key store', () => {
 
     const acquired = await acquireProviderKey('tripo');
     expect(acquired).toMatchObject({ id: 'key_primary', secret: 'sk-tripo-primary-1234' });
+  });
+
+  it('applies provider-level Base URL overrides when acquiring OpenAI-compatible keys', async () => {
+    useTempStore();
+
+    await writeModelOpsConfig({
+      version: 2,
+      providerOverrides: [
+        {
+          providerId: '302ai',
+          baseUrl: 'https://proxy.example/302ai/v1',
+          requestTimeoutMs: 45_500,
+        },
+      ],
+    });
+    await saveProviderKeys([
+      {
+        id: 'key_302ai_override',
+        provider: '302ai',
+        label: '302.AI override',
+        secret: 'sk-302ai-override',
+        enabled: true,
+        credentials: { baseUrl: 'https://api.302.ai/v1' },
+      },
+    ]);
+
+    await expect(acquireProviderKey('302ai')).resolves.toMatchObject({
+      id: 'key_302ai_override',
+      credentials: { baseUrl: 'https://proxy.example/302ai/v1', requestTimeoutMs: 45_500 },
+    });
   });
 
   it('supports TRIPO_API_KEY as a read-only fallback key', async () => {
@@ -570,6 +618,127 @@ describe('AI gateway provider key store', () => {
     expect(calls[0].init).toMatchObject({
       method: 'GET',
       headers: { Authorization: 'Bearer sk-tinysnow' },
+    });
+  });
+
+  it('runs a real upstream smoke probe for 302.AI keys with the default Base URL', async () => {
+    useTempStore();
+
+    await saveProviderKeys([
+      {
+        id: 'key_302ai_models_smoke',
+        provider: '302ai',
+        label: '302.AI models smoke',
+        secret: 'sk-302ai',
+        enabled: true,
+      },
+    ]);
+
+    const calls: Array<{ url: string; init: RequestInit }> = [];
+    const fetchImpl = async (url: string, init: RequestInit) => {
+      calls.push({ url, init });
+      return new Response(JSON.stringify({ data: [] }), { status: 200 });
+    };
+
+    await expect(smokeTestProviderKey('key_302ai_models_smoke', { fetchImpl })).resolves.toMatchObject({
+      ok: true,
+      provider: '302ai',
+      status: 'passed',
+      mode: 'real_upstream',
+      route: 'GET /models',
+      upstreamStatus: 200,
+    });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0].url).toBe('https://api.302.ai/v1/models');
+    expect(calls[0].init).toMatchObject({
+      method: 'GET',
+      headers: { Authorization: 'Bearer sk-302ai' },
+    });
+  });
+
+  it('runs OpenAI-compatible smoke probes through provider-level Base URL overrides', async () => {
+    useTempStore();
+
+    await writeModelOpsConfig({
+      version: 3,
+      providerOverrides: [
+        {
+          providerId: '302ai',
+          baseUrl: 'https://proxy.example/302ai/v1',
+          requestTimeoutMs: 45_500,
+        },
+      ],
+    });
+    await saveProviderKeys([
+      {
+        id: 'key_302ai_models_smoke_override',
+        provider: '302ai',
+        label: '302.AI override smoke',
+        secret: 'sk-302ai',
+        enabled: true,
+        credentials: { baseUrl: 'https://api.302.ai/v1' },
+      },
+    ]);
+
+    const calls: Array<{ url: string; init: RequestInit }> = [];
+    const timeoutSpy = vi.spyOn(AbortSignal, 'timeout').mockImplementation((ms: number) => {
+      const controller = new AbortController();
+      Object.defineProperty(controller.signal, '__timeoutMs', { value: ms });
+      return controller.signal;
+    });
+    const fetchImpl = async (url: string, init: RequestInit) => {
+      calls.push({ url, init });
+      return new Response(JSON.stringify({ data: [] }), { status: 200 });
+    };
+
+    await expect(smokeTestProviderKey('key_302ai_models_smoke_override', { fetchImpl })).resolves.toMatchObject({
+      ok: true,
+      provider: '302ai',
+      status: 'passed',
+      mode: 'real_upstream',
+      route: 'GET /models',
+      upstreamStatus: 200,
+    });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0].url).toBe('https://proxy.example/302ai/v1/models');
+    expect(timeoutSpy).toHaveBeenCalledWith(45_500);
+  });
+
+  it('runs a real upstream smoke probe for AIHubMix keys with the default Base URL', async () => {
+    useTempStore();
+
+    await saveProviderKeys([
+      {
+        id: 'key_aihubmix_models_smoke',
+        provider: 'aihubmix',
+        label: 'AIHubMix models smoke',
+        secret: 'sk-aihubmix',
+        enabled: true,
+      },
+    ]);
+
+    const calls: Array<{ url: string; init: RequestInit }> = [];
+    const fetchImpl = async (url: string, init: RequestInit) => {
+      calls.push({ url, init });
+      return new Response(JSON.stringify({ data: [] }), { status: 200 });
+    };
+
+    await expect(smokeTestProviderKey('key_aihubmix_models_smoke', { fetchImpl })).resolves.toMatchObject({
+      ok: true,
+      provider: 'aihubmix',
+      status: 'passed',
+      mode: 'real_upstream',
+      route: 'GET /models',
+      upstreamStatus: 200,
+    });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0].url).toBe('https://aihubmix.com/v1/models');
+    expect(calls[0].init).toMatchObject({
+      method: 'GET',
+      headers: { Authorization: 'Bearer sk-aihubmix' },
     });
   });
 

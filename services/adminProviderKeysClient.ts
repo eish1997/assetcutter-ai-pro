@@ -165,6 +165,8 @@ export type AdminModelOpsConfig = {
   publishedCanonicalModelAllowlist?: string[] | null;
   imageModelPreference?: string[] | null;
   bindingOverrides?: unknown[] | null;
+  providerOverrides?: unknown[] | null;
+  endpointMappings?: unknown[] | null;
   wiringEdges?: unknown[] | null;
   updatedAt?: string | null;
   updatedByUserId?: string | null;
@@ -179,6 +181,7 @@ export type AdminModelOpsConfigResponse = {
 };
 
 export type AdminModelAvailabilityRouteSummary = {
+  routeId?: string | null;
   providerId: string | null;
   modality: string | null;
   gatewayExecutionStatus: 'gateway_ready' | 'adapter_pending' | 'not_gateway_routed';
@@ -186,16 +189,30 @@ export type AdminModelAvailabilityRouteSummary = {
   platformKeyRequired: boolean;
   keyReady: boolean;
   selectable: boolean;
-  reasonCode: 'ready' | 'key_missing' | 'adapter_pending' | 'parameter_pending' | 'route_not_executable' | 'route_not_found';
+  reasonCode: 'ready' | 'key_missing' | 'adapter_pending' | 'parameter_pending' | 'route_ambiguous' | 'route_not_executable' | 'route_not_found';
+  missingEndpointFields?: string[];
+  priority?: number | null;
+  fallbackPolicy?:
+    | 'none'
+    | 'on_error'
+    | 'on_rate_limit'
+    | 'on_timeout'
+    | 'on_provider_degraded'
+    | 'cost_optimized'
+    | 'quality_first';
+  fallbackMaxAttempts?: number;
 };
 
 export type AdminModelAvailabilitySummaryItem = {
   canonicalModelId: string;
   modality: string | null;
-  status: 'ready' | 'key_missing' | 'adapter_pending' | 'parameter_pending' | 'route_not_found';
+  status: 'ready' | 'key_missing' | 'adapter_pending' | 'parameter_pending' | 'route_ambiguous' | 'route_not_executable' | 'route_not_found';
   workspaceSelectable: boolean;
-  reasonCode: 'ready' | 'key_missing' | 'adapter_pending' | 'parameter_pending' | 'route_not_found';
+  reasonCode: 'ready' | 'key_missing' | 'adapter_pending' | 'parameter_pending' | 'route_ambiguous' | 'route_not_executable' | 'route_not_found';
   reason: string;
+  routeIds?: string[];
+  providers?: string[];
+  priority?: number | null;
   routes: AdminModelAvailabilityRouteSummary[];
 };
 
@@ -208,6 +225,7 @@ export type AdminModelAvailabilitySummaryResponse = {
     keyMissing: number;
     adapterPending: number;
     parameterPending: number;
+    routeAmbiguous?: number;
     routeMissing: number;
   };
   models: AdminModelAvailabilitySummaryItem[];
@@ -215,6 +233,7 @@ export type AdminModelAvailabilitySummaryResponse = {
 
 export type AdminModelRouteTestInput = {
   canonicalModelId: string;
+  routeId?: string;
   modality?: string;
   providerId?: string;
   provider?: string;
@@ -241,6 +260,10 @@ export type AdminModelRouteTestResult = {
     executionStatus?: string;
     platformKeyRequired?: boolean;
   } | null;
+  missingEndpointFields?: string[];
+  routeIds?: string[];
+  providers?: string[];
+  priority?: number | null;
   nextAction?: string | null;
   testedAt: string;
 };
@@ -252,6 +275,7 @@ export type AdminModelRouteTestResponse = {
 
 export type AdminModelGenerationTestInput = {
   canonicalModelId: string;
+  routeId?: string;
   modality?: string;
   providerId?: string;
   provider?: string;
@@ -290,6 +314,10 @@ export type AdminModelGenerationTestResult = {
     kind?: string;
     textPreview?: string;
   } | null;
+  missingEndpointFields?: string[];
+  routeIds?: string[];
+  providers?: string[];
+  priority?: number | null;
   nextAction?: string | null;
   testedAt: string;
 };
@@ -305,6 +333,7 @@ export type AdminModelDiagnosticsRunInput = {
     | string
     | {
         canonicalModelId: string;
+        routeId?: string;
         registryId?: string;
         modality?: string;
         providerId?: string;
@@ -341,7 +370,7 @@ export type AdminModelAvailabilitySummaryInput = {
   models: Array<{
     canonicalModelId: string;
     modality?: string;
-    routes?: Array<{ providerId?: string; modality?: string; executionStatus?: string; requiresEndpointMapping?: boolean }>;
+    routes?: Array<{ routeId?: string; providerId?: string; modality?: string; executionStatus?: string; requiresEndpointMapping?: boolean }>;
   }>;
 };
 

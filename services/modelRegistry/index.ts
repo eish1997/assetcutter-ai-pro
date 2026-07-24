@@ -87,7 +87,12 @@ export {
   providerModelCount,
   providerModelCountsByModality,
 } from "./providerModelCatalog";
-export type { ProviderModelCatalogEntry, ProviderModelLifecycle, ProviderModelStatus } from "./providerModelCatalog";
+export type {
+  ProviderModelCatalogEntry,
+  ProviderModelEndpointMappingRequirement,
+  ProviderModelLifecycle,
+  ProviderModelStatus,
+} from "./providerModelCatalog";
 export {
   CANONICAL_MODEL_CATALOG,
   getCanonicalModel,

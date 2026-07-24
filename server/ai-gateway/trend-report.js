@@ -56,6 +56,24 @@ function classifyJobError(plan) {
   return null;
 }
 
+function timestampMs(value) {
+  const ms = Date.parse(String(value || ''));
+  return Number.isFinite(ms) ? ms : null;
+}
+
+function jobDurationMs(plan) {
+  const started = timestampMs(plan?.job?.startedAt || plan?.job?.createdAt);
+  const finished = timestampMs(plan?.job?.finishedAt || (TERMINAL_STATUSES.has(plan?.job?.status) ? plan?.job?.updatedAt : null));
+  if (started == null || finished == null || finished < started) return null;
+  return finished - started;
+}
+
+function fallbackAttemptCount(plan) {
+  const metadata = plan?.job?.metadata && typeof plan.job.metadata === 'object' ? plan.job.metadata : {};
+  const fallback = metadata.aiGatewayFallback && typeof metadata.aiGatewayFallback === 'object' ? metadata.aiGatewayFallback : {};
+  return Array.isArray(fallback.attempts) ? fallback.attempts.length : 0;
+}
+
 function emptyJobBucket(key) {
   return {
     key,
@@ -70,8 +88,13 @@ function emptyJobBucket(key) {
     creditErrors: 0,
     timeoutErrors: 0,
     upstreamErrors: 0,
+    fallbackAttempts: 0,
+    avgDurationMs: null,
+    maxDurationMs: null,
     failureRate: 0,
     rateLimitRate: 0,
+    _durationTotal: 0,
+    _durationCount: 0,
   };
 }
 
@@ -91,13 +114,23 @@ function addJobToBucket(bucket, plan) {
     else if (kind === 'upstream') bucket.upstreamErrors += 1;
   }
   if (status === 'cancelled') bucket.cancelled += 1;
+  bucket.fallbackAttempts += fallbackAttemptCount(plan);
+  const duration = jobDurationMs(plan);
+  if (duration != null) {
+    bucket._durationTotal += duration;
+    bucket._durationCount += 1;
+    bucket.maxDurationMs = bucket.maxDurationMs == null ? duration : Math.max(bucket.maxDurationMs, duration);
+  }
 }
 
 function finalizeJobBucket(bucket) {
+  const { _durationTotal, _durationCount, ...publicBucket } = bucket;
   return {
-    ...bucket,
+    ...publicBucket,
     failureRate: bucket.terminal ? bucket.failed / bucket.terminal : 0,
     rateLimitRate: bucket.failed ? bucket.rateLimited / bucket.failed : 0,
+    avgDurationMs: bucket._durationCount ? Math.round(bucket._durationTotal / bucket._durationCount) : null,
+    maxDurationMs: bucket.maxDurationMs,
   };
 }
 
@@ -140,6 +173,38 @@ function topBuckets(map, finalize, limit = 10) {
       if (left !== right) return left - right;
       return String(a.key).localeCompare(String(b.key));
     })
+    .slice(0, limit);
+}
+
+function buildProviderPerformance(jobRows, usageRows, limit = 20) {
+  const usageByProvider = new Map((usageRows || []).map((row) => [row.key, row]));
+  const keys = new Set([
+    ...(jobRows || []).map((row) => row.key),
+    ...(usageRows || []).map((row) => row.key),
+  ]);
+  return Array.from(keys)
+    .map((key) => {
+      const jobs = (jobRows || []).find((row) => row.key === key) || finalizeJobBucket(emptyJobBucket(key));
+      const usage = usageByProvider.get(key) || finalizeUsageBucket(emptyUsageBucket(key));
+      return {
+        providerId: key,
+        totalJobs: jobs.total,
+        succeededJobs: jobs.succeeded,
+        failedJobs: jobs.failed,
+        activeJobs: jobs.active,
+        failureRate: jobs.failureRate,
+        rateLimitedJobs: jobs.rateLimited,
+        rateLimitRate: jobs.rateLimitRate,
+        fallbackAttempts: jobs.fallbackAttempts,
+        avgDurationMs: jobs.avgDurationMs,
+        maxDurationMs: jobs.maxDurationMs,
+        usageEvents: usage.eventCount,
+        totalCreditsCharged: usage.totalCreditsCharged,
+        totalCostUsdEst: usage.totalCostUsdEst,
+        totalQuantity: usage.totalQuantity,
+      };
+    })
+    .sort((a, b) => b.totalJobs - a.totalJobs || b.totalCreditsCharged - a.totalCreditsCharged || a.providerId.localeCompare(b.providerId))
     .slice(0, limit);
 }
 
@@ -230,21 +295,25 @@ export function buildAiGatewayTrendReportFromInputs({ jobs = [], usageEvents = [
     }, emptyUsageBucket('total'))
   );
 
+  const jobRowsByProvider = topBuckets(byProvider, finalizeJobBucket, 20);
+  const usageRowsByProvider = topBuckets(usageByProvider, finalizeUsageBucket, 20);
+
   return {
     generatedAt,
     days: clampDays(days),
     jobs: {
       totals: jobTotals,
       byDay: Array.from(byDay.values()).map(finalizeJobBucket).sort((a, b) => a.key.localeCompare(b.key)),
-      byProvider: topBuckets(byProvider, finalizeJobBucket, 10),
+      byProvider: jobRowsByProvider.slice(0, 10),
       byModel: topBuckets(byModel, finalizeJobBucket, 10),
     },
     usage: {
       totals: usageTotals,
       byDay: Array.from(usageByDay.values()).map(finalizeUsageBucket).sort((a, b) => a.key.localeCompare(b.key)),
-      byProvider: topBuckets(usageByProvider, finalizeUsageBucket, 10),
+      byProvider: usageRowsByProvider.slice(0, 10),
       bySku: topBuckets(usageBySku, finalizeUsageBucket, 10),
     },
+    providerPerformance: buildProviderPerformance(jobRowsByProvider, usageRowsByProvider),
     providerKeys: keyHealth || null,
   };
 }

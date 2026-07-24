@@ -5,6 +5,7 @@ import { acquireProviderKey, recordProviderKeyError, recordProviderKeySuccess } 
 import { AiGatewayValidationError } from '../job.js';
 import { finalizeAiGatewayTerminalPlan } from '../execution-finalize.js';
 import { buildProviderTaskUsage, collectByteSize } from '../execution-usage.js';
+import { normalizeGatewayInput } from '../gateway-input.js';
 import { isR2Configured, putPublicR2Object } from '../../r2-storage-handlers.js';
 
 export const TRIPO_OPENAPI_BASE_URL = 'https://api.tripo3d.ai/v2/openapi';
@@ -269,10 +270,9 @@ async function publishTripoInputImageUrl(imageBase64DataUrl, options = {}) {
 
 function buildTripoTaskBody(job) {
   const input = job?.input && typeof job.input === 'object' ? job.input : {};
-  const prompt = nonEmptyString(input.prompt) || nonEmptyString(input.text) || nonEmptyString(input.contents?.[0]?.parts?.[0]?.text);
-  const firstReferenceImage = Array.isArray(input.referenceImages)
-    ? input.referenceImages.map((value) => nonEmptyString(value)).find(Boolean)
-    : '';
+  const gatewayInput = normalizeGatewayInput(job);
+  const prompt = gatewayInput.prompt;
+  const firstReferenceImage = gatewayInput.referenceImages[0] || '';
   const type = nonEmptyString(input.type) || (firstReferenceImage ? 'image_to_model' : 'text_to_model');
   if (type === 'text_to_model' && !prompt) {
     throw new AiGatewayValidationError('Tripo text_to_model requires input.prompt', 'AI_GATEWAY_TRIPO_PROMPT_REQUIRED');

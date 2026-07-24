@@ -2,6 +2,7 @@ import { fetch as undiciFetch } from 'undici';
 import { AiGatewayValidationError } from '../job.js';
 import { finalizeAiGatewayTerminalPlan } from '../execution-finalize.js';
 import { buildProviderTaskUsage, collectByteSize } from '../execution-usage.js';
+import { normalizeGatewayInput } from '../gateway-input.js';
 import { acquireProviderKey, recordProviderKeyError, recordProviderKeySuccess } from '../provider-key-store.js';
 
 export const VOLCENGINE_ARK_PROVIDER_ID = 'volcengine-ark';
@@ -33,42 +34,6 @@ function mapArkAsyncModel(value) {
   return ARK_ASYNC_MODEL_MAP[model] || model;
 }
 
-function promptFromInput(input) {
-  const direct = nonEmptyString(input.prompt) || nonEmptyString(input.text);
-  if (direct) return direct;
-  const contents = Array.isArray(input.contents) ? input.contents : [];
-  const parts = contents.flatMap((turn) => Array.isArray(turn?.parts) ? turn.parts : []);
-  return parts.map((part) => nonEmptyString(part?.text)).filter(Boolean).join('\n').trim();
-}
-
-function inlineImageToDataUrl(part) {
-  const data = nonEmptyString(part?.inlineData?.data);
-  if (!data) return '';
-  const mime = nonEmptyString(part.inlineData.mimeType) || 'image/png';
-  return `data:${mime};base64,${data}`;
-}
-
-function collectReferenceImages(input) {
-  const refs = [];
-  const push = (value) => {
-    const raw = nonEmptyString(value);
-    if (raw && !refs.includes(raw)) refs.push(raw);
-  };
-  if (Array.isArray(input.referenceImages)) input.referenceImages.forEach(push);
-  if (Array.isArray(input.images)) input.images.forEach(push);
-  if (input.imageUrl) push(input.imageUrl);
-  if (input.imageBase64DataUrl) push(input.imageBase64DataUrl);
-  const contents = Array.isArray(input.contents) ? input.contents : [];
-  for (const turn of contents) {
-    const parts = Array.isArray(turn?.parts) ? turn.parts : [];
-    for (const part of parts) {
-      if (part?.inlineData) push(inlineImageToDataUrl(part));
-      if (part?.imageUrl) push(part.imageUrl);
-    }
-  }
-  return refs;
-}
-
 function buildArkContent(prompt, refs) {
   const content = [];
   if (prompt) content.push({ type: 'text', text: prompt });
@@ -84,7 +49,8 @@ function copyDefined(source, pairs, target) {
 
 function buildArkAsyncInput(job) {
   const input = job?.input && typeof job.input === 'object' ? job.input : {};
-  const prompt = promptFromInput(input);
+  const gatewayInput = normalizeGatewayInput(job);
+  const prompt = gatewayInput.prompt;
   if (!prompt) {
     throw new AiGatewayValidationError('Volcengine Ark async generation requires input.prompt', 'AI_GATEWAY_ARK_PROMPT_REQUIRED');
   }
@@ -93,7 +59,7 @@ function buildArkAsyncInput(job) {
   if (!model) {
     throw new AiGatewayValidationError('Volcengine Ark async generation requires a model', 'AI_GATEWAY_ARK_MODEL_REQUIRED');
   }
-  const refs = collectReferenceImages(input);
+  const refs = gatewayInput.referenceImages;
   const body = {
     model,
     content: buildArkContent(prompt.slice(0, 32000), refs),
@@ -105,24 +71,20 @@ function buildArkAsyncInput(job) {
     },
   };
   if (job?.modality === 'video') {
-    copyDefined(input, [
-      ['durationSeconds', 'duration'],
-      ['duration', 'duration'],
-      ['aspectRatio', 'ratio'],
-      ['ratio', 'ratio'],
-      ['resolution', 'resolution'],
-      ['motionStrength', 'motion_strength'],
-      ['seed', 'seed'],
-    ], body);
+    if (gatewayInput.durationSeconds) body.duration = gatewayInput.durationSeconds;
+    if (gatewayInput.aspectRatio) body.ratio = gatewayInput.aspectRatio;
+    if (gatewayInput.resolution) body.resolution = gatewayInput.resolution;
+    if (gatewayInput.seed !== null) body.seed = gatewayInput.seed;
+    copyDefined(input, [['motionStrength', 'motion_strength']], body);
   }
   if (job?.modality === 'model3d') {
+    if (gatewayInput.quality) body.quality = gatewayInput.quality;
+    if (gatewayInput.format) body.format = gatewayInput.format;
+    if (gatewayInput.texture !== null) body.texture = gatewayInput.texture;
+    if (gatewayInput.seed !== null) body.seed = gatewayInput.seed;
     copyDefined(input, [
-      ['quality', 'quality'],
-      ['format', 'format'],
-      ['texture', 'texture'],
       ['geometryQuality', 'geometry_quality'],
       ['textureQuality', 'texture_quality'],
-      ['seed', 'seed'],
     ], body);
   }
   return body;

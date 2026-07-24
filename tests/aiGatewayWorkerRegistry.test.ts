@@ -9,23 +9,29 @@ import {
 describe('AI gateway worker registry', () => {
   it('reports active text/image/video/model3d workers and planned music worker', () => {
     expect(listAiGatewayWorkers()).toEqual([
-      { id: 'text-worker', modalities: ['text'], capabilities: ['text.generate'], adapters: ['ai-worker-proxy', 'openai-official', 'toapis-openai', 'volcengine-ark-openai'], status: 'active' },
+      { id: 'text-worker', modalities: ['text'], capabilities: ['text.generate'], adapters: ['ai-worker-proxy', 'openai-official', 'toapis-openai', '302ai-openai', 'aihubmix-openai', 'tinysnow-openai', 'volcengine-ark-openai'], status: 'active' },
       {
         id: 'image-worker',
         modalities: ['image'],
         capabilities: ['image.generate', 'image.edit', 'workflow_text_to_image', 'workflow_image_edit'],
-        adapters: ['ai-worker-proxy', 'openai-official', 'toapis-openai', 'volcengine-ark-image', 'jimeng-visual'],
+        adapters: ['ai-worker-proxy', 'openai-official', 'toapis-openai', '302ai-openai', 'aihubmix-openai', 'tinysnow-openai', 'volcengine-ark-image', 'jimeng-visual'],
         status: 'active',
       },
       {
         id: 'video-worker',
         modalities: ['video'],
         capabilities: ['video.generate', 'workflow_generate_video', 'workflow_jimeng_video'],
-        adapters: ['jimeng-visual', 'volcengine-ark-async'],
+        adapters: ['jimeng-visual', 'volcengine-ark-async', 'openai-compatible-async'],
         status: 'active',
       },
       { id: 'music-worker', modalities: ['music'], capabilities: ['music.generate'], adapters: [], status: 'planned' },
-      { id: 'model3d-worker', modalities: ['model3d'], capabilities: ['model3d.generate'], adapters: ['tripo-openapi', 'volcengine-ark-async', 'tencent-hunyuan-3d'], status: 'active' },
+      {
+        id: 'model3d-worker',
+        modalities: ['model3d'],
+        capabilities: ['model3d.generate'],
+        adapters: ['tripo-openapi', 'volcengine-ark-async', 'tencent-hunyuan-3d', 'openai-compatible-async'],
+        status: 'active',
+      },
     ]);
   });
 

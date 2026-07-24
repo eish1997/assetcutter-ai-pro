@@ -129,6 +129,8 @@ describe('AI gateway auth-api facade', () => {
           {
             bindingId: 'gemini-3-pro-image-preview:gemini-aistudio:image',
             priority: 5,
+            fallbackPolicy: 'on_provider_degraded',
+            fallbackMaxAttempts: 2,
           },
         ],
       },
@@ -143,6 +145,16 @@ describe('AI gateway auth-api facade', () => {
     expect(stored.job.provider).toBe('gemini-aistudio');
     expect(stored.route.providerId).toBe('gemini-aistudio');
     expect(stored.adapterRequest.body.aiBackend).toBeUndefined();
+    expect(stored.job.metadata.modelRouteGuard).toMatchObject({
+      providerId: 'gemini-aistudio',
+      fallbackPolicy: 'on_provider_degraded',
+      fallbackMaxAttempts: 2,
+    });
+    expect(stored.job.metadata.aiGatewayFallback).toMatchObject({
+      autoSelectedProvider: true,
+      policy: 'on_provider_degraded',
+      maxAttempts: 2,
+    });
   });
 
   it('falls back to the next Gemini auth route when the preferred provider key is unavailable', async () => {
@@ -197,6 +209,201 @@ describe('AI gateway auth-api facade', () => {
     });
 
     expect(await store.get('aijob_auth_ark_pending')).toBeNull();
+  });
+
+  it('creates a controlled 302.AI async gray-route plan by inferring the only enabled endpoint mapping', async () => {
+    const store = createInMemoryAiJobStore();
+    const user = { id: 'user_1', username: 'alice' };
+    const result = await createAuthAiGatewayJob(
+      {},
+      {
+        id: 'aijob_auth_302ai_video_gray',
+        modality: 'video',
+        model: '302ai-video-manual',
+        input: {
+          prompt: 'render a short product video',
+          durationSeconds: 5,
+          aspectRatio: '16:9',
+        },
+      },
+      user,
+      {
+        store,
+        listProviderKeys: async () => [{ provider: '302ai', enabled: true, hasSecret: true }],
+        modelOpsConfig: {
+          publishedCanonicalModelAllowlist: ['302ai-video-manual'],
+          endpointMappings: [
+            {
+              routeId: '302ai-video-manual:302ai:video',
+              enabled: true,
+              requestPath: '/v1/video/generations',
+              pollPath: '/v1/tasks/{id}',
+              statusPath: 'data.status',
+              artifactPath: 'data.output.video_url',
+              taskIdPath: 'data.taskId',
+              upstreamOverride: 'kling-video-v1',
+            },
+          ],
+        },
+      }
+    );
+
+    expect(result.status).toBe(202);
+    const stored = await store.get('aijob_auth_302ai_video_gray');
+    expect(stored.job.provider).toBe('302ai');
+    expect(stored.route).toMatchObject({
+      providerId: '302ai',
+      workerId: 'video-worker',
+      adapterId: 'openai-compatible-async',
+      endpointMapping: {
+        requestPath: '/v1/video/generations',
+        pollPath: '/v1/tasks/{id}',
+        statusPath: 'data.status',
+        artifactPath: 'data.output.video_url',
+        taskIdPath: 'data.taskId',
+      },
+    });
+    expect(stored.workerRequest).toMatchObject({
+      method: 'POST',
+      path: '/v1/video/generations',
+      endpointMapping: {
+        requestPath: '/v1/video/generations',
+      },
+      body: {
+        model: 'kling-video-v1',
+        prompt: 'render a short product video',
+        duration: 5,
+        aspect_ratio: '16:9',
+      },
+    });
+    expect(stored.job.metadata.modelRouteGuard).toMatchObject({
+      routeId: '302ai-video-manual:302ai:video',
+      providerId: '302ai',
+      upstreamModelId: 'kling-video-v1',
+      gatewayExecutionStatus: 'gateway_ready',
+      executionStatus: 'platform_ready',
+    });
+    expect(stored.job.input.upstreamModelId).toBe('kling-video-v1');
+    expect(stored.job.metadata.aiGatewayFallback).toMatchObject({
+      autoSelectedProvider: true,
+    });
+  });
+
+  it('creates an async gray-route plan using endpoint mapping priority when multiple providers are enabled', async () => {
+    const store = createInMemoryAiJobStore();
+    const user = { id: 'user_1', username: 'alice' };
+    const result = await createAuthAiGatewayJob(
+      {},
+      {
+        id: 'aijob_auth_async_priority',
+        modality: 'video',
+        model: '302ai-video-manual',
+        input: {
+          prompt: 'render a short product video',
+        },
+      },
+      user,
+      {
+        store,
+        listProviderKeys: async () => [
+          { provider: '302ai', enabled: true, hasSecret: true },
+          { provider: 'aihubmix', enabled: true, hasSecret: true },
+        ],
+        modelOpsConfig: {
+          publishedCanonicalModelAllowlist: ['302ai-video-manual'],
+          endpointMappings: [
+            {
+              routeId: '302ai-video-manual:302ai:video',
+              enabled: true,
+              priority: 80,
+              requestPath: '/v1/video/generations',
+              pollPath: '/v1/tasks/{id}',
+              statusPath: 'data.status',
+              artifactPath: 'data.output.video_url',
+            },
+            {
+              routeId: '302ai-video-manual:aihubmix:video',
+              enabled: true,
+              priority: 10,
+              requestPath: '/v1/videos',
+              pollPath: '/v1/video-tasks/{id}',
+              statusPath: 'data.status',
+              artifactPath: 'data.video.url',
+            },
+          ],
+        },
+      }
+    );
+
+    expect(result.status).toBe(202);
+    const stored = await store.get('aijob_auth_async_priority');
+    expect(stored.job.provider).toBe('aihubmix');
+    expect(stored.route).toMatchObject({
+      routeId: '302ai-video-manual:aihubmix:video',
+      providerId: 'aihubmix',
+      adapterId: 'openai-compatible-async',
+    });
+    expect(stored.job.metadata.aiGatewayFallback).toMatchObject({
+      autoSelectedProvider: true,
+    });
+  });
+
+  it('rejects async gray-route plans when multiple providers have the same endpoint mapping priority', async () => {
+    const store = createInMemoryAiJobStore();
+    const user = { id: 'user_1', username: 'alice' };
+
+    await expect(
+      createAuthAiGatewayJob(
+        {},
+        {
+          id: 'aijob_auth_async_ambiguous',
+          modality: 'video',
+          model: '302ai-video-manual',
+          input: {
+            prompt: 'render a short product video',
+          },
+        },
+        user,
+        {
+          store,
+          listProviderKeys: async () => [
+            { provider: '302ai', enabled: true, hasSecret: true },
+            { provider: 'aihubmix', enabled: true, hasSecret: true },
+          ],
+          modelOpsConfig: {
+            publishedCanonicalModelAllowlist: ['302ai-video-manual'],
+            endpointMappings: [
+              {
+                routeId: '302ai-video-manual:302ai:video',
+                enabled: true,
+                priority: 40,
+                requestPath: '/v1/video/generations',
+                pollPath: '/v1/tasks/{id}',
+                statusPath: 'data.status',
+                artifactPath: 'data.output.video_url',
+              },
+              {
+                routeId: '302ai-video-manual:aihubmix:video',
+                enabled: true,
+                priority: 40,
+                requestPath: '/v1/videos',
+                pollPath: '/v1/video-tasks/{id}',
+                statusPath: 'data.status',
+                artifactPath: 'data.video.url',
+              },
+            ],
+          },
+        }
+      )
+    ).rejects.toMatchObject({
+      code: 'AI_GATEWAY_MODEL_ROUTE_AMBIGUOUS',
+      details: {
+        routeIds: ['302ai-video-manual:302ai:video', '302ai-video-manual:aihubmix:video'],
+        priority: 40,
+      },
+    });
+
+    expect(await store.get('aijob_auth_async_ambiguous')).toBeNull();
   });
 
   it('rejects platform-key models when no usable provider key is available', async () => {
@@ -381,7 +588,15 @@ describe('AI gateway auth-api facade', () => {
       user,
       {
         store,
-        modelOpsConfig: { publishedCanonicalModelAllowlist: ['gpt-image-2'] },
+        modelOpsConfig: {
+          publishedCanonicalModelAllowlist: ['gpt-image-2'],
+          bindingOverrides: [
+            {
+              bindingId: 'gpt-image-2:toapis-openai:image',
+              upstreamOverride: 'gpt-image-2-vendor-alias',
+            },
+          ],
+        },
         listProviderKeys: async () => [{ provider: 'toapis', enabled: true, hasSecret: true }],
       }
     );
@@ -398,7 +613,10 @@ describe('AI gateway auth-api facade', () => {
       providerId: 'toapis',
       gatewayExecutionStatus: 'gateway_ready',
       platformKeyRequired: true,
+      upstreamModelId: 'gpt-image-2-vendor-alias',
     });
+    expect(stored.job.input.upstreamModelId).toBe('gpt-image-2-vendor-alias');
+    expect(stored.workerRequest.body.model).toBe('gpt-image-2-vendor-alias');
   });
 
   it('routes OpenAI-compatible jobs to a key-ready secondary provider when the primary key is absent', async () => {

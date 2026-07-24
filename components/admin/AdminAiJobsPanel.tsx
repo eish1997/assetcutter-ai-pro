@@ -2,11 +2,13 @@ import React from 'react';
 import {
   applyAdminAiGatewayOpsAction,
   clearAdminAiGatewayOpsControl,
+  fetchAiGatewayTrends,
   fetchAdminAiGatewayOpsControl,
   fetchAdminAiJob,
   fetchAdminAiJobs,
   fetchAdminAiJobsSummary,
   saveAdminAiGatewayOpsControl,
+  type AiGatewayTrendReport,
 } from '../../services/adminClient';
 import type {
   AiGatewayOpsControlConfig,
@@ -124,6 +126,40 @@ function formatDate(value: string | null | undefined): string {
   return new Date(value).toLocaleString();
 }
 
+function fallbackPolicyLabel(value: string | null | undefined): string {
+  if (value === 'none') return '不切换';
+  if (value === 'on_error') return '错误切换';
+  if (value === 'on_rate_limit') return '限流切换';
+  if (value === 'on_timeout') return '超时切换';
+  if (value === 'on_provider_degraded') return '降级切换';
+  if (value === 'cost_optimized') return '成本优先';
+  if (value === 'quality_first') return '质量优先';
+  return value || '未配置';
+}
+
+function fallbackReasonLabel(value: string | null | undefined): string {
+  if (value === 'rate_limit') return '限流';
+  if (value === 'timeout') return '超时';
+  if (value === 'upstream_5xx') return '供应商异常';
+  if (value === 'network_error') return '网络错误';
+  if (value === 'provider_key_missing') return '缺密钥';
+  return value || '暂无';
+}
+
+export function aiJobFallbackHint(job: AiJobSummary): string {
+  const fallback = job.fallback;
+  if (!fallback) return '无 fallback';
+  const max = fallback.maxAttempts ? `/${fallback.maxAttempts}` : '';
+  const parts = [
+    `策略 ${fallbackPolicyLabel(fallback.policy)}`,
+    `尝试 ${fallback.attemptCount}${max}`,
+    fallback.nextProviderId ? `下一家 ${fallback.nextProviderId}` : '',
+    fallback.lastReason ? `原因 ${fallbackReasonLabel(fallback.lastReason)}` : '',
+    fallback.exhausted ? '已耗尽' : '',
+  ].filter(Boolean);
+  return parts.join(' / ');
+}
+
 export function formatAiGatewayRate(value: number | null | undefined): string {
   const n = Number(value);
   if (!Number.isFinite(n)) return '0%';
@@ -136,6 +172,32 @@ export function formatAiGatewayDuration(ms: number | null | undefined): string {
   if (n < 1000) return `${Math.round(n)}ms`;
   if (n < 60_000) return `${Math.round(n / 1000)}s`;
   return `${Math.round(n / 60_000)}m`;
+}
+
+export function formatAiGatewayCostUsd(value: number | null | undefined): string {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return '$0.00';
+  if (n < 0.01) return '<$0.01';
+  return `$${n.toFixed(2)}`;
+}
+
+type AiGatewayProviderPerformanceRow = NonNullable<AiGatewayTrendReport['providerPerformance']>[number];
+
+export function buildAiGatewayProviderPerformanceRows(
+  report: AiGatewayTrendReport | null | undefined
+): AiGatewayProviderPerformanceRow[] {
+  return [...(report?.providerPerformance || [])]
+    .filter((row) => row.providerId && (row.totalJobs > 0 || row.usageEvents > 0))
+    .sort((a, b) => {
+      const riskA = a.failedJobs + a.rateLimitedJobs + a.fallbackAttempts;
+      const riskB = b.failedJobs + b.rateLimitedJobs + b.fallbackAttempts;
+      return (
+        b.failureRate - a.failureRate ||
+        riskB - riskA ||
+        b.totalJobs - a.totalJobs ||
+        a.providerId.localeCompare(b.providerId)
+      );
+    });
 }
 
 export function formatAiGatewayStorageLabel(storage: string | null | undefined): string {
@@ -302,12 +364,60 @@ const OpsGroupTable: React.FC<{ title: string; groups: AiGatewayOpsGroup[] }> = 
   );
 };
 
+const ProviderPerformanceTable: React.FC<{ rows: AiGatewayProviderPerformanceRow[]; days: number }> = ({ rows, days }) => {
+  if (!rows.length) return null;
+  return (
+    <div className="overflow-hidden rounded-2xl border border-[#2e2e32] bg-[#121214]">
+      <div className="flex items-center justify-between gap-3 border-b border-[#252528] px-4 py-3">
+        <div>
+          <div className="text-[11px] font-bold text-gray-300">供应商表现</div>
+          <div className="mt-0.5 text-[10px] text-gray-600">最近 {days} 天</div>
+        </div>
+        <div className="text-[10px] text-gray-600">失败 / 429 / fallback / 耗时 / 成本</div>
+      </div>
+      <div className="divide-y divide-[#252528]">
+        {rows.slice(0, 8).map((row) => (
+          <div key={row.providerId} className="grid grid-cols-[1.2fr_repeat(5,auto)] items-center gap-3 px-4 py-2 text-[10px]">
+            <div className="min-w-0">
+              <div className="truncate text-gray-200" title={row.providerId}>{row.providerId}</div>
+              <div className="mt-0.5 text-gray-600">
+                任务 {row.totalJobs} / 成功 {row.succeededJobs} / 用量 {row.usageEvents}
+              </div>
+            </div>
+            <div className={row.failureRate >= 0.3 ? 'text-right text-red-200' : 'text-right text-gray-400'}>
+              <div>{formatAiGatewayRate(row.failureRate)}</div>
+              <div className="mt-0.5 text-gray-600">失败</div>
+            </div>
+            <div className={row.rateLimitedJobs > 0 ? 'text-right text-amber-200' : 'text-right text-gray-400'}>
+              <div>{row.rateLimitedJobs}</div>
+              <div className="mt-0.5 text-gray-600">429</div>
+            </div>
+            <div className={row.fallbackAttempts > 0 ? 'text-right text-blue-200' : 'text-right text-gray-400'}>
+              <div>{row.fallbackAttempts}</div>
+              <div className="mt-0.5 text-gray-600">fallback</div>
+            </div>
+            <div className="text-right text-gray-400">
+              <div>{formatAiGatewayDuration(row.avgDurationMs)}</div>
+              <div className="mt-0.5 text-gray-600">平均</div>
+            </div>
+            <div className="text-right text-gray-400">
+              <div>{formatAiGatewayCostUsd(row.totalCostUsdEst)}</div>
+              <div className="mt-0.5 text-gray-600">{row.totalCreditsCharged || 0} 分</div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};
+
 const AdminAiJobsPanel: React.FC = () => {
   const { can, isRolePreview } = useAdminStaff();
   const canReadOps = can(PERMISSIONS.AI_GATEWAY_OPS_READ);
   const canWriteOps = can(PERMISSIONS.AI_GATEWAY_OPS_WRITE);
   const [jobs, setJobs] = React.useState<AiJobSummary[]>([]);
   const [summary, setSummary] = React.useState<AiGatewayOpsSummary | null>(null);
+  const [trendReport, setTrendReport] = React.useState<AiGatewayTrendReport | null>(null);
   const [opsControl, setOpsControl] = React.useState<AiGatewayOpsControlConfig | null>(null);
   const [disabledProvidersText, setDisabledProvidersText] = React.useState('');
   const [disabledModelsText, setDisabledModelsText] = React.useState('');
@@ -330,14 +440,17 @@ const AdminAiJobsPanel: React.FC = () => {
         ReturnType<typeof fetchAdminAiJobs>,
         ReturnType<typeof fetchAdminAiJobsSummary>,
         Promise<{ config: AiGatewayOpsControlConfig }> | Promise<null>,
+        ReturnType<typeof fetchAiGatewayTrends> | Promise<null>,
       ] = [
         fetchAdminAiJobs({ limit: PAGE_SIZE, ...cleanAdminAiJobFilters(appliedFilters) }),
         fetchAdminAiJobsSummary({ limit: 100, ...cleanAdminAiJobFilters(appliedFilters) }),
         canReadOps ? fetchAdminAiGatewayOpsControl() : Promise.resolve(null),
+        canReadOps ? fetchAiGatewayTrends({ days: 7 }).catch(() => null) : Promise.resolve(null),
       ];
-      const [res, ops, control] = await Promise.all(requests);
+      const [res, ops, control, trends] = await Promise.all(requests);
       setJobs(res.items);
       setSummary(ops);
+      setTrendReport(trends);
       setSelectedDetail((prev) => (prev && !res.items.some((job) => job.id === prev.job.id) ? null : prev));
       if (control) {
         setOpsControl(control.config);
@@ -454,6 +567,10 @@ const AdminAiJobsPanel: React.FC = () => {
     [opsControl, summary]
   );
   const opsRuleRows = React.useMemo(() => buildAiGatewayOpsRuleRows(opsControl), [opsControl]);
+  const providerPerformanceRows = React.useMemo(
+    () => buildAiGatewayProviderPerformanceRows(trendReport),
+    [trendReport]
+  );
 
   return (
     <div className="space-y-4">
@@ -571,7 +688,7 @@ const AdminAiJobsPanel: React.FC = () => {
               关闭
             </button>
           </div>
-          <div className="mt-4 grid gap-3 lg:grid-cols-3">
+          <div className="mt-4 grid gap-3 lg:grid-cols-4">
             <div className="rounded-xl border border-[#252528] bg-[#0d0d10] p-3">
               <div className="text-[10px] text-gray-600">路由</div>
               <div className="mt-1 text-[11px] text-gray-200">{aiJobRouteLabel(selectedDetail.job)}</div>
@@ -586,6 +703,15 @@ const AdminAiJobsPanel: React.FC = () => {
               <div className="text-[10px] text-gray-600">时间</div>
               <div className="mt-1 text-[11px] text-gray-300">创建 {formatDate(selectedDetail.job.createdAt)}</div>
               <div className="mt-1 text-[10px] text-gray-500">更新 {formatDate(selectedDetail.job.updatedAt)}</div>
+            </div>
+            <div className={`rounded-xl border p-3 ${selectedDetail.job.fallback?.active || selectedDetail.job.fallback?.attemptCount ? 'border-blue-500/20 bg-blue-500/10' : 'border-[#252528] bg-[#0d0d10]'}`}>
+              <div className="text-[10px] text-gray-600">Fallback</div>
+              <div className={selectedDetail.job.fallback?.active || selectedDetail.job.fallback?.attemptCount ? 'mt-1 text-[11px] text-blue-100' : 'mt-1 text-[11px] text-gray-400'}>
+                {aiJobFallbackHint(selectedDetail.job)}
+              </div>
+              {selectedDetail.job.fallback?.lastFallbackAt ? (
+                <div className="mt-2 text-[10px] text-gray-500">{formatDate(selectedDetail.job.fallback.lastFallbackAt)}</div>
+              ) : null}
             </div>
           </div>
           {selectedDetail.job.error?.message ? (
@@ -649,6 +775,7 @@ const AdminAiJobsPanel: React.FC = () => {
             <OpsGroupTable title="供应商健康度" groups={summary.byProvider} />
             <OpsGroupTable title="模型健康度" groups={summary.byModel} />
           </div>
+          {canReadOps ? <ProviderPerformanceTable rows={providerPerformanceRows} days={trendReport?.days || 7} /> : null}
         </>
       ) : null}
 

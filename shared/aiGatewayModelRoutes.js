@@ -14,8 +14,8 @@ export const AI_GATEWAY_MODEL_ROUTE_EXECUTABLE_RULES = Object.freeze([
     id: 'openai-official-gateway',
     modelPattern: /^(gpt-|dall-e|o1|o3|o4)/i,
     modalities: Object.freeze(['text', 'image']),
-    catalogProviderIds: Object.freeze(['openai-official', 'tinysnow']),
-    gatewayProviderIds: Object.freeze(['openai-official', 'tinysnow']),
+    catalogProviderIds: Object.freeze(['openai-official', 'tinysnow', '302ai', 'aihubmix']),
+    gatewayProviderIds: Object.freeze(['openai-official', 'tinysnow', '302ai', 'aihubmix']),
     gatewayExecutionStatus: 'gateway_ready',
     executionStatus: 'platform_ready',
     platformKeyRequired: true,
@@ -130,6 +130,15 @@ export const AI_GATEWAY_MODEL_ROUTE_PENDING_RULES = Object.freeze([
     gatewayExecutionStatus: 'adapter_pending',
     executionStatus: 'adapter_pending',
   },
+  {
+    id: '302ai-multimodal-manual-pending',
+    modelPattern: /^302ai-(video|model3d)-manual$/i,
+    modalities: Object.freeze(['video', 'model3d']),
+    catalogProviderIds: Object.freeze(['302ai']),
+    gatewayProviderIds: Object.freeze(['302ai']),
+    gatewayExecutionStatus: 'adapter_pending',
+    executionStatus: 'adapter_pending',
+  },
 ]);
 
 function nonEmptyString(value) {
@@ -157,6 +166,8 @@ export function normalizeAiGatewayProviderId(value) {
     return 'vertex-site';
   }
   if (id === 'toapis-openai' || id === 'toapis-gemini') return 'toapis';
+  if (id === '302ai-openai' || id === '302-ai' || id === '302') return '302ai';
+  if (id === 'aihubmix-openai' || id === 'aihubmix') return 'aihubmix';
   if (id === 'tinysnow-openai') return 'tinysnow';
   if (id === 'vertex-gemini') return 'vertex-site';
   return id;

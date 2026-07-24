@@ -1,22 +1,18 @@
-import { fetch as undiciFetch } from 'undici';
+import { fetch as undiciFetch, ProxyAgent } from 'undici';
 import { AiGatewayValidationError } from '../job.js';
 import { finalizeAiGatewayTerminalPlan } from '../execution-finalize.js';
 import { buildProviderTaskUsage, collectByteSize } from '../execution-usage.js';
+import { resolveAiGatewayBillingSku } from '../route-billing.js';
 import { normalizeInlineBase64Data } from '../inline-data-normalize.js';
+import {
+  defaultOpenAiCompatibleBaseUrl,
+  isOpenAiCompatibleAdapterId,
+  normalizeOpenAiCompatibleBaseUrl,
+  openAiCompatibleProviderLabel,
+} from '../openai-compatible-config.js';
 import { acquireProviderKey, recordProviderKeyError, recordProviderKeySuccess } from '../provider-key-store.js';
 
-const OPENAI_DEFAULT_BASE_URL = 'https://api.openai.com/v1';
 const OPENAI_PROVIDER_ID = 'openai-official';
-const TOAPIS_DEFAULT_BASE_URL = 'https://toapis.com/v1';
-const TINYSNOW_DEFAULT_BASE_URL = 'https://tinysnow.one/v1';
-const VOLCENGINE_ARK_DEFAULT_BASE_URL = 'https://ark.cn-beijing.volces.com/api/v3';
-const OPENAI_COMPATIBLE_ADAPTERS = new Set([
-  'openai-official',
-  'toapis-openai',
-  'tinysnow-openai',
-  'volcengine-ark-openai',
-  'volcengine-ark-image',
-]);
 const GPT_IMAGE_MAX_REFERENCE_IMAGES = 16;
 const GPT_IMAGE2_DEFAULT_TIMEOUT_MS = 600_000;
 const GPT_IMAGE2_MAX_LONG_EDGE = 3840;
@@ -41,16 +37,11 @@ function nonEmptyString(value) {
 }
 
 function defaultBaseUrlForProvider(providerId) {
-  if (providerId === 'volcengine-ark') return VOLCENGINE_ARK_DEFAULT_BASE_URL;
-  if (providerId === 'tinysnow') return TINYSNOW_DEFAULT_BASE_URL;
-  return providerId === 'toapis' ? TOAPIS_DEFAULT_BASE_URL : OPENAI_DEFAULT_BASE_URL;
+  return defaultOpenAiCompatibleBaseUrl(providerId);
 }
 
 function normalizeBaseUrl(value, providerId = OPENAI_PROVIDER_ID) {
-  const raw = nonEmptyString(value) || defaultBaseUrlForProvider(providerId);
-  const trimmed = raw.replace(/\/+$/, '');
-  if (providerId === 'volcengine-ark') return trimmed;
-  return /\/v1$/i.test(trimmed) ? trimmed : `${trimmed}/v1`;
+  return normalizeOpenAiCompatibleBaseUrl(value, providerId);
 }
 
 function mapOpenAiChatModel(value, providerId = OPENAI_PROVIDER_ID) {
@@ -81,6 +72,22 @@ function mapOpenAiImageModel(value, providerId = OPENAI_PROVIDER_ID) {
 function isImageModel(value) {
   const lower = nonEmptyString(value).toLowerCase();
   return lower.includes('gpt-image') || lower.startsWith('dall-e');
+}
+
+function resolveOutboundProxyUrl() {
+  return nonEmptyString(process.env.OPENAI_PROXY || process.env.HTTPS_PROXY || process.env.HTTP_PROXY || process.env.TRIPO_PROXY);
+}
+
+function buildFetchOptionsWithProxy(init, baseUrl) {
+  const proxyUrl = resolveOutboundProxyUrl();
+  if (!proxyUrl) return init;
+  try {
+    const hostname = new URL(baseUrl).hostname.toLowerCase();
+    if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1') return init;
+  } catch {
+    return init;
+  }
+  return { ...init, dispatcher: new ProxyAgent(proxyUrl) };
 }
 
 function isGptImage2Model(value) {
@@ -159,8 +166,8 @@ function resolveOpenAiImageSize(model, imageConfig) {
   return explicit || '1024x1024';
 }
 
-function resolveOpenAiRequestTimeoutMs(plan, options = {}) {
-  const explicit = Number(options.timeoutMs || process.env.AI_GATEWAY_OPENAI_TIMEOUT_MS || 0);
+function resolveOpenAiRequestTimeoutMs(plan, options = {}, providerKey = null) {
+  const explicit = Number(options.timeoutMs || providerKey?.credentials?.requestTimeoutMs || process.env.AI_GATEWAY_OPENAI_TIMEOUT_MS || 0);
   if (Number.isFinite(explicit) && explicit > 0) return explicit;
   const requestModel = plan?.workerRequest?.body?.model || plan?.adapterRequest?.body?.model || plan?.job?.model;
   return isGptImage2Model(requestModel) ? GPT_IMAGE2_DEFAULT_TIMEOUT_MS : 120_000;
@@ -288,20 +295,73 @@ function buildOpenAiImageBody(job, route) {
   };
 }
 
+function extFromMime(mimeType) {
+  const mime = nonEmptyString(mimeType).toLowerCase();
+  if (mime.includes('jpeg') || mime.includes('jpg')) return 'jpg';
+  if (mime.includes('webp')) return 'webp';
+  return 'png';
+}
+
+function dataUrlToImageBlob(dataUrl, index) {
+  const raw = nonEmptyString(dataUrl);
+  const match = raw.match(/^data:([^;,]+);base64,(.+)$/is);
+  if (!match) {
+    throw new AiGatewayValidationError('OpenAI image edit requires data URL images', 'AI_GATEWAY_OPENAI_EDIT_IMAGE_INVALID');
+  }
+  const mimeType = nonEmptyString(match[1]) || 'image/png';
+  const data = normalizeInlineBase64Data(match[2] || '');
+  if (!data) {
+    throw new AiGatewayValidationError('OpenAI image edit requires non-empty image bytes', 'AI_GATEWAY_OPENAI_EDIT_IMAGE_EMPTY');
+  }
+  const bytes = Buffer.from(data, 'base64');
+  if (!bytes.length) {
+    throw new AiGatewayValidationError('OpenAI image edit received invalid image bytes', 'AI_GATEWAY_OPENAI_EDIT_IMAGE_INVALID');
+  }
+  return {
+    blob: new Blob([bytes], { type: mimeType }),
+    filename: `image-${index + 1}.${extFromMime(mimeType)}`,
+  };
+}
+
+function buildOpenAiImageEditFormData(body) {
+  const form = new FormData();
+  const images = Array.isArray(body?.images) ? body.images : [];
+  const imageUrls = images
+    .map((item) => nonEmptyString(item?.image_url || item?.url || item))
+    .filter(Boolean)
+    .slice(0, GPT_IMAGE_MAX_REFERENCE_IMAGES);
+  if (!imageUrls.length) return null;
+  for (const [key, value] of Object.entries(body || {})) {
+    if (key === 'images' || value == null || value === '') continue;
+    form.append(key, String(value));
+  }
+  imageUrls.forEach((imageUrl, index) => {
+    const { blob, filename } = dataUrlToImageBlob(imageUrl, index);
+    form.append('image[]', blob, filename);
+  });
+  return form;
+}
+
+function shouldUseMultipartImageEdit(providerId, requestPath) {
+  return requestPath === '/images/edits' && providerId === OPENAI_PROVIDER_ID;
+}
+
 export function buildOpenAiOfficialRequest(job, route) {
-  if (!OPENAI_COMPATIBLE_ADAPTERS.has(route?.adapterId)) {
+  if (!isOpenAiCompatibleAdapterId(route?.adapterId)) {
     throw new AiGatewayValidationError(`Unsupported adapter for OpenAI: ${route?.adapterId || ''}`);
   }
   const image = job?.modality === 'image' || isImageModel(job?.model || job?.input?.model);
   const body = image ? buildOpenAiImageBody(job, route) : buildOpenAiTextBody(job, route);
   const arkImage = route?.providerId === 'volcengine-ark' && image;
+  const requestPath = arkImage ? '/images/generations' : image && body.images ? '/images/edits' : image ? '/images/generations' : '/chat/completions';
+  const multipartImageEdit = shouldUseMultipartImageEdit(route?.providerId, requestPath);
   return {
     method: 'POST',
-    path: arkImage ? '/images/generations' : image && body.images ? '/images/edits' : image ? '/images/generations' : '/chat/completions',
+    path: requestPath,
     providerBaseUrl: defaultBaseUrlForProvider(route?.providerId),
     body,
     headers: {
-      'content-type': 'application/json',
+      ...(multipartImageEdit ? {} : { 'content-type': 'application/json' }),
       'x-ac-task-envelope': job.id,
       'x-ac-correlation-id': job.correlationId,
     },
@@ -351,7 +411,7 @@ function extractImageArtifacts(data, providerId = OPENAI_PROVIDER_ID) {
 
 export async function startOpenAiOfficialExecution(plan, options = {}) {
   const providerId = nonEmptyString(plan?.route?.providerId) || OPENAI_PROVIDER_ID;
-  const providerLabel = providerId === 'toapis' ? 'ToAPIs' : providerId === 'volcengine-ark' ? 'Volcengine Ark' : 'OpenAI';
+  const providerLabel = openAiCompatibleProviderLabel(providerId);
   const key = await acquireProviderKey(providerId);
   if (!key?.secret) {
     throw new AiGatewayValidationError(`No enabled ${providerLabel} API key in AI Gateway provider key pool`, 'AI_GATEWAY_PROVIDER_KEY_MISSING');
@@ -359,6 +419,7 @@ export async function startOpenAiOfficialExecution(plan, options = {}) {
   const fetchImpl = options.fetchImpl || undiciFetch;
   const request = plan.workerRequest || plan.adapterRequest;
   const baseUrl = normalizeBaseUrl(key.credentials?.baseUrl, providerId);
+  const multipartImageEdit = shouldUseMultipartImageEdit(providerId, request.path);
   const startedAtMs = Date.now();
   const running = options.store?.update
     ? await options.store.update(plan.job.id, {
@@ -372,15 +433,26 @@ export async function startOpenAiOfficialExecution(plan, options = {}) {
         },
       })
     : plan;
-  const response = await fetchImpl(`${baseUrl}${request.path}`, {
-    method: request.method || 'POST',
-    headers: {
-      Authorization: `Bearer ${key.secret}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(request.body || {}),
-    signal: AbortSignal.timeout(resolveOpenAiRequestTimeoutMs(plan, options)),
-  });
+  let response;
+  try {
+    response = await fetchImpl(`${baseUrl}${request.path}`, buildFetchOptionsWithProxy({
+      method: request.method || 'POST',
+      headers: {
+        Authorization: `Bearer ${key.secret}`,
+        ...(multipartImageEdit ? {} : { 'Content-Type': 'application/json' }),
+      },
+      body: multipartImageEdit ? buildOpenAiImageEditFormData(request.body || {}) : JSON.stringify(request.body || {}),
+      signal: AbortSignal.timeout(resolveOpenAiRequestTimeoutMs(plan, options, key)),
+    }, baseUrl));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const err = new Error(`${providerLabel} network unavailable: ${message || 'fetch failed'}`);
+    recordProviderKeyError(key.id, err, {
+      status: 0,
+      reason: `${providerLabel} network unavailable`,
+    });
+    throw err;
+  }
   const data = await readJsonSafe(response);
   if (!response.ok) {
     const err = new Error(`${providerLabel} rejected AI job handoff: HTTP ${response.status} ${openAiErrorMessage(data)}`);
@@ -398,7 +470,7 @@ export async function startOpenAiOfficialExecution(plan, options = {}) {
   const text = image ? '' : extractText(data);
   const usage = buildProviderTaskUsage(running || plan, {
     provider: providerId,
-    billingSku: image ? `image.${providerId}.${plan.job.model || 'gpt-image'}` : `text.${providerId}.${plan.job.model || 'chat'}`,
+    billingSku: resolveAiGatewayBillingSku(running || plan),
     meterKind: image ? 'image' : 'token',
     unit: image ? 'image' : 'token',
     quantity: image ? Math.max(1, artifacts.length || 1) : Number(data?.usage?.total_tokens || 0),

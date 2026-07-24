@@ -8,6 +8,7 @@ import {
 } from '../../services/adminClient';
 import { PERMISSIONS, hasAdminPermission } from '../../services/adminPermissions';
 import { blockIfRolePreview } from '../../services/adminRolePreview';
+import { listModelRoutes, type ModelRouteCatalogEntry } from '../../services/modelRegistry';
 import { fmtCredits } from '../../shared/credits';
 import { CustomDropdown } from '../ui/CustomDropdown';
 import { useAdminStaff } from './AdminStaffContext';
@@ -30,6 +31,17 @@ type EditDraft = {
   enabled: boolean;
   effectiveFrom: string;
   meterKind: string;
+};
+
+export type AiGatewayPriceSkuSuggestion = {
+  billingSku: string;
+  displayName: string;
+  providerId: string;
+  canonicalModelId: string;
+  providerModelId: string;
+  modality: string;
+  meterKind: string;
+  routeEnabled: boolean;
 };
 
 function isoToDatetimeLocal(iso: string): string {
@@ -77,6 +89,83 @@ function draftToPayload(draft: EditDraft, billingSku?: string): AdminPriceCatalo
   };
 }
 
+function compactSkuPart(value: string): string {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 80);
+}
+
+function geminiRouteSku(modality: string, model: string): string {
+  if (modality === 'image') return model.includes('pro') && !model.includes('flash') ? 'image.gemini.pro' : 'image.gemini.flash';
+  return model.includes('pro') && !model.includes('flash') ? 'llm.gemini.pro' : 'llm.gemini.flash';
+}
+
+function openAiOfficialRouteSku(modality: string, model: string): string {
+  if (modality === 'image') {
+    if (model.includes('gpt-image-2')) return 'image.openai.gpt2';
+    if (model.includes('gpt-image-1.5') || model.includes('gpt-image-15')) return 'image.openai.gpt15';
+  }
+  if (modality === 'text') {
+    if (model.includes('gpt-4o-mini')) return 'llm.openai.gpt4o-mini';
+    if (model.includes('gpt-4o')) return 'llm.openai.gpt4o';
+  }
+  return '';
+}
+
+export function meterKindForAiGatewayPriceSuggestion(modality: string): string {
+  if (modality === 'text') return 'token';
+  if (modality === 'image') return 'image';
+  if (modality === 'video') return 'second';
+  return 'task';
+}
+
+export function billingSkuForAiGatewayRouteSuggestion(route: Pick<ModelRouteCatalogEntry, 'providerId' | 'providerModelId' | 'canonicalModelId' | 'modality'>): string {
+  const modality = String(route.modality || 'ai').trim();
+  const providerId = String(route.providerId || 'gateway').trim();
+  const model = String(route.providerModelId || route.canonicalModelId || 'task').trim().toLowerCase();
+  if (modality === 'model3d') {
+    if (providerId === 'tencent-hunyuan') return model.includes('rapid') ? '3d.tencent.rapid' : '3d.tencent.pro';
+    if (providerId === 'tripo') return '3d.tripo.task';
+  }
+  if (modality === 'video') {
+    if (providerId === 'volcengine-jimeng') return 'video.jimeng.ti2v-v30-pro';
+    return 'video.workflow.task';
+  }
+  if (providerId === 'vertex-site' || providerId === 'vertex-gemini' || model.includes('gemini')) {
+    return geminiRouteSku(modality, model);
+  }
+  const official = providerId === 'openai-official' ? openAiOfficialRouteSku(modality, model) : '';
+  if (official) return official;
+  return `${modality}.${compactSkuPart(providerId)}.${compactSkuPart(model || route.canonicalModelId || 'task') || 'task'}`.slice(0, 120);
+}
+
+export function buildAiGatewayPriceSkuSuggestions(
+  entries: readonly Pick<AdminPriceCatalogEntry, 'billingSku'>[],
+  routes: readonly ModelRouteCatalogEntry[] = listModelRoutes()
+): AiGatewayPriceSkuSuggestion[] {
+  const existing = new Set(entries.map((entry) => String(entry.billingSku || '').trim()).filter(Boolean));
+  const bySku = new Map<string, AiGatewayPriceSkuSuggestion>();
+  for (const route of routes) {
+    if (route.gatewayExecutionStatus !== 'gateway_ready') continue;
+    const billingSku = billingSkuForAiGatewayRouteSuggestion(route);
+    if (!billingSku || existing.has(billingSku) || bySku.has(billingSku)) continue;
+    bySku.set(billingSku, {
+      billingSku,
+      displayName: `${route.providerId} ${route.providerModelId || route.canonicalModelId}`,
+      providerId: route.providerId,
+      canonicalModelId: route.canonicalModelId,
+      providerModelId: route.providerModelId,
+      modality: route.modality,
+      meterKind: meterKindForAiGatewayPriceSuggestion(route.modality),
+      routeEnabled: route.enabled,
+    });
+  }
+  return [...bySku.values()].sort((a, b) => a.providerId.localeCompare(b.providerId) || a.billingSku.localeCompare(b.billingSku));
+}
+
 const emptyDraft = (): EditDraft => ({
   displayName: '',
   userCreditsPerUnit: '',
@@ -105,6 +194,7 @@ const AdminPriceCatalogPanel: React.FC = () => {
   const [draft, setDraft] = React.useState<EditDraft>(emptyDraft());
   const [newSku, setNewSku] = React.useState('');
   const [saving, setSaving] = React.useState(false);
+  const aiGatewaySkuSuggestions = React.useMemo(() => buildAiGatewayPriceSkuSuggestions(entries), [entries]);
 
   const load = React.useCallback(async () => {
     if (!canRead) return;
@@ -136,6 +226,17 @@ const AdminPriceCatalogPanel: React.FC = () => {
     setCreateOpen(true);
     setNewSku('');
     setDraft(emptyDraft());
+  };
+
+  const openCreateFromSuggestion = (suggestion: AiGatewayPriceSkuSuggestion) => {
+    setEditEntry(null);
+    setCreateOpen(true);
+    setNewSku(suggestion.billingSku);
+    setDraft({
+      ...emptyDraft(),
+      displayName: suggestion.displayName,
+      meterKind: suggestion.meterKind,
+    });
   };
 
   const closeModal = () => {
@@ -198,6 +299,42 @@ const AdminPriceCatalogPanel: React.FC = () => {
 
       {message ? <p className="text-[11px] text-emerald-400">{message}</p> : null}
       {error ? <p className="text-[11px] text-red-400">{error}</p> : null}
+
+      {aiGatewaySkuSuggestions.length ? (
+        <div className="rounded-xl border border-amber-500/20 bg-amber-500/[0.06] p-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <div className="text-[11px] font-semibold text-amber-100">AI Gateway 待补价 SKU</div>
+              <div className="mt-0.5 text-[10px] text-gray-500">
+                这些 SKU 已出现在模型路由里，但还没有价目表条目。
+              </div>
+            </div>
+            <span className="text-[10px] text-amber-200">{aiGatewaySkuSuggestions.length} 个</span>
+          </div>
+          <div className="mt-2 grid gap-2 lg:grid-cols-2">
+            {aiGatewaySkuSuggestions.slice(0, 8).map((item) => (
+              <div key={item.billingSku} className="flex items-center justify-between gap-3 rounded-lg border border-white/[0.07] bg-black/15 px-3 py-2">
+                <div className="min-w-0">
+                  <div className="truncate font-mono text-[10px] text-gray-200" title={item.billingSku}>{item.billingSku}</div>
+                  <div className="mt-0.5 truncate text-[10px] text-gray-500" title={`${item.providerId} / ${item.canonicalModelId}`}>
+                    {item.providerId} / {item.modality} / {item.meterKind}
+                    {item.routeEnabled ? '' : ' / 路由未启用'}
+                  </div>
+                </div>
+                {canWrite ? (
+                  <button
+                    type="button"
+                    onClick={() => openCreateFromSuggestion(item)}
+                    className="shrink-0 rounded-lg border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-[10px] text-amber-100 hover:bg-amber-500/20"
+                  >
+                    新建
+                  </button>
+                ) : null}
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
 
       <div className="rounded-xl border border-[#2e2e32] overflow-hidden">
         <div className="px-3 py-2 border-b border-[#2e2e32] text-[10px] text-gray-500 flex justify-between">

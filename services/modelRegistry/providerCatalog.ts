@@ -3,6 +3,8 @@ export type ProviderCatalogId =
   | "gemini-aistudio"
   | "vertex-site"
   | "toapis"
+  | "302ai"
+  | "aihubmix"
   | "tinysnow"
   | "vectorengine"
   | "volcengine-ark"
@@ -304,6 +306,75 @@ export const PROVIDER_CATALOG: readonly ProviderCatalogEntry[] = [
     homepageUrl: "https://toapis.com/",
     consoleUrl: "https://toapis.com/",
     docsUrl: "https://toapis.com/",
+    keyPoolSupported: true,
+    byokSupported: true,
+    modelDiscovery: "manual",
+    capabilityStatus: capabilityStatus({
+      keyPoolSupported: true,
+      backendAdapterReady: true,
+      platformKeyReady: true,
+      byokSupported: true,
+      smokeTestReady: true,
+    }),
+  },
+  {
+    id: "302ai",
+    displayName: "302.AI",
+    shortName: "302.AI",
+    supportedModalities: ["text", "image", "video", "model3d"],
+    authSchemes: [
+      {
+        ...API_KEY_BASE_URL_SCHEME,
+        fields: [
+          {
+            ...API_KEY_FIELD,
+            placeholder: "302.AI API Key",
+          },
+          {
+            ...BASE_URL_FIELD,
+            placeholder: "https://api.302.ai/v1",
+          },
+        ],
+      },
+    ],
+    homepageUrl: "https://302.ai/",
+    consoleUrl: "https://302.ai/",
+    docsUrl: "https://doc.302.ai/",
+    pricingUrl: "https://help.302.ai/docs/jia-ge-biao",
+    keyPoolSupported: true,
+    byokSupported: true,
+    modelDiscovery: "manual",
+    capabilityStatus: capabilityStatus({
+      keyPoolSupported: true,
+      backendAdapterReady: true,
+      platformKeyReady: true,
+      byokSupported: true,
+      smokeTestReady: true,
+    }),
+  },
+  {
+    id: "aihubmix",
+    displayName: "AIHubMix",
+    shortName: "AIHubMix",
+    supportedModalities: ["text", "image"],
+    authSchemes: [
+      {
+        ...API_KEY_BASE_URL_SCHEME,
+        fields: [
+          {
+            ...API_KEY_FIELD,
+            placeholder: "AIHubMix API Key",
+          },
+          {
+            ...BASE_URL_FIELD,
+            placeholder: "https://aihubmix.com/v1",
+          },
+        ],
+      },
+    ],
+    homepageUrl: "https://aihubmix.com/",
+    consoleUrl: "https://aihubmix.com/",
+    docsUrl: "https://docs.aihubmix.com/cn",
     keyPoolSupported: true,
     byokSupported: true,
     modelDiscovery: "manual",

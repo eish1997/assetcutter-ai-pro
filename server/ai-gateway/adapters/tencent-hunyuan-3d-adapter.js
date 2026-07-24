@@ -4,6 +4,7 @@ import { acquireProviderKey, recordProviderKeyError, recordProviderKeySuccess } 
 import { AiGatewayValidationError } from '../job.js';
 import { finalizeAiGatewayTerminalPlan } from '../execution-finalize.js';
 import { buildProviderTaskUsage, collectByteSize } from '../execution-usage.js';
+import { normalizeGatewayInput } from '../gateway-input.js';
 
 export const TENCENT_HUNYUAN_PROVIDER_ID = 'tencent-hunyuan';
 const AI3D_HOST = 'ai3d.tencentcloudapi.com';
@@ -85,17 +86,13 @@ function stripDataUrl(value) {
   return nonEmptyString(value).replace(/^data:image\/\w+;base64,/i, '');
 }
 
-function firstReferenceImage(input) {
-  const refs = Array.isArray(input.referenceImages) ? input.referenceImages : [];
-  return nonEmptyString(input.imageBase64DataUrl) || nonEmptyString(input.imageUrl) || nonEmptyString(refs[0]);
-}
-
 function buildTencentSubmitPayload(job) {
   const input = job?.input && typeof job.input === 'object' ? job.input : {};
+  const gatewayInput = normalizeGatewayInput(job);
   const registryId = nonEmptyString(input.registryId) || nonEmptyString(input.canonicalModelId) || nonEmptyString(job?.model);
   const rapid = registryId.includes('rapid');
-  const prompt = nonEmptyString(input.prompt) || nonEmptyString(input.text);
-  const image = firstReferenceImage(input);
+  const prompt = gatewayInput.prompt;
+  const image = gatewayInput.referenceImages[0] || '';
   const payload = {};
   if (image) {
     if (/^data:image\//i.test(image)) payload.ImageBase64 = stripDataUrl(image);
@@ -106,8 +103,8 @@ function buildTencentSubmitPayload(job) {
     throw new AiGatewayValidationError('Tencent Hunyuan 3D requires prompt or reference image', 'AI_GATEWAY_TENCENT_3D_INPUT_REQUIRED');
   }
   if (!rapid) payload.Model = nonEmptyString(input.model) || '3.0';
-  if (input.format) payload.ResultFormat = String(input.format).toUpperCase();
-  if (typeof input.texture === 'boolean') payload.EnablePBR = input.texture;
+  if (gatewayInput.format) payload.ResultFormat = String(gatewayInput.format).toUpperCase();
+  if (typeof gatewayInput.texture === 'boolean') payload.EnablePBR = gatewayInput.texture;
   if (typeof input.enablePBR === 'boolean') payload.EnablePBR = input.enablePBR;
   if (input.faceCount) payload.FaceCount = Number(input.faceCount);
   if (input.generateType) payload.GenerateType = input.generateType;

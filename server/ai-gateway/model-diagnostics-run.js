@@ -28,6 +28,7 @@ function normalizeModelInput(item) {
   if (!canonicalModelId) return null;
   return {
     canonicalModelId,
+    routeId: nonEmptyString(item.routeId) || undefined,
     registryId: nonEmptyString(item.registryId) || undefined,
     modality: nonEmptyString(item.modality) || undefined,
     providerId: nonEmptyString(item.providerId || item.provider) || undefined,
@@ -70,17 +71,35 @@ function failedLayerResult(model, layer, code, message) {
   };
 }
 
+function failedLayerResultFromError(model, layer, code, err, fallbackMessage) {
+  const result = failedLayerResult(
+    model,
+    layer,
+    code,
+    err instanceof Error ? err.message : String(err || fallbackMessage)
+  );
+  const details = err?.details && typeof err.details === 'object' ? err.details : {};
+  if (Array.isArray(details.missingEndpointFields)) {
+    result.missingEndpointFields = details.missingEndpointFields;
+  }
+  if (Array.isArray(details.routeIds)) {
+    result.routeIds = details.routeIds;
+  }
+  if (Array.isArray(details.providers)) {
+    result.providers = details.providers;
+  }
+  if (Number.isFinite(Number(details.priority))) {
+    result.priority = Number(details.priority);
+  }
+  return result;
+}
+
 async function runRouteLayer(model, options) {
   const routeTest = options.routeTest || testAiGatewayModelRoute;
   try {
     return await routeTest(model, options.routeTestOptions || {});
   } catch (err) {
-    return failedLayerResult(
-      model,
-      'route',
-      'AI_GATEWAY_BATCH_ROUTE_TEST_FAILED',
-      err instanceof Error ? err.message : String(err || 'Route test failed')
-    );
+    return failedLayerResultFromError(model, 'route', 'AI_GATEWAY_BATCH_ROUTE_TEST_FAILED', err, 'Route test failed');
   }
 }
 
@@ -89,12 +108,7 @@ async function runGenerationLayer(req, model, user, options) {
   try {
     return await generationTest(req, model, user, options.generationTestOptions || {});
   } catch (err) {
-    return failedLayerResult(
-      model,
-      'generation',
-      'AI_GATEWAY_BATCH_GENERATION_TEST_FAILED',
-      err instanceof Error ? err.message : String(err || 'Generation test failed')
-    );
+    return failedLayerResultFromError(model, 'generation', 'AI_GATEWAY_BATCH_GENERATION_TEST_FAILED', err, 'Generation test failed');
   }
 }
 

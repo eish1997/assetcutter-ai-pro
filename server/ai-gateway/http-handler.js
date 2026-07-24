@@ -10,6 +10,7 @@ import { readAiGatewayOpsControlConfig } from './ops-control.js';
 import { validateAiGatewayModelPublication } from './model-publication-guard.js';
 import { validateAiGatewayModelRouteExecutable } from './model-route-guard.js';
 import { aiGatewayTransientPostgresBody, isTransientPostgresError } from './postgres-transient-retry.js';
+import { publicAiJobSummary } from './job-public-summary.js';
 
 export const AI_GATEWAY_JOBS_PATH = '/ai-gateway/jobs';
 const DEFAULT_LIST_LIMIT = 20;
@@ -52,42 +53,7 @@ function publicJobPlan(plan) {
 }
 
 function publicJobSummary(plan) {
-  const metadata = plan.job?.metadata && typeof plan.job.metadata === 'object' ? plan.job.metadata : {};
-  const route = plan.route && typeof plan.route === 'object' ? plan.route : null;
-  return {
-    id: plan.job.id,
-    status: plan.job.status,
-    modality: plan.job.modality,
-    capability: plan.job.capability,
-    provider: plan.job.provider || null,
-    model: plan.job.model || null,
-    userId: plan.job.userId || null,
-    correlationId: plan.job.correlationId,
-    createdAt: plan.job.createdAt,
-    updatedAt: plan.job.updatedAt,
-    startedAt: plan.job.startedAt || null,
-    finishedAt: plan.job.finishedAt || null,
-    route: route
-        ? {
-            providerId: route.providerId || null,
-            workerId: route.workerId || null,
-            adapterId: route.adapterId || null,
-            legacyAdapterId: route.legacyAdapterId || null,
-            channel: route.channel || null,
-            upstreamBackend: route.upstreamBackend || null,
-          }
-      : null,
-    traceOnly: Boolean(metadata.traceOnly),
-    proxyPath: metadata.proxyPath || null,
-    proxyJobId: metadata.proxyJobId || null,
-    creditsGate: metadata.creditsGate || null,
-    error: plan.job.error
-      ? {
-          code: plan.job.error.code || null,
-          message: plan.job.error.message || String(plan.job.error),
-        }
-      : null,
-  };
+  return publicAiJobSummary(plan);
 }
 
 function mapGatewayError(err) {
@@ -101,6 +67,7 @@ function mapGatewayError(err) {
       err.code === 'AI_GATEWAY_MODEL_ROUTE_NOT_FOUND' ||
       err.code === 'AI_GATEWAY_MODEL_ROUTE_NOT_EXECUTABLE' ||
       err.code === 'AI_GATEWAY_MODEL_ADAPTER_PENDING' ||
+      err.code === 'AI_GATEWAY_MODEL_ROUTE_AMBIGUOUS' ||
       err.code === 'AI_GATEWAY_PROVIDER_PAUSED' ||
       err.code === 'AI_GATEWAY_PROVIDER_KEY_UNAVAILABLE'
     ) {
@@ -195,7 +162,29 @@ export async function handleAiGatewayRequest(req, res, options = {}) {
           Boolean(parsed?.provider) ||
           Boolean(executableRoute.route?.platformKeyRequired);
         if (shouldPinProvider && !planInput.provider && executableRoute.route?.providerId) {
+          planInput.metadata.aiGatewayFallback = {
+            ...(planInput.metadata.aiGatewayFallback && typeof planInput.metadata.aiGatewayFallback === 'object'
+              ? planInput.metadata.aiGatewayFallback
+              : {}),
+            autoSelectedProvider: true,
+          };
           planInput.provider = executableRoute.route.providerId;
+        }
+        if (executableRoute.route?.fallbackPolicy) {
+          planInput.metadata.aiGatewayFallback = {
+            ...(planInput.metadata.aiGatewayFallback && typeof planInput.metadata.aiGatewayFallback === 'object'
+              ? planInput.metadata.aiGatewayFallback
+              : {}),
+            policy: executableRoute.route.fallbackPolicy,
+          };
+        }
+        if (executableRoute.route?.fallbackMaxAttempts) {
+          planInput.metadata.aiGatewayFallback = {
+            ...(planInput.metadata.aiGatewayFallback && typeof planInput.metadata.aiGatewayFallback === 'object'
+              ? planInput.metadata.aiGatewayFallback
+              : {}),
+            maxAttempts: executableRoute.route.fallbackMaxAttempts,
+          };
         }
         planInput.metadata.modelRouteGuard = {
           canonicalModelId: executableRoute.canonicalModelId,
@@ -203,9 +192,20 @@ export async function handleAiGatewayRequest(req, res, options = {}) {
           executionStatus: executableRoute.route.executionStatus,
           gatewayExecutionStatus: executableRoute.route.gatewayExecutionStatus,
           platformKeyRequired: executableRoute.route.platformKeyRequired,
+          fallbackPolicy: executableRoute.route.fallbackPolicy,
+          fallbackMaxAttempts: executableRoute.route.fallbackMaxAttempts,
+          routeId: executableRoute.route.routeId,
+          upstreamModelId: executableRoute.route.upstreamModelId,
         };
+        if (executableRoute.route.upstreamModelId) {
+          planInput.input = {
+            ...(planInput.input && typeof planInput.input === 'object' ? planInput.input : {}),
+            upstreamModelId: executableRoute.route.upstreamModelId,
+          };
+        }
       }
-      const plan = await store.put(createAiGatewayJobPlan(planInput, { opsControl }));
+      const planRoutes = executableRoute.runtimeRoute ? [executableRoute.runtimeRoute] : options.routes;
+      const plan = await store.put(createAiGatewayJobPlan(planInput, { opsControl, routes: planRoutes }));
       sendJson(res, 202, publicJobPlan(plan));
       return true;
     } catch (err) {

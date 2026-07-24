@@ -138,6 +138,132 @@ describe("modelRegistry opsConfig remote fetch", () => {
     expect(getModelOpsConfigSync().publishedCanonicalModelAllowlist).toEqual(["gpt-4o-mini"]);
   });
 
+  it("keeps valid fallbackPolicy values in binding overrides", async () => {
+    const fetchMock = vi.fn();
+    globalThis.fetch = fetchMock as typeof fetch;
+
+    fetchMock.mockResolvedValueOnce(
+      jsonRes({
+        version: 6,
+        bindingOverrides: [
+          {
+            bindingId: "gpt-image-2:toapis-openai:image",
+            priority: 4,
+            fallbackPolicy: "quality_first",
+            fallbackMaxAttempts: 2,
+          },
+          {
+            bindingId: "gpt-image-2:tinysnow-openai:image",
+            fallbackPolicy: "not-a-policy",
+          },
+        ],
+      })
+    );
+
+    await _refreshModelOpsConfigAtUrlForTests(testUrl);
+
+    expect(getModelOpsConfigSync().bindingOverrides).toEqual([
+      {
+        bindingId: "gpt-image-2:toapis-openai:image",
+        priority: 4,
+        fallbackPolicy: "quality_first",
+        fallbackMaxAttempts: 2,
+      },
+      {
+        bindingId: "gpt-image-2:tinysnow-openai:image",
+      },
+    ]);
+  });
+
+  it("keeps valid endpoint mapping rows", async () => {
+    const fetchMock = vi.fn();
+    globalThis.fetch = fetchMock as typeof fetch;
+
+    fetchMock.mockResolvedValueOnce(
+      jsonRes({
+        version: 7,
+        endpointMappings: [
+          {
+            routeId: "302ai-video-manual:302ai:video",
+            method: "post",
+            requestPath: "/submit",
+            pollPath: "/tasks/{id}",
+            statusPath: "data.status",
+            artifactPath: "data.video.url",
+            taskIdPath: "data.taskId",
+            errorPath: "error.message",
+            statusValuePath: "data.status",
+            artifactUrlPath: "data.video.url",
+            upstreamOverride: "kling-video-v1",
+            priority: 25,
+          },
+          {
+            routeId: "302ai-model3d-manual:302ai:model3d",
+            requestPath: "relative-path-is-ignored",
+          },
+        ],
+      })
+    );
+
+    await _refreshModelOpsConfigAtUrlForTests(testUrl);
+
+    expect(getModelOpsConfigSync().endpointMappings).toEqual([
+      {
+        routeId: "302ai-video-manual:302ai:video",
+        method: "POST",
+        requestPath: "/submit",
+        pollPath: "/tasks/{id}",
+        statusPath: "data.status",
+        artifactPath: "data.video.url",
+        taskIdPath: "data.taskId",
+        errorPath: "error.message",
+        statusValuePath: "data.status",
+        artifactUrlPath: "data.video.url",
+        upstreamOverride: "kling-video-v1",
+        priority: 25,
+      },
+      {
+        routeId: "302ai-model3d-manual:302ai:model3d",
+      },
+    ]);
+  });
+
+  it("keeps valid provider base URL overrides", async () => {
+    const fetchMock = vi.fn();
+    globalThis.fetch = fetchMock as typeof fetch;
+
+    fetchMock.mockResolvedValueOnce(
+      jsonRes({
+        version: 8,
+        providerOverrides: [
+          {
+            providerId: "302ai",
+            baseUrl: "https://proxy.example/302ai/v1/",
+            requestTimeoutMs: 45500,
+          },
+          {
+            providerId: "aihubmix",
+            baseUrl: "ftp://invalid.example/v1",
+            requestTimeoutMs: -1,
+          },
+        ],
+      })
+    );
+
+    await _refreshModelOpsConfigAtUrlForTests(testUrl);
+
+    expect(getModelOpsConfigSync().providerOverrides).toEqual([
+      {
+        providerId: "302ai",
+        baseUrl: "https://proxy.example/302ai/v1",
+        requestTimeoutMs: 45500,
+      },
+      {
+        providerId: "aihubmix",
+      },
+    ]);
+  });
+
   it("ignores published canonical allowlist when every id is unknown", async () => {
     const fetchMock = vi.fn();
     globalThis.fetch = fetchMock as typeof fetch;

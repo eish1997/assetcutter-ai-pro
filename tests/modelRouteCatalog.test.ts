@@ -117,11 +117,24 @@ describe("model route catalog", () => {
 
   it("keeps provider route inventory queryable from supplier center", () => {
     const arkRoutes = listProviderRoutes("volcengine-ark");
+    const aggregatorRoutes = listProviderRoutes("302ai");
     const jimengRoutes = listProviderRoutes("volcengine-jimeng");
     const tripoRoutes = listProviderRoutes("tripo");
     const hunyuanRoutes = listProviderRoutes("tencent-hunyuan");
 
     expect(arkRoutes.some((route) => route.canonicalModelId === "doubao-seed-2-0-pro")).toBe(true);
+    expect(aggregatorRoutes.find((route) => route.canonicalModelId === "302ai-video-manual")).toMatchObject({
+      modality: "video",
+      executionStatus: "requires_endpoint_mapping",
+      gatewayExecutionStatus: "adapter_pending",
+      enabled: false,
+    });
+    expect(aggregatorRoutes.find((route) => route.canonicalModelId === "302ai-model3d-manual")).toMatchObject({
+      modality: "model3d",
+      executionStatus: "requires_endpoint_mapping",
+      gatewayExecutionStatus: "adapter_pending",
+      enabled: false,
+    });
     expect(jimengRoutes.some((route) => route.modality === "video")).toBe(true);
     expect(jimengRoutes.some((route) => route.executionStatus === "platform_ready")).toBe(true);
     expect(jimengRoutes.some((route) => route.gatewayExecutionStatus === "gateway_ready")).toBe(true);
@@ -147,5 +160,11 @@ describe("model route catalog", () => {
     expect(listModelRoutes("gemini-3-pro-image-preview").some((route) => route.gatewayExecutionStatus === "gateway_ready")).toBe(true);
     expect(listModelRoutes("tripo-p1").some((route) => route.gatewayExecutionStatus === "gateway_ready")).toBe(true);
     expect(listModelRoutes("tencent-hunyuan-3d-pro").some((route) => route.gatewayExecutionStatus === "gateway_ready")).toBe(true);
+    expect(getCanonicalModel("302ai-video-manual")).toMatchObject({
+      modality: "video",
+      status: "draft",
+      visibleInWorkspace: true,
+    });
+    expect(listModelRoutes("302ai-video-manual").some((route) => route.gatewayExecutionStatus === "gateway_ready")).toBe(false);
   });
 });

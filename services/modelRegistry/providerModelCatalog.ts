@@ -6,6 +6,16 @@ import type { ProviderCatalogId, ProviderModality } from "./providerCatalog";
 export type ProviderModelLifecycle = "active" | "preview" | "manual" | "planned";
 export type ProviderModelStatus = "verified" | "testing" | "discovered" | "requires_mapping" | "disabled";
 
+export type ProviderModelEndpointMappingRequirement = {
+  method?: string;
+  requestPath?: string;
+  pollPath?: string;
+  statusPath?: string;
+  artifactPath?: string;
+  required: readonly string[];
+  notes?: string;
+};
+
 export type ProviderModelCatalogEntry = {
   providerId: ProviderCatalogId;
   providerModelId: string;
@@ -16,6 +26,7 @@ export type ProviderModelCatalogEntry = {
   status: ProviderModelStatus;
   verified?: boolean;
   requiresEndpointMapping?: boolean;
+  endpointMapping?: ProviderModelEndpointMappingRequirement;
   docsUrl?: string;
 };
 
@@ -189,11 +200,49 @@ export const VOLCENGINE_ARK_MODEL_CATALOG: readonly ProviderModelCatalogEntry[] 
   },
 ];
 
+export const AGGREGATOR_302AI_MULTIMODAL_CATALOG: readonly ProviderModelCatalogEntry[] = [
+  {
+    providerId: "302ai",
+    providerModelId: "302ai-video-manual",
+    registryId: "302ai-video-manual",
+    label: "302.AI Video (manual mapping)",
+    modality: "video",
+    lifecycle: "planned",
+    status: "requires_mapping",
+    requiresEndpointMapping: true,
+    endpointMapping: {
+      method: "POST",
+      required: ["requestPath", "pollPath", "statusPath", "artifactPath"],
+      notes: "Map 302.AI video task submit/poll response into AI Gateway video artifacts.",
+    },
+    docsUrl: "https://doc.302.ai/",
+  },
+  {
+    providerId: "302ai",
+    providerModelId: "302ai-model3d-manual",
+    registryId: "302ai-model3d-manual",
+    label: "302.AI 3D (manual mapping)",
+    modality: "model3d",
+    lifecycle: "planned",
+    status: "requires_mapping",
+    requiresEndpointMapping: true,
+    endpointMapping: {
+      method: "POST",
+      required: ["requestPath", "pollPath", "statusPath", "artifactPath"],
+      notes: "Map 302.AI 3D task submit/poll response into AI Gateway model3d artifacts.",
+    },
+    docsUrl: "https://doc.302.ai/",
+  },
+];
+
 export const PROVIDER_MODEL_CATALOG: readonly ProviderModelCatalogEntry[] = [
   ...openAiCatalogRows("openai-official"),
   ...openAiCatalogRows("tinysnow"),
   ...VOLCENGINE_ARK_MODEL_CATALOG,
   ...openAiCatalogRows("toapis"),
+  ...openAiCatalogRows("302ai"),
+  ...AGGREGATOR_302AI_MULTIMODAL_CATALOG,
+  ...openAiCatalogRows("aihubmix"),
   ...geminiCatalogRows("vertex-site"),
   ...geminiCatalogRows("gemini-aistudio"),
   ...geminiCatalogRows("toapis"),

@@ -276,6 +276,8 @@ const GATEWAY_CHANNEL_PROVIDER: Partial<Record<ChannelId, string>> = {
   vectorengine: 'vectorengine',
   'openai-official': 'openai-official',
   'tinysnow-openai': 'tinysnow',
+  '302ai-openai': '302ai',
+  'aihubmix-openai': 'aihubmix',
   'toapis-openai': 'toapis',
   'volcengine-ark': 'volcengine-ark',
   'volcengine-jimeng': 'volcengine-jimeng',

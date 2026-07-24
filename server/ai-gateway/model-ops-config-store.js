@@ -10,6 +10,8 @@ const DEFAULT_CONFIG = Object.freeze({
   publishedCanonicalModelAllowlist: null,
   imageModelPreference: null,
   bindingOverrides: null,
+  providerOverrides: null,
+  endpointMappings: null,
   wiringEdges: null,
 });
 const CONFIG_ROW_ID = 'default';
@@ -58,11 +60,89 @@ function normalizeBindingOverrides(value) {
       const bindingId = nonEmptyString(row.bindingId);
       if (!bindingId) return null;
       const priority = Number(row.priority);
+      const fallbackPolicy = nonEmptyString(row.fallbackPolicy);
       return {
         bindingId,
         enabled: row.enabled === undefined ? undefined : row.enabled === true,
         priority: Number.isFinite(priority) ? Math.floor(priority) : undefined,
+        fallbackPolicy: ['none', 'on_error', 'on_rate_limit', 'on_timeout', 'on_provider_degraded', 'cost_optimized', 'quality_first'].includes(fallbackPolicy)
+          ? fallbackPolicy
+          : undefined,
+        fallbackMaxAttempts: Number.isFinite(Number(row.fallbackMaxAttempts))
+          ? Math.max(1, Math.min(5, Math.floor(Number(row.fallbackMaxAttempts))))
+          : undefined,
         upstreamOverride: nonEmptyString(row.upstreamOverride) || undefined,
+      };
+    })
+    .filter(Boolean);
+  return rows.length ? rows : null;
+}
+
+function providerBaseUrl(value) {
+  const urlValue = nonEmptyString(value).replace(/\/+$/, '');
+  if (!urlValue) return undefined;
+  try {
+    const parsed = new URL(urlValue);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return undefined;
+    return urlValue;
+  } catch {
+    return undefined;
+  }
+}
+
+function providerRequestTimeoutMs(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return undefined;
+  return Math.max(1000, Math.min(900_000, Math.floor(n)));
+}
+
+function normalizeProviderOverrides(value) {
+  if (value === null) return null;
+  if (!Array.isArray(value)) return undefined;
+  const rows = value
+    .map((item) => {
+      const row = item && typeof item === 'object' ? item : {};
+      const providerId = nonEmptyString(row.providerId);
+      if (!providerId) return null;
+      return {
+        providerId,
+        baseUrl: providerBaseUrl(row.baseUrl),
+        requestTimeoutMs: providerRequestTimeoutMs(row.requestTimeoutMs),
+      };
+    })
+    .filter(Boolean);
+  return rows.length ? rows : null;
+}
+
+function endpointPath(value) {
+  const pathValue = nonEmptyString(value);
+  return pathValue && pathValue.startsWith('/') ? pathValue : undefined;
+}
+
+function normalizeEndpointMappings(value) {
+  if (value === null) return null;
+  if (!Array.isArray(value)) return undefined;
+  const rows = value
+    .map((item) => {
+      const row = item && typeof item === 'object' ? item : {};
+      const routeId = nonEmptyString(row.routeId);
+      if (!routeId) return null;
+      const method = nonEmptyString(row.method).toUpperCase();
+      const priority = Number(row.priority);
+      return {
+        routeId,
+        method: ['GET', 'POST'].includes(method) ? method : undefined,
+        requestPath: endpointPath(row.requestPath),
+        pollPath: endpointPath(row.pollPath),
+        statusPath: nonEmptyString(row.statusPath) || undefined,
+        artifactPath: nonEmptyString(row.artifactPath) || undefined,
+        taskIdPath: nonEmptyString(row.taskIdPath) || undefined,
+        errorPath: nonEmptyString(row.errorPath) || undefined,
+        statusValuePath: nonEmptyString(row.statusValuePath) || undefined,
+        artifactUrlPath: nonEmptyString(row.artifactUrlPath) || undefined,
+        upstreamOverride: nonEmptyString(row.upstreamOverride) || undefined,
+        priority: Number.isFinite(priority) ? Math.floor(priority) : undefined,
+        enabled: row.enabled === undefined ? undefined : row.enabled === true,
       };
     })
     .filter(Boolean);
@@ -103,6 +183,8 @@ export function normalizeModelOpsConfig(input) {
   const publishedCanonicalModelAllowlist = nullableStringList(raw.publishedCanonicalModelAllowlist);
   const imageModelPreference = nullableStringList(raw.imageModelPreference ?? raw.gearPreference);
   const bindingOverrides = normalizeBindingOverrides(raw.bindingOverrides);
+  const providerOverrides = normalizeProviderOverrides(raw.providerOverrides);
+  const endpointMappings = normalizeEndpointMappings(raw.endpointMappings);
   const wiringEdges = normalizeWiringEdges(raw.wiringEdges);
   return {
     version: Number.isFinite(version) ? Math.max(1, Math.floor(version)) : DEFAULT_CONFIG.version,
@@ -114,6 +196,8 @@ export function normalizeModelOpsConfig(input) {
         : publishedCanonicalModelAllowlist,
     imageModelPreference: imageModelPreference === undefined ? DEFAULT_CONFIG.imageModelPreference : imageModelPreference,
     bindingOverrides: bindingOverrides === undefined ? DEFAULT_CONFIG.bindingOverrides : bindingOverrides,
+    providerOverrides: providerOverrides === undefined ? DEFAULT_CONFIG.providerOverrides : providerOverrides,
+    endpointMappings: endpointMappings === undefined ? DEFAULT_CONFIG.endpointMappings : endpointMappings,
     wiringEdges: wiringEdges === undefined ? DEFAULT_CONFIG.wiringEdges : wiringEdges,
   };
 }

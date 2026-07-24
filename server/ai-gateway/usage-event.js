@@ -2,6 +2,11 @@ import { insertUsageEvents } from '../usage-billing-store.js';
 import { priceUsageQuote } from '../pricing-engine.js';
 import { actualCreditsFromAiGatewayPlan } from './settlement.js';
 import { withAiGatewayPostgresRetry } from './postgres-transient-retry.js';
+import {
+  meterKindForAiGatewayModality,
+  resolveAiGatewayBillingSku,
+  unitForAiGatewayMeter,
+} from './route-billing.js';
 
 function text(value) {
   return typeof value === 'string' && value.trim() ? value.trim() : null;
@@ -15,40 +20,6 @@ function positiveInt(value) {
 function creditsGate(plan) {
   const metadata = plan?.job?.metadata && typeof plan.job.metadata === 'object' ? plan.job.metadata : {};
   return metadata.creditsGate && typeof metadata.creditsGate === 'object' ? metadata.creditsGate : null;
-}
-
-function resolveBillingSku(job, route) {
-  const explicit =
-    text(job?.input?.billingSku) ||
-    text(job?.metadata?.billingSku) ||
-    text(job?.metadata?.usage?.billingSku) ||
-    text(job?.metadata?.metering?.billingSku);
-  if (explicit) return explicit;
-
-  const model = String(job?.model || job?.input?.model || '').toLowerCase();
-  if (job?.modality === 'image') {
-    return model.includes('pro') && !model.includes('flash') ? 'image.gemini.pro' : 'image.gemini.flash';
-  }
-  if (job?.modality === 'video') return 'video.workflow.task';
-  if (job?.modality === 'model3d') return '3d.tripo.task';
-  if (route?.providerId === 'vertex-site' || route?.providerId === 'vertex-gemini' || model.includes('gemini')) {
-    return model.includes('pro') && !model.includes('flash') ? 'llm.gemini.pro' : 'llm.gemini.flash';
-  }
-  return `${job?.modality || 'ai'}.gateway.task`.slice(0, 120);
-}
-
-function meterKindForModality(modality) {
-  if (modality === 'text') return 'token';
-  if (modality === 'image') return 'image';
-  if (modality === 'video') return 'second';
-  return 'task';
-}
-
-function unitForMeter(meterKind) {
-  if (meterKind === 'token') return 'token';
-  if (meterKind === 'image') return 'image';
-  if (meterKind === 'second') return 'second';
-  return 'task';
 }
 
 function usageMetadataFromJob(job) {
@@ -106,9 +77,9 @@ export function buildAiGatewayUsageEvent(plan) {
   if (gate?.mode !== 'reserve') return null;
 
   const route = plan?.route && typeof plan.route === 'object' ? plan.route : {};
-  const billingSku = resolveBillingSku(job, route);
+  const billingSku = resolveAiGatewayBillingSku(plan);
   const usageMetadata = usageMetadataFromJob(job);
-  const meterKind = usageMetadata ? 'token' : meterKindForModality(job.modality);
+  const meterKind = meterKindForAiGatewayModality(job.modality, usageMetadata);
   const proxyJobId = text(job.metadata?.proxyJobId);
   const upstreamTaskId = text(job.metadata?.upstreamTaskId) || text(job.metadata?.tripoTaskId) || text(job.metadata?.jimengTaskId) || correlationId;
   const model = text(job.model || job.input?.model);
@@ -125,7 +96,7 @@ export function buildAiGatewayUsageEvent(plan) {
     quantityIn: usageMetadata?.promptTokenCount,
     quantityOut: usageMetadata?.candidatesTokenCount,
     quantity: usageMetadata?.totalTokenCount ?? (meterKind === 'token' ? 0 : 1),
-    unit: unitForMeter(meterKind),
+    unit: unitForAiGatewayMeter(meterKind),
     costUsdEst: resolved.costUsdEst ?? undefined,
     costConfidence: resolved.source === 'estimated' ? 'estimated' : 'exact',
     status: 'succeeded',

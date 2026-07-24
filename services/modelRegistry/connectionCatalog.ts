@@ -5,6 +5,8 @@ import type { ChannelId } from "./types";
 export type AiConnectionId =
   | "vertex-site"
   | "toapis"
+  | "302ai"
+  | "aihubmix"
   | "vectorengine"
   | "openai-official"
   | "tinysnow"
@@ -55,6 +57,22 @@ export const AI_CONNECTION_CATALOG: readonly AiConnectionCatalogRow[] = [
     subtitle: "直连 OpenAI API",
     outletHint: "binding 指向此处的 SKU 走 OpenAI 官方 upstream",
     channels: ["openai-official"],
+    credentialKind: "api-key-base-url",
+  },
+  {
+    id: "302ai",
+    title: "302.AI",
+    subtitle: "OpenAI-compatible aggregate gateway; default Base URL https://api.302.ai/v1",
+    outletHint: "OpenAI-family SKUs can route through 302.AI when this output is enabled.",
+    channels: ["302ai-openai"],
+    credentialKind: "api-key-base-url",
+  },
+  {
+    id: "aihubmix",
+    title: "AIHubMix",
+    subtitle: "OpenAI-compatible aggregate gateway; default Base URL https://aihubmix.com/v1",
+    outletHint: "OpenAI-family SKUs can route through AIHubMix when this output is enabled.",
+    channels: ["aihubmix-openai"],
     credentialKind: "api-key-base-url",
   },
   {

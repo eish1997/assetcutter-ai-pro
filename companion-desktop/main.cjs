@@ -2484,6 +2484,31 @@ async function prepareWorkbenchPairingForWorkbenchUrl(targetHref) {
  * 若与页面此前值不同则 `reload` 一次以便 SPA 重新探测伴侣。
  */
 async function injectWorkbenchCompanionPrefsFromPairingFile(wc) {
+  const isDisposedFrameError = (e) => {
+    const msg = e instanceof Error ? e.message : String(e || '');
+    return /Render frame was disposed|WebFrameMain could be accessed|frame.*disposed/i.test(msg);
+  };
+  const executeWorkbenchScript = async (js) => {
+    if (!wc || wc.isDestroyed()) return { ok: false, disposed: true, value: '' };
+    let timer = null;
+    try {
+      const result = await Promise.race([
+        wc.executeJavaScript(js),
+        new Promise((_, reject) => {
+          timer = setTimeout(() => reject(new Error('workbench_execute_script_timeout')), 3000);
+        }),
+      ]);
+      return { ok: true, disposed: false, value: result };
+    } catch (e) {
+      if (isDisposedFrameError(e) || !wc || wc.isDestroyed()) {
+        return { ok: false, disposed: true, value: '' };
+      }
+      throw e;
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  };
+
   if (shellMainProcessActiveView !== 'workbench') return;
   if (!wc || wc.isDestroyed()) return;
   let u = '';
@@ -2509,17 +2534,20 @@ async function injectWorkbenchCompanionPrefsFromPairingFile(wc) {
   const base = companionWorkbenchBaseUrl();
   let before = '';
   try {
-    before = await wc.executeJavaScript(
+    const r = await executeWorkbenchScript(
       `(()=>{ try { return localStorage.getItem('ac_companion_local_token_v1')||''; } catch(e){ return ''; } })()`,
     );
+    if (!r.ok) return;
+    before = r.value;
   } catch {
     return;
   }
   try {
-    await wc.executeJavaScript(`(()=>{ try {
+    const r = await executeWorkbenchScript(`(()=>{ try {
       localStorage.setItem('ac_companion_local_base_v1', ${JSON.stringify(base)});
       localStorage.setItem('ac_companion_local_token_v1', ${JSON.stringify(tok)});
     } catch(e){} })()`);
+    if (!r.ok) return;
   } catch (e) {
     console.warn('[companion-desktop] workbench inject companion prefs', e);
     return;
@@ -3458,11 +3486,9 @@ async function attachWorkbenchBrowserView() {
       return { ok: false, error: e instanceof Error ? e.message : String(e) };
     }
   } else {
-    try {
-      await injectWorkbenchCompanionPrefsFromPairingFile(wc);
-    } catch (e) {
+    void injectWorkbenchCompanionPrefsFromPairingFile(wc).catch((e) => {
       console.warn('[companion-desktop] workbench inject (same url)', e instanceof Error ? e.message : e);
-    }
+    });
   }
 
   return { ok: true };

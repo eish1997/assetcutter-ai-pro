@@ -238,6 +238,62 @@ describe('server AI gateway job planning', () => {
     });
   });
 
+  it('plans explicit 302.AI OpenAI-compatible jobs through the shared OpenAI adapter', () => {
+    const plan = createAiGatewayJobPlan({
+      modality: 'text',
+      provider: '302ai',
+      model: 'gpt-4o-mini',
+      input: {
+        contents: [{ role: 'user', parts: [{ text: 'hello from 302' }] }],
+      },
+    });
+
+    expect(plan.route).toMatchObject({
+      providerId: '302ai',
+      workerId: 'text-worker',
+      adapterId: '302ai-openai',
+      channel: '302ai-openai',
+      upstreamBackend: '302ai-openai',
+    });
+    expect(plan.adapterRequest).toMatchObject({
+      method: 'POST',
+      path: '/chat/completions',
+      providerBaseUrl: 'https://api.302.ai/v1',
+      body: {
+        model: 'gpt-4o-mini',
+        messages: [{ role: 'user', content: 'hello from 302' }],
+      },
+    });
+  });
+
+  it('plans explicit AIHubMix OpenAI-compatible jobs through the shared OpenAI adapter', () => {
+    const plan = createAiGatewayJobPlan({
+      modality: 'text',
+      provider: 'aihubmix',
+      model: 'gpt-4o-mini',
+      input: {
+        contents: [{ role: 'user', parts: [{ text: 'hello from aihubmix' }] }],
+      },
+    });
+
+    expect(plan.route).toMatchObject({
+      providerId: 'aihubmix',
+      workerId: 'text-worker',
+      adapterId: 'aihubmix-openai',
+      channel: 'aihubmix-openai',
+      upstreamBackend: 'aihubmix-openai',
+    });
+    expect(plan.adapterRequest).toMatchObject({
+      method: 'POST',
+      path: '/chat/completions',
+      providerBaseUrl: 'https://aihubmix.com/v1',
+      body: {
+        model: 'gpt-4o-mini',
+        messages: [{ role: 'user', content: 'hello from aihubmix' }],
+      },
+    });
+  });
+
   it('plans explicit Volcengine Ark text jobs through the Ark OpenAI-compatible adapter', () => {
     const plan = createAiGatewayJobPlan({
       modality: 'text',
@@ -560,6 +616,30 @@ describe('server AI gateway job planning', () => {
     });
   });
 
+  it('plans Tripo image-to-model jobs from standard contents inline image input', () => {
+    const plan = createAiGatewayJobPlan({
+      modality: 'model3d',
+      model: 'tripo-p1',
+      input: {
+        contents: [
+          {
+            role: 'user',
+            parts: [
+              { text: 'turn this product into a clean 3D model' },
+              { inlineData: { mimeType: 'image/png', data: 'AAAA' } },
+            ],
+          },
+        ],
+      },
+    });
+
+    expect(plan.workerRequest.body).toMatchObject({
+      type: 'image_to_model',
+      prompt: 'turn this product into a clean 3D model',
+      imageBase64DataUrl: 'data:image/png;base64,AAAA',
+    });
+  });
+
   it('plans Tencent Hunyuan Rapid 3D jobs through the Tencent Gateway adapter', () => {
     const plan = createAiGatewayJobPlan({
       modality: 'model3d',
@@ -593,6 +673,24 @@ describe('server AI gateway job planning', () => {
       Prompt: 'a cute vinyl toy',
       ResultFormat: 'GLB',
       EnablePBR: true,
+    });
+  });
+
+  it('plans Tencent Hunyuan 3D jobs from standard contents text input', () => {
+    const plan = createAiGatewayJobPlan({
+      modality: 'model3d',
+      model: 'tencent-hunyuan-3d-pro',
+      input: {
+        contents: [{ role: 'user', parts: [{ text: 'a compact desk lamp' }] }],
+        format: 'obj',
+        texture: false,
+      },
+    });
+
+    expect(plan.workerRequest.body).toMatchObject({
+      Prompt: 'a compact desk lamp',
+      ResultFormat: 'OBJ',
+      EnablePBR: false,
     });
   });
 

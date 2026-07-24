@@ -281,12 +281,22 @@ describe('AI gateway model publication guard', () => {
     await expect(
       validateAiGatewayModelRouteExecutable(
         { modality: 'image', model: 'gpt-image-2' },
-        { listProviderKeys: async () => [{ provider: 'toapis', enabled: true, hasSecret: true }] }
+        {
+          listProviderKeys: async () => [{ provider: 'toapis', enabled: true, hasSecret: true }],
+          modelOpsConfig: {
+            bindingOverrides: [
+              {
+                bindingId: 'gpt-image-2:toapis-openai:image',
+                fallbackPolicy: 'on_rate_limit',
+              },
+            ],
+          },
+        }
       )
     ).resolves.toMatchObject({
       ok: true,
       checked: true,
-      route: { providerId: 'toapis' },
+      route: { providerId: 'toapis', fallbackPolicy: 'on_rate_limit' },
     });
 
     await expect(

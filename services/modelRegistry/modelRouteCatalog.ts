@@ -1,11 +1,18 @@
 import { JIMENG_CATALOG } from "../jimeng/catalog";
 import { PROVIDER_BINDINGS } from "./providerBindings";
-import { VOLCENGINE_ARK_MODEL_CATALOG, listProviderModels, type ProviderModelCatalogEntry } from "./providerModelCatalog";
+import { AGGREGATOR_302AI_MULTIMODAL_CATALOG, VOLCENGINE_ARK_MODEL_CATALOG, listProviderModels, type ProviderModelCatalogEntry } from "./providerModelCatalog";
 import { resolveCatalogGatewayExecutionStatus } from "../../shared/aiGatewayModelRoutes.js";
 import type { ChannelId } from "./types";
 import type { ProviderCatalogId, ProviderModality } from "./providerCatalog";
 
-export type ModelRouteFallbackPolicy = "none" | "on_error" | "on_rate_limit" | "on_timeout";
+export type ModelRouteFallbackPolicy =
+  | "none"
+  | "on_error"
+  | "on_rate_limit"
+  | "on_timeout"
+  | "on_provider_degraded"
+  | "cost_optimized"
+  | "quality_first";
 export type ModelRouteExecutionStatus =
   | "platform_ready"
   | "byok_ready"
@@ -35,6 +42,8 @@ const CHANNEL_PROVIDER_MAP: Record<ChannelId, ProviderCatalogId> = {
   "gemini-aistudio": "gemini-aistudio",
   "toapis-gemini": "toapis",
   "toapis-openai": "toapis",
+  "302ai-openai": "302ai",
+  "aihubmix-openai": "aihubmix",
   "tinysnow-openai": "tinysnow",
   vectorengine: "vectorengine",
   "openai-official": "openai-official",
@@ -63,6 +72,8 @@ function routeExecutionStatus(row: {
     row.providerId === "volcengine-jimeng" ||
     row.providerId === "tripo" ||
     row.providerId === "openai-official" ||
+    row.providerId === "302ai" ||
+    row.providerId === "aihubmix" ||
     row.providerId === "tinysnow"
   ) {
     return "platform_ready";
@@ -152,6 +163,23 @@ function buildArkRoutes(): ModelRouteCatalogEntry[] {
   });
 }
 
+function buildAggregatorGrayRoutes(): ModelRouteCatalogEntry[] {
+  return AGGREGATOR_302AI_MULTIMODAL_CATALOG.map((row, index) => ({
+    routeId: `${row.registryId || row.providerModelId}:302ai:${row.modality}`,
+    canonicalModelId: row.registryId || row.providerModelId,
+    providerId: "302ai" as const,
+    providerModelId: row.providerModelId,
+    modality: row.modality,
+    enabled: false,
+    priority: 70 + index,
+    fallbackPolicy: "none" as const,
+    source: "static" as const,
+    executionStatus: "requires_endpoint_mapping" as const,
+    gatewayExecutionStatus: "adapter_pending" as const,
+    requiresEndpointMapping: true,
+  }));
+}
+
 function buildTripoRoutes(): ModelRouteCatalogEntry[] {
   return listProviderModels("tripo")
     .filter((row) => row.modality === "model3d")
@@ -220,6 +248,7 @@ function uniqueRoutes(rows: readonly ModelRouteCatalogEntry[]): ModelRouteCatalo
 export const MODEL_ROUTE_CATALOG: readonly ModelRouteCatalogEntry[] = uniqueRoutes([
   ...buildBindingRoutes(),
   ...buildArkRoutes(),
+  ...buildAggregatorGrayRoutes(),
   ...buildJimengNonImageRoutes(),
   ...buildTripoRoutes(),
   ...MODEL3D_ROUTES,

@@ -26,6 +26,8 @@ const OPENAI_CHANNELS: readonly ChannelTemplate[] = [
   { channel: "openai-official", priority: 10, defaultEnabled: true },
   { channel: "tinysnow-openai", priority: 20, defaultEnabled: false },
   { channel: "toapis-openai", priority: 30 },
+  { channel: "302ai-openai", priority: 35, defaultEnabled: false },
+  { channel: "aihubmix-openai", priority: 36, defaultEnabled: false },
 ];
 
 const VOLCENGINE_ARK_CHANNELS: readonly ChannelTemplate[] = [
