@@ -3,6 +3,7 @@ import {
   billingSkuForAiGatewayRouteSuggestion,
   buildAiGatewayPriceSkuSuggestions,
   meterKindForAiGatewayPriceSuggestion,
+  routesFromGatewayRouteConfigs,
 } from '../components/admin/AdminPriceCatalogPanel';
 import type { ModelRouteCatalogEntry } from '../services/modelRegistry';
 
@@ -66,5 +67,28 @@ describe('AdminPriceCatalogPanel AI Gateway SKU suggestions', () => {
     expect(meterKindForAiGatewayPriceSuggestion('image')).toBe('image');
     expect(meterKindForAiGatewayPriceSuggestion('video')).toBe('second');
     expect(meterKindForAiGatewayPriceSuggestion('model3d')).toBe('task');
+  });
+
+  it('A2: ops gatewayRouteConfigs produce missing-SKU suggestions for new aggregators', () => {
+    const opsRoutes = routesFromGatewayRouteConfigs([
+      {
+        canonicalModelId: 'fixture-aggregator-model-a2',
+        providerId: '302ai',
+        modality: 'image',
+        enabled: true,
+        upstreamModelId: 'upstream-image-v1',
+      },
+    ]);
+    const suggestions = buildAiGatewayPriceSkuSuggestions([], [], opsRoutes);
+    expect(suggestions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          billingSku: 'image.302ai.upstream-image-v1',
+          providerId: '302ai',
+          canonicalModelId: 'fixture-aggregator-model-a2',
+          meterKind: 'image',
+        }),
+      ])
+    );
   });
 });

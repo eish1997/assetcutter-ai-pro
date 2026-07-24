@@ -97,6 +97,50 @@ describe('Volcengine Ark async AI Gateway adapter', () => {
     ]);
   });
 
+  it('fails with AI_GATEWAY_ASYNC_POLL_TIMEOUT when poll never finishes', async () => {
+    useTempStore();
+    await saveProviderKeys([
+      {
+        id: 'key_ark_async_timeout',
+        provider: 'volcengine-ark',
+        label: 'Ark async timeout',
+        secret: 'ark-api-key',
+        enabled: true,
+        credentials: { baseUrl: 'https://ark.example/api/v3' },
+      },
+    ]);
+    const store = createInMemoryAiJobStore();
+    const plan = await store.put(createAiGatewayJobPlan({
+      id: 'aijob_ark_timeout',
+      modality: 'video',
+      provider: 'volcengine-ark',
+      model: 'doubao-seedance-2-0',
+      input: { prompt: 'timeout clip', durationSeconds: 4 },
+    }));
+    const fetchImpl = async (url: string, init?: RequestInit) => {
+      if (String(url).endsWith('/contents/generations/tasks') && init?.method === 'POST') {
+        return new Response(JSON.stringify({ id: 'ark_task_timeout' }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ id: 'ark_task_timeout', status: 'running' }), { status: 200 });
+    };
+
+    await startVolcengineArkAsyncExecution(plan, {
+      store,
+      fetchImpl,
+      pollIntervalMs: 1,
+      pollTimeoutMs: 25,
+      awaitBackgroundPoll: true,
+    });
+
+    const stored = await store.get('aijob_ark_timeout');
+    expect(stored?.job.status).toBe('failed');
+    const failureCode =
+      stored?.job?.metadata?.gatewayFailure?.code ||
+      stored?.job?.error?.code ||
+      stored?.job?.failureReason?.code;
+    expect(failureCode).toBe('AI_GATEWAY_ASYNC_POLL_TIMEOUT');
+  });
+
   it('starts and completes Seed3D jobs as model3d artifacts', async () => {
     useTempStore();
     await saveProviderKeys([

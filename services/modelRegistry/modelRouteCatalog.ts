@@ -2,8 +2,9 @@ import { JIMENG_CATALOG } from "../jimeng/catalog";
 import { PROVIDER_BINDINGS } from "./providerBindings";
 import { AGGREGATOR_302AI_MULTIMODAL_CATALOG, VOLCENGINE_ARK_MODEL_CATALOG, listProviderModels, type ProviderModelCatalogEntry } from "./providerModelCatalog";
 import { resolveCatalogGatewayExecutionStatus } from "../../shared/aiGatewayModelRoutes.js";
+import { getModelOpsConfigSync } from "./opsConfig";
+import { isProviderCatalogId, type ProviderCatalogId, type ProviderModality } from "./providerCatalog";
 import type { ChannelId } from "./types";
-import type { ProviderCatalogId, ProviderModality } from "./providerCatalog";
 
 export type ModelRouteFallbackPolicy =
   | "none"
@@ -254,15 +255,95 @@ export const MODEL_ROUTE_CATALOG: readonly ModelRouteCatalogEntry[] = uniqueRout
   ...MODEL3D_ROUTES,
 ]);
 
+function gatewayRouteConfigKey(canonicalModelId: string, providerId: string, modality?: string) {
+  const model = String(canonicalModelId || "").trim();
+  const provider = String(providerId || "").trim();
+  const mod = String(modality || "").trim();
+  if (!model || !provider) return "";
+  return mod ? `${model}:${provider}:${mod}` : `${model}:${provider}`;
+}
+
+/**
+ * A1: overlay ops `gatewayRouteConfigs` onto the static catalog so Admin/workspace
+ * display the same enabled/priority/providerModelId decision will use.
+ */
+function applyGatewayRouteConfigOverlay(routes: ModelRouteCatalogEntry[]): ModelRouteCatalogEntry[] {
+  const configs = getModelOpsConfigSync().gatewayRouteConfigs;
+  if (!Array.isArray(configs) || configs.length === 0) return routes;
+
+  const byKey = new Map<string, ModelRouteCatalogEntry>();
+  for (const route of routes) {
+    const key = gatewayRouteConfigKey(route.canonicalModelId, route.providerId, route.modality);
+    if (key) byKey.set(key, route);
+  }
+
+  for (const cfg of configs) {
+    const canonicalModelId = String(cfg.canonicalModelId || "").trim();
+    const providerIdRaw = String(cfg.providerId || "").trim();
+    if (!canonicalModelId || !providerIdRaw || !isProviderCatalogId(providerIdRaw)) continue;
+    const providerId = providerIdRaw as ProviderCatalogId;
+    const modality = (String(cfg.modality || "").trim() || undefined) as ProviderModality | undefined;
+    const key = gatewayRouteConfigKey(canonicalModelId, providerId, modality);
+    if (!key) continue;
+    const base = byKey.get(key);
+    const upstream =
+      (typeof cfg.upstreamModelId === "string" && cfg.upstreamModelId.trim()) ||
+      (typeof cfg.providerModelId === "string" && cfg.providerModelId.trim()) ||
+      "";
+    if (base) {
+      const enabled = cfg.enabled === undefined ? base.enabled : cfg.enabled === true;
+      const priority =
+        typeof cfg.priority === "number" && Number.isFinite(cfg.priority) ? Math.floor(cfg.priority) : base.priority;
+      byKey.set(key, {
+        ...base,
+        enabled,
+        priority,
+        ...(upstream ? { providerModelId: upstream } : {}),
+        executionStatus: enabled
+          ? base.executionStatus === "disabled"
+            ? "platform_ready"
+            : base.executionStatus
+          : "disabled",
+      });
+      continue;
+    }
+    if (!modality) continue;
+    const gatewayExecutionStatus = resolveCatalogGatewayExecutionStatus({
+      canonicalModelId,
+      providerId,
+      modality,
+    }) as ModelRouteGatewayExecutionStatus;
+    byKey.set(key, {
+      routeId: `${canonicalModelId}:${providerId}:${modality}`,
+      canonicalModelId,
+      providerId,
+      providerModelId: upstream || canonicalModelId,
+      modality,
+      enabled: cfg.enabled !== false,
+      priority: typeof cfg.priority === "number" && Number.isFinite(cfg.priority) ? Math.floor(cfg.priority) : 100,
+      fallbackPolicy: "on_error",
+      source: "static",
+      executionStatus: cfg.enabled === false ? "disabled" : gatewayExecutionStatus === "ready" ? "platform_ready" : "adapter_pending",
+      gatewayExecutionStatus: gatewayExecutionStatus || "not_published",
+    });
+  }
+
+  return [...byKey.values()].sort(
+    (a, b) => a.canonicalModelId.localeCompare(b.canonicalModelId) || a.priority - b.priority
+  );
+}
+
 export function listModelRoutes(canonicalModelId?: string): ModelRouteCatalogEntry[] {
   const id = String(canonicalModelId || "").trim();
-  if (!id) return [...MODEL_ROUTE_CATALOG];
-  return MODEL_ROUTE_CATALOG.filter((row) => row.canonicalModelId === id);
+  const base = id ? MODEL_ROUTE_CATALOG.filter((row) => row.canonicalModelId === id) : [...MODEL_ROUTE_CATALOG];
+  const overlaid = applyGatewayRouteConfigOverlay(base);
+  if (!id) return overlaid;
+  return overlaid.filter((row) => row.canonicalModelId === id);
 }
 
 export function listProviderRoutes(providerId: string): ModelRouteCatalogEntry[] {
   const id = String(providerId || "").trim();
-  return MODEL_ROUTE_CATALOG.filter((row) => row.providerId === id);
+  return listModelRoutes().filter((row) => row.providerId === id);
 }
 
 export function providerRouteCount(providerId: string): number {

@@ -5,6 +5,11 @@ import { applyAiGatewayAdapterResult } from '../adapter-result.js';
 import { buildProviderTaskUsage, collectByteSize } from '../execution-usage.js';
 import { normalizeGatewayInput } from '../gateway-input.js';
 import { acquireProviderKey, recordProviderKeyError, recordProviderKeySuccess } from '../provider-key-store.js';
+import {
+  modalityDefaultPollTimeoutMs,
+  normalizeAiGatewayAsyncStatus,
+  runAiGatewayAsyncPollLoop,
+} from '../async-poll.js';
 
 export const VOLCENGINE_ARK_PROVIDER_ID = 'volcengine-ark';
 export const VOLCENGINE_ARK_ASYNC_DEFAULT_BASE_URL = 'https://ark.cn-beijing.volces.com/api/v3';
@@ -140,12 +145,8 @@ function extractTaskId(data) {
 }
 
 function normalizeArkStatus(data) {
-  const s = String(data?.status || data?.data?.status || data?.task?.status || '').trim().toLowerCase();
-  if (['queued', 'pending', 'created', 'submitted'].includes(s)) return 'queued';
-  if (['running', 'processing', 'in_progress'].includes(s)) return 'running';
-  if (['succeeded', 'success', 'finished', 'done', 'completed'].includes(s)) return 'succeeded';
-  if (['failed', 'error', 'cancelled', 'canceled', 'expired'].includes(s)) return 'failed';
-  return 'running';
+  const raw = data?.status || data?.data?.status || data?.task?.status || '';
+  return normalizeAiGatewayAsyncStatus(raw);
 }
 
 function collectUrls(data, matcher) {
@@ -179,11 +180,23 @@ function extractModelUrls(data) {
   return collectUrls(data, (url, key) => /(model|glb|gltf|fbx|obj|usdz|zip|download)/i.test(key) || /\.(glb|gltf|fbx|obj|usdz|zip)(\?|#|$)/i.test(url));
 }
 
-function pollDelay(ms) {
-  return new Promise((resolve) => {
-    const timer = setTimeout(resolve, ms);
-    if (typeof timer.unref === 'function') timer.unref();
-  });
+async function failArkPoll(plan, store, taskId, error, extraMeta = {}) {
+  const { plan: failed } = await applyAiGatewayAdapterResult(
+    plan,
+    {
+      status: 'failed',
+      upstreamTaskId: taskId,
+      error,
+    },
+    store,
+    {
+      metadata: {
+        arkTaskId: taskId,
+        gatewayExecution: { failedAt: new Date().toISOString(), ...extraMeta },
+      },
+    }
+  );
+  await finalizeAiGatewayTerminalPlan(failed, store);
 }
 
 async function pollArkAsyncTask(plan, taskId, key, options = {}) {
@@ -191,121 +204,131 @@ async function pollArkAsyncTask(plan, taskId, key, options = {}) {
   if (!store?.update || !plan?.job?.id || !taskId) return;
   const fetchImpl = options.fetchImpl || undiciFetch;
   const baseUrl = normalizeBaseUrl(key?.credentials?.baseUrl);
-  const intervalFloorMs = options.pollIntervalMs != null ? 1 : 3000;
-  const intervalMs = Math.max(intervalFloorMs, Number(options.pollIntervalMs || process.env.AI_GATEWAY_ARK_ASYNC_POLL_INTERVAL_MS || 5000));
-  const timeoutMs = Math.max(intervalMs, Number(options.pollTimeoutMs || process.env.AI_GATEWAY_ARK_ASYNC_POLL_TIMEOUT_MS || 900_000));
-  const startedAt = Date.now();
-  const startedAtMs = Date.parse(plan.job?.startedAt || '') || startedAt;
+  const startedAtMs = Date.parse(plan.job?.startedAt || '') || Date.now();
   const model = plan.workerRequest?.body?.model || plan.job?.model || '';
+  const modality = plan.job?.modality === 'model3d' ? 'model3d' : 'video';
 
-  while (Date.now() - startedAt < timeoutMs) {
-    await pollDelay(intervalMs);
-    const response = await fetchImpl(`${baseUrl}${VOLCENGINE_ARK_ASYNC_TASK_PATH}/${encodeURIComponent(taskId)}`, {
-      method: 'GET',
-      headers: { Authorization: `Bearer ${key.secret}` },
-      signal: AbortSignal.timeout(Number(options.pollRequestTimeoutMs || 30_000)),
-    });
-    const data = await readJsonSafe(response);
-    if (!response.ok) continue;
-    const status = normalizeArkStatus(data);
-    if (status === 'succeeded') {
-      const completedAtMs = Date.now();
-      const outputBytes = collectByteSize(data);
-      const model3d = plan.job?.modality === 'model3d';
-      const modelUrls = model3d ? extractModelUrls(data) : [];
-      const videoUrl = model3d ? '' : extractVideoUrl(data);
-      if (model3d ? modelUrls.length === 0 : !videoUrl) {
-        const { plan: failed } = await applyAiGatewayAdapterResult(
+  await runAiGatewayAsyncPollLoop({
+    pollIntervalMs: options.pollIntervalMs ?? process.env.AI_GATEWAY_ARK_ASYNC_POLL_INTERVAL_MS ?? 5000,
+    pollTimeoutMs:
+      options.pollTimeoutMs ?? process.env.AI_GATEWAY_ARK_ASYNC_POLL_TIMEOUT_MS ?? modalityDefaultPollTimeoutMs(modality),
+    pollRequestTimeoutMs: options.pollRequestTimeoutMs,
+    intervalFloorMs: 3000,
+    timeoutCode: 'AI_GATEWAY_ASYNC_POLL_TIMEOUT',
+    timeoutMessage: 'Volcengine Ark async poll timed out',
+    async tick() {
+      const response = await fetchImpl(`${baseUrl}${VOLCENGINE_ARK_ASYNC_TASK_PATH}/${encodeURIComponent(taskId)}`, {
+        method: 'GET',
+        headers: { Authorization: `Bearer ${key.secret}` },
+        signal: AbortSignal.timeout(Number(options.pollRequestTimeoutMs || 30_000)),
+      });
+      const data = await readJsonSafe(response);
+      if (!response.ok) return { done: false };
+      const status = normalizeArkStatus(data);
+      if (status === 'succeeded') {
+        const completedAtMs = Date.now();
+        const outputBytes = collectByteSize(data);
+        const model3d = plan.job?.modality === 'model3d';
+        const modelUrls = model3d ? extractModelUrls(data) : [];
+        const videoUrl = model3d ? '' : extractVideoUrl(data);
+        if (model3d ? modelUrls.length === 0 : !videoUrl) {
+          await failArkPoll(plan, store, taskId, {
+            code: model3d ? 'ARK_MODEL_URL_MISSING' : 'ARK_VIDEO_URL_MISSING',
+            message: model3d
+              ? 'Volcengine Ark 3D task completed without model URL'
+              : 'Volcengine Ark video task completed without video URL',
+          });
+          return { done: true };
+        }
+        const usage = buildProviderTaskUsage(plan, {
+          provider: VOLCENGINE_ARK_PROVIDER_ID,
+          upstreamTaskId: taskId,
+          billingSku: model3d
+            ? `model3d.volcengine-ark.${model || 'seed3d'}`
+            : `video.volcengine-ark.${model || 'seedance'}`,
+          meterKind: model3d ? 'task' : 'second',
+          unit: model3d ? 'task' : 'second',
+          quantity: model3d
+            ? 1
+            : positiveNumber(plan.job?.input?.durationSeconds || plan.job?.input?.duration || data?.duration, 1),
+          outputBytes,
+          artifactCount: model3d ? modelUrls.length : 1,
+          startedAtMs,
+          completedAtMs,
+        });
+        const artifacts = model3d
+          ? modelUrls.map((url) => ({
+              kind: 'model3d',
+              url,
+              source: VOLCENGINE_ARK_PROVIDER_ID,
+              taskId,
+              registryId: plan.job?.model || null,
+              billing: { actualCredits: usage.actualCredits, settlementSource: usage.settlementSource },
+            }))
+          : [
+              {
+                kind: 'video',
+                url: videoUrl,
+                source: VOLCENGINE_ARK_PROVIDER_ID,
+                taskId,
+                registryId: plan.job?.model || null,
+                billing: { actualCredits: usage.actualCredits, settlementSource: usage.settlementSource },
+              },
+            ];
+        const { plan: succeeded } = await applyAiGatewayAdapterResult(
           plan,
           {
-            status: 'failed',
+            status: 'succeeded',
             upstreamTaskId: taskId,
-            error: {
-              code: model3d ? 'ARK_MODEL_URL_MISSING' : 'ARK_VIDEO_URL_MISSING',
-              message: model3d ? 'Volcengine Ark 3D task completed without model URL' : 'Volcengine Ark video task completed without video URL',
+            artifacts,
+            usage,
+            output: {
+              provider: VOLCENGINE_ARK_PROVIDER_ID,
+              taskId,
+              model,
+              ...(model3d ? { modelUrls } : { videoUrl }),
+              raw: data,
             },
           },
           store,
           {
             metadata: {
               arkTaskId: taskId,
-              gatewayExecution: { failedAt: new Date().toISOString() },
+              gatewayExecution: {
+                completedAt: new Date(completedAtMs).toISOString(),
+                durationMs: usage.durationMs,
+                outputBytes,
+                artifactCount: artifacts.length,
+              },
             },
           }
         );
-        await finalizeAiGatewayTerminalPlan(failed, store);
-        return;
+        await finalizeAiGatewayTerminalPlan(succeeded, store);
+        return { done: true };
       }
-      const usage = buildProviderTaskUsage(plan, {
-        provider: VOLCENGINE_ARK_PROVIDER_ID,
-        upstreamTaskId: taskId,
-        billingSku: model3d ? `model3d.volcengine-ark.${model || 'seed3d'}` : `video.volcengine-ark.${model || 'seedance'}`,
-        meterKind: model3d ? 'task' : 'second',
-        unit: model3d ? 'task' : 'second',
-        quantity: model3d ? 1 : positiveNumber(plan.job?.input?.durationSeconds || plan.job?.input?.duration || data?.duration, 1),
-        outputBytes,
-        artifactCount: model3d ? modelUrls.length : 1,
-        startedAtMs,
-        completedAtMs,
+      if (status === 'failed' || status === 'cancelled') {
+        await failArkPoll(plan, store, taskId, {
+          code: data?.code || 'ARK_ASYNC_TASK_FAILED',
+          message: arkErrorMessage(data, `Volcengine Ark async task ${status}`),
+        });
+        return { done: true };
+      }
+      await store.update(plan.job.id, {
+        status: status === 'queued' ? 'queued' : 'running',
+        metadata: { arkTaskId: taskId, upstreamTaskId: taskId, arkStatus: status },
       });
-      const artifacts = model3d
-        ? modelUrls.map((url) => ({ kind: 'model3d', url, source: VOLCENGINE_ARK_PROVIDER_ID, taskId, registryId: plan.job?.model || null, billing: { actualCredits: usage.actualCredits, settlementSource: usage.settlementSource } }))
-        : [{ kind: 'video', url: videoUrl, source: VOLCENGINE_ARK_PROVIDER_ID, taskId, registryId: plan.job?.model || null, billing: { actualCredits: usage.actualCredits, settlementSource: usage.settlementSource } }];
-      const { plan: succeeded } = await applyAiGatewayAdapterResult(
+      return { done: false };
+    },
+    async onTimeout({ code, message, timeoutMs }) {
+      await failArkPoll(
         plan,
-        {
-          status: 'succeeded',
-          upstreamTaskId: taskId,
-          artifacts,
-          usage,
-          output: {
-            provider: VOLCENGINE_ARK_PROVIDER_ID,
-            taskId,
-            model,
-            ...(model3d ? { modelUrls } : { videoUrl }),
-            raw: data,
-          },
-        },
         store,
-        {
-          metadata: {
-            arkTaskId: taskId,
-            gatewayExecution: {
-              completedAt: new Date(completedAtMs).toISOString(),
-              durationMs: usage.durationMs,
-              outputBytes,
-              artifactCount: artifacts.length,
-            },
-          },
-        }
+        taskId,
+        { code, message: `${message} (${timeoutMs}ms)` },
+        { pollTimeoutMs: timeoutMs }
       );
-      await finalizeAiGatewayTerminalPlan(succeeded, store);
-      return;
-    }
-    if (status === 'failed') {
-      const { plan: failed } = await applyAiGatewayAdapterResult(
-        plan,
-        {
-          status: 'failed',
-          upstreamTaskId: taskId,
-          error: { code: data?.code || 'ARK_ASYNC_TASK_FAILED', message: arkErrorMessage(data, 'Volcengine Ark async task failed') },
-        },
-        store,
-        {
-          metadata: {
-            arkTaskId: taskId,
-            gatewayExecution: { failedAt: new Date().toISOString() },
-          },
-        }
-      );
-      await finalizeAiGatewayTerminalPlan(failed, store);
-      return;
-    }
-    await store.update(plan.job.id, {
-      status: status === 'queued' ? 'queued' : 'running',
-      metadata: { arkTaskId: taskId, upstreamTaskId: taskId, arkStatus: status },
-    });
-  }
+    },
+  });
 }
 
 export async function cancelVolcengineArkAsyncExecution(plan) {

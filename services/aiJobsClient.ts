@@ -178,12 +178,39 @@ export type AiGatewayOpsPauseRule = {
   createdByUserId?: string | null;
 };
 
+export type AiGatewayRuntimeFallbackConfig = {
+  respectProviderPin?: boolean;
+  allowCrossProvider?: boolean;
+  /** switch_provider | same_route_retry | fail */
+  onTimeout?: 'switch_provider' | 'same_route_retry' | 'fail' | string;
+  sameRouteRetryMax?: number;
+};
+
+export type AiGatewayDispatchPolicy = {
+  strategy?: string;
+  healthWeight?: number;
+  costWeight?: number;
+  priorityWeight?: number;
+  preferLowerPriority?: boolean;
+  costHints?: Record<string, number>;
+  providerPins?: Array<Record<string, unknown>>;
+  canary?: Array<Record<string, unknown>>;
+  runtimeFallback?: AiGatewayRuntimeFallbackConfig;
+};
+
+export type AiGatewayRolloutControl = {
+  previousDispatchPolicy?: AiGatewayDispatchPolicy | null;
+  diagnosisMaxAgeMs?: number;
+};
+
 export type AiGatewayOpsControlConfig = {
   disabledProviders: string[];
   disabledModels: string[];
   disabledProviderRules?: AiGatewayOpsPauseRule[];
   disabledModelRules?: AiGatewayOpsPauseRule[];
   modelOverrides: AiGatewayOpsModelOverride[];
+  dispatchPolicy?: AiGatewayDispatchPolicy;
+  rollout?: AiGatewayRolloutControl;
   updatedAt?: string | null;
   updatedByUserId?: string | null;
   source?: string | null;

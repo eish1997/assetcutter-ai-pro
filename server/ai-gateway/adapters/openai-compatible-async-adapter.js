@@ -6,6 +6,11 @@ import { buildProviderTaskUsage, collectByteSize } from '../execution-usage.js';
 import { normalizeGatewayInput } from '../gateway-input.js';
 import { defaultOpenAiCompatibleBaseUrl, normalizeOpenAiCompatibleBaseUrl, openAiCompatibleProviderLabel, openAiCompatibleTimeoutsForProvider } from '../openai-compatible-config.js';
 import { acquireProviderKey, recordProviderKeyError, recordProviderKeySuccess } from '../provider-key-store.js';
+import {
+  modalityDefaultPollTimeoutMs,
+  normalizeAiGatewayAsyncStatus,
+  runAiGatewayAsyncPollLoop,
+} from '../async-poll.js';
 
 const ADAPTER_ID = 'openai-compatible-async';
 const REQUIRED_MAPPING_FIELDS = Object.freeze(['requestPath', 'pollPath', 'statusPath', 'artifactPath']);
@@ -49,15 +54,6 @@ function normalizeEndpointMapping(route) {
     taskIdPath: nonEmptyString(raw.taskIdPath) || 'id',
     errorPath: nonEmptyString(raw.errorPath) || 'error.message',
   };
-}
-
-function normalizeAsyncStatus(value) {
-  const s = String(value || '').trim().toLowerCase();
-  if (['queued', 'pending', 'created', 'submitted', 'waiting'].includes(s)) return 'queued';
-  if (['running', 'processing', 'in_progress', 'generating'].includes(s)) return 'running';
-  if (['succeeded', 'success', 'finished', 'done', 'completed'].includes(s)) return 'succeeded';
-  if (['failed', 'error', 'cancelled', 'canceled', 'expired'].includes(s)) return 'failed';
-  return 'running';
 }
 
 function extractTaskId(data, mapping) {
@@ -169,13 +165,6 @@ function extractArtifactUrls(data, mapping) {
     .filter(Boolean);
 }
 
-function pollDelay(ms) {
-  return new Promise((resolve) => {
-    const timer = setTimeout(resolve, ms);
-    if (typeof timer.unref === 'function') timer.unref();
-  });
-}
-
 async function pollOpenAiCompatibleAsyncTask(plan, taskId, key, mapping, options = {}) {
   const store = options.store;
   if (!store?.update || !plan?.job?.id || !taskId) return;
@@ -184,100 +173,137 @@ async function pollOpenAiCompatibleAsyncTask(plan, taskId, key, mapping, options
   const providerLabel = openAiCompatibleProviderLabel(providerId);
   const baseUrl = normalizeOpenAiCompatibleBaseUrl(key?.credentials?.baseUrl, providerId);
   const timeouts = openAiCompatibleTimeoutsForProvider(providerId);
-  const intervalFloorMs = options.pollIntervalMs != null ? 1 : 3000;
-  const intervalMs = Math.max(
-    intervalFloorMs,
-    Number(options.pollIntervalMs || process.env.AI_GATEWAY_OPENAI_COMPAT_ASYNC_POLL_INTERVAL_MS || timeouts.pollIntervalMs || 5000)
-  );
-  const timeoutMs = Math.max(
-    intervalMs,
-    Number(options.pollTimeoutMs || process.env.AI_GATEWAY_OPENAI_COMPAT_ASYNC_POLL_TIMEOUT_MS || timeouts.pollTimeoutMs || 900_000)
-  );
-  const startedAt = Date.now();
-  const startedAtMs = Date.parse(plan.job?.startedAt || '') || startedAt;
+  const modalityTimeout = modalityDefaultPollTimeoutMs(plan.job?.modality);
+  const startedAtMs = Date.parse(plan.job?.startedAt || '') || Date.now();
 
-  while (Date.now() - startedAt < timeoutMs) {
-    await pollDelay(intervalMs);
-    const response = await fetchImpl(joinBaseUrlAndPath(baseUrl, interpolatePath(mapping.pollPath, taskId)), {
-      method: 'GET',
-      headers: { Authorization: `Bearer ${key.secret}` },
-      signal: AbortSignal.timeout(Number(options.pollRequestTimeoutMs || timeouts.pollRequestMs || 30_000)),
-    });
-    const data = await readJsonSafe(response);
-    if (!response.ok) continue;
-    const status = normalizeAsyncStatus(getPath(data, mapping.statusPath));
-    if (status === 'succeeded') {
-      const completedAtMs = Date.now();
-      const urls = extractArtifactUrls(data, mapping);
-      if (!urls.length) {
+  await runAiGatewayAsyncPollLoop({
+    pollIntervalMs: options.pollIntervalMs ?? process.env.AI_GATEWAY_OPENAI_COMPAT_ASYNC_POLL_INTERVAL_MS ?? timeouts.pollIntervalMs,
+    pollTimeoutMs:
+      options.pollTimeoutMs ??
+      process.env.AI_GATEWAY_OPENAI_COMPAT_ASYNC_POLL_TIMEOUT_MS ??
+      timeouts.pollTimeoutMs ??
+      modalityTimeout,
+    pollRequestTimeoutMs: options.pollRequestTimeoutMs ?? timeouts.pollRequestMs,
+    intervalFloorMs: 3000,
+    timeoutCode: 'AI_GATEWAY_ASYNC_POLL_TIMEOUT',
+    timeoutMessage: `${providerLabel} async poll timed out`,
+    async tick() {
+      const response = await fetchImpl(joinBaseUrlAndPath(baseUrl, interpolatePath(mapping.pollPath, taskId)), {
+        method: 'GET',
+        headers: { Authorization: `Bearer ${key.secret}` },
+        signal: AbortSignal.timeout(Number(options.pollRequestTimeoutMs || timeouts.pollRequestMs || 30_000)),
+      });
+      const data = await readJsonSafe(response);
+      if (!response.ok) return { done: false };
+      const status = normalizeAiGatewayAsyncStatus(getPath(data, mapping.statusPath));
+      if (status === 'succeeded') {
+        const completedAtMs = Date.now();
+        const urls = extractArtifactUrls(data, mapping);
+        if (!urls.length) {
+          const { plan: failed } = await applyAiGatewayAdapterResult(
+            plan,
+            {
+              status: 'failed',
+              upstreamTaskId: taskId,
+              error: {
+                code: 'OPENAI_COMPAT_ASYNC_ARTIFACT_MISSING',
+                message: `${providerLabel} async task completed without artifact URL`,
+              },
+            },
+            store,
+            { metadata: { gatewayExecution: { failedAt: new Date().toISOString() } } }
+          );
+          await finalizeAiGatewayTerminalPlan(failed, store);
+          return { done: true };
+        }
+        const usage = buildProviderTaskUsage(plan, {
+          provider: providerId,
+          upstreamTaskId: taskId,
+          meterKind: plan.job?.modality === 'model3d' ? 'task' : 'second',
+          unit: plan.job?.modality === 'model3d' ? 'task' : 'second',
+          quantity:
+            plan.job?.modality === 'model3d'
+              ? 1
+              : Number(plan.job?.input?.durationSeconds || plan.job?.input?.duration || 1),
+          outputBytes: collectByteSize(data),
+          artifactCount: urls.length,
+          startedAtMs,
+          completedAtMs,
+        });
+        const kind = artifactKind(plan.job?.modality);
+        const artifacts = urls.map((url) => ({
+          kind,
+          url,
+          source: providerId,
+          taskId,
+          registryId: plan.job?.model || null,
+          billing: { actualCredits: usage.actualCredits, settlementSource: usage.settlementSource },
+        }));
+        const { plan: succeeded } = await applyAiGatewayAdapterResult(
+          plan,
+          {
+            status: 'succeeded',
+            upstreamTaskId: taskId,
+            artifacts,
+            usage,
+            output: { provider: providerId, taskId, raw: data },
+          },
+          store,
+          {
+            metadata: {
+              gatewayExecution: {
+                completedAt: new Date(completedAtMs).toISOString(),
+                durationMs: usage.durationMs,
+                outputBytes: usage.outputBytes,
+              },
+            },
+          }
+        );
+        await finalizeAiGatewayTerminalPlan(succeeded, store);
+        return { done: true };
+      }
+      if (status === 'failed' || status === 'cancelled') {
         const { plan: failed } = await applyAiGatewayAdapterResult(
           plan,
           {
-            status: 'failed',
+            status: status === 'cancelled' ? 'cancelled' : 'failed',
             upstreamTaskId: taskId,
-            error: { code: 'OPENAI_COMPAT_ASYNC_ARTIFACT_MISSING', message: `${providerLabel} async task completed without artifact URL` },
+            error: {
+              code: data?.code || 'OPENAI_COMPAT_ASYNC_TASK_FAILED',
+              message: asyncErrorMessage(data, mapping, `${providerLabel} async task ${status}`),
+            },
           },
           store,
           { metadata: { gatewayExecution: { failedAt: new Date().toISOString() } } }
         );
         await finalizeAiGatewayTerminalPlan(failed, store);
-        return;
+        return { done: true };
       }
-      const usage = buildProviderTaskUsage(plan, {
-        provider: providerId,
-        upstreamTaskId: taskId,
-        meterKind: plan.job?.modality === 'model3d' ? 'task' : 'second',
-        unit: plan.job?.modality === 'model3d' ? 'task' : 'second',
-        quantity: plan.job?.modality === 'model3d' ? 1 : Number(plan.job?.input?.durationSeconds || plan.job?.input?.duration || 1),
-        outputBytes: collectByteSize(data),
-        artifactCount: urls.length,
-        startedAtMs,
-        completedAtMs,
+      await store.update(plan.job.id, {
+        status: status === 'queued' ? 'queued' : 'running',
+        metadata: { upstreamTaskId: taskId, asyncStatus: status },
       });
-      const kind = artifactKind(plan.job?.modality);
-      const artifacts = urls.map((url) => ({
-        kind,
-        url,
-        source: providerId,
-        taskId,
-        registryId: plan.job?.model || null,
-        billing: { actualCredits: usage.actualCredits, settlementSource: usage.settlementSource },
-      }));
-      const { plan: succeeded } = await applyAiGatewayAdapterResult(
-        plan,
-        {
-          status: 'succeeded',
-          upstreamTaskId: taskId,
-          artifacts,
-          usage,
-          output: { provider: providerId, taskId, raw: data },
-        },
-        store,
-        {
-          metadata: {
-            gatewayExecution: { completedAt: new Date(completedAtMs).toISOString(), durationMs: usage.durationMs, outputBytes: usage.outputBytes },
-          },
-        }
-      );
-      await finalizeAiGatewayTerminalPlan(succeeded, store);
-      return;
-    }
-    if (status === 'failed') {
+      return { done: false };
+    },
+    async onTimeout({ code, message, timeoutMs }) {
       const { plan: failed } = await applyAiGatewayAdapterResult(
         plan,
         {
           status: 'failed',
           upstreamTaskId: taskId,
-          error: { code: data?.code || 'OPENAI_COMPAT_ASYNC_TASK_FAILED', message: asyncErrorMessage(data, mapping, `${providerLabel} async task failed`) },
+          error: { code, message: `${message} (${timeoutMs}ms)` },
         },
         store,
-        { metadata: { gatewayExecution: { failedAt: new Date().toISOString() } } }
+        {
+          metadata: {
+            gatewayExecution: { failedAt: new Date().toISOString(), pollTimeoutMs: timeoutMs },
+            gatewayFailure: undefined,
+          },
+        }
       );
       await finalizeAiGatewayTerminalPlan(failed, store);
-      return;
-    }
-    await store.update(plan.job.id, { status: status === 'queued' ? 'queued' : 'running', metadata: { upstreamTaskId: taskId, asyncStatus: status } });
-  }
+    },
+  });
 }
 
 export async function startOpenAiCompatibleAsyncExecution(plan, options = {}) {

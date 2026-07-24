@@ -20,6 +20,12 @@ export type UnifiedGenerationRequest = {
   registryId?: string;
   upstreamModelId?: string;
   providerId?: string;
+  /**
+   * A6: only pin BYOK channels onto createAiJob when the caller is an explicit
+   * self-key / local-debug entry. Default platform path leaves provider unset
+   * so AI Gateway route decision selects the executable route.
+   */
+  explicitByok?: boolean;
   input: Record<string, unknown>;
   assetContext?: {
     projectId?: string;
@@ -293,15 +299,21 @@ function inferGatewayProviderId(
   registryId: string,
   canonicalModelId: string,
   modality: UnifiedGenerationModality,
-  explicitProviderId?: string
+  explicitProviderId?: string,
+  explicitByok = false
 ): string | undefined {
   const explicit = String(explicitProviderId || '').trim();
   if (explicit) return explicit;
   const role = gatewayRoleForModality(modality);
   if (!role) return undefined;
   const picked = pickBinding(registryId || canonicalModelId, role);
-  const providerId = picked ? GATEWAY_CHANNEL_PROVIDER[picked.channel] : undefined;
-  return providerId || undefined;
+  if (!picked) return undefined;
+  const providerId = GATEWAY_CHANNEL_PROVIDER[picked.channel];
+  if (!providerId) return undefined;
+  // Platform proxy may still be pinned; BYOK channels must not hijack default Gateway jobs.
+  if (picked.channel === 'vertex-proxy') return providerId;
+  if (explicitByok) return providerId;
+  return undefined;
 }
 
 export async function runUnifiedGeneration(request: UnifiedGenerationRequest): Promise<AiJobDetail> {
@@ -310,7 +322,13 @@ export async function runUnifiedGeneration(request: UnifiedGenerationRequest): P
   const canonicalModelId = resolveCanonicalModelId(rawModel) || rawModel;
   const registryId = String(request.registryId || rawModel).trim() || canonicalModelId;
   const upstreamModelId = String(request.upstreamModelId || '').trim();
-  const providerId = inferGatewayProviderId(registryId, canonicalModelId, request.modality, request.providerId);
+  const providerId = inferGatewayProviderId(
+    registryId,
+    canonicalModelId,
+    request.modality,
+    request.providerId,
+    request.explicitByok === true
+  );
   const estimatedCredits = Math.max(
     1,
     Math.floor(Number(request.estimatedCredits || defaultEstimatedCreditsForGateway(request.modality, request.capability)))

@@ -8,10 +8,8 @@ import {
   applyAiGatewayModelOverride,
   readAiGatewayOpsControlConfigSync,
 } from './ops-control.js';
-import {
-  normalizeAiGatewayProviderId,
-  resolveExecutableAiGatewayModelRoute,
-} from '../../shared/aiGatewayModelRoutes.js';
+import { normalizeAiGatewayProviderId } from '../../shared/aiGatewayModelRoutes.js';
+import { resolveGatewayRouteConfig } from './route-config-source.js';
 
 function nonEmptyString(value) {
   return typeof value === 'string' && value.trim() ? value.trim() : '';
@@ -46,9 +44,9 @@ function readSelectedRoute(job, options = {}) {
 
 /**
  * When callers did not run resolveAiGatewayRouteDecision first (unit tests / modality-only plans),
- * derive a selectedRoute from the same executable model-route table decision uses — never a second ranking.
+ * derive a selectedRoute from the same route-config-source decision uses — never a second ranking.
  */
-function selectedRouteFromExecutableModelTable(job, opsControl = {}) {
+function selectedRouteFromExecutableModelTable(job, opsControl = {}, modelOpsConfig = null) {
   const canonicalModelId = resolveRequestedModelId(job);
   const explicitProvider = normalizeAiGatewayProviderId(job?.provider);
   if (!canonicalModelId && !explicitProvider) {
@@ -60,24 +58,28 @@ function selectedRouteFromExecutableModelTable(job, opsControl = {}) {
       modelRouteInference: null,
     };
   }
-  const modelRoute = resolveExecutableAiGatewayModelRoute({
-    canonicalModelId,
-    modality: job.modality,
-    provider: explicitProvider || undefined,
-    disabledProviders: opsControl.disabledProviders,
-  });
-  if (!modelRoute?.providerId) {
+  const modelRoute = resolveGatewayRouteConfig(
+    {
+      canonicalModelId,
+      modality: job.modality,
+      provider: explicitProvider || undefined,
+      disabledProviders: opsControl.disabledProviders,
+    },
+    modelOpsConfig || {}
+  );
+  if (!modelRoute?.providerId || modelRoute.enabled === false) {
     return {
       selectedRoute: explicitProvider ? { providerId: explicitProvider } : null,
       modelRouteInference: null,
     };
   }
+  const priority = Number(modelRoute.priority);
   return {
     selectedRoute: {
       routeId: `${modelRoute.canonicalModelId}:${modelRoute.providerId}:${String(job.modality || '').trim()}`,
       providerId: modelRoute.providerId,
       upstreamModelId: nonEmptyString(modelRoute.upstreamModelId) || undefined,
-      priority: 100,
+      priority: Number.isFinite(priority) ? Math.floor(priority) : 100,
       fallbackPolicy: 'on_error',
     },
     // Only when provider was inferred (not caller-pinned) — keeps fallbackEnabledForPlan behavior.
@@ -103,10 +105,10 @@ export function createAiGatewayJobPlan(input, options = {}) {
   let modelRouteInference = null;
 
   if (!selectedRoute) {
-    const derived = selectedRouteFromExecutableModelTable(job, opsControl);
+    const derived = selectedRouteFromExecutableModelTable(job, opsControl, options.modelOpsConfig);
     selectedRoute = derived.selectedRoute;
     modelRouteInference = derived.modelRouteInference;
-    planRouteSource = selectedRoute ? 'executable_model_route_table' : null;
+    planRouteSource = selectedRoute ? 'gateway_route_config_source' : null;
   }
 
   if (!selectedRoute?.providerId) {

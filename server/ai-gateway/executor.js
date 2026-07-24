@@ -10,6 +10,7 @@ import {
   fallbackMaxAttemptsForPlan,
   publicAiGatewayErrorMessage,
 } from './route-policy.js';
+import { publicAiGatewayRouteDecision, resolveAiGatewayRouteDecision } from './route-decision.js';
 import { settleAiGatewayJobCredits, settlementMetadataPatch } from './settlement.js';
 import { startAiGatewayWorkerExecution } from './workers/registry.js';
 import { gatewayFailureMetadata, decorateErrorWithFailureReason } from './failure-reason.js';
@@ -79,8 +80,53 @@ async function maybePlanFallback(plan, error, options = {}) {
   });
   const disabledProviders = fallbackDisabledProviders({ ...plan, job: { ...(plan.job || {}), metadata } }, options);
   try {
-    const fallbackPlan = createAiGatewayJobPlan(planInputForRetry(plan, metadata), {
+    const decision = await resolveAiGatewayRouteDecision(
+      {
+        id: plan.job?.id,
+        modality: plan.job?.modality,
+        model: plan.job?.model,
+        capability: plan.job?.capability,
+        correlationId: plan.job?.correlationId,
+        input: plan.job?.input,
+        metadata: metadata,
+      },
+      {
+        ...options,
+        disabledProviders,
+        opsControl: {
+          ...(options.opsControl || {}),
+          disabledProviders,
+        },
+      }
+    );
+    const publicDecision = publicAiGatewayRouteDecision(decision);
+    const nextSelected = decision?.ok ? decision.selectedRoute : null;
+    if (!nextSelected?.providerId || nextSelected.providerId === plan.route?.providerId) {
+      if (store?.update) {
+        await store.update(plan.job.id, {
+          metadata: {
+            aiGatewayFallback: {
+              ...metadata.aiGatewayFallback,
+              exhausted: true,
+              exhaustedAt: at,
+              exhaustedReason: nextSelected?.providerId
+                ? 'same_provider_only'
+                : decision?.code || 'no_ready_fallback_candidate',
+            },
+          },
+        });
+      }
+      return null;
+    }
+    const retryMetadata = {
+      ...metadata,
+      providerPinned: false,
+      routeDecision: publicDecision,
+    };
+    const fallbackPlan = createAiGatewayJobPlan(planInputForRetry(plan, retryMetadata), {
       ...options,
+      selectedRoute: nextSelected,
+      routeDecision: publicDecision,
       opsControl: {
         ...(options.opsControl || {}),
         disabledProviders,
@@ -95,12 +141,14 @@ async function maybePlanFallback(plan, error, options = {}) {
         provider: fallbackPlan.route?.providerId || fallbackPlan.job.provider,
         metadata: {
           ...(fallbackPlan.job.metadata || {}),
+          routeDecision: publicDecision,
           aiGatewayFallback: {
             ...(fallbackPlan.job.metadata?.aiGatewayFallback || {}),
             active: true,
             nextProviderId: fallbackPlan.route?.providerId || null,
             nextAdapterId: fallbackPlan.route?.adapterId || null,
             lastFallbackAt: at,
+            nextSelectionReason: nextSelected.selectionReason || publicDecision?.selectedRoute?.selectionReason || null,
           },
         },
       },
@@ -130,15 +178,66 @@ export async function startAiGatewayJobExecution(plan, options = {}) {
   }
 
   let currentPlan = plan;
+  let sameRouteRetryCount = 0;
+  let crossProviderAttempt = 0;
   const maxAttempts = fallbackMaxAttemptsForPlan(currentPlan, options);
-  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+  // Guard against infinite same-route loops; cross-provider attempts still capped by maxAttempts.
+  const hardCeiling = Math.max(maxAttempts * 2, maxAttempts + 3);
+  for (let turn = 1; turn <= hardCeiling; turn += 1) {
     try {
       return await startAiGatewayWorkerExecution(currentPlan, options);
     } catch (error) {
-      const fallbackPlan = attempt < maxAttempts ? await maybePlanFallback(currentPlan, error, options) : null;
-      if (fallbackPlan) {
-        currentPlan = fallbackPlan;
+      const classification = evaluateAiGatewayFallback(currentPlan, error, {
+        ...options,
+        sameRouteRetryCount,
+      });
+      if (classification.shouldSameRouteRetry) {
+        sameRouteRetryCount += 1;
+        const at = new Date().toISOString();
+        if (options.store?.update && currentPlan.job?.id) {
+          const metadata = appendAiGatewayFallbackAttempt(currentPlan.job?.metadata, {
+            at,
+            providerId: currentPlan.route?.providerId || currentPlan.job?.provider || '',
+            adapterId: currentPlan.route?.adapterId || '',
+            workerId: currentPlan.route?.workerId || '',
+            reason: classification.reason,
+            retryable: classification.retryable,
+            policyKind: classification.policyKind,
+            policies: classification.policies,
+            policyAllowed: true,
+            status: classification.status,
+            message: publicAiGatewayErrorMessage(error),
+          });
+          const nextFallback = {
+            ...(metadata.aiGatewayFallback || {}),
+            sameRouteRetryCount,
+            lastSameRouteRetryAt: at,
+          };
+          await options.store.update(currentPlan.job.id, {
+            metadata: { aiGatewayFallback: nextFallback },
+          });
+          currentPlan = {
+            ...currentPlan,
+            job: {
+              ...(currentPlan.job || {}),
+              metadata: {
+                ...(currentPlan.job?.metadata || {}),
+                aiGatewayFallback: nextFallback,
+              },
+            },
+          };
+        }
         continue;
+      }
+
+      if (crossProviderAttempt + 1 < maxAttempts) {
+        const fallbackPlan = await maybePlanFallback(currentPlan, error, options);
+        if (fallbackPlan) {
+          crossProviderAttempt += 1;
+          sameRouteRetryCount = 0;
+          currentPlan = fallbackPlan;
+          continue;
+        }
       }
       return await failAiGatewayExecution(currentPlan, error, options);
     }

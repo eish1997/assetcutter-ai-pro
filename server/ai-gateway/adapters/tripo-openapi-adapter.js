@@ -8,6 +8,11 @@ import { applyAiGatewayAdapterResult } from '../adapter-result.js';
 import { buildProviderTaskUsage, collectByteSize } from '../execution-usage.js';
 import { normalizeGatewayInput } from '../gateway-input.js';
 import { isR2Configured, putPublicR2Object } from '../../r2-storage-handlers.js';
+import {
+  modalityDefaultPollTimeoutMs,
+  normalizeAiGatewayAsyncStatus,
+  runAiGatewayAsyncPollLoop,
+} from '../async-poll.js';
 
 export const TRIPO_OPENAPI_BASE_URL = 'https://api.tripo3d.ai/v2/openapi';
 
@@ -24,12 +29,7 @@ function nonEmptyString(value) {
 }
 
 function normalizeTaskStatus(value) {
-  const s = String(value || '').trim().toLowerCase();
-  if (s === 'queued' || s === 'pending' || s === 'created' || s === 'submitted') return 'queued';
-  if (s === 'running' || s === 'processing' || s === 'in_progress') return 'running';
-  if (s === 'success' || s === 'succeeded' || s === 'finished' || s === 'done') return 'succeeded';
-  if (s === 'failed' || s === 'error' || s === 'cancelled' || s === 'expired') return 'failed';
-  return 'running';
+  return normalizeAiGatewayAsyncStatus(value);
 }
 
 function extractTaskId(data) {
@@ -373,142 +373,161 @@ async function readJsonSafe(response) {
   }
 }
 
-async function pollDelay(ms) {
-  return new Promise((resolve) => {
-    const timer = setTimeout(resolve, ms);
-    if (typeof timer.unref === 'function') timer.unref();
-  });
-}
-
 async function pollTripoTask(plan, taskId, apiKey, options = {}) {
   const store = options.store;
   if (!store?.update || !plan?.job?.id || !taskId) return;
   const fetchImpl = options.fetchImpl || undiciFetch;
-  const intervalFloorMs = options.pollIntervalMs != null ? 1 : 3000;
-  const intervalMs = Math.max(intervalFloorMs, Number(options.pollIntervalMs || process.env.AI_GATEWAY_TRIPO_POLL_INTERVAL_MS || 5000));
-  const timeoutMs = Math.max(intervalMs, Number(options.pollTimeoutMs || process.env.AI_GATEWAY_TRIPO_POLL_TIMEOUT_MS || 900_000));
-  const startedAt = Date.now();
-  const startedAtMs = Date.parse(plan.job?.startedAt || '') || startedAt;
+  const startedAtMs = Date.parse(plan.job?.startedAt || '') || Date.now();
 
-  while (Date.now() - startedAt < timeoutMs) {
-    await pollDelay(intervalMs);
-    try {
-      const response = await fetchImpl(`${TRIPO_OPENAPI_BASE_URL}/task/${encodeURIComponent(taskId)}`, {
-        method: 'GET',
-        headers: { Authorization: `Bearer ${apiKey}` },
-        signal: AbortSignal.timeout(Number(options.pollRequestTimeoutMs || 30_000)),
-      });
-      const data = await readJsonSafe(response);
-      if (!response.ok) continue;
-      const status = normalizeTaskStatus(data?.status ?? data?.data?.status ?? data?.task?.status);
-      if (status === 'succeeded') {
-        const { modelUrls, previewUrl } = extractTripoTaskArtifacts(data);
-        if (modelUrls.length === 0) {
-          await store.update(plan.job.id, {
-            status: 'running',
-            metadata: {
-              tripoTaskId: taskId,
-              upstreamTaskId: taskId,
-              tripoStatus: 'succeeded_artifacts_pending',
-              gatewayExecution: {
-                lastEmptySuccessAt: new Date().toISOString(),
-              },
-            },
-          });
-          continue;
-        }
-        const completedAtMs = Date.now();
-        const outputBytes = collectByteSize(data);
-        const usage = buildProviderTaskUsage(plan, {
-          provider: 'tripo',
-          upstreamTaskId: taskId,
-          billingSku: '3d.tripo.task',
-          meterKind: 'task',
-          unit: 'task',
-          quantity: 1,
-          outputBytes,
-          artifactCount: modelUrls.length,
-          startedAtMs,
-          completedAtMs,
+  await runAiGatewayAsyncPollLoop({
+    pollIntervalMs: options.pollIntervalMs ?? process.env.AI_GATEWAY_TRIPO_POLL_INTERVAL_MS ?? 5000,
+    pollTimeoutMs:
+      options.pollTimeoutMs ?? process.env.AI_GATEWAY_TRIPO_POLL_TIMEOUT_MS ?? modalityDefaultPollTimeoutMs('model3d'),
+    pollRequestTimeoutMs: options.pollRequestTimeoutMs,
+    intervalFloorMs: 3000,
+    timeoutCode: 'AI_GATEWAY_ASYNC_POLL_TIMEOUT',
+    timeoutMessage: 'Tripo async poll timed out',
+    async tick() {
+      try {
+        const response = await fetchImpl(`${TRIPO_OPENAPI_BASE_URL}/task/${encodeURIComponent(taskId)}`, {
+          method: 'GET',
+          headers: { Authorization: `Bearer ${apiKey}` },
+          signal: AbortSignal.timeout(Number(options.pollRequestTimeoutMs || 30_000)),
         });
-        const { plan: succeeded } = await applyAiGatewayAdapterResult(
-          plan,
-          {
-            status: 'succeeded',
-            upstreamTaskId: taskId,
-            artifacts: [
-              ...modelUrls.map((url) => ({
-                kind: 'model3d',
-                url,
-                source: 'tripo',
-                taskId,
-                billing: {
-                  actualCredits: usage.actualCredits,
-                  settlementSource: usage.settlementSource,
+        const data = await readJsonSafe(response);
+        if (!response.ok) return { done: false };
+        const status = normalizeTaskStatus(data?.status ?? data?.data?.status ?? data?.task?.status);
+        if (status === 'succeeded') {
+          const { modelUrls, previewUrl } = extractTripoTaskArtifacts(data);
+          if (modelUrls.length === 0) {
+            await store.update(plan.job.id, {
+              status: 'running',
+              metadata: {
+                tripoTaskId: taskId,
+                upstreamTaskId: taskId,
+                tripoStatus: 'succeeded_artifacts_pending',
+                gatewayExecution: {
+                  lastEmptySuccessAt: new Date().toISOString(),
                 },
-              })),
-              ...(previewUrl
-                ? [{
-                    kind: 'image',
-                    url: previewUrl,
-                    source: 'tripo',
-                    taskId,
-                    role: 'preview',
-                  }]
-                : []),
-            ],
-            usage,
-            output: {
-              provider: 'tripo',
-              taskId,
-              modelUrls,
-              previewUrl: previewUrl || undefined,
-              raw: data,
-            },
-          },
-          store,
-          {
-            metadata: {
-              tripoTaskId: taskId,
-              gatewayExecution: {
-                completedAt: new Date(completedAtMs).toISOString(),
-                durationMs: usage.durationMs,
-                outputBytes,
-                artifactCount: modelUrls.length,
+              },
+            });
+            return { done: false };
+          }
+          const completedAtMs = Date.now();
+          const outputBytes = collectByteSize(data);
+          const usage = buildProviderTaskUsage(plan, {
+            provider: 'tripo',
+            upstreamTaskId: taskId,
+            billingSku: '3d.tripo.task',
+            meterKind: 'task',
+            unit: 'task',
+            quantity: 1,
+            outputBytes,
+            artifactCount: modelUrls.length,
+            startedAtMs,
+            completedAtMs,
+          });
+          const { plan: succeeded } = await applyAiGatewayAdapterResult(
+            plan,
+            {
+              status: 'succeeded',
+              upstreamTaskId: taskId,
+              artifacts: [
+                ...modelUrls.map((url) => ({
+                  kind: 'model3d',
+                  url,
+                  source: 'tripo',
+                  taskId,
+                  billing: {
+                    actualCredits: usage.actualCredits,
+                    settlementSource: usage.settlementSource,
+                  },
+                })),
+                ...(previewUrl
+                  ? [
+                      {
+                        kind: 'image',
+                        url: previewUrl,
+                        source: 'tripo',
+                        taskId,
+                        role: 'preview',
+                      },
+                    ]
+                  : []),
+              ],
+              usage,
+              output: {
+                provider: 'tripo',
+                taskId,
+                modelUrls,
+                previewUrl: previewUrl || undefined,
+                raw: data,
               },
             },
-          }
-        );
-        await finalizeAiGatewayTerminalPlan(succeeded, store);
-        return;
-      }
-      if (status === 'failed') {
-        const { plan: failed } = await applyAiGatewayAdapterResult(
-          plan,
-          {
-            status: 'failed',
-            upstreamTaskId: taskId,
-            error: { code: 'TRIPO_TASK_FAILED', message: tripoErrorMessage(data, 'Tripo task failed') },
-          },
-          store,
-          {
-            metadata: {
-              tripoTaskId: taskId,
-              gatewayExecution: { failedAt: new Date().toISOString() },
+            store,
+            {
+              metadata: {
+                tripoTaskId: taskId,
+                gatewayExecution: {
+                  completedAt: new Date(completedAtMs).toISOString(),
+                  durationMs: usage.durationMs,
+                  outputBytes,
+                  artifactCount: modelUrls.length,
+                },
+              },
+            }
+          );
+          await finalizeAiGatewayTerminalPlan(succeeded, store);
+          return { done: true };
+        }
+        if (status === 'failed' || status === 'cancelled') {
+          const { plan: failed } = await applyAiGatewayAdapterResult(
+            plan,
+            {
+              status: status === 'cancelled' ? 'cancelled' : 'failed',
+              upstreamTaskId: taskId,
+              error: { code: 'TRIPO_TASK_FAILED', message: tripoErrorMessage(data, `Tripo task ${status}`) },
             },
-          }
-        );
-        await finalizeAiGatewayTerminalPlan(failed, store);
-        return;
+            store,
+            {
+              metadata: {
+                tripoTaskId: taskId,
+                gatewayExecution: { failedAt: new Date().toISOString() },
+              },
+            }
+          );
+          await finalizeAiGatewayTerminalPlan(failed, store);
+          return { done: true };
+        }
+        await store.update(plan.job.id, {
+          status: status === 'queued' ? 'queued' : 'running',
+          metadata: { tripoTaskId: taskId, upstreamTaskId: taskId, tripoStatus: status },
+        });
+        return { done: false };
+      } catch {
+        // Polling is best-effort; leave the last known state for admin retry/inspection.
+        return { done: false };
       }
-      await store.update(plan.job.id, {
-        status: status === 'queued' ? 'queued' : 'running',
-        metadata: { tripoTaskId: taskId, upstreamTaskId: taskId, tripoStatus: status },
-      });
-    } catch {
-      // Polling is best-effort; leave the last known state for admin retry/inspection.
-    }
-  }
+    },
+    async onTimeout({ code, message, timeoutMs }) {
+      const { plan: failed } = await applyAiGatewayAdapterResult(
+        plan,
+        {
+          status: 'failed',
+          upstreamTaskId: taskId,
+          error: { code, message: `${message} (${timeoutMs}ms)` },
+        },
+        store,
+        {
+          metadata: {
+            tripoTaskId: taskId,
+            gatewayExecution: { failedAt: new Date().toISOString(), pollTimeoutMs: timeoutMs },
+          },
+        }
+      );
+      await finalizeAiGatewayTerminalPlan(failed, store);
+    },
+  });
 }
 
 export async function cancelTripoExecution(plan) {

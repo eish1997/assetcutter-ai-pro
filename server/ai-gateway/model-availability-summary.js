@@ -1,10 +1,10 @@
 import {
-  listExecutableAiGatewayModelRoutes,
   resolveExecutableAiGatewayModelRoute,
   resolvePendingAiGatewayModelRoute,
 } from '../../shared/aiGatewayModelRoutes.js';
 import { listProviderKeys } from './provider-key-store.js';
 import { openAiCompatibleChannelForProvider, isOpenAiCompatibleAsyncProvider } from './openai-compatible-config.js';
+import { listGatewayRouteConfigs } from './route-config-source.js';
 
 function nonEmptyString(value) {
   return typeof value === 'string' && value.trim() ? value.trim() : '';
@@ -295,15 +295,17 @@ function routeSummary(input, keys, modelOpsConfig) {
     };
   }
 
-  const executableRoutes = listExecutableAiGatewayModelRoutes(input).filter((route) =>
-    !routeInputDisabledByAdminOverride(
-      {
-        canonicalModelId: input.canonicalModelId,
-        modality: input.modality,
-        provider: route.providerId,
-      },
-      modelOpsConfig
-    )
+  const executableRoutes = listGatewayRouteConfigs(input, modelOpsConfig).filter(
+    (route) =>
+      route.enabled !== false &&
+      !routeInputDisabledByAdminOverride(
+        {
+          canonicalModelId: input.canonicalModelId,
+          modality: input.modality,
+          provider: route.providerId,
+        },
+        modelOpsConfig
+      )
   );
   const executable =
     executableRoutes.find((route) => {

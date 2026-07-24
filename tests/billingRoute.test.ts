@@ -6,33 +6,53 @@ import {
 } from '../shared/billingRoute';
 
 describe('billingRoute', () => {
-  it('gpt-image openai-official binding is BYOK', () => {
+  it('gpt-image openai-official binding stays platform unless explicit BYOK', () => {
     const decision = resolveBillingRoute({
       jobKind: 'workflow_text_to_image',
       registryId: 'gpt-image-1.5',
       role: 'image',
       channel: 'openai-official',
     });
-    expect(decision.routeKind).toBe('byok');
-    expect(decision.channel).toBe('openai-official');
+    expect(decision.routeKind).toBe('platform');
+    expect(decision.channel).toBe('vertex-proxy');
     expect(
       isPlatformMeteredGeminiRoute({
         registryId: 'gpt-image-1.5',
         role: 'image',
         bindingChannel: 'openai-official',
       })
-    ).toBe(false);
+    ).toBe(true);
+
+    const byok = resolveBillingRoute({
+      jobKind: 'workflow_text_to_image',
+      registryId: 'gpt-image-1.5',
+      role: 'image',
+      channel: 'openai-official',
+      explicitByok: true,
+    });
+    expect(byok.routeKind).toBe('byok');
+    expect(byok.channel).toBe('openai-official');
   });
 
-  it('volcengine ark explicit model route is BYOK', () => {
+  it('volcengine ark channel stays platform unless explicit BYOK', () => {
     const decision = resolveBillingRoute({
       jobKind: 'workflow_chat',
       registryId: 'doubao-seed-2-0-pro',
       role: 'text',
       channel: 'volcengine-ark',
     });
-    expect(decision.routeKind).toBe('byok');
-    expect(decision.channel).toBe('volcengine-ark');
+    expect(decision.routeKind).toBe('platform');
+    expect(decision.channel).toBe('vertex-proxy');
+
+    const byok = resolveBillingRoute({
+      jobKind: 'workflow_chat',
+      registryId: 'doubao-seed-2-0-pro',
+      role: 'text',
+      channel: 'volcengine-ark',
+      explicitByok: true,
+    });
+    expect(byok.routeKind).toBe('byok');
+    expect(byok.channel).toBe('volcengine-ark');
   });
 
   it('vertex-proxy binding is platform', () => {
@@ -53,36 +73,52 @@ describe('billingRoute', () => {
     ).toBe(true);
   });
 
-  it('tripo 3d with API key is BYOK', () => {
+  it('tripo 3d with local API key stays platform unless explicit BYOK', () => {
     const decision = resolveBillingRoute({
       jobKind: 'workflow_generate_3d',
       generate3dProvider: 'tripo',
       hasTripoApiKey: true,
     });
-    expect(decision.routeKind).toBe('byok');
+    expect(decision.routeKind).toBe('platform');
     expect(
       isPlatformMeteredJobKindRoute({
         jobKind: 'workflow_generate_3d',
         generate3dProvider: 'tripo',
         hasTripoApiKey: true,
       })
-    ).toBe(false);
+    ).toBe(true);
+
+    const byok = resolveBillingRoute({
+      jobKind: 'workflow_generate_3d',
+      generate3dProvider: 'tripo',
+      hasTripoApiKey: true,
+      explicitByok: true,
+    });
+    expect(byok.routeKind).toBe('byok');
   });
 
-  it('tencent 3d with session creds is BYOK', () => {
+  it('tencent 3d with session creds stays platform unless explicit BYOK', () => {
     const decision = resolveBillingRoute({
       jobKind: 'workflow_generate_3d',
       generate3dProvider: 'tencent',
       hasTencentCreds: true,
     });
-    expect(decision.routeKind).toBe('byok');
+    expect(decision.routeKind).toBe('platform');
     expect(
       isPlatformMeteredJobKindRoute({
         jobKind: 'workflow_generate_3d',
         generate3dProvider: 'tencent',
         hasTencentCreds: true,
       })
-    ).toBe(false);
+    ).toBe(true);
+
+    const byok = resolveBillingRoute({
+      jobKind: 'workflow_generate_3d',
+      generate3dProvider: 'tencent',
+      hasTencentCreds: true,
+      explicitByok: true,
+    });
+    expect(byok.routeKind).toBe('byok');
   });
 
   it('jimeng workflow kinds are platform', () => {

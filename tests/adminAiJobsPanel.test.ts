@@ -17,6 +17,7 @@ import {
   formatAiGatewayStorageLabel,
   listToText,
   overridesToText,
+  runtimeFallbackFromOpsControl,
   textToList,
   textToOverrides,
 } from '../components/admin/AdminAiJobsPanel';
@@ -139,6 +140,26 @@ describe('AdminAiJobsPanel helpers', () => {
     expect(textToOverrides('pro => flash # quota\nbad line')).toEqual([
       { from: 'pro', to: 'flash', enabled: true, reason: 'quota' },
     ]);
+    expect(
+      runtimeFallbackFromOpsControl({
+        disabledProviders: [],
+        disabledModels: [],
+        modelOverrides: [],
+        dispatchPolicy: {
+          runtimeFallback: {
+            respectProviderPin: false,
+            allowCrossProvider: true,
+            onTimeout: 'same_route_retry',
+            sameRouteRetryMax: 2,
+          },
+        },
+      })
+    ).toEqual({
+      respectProviderPin: false,
+      allowCrossProvider: true,
+      onTimeout: 'same_route_retry',
+      sameRouteRetryMax: 2,
+    });
   });
 
   it('cleans admin AI job filters before requesting', () => {

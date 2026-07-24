@@ -2,14 +2,21 @@ import { AiGatewayValidationError } from './job.js';
 import { listProviderKeys } from './provider-key-store.js';
 import { resolveRequestedCanonicalModelId } from './model-publication-guard.js';
 import {
-  listExecutableAiGatewayModelRoutes,
   normalizeAiGatewayProviderId,
   resolveExecutableAiGatewayModelRoute,
   resolvePendingAiGatewayModelRoute,
 } from '../../shared/aiGatewayModelRoutes.js';
-import { openAiCompatibleChannelForProvider, isOpenAiCompatibleAsyncProvider } from './openai-compatible-config.js';
+import {
+  applyOpenAiCompatibleProvidersFromOps,
+  openAiCompatibleChannelForProvider,
+  isOpenAiCompatibleAsyncProvider,
+} from './openai-compatible-config.js';
 import { enrichSelectedRouteWithRuntimeDefaults } from './provider-router.js';
 import { resolveDispatchPolicyFromOptions, selectRouteWithDispatchPolicy } from './route-dispatch.js';
+import {
+  isGatewayRouteConfigDisabled,
+  listGatewayRouteConfigs,
+} from './route-config-source.js';
 
 const REQUIRED_ENDPOINT_MAPPING_FIELDS = Object.freeze(['requestPath', 'pollPath', 'statusPath', 'artifactPath']);
 
@@ -284,12 +291,15 @@ function upstreamOverridesByBindingId(modelOpsConfig) {
 
 function routeDisabledByAdminOverride(route, modelOpsConfig, fallbackModality) {
   if (!route) return false;
+  if (isGatewayRouteConfigDisabled(route)) return true;
   const disabled = disabledBindingIds(modelOpsConfig);
   if (!disabled.size) return false;
   return channelCandidatesForRoute(route, fallbackModality).some((bindingId) => disabled.has(bindingId));
 }
 
 function routePriority(route, priorityByBindingId, fallbackModality) {
+  const configPriority = Number(route?.priority);
+  if (Number.isFinite(configPriority)) return Math.floor(configPriority);
   for (const bindingId of channelCandidatesForRoute(route, fallbackModality)) {
     if (priorityByBindingId.has(bindingId)) return priorityByBindingId.get(bindingId);
   }
@@ -299,7 +309,8 @@ function routePriority(route, priorityByBindingId, fallbackModality) {
 function sortRoutesByAdminPriority(routes, modelOpsConfig, fallbackModality) {
   if (!Array.isArray(routes) || routes.length < 2) return routes;
   const priorityByBindingId = priorityOverridesByBindingId(modelOpsConfig);
-  if (!priorityByBindingId.size) return routes;
+  const hasConfigPriority = routes.some((route) => Number.isFinite(Number(route?.priority)));
+  if (!priorityByBindingId.size && !hasConfigPriority) return routes;
   return [...routes].sort((a, b) => {
     const ap = routePriority(a, priorityByBindingId, fallbackModality);
     const bp = routePriority(b, priorityByBindingId, fallbackModality);
@@ -313,8 +324,16 @@ function routeWithAdminOverrides(route, modelOpsConfig, fallbackModality) {
   const policyByBindingId = fallbackPolicyOverridesByBindingId(modelOpsConfig);
   const maxAttemptsByBindingId = fallbackMaxAttemptsByBindingId(modelOpsConfig);
   const upstreamByBindingId = upstreamOverridesByBindingId(modelOpsConfig);
-  if (!policyByBindingId.size && !maxAttemptsByBindingId.size && !upstreamByBindingId.size) return route;
-  let out = route;
+  const configUpstream = nonEmptyString(route?.upstreamModelId);
+  if (
+    !policyByBindingId.size &&
+    !maxAttemptsByBindingId.size &&
+    !upstreamByBindingId.size &&
+    !configUpstream
+  ) {
+    return route;
+  }
+  let out = configUpstream ? { ...route, upstreamModelId: configUpstream } : route;
   for (const bindingId of channelCandidatesForRoute(route, fallbackModality)) {
     const fallbackPolicy = policyByBindingId.get(bindingId);
     const fallbackMaxAttempts = maxAttemptsByBindingId.get(bindingId);
@@ -464,6 +483,13 @@ function readyDecision({ canonicalModelId, modality, route, modelOpsConfig, cand
 }
 
 export async function resolveAiGatewayRouteDecision(input, options = {}) {
+  // A2: only sync when ops explicitly carries openAiCompatibleProviders (avoid wiping test registers).
+  if (
+    options.applyOpenAiCompatibleFromOps !== false &&
+    Array.isArray(options.modelOpsConfig?.openAiCompatibleProviders)
+  ) {
+    applyOpenAiCompatibleProvidersFromOps(options.modelOpsConfig);
+  }
   const modality = String(input?.modality || '').trim() || null;
   const canonicalModelId = resolveRequestedCanonicalModelId(input);
   if (!canonicalModelId) {
@@ -561,11 +587,15 @@ export async function resolveAiGatewayRouteDecision(input, options = {}) {
   const disabledProviderSet = new Set(
     (Array.isArray(options.disabledProviders) ? options.disabledProviders : []).map(normalizeAiGatewayProviderId)
   );
-  const routes = listExecutableAiGatewayModelRoutes(routeInput);
-  const routesIgnoringPausedProviders = listExecutableAiGatewayModelRoutes({
-    ...routeInput,
-    disabledProviders: [],
-  });
+  // A1: candidates come from route-config-source (persisted gatewayRouteConfigs or seed table).
+  const routes = listGatewayRouteConfigs(routeInput, options.modelOpsConfig);
+  const routesIgnoringPausedProviders = listGatewayRouteConfigs(
+    {
+      ...routeInput,
+      disabledProviders: [],
+    },
+    options.modelOpsConfig
+  );
   const activeRoutes = routes.filter(
     (candidate) => !routeDisabledByAdminOverride(candidate, options.modelOpsConfig, modality)
   );

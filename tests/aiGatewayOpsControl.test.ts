@@ -51,6 +51,19 @@ describe('AI Gateway ops control config', () => {
         { from: 'gemini-pro', to: 'gemini-flash', enabled: true, reason: 'quota', expiresAt: null },
         { from: 'disabled-old', to: 'disabled-new', enabled: false, reason: null, expiresAt: null },
       ],
+      dispatchPolicy: expect.objectContaining({
+        strategy: 'priority_health_cost',
+        runtimeFallback: expect.objectContaining({
+          respectProviderPin: true,
+          allowCrossProvider: true,
+          onTimeout: 'switch_provider',
+          sameRouteRetryMax: 1,
+        }),
+      }),
+      rollout: expect.objectContaining({
+        previousDispatchPolicy: null,
+        diagnosisMaxAgeMs: expect.any(Number),
+      }),
     });
   });
 

@@ -172,6 +172,48 @@ export function registerOpenAiCompatibleProvider(raw) {
   return config;
 }
 
+/**
+ * A2: apply ops-persisted OpenAI-compatible aggregator configs (no new adapter file).
+ * Resets runtime overlays then registers each row; optional providerOverrides patch baseUrl/timeout.
+ */
+export function applyOpenAiCompatibleProvidersFromOps(modelOpsConfig = {}) {
+  resetOpenAiCompatibleProviderOverrides();
+  const rows = Array.isArray(modelOpsConfig?.openAiCompatibleProviders)
+    ? modelOpsConfig.openAiCompatibleProviders
+    : [];
+  const registered = [];
+  for (const row of rows) {
+    try {
+      registered.push(registerOpenAiCompatibleProvider(row));
+    } catch {
+      // skip invalid rows; normalize layer should already filter most
+    }
+  }
+  const overrides = Array.isArray(modelOpsConfig?.providerOverrides) ? modelOpsConfig.providerOverrides : [];
+  for (const override of overrides) {
+    const providerId = nonEmptyString(override?.providerId);
+    if (!providerId) continue;
+    const current = openAiCompatibleConfigForProvider(providerId);
+    if (!current) continue;
+    const baseUrl = nonEmptyString(override?.baseUrl);
+    const requestTimeoutMs = Number(override?.requestTimeoutMs);
+    if (!baseUrl && !(Number.isFinite(requestTimeoutMs) && requestTimeoutMs > 0)) continue;
+    registered.push(
+      registerOpenAiCompatibleProvider({
+        ...current,
+        ...(baseUrl ? { defaultBaseUrl: baseUrl } : {}),
+        timeouts: {
+          ...current.timeouts,
+          ...(Number.isFinite(requestTimeoutMs) && requestTimeoutMs > 0
+            ? { requestMs: Math.floor(requestTimeoutMs) }
+            : {}),
+        },
+      })
+    );
+  }
+  return registered;
+}
+
 export function unregisterOpenAiCompatibleProvider(providerId) {
   const removed = runtimeProviderOverrides.delete(nonEmptyString(providerId));
   if (removed) CONFIG_BY_ADAPTER_ID = rebuildAdapterIndex();

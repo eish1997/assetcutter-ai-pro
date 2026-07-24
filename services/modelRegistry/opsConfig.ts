@@ -264,6 +264,34 @@ function normalizeOpsPayload(raw: unknown): ModelOpsConfig {
   const wiringEdges = normalizeWiringEdges(o.wiringEdges);
   const providerOverrides = normalizeProviderOverrides(o.providerOverrides);
   const endpointMappings = normalizeEndpointMappings(o.endpointMappings);
+  let gatewayRouteConfigs: ModelOpsConfig["gatewayRouteConfigs"] = undefined;
+  if (Array.isArray(o.gatewayRouteConfigs)) {
+    const rows = o.gatewayRouteConfigs
+      .filter((x): x is Record<string, unknown> => x != null && typeof x === "object")
+      .map((row) => {
+        const canonicalModelId = String(row.canonicalModelId ?? "").trim();
+        const providerId = String(row.providerId ?? "").trim();
+        if (!canonicalModelId || !providerId) return null;
+        const priority =
+          typeof row.priority === "number" && Number.isFinite(row.priority) ? Math.floor(row.priority) : undefined;
+        const modality = typeof row.modality === "string" && row.modality.trim() ? row.modality.trim() : undefined;
+        const upstreamModelId =
+          (typeof row.upstreamModelId === "string" && row.upstreamModelId.trim()) ||
+          (typeof row.providerModelId === "string" && row.providerModelId.trim()) ||
+          undefined;
+        const enabled = row.enabled === undefined ? undefined : row.enabled === true;
+        return {
+          canonicalModelId,
+          providerId,
+          ...(modality ? { modality } : {}),
+          ...(enabled !== undefined ? { enabled } : {}),
+          ...(priority !== undefined ? { priority } : {}),
+          ...(upstreamModelId ? { upstreamModelId, providerModelId: upstreamModelId } : {}),
+        };
+      })
+      .filter((x): x is NonNullable<typeof x> => x != null);
+    if (rows.length > 0) gatewayRouteConfigs = rows;
+  }
   return {
     version,
     imageRegistryAllowlist,
@@ -273,6 +301,7 @@ function normalizeOpsPayload(raw: unknown): ModelOpsConfig {
     providerOverrides,
     endpointMappings,
     wiringEdges,
+    gatewayRouteConfigs,
   };
 }
 

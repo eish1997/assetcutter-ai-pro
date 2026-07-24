@@ -34,10 +34,27 @@ function makeDetail(overrides: Partial<AiJobDetail['job']> = {}): AiJobDetail {
 }
 
 describe('aiJobArtifacts', () => {
-  it('extracts restorable media from artifacts and output', () => {
+  it('prefers contract artifacts and ignores nested output dig when present', () => {
     const artifacts = extractRestorableAiJobArtifacts(
       makeDetail({
-        artifacts: [{ label: 'result', url: 'https://cdn.example.com/out.png', mimeType: 'image/png' }],
+        artifacts: [{ kind: 'image', label: 'result', url: 'https://cdn.example.com/out.png', mimeType: 'image/png' }],
+        output: {
+          imageUrl: 'https://cdn.example.com/out.png',
+          video: { videoUrl: 'https://cdn.example.com/clip.mp4' },
+          model: { modelUrl: 'https://cdn.example.com/mesh.glb' },
+        },
+      })
+    );
+
+    expect(artifacts.map((artifact) => artifact.kind)).toEqual(['image']);
+    expect(artifacts[0]!.url).toBe('https://cdn.example.com/out.png');
+    expect(artifacts[0]!.label).toMatch(/图片/);
+  });
+
+  it('falls back to nested output dig only when contract artifacts are empty', () => {
+    const artifacts = extractRestorableAiJobArtifacts(
+      makeDetail({
+        artifacts: [],
         output: {
           imageUrl: 'https://cdn.example.com/out.png',
           video: { videoUrl: 'https://cdn.example.com/clip.mp4' },
@@ -47,7 +64,6 @@ describe('aiJobArtifacts', () => {
     );
 
     expect(artifacts.map((artifact) => artifact.kind)).toEqual(['image', 'video', 'model3d']);
-    expect(artifacts[0]!.label).toBe('result');
   });
 
   it('attaches standardized source metadata to restorable artifacts', () => {

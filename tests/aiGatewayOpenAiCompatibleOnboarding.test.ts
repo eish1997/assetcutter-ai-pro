@@ -1,12 +1,14 @@
 import { afterEach, describe, expect, it } from 'vitest';
 
 import {
+  applyOpenAiCompatibleProvidersFromOps,
   buildOpenAiCompatibleRuntimeRoutes,
   isOpenAiCompatibleAsyncProvider,
   openAiCompatibleConfigForProvider,
   registerOpenAiCompatibleProvider,
   resetOpenAiCompatibleProviderOverrides,
 } from '../server/ai-gateway/openai-compatible-config.js';
+import { normalizeModelOpsConfig } from '../server/ai-gateway/model-ops-config-store.js';
 import { testAiGatewayModelRoute } from '../server/ai-gateway/model-route-test.js';
 import { testAiGatewayModelGeneration } from '../server/ai-gateway/model-generation-test.js';
 import { startOpenAiCompatibleAsyncExecution } from '../server/ai-gateway/adapters/openai-compatible-async-adapter.js';
@@ -38,7 +40,60 @@ function registerFakeAggregator() {
   });
 }
 
-describe('OpenAI-compatible config onboarding (Slice 5)', () => {
+describe('OpenAI-compatible config onboarding (Slice 5 / A2)', () => {
+  it('A2: applies openAiCompatibleProviders from model-ops without a new adapter file', async () => {
+    const ops = normalizeModelOpsConfig({
+      version: 6,
+      openAiCompatibleProviders: [
+        {
+          providerId: FAKE_PROVIDER,
+          label: 'Fake Aggregator Ops',
+          defaultBaseUrl: 'https://fake-aggregator.example/v1',
+          asyncCapable: true,
+          timeouts: { requestMs: 12_000, pollIntervalMs: 1 },
+        },
+      ],
+    });
+    applyOpenAiCompatibleProvidersFromOps(ops);
+    expect(openAiCompatibleConfigForProvider(FAKE_PROVIDER)).toMatchObject({
+      label: 'Fake Aggregator Ops',
+      asyncCapable: true,
+      timeouts: { requestMs: 12_000 },
+    });
+    const routeCheck = await testAiGatewayModelRoute(
+      {
+        canonicalModelId: FAKE_MODEL,
+        modality: 'video',
+        providerId: FAKE_PROVIDER,
+        routeId: FAKE_ROUTE_ID,
+      },
+      {
+        listProviderKeys: async () => [{ provider: FAKE_PROVIDER, enabled: true, hasSecret: true }],
+        modelOpsConfig: {
+          ...ops,
+          publishedCanonicalModelAllowlist: [FAKE_MODEL],
+          endpointMappings: [
+            {
+              routeId: FAKE_ROUTE_ID,
+              enabled: true,
+              priority: 10,
+              requestPath: '/v1/video/generations',
+              pollPath: '/v1/video/generations/{id}',
+              statusPath: 'status',
+              artifactPath: 'output.url',
+              taskIdPath: 'id',
+            },
+          ],
+        },
+      }
+    );
+    expect(routeCheck).toMatchObject({
+      ok: true,
+      checkKind: 'route',
+      providerId: FAKE_PROVIDER,
+    });
+  });
+
   it('onboards a fake aggregator via config only (no new adapter file)', () => {
     registerFakeAggregator();
     expect(openAiCompatibleConfigForProvider(FAKE_PROVIDER)).toMatchObject({

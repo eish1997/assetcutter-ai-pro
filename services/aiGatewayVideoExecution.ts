@@ -91,12 +91,8 @@ function extractProviderId(detail: AiJobDetail): string | undefined {
 }
 
 function extractVideoUrl(detail: AiJobDetail): WorkflowVideoJobResult | null {
-  const output = detail.job?.output && typeof detail.job.output === 'object'
-    ? (detail.job.output as Record<string, unknown>)
-    : {};
   const providerId = extractProviderId(detail);
-  const outputUrl = normalizeVideoResultUrl(output);
-  if (outputUrl) return { ...outputUrl, ...(providerId ? { providerId } : {}) };
+  // A3: prefer contract artifacts; output/raw is legacy fallback only.
   const artifacts = Array.isArray(detail.job?.artifacts) ? detail.job.artifacts : [];
   for (const artifact of artifacts) {
     const obj = artifact && typeof artifact === 'object' ? artifact : {};
@@ -104,6 +100,11 @@ function extractVideoUrl(detail: AiJobDetail): WorkflowVideoJobResult | null {
     const artifactUrl = normalizeVideoResultUrl(obj);
     if (artifactUrl) return { ...artifactUrl, ...(providerId ? { providerId } : {}) };
   }
+  const output = detail.job?.output && typeof detail.job.output === 'object'
+    ? (detail.job.output as Record<string, unknown>)
+    : {};
+  const outputUrl = normalizeVideoResultUrl(output);
+  if (outputUrl) return { ...outputUrl, ...(providerId ? { providerId } : {}) };
   return null;
 }
 

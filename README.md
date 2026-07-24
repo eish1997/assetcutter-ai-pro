@@ -17,6 +17,7 @@ AI-assisted asset workflow workbench (workspace, capability presets, experimenta
 - [x] Task-envelope credits: sum-of-steps precharge + clear stale reserve after settle (avoids CREDITS_RESERVE_INVALID)
 - [x] Project Agent (U1→U4): dock chat, @experts (real LLM), auto mode, child-run cards, export/cold-load; optimistic send while expert LLM runs
 - [x] Vertex route: default `us-central1`; Gemini 3.x models hybrid to `global` (avoids regional Publisher 404)
+- [x] AI Gateway ops hardening: single route source, aggregator onboarding, shared async poll, productized fallback, rollout/canary, platform-default path (BYOK only when explicit)
 - [ ] Removed: standalone dialog page, texture pattern extract page, prompt-effect analysis page
 
 ## Sidebar / pages

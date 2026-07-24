@@ -24,6 +24,7 @@ import {
   consumeAiGatewayJobIdForImage,
 } from '../services/aiGatewayImageResultRegistry';
 import {
+  runUnifiedGeneration,
   runUnifiedImageGeneration,
   runUnifiedTextGeneration,
   runUnifiedVisionTextGeneration,
@@ -291,7 +292,7 @@ describe('runUnifiedGeneration', () => {
     );
   });
 
-  it('pins Gemini AI Studio provider when the selected binding is gateway-ready', async () => {
+  it('does not pin BYOK Gemini channels on the default platform path', async () => {
     vi.spyOn(settingsStore, 'getEnabledChannels').mockReturnValue(['gemini-aistudio']);
     vi.spyOn(settingsStore, 'isChannelReady').mockImplementation((channel) => channel === 'gemini-aistudio');
     vi.mocked(createAiJob).mockResolvedValue({
@@ -313,18 +314,14 @@ describe('runUnifiedGeneration', () => {
       })
     ).resolves.toBe('data:image/png;base64,AISTUDIO');
 
-    expect(createAiJob).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: 'gemini-aistudio',
-        metadata: expect.objectContaining({
-          providerId: 'gemini-aistudio',
-        }),
-      }),
-      expect.any(Object)
+    const createArgs = vi.mocked(createAiJob).mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(createArgs).not.toHaveProperty('provider');
+    expect((createArgs.metadata as Record<string, unknown> | undefined)?.providerId).not.toBe(
+      'gemini-aistudio'
     );
   });
 
-  it('pins unsupported Gemini BYOK channels to their real provider instead of falling through to Vertex', async () => {
+  it('pins BYOK Gemini channels only when explicitByok is set', async () => {
     vi.spyOn(settingsStore, 'getEnabledChannels').mockReturnValue(['toapis-gemini']);
     vi.spyOn(settingsStore, 'isChannelReady').mockImplementation((channel) => channel === 'toapis-gemini');
     vi.mocked(createAiJob).mockResolvedValue({
@@ -336,11 +333,19 @@ describe('runUnifiedGeneration', () => {
       },
     } as unknown as Awaited<ReturnType<typeof createAiJob>>);
 
-    await runUnifiedImageGeneration({
-      prompt: 'clean package',
+    await runUnifiedGeneration({
+      modality: 'image',
+      capability: 'text_to_image',
+      canonicalModelId: 'gemini-3.1-flash-image-preview',
       registryId: 'gemini-3.1-flash-image-preview',
-      model: 'gemini-3.1-flash-image',
       upstreamModelId: 'gemini-3.1-flash-image',
+      explicitByok: true,
+      input: {
+        prompt: 'clean package',
+        model: 'gemini-3.1-flash-image',
+        upstreamModelId: 'gemini-3.1-flash-image',
+        registryId: 'gemini-3.1-flash-image-preview',
+      },
       uiSource: 'test',
     });
 

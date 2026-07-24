@@ -42,6 +42,38 @@ describe('model ops config store', () => {
     });
   });
 
+  it('normalizes gatewayRouteConfigs for A1 route config source', () => {
+    expect(
+      normalizeModelOpsConfig({
+        version: 5,
+        gatewayRouteConfigs: [
+          {
+            canonicalModelId: 'fixture-model',
+            providerId: '302ai',
+            modality: 'image',
+            enabled: true,
+            priority: 4,
+            providerModelId: 'upstream-x',
+          },
+          { canonicalModelId: '', providerId: 'skip-me' },
+        ],
+      })
+    ).toMatchObject({
+      version: 5,
+      gatewayRouteConfigs: [
+        {
+          canonicalModelId: 'fixture-model',
+          providerId: '302ai',
+          modality: 'image',
+          enabled: true,
+          priority: 4,
+          upstreamModelId: 'upstream-x',
+          providerModelId: 'upstream-x',
+        },
+      ],
+    });
+  });
+
   it('keeps route fallback policy and endpoint mappings', () => {
     expect(
       normalizeModelOpsConfig({

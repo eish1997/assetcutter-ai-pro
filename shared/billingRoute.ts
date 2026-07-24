@@ -25,6 +25,11 @@ export type ResolveBillingRouteInput = {
   hasTencentCreds?: boolean;
   hasUserApiKey?: boolean;
   platformSiteProxyConfigured?: boolean;
+  /**
+   * A6: BYOK only when the user explicitly chose a self-key / local-debug entry.
+   * Presence of a stored local key alone must not flip platform jobs to BYOK.
+   */
+  explicitByok?: boolean;
 };
 
 const PLATFORM_PROXY_CHANNELS = new Set(['vertex-proxy']);
@@ -79,13 +84,14 @@ function routeForGenerate3d(jobKind: string, input: ResolveBillingRouteInput): B
   if (jobKind !== 'workflow_generate_3d') return null;
 
   const provider = input.generate3dProvider;
-  if (provider === 'tripo' && input.hasTripoApiKey) {
+  const explicitByok = input.explicitByok === true;
+  if (explicitByok && provider === 'tripo' && input.hasTripoApiKey) {
     return { routeKind: 'byok', minCredits: 0 };
   }
-  if (provider === 'tencent' && input.hasTencentCreds) {
+  if (explicitByok && provider === 'tencent' && input.hasTencentCreds) {
     return { routeKind: 'byok', minCredits: 0 };
   }
-  if (!provider && (input.hasTripoApiKey || input.hasTencentCreds)) {
+  if (explicitByok && !provider && (input.hasTripoApiKey || input.hasTencentCreds)) {
     return { routeKind: 'byok', minCredits: 0 };
   }
   return { routeKind: 'platform', minCredits: minForPlatformJob(jobKind) };
@@ -95,17 +101,24 @@ function routeForGenerate3d(jobKind: string, input: ResolveBillingRouteInput): B
 export function resolveBillingRoute(input: ResolveBillingRouteInput): BillingRouteDecision {
   const jobKind = String(input.jobKind || 'workflow_chat').trim() || 'workflow_chat';
   const channel = resolvedChannel(input);
+  const explicitByok = input.explicitByok === true;
 
   if (channel) {
+    // A6: accidental BYOK channel selection must not bypass platform metering on default jobs.
+    if (BYOK_CHANNELS.has(channel) && !explicitByok && PLATFORM_JOB_KINDS.has(jobKind)) {
+      return { routeKind: 'platform', minCredits: minForPlatformJob(jobKind), channel: 'vertex-proxy' };
+    }
     return routeFromChannel(channel, jobKind);
   }
 
   if (String(input.registryId || '').trim()) {
-    if (input.hasUserApiKey) return { routeKind: 'byok', minCredits: 0 };
-    if (input.platformSiteProxyConfigured) {
+    if (explicitByok && input.hasUserApiKey) return { routeKind: 'byok', minCredits: 0 };
+    if (input.platformSiteProxyConfigured || PLATFORM_JOB_KINDS.has(jobKind)) {
       return { routeKind: 'platform', minCredits: minForPlatformJob(jobKind) };
     }
-    return { routeKind: 'byok', minCredits: 0 };
+    // Non-platform / unknown tools without proxy: keep BYOK only when a local key exists.
+    if (input.hasUserApiKey) return { routeKind: 'byok', minCredits: 0 };
+    return { routeKind: 'platform', minCredits: minForPlatformJob(jobKind) };
   }
 
   if (ALWAYS_PLATFORM_JOB_KINDS.has(jobKind)) {
@@ -129,6 +142,7 @@ export function isPlatformMeteredGeminiRoute(input: {
   bindingChannel?: string;
   hasUserApiKey?: boolean;
   platformSiteProxyConfigured?: boolean;
+  explicitByok?: boolean;
 }): boolean {
   return (
     resolveBillingRoute({
@@ -138,6 +152,7 @@ export function isPlatformMeteredGeminiRoute(input: {
       channel: input.channel || input.bindingChannel,
       hasUserApiKey: input.hasUserApiKey,
       platformSiteProxyConfigured: input.platformSiteProxyConfigured,
+      explicitByok: input.explicitByok,
     }).routeKind === 'platform'
   );
 }
@@ -147,6 +162,7 @@ export function isPlatformMeteredJobKindRoute(input: {
   generate3dProvider?: 'tripo' | 'tencent';
   hasTripoApiKey?: boolean;
   hasTencentCreds?: boolean;
+  explicitByok?: boolean;
 }): boolean {
   return (
     resolveBillingRoute({
@@ -154,6 +170,7 @@ export function isPlatformMeteredJobKindRoute(input: {
       generate3dProvider: input.generate3dProvider,
       hasTripoApiKey: input.hasTripoApiKey,
       hasTencentCreds: input.hasTencentCreds,
+      explicitByok: input.explicitByok,
     }).routeKind === 'platform'
   );
 }

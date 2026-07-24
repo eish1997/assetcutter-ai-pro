@@ -34,7 +34,24 @@ export const DEFAULT_DISPATCH_POLICY = Object.freeze({
   providerPins: Object.freeze([]),
   /** Canary: prefer provider for percent of traffic (0-100) when ready. */
   canary: Object.freeze([]),
+  /** A4: runtime failure fallback bounds (executor reads via route-policy). */
+  runtimeFallback: Object.freeze({
+    /** When true, admin_pin / providerPinned jobs never cross providers. */
+    respectProviderPin: true,
+    /** When false, disable automatic cross-provider fallback entirely. */
+    allowCrossProvider: true,
+    /**
+     * Timeout handling:
+     * - switch_provider: cross-provider fallback (default)
+     * - same_route_retry: retry current route first, then optionally switch
+     * - fail: do not retry / fallback on timeout
+     */
+    onTimeout: 'switch_provider',
+    sameRouteRetryMax: 1,
+  }),
 });
+
+const TIMEOUT_ACTIONS = new Set(['switch_provider', 'same_route_retry', 'fail']);
 
 export function normalizeDispatchPolicy(raw) {
   const input = asRecord(raw) || {};
@@ -45,6 +62,9 @@ export function normalizeDispatchPolicy(raw) {
       ? Number(input.priorityWeight)
       : DEFAULT_DISPATCH_POLICY.priorityWeight,
   };
+  const runtimeFallbackInput = asRecord(input.runtimeFallback) || {};
+  const onTimeoutRaw = nonEmptyString(runtimeFallbackInput.onTimeout) || DEFAULT_DISPATCH_POLICY.runtimeFallback.onTimeout;
+  const sameRouteRetryMax = Number(runtimeFallbackInput.sameRouteRetryMax);
   return {
     strategy: nonEmptyString(input.strategy) || DEFAULT_DISPATCH_POLICY.strategy,
     ...weights,
@@ -52,6 +72,14 @@ export function normalizeDispatchPolicy(raw) {
     costHints: { ...DEFAULT_DISPATCH_POLICY.costHints, ...(asRecord(input.costHints) || {}) },
     providerPins: Array.isArray(input.providerPins) ? input.providerPins.map((row) => asRecord(row)).filter(Boolean) : [],
     canary: Array.isArray(input.canary) ? input.canary.map((row) => asRecord(row)).filter(Boolean) : [],
+    runtimeFallback: {
+      respectProviderPin: runtimeFallbackInput.respectProviderPin !== false,
+      allowCrossProvider: runtimeFallbackInput.allowCrossProvider !== false,
+      onTimeout: TIMEOUT_ACTIONS.has(onTimeoutRaw) ? onTimeoutRaw : 'switch_provider',
+      sameRouteRetryMax: Number.isFinite(sameRouteRetryMax)
+        ? Math.max(0, Math.min(3, Math.floor(sameRouteRetryMax)))
+        : DEFAULT_DISPATCH_POLICY.runtimeFallback.sameRouteRetryMax,
+    },
   };
 }
 

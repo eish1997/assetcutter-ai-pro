@@ -186,6 +186,14 @@ const CODE_TABLE = Object.freeze({
     adminMessage: 'Adapter result failed AiGatewayAdapterResult contract validation',
     nextAction: 'Normalize adapter output to status/artifacts/output/usage/failureReason',
   },
+  AI_GATEWAY_ASYNC_POLL_TIMEOUT: {
+    stage: 'upstream',
+    owner: 'upstream',
+    retryable: true,
+    userMessage: '异步任务轮询超时，请稍后重试或换线路',
+    adminMessage: 'AI Gateway async poll loop timed out before a terminal upstream status',
+    nextAction: 'Increase modality poll timeout or inspect upstream task status',
+  },
   AI_WORKER_PROXY_POLL_TIMEOUT: {
     stage: 'upstream',
     owner: 'upstream',

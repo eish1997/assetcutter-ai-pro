@@ -3,6 +3,7 @@ import fsPromises from 'fs/promises';
 import path from 'path';
 import { USE_POSTGRES, ensurePostgres, getPool } from '../auth-store.js';
 import { withAiGatewayPostgresRetry } from './postgres-transient-retry.js';
+import { normalizePublishDiagnosisByModel } from './rollout-control.js';
 
 const DEFAULT_CONFIG = Object.freeze({
   version: 1,
@@ -13,6 +14,12 @@ const DEFAULT_CONFIG = Object.freeze({
   providerOverrides: null,
   endpointMappings: null,
   wiringEdges: null,
+  /** A1: authoritative Gateway executable route rows (seed falls back to shared rules). */
+  gatewayRouteConfigs: null,
+  /** A2: OpenAI-compatible aggregator defs applied via registerOpenAiCompatibleProvider. */
+  openAiCompatibleProviders: null,
+  /** A5: last publish-gate diagnosis snapshots by canonical model id. */
+  publishDiagnosisByModel: null,
 });
 const CONFIG_ROW_ID = 'default';
 
@@ -176,6 +183,99 @@ function normalizeWiringEdges(value) {
   return rows.length ? rows : null;
 }
 
+function normalizeGatewayRouteConfigs(value) {
+  if (value === null) return null;
+  if (!Array.isArray(value)) return undefined;
+  const rows = value
+    .map((item) => {
+      const row = item && typeof item === 'object' ? item : {};
+      const canonicalModelId = nonEmptyString(row.canonicalModelId);
+      const providerId = nonEmptyString(row.providerId);
+      if (!canonicalModelId || !providerId) return null;
+      const priority = Number(row.priority);
+      return {
+        canonicalModelId,
+        providerId,
+        modality: nonEmptyString(row.modality) || undefined,
+        enabled: row.enabled === undefined ? undefined : row.enabled === true,
+        priority: Number.isFinite(priority) ? Math.floor(priority) : undefined,
+        upstreamModelId:
+          nonEmptyString(row.upstreamModelId) || nonEmptyString(row.providerModelId) || undefined,
+        providerModelId: nonEmptyString(row.providerModelId) || undefined,
+        ruleId: nonEmptyString(row.ruleId) || undefined,
+        adapterId: nonEmptyString(row.adapterId) || undefined,
+        workerId: nonEmptyString(row.workerId) || undefined,
+        gatewayExecutionStatus: nonEmptyString(row.gatewayExecutionStatus) || undefined,
+        executionStatus: nonEmptyString(row.executionStatus) || undefined,
+        platformKeyRequired:
+          row.platformKeyRequired === undefined ? undefined : row.platformKeyRequired === true,
+      };
+    })
+    .filter(Boolean);
+  return rows.length ? rows : null;
+}
+
+function normalizeOpenAiCompatibleProviders(value) {
+  if (value === null) return null;
+  if (!Array.isArray(value)) return undefined;
+  const rows = value
+    .map((item) => {
+      const row = item && typeof item === 'object' ? item : {};
+      const providerId = nonEmptyString(row.providerId);
+      if (!providerId) return null;
+      const priority = Number(row.priority);
+      const requestMs = Number(row?.timeouts?.requestMs ?? row.requestTimeoutMs);
+      const pollIntervalMs = Number(row?.timeouts?.pollIntervalMs);
+      const pollTimeoutMs = Number(row?.timeouts?.pollTimeoutMs);
+      const pollRequestMs = Number(row?.timeouts?.pollRequestMs);
+      const modelMapping =
+        row.modelMapping && typeof row.modelMapping === 'object' && !Array.isArray(row.modelMapping)
+          ? Object.fromEntries(
+              Object.entries(row.modelMapping)
+                .map(([k, v]) => [nonEmptyString(k), nonEmptyString(v)])
+                .filter(([k, v]) => k && v)
+            )
+          : undefined;
+      const syncEndpoints =
+        row.syncEndpoints && typeof row.syncEndpoints === 'object' && !Array.isArray(row.syncEndpoints)
+          ? {
+              ...(nonEmptyString(row.syncEndpoints.text) ? { text: nonEmptyString(row.syncEndpoints.text) } : {}),
+              ...(nonEmptyString(row.syncEndpoints.imageGenerate)
+                ? { imageGenerate: nonEmptyString(row.syncEndpoints.imageGenerate) }
+                : {}),
+              ...(nonEmptyString(row.syncEndpoints.imageEdit)
+                ? { imageEdit: nonEmptyString(row.syncEndpoints.imageEdit) }
+                : {}),
+            }
+          : undefined;
+      return {
+        providerId,
+        label: nonEmptyString(row.label) || providerId,
+        defaultBaseUrl: providerBaseUrl(row.defaultBaseUrl || row.baseUrl),
+        appendV1: row.appendV1 === undefined ? undefined : row.appendV1 !== false,
+        channel: nonEmptyString(row.channel) || undefined,
+        priority: Number.isFinite(priority) ? Math.floor(priority) : undefined,
+        asyncCapable: row.asyncCapable === true,
+        ...(syncEndpoints && Object.keys(syncEndpoints).length ? { syncEndpoints } : {}),
+        timeouts: {
+          ...(Number.isFinite(requestMs) && requestMs > 0 ? { requestMs: Math.floor(requestMs) } : {}),
+          ...(Number.isFinite(pollIntervalMs) && pollIntervalMs > 0
+            ? { pollIntervalMs: Math.floor(pollIntervalMs) }
+            : {}),
+          ...(Number.isFinite(pollTimeoutMs) && pollTimeoutMs > 0
+            ? { pollTimeoutMs: Math.floor(pollTimeoutMs) }
+            : {}),
+          ...(Number.isFinite(pollRequestMs) && pollRequestMs > 0
+            ? { pollRequestMs: Math.floor(pollRequestMs) }
+            : {}),
+        },
+        ...(modelMapping && Object.keys(modelMapping).length ? { modelMapping } : {}),
+      };
+    })
+    .filter(Boolean);
+  return rows.length ? rows : null;
+}
+
 export function normalizeModelOpsConfig(input) {
   const raw = input && typeof input === 'object' && !Array.isArray(input) ? input : {};
   const version = Number(raw.version);
@@ -186,6 +286,14 @@ export function normalizeModelOpsConfig(input) {
   const providerOverrides = normalizeProviderOverrides(raw.providerOverrides);
   const endpointMappings = normalizeEndpointMappings(raw.endpointMappings);
   const wiringEdges = normalizeWiringEdges(raw.wiringEdges);
+  const gatewayRouteConfigs = normalizeGatewayRouteConfigs(raw.gatewayRouteConfigs);
+  const openAiCompatibleProviders = normalizeOpenAiCompatibleProviders(raw.openAiCompatibleProviders);
+  const publishDiagnosisByModel =
+    raw.publishDiagnosisByModel === null
+      ? null
+      : raw.publishDiagnosisByModel === undefined
+        ? undefined
+        : normalizePublishDiagnosisByModel(raw.publishDiagnosisByModel);
   return {
     version: Number.isFinite(version) ? Math.max(1, Math.floor(version)) : DEFAULT_CONFIG.version,
     imageRegistryAllowlist:
@@ -199,6 +307,16 @@ export function normalizeModelOpsConfig(input) {
     providerOverrides: providerOverrides === undefined ? DEFAULT_CONFIG.providerOverrides : providerOverrides,
     endpointMappings: endpointMappings === undefined ? DEFAULT_CONFIG.endpointMappings : endpointMappings,
     wiringEdges: wiringEdges === undefined ? DEFAULT_CONFIG.wiringEdges : wiringEdges,
+    gatewayRouteConfigs:
+      gatewayRouteConfigs === undefined ? DEFAULT_CONFIG.gatewayRouteConfigs : gatewayRouteConfigs,
+    openAiCompatibleProviders:
+      openAiCompatibleProviders === undefined
+        ? DEFAULT_CONFIG.openAiCompatibleProviders
+        : openAiCompatibleProviders,
+    publishDiagnosisByModel:
+      publishDiagnosisByModel === undefined
+        ? DEFAULT_CONFIG.publishDiagnosisByModel
+        : publishDiagnosisByModel,
   };
 }
 

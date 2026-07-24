@@ -202,6 +202,41 @@ describe('Tripo OpenAPI AI gateway worker', () => {
     expect(stored.job.metadata.gatewayExecution.artifactCount).toBe(1);
   });
 
+  it('fails with AI_GATEWAY_ASYNC_POLL_TIMEOUT when poll never finishes', async () => {
+    useTempKeyStore();
+    delete process.env.AI_GATEWAY_EXECUTION_ENABLED;
+    await saveProviderKeys([
+      { id: 'tripo_key_timeout', provider: 'tripo', label: 'Tripo timeout', secret: 'tripo-secret', enabled: true, priority: 1 },
+    ]);
+
+    const store = createInMemoryAiJobStore();
+    const plan = await store.put(createAiGatewayJobPlan({
+      id: 'aijob_tripo_timeout',
+      modality: 'model3d',
+      input: { prompt: 'timeout crate' },
+    }));
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({ task_id: 'tripo_task_timeout', status: 'queued' }, true, 200))
+      .mockResolvedValue(jsonResponse({ status: 'running' }, true, 200));
+
+    await startAiGatewayJobExecution(plan, {
+      store,
+      fetchImpl,
+      pollIntervalMs: 1,
+      pollTimeoutMs: 25,
+      awaitBackgroundPoll: true,
+    });
+
+    const stored = await store.get('aijob_tripo_timeout');
+    expect(stored.job.status).toBe('failed');
+    const failureCode =
+      stored.job?.metadata?.gatewayFailure?.code ||
+      stored.job?.error?.code ||
+      stored.job?.failureReason?.code;
+    expect(failureCode).toBe('AI_GATEWAY_ASYNC_POLL_TIMEOUT');
+  });
+
   it('returns an explicit soft-cancel result when Tripo hard cancel is unavailable', async () => {
     const plan = createAiGatewayJobPlan({
       id: 'aijob_tripo_cancel',

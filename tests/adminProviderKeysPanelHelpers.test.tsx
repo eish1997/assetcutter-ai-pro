@@ -82,6 +82,65 @@ describe('AdminProviderKeysPanel route override helpers', () => {
     expect(result).toContainEqual({ bindingId: 'custom:manual:text', fallbackMaxAttempts: 4 });
   });
 
+  it('A2: mergeOpenAiCompatibleProviders keeps providerId/baseUrl/timeouts', () => {
+    const rows = __adminProviderKeysPanelTestUtils.mergeOpenAiCompatibleProviders(
+      [{ providerId: '302ai', label: '302', defaultBaseUrl: 'https://old.example/v1' }],
+      [
+        {
+          providerId: '302ai',
+          label: '302.AI',
+          defaultBaseUrl: 'https://api.302.ai/v1',
+          asyncCapable: true,
+          timeouts: { requestMs: 45_000 },
+        },
+        { providerId: 'fake-agg', label: 'Fake', defaultBaseUrl: 'https://fake.example/v1', asyncCapable: true },
+      ]
+    );
+    expect(rows).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          providerId: '302ai',
+          label: '302.AI',
+          defaultBaseUrl: 'https://api.302.ai/v1',
+          timeouts: { requestMs: 45_000 },
+        }),
+        expect.objectContaining({ providerId: 'fake-agg', defaultBaseUrl: 'https://fake.example/v1' }),
+      ])
+    );
+  });
+
+  it('A1: mergeGatewayRouteConfigs writes priority/enabled into gatewayRouteConfigs', () => {
+    const route = listModelRoutes().find((item) => item.channel && (item.modality === 'text' || item.modality === 'image'));
+    if (!route?.channel) throw new Error('No route for gatewayRouteConfigs merge test');
+    const bindingId = `${route.canonicalModelId}:${route.channel}:${route.modality}`;
+    const bindingOverrides = __adminProviderKeysPanelTestUtils.mergeRouteBindingOverrides(
+      [{ bindingId, enabled: true, upstreamOverride: 'ops-upstream-model' }],
+      { [bindingId]: 7 },
+      {}
+    );
+    const rows = __adminProviderKeysPanelTestUtils.mergeGatewayRouteConfigs(null, bindingOverrides, {
+      [bindingId]: 7,
+    });
+    expect(rows).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          canonicalModelId: route.canonicalModelId,
+          providerId: route.providerId,
+          modality: route.modality,
+          priority: 7,
+          enabled: true,
+          upstreamModelId: 'ops-upstream-model',
+        }),
+      ])
+    );
+    expect(
+      __adminProviderKeysPanelTestUtils.routePriorityDraftFromConfig({
+        version: 1,
+        gatewayRouteConfigs: rows,
+      })
+    ).toMatchObject({ [bindingId]: 7 });
+  });
+
   it('formats route fallback summary text for availability rows', () => {
     expect(
       __adminProviderKeysPanelTestUtils.routeFallbackSummaryText({

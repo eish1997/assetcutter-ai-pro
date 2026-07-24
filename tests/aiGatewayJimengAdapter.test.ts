@@ -84,6 +84,43 @@ describe('Jimeng visual AI gateway video worker', () => {
     ]);
   });
 
+  it('fails with AI_GATEWAY_ASYNC_POLL_TIMEOUT when video poll never finishes', async () => {
+    const store = createInMemoryAiJobStore();
+    const plan = await store.put(createAiGatewayJobPlan({
+      id: 'aijob_jimeng_video_timeout',
+      modality: 'video',
+      input: {
+        registryId: 'jimeng-video-ti2v-v30-pro',
+        prompt: 'timeout clip',
+      },
+    }));
+    const submitJimengTaskImpl = vi.fn().mockResolvedValue({ ok: true, taskId: 'jimeng_task_timeout' });
+    const pollJimengTaskImpl = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      body: { status: 'running', progress: 10 },
+    });
+
+    await startAiGatewayJobExecution(plan, {
+      store,
+      providerKey: { id: 'test_no_credentials', credentials: {} },
+      isJimengServiceAvailableImpl: () => true,
+      submitJimengTaskImpl,
+      pollJimengTaskImpl,
+      pollIntervalMs: 1,
+      pollTimeoutMs: 25,
+      awaitBackgroundPoll: true,
+    });
+
+    const stored = await store.get('aijob_jimeng_video_timeout');
+    expect(stored.job.status).toBe('failed');
+    const failureCode =
+      stored.job?.metadata?.gatewayFailure?.code ||
+      stored.job?.error?.code ||
+      stored.job?.failureReason?.code;
+    expect(failureCode).toBe('AI_GATEWAY_ASYNC_POLL_TIMEOUT');
+  });
+
   it('returns an explicit soft-cancel result when Jimeng hard cancel is unavailable', async () => {
     const plan = createAiGatewayJobPlan({
       id: 'aijob_jimeng_cancel',

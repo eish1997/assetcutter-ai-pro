@@ -30,12 +30,32 @@ import {
   aiJobStatusTone,
   aiJobTraceLabel,
 } from '../../services/aiJobDisplay';
+import CustomDropdown from '../ui/CustomDropdown';
 export {
   aiJobCreditsLabel,
   aiJobRouteLabel,
   aiJobStatusLabel,
   aiJobStatusTone,
 } from '../../services/aiJobDisplay';
+
+const TIMEOUT_FALLBACK_OPTIONS = [
+  { value: 'switch_provider', label: '超时切下一候选' },
+  { value: 'same_route_retry', label: '超时先同路重试' },
+  { value: 'fail', label: '超时直接失败' },
+] as const;
+
+export function runtimeFallbackFromOpsControl(config: AiGatewayOpsControlConfig | null) {
+  const runtime = config?.dispatchPolicy?.runtimeFallback || {};
+  return {
+    respectProviderPin: runtime.respectProviderPin !== false,
+    allowCrossProvider: runtime.allowCrossProvider !== false,
+    onTimeout:
+      runtime.onTimeout === 'same_route_retry' || runtime.onTimeout === 'fail'
+        ? runtime.onTimeout
+        : ('switch_provider' as const),
+    sameRouteRetryMax: Math.max(0, Math.min(3, Number(runtime.sameRouteRetryMax ?? 1) || 0)),
+  };
+}
 
 const PAGE_SIZE = 50;
 const TTL_OPTIONS = [15, 30, 60, 240];
@@ -476,6 +496,13 @@ const AdminAiJobsPanel: React.FC = () => {
   const [disabledProvidersText, setDisabledProvidersText] = React.useState('');
   const [disabledModelsText, setDisabledModelsText] = React.useState('');
   const [modelOverridesText, setModelOverridesText] = React.useState('');
+  const [runtimeFallbackDraft, setRuntimeFallbackDraft] = React.useState(() => runtimeFallbackFromOpsControl(null));
+  const [canaryDraft, setCanaryDraft] = React.useState({
+    canonicalModelId: '',
+    providerId: '',
+    percent: 10,
+    enabled: true,
+  });
   const [suggestionTtlMinutes, setSuggestionTtlMinutes] = React.useState(60);
   const [filters, setFilters] = React.useState<AdminAiJobFilters>(EMPTY_FILTERS);
   const [appliedFilters, setAppliedFilters] = React.useState<AdminAiJobFilters>(EMPTY_FILTERS);
@@ -511,6 +538,7 @@ const AdminAiJobsPanel: React.FC = () => {
         setDisabledProvidersText(listToText(control.config.disabledProviders));
         setDisabledModelsText(listToText(control.config.disabledModels));
         setModelOverridesText(overridesToText(control.config));
+        setRuntimeFallbackDraft(runtimeFallbackFromOpsControl(control.config));
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : '加载 AI 任务失败');
@@ -543,14 +571,30 @@ const AdminAiJobsPanel: React.FC = () => {
     setError('');
     setMessage('');
     try {
+      const nextDispatchPolicy = {
+        ...(opsControl?.dispatchPolicy || {}),
+        runtimeFallback: {
+          ...(opsControl?.dispatchPolicy?.runtimeFallback || {}),
+          ...runtimeFallbackDraft,
+        },
+        canary: Array.isArray(opsControl?.dispatchPolicy?.canary)
+          ? opsControl?.dispatchPolicy?.canary
+          : [],
+      };
       const saved = await saveAdminAiGatewayOpsControl({
         disabledProviders: textToList(disabledProvidersText),
         disabledModels: textToList(disabledModelsText),
         disabledProviderRules: opsControl?.disabledProviderRules || [],
         disabledModelRules: opsControl?.disabledModelRules || [],
         modelOverrides: textToOverrides(modelOverridesText),
+        dispatchPolicy: nextDispatchPolicy,
+        rollout: {
+          ...(opsControl?.rollout || {}),
+          previousDispatchPolicy: opsControl?.dispatchPolicy || null,
+        },
       });
       setOpsControl(saved.config);
+      setRuntimeFallbackDraft(runtimeFallbackFromOpsControl(saved.config));
       setMessage('AI Gateway 运营控制已保存');
       void load();
     } catch (err) {
@@ -558,7 +602,124 @@ const AdminAiJobsPanel: React.FC = () => {
     } finally {
       setSavingOps(false);
     }
-  }, [disabledModelsText, disabledProvidersText, isRolePreview, load, modelOverridesText, opsControl]);
+  }, [
+    disabledModelsText,
+    disabledProvidersText,
+    isRolePreview,
+    load,
+    modelOverridesText,
+    opsControl,
+    runtimeFallbackDraft,
+  ]);
+
+  const saveCanaryRule = React.useCallback(async () => {
+    if (blockIfRolePreview(isRolePreview)) return;
+    const canonicalModelId = canaryDraft.canonicalModelId.trim();
+    const providerId = canaryDraft.providerId.trim();
+    const percent = Math.max(0, Math.min(100, Number(canaryDraft.percent) || 0));
+    if (!canonicalModelId || !providerId) {
+      setError('灰度需要填写模型 ID 与供应商 ID');
+      return;
+    }
+    setSavingOps(true);
+    setError('');
+    setMessage('');
+    try {
+      const existingCanary = Array.isArray(opsControl?.dispatchPolicy?.canary)
+        ? [...opsControl.dispatchPolicy.canary]
+        : [];
+      const nextRow = {
+        canonicalModelId,
+        providerId,
+        percent,
+        enabled: canaryDraft.enabled !== false,
+      };
+      const idx = existingCanary.findIndex(
+        (row) =>
+          String((row as { canonicalModelId?: string })?.canonicalModelId || '') === canonicalModelId &&
+          String((row as { providerId?: string })?.providerId || '') === providerId
+      );
+      if (idx >= 0) existingCanary[idx] = nextRow;
+      else existingCanary.push(nextRow);
+      const saved = await saveAdminAiGatewayOpsControl({
+        disabledProviders: textToList(disabledProvidersText),
+        disabledModels: textToList(disabledModelsText),
+        disabledProviderRules: opsControl?.disabledProviderRules || [],
+        disabledModelRules: opsControl?.disabledModelRules || [],
+        modelOverrides: textToOverrides(modelOverridesText),
+        dispatchPolicy: {
+          ...(opsControl?.dispatchPolicy || {}),
+          runtimeFallback: {
+            ...(opsControl?.dispatchPolicy?.runtimeFallback || {}),
+            ...runtimeFallbackDraft,
+          },
+          canary: existingCanary,
+        },
+        rollout: {
+          ...(opsControl?.rollout || {}),
+          previousDispatchPolicy: opsControl?.dispatchPolicy || null,
+        },
+      });
+      setOpsControl(saved.config);
+      setMessage(`灰度规则已保存：${canonicalModelId} → ${providerId} @ ${percent}%`);
+      void load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '保存灰度规则失败');
+    } finally {
+      setSavingOps(false);
+    }
+  }, [
+    canaryDraft,
+    disabledModelsText,
+    disabledProvidersText,
+    isRolePreview,
+    load,
+    modelOverridesText,
+    opsControl,
+    runtimeFallbackDraft,
+  ]);
+
+  const rollbackDispatchPolicy = React.useCallback(async () => {
+    if (blockIfRolePreview(isRolePreview)) return;
+    const previous = opsControl?.rollout?.previousDispatchPolicy;
+    if (!previous) {
+      setError('没有可回滚的上一版 dispatchPolicy');
+      return;
+    }
+    if (!window.confirm('恢复上一版 dispatchPolicy（灰度/pin/runtimeFallback）？')) return;
+    setSavingOps(true);
+    setError('');
+    setMessage('');
+    try {
+      const saved = await saveAdminAiGatewayOpsControl({
+        disabledProviders: textToList(disabledProvidersText),
+        disabledModels: textToList(disabledModelsText),
+        disabledProviderRules: opsControl?.disabledProviderRules || [],
+        disabledModelRules: opsControl?.disabledModelRules || [],
+        modelOverrides: textToOverrides(modelOverridesText),
+        dispatchPolicy: previous,
+        rollout: {
+          ...(opsControl?.rollout || {}),
+          previousDispatchPolicy: opsControl?.dispatchPolicy || null,
+        },
+      });
+      setOpsControl(saved.config);
+      setRuntimeFallbackDraft(runtimeFallbackFromOpsControl(saved.config));
+      setMessage('已回滚到上一版 dispatchPolicy');
+      void load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '回滚 dispatchPolicy 失败');
+    } finally {
+      setSavingOps(false);
+    }
+  }, [
+    disabledModelsText,
+    disabledProvidersText,
+    isRolePreview,
+    load,
+    modelOverridesText,
+    opsControl,
+  ]);
 
   const clearOpsControl = React.useCallback(async () => {
     if (blockIfRolePreview(isRolePreview)) return;
@@ -572,6 +733,7 @@ const AdminAiJobsPanel: React.FC = () => {
       setDisabledProvidersText('');
       setDisabledModelsText('');
       setModelOverridesText('');
+      setRuntimeFallbackDraft(runtimeFallbackFromOpsControl(cleared.config));
       setMessage('AI Gateway 运营控制已清空');
       void load();
     } catch (err) {
@@ -999,6 +1161,160 @@ const AdminAiJobsPanel: React.FC = () => {
                 placeholder="gemini-3-pro-image => gemini-3-flash-image # fallback"
               />
             </label>
+          </div>
+
+          <div className="mt-4 rounded-xl border border-[#252528] bg-[#0d0d10] p-3">
+            <div className="text-[10px] font-bold text-gray-400">运行时 Fallback（A4）</div>
+            <p className="mt-1 text-[10px] text-gray-600">
+              保存时会保留既有 dispatchPolicy（pin/canary），并写入 runtimeFallback；连续失败自动 pause 仍由 auto-circuit 负责。
+            </p>
+            <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+              <label className="flex items-center gap-2 text-[10px] text-gray-300">
+                <input
+                  type="checkbox"
+                  checked={runtimeFallbackDraft.respectProviderPin}
+                  disabled={!canWriteOps || savingOps}
+                  onChange={(ev) =>
+                    setRuntimeFallbackDraft((prev) => ({ ...prev, respectProviderPin: ev.target.checked }))
+                  }
+                />
+                尊重 provider pin（禁跨供应商）
+              </label>
+              <label className="flex items-center gap-2 text-[10px] text-gray-300">
+                <input
+                  type="checkbox"
+                  checked={runtimeFallbackDraft.allowCrossProvider}
+                  disabled={!canWriteOps || savingOps}
+                  onChange={(ev) =>
+                    setRuntimeFallbackDraft((prev) => ({ ...prev, allowCrossProvider: ev.target.checked }))
+                  }
+                />
+                允许跨供应商 Fallback
+              </label>
+              <div>
+                <div className="mb-1 text-[10px] text-gray-500">超时策略</div>
+                <CustomDropdown
+                  value={runtimeFallbackDraft.onTimeout}
+                  options={[...TIMEOUT_FALLBACK_OPTIONS]}
+                  onChange={(value) =>
+                    setRuntimeFallbackDraft((prev) => ({
+                      ...prev,
+                      onTimeout: value as typeof prev.onTimeout,
+                    }))
+                  }
+                  disabled={!canWriteOps || savingOps}
+                />
+              </div>
+              <label className="block">
+                <span className="text-[10px] text-gray-500">同路重试次数</span>
+                <input
+                  type="number"
+                  min={0}
+                  max={3}
+                  value={runtimeFallbackDraft.sameRouteRetryMax}
+                  disabled={!canWriteOps || savingOps || runtimeFallbackDraft.onTimeout !== 'same_route_retry'}
+                  onChange={(ev) =>
+                    setRuntimeFallbackDraft((prev) => ({
+                      ...prev,
+                      sameRouteRetryMax: Math.max(0, Math.min(3, Number(ev.target.value) || 0)),
+                    }))
+                  }
+                  className="mt-1 w-full rounded-xl border border-[#2e2e32] bg-[#0a0a0c] px-3 py-2 text-[11px] text-gray-100 outline-none disabled:opacity-40"
+                />
+              </label>
+            </div>
+          </div>
+
+          <div className="mt-4 rounded-xl border border-[#252528] bg-[#0d0d10] p-3">
+            <div className="flex flex-wrap items-start justify-between gap-2">
+              <div>
+                <div className="text-[10px] font-bold text-gray-400">灰度放量 / 回滚（A5）</div>
+                <p className="mt-1 text-[10px] text-gray-600">
+                  canary 命中后 job.routeDecision.selectedRoute.selectionReason.strategy=canary；回滚恢复上一版 dispatchPolicy。
+                </p>
+              </div>
+              <button
+                type="button"
+                disabled={!canWriteOps || savingOps || !opsControl?.rollout?.previousDispatchPolicy}
+                onClick={() => {
+                  void rollbackDispatchPolicy();
+                }}
+                className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[10px] text-amber-100 disabled:opacity-40"
+              >
+                回滚上一策略
+              </button>
+            </div>
+            <div className="mt-3 grid gap-2 md:grid-cols-4">
+              <label className="block">
+                <span className="text-[10px] text-gray-500">模型 ID</span>
+                <input
+                  value={canaryDraft.canonicalModelId}
+                  disabled={!canWriteOps || savingOps}
+                  onChange={(ev) => setCanaryDraft((prev) => ({ ...prev, canonicalModelId: ev.target.value }))}
+                  className="mt-1 w-full rounded-xl border border-[#2e2e32] bg-[#0a0a0c] px-3 py-2 text-[11px] text-gray-100 outline-none disabled:opacity-40"
+                  placeholder="gpt-image-2"
+                />
+              </label>
+              <label className="block">
+                <span className="text-[10px] text-gray-500">供应商</span>
+                <input
+                  value={canaryDraft.providerId}
+                  disabled={!canWriteOps || savingOps}
+                  onChange={(ev) => setCanaryDraft((prev) => ({ ...prev, providerId: ev.target.value }))}
+                  className="mt-1 w-full rounded-xl border border-[#2e2e32] bg-[#0a0a0c] px-3 py-2 text-[11px] text-gray-100 outline-none disabled:opacity-40"
+                  placeholder="302ai"
+                />
+              </label>
+              <label className="block">
+                <span className="text-[10px] text-gray-500">流量 %</span>
+                <input
+                  type="number"
+                  min={0}
+                  max={100}
+                  value={canaryDraft.percent}
+                  disabled={!canWriteOps || savingOps}
+                  onChange={(ev) =>
+                    setCanaryDraft((prev) => ({
+                      ...prev,
+                      percent: Math.max(0, Math.min(100, Number(ev.target.value) || 0)),
+                    }))
+                  }
+                  className="mt-1 w-full rounded-xl border border-[#2e2e32] bg-[#0a0a0c] px-3 py-2 text-[11px] text-gray-100 outline-none disabled:opacity-40"
+                />
+              </label>
+              <div className="flex items-end">
+                <button
+                  type="button"
+                  disabled={!canWriteOps || savingOps}
+                  onClick={() => {
+                    void saveCanaryRule();
+                  }}
+                  className="w-full rounded-xl border border-sky-500/30 bg-sky-500/10 px-3 py-2 text-[10px] text-sky-100 disabled:opacity-40"
+                >
+                  保存灰度规则
+                </button>
+              </div>
+            </div>
+            {Array.isArray(opsControl?.dispatchPolicy?.canary) && opsControl.dispatchPolicy.canary.length ? (
+              <div className="mt-3 divide-y divide-[#252528] rounded-lg border border-[#252528]">
+                {opsControl.dispatchPolicy.canary.map((row, index) => {
+                  const item = row as {
+                    canonicalModelId?: string;
+                    providerId?: string;
+                    percent?: number;
+                    enabled?: boolean;
+                  };
+                  return (
+                    <div key={`${item.canonicalModelId}:${item.providerId}:${index}`} className="px-3 py-2 text-[10px] text-gray-300">
+                      {item.canonicalModelId || '—'} → {item.providerId || '—'} @ {Number(item.percent) || 0}%
+                      {item.enabled === false ? '（已禁用）' : ''}
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="mt-3 text-[10px] text-gray-600">暂无灰度规则</div>
+            )}
           </div>
         </div>
       ) : null}

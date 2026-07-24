@@ -160,6 +160,40 @@ export type AdminProviderKeySmokeTestResponse = {
   keys: AdminProviderKeyRow[];
 };
 
+export type AdminGatewayRouteConfig = {
+  canonicalModelId: string;
+  providerId: string;
+  modality?: string;
+  enabled?: boolean;
+  priority?: number;
+  upstreamModelId?: string;
+  providerModelId?: string;
+};
+
+export type AdminOpenAiCompatibleProviderConfig = {
+  providerId: string;
+  label?: string;
+  defaultBaseUrl?: string;
+  baseUrl?: string;
+  appendV1?: boolean;
+  channel?: string;
+  priority?: number;
+  asyncCapable?: boolean;
+  requestTimeoutMs?: number;
+  timeouts?: {
+    requestMs?: number;
+    pollIntervalMs?: number;
+    pollTimeoutMs?: number;
+    pollRequestMs?: number;
+  };
+  syncEndpoints?: {
+    text?: string;
+    imageGenerate?: string;
+    imageEdit?: string;
+  };
+  modelMapping?: Record<string, string>;
+};
+
 export type AdminModelOpsConfig = {
   version: number;
   imageRegistryAllowlist?: string[] | null;
@@ -169,6 +203,22 @@ export type AdminModelOpsConfig = {
   providerOverrides?: unknown[] | null;
   endpointMappings?: unknown[] | null;
   wiringEdges?: unknown[] | null;
+  /** A1: Gateway executable route authority (seed falls back to shared rules). */
+  gatewayRouteConfigs?: AdminGatewayRouteConfig[] | null;
+  /** A2: OpenAI-compatible aggregator onboarding rows (no new adapter file). */
+  openAiCompatibleProviders?: AdminOpenAiCompatibleProviderConfig[] | null;
+  /** A5: last publish-gate diagnosis snapshots by canonical model id. */
+  publishDiagnosisByModel?: Record<
+    string,
+    {
+      ok: boolean;
+      status: string;
+      auditedAt: string;
+      message?: string | null;
+      source?: string | null;
+      code?: string | null;
+    }
+  > | null;
   updatedAt?: string | null;
   updatedByUserId?: string | null;
   source?: string | null;

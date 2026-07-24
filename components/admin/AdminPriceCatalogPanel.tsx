@@ -8,7 +8,13 @@ import {
 } from '../../services/adminClient';
 import { PERMISSIONS, hasAdminPermission } from '../../services/adminPermissions';
 import { blockIfRolePreview } from '../../services/adminRolePreview';
-import { listModelRoutes, type ModelRouteCatalogEntry } from '../../services/modelRegistry';
+import {
+  getModelOpsConfigSync,
+  isProviderCatalogId,
+  listModelRoutes,
+  refreshModelOpsConfig,
+  type ModelRouteCatalogEntry,
+} from '../../services/modelRegistry';
 import { fmtCredits } from '../../shared/credits';
 import { CustomDropdown } from '../ui/CustomDropdown';
 import { useAdminStaff } from './AdminStaffContext';
@@ -142,13 +148,52 @@ export function billingSkuForAiGatewayRouteSuggestion(route: Pick<ModelRouteCata
   return `${modality}.${compactSkuPart(providerId)}.${compactSkuPart(model || route.canonicalModelId || 'task') || 'task'}`.slice(0, 120);
 }
 
+/** A2: synthesize catalog-like routes from ops gatewayRouteConfigs for price suggestions. */
+export function routesFromGatewayRouteConfigs(
+  configs: readonly {
+    canonicalModelId?: string;
+    providerId?: string;
+    modality?: string;
+    enabled?: boolean;
+    upstreamModelId?: string;
+    providerModelId?: string;
+  }[] = []
+): ModelRouteCatalogEntry[] {
+  const out: ModelRouteCatalogEntry[] = [];
+  for (const row of configs) {
+    const canonicalModelId = String(row.canonicalModelId || '').trim();
+    const providerId = String(row.providerId || '').trim();
+    const modality = String(row.modality || '').trim();
+    if (!canonicalModelId || !providerId || !modality) continue;
+    if (!isProviderCatalogId(providerId)) continue;
+    const providerModelId =
+      String(row.upstreamModelId || row.providerModelId || canonicalModelId).trim() || canonicalModelId;
+    out.push({
+      routeId: `${canonicalModelId}:${providerId}:${modality}`,
+      canonicalModelId,
+      providerId,
+      providerModelId,
+      modality: modality as ModelRouteCatalogEntry['modality'],
+      enabled: row.enabled !== false,
+      priority: 100,
+      fallbackPolicy: 'on_error',
+      source: 'static',
+      executionStatus: row.enabled === false ? 'disabled' : 'platform_ready',
+      gatewayExecutionStatus: 'ready',
+    });
+  }
+  return out;
+}
+
 export function buildAiGatewayPriceSkuSuggestions(
   entries: readonly Pick<AdminPriceCatalogEntry, 'billingSku'>[],
-  routes: readonly ModelRouteCatalogEntry[] = listModelRoutes()
+  routes: readonly ModelRouteCatalogEntry[] = listModelRoutes(),
+  extraOpsRoutes: readonly ModelRouteCatalogEntry[] = []
 ): AiGatewayPriceSkuSuggestion[] {
   const existing = new Set(entries.map((entry) => String(entry.billingSku || '').trim()).filter(Boolean));
   const bySku = new Map<string, AiGatewayPriceSkuSuggestion>();
-  for (const route of routes) {
+  const merged = [...routes, ...extraOpsRoutes];
+  for (const route of merged) {
     if (route.gatewayExecutionStatus !== 'ready') continue;
     const billingSku = billingSkuForAiGatewayRouteSuggestion(route);
     if (!billingSku || existing.has(billingSku) || bySku.has(billingSku)) continue;
@@ -194,13 +239,19 @@ const AdminPriceCatalogPanel: React.FC = () => {
   const [draft, setDraft] = React.useState<EditDraft>(emptyDraft());
   const [newSku, setNewSku] = React.useState('');
   const [saving, setSaving] = React.useState(false);
-  const aiGatewaySkuSuggestions = React.useMemo(() => buildAiGatewayPriceSkuSuggestions(entries), [entries]);
+  const [opsRouteTick, setOpsRouteTick] = React.useState(0);
+  const aiGatewaySkuSuggestions = React.useMemo(() => {
+    const opsRoutes = routesFromGatewayRouteConfigs(getModelOpsConfigSync().gatewayRouteConfigs || []);
+    return buildAiGatewayPriceSkuSuggestions(entries, listModelRoutes(), opsRoutes);
+  }, [entries, opsRouteTick]);
 
   const load = React.useCallback(async () => {
     if (!canRead) return;
     setLoading(true);
     setError('');
     try {
+      await refreshModelOpsConfig().catch(() => null);
+      setOpsRouteTick((n) => n + 1);
       const res = await fetchAdminPriceCatalog();
       setCatalogVersion(res.catalogVersion);
       setEntries(res.entries);
@@ -236,6 +287,9 @@ const AdminPriceCatalogPanel: React.FC = () => {
       ...emptyDraft(),
       displayName: suggestion.displayName,
       meterKind: suggestion.meterKind,
+      // A2 minimal SKU: one credit placeholder so ops can publish then tune.
+      userCreditsPerUnit: '1',
+      perUnit: '1',
     });
   };
 

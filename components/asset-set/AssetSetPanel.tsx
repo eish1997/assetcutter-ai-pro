@@ -8,7 +8,6 @@ import StoryboardSheetSplitAdjustModal from '../storyboard/StoryboardSheetSplitA
 import { compressStoryboardFrameDataUrl } from '../storyboard/storyboardFrameImage';
 import { executeCapability, getCapabilityEngine } from '../../services/capabilityExecutor';
 import { readLocalJson, writeLocalJson } from '../../services/clientPersist';
-import { getTripoApiKey } from '../../services/settingsStore';
 import { AI_GATEWAY_TRIPO_PLATFORM_KEY } from '../../services/tripoService';
 import {
   computeAssetSetStats,
@@ -775,7 +774,9 @@ export default function AssetSetPanel({
           model3d: { status: 'running', updatedAt: Date.now() },
         }))
       );
-      const apiKey = preset.generate3D?.provider === 'tripo' ? getTripoApiKey() || AI_GATEWAY_TRIPO_PLATFORM_KEY : '';
+      // A6: Asset Set Tripo defaults to platform Gateway sentinel (same as App workflow).
+      // Local Tripo key remains available only via explicit self-key tooling, not this path.
+      const apiKey = preset.generate3D?.provider === 'tripo' ? AI_GATEWAY_TRIPO_PLATFORM_KEY : '';
       const result = await runAssetSetComponent3d({
         apiKey,
         preset,

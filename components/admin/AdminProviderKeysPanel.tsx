@@ -26,7 +26,9 @@ import {
   type AdminModelAvailabilityRouteSummary,
   type AdminModelAvailabilitySummaryItem,
   type AdminModelGenerationTestResult,
+  type AdminGatewayRouteConfig,
   type AdminModelOpsConfig,
+  type AdminOpenAiCompatibleProviderConfig,
   type AdminModelRouteTestInput,
   type AdminModelRouteTestResult,
   type AdminModelScreenDiagnosisResult,
@@ -36,6 +38,10 @@ import {
 } from '../../services/adminProviderKeysClient';
 import { PERMISSIONS } from '../../services/adminPermissions';
 import { blockIfRolePreview } from '../../services/adminRolePreview';
+import {
+  evaluatePublishDiagnosisGate,
+  formatPublishDiagnosisGateMessage,
+} from '../../services/aiGatewayRolloutControl';
 import {
   getCanonicalModel,
   getProviderCatalogEntry,
@@ -765,6 +771,19 @@ function routePriorityDraftFromConfig(config?: AdminModelOpsConfig | null): Rout
     if (!routeIds.has(row.bindingId) || row.priority == null) continue;
     out[row.bindingId] = row.priority;
   }
+  // A1: gatewayRouteConfigs priority wins when present for the same catalog binding.
+  for (const route of listModelRoutes()) {
+    const bindingId = routeBindingId(route);
+    if (!bindingId || !routeIds.has(bindingId)) continue;
+    const match = normalizeGatewayRouteConfigRows(config?.gatewayRouteConfigs).find(
+      (row) =>
+        row.canonicalModelId === route.canonicalModelId &&
+        row.providerId === route.providerId &&
+        (!row.modality || row.modality === route.modality) &&
+        row.priority != null
+    );
+    if (match?.priority != null) out[bindingId] = match.priority;
+  }
   return out;
 }
 
@@ -786,6 +805,135 @@ function routeFallbackMaxAttemptsDraftFromConfig(config?: AdminModelOpsConfig | 
     out[row.bindingId] = row.fallbackMaxAttempts;
   }
   return out;
+}
+
+function gatewayRouteConfigKey(row: Pick<AdminGatewayRouteConfig, 'canonicalModelId' | 'providerId' | 'modality'>) {
+  const model = String(row.canonicalModelId || '').trim();
+  const provider = String(row.providerId || '').trim();
+  const modality = String(row.modality || '').trim();
+  if (!model || !provider) return '';
+  return modality ? `${model}:${provider}:${modality}` : `${model}:${provider}`;
+}
+
+function normalizeGatewayRouteConfigRows(value: unknown): AdminGatewayRouteConfig[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => {
+      const row = item && typeof item === 'object' ? (item as Record<string, unknown>) : {};
+      const canonicalModelId = String(row.canonicalModelId || '').trim();
+      const providerId = String(row.providerId || '').trim();
+      if (!canonicalModelId || !providerId) return null;
+      const priority = Number(row.priority);
+      const upstreamModelId =
+        (typeof row.upstreamModelId === 'string' && row.upstreamModelId.trim()) ||
+        (typeof row.providerModelId === 'string' && row.providerModelId.trim()) ||
+        '';
+      return {
+        canonicalModelId,
+        providerId,
+        ...(typeof row.modality === 'string' && row.modality.trim() ? { modality: row.modality.trim() } : {}),
+        ...(row.enabled !== undefined ? { enabled: row.enabled === true } : {}),
+        ...(Number.isFinite(priority) ? { priority: Math.floor(priority) } : {}),
+        ...(upstreamModelId ? { upstreamModelId, providerModelId: upstreamModelId } : {}),
+      } satisfies AdminGatewayRouteConfig;
+    })
+    .filter((row): row is AdminGatewayRouteConfig => Boolean(row));
+}
+
+/**
+ * A1: Admin priority/enabled/upstream edits also write gatewayRouteConfigs so decision
+ * reads the same ops source instead of only bindingOverrides + hardcoded seed.
+ */
+function mergeGatewayRouteConfigs(
+  existing: unknown,
+  bindingOverrides: AdminBindingOverride[] | null,
+  routePriorityDraft: RoutePriorityDraft
+): AdminGatewayRouteConfig[] | null {
+  const byKey = new Map<string, AdminGatewayRouteConfig>();
+  for (const row of normalizeGatewayRouteConfigRows(existing)) {
+    const key = gatewayRouteConfigKey(row);
+    if (key) byKey.set(key, row);
+  }
+  const overrideByBindingId = new Map(
+    (Array.isArray(bindingOverrides) ? bindingOverrides : []).map((row) => [row.bindingId, row])
+  );
+  for (const route of listModelRoutes()) {
+    const bindingId = routeBindingId(route);
+    if (!bindingId) continue;
+    const override = overrideByBindingId.get(bindingId);
+    const draftPriority = routePriorityDraft[bindingId];
+    const hasPriority = Number.isFinite(Number(draftPriority)) || Number.isFinite(Number(override?.priority));
+    const hasEnabled = override?.enabled !== undefined;
+    const hasUpstream = Boolean(override?.upstreamOverride);
+    if (!hasPriority && !hasEnabled && !hasUpstream) continue;
+    const priority = Number.isFinite(Number(draftPriority))
+      ? Math.max(1, Math.floor(Number(draftPriority)))
+      : Number.isFinite(Number(override?.priority))
+        ? Math.floor(Number(override?.priority))
+        : undefined;
+    const next: AdminGatewayRouteConfig = {
+      canonicalModelId: route.canonicalModelId,
+      providerId: route.providerId,
+      modality: route.modality,
+      ...(hasEnabled ? { enabled: override?.enabled === true } : {}),
+      ...(priority != null ? { priority } : {}),
+      ...(hasUpstream
+        ? {
+            upstreamModelId: String(override?.upstreamOverride || '').trim(),
+            providerModelId: String(override?.upstreamOverride || '').trim(),
+          }
+        : { providerModelId: route.providerModelId }),
+    };
+    const key = gatewayRouteConfigKey(next);
+    if (!key) continue;
+    byKey.set(key, { ...(byKey.get(key) || {}), ...next });
+  }
+  const rows = [...byKey.values()].sort((a, b) => gatewayRouteConfigKey(a).localeCompare(gatewayRouteConfigKey(b)));
+  return rows.length ? rows : null;
+}
+
+function normalizeOpenAiCompatibleProviderRows(value: unknown): AdminOpenAiCompatibleProviderConfig[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => {
+      const row = item && typeof item === 'object' ? (item as Record<string, unknown>) : {};
+      const providerId = String(row.providerId || '').trim();
+      if (!providerId) return null;
+      const priority = Number(row.priority);
+      const requestTimeoutMs = Number(
+        (row.timeouts && typeof row.timeouts === 'object'
+          ? (row.timeouts as Record<string, unknown>).requestMs
+          : undefined) ?? row.requestTimeoutMs
+      );
+      return {
+        providerId,
+        label: String(row.label || providerId).trim() || providerId,
+        defaultBaseUrl: String(row.defaultBaseUrl || row.baseUrl || '').trim() || undefined,
+        appendV1: row.appendV1 === undefined ? undefined : row.appendV1 !== false,
+        channel: String(row.channel || '').trim() || undefined,
+        ...(Number.isFinite(priority) ? { priority: Math.floor(priority) } : {}),
+        asyncCapable: row.asyncCapable === true,
+        ...(Number.isFinite(requestTimeoutMs) && requestTimeoutMs > 0
+          ? { timeouts: { requestMs: Math.floor(requestTimeoutMs) }, requestTimeoutMs: Math.floor(requestTimeoutMs) }
+          : {}),
+      } satisfies AdminOpenAiCompatibleProviderConfig;
+    })
+    .filter((row): row is AdminOpenAiCompatibleProviderConfig => Boolean(row));
+}
+
+function openAiCompatibleProvidersDraftFromConfig(config?: AdminModelOpsConfig | null): AdminOpenAiCompatibleProviderConfig[] {
+  return normalizeOpenAiCompatibleProviderRows(config?.openAiCompatibleProviders);
+}
+
+function mergeOpenAiCompatibleProviders(
+  existing: unknown,
+  draft: AdminOpenAiCompatibleProviderConfig[]
+): AdminOpenAiCompatibleProviderConfig[] | null {
+  const byId = new Map<string, AdminOpenAiCompatibleProviderConfig>();
+  for (const row of normalizeOpenAiCompatibleProviderRows(existing)) byId.set(row.providerId, row);
+  for (const row of normalizeOpenAiCompatibleProviderRows(draft)) byId.set(row.providerId, { ...(byId.get(row.providerId) || {}), ...row });
+  const rows = [...byId.values()].sort((a, b) => a.providerId.localeCompare(b.providerId));
+  return rows.length ? rows : null;
 }
 
 function mergeRouteBindingOverrides(
@@ -880,6 +1028,11 @@ export const __adminProviderKeysPanelTestUtils = {
   routeFallbackPolicyDraftFromConfig,
   routeFallbackMaxAttemptsDraftFromConfig,
   mergeRouteBindingOverrides,
+  normalizeGatewayRouteConfigRows,
+  mergeGatewayRouteConfigs,
+  normalizeOpenAiCompatibleProviderRows,
+  openAiCompatibleProvidersDraftFromConfig,
+  mergeOpenAiCompatibleProviders,
   normalizeEndpointMappingRows,
   endpointMappingDraftFromConfig,
   mergeEndpointMappings,
@@ -1034,6 +1187,9 @@ const AdminProviderKeysPanel: React.FC = () => {
   const [routeFallbackPolicyDraft, setRouteFallbackPolicyDraft] = React.useState<RouteFallbackPolicyDraft>({});
   const [routeFallbackMaxAttemptsDraft, setRouteFallbackMaxAttemptsDraft] = React.useState<RouteFallbackMaxAttemptsDraft>({});
   const [endpointMappingDraft, setEndpointMappingDraft] = React.useState<EndpointMappingDraft>({});
+  const [openAiCompatibleProvidersDraft, setOpenAiCompatibleProvidersDraft] = React.useState<
+    AdminOpenAiCompatibleProviderConfig[]
+  >([]);
   const [error, setError] = React.useState('');
   const [message, setMessage] = React.useState('');
   const [selectedProviderId, setSelectedProviderId] = React.useState(PROVIDERS[0]?.id || 'tripo');
@@ -1062,6 +1218,7 @@ const AdminProviderKeysPanel: React.FC = () => {
         setRouteFallbackPolicyDraft(routeFallbackPolicyDraftFromConfig(modelOpsRes.config));
         setRouteFallbackMaxAttemptsDraft(routeFallbackMaxAttemptsDraftFromConfig(modelOpsRes.config));
         setEndpointMappingDraft(endpointMappingDraftFromConfig(modelOpsRes.config));
+        setOpenAiCompatibleProvidersDraft(openAiCompatibleProvidersDraftFromConfig(modelOpsRes.config));
         const allow = modelOpsRes.config.publishedCanonicalModelAllowlist;
         setSelectedCanonicalModelIds(Array.isArray(allow) ? allow : defaultPublishedCanonicalIds());
       }
@@ -1359,7 +1516,7 @@ const AdminProviderKeysPanel: React.FC = () => {
     }
   };
 
-  const savePublishedModels = async () => {
+  const savePublishedModels = async (options: { force?: boolean } = {}) => {
     if (blockIfRolePreview(isRolePreview)) return;
     setSavingModelOps(true);
     setError('');
@@ -1389,20 +1546,51 @@ const AdminProviderKeysPanel: React.FC = () => {
         );
         return;
       }
+      const diagnosisGate = evaluatePublishDiagnosisGate({
+        selectedIds: selected,
+        previousAllowlist: base.publishedCanonicalModelAllowlist || [],
+        snapshots: base.publishDiagnosisByModel || {},
+        force: options.force === true,
+        onlyNewlyAdded: true,
+      });
+      if (!diagnosisGate.ok) {
+        const detail = formatPublishDiagnosisGateMessage(diagnosisGate.issues);
+        const forceOk = window.confirm(`${detail}\n\n仍要强制发布新增模型吗？`);
+        if (!forceOk) {
+          setError(detail);
+          return;
+        }
+      }
+      const bindingOverrides = mergeRouteBindingOverrides(
+        base.bindingOverrides,
+        routePriorityDraft,
+        routeFallbackPolicyDraft,
+        routeFallbackMaxAttemptsDraft
+      );
       const saved = await saveAdminModelOpsConfig({
         ...base,
         publishedCanonicalModelAllowlist: selected,
-        bindingOverrides: mergeRouteBindingOverrides(base.bindingOverrides, routePriorityDraft, routeFallbackPolicyDraft, routeFallbackMaxAttemptsDraft),
+        bindingOverrides,
         endpointMappings: mergeEndpointMappings(base.endpointMappings, endpointMappingDraft),
+        gatewayRouteConfigs: mergeGatewayRouteConfigs(base.gatewayRouteConfigs, bindingOverrides, routePriorityDraft),
+        openAiCompatibleProviders: mergeOpenAiCompatibleProviders(
+          base.openAiCompatibleProviders,
+          openAiCompatibleProvidersDraft
+        ),
       });
       setModelOpsConfig(saved.config);
       setRoutePriorityDraft(routePriorityDraftFromConfig(saved.config));
       setRouteFallbackPolicyDraft(routeFallbackPolicyDraftFromConfig(saved.config));
       setRouteFallbackMaxAttemptsDraft(routeFallbackMaxAttemptsDraftFromConfig(saved.config));
       setEndpointMappingDraft(endpointMappingDraftFromConfig(saved.config));
+      setOpenAiCompatibleProvidersDraft(openAiCompatibleProvidersDraftFromConfig(saved.config));
       setSelectedCanonicalModelIds(saved.config.publishedCanonicalModelAllowlist || selected);
       await refreshModelOpsConfig();
-      setMessage('工作区模型发布范围已保存');
+      setMessage(
+        diagnosisGate.forceRequired || options.force
+          ? '工作区模型发布范围已保存（含强制发布）'
+          : '工作区模型发布范围已保存'
+      );
     } catch (err) {
       setError(err instanceof Error ? err.message : '保存工作区模型发布范围失败');
     } finally {
@@ -1461,6 +1649,8 @@ const AdminProviderKeysPanel: React.FC = () => {
     try {
       const res = await fetchAdminModelScreenDiagnosis(target);
       const result = res.result;
+      const auditedAt = result.generatedAt || new Date().toISOString();
+      const summary = screenDiagnosisSummaryText(result) || result.message || 'screen diagnosis';
       setModelDiagnostics((prev) => ({
         ...prev,
         [canonicalModelId]: {
@@ -1468,16 +1658,44 @@ const AdminProviderKeysPanel: React.FC = () => {
           screen: {
             layer: 'screen',
             status: result.status === 'ready' ? 'ready' : 'blocked',
-            message: screenDiagnosisSummaryText(result) || result.message || 'screen diagnosis',
+            message: summary,
             code: result.routeDecision?.blockingReason?.code || result.code || null,
             providerId: result.providerId || target.providerId || null,
             nextAction: result.nextActions?.[0]?.label || result.routeDecision?.blockingReason?.nextAction || null,
-            testedAt: result.generatedAt || new Date().toISOString(),
+            testedAt: auditedAt,
             screen: result,
           },
         },
       }));
-      setMessage(screenDiagnosisSummaryText(result) || `${canonicalModelId} 一屏诊断完成`);
+      // A5: persist snapshot for publish gate (best-effort; ignore save errors).
+      try {
+        const base = modelOpsConfig || {
+          version: 1,
+          imageRegistryAllowlist: null,
+          publishedCanonicalModelAllowlist: null,
+          imageModelPreference: null,
+          bindingOverrides: null,
+          wiringEdges: null,
+        };
+        const saved = await saveAdminModelOpsConfig({
+          ...base,
+          publishDiagnosisByModel: {
+            ...(base.publishDiagnosisByModel || {}),
+            [canonicalModelId]: {
+              ok: result.status === 'ready',
+              status: result.status === 'ready' ? 'ready' : 'blocked',
+              auditedAt,
+              message: summary,
+              source: 'screen',
+              code: result.routeDecision?.blockingReason?.code || result.code || null,
+            },
+          },
+        });
+        setModelOpsConfig(saved.config);
+      } catch {
+        // keep UI diagnosis even if snapshot persist fails
+      }
+      setMessage(summary || `${canonicalModelId} 一屏诊断完成`);
     } catch (err) {
       const fallbackMessage = err instanceof Error ? err.message : '一屏诊断失败';
       setModelDiagnostics((prev) => ({
@@ -1832,6 +2050,125 @@ const AdminProviderKeysPanel: React.FC = () => {
               </div>
             </section>
           ) : null}
+
+          <section className="rounded-lg border border-white/[0.08] bg-[#121216] p-4">
+            <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <h3 className="text-sm font-semibold text-white">OpenAI 兼容聚合商</h3>
+                <div className="mt-1 text-[11px] text-gray-500">
+                  填 baseURL / 超时后随「保存发布范围」写入 ops，无需新 adapter。详见 docs/AI-Gateway运营接聚合商手册.md
+                </div>
+              </div>
+              <button
+                type="button"
+                disabled={!canWriteOps || savingModelOps}
+                onClick={() =>
+                  setOpenAiCompatibleProvidersDraft((prev) => [
+                    ...prev,
+                    {
+                      providerId: '',
+                      label: '',
+                      defaultBaseUrl: 'https://',
+                      asyncCapable: true,
+                      timeouts: { requestMs: 60_000 },
+                    },
+                  ])
+                }
+                className="rounded-md border border-emerald-500/25 bg-emerald-950/20 px-3 py-1.5 text-[10px] text-emerald-100 disabled:opacity-40"
+              >
+                添加聚合商
+              </button>
+            </div>
+            <div className="space-y-2">
+              {openAiCompatibleProvidersDraft.length ? (
+                openAiCompatibleProvidersDraft.map((row, index) => (
+                  <div key={`oai-compat-${index}`} className="grid gap-2 rounded-md border border-white/[0.06] bg-black/20 p-3 md:grid-cols-[1fr_1fr_1.4fr_90px_72px_56px]">
+                    <label className="block">
+                      <span className="text-[10px] text-gray-500">providerId</span>
+                      <input
+                        value={row.providerId}
+                        disabled={!canWriteOps || savingModelOps}
+                        onChange={(ev) =>
+                          setOpenAiCompatibleProvidersDraft((prev) =>
+                            prev.map((item, i) => (i === index ? { ...item, providerId: ev.target.value.trim() } : item))
+                          )
+                        }
+                        className="mt-1 w-full rounded-md border border-white/[0.08] bg-[#0a0a0c] px-2 py-1.5 text-[11px] text-gray-100 disabled:opacity-40"
+                      />
+                    </label>
+                    <label className="block">
+                      <span className="text-[10px] text-gray-500">显示名</span>
+                      <input
+                        value={row.label || ''}
+                        disabled={!canWriteOps || savingModelOps}
+                        onChange={(ev) =>
+                          setOpenAiCompatibleProvidersDraft((prev) =>
+                            prev.map((item, i) => (i === index ? { ...item, label: ev.target.value } : item))
+                          )
+                        }
+                        className="mt-1 w-full rounded-md border border-white/[0.08] bg-[#0a0a0c] px-2 py-1.5 text-[11px] text-gray-100 disabled:opacity-40"
+                      />
+                    </label>
+                    <label className="block">
+                      <span className="text-[10px] text-gray-500">baseURL</span>
+                      <input
+                        value={row.defaultBaseUrl || row.baseUrl || ''}
+                        disabled={!canWriteOps || savingModelOps}
+                        onChange={(ev) =>
+                          setOpenAiCompatibleProvidersDraft((prev) =>
+                            prev.map((item, i) => (i === index ? { ...item, defaultBaseUrl: ev.target.value.trim() } : item))
+                          )
+                        }
+                        className="mt-1 w-full rounded-md border border-white/[0.08] bg-[#0a0a0c] px-2 py-1.5 text-[11px] text-gray-100 disabled:opacity-40"
+                      />
+                    </label>
+                    <label className="block">
+                      <span className="text-[10px] text-gray-500">超时 ms</span>
+                      <input
+                        inputMode="numeric"
+                        value={String(row.timeouts?.requestMs || row.requestTimeoutMs || 60000)}
+                        disabled={!canWriteOps || savingModelOps}
+                        onChange={(ev) => {
+                          const requestMs = Math.max(1000, Math.floor(Number(ev.target.value) || 60000));
+                          setOpenAiCompatibleProvidersDraft((prev) =>
+                            prev.map((item, i) =>
+                              i === index ? { ...item, timeouts: { ...(item.timeouts || {}), requestMs }, requestTimeoutMs: requestMs } : item
+                            )
+                          );
+                        }}
+                        className="mt-1 w-full rounded-md border border-white/[0.08] bg-[#0a0a0c] px-2 py-1.5 text-[11px] text-gray-100 disabled:opacity-40"
+                      />
+                    </label>
+                    <label className="flex items-end gap-2 pb-2 text-[11px] text-gray-300">
+                      <input
+                        type="checkbox"
+                        checked={row.asyncCapable === true}
+                        disabled={!canWriteOps || savingModelOps}
+                        onChange={(ev) =>
+                          setOpenAiCompatibleProvidersDraft((prev) =>
+                            prev.map((item, i) => (i === index ? { ...item, asyncCapable: ev.target.checked } : item))
+                          )
+                        }
+                      />
+                      异步
+                    </label>
+                    <button
+                      type="button"
+                      disabled={!canWriteOps || savingModelOps}
+                      onClick={() => setOpenAiCompatibleProvidersDraft((prev) => prev.filter((_, i) => i !== index))}
+                      className="self-end rounded-md border border-red-500/25 bg-red-950/20 px-2 py-1.5 text-[10px] text-red-100 disabled:opacity-40"
+                    >
+                      删除
+                    </button>
+                  </div>
+                ))
+              ) : (
+                <div className="rounded-md border border-white/[0.06] bg-black/20 px-3 py-4 text-[11px] text-gray-500">
+                  尚未配置运营侧聚合商。内置 302 / AIHubMix / ToAPIs 等仍可用；新聚合商点「添加聚合商」。
+                </div>
+              )}
+            </div>
+          </section>
 
           <section className="rounded-lg border border-white/[0.08] bg-[#121216] p-4">
             <div className="mb-3 flex flex-wrap items-start justify-between gap-3">

@@ -2615,6 +2615,12 @@ const server = http.createServer(async (req, res) => {
       }
       const config = normalizeModelOpsConfig(body?.config || body);
       const saved = await writeModelOpsConfig(config, { updatedByUserId: staff.user.id });
+      try {
+        const { applyOpenAiCompatibleProvidersFromOps } = await import('./ai-gateway/openai-compatible-config.js');
+        applyOpenAiCompatibleProvidersFromOps(saved);
+      } catch {
+        // non-fatal: route decision will re-apply on next request
+      }
       await createAuditLog({
         actorUserId: staff.user.id,
         actorIdentifier: staff.user.username,

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { normalizeAiGatewayProviderId } from "../shared/aiGatewayModelRoutes.js";
 import {
   getCanonicalModel,
@@ -6,6 +6,7 @@ import {
   listPublishedCanonicalModels,
   listProviderRoutes,
   routeProvidersForCanonicalModel,
+  _setModelOpsConfigForTests,
 } from "../services/modelRegistry";
 
 describe("model route catalog", () => {
@@ -166,5 +167,33 @@ describe("model route catalog", () => {
       visibleInWorkspace: true,
     });
     expect(listModelRoutes("302ai-video-manual").some((route) => route.gatewayExecutionStatus === "ready")).toBe(false);
+  });
+
+  describe("A1 gatewayRouteConfigs catalog overlay", () => {
+    afterEach(() => {
+      _setModelOpsConfigForTests({ version: 1 });
+    });
+
+    it("overlays priority/enabled/providerModelId from ops gatewayRouteConfigs", () => {
+      _setModelOpsConfigForTests({
+        version: 1,
+        gatewayRouteConfigs: [
+          {
+            canonicalModelId: "gpt-image-2",
+            providerId: "openai-official",
+            modality: "image",
+            enabled: true,
+            priority: 2,
+            upstreamModelId: "gpt-image-2-ops",
+          },
+        ],
+      });
+      expect(listModelRoutes("gpt-image-2").find((route) => route.providerId === "openai-official")).toMatchObject({
+        enabled: true,
+        priority: 2,
+        providerModelId: "gpt-image-2-ops",
+        gatewayExecutionStatus: "ready",
+      });
+    });
   });
 });

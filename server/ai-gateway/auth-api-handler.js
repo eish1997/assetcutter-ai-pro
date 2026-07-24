@@ -144,6 +144,13 @@ export async function createAuthAiGatewayJob(req, body, user, options = {}) {
     modelOpsConfig,
   });
   if (executableRoute.checked) {
+    const selectionStrategy =
+      executableRoute.routeDecision?.selectedRoute?.selectionReason?.strategy ||
+      executableRoute.routeDecision?.selectionReason?.strategy ||
+      '';
+    if (Boolean(raw.provider) || selectionStrategy === 'admin_pin') {
+      planInput.metadata.providerPinned = true;
+    }
     const shouldPinProvider =
       Boolean(raw.provider) ||
       Boolean(executableRoute.route?.platformKeyRequired);
@@ -152,7 +159,8 @@ export async function createAuthAiGatewayJob(req, body, user, options = {}) {
         ...(planInput.metadata.aiGatewayFallback && typeof planInput.metadata.aiGatewayFallback === 'object'
           ? planInput.metadata.aiGatewayFallback
           : {}),
-        autoSelectedProvider: true,
+        // System-inferred pin (platform key required) may still fall back; caller pin is blocked above.
+        autoSelectedProvider: !raw.provider,
       };
       planInput.provider = executableRoute.route.providerId;
     }

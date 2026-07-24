@@ -91,10 +91,11 @@ describe('aiBillingGate', () => {
     expect(step.minCredits).toBeGreaterThan(0);
   });
 
-  it('resolveJobKindBillingStep exempts tencent-backed 3d', () => {
+  it('resolveJobKindBillingStep meters tencent 3d on platform even when session creds exist', () => {
     vi.mocked(getTencentCreds).mockReturnValue({ secretId: 'sid', secretKey: 'skey' });
     const step = resolveJobKindBillingStep('workflow_generate_3d');
-    expect(step.kind).toBe('exempt');
+    expect(step.kind).toBe('platform');
+    expect(step.minCredits).toBeGreaterThan(0);
   });
 
   it('workflow Tripo 3D presets stay platform metered even when an old local key exists', () => {

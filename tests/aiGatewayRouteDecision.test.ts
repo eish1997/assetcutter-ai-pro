@@ -288,7 +288,74 @@ describe('AI Gateway route decision', () => {
       model: 'gpt-image-2',
       input: { prompt: 'a clean product photo' },
     });
-    expect(withModel.job.metadata.planRouteSource).toBe('executable_model_route_table');
+    expect(withModel.job.metadata.planRouteSource).toBe('gateway_route_config_source');
     expect(withModel.job.provider).toBe(withModel.route.providerId);
+  });
+
+  it('A1: gatewayRouteConfigs become decision candidates without seed table entry', async () => {
+    const decision = await resolveAiGatewayRouteDecision(
+      {
+        canonicalModelId: 'fixture-aggregator-model-a1',
+        modality: 'image',
+      },
+      {
+        checkProviderKeys: false,
+        modelOpsConfig: {
+          gatewayRouteConfigs: [
+            {
+              canonicalModelId: 'fixture-aggregator-model-a1',
+              providerId: '302ai',
+              modality: 'image',
+              enabled: true,
+              priority: 3,
+              upstreamModelId: 'upstream-image-v1',
+            },
+          ],
+        },
+      }
+    );
+
+    expect(decision.ok).toBe(true);
+    expect(decision.selectedRoute).toMatchObject({
+      providerId: '302ai',
+      upstreamModelId: 'upstream-image-v1',
+    });
+    expect(decision.candidates).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          providerId: '302ai',
+          status: 'ready',
+          priority: 3,
+        }),
+      ])
+    );
+  });
+
+  it('A1: gatewayRouteConfigs enabled=false marks candidate paused', async () => {
+    const decision = await resolveAiGatewayRouteDecision(
+      {
+        canonicalModelId: 'gpt-image-2',
+        modality: 'image',
+        provider: 'openai-official',
+      },
+      {
+        checkProviderKeys: false,
+        modelOpsConfig: {
+          gatewayRouteConfigs: [
+            {
+              canonicalModelId: 'gpt-image-2',
+              providerId: 'openai-official',
+              modality: 'image',
+              enabled: false,
+            },
+          ],
+        },
+      }
+    );
+
+    expect(decision.ok).toBe(false);
+    expect(decision.candidates.some((row) => row.providerId === 'openai-official' && row.status === 'paused')).toBe(
+      true
+    );
   });
 });

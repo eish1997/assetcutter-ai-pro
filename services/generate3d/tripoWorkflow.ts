@@ -200,15 +200,16 @@ function gatewayDetailToTripoResult(detail: AiJobDetail): TripoTaskResult {
             : 'unknown';
   const output = detail.job.output as Record<string, unknown> | null | undefined;
   const rawArtifacts = extractTripoTaskArtifactUrls(output?.raw || output || detail);
-  const artifactModelUrls = detail.job.artifacts
+  const artifactModelUrls = (Array.isArray(detail.job.artifacts) ? detail.job.artifacts : [])
     .filter((artifact) => isAiGatewayModel3dArtifact(artifact))
     .map((artifact) => extractAiGatewayArtifactUrl(artifact))
     .filter(Boolean);
-  const modelUrls = rawArtifacts.modelUrls.length
-    ? rawArtifacts.modelUrls
+  // A3: prefer Gateway contract artifacts over provider-shaped raw/output dig.
+  const modelUrls = artifactModelUrls.length
+    ? artifactModelUrls
     : Array.isArray(output?.modelUrls)
     ? output.modelUrls.map((url) => String(url || '').trim()).filter(Boolean)
-    : artifactModelUrls;
+    : rawArtifacts.modelUrls;
   return {
     taskId: extractGatewayTripoTaskId(detail),
     status,

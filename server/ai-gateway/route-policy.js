@@ -1,5 +1,35 @@
+import { resolveDispatchPolicyFromOptions } from './route-dispatch.js';
+
 function nonEmptyString(value) {
   return typeof value === 'string' && value.trim() ? value.trim() : '';
+}
+
+function asRecord(value) {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value : null;
+}
+
+export function selectionReasonFromPlan(plan) {
+  const metadata = asRecord(plan?.job?.metadata) || {};
+  const decision = asRecord(metadata.routeDecision) || {};
+  const selected = asRecord(decision.selectedRoute) || {};
+  return (
+    asRecord(selected.selectionReason) ||
+    asRecord(decision.selectionReason) ||
+    asRecord(plan?.route?.selectionReason) ||
+    null
+  );
+}
+
+/** A4: explicit user provider / admin pin must not silently cross providers. */
+export function isProviderPinnedForFallback(plan, options = {}) {
+  if (options.allowExplicitProviderFallback === true) return false;
+  const policy = resolveDispatchPolicyFromOptions(options);
+  if (policy.runtimeFallback?.respectProviderPin === false) return false;
+  const metadata = asRecord(plan?.job?.metadata) || {};
+  if (metadata.providerPinned === true) return true;
+  const reason = selectionReasonFromPlan(plan);
+  if (nonEmptyString(reason?.strategy) === 'admin_pin') return true;
+  return false;
 }
 
 const FALLBACK_POLICY_SET = new Set([
@@ -104,19 +134,64 @@ export function fallbackPolicyAllows(classification, policies) {
 
 export function evaluateAiGatewayFallback(plan, error, options = {}) {
   const classification = classifyAiGatewayFallbackError(error);
+  const pinned = isProviderPinnedForFallback(plan, options);
   const enabled = fallbackEnabledForPlan(plan, options);
   const policies = fallbackPoliciesForPlan(plan, options);
   const policyAllowed = fallbackPolicyAllows(classification, policies);
+  const dispatchPolicy = resolveDispatchPolicyFromOptions(options);
+  const runtime = dispatchPolicy.runtimeFallback || {};
+  const allowCrossProvider = runtime.allowCrossProvider !== false;
+  const onTimeout = nonEmptyString(runtime.onTimeout) || 'switch_provider';
+  const sameRouteRetryMax = Math.max(0, Math.min(3, Number(runtime.sameRouteRetryMax ?? 1) || 0));
+  const metadata = asRecord(plan?.job?.metadata) || {};
+  const fallbackMeta = asRecord(metadata.aiGatewayFallback) || {};
+  const sameRouteRetryCount = Math.max(
+    0,
+    Number(options.sameRouteRetryCount ?? fallbackMeta.sameRouteRetryCount ?? 0) || 0
+  );
+
+  let shouldSameRouteRetry = false;
+  let timeoutBlocksCrossProvider = false;
+  if (classification.policyKind === 'on_timeout') {
+    if (onTimeout === 'fail') {
+      timeoutBlocksCrossProvider = true;
+    } else if (onTimeout === 'same_route_retry') {
+      if (sameRouteRetryCount < sameRouteRetryMax) {
+        shouldSameRouteRetry = true;
+      }
+      // After same-route budget is spent, allow cross-provider only if still enabled.
+    }
+  }
+
   let skipReason = '';
-  if (!enabled) skipReason = 'fallback_disabled';
+  if (pinned) skipReason = 'provider_pinned';
+  else if (shouldSameRouteRetry) skipReason = '';
+  else if (timeoutBlocksCrossProvider) skipReason = 'timeout_fail_policy';
+  else if (!allowCrossProvider) skipReason = 'cross_provider_fallback_disabled';
+  else if (!enabled) skipReason = 'fallback_disabled';
   else if (!classification.retryable) skipReason = 'non_retryable_error';
   else if (!policyAllowed) skipReason = 'policy_disallowed';
+
+  const shouldFallback =
+    !pinned &&
+    !shouldSameRouteRetry &&
+    !timeoutBlocksCrossProvider &&
+    allowCrossProvider &&
+    enabled &&
+    classification.retryable &&
+    policyAllowed;
+
   return {
     ...classification,
-    enabled,
+    enabled: enabled && !pinned && allowCrossProvider && !timeoutBlocksCrossProvider,
+    pinned,
     policies,
     policyAllowed,
-    shouldFallback: enabled && classification.retryable && policyAllowed,
+    onTimeout,
+    sameRouteRetryMax,
+    sameRouteRetryCount,
+    shouldSameRouteRetry: shouldSameRouteRetry && classification.retryable,
+    shouldFallback,
     skipReason,
   };
 }

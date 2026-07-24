@@ -74,8 +74,7 @@ function collectModelUrls(detail: AiJobDetail): string[] {
     if (!url || out.includes(url)) return;
     out.push(url);
   };
-  if (Array.isArray(output.modelUrls)) output.modelUrls.forEach(push);
-  if (Array.isArray(output.urls)) output.urls.forEach(push);
+  // A3: contract artifacts first; output fields are legacy fallback.
   const artifacts = Array.isArray(detail.job?.artifacts) ? detail.job.artifacts : [];
   for (const artifact of artifacts) {
     const obj = artifact && typeof artifact === 'object' ? artifact : {};
@@ -83,6 +82,8 @@ function collectModelUrls(detail: AiJobDetail): string[] {
     push(obj.url);
     push(obj.modelUrl);
   }
+  if (Array.isArray(output.modelUrls)) output.modelUrls.forEach(push);
+  if (Array.isArray(output.urls)) output.urls.forEach(push);
   return out;
 }
 

@@ -9,9 +9,10 @@ import {
 import { DEFAULT_AI_PROVIDER_ROUTES } from '../server/ai-gateway/provider-router.js';
 import { AI_GATEWAY_WORKERS } from '../server/ai-gateway/workers/registry.js';
 import {
-  listExecutableAiGatewayModelRoutes,
   normalizeAiGatewayProviderId,
+  normalizeCatalogRouteCandidateStatus,
 } from '../shared/aiGatewayModelRoutes.js';
+import { listGatewayRouteConfigs } from '../server/ai-gateway/route-config-source.js';
 
 const DIAGNOSTIC_MODALITIES = new Set(['text', 'image']);
 
@@ -101,20 +102,30 @@ for (const route of listModelRoutes()) {
     );
   }
 
+  const catalogStatus = normalizeCatalogRouteCandidateStatus(route.gatewayExecutionStatus);
   const executableCatalogRoute =
     route.enabled &&
-    route.gatewayExecutionStatus === 'gateway_ready' &&
+    catalogStatus === 'ready' &&
     (route.executionStatus === 'platform_ready' || route.executionStatus === 'byok_ready');
   if (!executableCatalogRoute) continue;
 
-  const executableRoutes = listExecutableAiGatewayModelRoutes({
+  // A1: catalog ready ⇒ decision source (gatewayRouteConfigs overlay + seed) can explain the route.
+  const executableRoutes = listGatewayRouteConfigs({
     canonicalModelId: route.canonicalModelId,
     providerId: route.providerId,
     modality: route.modality,
   });
-  const executable = executableRoutes.find((item) => normalizeAiGatewayProviderId(item.providerId) === route.providerId);
+  const executable = executableRoutes.find(
+    (item) =>
+      normalizeAiGatewayProviderId(item.providerId) === normalizeAiGatewayProviderId(route.providerId) &&
+      item.enabled !== false
+  );
   if (!executable) {
-    violations.push(fail(`Gateway-ready route ${route.routeId} is not covered by shared executable Gateway rules`));
+    violations.push(
+      fail(
+        `Gateway-ready route ${route.routeId} is not explainable by listGatewayRouteConfigs (seed + gatewayRouteConfigs)`
+      )
+    );
     continue;
   }
   if (executable.platformKeyRequired && (!provider.keyPoolSupported || !hasAuthFields(provider))) {

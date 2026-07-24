@@ -114,4 +114,31 @@ describe('AI Gateway route dispatch (Slice 6)', () => {
       code: 'AI_GATEWAY_DISPATCH_ADMIN_PIN',
     });
   });
+
+  it('selects canary provider with auditable selectionReason', () => {
+    const { selected, selectionReason } = selectRouteWithDispatchPolicy(
+      [
+        { providerId: 'openai-official', priority: 10 },
+        { providerId: '302ai', priority: 40 },
+      ],
+      {
+        canonicalModelId: 'gpt-image-2',
+        modality: 'image',
+        correlationId: 'corr_canary_always',
+        keys: [
+          { provider: 'openai-official', enabled: true, hasSecret: true, runtime: { healthStatus: 'healthy' } },
+          { provider: '302ai', enabled: true, hasSecret: true, runtime: { healthStatus: 'healthy' } },
+        ],
+      },
+      {
+        canary: [{ canonicalModelId: 'gpt-image-2', providerId: '302ai', percent: 100, enabled: true }],
+      }
+    );
+    expect(selected.providerId).toBe('302ai');
+    expect(selectionReason).toMatchObject({
+      strategy: 'canary',
+      code: 'AI_GATEWAY_DISPATCH_CANARY',
+      override: expect.objectContaining({ kind: 'canary', providerId: '302ai', percent: 100 }),
+    });
+  });
 });
