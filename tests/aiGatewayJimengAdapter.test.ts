@@ -76,8 +76,10 @@ describe('Jimeng visual AI gateway video worker', () => {
       expect.objectContaining({
         kind: 'video',
         url: 'https://cdn.example.com/v.mp4',
-        source: 'volcengine-jimeng',
-        billing: expect.objectContaining({ settlementSource: 'provider_task_usage' }),
+        metadata: expect.objectContaining({
+          source: 'volcengine-jimeng',
+          billing: expect.objectContaining({ settlementSource: 'provider_task_usage' }),
+        }),
       }),
     ]);
   });

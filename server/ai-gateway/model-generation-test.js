@@ -1,5 +1,6 @@
 import { createAuthAiGatewayJob, publicAuthAiJobDetail } from './auth-api-handler.js';
 import { persistentAiGatewayJobStore } from './persistent-job-store.js';
+import { publicAiGatewayFailureReason, resolveAiGatewayFailureReason } from './failure-reason.js';
 
 const SUPPORTED_MODALITIES = new Set(['text', 'image', 'video', 'model3d']);
 const TERMINAL_STATUSES = new Set(['succeeded', 'failed', 'cancelled']);
@@ -28,24 +29,34 @@ function normalizeGenerationTestInput(input) {
 }
 
 function failedResult(input, code, message, extra = {}) {
+  const failureReason = publicAiGatewayFailureReason(
+    resolveAiGatewayFailureReason(
+      { code, message, ...(extra.jobError && typeof extra.jobError === 'object' ? extra.jobError : {}) },
+      { defaultCode: code }
+    )
+  );
   return {
     ok: false,
     status: 'failed',
+    checkKind: 'generation',
     mode: 'real_generation',
     testLayer: 'generation_test',
     createsGenerationTask: extra.createsGenerationTask === true || Boolean(extra.jobId),
+    billingNote: 'Generation Test creates a real AI Gateway job and may reserve/charge credits.',
     canonicalModelId: input.canonicalModelId || null,
     providerId: input.provider || null,
     modality: input.modality || null,
     code,
     message,
     jobId: extra.jobId || null,
+    aiGatewayJobId: extra.jobId || null,
     jobStatus: extra.jobStatus || null,
     route: extra.route || null,
     fallback: extra.fallback || null,
     artifacts: extra.artifacts || [],
     outputSummary: extra.outputSummary || null,
-    nextAction: extra.nextAction || null,
+    nextAction: extra.nextAction || failureReason?.nextAction || null,
+    failureReason,
     testedAt: new Date().toISOString(),
   };
 }
@@ -252,15 +263,20 @@ export async function testAiGatewayModelGeneration(req, input = {}, user = {}, o
   if (detail.job.status !== 'succeeded') {
     return failedResult(
       normalized,
-      detail.job.error?.code || 'AI_GATEWAY_GENERATION_JOB_FAILED',
-      detail.job.error?.message || `Generation task ended as ${detail.job.status}`,
+      detail.job.metadata?.gatewayFailure?.code || detail.job.error?.code || 'AI_GATEWAY_GENERATION_JOB_FAILED',
+      detail.job.metadata?.gatewayFailure?.adminMessage ||
+        detail.job.error?.message ||
+        `Generation task ended as ${detail.job.status}`,
       {
         jobId,
         jobStatus: detail.job.status,
         route,
         fallback: detail.job.fallback || null,
         artifacts,
-        nextAction: 'Check the job detail error, provider key health, and upstream quota/rate limit.',
+        jobError: detail.job.metadata?.gatewayFailure || detail.job.error || null,
+        nextAction:
+          detail.job.metadata?.gatewayFailure?.nextAction ||
+          'Check the job detail error, provider key health, and upstream quota/rate limit.',
       }
     );
   }
@@ -279,15 +295,18 @@ export async function testAiGatewayModelGeneration(req, input = {}, user = {}, o
   return {
     ok: true,
     status: 'passed',
+    checkKind: 'generation',
     mode: 'real_generation',
     testLayer: 'generation_test',
     createsGenerationTask: true,
+    billingNote: 'Generation Test created a real AI Gateway job and may have reserved/charged credits.',
     canonicalModelId: normalized.canonicalModelId,
     providerId: detail.job.provider || route?.providerId || normalized.provider || null,
     modality: normalized.modality,
     code: 'AI_GATEWAY_GENERATION_READY',
-    message: 'Generation task created, completed, and returned the expected output type.',
+    message: 'Generation Test passed: a real job completed with expected output. This is not the same as Route Check.',
     jobId,
+    aiGatewayJobId: jobId,
     jobStatus: detail.job.status,
     route,
     fallback: detail.job.fallback || null,

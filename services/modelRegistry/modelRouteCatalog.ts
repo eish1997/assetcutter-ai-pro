@@ -19,7 +19,7 @@ export type ModelRouteExecutionStatus =
   | "requires_endpoint_mapping"
   | "adapter_pending"
   | "disabled";
-export type ModelRouteGatewayExecutionStatus = "gateway_ready" | "adapter_pending" | "not_gateway_routed";
+export type ModelRouteGatewayExecutionStatus = "ready" | "adapter_pending" | "not_published";
 
 export type ModelRouteCatalogEntry = {
   routeId: string;
@@ -157,7 +157,7 @@ function buildArkRoutes(): ModelRouteCatalogEntry[] {
       priority: 20 + index,
       fallbackPolicy: "on_error" as const,
       source: "static" as const,
-      executionStatus: gatewayExecutionStatus === "gateway_ready" ? ("platform_ready" as const) : ("adapter_pending" as const),
+      executionStatus: gatewayExecutionStatus === "ready" ? ("platform_ready" as const) : ("adapter_pending" as const),
       gatewayExecutionStatus,
     };
   });
@@ -217,7 +217,7 @@ const MODEL3D_ROUTES: readonly ModelRouteCatalogEntry[] = [
     fallbackPolicy: "none",
     source: "static",
     executionStatus: "platform_ready",
-    gatewayExecutionStatus: "gateway_ready",
+    gatewayExecutionStatus: "ready",
   },
   {
     routeId: "tencent-hunyuan-3d-rapid:tencent-hunyuan:model3d",
@@ -230,7 +230,7 @@ const MODEL3D_ROUTES: readonly ModelRouteCatalogEntry[] = [
     fallbackPolicy: "none",
     source: "static",
     executionStatus: "platform_ready",
-    gatewayExecutionStatus: "gateway_ready",
+    gatewayExecutionStatus: "ready",
   },
 ];
 

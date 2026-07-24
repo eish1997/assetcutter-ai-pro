@@ -12,6 +12,7 @@ import {
 } from './route-policy.js';
 import { settleAiGatewayJobCredits, settlementMetadataPatch } from './settlement.js';
 import { startAiGatewayWorkerExecution } from './workers/registry.js';
+import { gatewayFailureMetadata, decorateErrorWithFailureReason } from './failure-reason.js';
 
 async function settleFailedExecution(plan, store) {
   if (!plan || !store?.update) return plan;
@@ -23,6 +24,10 @@ async function settleFailedExecution(plan, store) {
 
 function planInputForRetry(plan, metadata) {
   const job = plan?.job || {};
+  const nextMetadata = metadata && typeof metadata === 'object' ? { ...metadata } : {};
+  // Drop prior decision so fallback can re-select with disabledProviders (single-truth re-decide).
+  delete nextMetadata.routeDecision;
+  delete nextMetadata.modelRouteGuard;
   return {
     id: job.id,
     modality: job.modality,
@@ -31,7 +36,7 @@ function planInputForRetry(plan, metadata) {
     userId: job.userId,
     correlationId: job.correlationId,
     input: job.input,
-    metadata,
+    metadata: nextMetadata,
   };
 }
 
@@ -144,12 +149,23 @@ export async function startAiGatewayJobExecution(plan, options = {}) {
 async function failAiGatewayExecution(plan, error, options = {}) {
   const store = options.store;
   const failedAt = new Date().toISOString();
+  const decorated = decorateErrorWithFailureReason(error, {
+    defaultCode: 'AI_GATEWAY_EXECUTION_HANDOFF_FAILED',
+    providerId: plan.route?.providerId || plan.job?.provider || null,
+    adapterId: plan.route?.adapterId || null,
+    workerId: plan.route?.workerId || null,
+  });
+  const failureError = {
+    code: decorated?.code || error?.code || 'AI_GATEWAY_EXECUTION_HANDOFF_FAILED',
+    message: publicAiGatewayErrorMessage(decorated || error),
+    ...(decorated?.failureReason ? { failureReason: decorated.failureReason } : {}),
+  };
   const failedPlan = {
     ...plan,
     job: {
       ...(plan.job || {}),
       status: 'failed',
-      error: { code: 'AI_GATEWAY_EXECUTION_HANDOFF_FAILED', message: publicAiGatewayErrorMessage(error) },
+      error: failureError,
       finishedAt: failedAt,
       updatedAt: failedAt,
     },
@@ -163,7 +179,7 @@ async function failAiGatewayExecution(plan, error, options = {}) {
       recentPlans = [];
     }
   }
-  const autoCircuit = await maybeAutoPauseAiGatewayProvider(failedPlan, error, {
+  const autoCircuit = await maybeAutoPauseAiGatewayProvider(failedPlan, decorated || error, {
     recentPlans,
     windowLimit: options.autoCircuitWindowLimit,
     minTerminal: options.autoCircuitMinTerminal,
@@ -175,7 +191,7 @@ async function failAiGatewayExecution(plan, error, options = {}) {
   const metadata = {
     gatewayExecution: {
       failedAt,
-        error: publicAiGatewayErrorMessage(error),
+      error: publicAiGatewayErrorMessage(decorated || error),
       targetPath: plan.adapterRequest?.path || null,
       workerId: plan.route?.workerId || null,
       adapterId: plan.route?.adapterId || null,
@@ -188,12 +204,18 @@ async function failAiGatewayExecution(plan, error, options = {}) {
           }
         : null,
     },
+    ...gatewayFailureMetadata(decorated || failureError, {
+      defaultCode: 'AI_GATEWAY_EXECUTION_HANDOFF_FAILED',
+      providerId: plan.route?.providerId || plan.job?.provider || null,
+      adapterId: plan.route?.adapterId || null,
+      workerId: plan.route?.workerId || null,
+    }),
   };
   const failed = store?.update
     ? await store.update(plan.job.id, {
         status: 'failed',
         metadata,
-        error: { code: 'AI_GATEWAY_EXECUTION_HANDOFF_FAILED', message: publicAiGatewayErrorMessage(error) },
+        error: failureError,
       })
     : plan;
   const settled = await settleFailedExecution(failed, store);

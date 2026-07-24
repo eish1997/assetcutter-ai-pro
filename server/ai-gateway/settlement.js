@@ -181,6 +181,12 @@ export function settlementMetadataPatch(plan, settlement) {
       ...gate,
       releasedAt: now,
       settlementAction: 'released',
+      settlementReleaseReason:
+        plan?.job?.status === 'failed'
+          ? plan?.job?.metadata?.gatewayFailure?.code || plan?.job?.error?.code || 'AI_GATEWAY_JOB_FAILED'
+          : plan?.job?.status === 'cancelled'
+            ? 'AI_GATEWAY_JOB_CANCELLED'
+            : 'AI_GATEWAY_RESERVE_RELEASED',
     },
   };
 }

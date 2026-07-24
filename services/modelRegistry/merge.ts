@@ -88,7 +88,7 @@ export function buildEffectiveTextModelRows(
 
 function primaryGatewayProvider(canonicalModelId: string): { providerId?: string; providerLabel?: string } {
   const routes = listModelRoutes(canonicalModelId).sort((a, b) => a.priority - b.priority);
-  const route = routes.find((row) => row.gatewayExecutionStatus === "gateway_ready") || routes[0];
+  const route = routes.find((row) => row.gatewayExecutionStatus === "ready") || routes[0];
   if (!route?.providerId) return {};
   return {
     providerId: route.providerId,

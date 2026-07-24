@@ -6,7 +6,7 @@ export const AI_GATEWAY_MODEL_ROUTE_EXECUTABLE_RULES = Object.freeze([
     modalities: Object.freeze(['text', 'image']),
     catalogProviderIds: Object.freeze(['vertex-site', 'gemini-aistudio']),
     gatewayProviderIds: Object.freeze(['vertex-site', 'gemini-aistudio']),
-    gatewayExecutionStatus: 'gateway_ready',
+    gatewayExecutionStatus: 'ready',
     executionStatus: 'platform_ready',
     platformKeyRequired: true,
   },
@@ -16,7 +16,7 @@ export const AI_GATEWAY_MODEL_ROUTE_EXECUTABLE_RULES = Object.freeze([
     modalities: Object.freeze(['text', 'image']),
     catalogProviderIds: Object.freeze(['openai-official', 'tinysnow', '302ai', 'aihubmix']),
     gatewayProviderIds: Object.freeze(['openai-official', 'tinysnow', '302ai', 'aihubmix']),
-    gatewayExecutionStatus: 'gateway_ready',
+    gatewayExecutionStatus: 'ready',
     executionStatus: 'platform_ready',
     platformKeyRequired: true,
   },
@@ -26,7 +26,7 @@ export const AI_GATEWAY_MODEL_ROUTE_EXECUTABLE_RULES = Object.freeze([
     modalities: Object.freeze(['text', 'image']),
     catalogProviderIds: Object.freeze(['toapis']),
     gatewayProviderIds: Object.freeze(['toapis']),
-    gatewayExecutionStatus: 'gateway_ready',
+    gatewayExecutionStatus: 'ready',
     executionStatus: 'platform_ready',
     platformKeyRequired: true,
   },
@@ -36,7 +36,7 @@ export const AI_GATEWAY_MODEL_ROUTE_EXECUTABLE_RULES = Object.freeze([
     modalities: Object.freeze(['text']),
     catalogProviderIds: Object.freeze(['volcengine-ark']),
     gatewayProviderIds: Object.freeze(['volcengine-ark']),
-    gatewayExecutionStatus: 'gateway_ready',
+    gatewayExecutionStatus: 'ready',
     executionStatus: 'platform_ready',
     platformKeyRequired: true,
   },
@@ -46,7 +46,7 @@ export const AI_GATEWAY_MODEL_ROUTE_EXECUTABLE_RULES = Object.freeze([
     modalities: Object.freeze(['image']),
     catalogProviderIds: Object.freeze(['volcengine-ark']),
     gatewayProviderIds: Object.freeze(['volcengine-ark']),
-    gatewayExecutionStatus: 'gateway_ready',
+    gatewayExecutionStatus: 'ready',
     executionStatus: 'platform_ready',
     platformKeyRequired: true,
   },
@@ -56,7 +56,7 @@ export const AI_GATEWAY_MODEL_ROUTE_EXECUTABLE_RULES = Object.freeze([
     modalities: Object.freeze(['video']),
     catalogProviderIds: Object.freeze(['volcengine-ark']),
     gatewayProviderIds: Object.freeze(['volcengine-ark']),
-    gatewayExecutionStatus: 'gateway_ready',
+    gatewayExecutionStatus: 'ready',
     executionStatus: 'platform_ready',
     platformKeyRequired: true,
   },
@@ -66,7 +66,7 @@ export const AI_GATEWAY_MODEL_ROUTE_EXECUTABLE_RULES = Object.freeze([
     modalities: Object.freeze(['model3d']),
     catalogProviderIds: Object.freeze(['volcengine-ark']),
     gatewayProviderIds: Object.freeze(['volcengine-ark']),
-    gatewayExecutionStatus: 'gateway_ready',
+    gatewayExecutionStatus: 'ready',
     executionStatus: 'platform_ready',
     platformKeyRequired: true,
   },
@@ -76,7 +76,7 @@ export const AI_GATEWAY_MODEL_ROUTE_EXECUTABLE_RULES = Object.freeze([
     modalities: Object.freeze(['image']),
     catalogProviderIds: Object.freeze(['volcengine-jimeng']),
     gatewayProviderIds: Object.freeze(['volcengine-jimeng']),
-    gatewayExecutionStatus: 'gateway_ready',
+    gatewayExecutionStatus: 'ready',
     executionStatus: 'platform_ready',
     platformKeyRequired: true,
   },
@@ -86,7 +86,7 @@ export const AI_GATEWAY_MODEL_ROUTE_EXECUTABLE_RULES = Object.freeze([
     modalities: Object.freeze(['video']),
     catalogProviderIds: Object.freeze(['volcengine-jimeng']),
     gatewayProviderIds: Object.freeze(['volcengine-jimeng']),
-    gatewayExecutionStatus: 'gateway_ready',
+    gatewayExecutionStatus: 'ready',
     executionStatus: 'platform_ready',
     platformKeyRequired: true,
   },
@@ -96,7 +96,7 @@ export const AI_GATEWAY_MODEL_ROUTE_EXECUTABLE_RULES = Object.freeze([
     modalities: Object.freeze(['model3d']),
     catalogProviderIds: Object.freeze(['tripo']),
     gatewayProviderIds: Object.freeze(['tripo']),
-    gatewayExecutionStatus: 'gateway_ready',
+    gatewayExecutionStatus: 'ready',
     executionStatus: 'platform_ready',
     platformKeyRequired: true,
   },
@@ -106,7 +106,7 @@ export const AI_GATEWAY_MODEL_ROUTE_EXECUTABLE_RULES = Object.freeze([
     modalities: Object.freeze(['model3d']),
     catalogProviderIds: Object.freeze(['tencent-hunyuan']),
     gatewayProviderIds: Object.freeze(['tencent-hunyuan']),
-    gatewayExecutionStatus: 'gateway_ready',
+    gatewayExecutionStatus: 'ready',
     executionStatus: 'platform_ready',
     platformKeyRequired: true,
   },
@@ -131,11 +131,12 @@ export const AI_GATEWAY_MODEL_ROUTE_PENDING_RULES = Object.freeze([
     executionStatus: 'adapter_pending',
   },
   {
-    id: '302ai-multimodal-manual-pending',
-    modelPattern: /^302ai-(video|model3d)-manual$/i,
+    id: 'openai-compatible-async-manual-pending',
+    modelPattern: /^[a-z0-9-]+-(video|model3d)-manual$/i,
     modalities: Object.freeze(['video', 'model3d']),
-    catalogProviderIds: Object.freeze(['302ai']),
-    gatewayProviderIds: Object.freeze(['302ai']),
+    // Provider list is intentionally open: mappedAsyncRouteFromOps gates on asyncCapable config.
+    catalogProviderIds: Object.freeze(['302ai', 'aihubmix', 'toapis', 'tinysnow']),
+    gatewayProviderIds: Object.freeze(['302ai', 'aihubmix', 'toapis', 'tinysnow']),
     gatewayExecutionStatus: 'adapter_pending',
     executionStatus: 'adapter_pending',
   },
@@ -170,6 +171,11 @@ export function normalizeAiGatewayProviderId(value) {
   if (id === 'aihubmix-openai' || id === 'aihubmix') return 'aihubmix';
   if (id === 'tinysnow-openai') return 'tinysnow';
   if (id === 'vertex-gemini') return 'vertex-site';
+  // Generic OpenAI-compatible channel/adapter alias: `${providerId}-openai` → providerId
+  if (/-openai$/i.test(id)) {
+    const base = id.replace(/-openai$/i, '');
+    if (base && base !== 'openai') return base;
+  }
   return id;
 }
 
@@ -274,8 +280,25 @@ export function listPendingAiGatewayModelRoutes(input, options = {}) {
 
 export function resolveCatalogGatewayExecutionStatus(input) {
   const executable = resolveExecutableAiGatewayModelRoute(input, { providerField: 'catalogProviderIds' });
-  if (executable) return executable.gatewayExecutionStatus;
+  if (executable) {
+    return normalizeCatalogRouteCandidateStatus(executable.gatewayExecutionStatus) || 'ready';
+  }
   const pending = resolvePendingAiGatewayModelRoute(input, { providerField: 'catalogProviderIds' });
-  if (pending) return pending.gatewayExecutionStatus;
-  return 'not_gateway_routed';
+  if (pending) {
+    return normalizeCatalogRouteCandidateStatus(pending.gatewayExecutionStatus) || 'adapter_pending';
+  }
+  return 'not_published';
+}
+
+/**
+ * Align catalog/gatewayExecutionStatus with decision.candidates[].status vocabulary.
+ * Legacy aliases (gateway_ready / not_gateway_routed) normalize here so callers do not invent a third set.
+ */
+export function normalizeCatalogRouteCandidateStatus(status) {
+  const id = String(status || '').trim();
+  if (id === 'gateway_ready' || id === 'ready') return 'ready';
+  if (id === 'adapter_pending') return 'adapter_pending';
+  if (id === 'not_gateway_routed' || id === 'not_published') return 'not_published';
+  if (id === 'paused' || id === 'key_unavailable' || id === 'mapping_incomplete') return id;
+  return '';
 }

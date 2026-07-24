@@ -18,7 +18,7 @@ function route(partial: Partial<ModelRouteCatalogEntry>): ModelRouteCatalogEntry
     fallbackPolicy: 'none',
     source: 'provider-binding',
     executionStatus: 'platform_ready',
-    gatewayExecutionStatus: 'gateway_ready',
+    gatewayExecutionStatus: 'ready',
     ...partial,
   } as ModelRouteCatalogEntry;
 }

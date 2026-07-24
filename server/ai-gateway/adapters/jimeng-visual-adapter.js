@@ -7,6 +7,7 @@ import {
   submitJimengTask,
 } from '../../jimeng-visual-api.js';
 import { finalizeAiGatewayTerminalPlan } from '../execution-finalize.js';
+import { applyAiGatewayAdapterResult } from '../adapter-result.js';
 import { buildProviderTaskUsage, collectByteSize } from '../execution-usage.js';
 
 export const JIMENG_VISUAL_DEFAULT_VIDEO_REGISTRY_ID = 'jimeng-video-ti2v-v30-pro';
@@ -139,19 +140,25 @@ async function pollJimengVideoTask(plan, taskId, registryId, options = {}) {
       ...(options.credentials ? { credentials: options.credentials } : {}),
     });
     if (!result?.ok) {
-      const failed = await store.update(plan.job.id, {
-        status: 'failed',
-        error: {
-          code: result?.body?.code || 'JIMENG_POLL_FAILED',
-          message: publicJimengError(result, 'Jimeng video poll failed'),
-        },
-        metadata: {
-          jimengTaskId: taskId,
+      const { plan: failed } = await applyAiGatewayAdapterResult(
+        plan,
+        {
+          status: 'failed',
           upstreamTaskId: taskId,
-          jimengRegistryId: registryId,
-          gatewayExecution: { failedAt: new Date().toISOString() },
+          error: {
+            code: result?.body?.code || 'JIMENG_POLL_FAILED',
+            message: publicJimengError(result, 'Jimeng video poll failed'),
+          },
         },
-      });
+        store,
+        {
+          metadata: {
+            jimengTaskId: taskId,
+            jimengRegistryId: registryId,
+            gatewayExecution: { failedAt: new Date().toISOString() },
+          },
+        }
+      );
       await finalizeAiGatewayTerminalPlan(failed, store);
       return;
     }
@@ -160,16 +167,22 @@ async function pollJimengVideoTask(plan, taskId, registryId, options = {}) {
     if (status === 'done') {
       const videoUrl = nonEmptyString(body.videoUrl) || nonEmptyString(body.video_url);
       if (!videoUrl) {
-        const failed = await store.update(plan.job.id, {
-          status: 'failed',
-          error: { code: 'JIMENG_VIDEO_URL_MISSING', message: 'Jimeng video task completed without videoUrl' },
-          metadata: {
-            jimengTaskId: taskId,
+        const { plan: failed } = await applyAiGatewayAdapterResult(
+          plan,
+          {
+            status: 'failed',
             upstreamTaskId: taskId,
-            jimengRegistryId: registryId,
-            gatewayExecution: { failedAt: new Date().toISOString() },
+            error: { code: 'JIMENG_VIDEO_URL_MISSING', message: 'Jimeng video task completed without videoUrl' },
           },
-        });
+          store,
+          {
+            metadata: {
+              jimengTaskId: taskId,
+              jimengRegistryId: registryId,
+              gatewayExecution: { failedAt: new Date().toISOString() },
+            },
+          }
+        );
         await finalizeAiGatewayTerminalPlan(failed, store);
         return;
       }
@@ -187,56 +200,67 @@ async function pollJimengVideoTask(plan, taskId, registryId, options = {}) {
         startedAtMs,
         completedAtMs,
       });
-      const succeeded = await store.update(plan.job.id, {
-        status: 'succeeded',
-        output: {
-          provider: 'volcengine-jimeng',
-          taskId,
-          registryId,
-          videoUrl,
+      const { plan: succeeded } = await applyAiGatewayAdapterResult(
+        plan,
+        {
+          status: 'succeeded',
+          upstreamTaskId: taskId,
+          artifacts: [
+            {
+              kind: 'video',
+              url: videoUrl,
+              source: 'volcengine-jimeng',
+              taskId,
+              registryId,
+              billing: {
+                actualCredits: usage.actualCredits,
+                settlementSource: usage.settlementSource,
+              },
+            },
+          ],
           usage,
-          raw: body.raw || body,
-        },
-        artifacts: [
-          {
-            kind: 'video',
-            url: videoUrl,
-            source: 'volcengine-jimeng',
+          output: {
+            provider: 'volcengine-jimeng',
             taskId,
             registryId,
-            billing: {
-              actualCredits: usage.actualCredits,
-              settlementSource: usage.settlementSource,
-            },
-          },
-        ],
-        metadata: {
-          jimengTaskId: taskId,
-          upstreamTaskId: taskId,
-          jimengRegistryId: registryId,
-          usage,
-          gatewayExecution: {
-            completedAt: new Date(completedAtMs).toISOString(),
-            durationMs: usage.durationMs,
-            outputBytes,
-            artifactCount: 1,
+            videoUrl,
+            raw: body.raw || body,
           },
         },
-      });
+        store,
+        {
+          metadata: {
+            jimengTaskId: taskId,
+            jimengRegistryId: registryId,
+            gatewayExecution: {
+              completedAt: new Date(completedAtMs).toISOString(),
+              durationMs: usage.durationMs,
+              outputBytes,
+              artifactCount: 1,
+            },
+          },
+        }
+      );
       await finalizeAiGatewayTerminalPlan(succeeded, store);
       return;
     }
     if (status === 'failed' || status === 'error') {
-      const failed = await store.update(plan.job.id, {
-        status: 'failed',
-        error: { code: body.code || 'JIMENG_TASK_FAILED', message: nonEmptyString(body.message) || 'Jimeng video task failed' },
-        metadata: {
-          jimengTaskId: taskId,
+      const { plan: failed } = await applyAiGatewayAdapterResult(
+        plan,
+        {
+          status: 'failed',
           upstreamTaskId: taskId,
-          jimengRegistryId: registryId,
-          gatewayExecution: { failedAt: new Date().toISOString() },
+          error: { code: body.code || 'JIMENG_TASK_FAILED', message: nonEmptyString(body.message) || 'Jimeng video task failed' },
         },
-      });
+        store,
+        {
+          metadata: {
+            jimengTaskId: taskId,
+            jimengRegistryId: registryId,
+            gatewayExecution: { failedAt: new Date().toISOString() },
+          },
+        }
+      );
       await finalizeAiGatewayTerminalPlan(failed, store);
       return;
     }
@@ -252,16 +276,22 @@ async function pollJimengVideoTask(plan, taskId, registryId, options = {}) {
     });
   }
 
-  const failed = await store.update(plan.job.id, {
-    status: 'failed',
-    error: { code: 'JIMENG_POLL_TIMEOUT', message: 'Jimeng video task polling timed out' },
-    metadata: {
-      jimengTaskId: taskId,
+  const { plan: failed } = await applyAiGatewayAdapterResult(
+    plan,
+    {
+      status: 'failed',
       upstreamTaskId: taskId,
-      jimengRegistryId: registryId,
-      gatewayExecution: { failedAt: new Date().toISOString() },
+      error: { code: 'JIMENG_POLL_TIMEOUT', message: 'Jimeng video task polling timed out' },
     },
-  });
+    store,
+    {
+      metadata: {
+        jimengTaskId: taskId,
+        jimengRegistryId: registryId,
+        gatewayExecution: { failedAt: new Date().toISOString() },
+      },
+    }
+  );
   await finalizeAiGatewayTerminalPlan(failed, store);
 }
 
@@ -282,19 +312,25 @@ async function pollJimengImageTask(plan, taskId, registryId, options = {}) {
       ...(options.credentials ? { credentials: options.credentials } : {}),
     });
     if (!result?.ok) {
-      const failed = await store.update(plan.job.id, {
-        status: 'failed',
-        error: {
-          code: result?.body?.code || 'JIMENG_POLL_FAILED',
-          message: publicJimengError(result, 'Jimeng image poll failed'),
-        },
-        metadata: {
-          jimengTaskId: taskId,
+      const { plan: failed } = await applyAiGatewayAdapterResult(
+        plan,
+        {
+          status: 'failed',
           upstreamTaskId: taskId,
-          jimengRegistryId: registryId,
-          gatewayExecution: { failedAt: new Date().toISOString() },
+          error: {
+            code: result?.body?.code || 'JIMENG_POLL_FAILED',
+            message: publicJimengError(result, 'Jimeng image poll failed'),
+          },
         },
-      });
+        store,
+        {
+          metadata: {
+            jimengTaskId: taskId,
+            jimengRegistryId: registryId,
+            gatewayExecution: { failedAt: new Date().toISOString() },
+          },
+        }
+      );
       await finalizeAiGatewayTerminalPlan(failed, store);
       return;
     }
@@ -303,16 +339,22 @@ async function pollJimengImageTask(plan, taskId, registryId, options = {}) {
     if (status === 'done') {
       const images = Array.isArray(body.images) ? body.images.filter((url) => nonEmptyString(url)) : [];
       if (!images.length) {
-        const failed = await store.update(plan.job.id, {
-          status: 'failed',
-          error: { code: 'JIMENG_IMAGE_URL_MISSING', message: 'Jimeng image task completed without image output' },
-          metadata: {
-            jimengTaskId: taskId,
+        const { plan: failed } = await applyAiGatewayAdapterResult(
+          plan,
+          {
+            status: 'failed',
             upstreamTaskId: taskId,
-            jimengRegistryId: registryId,
-            gatewayExecution: { failedAt: new Date().toISOString() },
+            error: { code: 'JIMENG_IMAGE_URL_MISSING', message: 'Jimeng image task completed without image output' },
           },
-        });
+          store,
+          {
+            metadata: {
+              jimengTaskId: taskId,
+              jimengRegistryId: registryId,
+              gatewayExecution: { failedAt: new Date().toISOString() },
+            },
+          }
+        );
         await finalizeAiGatewayTerminalPlan(failed, store);
         return;
       }
@@ -341,44 +383,55 @@ async function pollJimengImageTask(plan, taskId, registryId, options = {}) {
           settlementSource: usage.settlementSource,
         },
       }));
-      const succeeded = await store.update(plan.job.id, {
-        status: 'succeeded',
-        output: {
-          provider: 'volcengine-jimeng',
-          taskId,
-          registryId,
-          images,
-          usage,
-          raw: body.raw || body,
-        },
-        artifacts,
-        metadata: {
-          jimengTaskId: taskId,
+      const { plan: succeeded } = await applyAiGatewayAdapterResult(
+        plan,
+        {
+          status: 'succeeded',
           upstreamTaskId: taskId,
-          jimengRegistryId: registryId,
+          artifacts,
           usage,
-          gatewayExecution: {
-            completedAt: new Date(completedAtMs).toISOString(),
-            durationMs: usage.durationMs,
-            outputBytes,
-            artifactCount: artifacts.length,
+          output: {
+            provider: 'volcengine-jimeng',
+            taskId,
+            registryId,
+            images,
+            raw: body.raw || body,
           },
         },
-      });
+        store,
+        {
+          metadata: {
+            jimengTaskId: taskId,
+            jimengRegistryId: registryId,
+            gatewayExecution: {
+              completedAt: new Date(completedAtMs).toISOString(),
+              durationMs: usage.durationMs,
+              outputBytes,
+              artifactCount: artifacts.length,
+            },
+          },
+        }
+      );
       await finalizeAiGatewayTerminalPlan(succeeded, store);
       return;
     }
     if (status === 'failed' || status === 'error') {
-      const failed = await store.update(plan.job.id, {
-        status: 'failed',
-        error: { code: body.code || 'JIMENG_TASK_FAILED', message: nonEmptyString(body.message) || 'Jimeng image task failed' },
-        metadata: {
-          jimengTaskId: taskId,
+      const { plan: failed } = await applyAiGatewayAdapterResult(
+        plan,
+        {
+          status: 'failed',
           upstreamTaskId: taskId,
-          jimengRegistryId: registryId,
-          gatewayExecution: { failedAt: new Date().toISOString() },
+          error: { code: body.code || 'JIMENG_TASK_FAILED', message: nonEmptyString(body.message) || 'Jimeng image task failed' },
         },
-      });
+        store,
+        {
+          metadata: {
+            jimengTaskId: taskId,
+            jimengRegistryId: registryId,
+            gatewayExecution: { failedAt: new Date().toISOString() },
+          },
+        }
+      );
       await finalizeAiGatewayTerminalPlan(failed, store);
       return;
     }
@@ -394,16 +447,22 @@ async function pollJimengImageTask(plan, taskId, registryId, options = {}) {
     });
   }
 
-  const failed = await store.update(plan.job.id, {
-    status: 'failed',
-    error: { code: 'JIMENG_POLL_TIMEOUT', message: 'Jimeng image task polling timed out' },
-    metadata: {
-      jimengTaskId: taskId,
+  const { plan: failed } = await applyAiGatewayAdapterResult(
+    plan,
+    {
+      status: 'failed',
       upstreamTaskId: taskId,
-      jimengRegistryId: registryId,
-      gatewayExecution: { failedAt: new Date().toISOString() },
+      error: { code: 'JIMENG_POLL_TIMEOUT', message: 'Jimeng image task polling timed out' },
     },
-  });
+    store,
+    {
+      metadata: {
+        jimengTaskId: taskId,
+        jimengRegistryId: registryId,
+        gatewayExecution: { failedAt: new Date().toISOString() },
+      },
+    }
+  );
   await finalizeAiGatewayTerminalPlan(failed, store);
 }
 

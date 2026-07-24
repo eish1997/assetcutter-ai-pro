@@ -9,6 +9,7 @@ import {
   buildAiGatewayOpsRuleRows,
   buildAiGatewayOpsSuggestions,
   cleanAdminAiJobFilters,
+  filterAdminAiJobsByFailureReason,
   formatAiGatewayCostUsd,
   formatAiGatewayDuration,
   formatAiGatewayExpiry,
@@ -314,5 +315,33 @@ describe('AdminAiJobsPanel helpers', () => {
     expect(formatAiGatewayCostUsd(0)).toBe('$0.00');
     expect(formatAiGatewayCostUsd(0.004)).toBe('<$0.01');
     expect(formatAiGatewayCostUsd(1.236)).toBe('$1.24');
+  });
+
+  it('filters jobs by gatewayFailure stage/owner and flags missing failureReason', () => {
+    const rows: AiJobSummary[] = [
+      makeJob({
+        id: 'ok',
+        status: 'succeeded',
+      }),
+      makeJob({
+        id: 'up',
+        status: 'failed',
+        gatewayFailure: { stage: 'upstream', owner: 'upstream', code: 'AI_GATEWAY_UPSTREAM_RATE_LIMITED' },
+      }),
+      makeJob({
+        id: 'bare',
+        status: 'failed',
+        gatewayFailure: null,
+      }),
+    ];
+    expect(filterAdminAiJobsByFailureReason(rows, { failureStage: 'upstream', failureOwner: '' }).map((j) => j.id)).toEqual([
+      'up',
+    ]);
+    expect(filterAdminAiJobsByFailureReason(rows, { failureStage: '__missing__', failureOwner: '' }).map((j) => j.id)).toEqual([
+      'bare',
+    ]);
+    expect(filterAdminAiJobsByFailureReason(rows, { failureStage: '', failureOwner: 'upstream' }).map((j) => j.id)).toEqual([
+      'up',
+    ]);
   });
 });

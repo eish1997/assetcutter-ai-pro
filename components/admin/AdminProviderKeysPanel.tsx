@@ -14,6 +14,7 @@ import {
   fetchAdminProviderKeys,
   restoreAdminProviderKey,
   runAdminModelDiagnostics,
+  fetchAdminModelScreenDiagnosis,
   saveAdminModelOpsConfig,
   saveAdminProviderKeys,
   smokeTestAdminProviderKey,
@@ -28,6 +29,7 @@ import {
   type AdminModelOpsConfig,
   type AdminModelRouteTestInput,
   type AdminModelRouteTestResult,
+  type AdminModelScreenDiagnosisResult,
   type AdminProviderKeyEvent,
   type AdminProviderKeyHealthSummaryItem,
   type AdminProviderKeyRow,
@@ -72,10 +74,10 @@ const WORKSPACE_CANONICAL_MODELS = listCanonicalModels().filter(
     model.status !== 'disabled'
 );
 
-type ModelDiagnosticLayer = 'route' | 'generation';
+type ModelDiagnosticLayer = 'route' | 'generation' | 'screen';
 type ModelDiagnosticEntry = {
   layer: ModelDiagnosticLayer;
-  status: 'passed' | 'failed';
+  status: 'passed' | 'failed' | 'partial' | 'ready' | 'blocked';
   message: string;
   code?: string | null;
   providerId?: string | null;
@@ -87,6 +89,7 @@ type ModelDiagnosticEntry = {
   missingEndpointFields?: string[];
   nextAction?: string | null;
   testedAt?: string | null;
+  screen?: AdminModelScreenDiagnosisResult;
 };
 type ModelDiagnosticState = Record<string, Partial<Record<ModelDiagnosticLayer, ModelDiagnosticEntry>>>;
 type AdminBindingOverride = {
@@ -356,14 +359,14 @@ function routeExecutionClass(status?: ModelRouteExecutionStatus) {
 }
 
 function gatewayExecutionLabel(status?: ModelRouteGatewayExecutionStatus) {
-  if (status === 'gateway_ready') return '网关可执行';
+  if (status === 'ready') return '网关可执行';
   if (status === 'adapter_pending') return '网关待接';
-  if (status === 'not_gateway_routed') return '非网关';
+  if (status === 'not_published') return '未发布/无路由';
   return '-';
 }
 
 function gatewayExecutionClass(status?: ModelRouteGatewayExecutionStatus) {
-  if (status === 'gateway_ready') return 'border-emerald-500/30 bg-emerald-950/25 text-emerald-100';
+  if (status === 'ready') return 'border-emerald-500/30 bg-emerald-950/25 text-emerald-100';
   if (status === 'adapter_pending') return 'border-purple-500/25 bg-purple-950/20 text-purple-100';
   return 'border-white/10 bg-white/[0.03] text-gray-400';
 }
@@ -454,15 +457,31 @@ function routeFallbackSummaryText(route: AdminModelAvailabilityRouteSummary | un
 }
 
 function diagnosticStatusClass(status?: string) {
-  if (status === 'passed') return 'border-emerald-500/25 bg-emerald-950/20 text-emerald-100';
-  if (status === 'failed') return 'border-red-500/25 bg-red-950/20 text-red-100';
+  if (status === 'passed' || status === 'ready') return 'border-emerald-500/25 bg-emerald-950/20 text-emerald-100';
+  if (status === 'failed' || status === 'blocked') return 'border-red-500/25 bg-red-950/20 text-red-100';
+  if (status === 'partial') return 'border-amber-500/25 bg-amber-950/20 text-amber-100';
   return 'border-white/[0.06] bg-black/20 text-gray-500';
 }
 
-function diagnosticStatusLabel(status?: string) {
-  if (status === 'passed') return '通过';
-  if (status === 'failed') return '失败';
+function diagnosticStatusLabel(status?: string, layer?: 'screen' | 'route' | 'generation' | 'key') {
+  if (status === 'passed' || status === 'ready') {
+    if (layer === 'route') return '可路由';
+    if (layer === 'generation') return '可生成';
+    if (layer === 'screen') return '总览就绪';
+    if (layer === 'key') return '密钥可用';
+    return '通过';
+  }
+  if (status === 'failed' || status === 'blocked') return '失败';
+  if (status === 'partial') return '部分';
   return '未测';
+}
+
+function checkKindLabelsMutualExclusive(texts: string[]) {
+  const joined = texts.join('\n');
+  const hasRouteOnly = /可路由|路由检查通过|不创建生成/.test(joined);
+  const hasGeneration = /可生成|真实生成测试通过|会计费/.test(joined);
+  const hasKey = /密钥可用|Key Check|凭证检查通过/.test(joined);
+  return { hasRouteOnly, hasGeneration, hasKey, mutualExclusive: !(hasRouteOnly && hasGeneration && /可生成/.test(joined) && /路由检查通过且可生成/.test(joined)) };
 }
 
 function diagnosticDetailText(entry?: ModelDiagnosticEntry) {
@@ -507,6 +526,17 @@ function routeTestFailureMessage(canonicalModelId: string, result: AdminModelRou
   }
   if (result.nextAction) details.push(result.nextAction);
   return `${canonicalModelId} 路由检查失败：${result.message}${details.length ? `；${details.join('；')}` : ''}`;
+}
+
+function screenDiagnosisSummaryText(result?: AdminModelScreenDiagnosisResult | null): string {
+  if (!result) return '';
+  const next = Array.isArray(result.nextActions) && result.nextActions[0]?.label ? result.nextActions[0].label : '';
+  const failure = result.recentFailures?.byStage?.[0]
+    ? `失败主因 ${result.recentFailures.byStage[0].key}×${result.recentFailures.byStage[0].count}`
+    : '';
+  const block = result.routeDecision?.blockingReason?.code || '';
+  const scope = '只读总览（≠可生成）';
+  return [result.status === 'ready' ? '一屏诊断：Key/Route 看起来就绪' : '一屏诊断：阻塞', scope, block, failure, next].filter(Boolean).join('；');
 }
 
 function modelDiagnosticsIssueSummaryText(results: AdminModelDiagnosticsRunResultItem[] | undefined) {
@@ -857,12 +887,15 @@ export const __adminProviderKeysPanelTestUtils = {
   buildPublishedModelDiagnosticsTargets,
   routeTestFailureMessage,
   selectedModelAvailabilityIssueText,
+  screenDiagnosisSummaryText,
   modelAvailabilityIssueText,
   modelAvailabilityIssueTitle,
   routeFallbackSummaryText,
   modelDiagnosticsIssueSummaryText,
   diagnosticDetailText,
   diagnosticTitle,
+  diagnosticStatusLabel,
+  checkKindLabelsMutualExclusive,
 };
 
 function Pill({ children, className = '' }: { children: React.ReactNode; className?: string }) {
@@ -995,6 +1028,7 @@ const AdminProviderKeysPanel: React.FC = () => {
   const [actingId, setActingId] = React.useState('');
   const [routeTestingId, setRouteTestingId] = React.useState('');
   const [generationTestingId, setGenerationTestingId] = React.useState('');
+  const [screenTestingId, setScreenTestingId] = React.useState('');
   const [modelDiagnostics, setModelDiagnostics] = React.useState<ModelDiagnosticState>({});
   const [routePriorityDraft, setRoutePriorityDraft] = React.useState<RoutePriorityDraft>({});
   const [routeFallbackPolicyDraft, setRouteFallbackPolicyDraft] = React.useState<RouteFallbackPolicyDraft>({});
@@ -1221,8 +1255,8 @@ const AdminProviderKeysPanel: React.FC = () => {
       const latencyLabel = res.result.latencyMs != null ? `，${res.result.latencyMs}ms` : '';
       setMessage(
         res.result.ok
-          ? `测试通过：${res.result.label || row.label}，${modeLabel}${routeLabel}${latencyLabel}`
-          : `测试失败：${res.result.message}`
+          ? `Key Check 通过（≠可路由/≠可生成）：${res.result.label || row.label}，${modeLabel}${routeLabel}${latencyLabel}`
+          : `Key Check 失败：${res.result.message}`
       );
     } catch (err) {
       setError(err instanceof Error ? err.message : '测试失败');
@@ -1416,6 +1450,56 @@ const AdminProviderKeysPanel: React.FC = () => {
     }
   };
 
+  const runModelScreenDiagnosis = async (canonicalModelId: string) => {
+    const model = WORKSPACE_CANONICAL_MODELS.find((row) => row.canonicalModelId === canonicalModelId);
+    if (!model) return;
+    const availability = modelAvailabilityById.get(canonicalModelId);
+    const target = buildModelDiagnosticsTarget(model, availability, endpointMappingDraft);
+    setScreenTestingId(canonicalModelId);
+    setError('');
+    setMessage('');
+    try {
+      const res = await fetchAdminModelScreenDiagnosis(target);
+      const result = res.result;
+      setModelDiagnostics((prev) => ({
+        ...prev,
+        [canonicalModelId]: {
+          ...(prev[canonicalModelId] || {}),
+          screen: {
+            layer: 'screen',
+            status: result.status === 'ready' ? 'ready' : 'blocked',
+            message: screenDiagnosisSummaryText(result) || result.message || 'screen diagnosis',
+            code: result.routeDecision?.blockingReason?.code || result.code || null,
+            providerId: result.providerId || target.providerId || null,
+            nextAction: result.nextActions?.[0]?.label || result.routeDecision?.blockingReason?.nextAction || null,
+            testedAt: result.generatedAt || new Date().toISOString(),
+            screen: result,
+          },
+        },
+      }));
+      setMessage(screenDiagnosisSummaryText(result) || `${canonicalModelId} 一屏诊断完成`);
+    } catch (err) {
+      const fallbackMessage = err instanceof Error ? err.message : '一屏诊断失败';
+      setModelDiagnostics((prev) => ({
+        ...prev,
+        [canonicalModelId]: {
+          ...(prev[canonicalModelId] || {}),
+          screen: {
+            layer: 'screen',
+            status: 'failed',
+            message: fallbackMessage,
+            code: 'ADMIN_SCREEN_DIAGNOSIS_REQUEST_FAILED',
+            providerId: target.providerId || null,
+            testedAt: new Date().toISOString(),
+          },
+        },
+      }));
+      setError(fallbackMessage);
+    } finally {
+      setScreenTestingId('');
+    }
+  };
+
   const runModelRouteTest = async (canonicalModelId: string) => {
     const model = WORKSPACE_CANONICAL_MODELS.find((row) => row.canonicalModelId === canonicalModelId);
     if (!model) return;
@@ -1429,7 +1513,7 @@ const AdminProviderKeysPanel: React.FC = () => {
       setModelDiagnostics((prev) => ({ ...prev, [canonicalModelId]: { ...(prev[canonicalModelId] || {}), route: routeDiagnosticEntry(res.result) } }));
       await refreshModelAvailability();
       if (res.result.status === 'passed') {
-        setMessage(`${canonicalModelId} ${routeTestModeLabel(res.result.mode)}通过，不创建生成任务`);
+        setMessage(`${canonicalModelId} 路由检查通过（可路由，≠可生成），不创建生成任务`);
       } else {
         setError(routeTestFailureMessage(canonicalModelId, res.result));
       }
@@ -1458,6 +1542,8 @@ const AdminProviderKeysPanel: React.FC = () => {
   const runModelGenerationTest = async (canonicalModelId: string) => {
     const model = WORKSPACE_CANONICAL_MODELS.find((row) => row.canonicalModelId === canonicalModelId);
     if (!model) return;
+    const billingNote = '真实生成会创建 AI Gateway 任务，并可能预扣/扣费。仅用于验证上游输出，不等于路由检查。';
+    if (!window.confirm(`${canonicalModelId}\n\n确认运行 Generation Test？\n\n${billingNote}`)) return;
     const availability = modelAvailabilityById.get(canonicalModelId);
     const target = buildModelDiagnosticsTarget(model, availability, endpointMappingDraft);
     setGenerationTestingId(canonicalModelId);
@@ -1468,10 +1554,11 @@ const AdminProviderKeysPanel: React.FC = () => {
       setModelDiagnostics((prev) => ({ ...prev, [canonicalModelId]: { ...(prev[canonicalModelId] || {}), generation: generationDiagnosticEntry(res.result) } }));
       await refreshModelAvailability();
       const jobLabel = res.result.jobId ? `，任务 ${res.result.jobId}` : '';
+      const note = res.result.billingNote ? `；${res.result.billingNote}` : `；${billingNote}`;
       if (res.result.status === 'passed') {
-        setMessage(`${canonicalModelId} 真实生成测试通过${jobLabel}`);
+        setMessage(`${canonicalModelId} 真实生成测试通过（可生成）${jobLabel}${note}`);
       } else {
-        setError(`${canonicalModelId} 真实生成失败：${res.result.message}${jobLabel}${res.result.nextAction ? `；${res.result.nextAction}` : ''}`);
+        setError(`${canonicalModelId} 真实生成失败：${res.result.message}${jobLabel}${res.result.nextAction ? `；${res.result.nextAction}` : ''}${note}`);
       }
     } catch (err) {
       const fallbackMessage = err instanceof Error ? err.message : '真实生成测试失败';
@@ -1600,12 +1687,12 @@ const AdminProviderKeysPanel: React.FC = () => {
           </div>
 
           <div className="rounded-lg border border-white/[0.08] bg-[#121216] p-3">
-            <div className="text-[12px] font-semibold text-white">测试层级</div>
+            <div className="text-[12px] font-semibold text-white">测试层级（能连 Key ≠ 能路由 ≠ 能生成）</div>
             <div className="mt-3 space-y-2 text-[11px] leading-relaxed text-gray-400">
-              <div><span className="text-gray-200">凭证检查：</span>只检查字段，不产生生成任务。</div>
-              <div><span className="text-gray-200">上游探活：</span>调用低成本接口，例如模型列表或余额。</div>
-              <div><span className="text-gray-200">路由检查：</span>确认模型、密钥、网关和后端是否能接上。</div>
-              <div><span className="text-gray-200">真实生成：</span>创建最小任务，验证真实输出。</div>
+              <div><span className="text-gray-200">Key Check：</span>只验证密钥/凭证，不创建任务、不计费。</div>
+              <div><span className="text-gray-200">Route Check：</span>确认模型、密钥、网关能否接上；通过≠可生成。</div>
+              <div><span className="text-gray-200">一屏诊断：</span>只读总览 Key/Route/近期失败；不替代真实生成。</div>
+              <div><span className="text-gray-200">Generation Test：</span>创建最小真实任务并可能计费，用于验证上游输出。</div>
             </div>
           </div>
         </aside>
@@ -1918,27 +2005,45 @@ const AdminProviderKeysPanel: React.FC = () => {
                                   </div>
                                 ) : null}
                                 <div className="mt-2 flex flex-wrap gap-1.5">
-                                  <button type="button" disabled={routeTestingId === model.canonicalModelId} onClick={(event) => { event.preventDefault(); event.stopPropagation(); void runModelRouteTest(model.canonicalModelId); }} className="rounded-md border border-white/[0.08] bg-black/20 px-2 py-1 text-[10px] text-gray-300 disabled:opacity-40">
-                                    {routeTestingId === model.canonicalModelId ? '检查中...' : '路由检查'}
+                                  <button type="button" disabled={screenTestingId === model.canonicalModelId} onClick={(event) => { event.preventDefault(); event.stopPropagation(); void runModelScreenDiagnosis(model.canonicalModelId); }} className="rounded-md border border-sky-500/25 bg-sky-950/20 px-2 py-1 text-[10px] text-sky-100 disabled:opacity-40" title="Key + Route + 最近失败聚合，不创建生成任务">
+                                    {screenTestingId === model.canonicalModelId ? '诊断中...' : '一屏诊断'}
                                   </button>
-                                  <button type="button" disabled={!canRunGenerationTest || generationTestingId === model.canonicalModelId} onClick={(event) => { event.preventDefault(); event.stopPropagation(); void runModelGenerationTest(model.canonicalModelId); }} className="rounded-md border border-emerald-500/25 bg-emerald-950/20 px-2 py-1 text-[10px] text-emerald-100 disabled:opacity-40">
-                                    {generationTestingId === model.canonicalModelId ? '生成中...' : '真实生成'}
+                                  <button type="button" disabled={routeTestingId === model.canonicalModelId} onClick={(event) => { event.preventDefault(); event.stopPropagation(); void runModelRouteTest(model.canonicalModelId); }} className="rounded-md border border-white/[0.08] bg-black/20 px-2 py-1 text-[10px] text-gray-300 disabled:opacity-40" title="Route Check：不创建任务、不计费">
+                                    {routeTestingId === model.canonicalModelId ? '检查中...' : '路由检查（不创建任务）'}
+                                  </button>
+                                  <button type="button" disabled={!canRunGenerationTest || generationTestingId === model.canonicalModelId} onClick={(event) => { event.preventDefault(); event.stopPropagation(); void runModelGenerationTest(model.canonicalModelId); }} className="rounded-md border border-emerald-500/25 bg-emerald-950/20 px-2 py-1 text-[10px] text-emerald-100 disabled:opacity-40" title="Generation Test：会创建真实任务并可能计费">
+                                    {generationTestingId === model.canonicalModelId ? '生成中...' : '真实生成（会计费）'}
                                   </button>
                                 </div>
-                                <div className="mt-2 grid gap-1.5 sm:grid-cols-2">
+                                <div className="mt-2 grid gap-1.5 sm:grid-cols-3">
                                   {[
+                                    { key: 'screen' as const, label: '一屏', entry: diagnostics.screen },
                                     { key: 'route' as const, label: '路由', entry: diagnostics.route },
                                     { key: 'generation' as const, label: '生成', entry: diagnostics.generation },
                                   ].map((item) => (
                                     <div key={`${model.canonicalModelId}:${item.key}`} className={`min-w-0 rounded-md border px-2 py-1 ${diagnosticStatusClass(item.entry?.status)}`} title={diagnosticTitle(item.entry, `${item.label}未测试`)}>
                                       <div className="flex items-center justify-between gap-2">
                                         <span className="font-semibold">{item.label}</span>
-                                        <span>{diagnosticStatusLabel(item.entry?.status)}</span>
+                                        <span>{diagnosticStatusLabel(item.entry?.status, item.key)}</span>
                                       </div>
                                       <div className="mt-0.5 truncate text-[9px] opacity-80">{item.entry ? diagnosticDetailText(item.entry) : '暂无结果'}</div>
                                     </div>
                                   ))}
                                 </div>
+                                {diagnostics.screen?.screen ? (
+                                  <div className="mt-2 rounded-md border border-sky-500/20 bg-sky-950/10 px-2 py-1.5 text-[9px] text-sky-50/90">
+                                    <div className="font-semibold text-sky-100">一屏诊断摘要</div>
+                                    <div className="mt-1 truncate">下一步：{diagnostics.screen.screen.nextActions?.[0]?.label || diagnostics.screen.nextAction || '—'}</div>
+                                    <div className="mt-0.5 truncate">
+                                      Key：{(diagnostics.screen.screen.keyStatuses || []).map((row) => `${row.providerId}:${row.status}`).join(' / ') || '—'}
+                                    </div>
+                                    <div className="mt-0.5 truncate">
+                                      最近失败：stage {(diagnostics.screen.screen.recentFailures?.byStage || []).map((row) => `${row.key}×${row.count}`).join(', ') || '无'}
+                                      {' · '}
+                                      owner {(diagnostics.screen.screen.recentFailures?.byOwner || []).map((row) => `${row.key}×${row.count}`).join(', ') || '无'}
+                                    </div>
+                                  </div>
+                                ) : null}
                               </div>
                             </div>
                           </label>

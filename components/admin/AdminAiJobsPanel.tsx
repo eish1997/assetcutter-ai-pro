@@ -63,6 +63,8 @@ type AdminAiJobFilters = {
   model: string;
   capability: string;
   q: string;
+  failureStage: string;
+  failureOwner: string;
 };
 
 const EMPTY_FILTERS: AdminAiJobFilters = {
@@ -73,8 +75,36 @@ const EMPTY_FILTERS: AdminAiJobFilters = {
   model: '',
   capability: '',
   q: '',
+  failureStage: '',
+  failureOwner: '',
 };
 
+const FAILURE_STAGE_FILTERS = [
+  { value: '', label: '失败阶段·全部' },
+  { value: 'admission', label: '准入' },
+  { value: 'billing', label: '计费' },
+  { value: 'publication', label: '发布' },
+  { value: 'routing', label: '路由' },
+  { value: 'provider_key', label: '密钥' },
+  { value: 'worker', label: 'Worker' },
+  { value: 'adapter', label: 'Adapter' },
+  { value: 'upstream', label: '上游' },
+  { value: 'artifact', label: '产物' },
+  { value: 'writeback', label: '回写' },
+  { value: '__missing__', label: '缺failureReason' },
+];
+
+const FAILURE_OWNER_FILTERS = [
+  { value: '', label: '责任方·全部' },
+  { value: 'user', label: '用户' },
+  { value: 'admin', label: '运营' },
+  { value: 'developer', label: '研发' },
+  { value: 'upstream', label: '上游' },
+  { value: 'system', label: '系统' },
+  { value: '__missing__', label: '缺owner' },
+];
+
+/** Server query params only (failure stage/owner are client-side). */
 export function cleanAdminAiJobFilters(filters: AdminAiJobFilters) {
   return {
     status: filters.status || '',
@@ -85,6 +115,30 @@ export function cleanAdminAiJobFilters(filters: AdminAiJobFilters) {
     capability: String(filters.capability || '').trim(),
     q: String(filters.q || '').trim(),
   };
+}
+
+/** Filter failed jobs by gatewayFailure.stage / owner (slice 2). */
+export function filterAdminAiJobsByFailureReason(
+  jobs: AiJobSummary[],
+  filters: Pick<AdminAiJobFilters, 'failureStage' | 'failureOwner'>
+): AiJobSummary[] {
+  const stage = String(filters.failureStage || '').trim();
+  const owner = String(filters.failureOwner || '').trim();
+  if (!stage && !owner) return jobs;
+  return jobs.filter((job) => {
+    const failure = job.gatewayFailure;
+    if (stage === '__missing__') {
+      if (!(job.status === 'failed' && !failure?.stage)) return false;
+    } else if (stage && failure?.stage !== stage) {
+      return false;
+    }
+    if (owner === '__missing__') {
+      if (!(job.status === 'failed' && !failure?.owner)) return false;
+    } else if (owner && failure?.owner !== owner) {
+      return false;
+    }
+    return true;
+  });
 }
 
 export function listToText(values: string[] | null | undefined): string {
@@ -465,6 +519,11 @@ const AdminAiJobsPanel: React.FC = () => {
     }
   }, [appliedFilters, canReadOps]);
 
+  const displayedJobs = React.useMemo(
+    () => filterAdminAiJobsByFailureReason(jobs, appliedFilters),
+    [jobs, appliedFilters]
+  );
+
   const openJobDetail = React.useCallback(async (jobId: string) => {
     setDetailLoading(true);
     setError('');
@@ -642,6 +701,38 @@ const AdminAiJobsPanel: React.FC = () => {
                 className={`rounded-lg border px-2 py-1 text-[10px] ${
                   filters.modality === item.value
                     ? 'border-emerald-400/50 bg-emerald-400/15 text-emerald-100'
+                    : 'border-white/[0.08] bg-black/10 text-gray-400'
+                }`}
+              >
+                {item.label}
+              </button>
+            ))}
+          </div>
+          <div className="flex flex-wrap gap-1">
+            {FAILURE_STAGE_FILTERS.map((item) => (
+              <button
+                key={`stage-${item.value || 'all'}`}
+                type="button"
+                onClick={() => setFilters((prev) => ({ ...prev, failureStage: item.value }))}
+                className={`rounded-lg border px-2 py-1 text-[10px] ${
+                  filters.failureStage === item.value
+                    ? 'border-rose-400/50 bg-rose-400/15 text-rose-100'
+                    : 'border-white/[0.08] bg-black/10 text-gray-400'
+                }`}
+              >
+                {item.label}
+              </button>
+            ))}
+          </div>
+          <div className="flex flex-wrap gap-1">
+            {FAILURE_OWNER_FILTERS.map((item) => (
+              <button
+                key={`owner-${item.value || 'all'}`}
+                type="button"
+                onClick={() => setFilters((prev) => ({ ...prev, failureOwner: item.value }))}
+                className={`rounded-lg border px-2 py-1 text-[10px] ${
+                  filters.failureOwner === item.value
+                    ? 'border-amber-400/50 bg-amber-400/15 text-amber-100'
                     : 'border-white/[0.08] bg-black/10 text-gray-400'
                 }`}
               >
@@ -934,7 +1025,7 @@ const AdminAiJobsPanel: React.FC = () => {
                   </tr>
                 </thead>
                 <tbody>
-                  {jobs.map((job) => (
+                  {displayedJobs.map((job) => (
                     <tr
                       key={job.id}
                       onClick={() => {
@@ -966,7 +1057,7 @@ const AdminAiJobsPanel: React.FC = () => {
             </div>
 
             <div className="divide-y divide-[#252528] md:hidden">
-              {jobs.map((job) => (
+              {displayedJobs.map((job) => (
                 <article
                   key={job.id}
                   onClick={() => {

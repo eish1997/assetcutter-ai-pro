@@ -101,6 +101,8 @@ export function publicAiJobSummary(plan) {
     proxyJobId: metadata.proxyJobId || null,
     creditsGate: metadata.creditsGate || null,
     fallback: fallbackSummary(metadata),
+    routeDecision: metadata.routeDecision || null,
+    gatewayFailure: metadata.gatewayFailure || null,
     error: errorSummary(plan.job.error),
   };
 }

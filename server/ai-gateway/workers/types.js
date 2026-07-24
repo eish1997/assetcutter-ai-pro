@@ -1,5 +1,16 @@
 import { AiGatewayValidationError } from '../job.js';
 
+export {
+  AI_GATEWAY_ADAPTER_RESULT_STATUSES,
+  AI_GATEWAY_ARTIFACT_KINDS,
+  normalizeAiGatewayAdapterResult,
+  normalizeAiGatewayAdapterArtifact,
+  validateAiGatewayAdapterResult,
+  jobPatchFromAdapterResult,
+  applyAiGatewayAdapterResult,
+  validateJobAgainstAdapterContract,
+} from '../adapter-result.js';
+
 export function createPlannedWorker({ id, modalities, capabilities = [] }) {
   return Object.freeze({
     id,

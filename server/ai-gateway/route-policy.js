@@ -13,7 +13,13 @@ const FALLBACK_POLICY_SET = new Set([
 ]);
 
 export function publicAiGatewayErrorMessage(error) {
-  return error instanceof Error ? error.message : String(error || 'AI Gateway execution failed');
+  if (error instanceof Error) return error.message;
+  if (typeof error === 'string') return error;
+  if (error && typeof error === 'object') {
+    if (typeof error.message === 'string' && error.message.trim()) return error.message.trim();
+    if (typeof error.body?.message === 'string' && error.body.message.trim()) return error.body.message.trim();
+  }
+  return String(error || 'AI Gateway execution failed');
 }
 
 function httpStatusFromError(error) {

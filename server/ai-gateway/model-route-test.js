@@ -1,5 +1,5 @@
 import { AiGatewayValidationError } from './job.js';
-import { validateAiGatewayModelRouteExecutable } from './model-route-guard.js';
+import { resolveAiGatewayRouteDecision, validateAiGatewayModelRouteExecutable } from './model-route-guard.js';
 
 function nonEmptyString(value) {
   return typeof value === 'string' && value.trim() ? value.trim() : '';
@@ -73,6 +73,7 @@ function failedResult(input, code, message, extra = {}) {
   return {
     ok: false,
     status: 'failed',
+    checkKind: 'route',
     mode: 'route_guard',
     testLayer: 'route_test',
     createsGenerationTask: false,
@@ -106,30 +107,42 @@ export async function testAiGatewayModelRoute(input = {}, options = {}) {
     );
   }
 
+  const decision = await resolveAiGatewayRouteDecision(normalized, {
+    listProviderKeys: options.listProviderKeys,
+    checkProviderKeys: options.checkProviderKeys,
+    modelOpsConfig: options.modelOpsConfig,
+    disabledProviders: options.disabledProviders,
+  });
   try {
     const result = await validateAiGatewayModelRouteExecutable(normalized, {
       listProviderKeys: options.listProviderKeys,
       checkProviderKeys: options.checkProviderKeys,
       modelOpsConfig: options.modelOpsConfig,
+      disabledProviders: options.disabledProviders,
     });
     return {
       ok: true,
       status: 'passed',
+      checkKind: 'route',
       mode: 'route_guard',
       canonicalModelId: result.canonicalModelId || normalized.canonicalModelId,
       providerId: result.route?.providerId || normalized.provider || null,
       modality: normalized.modality || null,
       code: 'AI_GATEWAY_MODEL_ROUTE_READY',
-      message: 'Route and platform key are ready. This test does not create a generation task.',
+      message: 'Route Check passed: route and platform key look ready. This does not mean generation works and does not create a job.',
       testLayer: 'route_test',
       createsGenerationTask: false,
       nextAction: 'Run a minimal Generation Test only when you need to verify upstream output and billing behavior.',
       route: result.route || null,
+      routeDecision: result.routeDecision || decision,
       testedAt: new Date().toISOString(),
     };
   } catch (err) {
     if (err instanceof AiGatewayValidationError || err?.name === 'AiGatewayValidationError') {
-      return failedResult(normalized, err.code || 'AI_GATEWAY_MODEL_ROUTE_TEST_FAILED', err.message, err.details || {});
+      return failedResult(normalized, err.code || 'AI_GATEWAY_MODEL_ROUTE_TEST_FAILED', err.message, {
+        ...(err.details || {}),
+        routeDecision: decision,
+      });
     }
     throw err;
   }

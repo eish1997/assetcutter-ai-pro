@@ -1,6 +1,7 @@
 import { fetch as undiciFetch } from 'undici';
 import { AiGatewayValidationError } from '../job.js';
 import { finalizeAiGatewayTerminalPlan } from '../execution-finalize.js';
+import { applyAiGatewayAdapterResult } from '../adapter-result.js';
 import { buildProviderTaskUsage, collectByteSize } from '../execution-usage.js';
 import { normalizeGatewayInput } from '../gateway-input.js';
 import { acquireProviderKey, recordProviderKeyError, recordProviderKeySuccess } from '../provider-key-store.js';
@@ -214,14 +215,24 @@ async function pollArkAsyncTask(plan, taskId, key, options = {}) {
       const modelUrls = model3d ? extractModelUrls(data) : [];
       const videoUrl = model3d ? '' : extractVideoUrl(data);
       if (model3d ? modelUrls.length === 0 : !videoUrl) {
-        const failed = await store.update(plan.job.id, {
-          status: 'failed',
-          error: {
-            code: model3d ? 'ARK_MODEL_URL_MISSING' : 'ARK_VIDEO_URL_MISSING',
-            message: model3d ? 'Volcengine Ark 3D task completed without model URL' : 'Volcengine Ark video task completed without video URL',
+        const { plan: failed } = await applyAiGatewayAdapterResult(
+          plan,
+          {
+            status: 'failed',
+            upstreamTaskId: taskId,
+            error: {
+              code: model3d ? 'ARK_MODEL_URL_MISSING' : 'ARK_VIDEO_URL_MISSING',
+              message: model3d ? 'Volcengine Ark 3D task completed without model URL' : 'Volcengine Ark video task completed without video URL',
+            },
           },
-          metadata: { arkTaskId: taskId, upstreamTaskId: taskId, gatewayExecution: { failedAt: new Date().toISOString() } },
-        });
+          store,
+          {
+            metadata: {
+              arkTaskId: taskId,
+              gatewayExecution: { failedAt: new Date().toISOString() },
+            },
+          }
+        );
         await finalizeAiGatewayTerminalPlan(failed, store);
         return;
       }
@@ -240,38 +251,53 @@ async function pollArkAsyncTask(plan, taskId, key, options = {}) {
       const artifacts = model3d
         ? modelUrls.map((url) => ({ kind: 'model3d', url, source: VOLCENGINE_ARK_PROVIDER_ID, taskId, registryId: plan.job?.model || null, billing: { actualCredits: usage.actualCredits, settlementSource: usage.settlementSource } }))
         : [{ kind: 'video', url: videoUrl, source: VOLCENGINE_ARK_PROVIDER_ID, taskId, registryId: plan.job?.model || null, billing: { actualCredits: usage.actualCredits, settlementSource: usage.settlementSource } }];
-      const succeeded = await store.update(plan.job.id, {
-        status: 'succeeded',
-        output: {
-          provider: VOLCENGINE_ARK_PROVIDER_ID,
-          taskId,
-          model,
-          ...(model3d ? { modelUrls } : { videoUrl }),
-          usage,
-          raw: data,
-        },
-        artifacts,
-        metadata: {
-          arkTaskId: taskId,
+      const { plan: succeeded } = await applyAiGatewayAdapterResult(
+        plan,
+        {
+          status: 'succeeded',
           upstreamTaskId: taskId,
+          artifacts,
           usage,
-          gatewayExecution: {
-            completedAt: new Date(completedAtMs).toISOString(),
-            durationMs: usage.durationMs,
-            outputBytes,
-            artifactCount: artifacts.length,
+          output: {
+            provider: VOLCENGINE_ARK_PROVIDER_ID,
+            taskId,
+            model,
+            ...(model3d ? { modelUrls } : { videoUrl }),
+            raw: data,
           },
         },
-      });
+        store,
+        {
+          metadata: {
+            arkTaskId: taskId,
+            gatewayExecution: {
+              completedAt: new Date(completedAtMs).toISOString(),
+              durationMs: usage.durationMs,
+              outputBytes,
+              artifactCount: artifacts.length,
+            },
+          },
+        }
+      );
       await finalizeAiGatewayTerminalPlan(succeeded, store);
       return;
     }
     if (status === 'failed') {
-      const failed = await store.update(plan.job.id, {
-        status: 'failed',
-        error: { code: data?.code || 'ARK_ASYNC_TASK_FAILED', message: arkErrorMessage(data, 'Volcengine Ark async task failed') },
-        metadata: { arkTaskId: taskId, upstreamTaskId: taskId, gatewayExecution: { failedAt: new Date().toISOString() } },
-      });
+      const { plan: failed } = await applyAiGatewayAdapterResult(
+        plan,
+        {
+          status: 'failed',
+          upstreamTaskId: taskId,
+          error: { code: data?.code || 'ARK_ASYNC_TASK_FAILED', message: arkErrorMessage(data, 'Volcengine Ark async task failed') },
+        },
+        store,
+        {
+          metadata: {
+            arkTaskId: taskId,
+            gatewayExecution: { failedAt: new Date().toISOString() },
+          },
+        }
+      );
       await finalizeAiGatewayTerminalPlan(failed, store);
       return;
     }

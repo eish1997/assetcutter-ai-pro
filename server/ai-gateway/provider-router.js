@@ -129,6 +129,92 @@ function routeMatchesJob(route, job) {
   return route.capabilities.some((cap) => cap.endsWith('.generate') && job.capability === `${job.modality}.generate`);
 }
 
+function toPublicRoute(route) {
+  return {
+    providerId: route.providerId,
+    workerId: route.workerId || null,
+    adapterId: route.adapterId,
+    legacyAdapterId: route.legacyAdapterId || null,
+    channel: route.channel,
+    upstreamBackend: route.upstreamBackend,
+    routeId: route.routeId || null,
+    endpointMapping: route.endpointMapping || null,
+    upstreamModelId: route.upstreamModelId || null,
+  };
+}
+
+/**
+ * Materialize a runtime provider route from an already-chosen selectedRoute.
+ * Does not re-rank providers — only fills worker/adapter/channel from the runtime catalog.
+ */
+export function materializeAiProviderRouteFromSelectedRoute(
+  selectedRoute,
+  job,
+  routes = DEFAULT_AI_PROVIDER_ROUTES,
+  options = {}
+) {
+  const providerId = normalizeAiGatewayRuntimeProviderId(selectedRoute?.providerId);
+  if (!providerId) {
+    throw new AiGatewayRouteError(
+      'selectedRoute.providerId is required to materialize provider route',
+      'AI_GATEWAY_NO_PROVIDER_ROUTE'
+    );
+  }
+  const jobForMatch = { ...(job && typeof job === 'object' ? job : {}), provider: providerId };
+  let base = null;
+  try {
+    base = resolveAiProviderRoute(jobForMatch, routes, options);
+  } catch (err) {
+    if (selectedRoute?.adapterId && selectedRoute?.workerId) {
+      base = {
+        providerId,
+        workerId: selectedRoute.workerId,
+        adapterId: selectedRoute.adapterId,
+        legacyAdapterId: selectedRoute.legacyAdapterId || null,
+        channel: selectedRoute.channel || selectedRoute.adapterId,
+        upstreamBackend: selectedRoute.upstreamBackend || providerId,
+        routeId: selectedRoute.routeId || null,
+        endpointMapping: selectedRoute.endpointMapping || null,
+        upstreamModelId: selectedRoute.upstreamModelId || null,
+      };
+    } else {
+      throw err;
+    }
+  }
+  return {
+    ...base,
+    providerId,
+    ...(selectedRoute.adapterId ? { adapterId: selectedRoute.adapterId } : {}),
+    ...(selectedRoute.workerId ? { workerId: selectedRoute.workerId } : {}),
+    ...(selectedRoute.routeId ? { routeId: selectedRoute.routeId } : {}),
+    ...(selectedRoute.upstreamModelId ? { upstreamModelId: selectedRoute.upstreamModelId } : {}),
+    ...(selectedRoute.channel ? { channel: selectedRoute.channel } : {}),
+    ...(selectedRoute.upstreamBackend ? { upstreamBackend: selectedRoute.upstreamBackend } : {}),
+    ...(selectedRoute.endpointMapping ? { endpointMapping: selectedRoute.endpointMapping } : {}),
+    ...(selectedRoute.legacyAdapterId ? { legacyAdapterId: selectedRoute.legacyAdapterId } : {}),
+  };
+}
+
+/** Fill adapterId/workerId on a decision selectedRoute from the runtime catalog (no re-selection). */
+export function enrichSelectedRouteWithRuntimeDefaults(
+  selectedRoute,
+  job,
+  routes = DEFAULT_AI_PROVIDER_ROUTES
+) {
+  if (!selectedRoute || typeof selectedRoute !== 'object') return selectedRoute;
+  if (selectedRoute.adapterId && selectedRoute.workerId) return selectedRoute;
+  try {
+    const materialized = materializeAiProviderRouteFromSelectedRoute(selectedRoute, job, routes, {});
+    return {
+      ...selectedRoute,
+      adapterId: selectedRoute.adapterId || materialized.adapterId || undefined,
+      workerId: selectedRoute.workerId || materialized.workerId || undefined,
+    };
+  } catch {
+    return selectedRoute;
+  }
+}
+
 export function resolveAiProviderRoute(job, routes = DEFAULT_AI_PROVIDER_ROUTES, options = {}) {
   const disabledProviders = new Set(
     Array.isArray(options.disabledProviders)
@@ -155,15 +241,22 @@ export function resolveAiProviderRoute(job, routes = DEFAULT_AI_PROVIDER_ROUTES,
     );
   }
 
+  return toPublicRoute(route);
+}
+
+/**
+ * Modality/capability-only plans (no model decision): pick the top runtime catalog row
+ * and return it as a selectedRoute so createAiGatewayJobPlan never re-ranks later.
+ */
+export function pickDefaultSelectedRouteForJob(job, routes = DEFAULT_AI_PROVIDER_ROUTES, options = {}) {
+  const route = resolveAiProviderRoute(job, routes, options);
   return {
+    routeId: route.routeId || `${route.providerId}:${String(job?.modality || '').trim() || 'unknown'}`,
     providerId: route.providerId,
-    workerId: route.workerId || null,
-    adapterId: route.adapterId,
-    legacyAdapterId: route.legacyAdapterId || null,
-    channel: route.channel,
-    upstreamBackend: route.upstreamBackend,
-    routeId: route.routeId || null,
-    endpointMapping: route.endpointMapping || null,
-    upstreamModelId: route.upstreamModelId || null,
+    adapterId: route.adapterId || undefined,
+    workerId: route.workerId || undefined,
+    upstreamModelId: route.upstreamModelId || undefined,
+    priority: 100,
+    fallbackPolicy: 'on_error',
   };
 }

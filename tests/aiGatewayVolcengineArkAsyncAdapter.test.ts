@@ -90,8 +90,7 @@ describe('Volcengine Ark async AI Gateway adapter', () => {
     expect(stored?.job.artifacts[0]).toMatchObject({
       kind: 'video',
       url: 'https://cdn.example/video.mp4',
-      source: 'volcengine-ark',
-      taskId: 'ark_task_video_1',
+      metadata: { source: 'volcengine-ark', taskId: 'ark_task_video_1' },
     });
     expect(await listProviderKeyHealthEvents({ keyId: 'key_ark_async_video', limit: 5 })).toEqual([
       expect.objectContaining({ type: 'success', provider: 'volcengine-ark' }),
@@ -140,8 +139,7 @@ describe('Volcengine Ark async AI Gateway adapter', () => {
     expect(stored?.job.artifacts[0]).toMatchObject({
       kind: 'model3d',
       url: 'https://cdn.example/model.glb',
-      source: 'volcengine-ark',
-      taskId: 'ark_task_3d_1',
+      metadata: { source: 'volcengine-ark', taskId: 'ark_task_3d_1' },
     });
   });
 });

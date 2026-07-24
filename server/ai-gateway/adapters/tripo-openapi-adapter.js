@@ -4,6 +4,7 @@ import crypto from 'crypto';
 import { acquireProviderKey, recordProviderKeyError, recordProviderKeySuccess } from '../provider-key-store.js';
 import { AiGatewayValidationError } from '../job.js';
 import { finalizeAiGatewayTerminalPlan } from '../execution-finalize.js';
+import { applyAiGatewayAdapterResult } from '../adapter-result.js';
 import { buildProviderTaskUsage, collectByteSize } from '../execution-usage.js';
 import { normalizeGatewayInput } from '../gateway-input.js';
 import { isR2Configured, putPublicR2Object } from '../../r2-storage-handlers.js';
@@ -430,62 +431,73 @@ async function pollTripoTask(plan, taskId, apiKey, options = {}) {
           startedAtMs,
           completedAtMs,
         });
-        const succeeded = await store.update(plan.job.id, {
-          status: 'succeeded',
-          output: {
-            provider: 'tripo',
-            taskId,
-            modelUrls,
-            previewUrl: previewUrl || undefined,
-            usage,
-            raw: data,
-          },
-          artifacts: [
-            ...modelUrls.map((url) => ({
-              kind: 'model3d',
-              url,
-              source: 'tripo',
-              taskId,
-              billing: {
-                actualCredits: usage.actualCredits,
-                settlementSource: usage.settlementSource,
-              },
-            })),
-            ...(previewUrl
-              ? [{
-                  kind: 'image',
-                  url: previewUrl,
-                  source: 'tripo',
-                  taskId,
-                  role: 'preview',
-                }]
-              : []),
-          ],
-          metadata: {
-            tripoTaskId: taskId,
+        const { plan: succeeded } = await applyAiGatewayAdapterResult(
+          plan,
+          {
+            status: 'succeeded',
             upstreamTaskId: taskId,
+            artifacts: [
+              ...modelUrls.map((url) => ({
+                kind: 'model3d',
+                url,
+                source: 'tripo',
+                taskId,
+                billing: {
+                  actualCredits: usage.actualCredits,
+                  settlementSource: usage.settlementSource,
+                },
+              })),
+              ...(previewUrl
+                ? [{
+                    kind: 'image',
+                    url: previewUrl,
+                    source: 'tripo',
+                    taskId,
+                    role: 'preview',
+                  }]
+                : []),
+            ],
             usage,
-            gatewayExecution: {
-              completedAt: new Date(completedAtMs).toISOString(),
-              durationMs: usage.durationMs,
-              outputBytes,
-              artifactCount: modelUrls.length,
+            output: {
+              provider: 'tripo',
+              taskId,
+              modelUrls,
+              previewUrl: previewUrl || undefined,
+              raw: data,
             },
           },
-        });
+          store,
+          {
+            metadata: {
+              tripoTaskId: taskId,
+              gatewayExecution: {
+                completedAt: new Date(completedAtMs).toISOString(),
+                durationMs: usage.durationMs,
+                outputBytes,
+                artifactCount: modelUrls.length,
+              },
+            },
+          }
+        );
         await finalizeAiGatewayTerminalPlan(succeeded, store);
         return;
       }
       if (status === 'failed') {
-        const failed = await store.update(plan.job.id, {
-          status: 'failed',
-          error: { code: 'TRIPO_TASK_FAILED', message: tripoErrorMessage(data, 'Tripo task failed') },
-          metadata: {
-            tripoTaskId: taskId,
+        const { plan: failed } = await applyAiGatewayAdapterResult(
+          plan,
+          {
+            status: 'failed',
             upstreamTaskId: taskId,
-            gatewayExecution: { failedAt: new Date().toISOString() },
+            error: { code: 'TRIPO_TASK_FAILED', message: tripoErrorMessage(data, 'Tripo task failed') },
           },
-        });
+          store,
+          {
+            metadata: {
+              tripoTaskId: taskId,
+              gatewayExecution: { failedAt: new Date().toISOString() },
+            },
+          }
+        );
         await finalizeAiGatewayTerminalPlan(failed, store);
         return;
       }

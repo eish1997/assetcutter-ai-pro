@@ -211,6 +211,52 @@ function collectTextCandidates(value: unknown, out: Array<{ text: string; label:
 }
 
 export function extractRestorableAiJobArtifacts(detail: AiJobDetail): RestorableAiJobArtifact[] {
+  const source = buildAiJobArtifactSource(detail);
+  const contractArtifacts = Array.isArray(detail.job.artifacts) ? detail.job.artifacts : [];
+  const fromContract: RestorableAiJobArtifact[] = [];
+  const seen = new Set<string>();
+
+  for (let index = 0; index < contractArtifacts.length && fromContract.length < 12; index += 1) {
+    const row = contractArtifacts[index];
+    if (!row || typeof row !== 'object') continue;
+    const record = row as Record<string, unknown>;
+    const kindHint = String(record.kind || '').toLowerCase() === 'music' ? 'audio' : record.kind;
+    const url = typeof record.url === 'string' ? record.url.trim() : '';
+    const text = typeof record.text === 'string' ? record.text.trim() : '';
+    const mimeType = typeof record.mimeType === 'string' ? record.mimeType : null;
+    if (url) {
+      if (seen.has(url)) continue;
+      seen.add(url);
+      const kind = classifyUrl(url, mimeType, kindHint);
+      fromContract.push({
+        id: `${detail.job.id}:${index}`,
+        label: `${kind === 'image' ? '图片' : kind === 'video' ? '视频' : kind === 'model3d' ? '模型' : kind === 'audio' ? '音频' : '文件'} ${fromContract.length + 1}`,
+        url,
+        mimeType,
+        kind,
+        source,
+      });
+      continue;
+    }
+    if (text && (kindHint === 'text' || shouldCollectTextArtifacts(detail))) {
+      if (seen.has(text)) continue;
+      seen.add(text);
+      fromContract.push({
+        id: `${detail.job.id}:text:${index}`,
+        label: `文本 ${fromContract.length + 1}`,
+        text,
+        mimeType: mimeType || 'text/plain',
+        kind: 'text',
+        source,
+      });
+    }
+  }
+
+  if (fromContract.length > 0) {
+    return fromContract;
+  }
+
+  // Legacy fallback only when contract artifacts are empty (pre-slice-4 jobs).
   const candidates: Array<{ url: string; mimeType: string | null; label: string; kindHint?: unknown }> = [];
   collectCandidates(detail.job.artifacts, candidates);
   collectCandidates(detail.job.output, candidates);
@@ -219,9 +265,7 @@ export function extractRestorableAiJobArtifacts(detail: AiJobDetail): Restorable
     collectTextCandidates(detail.job.artifacts, textCandidates);
     collectTextCandidates(detail.job.output, textCandidates);
   }
-  const source = buildAiJobArtifactSource(detail);
 
-  const seen = new Set<string>();
   const mediaArtifacts = candidates
     .filter((candidate) => {
       if (seen.has(candidate.url)) return false;
@@ -248,13 +292,14 @@ export function extractRestorableAiJobArtifacts(detail: AiJobDetail): Restorable
       return true;
     })
     .slice(0, Math.max(0, 12 - mediaArtifacts.length))
-    .map((candidate, index): RestorableAiJobArtifact => ({
+    .map((candidate, index) => ({
       id: `${detail.job.id}:text:${index}`,
-      label: candidate.label || `Text ${index + 1}`,
+      label: candidate.label || `文本 ${index + 1}`,
       text: candidate.text,
-      mimeType: 'text/plain',
-      kind: 'text',
+      mimeType: 'text/plain' as const,
+      kind: 'text' as const,
       source,
     }));
+
   return [...mediaArtifacts, ...textArtifacts];
 }

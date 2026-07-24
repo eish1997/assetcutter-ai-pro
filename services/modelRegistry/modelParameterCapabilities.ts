@@ -43,7 +43,7 @@ function normalizeId(value: string | null | undefined): string {
 }
 
 function routeProviderForModel(registryId: string): string | null {
-  return listModelRoutes(registryId).find((route) => route.gatewayExecutionStatus === "gateway_ready")?.providerId || null;
+  return listModelRoutes(registryId).find((route) => route.gatewayExecutionStatus === "ready")?.providerId || null;
 }
 
 function has(caps: ModelParameterCapability[], key: ModelParameterKey): boolean {

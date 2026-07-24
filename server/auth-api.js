@@ -206,6 +206,7 @@ import { buildModelAvailabilitySummary } from './ai-gateway/model-availability-s
 import { testAiGatewayModelRoute } from './ai-gateway/model-route-test.js';
 import { testAiGatewayModelGeneration } from './ai-gateway/model-generation-test.js';
 import { runAiGatewayModelDiagnostics } from './ai-gateway/model-diagnostics-run.js';
+import { buildAiGatewayModelScreenDiagnosis } from './ai-gateway/model-screen-diagnosis.js';
 import {
   acquireProviderKey,
   applyProviderKeyHealthAutomation,
@@ -2770,6 +2771,40 @@ const server = http.createServer(async (req, res) => {
         userAgent: req.headers['user-agent'],
       });
       json(res, 200, result);
+      return;
+    }
+
+    if (path === '/api/admin/model-screen-diagnosis' && req.method === 'POST') {
+      const staff = await requirePermission(req, res, PERMISSIONS.AI_GATEWAY_OPS_WRITE);
+      if (!staff) return;
+      let body;
+      try {
+        body = await readBody(req);
+      } catch (err) {
+        json(res, 400, { error: err?.message || 'Invalid JSON' });
+        return;
+      }
+      const modelOpsConfig = await readModelOpsConfig();
+      const opsControl = await readAiGatewayOpsControlConfig();
+      const result = await buildAiGatewayModelScreenDiagnosis(body || {}, {
+        modelOpsConfig,
+        disabledProviders: opsControl?.disabledProviders,
+      });
+      await createAuditLog({
+        actorUserId: staff.user.id,
+        actorIdentifier: staff.user.username,
+        action: 'admin.model_screen_diagnosis',
+        meta: {
+          canonicalModelId: result.canonicalModelId,
+          status: result.status,
+          ok: result.ok,
+          nextActions: result.nextActions,
+          recentFailureTotal: result.recentFailures?.total || 0,
+        },
+        ip: getClientIp(req),
+        userAgent: req.headers['user-agent'],
+      });
+      json(res, result.ok === false && result.code === 'AI_GATEWAY_MODEL_ID_REQUIRED' ? 400 : 200, { ok: result.ok !== false || result.status === 'blocked', result });
       return;
     }
 

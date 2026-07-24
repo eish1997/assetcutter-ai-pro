@@ -220,7 +220,7 @@ describe('AI gateway model publication guard', () => {
     });
     expect(resolveExecutableModelRoute({ modality: 'image', model: 'gemini-3.1-flash-image' })).toMatchObject({
       canonicalModelId: 'gemini-3.1-flash-image',
-      gatewayExecutionStatus: 'gateway_ready',
+      gatewayExecutionStatus: 'ready',
     });
     expect(resolveKnownPendingModelRoute({ modality: 'video', model: 'doubao-seedance-2-0' })).toBeNull();
     expect(resolveKnownPendingModelRoute({ modality: 'model3d', model: 'doubao-seed3d-2-0' })).toBeNull();

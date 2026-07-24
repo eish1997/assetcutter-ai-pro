@@ -4,6 +4,7 @@ import path from 'path';
 import { USE_POSTGRES, ensurePostgres, getPool } from '../auth-store.js';
 import { buildAiGatewayOpsSummary } from './observability.js';
 import { withAiGatewayPostgresRetry } from './postgres-transient-retry.js';
+import { normalizeDispatchPolicy } from './route-dispatch.js';
 
 const DEFAULT_CONFIG = Object.freeze({
   disabledProviders: [],
@@ -11,6 +12,16 @@ const DEFAULT_CONFIG = Object.freeze({
   disabledProviderRules: [],
   disabledModelRules: [],
   modelOverrides: [],
+  dispatchPolicy: Object.freeze({
+    strategy: 'priority_health_cost',
+    healthWeight: 40,
+    costWeight: 20,
+    priorityWeight: 40,
+    preferLowerPriority: true,
+    costHints: Object.freeze({}),
+    providerPins: Object.freeze([]),
+    canary: Object.freeze([]),
+  }),
 });
 const CONFIG_ROW_ID = 'default';
 
@@ -153,6 +164,7 @@ export function normalizeAiGatewayOpsControlConfig(input, options = {}) {
     disabledProviderRules,
     disabledModelRules,
     modelOverrides,
+    dispatchPolicy: normalizeDispatchPolicy(pruned.dispatchPolicy),
   };
 }
 

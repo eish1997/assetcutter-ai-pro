@@ -39,16 +39,16 @@ describe("model route catalog", () => {
       priority: 10,
       channel: "openai-official",
       executionStatus: "platform_ready",
-      gatewayExecutionStatus: "gateway_ready",
+      gatewayExecutionStatus: "ready",
     });
     expect(routes.find((route) => route.providerId === "toapis")).toMatchObject({
       executionStatus: "platform_ready",
-      gatewayExecutionStatus: "gateway_ready",
+      gatewayExecutionStatus: "ready",
     });
     expect(routes.find((route) => route.providerId === "tinysnow")).toMatchObject({
       channel: "tinysnow-openai",
       executionStatus: "disabled",
-      gatewayExecutionStatus: "gateway_ready",
+      gatewayExecutionStatus: "ready",
     });
   });
 
@@ -58,11 +58,11 @@ describe("model route catalog", () => {
 
     expect(textRoute).toMatchObject({
       executionStatus: "platform_ready",
-      gatewayExecutionStatus: "gateway_ready",
+      gatewayExecutionStatus: "ready",
     });
     expect(imageRoute).toMatchObject({
       executionStatus: "platform_ready",
-      gatewayExecutionStatus: "gateway_ready",
+      gatewayExecutionStatus: "ready",
     });
   });
 
@@ -70,11 +70,11 @@ describe("model route catalog", () => {
     const route = listModelRoutes("gemini-3.1-flash-image").find((row) => row.providerId === "vertex-site");
     expect(route).toMatchObject({
       executionStatus: "platform_ready",
-      gatewayExecutionStatus: "gateway_ready",
+      gatewayExecutionStatus: "ready",
     });
     expect(listModelRoutes("gemini-3.1-flash-lite-image").find((row) => row.providerId === "vertex-site")).toMatchObject({
       executionStatus: "platform_ready",
-      gatewayExecutionStatus: "gateway_ready",
+      gatewayExecutionStatus: "ready",
     });
   });
 
@@ -99,19 +99,19 @@ describe("model route catalog", () => {
     );
     expect(arkRoutes.find((route) => route.canonicalModelId === "doubao-seed-2-0-pro")).toMatchObject({
       executionStatus: "platform_ready",
-      gatewayExecutionStatus: "gateway_ready",
+      gatewayExecutionStatus: "ready",
     });
     expect(arkRoutes.find((route) => route.canonicalModelId === "doubao-seedream-5-0-pro")).toMatchObject({
       executionStatus: "platform_ready",
-      gatewayExecutionStatus: "gateway_ready",
+      gatewayExecutionStatus: "ready",
     });
     expect(arkRoutes.find((route) => route.canonicalModelId === "doubao-seedance-2-0")).toMatchObject({
       executionStatus: "platform_ready",
-      gatewayExecutionStatus: "gateway_ready",
+      gatewayExecutionStatus: "ready",
     });
     expect(arkRoutes.find((route) => route.canonicalModelId === "doubao-seed3d-2-0")).toMatchObject({
       executionStatus: "platform_ready",
-      gatewayExecutionStatus: "gateway_ready",
+      gatewayExecutionStatus: "ready",
     });
   });
 
@@ -137,34 +137,34 @@ describe("model route catalog", () => {
     });
     expect(jimengRoutes.some((route) => route.modality === "video")).toBe(true);
     expect(jimengRoutes.some((route) => route.executionStatus === "platform_ready")).toBe(true);
-    expect(jimengRoutes.some((route) => route.gatewayExecutionStatus === "gateway_ready")).toBe(true);
+    expect(jimengRoutes.some((route) => route.gatewayExecutionStatus === "ready")).toBe(true);
     expect(tripoRoutes.find((route) => route.canonicalModelId === "tripo-v3.0")).toMatchObject({
       executionStatus: "platform_ready",
-      gatewayExecutionStatus: "gateway_ready",
+      gatewayExecutionStatus: "ready",
     });
     expect(tripoRoutes.find((route) => route.canonicalModelId === "tripo-v2.0")).toMatchObject({
       executionStatus: "platform_ready",
-      gatewayExecutionStatus: "gateway_ready",
+      gatewayExecutionStatus: "ready",
     });
     expect(hunyuanRoutes.find((route) => route.canonicalModelId === "tencent-hunyuan-3d-rapid")).toMatchObject({
       executionStatus: "platform_ready",
-      gatewayExecutionStatus: "gateway_ready",
+      gatewayExecutionStatus: "ready",
     });
     expect(tripoRoutes.map((route) => route.canonicalModelId)).toEqual(
       expect.arrayContaining(["tripo-p1", "tripo-v3.1", "tripo-v3.0", "tripo-v2.5", "tripo-v2.0"])
     );
-    expect(tripoRoutes.every((route) => route.gatewayExecutionStatus === "gateway_ready")).toBe(true);
+    expect(tripoRoutes.every((route) => route.gatewayExecutionStatus === "ready")).toBe(true);
   });
 
   it("marks backend Gateway executable routes separately from supplier capability", () => {
-    expect(listModelRoutes("gemini-3-pro-image-preview").some((route) => route.gatewayExecutionStatus === "gateway_ready")).toBe(true);
-    expect(listModelRoutes("tripo-p1").some((route) => route.gatewayExecutionStatus === "gateway_ready")).toBe(true);
-    expect(listModelRoutes("tencent-hunyuan-3d-pro").some((route) => route.gatewayExecutionStatus === "gateway_ready")).toBe(true);
+    expect(listModelRoutes("gemini-3-pro-image-preview").some((route) => route.gatewayExecutionStatus === "ready")).toBe(true);
+    expect(listModelRoutes("tripo-p1").some((route) => route.gatewayExecutionStatus === "ready")).toBe(true);
+    expect(listModelRoutes("tencent-hunyuan-3d-pro").some((route) => route.gatewayExecutionStatus === "ready")).toBe(true);
     expect(getCanonicalModel("302ai-video-manual")).toMatchObject({
       modality: "video",
       status: "draft",
       visibleInWorkspace: true,
     });
-    expect(listModelRoutes("302ai-video-manual").some((route) => route.gatewayExecutionStatus === "gateway_ready")).toBe(false);
+    expect(listModelRoutes("302ai-video-manual").some((route) => route.gatewayExecutionStatus === "ready")).toBe(false);
   });
 });

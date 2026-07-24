@@ -463,7 +463,7 @@ const MainApp: React.FC = () => {
   const { balance: creditBalance } = useCreditBalance(user?.id ?? null);
   const [workflowSectionLoadAttempt, setWorkflowSectionLoadAttempt] = useState(0);
   const WorkflowSection = useMemo(
-    () => React.lazy(() => importWithChunkRetry(() => import('./components/workflow/workflowSectionLazyBoot0710'))),
+    () => React.lazy(() => importWithChunkRetry(() => import('./components/workflow/workflowSectionLazyBoot0724'))),
     [workflowSectionLoadAttempt],
   );
 

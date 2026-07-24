@@ -1,6 +1,7 @@
 import { fetch as undiciFetch, ProxyAgent } from 'undici';
 import { AiGatewayValidationError } from '../job.js';
 import { finalizeAiGatewayTerminalPlan } from '../execution-finalize.js';
+import { applyAiGatewayAdapterResult } from '../adapter-result.js';
 import { buildProviderTaskUsage, collectByteSize } from '../execution-usage.js';
 import { resolveAiGatewayBillingSku } from '../route-billing.js';
 import { normalizeInlineBase64Data } from '../inline-data-normalize.js';
@@ -11,6 +12,7 @@ import {
   openAiCompatibleProviderLabel,
 } from '../openai-compatible-config.js';
 import { acquireProviderKey, recordProviderKeyError, recordProviderKeySuccess } from '../provider-key-store.js';
+import { decorateErrorWithFailureReason } from '../failure-reason.js';
 
 const OPENAI_PROVIDER_ID = 'openai-official';
 const GPT_IMAGE_MAX_REFERENCE_IMAGES = 16;
@@ -447,21 +449,32 @@ export async function startOpenAiOfficialExecution(plan, options = {}) {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const err = new Error(`${providerLabel} network unavailable: ${message || 'fetch failed'}`);
+    err.status = 0;
     recordProviderKeyError(key.id, err, {
       status: 0,
       reason: `${providerLabel} network unavailable`,
     });
-    throw err;
+    throw decorateErrorWithFailureReason(err, {
+      defaultCode: 'AI_GATEWAY_UPSTREAM_UNAVAILABLE',
+      stage: 'upstream',
+      adapterId: plan?.route?.adapterId,
+      providerId,
+    });
   }
   const data = await readJsonSafe(response);
   if (!response.ok) {
     const err = new Error(`${providerLabel} rejected AI job handoff: HTTP ${response.status} ${openAiErrorMessage(data)}`);
+    err.status = response.status;
     recordProviderKeyError(key.id, err, {
       status: response.status,
       cooldownMs: response.status === 429 || response.status >= 500 ? 60_000 : 0,
       reason: `${providerLabel} HTTP ${response.status}`,
     });
-    throw err;
+    throw decorateErrorWithFailureReason(err, {
+      adapterId: plan?.route?.adapterId,
+      providerId,
+      status: response.status,
+    });
   }
   recordProviderKeySuccess(key.id);
   const completedAtMs = Date.now();
@@ -479,28 +492,36 @@ export async function startOpenAiOfficialExecution(plan, options = {}) {
     startedAtMs,
     completedAtMs,
   });
-  const succeeded = options.store?.update
-    ? await options.store.update(plan.job.id, {
-        status: 'succeeded',
-        output: {
-          provider: providerId,
-          model: request.body?.model || plan.job.model,
-          ...(image ? { artifacts } : { text }),
-          usage,
-          raw: data,
+  const { plan: succeeded } = await applyAiGatewayAdapterResult(
+    running || plan,
+    {
+      status: 'succeeded',
+      upstreamTaskId: nonEmptyString(data?.id) || undefined,
+      artifacts: image
+        ? artifacts
+        : text
+          ? [{ kind: 'text', text, metadata: { source: providerId } }]
+          : [],
+      usage,
+      output: {
+        provider: providerId,
+        model: request.body?.model || plan.job.model,
+        ...(image ? {} : { text }),
+        raw: data,
+      },
+    },
+    options.store,
+    {
+      metadata: {
+        gatewayExecution: {
+          completedAt: new Date(completedAtMs).toISOString(),
+          durationMs: usage.durationMs,
+          outputBytes: usage.outputBytes,
+          artifactCount: artifacts.length,
         },
-        artifacts,
-        metadata: {
-          usage,
-          gatewayExecution: {
-            completedAt: new Date(completedAtMs).toISOString(),
-            durationMs: usage.durationMs,
-            outputBytes: usage.outputBytes,
-            artifactCount: artifacts.length,
-          },
-        },
-      })
-    : plan;
+      },
+    }
+  );
   await finalizeAiGatewayTerminalPlan(succeeded, options.store);
   return { started: true, upstreamJobId: data?.id || null, plan: succeeded || running || plan };
 }

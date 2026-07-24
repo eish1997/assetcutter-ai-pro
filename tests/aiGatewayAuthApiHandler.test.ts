@@ -69,9 +69,15 @@ describe('AI gateway auth-api facade', () => {
       canonicalModelId: 'gemini-3-pro-image-preview',
       providerId: 'vertex-site',
       executionStatus: 'platform_ready',
-      gatewayExecutionStatus: 'gateway_ready',
+      gatewayExecutionStatus: 'ready',
       platformKeyRequired: true,
     });
+    expect(stored.job.metadata.routeDecision).toMatchObject({
+      ok: true,
+      canonicalModelId: 'gemini-3-pro-image-preview',
+      selectedRoute: { providerId: 'vertex-site' },
+    });
+    expect(Array.isArray(stored.job.metadata.routeDecision.candidates)).toBe(true);
   });
 
   it('rejects auth-api jobs for models not published to the workspace', async () => {
@@ -114,7 +120,7 @@ describe('AI gateway auth-api facade', () => {
     });
     expect(stored.job.metadata.modelRouteGuard).toMatchObject({
       providerId: 'gemini-aistudio',
-      gatewayExecutionStatus: 'gateway_ready',
+      gatewayExecutionStatus: 'ready',
     });
   });
 
@@ -280,7 +286,7 @@ describe('AI gateway auth-api facade', () => {
       routeId: '302ai-video-manual:302ai:video',
       providerId: '302ai',
       upstreamModelId: 'kling-video-v1',
-      gatewayExecutionStatus: 'gateway_ready',
+      gatewayExecutionStatus: 'ready',
       executionStatus: 'platform_ready',
     });
     expect(stored.job.input.upstreamModelId).toBe('kling-video-v1');
@@ -460,7 +466,7 @@ describe('AI gateway auth-api facade', () => {
     expect(stored.job.metadata.modelRouteGuard).toMatchObject({
       canonicalModelId: 'tripo-p1',
       providerId: 'tripo',
-      gatewayExecutionStatus: 'gateway_ready',
+      gatewayExecutionStatus: 'ready',
       platformKeyRequired: true,
     });
   });
@@ -491,7 +497,7 @@ describe('AI gateway auth-api facade', () => {
     expect(stored.job.metadata.modelRouteGuard).toMatchObject({
       canonicalModelId: 'jimeng-video-ti2v-v30-pro',
       providerId: 'volcengine-jimeng',
-      gatewayExecutionStatus: 'gateway_ready',
+      gatewayExecutionStatus: 'ready',
       platformKeyRequired: true,
     });
   });
@@ -528,7 +534,7 @@ describe('AI gateway auth-api facade', () => {
     expect(stored.job.metadata.modelRouteGuard).toMatchObject({
       canonicalModelId: 'jimeng-image-t2i-v40',
       providerId: 'volcengine-jimeng',
-      gatewayExecutionStatus: 'gateway_ready',
+      gatewayExecutionStatus: 'ready',
       platformKeyRequired: true,
     });
   });
@@ -565,7 +571,7 @@ describe('AI gateway auth-api facade', () => {
     expect(stored.job.metadata.modelRouteGuard).toMatchObject({
       canonicalModelId: 'gpt-image-2',
       providerId: 'openai-official',
-      gatewayExecutionStatus: 'gateway_ready',
+      gatewayExecutionStatus: 'ready',
       platformKeyRequired: true,
     });
   });
@@ -611,7 +617,7 @@ describe('AI gateway auth-api facade', () => {
     expect(stored.job.metadata.modelRouteGuard).toMatchObject({
       canonicalModelId: 'gpt-image-2',
       providerId: 'toapis',
-      gatewayExecutionStatus: 'gateway_ready',
+      gatewayExecutionStatus: 'ready',
       platformKeyRequired: true,
       upstreamModelId: 'gpt-image-2-vendor-alias',
     });
@@ -687,7 +693,7 @@ describe('AI gateway auth-api facade', () => {
     expect(stored.job.metadata.modelRouteGuard).toMatchObject({
       canonicalModelId: 'doubao-seed-2-0-pro',
       providerId: 'volcengine-ark',
-      gatewayExecutionStatus: 'gateway_ready',
+      gatewayExecutionStatus: 'ready',
       platformKeyRequired: true,
     });
   });
@@ -725,7 +731,7 @@ describe('AI gateway auth-api facade', () => {
     expect(stored.job.metadata.modelRouteGuard).toMatchObject({
       canonicalModelId: 'doubao-seedream-5-0',
       providerId: 'volcengine-ark',
-      gatewayExecutionStatus: 'gateway_ready',
+      gatewayExecutionStatus: 'ready',
       platformKeyRequired: true,
     });
   });

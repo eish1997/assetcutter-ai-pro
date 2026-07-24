@@ -8,6 +8,7 @@ import {
   signFairnessKeyHeader,
 } from '../../credits-gate-hmac.js';
 import { AI_GATEWAY_HANDOFF_HEADER, signAiGatewayHandoffToken } from '../handoff-token.js';
+import { applyAiGatewayAdapterResult } from '../adapter-result.js';
 import { settleAiGatewayJobCredits, settlementMetadataPatch } from '../settlement.js';
 import { maybeAutoPauseAiGatewayProvider } from '../ops-control.js';
 import {
@@ -260,31 +261,44 @@ export async function pollAiWorkerProxyJob(plan, proxyJobId, options = {}) {
       const status = String(body.status || '').trim();
       if (status === 'completed') {
         const result = body.result ?? null;
-        current = await store.update(plan.job.id, {
-          status: 'succeeded',
-          error: null,
-          output: sanitizeProxyResultForAiGatewayJob(result),
-          artifacts: extractAiGatewayArtifactsFromProxyResult(result),
-          metadata: {
-            proxyJobId,
-            proxyStatus: 'completed',
-            gatewayExecution: { completedAt: new Date().toISOString() },
+        const { plan: succeeded } = await applyAiGatewayAdapterResult(
+          plan,
+          {
+            status: 'succeeded',
+            upstreamTaskId: proxyJobId,
+            artifacts: extractAiGatewayArtifactsFromProxyResult(result),
+            output: sanitizeProxyResultForAiGatewayJob(result),
           },
-        });
-        await settleIfNeeded(current, store);
+          store,
+          {
+            metadata: {
+              proxyJobId,
+              proxyStatus: 'completed',
+              gatewayExecution: { completedAt: new Date().toISOString() },
+            },
+          }
+        );
+        current = await settleIfNeeded(succeeded, store);
         return;
       }
       if (status === 'failed') {
-        current = await store.update(plan.job.id, {
-          status: 'failed',
-          error: { code: 'AI_WORKER_PROXY_ASYNC_FAILED', message: String(body.error || 'AI Worker Proxy job failed') },
-          metadata: {
-            proxyJobId,
-            proxyStatus: 'failed',
-            gatewayExecution: { failedAt: new Date().toISOString() },
+        const { plan: failed } = await applyAiGatewayAdapterResult(
+          plan,
+          {
+            status: 'failed',
+            upstreamTaskId: proxyJobId,
+            error: { code: 'AI_WORKER_PROXY_ASYNC_FAILED', message: String(body.error || 'AI Worker Proxy job failed') },
           },
-        });
-        await settleIfNeeded(current, store);
+          store,
+          {
+            metadata: {
+              proxyJobId,
+              proxyStatus: 'failed',
+              gatewayExecution: { failedAt: new Date().toISOString() },
+            },
+          }
+        );
+        current = await settleIfNeeded(failed, store);
         return;
       }
       if (status === 'running' || status === 'queued' || status === 'pending') {
@@ -298,22 +312,29 @@ export async function pollAiWorkerProxyJob(plan, proxyJobId, options = {}) {
     }
   }
 
-  current = await store.update(plan.job.id, {
-    status: 'failed',
-    error: {
-      code: 'AI_WORKER_PROXY_POLL_TIMEOUT',
-      message: 'AI Worker Proxy job polling timed out',
-    },
-    metadata: {
-      proxyJobId,
-      proxyStatus: current?.job?.metadata?.proxyStatus || 'timeout',
-      gatewayExecution: {
-        failedAt: new Date().toISOString(),
-        timeoutMs,
+  const { plan: failed } = await applyAiGatewayAdapterResult(
+    plan,
+    {
+      status: 'failed',
+      upstreamTaskId: proxyJobId,
+      error: {
+        code: 'AI_WORKER_PROXY_POLL_TIMEOUT',
+        message: 'AI Worker Proxy job polling timed out',
       },
     },
-  });
-  await settleIfNeeded(current, store);
+    store,
+    {
+      metadata: {
+        proxyJobId,
+        proxyStatus: current?.job?.metadata?.proxyStatus || 'timeout',
+        gatewayExecution: {
+          failedAt: new Date().toISOString(),
+          timeoutMs,
+        },
+      },
+    }
+  );
+  await settleIfNeeded(failed, store);
 }
 
 export async function startAiWorkerProxyExecution(plan, options = {}) {
@@ -443,11 +464,15 @@ export async function startAiWorkerProxyExecution(plan, options = {}) {
       },
     };
     let next = store?.update
-      ? await store.update(plan.job.id, {
-          status: 'failed',
-          metadata,
-          error: { code: 'AI_GATEWAY_EXECUTION_HANDOFF_FAILED', message: publicErrorMessage(error) },
-        })
+      ? (await applyAiGatewayAdapterResult(
+          plan,
+          {
+            status: 'failed',
+            error: { code: 'AI_GATEWAY_EXECUTION_HANDOFF_FAILED', message: publicErrorMessage(error) },
+          },
+          store,
+          { metadata }
+        )).plan
       : plan;
     if (next && store?.update) {
       const settlement = await settleAiGatewayJobCredits(next);

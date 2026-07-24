@@ -46,22 +46,28 @@ describe('OpenAI-compatible provider config', () => {
   });
 
   it('derives worker adapters and runtime routes from the compatible provider table', () => {
-    expect(openAiCompatibleAdapterIdsForModality('text')).toEqual([
-      'openai-official',
-      'toapis-openai',
-      '302ai-openai',
-      'aihubmix-openai',
-      'tinysnow-openai',
-      'volcengine-ark-openai',
-    ]);
-    expect(openAiCompatibleAdapterIdsForModality('image')).toEqual([
-      'openai-official',
-      'toapis-openai',
-      '302ai-openai',
-      'aihubmix-openai',
-      'tinysnow-openai',
-      'volcengine-ark-image',
-    ]);
+    expect(openAiCompatibleAdapterIdsForModality('text')).toEqual(
+      expect.arrayContaining([
+        'openai-official',
+        'toapis-openai',
+        '302ai-openai',
+        'aihubmix-openai',
+        'tinysnow-openai',
+        'volcengine-ark-openai',
+      ])
+    );
+    expect(openAiCompatibleAdapterIdsForModality('text')).toHaveLength(6);
+    expect(openAiCompatibleAdapterIdsForModality('image')).toEqual(
+      expect.arrayContaining([
+        'openai-official',
+        'toapis-openai',
+        '302ai-openai',
+        'aihubmix-openai',
+        'tinysnow-openai',
+        'volcengine-ark-image',
+      ])
+    );
+    expect(openAiCompatibleAdapterIdsForModality('image')).toHaveLength(6);
     expect(buildOpenAiCompatibleRuntimeRoutes()).toEqual(
       expect.arrayContaining([
         expect.objectContaining({

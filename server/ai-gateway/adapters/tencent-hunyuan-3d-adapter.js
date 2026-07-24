@@ -3,6 +3,7 @@ import { fetch as undiciFetch } from 'undici';
 import { acquireProviderKey, recordProviderKeyError, recordProviderKeySuccess } from '../provider-key-store.js';
 import { AiGatewayValidationError } from '../job.js';
 import { finalizeAiGatewayTerminalPlan } from '../execution-finalize.js';
+import { applyAiGatewayAdapterResult } from '../adapter-result.js';
 import { buildProviderTaskUsage, collectByteSize } from '../execution-usage.js';
 import { normalizeGatewayInput } from '../gateway-input.js';
 
@@ -179,11 +180,21 @@ async function pollTencentHunyuan3dTask(plan, jobId, key, options = {}) {
       const completedAtMs = Date.now();
       const { modelUrls, previewUrl } = normalizeTencentFiles(data?.ResultFile3Ds);
       if (!modelUrls.length) {
-        const failed = await store.update(plan.job.id, {
-          status: 'failed',
-          error: { code: 'TENCENT_HUNYUAN_3D_MODEL_URL_MISSING', message: 'Tencent Hunyuan 3D task completed without model URL' },
-          metadata: { tencentJobId: jobId, upstreamTaskId: jobId, gatewayExecution: { failedAt: new Date().toISOString() } },
-        });
+        const { plan: failed } = await applyAiGatewayAdapterResult(
+          plan,
+          {
+            status: 'failed',
+            upstreamTaskId: jobId,
+            error: { code: 'TENCENT_HUNYUAN_3D_MODEL_URL_MISSING', message: 'Tencent Hunyuan 3D task completed without model URL' },
+          },
+          store,
+          {
+            metadata: {
+              tencentJobId: jobId,
+              gatewayExecution: { failedAt: new Date().toISOString() },
+            },
+          }
+        );
         await finalizeAiGatewayTerminalPlan(failed, store);
         return;
       }
@@ -211,38 +222,53 @@ async function pollTencentHunyuan3dTask(plan, jobId, key, options = {}) {
         })),
         ...(previewUrl ? [{ kind: 'image', url: previewUrl, source: TENCENT_HUNYUAN_PROVIDER_ID, taskId: jobId }] : []),
       ];
-      const succeeded = await store.update(plan.job.id, {
-        status: 'succeeded',
-        output: {
-          provider: TENCENT_HUNYUAN_PROVIDER_ID,
-          taskId: jobId,
-          modelUrls,
-          ...(previewUrl ? { previewUrl } : {}),
-          usage,
-          raw: data,
-        },
-        artifacts,
-        metadata: {
-          tencentJobId: jobId,
+      const { plan: succeeded } = await applyAiGatewayAdapterResult(
+        plan,
+        {
+          status: 'succeeded',
           upstreamTaskId: jobId,
+          artifacts,
           usage,
-          gatewayExecution: {
-            completedAt: new Date(completedAtMs).toISOString(),
-            durationMs: usage.durationMs,
-            outputBytes,
-            artifactCount: artifacts.length,
+          output: {
+            provider: TENCENT_HUNYUAN_PROVIDER_ID,
+            taskId: jobId,
+            modelUrls,
+            ...(previewUrl ? { previewUrl } : {}),
+            raw: data,
           },
         },
-      });
+        store,
+        {
+          metadata: {
+            tencentJobId: jobId,
+            gatewayExecution: {
+              completedAt: new Date(completedAtMs).toISOString(),
+              durationMs: usage.durationMs,
+              outputBytes,
+              artifactCount: artifacts.length,
+            },
+          },
+        }
+      );
       await finalizeAiGatewayTerminalPlan(succeeded, store);
       return;
     }
     if (status === 'failed') {
-      const failed = await store.update(plan.job.id, {
-        status: 'failed',
-        error: { code: data?.ErrorCode || 'TENCENT_HUNYUAN_3D_TASK_FAILED', message: data?.ErrorMessage || 'Tencent Hunyuan 3D task failed' },
-        metadata: { tencentJobId: jobId, upstreamTaskId: jobId, gatewayExecution: { failedAt: new Date().toISOString() } },
-      });
+      const { plan: failed } = await applyAiGatewayAdapterResult(
+        plan,
+        {
+          status: 'failed',
+          upstreamTaskId: jobId,
+          error: { code: data?.ErrorCode || 'TENCENT_HUNYUAN_3D_TASK_FAILED', message: data?.ErrorMessage || 'Tencent Hunyuan 3D task failed' },
+        },
+        store,
+        {
+          metadata: {
+            tencentJobId: jobId,
+            gatewayExecution: { failedAt: new Date().toISOString() },
+          },
+        }
+      );
       await finalizeAiGatewayTerminalPlan(failed, store);
       return;
     }

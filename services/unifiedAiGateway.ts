@@ -128,15 +128,29 @@ function nowMs(): number {
   return typeof performance !== "undefined" ? performance.now() : Date.now();
 }
 
-/** 仅用于调试日志，非权威分类（与 HTTP 状态码或供应商枚举无严格对应） */
-function unifiedAiErrorHint(message: string): "rate_limit" | "upstream_busy" | "auth_config" | "other" {
-  const s = message;
-  if (/rate_limited|秒后可重试|取号过快|排队深度|user_rpm/i.test(s)) return "rate_limit";
-  if (/queue_overflow|队列已满|全站排队|global_queue/i.test(s)) return "upstream_busy";
-  if (/429|RESOURCE_EXHAUSTED|rate limit|Too Many Requests/i.test(s)) return "rate_limit";
-  if (/503|529|UNAVAILABLE|overloaded|upstream connect error|connection reset|EAI_AGAIN/i.test(s)) return "upstream_busy";
-  if (/401|403|API key|apikey|unauthorized|PERMISSION_DENIED|invalid api key/i.test(s)) return "auth_config";
+/**
+ * Soft-notice hint for metered AI calls.
+ * Slice 2: production path uses only server `failureReason` (plus typed local errors above the call site).
+ * Message-string heuristics are intentionally removed — missing failureReason → "other".
+ */
+export function resolveUnifiedAiSoftHint(error?: unknown): "rate_limit" | "upstream_busy" | "auth_config" | "other" {
+  const failureReason =
+    error && typeof error === "object"
+      ? ((error as { failureReason?: { stage?: string; code?: string; retryable?: boolean } }).failureReason ||
+          (error as { body?: { failureReason?: { stage?: string; code?: string } } }).body?.failureReason)
+      : undefined;
+  if (!failureReason || typeof failureReason !== "object") return "other";
+  if (failureReason.stage === "upstream") {
+    if (/rate_limit|RATE_LIMITED|429/i.test(String(failureReason.code || ""))) return "rate_limit";
+    return "upstream_busy";
+  }
+  if (failureReason.stage === "provider_key") return "auth_config";
   return "other";
+}
+
+/** @deprecated Use resolveUnifiedAiSoftHint; message arg ignored (kept for call-site compatibility during slice 2). */
+function unifiedAiErrorHint(_message: string, error?: unknown): "rate_limit" | "upstream_busy" | "auth_config" | "other" {
+  return resolveUnifiedAiSoftHint(error);
 }
 
 type UnifiedAiDebugFields = Record<string, string | undefined>;
@@ -215,7 +229,7 @@ async function runMeteredAiCall<T>(
         ? e.status === 429 || e.code === "rate_limited"
           ? "rate_limit"
           : "upstream_busy"
-        : unifiedAiErrorHint(msg);
+        : unifiedAiErrorHint(msg, e);
     if (debug) {
       console.warn(`[unified-ai] ${kind} fail ${Math.round(nowMs() - t0)}ms`, { ...fields, errorHint }, msg);
     }

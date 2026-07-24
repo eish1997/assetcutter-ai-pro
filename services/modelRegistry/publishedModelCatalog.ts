@@ -75,7 +75,7 @@ export function listPublishedWorkspaceTextModels(ops?: PublishedModelOps): Publi
 }
 
 function gatewayReadyForCanonicalModel(canonicalModelId: string): boolean {
-  return listModelRoutes(canonicalModelId).some((route) => route.gatewayExecutionStatus === "gateway_ready");
+  return listModelRoutes(canonicalModelId).some((route) => route.gatewayExecutionStatus === "ready");
 }
 
 function listPublishedWorkspaceCapabilityModels(

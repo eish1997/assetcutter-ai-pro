@@ -7,10 +7,11 @@ import {
   resolveExecutableAiGatewayModelRoute,
   resolvePendingAiGatewayModelRoute,
 } from '../../shared/aiGatewayModelRoutes.js';
-import { openAiCompatibleChannelForProvider } from './openai-compatible-config.js';
+import { openAiCompatibleChannelForProvider, isOpenAiCompatibleAsyncProvider } from './openai-compatible-config.js';
+import { enrichSelectedRouteWithRuntimeDefaults } from './provider-router.js';
+import { resolveDispatchPolicyFromOptions, selectRouteWithDispatchPolicy } from './route-dispatch.js';
 
 const REQUIRED_ENDPOINT_MAPPING_FIELDS = Object.freeze(['requestPath', 'pollPath', 'statusPath', 'artifactPath']);
-const OPENAI_COMPATIBLE_ASYNC_PROVIDERS = new Set(['302ai', 'aihubmix', 'toapis', 'tinysnow']);
 
 function nonEmptyString(value) {
   return typeof value === 'string' && value.trim() ? value.trim() : '';
@@ -113,7 +114,7 @@ function endpointMappingCandidate(input, canonicalModelId, modelOpsConfig) {
       const parsed = parseEndpointMappingRouteId(routeId);
       if (!parsed) return null;
       if (parsed.canonicalModelId !== canonicalModelId || parsed.modality !== modality) return null;
-      if (!OPENAI_COMPATIBLE_ASYNC_PROVIDERS.has(parsed.providerId)) return null;
+      if (!isOpenAiCompatibleAsyncProvider(parsed.providerId)) return null;
       if (row?.enabled !== true) return null;
       return { ...parsed, routeId, mapping: row };
     })
@@ -145,7 +146,7 @@ function mappedAsyncRouteFromOps(input, canonicalModelId, modelOpsConfig, option
   const providerId = candidate?.providerId;
   const modality = candidate?.modality;
   if (!canonicalModelId || !providerId || !modality) return null;
-  if (!OPENAI_COMPATIBLE_ASYNC_PROVIDERS.has(providerId)) return null;
+  if (!isOpenAiCompatibleAsyncProvider(providerId)) return null;
   if (modality !== 'video' && modality !== 'model3d') return null;
   const routeId = candidate.routeId;
   const mapping = candidate.mapping;
@@ -173,7 +174,7 @@ function mappedAsyncRouteFromOps(input, canonicalModelId, modelOpsConfig, option
     routeId,
     canonicalModelId,
     providerId,
-    gatewayExecutionStatus: 'gateway_ready',
+    gatewayExecutionStatus: 'ready',
     executionStatus: 'platform_ready',
     platformKeyRequired: true,
     workerId: modality === 'model3d' ? 'model3d-worker' : 'video-worker',
@@ -330,28 +331,225 @@ function routeWithAdminOverrides(route, modelOpsConfig, fallbackModality) {
   return out;
 }
 
-export async function validateAiGatewayModelRouteExecutable(input, options = {}) {
-  const canonicalModelId = resolveRequestedCanonicalModelId(input);
-  if (!canonicalModelId) return { ok: true, canonicalModelId: null, route: null, checked: false };
+function candidateRouteId(route, modality) {
+  return (
+    nonEmptyString(route?.routeId) ||
+    channelCandidatesForRoute(route, modality)[0] ||
+    `${nonEmptyString(route?.canonicalModelId)}:${normalizeAiGatewayProviderId(route?.providerId)}:${String(modality || '').trim()}`
+  );
+}
 
-  const mappedAsyncRoute = mappedAsyncRouteFromOps(input, canonicalModelId, options.modelOpsConfig, options);
-  if (mappedAsyncRoute) {
-    if (options.checkProviderKeys !== false) {
-      const keys = await (options.listProviderKeys || listProviderKeys)();
-      if (!routeHasUsableKey(mappedAsyncRoute, keys)) {
-        throw new AiGatewayValidationError(
-          `No usable platform key for AI provider: ${mappedAsyncRoute.providerId}`,
-          'AI_GATEWAY_PROVIDER_KEY_UNAVAILABLE'
-        );
-      }
-    }
+function candidatePriority(route, modelOpsConfig, modality) {
+  const priorityByBindingId = priorityOverridesByBindingId(modelOpsConfig);
+  const override = routePriority(route, priorityByBindingId, modality);
+  if (Number.isFinite(override) && override !== Number.POSITIVE_INFINITY) return override;
+  const raw = Number(route?.priority);
+  return Number.isFinite(raw) ? Math.floor(raw) : 100;
+}
+
+function selectedRouteSummary(route, modality, modelOpsConfig, selectionReason = null) {
+  if (!route) return undefined;
+  const summary = {
+    routeId: candidateRouteId(route, modality),
+    providerId: normalizeAiGatewayProviderId(route.providerId),
+    adapterId: nonEmptyString(route.adapterId) || undefined,
+    workerId: nonEmptyString(route.workerId) || undefined,
+    upstreamModelId: nonEmptyString(route.upstreamModelId) || undefined,
+    priority: candidatePriority(route, modelOpsConfig, modality),
+    fallbackPolicy: nonEmptyString(route.fallbackPolicy) || 'on_error',
+    ...(selectionReason ? { selectionReason } : {}),
+  };
+  // Decision is the single source of truth: carry runtime adapter/worker so plan never re-selects.
+  return enrichSelectedRouteWithRuntimeDefaults(summary, {
+    modality,
+    capability: modality ? `${modality}.generate` : undefined,
+    provider: summary.providerId,
+    model: route.canonicalModelId || undefined,
+  });
+}
+
+function decisionCandidate(route, modality, modelOpsConfig, status, reasonCode) {
+  return {
+    routeId: candidateRouteId(route, modality),
+    providerId: normalizeAiGatewayProviderId(route?.providerId),
+    status,
+    reasonCode,
+    priority: candidatePriority(route, modelOpsConfig, modality),
+  };
+}
+
+function blockingOwnerForCode(code) {
+  if (code === 'AI_GATEWAY_PROVIDER_KEY_UNAVAILABLE') return 'admin';
+  if (code === 'AI_GATEWAY_PROVIDER_PAUSED' || code === 'AI_GATEWAY_MODEL_ROUTE_NOT_EXECUTABLE') return 'admin';
+  if (code === 'AI_GATEWAY_MODEL_ADAPTER_PENDING' || code === 'AI_GATEWAY_MODEL_PARAMETER_PENDING') return 'developer';
+  if (code === 'AI_GATEWAY_MODEL_ROUTE_AMBIGUOUS') return 'admin';
+  return 'system';
+}
+
+function blockingNextActionForCode(code, details = {}) {
+  if (code === 'AI_GATEWAY_PROVIDER_KEY_UNAVAILABLE') return 'Add or re-enable a usable platform key for the selected provider';
+  if (code === 'AI_GATEWAY_PROVIDER_PAUSED') return 'Resume the paused provider in ops control, then retry route check';
+  if (code === 'AI_GATEWAY_MODEL_ROUTE_NOT_EXECUTABLE') {
+    return details.nextAction || 'Enable the route binding in model ops config before publishing or testing this route';
+  }
+  if (code === 'AI_GATEWAY_MODEL_ADAPTER_PENDING') return 'Finish adapter wiring for this model/provider before publishing';
+  if (code === 'AI_GATEWAY_MODEL_PARAMETER_PENDING') {
+    const missing = Array.isArray(details.missingEndpointFields) ? details.missingEndpointFields.join(', ') : '';
+    return missing ? `Fill endpoint mapping fields: ${missing}` : 'Complete endpoint mapping before testing this route';
+  }
+  if (code === 'AI_GATEWAY_MODEL_ROUTE_AMBIGUOUS') return 'Set a unique endpoint-mapping priority or pin an explicit provider';
+  if (code === 'AI_GATEWAY_MODEL_ROUTE_NOT_FOUND') return 'Publish an executable model route or choose a supported model/provider';
+  return 'Inspect route candidates and fix the first blocking reason';
+}
+
+export function publicAiGatewayRouteDecision(decision) {
+  if (!decision || typeof decision !== 'object') return null;
+  const blocking = decision.blockingReason && typeof decision.blockingReason === 'object' ? decision.blockingReason : null;
+  return {
+    ok: decision.ok === true,
+    canonicalModelId: nonEmptyString(decision.canonicalModelId) || '',
+    modality: nonEmptyString(decision.modality) || null,
+    selectedRoute: decision.selectedRoute || undefined,
+    candidates: Array.isArray(decision.candidates) ? decision.candidates : [],
+    blockingReason: blocking
+      ? {
+          code: nonEmptyString(blocking.code) || 'AI_GATEWAY_ROUTE_BLOCKED',
+          message: nonEmptyString(blocking.message) || 'AI Gateway route blocked',
+          owner: nonEmptyString(blocking.owner) || 'system',
+          nextAction: nonEmptyString(blocking.nextAction) || blockingNextActionForCode(blocking.code, blocking.details),
+        }
+      : undefined,
+  };
+}
+
+function blockedDecision({ canonicalModelId, modality, code, message, details = {}, candidates = [] }) {
+  return {
+    ok: false,
+    canonicalModelId,
+    modality: modality || null,
+    selectedRoute: undefined,
+    candidates,
+    checked: true,
+    blockingReason: {
+      code,
+      message,
+      owner: blockingOwnerForCode(code),
+      nextAction: blockingNextActionForCode(code, details),
+      details,
+    },
+  };
+}
+
+function readyDecision({ canonicalModelId, modality, route, modelOpsConfig, candidates, runtimeRoute = null, selectionReason = null }) {
+  const executable = routeWithAdminOverrides(route, modelOpsConfig, modality);
+  const reason =
+    selectionReason ||
+    {
+      strategy: 'single_ready',
+      code: 'AI_GATEWAY_DISPATCH_SINGLE',
+      message: `Only one ready route: ${normalizeAiGatewayProviderId(executable?.providerId)}`,
+      auditedAt: new Date().toISOString(),
+    };
+  return {
+    ok: true,
+    canonicalModelId,
+    modality: modality || null,
+    selectedRoute: selectedRouteSummary(executable, modality, modelOpsConfig, reason),
+    candidates,
+    checked: true,
+    executableRoute: executable,
+    // Only ops-mapped async routes may override createJob plan routes.
+    ...(runtimeRoute ? { runtimeRoute } : {}),
+  };
+}
+
+export async function resolveAiGatewayRouteDecision(input, options = {}) {
+  const modality = String(input?.modality || '').trim() || null;
+  const canonicalModelId = resolveRequestedCanonicalModelId(input);
+  if (!canonicalModelId) {
     return {
       ok: true,
-      canonicalModelId,
-      route: mappedAsyncRoute,
-      runtimeRoute: mappedAsyncRoute,
-      checked: true,
+      canonicalModelId: '',
+      modality,
+      selectedRoute: undefined,
+      candidates: [],
+      checked: false,
     };
+  }
+
+  let mappedAsyncRoute = null;
+  try {
+    mappedAsyncRoute = mappedAsyncRouteFromOps(input, canonicalModelId, options.modelOpsConfig, options);
+  } catch (err) {
+    if (err instanceof AiGatewayValidationError || err?.name === 'AiGatewayValidationError') {
+      const details = err.details && typeof err.details === 'object' ? err.details : {};
+      const status =
+        err.code === 'AI_GATEWAY_MODEL_PARAMETER_PENDING'
+          ? 'mapping_incomplete'
+          : err.code === 'AI_GATEWAY_PROVIDER_PAUSED'
+            ? 'paused'
+            : err.code === 'AI_GATEWAY_MODEL_ROUTE_AMBIGUOUS'
+              ? 'paused'
+              : 'not_published';
+      const candidates = Array.isArray(details.routeIds)
+        ? details.routeIds.map((routeId, index) => ({
+            routeId,
+            providerId: Array.isArray(details.providers) ? normalizeAiGatewayProviderId(details.providers[index]) : null,
+            status,
+            reasonCode: err.code,
+            priority: Number.isFinite(Number(details.priority)) ? Number(details.priority) : 100,
+          }))
+        : details.routeId
+          ? [
+              {
+                routeId: details.routeId,
+                providerId: normalizeAiGatewayProviderId(input?.provider) || null,
+                status,
+                reasonCode: err.code,
+                priority: 100,
+              },
+            ]
+          : [];
+      return blockedDecision({
+        canonicalModelId,
+        modality,
+        code: err.code || 'AI_GATEWAY_MODEL_ROUTE_NOT_EXECUTABLE',
+        message: err.message,
+        details,
+        candidates,
+      });
+    }
+    throw err;
+  }
+
+  if (mappedAsyncRoute) {
+    const keys =
+      options.checkProviderKeys === false ? null : await (options.listProviderKeys || listProviderKeys)();
+    const ready = options.checkProviderKeys === false || routeHasUsableKey(mappedAsyncRoute, keys);
+    const candidate = decisionCandidate(
+      mappedAsyncRoute,
+      modality,
+      options.modelOpsConfig,
+      ready ? 'ready' : 'key_unavailable',
+      ready ? 'AI_GATEWAY_MODEL_ROUTE_READY' : 'AI_GATEWAY_PROVIDER_KEY_UNAVAILABLE'
+    );
+    if (!ready) {
+      return blockedDecision({
+        canonicalModelId,
+        modality,
+        code: 'AI_GATEWAY_PROVIDER_KEY_UNAVAILABLE',
+        message: `No usable platform key for AI provider: ${mappedAsyncRoute.providerId}`,
+        candidates: [candidate],
+      });
+    }
+    return readyDecision({
+      canonicalModelId,
+      modality,
+      route: mappedAsyncRoute,
+      modelOpsConfig: options.modelOpsConfig,
+      candidates: [candidate],
+      runtimeRoute: mappedAsyncRoute,
+    });
   }
 
   const routeInput = {
@@ -360,82 +558,210 @@ export async function validateAiGatewayModelRouteExecutable(input, options = {})
     provider: normalizeAiGatewayProviderId(input?.provider),
     disabledProviders: options.disabledProviders,
   };
+  const disabledProviderSet = new Set(
+    (Array.isArray(options.disabledProviders) ? options.disabledProviders : []).map(normalizeAiGatewayProviderId)
+  );
   const routes = listExecutableAiGatewayModelRoutes(routeInput);
-  const activeRoutes = routes.filter((candidate) => !routeDisabledByAdminOverride(candidate, options.modelOpsConfig, input?.modality));
-  const route = activeRoutes[0] || null;
-  if (!route) {
-    if (routes.length > 0 && activeRoutes.length === 0) {
-      const providerIds = [...new Set(routes.map((candidate) => candidate.providerId).filter(Boolean))];
-      throw new AiGatewayValidationError(
-        `AI model route is paused by model ops config: ${canonicalModelId}`,
-        'AI_GATEWAY_MODEL_ROUTE_NOT_EXECUTABLE',
-        {
-          canonicalModelId,
-          modality: input?.modality || null,
-          providerIds,
-          routeIds: routes.map((candidate) => channelCandidatesForRoute(candidate, input?.modality)[0]).filter(Boolean),
-          nextAction: 'Enable the route binding in model ops config before publishing or testing this route',
-        }
+  const routesIgnoringPausedProviders = listExecutableAiGatewayModelRoutes({
+    ...routeInput,
+    disabledProviders: [],
+  });
+  const activeRoutes = routes.filter(
+    (candidate) => !routeDisabledByAdminOverride(candidate, options.modelOpsConfig, modality)
+  );
+  const keys = options.checkProviderKeys === false ? null : await (options.listProviderKeys || listProviderKeys)();
+  const candidates = [];
+
+  for (const candidate of routesIgnoringPausedProviders) {
+    const providerId = normalizeAiGatewayProviderId(candidate.providerId);
+    if (disabledProviderSet.has(providerId)) {
+      candidates.push(
+        decisionCandidate(candidate, modality, options.modelOpsConfig, 'paused', 'AI_GATEWAY_PROVIDER_PAUSED')
       );
+      continue;
     }
-    const routesIgnoringPausedProviders = listExecutableAiGatewayModelRoutes({
-      ...routeInput,
-      disabledProviders: [],
-    }).filter((candidate) => !routeDisabledByAdminOverride(candidate, options.modelOpsConfig, input?.modality));
-    if (routesIgnoringPausedProviders.length > 0) {
-      const providerIds = [...new Set(routesIgnoringPausedProviders.map((candidate) => candidate.providerId).filter(Boolean))];
-      throw new AiGatewayValidationError(
-        `AI provider route is paused by ops control: ${providerIds.join(', ')}`,
-        'AI_GATEWAY_PROVIDER_PAUSED',
-        {
-          providerIds,
-          canonicalModelId,
-          modality: input?.modality || null,
-        }
+    if (routeDisabledByAdminOverride(candidate, options.modelOpsConfig, modality)) {
+      candidates.push(
+        decisionCandidate(
+          candidate,
+          modality,
+          options.modelOpsConfig,
+          'paused',
+          'AI_GATEWAY_MODEL_ROUTE_NOT_EXECUTABLE'
+        )
       );
+      continue;
     }
-    const pending = resolveKnownPendingModelRoute(input, {
-      disabledProviders: options.disabledProviders,
-    });
-    if (pending) {
-      throw new AiGatewayValidationError(
-        `AI model route is not executable yet: ${canonicalModelId} via ${pending.providerId}`,
+    if (options.checkProviderKeys !== false && candidate.platformKeyRequired && !routeHasUsableKey(candidate, keys)) {
+      candidates.push(
+        decisionCandidate(
+          candidate,
+          modality,
+          options.modelOpsConfig,
+          'key_unavailable',
+          'AI_GATEWAY_PROVIDER_KEY_UNAVAILABLE'
+        )
+      );
+      continue;
+    }
+    candidates.push(
+      decisionCandidate(candidate, modality, options.modelOpsConfig, 'ready', 'AI_GATEWAY_MODEL_ROUTE_READY')
+    );
+  }
+
+  const pending = resolveKnownPendingModelRoute(input, {
+    disabledProviders: options.disabledProviders,
+  });
+  if (pending) {
+    candidates.push(
+      decisionCandidate(
+        pending,
+        modality,
+        options.modelOpsConfig,
+        pending.executionStatus === 'adapter_pending' ? 'adapter_pending' : 'not_published',
         pending.executionStatus === 'adapter_pending'
           ? 'AI_GATEWAY_MODEL_ADAPTER_PENDING'
           : 'AI_GATEWAY_MODEL_ROUTE_NOT_EXECUTABLE'
-      );
-    }
-    throw new AiGatewayValidationError(
-      `No executable AI Gateway route for model: ${canonicalModelId}`,
-      'AI_GATEWAY_MODEL_ROUTE_NOT_FOUND'
+      )
     );
+  }
+
+  candidates.sort((a, b) => a.priority - b.priority || String(a.routeId).localeCompare(String(b.routeId)));
+
+  if (!activeRoutes.length) {
+    if (routes.length > 0) {
+      const providerIds = [...new Set(routes.map((candidate) => candidate.providerId).filter(Boolean))];
+      return blockedDecision({
+        canonicalModelId,
+        modality,
+        code: 'AI_GATEWAY_MODEL_ROUTE_NOT_EXECUTABLE',
+        message: `AI model route is paused by model ops config: ${canonicalModelId}`,
+        details: {
+          canonicalModelId,
+          modality,
+          providerIds,
+          routeIds: routes.map((candidate) => channelCandidatesForRoute(candidate, modality)[0]).filter(Boolean),
+          nextAction: 'Enable the route binding in model ops config before publishing or testing this route',
+        },
+        candidates,
+      });
+    }
+    const unpausedIgnoringProviders = routesIgnoringPausedProviders.filter(
+      (candidate) => !routeDisabledByAdminOverride(candidate, options.modelOpsConfig, modality)
+    );
+    if (unpausedIgnoringProviders.length > 0) {
+      const providerIds = [...new Set(unpausedIgnoringProviders.map((candidate) => candidate.providerId).filter(Boolean))];
+      return blockedDecision({
+        canonicalModelId,
+        modality,
+        code: 'AI_GATEWAY_PROVIDER_PAUSED',
+        message: `AI provider route is paused by ops control: ${providerIds.join(', ')}`,
+        details: { providerIds, canonicalModelId, modality },
+        candidates,
+      });
+    }
+    if (pending) {
+      const code =
+        pending.executionStatus === 'adapter_pending'
+          ? 'AI_GATEWAY_MODEL_ADAPTER_PENDING'
+          : 'AI_GATEWAY_MODEL_ROUTE_NOT_EXECUTABLE';
+      return blockedDecision({
+        canonicalModelId,
+        modality,
+        code,
+        message: `AI model route is not executable yet: ${canonicalModelId} via ${pending.providerId}`,
+        candidates,
+      });
+    }
+    return blockedDecision({
+      canonicalModelId,
+      modality,
+      code: 'AI_GATEWAY_MODEL_ROUTE_NOT_FOUND',
+      message: `No executable AI Gateway route for model: ${canonicalModelId}`,
+      candidates,
+    });
   }
 
   if (options.checkProviderKeys !== false) {
-    const keys = await (options.listProviderKeys || listProviderKeys)();
-    const readyRoute = sortRoutesByAdminPriority(activeRoutes, options.modelOpsConfig, input?.modality).find((candidate) =>
+    const readyRoutes = sortRoutesByAdminPriority(activeRoutes, options.modelOpsConfig, modality).filter((candidate) =>
       routeHasUsableKey(candidate, keys)
     );
-    if (readyRoute) {
-      return {
-        ok: true,
+    if (readyRoutes.length) {
+      const policy = resolveDispatchPolicyFromOptions(options);
+      const dispatch = selectRouteWithDispatchPolicy(readyRoutes, {
         canonicalModelId,
-        route: routeWithAdminOverrides(readyRoute, options.modelOpsConfig, input?.modality),
-        checked: true,
-      };
+        modality,
+        keys,
+        correlationId: nonEmptyString(input?.correlationId) || nonEmptyString(input?.id),
+      }, policy);
+      return readyDecision({
+        canonicalModelId,
+        modality,
+        route: dispatch.selected || readyRoutes[0],
+        modelOpsConfig: options.modelOpsConfig,
+        candidates,
+        selectionReason: dispatch.selectionReason,
+      });
     }
     if (activeRoutes.some((candidate) => candidate.platformKeyRequired)) {
-      throw new AiGatewayValidationError(
-        `No usable platform key for AI provider: ${route.providerId}`,
-        'AI_GATEWAY_PROVIDER_KEY_UNAVAILABLE'
-      );
+      return blockedDecision({
+        canonicalModelId,
+        modality,
+        code: 'AI_GATEWAY_PROVIDER_KEY_UNAVAILABLE',
+        message: `No usable platform key for AI provider: ${activeRoutes[0].providerId}`,
+        candidates,
+      });
     }
   }
 
+  {
+    const ordered = sortRoutesByAdminPriority(activeRoutes, options.modelOpsConfig, modality);
+    const policy = resolveDispatchPolicyFromOptions(options);
+    const dispatch = selectRouteWithDispatchPolicy(ordered, {
+      canonicalModelId,
+      modality,
+      keys,
+      correlationId: nonEmptyString(input?.correlationId) || nonEmptyString(input?.id),
+    }, policy);
+    return readyDecision({
+      canonicalModelId,
+      modality,
+      route: dispatch.selected || ordered[0] || activeRoutes[0],
+      modelOpsConfig: options.modelOpsConfig,
+      candidates,
+      selectionReason: dispatch.selectionReason,
+    });
+  }
+}
+
+export async function validateAiGatewayModelRouteExecutable(input, options = {}) {
+  const decision = await resolveAiGatewayRouteDecision(input, options);
+  if (!decision.checked) {
+    return {
+      ok: true,
+      canonicalModelId: decision.canonicalModelId || null,
+      route: null,
+      checked: false,
+      routeDecision: publicAiGatewayRouteDecision(decision),
+    };
+  }
+  if (!decision.ok) {
+    const details =
+      decision.blockingReason?.details && typeof decision.blockingReason.details === 'object'
+        ? decision.blockingReason.details
+        : {};
+    throw new AiGatewayValidationError(
+      decision.blockingReason?.message || 'AI Gateway route blocked',
+      decision.blockingReason?.code || 'AI_GATEWAY_MODEL_ROUTE_NOT_EXECUTABLE',
+      details
+    );
+  }
   return {
     ok: true,
-    canonicalModelId,
-    route: routeWithAdminOverrides(route, options.modelOpsConfig, input?.modality),
+    canonicalModelId: decision.canonicalModelId,
+    route: decision.executableRoute,
+    ...(decision.runtimeRoute ? { runtimeRoute: decision.runtimeRoute } : {}),
     checked: true,
+    routeDecision: publicAiGatewayRouteDecision(decision),
   };
 }

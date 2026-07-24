@@ -149,7 +149,7 @@ export function buildAiGatewayPriceSkuSuggestions(
   const existing = new Set(entries.map((entry) => String(entry.billingSku || '').trim()).filter(Boolean));
   const bySku = new Map<string, AiGatewayPriceSkuSuggestion>();
   for (const route of routes) {
-    if (route.gatewayExecutionStatus !== 'gateway_ready') continue;
+    if (route.gatewayExecutionStatus !== 'ready') continue;
     const billingSku = billingSkuForAiGatewayRouteSuggestion(route);
     if (!billingSku || existing.has(billingSku) || bySku.has(billingSku)) continue;
     bySku.set(billingSku, {

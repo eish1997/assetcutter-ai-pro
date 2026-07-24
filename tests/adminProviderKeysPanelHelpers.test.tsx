@@ -87,7 +87,7 @@ describe('AdminProviderKeysPanel route override helpers', () => {
       __adminProviderKeysPanelTestUtils.routeFallbackSummaryText({
         providerId: 'aihubmix',
         modality: 'text',
-        gatewayExecutionStatus: 'gateway_ready',
+        gatewayExecutionStatus: 'ready',
         executionStatus: 'platform_ready',
         platformKeyRequired: true,
         keyReady: true,
@@ -101,7 +101,7 @@ describe('AdminProviderKeysPanel route override helpers', () => {
       __adminProviderKeysPanelTestUtils.routeFallbackSummaryText({
         providerId: '302ai',
         modality: 'image',
-        gatewayExecutionStatus: 'gateway_ready',
+        gatewayExecutionStatus: 'ready',
         executionStatus: 'platform_ready',
         platformKeyRequired: true,
         keyReady: true,

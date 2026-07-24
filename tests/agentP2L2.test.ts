@@ -155,7 +155,7 @@ describe('agent P2 body host concurrency', () => {
       ok: true,
       route: {
         providerId: 'volcengine-ark',
-        gatewayExecutionStatus: 'gateway_ready',
+        gatewayExecutionStatus: 'ready',
       },
     });
     const scriptPromotion = await host.executeTool(

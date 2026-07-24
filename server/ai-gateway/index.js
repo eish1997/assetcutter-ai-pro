@@ -1,5 +1,8 @@
 import { createAiJobDraft } from './job.js';
-import { resolveAiProviderRoute } from './provider-router.js';
+import {
+  materializeAiProviderRouteFromSelectedRoute,
+  pickDefaultSelectedRouteForJob,
+} from './provider-router.js';
 import { buildAiGatewayWorkerRequest } from './workers/registry.js';
 import {
   applyAiGatewayModelOverride,
@@ -27,34 +30,64 @@ function resolveRequestedModelId(job) {
   );
 }
 
-function applyModelRouteProviderInference(job, opsControl = {}) {
-  const explicitProvider = normalizeAiGatewayProviderId(job?.provider);
-  if (explicitProvider) {
-    if (explicitProvider === job.provider) return { job, inferred: null };
-    return { job: { ...job, provider: explicitProvider }, inferred: null };
-  }
+function readRouteDecision(job, options = {}) {
+  if (options.routeDecision && typeof options.routeDecision === 'object') return options.routeDecision;
+  const metadata = job?.metadata && typeof job.metadata === 'object' ? job.metadata : {};
+  if (metadata.routeDecision && typeof metadata.routeDecision === 'object') return metadata.routeDecision;
+  return null;
+}
+
+function readSelectedRoute(job, options = {}) {
+  if (options.selectedRoute && typeof options.selectedRoute === 'object') return options.selectedRoute;
+  const decision = readRouteDecision(job, options);
+  if (decision?.selectedRoute && typeof decision.selectedRoute === 'object') return decision.selectedRoute;
+  return null;
+}
+
+/**
+ * When callers did not run resolveAiGatewayRouteDecision first (unit tests / modality-only plans),
+ * derive a selectedRoute from the same executable model-route table decision uses — never a second ranking.
+ */
+function selectedRouteFromExecutableModelTable(job, opsControl = {}) {
   const canonicalModelId = resolveRequestedModelId(job);
-  if (!canonicalModelId) return { job, inferred: null };
-  const route = resolveExecutableAiGatewayModelRoute({
+  const explicitProvider = normalizeAiGatewayProviderId(job?.provider);
+  if (!canonicalModelId && !explicitProvider) {
+    return { selectedRoute: null, modelRouteInference: null };
+  }
+  if (!canonicalModelId) {
+    return {
+      selectedRoute: explicitProvider ? { providerId: explicitProvider } : null,
+      modelRouteInference: null,
+    };
+  }
+  const modelRoute = resolveExecutableAiGatewayModelRoute({
     canonicalModelId,
     modality: job.modality,
+    provider: explicitProvider || undefined,
     disabledProviders: opsControl.disabledProviders,
   });
-  if (!route?.providerId) return { job, inferred: null };
+  if (!modelRoute?.providerId) {
+    return {
+      selectedRoute: explicitProvider ? { providerId: explicitProvider } : null,
+      modelRouteInference: null,
+    };
+  }
   return {
-    job: {
-      ...job,
-      provider: route.providerId,
-      metadata: {
-        ...(job.metadata && typeof job.metadata === 'object' ? job.metadata : {}),
-        modelRouteInference: {
-          canonicalModelId,
-          providerId: route.providerId,
-          ruleId: route.ruleId,
-        },
-      },
+    selectedRoute: {
+      routeId: `${modelRoute.canonicalModelId}:${modelRoute.providerId}:${String(job.modality || '').trim()}`,
+      providerId: modelRoute.providerId,
+      upstreamModelId: nonEmptyString(modelRoute.upstreamModelId) || undefined,
+      priority: 100,
+      fallbackPolicy: 'on_error',
     },
-    inferred: route,
+    // Only when provider was inferred (not caller-pinned) — keeps fallbackEnabledForPlan behavior.
+    modelRouteInference: explicitProvider
+      ? null
+      : {
+          canonicalModelId,
+          providerId: modelRoute.providerId,
+          ruleId: modelRoute.ruleId,
+        },
   };
 }
 
@@ -62,9 +95,48 @@ export function createAiGatewayJobPlan(input, options = {}) {
   const draft = createAiJobDraft(input, options);
   const opsControl = options.opsControl || readAiGatewayOpsControlConfigSync();
   const overridden = applyAiGatewayModelOverride(draft, opsControl);
-  const { job } = applyModelRouteProviderInference(overridden.job, opsControl);
-  const route = resolveAiProviderRoute(job, options.routes, opsControl);
+  let job = overridden.job;
 
+  const routeDecision = readRouteDecision(job, options);
+  let selectedRoute = readSelectedRoute(job, options);
+  let planRouteSource = selectedRoute ? 'route_decision_selected_route' : null;
+  let modelRouteInference = null;
+
+  if (!selectedRoute) {
+    const derived = selectedRouteFromExecutableModelTable(job, opsControl);
+    selectedRoute = derived.selectedRoute;
+    modelRouteInference = derived.modelRouteInference;
+    planRouteSource = selectedRoute ? 'executable_model_route_table' : null;
+  }
+
+  if (!selectedRoute?.providerId) {
+    // Bare modality/capability smoke plans: one catalog pick expressed as selectedRoute, then materialize only.
+    selectedRoute = pickDefaultSelectedRouteForJob(job, options.routes, opsControl);
+    planRouteSource = 'runtime_catalog_only';
+  }
+
+  const providerId = normalizeAiGatewayProviderId(selectedRoute.providerId) || selectedRoute.providerId;
+  job = {
+    ...job,
+    provider: providerId,
+    metadata: {
+      ...(job.metadata && typeof job.metadata === 'object' ? job.metadata : {}),
+      ...(routeDecision ? { routeDecision } : {}),
+      ...(modelRouteInference ? { modelRouteInference } : {}),
+      planRouteSource,
+      ...(modelRouteInference
+        ? {
+            aiGatewayFallback: {
+              ...(job.metadata?.aiGatewayFallback && typeof job.metadata.aiGatewayFallback === 'object'
+                ? job.metadata.aiGatewayFallback
+                : {}),
+              autoSelectedProvider: true,
+            },
+          }
+        : {}),
+    },
+  };
+  const route = materializeAiProviderRouteFromSelectedRoute(selectedRoute, job, options.routes, opsControl);
   const workerRequest = buildAiGatewayWorkerRequest(job, route);
   return {
     job,
@@ -75,7 +147,14 @@ export function createAiGatewayJobPlan(input, options = {}) {
 }
 
 export { createAiJobDraft, normalizeAiJobModality, AiGatewayValidationError } from './job.js';
-export { resolveAiProviderRoute, AiGatewayRouteError, DEFAULT_AI_PROVIDER_ROUTES } from './provider-router.js';
+export {
+  resolveAiProviderRoute,
+  materializeAiProviderRouteFromSelectedRoute,
+  pickDefaultSelectedRouteForJob,
+  enrichSelectedRouteWithRuntimeDefaults,
+  AiGatewayRouteError,
+  DEFAULT_AI_PROVIDER_ROUTES,
+} from './provider-router.js';
 export { buildAiWorkerProxyAsyncRequest, AI_WORKER_PROXY_ASYNC_PATH } from './adapters/ai-worker-proxy-adapter.js';
 export {
   buildAiGatewayWorkerRequest,

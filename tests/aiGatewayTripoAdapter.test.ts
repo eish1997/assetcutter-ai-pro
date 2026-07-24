@@ -140,14 +140,18 @@ describe('Tripo OpenAPI AI gateway worker', () => {
         expect.objectContaining({
           kind: 'model3d',
           url: 'https://cdn.example.com/model.glb',
-          source: 'tripo',
-          billing: expect.objectContaining({ settlementSource: 'provider_task_usage' }),
+          metadata: expect.objectContaining({
+            source: 'tripo',
+            billing: expect.objectContaining({ settlementSource: 'provider_task_usage' }),
+          }),
         }),
         expect.objectContaining({
           kind: 'image',
           url: 'https://cdn.example.com/preview.png',
-          source: 'tripo',
-          role: 'preview',
+          metadata: expect.objectContaining({
+            source: 'tripo',
+            role: 'preview',
+          }),
         }),
       ])
     );

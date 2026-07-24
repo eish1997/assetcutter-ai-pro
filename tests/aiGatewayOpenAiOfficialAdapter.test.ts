@@ -85,7 +85,7 @@ describe('OpenAI official AI Gateway adapter', () => {
     expect(stored?.job.artifacts[0]).toMatchObject({
       kind: 'image',
       url: 'data:image/png;base64,aW1hZ2U=',
-      source: 'openai-official',
+      metadata: { source: 'openai-official' },
     });
     expect(await listProviderKeyHealthEvents({ keyId: 'key_openai', limit: 5 })).toEqual([
       expect.objectContaining({ type: 'success', provider: 'openai-official' }),
@@ -494,7 +494,7 @@ describe('OpenAI official AI Gateway adapter', () => {
     expect(stored?.job.artifacts[0]).toMatchObject({
       kind: 'image',
       url: 'data:image/png;base64,YXJrLWltYWdl',
-      source: 'volcengine-ark',
+      metadata: { source: 'volcengine-ark' },
     });
     expect(await listProviderKeyHealthEvents({ keyId: 'key_ark_img', limit: 5 })).toEqual([
       expect.objectContaining({ type: 'success', provider: 'volcengine-ark' }),

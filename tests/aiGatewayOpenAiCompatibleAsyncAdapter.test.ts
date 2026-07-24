@@ -221,8 +221,7 @@ describe('OpenAI-compatible async adapter', () => {
         {
           kind: 'video',
           url: 'https://cdn.example.com/video.mp4',
-          source: '302ai',
-          taskId: 'task_302_done',
+          metadata: { source: '302ai', taskId: 'task_302_done' },
         },
       ],
     });
@@ -314,14 +313,12 @@ describe('OpenAI-compatible async adapter', () => {
         {
           kind: 'model3d',
           url: 'https://cdn.example.com/model.glb',
-          source: '302ai',
-          taskId: 'task_302_3d_done',
+          metadata: { source: '302ai', taskId: 'task_302_3d_done' },
         },
         {
           kind: 'model3d',
           url: 'https://cdn.example.com/preview.zip',
-          source: '302ai',
-          taskId: 'task_302_3d_done',
+          metadata: { source: '302ai', taskId: 'task_302_3d_done' },
         },
       ],
     });

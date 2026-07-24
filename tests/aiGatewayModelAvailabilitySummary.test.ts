@@ -417,7 +417,7 @@ describe('AI gateway model availability summary', () => {
         {
           routeId: '302ai-video-manual:302ai:video',
           providerId: '302ai',
-          gatewayExecutionStatus: 'gateway_ready',
+          gatewayExecutionStatus: 'ready',
           executionStatus: 'platform_ready',
           reasonCode: 'ready',
         },

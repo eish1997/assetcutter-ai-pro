@@ -63,6 +63,20 @@ export type AiJobFallbackSummary = {
   exhaustedAt: string | null;
 };
 
+export type AiJobGatewayFailureSummary = {
+  code?: string | null;
+  stage?: string | null;
+  owner?: string | null;
+  retryable?: boolean;
+  userMessage?: string | null;
+  adminMessage?: string | null;
+  nextAction?: string | null;
+  at?: string | null;
+  providerId?: string | null;
+  adapterId?: string | null;
+  workerId?: string | null;
+};
+
 export type AiJobSummary = {
   id: string;
   status: AiJobStatus;
@@ -82,6 +96,7 @@ export type AiJobSummary = {
   proxyJobId: string | null;
   creditsGate: AiJobCreditsGateSummary | null;
   fallback?: AiJobFallbackSummary | null;
+  gatewayFailure?: AiJobGatewayFailureSummary | null;
   error: AiJobErrorSummary | null;
 };
 

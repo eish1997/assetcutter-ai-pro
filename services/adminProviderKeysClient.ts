@@ -141,6 +141,7 @@ export type AdminProviderKeySmokeTestResult = {
   providerKeyId: string | null;
   provider: string | null;
   label: string | null;
+  checkKind?: 'key';
   status: 'passed' | 'failed';
   testLayer?: 'key_smoke';
   mode?: 'credentials_only' | 'real_upstream';
@@ -184,7 +185,7 @@ export type AdminModelAvailabilityRouteSummary = {
   routeId?: string | null;
   providerId: string | null;
   modality: string | null;
-  gatewayExecutionStatus: 'gateway_ready' | 'adapter_pending' | 'not_gateway_routed';
+  gatewayExecutionStatus: 'ready' | 'adapter_pending' | 'not_published';
   executionStatus: string;
   platformKeyRequired: boolean;
   keyReady: boolean;
@@ -244,6 +245,7 @@ export type AdminModelRouteTestInput = {
 export type AdminModelRouteTestResult = {
   ok: boolean;
   status: 'passed' | 'failed';
+  checkKind?: 'route';
   mode: 'route_guard';
   testLayer?: 'route_test';
   createsGenerationTask?: boolean;
@@ -286,9 +288,11 @@ export type AdminModelGenerationTestInput = {
 export type AdminModelGenerationTestResult = {
   ok: boolean;
   status: 'passed' | 'failed';
+  checkKind?: 'generation';
   mode: 'real_generation';
   testLayer?: 'generation_test';
   createsGenerationTask?: boolean;
+  billingNote?: string;
   canonicalModelId: string | null;
   providerId: string | null;
   modality: string | null;
@@ -458,6 +462,95 @@ export async function smokeTestAdminProviderKey(id: string) {
   );
 }
 
+export type AdminModelScreenDiagnosisResult = {
+  ok: boolean;
+  status?: 'ready' | 'blocked';
+  checkKind?: 'diagnosis';
+  mode?: 'screen_diagnosis';
+  createsGenerationTask?: boolean;
+  testLayer?: 'screen_diagnosis';
+  code?: string;
+  message?: string;
+  canonicalModelId?: string | null;
+  modality?: string | null;
+  providerId?: string | null;
+  model?: {
+    canonicalModelId: string;
+    modality: string | null;
+    published: boolean;
+    publication?: { published: boolean; restricted: boolean; source: string };
+    gatewayStatus?: string | null;
+    executionStatus?: string | null;
+  };
+  routeDecision?: {
+    ok: boolean;
+    canonicalModelId?: string;
+    modality?: string | null;
+    selectedRoute?: {
+      routeId?: string;
+      providerId?: string;
+      adapterId?: string;
+      workerId?: string;
+      upstreamModelId?: string;
+      priority?: number;
+      fallbackPolicy?: string;
+    };
+    candidates?: Array<{
+      routeId?: string;
+      providerId?: string | null;
+      status?: string;
+      reasonCode?: string;
+      priority?: number;
+    }>;
+    blockingReason?: {
+      code?: string;
+      message?: string;
+      owner?: string;
+      nextAction?: string;
+    };
+  } | null;
+  keyStatuses?: Array<{
+    checkKind?: 'key';
+    providerId: string;
+    status: string;
+    ready: boolean;
+    coolingDown?: boolean;
+    disabled?: boolean;
+    lastError?: string | null;
+    nextAction?: string | null;
+  }>;
+  recentFailures?: {
+    total: number;
+    byStage: Array<{ key: string; count: number }>;
+    byOwner: Array<{ key: string; count: number }>;
+    byProvider: Array<{ key: string; count: number }>;
+    byModel: Array<{ key: string; count: number }>;
+    recent: Array<{
+      jobId?: string | null;
+      model?: string;
+      providerId?: string;
+      code?: string;
+      stage?: string;
+      owner?: string;
+      message?: string;
+      nextAction?: string;
+      at?: string | null;
+    }>;
+  };
+  nextActions?: Array<{ owner?: string; action?: string; label?: string; code?: string; providerId?: string; status?: string }>;
+  layers?: {
+    keyCheck?: { checkKind?: 'key'; label: string; createsGenerationTask: boolean; status: string };
+    routeCheck?: { checkKind?: 'route'; label: string; createsGenerationTask: boolean; status: string; note?: string };
+    generationTest?: { checkKind?: 'generation'; label: string; createsGenerationTask: boolean; status: string; note?: string };
+  };
+  generatedAt?: string;
+};
+
+export type AdminModelScreenDiagnosisResponse = {
+  ok: boolean;
+  result: AdminModelScreenDiagnosisResult;
+};
+
 export async function fetchAdminModelOpsConfig() {
   return requestJson<AdminModelOpsConfigResponse>(apiUrl('/api/admin/model-ops-config'), {
     cache: 'no-store',
@@ -494,6 +587,19 @@ export async function testAdminModelGeneration(input: AdminModelGenerationTestIn
 
 export async function runAdminModelDiagnostics(input: AdminModelDiagnosticsRunInput) {
   return requestJson<AdminModelDiagnosticsRunResponse>(apiUrl('/api/admin/model-diagnostics/run'), {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+}
+
+export async function fetchAdminModelScreenDiagnosis(input: {
+  canonicalModelId: string;
+  modality?: string;
+  providerId?: string;
+  provider?: string;
+  routeId?: string;
+}) {
+  return requestJson<AdminModelScreenDiagnosisResponse>(apiUrl('/api/admin/model-screen-diagnosis'), {
     method: 'POST',
     body: JSON.stringify(input),
   });

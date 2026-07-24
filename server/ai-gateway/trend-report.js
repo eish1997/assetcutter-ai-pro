@@ -37,13 +37,25 @@ function modelKey(plan) {
 }
 
 function classifyJobError(plan) {
-  const error = plan?.job?.error;
   const metadata = plan?.job?.metadata && typeof plan.job.metadata === 'object' ? plan.job.metadata : {};
+  const gatewayFailure = metadata.gatewayFailure && typeof metadata.gatewayFailure === 'object' ? metadata.gatewayFailure : null;
+  if (gatewayFailure?.stage === 'billing' || /credit/i.test(String(gatewayFailure?.code || ''))) return 'credits';
+  if (gatewayFailure?.stage === 'admission' || /auth|login/i.test(String(gatewayFailure?.code || ''))) return 'auth';
+  if (gatewayFailure?.code === 'AI_GATEWAY_UPSTREAM_RATE_LIMITED' || gatewayFailure?.stage === 'upstream' && /rate_limit/i.test(String(gatewayFailure?.code || ''))) {
+    return 'rate_limited';
+  }
+  if (gatewayFailure?.code === 'AI_GATEWAY_UPSTREAM_TIMEOUT' || /timeout/i.test(String(gatewayFailure?.code || ''))) return 'timeout';
+  if (gatewayFailure?.stage === 'upstream' || gatewayFailure?.stage === 'artifact' || gatewayFailure?.stage === 'adapter') {
+    return 'upstream';
+  }
+  const error = plan?.job?.error;
   const message = [
     error && typeof error === 'object' ? error.code : '',
     error && typeof error === 'object' ? error.message : error,
     metadata.proxyStatus,
     metadata.settlementSource,
+    gatewayFailure?.code,
+    gatewayFailure?.adminMessage,
   ]
     .filter(Boolean)
     .join(' ')

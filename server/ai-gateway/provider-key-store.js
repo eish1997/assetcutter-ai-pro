@@ -270,21 +270,25 @@ function openAiCompatibleSmokeConfig(row, options = {}) {
   const provider = row.provider;
   const openAiConfig = openAiCompatibleConfigForProvider(provider);
   if (openAiConfig) {
-    const optionBaseUrls = {
-      'openai-official': options.openAiBaseUrl || process.env.AI_GATEWAY_OPENAI_BASE_URL,
-      toapis: options.toapisBaseUrl,
-      '302ai': options.aihub302BaseUrl,
-      aihubmix: options.aihubmixBaseUrl,
-      tinysnow: options.tinysnowBaseUrl,
-      'volcengine-ark': options.arkBaseUrl,
-    };
+    const optionBaseUrl =
+      nonEmptyString(options.providerBaseUrls?.[provider]) ||
+      nonEmptyString(options.openAiBaseUrl && provider === 'openai-official' ? options.openAiBaseUrl : '') ||
+      nonEmptyString(options.toapisBaseUrl && provider === 'toapis' ? options.toapisBaseUrl : '') ||
+      nonEmptyString(options.aihub302BaseUrl && provider === '302ai' ? options.aihub302BaseUrl : '') ||
+      nonEmptyString(options.aihubmixBaseUrl && provider === 'aihubmix' ? options.aihubmixBaseUrl : '') ||
+      nonEmptyString(options.tinysnowBaseUrl && provider === 'tinysnow' ? options.tinysnowBaseUrl : '') ||
+      nonEmptyString(options.arkBaseUrl && provider === 'volcengine-ark' ? options.arkBaseUrl : '') ||
+      nonEmptyString(process.env.AI_GATEWAY_OPENAI_BASE_URL && provider === 'openai-official' ? process.env.AI_GATEWAY_OPENAI_BASE_URL : '');
     return {
       baseUrl:
-        nonEmptyString(optionBaseUrls[provider]) ||
+        optionBaseUrl ||
         providerBaseUrlOverride(options.modelOpsConfig, provider) ||
         nonEmptyString(row.credentials?.baseUrl) ||
         openAiConfig.defaultBaseUrl,
-      requestTimeoutMs: providerRequestTimeoutMsOverride(options.modelOpsConfig, provider),
+      requestTimeoutMs:
+        providerRequestTimeoutMsOverride(options.modelOpsConfig, provider) ||
+        Number(openAiConfig.timeouts?.requestMs) ||
+        undefined,
       route: 'GET /models',
     };
   }
@@ -1225,6 +1229,7 @@ export async function smokeTestProviderKey(id, options = {}) {
     providerKeyId: keyId || null,
     provider: null,
     label: null,
+    checkKind: 'key',
     testLayer: 'key_smoke',
     mode: 'credentials_only',
     createsGenerationTask: false,
@@ -1284,8 +1289,8 @@ export async function smokeTestProviderKey(id, options = {}) {
       ...resultBase,
       ok: true,
       status: 'passed',
-      message: 'Smoke test passed: credentials shape is complete',
-      nextAction: 'Run Route Test on a published model to verify backend executability',
+      message: 'Key Check passed: credentials shape is complete. This does not mean the model can route or generate.',
+      nextAction: 'Run Route Check on a published model to verify backend executability',
     };
   }
   let probe;

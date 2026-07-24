@@ -93,4 +93,36 @@ describe('AI gateway public job summary', () => {
       },
     });
   });
+
+  it('surfaces metadata.routeDecision in compact public job summaries', () => {
+    const summary = publicAiJobSummary({
+      job: {
+        id: 'aijob_summary_decision',
+        status: 'queued',
+        modality: 'image',
+        capability: 'image.generate',
+        provider: 'openai-official',
+        model: 'gpt-image-2',
+        correlationId: 'corr_2',
+        createdAt: '2026-07-24T04:00:00.000Z',
+        updatedAt: '2026-07-24T04:00:00.000Z',
+        metadata: {
+          routeDecision: {
+            ok: true,
+            canonicalModelId: 'gpt-image-2',
+            modality: 'image',
+            selectedRoute: { providerId: 'openai-official', fallbackPolicy: 'on_error' },
+            candidates: [{ providerId: 'openai-official', status: 'ready', reasonCode: 'AI_GATEWAY_MODEL_ROUTE_READY', priority: 30 }],
+          },
+        },
+      },
+      route: { providerId: 'openai-official', workerId: 'image-worker', adapterId: 'openai-official' },
+    });
+
+    expect(summary.routeDecision).toMatchObject({
+      ok: true,
+      canonicalModelId: 'gpt-image-2',
+      selectedRoute: { providerId: 'openai-official' },
+    });
+  });
 });

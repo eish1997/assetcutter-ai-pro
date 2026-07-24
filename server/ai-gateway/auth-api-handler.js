@@ -13,6 +13,7 @@ import { validateAiGatewayModelRouteExecutable } from './model-route-guard.js';
 import { aiGatewayTransientPostgresBody, isTransientPostgresError } from './postgres-transient-retry.js';
 import { isAiGatewayExecutionEnabled } from './health.js';
 import { errorSummary, publicAiJobSummary, routeSummary } from './job-public-summary.js';
+import { attachFailureReasonToErrorBody } from './failure-reason.js';
 
 const DEFAULT_LIST_LIMIT = 20;
 const MAX_LIST_LIMIT = 100;
@@ -62,11 +63,17 @@ export function publicAuthAiJobDetail(plan) {
 
 export function mapAuthAiGatewayError(err) {
   if (isTransientPostgresError(err)) {
-    return { status: 503, body: aiGatewayTransientPostgresBody() };
+    return { status: 503, body: attachFailureReasonToErrorBody(aiGatewayTransientPostgresBody(), err, { stage: 'writeback' }) };
   }
   if (err instanceof AiGatewayValidationError) {
-    const body = { error: err.code, message: err.message };
-    if (err.details && typeof err.details === 'object') body.details = err.details;
+    const body = attachFailureReasonToErrorBody(
+      {
+        error: err.code,
+        message: err.message,
+        ...(err.details && typeof err.details === 'object' ? { details: err.details } : {}),
+      },
+      err
+    );
     if (
       err.code === 'AI_GATEWAY_MODEL_ROUTE_NOT_FOUND' ||
       err.code === 'AI_GATEWAY_MODEL_ROUTE_NOT_EXECUTABLE' ||
@@ -80,10 +87,20 @@ export function mapAuthAiGatewayError(err) {
     return { status: 400, body };
   }
   if (err instanceof AiGatewayRouteError) {
-    return { status: 422, body: { error: err.code, message: err.message } };
+    return {
+      status: 422,
+      body: attachFailureReasonToErrorBody({ error: err.code, message: err.message }, err, { stage: 'routing' }),
+    };
   }
   const message = err instanceof Error ? err.message : String(err);
-  return { status: 500, body: { error: 'AI_GATEWAY_INTERNAL_ERROR', message } };
+  return {
+    status: 500,
+    body: attachFailureReasonToErrorBody(
+      { error: 'AI_GATEWAY_INTERNAL_ERROR', message },
+      err,
+      { defaultCode: 'AI_GATEWAY_INTERNAL_ERROR' }
+    ),
+  };
 }
 
 export async function createAuthAiGatewayJob(req, body, user, options = {}) {
@@ -92,7 +109,14 @@ export async function createAuthAiGatewayJob(req, body, user, options = {}) {
   const raw = body && typeof body === 'object' ? body : {};
   const gate = await evaluateCreditsGate(req, raw, { userId: user.id });
   if (!gate.ok) {
-    return { status: gate.status || 403, body: gate.body || { error: 'AI_GATEWAY_CREDITS_GATE_FAILED' } };
+    return {
+      status: gate.status || 403,
+      body: attachFailureReasonToErrorBody(
+        gate.body || { error: 'AI_GATEWAY_CREDITS_GATE_FAILED' },
+        gate.body || 'AI_GATEWAY_CREDITS_GATE_FAILED',
+        { stage: 'billing' }
+      ),
+    };
   }
 
   const planInput = {
@@ -159,6 +183,9 @@ export async function createAuthAiGatewayJob(req, body, user, options = {}) {
       routeId: executableRoute.route.routeId,
         upstreamModelId: executableRoute.route.upstreamModelId,
       };
+    if (executableRoute.routeDecision) {
+      planInput.metadata.routeDecision = executableRoute.routeDecision;
+    }
       if (executableRoute.route.upstreamModelId) {
         planInput.input = {
           ...(planInput.input && typeof planInput.input === 'object' ? planInput.input : {}),
@@ -167,7 +194,14 @@ export async function createAuthAiGatewayJob(req, body, user, options = {}) {
       }
     }
   const planRoutes = executableRoute.runtimeRoute ? [executableRoute.runtimeRoute] : options.routes;
-  let plan = await store.put(createAiGatewayJobPlan(planInput, { opsControl, routes: planRoutes }));
+  let plan = await store.put(
+    createAiGatewayJobPlan(planInput, {
+      opsControl,
+      routes: planRoutes,
+      routeDecision: executableRoute.routeDecision || planInput.metadata?.routeDecision || null,
+      selectedRoute: executableRoute.routeDecision?.selectedRoute || null,
+    })
+  );
   const executionOptions = {
     store,
     fetchImpl: options.fetchImpl,
@@ -365,10 +399,15 @@ export async function retryAuthAiGatewayJob(id, user, body = {}, options = {}) {
       gatewayExecutionStatus: executableRoute.route.gatewayExecutionStatus,
       platformKeyRequired: executableRoute.route.platformKeyRequired,
     };
+    if (executableRoute.routeDecision) {
+      retryInput.metadata.routeDecision = executableRoute.routeDecision;
+    }
   }
   const retryPlan = await store.put(
     createAiGatewayJobPlan(retryInput, {
       opsControl,
+      routeDecision: executableRoute.routeDecision || retryInput.metadata?.routeDecision || null,
+      selectedRoute: executableRoute.routeDecision?.selectedRoute || null,
     })
   );
   return { status: 202, body: publicAuthAiJobDetail(retryPlan) };

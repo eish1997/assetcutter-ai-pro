@@ -4,7 +4,7 @@ import {
   resolvePendingAiGatewayModelRoute,
 } from '../../shared/aiGatewayModelRoutes.js';
 import { listProviderKeys } from './provider-key-store.js';
-import { openAiCompatibleChannelForProvider } from './openai-compatible-config.js';
+import { openAiCompatibleChannelForProvider, isOpenAiCompatibleAsyncProvider } from './openai-compatible-config.js';
 
 function nonEmptyString(value) {
   return typeof value === 'string' && value.trim() ? value.trim() : '';
@@ -66,7 +66,6 @@ function routeCheckInputs(model) {
 }
 
 const REQUIRED_ENDPOINT_MAPPING_FIELDS = Object.freeze(['requestPath', 'pollPath', 'statusPath', 'artifactPath']);
-const OPENAI_COMPATIBLE_ASYNC_PROVIDERS = new Set(['302ai', 'aihubmix', 'toapis', 'tinysnow']);
 
 function parseEndpointMappingRouteId(routeId) {
   const parts = nonEmptyString(routeId).split(':');
@@ -92,7 +91,7 @@ function endpointMappingsForModel(model, modelOpsConfig) {
       if (!parsed) return null;
       if (parsed.canonicalModelId !== model.canonicalModelId) return null;
       if (model.modality && parsed.modality !== model.modality) return null;
-      if (!OPENAI_COMPATIBLE_ASYNC_PROVIDERS.has(parsed.provider)) return null;
+      if (!isOpenAiCompatibleAsyncProvider(parsed.provider)) return null;
       return { row, routeId, ...parsed };
     })
     .filter(Boolean);
@@ -249,7 +248,7 @@ function routeSummary(input, keys, modelOpsConfig) {
       routeId: nonEmptyString(input.routeId) || null,
       providerId: nonEmptyString(input.provider) || null,
       modality: nonEmptyString(input.modality) || null,
-      gatewayExecutionStatus: 'not_gateway_routed',
+      gatewayExecutionStatus: 'not_published',
       executionStatus: 'disabled_by_ops',
       platformKeyRequired: false,
       keyReady: false,
@@ -265,7 +264,7 @@ function routeSummary(input, keys, modelOpsConfig) {
       routeId: nonEmptyString(input.routeId) || null,
       providerId: nonEmptyString(input.provider) || null,
       modality: nonEmptyString(input.modality) || null,
-      gatewayExecutionStatus: 'not_gateway_routed',
+      gatewayExecutionStatus: 'not_published',
       executionStatus: 'requires_endpoint_mapping',
       platformKeyRequired: false,
       keyReady: false,
@@ -284,7 +283,7 @@ function routeSummary(input, keys, modelOpsConfig) {
       routeId: nonEmptyString(input.routeId) || null,
       providerId,
       modality: nonEmptyString(input.modality) || null,
-      gatewayExecutionStatus: 'gateway_ready',
+      gatewayExecutionStatus: 'ready',
       executionStatus: 'platform_ready',
       platformKeyRequired: true,
       keyReady,
@@ -351,7 +350,7 @@ function routeSummary(input, keys, modelOpsConfig) {
     routeId: nonEmptyString(input.routeId) || null,
     providerId: nonEmptyString(input.provider) || null,
     modality: nonEmptyString(input.modality) || null,
-    gatewayExecutionStatus: 'not_gateway_routed',
+    gatewayExecutionStatus: 'not_published',
     executionStatus: 'route_not_found',
     platformKeyRequired: false,
     keyReady: false,
