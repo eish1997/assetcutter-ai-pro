@@ -2,6 +2,7 @@ import { fetch as undiciFetch } from 'undici';
 import { AiGatewayValidationError } from '../job.js';
 import { finalizeAiGatewayTerminalPlan } from '../execution-finalize.js';
 import { buildProviderTaskUsage, collectByteSize } from '../execution-usage.js';
+import { normalizeInlineBase64Data } from '../inline-data-normalize.js';
 import { acquireProviderKey, recordProviderKeyError, recordProviderKeySuccess } from '../provider-key-store.js';
 
 const OPENAI_DEFAULT_BASE_URL = 'https://api.openai.com/v1';
@@ -185,8 +186,11 @@ function textFromContents(contents) {
         content.push({ type: 'text', text });
       }
       if (part?.inlineData?.data) {
-        const mime = nonEmptyString(part.inlineData.mimeType) || 'image/png';
-        const dataUrl = `data:${mime};base64,${part.inlineData.data}`;
+        const rawData = nonEmptyString(part.inlineData.data);
+        const dataUrlMatch = rawData.match(/^data:([^;,]+);base64,/i);
+        const mime = nonEmptyString(dataUrlMatch?.[1]) || nonEmptyString(part.inlineData.mimeType) || 'image/png';
+        const data = normalizeInlineBase64Data(rawData);
+        const dataUrl = `data:${mime};base64,${data}`;
         inlineImages.push(dataUrl);
         content.push({ type: 'image_url', image_url: { url: dataUrl } });
       }

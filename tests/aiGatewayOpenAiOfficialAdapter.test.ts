@@ -118,6 +118,45 @@ describe('OpenAI official AI Gateway adapter', () => {
     expect(timeoutSpy).toHaveBeenCalledWith(600_000);
   });
 
+  it('normalizes data URL inline image bytes before OpenAI image edit handoff', async () => {
+    useTempStore();
+    await saveProviderKeys([
+      { id: 'key_openai_edit', provider: 'openai-official', label: 'OpenAI edit', secret: 'sk-openai', enabled: true },
+    ]);
+    const store = createInMemoryAiJobStore();
+    const plan = await store.put(createAiGatewayJobPlan({
+      id: 'aijob_openai_image_edit',
+      modality: 'image',
+      capability: 'workflow_image_edit',
+      provider: 'openai-official',
+      model: 'gpt-image-2',
+      input: {
+        contents: [
+          {
+            role: 'user',
+            parts: [
+              { text: 'make a clean catalog render' },
+              { inlineData: { mimeType: 'image/png', data: 'data:image/jpeg;base64, QUJD\nRA== ' } },
+            ],
+          },
+        ],
+        config: { imageConfig: { size: '1024x1024' } },
+      },
+    }));
+    const calls: Array<{ url: string; init: RequestInit }> = [];
+    const fetchImpl = async (url: string, init: RequestInit) => {
+      calls.push({ url, init });
+      return new Response(JSON.stringify({ id: 'img_edit_1', data: [{ b64_json: 'aW1hZ2U=' }] }), { status: 200 });
+    };
+
+    await startOpenAiOfficialExecution(plan, { store, fetchImpl });
+
+    expect(calls[0].url).toBe('https://api.openai.com/v1/images/edits');
+    const body = JSON.parse(String(calls[0].init.body));
+    expect(body.images[0].image_url).toBe('data:image/jpeg;base64,QUJDRA==');
+    expect(body.images[0].image_url).not.toContain('data:image/jpeg;base64, data:image');
+  });
+
   it('records OpenAI upstream failures against the provider key', async () => {
     useTempStore();
     await saveProviderKeys([
