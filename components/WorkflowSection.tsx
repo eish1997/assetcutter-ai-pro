@@ -10956,7 +10956,7 @@ ${lineSvg}
     (asset: WorkflowAsset, node: Extract<WorkflowStepNodeGraphNodeContext, { kind: 'texture' }>) => {
       const src = String(node.src || '').trim();
       if (!src) {
-        onLog?.('warn', '搴曢儴蹇嵎鏍忥細璐村浘娌℃湁鍙敤棰勮');
+        onLog?.('warn', '底部快捷栏：贴图没有可用预览');
         return;
       }
       const inputAssetId = uuid();
@@ -10991,7 +10991,7 @@ ${lineSvg}
         ])
       );
       setQuickComposeReferenceDropSlots((prev) => prev.filter((slot) => slot.assetId !== inputAssetId));
-      onLog?.('info', '搴曢儴蹇嵎鏍忥細璐村浘宸插姞鍏ヤ富鍥撅紝鐢熸垚缁撴灉灏嗗啓鍥?3D 璧勪骇');
+      onLog?.('info', '底部快捷栏：贴图已加入主图，生成结果将写回 3D 资产');
     },
     [onLog, setAssets]
   );
