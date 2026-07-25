@@ -280,6 +280,13 @@ function normalizeOpsPayload(raw: unknown): ModelOpsConfig {
           (typeof row.providerModelId === "string" && row.providerModelId.trim()) ||
           undefined;
         const enabled = row.enabled === undefined ? undefined : row.enabled === true;
+        const gatewayExecutionRaw = String(row.gatewayExecutionStatus ?? "").trim();
+        const gatewayExecutionStatus =
+          gatewayExecutionRaw === "ready" ||
+          gatewayExecutionRaw === "adapter_pending" ||
+          gatewayExecutionRaw === "not_published"
+            ? (gatewayExecutionRaw as "ready" | "adapter_pending" | "not_published")
+            : undefined;
         return {
           canonicalModelId,
           providerId,
@@ -287,6 +294,7 @@ function normalizeOpsPayload(raw: unknown): ModelOpsConfig {
           ...(enabled !== undefined ? { enabled } : {}),
           ...(priority !== undefined ? { priority } : {}),
           ...(upstreamModelId ? { upstreamModelId, providerModelId: upstreamModelId } : {}),
+          ...(gatewayExecutionStatus ? { gatewayExecutionStatus } : {}),
         };
       })
       .filter((x): x is NonNullable<typeof x> => x != null);

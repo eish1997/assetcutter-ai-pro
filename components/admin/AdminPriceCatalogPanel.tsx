@@ -16,6 +16,7 @@ import {
   type ModelRouteCatalogEntry,
 } from '../../services/modelRegistry';
 import { fmtCredits } from '../../shared/credits';
+import { DEFAULT_PRICE_CATALOG } from '../../shared/usageBillingCatalog';
 import { CustomDropdown } from '../ui/CustomDropdown';
 import { useAdminStaff } from './AdminStaffContext';
 
@@ -223,6 +224,28 @@ const emptyDraft = (): EditDraft => ({
   meterKind: 'task',
 });
 
+/** B6: 待补价预填真实种子单价/成本；无种子则留空，禁止写死 1 积分占位。 */
+export function draftFromAiGatewayPriceSuggestion(suggestion: AiGatewayPriceSkuSuggestion): EditDraft {
+  const seed = DEFAULT_PRICE_CATALOG.find((entry) => entry.billingSku === suggestion.billingSku);
+  if (!seed) {
+    return {
+      ...emptyDraft(),
+      displayName: suggestion.displayName,
+      meterKind: suggestion.meterKind,
+    };
+  }
+  return {
+    ...emptyDraft(),
+    displayName: seed.displayName || suggestion.displayName,
+    meterKind: seed.meterKind || suggestion.meterKind,
+    userCreditsPerUnit: seed.userCreditsPerUnit != null ? String(seed.userCreditsPerUnit) : '',
+    perUnit: seed.perUnit != null ? String(seed.perUnit) : '',
+    inputPer1m: seed.inputPer1m != null ? String(seed.inputPer1m) : '',
+    outputPer1m: seed.outputPer1m != null ? String(seed.outputPer1m) : '',
+    imageOutputPer1m: seed.imageOutputPer1m != null ? String(seed.imageOutputPer1m) : '',
+  };
+}
+
 const AdminPriceCatalogPanel: React.FC = () => {
   const { permissions, isRolePreview } = useAdminStaff();
   const canRead =
@@ -283,14 +306,7 @@ const AdminPriceCatalogPanel: React.FC = () => {
     setEditEntry(null);
     setCreateOpen(true);
     setNewSku(suggestion.billingSku);
-    setDraft({
-      ...emptyDraft(),
-      displayName: suggestion.displayName,
-      meterKind: suggestion.meterKind,
-      // A2 minimal SKU: one credit placeholder so ops can publish then tune.
-      userCreditsPerUnit: '1',
-      perUnit: '1',
-    });
+    setDraft(draftFromAiGatewayPriceSuggestion(suggestion));
   };
 
   const closeModal = () => {
@@ -360,7 +376,7 @@ const AdminPriceCatalogPanel: React.FC = () => {
             <div>
               <div className="text-[11px] font-semibold text-amber-100">AI Gateway 待补价 SKU</div>
               <div className="mt-0.5 text-[10px] text-gray-500">
-                这些 SKU 已出现在模型路由里，但还没有价目表条目。
+                这些 SKU 已出现在模型路由里，但还没有价目表条目。新建时会预填种子单价/成本（若有），否则请手填真实价，勿用占位 1。
               </div>
             </div>
             <span className="text-[10px] text-amber-200">{aiGatewaySkuSuggestions.length} 个</span>
@@ -467,7 +483,9 @@ const AdminPriceCatalogPanel: React.FC = () => {
               <h2 className="text-sm font-semibold text-white">
                 {createOpen ? '新建 SKU 版本' : `编辑 ${editEntry?.billingSku}`}
               </h2>
-              <p className="text-[10px] text-gray-500 mt-1">保存后将追加新版本并立即生效（若 effectiveFrom ≤ 现在）</p>
+              <p className="text-[10px] text-gray-500 mt-1">
+                保存后将追加新版本并立即生效（若 effectiveFrom ≤ 现在）。请填写真实用户积分与成本 USD；留空积分可从 perUnit 推导。
+              </p>
             </div>
             <div className="px-5 py-4 space-y-3 max-h-[70vh] overflow-y-auto">
               {createOpen ? (

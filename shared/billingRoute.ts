@@ -49,7 +49,6 @@ const BYOK_CHANNELS = new Set([
 const ALWAYS_PLATFORM_JOB_KINDS = new Set([
   'workflow_jimeng_image',
   'workflow_jimeng_video',
-  'workflow_jimeng_digital_human',
   'workflow_generate_video',
 ]);
 

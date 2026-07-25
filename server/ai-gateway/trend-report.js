@@ -154,6 +154,12 @@ function emptyUsageBucket(key) {
     failed: 0,
     totalQuantity: 0,
     totalCostUsdEst: 0,
+    /** B6: costConfidence=exact → 已定价 */
+    totalCostUsdPriced: 0,
+    pricedEventCount: 0,
+    /** B6: costConfidence=estimated|unknown → 估算 */
+    totalCostUsdEstimated: 0,
+    estimatedEventCount: 0,
     totalCreditsCharged: 0,
   };
 }
@@ -163,8 +169,18 @@ function addUsageToBucket(bucket, event) {
   if (event.status === 'succeeded') bucket.succeeded += 1;
   if (event.status === 'failed') bucket.failed += 1;
   bucket.totalQuantity += Number(event.quantity) || 0;
-  bucket.totalCostUsdEst += Number(event.costUsdEst) || 0;
+  const cost = Number(event.costUsdEst) || 0;
+  bucket.totalCostUsdEst += cost;
   bucket.totalCreditsCharged += Number(event.creditsCharged) || 0;
+  const confidence = String(event.costConfidence || event.cost_confidence || 'unknown').trim();
+  if (confidence === 'exact') {
+    bucket.totalCostUsdPriced += cost;
+    bucket.pricedEventCount += 1;
+  } else {
+    // estimated / unknown / missing → 归入估算，便于运营区分「已定价 vs 估算」
+    bucket.totalCostUsdEstimated += cost;
+    bucket.estimatedEventCount += 1;
+  }
 }
 
 function finalizeUsageBucket(bucket) {
@@ -172,6 +188,8 @@ function finalizeUsageBucket(bucket) {
     ...bucket,
     totalQuantity: Math.round(bucket.totalQuantity * 1000) / 1000,
     totalCostUsdEst: Math.round(bucket.totalCostUsdEst * 1e6) / 1e6,
+    totalCostUsdPriced: Math.round(bucket.totalCostUsdPriced * 1e6) / 1e6,
+    totalCostUsdEstimated: Math.round(bucket.totalCostUsdEstimated * 1e6) / 1e6,
     totalCreditsCharged: Math.round(bucket.totalCreditsCharged),
   };
 }
@@ -213,6 +231,10 @@ function buildProviderPerformance(jobRows, usageRows, limit = 20) {
         usageEvents: usage.eventCount,
         totalCreditsCharged: usage.totalCreditsCharged,
         totalCostUsdEst: usage.totalCostUsdEst,
+        totalCostUsdPriced: usage.totalCostUsdPriced,
+        totalCostUsdEstimated: usage.totalCostUsdEstimated,
+        pricedEventCount: usage.pricedEventCount,
+        estimatedEventCount: usage.estimatedEventCount,
         totalQuantity: usage.totalQuantity,
       };
     })

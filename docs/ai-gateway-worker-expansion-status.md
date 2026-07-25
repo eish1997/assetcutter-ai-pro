@@ -1,6 +1,6 @@
 # AI Gateway Worker Expansion Status
 
-Updated: 2026-07-13
+Updated: 2026-07-25
 
 ## Naming
 
@@ -13,11 +13,11 @@ Updated: 2026-07-13
 
 | Worker | Status | Adapter |
 | --- | --- | --- |
-| `text-worker` | active | `ai-worker-proxy` |
-| `image-worker` | active | `ai-worker-proxy` |
-| `model3d-worker` | active | `tripo-openapi` |
-| `video-worker` | planned | none |
-| `music-worker` | planned | none |
+| `text-worker` | active | 多 adapter（含 openai-compatible / volcengine / …） |
+| `image-worker` | active | 多 adapter（含 jimeng-visual / …） |
+| `video-worker` | active | jimeng-visual / volcengine-ark-async / openai-compatible-async |
+| `model3d-worker` | active | tripo-openapi / tencent-hunyuan-3d / … |
+| `music-worker` | **removed**（stub 已删除；不注册） | none |
 
 ## Tripo Production Path
 

@@ -273,6 +273,8 @@ export async function listAuthAiGatewayJobs(user, query = {}, options = {}) {
     modality: query.modality,
     capability: query.capability,
     q: query.q,
+    failureStage: query.failureStage,
+    failureOwner: query.failureOwner,
   });
   return { status: 200, body: { items: plans.map(publicAuthAiJobSummary), limit } };
 }
@@ -289,6 +291,8 @@ export async function summarizeAuthAiGatewayJobs(_user, query = {}, options = {}
     modality: query.modality,
     capability: query.capability,
     q: query.q,
+    failureStage: query.failureStage,
+    failureOwner: query.failureOwner,
   });
   return { status: 200, body: buildAiGatewayOpsSummary(plans, { limit }) };
 }

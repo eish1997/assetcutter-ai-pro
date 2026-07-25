@@ -30,6 +30,7 @@ import {
   aiJobStatusTone,
   aiJobTraceLabel,
 } from '../../services/aiJobDisplay';
+import { matchesGatewayFailureFilters } from '../../shared/aiGatewayJobFailureFilters.js';
 import CustomDropdown from '../ui/CustomDropdown';
 export {
   aiJobCreditsLabel,
@@ -124,7 +125,7 @@ const FAILURE_OWNER_FILTERS = [
   { value: '__missing__', label: '缺owner' },
 ];
 
-/** Server query params only (failure stage/owner are client-side). */
+/** Server query params（含 gatewayFailure.stage/owner，与分页一致）。 */
 export function cleanAdminAiJobFilters(filters: AdminAiJobFilters) {
   return {
     status: filters.status || '',
@@ -134,31 +135,17 @@ export function cleanAdminAiJobFilters(filters: AdminAiJobFilters) {
     model: String(filters.model || '').trim(),
     capability: String(filters.capability || '').trim(),
     q: String(filters.q || '').trim(),
+    failureStage: String(filters.failureStage || '').trim(),
+    failureOwner: String(filters.failureOwner || '').trim(),
   };
 }
 
-/** Filter failed jobs by gatewayFailure.stage / owner (slice 2). */
+/** @deprecated 服务端已筛；保留供单测对齐 shared/aiGatewayJobFailureFilters。 */
 export function filterAdminAiJobsByFailureReason(
   jobs: AiJobSummary[],
   filters: Pick<AdminAiJobFilters, 'failureStage' | 'failureOwner'>
 ): AiJobSummary[] {
-  const stage = String(filters.failureStage || '').trim();
-  const owner = String(filters.failureOwner || '').trim();
-  if (!stage && !owner) return jobs;
-  return jobs.filter((job) => {
-    const failure = job.gatewayFailure;
-    if (stage === '__missing__') {
-      if (!(job.status === 'failed' && !failure?.stage)) return false;
-    } else if (stage && failure?.stage !== stage) {
-      return false;
-    }
-    if (owner === '__missing__') {
-      if (!(job.status === 'failed' && !failure?.owner)) return false;
-    } else if (owner && failure?.owner !== owner) {
-      return false;
-    }
-    return true;
-  });
+  return jobs.filter((job) => matchesGatewayFailureFilters(job, filters));
 }
 
 export function listToText(values: string[] | null | undefined): string {
@@ -547,10 +534,8 @@ const AdminAiJobsPanel: React.FC = () => {
     }
   }, [appliedFilters, canReadOps]);
 
-  const displayedJobs = React.useMemo(
-    () => filterAdminAiJobsByFailureReason(jobs, appliedFilters),
-    [jobs, appliedFilters]
-  );
+  // B7: failureStage/owner 已进服务端 list/summary，与分页一致；不再二次滤当前页。
+  const displayedJobs = jobs;
 
   const openJobDetail = React.useCallback(async (jobId: string) => {
     setDetailLoading(true);
@@ -970,6 +955,25 @@ const AdminAiJobsPanel: React.FC = () => {
           {selectedDetail.job.error?.message ? (
             <p className="mt-3 break-words rounded-xl border border-red-500/20 bg-red-500/10 px-3 py-2 text-[10px] text-red-200">
               {selectedDetail.job.error.message}
+            </p>
+          ) : null}
+          {selectedDetail.job.workerCancel ? (
+            <p
+              className={`mt-3 break-words rounded-xl border px-3 py-2 text-[10px] ${
+                selectedDetail.job.workerCancel.mode === 'hard'
+                  ? 'border-emerald-500/20 bg-emerald-500/10 text-emerald-100'
+                  : 'border-amber-500/20 bg-amber-500/10 text-amber-100'
+              }`}
+            >
+              取消：{selectedDetail.job.workerCancel.mode === 'hard' ? '硬取消' : '软取消'}
+              {selectedDetail.job.workerCancel.cancelReason
+                ? ` · ${selectedDetail.job.workerCancel.cancelReason}`
+                : ''}
+              {selectedDetail.job.workerCancel.adminMessage
+                ? ` — ${selectedDetail.job.workerCancel.adminMessage}`
+                : selectedDetail.job.workerCancel.userMessage
+                  ? ` — ${selectedDetail.job.workerCancel.userMessage}`
+                  : ''}
             </p>
           ) : null}
           <div className="mt-3 grid gap-3 lg:grid-cols-4">

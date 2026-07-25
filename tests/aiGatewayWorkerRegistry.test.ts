@@ -7,14 +7,14 @@ import {
 } from '../server/ai-gateway/index.js';
 
 describe('AI gateway worker registry', () => {
-  it('reports active text/image/video/model3d workers and planned music worker', () => {
+  it('reports active text/image/video/model3d workers (music-worker removed / not registered)', () => {
     expect(listAiGatewayWorkers()).toEqual([
-      { id: 'text-worker', modalities: ['text'], capabilities: ['text.generate'], adapters: ['ai-worker-proxy', 'openai-official', 'toapis-openai', '302ai-openai', 'aihubmix-openai', 'tinysnow-openai', 'volcengine-ark-openai'], status: 'active' },
+      { id: 'text-worker', modalities: ['text'], capabilities: ['text.generate'], adapters: ['ai-worker-proxy', 'openai-official', 'volcengine-ark-openai', 'toapis-openai', '302ai-openai', 'aihubmix-openai', 'tinysnow-openai'], status: 'active' },
       {
         id: 'image-worker',
         modalities: ['image'],
         capabilities: ['image.generate', 'image.edit', 'workflow_text_to_image', 'workflow_image_edit'],
-        adapters: ['ai-worker-proxy', 'openai-official', 'toapis-openai', '302ai-openai', 'aihubmix-openai', 'tinysnow-openai', 'volcengine-ark-image', 'jimeng-visual'],
+        adapters: ['ai-worker-proxy', 'openai-official', 'volcengine-ark-image', 'toapis-openai', '302ai-openai', 'aihubmix-openai', 'tinysnow-openai', 'jimeng-visual'],
         status: 'active',
       },
       {
@@ -24,7 +24,6 @@ describe('AI gateway worker registry', () => {
         adapters: ['jimeng-visual', 'volcengine-ark-async', 'openai-compatible-async'],
         status: 'active',
       },
-      { id: 'music-worker', modalities: ['music'], capabilities: ['music.generate'], adapters: [], status: 'planned' },
       {
         id: 'model3d-worker',
         modalities: ['model3d'],
@@ -33,6 +32,7 @@ describe('AI gateway worker registry', () => {
         status: 'active',
       },
     ]);
+    expect(listAiGatewayWorkers().some((w) => w.id === 'music-worker')).toBe(false);
   });
 
   it('keeps default provider routes aligned with worker modality, capability, and adapter support', () => {
@@ -100,13 +100,15 @@ describe('AI gateway worker registry', () => {
     });
   });
 
-  it('does not execute planned workers without adapters', () => {
-    expect(resolveAiGatewayWorker({ workerId: 'music-worker' })).toMatchObject({ status: 'planned' });
+  it('rejects music-worker as not registered (stub removed)', () => {
+    expect(() => resolveAiGatewayWorker({ workerId: 'music-worker' })).toThrow(
+      /No AI gateway worker registered/
+    );
     expect(() =>
       buildAiGatewayWorkerRequest(
         { id: 'aijob_music_1', correlationId: 'corr_music_1', input: {} },
         { workerId: 'music-worker', adapterId: 'suno-music' }
       )
-    ).toThrow(/planned but not implemented/);
+    ).toThrow(/No AI gateway worker registered/);
   });
 });

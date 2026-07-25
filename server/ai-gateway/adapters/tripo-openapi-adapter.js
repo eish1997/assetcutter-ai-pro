@@ -5,7 +5,13 @@ import { acquireProviderKey, recordProviderKeyError, recordProviderKeySuccess } 
 import { AiGatewayValidationError } from '../job.js';
 import { finalizeAiGatewayTerminalPlan } from '../execution-finalize.js';
 import { applyAiGatewayAdapterResult } from '../adapter-result.js';
-import { buildProviderTaskUsage, collectByteSize } from '../execution-usage.js';
+import { softAiGatewayCancelResult } from '../cancel-result.js';
+import {
+  buildProviderTaskUsage,
+  collectByteSize,
+  extractProviderConsumedCredits,
+  extractProviderCostUsd,
+} from '../execution-usage.js';
 import { normalizeGatewayInput } from '../gateway-input.js';
 import { isR2Configured, putPublicR2Object } from '../../r2-storage-handlers.js';
 import {
@@ -415,6 +421,8 @@ async function pollTripoTask(plan, taskId, apiKey, options = {}) {
           }
           const completedAtMs = Date.now();
           const outputBytes = collectByteSize(data);
+          const providerCredits = extractProviderConsumedCredits(data);
+          const providerCostUsd = extractProviderCostUsd(data);
           const usage = buildProviderTaskUsage(plan, {
             provider: 'tripo',
             upstreamTaskId: taskId,
@@ -426,6 +434,8 @@ async function pollTripoTask(plan, taskId, apiKey, options = {}) {
             artifactCount: modelUrls.length,
             startedAtMs,
             completedAtMs,
+            ...(providerCredits ? { actualCredits: providerCredits } : {}),
+            ...(providerCostUsd ? { costUsd: providerCostUsd } : {}),
           });
           const { plan: succeeded } = await applyAiGatewayAdapterResult(
             plan,
@@ -533,13 +543,13 @@ async function pollTripoTask(plan, taskId, apiKey, options = {}) {
 export async function cancelTripoExecution(plan) {
   const metadata = plan?.job?.metadata && typeof plan.job.metadata === 'object' ? plan.job.metadata : {};
   const upstreamTaskId = nonEmptyString(metadata.upstreamTaskId) || nonEmptyString(metadata.tripoTaskId);
-  return {
-    cancelled: false,
-    mode: 'soft',
+  return softAiGatewayCancelResult({
     reason: 'tripo_hard_cancel_unavailable',
+    cancelReason: 'tripo_hard_cancel_unavailable',
     upstreamTaskId: upstreamTaskId || null,
     provider: 'tripo',
-  };
+    adapterId: 'tripo-openapi',
+  });
 }
 
 export async function startTripoExecution(plan, options = {}) {

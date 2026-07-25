@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   billingSkuForAiGatewayRouteSuggestion,
   buildAiGatewayPriceSkuSuggestions,
+  draftFromAiGatewayPriceSuggestion,
   meterKindForAiGatewayPriceSuggestion,
   routesFromGatewayRouteConfigs,
 } from '../components/admin/AdminPriceCatalogPanel';
@@ -90,5 +91,35 @@ describe('AdminPriceCatalogPanel AI Gateway SKU suggestions', () => {
         }),
       ])
     );
+  });
+
+  it('B6: pending-price draft uses seed catalog rates, not 1-credit placeholders', () => {
+    const seeded = draftFromAiGatewayPriceSuggestion({
+      billingSku: '3d.tripo.task',
+      displayName: 'tripo image',
+      providerId: 'tripo',
+      canonicalModelId: 'tripo',
+      providerModelId: 'tripo-image-to-model',
+      modality: 'model3d',
+      meterKind: 'task',
+      routeEnabled: true,
+    });
+    expect(seeded.perUnit).toBe('0.5');
+    expect(seeded.userCreditsPerUnit).toBe('');
+    expect(seeded.displayName).toContain('Tripo');
+
+    const blank = draftFromAiGatewayPriceSuggestion({
+      billingSku: 'image.302ai.upstream-image-v1',
+      displayName: '302ai upstream',
+      providerId: '302ai',
+      canonicalModelId: 'fixture',
+      providerModelId: 'upstream-image-v1',
+      modality: 'image',
+      meterKind: 'image',
+      routeEnabled: true,
+    });
+    expect(blank.userCreditsPerUnit).toBe('');
+    expect(blank.perUnit).toBe('');
+    expect(blank.meterKind).toBe('image');
   });
 });

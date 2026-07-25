@@ -26,7 +26,6 @@ import {
   workflowGenerateVideo,
   workflowUnderstandForImageGen,
   WorkflowVideoNotAvailableError,
-  type GeminiImageBatchGroupOptions,
 } from './unifiedAiGateway';
 import {
   formatAiPipelineStepError,
@@ -473,8 +472,8 @@ async function executeGenerateVideoPath(
     return { ok: false, kind: 'none', error: '未能生成有效的生视频提示词', durationMs: Date.now() - start };
   }
 
-  ctx.onLog?.('info', `[${actionLabel}] 请求生视频（HTTP 桥）…`, undefined);
-  emitCapabilityRunProgress(ctx, `${actionLabel}：生视频中（依赖后端）…`);
+  ctx.onLog?.('info', `[${actionLabel}] 请求生视频（AI Gateway）…`, undefined);
+  emitCapabilityRunProgress(ctx, `${actionLabel}：生视频中…`);
 
   try {
     const out = await workflowGenerateVideo({
@@ -670,7 +669,7 @@ export type ExecuteCapabilityOptions = {
   imageSystemPrompt?: string;
   /** 为 true 时：正文超过送模上限则拒绝执行，不截断 */
   rejectTextTruncation?: boolean;
-} & GeminiImageBatchGroupOptions;
+};
 
 async function executeCompanionSamSegmentCapability(
   preset: CustomAppModule,
@@ -887,8 +886,6 @@ async function executeSplitComponentCapability(
         presetId: preset.id,
         presetLabel: preset.label || preset.id,
         workflowSourceDisplayKey: ctx.workflowSourceDisplayKey,
-        ...(opts?.batchGroupKey ? { batchGroupKey: opts.batchGroupKey } : {}),
-        ...(opts?.batchGroupExpected ? { batchGroupExpected: opts.batchGroupExpected } : {}),
       },
       abortSignal: ctx.abortSignal,
     });
@@ -1115,8 +1112,6 @@ export async function executeCapability(
           presetId: preset.id,
           presetLabel: preset.label || preset.id,
           workflowSourceDisplayKey: ctx.workflowSourceDisplayKey,
-          ...(opts?.batchGroupKey ? { batchGroupKey: opts.batchGroupKey } : {}),
-          ...(opts?.batchGroupExpected ? { batchGroupExpected: opts.batchGroupExpected } : {}),
         },
         abortSignal: ctx.abortSignal,
       });
@@ -1187,10 +1182,6 @@ export async function executeCapability(
     throwIfCapabilityAborted(ctx);
     const { registryId: imageRegistryId, upstreamModelId: modelId } = resolveImageModelRouteIdsFromPreset(preset);
     const imageOptions = (preset.imageAspectRatio || preset.imageSize) ? { aspectRatio: preset.imageAspectRatio, imageSize: preset.imageSize } : undefined;
-    const batchOpts = {
-      ...(opts?.batchGroupKey ? { batchGroupKey: opts.batchGroupKey } : {}),
-      ...(opts?.batchGroupExpected ? { batchGroupExpected: opts.batchGroupExpected } : {}),
-    };
     let result: string;
     try {
       if (refs.length >= 2) {
@@ -1232,7 +1223,6 @@ export async function executeCapability(
             presetId: preset.id,
             presetLabel: preset.label || preset.id,
             workflowSourceDisplayKey: ctx.workflowSourceDisplayKey,
-            ...batchOpts,
           },
           abortSignal: ctx.abortSignal,
         });

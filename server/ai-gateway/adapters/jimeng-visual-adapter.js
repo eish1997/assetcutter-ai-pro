@@ -395,15 +395,16 @@ async function pollJimengImageTask(plan, taskId, registryId, options = {}) {
 }
 
 export async function cancelJimengVideoExecution(plan) {
+  const { softAiGatewayCancelResult } = await import('../cancel-result.js');
   const metadata = plan?.job?.metadata && typeof plan.job.metadata === 'object' ? plan.job.metadata : {};
   const upstreamTaskId = nonEmptyString(metadata.upstreamTaskId) || nonEmptyString(metadata.jimengTaskId);
-  return {
-    cancelled: false,
-    mode: 'soft',
+  return softAiGatewayCancelResult({
     reason: 'jimeng_hard_cancel_unavailable',
+    cancelReason: 'jimeng_hard_cancel_unavailable',
     upstreamTaskId: upstreamTaskId || null,
     provider: JIMENG_PROVIDER_ID,
-  };
+    adapterId: 'jimeng-visual',
+  });
 }
 
 export const cancelJimengImageExecution = cancelJimengVideoExecution;

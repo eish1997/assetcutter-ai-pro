@@ -6,7 +6,7 @@
  * "verified" set.
  */
 
-/** @type {Readonly<Record<string, { reqKey: string; modality: 'image' | 'video' | 'digital_human' }>>} */
+/** @type {Readonly<Record<string, { reqKey: string; modality: 'image' | 'video' }>>} */
 export const JIMENG_SUPPORTED_REQ_KEY_BY_REGISTRY = Object.freeze({
   'jimeng-image-t2i-v40': { reqKey: 'jimeng_t2i_v40', modality: 'image' },
   'jimeng-image-t2i-v30': { reqKey: 'jimeng_t2i_v30', modality: 'image' },
@@ -16,7 +16,7 @@ export const JIMENG_SUPPORTED_REQ_KEY_BY_REGISTRY = Object.freeze({
 
 /**
  * @param {string} registryId
- * @returns {{ reqKey: string; modality: 'image' | 'video' | 'digital_human' } | null}
+ * @returns {{ reqKey: string; modality: 'image' | 'video' } | null}
  */
 export function resolveSupportedJimengReqKey(registryId) {
   const id = String(registryId || '').trim();

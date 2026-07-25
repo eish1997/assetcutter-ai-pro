@@ -638,6 +638,10 @@ export type AdminAiJobsQuery = {
   modality?: string;
   capability?: string;
   q?: string;
+  /** gatewayFailure.stage；`__missing__` = 失败且无 stage */
+  failureStage?: string;
+  /** gatewayFailure.owner；`__missing__` = 失败且无 owner */
+  failureOwner?: string;
 };
 
 function appendAdminAiJobsQuery(params: URLSearchParams, query: AdminAiJobsQuery = {}) {
@@ -649,6 +653,8 @@ function appendAdminAiJobsQuery(params: URLSearchParams, query: AdminAiJobsQuery
   if (query.modality) params.set('modality', query.modality);
   if (query.capability) params.set('capability', query.capability);
   if (query.q) params.set('q', query.q);
+  if (query.failureStage) params.set('failureStage', query.failureStage);
+  if (query.failureOwner) params.set('failureOwner', query.failureOwner);
 }
 
 export async function fetchAdminAiJobs(query: AdminAiJobsQuery = {}) {
@@ -783,6 +789,12 @@ export type AiGatewayTrendUsageBucket = {
   failed: number;
   totalQuantity: number;
   totalCostUsdEst: number;
+  /** costConfidence=exact */
+  totalCostUsdPriced?: number;
+  pricedEventCount?: number;
+  /** costConfidence=estimated|unknown */
+  totalCostUsdEstimated?: number;
+  estimatedEventCount?: number;
   totalCreditsCharged: number;
 };
 
@@ -818,6 +830,10 @@ export type AiGatewayTrendReport = {
     usageEvents: number;
     totalCreditsCharged: number;
     totalCostUsdEst: number;
+    totalCostUsdPriced?: number;
+    totalCostUsdEstimated?: number;
+    pricedEventCount?: number;
+    estimatedEventCount?: number;
     totalQuantity: number;
   }>;
   providerKeys?: {

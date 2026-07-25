@@ -25,13 +25,12 @@ describe('aiGatewayVideoExecution', () => {
     else process.env.VITE_AI_GATEWAY_VIDEO_POLL_INTERVAL_MS = prevInterval;
   });
 
-  it('honors the explicit video execution off switch', () => {
+  it('keeps video Gateway execution always on', () => {
     process.env.VITE_AI_GATEWAY_VIDEO_EXECUTION = 'false';
-    expect(isAiGatewayVideoExecutionEnabled()).toBe(false);
+    expect(isAiGatewayVideoExecutionEnabled()).toBe(true);
   });
 
   it('creates a video AI job without hardcoding the provider and polls until a video artifact is ready', async () => {
-    process.env.VITE_AI_GATEWAY_VIDEO_EXECUTION = 'true';
     process.env.VITE_AI_GATEWAY_VIDEO_POLL_INTERVAL_MS = '1';
     vi.mocked(createAiJob).mockResolvedValue({
       job: {

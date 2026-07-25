@@ -2,7 +2,7 @@
  * 即梦站内代理客户端 — 调 `/api/jimeng/*`（AK/SK 仅服务端）。
  * 业务请经 `unifiedAiGateway`；单测可注入 `fetchImpl`。
  */
-import type { JimengOmniHumanInput, JimengPollResult, JimengSubmitInput } from "./types";
+import type { JimengPollResult, JimengSubmitInput } from "./types";
 import { JimengNotConfiguredError } from "./errors";
 
 export type JimengStatusResponse = {
@@ -186,31 +186,3 @@ export async function jimengPollTask(
   return normalizePollResult(body);
 }
 
-/** POST /api/jimeng/omnihuman */
-export async function jimengSubmitOmniHuman(
-  input: JimengOmniHumanInput,
-  options?: JimengClientOptions
-): Promise<{ taskId: string }> {
-  const fetchFn = resolveFetch(options?.fetchImpl);
-  const res = await fetchFn(resolveApiUrl("/api/jimeng/omnihuman"), {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(input),
-    cache: "no-store",
-    signal: options?.signal,
-    credentials: "include",
-  });
-  const body = (await readJsonResponse(res)) as Record<string, unknown>;
-  if (res.status === 503) {
-    throw new JimengNotConfiguredError(
-      pickString(body, ["error", "message"]) || "即梦 AI 未启用或未配置。"
-    );
-  }
-  if (!res.ok) {
-    const msg = pickString(body, ["error", "message", "detail"]) || `HTTP ${res.status}`;
-    throw new Error(`即梦数字人提交失败：${msg}`);
-  }
-  const taskId = pickString(body, ["taskId", "task_id"]);
-  if (!taskId) throw new Error("即梦数字人响应缺少 taskId");
-  return { taskId };
-}

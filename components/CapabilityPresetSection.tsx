@@ -1960,7 +1960,7 @@ const CapabilityPresetSection: React.FC<{
             <div>
               <span className="text-[8px] font-black text-cyan-400/90 uppercase">生视频 · 预设说明</span>
               <p className="text-[8px] text-gray-500 mt-0.5">
-                需构建变量 <code className="text-gray-400">VITE_WORKFLOW_VIDEO_API_URL</code>。可拖文字卡、图片卡或两者；有图时与对话生图一致可先「理解」再请求桥。
+                经 AI Gateway 生视频。可拖文字卡、图片卡或两者；有图时与对话生图一致可先「理解」再生成。
               </p>
               <label className="mt-1 flex items-center gap-2 text-[9px] text-gray-400 cursor-pointer" title="勾选：先由文字模型理解预设与画面，再 POST 生视频桥">
                 <input
@@ -2777,7 +2777,7 @@ const CapabilityPresetSection: React.FC<{
                           {editCategory === 'generate_video' && (
                             <div className="space-y-2">
                               <p className="text-[8px] text-gray-500">
-                                需 <code className="text-gray-400">VITE_WORKFLOW_VIDEO_API_URL</code>。有参考图时默认先理解再请求桥。
+                                经 AI Gateway。有参考图时默认先理解再生成。
                               </p>
                               <label className="flex items-center gap-2 text-[9px] text-gray-400 cursor-pointer">
                                 <input

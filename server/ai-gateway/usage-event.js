@@ -23,20 +23,41 @@ function creditsGate(plan) {
 }
 
 function usageMetadataFromJob(job) {
+  const usageBlob = job?.metadata?.usage || job?.output?.usage || null;
   const raw =
     job?.metadata?.usage?.usageMetadata ||
     job?.metadata?.usageMetadata ||
     job?.output?.usageMetadata ||
     job?.output?.usage?.usageMetadata ||
+    usageBlob ||
     null;
   if (!raw || typeof raw !== 'object') return null;
-  const promptTokenCount = positiveInt(raw.promptTokenCount ?? raw.prompt_token_count ?? raw.prompt_tokens ?? raw.input_tokens);
-  const candidatesTokenCount = positiveInt(
-    raw.candidatesTokenCount ?? raw.candidates_token_count ?? raw.completion_tokens ?? raw.output_tokens
+  const promptTokenCount = positiveInt(
+    raw.promptTokenCount ??
+      raw.prompt_token_count ??
+      raw.prompt_tokens ??
+      raw.input_tokens ??
+      raw.promptTokens
   );
-  const totalTokenCount = positiveInt(raw.totalTokenCount ?? raw.total_token_count ?? raw.total_tokens) || promptTokenCount + candidatesTokenCount;
+  const candidatesTokenCount = positiveInt(
+    raw.candidatesTokenCount ??
+      raw.candidates_token_count ??
+      raw.completion_tokens ??
+      raw.output_tokens ??
+      raw.completionTokens
+  );
+  const totalTokenCount =
+    positiveInt(raw.totalTokenCount ?? raw.total_token_count ?? raw.total_tokens ?? raw.totalTokens) ||
+    promptTokenCount + candidatesTokenCount;
   if (!promptTokenCount && !candidatesTokenCount && !totalTokenCount) return null;
   return { promptTokenCount, candidatesTokenCount, totalTokenCount };
+}
+
+function costUsdFromJob(job) {
+  const usage = job?.metadata?.usage || job?.output?.usage || null;
+  if (!usage || typeof usage !== 'object') return null;
+  const n = Number(usage.costUsd ?? usage.costUsdEst ?? usage.cost_usd ?? usage.cost);
+  return Number.isFinite(n) && n > 0 ? n : null;
 }
 
 function quoteCreditsFromUsage({ billingSku, meterKind, usageMetadata, imageOutput }) {
@@ -86,6 +107,7 @@ export function buildAiGatewayUsageEvent(plan) {
   const imageOutput = job.modality === 'image';
   const resolved = resolveActualOrEstimatedCredits(plan, { billingSku, meterKind, usageMetadata, imageOutput });
   if (resolved.credits <= 0) return null;
+  const providerCostUsd = costUsdFromJob(job);
 
   const event = {
     idempotencyKey: `aijob:usage:${job.id}`.slice(0, 200),
@@ -97,8 +119,13 @@ export function buildAiGatewayUsageEvent(plan) {
     quantityOut: usageMetadata?.candidatesTokenCount,
     quantity: usageMetadata?.totalTokenCount ?? (meterKind === 'token' ? 0 : 1),
     unit: unitForAiGatewayMeter(meterKind),
-    costUsdEst: resolved.costUsdEst ?? undefined,
-    costConfidence: resolved.source === 'estimated' ? 'estimated' : 'exact',
+    costUsdEst: providerCostUsd ?? resolved.costUsdEst ?? undefined,
+    costConfidence:
+      providerCostUsd != null || resolved.source === 'usage_metadata' || resolved.source === 'job_usage'
+        ? 'exact'
+        : resolved.source === 'estimated'
+          ? 'estimated'
+          : 'exact',
     status: 'succeeded',
     upstreamTaskId,
     requestId: proxyJobId || upstreamTaskId || job.id,

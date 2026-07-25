@@ -28,12 +28,11 @@ describe('AI gateway health snapshot', () => {
         updateJobStatus: 'PATCH /ai-gateway/jobs/:id',
         executeViaAuthApi: 'POST /api/ai/jobs (AI_GATEWAY_EXECUTION_ENABLED=true)',
       },
-      adapters: ['ai-worker-proxy', 'openai-official', 'toapis-openai', '302ai-openai', 'aihubmix-openai', 'tinysnow-openai', 'volcengine-ark-openai', 'volcengine-ark-image', 'volcengine-ark-async', 'jimeng-visual', 'tripo-openapi', 'tencent-hunyuan-3d'],
+      adapters: ['ai-worker-proxy', 'openai-official', 'volcengine-ark-openai', 'volcengine-ark-image', 'toapis-openai', '302ai-openai', 'aihubmix-openai', 'tinysnow-openai', 'volcengine-ark-async', 'jimeng-visual', 'tripo-openapi', 'tencent-hunyuan-3d'],
       workers: [
         { id: 'text-worker', status: 'active' },
         { id: 'image-worker', status: 'active' },
         { id: 'video-worker', status: 'active' },
-        { id: 'music-worker', status: 'planned' },
         { id: 'model3d-worker', status: 'active' },
       ],
     });

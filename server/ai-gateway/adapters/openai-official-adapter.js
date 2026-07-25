@@ -2,7 +2,12 @@ import { fetch as undiciFetch, ProxyAgent } from 'undici';
 import { AiGatewayValidationError } from '../job.js';
 import { finalizeAiGatewayTerminalPlan } from '../execution-finalize.js';
 import { applyAiGatewayAdapterResult } from '../adapter-result.js';
-import { buildProviderTaskUsage, collectByteSize } from '../execution-usage.js';
+import {
+  buildProviderTaskUsage,
+  collectByteSize,
+  extractOpenAiStyleTokenUsage,
+  extractProviderCostUsd,
+} from '../execution-usage.js';
 import { resolveAiGatewayBillingSku } from '../route-billing.js';
 import { normalizeInlineBase64Data } from '../inline-data-normalize.js';
 import {
@@ -481,16 +486,29 @@ export async function startOpenAiOfficialExecution(plan, options = {}) {
   const image = plan.job?.modality === 'image';
   const artifacts = image ? extractImageArtifacts(data, providerId) : [];
   const text = image ? '' : extractText(data);
+  const tokenUsage = extractOpenAiStyleTokenUsage(data);
+  const providerCostUsd = extractProviderCostUsd(data);
   const usage = buildProviderTaskUsage(running || plan, {
     provider: providerId,
     billingSku: resolveAiGatewayBillingSku(running || plan),
     meterKind: image ? 'image' : 'token',
     unit: image ? 'image' : 'token',
-    quantity: image ? Math.max(1, artifacts.length || 1) : Number(data?.usage?.total_tokens || 0),
+    quantity: image
+      ? Math.max(1, artifacts.length || 1)
+      : tokenUsage?.totalTokens || Number(data?.usage?.total_tokens || 0),
     outputBytes: collectByteSize(data),
     artifactCount: artifacts.length,
     startedAtMs,
     completedAtMs,
+    ...(providerCostUsd ? { costUsd: providerCostUsd } : {}),
+    ...(tokenUsage
+      ? {
+          promptTokens: tokenUsage.promptTokens,
+          completionTokens: tokenUsage.completionTokens,
+          totalTokens: tokenUsage.totalTokens,
+          usageMetadata: tokenUsage.usageMetadata,
+        }
+      : {}),
   });
   const { plan: succeeded } = await applyAiGatewayAdapterResult(
     running || plan,

@@ -1,7 +1,7 @@
 /** 即梦 SKU 模态 */
-export type JimengModality = "image" | "video" | "digital_human";
+export type JimengModality = "image" | "video";
 
-export type JimengAsyncMode = "submit_poll" | "omnihuman_v1";
+export type JimengAsyncMode = "submit_poll";
 
 export type JimengVisibility = "warehouseOnly" | "vendor_extended";
 
@@ -37,14 +37,6 @@ export type JimengPollResult =
   | { status: "pending" | "running"; progress?: number }
   | { status: "done"; images?: string[]; videoUrl?: string; raw: unknown }
   | { status: "failed"; code: number; message: string };
-
-/** §4.4 数字人（W0） */
-export type JimengOmniHumanInput = {
-  registryId: "jimeng-dh-omnihuman-v10";
-  portraitImage: string;
-  driveAudioUrl?: string;
-  driveVideoUrl?: string;
-};
 
 export type JimengParamsValidationError = {
   field: string;

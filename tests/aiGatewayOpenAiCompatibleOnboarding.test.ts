@@ -209,7 +209,13 @@ describe('OpenAI-compatible config onboarding (Slice 5 / A2)', () => {
         return new Response(JSON.stringify({ id: 'fake_task_1', status: 'queued' }), { status: 200 });
       }
       return new Response(
-        JSON.stringify({ id: 'fake_task_1', status: 'succeeded', output: { url: 'https://cdn.example/fake.mp4' } }),
+        JSON.stringify({
+          id: 'fake_task_1',
+          status: 'succeeded',
+          output: { url: 'https://cdn.example/fake.mp4' },
+          usage: { prompt_tokens: 10, completion_tokens: 20, total_tokens: 30, cost: 0.004 },
+          consumed_credits: 7,
+        }),
         { status: 200 }
       );
     };
@@ -234,6 +240,14 @@ describe('OpenAI-compatible config onboarding (Slice 5 / A2)', () => {
     expect(stored?.job.artifacts?.[0]).toMatchObject({
       kind: 'video',
       url: 'https://cdn.example/fake.mp4',
+    });
+    // B10: OpenAI-compatible success path returns real usage fields
+    expect(stored?.job.metadata?.usage || stored?.job.output?.usage).toMatchObject({
+      promptTokens: 10,
+      completionTokens: 20,
+      totalTokens: 30,
+      costUsd: 0.004,
+      actualCredits: 7,
     });
 
     const generation = await testAiGatewayModelGeneration(

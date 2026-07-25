@@ -13,6 +13,10 @@ export function normalizeAiGatewayRuntimeProviderId(value) {
   return normalizeAiGatewayProviderId(value);
 }
 
+/**
+ * B2: runtime adapter/worker catalog only — fill defaults for an already-chosen provider.
+ * Must not be used to rank/select providers (that authority is listGatewayRouteConfigs / decision).
+ */
 export const DEFAULT_AI_PROVIDER_ROUTES = Object.freeze([
   {
     providerId: 'vertex-site',
@@ -144,6 +148,50 @@ function toPublicRoute(route) {
 }
 
 /**
+ * B2: look up adapter/worker defaults for a pinned provider + modality.
+ * Never ranks across providers.
+ */
+export function lookupRuntimeAdapterDefaults(job, routes = DEFAULT_AI_PROVIDER_ROUTES, options = {}) {
+  const providerId = normalizeAiGatewayRuntimeProviderId(job?.provider);
+  if (!providerId) {
+    throw new AiGatewayRouteError(
+      'provider is required to look up runtime adapter defaults (use route decision / gatewayRouteConfigs)',
+      'AI_GATEWAY_NO_PROVIDER_ROUTE'
+    );
+  }
+  const disabledProviders = new Set(
+    Array.isArray(options.disabledProviders)
+      ? options.disabledProviders.map(normalizeAiGatewayRuntimeProviderId).filter(Boolean)
+      : []
+  );
+  if (disabledProviders.has(providerId)) {
+    throw new AiGatewayRouteError(
+      `AI provider is paused by ops control: ${providerId}`,
+      'AI_GATEWAY_PROVIDER_PAUSED'
+    );
+  }
+  const disabledModels = new Set(Array.isArray(options.disabledModels) ? options.disabledModels : []);
+  if (job.model && disabledModels.has(job.model)) {
+    throw new AiGatewayRouteError(
+      `AI model is paused by ops control: ${job.model}`,
+      'AI_GATEWAY_MODEL_PAUSED'
+    );
+  }
+  const jobForMatch = { ...(job && typeof job === 'object' ? job : {}), provider: providerId };
+  const candidates = routes
+    .filter((route) => route.providerId === providerId)
+    .filter((route) => routeMatchesJob(route, jobForMatch))
+    .sort((a, b) => Number(a.priority || 100) - Number(b.priority || 100));
+  const route = candidates[0];
+  if (!route) {
+    throw new AiGatewayRouteError(
+      `No runtime adapter defaults for provider=${providerId} modality=${job.modality} capability=${job.capability}`
+    );
+  }
+  return toPublicRoute(route);
+}
+
+/**
  * Materialize a runtime provider route from an already-chosen selectedRoute.
  * Does not re-rank providers — only fills worker/adapter/channel from the runtime catalog.
  */
@@ -163,7 +211,7 @@ export function materializeAiProviderRouteFromSelectedRoute(
   const jobForMatch = { ...(job && typeof job === 'object' ? job : {}), provider: providerId };
   let base = null;
   try {
-    base = resolveAiProviderRoute(jobForMatch, routes, options);
+    base = lookupRuntimeAdapterDefaults(jobForMatch, routes, options);
   } catch (err) {
     if (selectedRoute?.adapterId && selectedRoute?.workerId) {
       base = {
@@ -215,41 +263,27 @@ export function enrichSelectedRouteWithRuntimeDefaults(
   }
 }
 
+/**
+ * @deprecated B2: do not use for provider selection. Prefer lookupRuntimeAdapterDefaults
+ * after route decision / gatewayRouteConfigs. Kept for tests that pin job.provider.
+ */
 export function resolveAiProviderRoute(job, routes = DEFAULT_AI_PROVIDER_ROUTES, options = {}) {
-  const disabledProviders = new Set(
-    Array.isArray(options.disabledProviders)
-      ? options.disabledProviders.map(normalizeAiGatewayRuntimeProviderId).filter(Boolean)
-      : []
-  );
-  const disabledModels = new Set(Array.isArray(options.disabledModels) ? options.disabledModels : []);
-  if (job.model && disabledModels.has(job.model)) {
-    throw new AiGatewayRouteError(
-      `AI model is paused by ops control: ${job.model}`,
-      'AI_GATEWAY_MODEL_PAUSED'
-    );
-  }
-  const candidates = routes
-    .filter((route) => routeMatchesJob(route, job))
-    .filter((route) => !disabledProviders.has(route.providerId))
-    .sort((a, b) => Number(a.priority || 100) - Number(b.priority || 100));
-
-  const route = candidates[0];
-  if (!route) {
-    const wanted = job.provider ? ` provider=${normalizeAiGatewayRuntimeProviderId(job.provider) || job.provider}` : '';
-    throw new AiGatewayRouteError(
-      `No AI provider route for modality=${job.modality} capability=${job.capability}${wanted}`
-    );
-  }
-
-  return toPublicRoute(route);
+  return lookupRuntimeAdapterDefaults(job, routes, options);
 }
 
 /**
- * Modality/capability-only plans (no model decision): pick the top runtime catalog row
- * and return it as a selectedRoute so createAiGatewayJobPlan never re-ranks later.
+ * Build a selectedRoute shell from an explicit provider pin + runtime adapter defaults.
+ * Does not choose a provider when none is set.
  */
 export function pickDefaultSelectedRouteForJob(job, routes = DEFAULT_AI_PROVIDER_ROUTES, options = {}) {
-  const route = resolveAiProviderRoute(job, routes, options);
+  const providerId = normalizeAiGatewayRuntimeProviderId(job?.provider);
+  if (!providerId) {
+    throw new AiGatewayRouteError(
+      'Cannot pick selectedRoute without provider (run resolveAiGatewayRouteDecision or set model/provider)',
+      'AI_GATEWAY_NO_PROVIDER_ROUTE'
+    );
+  }
+  const route = lookupRuntimeAdapterDefaults({ ...job, provider: providerId }, routes, options);
   return {
     routeId: route.routeId || `${route.providerId}:${String(job?.modality || '').trim() || 'unknown'}`,
     providerId: route.providerId,

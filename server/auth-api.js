@@ -237,6 +237,7 @@ import {
   summarizeAuthAiGatewayJobs,
 } from './ai-gateway/auth-api-handler.js';
 import { recoverAiGatewayQueuedJobs, startAiGatewayQueueRecoveryLoop } from './ai-gateway/recovery.js';
+import { startAiGatewayTrendSnapshotLoop } from './ai-gateway/trend-snapshot-loop.js';
 import { buildAiGatewayTrendReport, refreshAiGatewayTrendSnapshot } from './ai-gateway/trend-report.js';
 import { listPublicPriceCatalog } from './pricing-engine.js';
 import { buildUsageReceipt, quoteJobKinds } from './pricing-read-model.js';
@@ -273,6 +274,7 @@ function startStoreInit() {
     storeReady = true;
     console.log('[auth-api] store ready');
     startAiGatewayQueueRecoveryLoop();
+    startAiGatewayTrendSnapshotLoop();
     try {
       assertProductionConfig();
       const adminEmail = String(process.env.AUTH_ADMIN_EMAIL || '').trim().toLowerCase();
@@ -2555,6 +2557,8 @@ const server = http.createServer(async (req, res) => {
         modality: u.searchParams.get('modality') || '',
         capability: u.searchParams.get('capability') || '',
         q: u.searchParams.get('q') || '',
+        failureStage: u.searchParams.get('failureStage') || '',
+        failureOwner: u.searchParams.get('failureOwner') || '',
       }, { admin: true });
       json(res, result.status, result.body);
       return;
@@ -3070,6 +3074,8 @@ const server = http.createServer(async (req, res) => {
         modality: u.searchParams.get('modality') || '',
         capability: u.searchParams.get('capability') || '',
         q: u.searchParams.get('q') || '',
+        failureStage: u.searchParams.get('failureStage') || '',
+        failureOwner: u.searchParams.get('failureOwner') || '',
       }, { admin: true });
       json(res, result.status, result.body);
       return;

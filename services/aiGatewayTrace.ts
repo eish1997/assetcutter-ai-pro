@@ -29,12 +29,17 @@ export function isAiGatewayJobTraceEnabled(useVertex?: boolean): boolean {
   return Boolean(useVertex);
 }
 
-export function isAiGatewayImageExecutionEnabled(useVertex?: boolean): boolean {
-  const raw = readEnv('VITE_AI_GATEWAY_IMAGE_EXECUTION');
-  if (/^(0|false|off|no)$/i.test(raw)) return false;
-  if (/^(1|true|on|yes)$/i.test(raw)) return true;
-  if (/^vertex$/i.test(raw)) return Boolean(useVertex);
-  return Boolean(useVertex);
+/**
+ * User-reachable image gen always uses AI Gateway (`createAiJob`).
+ * Env opt-out (`legacy` / `proxy` / `false` / `vertex`) removed.
+ */
+export function isAiGatewayImageExecutionEnabled(_useVertex?: boolean): boolean {
+  return true;
+}
+
+/** @deprecated Legacy proxy opt-out removed; always false. */
+export function isAiGatewayImageLegacyProxyEnabled(_useVertex?: boolean): boolean {
+  return false;
 }
 
 export function buildAiGatewayImageJobBody(

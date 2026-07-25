@@ -25,11 +25,6 @@ const SKU_OVERRIDES: Record<string, Partial<BillingPresentation>> = {
   '3d.tencent.rapid': { label: '腾讯混元 3D 极速版', unitLabel: '次', category: '3d' },
   'video.workflow.task': { label: '工作流视频任务', unitLabel: '次', category: 'video' },
   'video.jimeng.ti2v-v30-pro': { label: '即梦 视频 3.0 Pro', unitLabel: '次', category: 'video' },
-  'digital_human.jimeng.omnihuman-v10': {
-    label: '即梦 OmniHuman 1.0',
-    unitLabel: '次',
-    category: 'video',
-  },
 };
 
 function categoryFromSku(sku: string): BillingPresentationCategory {
@@ -37,7 +32,7 @@ function categoryFromSku(sku: string): BillingPresentationCategory {
   if (sku.startsWith('copilot.')) return 'text';
   if (sku.startsWith('image.')) return 'image';
   if (sku.startsWith('3d.')) return '3d';
-  if (sku.startsWith('video.') || sku.startsWith('digital_human.')) return 'video';
+  if (sku.startsWith('video.')) return 'video';
   return 'other';
 }
 

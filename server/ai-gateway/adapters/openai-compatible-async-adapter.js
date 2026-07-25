@@ -2,7 +2,14 @@ import { fetch as undiciFetch } from 'undici';
 import { AiGatewayValidationError } from '../job.js';
 import { finalizeAiGatewayTerminalPlan } from '../execution-finalize.js';
 import { applyAiGatewayAdapterResult } from '../adapter-result.js';
-import { buildProviderTaskUsage, collectByteSize } from '../execution-usage.js';
+import { hardAiGatewayCancelResult, softAiGatewayCancelResult } from '../cancel-result.js';
+import {
+  buildProviderTaskUsage,
+  collectByteSize,
+  extractOpenAiStyleTokenUsage,
+  extractProviderConsumedCredits,
+  extractProviderCostUsd,
+} from '../execution-usage.js';
 import { normalizeGatewayInput } from '../gateway-input.js';
 import { defaultOpenAiCompatibleBaseUrl, normalizeOpenAiCompatibleBaseUrl, openAiCompatibleProviderLabel, openAiCompatibleTimeoutsForProvider } from '../openai-compatible-config.js';
 import { acquireProviderKey, recordProviderKeyError, recordProviderKeySuccess } from '../provider-key-store.js';
@@ -53,6 +60,8 @@ function normalizeEndpointMapping(route) {
     artifactPath: nonEmptyString(raw.artifactPath),
     taskIdPath: nonEmptyString(raw.taskIdPath) || 'id',
     errorPath: nonEmptyString(raw.errorPath) || 'error.message',
+    cancelPath: nonEmptyString(raw.cancelPath) || '',
+    cancelMethod: nonEmptyString(raw.cancelMethod).toUpperCase() || 'DELETE',
   };
 }
 
@@ -216,19 +225,38 @@ async function pollOpenAiCompatibleAsyncTask(plan, taskId, key, mapping, options
           await finalizeAiGatewayTerminalPlan(failed, store);
           return { done: true };
         }
+        const tokenUsage = extractOpenAiStyleTokenUsage(data);
+        const providerCredits = extractProviderConsumedCredits(data);
+        const providerCostUsd = extractProviderCostUsd(data);
+        const modality = String(plan.job?.modality || '');
+        const isModel3d = modality === 'model3d';
+        // video/image keep task-second/image meters; only text (or bare token responses) use token meter
+        const isTokenMeter =
+          modality === 'text' || (Boolean(tokenUsage) && !isModel3d && modality !== 'video' && modality !== 'image');
         const usage = buildProviderTaskUsage(plan, {
           provider: providerId,
           upstreamTaskId: taskId,
-          meterKind: plan.job?.modality === 'model3d' ? 'task' : 'second',
-          unit: plan.job?.modality === 'model3d' ? 'task' : 'second',
-          quantity:
-            plan.job?.modality === 'model3d'
-              ? 1
+          meterKind: isModel3d ? 'task' : isTokenMeter ? 'token' : modality === 'image' ? 'image' : 'second',
+          unit: isModel3d ? 'task' : isTokenMeter ? 'token' : modality === 'image' ? 'image' : 'second',
+          quantity: isModel3d
+            ? 1
+            : isTokenMeter
+              ? tokenUsage?.totalTokens || 1
               : Number(plan.job?.input?.durationSeconds || plan.job?.input?.duration || 1),
           outputBytes: collectByteSize(data),
           artifactCount: urls.length,
           startedAtMs,
           completedAtMs,
+          ...(providerCredits ? { actualCredits: providerCredits } : {}),
+          ...(providerCostUsd ? { costUsd: providerCostUsd } : {}),
+          ...(tokenUsage
+            ? {
+                promptTokens: tokenUsage.promptTokens,
+                completionTokens: tokenUsage.completionTokens,
+                totalTokens: tokenUsage.totalTokens,
+                usageMetadata: tokenUsage.usageMetadata,
+              }
+            : {}),
         });
         const kind = artifactKind(plan.job?.modality);
         const artifacts = urls.map((url) => ({
@@ -354,13 +382,67 @@ export async function startOpenAiCompatibleAsyncExecution(plan, options = {}) {
   return { started: true, upstreamJobId: taskId, plan: next };
 }
 
-export async function cancelOpenAiCompatibleAsyncExecution(plan) {
+export async function cancelOpenAiCompatibleAsyncExecution(plan, options = {}) {
   const metadata = plan?.job?.metadata && typeof plan.job.metadata === 'object' ? plan.job.metadata : {};
-  return {
-    cancelled: false,
-    mode: 'soft',
-    reason: 'openai_compatible_async_hard_cancel_unavailable',
-    upstreamTaskId: nonEmptyString(metadata.upstreamTaskId) || null,
-    provider: nonEmptyString(plan?.route?.providerId) || null,
-  };
+  const providerId = nonEmptyString(plan?.route?.providerId);
+  const upstreamTaskId = nonEmptyString(metadata.upstreamTaskId);
+  const request = plan?.workerRequest || plan?.adapterRequest;
+  let mapping;
+  try {
+    mapping = request?.endpointMapping || normalizeEndpointMapping(plan?.route);
+  } catch {
+    mapping = request?.endpointMapping && typeof request.endpointMapping === 'object' ? request.endpointMapping : {};
+  }
+  const cancelPath = nonEmptyString(mapping?.cancelPath);
+  const soft = () =>
+    softAiGatewayCancelResult({
+      reason: 'openai_compatible_async_hard_cancel_unavailable',
+      cancelReason: 'openai_compatible_async_hard_cancel_unavailable',
+      upstreamTaskId: upstreamTaskId || null,
+      provider: providerId || null,
+      adapterId: 'openai-compatible-async',
+    });
+  if (!cancelPath || !upstreamTaskId) return soft();
+
+  const providerLabel = openAiCompatibleProviderLabel(providerId);
+  const key = options.providerKey || (await acquireProviderKey(providerId));
+  if (!key?.secret) return soft();
+  const fetchImpl = options.fetchImpl || undiciFetch;
+  const baseUrl = normalizeOpenAiCompatibleBaseUrl(key.credentials?.baseUrl, providerId);
+  const method = nonEmptyString(mapping?.cancelMethod).toUpperCase() || 'DELETE';
+  try {
+    const response = await fetchImpl(joinBaseUrlAndPath(baseUrl, interpolatePath(cancelPath, upstreamTaskId)), {
+      method,
+      headers: { Authorization: `Bearer ${key.secret}` },
+      signal: AbortSignal.timeout(Number(options.cancelTimeoutMs || 15_000)),
+    });
+    if (response.ok || response.status === 404 || response.status === 409) {
+      return hardAiGatewayCancelResult({
+        reason: 'openai_compatible_async_hard_cancel_ok',
+        cancelReason: 'openai_compatible_async_hard_cancel_ok',
+        upstreamTaskId,
+        provider: providerId,
+        adapterId: 'openai-compatible-async',
+        httpStatus: response.status,
+        adminMessage: `${providerLabel} hard cancel HTTP ${response.status}`,
+      });
+    }
+    return softAiGatewayCancelResult({
+      reason: 'openai_compatible_async_hard_cancel_failed',
+      cancelReason: 'openai_compatible_async_hard_cancel_failed',
+      upstreamTaskId,
+      provider: providerId,
+      adapterId: 'openai-compatible-async',
+      adminMessage: `${providerLabel} hard cancel failed HTTP ${response.status}; fell back to soft cancel`,
+    });
+  } catch (error) {
+    return softAiGatewayCancelResult({
+      reason: 'openai_compatible_async_hard_cancel_error',
+      cancelReason: 'openai_compatible_async_hard_cancel_error',
+      upstreamTaskId,
+      provider: providerId,
+      adapterId: 'openai-compatible-async',
+      adminMessage: error instanceof Error ? error.message : String(error),
+    });
+  }
 }

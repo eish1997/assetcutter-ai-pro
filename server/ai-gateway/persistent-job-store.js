@@ -1,4 +1,5 @@
 import { readDb, writeDb, USE_POSTGRES, getPool, ensurePostgres } from '../auth-store.js';
+import { matchesGatewayFailureFilters } from '../../shared/aiGatewayJobFailureFilters.js';
 import { applyAiJobStatusPatch } from './job.js';
 import { archiveAiGatewayJobMedia } from './job-media-archive.js';
 import { withAiGatewayPostgresRetry } from './postgres-transient-retry.js';
@@ -27,7 +28,27 @@ function normalizeJobListFilters(options = {}) {
     modality: nonEmptyString(options.modality),
     capability: nonEmptyString(options.capability),
     q: nonEmptyString(options.q),
+    failureStage: nonEmptyString(options.failureStage),
+    failureOwner: nonEmptyString(options.failureOwner),
   };
+}
+
+function appendGatewayFailureSqlFilters(where, addValue, filters) {
+  const stage = filters.failureStage;
+  const owner = filters.failureOwner;
+  if (!stage && !owner) return;
+  const stageExpr = `(metadata_json->'gatewayFailure'->>'stage')`;
+  const ownerExpr = `(metadata_json->'gatewayFailure'->>'owner')`;
+  if (stage === '__missing__') {
+    where.push(`status = 'failed' AND (${stageExpr} IS NULL OR ${stageExpr} = '')`);
+  } else if (stage) {
+    where.push(`${stageExpr} = ${addValue(stage)}`);
+  }
+  if (owner === '__missing__') {
+    where.push(`status = 'failed' AND (${ownerExpr} IS NULL OR ${ownerExpr} = '')`);
+  } else if (owner) {
+    where.push(`${ownerExpr} = ${addValue(owner)}`);
+  }
 }
 
 function planMatchesJobListFilters(plan, filters) {
@@ -60,6 +81,7 @@ function planMatchesJobListFilters(plan, filters) {
     ].join('\n').toLowerCase();
     if (!haystack.includes(filters.q.toLowerCase())) return false;
   }
+  if (!matchesGatewayFailureFilters(plan, filters)) return false;
   return true;
 }
 
@@ -350,6 +372,7 @@ export function createPersistentAiJobStore() {
             OR error_json::text ILIKE ${p}
           )`);
         }
+        appendGatewayFailureSqlFilters(where, addValue, filters);
         values.push(limit);
         const res = await withAiGatewayPostgresRetry('aiGatewayJobs.list', () => getPool().query(
           `SELECT * FROM ai_gateway_jobs

@@ -97,6 +97,17 @@ export type AiJobSummary = {
   creditsGate: AiJobCreditsGateSummary | null;
   fallback?: AiJobFallbackSummary | null;
   gatewayFailure?: AiJobGatewayFailureSummary | null;
+  /** B12: hard vs soft cancel distinguishable copy */
+  workerCancel?: {
+    mode: string;
+    cancelled?: boolean;
+    reason?: string | null;
+    cancelReason?: string | null;
+    userMessage?: string | null;
+    adminMessage?: string | null;
+    upstreamTaskId?: string | null;
+    provider?: string | null;
+  } | null;
   error: AiJobErrorSummary | null;
 };
 

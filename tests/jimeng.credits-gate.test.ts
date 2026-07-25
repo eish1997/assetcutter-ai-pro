@@ -18,6 +18,7 @@ vi.mock("../services/creditsApi", () => ({
 
 vi.mock("../services/settingsStore", () => ({
   getTencentCreds: vi.fn(() => ({ secretId: "", secretKey: "" })),
+  getTripoApiKey: vi.fn(() => null),
   getUserApiKey: vi.fn(() => null),
 }));
 
@@ -40,13 +41,11 @@ describe("jimeng credits gate", () => {
   it("proxyGateMinCreditsForJob returns catalog-aligned defaults for jimeng kinds", () => {
     expect(proxyGateMinCreditsForJob("workflow_jimeng_image")).toBe(50);
     expect(proxyGateMinCreditsForJob("workflow_jimeng_video")).toBe(250);
-    expect(proxyGateMinCreditsForJob("workflow_jimeng_digital_human")).toBe(350);
   });
 
   it("isPlatformMeteredJobKind includes jimeng workflow kinds", () => {
     expect(isPlatformMeteredJobKind("workflow_jimeng_image")).toBe(true);
     expect(isPlatformMeteredJobKind("workflow_jimeng_video")).toBe(true);
-    expect(isPlatformMeteredJobKind("workflow_jimeng_digital_human")).toBe(true);
   });
 
   it("assertUnifiedProxyCreditsGate blocks when not logged in", async () => {
@@ -68,15 +67,15 @@ describe("jimeng credits gate", () => {
     expect(prechargePlatformCredits).toHaveBeenCalledWith(250, undefined);
   });
 
-  it("blocks zero balance for jimeng digital human", async () => {
+  it("blocks zero balance for jimeng video", async () => {
     vi.mocked(prechargePlatformCredits).mockRejectedValue(
       new HttpRequestError("积分不足", 403, CREDITS_EXCEEDED_CODE)
     );
     vi.mocked(getGeminiFairnessUserId).mockReturnValue("u1");
-    await expect(assertUnifiedProxyCreditsGate("workflow_jimeng_digital_human")).rejects.toMatchObject({
+    await expect(assertUnifiedProxyCreditsGate("workflow_jimeng_video")).rejects.toMatchObject({
       code: CREDITS_EXCEEDED_CODE,
     });
-    expect(prechargePlatformCredits).toHaveBeenCalledWith(350, undefined);
+    expect(prechargePlatformCredits).toHaveBeenCalledWith(250, undefined);
   });
 
   it("isPlatformAiSubmitBlocked uses jimeng minimum credits", () => {
@@ -89,8 +88,5 @@ describe("jimeng credits gate", () => {
   it("resolveBillingSkuForJimeng maps registryId prefixes", () => {
     expect(resolveBillingSkuForJimeng("jimeng-image-t2i-v40")).toBe("image.jimeng.t2i-v40");
     expect(resolveBillingSkuForJimeng("jimeng-video-ti2v-v30-pro")).toBe("video.jimeng.ti2v-v30-pro");
-    expect(resolveBillingSkuForJimeng("jimeng-dh-omnihuman-v10")).toBe(
-      "digital_human.jimeng.omnihuman-v10"
-    );
   });
 });

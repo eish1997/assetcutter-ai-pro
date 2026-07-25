@@ -5,9 +5,8 @@ import {
   JIMENG_VERIFIED_REGISTRY_IDS,
   listJimengCatalogByModality,
 } from "../services/jimeng/catalog";
-import { validateJimengOmniHumanInput, validateJimengSubmitInput } from "../services/jimeng/paramsSchema";
+import { validateJimengSubmitInput } from "../services/jimeng/paramsSchema";
 import { isJimengParamsValidationFailure } from "../services/jimeng/types";
-import { JIMENG_DIGITAL_HUMAN_REGISTRY } from "../services/modelRegistry/jimengDigitalHumanRegistry";
 import { JIMENG_IMAGE_BINDINGS, JIMENG_IMAGE_CHANNEL } from "../services/modelRegistry/jimengBindings";
 import { JIMENG_IMAGE_REGISTRY } from "../services/modelRegistry/jimengImageRegistry";
 import { JIMENG_VIDEO_REGISTRY } from "../services/modelRegistry/jimengVideoRegistry";
@@ -54,16 +53,16 @@ const EXPECTED_SUPPORTED = {
 
 describe("jimeng catalog", () => {
   it("contains full §3 table with required fields", () => {
-    expect(JIMENG_CATALOG).toHaveLength(21);
+    expect(JIMENG_CATALOG).toHaveLength(20);
     for (const entry of JIMENG_CATALOG) {
       expect(entry.registryId).toMatch(/^jimeng-/);
       expect(entry.label.trim()).not.toBe("");
-      expect(["image", "video", "digital_human"]).toContain(entry.modality);
+      expect(["image", "video"]).toContain(entry.modality);
       expect(entry.upstreamReqKey.trim()).not.toBe("");
       expect(entry.docRef).toMatch(/^https:\/\/www\.volcengine\.com\/docs\//);
       expect(typeof entry.verified).toBe("boolean");
       expect(entry.warehouseOnly).toBe(true);
-      expect(["submit_poll", "omnihuman_v1"]).toContain(entry.asyncMode);
+      expect(entry.asyncMode).toBe("submit_poll");
     }
   });
 
@@ -88,9 +87,6 @@ describe("jimeng catalog", () => {
   it("partitions §3 modalities", () => {
     expect(listJimengCatalogByModality("image").map((e) => e.registryId)).toEqual([...EXPECTED_IMAGE_IDS]);
     expect(listJimengCatalogByModality("video").map((e) => e.registryId)).toEqual([...EXPECTED_VIDEO_IDS]);
-    expect(listJimengCatalogByModality("digital_human")).toHaveLength(1);
-    expect(listJimengCatalogByModality("digital_human")[0]?.registryId).toBe("jimeng-dh-omnihuman-v10");
-    expect(listJimengCatalogByModality("digital_human")[0]?.asyncMode).toBe("omnihuman_v1");
   });
 
   it("exports getJimengCatalogEntry helper", () => {
@@ -104,10 +100,8 @@ describe("jimeng catalog", () => {
     expect(JIMENG_IMAGE_REGISTRY.every((r) => r.warehouseOnly === true)).toBe(true);
   });
 
-  it("mirrors video and digital human registries", () => {
+  it("mirrors video registry", () => {
     expect(JIMENG_VIDEO_REGISTRY).toHaveLength(EXPECTED_VIDEO_IDS.length);
-    expect(JIMENG_DIGITAL_HUMAN_REGISTRY).toHaveLength(1);
-    expect(JIMENG_DIGITAL_HUMAN_REGISTRY[0]?.asyncMode).toBe("omnihuman_v1");
   });
 
   it("binds image SKUs to volcengine-jimeng channel", () => {
@@ -166,15 +160,5 @@ describe("jimeng paramsSchema", () => {
     if (isJimengParamsValidationFailure(result)) {
       expect(result.errors.some((e) => e.field === "referenceImages")).toBe(true);
     }
-  });
-
-  it("validates omnihuman input", () => {
-    expect(
-      validateJimengOmniHumanInput({
-        registryId: "jimeng-dh-omnihuman-v10",
-        portraitImage: "https://example.com/p.jpg",
-        driveAudioUrl: "https://example.com/a.mp3",
-      }).ok
-    ).toBe(true);
   });
 });

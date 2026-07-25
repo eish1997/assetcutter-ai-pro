@@ -29,7 +29,6 @@ const EXPECTED_PUBLIC: Record<
   'video.workflow.task': { credits: 200, unitHint: '一口价', category: 'video' },
   'image.jimeng.t2i-v40': { credits: 50, unitHint: '一口价', category: 'image' },
   'video.jimeng.ti2v-v30-pro': { credits: 250, unitHint: '一口价', category: 'video' },
-  'digital_human.jimeng.omnihuman-v10': { credits: 350, unitHint: '一口价', category: 'video' },
 };
 
 describe('pricing catalog audit', () => {
@@ -85,7 +84,6 @@ describe('pricing catalog audit', () => {
       { sku: '3d.tencent.rapid', meterKind: 'task', qty: 1, credits: 400 },
       { sku: 'image.jimeng.t2i-v40', meterKind: 'task', qty: 1, credits: 50 },
       { sku: 'video.jimeng.ti2v-v30-pro', meterKind: 'task', qty: 1, credits: 250 },
-      { sku: 'digital_human.jimeng.omnihuman-v10', meterKind: 'task', qty: 1, credits: 350 },
       { sku: 'video.workflow.task', meterKind: 'task', qty: 1, credits: 200 },
     ];
     for (const c of cases) {
@@ -99,7 +97,6 @@ describe('pricing catalog audit', () => {
     expect(quoteGateMinCreditsForJob('workflow_generate_3d')).toBe(800);
     expect(quoteGateMinCreditsForJob('workflow_jimeng_image')).toBe(50);
     expect(quoteGateMinCreditsForJob('workflow_jimeng_video')).toBe(250);
-    expect(quoteGateMinCreditsForJob('workflow_jimeng_digital_human')).toBe(350);
     expect(quoteGateMinCreditsForJob('workflow_understand')).toBe(15);
     expect(quoteGateMinCreditsForJob('workflow_chat')).toBe(10);
   });

@@ -1,3 +1,5 @@
+import { publicAiGatewayCancelSummary } from './cancel-result.js';
+
 function record(value) {
   return value && typeof value === 'object' ? value : {};
 }
@@ -103,6 +105,7 @@ export function publicAiJobSummary(plan) {
     fallback: fallbackSummary(metadata),
     routeDecision: metadata.routeDecision || null,
     gatewayFailure: metadata.gatewayFailure || null,
+    workerCancel: publicAiGatewayCancelSummary(metadata.workerCancel),
     error: errorSummary(plan.job.error),
   };
 }

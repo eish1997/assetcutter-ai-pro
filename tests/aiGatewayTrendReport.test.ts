@@ -6,6 +6,10 @@ import {
   listAiGatewayTrendSnapshots,
   saveAiGatewayTrendSnapshot,
 } from '../server/ai-gateway/trend-report.js';
+import {
+  resetAiGatewayTrendSnapshotLoopStateForTests,
+  runAiGatewayTrendSnapshotTick,
+} from '../server/ai-gateway/trend-snapshot-loop.js';
 import { resolveAuthDbFileForTests } from './helpers/authDbTestPath.js';
 
 function job(id: string, status: string, provider: string, createdAt: string, message = '', extra: Record<string, unknown> = {}) {
@@ -58,6 +62,7 @@ describe('AI Gateway trend report', () => {
           status: 'succeeded',
           quantity: 1,
           costUsdEst: 0.01,
+          costConfidence: 'exact',
           creditsCharged: 10,
           createdAt: '2026-07-13T12:00:00.000Z',
         },
@@ -68,6 +73,7 @@ describe('AI Gateway trend report', () => {
           status: 'succeeded',
           quantity: 1,
           costUsdEst: 0.2,
+          costConfidence: 'estimated',
           creditsCharged: 50,
           createdAt: '2026-07-14T12:00:00.000Z',
         },
@@ -90,6 +96,10 @@ describe('AI Gateway trend report', () => {
     expect(report.usage.totals).toMatchObject({
       eventCount: 2,
       totalCreditsCharged: 60,
+      totalCostUsdPriced: 0.01,
+      totalCostUsdEstimated: 0.2,
+      pricedEventCount: 1,
+      estimatedEventCount: 1,
     });
     expect(report.usage.bySku.map((row) => row.key)).toContain('3d.tripo.task');
     expect(report.jobs.byDay.map((row) => row.key)).toEqual(['2026-07-13', '2026-07-14']);
@@ -101,6 +111,8 @@ describe('AI Gateway trend report', () => {
       avgDurationMs: 3000,
       usageEvents: 1,
       totalCostUsdEst: 0.01,
+      totalCostUsdPriced: 0.01,
+      totalCostUsdEstimated: 0,
       totalCreditsCharged: 10,
     });
   });
@@ -130,5 +142,26 @@ describe('AI Gateway trend report', () => {
       generatedAt: '2026-07-14T09:00:00.000Z',
     });
     expect(snapshots[0].report.snapshot).toMatchObject({ day: '2026-07-14', version: 1 });
+  });
+
+  it('B9: scheduled tick refreshes today and seals yesterday once', async () => {
+    resetAiGatewayTrendSnapshotLoopStateForTests();
+    const calls: Array<{ day: string }> = [];
+    const refresh = async (input: { day?: string }) => {
+      const day = String(input?.day || '');
+      calls.push({ day });
+      return { day, generatedAt: `${day}T12:00:00.000Z`, version: 1, report: {} };
+    };
+    const now = new Date('2026-07-15T08:00:00.000Z');
+    const first = await runAiGatewayTrendSnapshotTick({ now, refresh });
+    expect(first.today).toBe('2026-07-15');
+    expect(first.yesterday).toBe('2026-07-14');
+    expect(calls.map((c) => c.day)).toEqual(['2026-07-15', '2026-07-14']);
+    expect(first.yesterdaySnapshot?.day).toBe('2026-07-14');
+
+    calls.length = 0;
+    const second = await runAiGatewayTrendSnapshotTick({ now, refresh });
+    expect(calls.map((c) => c.day)).toEqual(['2026-07-15']);
+    expect(second.yesterdaySnapshot).toBeNull();
   });
 });

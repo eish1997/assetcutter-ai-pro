@@ -138,8 +138,9 @@ export const WORKFLOW_AI_PICK_NODES: readonly WorkflowAiPickNode[] = [
   {
     id: 'workflow_video_bridge',
     layer: 'gate',
-    label: 'workflowVideoBridge',
-    codeRefs: ['services/workflowVideoBridge.ts'],
+    label: 'aiGatewayVideoExecution（Gateway Job）',
+    codeRefs: ['services/aiGatewayVideoExecution.ts', 'services/workflowVideoBridge.ts'],
+    notes: '类型仍在 workflowVideoBridge；执行只走 createAiJob',
   },
   {
     id: 'model_registry_pick',
@@ -192,12 +193,6 @@ export const WORKFLOW_AI_PICK_NODES: readonly WorkflowAiPickNode[] = [
     notes: '仅经网关或 generate3d',
   },
   {
-    id: 'http_video_bridge_upstream',
-    layer: 'supplier',
-    label: 'HTTP 生视频上游（VITE_WORKFLOW_VIDEO_API_URL）',
-    codeRefs: ['VITE_WORKFLOW_VIDEO_API_URL'],
-  },
-  {
     id: 'jimeng_warehouse',
     layer: 'gate',
     label: 'services/jimeng（catalog / adapter / client）',
@@ -208,9 +203,8 @@ export const WORKFLOW_AI_PICK_NODES: readonly WorkflowAiPickNode[] = [
       'services/jimeng/pickJimengBinding.ts',
       'services/modelRegistry/jimengImageRegistry.ts',
       'services/modelRegistry/jimengVideoRegistry.ts',
-      'services/modelRegistry/jimengDigitalHumanRegistry.ts',
     ],
-    notes: 'W0 warehouseOnly；图类经 pickBinding(role=image)；视频/数字人经 pickJimengBinding',
+    notes: 'W0 warehouseOnly；图类经 pickBinding(role=image)；视频经 pickJimengBinding；无数字人/无 legacy 直连',
   },
   {
     id: 'jimeng_server_proxy',
@@ -353,7 +347,7 @@ export const WORKFLOW_AI_EXECUTION_ENTRY_ROWS: readonly WorkflowAiExecutionEntry
     id: 'admin_route_test',
     entryLabel: '管理端 · Route Test / 可用性摘要',
     sourceRefs: ['components/admin/AdminProviderKeysPanel.tsx', 'server/ai-gateway/model-availability-summary.js'],
-    modalities: ['text', 'image', 'video', 'model3d', 'music'],
+    modalities: ['text', 'image', 'video', 'model3d'],
     routeStatus: 'admin_only',
     modelContract: 'canonical_model',
     contextContract: 'not_applicable',
@@ -379,7 +373,6 @@ export const WORKFLOW_AI_PICK_EDGES: readonly WorkflowAiPickEdge[] = [
   { id: 'edge_g3_tr', from: 'generate3d_module', to: 'tripo_service' },
   { id: 'edge_g3_tc', from: 'generate3d_module', to: 'tencent_service' },
   { id: 'edge_ug_vb', from: 'unified_ai_gateway', to: 'workflow_video_bridge' },
-  { id: 'edge_vb_http', from: 'workflow_video_bridge', to: 'http_video_bridge_upstream' },
   { id: 'edge_ug_jimeng', from: 'unified_ai_gateway', to: 'jimeng_warehouse' },
   { id: 'edge_jimeng_proxy', from: 'jimeng_warehouse', to: 'jimeng_server_proxy' },
   { id: 'edge_jimeng_volc', from: 'jimeng_server_proxy', to: 'volcengine_visual_upstream' },
@@ -406,9 +399,9 @@ export const WORKFLOW_AI_CARGO_ROWS: readonly WorkflowAiCargoRow[] = [
   {
     id: 'cargo_video',
     cargoLabel: '视频',
-    primaryGate: 'unifiedAiGateway.workflowGenerateVideo → workflowVideoBridge',
-    opsMeans: '构建变量 VITE_WORKFLOW_VIDEO_API_URL（尚无与 model-ops 同源 JSON）',
-    remark: '多供应商、异步形态见计划 §8',
+    primaryGate: 'unifiedAiGateway.workflowGenerateVideo → AI Gateway Job',
+    opsMeans: 'gatewayRouteConfigs + Key 池；默认 registry 如 jimeng-video-ti2v-v30-pro',
+    remark: 'HTTP 桥 VITE_WORKFLOW_VIDEO_API_URL 已下线用户路径',
   },
   {
     id: 'cargo_3d',
@@ -427,23 +420,16 @@ export const WORKFLOW_AI_CARGO_ROWS: readonly WorkflowAiCargoRow[] = [
   {
     id: 'cargo_jimeng_image',
     cargoLabel: '即梦 · 图（W0 仓库）',
-    primaryGate: 'unifiedAiGateway.workflowGenerateImageJimeng → pickBinding(role=image) → /api/jimeng',
+    primaryGate: 'unifiedAiGateway.workflowGenerateImageJimeng → AI Gateway jimeng-visual（Gateway-only）',
     opsMeans: 'catalog.ts + jimengImageRegistry；warehouseOnly；M1 运营 allowlist',
     remark: 'verified: jimeng-image-t2i-v40',
   },
   {
     id: 'cargo_jimeng_video',
     cargoLabel: '即梦 · 视频（W0 仓库）',
-    primaryGate: 'unifiedAiGateway.workflowGenerateVideoJimeng → pickJimengBinding(video)',
+    primaryGate: 'unifiedAiGateway.workflowGenerateVideoJimeng → AI Gateway jimeng-visual（Gateway-only）',
     opsMeans: 'jimengVideoRegistry；不经 geminiService',
     remark: 'verified: jimeng-video-ti2v-v30-pro',
-  },
-  {
-    id: 'cargo_jimeng_dh',
-    cargoLabel: '即梦 · 数字人（W0 仓库）',
-    primaryGate: 'unifiedAiGateway.workflowGenerateDigitalHumanJimeng → pickJimengBinding(digital_human)',
-    opsMeans: 'jimengDigitalHumanRegistry；asyncMode omnihuman_v1',
-    remark: 'W0 可 skip 冒烟；M1 generate_digital_human',
   },
 ];
 

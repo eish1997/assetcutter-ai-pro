@@ -99,6 +99,7 @@ describe('persistent AI gateway job store', () => {
     const store = createPersistentAiJobStore();
     const plan = createAiGatewayJobPlan({
       id: 'aijob_persist_3d',
+      provider: 'tripo',
       modality: 'model3d',
       input: {
         type: 'image_to_model',
@@ -191,5 +192,61 @@ describe('persistent AI gateway job store', () => {
     expect((await store.list({ limit: 10, provider: 'tripo' })).map((item) => item.job.id)).toEqual(['aijob_filter_model']);
     expect((await store.list({ limit: 10, modality: 'image' })).map((item) => item.job.id)).toEqual(['aijob_filter_image']);
     expect((await store.list({ limit: 10, q: 'upstream' })).map((item) => item.job.id)).toEqual(['aijob_filter_model']);
+  });
+
+  it('B7: filters JSON fallback lists by gatewayFailure stage/owner including __missing__', async () => {
+    const { createAiGatewayJobPlan } = await import('../server/ai-gateway/index.js');
+    const { createPersistentAiJobStore } = await import('../server/ai-gateway/persistent-job-store.js');
+    const store = createPersistentAiJobStore();
+    const upstream = createAiGatewayJobPlan(
+      {
+        id: 'aijob_fail_upstream',
+        modality: 'image',
+        model: 'gemini-3-pro-image-preview',
+        userId: 'user_fail_1',
+        input: { contents: [{ role: 'user', parts: [{ text: 'x' }] }] },
+      },
+      { nowIso: '2026-07-11T00:02:00.000Z' }
+    );
+    const bare = createAiGatewayJobPlan(
+      {
+        id: 'aijob_fail_bare',
+        modality: 'image',
+        model: 'gemini-3-pro-image-preview',
+        userId: 'user_fail_2',
+        input: { contents: [{ role: 'user', parts: [{ text: 'y' }] }] },
+      },
+      { nowIso: '2026-07-11T00:03:00.000Z' }
+    );
+    await store.put(upstream);
+    await store.put(bare);
+    await store.update('aijob_fail_upstream', {
+      status: 'failed',
+      error: { code: 'AI_GATEWAY_UPSTREAM_RATE_LIMITED', message: '429' },
+      metadata: {
+        gatewayFailure: {
+          stage: 'upstream',
+          owner: 'upstream',
+          code: 'AI_GATEWAY_UPSTREAM_RATE_LIMITED',
+        },
+      },
+    });
+    await store.update('aijob_fail_bare', {
+      status: 'failed',
+      error: { code: 'AI_GATEWAY_JOB_FAILED', message: 'bare' },
+    });
+
+    expect((await store.list({ limit: 10, failureStage: 'upstream' })).map((item) => item.job.id)).toEqual([
+      'aijob_fail_upstream',
+    ]);
+    expect((await store.list({ limit: 10, failureOwner: 'upstream' })).map((item) => item.job.id)).toEqual([
+      'aijob_fail_upstream',
+    ]);
+    expect((await store.list({ limit: 10, failureStage: '__missing__' })).map((item) => item.job.id)).toEqual([
+      'aijob_fail_bare',
+    ]);
+    expect((await store.list({ limit: 10, failureOwner: '__missing__' })).map((item) => item.job.id)).toEqual([
+      'aijob_fail_bare',
+    ]);
   });
 });

@@ -219,18 +219,6 @@ export const JIMENG_CATALOG: readonly JimengCatalogEntry[] = [
     asyncMode: "submit_poll",
     maxReferenceImages: 1,
   },
-
-  // §3.3 数字人
-  {
-    registryId: "jimeng-dh-omnihuman-v10",
-    label: "即梦 · OmniHuman 1.0",
-    modality: "digital_human",
-    upstreamReqKey: "omnihuman_v1",
-    docRef: "https://www.volcengine.com/docs/85621/1810469?lang=zh",
-    verified: false,
-    warehouseOnly: true,
-    asyncMode: "omnihuman_v1",
-  },
 ] as const;
 
 export type JimengCatalogRegistryId = (typeof JIMENG_CATALOG)[number]["registryId"];

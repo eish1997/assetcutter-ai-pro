@@ -122,11 +122,7 @@ describe('billingRoute', () => {
   });
 
   it('jimeng workflow kinds are platform', () => {
-    for (const jobKind of [
-      'workflow_jimeng_image',
-      'workflow_jimeng_video',
-      'workflow_jimeng_digital_human',
-    ]) {
+    for (const jobKind of ['workflow_jimeng_image', 'workflow_jimeng_video']) {
       const decision = resolveBillingRoute({ jobKind });
       expect(decision.routeKind).toBe('platform');
     }

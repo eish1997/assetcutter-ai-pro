@@ -85,6 +85,7 @@ describe('Tripo OpenAPI AI gateway worker', () => {
     const store = createInMemoryAiJobStore();
     const plan = await store.put(createAiGatewayJobPlan({
       id: 'aijob_tripo_1',
+      provider: 'tripo',
       modality: 'model3d',
       input: { prompt: 'small stylized crate', texture: true, estimatedCredits: 42 },
     }));
@@ -167,6 +168,7 @@ describe('Tripo OpenAPI AI gateway worker', () => {
     const store = createInMemoryAiJobStore();
     const plan = await store.put(createAiGatewayJobPlan({
       id: 'aijob_tripo_pending_artifact',
+      provider: 'tripo',
       modality: 'model3d',
       input: { prompt: 'small stylized crate' },
     }));
@@ -212,6 +214,7 @@ describe('Tripo OpenAPI AI gateway worker', () => {
     const store = createInMemoryAiJobStore();
     const plan = await store.put(createAiGatewayJobPlan({
       id: 'aijob_tripo_timeout',
+      provider: 'tripo',
       modality: 'model3d',
       input: { prompt: 'timeout crate' },
     }));
@@ -240,6 +243,7 @@ describe('Tripo OpenAPI AI gateway worker', () => {
   it('returns an explicit soft-cancel result when Tripo hard cancel is unavailable', async () => {
     const plan = createAiGatewayJobPlan({
       id: 'aijob_tripo_cancel',
+      provider: 'tripo',
       modality: 'model3d',
       input: { prompt: 'crate' },
       metadata: { tripoTaskId: 'tripo_task_cancel', upstreamTaskId: 'tripo_task_cancel' },
@@ -262,6 +266,7 @@ describe('Tripo OpenAPI AI gateway worker', () => {
     const store = createInMemoryAiJobStore();
     const plan = await store.put(createAiGatewayJobPlan({
       id: 'aijob_tripo_image',
+      provider: 'tripo',
       modality: 'model3d',
       input: {
         type: 'image_to_model',
@@ -303,6 +308,7 @@ describe('Tripo OpenAPI AI gateway worker', () => {
     const store = createInMemoryAiJobStore();
     const plan = await store.put(createAiGatewayJobPlan({
       id: 'aijob_tripo_image_retry',
+      provider: 'tripo',
       modality: 'model3d',
       input: {
         type: 'image_to_model',
@@ -358,6 +364,7 @@ describe('Tripo OpenAPI AI gateway worker', () => {
     const store = createInMemoryAiJobStore();
     const plan = await store.put(createAiGatewayJobPlan({
       id: 'aijob_tripo_image_r2',
+      provider: 'tripo',
       modality: 'model3d',
       input: {
         type: 'image_to_model',

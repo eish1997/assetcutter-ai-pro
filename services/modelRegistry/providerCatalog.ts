@@ -12,7 +12,7 @@ export type ProviderCatalogId =
   | "tripo"
   | "tencent-hunyuan";
 
-export type ProviderModality = "text" | "image" | "video" | "model3d" | "music" | "digital_human";
+export type ProviderModality = "text" | "image" | "video" | "model3d" | "music";
 
 export type ProviderAuthField = {
   key: string;
@@ -181,7 +181,7 @@ export const PROVIDER_CATALOG: readonly ProviderCatalogEntry[] = [
     id: "volcengine-jimeng",
     displayName: "火山引擎即梦",
     shortName: "即梦",
-    supportedModalities: ["image", "video", "digital_human"],
+    supportedModalities: ["image", "video"],
     authSchemes: [VOLCENGINE_AK_SK_SCHEME],
     homepageUrl: "https://www.volcengine.com/product/jimeng",
     consoleUrl: "https://console.volcengine.com/visual/overview",

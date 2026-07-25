@@ -17,7 +17,16 @@ describe('server AI gateway job planning', () => {
     });
 
     expect(() => createAiGatewayJobPlan({ modality: 'music', input: {} })).toThrow(AiGatewayRouteError);
-    expect(createAiGatewayJobPlan({ modality: 'video', input: { prompt: 'a product turntable' } })).toMatchObject({
+    expect(() => createAiGatewayJobPlan({ modality: 'video', input: { prompt: 'a product turntable' } })).toThrow(
+      AiGatewayRouteError
+    );
+    expect(
+      createAiGatewayJobPlan({
+        modality: 'video',
+        provider: 'volcengine-jimeng',
+        input: { registryId: 'jimeng-video-ti2v-v30-pro', prompt: 'a product turntable' },
+      })
+    ).toMatchObject({
       route: {
         providerId: 'volcengine-jimeng',
         workerId: 'video-worker',
@@ -32,12 +41,13 @@ describe('server AI gateway job planning', () => {
         },
       },
     });
-    expect(() => createAiGatewayJobPlan({ modality: 'model3d', input: {} })).toThrow('Tripo text_to_model requires input.prompt');
+    expect(() => createAiGatewayJobPlan({ modality: 'model3d', input: {} })).toThrow(AiGatewayRouteError);
   });
 
   it('plans model3d generation through Tripo OpenAPI', () => {
     const plan = createAiGatewayJobPlan({
       modality: 'model3d',
+      model: 'tripo-v2.0',
       input: {
         prompt: 'small low-poly sci-fi crate',
         texture: true,

@@ -30,19 +30,18 @@ describe('aiGatewayTrace', () => {
     expect(isAiGatewayJobTraceEnabled(false)).toBe(true);
   });
 
-  it('defaults Vertex image execution on while keeping an explicit off switch', () => {
+  it('image Gateway execution is always on (env opt-out removed)', () => {
     process.env.VITE_AI_GATEWAY_IMAGE_EXECUTION = '';
     expect(isAiGatewayImageExecutionEnabled(true)).toBe(true);
-    expect(isAiGatewayImageExecutionEnabled(false)).toBe(false);
+    expect(isAiGatewayImageExecutionEnabled(false)).toBe(true);
 
     process.env.VITE_AI_GATEWAY_IMAGE_EXECUTION = 'false';
-    expect(isAiGatewayImageExecutionEnabled(true)).toBe(false);
-
-    process.env.VITE_AI_GATEWAY_IMAGE_EXECUTION = 'vertex';
     expect(isAiGatewayImageExecutionEnabled(true)).toBe(true);
-    expect(isAiGatewayImageExecutionEnabled(false)).toBe(false);
-
-    process.env.VITE_AI_GATEWAY_IMAGE_EXECUTION = 'true';
+    process.env.VITE_AI_GATEWAY_IMAGE_EXECUTION = 'legacy';
+    expect(isAiGatewayImageExecutionEnabled(false)).toBe(true);
+    process.env.VITE_AI_GATEWAY_IMAGE_EXECUTION = 'proxy';
+    expect(isAiGatewayImageExecutionEnabled(true)).toBe(true);
+    process.env.VITE_AI_GATEWAY_IMAGE_EXECUTION = 'vertex';
     expect(isAiGatewayImageExecutionEnabled(false)).toBe(true);
   });
 

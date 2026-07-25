@@ -274,14 +274,24 @@ describe('AI Gateway route decision', () => {
     expect(catalogStatus).toBe('ready');
   });
 
-  it('createAiGatewayJobPlan always materializes from selectedRoute (no direct resolveAiProviderRoute)', async () => {
-    const bare = createAiGatewayJobPlan({
+  it('B2: createAiGatewayJobPlan materializes from selectedRoute / config; no cross-provider catalog pick', async () => {
+    expect(() =>
+      createAiGatewayJobPlan({
+        modality: 'video',
+        input: { prompt: 'a product turntable', durationSeconds: 1 },
+      })
+    ).toThrow(/No selectedRoute\/provider|AI_GATEWAY_NO_PROVIDER_ROUTE/);
+
+    const pinned = createAiGatewayJobPlan({
       modality: 'video',
+      provider: 'volcengine-jimeng',
       input: { prompt: 'a product turntable', durationSeconds: 1 },
     });
-    expect(bare.job.metadata.planRouteSource).toBe('runtime_catalog_only');
-    expect(bare.route.providerId).toBeTruthy();
-    expect(bare.route.adapterId).toBeTruthy();
+    expect(pinned.job.metadata.planRouteSource).toBe('explicit_provider_pin');
+    expect(pinned.route).toMatchObject({
+      providerId: 'volcengine-jimeng',
+      adapterId: 'jimeng-visual',
+    });
 
     const withModel = createAiGatewayJobPlan({
       modality: 'image',

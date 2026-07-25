@@ -14,7 +14,16 @@
 
 ### 1. 写聚合商配置（model-ops）
 
-在管理后台保存的 `model-ops-config` 中填写 `openAiCompatibleProviders`（或由后台表单写入），例如：
+在管理后台「OpenAI 兼容聚合商」表单填写（推荐），或直接写 `model-ops-config.openAiCompatibleProviders`：
+
+| 字段 | 说明 |
+| --- | --- |
+| providerId / 显示名 / baseURL | 必填身份与入口 |
+| 请求超时 ms | 单次 HTTP 超时 |
+| 异步 | 勾选后可填轮询间隔 / 轮询总超时 |
+| 模型映射 | 每行 `canonical=upstream`，或 JSON `{"canonical":"upstream"}` |
+
+示例：
 
 ```json
 {
@@ -24,7 +33,14 @@
       "label": "302.AI",
       "defaultBaseUrl": "https://api.302.ai/v1",
       "asyncCapable": true,
-      "timeouts": { "requestMs": 60000 }
+      "timeouts": {
+        "requestMs": 60000,
+        "pollIntervalMs": 2000,
+        "pollTimeoutMs": 600000
+      },
+      "modelMapping": {
+        "gpt-image-2": "gpt-image-1"
+      }
     }
   ],
   "providerOverrides": [
@@ -33,7 +49,7 @@
 }
 ```
 
-保存后服务端会调用 `applyOpenAiCompatibleProvidersFromOps`，**不会**新建 `xxx-adapter.js`。
+点「保存发布范围」后服务端会 `applyOpenAiCompatibleProvidersFromOps`，**不会**新建 `xxx-adapter.js`。
 
 ### 2. 挂 Key
 
@@ -64,7 +80,31 @@
 | **平台路由（默认）** | 工作流 / 能力块 / 统一生成入口 | 走 AI Gateway + 站点积分；本地陈旧 Key **不会**自动翻成 BYOK，也不会钉死自备供应商 |
 | **本地调试 / 自备 Key（显式）** | 仅「自备 Key」类工具或调用方传 `explicitByok: true` | 才按 BYOK 计费与 provider pin；用于排障或个人 Key 实验 |
 
-运营接聚合商时，用户侧默认应只看到平台路由结果；不要靠「用户本机填了 Key」来验证平台链路。
+运营接聚合商时，用户侧默认应只看到平台路由结果；不要靠「用户本机填了 Key」来验证平台链路。完整路径清单见 `docs/AI-Gateway-BYOK旁路审计表.md`（机器可读：`shared/aiGatewayByokPathAudit.ts`）。
+
+## 预发 302 真实冒烟门禁（B15）
+
+对预发环境跑 **Key Check → Route Check → Generation Test**（文本 + 图片）：
+
+```powershell
+$env:ADMIN_IDENTIFIER='...'
+$env:ADMIN_PASSWORD='...'
+# 可选：$env:AUTH_API_BASE='https://assetcutter-auth-api.onrender.com'
+# 可选：$env:AI_GATEWAY_302_TEXT_MODEL='gpt-4o-mini'
+# 可选：$env:AI_GATEWAY_302_IMAGE_MODEL='gpt-image-1.5'  # 须在发布白名单内
+npm run smoke:ai-gateway-302
+```
+
+**预发实测（2026-07-25）**：Key Check + Route + Generation 通过 — 文本 `gpt-4o-mini`、图片 `gpt-image-1.5`（`gpt-image-1` 未发布时会 400）。
+
+| 退出码 | 含义 |
+| --- | --- |
+| 0 | 通过；或 `AI_GATEWAY_302_SMOKE_OPTIONAL=1` 时缺凭据 SKIP |
+| 1 | Key/Route/Generation 失败 |
+| 2 | BLOCKED：缺管理员凭据或 Key 池无可用 `302ai` Key |
+
+仅检查门禁、不打真实 Generation：`npm run smoke:ai-gateway-302 -- --dry-run`。  
+CI 可选挂 `smoke:ai-gateway-302`（建议 `AI_GATEWAY_302_SMOKE_OPTIONAL=1` 除非预发已注入凭据）。
 
 ## 不要做的事
 

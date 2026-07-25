@@ -195,5 +195,54 @@ describe("model route catalog", () => {
         gatewayExecutionStatus: "ready",
       });
     });
+
+    it("B1: ops gatewayExecutionStatus ready overrides static adapter_pending", () => {
+      expect(
+        listModelRoutes("gemini-3-pro-preview").find((route) => route.providerId === "vertex-site")
+      ).toMatchObject({
+        gatewayExecutionStatus: "adapter_pending",
+      });
+      _setModelOpsConfigForTests({
+        version: 1,
+        gatewayRouteConfigs: [
+          {
+            canonicalModelId: "gemini-3-pro-preview",
+            providerId: "vertex-site",
+            modality: "text",
+            enabled: true,
+            gatewayExecutionStatus: "ready",
+          },
+        ],
+      });
+      expect(
+        listModelRoutes("gemini-3-pro-preview").find((route) => route.providerId === "vertex-site")
+      ).toMatchObject({
+        gatewayExecutionStatus: "ready",
+        executionStatus: "platform_ready",
+        enabled: true,
+      });
+    });
+
+    it("B1: ops row without status on non-seed route defaults to ready (matches materialize)", () => {
+      _setModelOpsConfigForTests({
+        version: 1,
+        gatewayRouteConfigs: [
+          {
+            canonicalModelId: "302ai-video-manual",
+            providerId: "302ai",
+            modality: "video",
+            enabled: true,
+            priority: 5,
+          },
+        ],
+      });
+      expect(
+        listModelRoutes("302ai-video-manual").find((route) => route.providerId === "302ai")
+      ).toMatchObject({
+        gatewayExecutionStatus: "ready",
+        enabled: true,
+        priority: 5,
+      });
+    });
   });
 });

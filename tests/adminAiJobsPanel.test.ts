@@ -172,6 +172,8 @@ describe('AdminAiJobsPanel helpers', () => {
         model: ' ',
         capability: ' model3d.generate ',
         q: ' upstream ',
+        failureStage: ' upstream ',
+        failureOwner: ' __missing__ ',
       })
     ).toEqual({
       status: 'failed',
@@ -181,6 +183,8 @@ describe('AdminAiJobsPanel helpers', () => {
       model: '',
       capability: 'model3d.generate',
       q: 'upstream',
+      failureStage: 'upstream',
+      failureOwner: '__missing__',
     });
   });
 

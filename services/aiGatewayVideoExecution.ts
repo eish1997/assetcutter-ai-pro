@@ -22,9 +22,8 @@ function readEnv(name: string): string {
   }
 }
 
+/** Always on — workflow video is Gateway-only (no HTTP bridge fallback). */
 export function isAiGatewayVideoExecutionEnabled(): boolean {
-  const raw = readEnv('VITE_AI_GATEWAY_VIDEO_EXECUTION');
-  if (/^(0|false|off|no)$/i.test(raw)) return false;
   return true;
 }
 
@@ -116,9 +115,6 @@ function terminalError(detail: AiJobDetail): Error {
 export async function createAndPollAiGatewayVideoJob(
   input: AiGatewayVideoExecutionInput
 ): Promise<WorkflowVideoJobResult> {
-  if (!isAiGatewayVideoExecutionEnabled()) {
-    throw new Error('AI Gateway video execution is disabled');
-  }
   const estimatedCredits = Math.max(1, Math.floor(Number(input.estimatedCredits || 50)));
   const cachedHeaders = getCachedCreditsProxyHeaders(estimatedCredits) || {};
   const registryId = input.registryId || 'jimeng-video-ti2v-v30-pro';

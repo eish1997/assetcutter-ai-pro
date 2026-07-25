@@ -1,7 +1,7 @@
 import { createAiJobDraft } from './job.js';
 import {
+  AiGatewayRouteError,
   materializeAiProviderRouteFromSelectedRoute,
-  pickDefaultSelectedRouteForJob,
 } from './provider-router.js';
 import { buildAiGatewayWorkerRequest } from './workers/registry.js';
 import {
@@ -108,13 +108,19 @@ export function createAiGatewayJobPlan(input, options = {}) {
     const derived = selectedRouteFromExecutableModelTable(job, opsControl, options.modelOpsConfig);
     selectedRoute = derived.selectedRoute;
     modelRouteInference = derived.modelRouteInference;
-    planRouteSource = selectedRoute ? 'gateway_route_config_source' : null;
+    if (selectedRoute) {
+      planRouteSource = modelRouteInference || resolveRequestedModelId(job)
+        ? 'gateway_route_config_source'
+        : 'explicit_provider_pin';
+    }
   }
 
   if (!selectedRoute?.providerId) {
-    // Bare modality/capability smoke plans: one catalog pick expressed as selectedRoute, then materialize only.
-    selectedRoute = pickDefaultSelectedRouteForJob(job, options.routes, opsControl);
-    planRouteSource = 'runtime_catalog_only';
+    // B2: never rank providers from DEFAULT_AI_PROVIDER_ROUTES. Only materialize when provider is known.
+    throw new AiGatewayRouteError(
+      'No selectedRoute/provider for job plan (run resolveAiGatewayRouteDecision or set model/provider)',
+      'AI_GATEWAY_NO_PROVIDER_ROUTE'
+    );
   }
 
   const providerId = normalizeAiGatewayProviderId(selectedRoute.providerId) || selectedRoute.providerId;
@@ -151,6 +157,7 @@ export function createAiGatewayJobPlan(input, options = {}) {
 export { createAiJobDraft, normalizeAiJobModality, AiGatewayValidationError } from './job.js';
 export {
   resolveAiProviderRoute,
+  lookupRuntimeAdapterDefaults,
   materializeAiProviderRouteFromSelectedRoute,
   pickDefaultSelectedRouteForJob,
   enrichSelectedRouteWithRuntimeDefaults,

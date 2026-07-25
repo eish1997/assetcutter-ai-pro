@@ -6,7 +6,6 @@ import {
   getDialogTextResponse,
   detectObjectsInImage,
   DEFAULT_PROMPTS,
-  WorkflowVideoNotAvailableError,
   isWorkflowVideoAvailable,
   PRO_VIEW_IDS,
   startTencent3DProJob,
@@ -19,6 +18,18 @@ vi.mock("../services/aiDispatchGate", () => ({
     jobKind: params.jobKind,
     registryId: params.jobKind,
     role: "text",
+    platformReserve: {
+      estimatedCredits: 10,
+      release: vi.fn(async () => undefined),
+    },
+  })),
+}));
+
+vi.mock("../services/aiGatewayVideoExecution", () => ({
+  isAiGatewayVideoExecutionEnabled: () => true,
+  createAndPollAiGatewayVideoJob: vi.fn(async () => ({
+    videoUrl: "https://cdn.example.com/v.mp4",
+    providerId: "volcengine-jimeng",
   })),
 }));
 
@@ -46,8 +57,9 @@ describe("unifiedAiGateway", () => {
     expect(typeof DEFAULT_PROMPTS).toBe("object");
   });
 
-  it("workflowGenerateVideo throws when VITE_WORKFLOW_VIDEO_API_URL 未配置", async () => {
-    expect(isWorkflowVideoAvailable()).toBe(false);
-    await expect(workflowGenerateVideo({ prompt: "test" })).rejects.toThrow(WorkflowVideoNotAvailableError);
+  it("workflowGenerateVideo uses AI Gateway Job (no HTTP bridge)", async () => {
+    expect(isWorkflowVideoAvailable()).toBe(true);
+    const out = await workflowGenerateVideo({ prompt: "test" });
+    expect(out.videoUrl).toContain("cdn.example.com");
   });
 });

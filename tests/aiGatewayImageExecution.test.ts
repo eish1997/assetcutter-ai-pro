@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+﻿import { afterEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../services/aiJobsClient', () => ({
   createAiJob: vi.fn(),
@@ -16,8 +16,15 @@ describe('aiGatewayImageExecution', () => {
     else process.env.VITE_AI_GATEWAY_IMAGE_EXECUTION = prev;
   });
 
-  it('honors the explicit frontend execution off switch', async () => {
+  it('still creates Gateway jobs when env would formerly opt out', async () => {
     process.env.VITE_AI_GATEWAY_IMAGE_EXECUTION = 'false';
+    vi.mocked(createAiJob).mockResolvedValue({
+      job: {
+        id: 'aijob_1',
+        status: 'queued',
+        proxyJobId: 'gemini_job_1',
+      },
+    } as Awaited<ReturnType<typeof createAiJob>>);
     await expect(
       createAiGatewayImageExecutionJob({
         model: 'gemini-3.1-flash-image',
@@ -25,12 +32,15 @@ describe('aiGatewayImageExecution', () => {
         estimatedCredits: 50,
         useVertex: true,
       })
-    ).resolves.toBeNull();
-    expect(createAiJob).not.toHaveBeenCalled();
+    ).resolves.toMatchObject({
+      aiGatewayJobId: 'aijob_1',
+      proxyJobId: 'gemini_job_1',
+    });
+    expect(createAiJob).toHaveBeenCalled();
   });
 
   it('returns the gateway and proxy job ids when auth-api hands off execution', async () => {
-    process.env.VITE_AI_GATEWAY_IMAGE_EXECUTION = 'vertex';
+    process.env.VITE_AI_GATEWAY_IMAGE_EXECUTION = 'true';
     vi.mocked(createAiJob).mockResolvedValue({
       job: {
         id: 'aijob_1',
@@ -44,7 +54,7 @@ describe('aiGatewayImageExecution', () => {
         model: 'gemini-3.1-flash-image',
         contents: [{ role: 'user', parts: [{ text: 'draw' }] }],
         estimatedCredits: 50,
-        useVertex: true,
+        useVertex: false,
       })
     ).resolves.toMatchObject({
       aiGatewayJobId: 'aijob_1',
@@ -65,5 +75,20 @@ describe('aiGatewayImageExecution', () => {
       }),
       expect.objectContaining({ cache: 'no-store' })
     );
+  });
+
+  it('default empty env still creates Gateway jobs for non-vertex', async () => {
+    process.env.VITE_AI_GATEWAY_IMAGE_EXECUTION = '';
+    vi.mocked(createAiJob).mockResolvedValue({
+      job: { id: 'aijob_2', status: 'queued', proxyJobId: 'gemini_job_2' },
+    } as Awaited<ReturnType<typeof createAiJob>>);
+    await expect(
+      createAiGatewayImageExecutionJob({
+        model: 'gemini-3.1-flash-image',
+        contents: [],
+        useVertex: false,
+      })
+    ).resolves.toMatchObject({ aiGatewayJobId: 'aijob_2' });
+    expect(createAiJob).toHaveBeenCalled();
   });
 });

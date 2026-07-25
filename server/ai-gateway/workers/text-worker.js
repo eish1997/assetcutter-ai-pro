@@ -28,8 +28,15 @@ export const textWorker = Object.freeze({
     }
     return startAiWorkerProxyExecution(plan, options);
   },
-  async cancel() {
-    return { cancelled: false, mode: 'soft', reason: 'legacy_adapter_cancel_not_supported' };
+  async cancel(plan) {
+    const { softAiGatewayCancelResult } = await import('../cancel-result.js');
+    return softAiGatewayCancelResult({
+      reason: 'legacy_adapter_cancel_not_supported',
+      cancelReason: 'legacy_adapter_cancel_not_supported',
+      upstreamTaskId: plan?.job?.metadata?.upstreamTaskId || plan?.job?.metadata?.proxyJobId || null,
+      provider: plan?.route?.providerId || plan?.job?.provider || null,
+      adapterId: plan?.route?.adapterId || null,
+    });
   },
   estimateCost() {
     return null;

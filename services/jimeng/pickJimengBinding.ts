@@ -7,11 +7,11 @@ export type JimengBinding = {
 };
 
 /**
- * 视频 / 数字人专用选线（不经 pickBinding / geminiService）。
+ * 视频专用选线（不经 pickBinding / geminiService）。
  * 图类 jimeng SKU 仍走 pickBinding(role=image)。
  */
 export function pickJimengBinding(
-  modality: Extract<JimengModality, "video" | "digital_human">,
+  modality: Extract<JimengModality, "video">,
   registryId: string
 ): JimengBinding | null {
   const id = String(registryId || "").trim();

@@ -109,6 +109,32 @@ describe('AdminProviderKeysPanel route override helpers', () => {
     );
   });
 
+  it('B5: normalize keeps modelMapping and poll timeouts', () => {
+    const rows = __adminProviderKeysPanelTestUtils.normalizeOpenAiCompatibleProviderRows([
+      {
+        providerId: '302ai',
+        label: '302.AI',
+        defaultBaseUrl: 'https://api.302.ai/v1',
+        asyncCapable: true,
+        timeouts: { requestMs: 60_000, pollIntervalMs: 2_000, pollTimeoutMs: 600_000 },
+        modelMapping: { 'gpt-image-2': 'gpt-image-1', '': 'skip', bad: '' },
+      },
+    ]);
+    expect(rows).toEqual([
+      expect.objectContaining({
+        providerId: '302ai',
+        timeouts: { requestMs: 60_000, pollIntervalMs: 2_000, pollTimeoutMs: 600_000 },
+        modelMapping: { 'gpt-image-2': 'gpt-image-1' },
+      }),
+    ]);
+    expect(
+      __adminProviderKeysPanelTestUtils.parseOpenAiCompatibleModelMappingText('gpt-image-2=gpt-image-1\n# c\na:b')
+    ).toEqual({ 'gpt-image-2': 'gpt-image-1', a: 'b' });
+    expect(
+      __adminProviderKeysPanelTestUtils.formatOpenAiCompatibleModelMappingText({ z: '2', a: '1' })
+    ).toBe('a=1\nz=2');
+  });
+
   it('A1: mergeGatewayRouteConfigs writes priority/enabled into gatewayRouteConfigs', () => {
     const route = listModelRoutes().find((item) => item.channel && (item.modality === 'text' || item.modality === 'image'));
     if (!route?.channel) throw new Error('No route for gatewayRouteConfigs merge test');

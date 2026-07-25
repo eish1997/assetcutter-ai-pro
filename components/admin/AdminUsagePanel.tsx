@@ -128,7 +128,9 @@ const TrendUsageRows: React.FC<{ rows: AiGatewayTrendUsageBucket[]; title: strin
           </div>
           <div className="text-right text-gray-300">
             <div>{shortMoney(row.totalCostUsdEst)}</div>
-            <div className="mt-0.5 text-gray-600">成本</div>
+            <div className="mt-0.5 text-gray-600">
+              已定价 {shortMoney(row.totalCostUsdPriced || 0)} / 估算 {shortMoney(row.totalCostUsdEstimated || 0)}
+            </div>
           </div>
           <div className="text-right text-gray-400">
             <div>{Math.round(row.totalQuantity)}</div>
@@ -299,7 +301,7 @@ const AdminUsagePanel: React.FC = () => {
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
+          <div className="grid grid-cols-2 gap-2 lg:grid-cols-5">
             <div className="rounded-xl border border-[#2e2e32] bg-[#121214] p-3">
               <p className="text-[10px] text-gray-500">任务成功率</p>
               <p className="mt-1 text-[16px] font-semibold text-emerald-200">
@@ -314,6 +316,14 @@ const AdminUsagePanel: React.FC = () => {
               <p className="text-[10px] text-gray-500">扣费积分</p>
               <p className="mt-1 text-[16px] font-semibold text-amber-200">
                 {fmtCredits(trendReport.usage.totals.totalCreditsCharged)}
+              </p>
+            </div>
+            <div className="rounded-xl border border-[#2e2e32] bg-[#121214] p-3">
+              <p className="text-[10px] text-gray-500">成本（已定价 / 估算）</p>
+              <p className="mt-1 text-[13px] font-semibold text-gray-200">
+                {shortMoney(trendReport.usage.totals.totalCostUsdPriced || 0)}
+                <span className="mx-1 text-gray-600">/</span>
+                <span className="text-amber-200/90">{shortMoney(trendReport.usage.totals.totalCostUsdEstimated || 0)}</span>
               </p>
             </div>
             <div className="rounded-xl border border-[#2e2e32] bg-[#121214] p-3">
@@ -364,7 +374,8 @@ const AdminUsagePanel: React.FC = () => {
                     <th className="px-3 py-2 text-right font-medium">429</th>
                     <th className="px-3 py-2 text-right font-medium">用量事件</th>
                     <th className="px-3 py-2 text-right font-medium">积分</th>
-                    <th className="px-3 py-2 text-right font-medium">成本</th>
+                    <th className="px-3 py-2 text-right font-medium">已定价</th>
+                    <th className="px-3 py-2 text-right font-medium">估算</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -379,13 +390,14 @@ const AdminUsagePanel: React.FC = () => {
                         <td className="px-3 py-2 text-right text-amber-200">{jobDay.rateLimited}</td>
                         <td className="px-3 py-2 text-right">{usageDay?.eventCount || 0}</td>
                         <td className="px-3 py-2 text-right text-amber-200">{fmtCredits(usageDay?.totalCreditsCharged || 0)}</td>
-                        <td className="px-3 py-2 text-right">{shortMoney(usageDay?.totalCostUsdEst || 0)}</td>
+                        <td className="px-3 py-2 text-right text-gray-200">{shortMoney(usageDay?.totalCostUsdPriced || 0)}</td>
+                        <td className="px-3 py-2 text-right text-amber-200/80">{shortMoney(usageDay?.totalCostUsdEstimated || 0)}</td>
                       </tr>
                     );
                   })}
                   {!trendReport.jobs.byDay.length ? (
                     <tr>
-                      <td colSpan={8} className="px-3 py-8 text-center text-gray-600">暂无趋势数据</td>
+                      <td colSpan={9} className="px-3 py-8 text-center text-gray-600">暂无趋势数据</td>
                     </tr>
                   ) : null}
                 </tbody>

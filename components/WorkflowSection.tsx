@@ -3350,8 +3350,7 @@ ${lineSvg}
   }, [pending, setAssets, setPending]);
 
   const runTask = useCallback(async (
-    task: WorkflowPendingTask,
-    batchGroup?: { key: string; expected: number }
+    task: WorkflowPendingTask
   ): Promise<{
     image: string | null;
     text?: string;
@@ -3791,7 +3790,6 @@ ${lineSvg}
             {
               inputText,
               ...(resolvedInputImagesForExecute ? { inputImages: resolvedInputImagesForExecute } : {}),
-              ...(batchGroup ? { batchGroupKey: batchGroup.key, batchGroupExpected: batchGroup.expected } : {}),
             }
           );
           if (cancelledTaskIdsRef.current.has(task.id)) {
@@ -4276,11 +4274,12 @@ ${lineSvg}
       setExecuting(true);
       setExecutingQueue({ total: queue.length, tasks: [...queue] });
       const workflowMaxConcurrency = getWorkflowMaxConcurrency();
+      /** 生图并发（BATCH_BOX_SIZE，非 HTTP async-batch） */
       const imageBatchWorkersDirect = getGeminiImageBatchBoxSizeForCurrentProvider();
       const imageBatchWorkersUnderstand = getWorkflowUnderstandImageConcurrency();
       onLog?.(
         'info',
-        `开始执行队列（${queue.length} 项，常规并发 ${workflowMaxConcurrency}，生图直发并发 ${imageBatchWorkersDirect}，生图理解并发 ${imageBatchWorkersUnderstand}）`
+        `开始执行队列（${queue.length} 项，常规并发 ${workflowMaxConcurrency}，生图并发 ${imageBatchWorkersDirect}，生图理解并发 ${imageBatchWorkersUnderstand}）`
       );
       onLog?.(
         'info',
@@ -4288,12 +4287,9 @@ ${lineSvg}
       );
 
       const total = queue.length;
-      const logBatch = `[${total}项·常规≤${workflowMaxConcurrency}/直发≤${imageBatchWorkersDirect}/理解≤${imageBatchWorkersUnderstand}]`;
+      const logBatch = `[${total}项·常规≤${workflowMaxConcurrency}/生图≤${imageBatchWorkersDirect}/理解≤${imageBatchWorkersUnderstand}]`;
 
-      const processTask = async (
-        task: WorkflowPendingTask,
-        batchGroup?: { key: string; expected: number }
-      ) => {
+      const processTask = async (task: WorkflowPendingTask) => {
         let balanceBeforeTask: number | null = null;
         const taskModForCredits = getModule(task.actionType);
         const taskBranchForCredits = classifyWorkflowRunTaskBranch({
@@ -4503,7 +4499,7 @@ ${lineSvg}
               videoProviderId,
               vgpSteps,
               geminiRecoveryJobId,
-            } = await runTaskRef.current(task, batchGroup);
+            } = await runTaskRef.current(task);
             if (isTaskCancelled()) {
               skipCancelledWrite();
               return;
@@ -4794,26 +4790,7 @@ ${lineSvg}
             : imageBatchWorkersDirect;
           const chunkSize = leadTaskIsGenImage ? imageBatchWorkers : BASE_MAX_CONCURRENCY;
           const chunk = queue.slice(i, i + chunkSize);
-          const genImageTasks = chunk.filter((task) => {
-            if (task.actionType === 'cut_image' || task.actionType.startsWith(SET_ACTION_PREFIX)) return false;
-            const mod = getModule(task.actionType);
-            return !!mod && getCapabilityEngine(mod) === 'gen_image';
-          });
-          const batchGroup =
-            genImageTasks.length > 1
-              ? { key: `wf-batch-${Date.now()}-${i}`, expected: genImageTasks.length }
-              : undefined;
-          await Promise.all(
-            chunk.map((task) =>
-              processTask(
-                task,
-                batchGroup &&
-                  genImageTasks.some((x) => x.id === task.id)
-                  ? batchGroup
-                  : undefined
-              )
-            )
-          );
+          await Promise.all(chunk.map((task) => processTask(task)));
           i += chunk.length;
         }
         onLog?.('info', '队列执行完成');
@@ -15556,7 +15533,8 @@ ${lineSvg}
                   >
                     {lightboxModelPersistLabel}
                   </span>
-                ) : null}
+                ) : null}
+
                 {lightboxTencentRehydrateCtx ? (
                   <button
                     type="button"

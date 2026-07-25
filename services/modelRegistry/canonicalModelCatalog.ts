@@ -52,9 +52,8 @@ const JIMENG_WORKSPACE_READY_IDS = new Set([
 const JIMENG_CANONICAL_MODELS: CanonicalModelCatalogEntry[] = JIMENG_CATALOG.map((row) => ({
   canonicalModelId: row.registryId,
   label: row.label,
-  modality: row.modality === "digital_human" ? "digital_human" : row.modality,
-  category:
-    row.modality === "video" ? "video_generation" : row.modality === "digital_human" ? "digital_human" : "image_generation",
+  modality: row.modality,
+  category: row.modality === "video" ? "video_generation" : "image_generation",
   visibleInWorkspace: JIMENG_WORKSPACE_READY_IDS.has(row.registryId),
   supportedWorkflows: row.modality === "video" ? ["workflow"] : ["warehouse", "workflow"],
   status: row.verified ? "published" : "draft",

@@ -7,7 +7,6 @@ import { assertAiWorkerProxyCreditsGate } from './ai-worker-proxy-credits-gate.j
 const REGISTRY_MIN_CREDITS = {
   'jimeng-image-t2i-v40': 50,
   'jimeng-video-ti2v-v30-pro': 250,
-  'jimeng-dh-omnihuman-v10': 350,
 };
 
 /**
@@ -18,7 +17,6 @@ export function estimatedCreditsForJimengRegistry(registryId) {
   const id = String(registryId || '').trim();
   if (REGISTRY_MIN_CREDITS[id] != null) return REGISTRY_MIN_CREDITS[id];
   if (id.startsWith('jimeng-video')) return 250;
-  if (id.startsWith('jimeng-dh')) return 350;
   if (id.startsWith('jimeng-image')) return 50;
   return 50;
 }

@@ -34,7 +34,6 @@ import {
 import type { UsageGeminiMetadata } from "../shared/usageBilling";
 import { proxyGateMinCreditsForJob } from "../shared/credits";
 import { apiUrl, authApiRelayConfigured, devUsesRemoteAuthViaViteProxy, resolvedAuthApiBaseUrl } from "./apiBase";
-import { HttpRequestError } from "./httpClient";
 import {
   getCachedCreditsProxyHeaders,
   getCreditsProxyRequestHeaders,
@@ -91,6 +90,7 @@ import {
 import {
   buildAiGatewayImageJobTraceBody,
   extractAiGatewayTraceJobId,
+  isAiGatewayImageExecutionEnabled,
   isAiGatewayJobTraceEnabled,
 } from "./aiGatewayTrace";
 import { createAiGatewayImageExecutionJob } from "./aiGatewayImageExecution";
@@ -108,23 +108,6 @@ import {
   collectRemoteAiWorkerProxyOriginsFromEnv,
   DEFAULT_AI_WORKER_PROXY_ORIGIN,
 } from "./aiWorkerProxyForwardDevOrigins";
-
-const AI_GATEWAY_GOVERNANCE_ERROR_CODES = new Set([
-  'AI_GATEWAY_MODEL_NOT_PUBLISHED',
-  'AI_GATEWAY_MODEL_ADAPTER_PENDING',
-  'AI_GATEWAY_MODEL_ROUTE_NOT_FOUND',
-  'AI_GATEWAY_MODEL_ROUTE_NOT_EXECUTABLE',
-  'AI_GATEWAY_PROVIDER_KEY_UNAVAILABLE',
-  'AI_GATEWAY_PROVIDER_KEY_MISSING',
-  'AI_GATEWAY_PROVIDER_PAUSED',
-  'AI_GATEWAY_MODEL_PAUSED',
-  'AI_GATEWAY_NO_PROVIDER_ROUTE',
-]);
-
-function isAiGatewayGovernanceError(error: unknown): boolean {
-  if (!(error instanceof HttpRequestError)) return false;
-  return Boolean(error.code && AI_GATEWAY_GOVERNANCE_ERROR_CODES.has(error.code));
-}
 
 export {
   resolveUpstreamImageModelId,
@@ -353,11 +336,9 @@ const GEMINI_QUEUE_PROGRESS_DISPATCH_MS = 8000;
 const FAIRNESS_CREATE_MAX_RETRIES = 5;
 /** 与 proxy 侧 GEMINI_ASYNC_JOB_MAX_WAIT_MS（默认 300s）对齐，避免前端提前超时 */
 const GEMINI_ASYNC_CLIENT_MAX_POLL_MS = 300_000;
-/** 生图阶段「盒子批处理」：凑满后一次发给 proxy（默认试用=3、Vertex=4，可用环境变量调整） */
+/** 生图并发上限（工作流 chunk 并发；默认试用=3、Vertex=4，可用环境变量调整） */
 const GEMINI_IMAGE_BATCH_BOX_SIZE_DEFAULT = 3;
 const GEMINI_IMAGE_BATCH_BOX_SIZE_VERTEX_DEFAULT = 4;
-const GEMINI_IMAGE_BATCH_FLUSH_MS = 30;
-const GEMINI_IMAGE_BATCH_GROUP_WAIT_MS = 8_000;
 
 function readEnvNumber(key: string): number | null {
   try {
@@ -1181,9 +1162,9 @@ async function aiWorkerProxyGenerateContentAsync(args: {
   try {
   const asyncCreateUrl = aiWorkerProxyApiUrl("/proxy/gemini/async");
   assertDevAiWorkerProxyCreditsAuthAligned(asyncCreateUrl);
-  const gatewayExecution = await (async () => {
-    try {
-      return await createAiGatewayImageExecutionJob({
+  const gatewayEnabled = isAiGatewayImageExecutionEnabled(useVertexBackend);
+  const gatewayExecution = gatewayEnabled
+    ? await createAiGatewayImageExecutionJob({
         model: args.model,
         contents: args.contents,
         config: safeConfig,
@@ -1191,42 +1172,25 @@ async function aiWorkerProxyGenerateContentAsync(args: {
         estimatedCredits: gateCredits,
         useVertex: useVertexBackend,
         abortSignal,
-      });
-    } catch (error) {
-      if (isAbortError(error)) throw error;
-      if (isAiGatewayGovernanceError(error)) throw error;
-      logAiPipelineDev('warn', {
-        step: 'image_create',
-        code: 'AI_GATEWAY_EXECUTION_FALLBACK',
-        raw: String((error as Error)?.message || error),
-      });
-      return null;
-    }
-  })();
+      })
+    : null;
   let aiGatewayTraceJobId: string | null = gatewayExecution?.aiGatewayJobId || null;
-  if (gatewayExecution && !gatewayExecution.proxyJobId) {
-    logAiPipelineDev('warn', {
-      step: 'image_create',
-      code: 'AI_GATEWAY_EXECUTION_NO_PROXY_JOB',
-      raw: `job=${gatewayExecution.aiGatewayJobId || ''}; status=${gatewayExecution.createStatus}`,
-    });
+  if (gatewayEnabled && !gatewayExecution) {
+    throw new Error("AI Gateway image execution unavailable");
   }
-  if (!aiGatewayTraceJobId) {
-    aiGatewayTraceJobId = await createAiGatewayImageJobTrace({
-      model: args.model,
-      contents: args.contents,
-      config: safeConfig,
-      registryId: bindingRegistryId,
-      estimatedCredits: gateCredits,
-      useVertex: useVertexBackend,
-      abortSignal,
-    });
+  if (gatewayExecution && !gatewayExecution.proxyJobId) {
+    throw new Error(
+      `AI Gateway image job missing proxy handoff (job=${gatewayExecution.aiGatewayJobId || ""}; status=${gatewayExecution.createStatus})`
+    );
   }
   let jobId = gatewayExecution?.proxyJobId || "";
   let createStatus = gatewayExecution?.proxyJobId
     ? `ai-gateway:${gatewayExecution.createStatus}`
     : "";
   if (!jobId) {
+  if (gatewayEnabled) {
+    throw new Error("AI Gateway image job missing proxyJobId; refusing legacy /proxy/gemini/async fallback");
+  }
   const createBody = JSON.stringify({
     model: args.model,
     contents: args.contents,
@@ -1345,287 +1309,6 @@ async function aiWorkerProxyGenerateContentAsync(args: {
       await releaseCreditsProxyReserve();
     }
   }
-}
-
-async function aiWorkerProxyGenerateContentBatchAsync(args: {
-  items: Array<{ model: string; contents: unknown; config?: Record<string, unknown> }>;
-  aiBackend?: "vertex";
-}): Promise<Array<{ ok: boolean; result?: { text?: string; candidates?: unknown[] }; error?: string }>> {
-  if (!Array.isArray(args.items) || args.items.length === 0) return [];
-  await ensureAiWorkerProxySessionHint();
-  const batchGateCredits = proxyGateMinCreditsForJob("workflow_text_to_image");
-  try {
-  const create = await aiWorkerProxyFetchCreateWithFairnessRetry(aiWorkerProxyApiUrl("/proxy/gemini/async-batch"), {
-    method: "POST",
-    headers: { "Content-Type": "application/json", ...(await aiWorkerProxyAdmissionHeaders(batchGateCredits)) },
-    body: JSON.stringify({
-      items: args.items.map((item) => ({
-        model: item.model,
-        contents: item.contents,
-        config: item.config || {},
-      })),
-      ...(args.aiBackend ? { aiBackend: args.aiBackend } : {}),
-      estimatedCredits: batchGateCredits,
-    }),
-    cache: "no-store",
-  });
-  if (!create.ok) {
-    const rawBatch = (create.text || "").trim();
-    const fairnessErr = tryParseAiWorkerProxyFairnessRejected(create.status, rawBatch);
-    if (fairnessErr) throwFairnessRejected(fairnessErr);
-    throw new Error(
-      parseAiWorkerProxyCreateError(create.status, rawBatch, aiWorkerProxyApiUrl("/proxy/gemini/async-batch")) ||
-        `Gemini 批量异步任务创建失败（${create.status}）`
-    );
-  }
-  let jobId: string;
-  let createStatus: string;
-  try {
-    const parsed = parseAsyncCreateBody(create.text);
-    jobId = parsed.jobId;
-    createStatus = parsed.createStatus;
-  } catch {
-    throw new Error("批量异步任务响应无效");
-  }
-  if (!jobId) throw new Error("批量异步任务未返回 jobId");
-  dispatchGeminiQueueHint({
-    kind: "job_submitted",
-    jobId,
-    createStatus,
-    batchSize: args.items.length,
-  });
-
-  const deadline = Date.now() + GEMINI_ASYNC_CLIENT_MAX_POLL_MS;
-  const tracker = createGeminiAsyncPollTracker();
-  while (Date.now() < deadline) {
-    const pollRes = await aiWorkerProxyFetchOrExplain(aiWorkerProxyApiUrl(`/proxy/gemini/async-batch/${encodeURIComponent(jobId)}`), {
-      cache: "no-store",
-    });
-    const pollText = await pollRes.text();
-    if (!pollRes.ok) {
-      const pt = (pollText || "").trim();
-      const fe = tryParseAiWorkerProxyFairnessRejected(pollRes.status, pt);
-      if (fe) throwFairnessRejected(fe);
-      if (isGeminiAsyncJobNotFoundPoll(pollRes.status, pt)) {
-        throw new AiPipelineStepError(
-          "image_poll",
-          "ASYNC_JOB_NOT_FOUND",
-          geminiAsyncJobNotFoundUserMessage()
-        );
-      }
-      throw new AiPipelineStepError(
-        "image_poll",
-        "ASYNC_POLL_HTTP",
-        parseAiWorkerProxyErrorBody(pt) || `批量任务轮询失败（${pollRes.status}）`
-      );
-    }
-    let j: GeminiAsyncPollBody;
-    try {
-      j = JSON.parse(pollText) as GeminiAsyncPollBody;
-    } catch {
-      throw new Error("批量轮询响应无效");
-    }
-    if (j.status === "completed") {
-      const items = Array.isArray(j.result?.items) ? j.result!.items! : [];
-      emitGeminiAsyncDoneNoQueueHint(jobId, tracker);
-      for (let idx = 0; idx < items.length; idx += 1) {
-        const it = items[idx];
-        const row = it as {
-          ok?: boolean;
-          result?: { text?: string; candidates?: unknown[]; usageMetadata?: UsageGeminiMetadata };
-          error?: string;
-        };
-        if (row?.ok !== true || !row.result) continue;
-        const bindingRegistryId = String(args.items[idx]?.model || "").trim();
-        if (!bindingRegistryId) continue;
-        const imageRole = isLikelyImageRegistryId(bindingRegistryId);
-        const useVertex = aiWorkerProxyUsesVertexBackend(bindingRegistryId, imageRole ? "image" : "text");
-        const meterArgs = {
-          jobId: `${jobId}:${idx}`,
-          model: args.items[idx]!.model,
-          registryId: bindingRegistryId,
-          useVertex,
-          proxyResult: row.result,
-          usageMetadata: row.result.usageMetadata,
-          jobKind: imageRole ? "workflow_image" : "workflow_chat",
-        };
-        if (peekCreditsPrechargeSession()) {
-          await emitAiWorkerProxyMeteredUsage(meterArgs);
-        } else {
-          settleAiWorkerProxyMeteredUsageAfterDelivery(meterArgs);
-        }
-      }
-      return items.map((it) => {
-        const row = it as { ok?: boolean; result?: { text?: string; candidates?: unknown[] }; error?: string };
-        return {
-          ok: row?.ok === true,
-          ...(row?.result ? { result: row.result } : {}),
-          ...(row?.error ? { error: String(row.error) } : {}),
-        };
-      });
-    }
-    if (j.status === "failed") {
-      throw new Error(j.error || "Gemini 批量任务失败");
-    }
-    handleGeminiAsyncPollWaitState(jobId, j, tracker);
-    await sleepWithAbort(GEMINI_ASYNC_POLL_MS);
-  }
-  throw new Error(`等待 Gemini 批量结果超时（>${GEMINI_ASYNC_CLIENT_MAX_POLL_MS}ms），请稍后重试`);
-  } finally {
-    if (!peekCreditsPrechargeSession() && !isAiTaskEnvelopeActive()) {
-      await releaseCreditsProxyReserve();
-    }
-  }
-}
-
-type PendingImageBatchItem = {
-  model: string;
-  contents: unknown;
-  config?: Record<string, unknown>;
-  aiBackend?: "vertex";
-  batchGroupKey?: string;
-  resolve: (value: { text?: string; candidates?: unknown[] }) => void;
-  reject: (reason?: unknown) => void;
-};
-
-type ImageBatchGroupState = {
-  expected: number;
-  pendingCount: number;
-  firstEnqueueAt: number;
-};
-
-const pendingImageBatchItems: PendingImageBatchItem[] = [];
-let imageBatchTimer: ReturnType<typeof setTimeout> | null = null;
-let imageBatchInFlight = false;
-const imageBatchGroupState = new Map<string, ImageBatchGroupState>();
-
-function scheduleImageBatchFlush() {
-  if (imageBatchTimer != null) return;
-  imageBatchTimer = setTimeout(() => {
-    imageBatchTimer = null;
-    void flushImageBatchQueue();
-  }, GEMINI_IMAGE_BATCH_FLUSH_MS);
-}
-
-async function flushImageBatchQueue(): Promise<void> {
-  if (imageBatchInFlight) return;
-  if (pendingImageBatchItems.length === 0) return;
-  imageBatchInFlight = true;
-  try {
-    while (pendingImageBatchItems.length > 0) {
-      const first = pendingImageBatchItems[0];
-      if (!first) break;
-      const queueAiBackend = first.aiBackend;
-      const batchBoxSize = resolveImageBatchBoxSize(queueAiBackend);
-      let chunk: PendingImageBatchItem[] = [];
-      if (first.batchGroupKey) {
-        const key = first.batchGroupKey;
-        const state = imageBatchGroupState.get(key);
-        const readyByCount = !!state && state.pendingCount >= state.expected;
-        const readyByTimeout =
-          !!state && Date.now() - state.firstEnqueueAt >= GEMINI_IMAGE_BATCH_GROUP_WAIT_MS;
-        if (!readyByCount && !readyByTimeout) {
-          scheduleImageBatchFlush();
-          break;
-        }
-        const maxTake = Math.min(batchBoxSize, state?.pendingCount ?? batchBoxSize);
-        for (let i = 0; i < pendingImageBatchItems.length && chunk.length < maxTake; i += 1) {
-          const item = pendingImageBatchItems[i];
-          if (item.batchGroupKey !== key) break;
-          chunk.push(item);
-        }
-        pendingImageBatchItems.splice(0, chunk.length);
-        if (state) {
-          state.pendingCount = Math.max(0, state.pendingCount - chunk.length);
-          if (state.pendingCount === 0) imageBatchGroupState.delete(key);
-          else imageBatchGroupState.set(key, state);
-        }
-      } else {
-        chunk = pendingImageBatchItems.splice(0, batchBoxSize);
-      }
-      const aiBackend = chunk[0]?.aiBackend;
-      const mixedBackend = chunk.some((item) => item.aiBackend !== aiBackend);
-      if (mixedBackend) {
-        for (const item of chunk) {
-          try {
-            const single = await aiWorkerProxyGenerateContentAsync({
-              model: item.model,
-              contents: item.contents,
-              config: item.config,
-            });
-            item.resolve(single);
-          } catch (e) {
-            item.reject(e);
-          }
-        }
-        continue;
-      }
-      try {
-        console.info(
-          `[gemini-batch] dispatch size=${chunk.length} box=${batchBoxSize} provider=${aiBackend ?? "gemini"}`
-        );
-        const results = await aiWorkerProxyGenerateContentBatchAsync({
-          items: chunk.map((item) => ({
-            model: item.model,
-            contents: item.contents,
-            config: item.config,
-          })),
-          ...(aiBackend ? { aiBackend } : {}),
-        });
-        chunk.forEach((item, idx) => {
-          const result = results[idx];
-          if (result?.ok && result.result) {
-            item.resolve(result.result);
-          } else {
-            item.reject(new Error(result?.error || "Gemini 批量子任务失败"));
-          }
-        });
-      } catch (e) {
-        chunk.forEach((item) => item.reject(e));
-      }
-    }
-  } finally {
-    imageBatchInFlight = false;
-    if (pendingImageBatchItems.length > 0) scheduleImageBatchFlush();
-  }
-}
-
-function enqueueImageBatchGenerateContent(args: {
-  model: string;
-  contents: unknown;
-  config?: Record<string, unknown>;
-  batchGroupKey?: string;
-  batchGroupExpected?: number;
-}): Promise<{ text?: string; candidates?: unknown[] }> {
-  return new Promise((resolve, reject) => {
-    const bindingRegistryId = (args.model || "").trim();
-    const aiBackend = aiWorkerProxyUsesVertexBackend(bindingRegistryId, "image") ? ("vertex" as const) : undefined;
-    const batchBoxSize = resolveImageBatchBoxSize(aiBackend);
-    const batchGroupKey = args.batchGroupKey?.trim();
-    if (batchGroupKey) {
-      const prev = imageBatchGroupState.get(batchGroupKey);
-      const expected = Math.max(1, Math.floor(args.batchGroupExpected || prev?.expected || 1));
-      imageBatchGroupState.set(batchGroupKey, {
-        expected,
-        pendingCount: (prev?.pendingCount ?? 0) + 1,
-        firstEnqueueAt: prev?.firstEnqueueAt ?? Date.now(),
-      });
-    }
-    pendingImageBatchItems.push({
-      model: args.model,
-      contents: args.contents,
-      config: args.config,
-      aiBackend,
-      ...(batchGroupKey ? { batchGroupKey } : {}),
-      resolve,
-      reject,
-    });
-    if (pendingImageBatchItems.length >= batchBoxSize) {
-      void flushImageBatchQueue();
-    } else {
-      scheduleImageBatchFlush();
-    }
-  });
 }
 
 type GeminiClientLike = {
@@ -1889,11 +1572,6 @@ export interface GeminiRequestOptions {
   /** 结构化 JSON 输出（如分镜解析/优化） */
   responseMimeType?: string;
 }
-
-export type GeminiImageBatchGroupOptions = {
-  batchGroupKey?: string;
-  batchGroupExpected?: number;
-};
 
 const GEMINI_REQUEST_TIMEOUT_MS = Number(process.env.GEMINI_REQUEST_TIMEOUT_MS) || 45_000;
 const GEMINI_IMAGE_REQUEST_TIMEOUT_MS = Number(process.env.GEMINI_IMAGE_REQUEST_TIMEOUT_MS) || 120_000;
@@ -3035,7 +2713,7 @@ export async function dialogGenerateImage(
   options?: { aspectRatio?: string; imageSize?: string },
   customSystemPrompt?: string,
   abortSignal?: AbortSignal,
-  requestOptions?: Omit<GeminiRequestOptions, 'abortSignal'> & GeminiImageBatchGroupOptions
+  requestOptions?: Omit<GeminiRequestOptions, 'abortSignal'>
 ): Promise<string> {
   const baseTimeout = requestOptions?.timeoutMs ?? GEMINI_IMAGE_REQUEST_TIMEOUT_MS;
   const useAiWorkerProxyImageQueue = shouldUseAiWorkerProxyImageQueueForModel(model);
@@ -3079,15 +2757,7 @@ export async function dialogGenerateImage(
       contents: [{ role: 'user' as const, parts }],
       config: buildGeminiConfig(config, signal, timeoutMs, model),
     };
-    const response = useAiWorkerProxyImageQueue
-      ? await enqueueImageBatchGenerateContent({
-          ...payload,
-          ...(requestOptions?.batchGroupKey ? { batchGroupKey: requestOptions.batchGroupKey } : {}),
-          ...(requestOptions?.batchGroupExpected
-            ? { batchGroupExpected: requestOptions.batchGroupExpected }
-            : {}),
-        })
-      : await ai.models.generateContent(payload);
+    const response = await ai.models.generateContent(payload);
     const images = collectInlineImagesFromGeminiResponse(response);
     if (images.length > 0) {
       return images[0];

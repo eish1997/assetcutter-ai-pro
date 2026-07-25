@@ -12,7 +12,6 @@ const GATE_BILLING_SKUS: Record<string, readonly string[]> = {
   workflow_generate_video: ['video.workflow.task', 'video.jimeng.ti2v-v30-pro'],
   workflow_jimeng_image: ['image.jimeng.t2i-v40'],
   workflow_jimeng_video: ['video.jimeng.ti2v-v30-pro'],
-  workflow_jimeng_digital_human: ['digital_human.jimeng.omnihuman-v10'],
   workflow_text_to_image: [
     'image.gemini.flash',
     'image.gemini.pro',

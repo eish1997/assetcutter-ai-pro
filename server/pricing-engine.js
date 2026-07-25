@@ -38,7 +38,6 @@ const JOB_KIND_LABELS = {
   workflow_generate_video: '工作流 · 视频',
   workflow_jimeng_image: '即梦 · 生图',
   workflow_jimeng_video: '即梦 · 视频',
-  workflow_jimeng_digital_human: '即梦 · 数字人',
 };
 
 const GATE_TOKEN_FLOOR_CREDITS = {
@@ -52,7 +51,6 @@ const GATE_BILLING_SKUS = {
   workflow_generate_video: ['video.workflow.task', 'video.jimeng.ti2v-v30-pro'],
   workflow_jimeng_image: ['image.jimeng.t2i-v40'],
   workflow_jimeng_video: ['video.jimeng.ti2v-v30-pro'],
-  workflow_jimeng_digital_human: ['digital_human.jimeng.omnihuman-v10'],
   workflow_text_to_image: [
     'image.gemini.flash',
     'image.gemini.pro',
@@ -84,18 +82,13 @@ const SKU_PRESENTATION = {
   '3d.tencent.rapid': { label: '腾讯混元 3D 极速版', unitLabel: '次', category: '3d' },
   'video.workflow.task': { label: '工作流视频任务', unitLabel: '次', category: 'video' },
   'video.jimeng.ti2v-v30-pro': { label: '即梦 视频 3.0 Pro', unitLabel: '次', category: 'video' },
-  'digital_human.jimeng.omnihuman-v10': {
-    label: '即梦 OmniHuman 1.0',
-    unitLabel: '次',
-    category: 'video',
-  },
 };
 
 function categoryFromSku(sku) {
   if (isTextTokenBillingSku(sku)) return 'text';
   if (sku.startsWith('image.')) return 'image';
   if (sku.startsWith('3d.')) return '3d';
-  if (sku.startsWith('video.') || sku.startsWith('digital_human.')) return 'video';
+  if (sku.startsWith('video.')) return 'video';
   return 'other';
 }
 

@@ -52,8 +52,8 @@ export type ModelOpsConfig = {
   /** 枢纽边表：存在且某 SKU 有边时，优先于静态 providerBindings */
   wiringEdges?: WiringEdge[] | null;
   /**
-   * A1: Gateway executable route authority mirrored into the browser catalog.
-   * When present, listModelRoutes overlays enabled/priority/providerModelId.
+   * A1/B1: Gateway executable route authority mirrored into the browser catalog.
+   * When present, listModelRoutes overlays enabled/priority/providerModelId/gatewayExecutionStatus.
    */
   gatewayRouteConfigs?: Array<{
     canonicalModelId: string;
@@ -63,6 +63,8 @@ export type ModelOpsConfig = {
     priority?: number;
     upstreamModelId?: string;
     providerModelId?: string;
+    /** Aligns catalog with route-config-source / decision candidates. */
+    gatewayExecutionStatus?: "ready" | "adapter_pending" | "not_published";
   }> | null;
   /** @deprecated 请用 `imageModelPreference`（gear id 会在读取时迁移为 registryId） */
   gearPreference?: string[];

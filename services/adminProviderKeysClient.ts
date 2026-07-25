@@ -168,6 +168,8 @@ export type AdminGatewayRouteConfig = {
   priority?: number;
   upstreamModelId?: string;
   providerModelId?: string;
+  /** B1: persisted so catalog/decision share the same execution status. */
+  gatewayExecutionStatus?: "ready" | "adapter_pending" | "not_published";
 };
 
 export type AdminOpenAiCompatibleProviderConfig = {

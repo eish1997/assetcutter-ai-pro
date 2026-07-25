@@ -7,7 +7,7 @@ export type PublishedWorkspaceModelRow = {
   canonicalModelId: string;
   registryId: string;
   label: string;
-  modality: Extract<ProviderModality, "text" | "image" | "video" | "model3d" | "music">;
+  modality: Extract<ProviderModality, "text" | "image" | "video" | "model3d">;
   defaultForModality?: boolean;
   gatewayReady: boolean;
 };
@@ -79,7 +79,7 @@ function gatewayReadyForCanonicalModel(canonicalModelId: string): boolean {
 }
 
 function listPublishedWorkspaceCapabilityModels(
-  modality: Extract<ProviderModality, "video" | "model3d" | "music">,
+  modality: Extract<ProviderModality, "video" | "model3d">,
   ops?: PublishedModelOps
 ): PublishedWorkspaceModelRow[] {
   return uniqueByRegistryId(
@@ -104,8 +104,9 @@ export function listPublishedWorkspaceModel3dModels(ops?: PublishedModelOps): Pu
   return listPublishedWorkspaceCapabilityModels("model3d", ops);
 }
 
-export function listPublishedWorkspaceMusicModels(ops?: PublishedModelOps): PublishedWorkspaceModelRow[] {
-  return listPublishedWorkspaceCapabilityModels("music", ops);
+/** Music publish surface removed (no music-worker). Kept as empty stub for callers. */
+export function listPublishedWorkspaceMusicModels(_ops?: PublishedModelOps): PublishedWorkspaceModelRow[] {
+  return [];
 }
 
 export function listPublishedWorkspaceModels(

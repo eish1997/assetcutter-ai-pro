@@ -17,7 +17,6 @@ const JOB_KIND_LABELS = {
   workflow_generate_video: '工作流 · 视频',
   workflow_jimeng_image: '即梦 · 生图',
   workflow_jimeng_video: '即梦 · 视频',
-  workflow_jimeng_digital_human: '即梦 · 数字人',
 };
 
 const SKU_PRESENTATION = {

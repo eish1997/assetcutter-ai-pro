@@ -33,7 +33,14 @@ export const imageWorker = Object.freeze({
   },
   async cancel(plan, options = {}) {
     if (plan?.route?.adapterId === 'jimeng-visual') return cancelJimengImageExecution(plan, options);
-    return { cancelled: false, mode: 'soft', reason: 'legacy_adapter_cancel_not_supported' };
+    const { softAiGatewayCancelResult } = await import('../cancel-result.js');
+    return softAiGatewayCancelResult({
+      reason: 'legacy_adapter_cancel_not_supported',
+      cancelReason: 'legacy_adapter_cancel_not_supported',
+      upstreamTaskId: plan?.job?.metadata?.upstreamTaskId || plan?.job?.metadata?.proxyJobId || null,
+      provider: plan?.route?.providerId || plan?.job?.provider || null,
+      adapterId: plan?.route?.adapterId || null,
+    });
   },
   estimateCost() {
     return null;

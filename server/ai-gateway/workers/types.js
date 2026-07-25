@@ -11,31 +11,6 @@ export {
   validateJobAgainstAdapterContract,
 } from '../adapter-result.js';
 
-export function createPlannedWorker({ id, modalities, capabilities = [] }) {
-  return Object.freeze({
-    id,
-    modalities: Object.freeze([...modalities]),
-    capabilities: Object.freeze([...capabilities]),
-    adapters: Object.freeze([]),
-    status: 'planned',
-    buildRequest() {
-      throw new AiGatewayValidationError(`AI gateway worker ${id} is planned but not implemented`, 'AI_GATEWAY_WORKER_PLANNED');
-    },
-    async start() {
-      throw new AiGatewayValidationError(`AI gateway worker ${id} is planned but not implemented`, 'AI_GATEWAY_WORKER_PLANNED');
-    },
-    async cancel() {
-      return { cancelled: false, mode: 'not_supported', reason: 'worker_planned' };
-    },
-    estimateCost() {
-      return null;
-    },
-    settleUsage() {
-      return null;
-    },
-  });
-}
-
 export function publicWorkerDescriptor(worker) {
   return {
     id: worker.id,

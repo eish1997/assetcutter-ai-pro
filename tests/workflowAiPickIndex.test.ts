@@ -21,7 +21,6 @@ describe('workflowAiPickIndex', () => {
         'cargo_misc',
         'cargo_jimeng_image',
         'cargo_jimeng_video',
-        'cargo_jimeng_dh',
       ])
     );
   });
@@ -39,7 +38,6 @@ describe('workflowAiPickIndex', () => {
         'gemini_service_stack',
         'tripo_service',
         'tencent_service',
-        'http_video_bridge_upstream',
         'local_companion_sam',
         'jimeng_warehouse',
         'jimeng_server_proxy',

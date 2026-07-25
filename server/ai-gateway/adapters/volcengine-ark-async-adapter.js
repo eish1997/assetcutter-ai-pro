@@ -332,15 +332,16 @@ async function pollArkAsyncTask(plan, taskId, key, options = {}) {
 }
 
 export async function cancelVolcengineArkAsyncExecution(plan) {
+  const { softAiGatewayCancelResult } = await import('../cancel-result.js');
   const metadata = plan?.job?.metadata && typeof plan.job.metadata === 'object' ? plan.job.metadata : {};
   const upstreamTaskId = nonEmptyString(metadata.upstreamTaskId) || nonEmptyString(metadata.arkTaskId);
-  return {
-    cancelled: false,
-    mode: 'soft',
+  return softAiGatewayCancelResult({
     reason: 'volcengine_ark_hard_cancel_unavailable',
+    cancelReason: 'volcengine_ark_hard_cancel_unavailable',
     upstreamTaskId: upstreamTaskId || null,
     provider: VOLCENGINE_ARK_PROVIDER_ID,
-  };
+    adapterId: 'volcengine-ark-async',
+  });
 }
 
 export async function startVolcengineArkAsyncExecution(plan, options = {}) {

@@ -1,16 +1,15 @@
 import { AiGatewayValidationError } from '../job.js';
 import { imageWorker } from './image-worker.js';
 import { model3dWorker } from './model3d-worker.js';
-import { musicWorker } from './music-worker.js';
 import { textWorker } from './text-worker.js';
 import { publicWorkerDescriptor } from './types.js';
 import { videoWorker } from './video-worker.js';
 
+/** music-worker stub 已删除（cleanup）：不注册 music；resolve 抛 NOT_REGISTERED。 */
 export const AI_GATEWAY_WORKERS = Object.freeze([
   textWorker,
   imageWorker,
   videoWorker,
-  musicWorker,
   model3dWorker,
 ]);
 

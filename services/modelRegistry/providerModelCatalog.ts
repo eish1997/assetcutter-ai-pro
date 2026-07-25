@@ -254,7 +254,7 @@ export const PROVIDER_MODEL_CATALOG: readonly ProviderModelCatalogEntry[] = [
       providerModelId: row.upstreamReqKey,
       registryId: row.registryId,
       label: row.label,
-      modality: row.modality === "digital_human" ? ("digital_human" as const) : row.modality,
+      modality: row.modality,
       lifecycle,
       status: providerModelStatus({ lifecycle, verified: row.verified }),
       verified: row.verified,

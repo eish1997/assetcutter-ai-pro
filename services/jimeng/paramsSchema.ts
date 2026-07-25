@@ -2,7 +2,6 @@ import { getJimengCatalogEntry } from "./catalog";
 import {
   isJimengParamsValidationFailure,
   type JimengCatalogEntry,
-  type JimengOmniHumanInput,
   type JimengParamsValidationResult,
   type JimengSubmitInput,
 } from "./types";
@@ -34,7 +33,6 @@ function countReferenceImages(input: JimengSubmitInput): number {
 
 function registryNeedsPrompt(entry: JimengCatalogEntry): boolean {
   const id = entry.registryId;
-  if (entry.modality === "digital_human") return false;
   if (id.includes("-i2i-") || id.includes("-inpainting") || id.includes("-outpainting")) {
     return false;
   }
@@ -107,9 +105,6 @@ export function validateJimengSubmitInput(input: JimengSubmitInput): JimengParam
 
   const entry = getJimengCatalogEntry(registryId);
   if (!entry) return fail("registryId", `未知即梦 SKU：${registryId}`);
-  if (entry.asyncMode === "omnihuman_v1") {
-    return fail("registryId", "数字人 SKU 请使用 validateJimengOmniHumanInput");
-  }
 
   const checks: JimengParamsValidationResult[] = [validateDimensions(input), validateReferenceImages(entry, input)];
 
@@ -120,35 +115,7 @@ export function validateJimengSubmitInput(input: JimengSubmitInput): JimengParam
   return mergeResults(...checks);
 }
 
-/** 数字人 OmniHuman 参数校验 */
-export function validateJimengOmniHumanInput(input: JimengOmniHumanInput): JimengParamsValidationResult {
-  const entry = getJimengCatalogEntry(input.registryId);
-  if (!entry) return fail("registryId", `未知即梦 SKU：${input.registryId}`);
-  if (entry.asyncMode !== "omnihuman_v1") {
-    return fail("registryId", "该 SKU 不支持 OmniHuman 输入");
-  }
-
-  if (!hasNonEmptyText(input.portraitImage)) {
-    return fail("portraitImage", "需要 portraitImage");
-  }
-
-  const hasAudio = hasNonEmptyText(input.driveAudioUrl);
-  const hasVideo = hasNonEmptyText(input.driveVideoUrl);
-  if (!hasAudio && !hasVideo) {
-    return fail("driveAudioUrl", "需要 driveAudioUrl 或 driveVideoUrl 之一");
-  }
-
-  return { ok: true };
-}
-
-/** 按 registryId 自动分流 submit / omnihuman 校验 */
-export function validateJimengParams(
-  input: JimengSubmitInput | JimengOmniHumanInput
-): JimengParamsValidationResult {
-  const entry = getJimengCatalogEntry(input.registryId);
-  if (!entry) return fail("registryId", `未知即梦 SKU：${input.registryId}`);
-  if (entry.asyncMode === "omnihuman_v1") {
-    return validateJimengOmniHumanInput(input as JimengOmniHumanInput);
-  }
-  return validateJimengSubmitInput(input as JimengSubmitInput);
+/** 参数校验（图/视频 submit_poll） */
+export function validateJimengParams(input: JimengSubmitInput): JimengParamsValidationResult {
+  return validateJimengSubmitInput(input);
 }

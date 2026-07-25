@@ -327,10 +327,40 @@ export function aiGatewayAutoCircuitConfig(options = {}) {
   };
 }
 
-function autoCircuitErrorReason(error) {
-  const msg = error instanceof Error ? error.message : String(error || '');
-  if (/429|too many requests|resource_exhausted|rate.?limit|quota|rpm/i.test(msg)) return 'auto circuit: rate limited';
-  if (/HTTP 5\d\d|503|502|504|upstream|overload|unavailable|timeout/i.test(msg)) return 'auto circuit: upstream unstable';
+/** B8: only structured failureReason/gatewayFailure — never regex message strings. */
+function resolveStructuredFailureReason(error, plan = null) {
+  const fromObject = (value) => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+    const code = nonEmptyString(value.code);
+    const stage = nonEmptyString(value.stage);
+    if (!code && !stage) return null;
+    return { code, stage };
+  };
+  return (
+    fromObject(error?.failureReason) ||
+    fromObject(error?.gatewayFailure) ||
+    fromObject(error) ||
+    fromObject(plan?.job?.metadata?.gatewayFailure) ||
+    fromObject(plan?.job?.error?.failureReason) ||
+    fromObject(plan?.job?.error) ||
+    null
+  );
+}
+
+/**
+ * Gate for auto-pause: structured upstream failure only.
+ * Returns empty string when unstructured → caller must not pause.
+ */
+export function autoCircuitErrorReason(error, plan = null) {
+  const reason = resolveStructuredFailureReason(error, plan);
+  if (!reason) return '';
+  const { code, stage } = reason;
+  if (code === 'AI_GATEWAY_UPSTREAM_RATE_LIMITED') return 'auto circuit: rate limited';
+  if (code === 'AI_GATEWAY_UPSTREAM_TIMEOUT' || code === 'AI_GATEWAY_UPSTREAM_UNAVAILABLE') {
+    return 'auto circuit: upstream unstable';
+  }
+  // stage=upstream with any structured code (or stage alone) → unstable
+  if (stage === 'upstream') return 'auto circuit: upstream unstable';
   return '';
 }
 
@@ -379,7 +409,7 @@ export async function maybeAutoPauseAiGatewayProvider(plan, error, options = {})
   if (!isAiGatewayAutoCircuitEnabled()) return null;
   const provider = nonEmptyString(plan?.route?.providerId || plan?.job?.provider);
   if (!provider) return null;
-  const errorReason = autoCircuitErrorReason(error);
+  const errorReason = autoCircuitErrorReason(error, plan);
   if (!errorReason) return null;
   const action = evaluateAiGatewayProviderAutoCircuit(
     [plan, ...(Array.isArray(options.recentPlans) ? options.recentPlans : [])],

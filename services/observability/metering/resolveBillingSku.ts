@@ -49,9 +49,6 @@ export function resolveBillingSkuForJimeng(registryId: string | undefined): stri
   if (id.startsWith('jimeng-video-')) {
     return `video.jimeng.${id.slice('jimeng-video-'.length)}`;
   }
-  if (id.startsWith('jimeng-dh-')) {
-    return `digital_human.jimeng.${id.slice('jimeng-dh-'.length)}`;
-  }
   return `task.jimeng.${id.replace(/^jimeng-/, '') || 'unknown'}`;
 }
 

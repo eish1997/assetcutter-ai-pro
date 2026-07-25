@@ -45,7 +45,7 @@ function normalizeEventInput(userId, raw, catalogVersion = null) {
   const status = String(raw?.status || 'succeeded').trim();
   if (!STATUS_VALUES.has(status)) return null;
 
-  const costConfidence = String(raw?.costConfidence || raw?.cost_confidence || 'unknown').trim();
+  let costConfidence = String(raw?.costConfidence || raw?.cost_confidence || 'unknown').trim();
   if (!CONFIDENCE_VALUES.has(costConfidence)) return null;
 
   const quantityIn = raw?.quantityIn ?? raw?.quantity_in;
@@ -53,6 +53,7 @@ function normalizeEventInput(userId, raw, catalogVersion = null) {
   const quantity = raw?.quantity;
 
   let costUsdEst = raw?.costUsdEst ?? raw?.cost_usd_est;
+  let costFromCatalogEstimate = false;
   if (costUsdEst === undefined && raw?.meta?.byok !== true) {
     const meta = raw?.meta && typeof raw.meta === 'object' && !Array.isArray(raw.meta) ? raw.meta : null;
     costUsdEst = estimateCostFromCatalog(billingSku, {
@@ -65,8 +66,13 @@ function normalizeEventInput(userId, raw, catalogVersion = null) {
         meterKind === 'token' &&
         (meta?.outputKind === 'token' || meta?.outputKind === 'image'),
     });
+    if (costUsdEst != null) costFromCatalogEstimate = true;
   }
   if (raw?.meta?.byok === true) costUsdEst = null;
+  // B6: catalog 回填成本时标记为估算，避免趋势把未知置信度当成已定价
+  if (costFromCatalogEstimate && costConfidence === 'unknown') {
+    costConfidence = 'estimated';
+  }
 
   const meta = raw?.meta && typeof raw.meta === 'object' && !Array.isArray(raw.meta) ? raw.meta : null;
 

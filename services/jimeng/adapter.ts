@@ -5,12 +5,11 @@
 import { getJimengCatalogEntry } from "./catalog";
 import {
   jimengPollTask,
-  jimengSubmitOmniHuman,
   jimengSubmitTask,
   type JimengClientOptions,
 } from "./client";
 import { JimengPollTimeoutError, JimengUpstreamRejectedError } from "./errors";
-import type { JimengModality, JimengOmniHumanInput, JimengSubmitInput } from "./types";
+import type { JimengModality, JimengSubmitInput } from "./types";
 
 /** §4.6 默认轮询参数 */
 export const JIMENG_DEFAULT_POLL_INTERVAL_MS = 2000;
@@ -42,7 +41,7 @@ export type JimengVideoJobResult = {
 
 function resolveMaxWaitMs(modality: JimengModality, override?: number): number {
   if (override != null && Number.isFinite(override) && override > 0) return override;
-  if (modality === "video" || modality === "digital_human") return JIMENG_DEFAULT_MAX_WAIT_VIDEO_MS;
+  if (modality === "video") return JIMENG_DEFAULT_MAX_WAIT_VIDEO_MS;
   return JIMENG_DEFAULT_MAX_WAIT_IMAGE_MS;
 }
 
@@ -135,28 +134,6 @@ export async function submitAndPollJimengVideo(
   const videoUrl = String(done.videoUrl || "").trim();
   if (!videoUrl) {
     throw new JimengUpstreamRejectedError("即梦视频任务完成但无 video_url", 10001, input.registryId, taskId);
-  }
-  return { taskId, videoUrl, raw: done.raw };
-}
-
-export async function submitAndPollJimengOmniHuman(
-  input: JimengOmniHumanInput,
-  options?: JimengAdapterOptions
-): Promise<JimengVideoJobResult> {
-  const entry = getJimengCatalogEntry(input.registryId);
-  if (!entry || entry.modality !== "digital_human") {
-    throw new Error(`未知即梦数字人 SKU：${input.registryId}`);
-  }
-  const { taskId } = await jimengSubmitOmniHuman(input, options);
-  const done = await pollJimengUntilDone(taskId, input.registryId, "digital_human", options);
-  const videoUrl = String(done.videoUrl || "").trim();
-  if (!videoUrl) {
-    throw new JimengUpstreamRejectedError(
-      "即梦数字人任务完成但无 video_url",
-      10001,
-      input.registryId,
-      taskId
-    );
   }
   return { taskId, videoUrl, raw: done.raw };
 }

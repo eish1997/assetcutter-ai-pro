@@ -323,13 +323,14 @@ export async function startTencentHunyuan3dExecution(plan, options = {}) {
 }
 
 export async function cancelTencentHunyuan3dExecution(plan) {
+  const { softAiGatewayCancelResult } = await import('../cancel-result.js');
   const metadata = plan?.job?.metadata && typeof plan.job.metadata === 'object' ? plan.job.metadata : {};
   const upstreamTaskId = nonEmptyString(metadata.upstreamTaskId) || nonEmptyString(metadata.tencentJobId);
-  return {
-    cancelled: false,
-    mode: 'soft',
+  return softAiGatewayCancelResult({
     reason: 'tencent_hunyuan_3d_hard_cancel_unavailable',
+    cancelReason: 'tencent_hunyuan_3d_hard_cancel_unavailable',
     upstreamTaskId: upstreamTaskId || null,
     provider: TENCENT_HUNYUAN_PROVIDER_ID,
-  };
+    adapterId: 'tencent-hunyuan-3d',
+  });
 }

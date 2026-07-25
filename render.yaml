@@ -143,9 +143,7 @@
         value: "2"
       - key: VITE_GEMINI_IMAGE_BATCH_BOX_SIZE_VERTEX
         value: "2"
-      # Frontend gray gate: Vertex image jobs try /api/ai/jobs first, then use AI Worker Proxy execution.
-      - key: VITE_AI_GATEWAY_IMAGE_EXECUTION
-        value: vertex
+      # Image Gateway is always on; VITE_AI_GATEWAY_IMAGE_EXECUTION gray gate removed.
 
 databases:
   - name: assetcutter-auth-db

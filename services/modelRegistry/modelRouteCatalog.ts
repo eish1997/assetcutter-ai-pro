@@ -1,7 +1,11 @@
 import { JIMENG_CATALOG } from "../jimeng/catalog";
 import { PROVIDER_BINDINGS } from "./providerBindings";
 import { AGGREGATOR_302AI_MULTIMODAL_CATALOG, VOLCENGINE_ARK_MODEL_CATALOG, listProviderModels, type ProviderModelCatalogEntry } from "./providerModelCatalog";
-import { resolveCatalogGatewayExecutionStatus } from "../../shared/aiGatewayModelRoutes.js";
+import {
+  normalizeCatalogRouteCandidateStatus,
+  resolveCatalogGatewayExecutionStatus,
+  resolveExecutableAiGatewayModelRoute,
+} from "../../shared/aiGatewayModelRoutes.js";
 import { getModelOpsConfigSync } from "./opsConfig";
 import { isProviderCatalogId, type ProviderCatalogId, type ProviderModality } from "./providerCatalog";
 import type { ChannelId } from "./types";
@@ -124,7 +128,7 @@ function buildJimengNonImageRoutes(): ModelRouteCatalogEntry[] {
     canonicalModelId: row.registryId,
     providerId: "volcengine-jimeng" as const,
     providerModelId: row.upstreamReqKey,
-    modality: row.modality === "digital_human" ? ("digital_human" as const) : row.modality,
+    modality: row.modality,
     enabled: row.verified === true,
     priority: 10 + index,
     fallbackPolicy: "none" as const,
@@ -136,7 +140,7 @@ function buildJimengNonImageRoutes(): ModelRouteCatalogEntry[] {
     gatewayExecutionStatus: resolveCatalogGatewayExecutionStatus({
       canonicalModelId: row.registryId,
       providerId: "volcengine-jimeng",
-      modality: row.modality === "digital_human" ? "digital_human" : row.modality,
+      modality: row.modality,
     }) as ModelRouteGatewayExecutionStatus,
   }));
 }
@@ -264,8 +268,53 @@ function gatewayRouteConfigKey(canonicalModelId: string, providerId: string, mod
 }
 
 /**
- * A1: overlay ops `gatewayRouteConfigs` onto the static catalog so Admin/workspace
- * display the same enabled/priority/providerModelId decision will use.
+ * B1: same authority chain as server `listGatewayRouteConfigs` /
+ * `materializeGatewayRouteConfigRow`:
+ * explicit ops status → executable seed status → catalog base → ready.
+ */
+function resolveOverlayGatewayExecutionStatus(
+  cfg: { gatewayExecutionStatus?: string },
+  input: { canonicalModelId: string; providerId: string; modality?: string },
+  catalogBase?: ModelRouteCatalogEntry
+): ModelRouteGatewayExecutionStatus {
+  const fromOps = normalizeCatalogRouteCandidateStatus(cfg.gatewayExecutionStatus);
+  if (fromOps === "ready" || fromOps === "adapter_pending" || fromOps === "not_published") {
+    return fromOps;
+  }
+  const executable = resolveExecutableAiGatewayModelRoute(
+    {
+      canonicalModelId: input.canonicalModelId,
+      providerId: input.providerId,
+      modality: input.modality,
+    },
+    { providerField: "catalogProviderIds" }
+  );
+  if (executable) {
+    return (normalizeCatalogRouteCandidateStatus(executable.gatewayExecutionStatus) ||
+      catalogBase?.gatewayExecutionStatus ||
+      "ready") as ModelRouteGatewayExecutionStatus;
+  }
+  // No executable seed: materializeGatewayRouteConfigRow defaults missing status to ready.
+  return "ready";
+}
+
+function executionStatusForGatewayOverlay(
+  enabled: boolean,
+  gatewayExecutionStatus: ModelRouteGatewayExecutionStatus,
+  catalogBase?: ModelRouteCatalogEntry
+): ModelRouteExecutionStatus {
+  if (!enabled) return "disabled";
+  if (catalogBase?.requiresEndpointMapping) return "requires_endpoint_mapping";
+  if (gatewayExecutionStatus === "ready") return "platform_ready";
+  if (gatewayExecutionStatus === "adapter_pending") return "adapter_pending";
+  return catalogBase?.executionStatus && catalogBase.executionStatus !== "disabled"
+    ? catalogBase.executionStatus
+    : "adapter_pending";
+}
+
+/**
+ * A1/B1: overlay ops `gatewayRouteConfigs` onto the static catalog so Admin/workspace
+ * display the same enabled/priority/providerModelId/gatewayExecutionStatus decision uses.
  */
 function applyGatewayRouteConfigOverlay(routes: ModelRouteCatalogEntry[]): ModelRouteCatalogEntry[] {
   const configs = getModelOpsConfigSync().gatewayRouteConfigs;
@@ -290,6 +339,11 @@ function applyGatewayRouteConfigOverlay(routes: ModelRouteCatalogEntry[]): Model
       (typeof cfg.upstreamModelId === "string" && cfg.upstreamModelId.trim()) ||
       (typeof cfg.providerModelId === "string" && cfg.providerModelId.trim()) ||
       "";
+    const gatewayExecutionStatus = resolveOverlayGatewayExecutionStatus(
+      cfg,
+      { canonicalModelId, providerId, modality: modality || base?.modality },
+      base
+    );
     if (base) {
       const enabled = cfg.enabled === undefined ? base.enabled : cfg.enabled === true;
       const priority =
@@ -299,32 +353,25 @@ function applyGatewayRouteConfigOverlay(routes: ModelRouteCatalogEntry[]): Model
         enabled,
         priority,
         ...(upstream ? { providerModelId: upstream } : {}),
-        executionStatus: enabled
-          ? base.executionStatus === "disabled"
-            ? "platform_ready"
-            : base.executionStatus
-          : "disabled",
+        gatewayExecutionStatus,
+        executionStatus: executionStatusForGatewayOverlay(enabled, gatewayExecutionStatus, base),
       });
       continue;
     }
     if (!modality) continue;
-    const gatewayExecutionStatus = resolveCatalogGatewayExecutionStatus({
-      canonicalModelId,
-      providerId,
-      modality,
-    }) as ModelRouteGatewayExecutionStatus;
+    const enabled = cfg.enabled !== false;
     byKey.set(key, {
       routeId: `${canonicalModelId}:${providerId}:${modality}`,
       canonicalModelId,
       providerId,
       providerModelId: upstream || canonicalModelId,
       modality,
-      enabled: cfg.enabled !== false,
+      enabled,
       priority: typeof cfg.priority === "number" && Number.isFinite(cfg.priority) ? Math.floor(cfg.priority) : 100,
       fallbackPolicy: "on_error",
       source: "static",
-      executionStatus: cfg.enabled === false ? "disabled" : gatewayExecutionStatus === "ready" ? "platform_ready" : "adapter_pending",
-      gatewayExecutionStatus: gatewayExecutionStatus || "not_published",
+      gatewayExecutionStatus,
+      executionStatus: executionStatusForGatewayOverlay(enabled, gatewayExecutionStatus),
     });
   }
 

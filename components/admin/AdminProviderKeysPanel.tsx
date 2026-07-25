@@ -71,7 +71,7 @@ import { useAdminStaff } from './AdminStaffContext';
 
 const PROVIDERS = providersForAdminConsole();
 const KEY_POOL_PROVIDERS = providersForAdminKeyPool();
-const WORKSPACE_PUBLISH_MODALITIES: readonly ProviderModality[] = ['text', 'image', 'video', 'model3d', 'music'];
+const WORKSPACE_PUBLISH_MODALITIES: readonly ProviderModality[] = ['text', 'image', 'video', 'model3d'];
 const GENERATION_TEST_MODALITIES = new Set<ProviderModality>(['text', 'image', 'video', 'model3d']);
 const WORKSPACE_CANONICAL_MODELS = listCanonicalModels().filter(
   (model) =>
@@ -152,7 +152,6 @@ const MODALITY_LABELS: Record<ProviderModality, string> = {
   video: '视频',
   model3d: '3D',
   music: '音乐',
-  digital_human: '数字人',
 };
 
 const CAPABILITY_STATUS_ITEMS: readonly { key: keyof ProviderCapabilityStatus; label: string }[] = [
@@ -828,6 +827,13 @@ function normalizeGatewayRouteConfigRows(value: unknown): AdminGatewayRouteConfi
         (typeof row.upstreamModelId === 'string' && row.upstreamModelId.trim()) ||
         (typeof row.providerModelId === 'string' && row.providerModelId.trim()) ||
         '';
+      const gatewayExecutionRaw = String(row.gatewayExecutionStatus || '').trim();
+      const gatewayExecutionStatus =
+        gatewayExecutionRaw === 'ready' ||
+        gatewayExecutionRaw === 'adapter_pending' ||
+        gatewayExecutionRaw === 'not_published'
+          ? (gatewayExecutionRaw as AdminGatewayRouteConfig['gatewayExecutionStatus'])
+          : undefined;
       return {
         canonicalModelId,
         providerId,
@@ -835,6 +841,7 @@ function normalizeGatewayRouteConfigRows(value: unknown): AdminGatewayRouteConfi
         ...(row.enabled !== undefined ? { enabled: row.enabled === true } : {}),
         ...(Number.isFinite(priority) ? { priority: Math.floor(priority) } : {}),
         ...(upstreamModelId ? { upstreamModelId, providerModelId: upstreamModelId } : {}),
+        ...(gatewayExecutionStatus ? { gatewayExecutionStatus } : {}),
       } satisfies AdminGatewayRouteConfig;
     })
     .filter((row): row is AdminGatewayRouteConfig => Boolean(row));
@@ -892,6 +899,47 @@ function mergeGatewayRouteConfigs(
   return rows.length ? rows : null;
 }
 
+/** B5: parse `canonical=upstream` lines (or JSON object) into modelMapping. */
+function parseOpenAiCompatibleModelMappingText(value: string): Record<string, string> | undefined {
+  const raw = String(value || '').trim();
+  if (!raw) return undefined;
+  if (raw.startsWith('{')) {
+    try {
+      const parsed = JSON.parse(raw) as unknown;
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return undefined;
+      const entries = Object.entries(parsed as Record<string, unknown>)
+        .map(([k, v]) => [String(k || '').trim(), String(v || '').trim()] as const)
+        .filter(([k, v]) => k && v);
+      return entries.length ? Object.fromEntries(entries) : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+  const entries: Array<[string, string]> = [];
+  for (const line of raw.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+    const eq = trimmed.indexOf('=');
+    const colon = trimmed.indexOf(':');
+    const sep = eq >= 0 ? eq : colon;
+    if (sep <= 0) continue;
+    const canonical = trimmed.slice(0, sep).trim();
+    const upstream = trimmed.slice(sep + 1).trim();
+    if (canonical && upstream) entries.push([canonical, upstream]);
+  }
+  return entries.length ? Object.fromEntries(entries) : undefined;
+}
+
+function formatOpenAiCompatibleModelMappingText(mapping?: Record<string, string> | null): string {
+  if (!mapping || typeof mapping !== 'object') return '';
+  return Object.entries(mapping)
+    .map(([k, v]) => [String(k || '').trim(), String(v || '').trim()] as const)
+    .filter(([k, v]) => k && v)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([k, v]) => `${k}=${v}`)
+    .join('\n');
+}
+
 function normalizeOpenAiCompatibleProviderRows(value: unknown): AdminOpenAiCompatibleProviderConfig[] {
   if (!Array.isArray(value)) return [];
   return value
@@ -900,11 +948,27 @@ function normalizeOpenAiCompatibleProviderRows(value: unknown): AdminOpenAiCompa
       const providerId = String(row.providerId || '').trim();
       if (!providerId) return null;
       const priority = Number(row.priority);
-      const requestTimeoutMs = Number(
-        (row.timeouts && typeof row.timeouts === 'object'
-          ? (row.timeouts as Record<string, unknown>).requestMs
-          : undefined) ?? row.requestTimeoutMs
-      );
+      const timeoutsIn =
+        row.timeouts && typeof row.timeouts === 'object' && !Array.isArray(row.timeouts)
+          ? (row.timeouts as Record<string, unknown>)
+          : {};
+      const requestMs = Number(timeoutsIn.requestMs ?? row.requestTimeoutMs);
+      const pollIntervalMs = Number(timeoutsIn.pollIntervalMs);
+      const pollTimeoutMs = Number(timeoutsIn.pollTimeoutMs);
+      const pollRequestMs = Number(timeoutsIn.pollRequestMs);
+      const timeouts: NonNullable<AdminOpenAiCompatibleProviderConfig['timeouts']> = {};
+      if (Number.isFinite(requestMs) && requestMs > 0) timeouts.requestMs = Math.floor(requestMs);
+      if (Number.isFinite(pollIntervalMs) && pollIntervalMs > 0) timeouts.pollIntervalMs = Math.floor(pollIntervalMs);
+      if (Number.isFinite(pollTimeoutMs) && pollTimeoutMs > 0) timeouts.pollTimeoutMs = Math.floor(pollTimeoutMs);
+      if (Number.isFinite(pollRequestMs) && pollRequestMs > 0) timeouts.pollRequestMs = Math.floor(pollRequestMs);
+      const modelMapping =
+        row.modelMapping && typeof row.modelMapping === 'object' && !Array.isArray(row.modelMapping)
+          ? Object.fromEntries(
+              Object.entries(row.modelMapping as Record<string, unknown>)
+                .map(([k, v]) => [String(k || '').trim(), String(v || '').trim()] as const)
+                .filter(([k, v]) => k && v)
+            )
+          : undefined;
       return {
         providerId,
         label: String(row.label || providerId).trim() || providerId,
@@ -913,9 +977,13 @@ function normalizeOpenAiCompatibleProviderRows(value: unknown): AdminOpenAiCompa
         channel: String(row.channel || '').trim() || undefined,
         ...(Number.isFinite(priority) ? { priority: Math.floor(priority) } : {}),
         asyncCapable: row.asyncCapable === true,
-        ...(Number.isFinite(requestTimeoutMs) && requestTimeoutMs > 0
-          ? { timeouts: { requestMs: Math.floor(requestTimeoutMs) }, requestTimeoutMs: Math.floor(requestTimeoutMs) }
+        ...(Object.keys(timeouts).length
+          ? {
+              timeouts,
+              ...(timeouts.requestMs ? { requestTimeoutMs: timeouts.requestMs } : {}),
+            }
           : {}),
+        ...(modelMapping && Object.keys(modelMapping).length ? { modelMapping } : {}),
       } satisfies AdminOpenAiCompatibleProviderConfig;
     })
     .filter((row): row is AdminOpenAiCompatibleProviderConfig => Boolean(row));
@@ -1031,6 +1099,8 @@ export const __adminProviderKeysPanelTestUtils = {
   normalizeGatewayRouteConfigRows,
   mergeGatewayRouteConfigs,
   normalizeOpenAiCompatibleProviderRows,
+  parseOpenAiCompatibleModelMappingText,
+  formatOpenAiCompatibleModelMappingText,
   openAiCompatibleProvidersDraftFromConfig,
   mergeOpenAiCompatibleProviders,
   normalizeEndpointMappingRows,
@@ -1190,6 +1260,8 @@ const AdminProviderKeysPanel: React.FC = () => {
   const [openAiCompatibleProvidersDraft, setOpenAiCompatibleProvidersDraft] = React.useState<
     AdminOpenAiCompatibleProviderConfig[]
   >([]);
+  /** B5: free-text buffer so incomplete mapping lines are not wiped while typing. */
+  const [oaiModelMappingTextByIndex, setOaiModelMappingTextByIndex] = React.useState<Record<number, string>>({});
   const [error, setError] = React.useState('');
   const [message, setMessage] = React.useState('');
   const [selectedProviderId, setSelectedProviderId] = React.useState(PROVIDERS[0]?.id || 'tripo');
@@ -1219,6 +1291,7 @@ const AdminProviderKeysPanel: React.FC = () => {
         setRouteFallbackMaxAttemptsDraft(routeFallbackMaxAttemptsDraftFromConfig(modelOpsRes.config));
         setEndpointMappingDraft(endpointMappingDraftFromConfig(modelOpsRes.config));
         setOpenAiCompatibleProvidersDraft(openAiCompatibleProvidersDraftFromConfig(modelOpsRes.config));
+        setOaiModelMappingTextByIndex({});
         const allow = modelOpsRes.config.publishedCanonicalModelAllowlist;
         setSelectedCanonicalModelIds(Array.isArray(allow) ? allow : defaultPublishedCanonicalIds());
       }
@@ -1575,10 +1648,21 @@ const AdminProviderKeysPanel: React.FC = () => {
         gatewayRouteConfigs: mergeGatewayRouteConfigs(base.gatewayRouteConfigs, bindingOverrides, routePriorityDraft),
         openAiCompatibleProviders: mergeOpenAiCompatibleProviders(
           base.openAiCompatibleProviders,
-          openAiCompatibleProvidersDraft
+          openAiCompatibleProvidersDraft.map((row, index) => {
+            const text = oaiModelMappingTextByIndex[index];
+            if (text === undefined) return row;
+            const modelMapping = parseOpenAiCompatibleModelMappingText(text);
+            if (!modelMapping) {
+              const next = { ...row };
+              delete next.modelMapping;
+              return next;
+            }
+            return { ...row, modelMapping };
+          })
         ),
       });
       setModelOpsConfig(saved.config);
+      setOaiModelMappingTextByIndex({});
       setRoutePriorityDraft(routePriorityDraftFromConfig(saved.config));
       setRouteFallbackPolicyDraft(routeFallbackPolicyDraftFromConfig(saved.config));
       setRouteFallbackMaxAttemptsDraft(routeFallbackMaxAttemptsDraftFromConfig(saved.config));
@@ -2056,7 +2140,7 @@ const AdminProviderKeysPanel: React.FC = () => {
               <div>
                 <h3 className="text-sm font-semibold text-white">OpenAI 兼容聚合商</h3>
                 <div className="mt-1 text-[11px] text-gray-500">
-                  填 baseURL / 超时后随「保存发布范围」写入 ops，无需新 adapter。详见 docs/AI-Gateway运营接聚合商手册.md
+                  填 baseURL / 模型映射 / 轮询超时后随「保存发布范围」写入 ops，无需新 adapter。详见 docs/AI-Gateway运营接聚合商手册.md
                 </div>
               </div>
               <button
@@ -2070,7 +2154,7 @@ const AdminProviderKeysPanel: React.FC = () => {
                       label: '',
                       defaultBaseUrl: 'https://',
                       asyncCapable: true,
-                      timeouts: { requestMs: 60_000 },
+                      timeouts: { requestMs: 60_000, pollIntervalMs: 2_000, pollTimeoutMs: 600_000 },
                     },
                   ])
                 }
@@ -2079,87 +2163,173 @@ const AdminProviderKeysPanel: React.FC = () => {
                 添加聚合商
               </button>
             </div>
-            <div className="space-y-2">
+            <div className="space-y-3">
               {openAiCompatibleProvidersDraft.length ? (
                 openAiCompatibleProvidersDraft.map((row, index) => (
-                  <div key={`oai-compat-${index}`} className="grid gap-2 rounded-md border border-white/[0.06] bg-black/20 p-3 md:grid-cols-[1fr_1fr_1.4fr_90px_72px_56px]">
-                    <label className="block">
-                      <span className="text-[10px] text-gray-500">providerId</span>
-                      <input
-                        value={row.providerId}
-                        disabled={!canWriteOps || savingModelOps}
-                        onChange={(ev) =>
-                          setOpenAiCompatibleProvidersDraft((prev) =>
-                            prev.map((item, i) => (i === index ? { ...item, providerId: ev.target.value.trim() } : item))
-                          )
-                        }
-                        className="mt-1 w-full rounded-md border border-white/[0.08] bg-[#0a0a0c] px-2 py-1.5 text-[11px] text-gray-100 disabled:opacity-40"
-                      />
-                    </label>
-                    <label className="block">
-                      <span className="text-[10px] text-gray-500">显示名</span>
-                      <input
-                        value={row.label || ''}
-                        disabled={!canWriteOps || savingModelOps}
-                        onChange={(ev) =>
-                          setOpenAiCompatibleProvidersDraft((prev) =>
-                            prev.map((item, i) => (i === index ? { ...item, label: ev.target.value } : item))
-                          )
-                        }
-                        className="mt-1 w-full rounded-md border border-white/[0.08] bg-[#0a0a0c] px-2 py-1.5 text-[11px] text-gray-100 disabled:opacity-40"
-                      />
-                    </label>
-                    <label className="block">
-                      <span className="text-[10px] text-gray-500">baseURL</span>
-                      <input
-                        value={row.defaultBaseUrl || row.baseUrl || ''}
-                        disabled={!canWriteOps || savingModelOps}
-                        onChange={(ev) =>
-                          setOpenAiCompatibleProvidersDraft((prev) =>
-                            prev.map((item, i) => (i === index ? { ...item, defaultBaseUrl: ev.target.value.trim() } : item))
-                          )
-                        }
-                        className="mt-1 w-full rounded-md border border-white/[0.08] bg-[#0a0a0c] px-2 py-1.5 text-[11px] text-gray-100 disabled:opacity-40"
-                      />
-                    </label>
-                    <label className="block">
-                      <span className="text-[10px] text-gray-500">超时 ms</span>
-                      <input
-                        inputMode="numeric"
-                        value={String(row.timeouts?.requestMs || row.requestTimeoutMs || 60000)}
-                        disabled={!canWriteOps || savingModelOps}
-                        onChange={(ev) => {
-                          const requestMs = Math.max(1000, Math.floor(Number(ev.target.value) || 60000));
-                          setOpenAiCompatibleProvidersDraft((prev) =>
-                            prev.map((item, i) =>
-                              i === index ? { ...item, timeouts: { ...(item.timeouts || {}), requestMs }, requestTimeoutMs: requestMs } : item
+                  <div key={`oai-compat-${index}`} className="space-y-2 rounded-md border border-white/[0.06] bg-black/20 p-3">
+                    <div className="grid gap-2 md:grid-cols-[1fr_1fr_1.4fr_90px_72px_56px]">
+                      <label className="block">
+                        <span className="text-[10px] text-gray-500">providerId</span>
+                        <input
+                          value={row.providerId}
+                          disabled={!canWriteOps || savingModelOps}
+                          onChange={(ev) =>
+                            setOpenAiCompatibleProvidersDraft((prev) =>
+                              prev.map((item, i) => (i === index ? { ...item, providerId: ev.target.value.trim() } : item))
                             )
+                          }
+                          className="mt-1 w-full rounded-md border border-white/[0.08] bg-[#0a0a0c] px-2 py-1.5 text-[11px] text-gray-100 disabled:opacity-40"
+                        />
+                      </label>
+                      <label className="block">
+                        <span className="text-[10px] text-gray-500">显示名</span>
+                        <input
+                          value={row.label || ''}
+                          disabled={!canWriteOps || savingModelOps}
+                          onChange={(ev) =>
+                            setOpenAiCompatibleProvidersDraft((prev) =>
+                              prev.map((item, i) => (i === index ? { ...item, label: ev.target.value } : item))
+                            )
+                          }
+                          className="mt-1 w-full rounded-md border border-white/[0.08] bg-[#0a0a0c] px-2 py-1.5 text-[11px] text-gray-100 disabled:opacity-40"
+                        />
+                      </label>
+                      <label className="block">
+                        <span className="text-[10px] text-gray-500">baseURL</span>
+                        <input
+                          value={row.defaultBaseUrl || row.baseUrl || ''}
+                          disabled={!canWriteOps || savingModelOps}
+                          onChange={(ev) =>
+                            setOpenAiCompatibleProvidersDraft((prev) =>
+                              prev.map((item, i) => (i === index ? { ...item, defaultBaseUrl: ev.target.value.trim() } : item))
+                            )
+                          }
+                          className="mt-1 w-full rounded-md border border-white/[0.08] bg-[#0a0a0c] px-2 py-1.5 text-[11px] text-gray-100 disabled:opacity-40"
+                        />
+                      </label>
+                      <label className="block">
+                        <span className="text-[10px] text-gray-500">请求超时 ms</span>
+                        <input
+                          inputMode="numeric"
+                          value={String(row.timeouts?.requestMs || row.requestTimeoutMs || 60000)}
+                          disabled={!canWriteOps || savingModelOps}
+                          onChange={(ev) => {
+                            const requestMs = Math.max(1000, Math.floor(Number(ev.target.value) || 60000));
+                            setOpenAiCompatibleProvidersDraft((prev) =>
+                              prev.map((item, i) =>
+                                i === index ? { ...item, timeouts: { ...(item.timeouts || {}), requestMs }, requestTimeoutMs: requestMs } : item
+                              )
+                            );
+                          }}
+                          className="mt-1 w-full rounded-md border border-white/[0.08] bg-[#0a0a0c] px-2 py-1.5 text-[11px] text-gray-100 disabled:opacity-40"
+                        />
+                      </label>
+                      <label className="flex items-end gap-2 pb-2 text-[11px] text-gray-300">
+                        <input
+                          type="checkbox"
+                          checked={row.asyncCapable === true}
+                          disabled={!canWriteOps || savingModelOps}
+                          onChange={(ev) =>
+                            setOpenAiCompatibleProvidersDraft((prev) =>
+                              prev.map((item, i) => (i === index ? { ...item, asyncCapable: ev.target.checked } : item))
+                            )
+                          }
+                        />
+                        异步
+                      </label>
+                      <button
+                        type="button"
+                        disabled={!canWriteOps || savingModelOps}
+                        onClick={() => {
+                          setOpenAiCompatibleProvidersDraft((prev) => prev.filter((_, i) => i !== index));
+                          setOaiModelMappingTextByIndex({});
+                        }}
+                        className="self-end rounded-md border border-red-500/25 bg-red-950/20 px-2 py-1.5 text-[10px] text-red-100 disabled:opacity-40"
+                      >
+                        删除
+                      </button>
+                    </div>
+                    <div className="grid gap-2 md:grid-cols-2">
+                      <label className="block">
+                        <span className="text-[10px] text-gray-500">轮询间隔 ms（异步）</span>
+                        <input
+                          inputMode="numeric"
+                          value={String(row.timeouts?.pollIntervalMs || '')}
+                          placeholder="2000"
+                          disabled={!canWriteOps || savingModelOps || row.asyncCapable !== true}
+                          onChange={(ev) => {
+                            const raw = ev.target.value.trim();
+                            const pollIntervalMs = raw ? Math.max(200, Math.floor(Number(raw) || 2000)) : undefined;
+                            setOpenAiCompatibleProvidersDraft((prev) =>
+                              prev.map((item, i) => {
+                                if (i !== index) return item;
+                                const timeouts = { ...(item.timeouts || {}) };
+                                if (pollIntervalMs == null) delete timeouts.pollIntervalMs;
+                                else timeouts.pollIntervalMs = pollIntervalMs;
+                                return { ...item, timeouts };
+                              })
+                            );
+                          }}
+                          className="mt-1 w-full rounded-md border border-white/[0.08] bg-[#0a0a0c] px-2 py-1.5 text-[11px] text-gray-100 disabled:opacity-40"
+                        />
+                      </label>
+                      <label className="block">
+                        <span className="text-[10px] text-gray-500">轮询总超时 ms（异步）</span>
+                        <input
+                          inputMode="numeric"
+                          value={String(row.timeouts?.pollTimeoutMs || '')}
+                          placeholder="600000"
+                          disabled={!canWriteOps || savingModelOps || row.asyncCapable !== true}
+                          onChange={(ev) => {
+                            const raw = ev.target.value.trim();
+                            const pollTimeoutMs = raw ? Math.max(5000, Math.floor(Number(raw) || 600000)) : undefined;
+                            setOpenAiCompatibleProvidersDraft((prev) =>
+                              prev.map((item, i) => {
+                                if (i !== index) return item;
+                                const timeouts = { ...(item.timeouts || {}) };
+                                if (pollTimeoutMs == null) delete timeouts.pollTimeoutMs;
+                                else timeouts.pollTimeoutMs = pollTimeoutMs;
+                                return { ...item, timeouts };
+                              })
+                            );
+                          }}
+                          className="mt-1 w-full rounded-md border border-white/[0.08] bg-[#0a0a0c] px-2 py-1.5 text-[11px] text-gray-100 disabled:opacity-40"
+                        />
+                      </label>
+                    </div>
+                    <label className="block">
+                      <span className="text-[10px] text-gray-500">模型映射（每行 canonical=upstream，或 JSON）</span>
+                      <textarea
+                        value={
+                          oaiModelMappingTextByIndex[index] ??
+                          formatOpenAiCompatibleModelMappingText(row.modelMapping)
+                        }
+                        disabled={!canWriteOps || savingModelOps}
+                        rows={3}
+                        placeholder={'gpt-image-2=gpt-image-1\n# 或 {"gpt-image-2":"gpt-image-1"}'}
+                        onChange={(ev) => {
+                          const text = ev.target.value;
+                          setOaiModelMappingTextByIndex((prev) => ({ ...prev, [index]: text }));
+                          const modelMapping = parseOpenAiCompatibleModelMappingText(text);
+                          if (!text.trim()) {
+                            setOpenAiCompatibleProvidersDraft((prev) =>
+                              prev.map((item, i) => {
+                                if (i !== index) return item;
+                                const next = { ...item };
+                                delete next.modelMapping;
+                                return next;
+                              })
+                            );
+                            return;
+                          }
+                          if (!modelMapping) return;
+                          setOpenAiCompatibleProvidersDraft((prev) =>
+                            prev.map((item, i) => (i === index ? { ...item, modelMapping } : item))
                           );
                         }}
-                        className="mt-1 w-full rounded-md border border-white/[0.08] bg-[#0a0a0c] px-2 py-1.5 text-[11px] text-gray-100 disabled:opacity-40"
+                        className="mt-1 w-full rounded-md border border-white/[0.08] bg-[#0a0a0c] px-2 py-1.5 font-mono text-[11px] text-gray-100 disabled:opacity-40"
                       />
                     </label>
-                    <label className="flex items-end gap-2 pb-2 text-[11px] text-gray-300">
-                      <input
-                        type="checkbox"
-                        checked={row.asyncCapable === true}
-                        disabled={!canWriteOps || savingModelOps}
-                        onChange={(ev) =>
-                          setOpenAiCompatibleProvidersDraft((prev) =>
-                            prev.map((item, i) => (i === index ? { ...item, asyncCapable: ev.target.checked } : item))
-                          )
-                        }
-                      />
-                      异步
-                    </label>
-                    <button
-                      type="button"
-                      disabled={!canWriteOps || savingModelOps}
-                      onClick={() => setOpenAiCompatibleProvidersDraft((prev) => prev.filter((_, i) => i !== index))}
-                      className="self-end rounded-md border border-red-500/25 bg-red-950/20 px-2 py-1.5 text-[10px] text-red-100 disabled:opacity-40"
-                    >
-                      删除
-                    </button>
                   </div>
                 ))
               ) : (

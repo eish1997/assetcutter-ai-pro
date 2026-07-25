@@ -482,7 +482,7 @@ const UsageSettingsPanel: React.FC<{
             <span className="block">
               文本：按<strong className="text-gray-500 font-normal">次（起）</strong>公示，长对话按实际用量结算；
               生图 Gemini/OpenAI：<strong className="text-gray-500 font-normal">张（一口价）</strong>，提示词 token 已含在内；
-              即梦/3D/视频/数字人：<strong className="text-gray-500 font-normal">次（一口价）</strong>。
+              即梦/3D/视频：<strong className="text-gray-500 font-normal">次（一口价）</strong>。
             </span>
             <span className="block text-gray-500">自备 API Key 的通道：0 积分 · 仅记用量</span>
           </p>

@@ -124,11 +124,4 @@ export const DEFAULT_PRICE_CATALOG: PriceCatalogEntry[] = [
     displayName: '即梦 视频 3.0 Pro (estimate)',
     vendorSkuRef: 'jimeng_ti2v_v30_pro',
   },
-  {
-    billingSku: 'digital_human.jimeng.omnihuman-v10',
-    meterKind: 'task',
-    perUnit: 0.35,
-    displayName: '即梦 OmniHuman 1.0 (estimate)',
-    vendorSkuRef: 'omnihuman_v1',
-  },
 ];

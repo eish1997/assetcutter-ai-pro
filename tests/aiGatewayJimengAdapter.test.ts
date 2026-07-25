@@ -124,8 +124,9 @@ describe('Jimeng visual AI gateway video worker', () => {
   it('returns an explicit soft-cancel result when Jimeng hard cancel is unavailable', async () => {
     const plan = createAiGatewayJobPlan({
       id: 'aijob_jimeng_cancel',
+      provider: 'volcengine-jimeng',
       modality: 'video',
-      input: { prompt: 'clip' },
+      input: { registryId: 'jimeng-video-ti2v-v30-pro', prompt: 'clip' },
       metadata: { jimengTaskId: 'jimeng_task_cancel', upstreamTaskId: 'jimeng_task_cancel' },
     });
 
@@ -141,8 +142,9 @@ describe('Jimeng visual AI gateway video worker', () => {
     const store = createInMemoryAiJobStore();
     const plan = await store.put(createAiGatewayJobPlan({
       id: 'aijob_jimeng_video_keyed',
+      provider: 'volcengine-jimeng',
       modality: 'video',
-      input: { prompt: 'cinematic product clip' },
+      input: { registryId: 'jimeng-video-ti2v-v30-pro', prompt: 'cinematic product clip' },
     }));
     const submitJimengTaskImpl = vi.fn().mockResolvedValue({ ok: true, taskId: 'jimeng_task_keyed' });
     const pollJimengTaskImpl = vi.fn().mockResolvedValue({ ok: true, status: 200, body: { status: 'done', videoUrl: 'https://cdn.example.com/keyed.mp4' } });

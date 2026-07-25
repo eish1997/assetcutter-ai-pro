@@ -4,6 +4,7 @@ import path from 'path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import {
+  autoCircuitErrorReason,
   evaluateAiGatewayProviderAutoCircuit,
   mergeAiGatewayOpsControlAction,
   maybeAutoPauseAiGatewayProvider,
@@ -248,15 +249,58 @@ describe('AI Gateway ops control config', () => {
     });
   });
 
-  it('auto-pauses a provider when recent failures cross the circuit threshold', async () => {
+  it('B8: does not auto-pause from unstructured error message strings alone', async () => {
     const file = path.join(os.tmpdir(), `ac-aig-ops-${Date.now()}-${Math.random().toString(36).slice(2)}.json`);
     tempFiles.add(file);
     process.env.AI_GATEWAY_OPS_CONTROL_PATH = file;
     process.env.AI_GATEWAY_AUTO_CIRCUIT_ENABLED = 'true';
 
+    expect(autoCircuitErrorReason(new Error('HTTP 429 Too Many Requests'))).toBe('');
+    expect(autoCircuitErrorReason(new Error('HTTP 503 upstream unavailable'))).toBe('');
+
     const config = await maybeAutoPauseAiGatewayProvider(
       plan('tripo', 'failed', 'HTTP 429 Too Many Requests'),
       new Error('HTTP 429 Too Many Requests'),
+      {
+        recentPlans: [plan('tripo', 'failed', 'HTTP 503 upstream unavailable'), plan('tripo', 'succeeded')],
+        ttlMinutes: 5,
+      }
+    );
+    expect(config).toBeNull();
+  });
+
+  it('B8: auto-pauses only when triggering error has structured failureReason', async () => {
+    const file = path.join(os.tmpdir(), `ac-aig-ops-${Date.now()}-${Math.random().toString(36).slice(2)}.json`);
+    tempFiles.add(file);
+    process.env.AI_GATEWAY_OPS_CONTROL_PATH = file;
+    process.env.AI_GATEWAY_AUTO_CIRCUIT_ENABLED = 'true';
+
+    const structured = Object.assign(new Error('HTTP 429 Too Many Requests'), {
+      failureReason: {
+        code: 'AI_GATEWAY_UPSTREAM_RATE_LIMITED',
+        stage: 'upstream',
+        owner: 'upstream',
+      },
+    });
+    expect(autoCircuitErrorReason(structured)).toBe('auto circuit: rate limited');
+    expect(
+      autoCircuitErrorReason(null, {
+        job: {
+          metadata: {
+            gatewayFailure: { code: 'AI_GATEWAY_UPSTREAM_UNAVAILABLE', stage: 'upstream' },
+          },
+        },
+      })
+    ).toBe('auto circuit: upstream unstable');
+    expect(
+      autoCircuitErrorReason({
+        failureReason: { code: 'AI_GATEWAY_CREDITS_EXCEEDED', stage: 'billing' },
+      })
+    ).toBe('');
+
+    const config = await maybeAutoPauseAiGatewayProvider(
+      plan('tripo', 'failed', 'HTTP 429 Too Many Requests'),
+      structured,
       {
         recentPlans: [plan('tripo', 'failed', 'HTTP 503 upstream unavailable'), plan('tripo', 'succeeded')],
         ttlMinutes: 5,

@@ -8,8 +8,8 @@
  * - **直通再导出**：贴图、擂台、对话等同名函数从 `geminiService` 再导出，仅收敛 import 路径。
  * - **Tripo**：生 3D 任务 API 经本文件 re-export。
  * - **腾讯混元生 3D（ai3d）**：`**tencentService**` 全量再导出；UI/hooks 勿直连该文件（与 Tripo 同纪律）。
- * - **生视频**：配置 **`VITE_WORKFLOW_VIDEO_API_URL`** 时 `workflowGenerateVideo` POST 桥接后端；未配置则抛 **`WorkflowVideoNotAvailableError`**；**`isWorkflowVideoAvailable()`** 反映是否已配置 URL。
- * - **即梦 Jimeng**：`workflowGenerateImageJimeng` / `workflowGenerateVideoJimeng` / `workflowGenerateDigitalHumanJimeng` 经站内 `/api/jimeng/*`；**`isJimengAvailable()`** 读 status API。
+ * - **生视频**：`workflowGenerateVideo` **只走** AI Gateway Job（`aiGatewayVideoExecution`）。
+ * - **即梦 Jimeng**：`workflowGenerateImageJimeng` / `workflowGenerateVideoJimeng` **只走** AI Gateway（`jimeng-visual`）。**`isJimengAvailable()`** 读 status API。
  * - **排障**：构建变量 **`VITE_DEBUG_UNIFIED_AI=1`** 时，`workflow*` 委托在控制台输出 **`[unified-ai]`** 行 + **结构化第二参数**（`provider`、`registryId`/`model`、失败时的 **`errorHint`** 启发式分类），默认关闭。
  * - **Gemini 代理公平限流**：代理返回 **`rate_limited` / `queue_overflow`** 时底层抛 **`AiWorkerProxyFairnessRejectedError`**（本文件再导出）；**`throwFairnessRejected`** 同步派发 **`ac:ai-worker-proxy-fairness-rejected`** 供根组件浮层提示。
  * - **工作流软提示**：凡经 **`runMeteredAiCall`** 的 **`workflow*`** 失败且启发式为限流/繁忙（且**非**公平拒绝类）时，节流派发 **`ac:unified-ai-soft-notice`**（见 **`unifiedAiSoftNotice.ts`**）；对话等经本文件 **`getDialogTextResponse`** 包装同样走 gate。
@@ -34,7 +34,6 @@ import {
   generateNewChallenger as generateNewChallengerRaw,
   translateToChinese as translateToChineseRaw,
   analyzeStoryboardSheetStructureInImage as analyzeStoryboardSheetStructureInImageRaw,
-  type GeminiImageBatchGroupOptions,
   type GeminiRequestOptions,
 } from "./geminiService";
 import {
@@ -46,31 +45,25 @@ import {
   WorkflowVideoNotAvailableError,
   type WorkflowVideoJobInput,
   type WorkflowVideoJobResult,
-  isWorkflowVideoBridgeConfigured,
-  requestWorkflowVideoFromEnv,
 } from "./workflowVideoBridge";
 import {
   createAndPollAiGatewayVideoJob,
   isAiGatewayVideoExecutionEnabled,
 } from "./aiGatewayVideoExecution";
+import {
+  createAndPollAiGatewayJimengImageJob,
+  createAndPollAiGatewayJimengVideoJob,
+} from "./aiGatewayJimengExecution";
+import { runUnifiedImageGeneration } from "./generation/runUnifiedGeneration";
 import { AiWorkerProxyFairnessRejectedError } from "./aiWorkerProxyFairnessError";
 import { dispatchUnifiedAiSoftNotice, clipUnifiedAiNoticeMessage } from "./unifiedAiSoftNotice";
-import { emitMeteredUsageAfterDelivery } from "./observability/metering/pipeline";
-import { meterReadingFromTask } from "./observability/metering/adapters/task";
-import { resolveBillingSkuForWorkflowVideo, resolveBillingSkuForJimeng } from "./usageBillingSku";
 import { gateBeforeUpstream } from "./aiDispatchGate";
 import { markCreditsProxyHeadersFromGate } from "./creditsProxyBridge";
-import { HttpRequestError } from "./httpClient";
 import type { BillingDecision } from "../shared/billingDecision";
 import { peekCorrelationContext } from "./observability/correlationContext";
-import {
-  submitAndPollJimengImage,
-  submitAndPollJimengOmniHuman,
-  submitAndPollJimengVideo,
-} from "./jimeng/adapter";
 import { isJimengAvailable as isJimengAvailableImpl } from "./jimeng/client";
 import { JimengNotConfiguredError } from "./jimeng/errors";
-import type { JimengOmniHumanInput, JimengSubmitInput } from "./jimeng/types";
+import type { JimengSubmitInput } from "./jimeng/types";
 import {
   createTripoTask as createTripoTaskImpl,
   getTripoTask as getTripoTaskImpl,
@@ -91,28 +84,10 @@ export type UnifiedAiJobKind =
   | "workflow_generate_3d"
   | "workflow_generate_video"
   | "workflow_jimeng_image"
-  | "workflow_jimeng_video"
-  | "workflow_jimeng_digital_human";
+  | "workflow_jimeng_video";
 
 /** @deprecated 请优先使用 `UnifiedAiJobKind` */
 export type WorkflowAiJobKind = UnifiedAiJobKind;
-
-const AI_GATEWAY_GOVERNANCE_ERROR_CODES = new Set([
-  'AI_GATEWAY_MODEL_NOT_PUBLISHED',
-  'AI_GATEWAY_MODEL_ADAPTER_PENDING',
-  'AI_GATEWAY_MODEL_ROUTE_NOT_FOUND',
-  'AI_GATEWAY_MODEL_ROUTE_NOT_EXECUTABLE',
-  'AI_GATEWAY_PROVIDER_KEY_UNAVAILABLE',
-  'AI_GATEWAY_PROVIDER_KEY_MISSING',
-  'AI_GATEWAY_PROVIDER_PAUSED',
-  'AI_GATEWAY_MODEL_PAUSED',
-  'AI_GATEWAY_NO_PROVIDER_ROUTE',
-]);
-
-function isAiGatewayGovernanceError(error: unknown): boolean {
-  if (!(error instanceof HttpRequestError)) return false;
-  return Boolean(error.code && AI_GATEWAY_GOVERNANCE_ERROR_CODES.has(error.code));
-}
 
 function isViteDebugUnifiedAi(): boolean {
   try {
@@ -179,11 +154,6 @@ type RunMeteredAiCallParams = {
 export type MeteredAiCallContext = {
   billingDecision: BillingDecision;
 };
-
-function extraMetaFromBillingDecision(billingDecision: BillingDecision): Record<string, unknown> | undefined {
-  if (billingDecision.routeKind === "platform") return undefined;
-  return { byok: true, billingRouteKind: billingDecision.routeKind };
-}
 
 /**
  * 包装全部 metered AI 调用：upstream 前 `gateBeforeUpstream`；始终 try/catch；
@@ -276,7 +246,7 @@ export {
 } from "./geminiService";
 
 export { CAPABILITY_UNDERSTAND_RETRY_OPTIONS };
-export type { GeminiImageBatchGroupOptions, GeminiRequestOptions };
+export type { GeminiRequestOptions };
 
 /** @kind workflow_chat — 纯文字对话（经 gate） */
 export async function getDialogTextResponse(
@@ -332,18 +302,29 @@ export async function dialogGenerateImage(
       kind: "workflow_text_to_image",
       registryId: resolvedModel,
       role: "image",
-      debugFields: () => ({ registryId: resolvedModel }),
+      debugFields: () => ({
+        registryId: resolvedModel,
+        imagePath: "ai_gateway",
+      }),
     },
-    () =>
-      dialogGenerateImageRaw(
-        imageBase64,
-        instruction,
-        model,
-        options,
-        customSystemPrompt,
+    async ({ billingDecision }) => {
+      const estimatedCredits = Number(billingDecision.platformReserve?.estimatedCredits || 134);
+      return runUnifiedImageGeneration({
+        prompt: instruction,
+        model: resolvedModel || String(model || "").trim() || "gemini-2.5-flash-image",
+        registryId: resolvedModel,
+        canonicalModelId: resolvedModel,
+        referenceImages: imageBase64 ? [imageBase64] : [],
+        imageOptions: options,
+        systemInstruction: customSystemPrompt,
+        uiSource: "unifiedAiGateway.dialogGenerateImage",
+        estimatedCredits,
         abortSignal,
-        requestOptions
-      )
+        metadata: {
+          source: "unifiedAiGateway.dialogGenerateImage",
+        },
+      });
+    }
   );
 }
 
@@ -438,17 +419,36 @@ export async function workflowGenerateImageMultiRefs(
   abortSignal?: Parameters<typeof dialogGenerateImageMulti>[4],
   requestOptions?: Parameters<typeof dialogGenerateImageMulti>[5]
 ): ReturnType<typeof dialogGenerateImageMulti> {
+  const resolvedModel = model != null && model !== "" ? String(model) : undefined;
   return runMeteredAiCall(
     {
       kind: "workflow_image_edit",
-      registryId: model != null && model !== "" ? String(model) : undefined,
+      registryId: resolvedModel,
       role: "image",
       debugFields: () => ({
-        registryId: model != null && model !== "" ? String(model) : undefined,
+        registryId: resolvedModel,
         refImageCount: String(Array.isArray(imagesBase64) ? imagesBase64.length : 0),
+        imagePath: "ai_gateway",
       }),
     },
-    () => dialogGenerateImageMultiRaw(imagesBase64, instruction, model, options, abortSignal, requestOptions)
+    async ({ billingDecision }) => {
+      const estimatedCredits = Number(billingDecision.platformReserve?.estimatedCredits || 134);
+      return runUnifiedImageGeneration({
+        prompt: instruction,
+        model: resolvedModel || String(model || "").trim() || "gemini-2.5-flash-image",
+        registryId: resolvedModel,
+        canonicalModelId: resolvedModel,
+        referenceImages: Array.isArray(imagesBase64) ? imagesBase64 : [],
+        imageOptions: options,
+        uiSource: "unifiedAiGateway.workflowGenerateImageMultiRefs",
+        estimatedCredits,
+        abortSignal,
+        metadata: {
+          source: "unifiedAiGateway.workflowGenerateImageMultiRefs",
+          referenceImageCount: Array.isArray(imagesBase64) ? imagesBase64.length : 0,
+        },
+      });
+    }
   );
 }
 
@@ -556,16 +556,11 @@ export async function translateToChinese(
   );
 }
 
-/** @kind workflow_image_edit — 多参考生图（经 gate） */
+/** @kind workflow_image_edit — 多参考生图（经 gate）；仅 AI Gateway */
 export async function dialogGenerateImageMulti(
   ...args: Parameters<typeof dialogGenerateImageMultiRaw>
 ): ReturnType<typeof dialogGenerateImageMultiRaw> {
-  const model = args[2];
-  const resolvedModel = model != null && model !== "" ? String(model) : undefined;
-  return runMeteredAiCall(
-    { kind: "workflow_image_edit", registryId: resolvedModel, role: "image", debugFields: () => ({ registryId: resolvedModel }) },
-    () => dialogGenerateImageMultiRaw(...args)
-  );
+  return workflowGenerateImageMultiRefs(...args);
 }
 
 /** @kind workflow_chat — 分镜表结构分析（经 gate） */
@@ -690,18 +685,18 @@ export async function startTencent3DRapidJob(
   );
 }
 
-// ----- 生视频（HTTP 桥，实现见 workflowVideoBridge.ts） -----
+// ----- 生视频（仅 AI Gateway Job） -----
 
 export type { WorkflowVideoJobInput, WorkflowVideoJobResult };
 export { WorkflowVideoNotAvailableError };
 
 export function isWorkflowVideoAvailable(): boolean {
-  return isAiGatewayVideoExecutionEnabled() || isWorkflowVideoBridgeConfigured();
+  return isAiGatewayVideoExecutionEnabled();
 }
 
-/** @kind workflow_generate_video — AI Gateway video worker first, legacy endpoint as fallback */
+/** @kind workflow_generate_video — 仅 AI Gateway Job */
 export async function workflowGenerateVideo(input: WorkflowVideoJobInput): Promise<WorkflowVideoJobResult> {
-  if (!isAiGatewayVideoExecutionEnabled() && !isWorkflowVideoBridgeConfigured()) {
+  if (!isAiGatewayVideoExecutionEnabled()) {
     throw new WorkflowVideoNotAvailableError();
   }
   return runMeteredAiCall(
@@ -710,55 +705,30 @@ export async function workflowGenerateVideo(input: WorkflowVideoJobInput): Promi
       debugFields: () => ({
         promptLen: String((input.prompt || "").length),
         refImageCount: String(input.referenceImages?.length ?? 0),
+        videoPath: "ai_gateway",
       }),
     },
     async ({ billingDecision }) => {
       const estimatedCredits = Number(billingDecision.platformReserve?.estimatedCredits || 50);
-      let result: WorkflowVideoJobResult;
-      let settledByAiGateway = false;
-      try {
-        if (!isAiGatewayVideoExecutionEnabled()) throw new WorkflowVideoNotAvailableError();
-        result = await createAndPollAiGatewayVideoJob({
-          ...input,
-          registryId: input.registryId || "jimeng-video-ti2v-v30-pro",
-          estimatedCredits,
-        });
-        settledByAiGateway = true;
-      } catch (e) {
-        if (isAiGatewayGovernanceError(e)) throw e;
-        if (!isWorkflowVideoBridgeConfigured()) throw e;
-        result = await requestWorkflowVideoFromEnv(input);
-      }
-      const requestId =
-        (result as { jobId?: string; taskId?: string }).jobId ||
-        (result as { jobId?: string; taskId?: string }).taskId ||
-        `video-${Date.now()}`;
-      if (!settledByAiGateway) {
-        emitMeteredUsageAfterDelivery({
-          reading: meterReadingFromTask({ provider: "workflow-video", modality: "video" }),
-          registryId: "workflow-video",
-          billingSku: resolveBillingSkuForWorkflowVideo(),
-          idempotencyPrefix: `workflow-video:${requestId}`,
-          requestId: String(requestId),
-          jobKind: "workflow_generate_video",
-          extraMeta: extraMetaFromBillingDecision(billingDecision),
-        });
-      }
-      return result;
+      return createAndPollAiGatewayVideoJob({
+        ...input,
+        registryId: input.registryId || "jimeng-video-ti2v-v30-pro",
+        estimatedCredits,
+      });
     }
   );
 }
 
 // ----- 即梦 Jimeng（volcengine-jimeng，实现见 services/jimeng/*） -----
 
-export type { JimengSubmitInput, JimengOmniHumanInput };
+export type { JimengSubmitInput };
 export { JimengNotConfiguredError };
 
 export async function isJimengAvailable(): Promise<boolean> {
   return isJimengAvailableImpl();
 }
 
-/** @kind workflow_jimeng_image */
+/** @kind workflow_jimeng_image — 仅 AI Gateway（jimeng-visual） */
 export async function workflowGenerateImageJimeng(
   input: JimengSubmitInput
 ): Promise<{ images: string[] }> {
@@ -774,25 +744,21 @@ export async function workflowGenerateImageJimeng(
         provider: "volcengine-jimeng",
         registryId: input.registryId,
         promptLen: String((input.prompt || "").length),
+        jimengPath: "ai_gateway",
       }),
     },
     async ({ billingDecision }) => {
-      const result = await submitAndPollJimengImage(input);
-      emitMeteredUsageAfterDelivery({
-        reading: meterReadingFromTask({ provider: "volcengine-jimeng", modality: "task" }),
-        registryId: input.registryId,
-        billingSku: resolveBillingSkuForJimeng(input.registryId),
-        idempotencyPrefix: `jimeng:${result.taskId}`,
-        requestId: result.taskId,
-        jobKind: "workflow_jimeng_image",
-        extraMeta: extraMetaFromBillingDecision(billingDecision),
+      const estimatedCredits = Number(billingDecision.platformReserve?.estimatedCredits || 50);
+      const result = await createAndPollAiGatewayJimengImageJob({
+        ...input,
+        estimatedCredits,
       });
       return { images: result.images };
     }
   );
 }
 
-/** @kind workflow_jimeng_video */
+/** @kind workflow_jimeng_video — 仅 AI Gateway（jimeng-visual） */
 export async function workflowGenerateVideoJimeng(
   input: JimengSubmitInput
 ): Promise<WorkflowVideoJobResult> {
@@ -808,53 +774,15 @@ export async function workflowGenerateVideoJimeng(
         provider: "volcengine-jimeng",
         registryId: input.registryId,
         promptLen: String((input.prompt || "").length),
+        jimengPath: "ai_gateway",
       }),
     },
     async ({ billingDecision }) => {
-      const result = await submitAndPollJimengVideo(input);
-      emitMeteredUsageAfterDelivery({
-        reading: meterReadingFromTask({ provider: "volcengine-jimeng", modality: "video" }),
-        registryId: input.registryId,
-        billingSku: resolveBillingSkuForJimeng(input.registryId),
-        idempotencyPrefix: `jimeng:${result.taskId}`,
-        requestId: result.taskId,
-        jobKind: "workflow_jimeng_video",
-        extraMeta: extraMetaFromBillingDecision(billingDecision),
+      const estimatedCredits = Number(billingDecision.platformReserve?.estimatedCredits || 88);
+      return createAndPollAiGatewayJimengVideoJob({
+        ...input,
+        estimatedCredits,
       });
-      return { videoUrl: result.videoUrl };
-    }
-  );
-}
-
-/** @kind workflow_jimeng_digital_human */
-export async function workflowGenerateDigitalHumanJimeng(
-  input: JimengOmniHumanInput
-): Promise<WorkflowVideoJobResult> {
-  if (!(await isJimengAvailable())) {
-    throw new JimengNotConfiguredError();
-  }
-  return runMeteredAiCall(
-    {
-      kind: "workflow_jimeng_digital_human",
-      registryId: input.registryId,
-      role: "image",
-      debugFields: () => ({
-        provider: "volcengine-jimeng",
-        registryId: input.registryId,
-      }),
-    },
-    async ({ billingDecision }) => {
-      const result = await submitAndPollJimengOmniHuman(input);
-      emitMeteredUsageAfterDelivery({
-        reading: meterReadingFromTask({ provider: "volcengine-jimeng", modality: "task" }),
-        registryId: input.registryId,
-        billingSku: resolveBillingSkuForJimeng(input.registryId),
-        idempotencyPrefix: `jimeng:${result.taskId}`,
-        requestId: result.taskId,
-        jobKind: "workflow_jimeng_digital_human",
-        extraMeta: extraMetaFromBillingDecision(billingDecision),
-      });
-      return { videoUrl: result.videoUrl };
     }
   );
 }
