@@ -1,11 +1,31 @@
 import { createTripoTask, getTripoTask, waitTripoTaskDone } from '../unifiedAiGateway';
-import { extractTripoTaskArtifactUrls, isAiGatewayTripoPlatformKey } from '../tripoService';
+import {
+  AI_GATEWAY_TRIPO_PLATFORM_KEY,
+  extractTripoTaskArtifactUrls,
+  isAiGatewayTripoPlatformKey,
+} from '../tripoService';
 import type { TripoCreateTaskInput, TripoTaskResult, TripoTaskType } from '../tripoService';
 import type { CustomAppModule } from '../../types';
 import { normalizeGenerate3DPresetForRun } from './normalizePreset';
 import { createAiJob, getMyAiJob, type AiJobDetail } from '../aiJobsClient';
 import { upsertAiJobSummary } from '../aiJobsStore';
 import { prepareImageDataUrlForTripoUpload } from '../tripoUploadImagePrep';
+import { isAiGatewayModel3dExecutionEnabled } from '../aiGatewayModel3dExecution';
+
+/**
+ * C9/D4: user workflow Tripo always platform Key + Gateway.
+ * BYOK only when model3d execution is explicitly off (dev/diagnostic; blocked in production by false-green).
+ */
+function resolveTripoWorkflowApiKey(apiKey: string): string {
+  if (isAiGatewayModel3dExecutionEnabled()) return AI_GATEWAY_TRIPO_PLATFORM_KEY;
+  const bypass = String(apiKey || '').trim();
+  if (bypass) {
+    console.warn(
+      '[tripoWorkflow] VITE_AI_GATEWAY_MODEL3D_EXECUTION is off — using caller Tripo key (not pre-release safe; D4)'
+    );
+  }
+  return bypass;
+}
 
 const TRIPO_REGISTRY_MODEL_VERSION: Record<string, string> = {
   'tripo-p1': 'P1-20260311',
@@ -141,13 +161,14 @@ export async function tripoWorkflowCreateOrResumeTaskId(params: {
         )
       ) as Partial<Record<'front' | 'back' | 'left' | 'right', string>>
     : params.multiviewImageDataUrls;
+  const apiKey = resolveTripoWorkflowApiKey(params.apiKey);
   const input = buildTripoCreateTaskInputFromPreset({
-    apiKey: params.apiKey,
+    apiKey,
     preset: params.preset,
     imageDataUrl,
     multiviewImageDataUrls,
   });
-  if (isAiGatewayTripoPlatformKey(params.apiKey)) {
+  if (isAiGatewayTripoPlatformKey(apiKey)) {
     const { apiKey: _apiKey, ...gatewayInput } = input;
     const registryId = params.preset.generate3D?.modelRegistryId || 'tripo-p1';
     const detail = await createAiJob({
@@ -228,7 +249,8 @@ export async function tripoWorkflowPollUntilDone(params: {
   timeoutMs?: number;
   intervalMs?: number;
 }): Promise<TripoTaskResult> {
-  const { apiKey, taskId, normalizeApiErrorMessage } = params;
+  const apiKey = resolveTripoWorkflowApiKey(params.apiKey);
+  const { taskId, normalizeApiErrorMessage } = params;
   if (isAiGatewayTripoPlatformKey(apiKey)) {
     const timeoutMs = params.timeoutMs ?? 8 * 60_000;
     const intervalMs = params.intervalMs ?? 3000;

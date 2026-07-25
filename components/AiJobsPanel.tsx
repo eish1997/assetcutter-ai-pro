@@ -11,6 +11,8 @@ import {
   aiJobStatusLabel,
   aiJobStatusTone,
   aiJobTraceLabel,
+  aiJobMediaArchiveStatus,
+  aiJobMediaArchiveUserHint,
   canCancelAiJobStatus,
   canRetryAiJobStatus,
 } from '../services/aiJobDisplay';
@@ -187,7 +189,21 @@ const AiJobsPanel: React.FC<AiJobsPanelProps> = ({ open, signedIn, onClose, onRe
                       <dd className="truncate text-gray-400">{aiJobCreditsLabel(job)}</dd>
                       <dt className="text-gray-600">Trace</dt>
                       <dd className="truncate font-mono text-gray-500">{aiJobTraceLabel(job)}</dd>
+                      <dt className="text-gray-600">归档</dt>
+                      <dd
+                        className={`truncate ${
+                          aiJobMediaArchiveStatus(job) === 'skipped' ? 'text-amber-300' : 'text-gray-500'
+                        }`}
+                      >
+                        {aiJobMediaArchiveStatus(job)}
+                      </dd>
                     </dl>
+
+                    {aiJobMediaArchiveUserHint(job) ? (
+                      <p className="mt-1.5 line-clamp-2 break-words text-[9px] leading-relaxed text-amber-200/85">
+                        {aiJobMediaArchiveUserHint(job)}
+                      </p>
+                    ) : null}
 
                     {job.error?.message ? (
                       <p className="mt-1.5 line-clamp-2 break-words text-[9px] leading-relaxed text-red-300/85">{job.error.message}</p>

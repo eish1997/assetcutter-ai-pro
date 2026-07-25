@@ -60,5 +60,20 @@ jobs:
       - name: Storage / persistence guards
         run: npm run guard:storage
 
+      - name: False-green Vite env guard (C4)
+        run: npm run guard:false-green
+
       - name: Production build
         run: npm run build
+
+      # D1: optional dry-run only — never treat as pre-release green (summary says UNTESTED/DRY-RUN).
+      - name: AI Gateway smoke matrix (optional dry-run; not pre-release green)
+        env:
+          AI_GATEWAY_SMOKE_OPTIONAL: '1'
+          ADMIN_IDENTIFIER: ${{ secrets.ADMIN_IDENTIFIER }}
+          ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
+          AUTH_API_BASE: ${{ vars.AUTH_API_BASE }}
+          ADMIN_ORIGIN: ${{ vars.ADMIN_ORIGIN }}
+        run: |
+          npm run smoke:ai-gateway-matrix -- --dry-run
+          echo "::notice title=AI Gateway smoke::Dry-run/optional matrix is NOT a pre-release pass (see job summary)."

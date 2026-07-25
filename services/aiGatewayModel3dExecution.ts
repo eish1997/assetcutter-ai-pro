@@ -11,6 +11,12 @@ export type AiGatewayModel3dExecutionInput = {
   texture?: boolean;
   geometryQuality?: string;
   textureQuality?: string;
+  /** Tencent Hunyuan Pro/Rapid passthrough (adapter reads these). */
+  enablePBR?: boolean;
+  faceCount?: number;
+  generateType?: string;
+  polygonType?: string;
+  model?: string;
   estimatedCredits?: number;
   abortSignal?: AbortSignal;
 };
@@ -141,6 +147,11 @@ export async function createAndPollAiGatewayModel3dJob(
         texture: input.texture,
         geometryQuality: input.geometryQuality,
         textureQuality: input.textureQuality,
+        ...(typeof input.enablePBR === 'boolean' ? { enablePBR: input.enablePBR } : {}),
+        ...(input.faceCount != null ? { faceCount: input.faceCount } : {}),
+        ...(input.generateType ? { generateType: input.generateType } : {}),
+        ...(input.polygonType ? { polygonType: input.polygonType } : {}),
+        ...(input.model ? { model: input.model } : {}),
         estimatedCredits,
       },
       metadata: {

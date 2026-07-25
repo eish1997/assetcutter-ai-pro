@@ -20,6 +20,7 @@
  */
 
 import { fetch } from 'undici';
+import { exitCodeForStatus as exitCodeForStatusLib } from './ai-gateway-smoke-lib.mjs';
 
 const DEFAULT_AUTH = 'https://assetcutter-auth-api.onrender.com';
 const DEFAULT_ORIGIN = 'https://assetcutter-web.onrender.com';
@@ -34,10 +35,9 @@ export function classifySmokePrereq({ identifier, password, hasProviderKey }) {
   return { status: 'ready', reason: 'ok' };
 }
 
-export function exitCodeForStatus(status, { optional = false } = {}) {
-  if (status === 'ok' || status === 'skipped') return 0;
-  if (status === 'blocked') return optional ? 0 : 2;
-  return 1;
+/** Kept for B15 tests; delegates to shared lib (C10 reportBlocked). */
+export function exitCodeForStatus(status, opts = {}) {
+  return exitCodeForStatusLib(status, opts);
 }
 
 function parseArgs(argv) {
@@ -145,7 +145,11 @@ function pick302Key(keys, providerId, keyId) {
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
-  const optional = String(process.env.AI_GATEWAY_302_SMOKE_OPTIONAL || '').trim() === '1';
+  const optional =
+    String(process.env.AI_GATEWAY_302_SMOKE_OPTIONAL || '').trim() === '1' ||
+    String(process.env.AI_GATEWAY_SMOKE_OPTIONAL || '').trim() === '1';
+  const reportBlocked = String(process.env.AI_GATEWAY_SMOKE_REPORT_BLOCKED || '').trim() === '1';
+  const exitOpts = { optional, reportBlocked };
   const identifier = String(process.env.ADMIN_IDENTIFIER || '').trim();
   const password = String(process.env.ADMIN_PASSWORD || '').trim();
   const providerId = String(process.env.AI_GATEWAY_302_PROVIDER_ID || '302ai').trim().toLowerCase();
@@ -156,7 +160,7 @@ async function main() {
   const early = classifySmokePrereq({ identifier, password, hasProviderKey: true });
   if (early.status === 'blocked' && early.reason === 'missing_admin_credentials') {
     console.error('[smoke:ai-gateway-302] BLOCKED: set ADMIN_IDENTIFIER + ADMIN_PASSWORD');
-    process.exit(exitCodeForStatus('blocked', { optional }));
+    process.exit(exitCodeForStatus('blocked', exitOpts));
   }
 
   const client = new AdminClient({
@@ -174,7 +178,7 @@ async function main() {
     console.error(
       `[smoke:ai-gateway-302] BLOCKED: no usable ${providerId} key in pool (set AI_GATEWAY_302_KEY_ID or add Key)`
     );
-    process.exit(exitCodeForStatus('blocked', { optional }));
+    process.exit(exitCodeForStatus('blocked', exitOpts));
   }
 
   console.log('[smoke:ai-gateway-302] Key Check', key.id, key.label || '');

@@ -20,6 +20,7 @@ import type {
   AiJobSummary,
 } from '../../services/aiJobsClient';
 import { PERMISSIONS } from '../../services/adminPermissions';
+import { navigateAdmin } from '../../services/adminNavigate';
 import { blockIfRolePreview } from '../../services/adminRolePreview';
 import { useAdminStaff } from './AdminStaffContext';
 import {
@@ -29,6 +30,7 @@ import {
   aiJobStatusLabel,
   aiJobStatusTone,
   aiJobTraceLabel,
+  aiJobMediaArchiveStatus,
 } from '../../services/aiJobDisplay';
 import { matchesGatewayFailureFilters } from '../../shared/aiGatewayJobFailureFilters.js';
 import CustomDropdown from '../ui/CustomDropdown';
@@ -138,6 +140,41 @@ export function cleanAdminAiJobFilters(filters: AdminAiJobFilters) {
     failureStage: String(filters.failureStage || '').trim(),
     failureOwner: String(filters.failureOwner || '').trim(),
   };
+}
+
+/** C16 — unify job troubleshooting fields for Admin detail + curl JSON. */
+export function resolveJobObservability(detail: AiJobDetail) {
+  const fromDetail = (detail as AiJobDetail & { observability?: Record<string, unknown> }).observability;
+  const fromJob = detail.job.observability;
+  const card = (fromDetail || fromJob || {}) as {
+    gatewayFailure?: AiJobSummary['gatewayFailure'];
+    proxyJobId?: string | null;
+    mediaArchive?: Record<string, unknown> | null;
+    buildSha?: { auth?: string | null; proxy?: string | null };
+  };
+  return {
+    gatewayFailure: card.gatewayFailure ?? detail.job.gatewayFailure ?? null,
+    proxyJobId: card.proxyJobId ?? detail.job.proxyJobId ?? null,
+    mediaArchive: card.mediaArchive ?? detail.job.mediaArchive ?? null,
+    buildSha: {
+      auth: card.buildSha?.auth ?? null,
+      proxy: card.buildSha?.proxy ?? null,
+    },
+  };
+}
+
+export function formatJobObservabilityLines(detail: AiJobDetail): string[] {
+  const obs = resolveJobObservability(detail);
+  const failure = obs.gatewayFailure as { stage?: string; owner?: string; code?: string; adminMessage?: string } | null;
+  return [
+    `gatewayFailure.stage=${failure?.stage || '-'}`,
+    `gatewayFailure.owner=${failure?.owner || '-'}`,
+    `gatewayFailure.code=${failure?.code || '-'}`,
+    `proxyJobId=${obs.proxyJobId || '-'}`,
+    `mediaArchive=${obs.mediaArchive && typeof obs.mediaArchive === 'object' ? String((obs.mediaArchive as { status?: string }).status || '-') : '-'}`,
+    `buildSha.auth=${obs.buildSha.auth || '-'}`,
+    `buildSha.proxy=${obs.buildSha.proxy || '-'}`,
+  ];
 }
 
 /** @deprecated 服务端已筛；保留供单测对齐 shared/aiGatewayJobFailureFilters。 */
@@ -783,7 +820,41 @@ const AdminAiJobsPanel: React.FC = () => {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 className="text-[12px] font-black uppercase tracking-[0.2em] text-gray-300">AI 任务</h2>
-          <p className="mt-1 text-[10px] text-gray-600">最近 {PAGE_SIZE} 条</p>
+          <p className="mt-1 text-[10px] text-gray-600">
+            Gateway Job · 最近 {PAGE_SIZE} 条
+            {' · '}
+            <button
+              type="button"
+              onClick={() => navigateAdmin('/admin/task-events')}
+              className="text-blue-400 hover:text-blue-300"
+            >
+              任务执行事件
+            </button>
+            {can(PERMISSIONS.AI_GATEWAY_KEYS_READ) ? (
+              <>
+                {' · '}
+                <button
+                  type="button"
+                  onClick={() => navigateAdmin('/admin/ai-provider-keys')}
+                  className="text-blue-400 hover:text-blue-300"
+                >
+                  供应商中心
+                </button>
+              </>
+            ) : null}
+            {can(PERMISSIONS.USAGE_READ) ? (
+              <>
+                {' · '}
+                <button
+                  type="button"
+                  onClick={() => navigateAdmin('/admin/usage')}
+                  className="text-blue-400 hover:text-blue-300"
+                >
+                  AI 用量
+                </button>
+              </>
+            ) : null}
+          </p>
         </div>
         <button
           type="button"
@@ -951,6 +1022,27 @@ const AdminAiJobsPanel: React.FC = () => {
                 <div className="mt-2 text-[10px] text-gray-500">{formatDate(selectedDetail.job.fallback.lastFallbackAt)}</div>
               ) : null}
             </div>
+          </div>
+          <div className="mt-3 rounded-xl border border-violet-500/20 bg-violet-500/5 p-3">
+            <div className="text-[10px] font-semibold text-violet-200/90">排查卡（C16）</div>
+            <dl className="mt-2 grid gap-2 sm:grid-cols-2 lg:grid-cols-4 text-[10px]">
+              {formatJobObservabilityLines(selectedDetail).map((line) => {
+                const eq = line.indexOf('=');
+                const k = eq >= 0 ? line.slice(0, eq) : line;
+                const v = eq >= 0 ? line.slice(eq + 1) : '';
+                return (
+                  <div key={line}>
+                    <dt className="text-gray-600">{k}</dt>
+                    <dd className="mt-0.5 break-all font-mono text-gray-300">{v}</dd>
+                  </div>
+                );
+              })}
+            </dl>
+            {(() => {
+              const obs = resolveJobObservability(selectedDetail);
+              const msg = (obs.gatewayFailure as { adminMessage?: string } | null)?.adminMessage;
+              return msg ? <p className="mt-2 break-words text-[10px] text-violet-100/80">{msg}</p> : null;
+            })()}
           </div>
           {selectedDetail.job.error?.message ? (
             <p className="mt-3 break-words rounded-xl border border-red-500/20 bg-red-500/10 px-3 py-2 text-[10px] text-red-200">
@@ -1340,12 +1432,16 @@ const AdminAiJobsPanel: React.FC = () => {
                     <th className="px-3 py-2 text-left font-medium">用户</th>
                     <th className="px-3 py-2 text-left font-medium">路由</th>
                     <th className="px-3 py-2 text-left font-medium">Trace / 代理</th>
+                    <th className="px-3 py-2 text-left font-medium">归档</th>
                     <th className="px-3 py-2 text-left font-medium">积分</th>
                     <th className="px-3 py-2 text-left font-medium">错误</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {displayedJobs.map((job) => (
+                  {displayedJobs.map((job) => {
+                    const archiveStatus = aiJobMediaArchiveStatus(job);
+                    const archiveWarn = archiveStatus === 'skipped';
+                    return (
                     <tr
                       key={job.id}
                       onClick={() => {
@@ -1366,12 +1462,30 @@ const AdminAiJobsPanel: React.FC = () => {
                       <td className="break-all px-3 py-2 font-mono text-[10px] text-gray-400">{job.userId || '-'}</td>
                       <td className="px-3 py-2 text-gray-300">{aiJobRouteLabel(job)}</td>
                       <td className="break-all px-3 py-2 font-mono text-[10px] text-gray-500">{aiJobTraceLabel(job)}</td>
+                      <td
+                        className={`px-3 py-2 text-[10px] ${archiveWarn ? 'text-amber-300' : 'text-gray-500'}`}
+                        title={
+                          archiveWarn
+                            ? 'mediaArchive.skipped — 成功但文件可能不可跨设备持久化（D7）'
+                            : archiveStatus === 'ok'
+                              ? 'mediaArchive.ok'
+                              : 'mediaArchive'
+                        }
+                      >
+                        {archiveStatus}
+                        {!job.proxyJobId && job.status === 'succeeded' ? (
+                          <span className="ml-1 text-gray-600" title="无 proxyJobId">
+                            ·noProxy
+                          </span>
+                        ) : null}
+                      </td>
                       <td className="px-3 py-2 text-gray-400">{aiJobCreditsLabel(job)}</td>
                       <td className="max-w-[240px] truncate px-3 py-2 text-red-300/80" title={job.error?.message || ''}>
                         {job.error?.message || '-'}
                       </td>
                     </tr>
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -1408,6 +1522,16 @@ const AdminAiJobsPanel: React.FC = () => {
                     <div>
                       <dt className="text-gray-600">Trace</dt>
                       <dd className="mt-0.5 break-all font-mono text-gray-500">{aiJobTraceLabel(job)}</dd>
+                    </div>
+                    <div>
+                      <dt className="text-gray-600">归档</dt>
+                      <dd
+                        className={`mt-0.5 text-[10px] ${
+                          aiJobMediaArchiveStatus(job) === 'skipped' ? 'text-amber-300' : 'text-gray-400'
+                        }`}
+                      >
+                        {aiJobMediaArchiveStatus(job)}
+                      </dd>
                     </div>
                   </dl>
                   {job.error?.message ? <p className="break-words text-[10px] text-red-300/80">{job.error.message}</p> : null}

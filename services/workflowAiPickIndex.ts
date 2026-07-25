@@ -133,7 +133,7 @@ export const WORKFLOW_AI_PICK_NODES: readonly WorkflowAiPickNode[] = [
     layer: 'gate',
     label: 'services/generate3d（3D 任务适配）',
     codeRefs: ['services/generate3d/'],
-    notes: 'ESLint 允许的 tripo/tencent 直连例外目录',
+    notes: 'C9：主路 Tripo/混元 → Gateway Job；legacy tencentWorkflow 仅诊断',
   },
   {
     id: 'workflow_video_bridge',
@@ -190,7 +190,7 @@ export const WORKFLOW_AI_PICK_NODES: readonly WorkflowAiPickNode[] = [
     layer: 'supplier',
     label: 'tencentService',
     codeRefs: ['services/tencentService.ts'],
-    notes: '仅经网关或 generate3d',
+    notes: '用户混元主路走 Gateway adapter；本文件为 legacy/队列诊断',
   },
   {
     id: 'jimeng_warehouse',
@@ -292,10 +292,11 @@ export const WORKFLOW_AI_EXECUTION_ENTRY_ROWS: readonly WorkflowAiExecutionEntry
     entryLabel: '能力预设执行 · 文 / 图 / 视频 / 3D',
     sourceRefs: ['services/capabilityExecutor.ts', 'components/CapabilityPresetSection.tsx'],
     modalities: ['text', 'image', 'video', 'model3d'],
-    routeStatus: 'partial_gateway',
+    routeStatus: 'gateway',
     modelContract: 'mixed',
     contextContract: 'partial',
-    nextAction: '先统一 resolve 组覆盖、预设、全局默认，再按 capability 创建 Gateway Job。',
+    nextAction:
+      '文/图/视频/检测已走 Gateway Job；3D 预设引导至工作流拖图。后续统一 resolve 组覆盖与 route schema。',
   },
   {
     id: 'storyboard_ai',
@@ -308,10 +309,11 @@ export const WORKFLOW_AI_EXECUTION_ENTRY_ROWS: readonly WorkflowAiExecutionEntry
       'services/storyboardTableParse.ts',
     ],
     modalities: ['text', 'image'],
-    routeStatus: 'partial_gateway',
+    routeStatus: 'gateway',
     modelContract: 'canonical_model',
     contextContract: 'partial',
-    nextAction: '第 5 轮纳入统一请求，并保留 storyboardAssetId / rowId metadata。',
+    nextAction:
+      '重绘/检测/结构解析/分镜文本已 Gateway Job（D5/D6）；本地规则预解析仍 local。后续补 Job id UI 展示。',
   },
   {
     id: 'workflow_video',
@@ -321,17 +323,18 @@ export const WORKFLOW_AI_EXECUTION_ENTRY_ROWS: readonly WorkflowAiExecutionEntry
     routeStatus: 'gateway',
     modelContract: 'canonical_model',
     contextContract: 'partial',
-    nextAction: '继续补 route parameter schema；保留 legacy HTTP bridge 为显式 fallback。',
+    nextAction: '继续补 route parameter schema；用户路径已 Gateway-only（无 HTTP bridge fallback）。',
   },
   {
     id: 'workflow_3d',
     entryLabel: '工作流 · 生 3D',
     sourceRefs: ['services/generate3d/', 'services/unifiedAiGateway.ts', 'components/WorkflowSection.tsx'],
     modalities: ['model3d'],
-    routeStatus: 'partial_gateway',
+    routeStatus: 'gateway',
     modelContract: 'mixed',
     contextContract: 'partial',
-    nextAction: '按 model3d.generate 统一任务结构，Tripo / 混元 / 方舟 3D 只作为 route。',
+    nextAction:
+      '混元/Tripo 用户主路已 Gateway + 平台 Key（C9/D4）；继续固化 model3d.generate schema 与产物落库。',
   },
   {
     id: 'local_sam_segment',
@@ -385,16 +388,16 @@ export const WORKFLOW_AI_CARGO_ROWS: readonly WorkflowAiCargoRow[] = [
   {
     id: 'cargo_text',
     cargoLabel: '文（对话 / 理解 / 标签等）',
-    primaryGate: 'unifiedAiGateway → modelRegistry.pickBinding → geminiService',
-    opsMeans: 'SystemConfig.modelText（registryId）+ pickBinding(role=text) + resolveUpstream',
-    remark: '默认 DEFAULT_MODEL_TEXT；Vertex 代理路径叠 ai-worker-proxy 公平排队链',
+    primaryGate: 'unifiedAiGateway → runUnifiedContentsTextGeneration / createAiJob',
+    opsMeans: 'SystemConfig.modelText（registryId）+ gatewayRouteConfigs + Key 池',
+    remark: 'C7：对话/理解用户主路 Gateway Job；浏览器 Key fallback 已关',
   },
   {
     id: 'cargo_image',
     cargoLabel: '图（生图 / 改图 / 多参考）',
-    primaryGate: 'unifiedAiGateway → pickBinding(role=image) → getAIForImageModel',
+    primaryGate: 'runUnifiedImageGeneration → /api/ai/jobs（AI Gateway）',
     opsMeans: '挡位 registryId + merge.ts（ready binding ∩ 运营 allowlist）+ bindingOverrides',
-    remark: 'maxReferenceImagesForImageGear；异步 AI Worker Proxy 经 vertex-proxy 时带 aiBackend: vertex',
+    remark: 'C8/D 轮：用户生图 Gateway Job；Vertex 经 proxy handoff 带 proxyJobId；勿再教客户端 async-batch',
   },
   {
     id: 'cargo_video',
@@ -406,16 +409,16 @@ export const WORKFLOW_AI_CARGO_ROWS: readonly WorkflowAiCargoRow[] = [
   {
     id: 'cargo_3d',
     cargoLabel: '3D',
-    primaryGate: 'unifiedAiGateway re-export；执行编排 services/generate3d',
-    opsMeans: '腾讯凭据 env/页面；GENERATE3D_PROVIDER_REGISTRY 代码登记',
-    remark: '无与文图同一套 ops JSON；运营策略见 §1.4.1',
+    primaryGate: 'createAndPollAiGatewayModel3dJob / Tripo 平台 Key（services/generate3d）',
+    opsMeans: '平台 Key 池 + model3d adapter；VITE_TENCENT_PROXY 仅本地诊断（D4 false-green 禁生产）',
+    remark: 'C9/D4：用户主路不靠本机 9001/用户腾讯 Key；索引 workflow_3d=gateway',
   },
   {
     id: 'cargo_misc',
     cargoLabel: '贴图 / 擂台 / 站点助手等',
-    primaryGate: '经 unifiedAiGateway',
-    opsMeans: '随文/图默认与渠道',
-    remark: '见计划 §3.6',
+    primaryGate: 'unifiedAiGateway → Gateway Job（助手文 / PBR 图）',
+    opsMeans: 'gatewayRouteConfigs + Key 池；PBR 用 gemini-2.5-flash-image',
+    remark: 'C8：generatePBRTexture / 站点助手已走 createAiJob',
   },
   {
     id: 'cargo_jimeng_image',

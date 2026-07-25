@@ -1,4 +1,5 @@
 import type { AiJobStatus, AiJobSummary } from './aiJobsClient';
+import { dispatchUnifiedAiSoftNotice } from './unifiedAiSoftNotice';
 
 const STATUS_LABELS: Record<AiJobStatus, string> = {
   created: '已创建',
@@ -46,6 +47,35 @@ export function aiJobModelLabel(job: AiJobSummary): string {
 
 export function aiJobTraceLabel(job: AiJobSummary): string {
   return job.proxyJobId || job.correlationId || job.id;
+}
+
+/** D7 — list-scannable mediaArchive.status (ok / skipped / -). */
+export function aiJobMediaArchiveStatus(job: AiJobSummary): string {
+  const archive = (job.mediaArchive || job.observability?.mediaArchive) as { status?: string } | null | undefined;
+  if (!archive || typeof archive !== 'object') return '-';
+  const status = String(archive.status || '').trim();
+  return status || '-';
+}
+
+/** User-facing warn when success may not persist across devices. */
+export function aiJobMediaArchiveUserHint(job: AiJobSummary): string | null {
+  const status = aiJobMediaArchiveStatus(job);
+  if (status === 'skipped') {
+    return '文件未归档到云存储，刷新或换设备后可能无法打开';
+  }
+  return null;
+}
+
+/** Soft toast when a succeeded job did not archive media (D7). */
+export function warnMediaArchiveIfEphemeral(job: AiJobSummary | null | undefined): void {
+  if (!job || job.status !== 'succeeded') return;
+  const hint = aiJobMediaArchiveUserHint(job);
+  if (!hint) return;
+  dispatchUnifiedAiSoftNotice({
+    kind: 'media_ephemeral',
+    message: `任务已完成，但${hint}`,
+    jobKind: 'media_archive',
+  });
 }
 
 export function canCancelAiJobStatus(status: AiJobStatus): boolean {

@@ -37,6 +37,9 @@ import {
   updateAdminAlertWebhookConfig,
 } from './admin-alert-webhook.js';
 import { buildAdminSystemStatus } from './admin-system-status.js';
+import { buildIdentityFields } from '../shared/buildSha.js';
+import { aiGatewayMediaArchivePolicy } from './ai-gateway/job-media-archive.js';
+import { startProxyBuildShaCacheLoop } from './ai-gateway/runtime-build-sha.js';
 import {
   recordPromoSweepFailure,
   recordPromoSweepSuccess,
@@ -239,6 +242,7 @@ import {
 import { recoverAiGatewayQueuedJobs, startAiGatewayQueueRecoveryLoop } from './ai-gateway/recovery.js';
 import { startAiGatewayTrendSnapshotLoop } from './ai-gateway/trend-snapshot-loop.js';
 import { buildAiGatewayTrendReport, refreshAiGatewayTrendSnapshot } from './ai-gateway/trend-report.js';
+import { enforceCreditsGateProductionPolicy } from './ai-gateway/credits-gate.js';
 import { listPublicPriceCatalog } from './pricing-engine.js';
 import { buildUsageReceipt, quoteJobKinds } from './pricing-read-model.js';
 import {
@@ -757,7 +761,12 @@ const server = http.createServer(async (req, res) => {
   const path = rawPath.replace(/\/+$/, '') || '/';
   try {
     if (path === '/healthz' && req.method === 'GET') {
-      json(res, 200, { ok: true, service: 'auth-api', ready: storeReady });
+      json(res, 200, {
+        ok: true,
+        ready: storeReady,
+        ...buildIdentityFields('auth-api'),
+        mediaArchive: aiGatewayMediaArchivePolicy(),
+      });
       return;
     }
 
@@ -4323,6 +4332,16 @@ server.on('upgrade', async (req, socket, head) => {
   }
 });
 
+try {
+  const creditsPolicy = enforceCreditsGateProductionPolicy();
+  if (creditsPolicy?.mode) {
+    console.log(`[ai-gateway] creditsGate=${creditsPolicy.mode} policy=${creditsPolicy.level}`);
+  }
+} catch (err) {
+  console.error('[ai-gateway] credits gate policy blocked startup:', err instanceof Error ? err.message : String(err));
+  process.exit(1);
+}
+
 server.listen(PORT, BIND_HOST, () => {
   console.log(`[auth-api] http://${BIND_HOST}:${PORT}${isR2Configured() ? ' (R2 /api/r2 enabled)' : ''}`);
   console.log(`[bridge-relay] ws://${BIND_HOST}:${PORT}/ws/bridge auth=${BRIDGE_REQUIRE_AUTH ? 'required' : 'disabled'}`);
@@ -4331,5 +4350,6 @@ server.listen(PORT, BIND_HOST, () => {
   );
   void startStoreInit().catch(() => {});
   startPromoExpireSweep();
+  startProxyBuildShaCacheLoop();
 });
 

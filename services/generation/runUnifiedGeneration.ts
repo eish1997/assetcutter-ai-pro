@@ -6,6 +6,7 @@ import { proxyGateMinCreditsForJob } from '../../shared/credits';
 import { isAiTaskEnvelopeActive } from '../aiTaskEnvelope';
 import type { ChannelId } from '../modelRegistry/types';
 import { rememberAiGatewayImageResult } from '../aiGatewayImageResultRegistry';
+import { warnMediaArchiveIfEphemeral } from '../aiJobDisplay';
 import {
   dataUrlPayloadBytes,
   normalizeDataUrlForVisionApi,
@@ -56,6 +57,24 @@ export type UnifiedVisionTextGenerationRequest = {
   model: string;
   images: string[];
   systemInstruction?: string;
+  /** When set (e.g. application/json), forwarded on text.generate Job config. */
+  responseMimeType?: string;
+  uiSource: string;
+  assetContext?: UnifiedGenerationRequest['assetContext'];
+  estimatedCredits?: number;
+  metadata?: Record<string, unknown>;
+  abortSignal?: AbortSignal;
+};
+
+export type UnifiedContentPart =
+  | { text: string }
+  | { inlineData: { mimeType: string; data: string } };
+
+export type UnifiedContentsTextGenerationRequest = {
+  contents: Array<{ role: 'user' | 'model'; parts: UnifiedContentPart[] }>;
+  model: string;
+  systemInstruction?: string;
+  responseMimeType?: string;
   uiSource: string;
   assetContext?: UnifiedGenerationRequest['assetContext'];
   estimatedCredits?: number;
@@ -376,6 +395,104 @@ export async function runUnifiedGeneration(request: UnifiedGenerationRequest): P
   }
 }
 
+async function pollUnifiedTextJob(
+  created: AiJobDetail,
+  abortSignal?: AbortSignal,
+  emptyMessage = 'AI Gateway text job succeeded without text output',
+  timeoutMessage = 'AI Gateway text job polling timed out'
+): Promise<string> {
+  const immediate = extractText(created);
+  if (created.job.status === 'succeeded' && immediate != null) return immediate;
+  if (created.job.status === 'failed' || created.job.status === 'cancelled') throw terminalError(created);
+
+  const timeoutMs = Math.max(5_000, Number(readEnv('VITE_AI_GATEWAY_TEXT_POLL_TIMEOUT_MS') || 180_000));
+  let intervalMs = Math.max(1, Number(readEnv('VITE_AI_GATEWAY_TEXT_POLL_INTERVAL_MS') || 1000));
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    await sleep(intervalMs, abortSignal);
+    const detail = await getMyAiJob(created.job.id);
+    if (detail.job.status === 'succeeded') {
+      const text = extractText(detail);
+      if (text != null) return text;
+      throw new Error(emptyMessage);
+    }
+    if (detail.job.status === 'failed' || detail.job.status === 'cancelled') throw terminalError(detail);
+    intervalMs = Math.min(Math.round(intervalMs * 1.5), 5_000);
+  }
+  throw new Error(timeoutMessage);
+}
+
+async function normalizeContentsInlineImages(
+  contents: UnifiedContentsTextGenerationRequest['contents']
+): Promise<UnifiedContentsTextGenerationRequest['contents']> {
+  const out: UnifiedContentsTextGenerationRequest['contents'] = [];
+  for (const turn of contents) {
+    const parts: UnifiedContentPart[] = [];
+    for (const part of turn.parts || []) {
+      if ('text' in part) {
+        parts.push({ text: String(part.text || '') });
+        continue;
+      }
+      const mime = String(part.inlineData?.mimeType || 'image/png').trim() || 'image/png';
+      const data = String(part.inlineData?.data || '').replace(/\s+/g, '');
+      if (!data) continue;
+      const dataUrl = `data:${mime};base64,${data}`;
+      const normalized = await normalizeImageReferenceForGateway(dataUrl);
+      const inline = inlineDataFromDataUrl(normalized);
+      if (inline?.data) parts.push({ inlineData: inline });
+    }
+    out.push({ role: turn.role === 'model' ? 'model' : 'user', parts });
+  }
+  return out;
+}
+
+function lastUserTextFromContents(contents: UnifiedContentsTextGenerationRequest['contents']): string {
+  for (let i = contents.length - 1; i >= 0; i -= 1) {
+    const turn = contents[i];
+    if (turn.role !== 'user') continue;
+    for (const part of turn.parts || []) {
+      if ('text' in part && String(part.text || '').trim()) return String(part.text).trim();
+    }
+  }
+  return '';
+}
+
+/** C7: multi-turn / vision chat via AI Gateway Job (no browser Key fallback). */
+export async function runUnifiedContentsTextGeneration(
+  request: UnifiedContentsTextGenerationRequest
+): Promise<string> {
+  const model = String(request.model || '').trim();
+  if (!model) throw new Error('缺少文字模型');
+  if (!Array.isArray(request.contents) || request.contents.length === 0) {
+    throw new Error('缺少对话内容');
+  }
+  const contents = await normalizeContentsInlineImages(request.contents);
+  const prompt = lastUserTextFromContents(contents) || '(multi-turn)';
+  const config: Record<string, unknown> = {};
+  const systemInstruction = String(request.systemInstruction || '').trim();
+  if (systemInstruction) config.systemInstruction = systemInstruction;
+  const mime = String(request.responseMimeType || '').trim();
+  if (mime) config.responseMimeType = mime;
+
+  const created = await runUnifiedGeneration({
+    modality: 'text',
+    capability: 'text.generate',
+    canonicalModelId: model,
+    registryId: model,
+    input: {
+      contents,
+      prompt,
+      config,
+    },
+    uiSource: request.uiSource,
+    assetContext: request.assetContext,
+    estimatedCredits: request.estimatedCredits,
+    metadata: request.metadata,
+    abortSignal: request.abortSignal,
+  });
+  return pollUnifiedTextJob(created, request.abortSignal);
+}
+
 export async function runUnifiedTextGeneration(request: UnifiedTextGenerationRequest): Promise<string> {
   const prompt = String(request.prompt || '').trim();
   if (!prompt) throw new Error('请输入文字');
@@ -399,25 +516,7 @@ export async function runUnifiedTextGeneration(request: UnifiedTextGenerationReq
     metadata: request.metadata,
     abortSignal: request.abortSignal,
   });
-  const immediate = extractText(created);
-  if (created.job.status === 'succeeded' && immediate != null) return immediate;
-  if (created.job.status === 'failed' || created.job.status === 'cancelled') throw terminalError(created);
-
-  const timeoutMs = Math.max(5_000, Number(readEnv('VITE_AI_GATEWAY_TEXT_POLL_TIMEOUT_MS') || 180_000));
-  let intervalMs = Math.max(1, Number(readEnv('VITE_AI_GATEWAY_TEXT_POLL_INTERVAL_MS') || 1000));
-  const startedAt = Date.now();
-  while (Date.now() - startedAt < timeoutMs) {
-    await sleep(intervalMs, request.abortSignal);
-    const detail = await getMyAiJob(created.job.id);
-    if (detail.job.status === 'succeeded') {
-      const text = extractText(detail);
-      if (text != null) return text;
-      throw new Error('AI Gateway text job succeeded without text output');
-    }
-    if (detail.job.status === 'failed' || detail.job.status === 'cancelled') throw terminalError(detail);
-    intervalMs = Math.min(Math.round(intervalMs * 1.5), 5_000);
-  }
-  throw new Error('AI Gateway text job polling timed out');
+  return pollUnifiedTextJob(created, request.abortSignal);
 }
 
 export async function runUnifiedVisionTextGeneration(request: UnifiedVisionTextGenerationRequest): Promise<string> {
@@ -438,6 +537,11 @@ export async function runUnifiedVisionTextGeneration(request: UnifiedVisionTextG
   }
   if (!parts.some((part) => 'inlineData' in part)) throw new Error('图生文需要有效图片');
   parts.push({ text: prompt });
+  const config: Record<string, unknown> = {};
+  const systemInstruction = String(request.systemInstruction || '').trim();
+  if (systemInstruction) config.systemInstruction = systemInstruction;
+  const mime = String(request.responseMimeType || '').trim();
+  if (mime) config.responseMimeType = mime;
   const created = await runUnifiedGeneration({
     modality: 'text',
     capability: 'text.generate',
@@ -446,9 +550,7 @@ export async function runUnifiedVisionTextGeneration(request: UnifiedVisionTextG
     input: {
       contents: [{ role: 'user', parts }],
       prompt,
-      config: request.systemInstruction
-        ? { systemInstruction: String(request.systemInstruction || '').trim() }
-        : {},
+      config,
     },
     uiSource: request.uiSource,
     assetContext: request.assetContext,
@@ -460,25 +562,12 @@ export async function runUnifiedVisionTextGeneration(request: UnifiedVisionTextG
     },
     abortSignal: request.abortSignal,
   });
-  const immediate = extractText(created);
-  if (created.job.status === 'succeeded' && immediate != null) return immediate;
-  if (created.job.status === 'failed' || created.job.status === 'cancelled') throw terminalError(created);
-
-  const timeoutMs = Math.max(5_000, Number(readEnv('VITE_AI_GATEWAY_TEXT_POLL_TIMEOUT_MS') || 180_000));
-  let intervalMs = Math.max(1, Number(readEnv('VITE_AI_GATEWAY_TEXT_POLL_INTERVAL_MS') || 1000));
-  const startedAt = Date.now();
-  while (Date.now() - startedAt < timeoutMs) {
-    await sleep(intervalMs, request.abortSignal);
-    const detail = await getMyAiJob(created.job.id);
-    if (detail.job.status === 'succeeded') {
-      const text = extractText(detail);
-      if (text != null) return text;
-      throw new Error('AI Gateway vision text job succeeded without text output');
-    }
-    if (detail.job.status === 'failed' || detail.job.status === 'cancelled') throw terminalError(detail);
-    intervalMs = Math.min(Math.round(intervalMs * 1.5), 5_000);
-  }
-  throw new Error('AI Gateway vision text job polling timed out');
+  return pollUnifiedTextJob(
+    created,
+    request.abortSignal,
+    'AI Gateway vision text job succeeded without text output',
+    'AI Gateway vision text job polling timed out'
+  );
 }
 
 export async function runUnifiedImageGeneration(request: UnifiedImageGenerationRequest): Promise<string> {
@@ -531,6 +620,7 @@ export async function runUnifiedImageGeneration(request: UnifiedImageGenerationR
   const immediate = extractImageUrl(created);
   if (created.job.status === 'succeeded' && immediate != null) {
     rememberAiGatewayImageResult(immediate, created.job.id);
+    warnMediaArchiveIfEphemeral(created.job);
     return immediate;
   }
   if (created.job.status === 'failed' || created.job.status === 'cancelled') throw terminalError(created);
@@ -549,6 +639,7 @@ export async function runUnifiedImageGeneration(request: UnifiedImageGenerationR
       const imageUrl = extractImageUrl(detail);
       if (imageUrl != null) {
         rememberAiGatewayImageResult(imageUrl, detail.job.id);
+        warnMediaArchiveIfEphemeral(detail.job);
         return imageUrl;
       }
       missingImageOutputDetail = detail;
@@ -572,6 +663,7 @@ export async function runUnifiedImageGeneration(request: UnifiedImageGenerationR
       const imageUrl = extractImageUrl(finalDetail);
       if (imageUrl != null) {
         rememberAiGatewayImageResult(imageUrl, finalDetail.job.id);
+        warnMediaArchiveIfEphemeral(finalDetail.job);
         return imageUrl;
       }
       throw new Error(`AI Gateway image job succeeded without image output (${imageOutputDebug(finalDetail)})`);

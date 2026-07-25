@@ -119,15 +119,15 @@
 
 ## 五、生成3D资产（Generate 3D）详解
 
-侧栏点击「生成3D」进入。基于**腾讯云混元生3D**（ai3d）API，左侧为 8 个功能模块，中间为常驻 3D 预览，右侧为临时库与生成队列；所有任务入队后最多 2 个并发生成，结果统一进入临时库并可保存到资产库。
+侧栏「生成3D」/工作流 3D 节点：用户主路经 **AI Gateway Jobs**（混元 / Tripo 平台 Key），产物入 Job 与资产库。详见 [`docs/AI-Gateway优化清单-D轮-验收即线上.md`](./docs/AI-Gateway优化清单-D轮-验收即线上.md)（D4/C9）。
 
-### 凭证与代理
+> **勿再当主路**：本机 `VITE_TENCENT_PROXY=http://127.0.0.1:9001` + 用户腾讯密钥仅诊断；生产 / `env:profile:prod-like` / `guard:false-green` 会拒绝裸代理与 `MODEL3D_PLATFORM_KEY_REQUIRED=false`。
 
-- 浏览器直连腾讯 API 会因 CORS 报错，需通过**本地代理**转发。
-- 在 `.env.local` 中为代理进程设置 `TENCENT_SECRET_ID`、`TENCENT_SECRET_KEY`，前端只设置 `VITE_TENCENT_PROXY=http://localhost:3001`。
-- **先启动代理**：项目根目录执行 `npm run proxy`（需 Node 20+），再运行 `npm run dev`。
-- 浏览器默认不再直接持有腾讯云密钥；仅在显式设置 `VITE_ALLOW_UNSAFE_TENCENT_BROWSER_CREDS=true` 时，才允许临时直连调试。
-- 密钥在 [腾讯云 API 密钥](https://console.cloud.tencent.com/cam/capi) 创建，混元生3D 需在 [产品页](https://cloud.tencent.com/document/product/1804) 开通。代理实现见 `server/ai3d-proxy.js`。
+### 凭证与执行（现行）
+
+- **用户路径**：`createAndPollAiGatewayModel3dJob` / 工作流 `workflow_3d` → Gateway；平台侧配置 Tripo / 混元 Key（Admin Provider Keys），浏览器不直持密钥。
+- **遗留诊断**：可选本机 `npm run proxy`（`server/ai3d-proxy.js`）+ `TENCENT_SECRET_*`；仅本地排障，**禁止**写入预发/生产验收步骤。
+- 混元产品与密钥说明见 [腾讯云混元生3D](https://cloud.tencent.com/document/product/1804)；联调以 Gateway 冒烟矩阵为准，勿默认打 9001。
 
 ### 8 个模块与流程
 

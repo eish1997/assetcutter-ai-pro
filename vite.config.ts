@@ -5,6 +5,7 @@ import { defineConfig, loadEnv } from 'vite';
 import react from '@vitejs/plugin-react';
 import { HttpsProxyAgent } from 'https-proxy-agent';
 import { collectRemoteAiWorkerProxyOriginsFromEnv } from './services/aiWorkerProxyForwardDevOrigins';
+import { buildIdentityFields, resolveBuildSha } from './shared/buildSha.js';
 
 const HOP_BY_HOP_REQ = new Set([
   'host',
@@ -39,6 +40,27 @@ function fixViteDecimalTimestampQuery(): Plugin {
         const url = req.url;
         if (url && /\?t=\d+\.\d+/.test(url)) {
           req.url = url.replace(/(\?t=\d+)\.\d+([^&]*)/, '$1$2');
+        }
+        next();
+      });
+    },
+  };
+}
+
+/** C11 — dev/prod web /healthz exposes buildSha for multi-service alignment. */
+function webBuildShaHealthzPlugin(): Plugin {
+  const payload = () =>
+    JSON.stringify({ ok: true, ...buildIdentityFields('web'), writtenAt: new Date().toISOString() });
+  return {
+    name: 'web-build-sha-healthz',
+    configureServer(server) {
+      server.middlewares.use((req, res, next) => {
+        const url = String(req.url || '').split('?')[0];
+        if (url === '/healthz' || url === '/healthz.json') {
+          res.statusCode = 200;
+          res.setHeader('Content-Type', 'application/json; charset=utf-8');
+          res.end(payload());
+          return;
         }
         next();
       });
@@ -322,10 +344,18 @@ export default defineConfig(({ mode }) => {
           },
         },
       },
-      plugins: [fixViteDecimalTimestampQuery(), react(), aiWorkerProxyForwardDevPlugin(aiWorkerProxyForwardOrigins)],
+      plugins: [
+        fixViteDecimalTimestampQuery(),
+        webBuildShaHealthzPlugin(),
+        react(),
+        aiWorkerProxyForwardDevPlugin(aiWorkerProxyForwardOrigins),
+      ],
       define: {
         'process.env.VITE_TENCENT_PROXY': JSON.stringify(env.VITE_TENCENT_PROXY),
         'process.env.VITE_ALLOW_UNSAFE_TENCENT_BROWSER_CREDS': JSON.stringify(env.VITE_ALLOW_UNSAFE_TENCENT_BROWSER_CREDS),
+        'import.meta.env.VITE_BUILD_SHA': JSON.stringify(
+          resolveBuildSha({ ...fromFile, ...process.env, VITE_BUILD_SHA: process.env.VITE_BUILD_SHA || fromFile.VITE_BUILD_SHA })
+        ),
       },
       resolve: {
         alias: {

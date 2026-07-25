@@ -1,8 +1,13 @@
 import React from 'react';
-import { ADMIN_NAV_ITEMS } from '../../services/adminPermissions';
+import {
+  ADMIN_NAV_GROUP_ORDER,
+  ADMIN_NAV_ITEMS,
+  canAccessAdminNavItem,
+} from '../../services/adminPermissions';
 import { navigateMainSite } from '../../services/adminNavigate';
 import { useAdminStaff } from './AdminStaffContext';
 import { logoutSession } from '../../services/authClient';
+import AiEnvTopologyBanner from '../AiEnvTopologyBanner';
 
 type AdminLayoutProps = {
   children: React.ReactNode;
@@ -22,7 +27,11 @@ function NavButton({
   currentPath: string;
   onNavigate: (path: string) => void;
 }) {
-  const active = currentPath === path || (path === '/admin/users' && currentPath.startsWith('/admin/users/'));
+  const active =
+    currentPath === path ||
+    (path === '/admin/users' && currentPath.startsWith('/admin/users/')) ||
+    (path === '/admin/invites' &&
+      (currentPath === '/admin/staff-invites' || currentPath === '/admin/registration-invites'));
   return (
     <button
       type="button"
@@ -41,7 +50,11 @@ function NavButton({
 
 const AdminLayout: React.FC<AdminLayoutProps> = ({ children, currentPath, onNavigate }) => {
   const { staffRole, can, isRolePreview, exitRolePreview, me } = useAdminStaff();
-  const navItems = ADMIN_NAV_ITEMS.filter((item) => can(item.permission));
+  const navItems = ADMIN_NAV_ITEMS.filter((item) => canAccessAdminNavItem(can, item));
+  const groupedNav = ADMIN_NAV_GROUP_ORDER.map((group) => ({
+    ...group,
+    items: navItems.filter((item) => item.group === group.id),
+  })).filter((group) => group.items.length > 0);
 
   return (
     <div className="min-h-screen bg-[#050505] text-white flex flex-col">
@@ -73,15 +86,26 @@ const AdminLayout: React.FC<AdminLayoutProps> = ({ children, currentPath, onNavi
             <p className="text-[10px] text-blue-300/80 mt-2">{staffRole.displayName}</p>
           ) : null}
         </div>
-        <nav className="flex-1 px-3 py-4 space-y-2">
-          {navItems.map((item) => (
-            <NavButton
-              key={item.path}
-              label={item.label}
-              path={item.path}
-              currentPath={currentPath}
-              onNavigate={onNavigate}
-            />
+        <nav className="flex-1 px-3 py-4 space-y-4 overflow-y-auto">
+          {groupedNav.map((group) => (
+            <div key={group.id} className="space-y-2">
+              {group.label ? (
+                <p className="px-1 text-[9px] font-black uppercase tracking-[0.18em] text-gray-500">
+                  {group.label}
+                </p>
+              ) : null}
+              <div className="space-y-2">
+                {group.items.map((item) => (
+                  <NavButton
+                    key={item.path}
+                    label={item.label}
+                    path={item.path}
+                    currentPath={currentPath}
+                    onNavigate={onNavigate}
+                  />
+                ))}
+              </div>
+            </div>
           ))}
         </nav>
         <div className="px-3 py-3 border-t border-[#2e2e32] space-y-2">
@@ -119,7 +143,10 @@ const AdminLayout: React.FC<AdminLayoutProps> = ({ children, currentPath, onNavi
             回到主站
           </button>
         </header>
-        <div className="flex-1 overflow-auto p-6">{children}</div>
+        <div className="px-6 pt-3 shrink-0">
+          <AiEnvTopologyBanner />
+        </div>
+        <div className="flex-1 overflow-auto p-6 pt-3">{children}</div>
       </main>
       </div>
     </div>

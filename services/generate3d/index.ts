@@ -1,6 +1,6 @@
 export type { Generate3dProviderId } from './types';
 export { GENERATE3D_PROVIDER_REGISTRY, listRegisteredGenerate3dProviderIds } from './registry';
-export { resolveGenerate3dProviderId } from './resolveProvider';
+export { resolveGenerate3dProviderId, resolveTencentHunyuanRegistryId } from './resolveProvider';
 export { normalizeGenerate3DPresetForRun } from './normalizePreset';
 export {
   buildTripoCreateTaskInputFromPreset,

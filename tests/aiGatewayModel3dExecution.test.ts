@@ -85,4 +85,50 @@ describe('aiGatewayModel3dExecution', () => {
     );
     expect(vi.mocked(createAiJob).mock.calls[0]?.[0]).not.toHaveProperty('provider');
   });
+
+  it('passes Tencent Hunyuan registry and Pro fields for Gateway adapter', async () => {
+    process.env.VITE_AI_GATEWAY_MODEL3D_EXECUTION = 'true';
+    vi.mocked(createAiJob).mockResolvedValue({
+      job: {
+        id: 'aijob_hunyuan_1',
+        status: 'succeeded',
+        output: {
+          modelUrls: ['https://cdn.example.com/hunyuan.glb'],
+        },
+        artifacts: [],
+      },
+    } as Awaited<ReturnType<typeof createAiJob>>);
+
+    await expect(
+      createAndPollAiGatewayModel3dJob({
+        prompt: 'product prop',
+        referenceImages: ['data:image/png;base64,BBBB'],
+        registryId: 'tencent-hunyuan-3d-pro',
+        format: 'GLB',
+        enablePBR: true,
+        faceCount: 40000,
+        generateType: 'Normal',
+        model: '3.0',
+      })
+    ).resolves.toMatchObject({
+      aiGatewayJobId: 'aijob_hunyuan_1',
+      modelUrls: ['https://cdn.example.com/hunyuan.glb'],
+    });
+
+    expect(createAiJob).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: 'tencent-hunyuan-3d-pro',
+        registryId: 'tencent-hunyuan-3d-pro',
+        input: expect.objectContaining({
+          registryId: 'tencent-hunyuan-3d-pro',
+          enablePBR: true,
+          faceCount: 40000,
+          generateType: 'Normal',
+          model: '3.0',
+          format: 'GLB',
+        }),
+      }),
+      expect.any(Object)
+    );
+  });
 });

@@ -1,6 +1,7 @@
 import React from 'react';
 import { fetchTaskExecutionEvents, type TaskExecutionEvent } from '../../services/adminClient';
 import { AUDITOR_ROLE_SLUG } from '../../services/adminPermissions';
+import { navigateAdmin } from '../../services/adminNavigate';
 import { useAdminStaff } from './AdminStaffContext';
 import {
   TASK_EVENT_LEVEL_OPTIONS,
@@ -245,6 +246,14 @@ const AdminTaskEventsPanel: React.FC = () => {
             <h2 className="text-[12px] font-black uppercase tracking-[0.2em] text-gray-300">任务执行记录</h2>
             <p className="mt-1 text-[10px] text-gray-600">
               工作流队列 RUN_TASK 与分镜表 STORYBOARD 大模型/生图任务（须用户已登录执行）
+              {' · '}
+              <button
+                type="button"
+                onClick={() => navigateAdmin('/admin/ai-jobs')}
+                className="text-blue-400 hover:text-blue-300"
+              >
+                AI Gateway 任务
+              </button>
             </p>
             {redactedView ? (
               <p className="mt-1 text-[10px] text-amber-500/90">当前为审计员脱敏视图</p>

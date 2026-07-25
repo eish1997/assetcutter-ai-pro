@@ -17,7 +17,12 @@ function inviteStatus(inv: AdminStaffInvite): { label: string; className: string
   return { label: '待使用', className: 'text-blue-300' };
 }
 
-const AdminStaffInvitesPanel: React.FC = () => {
+type AdminStaffInvitesPanelProps = {
+  /** When true, hide page-level title (used inside AdminInvitesPanel tabs). */
+  embedded?: boolean;
+};
+
+const AdminStaffInvitesPanel: React.FC<AdminStaffInvitesPanelProps> = ({ embedded = false }) => {
   const { isRolePreview } = useAdminStaff();
   const [invites, setInvites] = React.useState<AdminStaffInvite[]>([]);
   const [roles, setRoles] = React.useState<AdminRoleRow[]>([]);
@@ -102,10 +107,14 @@ const AdminStaffInvitesPanel: React.FC = () => {
 
   return (
     <div className="space-y-4">
-      <div>
-        <h2 className="text-[12px] font-black uppercase tracking-[0.2em] text-gray-300">成员邀请</h2>
-        <p className="mt-1 text-[10px] text-gray-600">生成注册链接，新用户注册后自动获得后台角色（不可邀请 super）</p>
-      </div>
+      {!embedded ? (
+        <div>
+          <h2 className="text-[12px] font-black uppercase tracking-[0.2em] text-gray-300">成员邀请</h2>
+          <p className="mt-1 text-[10px] text-gray-600">生成注册链接，新用户注册后自动获得后台角色（不可邀请 super）</p>
+        </div>
+      ) : (
+        <p className="text-[10px] text-gray-600">生成注册链接，新用户注册后自动获得后台角色（不可邀请 super）</p>
+      )}
 
       {error ? <p className="text-[11px] text-red-400">{error}</p> : null}
 

@@ -13,6 +13,7 @@ import {
   type UsageSummaryResponse,
 } from '../../services/adminClient';
 import { PERMISSIONS, hasAdminPermission } from '../../services/adminPermissions';
+import { navigateAdmin } from '../../services/adminNavigate';
 import { useAdminStaff } from './AdminStaffContext';
 import {
   AUDIT_TIME_PRESETS,
@@ -220,7 +221,41 @@ const AdminUsagePanel: React.FC = () => {
     <div className="space-y-4 p-4 max-w-6xl">
       <div>
         <h1 className="text-lg font-semibold text-white">AI 用量</h1>
-        <p className="text-[11px] text-gray-500 mt-1">工作流 AI 调用记录；汇总与明细均为积分消耗。</p>
+        <p className="text-[11px] text-gray-500 mt-1">
+          工作流 AI 调用记录；汇总与明细均为积分消耗。
+          {' · '}
+          <button
+            type="button"
+            onClick={() => navigateAdmin('/admin/price-catalog')}
+            className="text-blue-400 hover:text-blue-300"
+          >
+            价目表
+          </button>
+          {hasAdminPermission(permissions, PERMISSIONS.TASK_EVENTS_READ) ? (
+            <>
+              {' · '}
+              <button
+                type="button"
+                onClick={() => navigateAdmin('/admin/ai-jobs')}
+                className="text-blue-400 hover:text-blue-300"
+              >
+                AI 任务
+              </button>
+            </>
+          ) : null}
+          {hasAdminPermission(permissions, PERMISSIONS.CREDITS_WRITE) ? (
+            <>
+              {' · '}
+              <button
+                type="button"
+                onClick={() => navigateAdmin('/admin/promo-credits')}
+                className="text-blue-400 hover:text-blue-300"
+              >
+                活动积分
+              </button>
+            </>
+          ) : null}
+        </p>
       </div>
 
       <div className="flex gap-2">

@@ -1187,78 +1187,10 @@ async function aiWorkerProxyGenerateContentAsync(args: {
   let createStatus = gatewayExecution?.proxyJobId
     ? `ai-gateway:${gatewayExecution.createStatus}`
     : "";
+  // C12: image path is Gateway-only; no client POST /proxy/gemini/async fallback.
   if (!jobId) {
-  if (gatewayEnabled) {
     throw new Error("AI Gateway image job missing proxyJobId; refusing legacy /proxy/gemini/async fallback");
   }
-  const createBody = JSON.stringify({
-    model: args.model,
-    contents: args.contents,
-    config: safeConfig,
-    estimatedCredits: gateCredits,
-    ...(aiGatewayTraceJobId ? { fairnessMeta: { aiGatewayTraceJobId } } : {}),
-    ...aiBackendExtra,
-  });
-  const postAsyncCreate = async () =>
-    aiWorkerProxyFetchCreateWithFairnessRetry(asyncCreateUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", ...(await aiWorkerProxyAdmissionHeaders(gateCredits)) },
-      body: createBody,
-      signal: abortSignal,
-      cache: "no-store",
-    });
-  let create = await postAsyncCreate();
-  if (!create.ok && isCreditsReserveInvalidProxyError(create.status, create.text || "")) {
-    clearLastCreditsReserveKey();
-    create = await postAsyncCreate();
-    if (!create.ok && isCreditsReserveInvalidProxyError(create.status, create.text || "")) {
-      clearLastCreditsReserveKey();
-      logAiPipelineDev('error', {
-        step: 'credits_gate',
-        code: 'CREDITS_RESERVE_INVALID',
-        raw: create.text,
-        reserveKey: getLastCreditsReserveKey(),
-      });
-      throwCreditsReserveInvalid('credits_gate', create.text || '');
-    }
-  }
-  if (!create.ok) {
-    const raw = (create.text || "").trim();
-    logAiPipelineDev('error', {
-      step: 'image_create',
-      raw,
-      reserveKey: getLastCreditsReserveKey(),
-    });
-    const parsedMsg = parseAiWorkerProxyErrorBody(raw);
-    if (/Use POST \/jobs/i.test(raw)) {
-      const aiWorkerProxyHint =
-        usesVertexProxyForImage(bindingRegistryId) && VERTEX_AI_WORKER_PROXY_BASE
-          ? `VITE_AI_WORKER_PROXY_API_VERTEX=${VERTEX_AI_WORKER_PROXY_BASE || "(empty)"}`
-          : `VITE_AI_WORKER_PROXY_API=${AI_WORKER_PROXY_BASE || "(empty)"}`;
-      throw new Error(
-        [
-          parsedMsg,
-          `当前后端代理地址不是 Gemini 代理：${aiWorkerProxyHint}`,
-          "请改为部署了 server/ai-worker-proxy-api.js 的根地址（应支持 POST /proxy/gemini/async）。",
-        ].join(" ")
-      );
-    }
-    const fairnessErr = tryParseAiWorkerProxyFairnessRejected(create.status, raw);
-    if (fairnessErr) throwFairnessRejected(fairnessErr);
-    throw new Error(
-      parseAiWorkerProxyCreateError(create.status, raw, aiWorkerProxyApiUrl("/proxy/gemini/async"))
-    );
-  }
-  try {
-    const parsed = parseAsyncCreateBody(create.text);
-    jobId = parsed.jobId;
-    createStatus = parsed.createStatus;
-  } catch {
-    throw new Error("异步任务响应无效");
-  }
-  if (!jobId) throw new Error("未返回 jobId");
-  }
-  if (!jobId) throw new Error("Missing async jobId");
   dispatchGeminiQueueHint({ kind: "job_submitted", jobId, createStatus });
   const asyncReserveKey = getLastCreditsReserveKey();
   registerGeminiAsyncJobForRecovery({
@@ -1933,23 +1865,9 @@ function effectiveImageGenControlTimeoutMs(
   return useLongAiWorkerProxyWait ? Math.max(floor, AI_WORKER_PROXY_IMAGE_TIMEOUT_MS) : floor;
 }
 
-function shouldFallbackUnderstandToBrowserGemini(error: unknown): boolean {
-  if (!AI_WORKER_PROXY_BASE) return false;
-  if (pickChannel(DEFAULT_MODEL_TEXT, "text") !== "gemini-aistudio") return false;
-  if (!getUserApiKey()) return false;
-  const msg = String((error as Error)?.message ?? error ?? "");
-  return (
-    msg.includes("GEMINI_TIMEOUT") ||
-    msg.includes("请求超时") ||
-    msg.includes("Failed to fetch") ||
-    msg.includes("fetch failed") ||
-    msg.includes("NetworkError") ||
-    msg.includes("503") ||
-    msg.includes("504") ||
-    msg.includes("UNAVAILABLE") ||
-    msg.includes("DEADLINE_EXCEEDED") ||
-    msg.includes("high demand")
-  );
+/** C7: browser Gemini fallback disabled — user understand path goes AI Gateway Jobs via unifiedAiGateway. */
+function shouldFallbackUnderstandToBrowserGemini(_error: unknown): boolean {
+  return false;
 }
 
 async function callWithRetry<T>(
@@ -2376,7 +2294,8 @@ export function normalizeApiErrorMessage(err: unknown): string {
  * OpenAI 兼容网关（Antigravity / 部分 ToAPIs）在 `json_object` 模式下仍可能返回 ```json … ``` 包裹的文本；
  * 官方 Gemini structured output 多为裸 JSON。此处统一剥围栏并尽量截取首个 `[`…`]` 数组再 parse。
  */
-function parseBoundingBoxJsonArrayFromModelText(raw: string): unknown[] {
+/** Shared by Gateway detect path (`unifiedAiGateway`) and legacy sync detect. */
+export function parseBoundingBoxJsonArrayFromModelText(raw: string): unknown[] {
   const t = (raw || "").trim();
   if (!t) return [];
   let s = t;
@@ -2411,7 +2330,8 @@ function parseBoundingBoxJsonArrayFromModelText(raw: string): unknown[] {
   }
 }
 
-function parseJsonObjectFromModelText(raw: string): Record<string, unknown> {
+/** Shared by Gateway storyboard structure path and legacy sync analyze. */
+export function parseJsonObjectFromModelText(raw: string): Record<string, unknown> {
   const t = (raw || "").trim();
   if (!t) return {};
   let s = t;

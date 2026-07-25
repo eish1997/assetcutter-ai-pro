@@ -26,6 +26,7 @@ describe('AI Gateway 302 staging smoke gate (B15)', () => {
     expect(exitCodeForStatus('ok')).toBe(0);
     expect(exitCodeForStatus('blocked')).toBe(2);
     expect(exitCodeForStatus('blocked', { optional: true })).toBe(0);
+    expect(exitCodeForStatus('blocked', { optional: true, reportBlocked: true })).toBe(2);
     expect(exitCodeForStatus('failed')).toBe(1);
   });
 });

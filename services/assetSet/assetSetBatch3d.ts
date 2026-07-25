@@ -5,7 +5,11 @@ import {
   tripoWorkflowPollUntilDone,
   extractTripoModelAndPreviewUrls,
 } from '../generate3d/tripoWorkflow';
-import { normalizeGenerate3DPresetForRun, resolveGenerate3dProviderId } from '../generate3d';
+import {
+  normalizeGenerate3DPresetForRun,
+  resolveGenerate3dProviderId,
+  resolveTencentHunyuanRegistryId,
+} from '../generate3d';
 import { createAndPollAiGatewayModel3dJob } from '../aiGatewayModel3dExecution';
 import { normalizeApiErrorMessage } from '../unifiedAiGateway';
 import { persistWorkflow3dSlots } from '../persistWorkflow3dSlots';
@@ -158,7 +162,11 @@ export async function runAssetSetComponent3d(params: {
   try {
     const g = normalizeGenerate3DPresetForRun(params.preset.generate3D!);
     const provider = resolveGenerate3dProviderId(g);
-    if (provider === 'volcengine-ark') {
+    if (provider === 'volcengine-ark' || provider === 'tencent') {
+      const registryId =
+        provider === 'tencent'
+          ? resolveTencentHunyuanRegistryId(g)
+          : g.modelRegistryId || 'doubao-seed3d-2-0';
       const prompt = (
         params.preset.instruction?.trim() ||
         g.prompt?.trim() ||
@@ -168,10 +176,15 @@ export async function runAssetSetComponent3d(params: {
       const result = await createAndPollAiGatewayModel3dJob({
         prompt,
         referenceImages: [primary],
-        registryId: g.modelRegistryId || 'doubao-seed3d-2-0',
+        registryId,
         quality: g.quality,
-        format: g.format,
-        texture: g.texture,
+        format: provider === 'tencent' ? g.resultFormat : g.format,
+        texture: provider === 'tencent' ? g.enablePBR : g.texture,
+        enablePBR: g.enablePBR,
+        faceCount: g.faceCount,
+        generateType: g.generateType,
+        polygonType: g.polygonType,
+        model: g.model,
       });
       params.onStatus?.('running');
       return {

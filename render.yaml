@@ -54,6 +54,9 @@
       # AI Gateway image execution gray gate; kept in proxy healthz for deployment verification.
       - key: AI_GATEWAY_EXECUTION_ENABLED
         value: "true"
+      # Vertex image start spacing (prod-like / RPM shield). Code default 65000 when NODE_ENV=production.
+      - key: GEMINI_VERTEX_IMAGE_MIN_INTERVAL_MS
+        value: "65000"
 
   - type: web
     name: assetcutter-auth-api
@@ -98,6 +101,23 @@
       # AI Gateway execution handoff: /api/ai/jobs can submit image/text jobs to AI Worker Proxy.
       - key: AI_GATEWAY_EXECUTION_ENABLED
         value: "true"
+      # Credits gate: reserve on create (prod/pre-release). Local dev may use plan via .env.local.
+      - key: AI_GATEWAY_CREDITS_GATE
+        value: reserve
+      # D2: refuse boot if Dashboard overrides gate to plan/off.
+      - key: AI_GATEWAY_CREDITS_GATE_STRICT
+        value: "true"
+      # Jimeng (Volcengine) site AK for jimeng-visual adapter — fill in Dashboard.
+      - key: JIMENG_API_ENABLED
+        sync: false
+      - key: VOLCENGINE_ACCESS_KEY
+        sync: false
+      - key: VOLCENGINE_SECRET_KEY
+        sync: false
+      - key: JIMENG_VISUAL_HOST
+        sync: false
+      - key: JIMENG_VISUAL_REGION
+        sync: false
       # 宸ヤ綔鍖轰簯鍚屾锛圧2锛夛細涓?auth 鍚屾簮鎸傝浇 /api/r2锛屾棤闇€鍗曠嫭 R2 鏈嶅姟
       - key: R2_ACCOUNT_ID
         sync: false

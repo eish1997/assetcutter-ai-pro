@@ -6,6 +6,7 @@ import {
   type GeminiFairnessConfig,
 } from '../../services/adminGeminiFairnessClient';
 import { PERMISSIONS } from '../../services/adminPermissions';
+import { navigateAdmin } from '../../services/adminNavigate';
 import { blockIfRolePreview } from '../../services/adminRolePreview';
 import { useAdminStaff } from './AdminStaffContext';
 
@@ -177,6 +178,14 @@ const AdminGeminiFairnessPanel: React.FC = () => {
           ，与 <code className="text-gray-400">GEMINI_FAIRNESS_ENABLED=true</code> 的 ai-worker-proxy 同机时可热更新数值。
           总开关、密钥类仍用环境变量。排障：代理根 <code className="text-gray-400">GET /healthz.fairness</code>。
           架构见 <code className="text-gray-400">docs/Gemini代理-公平排队与每用户限流.md</code> 开篇「全链路速查」。
+          {' · '}
+          <button
+            type="button"
+            onClick={() => navigateAdmin('/admin/system-status')}
+            className="text-blue-400 hover:text-blue-300"
+          >
+            系统状态（只读指标）
+          </button>
         </p>
       </div>
       {error && (

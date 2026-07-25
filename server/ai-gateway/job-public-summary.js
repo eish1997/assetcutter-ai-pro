@@ -82,9 +82,31 @@ export function fallbackSummary(metadata) {
   };
 }
 
-export function publicAiJobSummary(plan) {
-  const metadata = record(plan?.job?.metadata);
+/**
+ * C16 — fixed troubleshooting card (same shape local + prod).
+ * @param {Record<string, unknown>} jobLike
+ * @param {{ authBuildSha?: string|null, proxyBuildSha?: string|null }} [runtime]
+ */
+export function buildJobObservabilityCard(jobLike, runtime = {}) {
+  const job = record(jobLike);
+  const metadata = record(job.metadata);
+  const gatewayFailure = job.gatewayFailure || metadata.gatewayFailure || null;
+  const proxyJobId = nonEmptyString(job.proxyJobId) || nonEmptyString(metadata.proxyJobId) || null;
+  const mediaArchive = job.mediaArchive || metadata.mediaArchive || null;
   return {
+    gatewayFailure: gatewayFailure && typeof gatewayFailure === 'object' ? gatewayFailure : null,
+    proxyJobId,
+    mediaArchive: mediaArchive && typeof mediaArchive === 'object' ? mediaArchive : null,
+    buildSha: {
+      auth: nonEmptyString(runtime.authBuildSha) || null,
+      proxy: nonEmptyString(runtime.proxyBuildSha) || null,
+    },
+  };
+}
+
+export function publicAiJobSummary(plan, runtime = {}) {
+  const metadata = record(plan?.job?.metadata);
+  const summary = {
     id: plan.job.id,
     status: plan.job.status,
     modality: plan.job.modality,
@@ -101,11 +123,16 @@ export function publicAiJobSummary(plan) {
     traceOnly: Boolean(metadata.traceOnly),
     proxyPath: metadata.proxyPath || null,
     proxyJobId: metadata.proxyJobId || null,
+    mediaArchive: metadata.mediaArchive || null,
     creditsGate: metadata.creditsGate || null,
     fallback: fallbackSummary(metadata),
     routeDecision: metadata.routeDecision || null,
     gatewayFailure: metadata.gatewayFailure || null,
     workerCancel: publicAiGatewayCancelSummary(metadata.workerCancel),
     error: errorSummary(plan.job.error),
+  };
+  return {
+    ...summary,
+    observability: buildJobObservabilityCard(summary, runtime),
   };
 }

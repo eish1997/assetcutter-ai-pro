@@ -38,7 +38,7 @@ const TencentGenerate3DPresetFields: React.FC<Props> = ({
     <div className="w-full space-y-2">
       <div className="text-[8px] text-gray-500 leading-relaxed">
         工作流拖<strong className="text-gray-400">图片</strong>到该能力即可图生 3D（暂不支持多视角与文生）。
-        需配置 <code className="text-gray-400">VITE_TENCENT_PROXY</code> 与本地代理。
+        用户主路走 AI Gateway 平台 Key；<code className="text-gray-400">VITE_TENCENT_PROXY</code> 仅本地诊断。
       </div>
       <div className="flex flex-wrap gap-2">
         <label className="flex items-center gap-1.5 text-[9px]">

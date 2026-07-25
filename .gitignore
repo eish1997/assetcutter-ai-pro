@@ -31,6 +31,8 @@ companion-desktop/sam-local-bundled/
 server/data/companion-artifacts.json
 server/data/ai-gateway-provider-keys.json
 server/data/ai-gateway-provider-keys-events.json
+server/data/ai-gateway-provider-keys.online-mirror.json
+server/data/*.bak-*
 server/data/auth-db.test.json
 *.local
 .env
@@ -58,3 +60,8 @@ server/data/auth-db.test.json
 *.njsproj
 *.sln
 *.sw?
+
+# C11 — generated at build
+public/healthz
+public/healthz.json
+

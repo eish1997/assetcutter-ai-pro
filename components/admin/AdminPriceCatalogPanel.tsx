@@ -7,6 +7,7 @@ import {
   type AdminPriceCatalogWriteInput,
 } from '../../services/adminClient';
 import { PERMISSIONS, hasAdminPermission } from '../../services/adminPermissions';
+import { navigateAdmin } from '../../services/adminNavigate';
 import { blockIfRolePreview } from '../../services/adminRolePreview';
 import {
   getModelOpsConfigSync,
@@ -354,6 +355,14 @@ const AdminPriceCatalogPanel: React.FC = () => {
           <h1 className="text-lg font-semibold text-white">价目表</h1>
           <p className="text-[11px] text-gray-500 mt-1">
             运行时价目版本 · 修改会追加新版本（catalog: {catalogVersion || '—'}）
+            {' · '}
+            <button
+              type="button"
+              onClick={() => navigateAdmin('/admin/usage')}
+              className="text-blue-400 hover:text-blue-300"
+            >
+              AI 用量
+            </button>
           </p>
         </div>
         {canWrite ? (

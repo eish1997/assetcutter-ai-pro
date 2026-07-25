@@ -41,6 +41,11 @@ export async function runTencentGenerate3dQueueItem(args: {
   onLog: LogFn;
 }): Promise<TencentQueueRunResult> {
   const { jobType, input, creds, signal, onTaskProgress, onLog } = args;
+  // D4: legacy BYOK queue — not a user-main / pre-release path (prefer createAndPollAiGatewayModel3dJob).
+  onLog(
+    'warn',
+    '[generate3d] runTencentGenerate3dQueueItem is diagnostic/legacy BYOK — not pre-release evidence (D4)'
+  );
   const opt = { signal };
 
   if (jobType === 'pro') {

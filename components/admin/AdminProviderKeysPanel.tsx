@@ -37,6 +37,7 @@ import {
   type AdminProviderKeyRow,
 } from '../../services/adminProviderKeysClient';
 import { PERMISSIONS } from '../../services/adminPermissions';
+import { navigateAdmin } from '../../services/adminNavigate';
 import { blockIfRolePreview } from '../../services/adminRolePreview';
 import {
   evaluatePublishDiagnosisGate,
@@ -1672,8 +1673,8 @@ const AdminProviderKeysPanel: React.FC = () => {
       await refreshModelOpsConfig();
       setMessage(
         diagnosisGate.forceRequired || options.force
-          ? '工作区模型发布范围已保存（含强制发布）'
-          : '工作区模型发布范围已保存'
+          ? '工作区模型发布范围已保存（含强制发布）。提醒：Key/Route 绿 ≠ 可上线，请补 Generation Test。'
+          : '工作区模型发布范围已保存。提醒：Key/Route 绿 ≠ 可上线，请补 Generation Test。'
       );
     } catch (err) {
       setError(err instanceof Error ? err.message : '保存工作区模型发布范围失败');
@@ -1893,6 +1894,22 @@ const AdminProviderKeysPanel: React.FC = () => {
           <h2 className="text-base font-semibold text-white">供应商中心</h2>
           <p className="mt-1 max-w-3xl text-[12px] leading-relaxed text-gray-400">
             管理平台密钥、模型发布、路由检查和真实生成诊断。管理员进来后先看总览，再处理异常、添加密钥、发布可用模型。
+            {' · '}
+            <button
+              type="button"
+              onClick={() => navigateAdmin('/admin/ai-jobs')}
+              className="text-blue-400 hover:text-blue-300"
+            >
+              AI 任务（运营暂停）
+            </button>
+            {' · '}
+            <button
+              type="button"
+              onClick={() => navigateAdmin('/admin/price-catalog')}
+              className="text-blue-400 hover:text-blue-300"
+            >
+              价目表
+            </button>
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -1995,6 +2012,10 @@ const AdminProviderKeysPanel: React.FC = () => {
               <div><span className="text-gray-200">Route Check：</span>确认模型、密钥、网关能否接上；通过≠可生成。</div>
               <div><span className="text-gray-200">一屏诊断：</span>只读总览 Key/Route/近期失败；不替代真实生成。</div>
               <div><span className="text-gray-200">Generation Test：</span>创建最小真实任务并可能计费，用于验证上游输出。</div>
+            </div>
+            <div className="mt-3 rounded-md border border-amber-700/40 bg-amber-950/25 px-2.5 py-2 text-[10px] leading-relaxed text-amber-100/90">
+              D8：仅 Key / Route 通过不得宣布「可上线」。发布前至少一条 Generation Test 成功，并完成{' '}
+              <code className="text-amber-50/90">env:profile:prod-like</code> + live 冒烟矩阵（见 D 轮 §5）。
             </div>
           </div>
         </aside>

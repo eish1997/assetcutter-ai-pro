@@ -124,6 +124,14 @@ const AdminRolesMatrixPanel: React.FC = () => {
           仅超级管理员可编辑。super 行锁定；admin 系统模板可改列权限但不可删除。带「高危」标记的列不可授予非 super 角色（保存时服务端会剔除）。
           矩阵列与侧栏一一对应；「用户管理」与「用量同步」可独立开关。开启「用户写/改角色」时会自动附带用户列表只读。
           保存后若改的是当前登录账号所属角色，侧栏会立即刷新。
+          {' · '}
+          <button
+            type="button"
+            onClick={() => navigateAdmin('/admin/users')}
+            className="text-blue-400 hover:text-blue-300"
+          >
+            用户管理（指派角色）
+          </button>
         </p>
       </div>
 

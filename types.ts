@@ -831,7 +831,7 @@ export const CAPABILITY_CATEGORIES = [
   {
     id: 'generate_video',
     label: '生成视频',
-    desc: '文字与/或参考图 → 视频（需配置 VITE_WORKFLOW_VIDEO_API_URL，由后端桥接供应商）',
+    desc: '文字与/或参考图 → 视频（经 AI Gateway Job；平台视频路由）',
   },
 ] as const;
 export type CapabilityCategory = (typeof CAPABILITY_CATEGORIES)[number]['id'];

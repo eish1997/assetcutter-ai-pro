@@ -292,6 +292,8 @@ export async function testAiGatewayModelGeneration(req, input = {}, user = {}, o
       nextAction: 'The upstream task succeeded; inspect adapter output extraction and workspace restore handling.',
     });
   }
+  const proxyJobId =
+    nonEmptyString(detail.job.proxyJobId) || nonEmptyString(detail.job.metadata?.proxyJobId) || null;
   return {
     ok: true,
     status: 'passed',
@@ -307,6 +309,7 @@ export async function testAiGatewayModelGeneration(req, input = {}, user = {}, o
     message: 'Generation Test passed: a real job completed with expected output. This is not the same as Route Check.',
     jobId,
     aiGatewayJobId: jobId,
+    proxyJobId,
     jobStatus: detail.job.status,
     route,
     fallback: detail.job.fallback || null,

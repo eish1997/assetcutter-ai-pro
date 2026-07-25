@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../server/r2-storage-handlers.js', () => ({
   isR2Configured: vi.fn(() => true),
+  publicR2UrlForKey: vi.fn((key: string) => `https://cdn.example.com/${key}`),
   putPublicR2Object: vi.fn(async (objectKey: string, body: Buffer, options: { contentType?: string } = {}) => ({
     objectKey,
     publicUrl: `https://cdn.example.com/${objectKey}`,
@@ -10,13 +11,18 @@ vi.mock('../server/r2-storage-handlers.js', () => ({
   })),
 }));
 
+vi.mock('undici', () => ({
+  fetch: vi.fn(),
+}));
+
 import { archiveAiGatewayJobMedia } from '../server/ai-gateway/job-media-archive.js';
-import { putPublicR2Object } from '../server/r2-storage-handlers.js';
+import { isR2Configured, putPublicR2Object } from '../server/r2-storage-handlers.js';
+import { fetch as undiciFetch } from 'undici';
 
 describe('archiveAiGatewayJobMedia', () => {
   afterEach(() => {
     vi.clearAllMocks();
-    vi.restoreAllMocks();
+    vi.mocked(isR2Configured).mockReturnValue(true);
   });
 
   it('does not archive remote video URLs into cloud object storage', async () => {
@@ -39,6 +45,59 @@ describe('archiveAiGatewayJobMedia', () => {
     expect(putPublicR2Object).not.toHaveBeenCalled();
     expect(archived.job.output.videoUrl).toBe('https://upstream.example.com/signed-video');
     expect(archived.job.artifacts[0].url).toBe('https://upstream.example.com/signed-video');
+  });
+
+  it('archives remote image supplier URLs to R2 for durable re-GET (C14)', async () => {
+    vi.mocked(undiciFetch).mockResolvedValue({
+      ok: true,
+      headers: { get: () => 'image/png' },
+      arrayBuffer: async () => Uint8Array.from([1, 2, 3, 4]).buffer,
+    } as unknown as Response);
+
+    const archived = await archiveAiGatewayJobMedia({
+      job: {
+        id: 'aijob_remote_image',
+        userId: 'user_1',
+        output: {
+          imageUrl: 'https://upstream.example.com/tmp/signed-image?token=1',
+        },
+        artifacts: [
+          {
+            kind: 'image',
+            url: 'https://upstream.example.com/tmp/signed-image?token=1',
+          },
+        ],
+      },
+    });
+
+    expect(undiciFetch).toHaveBeenCalled();
+    expect(putPublicR2Object).toHaveBeenCalled();
+    expect(archived.job.output.imageUrl).toMatch(/^https:\/\/cdn\.example\.com\/public\/ai-gateway-results\//);
+    expect(archived.job.artifacts[0]).toMatchObject({
+      kind: 'image',
+      archived: true,
+      url: expect.stringMatching(/^https:\/\/cdn\.example\.com\/public\/ai-gateway-results\//),
+    });
+    expect(archived.job.metadata?.mediaArchive).toMatchObject({
+      status: 'ok',
+      archivedRemoteCount: expect.any(Number),
+    });
+  });
+
+  it('stamps skipped mediaArchive when R2 is not configured (C14)', async () => {
+    vi.mocked(isR2Configured).mockReturnValue(false);
+    const archived = await archiveAiGatewayJobMedia({
+      job: {
+        id: 'aijob_no_r2',
+        userId: 'user_1',
+        output: { imageUrl: 'data:image/png;base64,QUJD' },
+      },
+    });
+    expect(putPublicR2Object).not.toHaveBeenCalled();
+    expect(archived.job.metadata?.mediaArchive).toMatchObject({
+      status: 'skipped',
+      reason: 'r2_not_configured',
+    });
   });
 
   it('still archives inline data URLs to avoid persisting large base64 job payloads', async () => {

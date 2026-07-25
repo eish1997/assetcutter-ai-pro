@@ -19,6 +19,7 @@ function variantFromSoftKind(kind: AcUnifiedAiSoftNoticeDetail['kind']): NoticeV
   if (kind === 'credits_exceeded') return 'credits_exceeded';
   if (kind === 'credits_consumed') return 'credits_consumed';
   if (kind === 'rate_limit') return 'soft_rate';
+  // media_ephemeral → soft_busy (amber-slate: success but not durable)
   return 'soft_busy';
 }
 

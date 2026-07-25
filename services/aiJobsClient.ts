@@ -94,9 +94,17 @@ export type AiJobSummary = {
   traceOnly: boolean;
   proxyPath: string | null;
   proxyJobId: string | null;
+  mediaArchive?: Record<string, unknown> | null;
   creditsGate: AiJobCreditsGateSummary | null;
   fallback?: AiJobFallbackSummary | null;
   gatewayFailure?: AiJobGatewayFailureSummary | null;
+  /** C16 — fixed troubleshooting card */
+  observability?: {
+    gatewayFailure?: AiJobGatewayFailureSummary | null;
+    proxyJobId?: string | null;
+    mediaArchive?: Record<string, unknown> | null;
+    buildSha?: { auth?: string | null; proxy?: string | null };
+  } | null;
   /** B12: hard vs soft cancel distinguishable copy */
   workerCancel?: {
     mode: string;
@@ -117,6 +125,8 @@ export type AiJobDetail = {
     output: unknown | null;
     artifacts: Array<Record<string, unknown>>;
   };
+  /** C16 — same shape as job.observability, with runtime buildSha */
+  observability?: AiJobSummary['observability'];
   route: AiJobRouteSummary | null;
   adapterRequest: {
     method?: string;

@@ -8,6 +8,7 @@ import {
   type AdminSystemStatusPayload,
 } from '../../services/adminClient';
 import { PERMISSIONS } from '../../services/adminPermissions';
+import { navigateAdmin } from '../../services/adminNavigate';
 import { blockIfRolePreview } from '../../services/adminRolePreview';
 import { useAdminStaff } from './AdminStaffContext';
 
@@ -121,6 +122,17 @@ const AdminSystemStatusPanel: React.FC = () => {
           {status?.generatedAt ? (
             <p className="mt-1 text-[10px] text-gray-600">生成于 {new Date(status.generatedAt).toLocaleString()}</p>
           ) : null}
+          {can(PERMISSIONS.GEMINI_FAIRNESS_READ) ? (
+            <p className="mt-1 text-[10px] text-gray-600">
+              <button
+                type="button"
+                onClick={() => navigateAdmin('/admin/gemini-fairness')}
+                className="text-blue-400 hover:text-blue-300"
+              >
+                编辑 Gemini 公平限流
+              </button>
+            </p>
+          ) : null}
         </div>
         <button
           type="button"
@@ -188,10 +200,22 @@ const AdminSystemStatusPanel: React.FC = () => {
               </dl>
               {gp?.metrics ? (
                 <dl className="mt-3 pt-3 border-t border-[#252528] space-y-1.5 text-[10px]">
-                  <div className="flex justify-between">
+                  <div className="flex justify-between gap-3">
                     <dt className="text-gray-500">公平排队</dt>
-                    <dd className={gp.metrics.enabled ? 'text-emerald-300' : 'text-gray-500'}>
+                    <dd className={`text-right ${gp.metrics.enabled ? 'text-emerald-300' : 'text-gray-500'}`}>
                       {gp.metrics.enabled ? '已启用' : '未启用'}
+                      {can(PERMISSIONS.GEMINI_FAIRNESS_READ) ? (
+                        <>
+                          {' · '}
+                          <button
+                            type="button"
+                            onClick={() => navigateAdmin('/admin/gemini-fairness')}
+                            className="text-blue-400 hover:text-blue-300"
+                          >
+                            配置
+                          </button>
+                        </>
+                      ) : null}
                     </dd>
                   </div>
                   <div className="flex justify-between">

@@ -21,8 +21,8 @@
 
 | pathId | 入口 | jobKind | 默认 | BYOK 条件 | 预检=结算 |
 | --- | --- | --- | --- | --- | --- |
-| workflow.chat | 工作流对话/理解 | workflow_chat | platform | 仅 explicitByok | 是 |
-| workflow.understand | 工作流图像理解 | workflow_understand | platform | 仅 explicitByok | 是 |
+| workflow.chat | 工作流对话/理解 | workflow_chat | platform | 仅 explicitByok | 是（C7：Gateway Job） |
+| workflow.understand | 工作流图像理解 | workflow_understand | platform | 仅 explicitByok | 是（C7：Gateway Job） |
 | workflow.text_to_image | 文生图 / 统一生成 | workflow_text_to_image | platform | 仅 explicitByok | 是 |
 | workflow.image_edit | 图编辑 | workflow_image_edit | platform | 仅 explicitByok | 是 |
 | workflow.jimeng_* | 即梦图/视频（Gateway-only） | workflow_jimeng_* | platform | 不翻 BYOK（ALWAYS_PLATFORM） | 是 |

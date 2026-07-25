@@ -5,7 +5,12 @@
 
 export const AC_UNIFIED_AI_SOFT_NOTICE_EVENT = "ac:unified-ai-soft-notice" as const;
 
-export type AcUnifiedAiSoftNoticeKind = "rate_limit" | "upstream_busy" | "credits_exceeded" | "credits_consumed";
+export type AcUnifiedAiSoftNoticeKind =
+  | "rate_limit"
+  | "upstream_busy"
+  | "credits_exceeded"
+  | "credits_consumed"
+  | "media_ephemeral";
 
 export type AcUnifiedAiSoftNoticeDetail = {
   kind: AcUnifiedAiSoftNoticeKind;

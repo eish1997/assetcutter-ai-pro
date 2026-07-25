@@ -66,7 +66,11 @@ export function aiWorkerProxyUpstreamDiagnostics() {
     source: matched ? matched[0] : 'default',
     legacyGeminiProxyEnvUsed: Boolean(matched?.[0]?.startsWith('GEMINI_PROXY_')),
     legacyGeminiProxyEnvPresent: candidates.some(([key, value]) => key.startsWith('GEMINI_PROXY_') && String(value || '').trim()),
-    internalCompatibilityRoutes: ['/proxy/gemini/async', '/proxy/gemini/async-batch', '/proxy/gemini/generate-content'],
+    internalCompatibilityRoutes: [
+      '/proxy/gemini/async',
+      '/proxy/gemini/async-batch', // internal-only unless AI_WORKER_PROXY_ASYNC_BATCH_ENABLED
+      '/proxy/gemini/generate-content',
+    ],
   };
 }
 

@@ -2,6 +2,10 @@
 
 本文档描述在 **单 GCP 项目、单 Vertex 凭证** 前提下，为 `server/ai-worker-proxy-api.js` 及调用链增加的 **公平排队** 与 **每用户限流** 的设计目标、行为规格与落地清单。**实现前以本文为准；实现后应同步更新环境变量表与健康检查字段。**
 
+> **2026-07-25（C12 / D9）**：工作流客户端 **不再** HTTP coalesce 调用 `POST /proxy/gemini/async-batch`；**用户生图 / 理解 / 检测主路走 AI Gateway Jobs**（`runUnifiedImageGeneration` 等）。  
+> 服务端 `POST /proxy/gemini/async-batch` 默认 **410 Gone**；仅运维显式 `AI_WORKER_PROXY_ASYNC_BATCH_ENABLED=true` 时内部可用（**误开会绕过「用户图必须 Jobs」叙事，禁止当预发路径**）。  
+> **现行验收以** [`AI-Gateway优化清单-D轮-验收即线上.md`](./AI-Gateway优化清单-D轮-验收即线上.md) **§5 为准**。下文 §5～§6、§12、§15 中「客户端 async-batch」段落均为 **历史规格存档**，勿照做联调。
+
 相关文档：
 
 - [Vertex AI 接入说明](./VERTEX_AI_INTEGRATION.md)（`aiBackend: "vertex"`、ADC、前端 `VITE_AI_WORKER_PROXY_API` / `VITE_AI_WORKER_PROXY_API_VERTEX`）
@@ -12,7 +16,7 @@
 | 位置 | 职责 |
 | --- | --- |
 | **浏览器** | `geminiFairnessBridge` 登录头；**`throwFairnessRejected`** → **`ac:ai-worker-proxy-fairness-rejected`**；**`traceUnifiedAiCall`**（`workflow*`）对其它限流/繁忙节流派发 **`ac:unified-ai-soft-notice`**；**`GeminiFairnessFloatingNotice`** 统一顶栏展示。 |
-| **ai-worker-proxy 进程** | **`server/ai-worker-proxy-fairness.js`** 准入与队列；**`server/ai-worker-proxy-api.js`** 挂接 async / async-batch / generate-content；**`/healthz.fairness`** 可观测。 |
+| **ai-worker-proxy 进程** | **`server/ai-worker-proxy-fairness.js`** 准入与队列；**`server/ai-worker-proxy-api.js`** 挂接 async / generate-content（**async-batch 默认关闭**）；**`/healthz.fairness`** 可观测。 |
 | **运维数值** | 默认磁盘 **`server/data/gemini-fairness-config.json`**（或 **`GEMINI_FAIRNESS_CONFIG_PATH`**）；代理约 **3s** 重读；**auth-api** **`GET` / `PUT` / `DELETE`** **`/api/admin/gemini-fairness-config`**（**DELETE** 清空为 `{}`）与站点 **`/admin/gemini-fairness`**（**PUT 与已有键合并**、**清空磁盘覆盖**按钮）。 |
 | **总开关 / 密钥** | 仍以环境变量为准（**`GEMINI_FAIRNESS_ENABLED`**、HMAC、**`GEMINI_FAIRNESS_TRUST_CLIENT_KEY_HEADER`** 等）；磁盘只覆盖数值型旋钮。 |
 
@@ -209,7 +213,9 @@
 - `costWeight` 仅允许 `1 | 2 | 5` 等白名单；未传默认为 `1`。
 - **批量 async-batch**：`costWeight = min(ceil(n/5), 10)` 之类，避免一次提交 20 条等同 20 次单任务冲击。
 
-### 6.4 `async-batch` 首版语义（与公平队列对齐）
+### 6.4 `async-batch` 首版语义（历史规格 · 默认已 410）
+
+> **D9**：用户路径已不走本接口；下列策略仅供理解旧实现 / 误开时的内部行为。
 
 当前仓库内批量路径对子项 **并行** 发起上游调用；与「公平队列 + 每用户并发」叠加时，须在文档中 **写死首版语义**，避免实现分歧：
 

@@ -21,6 +21,10 @@ describe('AI gateway health snapshot', () => {
       enabled: true,
       executionEnabled: true,
       creditsGateMode: 'plan',
+      mediaArchive: expect.objectContaining({
+        archivesInlineDataUrls: true,
+        archivesRemoteImages: true,
+      }),
       routes: {
         createJob: 'POST /ai-gateway/jobs',
         listJobs: 'GET /ai-gateway/jobs?limit=20',

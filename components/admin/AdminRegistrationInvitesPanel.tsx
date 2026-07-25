@@ -15,7 +15,14 @@ function inviteStatus(inv: AdminRegistrationInvite): { label: string; className:
   return { label: '待使用', className: 'text-blue-300' };
 }
 
-const AdminRegistrationInvitesPanel: React.FC = () => {
+type AdminRegistrationInvitesPanelProps = {
+  /** When true, hide page-level title (used inside AdminInvitesPanel tabs). */
+  embedded?: boolean;
+};
+
+const AdminRegistrationInvitesPanel: React.FC<AdminRegistrationInvitesPanelProps> = ({
+  embedded = false,
+}) => {
   const { isRolePreview } = useAdminStaff();
   const [invites, setInvites] = React.useState<AdminRegistrationInvite[]>([]);
   const [note, setNote] = React.useState('');
@@ -89,12 +96,18 @@ const AdminRegistrationInvitesPanel: React.FC = () => {
 
   return (
     <div className="space-y-4">
-      <div>
-        <h2 className="text-[12px] font-black uppercase tracking-[0.2em] text-gray-300">注册邀请码</h2>
-        <p className="mt-1 text-[10px] text-gray-600">
+      {!embedded ? (
+        <div>
+          <h2 className="text-[12px] font-black uppercase tracking-[0.2em] text-gray-300">注册邀请码</h2>
+          <p className="mt-1 text-[10px] text-gray-600">
+            一次性短码 + 注册链接；用户注册后不会自动发放积分，需在用户管理中手动发放
+          </p>
+        </div>
+      ) : (
+        <p className="text-[10px] text-gray-600">
           一次性短码 + 注册链接；用户注册后不会自动发放积分，需在用户管理中手动发放
         </p>
-      </div>
+      )}
 
       {error ? <p className="text-[11px] text-red-400">{error}</p> : null}
 

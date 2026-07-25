@@ -16,6 +16,7 @@ import { ProxyAgent, setGlobalDispatcher } from 'undici';
 import { GoogleGenAI } from '@google/genai';
 import { handleAiGatewayRequest, updateAiGatewayJobStatus } from './ai-gateway/http-handler.js';
 import { aiGatewayHealthSnapshot } from './ai-gateway/health.js';
+import { buildIdentityFields } from '../shared/buildSha.js';
 import { normalizeInlineDataPayload } from './ai-gateway/inline-data-normalize.js';
 import {
   AI_WORKER_PROXY_MAX_BODY_BYTES as MAX_BODY_BYTES,
@@ -1129,6 +1130,20 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (path === GEMINI_ASYNC_BATCH_PATH && req.method === 'POST') {
+    // C12/D9: client coalesce removed. Default 410. Opt-in is INTERNAL ONLY —
+    // enabling bypasses "user images must go through AI Gateway Jobs". Never use for staging green.
+    const batchEnabled = ['1', 'true', 'yes', 'on'].includes(
+      String(process.env.AI_WORKER_PROXY_ASYNC_BATCH_ENABLED || '').trim().toLowerCase()
+    );
+    if (!batchEnabled) {
+      sendJson(res, 410, {
+        error: 'async-batch disabled',
+        code: 'ASYNC_BATCH_DISABLED',
+        message:
+          'POST /proxy/gemini/async-batch is internal-only (dead branch). User image path uses AI Gateway Jobs. Do not enable AI_WORKER_PROXY_ASYNC_BATCH_ENABLED for prod/staging acceptance.',
+      });
+      return;
+    }
     try {
       const body = await readBodyUtf8(req, MAX_BODY_BYTES);
       let parsed;
@@ -1330,7 +1345,7 @@ const server = http.createServer(async (req, res) => {
   if (path === '/healthz' && req.method === 'GET') {
     sendJson(res, 200, {
       ok: true,
-      service: 'ai-worker-proxy',
+      ...buildIdentityFields('ai-worker-proxy'),
       geminiAsyncJobs: geminiAsyncJobs.size,
       aiWorkerProxyInFlight,
       fairness: fairnessHealthSnapshot(),
@@ -1350,7 +1365,7 @@ const server = http.createServer(async (req, res) => {
 
   sendJson(res, 404, {
     error:
-      'Not found. POST /ai-gateway/jobs + GET /ai-gateway/jobs/:jobId; POST /proxy/gemini/async or /proxy/gemini/async-batch (body optional aiBackend:vertex) + GET /proxy/gemini/async/:jobId or /proxy/gemini/async-batch/:jobId; POST /proxy/gemini/generate-content; GET /healthz',
+      'Not found. POST /ai-gateway/jobs + GET /ai-gateway/jobs/:jobId; POST /proxy/gemini/async (body optional aiBackend:vertex) + GET /proxy/gemini/async/:jobId; POST /proxy/gemini/generate-content; GET /healthz. async-batch is internal-only (AI_WORKER_PROXY_ASYNC_BATCH_ENABLED=true).',
   });
 });
 

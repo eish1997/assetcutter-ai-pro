@@ -1,20 +1,38 @@
 import React from 'react';
-import { ADMIN_NAV_ITEMS, PERMISSIONS, resolveAdminLandingPath, type AdminPermission } from '../../services/adminPermissions';
+import {
+  ADMIN_NAV_ITEMS,
+  PERMISSIONS,
+  resolveAdminLandingPath,
+  type AdminPermission,
+} from '../../services/adminPermissions';
 import { useAdminStaff } from './AdminStaffContext';
 
 const ROUTE_PERMISSIONS: Record<string, AdminPermission> = {
   '/admin': PERMISSIONS.DASHBOARD_READ,
-  ...Object.fromEntries(ADMIN_NAV_ITEMS.map((item) => [item.path, item.permission])),
+  ...Object.fromEntries(
+    ADMIN_NAV_ITEMS.filter((item) => item.permission).map((item) => [item.path, item.permission!])
+  ),
+  // Legacy paths redirect to /admin/invites; keep permission checks during redirect flash.
+  '/admin/staff-invites': PERMISSIONS.USERS_ROLE_WRITE,
+  '/admin/registration-invites': PERMISSIONS.REGISTRATION_INVITES_WRITE,
 };
+
+function canAccessPath(pathname: string, can: (key: AdminPermission) => boolean): boolean {
+  if (pathname === '/admin/invites') {
+    return can(PERMISSIONS.USERS_ROLE_WRITE) || can(PERMISSIONS.REGISTRATION_INVITES_WRITE);
+  }
+  if (pathname.startsWith('/admin/users/')) {
+    return can(PERMISSIONS.USERS_READ);
+  }
+  const permission = ROUTE_PERMISSIONS[pathname] ?? PERMISSIONS.DASHBOARD_READ;
+  return can(permission);
+}
 
 export const AdminRouteGuard: React.FC<{ pathname: string; children: React.ReactNode }> = ({
   pathname,
   children,
 }) => {
   const { can, permissions } = useAdminStaff();
-  const permission =
-    ROUTE_PERMISSIONS[pathname] ??
-    (pathname.startsWith('/admin/users/') ? PERMISSIONS.USERS_READ : PERMISSIONS.DASHBOARD_READ);
 
   if (pathname === '/admin' && !can(PERMISSIONS.DASHBOARD_READ)) {
     const landing = resolveAdminLandingPath(permissions);
@@ -27,7 +45,7 @@ export const AdminRouteGuard: React.FC<{ pathname: string; children: React.React
     }
   }
 
-  if (!can(permission)) {
+  if (!canAccessPath(pathname, can)) {
     return (
       <div className="rounded-2xl border border-[#2e2e32] bg-[#121214] p-8 max-w-lg">
         <h2 className="text-[12px] font-black uppercase tracking-[0.2em] text-gray-300">无权限</h2>

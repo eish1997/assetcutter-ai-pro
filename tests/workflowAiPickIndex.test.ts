@@ -120,13 +120,15 @@ describe('workflowAiPickIndex', () => {
     );
   });
 
-  it('第三轮审计明确文本与图片主入口已 Gateway 化，当前画面问答仍待第四轮收口', () => {
+  it('第三轮审计明确文本与图片主入口已 Gateway 化；D5 能力预设/工作流 3D 亦 Gateway', () => {
     const byId = new Map(WORKFLOW_AI_EXECUTION_ENTRY_ROWS.map((r) => [r.id, r]));
     expect(byId.get('quick_compose_text')?.routeStatus).toBe('gateway');
     expect(byId.get('project_agent_plain_text')?.routeStatus).toBe('gateway');
     expect(byId.get('quick_compose_image')?.routeStatus).toBe('gateway');
     expect(byId.get('project_agent_current_view_qa')?.routeStatus).toBe('gateway');
-    expect(byId.get('storyboard_ai')?.routeStatus).toBe('partial_gateway');
+    expect(byId.get('capability_preset_execute')?.routeStatus).toBe('gateway');
+    expect(byId.get('workflow_3d')?.routeStatus).toBe('gateway');
+    expect(byId.get('storyboard_ai')?.routeStatus).toBe('gateway');
     expect(byId.get('workflow_video')?.routeStatus).toBe('gateway');
   });
 

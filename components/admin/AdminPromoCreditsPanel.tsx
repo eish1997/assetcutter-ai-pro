@@ -9,6 +9,7 @@ import {
   type AdminPromoLotRow,
 } from '../../services/adminClient';
 import { blockIfRolePreview } from '../../services/adminRolePreview';
+import { navigateAdmin } from '../../services/adminNavigate';
 import { fmtCredits, fmtPromoExpiryDate } from '../../shared/credits';
 import { CustomDropdown } from '../ui/CustomDropdown';
 import { useAdminStaff } from './AdminStaffContext';
@@ -247,6 +248,22 @@ const AdminPromoCreditsPanel: React.FC = () => {
         <h1 className="text-lg font-semibold text-white">活动积分（限时）</h1>
         <p className="text-[11px] text-gray-400 mt-1 leading-relaxed max-w-3xl">
           发放带到期日的活动积分；用户消耗时优先扣活动桶（按到期先后）。到期后自动清零，流水类型为「活动到期清零」。
+          {' '}
+          <button
+            type="button"
+            onClick={() => navigateAdmin('/admin/users')}
+            className="text-blue-400 hover:text-blue-300"
+          >
+            用户管理（永久账本）
+          </button>
+          {' · '}
+          <button
+            type="button"
+            onClick={() => navigateAdmin('/admin/usage')}
+            className="text-blue-400 hover:text-blue-300"
+          >
+            AI 用量
+          </button>
         </p>
         {!enabled ? (
           <p className="text-[11px] text-amber-300/90 mt-2">

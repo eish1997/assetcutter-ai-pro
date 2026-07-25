@@ -9,12 +9,67 @@ import { withAiGatewayPostgresRetry } from './postgres-transient-retry.js';
 const CHECK_MODES = new Set(['check', 'precheck', 'on', 'true', '1']);
 const RESERVE_MODES = new Set(['reserve', 'reserved']);
 
-export function aiGatewayCreditsGateMode() {
-  const raw = String(process.env.AI_GATEWAY_CREDITS_GATE || 'plan').trim().toLowerCase();
+function isProductionNodeEnv(env = process.env) {
+  return String(env.NODE_ENV || '').trim().toLowerCase() === 'production';
+}
+
+/**
+ * Credits gate mode (C6).
+ * - Explicit AI_GATEWAY_CREDITS_GATE wins.
+ * - Unset: production → reserve; otherwise → plan (local/dev only; not pre-release).
+ */
+export function aiGatewayCreditsGateMode(env = process.env) {
+  const raw = String(env.AI_GATEWAY_CREDITS_GATE || '').trim().toLowerCase();
   if (RESERVE_MODES.has(raw)) return 'reserve';
   if (CHECK_MODES.has(raw)) return 'check';
   if (raw === 'off' || raw === 'false' || raw === '0') return 'off';
-  return 'plan';
+  if (raw === 'plan') return 'plan';
+  // default when unset
+  return isProductionNodeEnv(env) ? 'reserve' : 'plan';
+}
+
+/**
+ * D2: production defaults STRICT=on when unset; only explicit false|0|off softens to WARN.
+ */
+export function isCreditsGateStrict(env = process.env) {
+  const raw = String(env.AI_GATEWAY_CREDITS_GATE_STRICT ?? '').trim().toLowerCase();
+  if (raw === 'false' || raw === '0' || raw === 'off') return false;
+  if (raw === 'true' || raw === '1' || raw === 'on') return true;
+  return isProductionNodeEnv(env);
+}
+
+/**
+ * Production soft/hard policy: plan|off are not pre-release safe.
+ * Returns { ok, mode, level: 'ok'|'warn'|'error', message }.
+ */
+export function evaluateCreditsGateProductionPolicy(env = process.env) {
+  const mode = aiGatewayCreditsGateMode(env);
+  if (!isProductionNodeEnv(env)) {
+    return {
+      ok: true,
+      mode,
+      level: 'ok',
+      message: mode === 'plan' || mode === 'off' ? 'dev credits gate (not pre-release)' : `credits gate ${mode}`,
+    };
+  }
+  if (mode === 'reserve') {
+    return { ok: true, mode, level: 'ok', message: 'production credits gate=reserve' };
+  }
+  const strict = isCreditsGateStrict(env);
+  const message = `production NODE_ENV with AI_GATEWAY_CREDITS_GATE=${mode || '(default)'} — pre-release requires reserve`;
+  return { ok: !strict, mode, level: strict ? 'error' : 'warn', message };
+}
+
+/** Log / throw once at process boot when production policy is violated. */
+export function enforceCreditsGateProductionPolicy(env = process.env, log = console) {
+  const policy = evaluateCreditsGateProductionPolicy(env);
+  if (policy.level === 'warn') {
+    log.warn?.(`[ai-gateway] WARN ${policy.message}`);
+  } else if (policy.level === 'error') {
+    log.error?.(`[ai-gateway] ${policy.message}`);
+    throw new Error(policy.message);
+  }
+  return policy;
 }
 
 export function estimateAiGatewayJobCredits(input, fallback = 50) {

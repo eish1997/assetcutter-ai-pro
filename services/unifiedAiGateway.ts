@@ -19,21 +19,23 @@
 
 import {
   CAPABILITY_UNDERSTAND_RETRY_OPTIONS,
+  DEFAULT_PROMPTS,
   dialogGenerateImage as dialogGenerateImageRaw,
   dialogGenerateImageMulti as dialogGenerateImageMultiRaw,
   getDialogTextResponse as getDialogTextResponseRaw,
   understandImageEditIntent as understandImageEditIntentRaw,
   getSiteAssistantResponse as getSiteAssistantResponseRaw,
   getSiteAssistantResponseStream as getSiteAssistantResponseStreamRaw,
-  detectObjectsInImage as detectObjectsInImageRaw,
-  describeImageSubject as describeImageSubjectRaw,
+  parseBoundingBoxJsonArrayFromModelText,
+  parseJsonObjectFromModelText,
+  buildStoryboardSheetStructureAnalysisPrompt,
   generatePBRTexture as generatePBRTextureRaw,
   generateArenaABPrompts as generateArenaABPromptsRaw,
   generateArenaPrompts as generateArenaPromptsRaw,
   optimizeLoserPrompt as optimizeLoserPromptRaw,
   generateNewChallenger as generateNewChallengerRaw,
   translateToChinese as translateToChineseRaw,
-  analyzeStoryboardSheetStructureInImage as analyzeStoryboardSheetStructureInImageRaw,
+  type StoryboardSheetStructureAnalysisRaw,
   type GeminiRequestOptions,
 } from "./geminiService";
 import {
@@ -54,7 +56,12 @@ import {
   createAndPollAiGatewayJimengImageJob,
   createAndPollAiGatewayJimengVideoJob,
 } from "./aiGatewayJimengExecution";
-import { runUnifiedImageGeneration } from "./generation/runUnifiedGeneration";
+import {
+  runUnifiedContentsTextGeneration,
+  runUnifiedImageGeneration,
+  runUnifiedVisionTextGeneration,
+} from "./generation/runUnifiedGeneration";
+import { DEFAULT_MODEL_TEXT } from "./modelRegistry/constants";
 import { AiWorkerProxyFairnessRejectedError } from "./aiWorkerProxyFairnessError";
 import { dispatchUnifiedAiSoftNotice, clipUnifiedAiNoticeMessage } from "./unifiedAiSoftNotice";
 import { gateBeforeUpstream } from "./aiDispatchGate";
@@ -248,7 +255,7 @@ export {
 export { CAPABILITY_UNDERSTAND_RETRY_OPTIONS };
 export type { GeminiRequestOptions };
 
-/** @kind workflow_chat — 纯文字对话（经 gate） */
+/** @kind workflow_chat — 纯文字对话（经 gate → AI Gateway Job，C7） */
 export async function getDialogTextResponse(
   contents: Parameters<typeof getDialogTextResponseRaw>[0],
   model?: Parameters<typeof getDialogTextResponseRaw>[1],
@@ -260,13 +267,21 @@ export async function getDialogTextResponse(
       kind: "workflow_chat",
       registryId: resolvedModel,
       role: "text",
-      debugFields: () => ({ registryId: resolvedModel }),
+      debugFields: () => ({ registryId: resolvedModel, textPath: "ai_gateway" }),
     },
-    () => getDialogTextResponseRaw(contents, model, options)
+    () =>
+      runUnifiedContentsTextGeneration({
+        contents: contents as Parameters<typeof runUnifiedContentsTextGeneration>[0]["contents"],
+        model: resolvedModel || String(model || "").trim() || "gemini-2.5-flash",
+        responseMimeType: options?.responseMimeType,
+        uiSource: "unifiedAiGateway.getDialogTextResponse",
+        abortSignal: options?.abortSignal,
+        metadata: { source: "unifiedAiGateway.getDialogTextResponse" },
+      })
   );
 }
 
-/** @kind workflow_understand — 理解生图意图（经 gate） */
+/** @kind workflow_understand — 理解生图意图（经 gate → AI Gateway Job，C7；无浏览器 Key fallback） */
 export async function understandImageEditIntent(
   imageBase64: Parameters<typeof understandImageEditIntentRaw>[0],
   userPrompt: Parameters<typeof understandImageEditIntentRaw>[1],
@@ -280,9 +295,54 @@ export async function understandImageEditIntent(
       kind: "workflow_understand",
       registryId: resolvedModel,
       role: "text",
-      debugFields: () => ({ registryId: resolvedModel }),
+      debugFields: () => ({ registryId: resolvedModel, textPath: "ai_gateway" }),
     },
-    () => understandImageEditIntentRaw(imageBase64, userPrompt, model, customPrompt, options)
+    async () => {
+      const systemPrompt = customPrompt || DEFAULT_PROMPTS.dialog_understand;
+      const parts: Array<{ text: string } | { inlineData: { mimeType: string; data: string } }> = [
+        {
+          text: `User request: ${userPrompt}\n\nOutput only a valid JSON object with "instruction" (required), optional "summary", and "shouldGenerateImage" (required, true only when user wants to edit/generate a new image):`,
+        },
+      ];
+      const images = Array.isArray(imageBase64)
+        ? imageBase64.filter(Boolean)
+        : imageBase64
+          ? [imageBase64]
+          : [];
+      for (let i = images.length - 1; i >= 0; i -= 1) {
+        const raw = String(images[i] || "").trim();
+        if (!raw) continue;
+        const dataUrl = raw.startsWith("data:")
+          ? raw
+          : `data:image/png;base64,${raw.replace(/\s+/g, "")}`;
+        const matched = dataUrl.match(/^data:([^;,]+);base64,(.+)$/i);
+        if (matched?.[2]) {
+          parts.unshift({
+            inlineData: {
+              mimeType: matched[1] || "image/png",
+              data: matched[2].replace(/\s+/g, ""),
+            },
+          });
+        }
+      }
+      const raw = await runUnifiedContentsTextGeneration({
+        contents: [{ role: "user", parts }],
+        model: resolvedModel || String(model || "").trim() || "gemini-2.5-flash",
+        systemInstruction: systemPrompt,
+        uiSource: "unifiedAiGateway.understandImageEditIntent",
+        abortSignal: options?.abortSignal,
+        metadata: { source: "unifiedAiGateway.understandImageEditIntent" },
+      });
+      try {
+        const cleaned = raw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
+        const obj = JSON.parse(cleaned);
+        const instruction = typeof obj.instruction === "string" ? obj.instruction : raw;
+        const shouldGenerateImage = obj.shouldGenerateImage === true;
+        return { instruction, summary: obj.summary, shouldGenerateImage };
+      } catch {
+        return { instruction: raw, shouldGenerateImage: false };
+      }
+    }
   );
 }
 
@@ -328,7 +388,12 @@ export async function dialogGenerateImage(
   );
 }
 
-/** @kind workflow_chat — 网站助手（经 gate） */
+const SITE_ASSISTANT_SYSTEM = `You are the in-app assistant for AssetCutter AI Pro, a web app for intelligent asset production. You help users with:
+- How to use features: 工作流 (compose / generate), 贴图修缝 / 生成贴图, 生成3D, 能力预设, 提示词擂台, 设置.
+- Troubleshooting: e.g. "贴图修缝" needs Python backend or Pyodide; 生成贴图 / 工作流生图 need Gemini API Key saved in Settings.
+- Other questions about the product. Reply in the same language as the user. Be concise and helpful.`;
+
+/** @kind workflow_chat — 网站助手（经 gate → AI Gateway Job，C8） */
 export async function getSiteAssistantResponse(
   userMessage: Parameters<typeof getSiteAssistantResponseRaw>[0],
   history?: Parameters<typeof getSiteAssistantResponseRaw>[1],
@@ -341,13 +406,29 @@ export async function getSiteAssistantResponse(
       kind: "workflow_chat",
       registryId: resolvedModel,
       role: "text",
-      debugFields: () => ({ registryId: resolvedModel }),
+      debugFields: () => ({ registryId: resolvedModel, textPath: "ai_gateway" }),
     },
-    () => getSiteAssistantResponseRaw(userMessage, history, model, options)
+    () => {
+      const contents = [
+        ...(history || []).map((m) => ({
+          role: m.role as "user" | "model",
+          parts: [{ text: m.text }],
+        })),
+        { role: "user" as const, parts: [{ text: (userMessage || "").trim() || "(empty)" }] },
+      ];
+      return runUnifiedContentsTextGeneration({
+        contents,
+        model: resolvedModel || String(model || "").trim() || "gemini-2.5-flash",
+        systemInstruction: SITE_ASSISTANT_SYSTEM,
+        uiSource: "unifiedAiGateway.getSiteAssistantResponse",
+        abortSignal: options?.abortSignal,
+        metadata: { source: "unifiedAiGateway.getSiteAssistantResponse" },
+      });
+    }
   );
 }
 
-/** @kind workflow_chat — 网站助手流式（经 gate） */
+/** @kind workflow_chat — 网站助手流式（经 gate；Gateway 无流式则整段回调） */
 export async function getSiteAssistantResponseStream(
   userMessage: Parameters<typeof getSiteAssistantResponseStreamRaw>[0],
   history: Parameters<typeof getSiteAssistantResponseStreamRaw>[1],
@@ -361,9 +442,27 @@ export async function getSiteAssistantResponseStream(
       kind: "workflow_chat",
       registryId: resolvedModel,
       role: "text",
-      debugFields: () => ({ registryId: resolvedModel }),
+      debugFields: () => ({ registryId: resolvedModel, textPath: "ai_gateway" }),
     },
-    () => getSiteAssistantResponseStreamRaw(userMessage, history, onChunk, model, options)
+    async () => {
+      const contents = [
+        ...(history || []).map((m) => ({
+          role: m.role as "user" | "model",
+          parts: [{ text: m.text }],
+        })),
+        { role: "user" as const, parts: [{ text: (userMessage || "").trim() || "(empty)" }] },
+      ];
+      const full = await runUnifiedContentsTextGeneration({
+        contents,
+        model: resolvedModel || String(model || "").trim() || "gemini-2.5-flash",
+        systemInstruction: SITE_ASSISTANT_SYSTEM,
+        uiSource: "unifiedAiGateway.getSiteAssistantResponseStream",
+        abortSignal: options?.abortSignal,
+        metadata: { source: "unifiedAiGateway.getSiteAssistantResponseStream" },
+      });
+      onChunk(full);
+      return full;
+    }
   );
 }
 
@@ -452,35 +551,102 @@ export async function workflowGenerateImageMultiRefs(
   );
 }
 
-/** @kind workflow_chat — 单图物体检测（经 gate） */
+function toVisionDataUrl(base64Image: string): string {
+  const raw = String(base64Image || "").trim();
+  if (!raw) return "";
+  if (raw.startsWith("data:")) return raw;
+  const payload = raw.includes(",") ? raw.split(",")[1] || raw : raw;
+  return `data:image/jpeg;base64,${payload.replace(/\s+/g, "")}`;
+}
+
+function abortSignalFromGeminiOptions(options?: GeminiRequestOptions): AbortSignal | undefined {
+  const anyOpts = options as { signal?: AbortSignal; abortSignal?: AbortSignal } | undefined;
+  return anyOpts?.abortSignal || anyOpts?.signal;
+}
+
+/**
+ * @kind workflow_chat — 单图物体检测（D5/D6：AI Gateway text Job，Admin Jobs 可见）
+ */
 export async function detectObjectsInImage(
-  base64Image: Parameters<typeof detectObjectsInImageRaw>[0],
-  model?: Parameters<typeof detectObjectsInImageRaw>[1],
-  customPrompt?: Parameters<typeof detectObjectsInImageRaw>[2],
-  options?: Parameters<typeof detectObjectsInImageRaw>[3]
-): ReturnType<typeof detectObjectsInImageRaw> {
-  const resolvedModel = model != null && model !== "" ? String(model) : undefined;
+  base64Image: string,
+  model?: string,
+  customPrompt?: string,
+  options?: GeminiRequestOptions
+): Promise<
+  Array<{ id: string; label: string; ymin: number; xmin: number; ymax: number; xmax: number }>
+> {
+  const resolvedModel = model != null && String(model).trim() !== "" ? String(model).trim() : DEFAULT_MODEL_TEXT;
+  const prompt = customPrompt || DEFAULT_PROMPTS.detect_single;
+  const dataUrl = toVisionDataUrl(base64Image);
+  if (!dataUrl) throw new Error("缺少检测图片");
   return runMeteredAiCall(
     { kind: "workflow_chat", registryId: resolvedModel, role: "text", debugFields: () => ({ registryId: resolvedModel }) },
-    () => detectObjectsInImageRaw(base64Image, model, customPrompt, options)
+    async () => {
+      const text = await runUnifiedVisionTextGeneration({
+        prompt,
+        model: resolvedModel,
+        images: [dataUrl],
+        responseMimeType: "application/json",
+        uiSource: "capability.detect_objects",
+        metadata: { detectObjects: true },
+        abortSignal: abortSignalFromGeminiOptions(options),
+      });
+      const results = parseBoundingBoxJsonArrayFromModelText(text || "");
+      return results.map((r) => {
+        const box = r as { id: string; label: string; box_2d: number[] };
+        return {
+          id: box.id,
+          label: box.label,
+          ymin: box.box_2d[0],
+          xmin: box.box_2d[1],
+          ymax: box.box_2d[2],
+          xmax: box.box_2d[3],
+        };
+      });
+    }
   );
 }
 
-/** @kind workflow_understand — 描述图片主体（经 gate） */
+/**
+ * @kind workflow_understand — 描述图片主体（D5/D6：AI Gateway text Job）
+ */
 export async function describeImageSubject(
-  base64Image: Parameters<typeof describeImageSubjectRaw>[0],
-  model?: Parameters<typeof describeImageSubjectRaw>[1],
-  customPrompt?: Parameters<typeof describeImageSubjectRaw>[2],
-  options?: Parameters<typeof describeImageSubjectRaw>[3]
-): ReturnType<typeof describeImageSubjectRaw> {
-  const resolvedModel = model != null && model !== "" ? String(model) : undefined;
+  base64Image: string,
+  model?: string,
+  customPrompt?: string,
+  options?: GeminiRequestOptions
+): Promise<string> {
+  const resolvedModel = model != null && String(model).trim() !== "" ? String(model).trim() : DEFAULT_MODEL_TEXT;
+  const prompt = customPrompt || DEFAULT_PROMPTS.describe_subject;
+  const dataUrl = toVisionDataUrl(base64Image);
+  if (!dataUrl) throw new Error("缺少描述图片");
   return runMeteredAiCall(
     { kind: "workflow_understand", registryId: resolvedModel, role: "text", debugFields: () => ({ registryId: resolvedModel }) },
-    () => describeImageSubjectRaw(base64Image, model, customPrompt, options)
+    async () => {
+      const text = await runUnifiedVisionTextGeneration({
+        prompt,
+        model: resolvedModel,
+        images: [dataUrl],
+        uiSource: "capability.describe_subject",
+        metadata: { describeSubject: true },
+        abortSignal: abortSignalFromGeminiOptions(options),
+      });
+      const raw = String(text || "").trim();
+      if (!raw) throw new Error("Empty subject description");
+      return raw.replace(/\n+/g, " ").trim();
+    }
   );
 }
 
-/** @kind workflow_image_edit — PBR 贴图生成（经 gate） */
+function toPbrDataUrl(base64: string): string {
+  const raw = String(base64 || "").trim();
+  if (!raw) return "";
+  if (raw.startsWith("data:")) return raw;
+  const payload = raw.includes(",") ? raw.split(",")[1] || raw : raw;
+  return `data:image/png;base64,${payload.replace(/\s+/g, "")}`;
+}
+
+/** @kind workflow_image_edit — PBR 贴图生成（经 gate → AI Gateway Job，C8） */
 export async function generatePBRTexture(
   functionalMaps: Parameters<typeof generatePBRTextureRaw>[0],
   prompt: Parameters<typeof generatePBRTextureRaw>[1],
@@ -490,8 +656,66 @@ export async function generatePBRTexture(
 ): ReturnType<typeof generatePBRTextureRaw> {
   const modelId = "gemini-2.5-flash-image";
   return runMeteredAiCall(
-    { kind: "workflow_image_edit", registryId: modelId, role: "image", debugFields: () => ({ registryId: modelId }) },
-    () => generatePBRTextureRaw(functionalMaps, prompt, targetType, baseColorMap, options)
+    {
+      kind: "workflow_image_edit",
+      registryId: modelId,
+      role: "image",
+      debugFields: () => ({ registryId: modelId, imagePath: "ai_gateway" }),
+    },
+    async ({ billingDecision }) => {
+      const refs: string[] = [];
+      for (const map of functionalMaps || []) {
+        const url = toPbrDataUrl(String(map?.base64 || ""));
+        if (url) refs.push(url);
+      }
+      if (baseColorMap?.base64) {
+        const url = toPbrDataUrl(String(baseColorMap.base64));
+        if (url) refs.push(url);
+      }
+      const systemInstruction =
+        targetType === "BASE_COLOR"
+          ? `You are a world-class 3D texture artist expert in PBR (Physically Based Rendering) workflows.
+Based on the provided functional maps (AO, Curvature, WS Normal, Position), generate a high-quality, hyper-realistic BASE COLOR (Albedo) map.
+Requirements:
+1. MUST follow the user requirement: ${prompt}.
+2. MUST be flat lighting: No baked-in shadows, no 3D lighting, no directional light.
+3. MUST be PBR compliant (Albedo should represent surface color only).
+4. High detail and resolution suitable for modern game engines.
+5. Output ONLY the image.`
+          : `You are a world-class 3D texture artist.
+Generate a ${targetType} map for a PBR workflow based on the provided Base Color and functional maps.
+If generating Roughness: Darker values are smooth/shiny, lighter are rough/matte.
+If generating Metallic: Grayscale where white is metal, black is non-metal.
+Output ONLY the image.`;
+      const mapTypes = (functionalMaps || [])
+        .map((m) => String(m?.type || "").trim())
+        .filter(Boolean)
+        .join(", ");
+      const userPrompt = [
+        `Generate a PBR ${targetType} texture map.`,
+        `User requirement: ${prompt}`,
+        mapTypes ? `Functional map types provided: ${mapTypes}.` : "",
+        baseColorMap?.base64 ? `A Base Color reference map is included among the reference images.` : "",
+      ]
+        .filter(Boolean)
+        .join("\n");
+      return runUnifiedImageGeneration({
+        prompt: userPrompt,
+        model: modelId,
+        registryId: modelId,
+        canonicalModelId: modelId,
+        referenceImages: refs,
+        imageOptions: { aspectRatio: "1:1" },
+        systemInstruction,
+        uiSource: "unifiedAiGateway.generatePBRTexture",
+        estimatedCredits: Number(billingDecision.platformReserve?.estimatedCredits || 134),
+        abortSignal: options?.abortSignal,
+        metadata: {
+          source: "unifiedAiGateway.generatePBRTexture",
+          targetType,
+        },
+      });
+    }
   );
 }
 
@@ -563,16 +787,58 @@ export async function dialogGenerateImageMulti(
   return workflowGenerateImageMultiRefs(...args);
 }
 
-/** @kind workflow_chat — 分镜表结构分析（经 gate） */
+/**
+ * @kind workflow_chat — 分镜表结构分析（D6：AI Gateway text Job；失败返回 null 与旧行为一致）
+ */
 export async function analyzeStoryboardSheetStructureInImage(
-  ...args: Parameters<typeof analyzeStoryboardSheetStructureInImageRaw>
-): ReturnType<typeof analyzeStoryboardSheetStructureInImageRaw> {
-  const model = args[1];
-  const resolvedModel = model != null && model !== "" ? String(model) : undefined;
-  return runMeteredAiCall(
-    { kind: "workflow_chat", registryId: resolvedModel, role: "text", debugFields: () => ({ registryId: resolvedModel }) },
-    () => analyzeStoryboardSheetStructureInImageRaw(...args)
-  );
+  base64Image: string,
+  model?: string,
+  options?: GeminiRequestOptions
+): Promise<StoryboardSheetStructureAnalysisRaw | null> {
+  const resolvedModel = model != null && String(model).trim() !== "" ? String(model).trim() : DEFAULT_MODEL_TEXT;
+  const dataUrl = toVisionDataUrl(base64Image);
+  if (!dataUrl) return null;
+  try {
+    return await runMeteredAiCall(
+      {
+        kind: "workflow_chat",
+        registryId: resolvedModel,
+        role: "text",
+        debugFields: () => ({ registryId: resolvedModel }),
+      },
+      async () => {
+        const text = await runUnifiedVisionTextGeneration({
+          prompt: buildStoryboardSheetStructureAnalysisPrompt(),
+          model: resolvedModel,
+          images: [dataUrl],
+          responseMimeType: "application/json",
+          uiSource: "storyboard.sheet_structure",
+          metadata: { storyboardSheetStructure: true },
+          abortSignal: abortSignalFromGeminiOptions(options),
+        });
+        const obj = parseJsonObjectFromModelText(text || "");
+        const shotCount = Number(obj.shotCount);
+        const cols = Number(obj.cols);
+        const rows = Number(obj.rows);
+        const emptyCellCount = Number(obj.emptyCellCount);
+        const shotNos = Array.isArray(obj.shotNos)
+          ? obj.shotNos.map((item) => String(item ?? "").trim()).filter(Boolean)
+          : [];
+        if (!Number.isFinite(shotCount) || !Number.isFinite(cols) || !Number.isFinite(rows)) {
+          return null;
+        }
+        return {
+          shotCount: Math.round(shotCount),
+          cols: Math.round(cols),
+          rows: Math.round(rows),
+          shotNos,
+          emptyCellCount: Number.isFinite(emptyCellCount) ? Math.max(0, Math.round(emptyCellCount)) : 0,
+        };
+      }
+    );
+  } catch {
+    return null;
+  }
 }
 
 export {

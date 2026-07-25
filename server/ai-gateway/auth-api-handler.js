@@ -12,7 +12,8 @@ import { validateAiGatewayModelPublication } from './model-publication-guard.js'
 import { validateAiGatewayModelRouteExecutable } from './model-route-guard.js';
 import { aiGatewayTransientPostgresBody, isTransientPostgresError } from './postgres-transient-retry.js';
 import { isAiGatewayExecutionEnabled } from './health.js';
-import { errorSummary, publicAiJobSummary, routeSummary } from './job-public-summary.js';
+import { buildJobObservabilityCard, errorSummary, publicAiJobSummary, routeSummary } from './job-public-summary.js';
+import { getAuthBuildSha, getCachedProxyBuildSha } from './runtime-build-sha.js';
 import { attachFailureReasonToErrorBody } from './failure-reason.js';
 
 const DEFAULT_LIST_LIMIT = 20;
@@ -38,18 +39,28 @@ function startAuthAiGatewayExecutionInBackground(plan, executionOptions) {
   });
 }
 
+function runtimeBuildShaForResponse() {
+  return {
+    authBuildSha: getAuthBuildSha(),
+    proxyBuildSha: getCachedProxyBuildSha(),
+  };
+}
+
 export function publicAuthAiJobSummary(plan) {
-  return publicAiJobSummary(plan);
+  return publicAiJobSummary(plan, runtimeBuildShaForResponse());
 }
 
 export function publicAuthAiJobDetail(plan) {
+  const runtime = runtimeBuildShaForResponse();
+  const summary = publicAuthAiJobSummary(plan);
   return {
     job: {
-      ...publicAuthAiJobSummary(plan),
+      ...summary,
       metadata: plan.job.metadata && typeof plan.job.metadata === 'object' ? plan.job.metadata : {},
       output: plan.job.output ?? null,
       artifacts: Array.isArray(plan.job.artifacts) ? plan.job.artifacts : [],
     },
+    observability: buildJobObservabilityCard(summary, runtime),
     route: routeSummary(plan.route),
     adapterRequest: plan.adapterRequest
       ? {

@@ -16,6 +16,14 @@ const AdminDefaultRedirect: React.FC<{ pathname: string }> = ({ pathname }) => {
       navigateAdmin(`/admin/task-events${qs}`);
       return;
     }
+    if (pathname === '/admin/staff-invites') {
+      navigateAdmin('/admin/invites?tab=staff');
+      return;
+    }
+    if (pathname === '/admin/registration-invites') {
+      navigateAdmin('/admin/invites?tab=registration');
+      return;
+    }
     if (pathname !== '/admin') return;
     const landing = resolveAdminLandingPath(permissions);
     if (landing !== '/admin') navigateAdmin(landing);

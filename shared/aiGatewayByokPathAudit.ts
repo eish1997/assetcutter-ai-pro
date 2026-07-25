@@ -33,7 +33,7 @@ export const AI_GATEWAY_BYOK_PATH_AUDIT: readonly AiGatewayByokPathAuditRow[] = 
     defaultRouteKind: 'platform',
     byokOnlyWhenExplicit: true,
     precheckEqualsSettlement: true,
-    notes: '默认 AI Gateway + 站点积分；explicitByok 才允许 BYOK channel pin',
+    notes: 'C7：unifiedAiGateway → runUnifiedContentsTextGeneration（createAiJob）；无浏览器 Key fallback',
   },
   {
     pathId: 'workflow.understand',
@@ -42,7 +42,7 @@ export const AI_GATEWAY_BYOK_PATH_AUDIT: readonly AiGatewayByokPathAuditRow[] = 
     defaultRouteKind: 'platform',
     byokOnlyWhenExplicit: true,
     precheckEqualsSettlement: true,
-    notes: '同 chat',
+    notes: 'C7：同 chat，Gateway Job；无浏览器 Key fallback',
   },
   {
     pathId: 'workflow.text_to_image',

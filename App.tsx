@@ -6,15 +6,13 @@ installSafeEncodeURIComponent();
 import {
   DEFAULT_PROMPTS,
   normalizeApiErrorMessage,
-  getTencentCredsFromEnv,
 } from './services/unifiedAiGateway';
 import {
   buildTripoCreateTaskInputFromPreset,
   extractTripoModelAndPreviewUrls,
-  extractTencentModelAndPreviewUrls,
   normalizeGenerate3DPresetForRun,
   resolveGenerate3dProviderId,
-  tencentWorkflowRunImageTo3D,
+  resolveTencentHunyuanRegistryId,
   tripoWorkflowCreateOrResumeTaskId,
   tripoWorkflowPollUntilDone,
 } from './services/generate3d';
@@ -45,6 +43,7 @@ import Waves from './components/ui/Waves';
 import AppIcon from './components/ui/AppIcon';
 import GeminiFairnessFloatingNotice from './components/GeminiFairnessFloatingNotice';
 import DownloadSavedFloatingNotice from './components/DownloadSavedFloatingNotice';
+import AiEnvTopologyBanner from './components/AiEnvTopologyBanner';
 import {
   AC_GEMINI_QUEUE_HINT_EVENT,
   AC_GEMINI_QUEUE_PROGRESS_EVENT,
@@ -128,7 +127,6 @@ import {
   getTinysnowBaseUrl,
   getToapisApiKey,
   getToapisBaseUrl,
-  getTripoApiKey,
   getUserApiKey,
   getVolcengineArkApiKey,
   getVolcengineArkBaseUrl,
@@ -240,8 +238,7 @@ const AdminPriceCatalogPanel = lazyChunk(() => import('./components/admin/AdminP
 const AdminPromoCreditsPanel = lazyChunk(() => import('./components/admin/AdminPromoCreditsPanel'));
 const AdminCapabilityPresetsPanel = lazyChunk(() => import('./components/admin/AdminCapabilityPresetsPanel'));
 const AdminSystemStatusPanel = lazyChunk(() => import('./components/admin/AdminSystemStatusPanel'));
-const AdminStaffInvitesPanel = lazyChunk(() => import('./components/admin/AdminStaffInvitesPanel'));
-const AdminRegistrationInvitesPanel = lazyChunk(() => import('./components/admin/AdminRegistrationInvitesPanel'));
+const AdminInvitesPanel = lazyChunk(() => import('./components/admin/AdminInvitesPanel'));
 const AdminCompanionArtifactsPanel = lazyChunk(() => import('./components/admin/AdminCompanionArtifactsPanel'));
 const AdminGeminiFairnessPanel = lazyChunk(() => import('./components/admin/AdminGeminiFairnessPanel'));
 const AdminProviderKeysPanel = lazyChunk(() => import('./components/admin/AdminProviderKeysPanel'));
@@ -349,7 +346,7 @@ const AssetViewer: React.FC<{ item: LibraryItem | null; onClose: () => void }> =
                   void downloadModelFromSource({
                     url,
                     fileNameHint: item.label,
-                    tripoApiKey: getTripoApiKey(),
+                    tripoApiKey: AI_GATEWAY_TRIPO_PLATFORM_KEY,
                     slotIndex: i,
                   }).catch((e) => {
                     console.warn('[library] download model', e);
@@ -433,10 +430,10 @@ const AdminAppShell: React.FC = () => {
             <AdminCapabilityPresetsPanel />
           ) : pathname === '/admin/system-status' ? (
             <AdminSystemStatusPanel />
-          ) : pathname === '/admin/staff-invites' ? (
-            <AdminStaffInvitesPanel />
-          ) : pathname === '/admin/registration-invites' ? (
-            <AdminRegistrationInvitesPanel />
+          ) : pathname === '/admin/invites' ||
+            pathname === '/admin/staff-invites' ||
+            pathname === '/admin/registration-invites' ? (
+            <AdminInvitesPanel />
           ) : pathname === '/admin/companion-artifacts' ? (
             <AdminCompanionArtifactsPanel />
           ) : pathname === '/admin/gemini-fairness' ? (
@@ -2977,8 +2974,6 @@ const MainApp: React.FC = () => {
     addGlobalLog('生成3D', level, message, detailStr);
   }, [addGlobalLog]);
 
-  const creds3D = useMemo(() => getTencentCredsFromEnv(), []);
-
   /** 工作流中拖图到「生成3D」能力时：用能力预设参数提交 3D 任务 */
   const handleAddGenerate3DJobFromWorkflow = async (
     preset: CustomAppModule,
@@ -3000,36 +2995,41 @@ const MainApp: React.FC = () => {
       addGenerate3DLog('warn', `[工作流] ${w}`);
     }
     if (provider === 'tencent') {
-      if (!creds3D) {
-        const msg = '缺少腾讯云混元配置：请在 .env.local 配置 VITE_TENCENT_PROXY 并启动 npm run proxy';
-        addGenerate3DLog('warn', `[工作流] ${msg}`);
-        alert(msg);
-        throw new Error(msg);
-      }
       const taskId = addTask('GENERATE_3D', `${preset.label}（混元）`);
       const gNorm = normalizeGenerate3DPresetForRun(preset.generate3D);
+      const registryId = resolveTencentHunyuanRegistryId(gNorm);
       try {
-        addGenerate3DLog('info', `[工作流] 混元提交：${preset.label}`, {
+        addGenerate3DLog('info', `[工作流] 混元提交（AI Gateway）：${preset.label}`, {
           module: gNorm.module,
           model: gNorm.model,
+          modelRegistryId: registryId,
           generateType: gNorm.generateType,
           resultFormat: gNorm.resultFormat,
           enablePBR: gNorm.enablePBR,
+          route: 'ai-gateway',
         });
         updateTask(taskId, { status: 'RUNNING', progress: 10 });
-        const { jobId, files } = await tencentWorkflowRunImageTo3D({
-          creds: creds3D,
-          preset,
-          imageDataUrl: imageBase64,
-          onProgress: (p) =>
-            updateTask(taskId, { status: 'RUNNING', progress: Math.max(15, Math.min(95, Math.round(p))) }),
-          onLog: (message, detail) => addGenerate3DLog('info', message, detail),
+        const prompt = (
+          preset.instruction?.trim() ||
+          gNorm.prompt?.trim() ||
+          'Generate a 3D model from the reference image'
+        ).trim();
+        const result = await createAndPollAiGatewayModel3dJob({
+          prompt,
+          referenceImages: imageBase64 ? [imageBase64] : undefined,
+          registryId,
+          format: gNorm.resultFormat,
+          enablePBR: gNorm.enablePBR,
+          faceCount: gNorm.faceCount,
+          generateType: gNorm.generateType,
+          polygonType: gNorm.polygonType,
+          model: gNorm.model,
+          texture: gNorm.enablePBR,
         });
-        const { modelUrls } = extractTencentModelAndPreviewUrls(files);
-        if (!modelUrls.length) {
+        if (!result.modelUrls.length) {
           throw new Error('混元任务完成但未返回可下载模型链接');
         }
-        if (task?.assetId && task?.actionType && jobId) {
+        if (task?.assetId && task?.actionType && result.aiGatewayJobId) {
           setWorkflowAssets((prev) =>
             prev.map((a) => {
               if (a.id !== task.assetId) return a;
@@ -3040,7 +3040,8 @@ const MainApp: React.FC = () => {
                   ...(a.resultMeta || {}),
                   [task.actionType]: {
                     ...old,
-                    tencentJobId: jobId,
+                    tencentJobId: result.aiGatewayJobId,
+                    aiGatewayJobId: result.aiGatewayJobId,
                     tencentLastError: undefined,
                     presetActionIdSnapshot: preset.id,
                     displayStepLabel: preset.label,
@@ -3050,15 +3051,16 @@ const MainApp: React.FC = () => {
             })
           );
         }
+        updateTask(taskId, { status: 'RUNNING', progress: 85 });
         const companionBase = getCompanionLocalBaseUrl();
         const companionProjectId = String(activeWorkspaceProjectId || '').trim() || 'default';
         const workflowAssetId = task?.assetId || `wf_tencent_${Math.random().toString(36).slice(2, 11)}`;
         const resultKey = task?.actionType || preset.id;
         const persisted = await persistWorkflow3dSlots({
-          provider: 'tencent',
-          creds: creds3D,
-          taskId: jobId,
-          files,
+          provider: 'tencent-hunyuan',
+          taskId: result.aiGatewayJobId,
+          modelUrls: result.modelUrls,
+          previewUrl: result.previewUrl,
           assetId: workflowAssetId,
           resultKey,
           companionBaseUrl: companionBase,
@@ -3092,7 +3094,11 @@ const MainApp: React.FC = () => {
             modelSourceName,
             localPreviewUrl,
             previewCompanionKey,
-            jobMeta: { tencentJobId: jobId, tencentLastError: undefined },
+            jobMeta: {
+              tencentJobId: result.aiGatewayJobId,
+              aiGatewayJobId: result.aiGatewayJobId,
+              tencentLastError: undefined,
+            },
             companionBaseUrl: companionBase,
             companionProjectId,
             onLog: (level, message, detail) => addGenerate3DLog(level, message, detail),
@@ -3107,10 +3113,11 @@ const MainApp: React.FC = () => {
         setWorkflowAssets(hydratedAssets);
         updateTask(taskId, { status: 'SUCCESS', progress: 100 });
         addGenerate3DLog('info', `[工作流] 混元生成完成，模型已回填资产卡`, {
-          jobId,
+          jobId: result.aiGatewayJobId,
           modelCount: localModelUrls.length,
           hasPreview: Boolean(localPreviewUrl),
           companionProjectId,
+          route: 'ai-gateway',
         });
       } catch (e) {
         const msg = normalizeApiErrorMessage(e);
@@ -3554,6 +3561,11 @@ const MainApp: React.FC = () => {
           waveAmpX={26}
           waveAmpY={13}
         />
+      </div>
+      <div className="fixed top-0 left-0 right-0 z-[1102] px-3 pt-2 pointer-events-none lg:pl-20">
+        <div className="pointer-events-auto max-w-3xl">
+          <AiEnvTopologyBanner />
+        </div>
       </div>
       <AssetViewer item={activeAssetId} onClose={() => setActiveAssetId(null)} />
       {isLibraryPickerOpen && <LibraryPickerModal library={library} filter={pickerFilter} multiSelect={pickerMultiSelect} onSelect={(items) => { pickerCallback(items); setIsLibraryPickerOpen(false); }} onClose={() => setIsLibraryPickerOpen(false)} />}

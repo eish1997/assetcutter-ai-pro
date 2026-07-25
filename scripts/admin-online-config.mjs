@@ -12,6 +12,8 @@ Read-only:
   npm run admin:online-config -- inspect
   npm run admin:online-config -- provider-keys
   npm run admin:online-config -- diagnostics --models gemini-3-flash-preview,gemini-3-pro-image --generation
+  npm run admin:pull-online-config
+  npm run admin:pull-online-config -- --dry-run
 
 Mutating commands require --apply:
   $env:PROVIDER_API_KEY='...'; npm run admin:online-config -- provider-key-upsert --provider google-agent-platform --label "Agent Platform primary" --apply

@@ -231,6 +231,30 @@ const AdminUsersPanel: React.FC = () => {
             <h2 className="text-[12px] font-black uppercase tracking-[0.2em] text-gray-300">用户管理</h2>
             <p className="mt-1 text-[10px] text-gray-500 max-w-xl leading-relaxed">
               共 {total} 用户。积分与配额均在列表内直接修改；配额保存后下次请求生效，「同步用量」从 R2 扫描重建云空间账本。
+              {can(PERMISSIONS.USERS_ROLE_WRITE) || can(PERMISSIONS.REGISTRATION_INVITES_WRITE) ? (
+                <>
+                  {' · '}
+                  <button
+                    type="button"
+                    onClick={() => navigateAdmin('/admin/invites')}
+                    className="text-blue-400 hover:text-blue-300"
+                  >
+                    邀请
+                  </button>
+                </>
+              ) : null}
+              {can(PERMISSIONS.ROLES_READ) ? (
+                <>
+                  {' · '}
+                  <button
+                    type="button"
+                    onClick={() => navigateAdmin('/admin/roles')}
+                    className="text-blue-400 hover:text-blue-300"
+                  >
+                    角色矩阵
+                  </button>
+                </>
+              ) : null}
             </p>
           </div>
           <div className="flex flex-wrap gap-2">

@@ -154,7 +154,7 @@ import {
 import { triggerImageDownload } from '../services/imageDataUrl';
 import type { WorkflowLightboxImageWriteBackPayload } from '../services/imagePreviewWorkflowResize';
 import { readLocalJson, scopedStorageKey, workflowFavoritesStorageKey, writeLocalJson } from '../services/clientPersist';
-import { getTripoApiKey } from '../services/settingsStore';
+import { AI_GATEWAY_TRIPO_PLATFORM_KEY } from '../services/tripoService';
 import {
   rehydrateWorkflowAssetModelsFromTripoTask,
 } from '../services/workflowTripoModelRehydrate';
@@ -8208,11 +8208,7 @@ ${lineSvg}
       onLog?.('warn', 'Tripo 拉取模型', '当前步骤详情中未找到 tripoTaskId，请切换到生成 3D 的步骤');
       return;
     }
-    const apiKey = getTripoApiKey();
-    if (!String(apiKey || '').trim()) {
-      onLog?.('error', 'Tripo 拉取模型', '缺少 Tripo API Key，请先在 API 密钥弹窗保存');
-      return;
-    }
+    const apiKey = AI_GATEWAY_TRIPO_PLATFORM_KEY;
     setLightboxTripoPullBusy(true);
     try {
       const base = String(getCompanionLocalBaseUrl() || '').trim();
@@ -8273,9 +8269,18 @@ ${lineSvg}
     }
     const creds = getTencentCredsFromEnv();
     if (!creds) {
-      onLog?.('error', '混元拉取模型', '缺少腾讯云混元配置（VITE_TENCENT_PROXY）');
+      onLog?.(
+        'error',
+        '混元拉取模型',
+        '用户主路请从 AI Gateway 任务产物 / 本地伴侣恢复；VITE_TENCENT_PROXY 仅本地诊断，不可用于预发验收（D4）'
+      );
       return;
     }
+    onLog?.(
+      'warn',
+      '混元拉取模型',
+      '正在使用 VITE_TENCENT_PROXY 诊断拉取 — 勿当作预发通过证据（D4）'
+    );
     setLightboxTencentPullBusy(true);
     try {
       const base = String(getCompanionLocalBaseUrl() || '').trim();
@@ -8416,7 +8421,7 @@ ${lineSvg}
           companionBaseUrl: base || null,
           companionProjectId: pid || null,
           fileNameHint: `${nameBase}.${format}`,
-          tripoApiKey: getTripoApiKey(),
+          tripoApiKey: AI_GATEWAY_TRIPO_PLATFORM_KEY,
         });
         onLog?.(
           'info',
@@ -12192,7 +12197,7 @@ ${lineSvg}
         getAssetDisplayText,
         companionBaseUrl: base || null,
         companionProjectId: pid || null,
-        tripoApiKey: getTripoApiKey(),
+        tripoApiKey: AI_GATEWAY_TRIPO_PLATFORM_KEY,
       });
       if (ok > 0) onLog?.('info', `已触发 ${ok} 个资产下载`);
       for (const f of failed) {

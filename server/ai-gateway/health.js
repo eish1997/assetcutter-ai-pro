@@ -1,5 +1,6 @@
 import { USE_POSTGRES } from '../auth-store.js';
-import { aiGatewayCreditsGateMode } from './credits-gate.js';
+import { aiGatewayCreditsGateMode, evaluateCreditsGateProductionPolicy } from './credits-gate.js';
+import { aiGatewayMediaArchivePolicy } from './job-media-archive.js';
 import { aiGatewayAutoCircuitConfig, isAiGatewayAutoCircuitEnabled, resolveAiGatewayOpsControlSource } from './ops-control.js';
 import { openAiCompatibleProviderConfigs } from './openai-compatible-config.js';
 import { listAiGatewayWorkers } from './workers/registry.js';
@@ -21,6 +22,8 @@ export function aiGatewayHealthSnapshot() {
     autoCircuitEnabled: isAiGatewayAutoCircuitEnabled(),
     autoCircuit: aiGatewayAutoCircuitConfig(),
     creditsGateMode: aiGatewayCreditsGateMode(),
+    creditsGatePolicy: evaluateCreditsGateProductionPolicy(),
+    mediaArchive: aiGatewayMediaArchivePolicy(),
     routes: {
       createJob: 'POST /ai-gateway/jobs',
       listJobs: 'GET /ai-gateway/jobs?limit=20',
@@ -37,6 +40,6 @@ export function aiGatewayHealthSnapshot() {
       'tripo-openapi',
       'tencent-hunyuan-3d',
     ],
-    modalities: ['text', 'image', 'music', 'video', 'model3d'],
+    modalities: ['text', 'image', 'video', 'model3d'],
   };
 }
