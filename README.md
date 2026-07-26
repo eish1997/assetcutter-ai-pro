@@ -23,6 +23,7 @@ AI-assisted asset workflow workbench (workspace, capability presets, experimenta
 - [x] Multi-provider Gateway routing: default jobs omit client `provider` pin; Gemini/GPT can fall back to keyed aggregators (302/AIHubMix); `guard:ai-routing` includes client pin check; prompt arena/translate via Gateway Jobs
 - [x] WebGPU-first RenderHost (`services/renderCore/`) with classic WebGL path for PMREM; companion shell can disable WebGPU
 - [x] Agent CLI (`npm run agent:cli` / `agent:init`): HTTP Soul API + workbench asset merge (`source=agent-cli`); see `docs/Cursor与Codex-Agent-CLI接入.md`
+- [x] Companion local object keys: `{assetId}/{mediaKind}-{full|thumb}-{slot}-{id8}.{ext}` (legacy `result-*` / `image-N` read-compat only)
 - [ ] Removed: standalone dialog page, texture pattern extract page, prompt-effect analysis page
 
 ## Sidebar / pages

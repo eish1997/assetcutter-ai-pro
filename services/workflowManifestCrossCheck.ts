@@ -1,5 +1,8 @@
 import type { WorkflowAsset } from '../types';
-import type { CompanionManifestV1 } from './companionClient/storage';
+import {
+  getCompanionAssetMeta,
+  type CompanionManifestV1,
+} from './companionClient/storage';
 import { attachInitialVgpToNewAsset } from './vgp/vgpStore';
 import { isWorkflowStoryboardTableAsset } from './storyboardTableAsset';
 import { isWorkflowTextAsset } from './workflowTextAsset';
@@ -240,6 +243,126 @@ const DEFAULT_MAX_REPAIR = 48;
  * 对 manifest 中缺失的键：若浏览器内存中仍有对应图像串（data/blob/http），则重新 PUT，触发伴侣侧 manifest upsert。
  * 无内存图、键与资产 id 推导不一致、或 PUT 失败则计入 skipped/failed。
  */
+/** Disk probe result: only `absent` may enter open-project key cleanup. */
+export type CompanionDiskPresence = 'present' | 'absent' | 'unknown';
+
+function isCompanionMetaNotFound(meta: { ok: false; error: string; status?: number; code?: string }): boolean {
+  if (meta.status === 404) return true;
+  const code = String(meta.code || '').trim();
+  const err = String(meta.error || '').trim();
+  return (
+    code === 'STORAGE_NOT_FOUND' ||
+    /not_found|STORAGE_NOT_FOUND/i.test(code) ||
+    /not_found|STORAGE_NOT_FOUND/i.test(err)
+  );
+}
+
+async function probeCompanionAssetDiskPresence(
+  baseUrl: string,
+  projectId: string,
+  key: string
+): Promise<CompanionDiskPresence> {
+  const meta = await getCompanionAssetMeta(baseUrl, projectId, key);
+  if (meta.ok) return meta.data.onDisk ? 'present' : 'absent';
+  // Network / companion-down must not be treated as "file missing".
+  if (isCompanionMetaNotFound(meta)) return 'absent';
+  return 'unknown';
+}
+
+/** Probe companion volume: key (or legacy candidate) still has bytes on disk. */
+export async function companionAssetKeyPresentOnDisk(
+  baseUrl: string,
+  projectId: string,
+  key: string
+): Promise<CompanionDiskPresence> {
+  const base = String(baseUrl || '').trim();
+  const pid = String(projectId || '').trim();
+  const k = String(key || '').trim();
+  if (!base || !pid || !k) return 'unknown';
+  const keys = [k, ...legacyWorkflowCompanionAssetKeyCandidates(k)];
+  let sawUnknown = false;
+  for (const candidate of keys) {
+    const presence = await probeCompanionAssetDiskPresence(base, pid, candidate);
+    if (presence === 'present') return 'present';
+    if (presence === 'unknown') sawUnknown = true;
+  }
+  return sawUnknown ? 'unknown' : 'absent';
+}
+
+/**
+ * Open-project gap resolution: repair → reconcile → re-scan.
+ * Only keys still missing from the refreshed manifest AND absent on disk may be cleaned.
+ * Never pass the pre-repair gap list into {@link removeMissingCompanionKeyReferences}.
+ */
+export async function resolveCompanionManifestGapsForProjectOpen(params: {
+  baseUrl: string;
+  projectId: string;
+  assets: WorkflowAsset[];
+  manifest: CompanionManifestV1;
+  reconcile: () => Promise<{ ok: true; data: { added: number; keys: string[] } } | { ok: false; error: string }>;
+  refetchManifest: () => Promise<{ ok: true; data: CompanionManifestV1 } | { ok: false; error: string }>;
+  onLog?: (level: 'info' | 'warn', title: string, detail: string) => void;
+}): Promise<{
+  manifest: CompanionManifestV1;
+  initialGaps: CompanionManifestKeyGap[];
+  gapsToClean: CompanionManifestKeyGap[];
+}> {
+  const base = String(params.baseUrl || '').trim();
+  const pid = String(params.projectId || '').trim();
+  let manifest = params.manifest;
+  const assets = params.assets;
+  const initialGaps = findCompanionKeysMissingFromManifest(assets, manifest);
+  if (initialGaps.length === 0) {
+    return { manifest, initialGaps, gapsToClean: [] };
+  }
+  // No companion probe context → never clean (avoid wiping locators without disk evidence).
+  if (!base || !pid) {
+    return { manifest, initialGaps, gapsToClean: [] };
+  }
+
+  await attemptRepairCompanionManifestKeyGaps(base, pid, assets, initialGaps, params.onLog);
+
+  const recon = await params.reconcile();
+  if (recon.ok && recon.data.added > 0) {
+    const kp = recon.data.keys.slice(0, 5).join(', ') + (recon.data.keys.length > 5 ? '…' : '');
+    params.onLog?.('info', '本地伴侣已从磁盘补全 manifest', `${recon.data.added} 项 ${kp}`);
+  } else if (recon.ok === false) {
+    params.onLog?.('warn', '本地伴侣 manifest 磁盘补全请求失败', String(recon.error));
+  }
+
+  const refreshed = await params.refetchManifest();
+  if (refreshed.ok) {
+    manifest = refreshed.data;
+  } else {
+    params.onLog?.('warn', '本地伴侣 manifest 刷新失败（清理将更保守）', String(refreshed.error));
+  }
+
+  const stillMissing = findCompanionKeysMissingFromManifest(assets, manifest);
+  const gapsToClean: CompanionManifestKeyGap[] = [];
+  for (const gap of stillMissing) {
+    const presence = await companionAssetKeyPresentOnDisk(base, pid, gap.key);
+    if (presence === 'present') {
+      params.onLog?.(
+        'warn',
+        '伴侣对象在磁盘上但仍未进 manifest，保留项目引用',
+        `${gap.kind}:${gap.assetId}:${gap.key}`
+      );
+      continue;
+    }
+    if (presence === 'unknown') {
+      params.onLog?.(
+        'warn',
+        '伴侣对象磁盘探测失败，保留项目引用（不清理）',
+        `${gap.kind}:${gap.assetId}:${gap.key}`
+      );
+      continue;
+    }
+    gapsToClean.push(gap);
+  }
+
+  return { manifest, initialGaps, gapsToClean };
+}
+
 export async function attemptRepairCompanionManifestKeyGaps(
   baseUrl: string,
   projectId: string,
@@ -303,7 +426,19 @@ export async function attemptRepairCompanionManifestKeyGaps(
         skipped += 1;
         continue;
       }
-      const src = String((asset.modelUrls || [])[gap.slotIndex] ?? '').trim();
+      // File may already be on disk while manifest lagged; treat as repaired so open-project cleanup won't drop keys.
+      const presence = await companionAssetKeyPresentOnDisk(base, pid, gap.key);
+      if (presence === 'present') {
+        repaired += 1;
+        continue;
+      }
+      let src = '';
+      if (gap.stepId) {
+        src = String((asset.stepModelUrls?.[gap.stepId] || [])[gap.slotIndex] ?? '').trim();
+      }
+      if (!src) {
+        src = String((asset.modelUrls || [])[gap.slotIndex] ?? '').trim();
+      }
       let blob: Blob | null = null;
       try {
         if (/^blob:|^https?:|^data:/i.test(src)) {
@@ -429,6 +564,8 @@ function classifyManifestEntryForAutoImport(entry: {
   if (mime.startsWith('model/') || mime.includes('fbx') || mime.includes('obj') || mime.includes('gltf')) return 'model';
   if (key.includes('wf-mdl-')) return 'model';
   if (key.includes('wf-res-') || key.includes('wf-orig-')) return 'image';
+  if (/\/model-(full|thumb)-\d+/i.test(key)) return 'model';
+  if (/\/(image|video)-(full|thumb)-\d+/i.test(key)) return 'image';
   if (/\/original-model-[^/]+\.(glb|gltf|fbx|obj|stl)(\?|#|$)/i.test(key)) return 'model';
   if (/\/original-(image|video|text|binary)-[^/]+\./i.test(key)) return 'image';
   if (mime === 'application/octet-stream' || !mime) {
@@ -454,6 +591,18 @@ function parseAssetDirectoryCompanionKey(
   if (parts.length !== 2 || !parts[0] || !parts[1]) return null;
   const assetId = parts[0];
   const stem = parts[1].replace(/\.[^.]+$/, '');
+  // `{mediaKind}-{role}-{slot}-{id8}`（thumb 为 sidecar，不单独建卡）
+  const named = /^(image|model|video)-(full|thumb)-(\d+)(?:-[a-z0-9]{4,12})?$/i.exec(stem);
+  if (named) {
+    const mediaKind = named[1]!.toLowerCase();
+    const role = named[2]!.toLowerCase();
+    const slot = Math.max(0, Number.parseInt(named[3]!, 10) || 0);
+    if (role === 'thumb') return null;
+    if (mediaKind === 'model') return { kind: 'model', assetId, slot };
+    // 出生原图/原视频与 slot0 主文件同名；>0 的结果槽用 synthetic step 键（文件名不含 actionId）
+    if (slot === 0) return { kind: 'original', assetId };
+    return { kind: 'result', assetId, resultKey: `slot_${slot}` };
+  }
   if (stem === 'original') return { kind: 'original', assetId };
   if (stem.startsWith('original-model-')) return { kind: 'model', assetId, slot: 0 };
   if (stem.startsWith('original-')) return { kind: 'original', assetId };
@@ -461,7 +610,7 @@ function parseAssetDirectoryCompanionKey(
     const resultKey = stem.slice('result-'.length).trim();
     if (resultKey) return { kind: 'result', assetId, resultKey };
   }
-  if (stem.startsWith('model-')) {
+  if (/^model-\d+$/i.test(stem)) {
     const slotStr = stem.slice('model-'.length);
     const slot = Number(slotStr);
     if (Number.isFinite(slot) && slot >= 0 && String(slot) === slotStr) {
@@ -477,8 +626,12 @@ function companionKeyMatchesWorkflowSlot(gap: CompanionManifestKeyGap): boolean 
   if (dirKey) {
     if (sanitizeCompanionPathSegment(gap.assetId) !== sanitizeCompanionPathSegment(dirKey.assetId)) return false;
     if (gap.kind === 'original') return dirKey.kind === 'original';
-    if (gap.kind === 'result') return dirKey.kind === 'result' && dirKey.resultKey === gap.stepId;
     if (gap.kind === 'model') return dirKey.kind === 'model' && dirKey.slot === gap.slotIndex;
+    if (gap.kind === 'result') {
+      // legacy `result-{step}` 含步骤名；新 `image-full-{slot}` 不含 actionId（步骤在 JSON）
+      if (dirKey.kind === 'result' && dirKey.resultKey === gap.stepId) return true;
+      return dirKey.kind === 'result' || dirKey.kind === 'original';
+    }
   }
   if (gap.kind === 'original') return key === `${WF_ORIG_P}${sanitizeCompanionPathSegment(gap.assetId)}`;
   if (gap.kind === 'model') {

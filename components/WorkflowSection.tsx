@@ -279,6 +279,7 @@ import {
   buildComposerTextAssetThumbDataUrl,
   clampWorkflowTextBody,
   isWorkflowTextAsset,
+  resolveWorkflowDisplaySlot,
   workflowAssetAllowedForCapabilityDrop,
   workflowAssetCurrentDisplayIsTextChannel,
   workflowAssetCardZoomEligible,
@@ -486,6 +487,7 @@ import {
 } from '../services/projectAgent/runtime';
 import {
   archiveAndResetProjectAgentThread,
+  finalizeStaleInFlightProjectAgentThread,
   loadOrCreateProjectAgentThread,
   saveProjectAgentThread,
   type ProjectAgentThread,
@@ -554,6 +556,13 @@ import {
 import { captureWorkflowModelThumbnailDataUrl } from '../services/workflowModelPreviewCapture';
 import { getCompanionLocalBaseUrl, normalizeCompanionBaseUrl } from '../services/companionLocalPrefs';
 import {
+  canAttemptOpenWorkflowAssetFolder,
+  canOpenWorkflowAssetFolder,
+  resolveWorkflowAssetLocalHandle,
+  resolveWorkflowAssetLocalHandleOnDisk,
+} from '../services/workflowMediaLocator';
+import { ensureWorkflowAssetCompanionKeyForReveal } from '../services/workflowEnsureCompanionForReveal';
+import {
   deleteCompanionAsset,
   deleteCompanionAssetDirectory,
   getCompanionAssetMeta,
@@ -574,6 +583,7 @@ import {
   putWorkflowResultImageToCompanion,
   putWorkflowResultMediaFromAnyUrl,
   resolveCapabilityInputImageForExecute,
+  resolveWorkflowImageSlotIndex,
   sanitizeCompanionPathSegment,
   shouldKeepExistingCompanionRasterUrl,
   workflowAssetNeedsCompanionModelHydrate,
@@ -1554,7 +1564,12 @@ const WorkflowSection: React.FC<{
       userId: preferenceScope,
       workspaceProjectId: activeWorkspaceProjectId,
     };
-    const local = loadOrCreateProjectAgentThread(key);
+    const localRaw = loadOrCreateProjectAgentThread(key);
+    const localFinalized = finalizeStaleInFlightProjectAgentThread(localRaw);
+    const local = localFinalized.thread;
+    if (localFinalized.changed) {
+      saveProjectAgentThread(key, local);
+    }
     try {
       maybeCompactProjectAgentThread(key, local);
     } catch {
@@ -1579,12 +1594,17 @@ const WorkflowSection: React.FC<{
           // Clear/new chat: new thread id while hydrate was in flight — keep local.
           if (current.id !== hydrated.id && currentTs >= hydratedTs) return;
         }
+        const cloudFinalized = finalizeStaleInFlightProjectAgentThread(hydrated);
+        const nextThread = cloudFinalized.thread;
+        if (cloudFinalized.changed) {
+          saveProjectAgentThread(key, nextThread);
+        }
         try {
-          maybeCompactProjectAgentThread(key, hydrated);
+          maybeCompactProjectAgentThread(key, nextThread);
         } catch {
           /* compaction best-effort */
         }
-        setWorkspaceQuickComposeThread(hydrated);
+        setWorkspaceQuickComposeThread(nextThread);
       } catch {
         /* keep local — hydrate must not break open-project */
       }
@@ -2446,9 +2466,16 @@ const WorkflowSection: React.FC<{
     }
     const orig = asWorkflowImageString(a.original);
     if (isWorkflowTextAsset(a)) {
-      if (a.displayKey === 'original') return orig;
-      const fromResults = (a.results as Record<string, unknown>)[a.displayKey];
-      return asWorkflowImageString(fromResults) || resolveAssetObjectKeyDisplayImage(a) || orig;
+      const slot = resolveWorkflowDisplaySlot(a);
+      if (slot.modality === 'image' || slot.modality === 'video') {
+        return (
+          asWorkflowImageString(slot.imageSrc) ||
+          resolveAssetObjectKeyDisplayImage(a) ||
+          resolveAssetCompanionKeyDisplayImage(a) ||
+          ''
+        );
+      }
+      return '';
     }
     if (a.displayKey === 'original') {
       return orig || resolveAssetObjectKeyDisplayImage(a) || resolveAssetCompanionKeyDisplayImage(a);
@@ -2897,14 +2924,24 @@ const WorkflowSection: React.FC<{
   const scheduleCompanionPersistResult = useCallback(
     (assetId: string, resultKey: string, imageSrc: string) => {
       const source = String(imageSrc || '').trim();
-      if (!source) return;
+      const rk = String(resultKey || '').trim();
+      if (!source || !rk) return;
       const base = String(getCompanionLocalBaseUrl() || '').trim();
       const pid = String(workspaceProjectChrome?.activeProjectId || '').trim();
-      if (!base || !pid) return;
+      if (!base || !pid) {
+        onLog?.(
+          'warn',
+          '本地伴侣未连接或无项目，生成图仅在内存/云预览；右键「打开资产文件夹」将不可用',
+          `${assetId}/${rk}`
+        );
+        return;
+      }
       void (async () => {
+        const asset = assetsRef.current.find((x) => x.id === assetId);
+        const slotIndex = resolveWorkflowImageSlotIndex(asset?.resultOrder, rk);
         const put = parseDataUrlToBlob(source)
-          ? await putWorkflowResultImageToCompanion(base, pid, assetId, resultKey, source)
-          : await putWorkflowResultImageFromAnyUrl(base, pid, assetId, resultKey, source);
+          ? await putWorkflowResultImageToCompanion(base, pid, assetId, rk, source, { slotIndex })
+          : await putWorkflowResultImageFromAnyUrl(base, pid, assetId, rk, source, { slotIndex });
         if (put.ok === false) {
           onLog?.('warn', '本地伴侣步骤结果落盘失败（画布仍在内存）', put.error);
           return;
@@ -2913,7 +2950,18 @@ const WorkflowSection: React.FC<{
           prev.some((x) => x.id === assetId)
             ? prev.map((x) =>
                 x.id === assetId
-                  ? { ...x, resultsCompanionKeys: { ...(x.resultsCompanionKeys || {}), [resultKey]: put.key } }
+                  ? {
+                      ...x,
+                      resultsCompanionKeys: { ...(x.resultsCompanionKeys || {}), [rk]: put.key },
+                      ...(put.previewKey
+                        ? {
+                            resultsPreviewCompanionKeys: {
+                              ...(x.resultsPreviewCompanionKeys || {}),
+                              [rk]: put.previewKey,
+                            },
+                          }
+                        : {}),
+                    }
                   : x
               )
             : prev
@@ -2968,10 +3016,12 @@ const WorkflowSection: React.FC<{
       const pid = String(workspaceProjectChrome?.activeProjectId || '').trim();
       if (!base || !pid) return;
       void (async () => {
+        const asset = assetsRef.current.find((x) => x.id === id);
+        const slotIndex = resolveWorkflowImageSlotIndex(asset?.resultOrder, variantId);
         const put =
           variantId === 'original'
             ? await putWorkflowOriginalImageToCompanion(base, pid, id, thumb)
-            : await putWorkflowResultImageToCompanion(base, pid, id, variantId, thumb);
+            : await putWorkflowResultImageToCompanion(base, pid, id, variantId, thumb, { slotIndex });
         if (put.ok === false) {
           onLog?.('warn', '3D 缩略图持久化失败', put.error);
           return;
@@ -2983,6 +3033,14 @@ const WorkflowSection: React.FC<{
             return {
               ...x,
               resultsCompanionKeys: { ...(x.resultsCompanionKeys || {}), [variantId]: put.key },
+              ...('previewKey' in put && put.previewKey
+                ? {
+                    resultsPreviewCompanionKeys: {
+                      ...(x.resultsPreviewCompanionKeys || {}),
+                      [variantId]: put.previewKey,
+                    },
+                  }
+                : {}),
             };
           })
         );
@@ -3001,7 +3059,13 @@ const WorkflowSection: React.FC<{
         onLog?.('warn', '本地伴侣未连接，视频结果仅保留临时预览；请连接本地伴侣后重新生成以写入项目资产目录');
         return;
       }
-      const put = await putWorkflowResultMediaFromAnyUrl(base, pid, assetId, resultKey, source, { fallbackMime, providerId });
+      const asset = assetsRef.current.find((x) => x.id === assetId);
+      const slotIndex = resolveWorkflowImageSlotIndex(asset?.resultOrder, resultKey);
+      const put = await putWorkflowResultMediaFromAnyUrl(base, pid, assetId, resultKey, source, {
+        fallbackMime,
+        providerId,
+        slotIndex,
+      });
       if (put.ok === false) {
         onLog?.('warn', '视频结果写入本地伴侣失败（仍保留临时预览）', put.error);
         return;
@@ -3155,24 +3219,15 @@ ${lineSvg}
         capabilityPresets.find((p) => p.id === actionType) ??
         getQuickComposePlainModule(actionType);
       const inputImage = getAssetDisplayImage(asset);
-      if (isWorkflowTextAsset(asset)) {
-        const textPresetOk = mod && workflowPresetAcceptsTextCardDrag(mod);
-        const textRasterOk =
-          mod &&
-          !workflowPresetAcceptsTextCardDrag(mod) &&
-          workflowAssetAllowedForCapabilityDrop(asset, mod) &&
-          inputImage.trim() !== '';
-        if (!mod || (!textPresetOk && !textRasterOk)) {
-          onLog?.(
-            'warn',
-            '文字资产请拖入文生文/文生图类能力；若已对正文做过文生图，请将卡片切换到该图版本后再拖入图生图、图像处理、图生文等'
-          );
-          return null;
-        }
+      if (mod && !workflowAssetAllowedForCapabilityDrop(asset, mod)) {
+        onLog?.('warn', '当前显示内容与该能力不匹配（请切换到对应版本，或选用匹配能力）');
+        return null;
       }
       const inputTextFromCard =
         options?.inputText ??
-        (isWorkflowTextAsset(asset) && workflowAssetCurrentDisplayIsTextChannel(asset)
+        (isWorkflowTextAsset(asset) &&
+        (workflowAssetCurrentDisplayIsTextChannel(asset) ||
+          (mod != null && workflowPresetAcceptsTextCardDrag(mod)))
           ? workflowAssetToInputText(asset)
           : undefined);
       const fromGroup =
@@ -3954,6 +4009,7 @@ ${lineSvg}
       } else if (applied.image) {
         const result = applied.image;
         const aiGatewayJobId = consumeAiGatewayJobIdForImage(result);
+        let persistedResultKey = '';
         flushSync(() => {
           setAssets((prev) =>
             prev.map((a) => {
@@ -3963,6 +4019,7 @@ ${lineSvg}
                 Object.keys(a.results || {}).some((k) => baseActionId(k) === baseId) ||
                 (a.resultOrder || []).some((k) => baseActionId(k) === baseId);
               const key = hasAnyVersion ? makeVersionKey(baseId) : baseId;
+              persistedResultKey = key;
               const tagList = buildWorkflowImageTags({
                 actionLabel: label,
                 actionId: baseActionId(task.actionType),
@@ -4001,20 +4058,12 @@ ${lineSvg}
             })
           );
         });
-        const after = assetsRef.current.find((x) => x.id === task.assetId);
-        if (after) {
-          if (isWorkflowTextAsset(after)) {
-            void loadImageIntrinsicSize(result).then((dim) => {
-              if (dim) applyIntrinsicAspectToAsset(task.assetId, dim.w, dim.h);
-            });
-          } else {
-            const order = after.resultOrder || [];
-            const lastKey = order[order.length - 1];
-            if (lastKey && String(after.results?.[lastKey] || '') === String(result)) {
-              scheduleCompanionPersistResult(task.assetId, lastKey, result);
-            }
-          }
+        if (persistedResultKey) {
+          scheduleCompanionPersistResult(task.assetId, persistedResultKey, result);
         }
+        void loadImageIntrinsicSize(result).then((dim) => {
+          if (dim) applyIntrinsicAspectToAsset(task.assetId, dim.w, dim.h);
+        });
       }
       void (async () => {
         dispatchCreditsBalanceChanged();
@@ -4646,6 +4695,7 @@ ${lineSvg}
                 }
                 onLog?.('warn', `${logBatch} ${taskLabel} texture target was not found; saved as a normal result`);
               }
+              let persistedResultKey = '';
               if (!delegatedGenerate3D) {
               flushSync(() => {
                 setAssets((prev) =>
@@ -4656,6 +4706,7 @@ ${lineSvg}
                       Object.keys(a.results || {}).some((k) => baseActionId(k) === baseId) ||
                       (a.resultOrder || []).some((k) => baseActionId(k) === baseId);
                     const key = result ? (hasAnyVersion ? makeVersionKey(baseId) : baseId) : baseId;
+                    if (result) persistedResultKey = key;
                     const prevStepMeta = a.resultMeta?.[key];
                     const nextResults = result ? { ...a.results, [key]: result } : a.results;
                     const nextOrder = result ? [...(a.resultOrder || []), key] : a.resultOrder || [];
@@ -4712,19 +4763,11 @@ ${lineSvg}
                 );
               });
               }
-              const after = assetsRef.current.find((x) => x.id === task.assetId);
-              if (after && result) {
-                if (isWorkflowTextAsset(after)) {
-                  void loadImageIntrinsicSize(result).then((dim) => {
-                    if (dim) applyIntrinsicAspectToAsset(task.assetId, dim.w, dim.h);
-                  });
-                } else {
-                  const order = after.resultOrder || [];
-                  const lastKey = order[order.length - 1];
-                  if (lastKey && String(after.results?.[lastKey] || '') === String(result)) {
-                    scheduleCompanionPersistResult(task.assetId, lastKey, result);
-                  }
-                }
+              if (result && persistedResultKey) {
+                scheduleCompanionPersistResult(task.assetId, persistedResultKey, result);
+                void loadImageIntrinsicSize(result).then((dim) => {
+                  if (dim) applyIntrinsicAspectToAsset(task.assetId, dim.w, dim.h);
+                });
               }
               markTaskCompleted(task);
             }
@@ -4834,6 +4877,7 @@ ${lineSvg}
       actionModules,
       setAssetError,
       scheduleCompanionPersistResult,
+      applyIntrinsicAspectToAsset,
       persistCompanionResultMedia,
       workspaceProjectChrome?.activeProjectId,
       buildWorkflowCreditsSteps,
@@ -4922,8 +4966,9 @@ ${lineSvg}
       const trimmed = actionType.trim();
       if (!trimmed) return;
       if (trimmed.startsWith(SET_ACTION_PREFIX)) {
-        if (isWorkflowTextAsset(targetAsset)) {
-          onLog?.('warn', '复合能力需要图片资产作为输入');
+        const slot = resolveWorkflowDisplaySlot(targetAsset);
+        if (slot.modality !== 'image' && slot.modality !== 'video') {
+          onLog?.('warn', '复合能力需要当前显示为图片的资产作为输入');
           return;
         }
       } else {
@@ -4931,23 +4976,8 @@ ${lineSvg}
           actionModules.find((m) => m.id === trimmed) ??
           capabilityPresets.find((p) => p.id === trimmed);
         if (mod && !workflowAssetAllowedForCapabilityDrop(targetAsset, mod)) {
-          onLog?.('warn', '该能力与当前资产类型不匹配');
+          onLog?.('warn', '当前显示内容与该能力不匹配');
           return;
-        }
-        if (mod && isWorkflowTextAsset(targetAsset)) {
-          const img = getAssetDisplayImage(targetAsset);
-          const textPresetOk = workflowPresetAcceptsTextCardDrag(mod);
-          const textRasterOk =
-            !textPresetOk &&
-            workflowAssetAllowedForCapabilityDrop(targetAsset, mod) &&
-            img.trim() !== '';
-          if (!textPresetOk && !textRasterOk) {
-            onLog?.(
-              'warn',
-              '文字资产请使用文生文/文生图，或将卡片切换到文生图结果后再使用图类能力'
-            );
-            return;
-          }
         }
       }
       const task = makePendingTaskForAsset(targetAsset.id, trimmed, undefined);
@@ -7561,96 +7591,123 @@ ${lineSvg}
             })
             .concat(newAsset);
         });
+        // Capture thumb from local blob BEFORE companion put revokes it; otherwise FBX/GLB load fails
+        // and the SVG placeholder ("本地预览") sticks as the card preview.
         void (async () => {
           const pid = String(workspaceProjectChrome?.activeProjectId || '').trim();
           const base = String(getCompanionLocalBaseUrl() || '').trim();
+
+          let thumb: string | null = null;
+          try {
+            thumb = await captureWorkflowModelThumbnailDataUrl({
+              modelSrc: blobUrl,
+              modelFileName: file.name,
+            });
+          } catch {
+            thumb = null;
+          }
+
+          let companionModelUrl = '';
+          let companionModelKey = '';
           if (!pid || !base) {
             onLog?.(
               'warn',
               '本地伴侣未连接',
               '3D 模型仅保存在浏览器会话内，刷新后可能无法预览；请在设置中连接本地伴侣以写入卷目录。'
             );
-            return;
-          }
-          const put = await putWorkflowModelFileToCompanion(base, pid, newId, 0, file);
-          if (put.ok === false) {
-            onLog?.('warn', '3D 模型写入本地伴侣失败', put.error);
-            return;
-          }
-          const got = await fetchWorkflowModelFromCompanionAsObjectUrl(base, pid, put.key, file.name);
-          if (got.ok === false) {
-            const meta = await getCompanionAssetMeta(base, pid, put.key);
-            if (meta.ok && meta.data.onDisk) {
-            setAssets((prev) =>
-              prev.map((x) =>
-                x.id === newId
-                  ? {
-                      ...x,
-                      stepModelCompanionKeys: { original: [put.key] },
-                      modelCompanionKeys: [put.key],
-                    }
-                  : x
-              )
-            );
-            }
-            onLog?.('warn', '3D 模型落盘后读取预览失败', got.error);
-            return;
-          }
-          try {
-            URL.revokeObjectURL(blobUrl);
-          } catch {
-            /* ignore */
-          }
-          setAssets((prev) =>
-            prev.map((x) => {
-              if (x.id !== newId) return x;
-              const urls = [...(x.modelUrls || [])];
-              urls[0] = got.objectUrl;
-              return {
-                ...x,
-                modelUrls: urls,
-                modelCompanionKeys: [put.key],
-                stepModelUrls: { ...(x.stepModelUrls || {}), original: [got.objectUrl] },
-                stepModelCompanionKeys: { ...(x.stepModelCompanionKeys || {}), original: [put.key] },
-                stepModelFormats: { ...(x.stepModelFormats || {}), original: [modelFormat] },
-              };
-            })
-          );
-        })();
-        void (async () => {
-          const thumb = await captureWorkflowModelThumbnailDataUrl({
-            modelSrc: blobUrl,
-            modelFileName: file.name,
-          });
-          if (thumb) {
-            const thumbRatio = clampWorkflowCardAspectRatio(1280, 800);
-            let thumbCompanionKey = '';
-            const pid = String(workspaceProjectChrome?.activeProjectId || '').trim();
-            const base = String(getCompanionLocalBaseUrl() || '').trim();
-            if (pid && base) {
-              const putThumb = await putWorkflowOriginalImageToCompanion(base, pid, newId, thumb);
-              if (putThumb.ok === false) {
-                onLog?.('warn', '3D 缩略图写入本地 companion 失败', putThumb.error);
+          } else {
+            const put = await putWorkflowModelFileToCompanion(base, pid, newId, 0, file);
+            if (put.ok === false) {
+              onLog?.('warn', '3D 模型写入本地伴侣失败', put.error);
+            } else {
+              companionModelKey = put.key;
+              const got = await fetchWorkflowModelFromCompanionAsObjectUrl(base, pid, put.key, file.name);
+              if (got.ok === false) {
+                const meta = await getCompanionAssetMeta(base, pid, put.key);
+                if (meta.ok && meta.data.onDisk) {
+                  setAssets((prev) =>
+                    prev.map((x) =>
+                      x.id === newId
+                        ? {
+                            ...x,
+                            stepModelCompanionKeys: { original: [put.key] },
+                            modelCompanionKeys: [put.key],
+                          }
+                        : x
+                    )
+                  );
+                }
+                onLog?.('warn', '3D 模型落盘后读取预览失败', got.error);
               } else {
-                thumbCompanionKey = putThumb.key;
+                companionModelUrl = got.objectUrl;
+                try {
+                  URL.revokeObjectURL(blobUrl);
+                } catch {
+                  /* ignore */
+                }
+                setAssets((prev) =>
+                  prev.map((x) => {
+                    if (x.id !== newId) return x;
+                    const urls = [...(x.modelUrls || [])];
+                    urls[0] = got.objectUrl;
+                    return {
+                      ...x,
+                      modelUrls: urls,
+                      modelCompanionKeys: [put.key],
+                      stepModelUrls: { ...(x.stepModelUrls || {}), original: [got.objectUrl] },
+                      stepModelCompanionKeys: { ...(x.stepModelCompanionKeys || {}), original: [put.key] },
+                      stepModelFormats: { ...(x.stepModelFormats || {}), original: [modelFormat] },
+                    };
+                  })
+                );
               }
             }
-            setAssets((prev) => {
-              if (!prev.some((x) => x.id === newId)) return prev;
-              return prev.map((x) => {
-                if (x.id !== newId) return x;
-                const o = String(x.original || '');
-                if (!o.includes('image/svg+xml')) return x;
-                return {
-                  ...x,
-                  original: thumb,
-                  ...(thumbCompanionKey ? { originalCompanionKey: thumbCompanionKey } : {}),
-                  gridCardAspectRatio: thumbRatio,
-                };
-              });
-            });
-            setCardAspectByAssetId((prev) => ({ ...prev, [newId]: thumbRatio }));
           }
+
+          // Retry capture from companion URL if blob capture failed (queue/load race).
+          if (!thumb && companionModelUrl) {
+            try {
+              thumb = await captureWorkflowModelThumbnailDataUrl({
+                modelSrc: companionModelUrl,
+                modelFileName: file.name,
+              });
+            } catch {
+              thumb = null;
+            }
+          }
+
+          if (!thumb) {
+            if (companionModelKey) {
+              onLog?.('warn', '3D 缩略图截取失败，卡片仍显示占位图', file.name);
+            }
+            return;
+          }
+
+          const thumbRatio = clampWorkflowCardAspectRatio(1280, 800);
+          let thumbCompanionKey = '';
+          if (pid && base) {
+            const putThumb = await putWorkflowOriginalImageToCompanion(base, pid, newId, thumb);
+            if (putThumb.ok === false) {
+              onLog?.('warn', '3D 缩略图写入本地 companion 失败', putThumb.error);
+            } else {
+              thumbCompanionKey = putThumb.key;
+            }
+          }
+          setAssets((prev) => {
+            if (!prev.some((x) => x.id === newId)) return prev;
+            return prev.map((x) => {
+              if (x.id !== newId) return x;
+              const o = String(x.original || '');
+              if (o && !o.includes('image/svg+xml')) return x;
+              return {
+                ...x,
+                original: thumb!,
+                ...(thumbCompanionKey ? { originalCompanionKey: thumbCompanionKey } : {}),
+                gridCardAspectRatio: thumbRatio,
+              };
+            });
+          });
+          setCardAspectByAssetId((prev) => ({ ...prev, [newId]: thumbRatio }));
         })();
       });
     },
@@ -8781,10 +8838,16 @@ ${lineSvg}
     setLightboxAssetId(assetId);
   }, []);
 
-  const getWorkflowAssetOriginalCopySrc = useCallback((asset: WorkflowAsset): string => {
-    const orig = asWorkflowImageString(asset.original).trim();
-    return orig ? workflowSafeImgSrc(orig) : '';
-  }, []);
+  const getWorkflowAssetOriginalCopySrc = useCallback(
+    (asset: WorkflowAsset): string => {
+      // Same-card TTI: copy the current display raster (results slot), not birth-shell original.
+      const display = asWorkflowImageString(getAssetDisplayImage(asset)).trim();
+      if (display) return workflowSafeImgSrc(display);
+      const orig = asWorkflowImageString(asset.original).trim();
+      return orig ? workflowSafeImgSrc(orig) : '';
+    },
+    [getAssetDisplayImage]
+  );
 
   const canWorkflowAssetCopyImage = useCallback(
     (asset: WorkflowAsset) => Boolean(getWorkflowAssetOriginalCopySrc(asset)),
@@ -8802,9 +8865,48 @@ ${lineSvg}
     [getAssetDisplayImage]
   );
 
+  const resolveWorkflowAssetOpenFolderHandle = useCallback(
+    (asset: WorkflowAsset) =>
+      resolveWorkflowAssetLocalHandle({
+        asset,
+        projectId: workspaceProjectChrome?.activeProjectId,
+        companionBaseUrl: getCompanionLocalBaseUrl(),
+      }),
+    [workspaceProjectChrome?.activeProjectId]
+  );
+
   const canWorkflowAssetOpenFolder = useCallback(
-    (asset: WorkflowAsset) => Boolean(getWorkflowAssetActiveCompanionKey(asset)),
-    [getWorkflowAssetActiveCompanionKey]
+    (asset: WorkflowAsset) => {
+      const handle = resolveWorkflowAssetOpenFolderHandle(asset);
+      return canAttemptOpenWorkflowAssetFolder({
+        projectId: handle.projectId,
+        companionBaseUrl: getCompanionLocalBaseUrl(),
+        hasCompanionKey: canOpenWorkflowAssetFolder(handle),
+        asset,
+      });
+    },
+    [resolveWorkflowAssetOpenFolderHandle]
+  );
+
+  const workflowAssetOpenFolderDisabledReason = useCallback(
+    (asset: WorkflowAsset) => {
+      const handle = resolveWorkflowAssetOpenFolderHandle(asset);
+      if (canOpenWorkflowAssetFolder(handle)) {
+        return handle.availability === 'asset_dir_fallback' ? handle.reasonZh : '';
+      }
+      if (
+        canAttemptOpenWorkflowAssetFolder({
+          projectId: handle.projectId,
+          companionBaseUrl: getCompanionLocalBaseUrl(),
+          hasCompanionKey: false,
+          asset,
+        })
+      ) {
+        return '当前步骤尚未落到本地，将先写入本机再打开';
+      }
+      return handle.reasonZh;
+    },
+    [resolveWorkflowAssetOpenFolderHandle]
   );
 
   const openWorkflowAssetContextMenu = useCallback((asset: WorkflowAsset, e: React.MouseEvent) => {
@@ -8845,30 +8947,60 @@ ${lineSvg}
   /** 大图预览：普通滚轮在本资产内切换 displayKey */
   const handleWorkflowAssetOpenFolder = useCallback(
     async (asset: WorkflowAsset) => {
-      const projectId = String(workspaceProjectChrome?.activeProjectId || '').trim();
       const base = String(getCompanionLocalBaseUrl() || '').trim();
-      const key = getWorkflowAssetActiveCompanionKey(asset);
-      if (!projectId) {
-        onLog?.('warn', '当前没有本机项目，无法打开资产文件夹');
+      const projectId = String(workspaceProjectChrome?.activeProjectId || '').trim();
+      let working = asset;
+      let handle = await resolveWorkflowAssetLocalHandleOnDisk({
+        asset: working,
+        projectId,
+        companionBaseUrl: base,
+      });
+      if (!canOpenWorkflowAssetFolder(handle)) {
+        const ensured = await ensureWorkflowAssetCompanionKeyForReveal({
+          asset: working,
+          projectId,
+          companionBaseUrl: base,
+        });
+        if (ensured.ok === false) {
+          onLog?.(
+            'warn',
+            ensured.error && ensured.error !== 'no_persistable_raster'
+              ? `无法落到本地：${ensured.error}`
+              : handle.reasonZh || '无法打开资产文件夹'
+          );
+          return;
+        }
+        working = ensured.asset;
+        if (ensured.wrote) {
+          setAssets((prev) => prev.map((x) => (x.id === working.id ? working : x)));
+          onLog?.('info', '已将当前显示图写入本机，正在打开资产文件夹…');
+        }
+        handle = await resolveWorkflowAssetLocalHandleOnDisk({
+          asset: working,
+          projectId,
+          companionBaseUrl: base,
+        });
+      }
+      if (!canOpenWorkflowAssetFolder(handle)) {
+        onLog?.('warn', handle.reasonZh || '无法打开资产文件夹');
         return;
       }
-      if (!base) {
-        onLog?.('warn', '本机伴侣未连接，无法打开资产文件夹');
-        return;
+      if (handle.availability === 'asset_dir_fallback' && handle.reasonZh) {
+        onLog?.('info', handle.reasonZh);
       }
-      if (!key) {
-        onLog?.('warn', '当前资产尚未落到本地，无法打开资产文件夹');
-        return;
-      }
-      onLog?.('info', '正在打开资产文件夹...', key);
-      const out = await revealCompanionAssetFolderWithProjectFallback(base, projectId, key);
+      onLog?.('info', '正在打开资产文件夹...', handle.companionKey);
+      const out = await revealCompanionAssetFolderWithProjectFallback(
+        base,
+        handle.projectId,
+        handle.companionKey
+      );
       if (out.ok) {
         onLog?.('info', `已打开资产文件夹：${out.data.filename}`);
         return;
       }
       onLog?.('warn', `打开资产文件夹失败：${'error' in out ? out.error : 'unknown_error'}`);
     },
-    [getWorkflowAssetActiveCompanionKey, onLog, workspaceProjectChrome?.activeProjectId]
+    [onLog, setAssets, workspaceProjectChrome?.activeProjectId]
   );
 
   const deleteWorkflowAssetCompanionObjects = useCallback(
@@ -11492,12 +11624,16 @@ ${lineSvg}
         onLog?.('warn', '分割：合成 mask 失败，无法保存');
         return;
       }
+      const asset = assetsRef.current.find((x) => x.id === pending.assetId);
+      const orderPreview = [...(asset?.resultOrder || []).filter((k) => k !== pending.resultKey), pending.resultKey];
+      const slotIndex = resolveWorkflowImageSlotIndex(orderPreview, pending.resultKey);
       const put = await putWorkflowResultImageToCompanion(
         base,
         projectId,
         pending.assetId,
         pending.resultKey,
-        composite
+        composite,
+        { slotIndex }
       );
       if (put.ok === false) {
         onLog?.('error', `分割保存上传失败：${put.error}`);
@@ -11520,6 +11656,14 @@ ${lineSvg}
             results: nextResults,
             resultOrder: order,
             resultsCompanionKeys: nextRck,
+            ...(put.previewKey
+              ? {
+                  resultsPreviewCompanionKeys: {
+                    ...(a.resultsPreviewCompanionKeys || {}),
+                    [resultKey]: put.previewKey,
+                  },
+                }
+              : {}),
             resultMeta: nextMeta,
             displayKey: resultKey,
           };
@@ -11548,12 +11692,16 @@ ${lineSvg}
       return;
     }
     void (async () => {
+      const asset = assetsRef.current.find((x) => x.id === pending.assetId);
+      const orderPreview = [...(asset?.resultOrder || []).filter((k) => k !== pending.resultKey), pending.resultKey];
+      const slotIndex = resolveWorkflowImageSlotIndex(orderPreview, pending.resultKey);
       const put = await putWorkflowResultImageToCompanion(
         base,
         projectId,
         pending.assetId,
         pending.resultKey,
-        pending.dataUrl
+        pending.dataUrl,
+        { slotIndex }
       );
       if (put.ok === false) {
         onLog?.('error', `抠图保存上传失败：${put.error}`);
@@ -11577,6 +11725,14 @@ ${lineSvg}
             results: nextResults,
             resultOrder: order,
             resultsCompanionKeys: nextRck,
+            ...(put.previewKey
+              ? {
+                  resultsPreviewCompanionKeys: {
+                    ...(a.resultsPreviewCompanionKeys || {}),
+                    [resultKey]: put.previewKey,
+                  },
+                }
+              : {}),
             resultMeta: nextMeta,
             displayKey: resultKey,
           };
@@ -12248,12 +12404,7 @@ ${lineSvg}
         if (source.kind === 'root') {
           const effectiveIds = getEffectiveAssetIdsForAction(source.assetIds).filter((id) => {
             const x = assets.find((a) => a.id === id);
-            if (x == null || !workflowAssetAllowedForCapabilityDrop(x, mod)) return false;
-            if (isWorkflowTextAsset(x)) {
-              if (workflowPresetAcceptsTextCardDrag(mod)) return true;
-              return getAssetDisplayImage(x).trim() !== '';
-            }
-            return true;
+            return x != null && workflowAssetAllowedForCapabilityDrop(x, mod);
           });
           effectiveIds.forEach((id) => {
             const a = assets.find((x) => x.id === id);
@@ -12262,7 +12413,8 @@ ${lineSvg}
                 assetId: id,
                 inputImage: getAssetDisplayImage(a),
                 inputSourceDisplayKey: a.displayKey,
-                ...(isWorkflowTextAsset(a) && workflowAssetCurrentDisplayIsTextChannel(a)
+                ...(isWorkflowTextAsset(a) &&
+                (workflowAssetCurrentDisplayIsTextChannel(a) || workflowPresetAcceptsTextCardDrag(mod))
                   ? { inputText: workflowAssetToInputText(a) }
                   : {}),
               });
@@ -12279,10 +12431,7 @@ ${lineSvg}
             if (Array.isArray(cut) && typeof item === 'string') {
               const child = assets.find((x) => x.id === item);
               if (!child || !workflowAssetAllowedForCapabilityDrop(child, mod)) continue;
-              const passChildText =
-                !isWorkflowTextAsset(child) ||
-                workflowPresetAcceptsTextCardDrag(mod) ||
-                (workflowAssetAllowedForCapabilityDrop(child, mod) && getAssetDisplayImage(child).trim() !== '');
+              const passChildText = workflowAssetAllowedForCapabilityDrop(child, mod);
               if (passChildText) {
                 targets.push({
                   assetId: child.id,
@@ -12290,7 +12439,9 @@ ${lineSvg}
                   inputSourceDisplayKey: child.displayKey,
                   sourceGroupAssetId: groupId,
                   sourceItemIndex: itemIndex,
-                  ...(isWorkflowTextAsset(child) && workflowAssetCurrentDisplayIsTextChannel(child)
+                  ...(isWorkflowTextAsset(child) &&
+                  (workflowAssetCurrentDisplayIsTextChannel(child) ||
+                    workflowPresetAcceptsTextCardDrag(mod))
                     ? { inputText: workflowAssetToInputText(child) }
                     : {}),
                 });
@@ -12307,10 +12458,7 @@ ${lineSvg}
             } else if (item && typeof item === 'object' && 'assetId' in item) {
               const child = assets.find((x) => x.id === (item as { assetId: string }).assetId);
               if (!child || !workflowAssetAllowedForCapabilityDrop(child, mod)) continue;
-              const passLegacyChildText =
-                !isWorkflowTextAsset(child) ||
-                workflowPresetAcceptsTextCardDrag(mod) ||
-                (workflowAssetAllowedForCapabilityDrop(child, mod) && getAssetDisplayImage(child).trim() !== '');
+              const passLegacyChildText = workflowAssetAllowedForCapabilityDrop(child, mod);
               if (passLegacyChildText) {
                 targets.push({
                   assetId: child.id,
@@ -12357,10 +12505,6 @@ ${lineSvg}
             const effectiveIds = getEffectiveAssetIdsForAction(source.assetIds).filter((id) => {
               const x = assets.find((a) => a.id === id);
               if (x == null || !workflowAssetAllowedForCapabilityDrop(x, mod)) return false;
-              if (isWorkflowTextAsset(x)) {
-                if (workflowPresetAcceptsTextCardDrag(mod)) return true;
-                return getAssetDisplayImage(x).trim() !== '';
-              }
               return true;
             });
             effectiveIds.forEach((id) => {
@@ -12370,7 +12514,9 @@ ${lineSvg}
                   assetId: id,
                   inputImage: getAssetDisplayImage(a),
                   inputSourceDisplayKey: a.displayKey,
-                  ...(isWorkflowTextAsset(a) && workflowAssetCurrentDisplayIsTextChannel(a)
+                  ...(isWorkflowTextAsset(a) &&
+                  (workflowAssetCurrentDisplayIsTextChannel(a) ||
+                    workflowPresetAcceptsTextCardDrag(mod))
                     ? { inputText: workflowAssetToInputText(a) }
                     : {}),
                 });
@@ -12389,10 +12535,7 @@ ${lineSvg}
               if (Array.isArray(cut) && typeof item === 'string') {
                 const child = assets.find((x) => x.id === item);
                 if (!child || !workflowAssetAllowedForCapabilityDrop(child, mod)) continue;
-                const passChildText =
-                  !isWorkflowTextAsset(child) ||
-                  workflowPresetAcceptsTextCardDrag(mod) ||
-                  (workflowAssetAllowedForCapabilityDrop(child, mod) && getAssetDisplayImage(child).trim() !== '');
+                const passChildText = workflowAssetAllowedForCapabilityDrop(child, mod);
                 if (passChildText) {
                   targets.push({
                     assetId: child.id,
@@ -12418,10 +12561,7 @@ ${lineSvg}
               } else if (item && typeof item === 'object' && 'assetId' in item) {
                 const child = assets.find((x) => x.id === (item as { assetId: string }).assetId);
                 if (!child || !workflowAssetAllowedForCapabilityDrop(child, mod)) continue;
-                const passLegacyChildText =
-                  !isWorkflowTextAsset(child) ||
-                  workflowPresetAcceptsTextCardDrag(mod) ||
-                  (workflowAssetAllowedForCapabilityDrop(child, mod) && getAssetDisplayImage(child).trim() !== '');
+                const passLegacyChildText = workflowAssetAllowedForCapabilityDrop(child, mod);
                 if (passLegacyChildText) {
                   targets.push({
                     assetId: child.id,
@@ -12543,15 +12683,14 @@ ${lineSvg}
 
       for (const source of sources) {
         if (source.kind === 'root') {
-          const effectiveIds = getEffectiveAssetIdsForAction(source.assetIds).filter((id) => {
+          const rootCandidateIds = getEffectiveAssetIdsForAction(source.assetIds);
+          const effectiveIds = rootCandidateIds.filter((id) => {
             const x = assets.find((a) => a.id === id);
-            if (x == null || !workflowAssetAllowedForCapabilityDrop(x, mod)) return false;
-            if (isWorkflowTextAsset(x)) {
-              if (workflowPresetAcceptsTextCardDrag(mod)) return true;
-              return getAssetDisplayImage(x).trim() !== '';
-            }
-            return true;
+            return x != null && workflowAssetAllowedForCapabilityDrop(x, mod);
           });
+          if (rootCandidateIds.length > 0 && effectiveIds.length === 0) {
+            onLog?.('warn', '当前显示内容与该能力不匹配（请切换到对应版本）');
+          }
           const allowTextAssetsForGenerateCount =
             mod.category === 'text_to_text' || mod.category === 'text_to_image';
           const { rootIds, cloneTaskSeeds } =
@@ -15314,6 +15453,7 @@ ${lineSvg}
                 onCopyImage={handleWorkflowAssetCopyImage}
                 onCopyId={handleWorkflowAssetCopyId}
                 canOpenFolder={canWorkflowAssetOpenFolder}
+                openFolderDisabledReason={workflowAssetOpenFolderDisabledReason}
                 onOpenFolder={handleWorkflowAssetOpenFolder}
                 onAddToComposeInput={handleWorkflowAssetAddToComposeInput}
                 canAddToComposeInput={canWorkflowAssetAddToComposeInput}
@@ -16563,6 +16703,7 @@ ${lineSvg}
                 void handleWorkflowAssetCopyId(menuAsset);
               }}
               canOpenFolder={canWorkflowAssetOpenFolder(menuAsset)}
+              openFolderDisabledReason={workflowAssetOpenFolderDisabledReason(menuAsset)}
               onOpenFolder={() => {
                 void handleWorkflowAssetOpenFolder(menuAsset);
               }}

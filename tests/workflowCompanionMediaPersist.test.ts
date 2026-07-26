@@ -18,8 +18,10 @@ vi.mock('../services/providerArtifactFetch', () => ({
   fetchProviderArtifactBlob: mocks.fetchProviderArtifactBlob,
 }));
 
-import { putWorkflowResultMediaFromAnyUrl } from '../services/workflowCompanionAssets';
+import { putWorkflowResultMediaFromAnyUrl, workflowVideoCompanionStorageKey } from '../services/workflowCompanionAssets';
 import { fetchProviderArtifactBlob } from '../services/providerArtifactFetch';
+
+const VIDEO_KEY = workflowVideoCompanionStorageKey('asset-a', 0, 'mp4');
 
 describe('putWorkflowResultMediaFromAnyUrl', () => {
   afterEach(() => {
@@ -31,7 +33,7 @@ describe('putWorkflowResultMediaFromAnyUrl', () => {
 
   it('falls back to browser fetch and PUT when older companion lacks import-url', async () => {
     mocks.importCompanionAssetFromUrl.mockResolvedValue({ ok: false, status: 404, error: 'not_found' });
-    mocks.putCompanionAsset.mockResolvedValue({ ok: true, data: { key: 'wf-res-a1-video' } });
+    mocks.putCompanionAsset.mockResolvedValue({ ok: true, data: { key: VIDEO_KEY } });
     vi.stubGlobal(
       'fetch',
       vi.fn(async () => new Response(new Blob(['mp4'], { type: 'video/mp4' }), { status: 200 }))
@@ -42,16 +44,17 @@ describe('putWorkflowResultMediaFromAnyUrl', () => {
       'project-a',
       'asset-a',
       'video_step',
-      'https://upstream.example.com/video.mp4'
+      'https://upstream.example.com/video.mp4',
+      { slotIndex: 0 }
     );
 
-    expect(result).toEqual({ ok: true, key: 'wf-res-asset-a-video_step' });
+    expect(result).toEqual({ ok: true, key: VIDEO_KEY });
     expect(mocks.importCompanionAssetFromUrl).toHaveBeenCalled();
     expect(fetch).toHaveBeenCalledWith('https://upstream.example.com/video.mp4', { credentials: 'omit' });
     expect(mocks.putCompanionAsset).toHaveBeenCalledWith(
       'http://127.0.0.1:18765',
       'project-a',
-      'wf-res-asset-a-video_step',
+      VIDEO_KEY,
       expect.any(Blob),
       'video/mp4'
     );
@@ -59,7 +62,7 @@ describe('putWorkflowResultMediaFromAnyUrl', () => {
 
   it('falls back to browser fetch and PUT when companion import-url rejects a reachable video', async () => {
     mocks.importCompanionAssetFromUrl.mockResolvedValue({ ok: false, status: 500, error: 'fetch_failed' });
-    mocks.putCompanionAsset.mockResolvedValue({ ok: true, data: { key: 'wf-res-a1-video' } });
+    mocks.putCompanionAsset.mockResolvedValue({ ok: true, data: { key: VIDEO_KEY } });
     vi.stubGlobal(
       'fetch',
       vi.fn(async () => new Response(new Blob(['mp4'], { type: 'video/mp4' }), { status: 200 }))
@@ -70,16 +73,17 @@ describe('putWorkflowResultMediaFromAnyUrl', () => {
       'project-a',
       'asset-a',
       'video_step',
-      'https://upstream.example.com/signed-download?token=abc'
+      'https://upstream.example.com/signed-download?token=abc',
+      { slotIndex: 0 }
     );
 
-    expect(result).toEqual({ ok: true, key: 'wf-res-asset-a-video_step' });
+    expect(result).toEqual({ ok: true, key: VIDEO_KEY });
     expect(mocks.importCompanionAssetFromUrl).toHaveBeenCalled();
     expect(fetch).toHaveBeenCalledWith('https://upstream.example.com/signed-download?token=abc', { credentials: 'omit' });
     expect(mocks.putCompanionAsset).toHaveBeenCalledWith(
       'http://127.0.0.1:18765',
       'project-a',
-      'wf-res-asset-a-video_step',
+      VIDEO_KEY,
       expect.any(Blob),
       'video/mp4'
     );
@@ -88,7 +92,7 @@ describe('putWorkflowResultMediaFromAnyUrl', () => {
   it('falls back to provider artifact proxy when browser cannot fetch a provider video', async () => {
     mocks.importCompanionAssetFromUrl.mockResolvedValue({ ok: false, status: 500, error: 'fetch_failed' });
     mocks.fetchProviderArtifactBlob.mockResolvedValue(new Blob(['mp4'], { type: 'video/mp4' }));
-    mocks.putCompanionAsset.mockResolvedValue({ ok: true, data: { key: 'wf-res-a1-video' } });
+    mocks.putCompanionAsset.mockResolvedValue({ ok: true, data: { key: VIDEO_KEY } });
     vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('CORS blocked'); }));
 
     const result = await putWorkflowResultMediaFromAnyUrl(
@@ -97,10 +101,10 @@ describe('putWorkflowResultMediaFromAnyUrl', () => {
       'asset-a',
       'video_step',
       'https://upstream.example.com/video.mp4',
-      { providerId: 'volcengine-ark' }
+      { providerId: 'volcengine-ark', slotIndex: 0 }
     );
 
-    expect(result).toEqual({ ok: true, key: 'wf-res-asset-a-video_step' });
+    expect(result).toEqual({ ok: true, key: VIDEO_KEY });
     expect(fetchProviderArtifactBlob).toHaveBeenCalledWith({
       providerId: 'volcengine-ark',
       url: 'https://upstream.example.com/video.mp4',
@@ -108,7 +112,7 @@ describe('putWorkflowResultMediaFromAnyUrl', () => {
     expect(mocks.putCompanionAsset).toHaveBeenCalledWith(
       'http://127.0.0.1:18765',
       'project-a',
-      'wf-res-asset-a-video_step',
+      VIDEO_KEY,
       expect.any(Blob),
       'video/mp4'
     );

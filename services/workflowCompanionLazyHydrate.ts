@@ -1,3 +1,8 @@
+/**
+ * Sole production entry for workflow-canvas raster companion hydrate (original + step results).
+ * UI: hooks/useWorkflowCompanionLazyHydrate.ts ← WorkflowSection.
+ * Do not add a parallel facade module; 3D hydrate stays in workflow3dCompanionHydrate.ts.
+ */
 import type { WorkflowAsset } from '../types';
 import { isWorkflowTextAsset } from './workflowTextAsset';
 import {

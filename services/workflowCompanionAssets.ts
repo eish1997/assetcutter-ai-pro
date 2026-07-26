@@ -15,8 +15,10 @@ import {
   isWorkflowTextAsset,
 } from './workflowAssetKind';
 import { fetchProviderArtifactBlob } from './providerArtifactFetch';
+import { fetchMediaUrlViaAuthApi } from './mediaUrlAuthFetch';
 import { workflowModelSlotMayNeedCompanionHydrate, isWorkflowModelUrlReadable } from './workflowModelBlob';
 import { normalizeDataUrlForVisionApi } from './workflowImageDataUrlCompress';
+import { createPreviewThumbnail } from './workflowImageThumb';
 
 /** 与 `storyboardNamedAssetImage.StoryboardNamedAssetImageFields` 同形；内联避免 companion 模块环 */
 type StoryboardNamedAssetImageFields = {
@@ -83,11 +85,63 @@ function modelExtFromMimeOrName(mime: string | undefined, fileName?: string): 'g
   return 'bin';
 }
 
+export type CompanionMediaKind = 'image' | 'model' | 'video';
+export type CompanionObjectRole = 'full' | 'thumb';
+
+/** 资产 ID 去连字符后前 8 位（小写），写入文件名便于辨认 */
+export function companionAssetId8(assetId: string): string {
+  const raw = String(assetId || '')
+    .trim()
+    .toLowerCase()
+    .replace(/-/g, '')
+    .replace(/[^a-z0-9]/g, '');
+  return (raw.slice(0, 8) || '00000000').padEnd(8, '0').slice(0, 8);
+}
+
 /**
- * 工作流原图在本地伴侣项目下的稳定对象键（按资产 id，便于覆盖同卡更新）。
- * 必须与 `local-companion` 的 `isSafeIdPart` 一致：单段、无 `/`，否则 PUT 会 400 `invalid_key`。
+ * 统一伴侣对象键：`{assetId}/{mediaKind}-{role}-{slot}-{id8}.{ext}`
+ */
+export function workflowCompanionObjectKey(input: {
+  assetId: string;
+  mediaKind: CompanionMediaKind;
+  role: CompanionObjectRole;
+  slot?: number;
+  ext?: string;
+}): string {
+  const slot = Math.max(0, Math.floor(Number(input.slot) || 0));
+  const ext = sanitizeCompanionPathSegment(input.ext || 'bin').slice(0, 12) || 'bin';
+  const id8 = companionAssetId8(input.assetId);
+  const kind = (sanitizeCompanionPathSegment(input.mediaKind).slice(0, 16) || 'image') as string;
+  const role = input.role === 'thumb' ? 'thumb' : 'full';
+  return workflowAssetDirectoryKey(input.assetId, `${kind}-${role}-${slot}-${id8}.${ext}`);
+}
+
+/**
+ * 出生原图/原视频键（新写）。
+ * image/video → `image|video-full-0-{id8}`；model → `model-full-0-{id8}`。
  */
 export function workflowOriginalCompanionStorageKey(
+  assetId: string,
+  ext = 'jpg',
+  assetType: WorkflowOriginalAssetType = 'image'
+): string {
+  if (assetType === 'model') {
+    return workflowCompanionObjectKey({ assetId, mediaKind: 'model', role: 'full', slot: 0, ext });
+  }
+  if (assetType === 'video') {
+    return workflowCompanionObjectKey({ assetId, mediaKind: 'video', role: 'full', slot: 0, ext });
+  }
+  return workflowCompanionObjectKey({
+    assetId,
+    mediaKind: 'image',
+    role: 'full',
+    slot: 0,
+    ext,
+  });
+}
+
+/** 旧版 `original-{kind}-{fullId}.{ext}`（仅 hydrate/回退） */
+export function workflowLegacyOriginalCompanionStorageKey(
   assetId: string,
   ext = 'jpg',
   assetType: WorkflowOriginalAssetType = 'image'
@@ -102,10 +156,90 @@ export function workflowOriginalModelCompanionStorageKey(assetId: string, ext = 
   return workflowOriginalCompanionStorageKey(assetId, ext, 'model');
 }
 
-/** 某资产某步骤结果图在伴侣下的键（含版本 key；长度受 128 字符上限约束） */
-export function workflowResultCompanionStorageKey(assetId: string, resultKey: string, ext = 'jpg'): string {
+/** 图像主文件 `image-full-{slot}-{id8}.{ext}` */
+export function workflowImageCompanionStorageKey(assetId: string, slotIndex: number, ext = 'png'): string {
+  return workflowCompanionObjectKey({
+    assetId,
+    mediaKind: 'image',
+    role: 'full',
+    slot: slotIndex,
+    ext,
+  });
+}
+
+/** 图像缩略图 `image-thumb-{slot}-{id8}.jpg` */
+export function workflowImagePreviewCompanionStorageKey(
+  assetId: string,
+  slotIndex: number,
+  ext = 'jpg'
+): string {
+  return workflowCompanionObjectKey({
+    assetId,
+    mediaKind: 'image',
+    role: 'thumb',
+    slot: slotIndex,
+    ext,
+  });
+}
+
+/**
+ * 步骤结果图伴侣键 → `image-full-{slot}-{id8}`。
+ * 无 slot 时默认 slot=0（调用方应传入 resultOrder 下标）。
+ */
+export function workflowResultCompanionStorageKey(
+  assetId: string,
+  _resultKey: string,
+  ext = 'jpg',
+  slotIndex = 0
+): string {
+  return workflowImageCompanionStorageKey(assetId, slotIndex, ext);
+}
+
+/** 旧版 `result-{stepKey}.{ext}`（仅 hydrate/回退） */
+export function workflowLegacyResultCompanionStorageKey(
+  assetId: string,
+  resultKey: string,
+  ext = 'jpg'
+): string {
   const r = sanitizeCompanionPathSegment(resultKey).slice(0, 72);
   return workflowAssetDirectoryKey(assetId, `result-${r}.${sanitizeCompanionPathSegment(ext).slice(0, 12) || 'jpg'}`);
+}
+
+/** 旧版短名 `image-{slot}.{ext}` / `preview-{slot}.{ext}`（仅回退） */
+export function workflowLegacyShortImageCompanionStorageKey(
+  assetId: string,
+  slotIndex: number,
+  ext = 'png'
+): string {
+  const slot = Math.max(0, Math.floor(Number(slotIndex) || 0));
+  return workflowAssetDirectoryKey(
+    assetId,
+    `image-${slot}.${sanitizeCompanionPathSegment(ext).slice(0, 12) || 'png'}`
+  );
+}
+
+export function workflowLegacyShortPreviewCompanionStorageKey(
+  assetId: string,
+  slotIndex: number,
+  ext = 'jpg'
+): string {
+  const slot = Math.max(0, Math.floor(Number(slotIndex) || 0));
+  return workflowAssetDirectoryKey(
+    assetId,
+    `preview-${slot}.${sanitizeCompanionPathSegment(ext).slice(0, 12) || 'jpg'}`
+  );
+}
+
+export function resolveWorkflowImageSlotIndex(
+  resultOrder: string[] | undefined,
+  resultKey: string
+): number {
+  const rk = String(resultKey || '').trim();
+  if (!rk) return 0;
+  const order = Array.isArray(resultOrder) ? resultOrder : [];
+  const idx = order.indexOf(rk);
+  if (idx >= 0) return idx;
+  return Math.max(0, order.length);
 }
 
 /** 与 `local-companion` `samSegmentAdapter.companionSamAltOutputKey` 一致：多 mask 备选文件键 */
@@ -123,8 +257,23 @@ export function workflowSamMultimaskCompanionKeys(primaryOutputKey: string, coun
   return keys;
 }
 
-/** 工作流 3D 模型在伴侣下的键（按资产 id + 槽位，与 `modelUrls` 下标对齐） */
+/** 3D 模型主文件 `model-full-{slot}-{id8}.{ext}` */
 export function workflowModelCompanionStorageKey(assetId: string, slotIndex: number, ext = 'bin'): string {
+  return workflowCompanionObjectKey({
+    assetId,
+    mediaKind: 'model',
+    role: 'full',
+    slot: slotIndex,
+    ext,
+  });
+}
+
+/** 旧版 `model-{slot}.{ext}`（仅回退） */
+export function workflowLegacyModelCompanionStorageKey(
+  assetId: string,
+  slotIndex: number,
+  ext = 'bin'
+): string {
   const slot = Math.max(0, Math.floor(slotIndex));
   return workflowAssetDirectoryKey(assetId, `model-${slot}.${sanitizeCompanionPathSegment(ext).slice(0, 12) || 'bin'}`);
 }
@@ -177,6 +326,21 @@ function companionAssetProjectCacheKey(baseUrl: string, key: string): string {
   return `${normalizeCompanionBaseUrl(baseUrl)}\0${String(key || '').trim()}`;
 }
 
+function parseCompanionNamedStem(stem: string): {
+  mediaKind?: CompanionMediaKind;
+  role?: CompanionObjectRole;
+  slot?: number;
+} | null {
+  // image-full-0-550e8400 | model-thumb-1-abcdef01 | video-full-0-...
+  const m = /^(image|model|video)-(full|thumb)-(\d+)(?:-[a-z0-9]{4,12})?$/i.exec(String(stem || ''));
+  if (!m) return null;
+  return {
+    mediaKind: m[1]!.toLowerCase() as CompanionMediaKind,
+    role: m[2]!.toLowerCase() as CompanionObjectRole,
+    slot: Math.max(0, Number.parseInt(m[3]!, 10) || 0),
+  };
+}
+
 export function legacyWorkflowCompanionAssetKeyCandidates(key: string): string[] {
   const k = String(key || '').trim();
   if (!k || k.startsWith('wf-')) return [];
@@ -189,36 +353,76 @@ export function legacyWorkflowCompanionAssetKeyCandidates(key: string): string[]
     const stem = file.replace(/\.[^.]+$/, '');
     const hasNamedFileExt = /\.[^.]+$/.test(file);
     const ext = hasNamedFileExt ? file.split('.').pop() || 'jpg' : 'jpg';
-    if (stem === 'original') {
+    const named = parseCompanionNamedStem(stem);
+    if (named?.mediaKind && named.role != null && named.slot != null) {
+      out.push(
+        workflowCompanionObjectKey({
+          assetId,
+          mediaKind: named.mediaKind,
+          role: named.role,
+          slot: named.slot,
+          ext,
+        })
+      );
+      if (named.mediaKind === 'image') {
+        out.push(
+          workflowCompanionObjectKey({
+            assetId,
+            mediaKind: 'image',
+            role: named.role === 'full' ? 'thumb' : 'full',
+            slot: named.slot,
+            ext: named.role === 'full' ? 'jpg' : ext,
+          })
+        );
+      }
+    } else if (stem === 'original') {
       const kind = originalAssetTypeFromMimeOrExt(undefined, ext);
-      if (kind === 'model') out.push(workflowOriginalModelCompanionStorageKey(assetId, ext));
-      else out.push(workflowOriginalCompanionStorageKey(assetId, ext, kind));
+      out.push(workflowOriginalCompanionStorageKey(assetId, ext, kind));
+      out.push(workflowLegacyOriginalCompanionStorageKey(assetId, ext, kind));
       if (hasNamedFileExt) out.push(`wf-orig-${assetId}`.slice(0, 128));
     } else if (stem.startsWith('original-')) {
       if (stem.startsWith('original-model-')) {
         out.push(workflowModelCompanionStorageKey(assetId, 0, ext));
+        out.push(workflowLegacyModelCompanionStorageKey(assetId, 0, ext));
         out.push(`wf-mdl-${assetId}-0`.slice(0, 128));
       } else {
+        out.push(workflowOriginalCompanionStorageKey(assetId, ext, 'image'));
+        out.push(workflowLegacyOriginalCompanionStorageKey(assetId, ext, 'image'));
         out.push(legacyOriginalCompanionStorageKey(assetId, ext));
         out.push(`wf-orig-${assetId}`.slice(0, 128));
       }
     } else if (stem.startsWith('result-')) {
       const resultKey = sanitizeCompanionPathSegment(stem.slice('result-'.length)).slice(0, 72);
-      out.push(workflowResultCompanionStorageKey(assetId, resultKey));
+      out.push(workflowLegacyResultCompanionStorageKey(assetId, resultKey, ext));
+      out.push(workflowImageCompanionStorageKey(assetId, 0, ext));
+      out.push(workflowImagePreviewCompanionStorageKey(assetId, 0));
       if (hasNamedFileExt) out.push(`wf-res-${assetId.slice(0, 48)}-${resultKey}`.slice(0, 128));
-    } else if (stem.startsWith('model-')) {
+    } else if (/^image-\d+$/i.test(stem)) {
+      const slot = Math.max(0, Number.parseInt(stem.slice('image-'.length), 10) || 0);
+      out.push(workflowLegacyShortImageCompanionStorageKey(assetId, slot, ext));
+      out.push(workflowImageCompanionStorageKey(assetId, slot, ext));
+      out.push(workflowImagePreviewCompanionStorageKey(assetId, slot));
+    } else if (/^preview-\d+$/i.test(stem)) {
+      const slot = Math.max(0, Number.parseInt(stem.slice('preview-'.length), 10) || 0);
+      out.push(workflowLegacyShortPreviewCompanionStorageKey(assetId, slot, ext));
+      out.push(workflowImagePreviewCompanionStorageKey(assetId, slot, ext));
+      out.push(workflowImageCompanionStorageKey(assetId, slot));
+    } else if (/^model-\d+$/i.test(stem)) {
       const slot = Math.max(0, Number.parseInt(stem.slice('model-'.length), 10) || 0);
-      out.push(workflowModelCompanionStorageKey(assetId, slot));
+      out.push(workflowLegacyModelCompanionStorageKey(assetId, slot, ext));
+      out.push(workflowModelCompanionStorageKey(assetId, slot, ext));
       if (hasNamedFileExt) out.push(`wf-mdl-${assetId}-${slot}`.slice(0, 128));
     } else {
-      out.push(workflowResultCompanionStorageKey(assetId, stem));
+      out.push(workflowLegacyResultCompanionStorageKey(assetId, stem, ext));
+      out.push(workflowImageCompanionStorageKey(assetId, 0, ext));
       if (hasNamedFileExt) {
         out.push(`wf-res-${assetId.slice(0, 48)}-${sanitizeCompanionPathSegment(stem).slice(0, 72)}`.slice(0, 128));
       }
     }
-  } else if (parts.length === 1 && !/^[a-z][a-z0-9+.-]*:/i.test(parts[0])) {
-    out.push(workflowOriginalCompanionStorageKey(parts[0]));
-    out.push(legacyOriginalCompanionStorageKey(parts[0]));
+  } else if (parts.length === 1 && !/^[a-z][a-z0-9+.-]*:/i.test(parts[0]!)) {
+    out.push(workflowOriginalCompanionStorageKey(parts[0]!));
+    out.push(workflowLegacyOriginalCompanionStorageKey(parts[0]!));
+    out.push(legacyOriginalCompanionStorageKey(parts[0]!));
   }
 
   return Array.from(new Set(out.filter((candidate) => candidate && candidate !== k)));
@@ -549,16 +753,160 @@ export async function imageSrcToDataUrlForCompanion(src: string, depth = 0): Pro
   return null;
 }
 
-/** 原图可为任意可解析形态，内部先转为 data URL 再上传 */
+function sniffImageExtFromUrl(value: string): string {
+  const s = String(value || '').split('?')[0]!.split('#')[0]!.toLowerCase();
+  if (s.endsWith('.png')) return 'png';
+  if (s.endsWith('.webp')) return 'webp';
+  if (s.endsWith('.gif')) return 'gif';
+  if (s.endsWith('.svg')) return 'svg';
+  if (s.endsWith('.jpg') || s.endsWith('.jpeg')) return 'jpg';
+  return 'png';
+}
+
+export type PutWorkflowResultImageOk = {
+  ok: true;
+  key: string;
+  previewKey?: string;
+  slotIndex: number;
+};
+
+async function blobToDataUrlForCompanion(blob: Blob): Promise<string | null> {
+  try {
+    if (typeof FileReader !== 'undefined') {
+      return await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result || ''));
+        reader.onerror = () => reject(reader.error || new Error('read_failed'));
+        reader.readAsDataURL(blob);
+      });
+    }
+    const mime = (blob.type && blob.type.split(';')[0]!.trim()) || 'application/octet-stream';
+    const bytes = new Uint8Array(await blob.arrayBuffer());
+    let bin = '';
+    const chunk = 0x8000;
+    for (let i = 0; i < bytes.length; i += chunk) {
+      bin += String.fromCharCode(...bytes.subarray(i, i + chunk));
+    }
+    return `data:${mime};base64,${btoa(bin)}`;
+  } catch {
+    return null;
+  }
+}
+
+async function putWorkflowImagePreviewSidecar(
+  baseUrl: string,
+  projectId: string,
+  assetId: string,
+  slotIndex: number,
+  sourceDataUrl: string
+): Promise<string | undefined> {
+  try {
+    const thumb = await createPreviewThumbnail(sourceDataUrl, 512, 0.82, 'low');
+    const parsed = parseDataUrlToBlob(thumb);
+    if (!parsed) return undefined;
+    const previewKey = workflowImagePreviewCompanionStorageKey(assetId, slotIndex, 'jpg');
+    const base = normalizeCompanionBaseUrl(baseUrl);
+    const res = await putCompanionAsset(base, projectId, previewKey, parsed.blob, parsed.mime || 'image/jpeg');
+    if (res.ok === false) return undefined;
+    return previewKey;
+  } catch {
+    return undefined;
+  }
+}
+
+async function putWorkflowResultImageBlobToCompanion(
+  baseUrl: string,
+  projectId: string,
+  assetId: string,
+  resultKey: string,
+  blob: Blob,
+  opts?: { slotIndex?: number; writePreview?: boolean; sourceDataUrl?: string }
+): Promise<PutWorkflowResultImageOk | { ok: false; error: string }> {
+  const mime = (blob.type && blob.type.split(';')[0]!.trim()) || 'image/png';
+  const slotIndex = Math.max(0, Math.floor(opts?.slotIndex ?? 0));
+  const key = workflowImageCompanionStorageKey(assetId, slotIndex, mediaExtFromMime(mime));
+  const base = normalizeCompanionBaseUrl(baseUrl);
+  const res = await putCompanionAsset(base, projectId, key, blob.type ? blob : new Blob([blob], { type: mime }), mime);
+  if (res.ok === false) {
+    return { ok: false, error: `${res.error}${res.status != null ? ` (HTTP ${res.status})` : ''}` };
+  }
+  let previewKey: string | undefined;
+  if (opts?.writePreview !== false) {
+    const dataUrl =
+      (opts?.sourceDataUrl && parseDataUrlToBlob(opts.sourceDataUrl) ? opts.sourceDataUrl : null) ||
+      (await blobToDataUrlForCompanion(blob.type ? blob : new Blob([blob], { type: mime })));
+    if (dataUrl) {
+      previewKey = await putWorkflowImagePreviewSidecar(baseUrl, projectId, assetId, slotIndex, dataUrl);
+    }
+  }
+  return { ok: true, key, previewKey, slotIndex };
+}
+
+async function resolveRemoteImageBlobForCompanion(
+  source: string,
+  opts?: { providerId?: string }
+): Promise<{ blob: Blob; via: string } | { error: string }> {
+  const notes: string[] = [];
+  if (opts?.providerId) {
+    try {
+      const blob = await fetchProviderArtifactBlob({ providerId: opts.providerId, url: source });
+      return { blob, via: 'provider_artifact' };
+    } catch (e) {
+      notes.push(`provider:${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+  try {
+    const blob = await fetchMediaUrlViaAuthApi(source);
+    return { blob, via: 'auth_media_fetch' };
+  } catch (e) {
+    notes.push(`auth:${e instanceof Error ? e.message : String(e)}`);
+  }
+  return { error: notes.join(' | ') || 'remote_fetch_failed' };
+}
+
+/**
+ * 原图可为任意可解析形态。
+ * https：伴侣 import-url → 浏览器规范化 → auth-api 代拉（带出站代理）→ PUT。
+ */
 export async function putWorkflowOriginalImageFromAnyUrl(
   baseUrl: string,
   projectId: string,
   assetId: string,
-  imageSrc: string
+  imageSrc: string,
+  opts?: { providerId?: string }
 ): Promise<{ ok: true; key: string } | { ok: false; error: string }> {
-  const dataUrl = await imageSrcToDataUrlForCompanion(imageSrc);
-  if (!dataUrl) return { ok: false, error: 'cannot_normalize_image_src' };
-  return putWorkflowOriginalImageToCompanion(baseUrl, projectId, assetId, dataUrl);
+  const source = String(imageSrc || '').trim();
+  if (!source) return { ok: false, error: 'empty_image_src' };
+  const base = normalizeCompanionBaseUrl(baseUrl);
+  let importNote = '';
+
+  if (/^https?:\/\//i.test(source)) {
+    const key = workflowOriginalCompanionStorageKey(assetId, sniffImageExtFromUrl(source), 'image');
+    const imported = await importCompanionAssetFromUrl(base, projectId, key, source);
+    if (imported.ok !== false) {
+      return { ok: true, key };
+    }
+    importNote = imported.error || `import_http_${imported.status ?? '?'}`;
+  }
+
+  const dataUrl = await imageSrcToDataUrlForCompanion(source);
+  if (dataUrl) return putWorkflowOriginalImageToCompanion(baseUrl, projectId, assetId, dataUrl);
+
+  if (/^https?:\/\//i.test(source)) {
+    const remote = await resolveRemoteImageBlobForCompanion(source, opts);
+    if ('blob' in remote) {
+      return putWorkflowOriginalBlobToCompanion(baseUrl, projectId, assetId, remote.blob);
+    }
+    return {
+      ok: false,
+      error: `cannot_normalize_image_src${importNote ? `; import-url: ${importNote}` : ''}; ${remote.error}`,
+    };
+  }
+
+  return {
+    ok: false,
+    error: `cannot_normalize_image_src${importNote ? `; import-url: ${importNote}` : ''}`,
+  };
 }
 
 export function parseDataUrlToBlob(dataUrl: string): { blob: Blob; mime: string } | null {
@@ -629,30 +977,78 @@ export async function putWorkflowResultImageToCompanion(
   projectId: string,
   assetId: string,
   resultKey: string,
-  imageDataUrl: string
-): Promise<{ ok: true; key: string } | { ok: false; error: string }> {
+  imageDataUrl: string,
+  opts?: { slotIndex?: number; writePreview?: boolean }
+): Promise<PutWorkflowResultImageOk | { ok: false; error: string }> {
   const parsed = parseDataUrlToBlob(imageDataUrl);
   if (!parsed) return { ok: false, error: 'not_data_url' };
-  const key = workflowResultCompanionStorageKey(assetId, resultKey, mediaExtFromMime(parsed.mime));
-  const base = normalizeCompanionBaseUrl(baseUrl);
-  const res = await putCompanionAsset(base, projectId, key, parsed.blob, parsed.mime);
-  if (res.ok === false) {
-    return { ok: false, error: `${res.error}${res.status != null ? ` (HTTP ${res.status})` : ''}` };
-  }
-  return { ok: true, key };
+  return putWorkflowResultImageBlobToCompanion(
+    baseUrl,
+    projectId,
+    assetId,
+    resultKey,
+    parsed.blob,
+    { ...opts, sourceDataUrl: imageDataUrl }
+  );
 }
 
-/** 结果图可来自 data/blob/http/R2 URL；归档前统一转成 data URL 再写入本地伴侣。 */
+/** 结果图可来自 data/blob/http/R2 URL；https：import-url → 浏览器 → auth-api 代拉 → PUT。 */
 export async function putWorkflowResultImageFromAnyUrl(
   baseUrl: string,
   projectId: string,
   assetId: string,
   resultKey: string,
-  imageSrc: string
-): Promise<{ ok: true; key: string } | { ok: false; error: string }> {
-  const dataUrl = await imageSrcToDataUrlForCompanion(imageSrc);
-  if (!dataUrl) return { ok: false, error: 'cannot_normalize_image_src' };
-  return putWorkflowResultImageToCompanion(baseUrl, projectId, assetId, resultKey, dataUrl);
+  imageSrc: string,
+  opts?: { providerId?: string; slotIndex?: number; writePreview?: boolean }
+): Promise<PutWorkflowResultImageOk | { ok: false; error: string }> {
+  const source = String(imageSrc || '').trim();
+  if (!source) return { ok: false, error: 'empty_image_src' };
+  const base = normalizeCompanionBaseUrl(baseUrl);
+  const slotIndex = Math.max(0, Math.floor(opts?.slotIndex ?? 0));
+  let importNote = '';
+
+  if (/^https?:\/\//i.test(source)) {
+    const key = workflowImageCompanionStorageKey(assetId, slotIndex, sniffImageExtFromUrl(source));
+    const imported = await importCompanionAssetFromUrl(base, projectId, key, source);
+    if (imported.ok !== false) {
+      let previewKey: string | undefined;
+      if (opts?.writePreview !== false) {
+        const dataUrl = await imageSrcToDataUrlForCompanion(source);
+        if (dataUrl) {
+          previewKey = await putWorkflowImagePreviewSidecar(baseUrl, projectId, assetId, slotIndex, dataUrl);
+        }
+      }
+      return { ok: true, key, previewKey, slotIndex };
+    }
+    importNote = imported.error || `import_http_${imported.status ?? '?'}`;
+  }
+
+  const dataUrl = await imageSrcToDataUrlForCompanion(source);
+  if (dataUrl) {
+    return putWorkflowResultImageToCompanion(baseUrl, projectId, assetId, resultKey, dataUrl, {
+      slotIndex,
+      writePreview: opts?.writePreview,
+    });
+  }
+
+  if (/^https?:\/\//i.test(source)) {
+    const remote = await resolveRemoteImageBlobForCompanion(source, opts);
+    if ('blob' in remote) {
+      return putWorkflowResultImageBlobToCompanion(baseUrl, projectId, assetId, resultKey, remote.blob, {
+        slotIndex,
+        writePreview: opts?.writePreview,
+      });
+    }
+    return {
+      ok: false,
+      error: `cannot_normalize_image_src${importNote ? `; import-url: ${importNote}` : ''}; ${remote.error}`,
+    };
+  }
+
+  return {
+    ok: false,
+    error: `cannot_normalize_image_src${importNote ? `; import-url: ${importNote}` : ''}`,
+  };
 }
 
 function sniffVideoMimeFromUrl(value: string): string {
@@ -705,19 +1101,31 @@ async function mediaSrcToBlobForCompanion(src: string, fallbackMime: string): Pr
   return null;
 }
 
+/** 视频主文件 `video-full-{slot}-{id8}.{ext}` */
+export function workflowVideoCompanionStorageKey(assetId: string, slotIndex: number, ext = 'mp4'): string {
+  return workflowCompanionObjectKey({
+    assetId,
+    mediaKind: 'video',
+    role: 'full',
+    slot: slotIndex,
+    ext,
+  });
+}
+
 export async function putWorkflowResultMediaFromAnyUrl(
   baseUrl: string,
   projectId: string,
   assetId: string,
   resultKey: string,
   mediaSrc: string,
-  opts?: { fallbackMime?: string; providerId?: string }
+  opts?: { fallbackMime?: string; providerId?: string; slotIndex?: number }
 ): Promise<{ ok: true; key: string } | { ok: false; error: string }> {
   const source = String(mediaSrc || '').trim();
   if (!source) return { ok: false, error: 'empty_media_src' };
   const base = normalizeCompanionBaseUrl(baseUrl);
   const fallbackMime = opts?.fallbackMime || sniffVideoMimeFromUrl(source);
-  let key = workflowResultCompanionStorageKey(assetId, resultKey, mediaExtFromMime(fallbackMime));
+  const slotIndex = Math.max(0, Math.floor(opts?.slotIndex ?? 0));
+  let key = workflowVideoCompanionStorageKey(assetId, slotIndex, mediaExtFromMime(fallbackMime));
 
   if (/^https?:\/\//i.test(source)) {
     const imported = await importCompanionAssetFromUrl(base, projectId, key, source);
@@ -738,7 +1146,7 @@ export async function putWorkflowResultMediaFromAnyUrl(
     }
   }
   if (!parsed) return { ok: false, error: 'cannot_normalize_media_src' };
-  key = workflowResultCompanionStorageKey(assetId, resultKey, mediaExtFromMime(parsed.mime));
+  key = workflowVideoCompanionStorageKey(assetId, slotIndex, mediaExtFromMime(parsed.mime));
   const put = await putCompanionAsset(base, projectId, key, parsed.blob, parsed.mime);
   if (put.ok === false) {
     return { ok: false, error: `${put.error}${put.status != null ? ` (HTTP ${put.status})` : ''}` };
@@ -1128,8 +1536,14 @@ export async function shouldKeepExistingCompanionRasterUrl(
 
 /** 手动上云打包前：是否存在仅伴侣键、无内存图串的资产/分镜/历史项 */
 export function workflowAssetNeedsCompanionHydrateForCloudPack(a: WorkflowAsset): boolean {
-  if (isWorkflowTextAsset(a)) return false;
-  if (!String(a.original || '').trim() && String(a.originalCompanionKey || '').trim()) return true;
+  // Text birth shell: still pack result rasters; skip original-as-image for text.
+  if (
+    !isWorkflowTextAsset(a) &&
+    !String(a.original || '').trim() &&
+    String(a.originalCompanionKey || '').trim()
+  ) {
+    return true;
+  }
   const rck = a.resultsCompanionKeys || {};
   for (const sid of Object.keys(rck)) {
     if (!String(rck[sid] || '').trim()) continue;
@@ -1158,13 +1572,13 @@ export function workflowBundleNeedsCompanionHydrateForCloudPack(bundle: {
 }
 
 export function workflowAssetNeedsCompanionOriginalHydrate(a: WorkflowAsset): boolean {
+  // Text birth shell original is not a production raster slot.
   if (isWorkflowTextAsset(a)) return false;
   return companionRasterSlotNeedsHydrate(String(a.original ?? ''), String(a.originalCompanionKey || ''));
 }
 
-/** 是否存在「有伴侣结果键但该步无内存图串」需从伴侣补 blob: */
+/** 是否存在「有伴侣结果键但该步无内存图串」需从伴侣补 blob:（含文字出生卡上的图槽） */
 export function workflowAssetNeedsCompanionResultHydrate(a: WorkflowAsset): boolean {
-  if (isWorkflowTextAsset(a)) return false;
   const rck = a.resultsCompanionKeys;
   if (!rck) return false;
   const res = a.results || {};

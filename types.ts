@@ -597,12 +597,18 @@ export type WorkflowAssetVariant = {
 export type WorkflowAsset = {
   id: string;
   /**
-   * 资产形态：缺省视为 `image`，兼容旧数据。
-   * `text`：工作区文字卡片（无位图执行能力，不进入图像能力队列）。
+   * 出生壳类型：缺省视为 `image`，兼容旧数据。
+   * `text`：从文字创建；同卡可挂 results 图/视频等，**显示态以 displayKey 槽为准**。
    * `storyboard_table`：分镜表容器，镜头行存于 `storyboardTable`。
    * `asset_set`：资产集容器，拆解数据存于 `assetSet`。
    */
   assetKind?: WorkflowAssetKind;
+  /** 遗留字段：旧拆卡谱系；新路径不再写入 */
+  derivedFromAssetId?: string;
+  /** 遗留字段：旧拆卡谱系；新路径不再写入 */
+  derivedFromVariantId?: string;
+  /** 遗留字段：旧拆卡谱系；新路径不再写入 */
+  derivationKind?: 'text_to_image';
   /** 分镜表行数据（仅 `assetKind === 'storyboard_table'`） */
   storyboardTable?: StoryboardTableDoc;
   /** 资产集文档（仅 `assetKind === 'asset_set'`） */
@@ -648,6 +654,11 @@ export type WorkflowAsset = {
   resultsObjectKeys?: Record<string, string>;
   /** 各步骤结果图在本地伴侣下的对象键（与 `results` 中对应 step 的 data/blob 配对；持久化时可清空该步内联串） */
   resultsCompanionKeys?: Record<string, string>;
+  /**
+   * 各步骤结果缩略图伴侣键（`preview-{slot}.jpg`，与 `image-{slot}` 同目录）。
+   * 对齐 3D 的 model + preview 双文件；打开资产文件夹时应能看到。
+   */
+  resultsPreviewCompanionKeys?: Record<string, string>;
   /** 所属组的唯一 ID，null/undefined = 不在任何组 */
   groupId?: string | null;
   /** 组显示名称（冗余存，UI 直接用） */

@@ -385,7 +385,7 @@ async function packStoryboardNamedAssetsForCloud<T extends StoryboardNamedAssetI
           ...item,
           image: '',
           imageObjectKey: key,
-          imageCompanionKey: undefined,
+          // Keep imageCompanionKey — cloud pin must not erase local locator.
         };
       }
     }
@@ -453,7 +453,7 @@ export async function packWorkflowBundleForCloud(
         a.original = '';
       }
     }
-    delete (a as { originalCompanionKey?: string }).originalCompanionKey;
+    // Keep local companion locators: cloud object keys are pins/cache, not a reason to erase local truth.
 
     const resultsKeys: Record<string, string> = {};
     const resultsCompanionKeysMap = { ...(a.resultsCompanionKeys || {}) };
@@ -511,7 +511,7 @@ export async function packWorkflowBundleForCloud(
     }
     a.results = nextResults;
     if (Object.keys(resultsKeys).length) a.resultsObjectKeys = resultsKeys;
-    delete a.resultsCompanionKeys;
+    // Preserve resultsCompanionKeys — R2 keys are additive, not a replacement for local locators.
 
     if (a.cutImageGroup?.length) {
       const nextGroup = await mapLimit(a.cutImageGroup, CLOUD_PACK_UPLOAD_CONCURRENCY, async (item, idx) => {
@@ -563,7 +563,7 @@ export async function packWorkflowBundleForCloud(
               ...nextRow,
               frameImage: '',
               frameImageObjectKey: key,
-              frameImageCompanionKey: undefined,
+              // Keep frameImageCompanionKey — cloud pin must not erase local locator.
             };
           }
         } else if (row.frameImageObjectKey?.trim()) {
@@ -607,7 +607,7 @@ export async function packWorkflowBundleForCloud(
               ...ver,
               frameImage: '',
               frameImageObjectKey: histKey,
-              frameImageCompanionKey: undefined,
+              // Keep frameImageCompanionKey — cloud pin must not erase local locator.
             };
           })
         );

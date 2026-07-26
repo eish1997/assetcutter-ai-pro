@@ -13,9 +13,9 @@ vi.mock('../services/companionClient/storage', () => storageMock);
 import {
   fetchWorkflowOriginalFromCompanionAsObjectUrl,
   legacyWorkflowCompanionAssetKeyCandidates,
+  workflowLegacyOriginalCompanionStorageKey,
   workflowOriginalModelCompanionStorageKey,
   workflowOriginalCompanionStorageKey,
-  workflowResultCompanionStorageKey,
 } from '../services/workflowCompanionAssets';
 
 describe('workflow companion legacy key fallback', () => {
@@ -30,22 +30,26 @@ describe('workflow companion legacy key fallback', () => {
     vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:restored');
   });
 
-  it('maps old original companion keys to stable wf-orig keys', () => {
-    expect(legacyWorkflowCompanionAssetKeyCandidates('asset-1')).toEqual([
-      workflowOriginalCompanionStorageKey('asset-1'),
-      'asset-1/original.jpg',
-    ]);
+  it('maps bare original keys to new full + legacy originals', () => {
+    const candidates = legacyWorkflowCompanionAssetKeyCandidates('asset-1');
+    expect(candidates).toContain(workflowOriginalCompanionStorageKey('asset-1'));
+    expect(candidates).toContain('asset-1/original.jpg');
   });
 
-  it('names typed original image and model source files inside the asset directory', () => {
-    expect(workflowOriginalCompanionStorageKey('asset-1', 'png')).toBe('asset-1/original-image-asset-1.png');
-    expect(workflowOriginalModelCompanionStorageKey('asset-1', 'fbx')).toBe('asset-1/original-model-asset-1.fbx');
+  it('names original image/model with mediaKind-role-slot-id8', () => {
+    expect(workflowOriginalCompanionStorageKey('asset-1', 'png')).toBe('asset-1/image-full-0-asset100.png');
+    expect(workflowOriginalModelCompanionStorageKey('asset-1', 'fbx')).toBe('asset-1/model-full-0-asset100.fbx');
+    expect(workflowLegacyOriginalCompanionStorageKey('asset-1', 'png')).toBe(
+      'asset-1/original-image-asset-1.png'
+    );
   });
 
-  it('maps old asset/result companion keys to stable wf-res keys', () => {
-    expect(legacyWorkflowCompanionAssetKeyCandidates('asset-1/ac_internal_quick_compose_plain_i2i')).toEqual([
-      workflowResultCompanionStorageKey('asset-1', 'ac_internal_quick_compose_plain_i2i'),
-    ]);
+  it('maps old asset/result companion keys to image + legacy result candidates', () => {
+    const candidates = legacyWorkflowCompanionAssetKeyCandidates(
+      'asset-1/ac_internal_quick_compose_plain_i2i'
+    );
+    expect(candidates.some((k) => k.includes('/image-full-'))).toBe(true);
+    expect(candidates.some((k) => k.includes('/result-ac_internal_quick_compose_plain_i2i'))).toBe(true);
   });
 
   it('restores an old bare original key after the direct lookup returns 404', async () => {
