@@ -100,6 +100,16 @@ try {
   /* ignore */
 }
 
+/**
+ * 进入工作区时卡片会并发创建 WebGL/曾尝试 WebGPU；Electron GPU 进程易被打挂导致 BrowserView 黑屏。
+ * 壳内强制关 WebGPU，预览走 WebGL（页面侧 companionShell 检测也会跳过 WebGPU）。
+ */
+try {
+  app.commandLine.appendSwitch('disable-webgpu');
+} catch {
+  /* ignore */
+}
+
 const DEFAULT_HTTP_PORT = 18765;
 
 /** 开发：`npm start`；安装包：未保存过主站时的「打开网站」默认 */

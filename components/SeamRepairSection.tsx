@@ -27,6 +27,7 @@ import {
 } from '../services/companionJobTerminalStore';
 import { companionJobStatusHuman } from '../services/companionJobStatusHuman';
 import { SiteImage } from './SiteImage';
+import { createRenderHost, type RenderHost } from '../services/renderCore';
 
 // OBJ + 贴图 3D 预览（仅影响预览，不改变修复结果）
 const ObjTextureViewer: React.FC<{
@@ -41,6 +42,7 @@ const ObjTextureViewer: React.FC<{
   const sceneRef = useRef<THREE.Scene | null>(null);
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
   const controlsRef = useRef<OrbitControls | null>(null);
+  const hostRef = useRef<RenderHost | null>(null);
   const rootRef = useRef<THREE.Group | null>(null);
   const materialRef = useRef<THREE.MeshStandardMaterial | null>(null);
   const animIdRef = useRef<number>(0);
@@ -48,19 +50,17 @@ const ObjTextureViewer: React.FC<{
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
+    let cancelled = false;
+    let controls: OrbitControls | null = null;
+    let renderHost: RenderHost | null = null;
+
     const width = container.clientWidth || 400;
     const height = container.clientHeight || 320;
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0x0a0a12);
     const camera = new THREE.PerspectiveCamera(45, width / height, 0.01, 1000);
     camera.position.set(1.6, 1.2, 1.6);
-    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-    renderer.setSize(width, height);
-    renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
-    renderer.outputColorSpace = THREE.SRGBColorSpace;
-    renderer.setClearColor(0x000000, 0);
-    const controls = new OrbitControls(camera, renderer.domElement);
-    controls.enableDamping = true;
+
     scene.add(new THREE.AmbientLight(0xffffff, 0.55));
     const dir = new THREE.DirectionalLight(0xffffff, 0.8);
     dir.position.set(2.5, 3.5, 2);
@@ -69,37 +69,69 @@ const ObjTextureViewer: React.FC<{
     (grid.material as THREE.Material).opacity = 0.25;
     (grid.material as THREE.Material).transparent = true;
     scene.add(grid);
-    container.innerHTML = '';
-    container.appendChild(renderer.domElement);
-    sceneRef.current = scene;
-    cameraRef.current = camera;
-    controlsRef.current = controls;
-
-    function animate() {
-      animIdRef.current = requestAnimationFrame(animate);
-      controls.update();
-      renderer.render(scene, camera);
-    }
-    animate();
 
     const onResize = () => {
+      if (!renderHost) return;
       const w = container.clientWidth;
       const h = container.clientHeight || 320;
       camera.aspect = w / h;
       camera.updateProjectionMatrix();
-      renderer.setSize(w, h);
+      renderHost.resize(w, h, Math.min(2, window.devicePixelRatio || 1));
     };
-    window.addEventListener('resize', onResize);
+
+    void (async () => {
+      try {
+        container.innerHTML = '';
+        renderHost = createRenderHost({
+          preferredBackend: 'webgpu',
+          fallbackBackend: 'webgl',
+          container,
+          visual: {
+            antialias: true,
+            alpha: true,
+            outputColorSpace: THREE.SRGBColorSpace,
+            clearColor: 0x000000,
+            clearAlpha: 0,
+          },
+        });
+        await renderHost.init();
+        if (cancelled) return;
+
+        const canvas = renderHost.getDomElement();
+        if (!canvas) throw new Error('RenderHost missing canvas');
+        renderHost.resize(width, height, Math.min(2, window.devicePixelRatio || 1));
+
+        controls = new OrbitControls(camera, canvas);
+        controls.enableDamping = true;
+
+        sceneRef.current = scene;
+        cameraRef.current = camera;
+        controlsRef.current = controls;
+        hostRef.current = renderHost;
+
+        const animate = () => {
+          if (cancelled || !renderHost || !controls) return;
+          animIdRef.current = requestAnimationFrame(animate);
+          controls.update();
+          renderHost.render(scene, camera);
+        };
+        animate();
+        window.addEventListener('resize', onResize);
+      } catch {
+        /* preview-only; leave empty mount on init failure */
+      }
+    })();
 
     return () => {
+      cancelled = true;
       window.removeEventListener('resize', onResize);
       cancelAnimationFrame(animIdRef.current);
-      renderer.dispose();
-      controls.dispose();
-      if (container.contains(renderer.domElement)) container.removeChild(renderer.domElement);
+      controls?.dispose();
+      renderHost?.dispose();
       sceneRef.current = null;
       cameraRef.current = null;
       controlsRef.current = null;
+      hostRef.current = null;
     };
   }, []);
 

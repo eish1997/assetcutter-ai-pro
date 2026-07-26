@@ -1,5 +1,5 @@
 import { installSafeEncodeURIComponent } from './services/safeUriEncodingInstall';
-import React, { Suspense, useState, useEffect, useLayoutEffect, useMemo, useRef, useCallback } from 'react';
+import React, { Suspense, startTransition, useState, useEffect, useLayoutEffect, useMemo, useRef, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 
 installSafeEncodeURIComponent();
@@ -26,6 +26,13 @@ import { AppMode, LibraryItem, SystemConfig, AppTask, AssetCategory, type Custom
 import { runCapabilityTest } from './services/capabilityTestRunner';
 import { executeCapability } from './services/capabilityExecutor';
 import { AGENT_WORKBENCH_SMOKE_PRESET_ID, buildAgentCapabilityOutputAsset, getAgentWorkbenchSmokePresetSummary, initAgentWorkbenchBridge, summarizeAgentCapabilityPreset, summarizeAgentWorkflowAsset, summarizeAgentWorkflowAssetDetail } from './services/agentWorkbenchBridge';
+import {
+  fetchAgentCliPlatformAssets,
+  fetchAgentCliPlatformProjects,
+  isAgentCliProjectId,
+  mergeAgentCliAssetsIntoWorkflow,
+  mergeAgentCliProjectsIntoWorkspace,
+} from './services/agentCliPlatformAssets';
 import { loadCapabilityPresets, saveCapabilityPresets, CAPABILITY_PRESETS_KEY } from './services/capabilityPresetStore';
 import { loadCapabilitySets, saveCapabilitySets, CAPABILITY_SETS_KEY } from './services/capabilitySetStore';
 import { useWorkflowMainScrollCapture, type WorkflowCapabilityGutterDropConfig } from './hooks/useWorkflowMainScrollCapture';
@@ -707,7 +714,10 @@ const MainApp: React.FC = () => {
   }, [user?.id]);
 
   function canSyncWorkspaceProjectToCloud(projectId: string | null | undefined): boolean {
-    return Boolean(projectId && userIdRef.current);
+    if (!projectId || !userIdRef.current) return false;
+    // Agent CLI 项目以服务端 Soul 库为准，不走伴侣目录 / 云索引推送
+    if (isAgentCliProjectId(projectId)) return false;
+    return true;
   }
 
   function shouldAutoPushWorkspaceProjectIndex(): boolean {
@@ -1130,14 +1140,29 @@ const MainApp: React.FC = () => {
     return [...fromCompanion, ...extras];
   }, []);
 
+  const enrichWorkspaceProjectsWithAgentCli = useCallback(async (base: WorkspaceProject[], uid: string) => {
+    try {
+      const cli = await fetchAgentCliPlatformProjects();
+      if (!cli.length) return base;
+      const next = mergeAgentCliProjectsIntoWorkspace(base, cli);
+      if (next !== base) saveWorkspaceProjects(next, uid);
+      return next;
+    } catch (e) {
+      console.warn('[agent-cli] merge projects into workspace', e);
+      return base;
+    }
+  }, []);
+
   const applyLocalWorkspaceIndex = useCallback(
     async (uid: string) => {
       await ensureWorkspaceBundlesHydratedFromIdb(uid);
       const localProjects = loadWorkspaceProjects(uid);
+      const effectiveProjects = await enrichWorkspaceProjectsWithAgentCli(localProjects, uid);
       const last = getLastOpenedWorkspaceProjectId(uid);
-      const validLast = last && localProjects.some((p) => p.id === last) ? last : null;
-      saveWorkspaceProjects(localProjects, uid);
-      setWorkspaceProjects(localProjects);
+      const validLast = last && effectiveProjects.some((p) => p.id === last) ? last : null;
+      saveWorkspaceProjects(effectiveProjects, uid);
+      setWorkspaceProjects(effectiveProjects);
+      workspaceProjectsRef.current = effectiveProjects;
       setLastOpenedWorkspaceProjectId(validLast, uid);
       workspaceCloudPushAllowedUserIdRef.current = uid;
       markWorkspaceLocalIdbHydrateReady();
@@ -1149,7 +1174,7 @@ const MainApp: React.FC = () => {
         setWorkflowPending([]);
       }
     },
-    [markWorkspaceLocalIdbHydrateReady]
+    [enrichWorkspaceProjectsWithAgentCli, markWorkspaceLocalIdbHydrateReady]
   );
 
   const applyCompanionFirstWorkspaceIndex = useCallback(
@@ -1157,12 +1182,14 @@ const MainApp: React.FC = () => {
       await ensureWorkspaceBundlesHydratedFromIdb(uid);
       const localProjects = loadWorkspaceProjects(uid);
       const remoteProjects = await pullWorkspaceProjectsFromCompanion(localProjects);
-      const effectiveProjects =
+      const mergedBase =
         remoteProjects && remoteProjects.length > 0 ? remoteProjects : localProjects;
+      const effectiveProjects = await enrichWorkspaceProjectsWithAgentCli(mergedBase, uid);
       const last = getLastOpenedWorkspaceProjectId(uid);
       const validLast = last && effectiveProjects.some((p) => p.id === last) ? last : null;
       saveWorkspaceProjects(effectiveProjects, uid);
       setWorkspaceProjects(effectiveProjects);
+      workspaceProjectsRef.current = effectiveProjects;
       setLastOpenedWorkspaceProjectId(validLast, uid);
       workspaceCloudPushAllowedUserIdRef.current = uid;
       markWorkspaceLocalIdbHydrateReady();
@@ -1174,10 +1201,63 @@ const MainApp: React.FC = () => {
         setWorkflowPending([]);
       }
     },
-    [markWorkspaceLocalIdbHydrateReady, pullWorkspaceProjectsFromCompanion]
+    [enrichWorkspaceProjectsWithAgentCli, markWorkspaceLocalIdbHydrateReady, pullWorkspaceProjectsFromCompanion]
   );
 
   const workflowAssetsRef = useRef(workflowAssets);
+
+  /** Agent CLI 产出并入工作台：项目进侧栏列表；打开 CLI 项目时再拉该项目资产。 */
+  useEffect(() => {
+    if (!user?.id) return;
+    let cancelled = false;
+    const pullProjects = async () => {
+      const projects = await fetchAgentCliPlatformProjects();
+      if (cancelled || !projects.length) return;
+      setWorkspaceProjects((prev) => {
+        const next = mergeAgentCliProjectsIntoWorkspace(prev, projects);
+        if (next === prev) return prev;
+        saveWorkspaceProjects(next, user.id);
+        workspaceProjectsRef.current = next;
+        return next;
+      });
+    };
+    void pullProjects();
+    const t = window.setInterval(() => void pullProjects(), 15_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(t);
+    };
+  }, [user?.id]);
+
+  useEffect(() => {
+    if (!user?.id || !activeWorkspaceProjectId || !isAgentCliProjectId(activeWorkspaceProjectId)) return;
+    let cancelled = false;
+    const pid = activeWorkspaceProjectId;
+    const pullAssets = async () => {
+      const rows = await fetchAgentCliPlatformAssets(200, pid);
+      if (cancelled || activeWorkspaceProjectIdRef.current !== pid) return;
+      if (!rows.length) return;
+      setWorkflowAssets((prev) => {
+        const next = mergeAgentCliAssetsIntoWorkflow(prev, rows);
+        if (next !== prev && workspaceLocalIdbHydrateReadyRef.current) {
+          trySaveWorkflowBundle(
+            pid,
+            { assets: next, pending: workflowPendingRef.current },
+            user.id,
+            workflowBundleSaveOpts()
+          );
+        }
+        return next;
+      });
+    };
+    void pullAssets();
+    const t = window.setInterval(() => void pullAssets(), 20_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(t);
+    };
+  }, [user?.id, activeWorkspaceProjectId, workflowBundleSaveOpts]);
+
   const workflowPendingRef = useRef(workflowPending);
   useEffect(() => {
     workflowAssetsRef.current = workflowAssets;
@@ -1597,17 +1677,37 @@ const MainApp: React.FC = () => {
     setWorkspaceCloudHydratingProjectId(null);
     const scope = userIdRef.current ?? null;
     const pid = activeWorkspaceProjectIdRef.current;
-    if (pid && workspaceLocalIdbHydrateReadyRef.current) {
-      trySaveWorkflowBundle(
-        pid,
-        { assets: workflowAssetsRef.current, pending: workflowPendingRef.current },
-        scope,
-        workflowBundleSaveOpts()
-      );
+    const shouldSave = Boolean(pid && workspaceLocalIdbHydrateReadyRef.current);
+    // Snapshot refs before clearing UI — save must not run on the click path (clone+stringify can stall seconds).
+    const snapshot = shouldSave
+      ? {
+          assets: workflowAssetsRef.current,
+          pending: workflowPendingRef.current,
+        }
+      : null;
+    const saveOpts = workflowBundleSaveOpts();
+
+    startTransition(() => {
+      setActiveWorkspaceProjectId(null);
+      setWorkflowAssets([]);
+      setWorkflowPending([]);
+    });
+
+    if (shouldSave && pid && snapshot) {
+      const runSave = () => {
+        trySaveWorkflowBundle(pid, snapshot, scope, saveOpts);
+      };
+      const ric = (
+        window as Window & {
+          requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number;
+        }
+      ).requestIdleCallback;
+      if (typeof ric === 'function') {
+        ric(runSave, { timeout: 900 });
+      } else {
+        window.setTimeout(runSave, 0);
+      }
     }
-    setActiveWorkspaceProjectId(null);
-    setWorkflowAssets([]);
-    setWorkflowPending([]);
   }, [workflowBundleSaveOpts]);
 
   const loadWorkspaceProjectInternal = useCallback(
@@ -2353,14 +2453,9 @@ const MainApp: React.FC = () => {
       const scope = userIdRef.current ?? null;
       const pid = activeWorkspaceProjectIdRef.current;
       if (pid) {
-        const bundle = {
-          assets: workflowAssetsRef.current,
-          pending: workflowPendingRef.current,
-        };
-        if (workspaceLocalIdbHydrateReadyRef.current) {
-          trySaveWorkflowBundle(pid, bundle, scope);
-        }
         const uid = userIdRef.current;
+        // Index sync (opt-in) still blocks leave; default companion path skips this.
+        // Bundle persist is deferred inside proceedBackToWorkspaceShell after UI switches.
         if (
           shouldAutoPushWorkspaceProjectIndex() &&
           uid &&

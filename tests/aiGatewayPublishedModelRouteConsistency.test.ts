@@ -75,6 +75,7 @@ describe("published model route consistency", () => {
       const plan = createAiGatewayJobPlan({
         modality: row.modality,
         model: row.registryId,
+        provider: executable?.providerId,
         input: promptFor(row),
       });
 

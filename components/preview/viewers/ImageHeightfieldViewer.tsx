@@ -11,6 +11,7 @@ import {
   createStudioGroundMesh,
   createWorkflowModelViewerStageAsync,
 } from '../../../services/workflowModelViewerStage';
+import { createRenderHost, type RenderHost } from '../../../services/renderCore';
 import { readLocalString, writeLocalString } from '../../../services/clientPersist';
 import { downloadHeightfieldMesh, type HeightfieldMeshExportFormat } from '../../../services/heightfieldMeshExport';
 import {
@@ -62,6 +63,7 @@ type HeightfieldRuntime = {
   camera: THREE.PerspectiveCamera;
   controls: OrbitControls;
   renderer: THREE.WebGLRenderer;
+  host: RenderHost;
   stage: Awaited<ReturnType<typeof createWorkflowModelViewerStageAsync>> | null;
   groundMesh: THREE.Mesh | null;
   loadedImg: HTMLImageElement | null;
@@ -223,8 +225,12 @@ const ImageHeightfieldViewer: React.FC<LazyImagePreviewViewerProps> = ({
     let rafId = 0;
     let stage: Awaited<ReturnType<typeof createWorkflowModelViewerStageAsync>> | null = null;
     let groundMesh: THREE.Mesh | null = null;
+    let renderHost: RenderHost | null = null;
+    let controls: OrbitControls | null = null;
+    let renderer: THREE.WebGLRenderer | null = null;
+    let domElement: HTMLCanvasElement | null = null;
+    let resizeObserver: ResizeObserver | null = null;
     const abortEnv = new AbortController();
-
     const img = new Image();
     img.crossOrigin = 'anonymous';
     img.decoding = 'async';
@@ -239,52 +245,6 @@ const ImageHeightfieldViewer: React.FC<LazyImagePreviewViewerProps> = ({
     /** 首帧在 HDR 完成前：略偏上、从 +Z 朝立面看，与 `frameCameraToObject` 的 +z 一致 */
     camera.position.set(0, 0.12, 2.35);
 
-    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
-    renderer.setClearColor(0x000000, 0);
-    renderer.outputColorSpace = THREE.SRGBColorSpace;
-    renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 0.92;
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, quality.pixelRatioCap));
-    renderer.setSize(width, height);
-    configureWorkflowModelSoftShadows(renderer);
-
-    while (mount.firstChild) mount.removeChild(mount.firstChild);
-    mount.appendChild(renderer.domElement);
-    renderer.domElement.style.width = '100%';
-    renderer.domElement.style.height = '100%';
-    renderer.domElement.style.display = 'block';
-    renderer.domElement.style.background = 'transparent';
-    renderer.domElement.style.cursor = 'grab';
-
-    const controls = new OrbitControls(camera, renderer.domElement);
-    controls.enableDamping = true;
-    controls.dampingFactor = 0.08;
-    controls.enablePan = false;
-    controls.minDistance = 0.2;
-    controls.maxDistance = 24;
-    controls.target.set(0, 0, 0);
-
-    runtimeRef.current = {
-      scene,
-      camera,
-      controls,
-      renderer,
-      stage: null,
-      groundMesh: null,
-      loadedImg: null,
-      ready: false,
-    };
-
-    const onMouseDown = () => {
-      renderer.domElement.style.cursor = 'grabbing';
-    };
-    const onMouseUp = () => {
-      renderer.domElement.style.cursor = 'grab';
-    };
-    renderer.domElement.addEventListener('mousedown', onMouseDown);
-    renderer.domElement.addEventListener('mouseup', onMouseUp);
-    renderer.domElement.addEventListener('mouseleave', onMouseUp);
-
     setStatus('loading');
     setMessage('');
 
@@ -294,98 +254,183 @@ const ImageHeightfieldViewer: React.FC<LazyImagePreviewViewerProps> = ({
       setMessage(msg);
     };
 
-    img.onerror = () => fail('图片加载失败（链接无效或跨域限制）。');
+    const onMouseDown = () => {
+      if (domElement) domElement.style.cursor = 'grabbing';
+    };
+    const onMouseUp = () => {
+      if (domElement) domElement.style.cursor = 'grab';
+    };
 
-    img.onload = () => {
-      if (cancelled) return;
-      runtimeRef.current!.loadedImg = img;
+    void (async () => {
+      try {
+        while (mount.firstChild) mount.removeChild(mount.firstChild);
 
-      const mesh = buildHeightfieldMeshFromImage(
-        img,
-        heightfieldQualityTierTo01(qualityTierRef.current),
-        displaceMulRef.current,
-        curl01Ref.current
-      );
-      if (!mesh) {
-        fail('无法处理图片像素（可能被跨域策略阻止）。');
-        return;
-      }
-      meshRef.current = mesh;
-
-      void (async () => {
-        try {
-          stage = await createWorkflowModelViewerStageAsync(scene, renderer, null, { signal: abortEnv.signal });
-        } catch (e) {
-          if (cancelled || (e instanceof DOMException && e.name === 'AbortError')) return;
-          meshRef.current = null;
-          disposeHeightfieldMesh(mesh);
-          if (!cancelled) fail('3D 环境（HDR）加载失败，请刷新重试。');
-          return;
-        }
-        if (cancelled) {
-          disposeHeightfieldMesh(mesh);
-          stage?.dispose();
-          stage = null;
-          return;
-        }
-        scene.add(mesh);
-        frameCameraToObject(camera, controls, mesh, { defaultView: '+z' });
-        if (cancelled) {
-          scene.remove(mesh);
-          disposeHeightfieldMesh(mesh);
-          stage?.dispose();
-          stage = null;
-          meshRef.current = null;
-          return;
-        }
-        groundMesh = createStudioGroundMesh(new THREE.Box3().setFromObject(mesh), 8);
-        if (groundMesh) scene.add(groundMesh);
-        const rt = runtimeRef.current;
-        if (rt) {
-          rt.stage = stage;
-          rt.groundMesh = groundMesh;
-          refreshHeightfieldStageLighting(rt, mesh);
-          rt.ready = true;
-        }
-        queueMicrotask(() => {
-          const m = meshRef.current;
-          if (m && m.userData.flatX) {
-            applyHeightfieldCylinderWrapPositions(m, curl01Ref.current, displaceMulRef.current);
-          }
+        renderHost = createRenderHost({
+          preferredBackend: 'webgl',
+          fallbackBackend: 'webgl',
+          requireClassicWebGl: true,
+          container: mount,
+          visual: {
+            antialias: true,
+            alpha: true,
+            preserveDrawingBuffer: true,
+            outputColorSpace: THREE.SRGBColorSpace,
+            toneMapping: THREE.ACESFilmicToneMapping,
+            toneMappingExposure: 0.92,
+            clearColor: 0x000000,
+            clearAlpha: 0,
+          },
         });
-        setStatus('ready');
-      })();
-    };
+        await renderHost.init();
+        if (cancelled) return;
 
-    img.src = src;
+        const raw = renderHost.getRawRenderer();
+        const canvas = renderHost.getDomElement();
+        if (!(raw instanceof THREE.WebGLRenderer) || !canvas) {
+          throw new Error('RenderHost did not produce a WebGLRenderer');
+        }
+        renderer = raw;
+        domElement = canvas;
 
-    const ro = new ResizeObserver(() => {
-      if (cancelled || !mount) return;
-      const w = Math.max(1, mount.clientWidth || root.clientWidth);
-      const h = Math.max(1, mount.clientHeight || root.clientHeight || 1);
-      camera.aspect = w / h;
-      camera.updateProjectionMatrix();
-      renderer.setSize(w, h);
-    });
-    ro.observe(root);
+        renderHost.resize(
+          width,
+          height,
+          Math.min(window.devicePixelRatio, quality.pixelRatioCap)
+        );
+        configureWorkflowModelSoftShadows(renderer);
 
-    const tick = () => {
-      if (cancelled) return;
-      rafId = requestAnimationFrame(tick);
-      controls.update();
-      renderer.render(scene, camera);
-    };
-    tick();
+        canvas.style.width = '100%';
+        canvas.style.height = '100%';
+        canvas.style.display = 'block';
+        canvas.style.background = 'transparent';
+        canvas.style.cursor = 'grab';
+
+        controls = new OrbitControls(camera, canvas);
+        controls.enableDamping = true;
+        controls.dampingFactor = 0.08;
+        controls.enablePan = false;
+        controls.minDistance = 0.2;
+        controls.maxDistance = 24;
+        controls.target.set(0, 0, 0);
+
+        runtimeRef.current = {
+          scene,
+          camera,
+          controls,
+          renderer,
+          host: renderHost,
+          stage: null,
+          groundMesh: null,
+          loadedImg: null,
+          ready: false,
+        };
+
+        canvas.addEventListener('mousedown', onMouseDown);
+        canvas.addEventListener('mouseup', onMouseUp);
+        canvas.addEventListener('mouseleave', onMouseUp);
+
+        img.onerror = () => fail('图片加载失败（链接无效或跨域限制）。');
+
+        img.onload = () => {
+          if (cancelled || !controls || !renderer) return;
+          runtimeRef.current!.loadedImg = img;
+
+          const mesh = buildHeightfieldMeshFromImage(
+            img,
+            heightfieldQualityTierTo01(qualityTierRef.current),
+            displaceMulRef.current,
+            curl01Ref.current
+          );
+          if (!mesh) {
+            fail('无法处理图片像素（可能被跨域策略阻止）。');
+            return;
+          }
+          meshRef.current = mesh;
+
+          void (async () => {
+            try {
+              stage = await createWorkflowModelViewerStageAsync(scene, renderer!, null, {
+                signal: abortEnv.signal,
+              });
+            } catch (e) {
+              if (cancelled || (e instanceof DOMException && e.name === 'AbortError')) return;
+              meshRef.current = null;
+              disposeHeightfieldMesh(mesh);
+              if (!cancelled) fail('3D 环境（HDR）加载失败，请刷新重试。');
+              return;
+            }
+            if (cancelled) {
+              disposeHeightfieldMesh(mesh);
+              stage?.dispose();
+              stage = null;
+              return;
+            }
+            scene.add(mesh);
+            frameCameraToObject(camera, controls!, mesh, { defaultView: '+z' });
+            if (cancelled) {
+              scene.remove(mesh);
+              disposeHeightfieldMesh(mesh);
+              stage?.dispose();
+              stage = null;
+              meshRef.current = null;
+              return;
+            }
+            groundMesh = createStudioGroundMesh(new THREE.Box3().setFromObject(mesh), 8);
+            if (groundMesh) scene.add(groundMesh);
+            const rt = runtimeRef.current;
+            if (rt) {
+              rt.stage = stage;
+              rt.groundMesh = groundMesh;
+              refreshHeightfieldStageLighting(rt, mesh);
+              rt.ready = true;
+            }
+            queueMicrotask(() => {
+              const m = meshRef.current;
+              if (m && m.userData.flatX) {
+                applyHeightfieldCylinderWrapPositions(m, curl01Ref.current, displaceMulRef.current);
+              }
+            });
+            setStatus('ready');
+          })();
+        };
+
+        img.src = src;
+
+        resizeObserver = new ResizeObserver(() => {
+          if (cancelled || !mount || !renderHost) return;
+          const w = Math.max(1, mount.clientWidth || root.clientWidth);
+          const h = Math.max(1, mount.clientHeight || root.clientHeight || 1);
+          camera.aspect = w / h;
+          camera.updateProjectionMatrix();
+          const q = getHeightfieldQualitySettings(heightfieldQualityTierTo01(qualityTierRef.current));
+          renderHost.resize(w, h, Math.min(window.devicePixelRatio, q.pixelRatioCap));
+        });
+        resizeObserver.observe(root);
+
+        const tick = () => {
+          if (cancelled || !renderHost || !controls) return;
+          rafId = requestAnimationFrame(tick);
+          controls.update();
+          renderHost.render(scene, camera);
+        };
+        tick();
+      } catch (e) {
+        if (cancelled) return;
+        fail(e instanceof Error ? e.message : '3D 渲染初始化失败。');
+      }
+    })();
 
     return () => {
       cancelled = true;
       abortEnv.abort();
       cancelAnimationFrame(rafId);
-      ro.disconnect();
-      controls.dispose();
-      renderer.domElement.removeEventListener('mousedown', onMouseDown);
-      renderer.domElement.removeEventListener('mouseup', onMouseUp);
-      renderer.domElement.removeEventListener('mouseleave', onMouseUp);
+      resizeObserver?.disconnect();
+      controls?.dispose();
+      if (domElement) {
+        domElement.removeEventListener('mousedown', onMouseDown);
+        domElement.removeEventListener('mouseup', onMouseUp);
+        domElement.removeEventListener('mouseleave', onMouseUp);
+      }
       const mesh = meshRef.current;
       meshRef.current = null;
       if (mesh) {
@@ -400,8 +445,7 @@ const ImageHeightfieldViewer: React.FC<LazyImagePreviewViewerProps> = ({
       }
       rt?.stage?.dispose();
       runtimeRef.current = null;
-      renderer.dispose();
-      if (renderer.domElement.parentNode === mount) mount.removeChild(renderer.domElement);
+      renderHost?.dispose();
     };
   }, [imageSrc]); // 画质档位单独 effect 重建网格，不重置相机
 
@@ -430,7 +474,9 @@ const ImageHeightfieldViewer: React.FC<LazyImagePreviewViewerProps> = ({
     rt.scene.add(mesh);
 
     const q = getHeightfieldQualitySettings(q01);
-    rt.renderer.setPixelRatio(Math.min(window.devicePixelRatio, q.pixelRatioCap));
+    const w = Math.max(1, rt.renderer.domElement.clientWidth || 1);
+    const h = Math.max(1, rt.renderer.domElement.clientHeight || 1);
+    rt.host.resize(w, h, Math.min(window.devicePixelRatio, q.pixelRatioCap));
     refreshHeightfieldStageLighting(rt, mesh);
 
     rt.camera.position.copy(camPos);

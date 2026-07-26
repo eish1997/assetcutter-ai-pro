@@ -734,11 +734,15 @@ export async function resolveAiGatewayRouteDecision(input, options = {}) {
       });
     }
     if (activeRoutes.some((candidate) => candidate.platformKeyRequired)) {
+      const missingProviders = [
+        ...new Set(activeRoutes.map((candidate) => normalizeAiGatewayProviderId(candidate.providerId)).filter(Boolean)),
+      ];
       return blockedDecision({
         canonicalModelId,
         modality,
         code: 'AI_GATEWAY_PROVIDER_KEY_UNAVAILABLE',
-        message: `No usable platform key for AI provider: ${activeRoutes[0].providerId}`,
+        message: `No usable platform key for AI provider: ${missingProviders.join(', ')}`,
+        details: { providerIds: missingProviders, canonicalModelId, modality },
         candidates,
       });
     }

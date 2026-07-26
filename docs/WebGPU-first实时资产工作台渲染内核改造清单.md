@@ -1,147 +1,138 @@
-# WebGPU-first 实时资产工作台渲染内核改造清单
+# WebGPU-first 渲染改造 — 最终计划（parity 优先）
 
-## 1. 目标结论
+## 1. 目标（定稿）
 
-当前改造不是简单把 `THREE.WebGLRenderer` 替换成 WebGPU，而是趁渲染功能还没有重度铺开时，提前建立面向未来资产编辑器的统一渲染底座。
+> **改完后：看起来、用起来和现在基本一样；底层默认走 WebGPU，失败无感回 WebGL。**  
+> 更流畅或其他收益是加分项，不是硬指标。
 
-最终方向：
+不是：
 
-- WebGPU 作为默认主链路。
-- WebGL 作为兼容 fallback。
-- fallback 对用户无感，但写入内部日志或调试状态。
-- 建设 B 级“中内核”：统一 renderer、scene、camera、controls、材质、贴图、截图和生命周期。
-- 首个试点迁移 `ImageModel3DViewer`，再逐步迁移高度场、全景、离屏截图。
+- 单纯为换而换、牺牲现有预览稳定性
+- 一次做出完整实时资产编辑器（brush / mask / 图层 / 历史栈 / 节点材质）
+- 保证 WebGPU 一定更流畅
 
-一句话定义：
+是：
 
-> AssetCutter 的渲染架构进入 WebGPU-first 双栈期：WebGPU 是默认方向，WebGL 是兼容兜底，中内核承接未来实时资产工作台。
+- 统一渲染创建与生命周期，避免各入口各自 `new WebGLRenderer`
+- WebGPU 优先 + WebGL 兜底
+- **按入口保留现有视觉与交互契约**（参数、色调、灯光、截图、PBR 编辑）
 
-## 2. 当前状态
+## 2. 现状
 
-当前主项目实际使用的是 Three.js + WebGL 链路：
+当前链路：
 
 ```text
 React UI -> Three.js -> WebGLRenderer -> 浏览器 WebGL -> GPU
 ```
 
-已确认的 WebGL 使用点包括：
+尚未启用业务侧 WebGPU（无 `navigator.gpu` / `WebGPURenderer` 调用）。
 
-- `components/preview/viewers/ImageModel3DViewer.tsx`
-- `components/preview/viewers/ImageHeightfieldViewer.tsx`
-- `components/EquirectangularPanoramaCanvas.tsx`
-- `components/ModelViewer3D.tsx`
-- `components/SeamRepairSection.tsx`
-- `services/workflowModelPreviewCapture.ts`
+### 2.1 主站直接创建 Renderer 的入口
 
-当前没有实际使用 WebGPU：
+| 入口 | 现状要点（须保留） |
+|------|-------------------|
+| `ImageModel3DViewer.tsx` | `antialias + alpha + preserveDrawingBuffer`；透明清屏；ACES `1.02`；`pixelRatio≤1.5`；软阴影；OrbitControls（可 pan）；**PBR 槽位/贴图编辑** |
+| `ImageHeightfieldViewer.tsx` | 同上透明截图向；ACES `0.92`；`pixelRatio` 受 `imageHeightfieldQuality` 上限；软阴影；OrbitControls（不可 pan） |
+| `EquirectangularPanoramaCanvas.tsx` | **`antialias: false`**、`alpha: false`、`preserveDrawingBuffer: true`（截图/裁切依赖）；`pixelRatio≤1.5`；FOV 滚轮；无 ACES |
+| `workflowModelPreviewCapture.ts` | 离屏；**`alpha: false`** + `preserveDrawingBuffer`；ACES `1.02`；`pixelRatio=1`；灯光与主预览一致（HDR→PMREM，失败 Room） |
+| `ModelViewer3D.tsx` | `alpha: false`；深色背景 `0x0f0f1a`；ACES `1`；`pixelRatio≤2`；PCF 软阴影；仅 GLTF/GLB |
+| `SeamRepairSection.tsx`（内嵌 `ObjTextureViewer`） | `alpha: true` 但场景有深色背景；`pixelRatio≤2`；无 ACES；网格辅助；OBJ+贴图预览 |
 
-- 未发现 `navigator.gpu` 调用。
-- 未发现 `WebGPURenderer` 使用。
-- `package-lock.json` 中出现 `@webgpu/types` 更可能来自 Three.js 类型依赖，不代表运行时启用 WebGPU。
+### 2.2 视觉一致性依赖的共享层（不可绕开）
+
+换 backend 时必须继续走这些逻辑，不能只换 renderer：
+
+| 模块 | 作用 |
+|------|------|
+| `services/workflowModelThreeShared.ts` | 模型格式推断、相机 framing、层级 dispose 等 |
+| `services/workflowModelViewerStage.ts` | 影棚灯光、HDR/PMREM、软阴影配置、地面、材质增强 |
+| `services/imageHeightfield*.ts` | 高度场质量、灰度 matcap、柱面 wrap、亮度等 |
+
+### 2.3 范围外（本次明确暂不动）
+
+| 路径 | 说明 |
+|------|------|
+| `WebSeamRepair/frontend/` | 独立前端里的 WebGL/`getContext('webgl')`；**不纳入本次主站改造**。若日后统一，另立项。 |
 
 ## 3. 最终形态
 
-目标结构：
-
 ```text
-Asset Workbench
-  -> Render Core
-      -> WebGPU Primary Renderer
-      -> WebGL Compatibility Renderer
-      -> Scene Controller
-      -> Camera Controller
-      -> Controls Controller
-      -> Asset Loader
-      -> Material Pipeline
-      -> Texture Pipeline
-      -> Capture Pipeline
-      -> Device Capability Layer
+现有 Viewer / Capture
+  -> RenderHost（选 backend、生命周期、fallback、debug）
+      -> WebGPU adapter（默认）
+      -> WebGL adapter（兜底）
+  -> 继续调用现有 shared / stage / heightfield 逻辑
 ```
 
-React 组件未来不直接关心 WebGPU/WebGL，而只表达“要展示什么资产、使用什么模式、需要什么能力”：
+原则：
 
-```tsx
-<AssetViewport
-  asset={asset}
-  mode="model"
-  materialMode="original"
-  rendererPreference="webgpu"
-/>
-```
+- React 组件尽量少碰 backend；创建 renderer 只走 RenderHost。
+- **不强制**立刻做成统一 `<AssetViewport>`；可先让各 viewer 内部改用 RenderHost，对外 props 不变。
+- 灰模/线框/matcap 等工作台增强：**非本次必达**；有则加分，无则不影响验收。
 
-## 4. 中内核边界
-
-第一版 render core 应覆盖：
-
-- renderer 创建、初始化、销毁。
-- WebGPU/WebGL adapter 选择。
-- WebGPU 初始化失败后的 WebGL fallback。
-- scene 生命周期。
-- camera 生命周期。
-- OrbitControls 生命周期。
-- resize。
-- capture 截图。
-- device lost / context lost 处理。
-- fallback 原因记录。
-- 基础灯光、环境、背景。
-- 模型加载入口。
-- 基础材质和贴图模式入口。
-
-第一版不做：
-
-- brush。
-- mask。
-- 图层。
-- 对象选择和编辑。
-- 历史栈。
-- 节点材质编辑器。
-- 完整编辑器命令系统。
-
-这些能力属于未来编辑器层，不塞进第一版 render core。
-
-## 5. 建议目录
-
-建议新增目录：
+建议目录（可按实现微调，不必一次建满）：
 
 ```text
 services/renderCore/
-  capabilityDetector.ts
   types.ts
+  capabilityDetector.ts
   rendererAdapter.ts
   webgpuRendererAdapter.ts
   webglRendererAdapter.ts
   renderHost.ts
-  sceneController.ts
-  cameraController.ts
-  controlsController.ts
-  assetLoader.ts
-  materialPipeline.ts
-  texturePipeline.ts
   capturePipeline.ts
   debugState.ts
 ```
 
-如果后续 React 侧需要统一组件，可再新增：
+scene/camera/controls/材质若仍适合留在各 viewer，可暂不抽；**硬要求是 renderer 创建、resize、capture、dispose、fallback 统一。**
+
+## 4. 最终交付清单
+
+### 4.1 RenderHost / Adapter
+
+- WebGPU 优先初始化；失败或 device lost 可重建时回退 WebGL。
+- 每个入口通过 **options 传入** 现有契约（勿全局一套参数盖死）：
+  - `antialias` / `alpha` / `preserveDrawingBuffer`
+  - `outputColorSpace` / `toneMapping` / `toneMappingExposure`
+  - `pixelRatio`（含上限与离屏固定 1）
+  - clear / background 策略
+- `capture` 封装：主预览与离屏均可用；WebGPU 截图异常时有兜底（含必要时临时 WebGL capture）。
+- 统一 `dispose`；debug 暴露 `preferredBackend` / `activeBackend` / `fallbackReason` / lost 标记。
+
+### 4.2 入口接入（行为不变）
+
+全部主站自建 Renderer 路径改走 RenderHost，并对照 §2.1 做视觉/交互核对：
+
+1. `ImageModel3DViewer` — **含现有 PBR 编辑全流程**（槽位、贴图更新、材质转换）；仅替换 renderer 生命周期。
+2. `ImageHeightfieldViewer` — 质量档位、透明底、截图、交互不变。
+3. `EquirectangularPanoramaCanvas` — 保持 `antialias: false` 与 `preserveDrawingBuffer`；截图/裁切可用。
+4. `workflowModelPreviewCapture` — 与主预览灯光/材质默认一致；缩略图观感不漂移。
+5. `ModelViewer3D` — 背景、阴影、曝光、交互不变。
+6. `SeamRepairSection` 内嵌预览 — 网格/贴图/交互不变。
+
+### 4.3 Fallback
 
 ```text
-components/renderCore/
-  AssetViewport.tsx
-  useRenderHost.ts
+preferredBackend = webgpu
+fallbackBackend = webgl
 ```
 
-## 6. 核心接口草案
+触发：无 `navigator.gpu`、adapter/device 失败、Three.js WebGPU 初始化失败、device lost 且允许重建。
 
-### 6.1 RendererAdapter
+表现：用户无感；内部日志 + debug；仅双栈皆不可用才阻断。
+
+### 4.4 核心接口（边界固定，名称可微调）
 
 ```ts
 export type RenderBackend = 'webgpu' | 'webgl';
 
 export type RendererAdapterInitInput = {
   canvas?: HTMLCanvasElement;
-  container: HTMLElement;
-  alpha?: boolean;
+  container?: HTMLElement;
   antialias?: boolean;
+  alpha?: boolean;
   preserveDrawingBuffer?: boolean;
+  // 以及各入口现有的色调/像素比等，由 RenderHost options 传入后应用到 renderer
 };
 
 export type RendererAdapter = {
@@ -154,334 +145,81 @@ export type RendererAdapter = {
   capture(type?: string): string | null;
   dispose(): void;
 };
-```
-
-### 6.2 RenderHost
-
-```ts
-export type RenderHostOptions = {
-  preferredBackend: 'webgpu' | 'webgl' | 'auto';
-  fallbackBackend: 'webgl' | 'none';
-  onDebugEvent?: (event: RenderCoreDebugEvent) => void;
-};
 
 export type RenderHost = {
   backend: RenderBackend;
   fallbackUsed: boolean;
   fallbackReason?: string;
   init(): Promise<void>;
-  loadAsset(input: AssetViewportInput): Promise<void>;
   resize(): void;
   capture(): string | null;
   dispose(): void;
+  getDebugState(): RenderCoreDebugState;
 };
 ```
 
-接口名和类型可在实现时微调，但边界要保持：组件调用 RenderHost，RenderHost 调用 adapter，adapter 隐藏 WebGPU/WebGL 差异。
+调用链：入口组件 → RenderHost → adapter；shared/stage/PBR 逻辑仍由原模块驱动。
 
-## 7. 迁移阶段
+实现备注（three r182）：
 
-### Phase 1：建立 render core 骨架
+- `PMREMGenerator` / `createWorkflowModelViewerStageAsync` 仍要求经典 `THREE.WebGLRenderer`。
+- 依赖 HDR/PMREM 的入口（如 `ImageModel3DViewer`）经 RenderHost 时设 `requireClassicWebGl: true`：WebGPU 若未产出 WebGLRenderer，则无感回退 WebGL（`classic-webgl-required`），保证 parity。
+- 已迁移（主站全部自建 Renderer 入口）：`ImageModel3DViewer`、`ImageHeightfieldViewer`、`EquirectangularPanoramaCanvas`、`workflowModelPreviewCapture`、`ModelViewer3D`、`SeamRepairSection`（`ObjTextureViewer`）。
+- `ModelViewer3D` / 修缝预览无 PMREM，未强制 `requireClassicWebGl`，可真实走 WebGPU（失败回 WebGL）。
+- 主站业务代码中仅 `services/renderCore/webglRendererAdapter.ts` 允许 `new THREE.WebGLRenderer`。
 
-目标：先抽象，不改变现有视觉行为。
+## 5. 验收标准（parity）
 
-清单：
+硬指标：
 
-- 新增 `services/renderCore/types.ts`。
-- 新增 `capabilityDetector.ts`，封装 WebGPU 支持检测。
-- 新增 `rendererAdapter.ts`，定义统一接口。
-- 新增 `webglRendererAdapter.ts`，先用现有 `THREE.WebGLRenderer` 实现。
-- 新增 `webgpuRendererAdapter.ts`，提供 WebGPU 初始化路径。
-- 新增 `renderHost.ts`，负责选择 WebGPU 或 fallback WebGL。
-- 新增 `debugState.ts`，记录当前 backend、fallback 原因、device/context lost 信息。
+- [ ] WebGPU 可用时默认 WebGPU；不可用时无感 WebGL。
+- [ ] 模型预览：加载格式、Orbit 交互、透明底、截图、软阴影/ACES、**PBR 编辑**与现状一致。
+- [ ] 高度场：交互、质量档、透明底、截图一致。
+- [ ] 全景：查看、滚轮 FOV、截图/裁切一致（含 `antialias: false`）。
+- [ ] 离屏缩略图与主预览灯光观感一致；批量后无泄漏。
+- [ ] `ModelViewer3D`、修缝内嵌预览行为不退。
+- [ ] 多次打开/关闭预览，资源正常释放。
+- [ ] debug 可见真实 backend 与 fallback 原因。
 
-验收：
+加分（不阻塞）：
 
-- WebGL adapter 能独立初始化、resize、render、capture、dispose。
-- WebGPU 不支持时能返回明确 fallback 原因。
-- 不影响现有 viewer。
+- 同场景帧时更稳、切换更顺
+- 后续再抽 `AssetViewport` / 材质显示模式
 
-### Phase 2：迁移 `ImageModel3DViewer`
-
-目标：首个核心 viewer 接入 render core。
-
-清单：
-
-- 保留 `ImageModel3DViewer` 对外 props 和现有产品行为。
-- 将 renderer 创建逻辑迁入 RenderHost。
-- 将 resize、capture、dispose 接入统一接口。
-- 将 `webglcontextlost` 逻辑迁入 WebGL adapter 或 RenderHost。
-- 加 WebGPU 优先初始化。
-- WebGPU 初始化失败时自动回退 WebGL。
-- fallback 原因写入内部日志或调试状态。
-- 保持现有模型加载、OrbitControls、透明背景、截图能力。
-
-验收：
-
-- 原有 GLB/GLTF/FBX/OBJ 预览不回退功能。
-- OrbitControls 行为一致。
-- 透明背景表现一致。
-- 截图可用。
-- 关闭预览时资源释放正常。
-- WebGPU 不可用时用户仍可正常预览。
-- 调试状态可看到实际使用 `webgpu` 或 `webgl`。
-
-### Phase 3：完善材质和贴图管线
-
-目标：让 WebGPU-first 不只是能打开模型，而是能承接未来贴图材质工作台。
-
-清单：
-
-- 抽出基础环境光、主光、辅助光配置。
-- 抽出背景模式：透明、纯色、环境。
-- 抽出材质模式：原始材质、灰模、线框、法线、matcap。
-- 抽出贴图入口：base color、normal、roughness、metalness、height。
-- 明确 WebGPU 不支持或表现不一致的材质能力 fallback 策略。
-
-验收：
-
-- WebGL 与 WebGPU 同一模型视觉差异可接受。
-- 材质模式切换不造成资源泄漏。
-- 贴图更新不需要重建整个 viewer。
-
-### Phase 4：迁移高度场 viewer
-
-目标：把未来编辑器常用的高度/浮雕预览纳入统一内核。
-
-目标文件：
-
-- `components/preview/viewers/ImageHeightfieldViewer.tsx`
-
-清单：
-
-- 高度场 scene/camera/controls 接入 RenderHost。
-- 灰度高度贴图生成逻辑与 TexturePipeline 对齐。
-- 保持现有截图和透明背景能力。
-- 记录 WebGPU/WebGL backend 状态。
-
-验收：
-
-- 高度场预览视觉一致。
-- 交互一致。
-- 截图一致。
-- fallback 无感。
-
-### Phase 5：迁移全景和环境能力
-
-目标：把全景从独立 WebGL viewer 收束为 render core 可管理能力。
-
-目标文件：
-
-- `components/EquirectangularPanoramaCanvas.tsx`
-
-清单：
-
-- 全景球/环境贴图加载接入 AssetLoader/TexturePipeline。
-- 相机和 controls 接入统一控制层。
-- 保持当前全景查看、截图、尺寸自适应行为。
-
-验收：
-
-- 全景预览行为一致。
-- 环境贴图能力可复用到模型材质预览。
-
-### Phase 6：迁移离屏截图/缩略图生成
-
-目标：让主预览和导出缩略图共用同一套渲染管线，避免“看到一套、导出一套”。
-
-目标文件：
-
-- `services/workflowModelPreviewCapture.ts`
-
-清单：
-
-- 离屏 renderer 通过 RenderHost 创建。
-- capture 使用 CapturePipeline。
-- 和 `ImageModel3DViewer` 保持材质、灯光、相机默认一致。
-- WebGPU 不可用时 fallback WebGL。
-
-验收：
-
-- 缩略图与主预览视觉一致。
-- 批量生成后资源释放正常。
-- 不引入明显内存上涨。
-
-## 8. Fallback 策略
-
-默认策略：
-
-```text
-preferredBackend = webgpu
-fallbackBackend = webgl
-```
-
-fallback 触发条件：
-
-- 浏览器无 `navigator.gpu`。
-- `requestAdapter()` 失败。
-- `requestDevice()` 失败。
-- Three.js WebGPU renderer 初始化失败。
-- WebGPU 渲染过程中发生 device lost，且当前场景允许重建。
-
-fallback 表现：
-
-- 普通用户无感继续预览。
-- 内部日志记录 fallback 原因。
-- 调试状态显示当前实际 backend。
-- 不弹阻断性错误，除非 WebGPU 和 WebGL 都不可用。
-
-## 9. 调试状态建议
-
-建议 RenderHost 暴露：
-
-```ts
-export type RenderCoreDebugState = {
-  preferredBackend: 'webgpu' | 'webgl' | 'auto';
-  activeBackend: 'webgpu' | 'webgl' | null;
-  fallbackUsed: boolean;
-  fallbackReason?: string;
-  deviceLost?: boolean;
-  contextLost?: boolean;
-  lastInitAt?: number;
-  lastError?: string;
-};
-```
-
-用途：
-
-- 开发排查。
-- 后续接入内部调试面板。
-- 统计真实 WebGPU 覆盖率。
-
-## 10. 风险清单
-
-### 10.1 Three.js WebGPU 支持差异
-
-风险：Three.js 的 WebGPU renderer 与 WebGL renderer 在材质、阴影、后处理、loader 行为上可能存在差异。
-
-处理：
-
-- 第一版不追求所有高级材质完全一致。
-- 先锁定核心模型预览能力。
-- 对不一致能力建立 fallback 或降级表。
-
-### 10.2 浏览器兼容
-
-风险：不同浏览器 WebGPU 支持程度不同。
-
-处理：
-
-- WebGPU 默认优先，但必须保留 WebGL fallback。
-- 调试状态记录真实 backend。
-- 不把 WebGPU 不支持作为普通用户阻断。
-
-### 10.3 截图能力差异
-
-风险：当前依赖 canvas `toDataURL`，WebGPU 路径下截图行为需要验证。
-
-处理：
-
-- CapturePipeline 单独封装。
-- WebGPU 截图不可用时尝试 fallback 截图或临时 WebGL capture。
-- 截图能力作为 `ImageModel3DViewer` 试点验收项。
-
-### 10.4 资源释放
-
-风险：双栈 renderer、贴图、loader、controls 生命周期复杂，容易泄漏。
-
-处理：
-
-- RenderHost 统一 dispose。
-- adapter 必须实现 dispose 合约。
-- 迁移试点时重点验证打开/关闭预览多次后的内存和 WebGL/WebGPU 资源释放。
-
-### 10.5 过早做重编辑器
-
-风险：一开始把 brush、mask、历史栈、节点材质都塞进 render core，会拖慢主线。
-
-处理：
-
-- 第一版只做中内核。
-- 编辑器能力作为上层模块，后续基于 render core 扩展。
-
-## 11. 不做项
-
-短期明确不做：
-
-- 全量删除 WebGL。
-- 所有 viewer 一次性迁移。
-- 重写所有 Three.js 场景。
-- 自研完整 WebGPU renderer。
-- 一开始引入完整编辑器命令系统。
-- 为 WebGPU 牺牲现有模型预览稳定性。
-
-## 12. 建议验证命令
-
-每个阶段至少运行：
+验证：
 
 ```powershell
 npm run typecheck
 npm run build
 ```
 
-涉及 viewer 行为时，还应做手动验证：
+手动：各入口开预览 → 旋转缩放 → 截图 → 关开；无 WebGPU 环境确认 fallback；模型入口再验一轮 PBR 贴图编辑。
 
-- 打开模型预览。
-- 切换材质/显示模式。
-- 拖拽旋转/缩放/平移。
-- 截图。
-- 关闭再打开。
-- 在不支持 WebGPU 的环境确认 WebGL fallback。
+## 6. 明确不做
 
-后续如果增加自动化测试，可补：
+- 删除 WebGL
+- 自研 WebGPU renderer（用 Three.js WebGPU）
+- 本次改 `WebSeamRepair/frontend`
+- 把完整编辑器塞进 render core
+- 用「统一默认参数」抹平各入口现有差异
+- 把「更流畅」写成验收失败条件
 
-- RenderHost fallback 单元测试。
-- WebGL adapter 生命周期测试。
-- debug state 测试。
-- capture pipeline 测试。
+## 7. 风险与对策
 
-## 13. 第一批任务拆分
+| 风险 | 对策 |
+|------|------|
+| WebGPU/WebGL 色调、透明、阴影不一致 | **按入口锁参数**；差异不可接受时该入口或该能力回退 WebGL |
+| `toDataURL` / 截图在 WebGPU 异常 | CapturePipeline；失败则兜底截图 |
+| 只换 renderer、丢了 stage/HDR | 强制继续走 `workflowModelViewerStage` 等共享层 |
+| PBR 编辑回归 | `ImageModel3DViewer` 专项手测；不把 PBR 逻辑重写成新工作台 |
+| 双栈泄漏 | RenderHost 统一 dispose；反复开关压测 |
+| 期望「一定更流畅」 | 文档与验收均定为观测项 |
 
-建议第一批 PR 拆成：
+## 8. 决策记录
 
-### PR 1：render core 类型和 WebGL adapter
-
-- 新增 `services/renderCore/` 基础类型。
-- 实现 WebGL adapter。
-- 加基础单元测试。
-- 不改现有 viewer。
-
-### PR 2：WebGPU adapter 和 fallback host
-
-- 实现 WebGPU 支持检测。
-- 实现 WebGPU adapter 初始化。
-- 实现 RenderHost 选择和 fallback。
-- 加 debug state。
-
-### PR 3：`ImageModel3DViewer` 接入 RenderHost
-
-- 迁移 renderer 生命周期。
-- 保持模型加载和交互行为。
-- 接入 capture。
-- 接入 fallback debug。
-
-### PR 4：材质/贴图管线收束
-
-- 抽出基础灯光、背景、材质模式。
-- 为高度场迁移做准备。
-
-### PR 5：高度场迁移
-
-- 迁移 `ImageHeightfieldViewer`。
-- 验证截图、透明背景、fallback。
-
-## 14. 决策记录
-
-本次产品和技术决策：
-
-- WebGPU 默认主链路。
-- 未来目标看重资产编辑器实时工作台，而不是单纯模型预览。
-- 选择 B 中内核，不做轻封装，也不提前做重编辑器。
-- WebGPU 失败时自动回退 WebGL，并记录内部日志/调试状态。
-- 首个试点选择 `ImageModel3DViewer`。
-
+- **Parity 优先**：效果/交互 ≈ 现状；WebGPU 是底层默认路径。
+- WebGL 长期保留作兜底。
+- 主站全部自建 Renderer 入口收束；`WebSeamRepair/frontend` 暂不动。
+- 共享灯光/舞台/高度场逻辑保留并复用。
+- 各入口 renderer 参数差异必须保留，禁止一刀切。
+- 工作台大能力与「更流畅」均为后续/加分，不进本次硬验收。

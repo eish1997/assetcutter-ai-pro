@@ -34,6 +34,7 @@ server/data/ai-gateway-provider-keys-events.json
 server/data/ai-gateway-provider-keys.online-mirror.json
 server/data/*.bak-*
 server/data/auth-db.test.json
+server/data/agent-cli/
 *.local
 .env
 .env*.local

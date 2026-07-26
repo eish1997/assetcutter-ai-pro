@@ -7,6 +7,7 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import AppIcon from './ui/AppIcon';
+import { createRenderHost, type RenderHost } from '../services/renderCore';
 
 const proxyBase = (typeof import.meta !== 'undefined' && (import.meta as { env?: Record<string, string> }).env?.VITE_TENCENT_PROXY as string)?.trim?.() || '';
 
@@ -16,6 +17,10 @@ export interface ModelViewer3DProps {
   /** 常驻内联模式：不占满屏，无遮罩，适合嵌入页面中央预览区 */
   inline?: boolean;
 }
+
+type ShadowCapableRenderer = {
+  shadowMap?: { enabled: boolean; type: THREE.ShadowMapType };
+};
 
 const ModelViewer3D: React.FC<ModelViewer3DProps> = ({ url, onClose, inline = false }) => {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -27,6 +32,12 @@ const ModelViewer3D: React.FC<ModelViewer3DProps> = ({ url, onClose, inline = fa
     const container = containerRef.current;
     if (!container || !url) return;
 
+    let cancelled = false;
+    let animationId = 0;
+    let loadedRoot: THREE.Group | null = null;
+    let renderHost: RenderHost | null = null;
+    let controls: OrbitControls | null = null;
+
     const width = container.clientWidth;
     const height = container.clientHeight || 400;
     const scene = new THREE.Scene();
@@ -35,15 +46,6 @@ const ModelViewer3D: React.FC<ModelViewer3DProps> = ({ url, onClose, inline = fa
 
     const camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 1000);
     camera.position.set(2, 2, 2);
-
-    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
-    renderer.setSize(width, height);
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    renderer.outputColorSpace = THREE.SRGBColorSpace;
-    renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 1;
-    renderer.shadowMap.enabled = true;
-    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
     const ambient = new THREE.AmbientLight(0xffffff, 0.6);
     scene.add(ambient);
@@ -55,24 +57,13 @@ const ModelViewer3D: React.FC<ModelViewer3DProps> = ({ url, onClose, inline = fa
     dir2.position.set(-2, 2, -1);
     scene.add(dir2);
 
-    const controls = new OrbitControls(camera, renderer.domElement);
-    controls.enableDamping = true;
-    controls.dampingFactor = 0.05;
-    controls.screenSpacePanning = true;
-    controls.minDistance = 0.5;
-    controls.maxDistance = 20;
-
-    container.innerHTML = '';
-    container.appendChild(renderer.domElement);
-
     const loader = new GLTFLoader();
-    let animationId: number;
-    let loadedRoot: THREE.Group | null = null;
 
     function loadFromUrl(src: string) {
       loader.load(
         src,
         (gltf) => {
+          if (cancelled || !controls) return;
           if (loadedRoot) scene.remove(loadedRoot);
           loadedRoot = gltf.scene;
           scene.add(loadedRoot);
@@ -87,79 +78,130 @@ const ModelViewer3D: React.FC<ModelViewer3DProps> = ({ url, onClose, inline = fa
         },
         undefined,
         (err: unknown) => {
+          if (cancelled) return;
           setErrorMsg(err instanceof Error ? err.message : '加载失败');
           setStatus('error');
         }
       );
     }
 
-    const isGLB = /\.glb$/i.test(url) || url.includes('glb');
-    const isGLTF = url.includes('gltf');
-    const isExternal = /^https?:\/\//i.test(url);
-    const useProxy = proxyBase && isExternal;
-
-    if (isGLB || isGLTF) {
-      if (useProxy) {
-        const fetchUrl = `${proxyBase.replace(/\/$/, '')}/model?url=${encodeURIComponent(url)}`;
-        fetch(fetchUrl, { mode: 'cors', credentials: 'omit' })
-          .then((r) => {
-            if (!r.ok) throw new Error(`HTTP ${r.status}`);
-            return r.blob();
-          })
-          .then((blob) => {
-            const u = URL.createObjectURL(blob);
-            objectUrlRef.current = u;
-            loadFromUrl(u);
-          })
-          .catch((e) => {
-            setErrorMsg((e?.message) || '代理拉取失败或网络错误');
-            setStatus('error');
-          });
-      } else if (isExternal) {
-        fetch(url, { mode: 'cors', credentials: 'omit' })
-          .then((r) => {
-            if (!r.ok) throw new Error(`HTTP ${r.status}`);
-            return r.blob();
-          })
-          .then((blob) => {
-            const u = URL.createObjectURL(blob);
-            objectUrlRef.current = u;
-            loadFromUrl(u);
-          })
-          .catch(() => loadFromUrl(url));
-      } else {
-        loadFromUrl(url);
-      }
-    } else {
-      loadFromUrl(url);
-    }
-
-    function animate() {
-      animationId = requestAnimationFrame(animate);
-      controls.update();
-      renderer.render(scene, camera);
-    }
-    animate();
-
     const onResize = () => {
+      if (!renderHost) return;
       const w = container.clientWidth;
       const h = container.clientHeight || 400;
       camera.aspect = w / h;
       camera.updateProjectionMatrix();
-      renderer.setSize(w, h);
+      renderHost.resize(w, h, Math.min(window.devicePixelRatio, 2));
     };
-    window.addEventListener('resize', onResize);
+
+    void (async () => {
+      try {
+        container.innerHTML = '';
+        // 无 PMREM：允许真实 WebGPU；失败则 RenderHost 回退 WebGL
+        renderHost = createRenderHost({
+          preferredBackend: 'webgpu',
+          fallbackBackend: 'webgl',
+          container,
+          visual: {
+            antialias: true,
+            alpha: false,
+            outputColorSpace: THREE.SRGBColorSpace,
+            toneMapping: THREE.ACESFilmicToneMapping,
+            toneMappingExposure: 1,
+          },
+        });
+        await renderHost.init();
+        if (cancelled) return;
+
+        const canvas = renderHost.getDomElement();
+        if (!canvas) throw new Error('RenderHost missing canvas');
+
+        renderHost.resize(width, height, Math.min(window.devicePixelRatio, 2));
+        const raw = renderHost.getRawRenderer() as ShadowCapableRenderer | null;
+        if (raw?.shadowMap) {
+          raw.shadowMap.enabled = true;
+          raw.shadowMap.type = THREE.PCFSoftShadowMap;
+        }
+
+        controls = new OrbitControls(camera, canvas);
+        controls.enableDamping = true;
+        controls.dampingFactor = 0.05;
+        controls.screenSpacePanning = true;
+        controls.minDistance = 0.5;
+        controls.maxDistance = 20;
+
+        const isGLB = /\.glb$/i.test(url) || url.includes('glb');
+        const isGLTF = url.includes('gltf');
+        const isExternal = /^https?:\/\//i.test(url);
+        const useProxy = proxyBase && isExternal;
+
+        if (isGLB || isGLTF) {
+          if (useProxy) {
+            const fetchUrl = `${proxyBase.replace(/\/$/, '')}/model?url=${encodeURIComponent(url)}`;
+            fetch(fetchUrl, { mode: 'cors', credentials: 'omit' })
+              .then((r) => {
+                if (!r.ok) throw new Error(`HTTP ${r.status}`);
+                return r.blob();
+              })
+              .then((blob) => {
+                if (cancelled) return;
+                const u = URL.createObjectURL(blob);
+                objectUrlRef.current = u;
+                loadFromUrl(u);
+              })
+              .catch((e) => {
+                if (cancelled) return;
+                setErrorMsg(e?.message || '代理拉取失败或网络错误');
+                setStatus('error');
+              });
+          } else if (isExternal) {
+            fetch(url, { mode: 'cors', credentials: 'omit' })
+              .then((r) => {
+                if (!r.ok) throw new Error(`HTTP ${r.status}`);
+                return r.blob();
+              })
+              .then((blob) => {
+                if (cancelled) return;
+                const u = URL.createObjectURL(blob);
+                objectUrlRef.current = u;
+                loadFromUrl(u);
+              })
+              .catch(() => {
+                if (!cancelled) loadFromUrl(url);
+              });
+          } else {
+            loadFromUrl(url);
+          }
+        } else {
+          loadFromUrl(url);
+        }
+
+        const animate = () => {
+          if (cancelled || !renderHost || !controls) return;
+          animationId = requestAnimationFrame(animate);
+          controls.update();
+          renderHost.render(scene, camera);
+        };
+        animate();
+
+        window.addEventListener('resize', onResize);
+      } catch (e) {
+        if (cancelled) return;
+        setErrorMsg(e instanceof Error ? e.message : '渲染初始化失败');
+        setStatus('error');
+      }
+    })();
 
     return () => {
+      cancelled = true;
       window.removeEventListener('resize', onResize);
       cancelAnimationFrame(animationId);
       if (objectUrlRef.current) {
         URL.revokeObjectURL(objectUrlRef.current);
         objectUrlRef.current = null;
       }
-      renderer.dispose();
-      controls.dispose();
-      if (container.contains(renderer.domElement)) container.removeChild(renderer.domElement);
+      controls?.dispose();
+      renderHost?.dispose();
     };
   }, [url]);
 

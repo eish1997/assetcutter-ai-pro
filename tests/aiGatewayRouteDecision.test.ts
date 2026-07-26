@@ -293,13 +293,22 @@ describe('AI Gateway route decision', () => {
       adapterId: 'jimeng-visual',
     });
 
-    const withModel = createAiGatewayJobPlan({
-      modality: 'image',
-      model: 'gpt-image-2',
-      input: { prompt: 'a clean product photo' },
+    // Multi-provider families must not silent-pick seed[0]; require decision or explicit pin.
+    expect(() =>
+      createAiGatewayJobPlan({
+        modality: 'image',
+        model: 'gpt-image-2',
+        input: { prompt: 'a clean product photo' },
+      })
+    ).toThrow(/No selectedRoute\/provider|AI_GATEWAY_NO_PROVIDER_ROUTE/);
+
+    const singleSku = createAiGatewayJobPlan({
+      modality: 'model3d',
+      model: 'tripo-p1',
+      input: { prompt: 'a crate' },
     });
-    expect(withModel.job.metadata.planRouteSource).toBe('gateway_route_config_source');
-    expect(withModel.job.provider).toBe(withModel.route.providerId);
+    expect(singleSku.job.metadata.planRouteSource).toBe('gateway_route_config_source');
+    expect(singleSku.job.provider).toBe('tripo');
   });
 
   it('A1: gatewayRouteConfigs become decision candidates without seed table entry', async () => {

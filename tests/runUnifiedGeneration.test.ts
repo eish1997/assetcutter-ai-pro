@@ -321,6 +321,91 @@ describe('runUnifiedGeneration', () => {
     );
   });
 
+  it('does not pin vertex-site for Gemini image so Gateway can fall back to keyed aggregators', async () => {
+    vi.spyOn(settingsStore, 'getEnabledChannels').mockReturnValue(['vertex-proxy', '302ai-openai']);
+    vi.spyOn(settingsStore, 'isChannelReady').mockImplementation(
+      (channel) => channel === 'vertex-proxy' || channel === '302ai-openai'
+    );
+    vi.mocked(createAiJob).mockResolvedValue({
+      job: {
+        id: 'aijob_image_gemini_unpinned',
+        status: 'succeeded',
+        output: null,
+        artifacts: [{ kind: 'image', url: 'data:image/png;base64,GEM' }],
+      },
+    } as unknown as Awaited<ReturnType<typeof createAiJob>>);
+
+    await expect(
+      runUnifiedImageGeneration({
+        prompt: 'a dog',
+        registryId: 'gemini-2.5-flash-image',
+        model: 'gemini-2.5-flash-image',
+        uiSource: 'test',
+      })
+    ).resolves.toBe('data:image/png;base64,GEM');
+
+    const createArgs = vi.mocked(createAiJob).mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(createArgs).not.toHaveProperty('provider');
+    expect((createArgs.metadata as Record<string, unknown> | undefined)?.providerId).not.toBe(
+      'vertex-site'
+    );
+  });
+
+  it('does not pin openai-official for GPT image so Gateway can fall back to keyed aggregators', async () => {
+    vi.spyOn(settingsStore, 'getEnabledChannels').mockReturnValue(['openai-official', '302ai-openai']);
+    vi.spyOn(settingsStore, 'isChannelReady').mockImplementation(
+      (channel) => channel === 'openai-official' || channel === '302ai-openai'
+    );
+    vi.mocked(createAiJob).mockResolvedValue({
+      job: {
+        id: 'aijob_image_gpt_unpinned',
+        status: 'succeeded',
+        output: null,
+        artifacts: [{ kind: 'image', url: 'data:image/png;base64,GPT' }],
+      },
+    } as unknown as Awaited<ReturnType<typeof createAiJob>>);
+
+    await expect(
+      runUnifiedImageGeneration({
+        prompt: 'a cat',
+        registryId: 'gpt-image-1.5',
+        model: 'gpt-image-1.5',
+        uiSource: 'test',
+      })
+    ).resolves.toBe('data:image/png;base64,GPT');
+
+    const createArgs = vi.mocked(createAiJob).mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(createArgs).not.toHaveProperty('provider');
+    expect((createArgs.metadata as Record<string, unknown> | undefined)?.providerId).not.toBe(
+      'openai-official'
+    );
+  });
+
+  it('ignores request.providerId on the default platform path without explicitByok', async () => {
+    vi.mocked(createAiJob).mockResolvedValue({
+      job: {
+        id: 'aijob_image_ignore_pin',
+        status: 'succeeded',
+        output: null,
+        artifacts: [{ kind: 'image', url: 'data:image/png;base64,IGN' }],
+      },
+    } as unknown as Awaited<ReturnType<typeof createAiJob>>);
+
+    await runUnifiedGeneration({
+      modality: 'image',
+      capability: 'text_to_image',
+      canonicalModelId: 'gemini-3.1-flash-image-preview',
+      registryId: 'gemini-3.1-flash-image-preview',
+      providerId: 'vertex-site',
+      input: { prompt: 'no pin' },
+      uiSource: 'test',
+    });
+
+    const createArgs = vi.mocked(createAiJob).mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(createArgs).not.toHaveProperty('provider');
+    expect((createArgs.metadata as Record<string, unknown> | undefined)?.providerId).toBeUndefined();
+  });
+
   it('pins BYOK Gemini channels only when explicitByok is set', async () => {
     vi.spyOn(settingsStore, 'getEnabledChannels').mockReturnValue(['toapis-gemini']);
     vi.spyOn(settingsStore, 'isChannelReady').mockImplementation((channel) => channel === 'toapis-gemini');

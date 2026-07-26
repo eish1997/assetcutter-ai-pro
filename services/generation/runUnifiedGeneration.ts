@@ -321,18 +321,16 @@ function inferGatewayProviderId(
   explicitProviderId?: string,
   explicitByok = false
 ): string | undefined {
+  // Default platform path must leave provider unset so Gateway can pick any keyed
+  // route (e.g. 302ai for Gemini when Vertex Key is missing). Only pin for explicit BYOK.
+  if (!explicitByok) return undefined;
   const explicit = String(explicitProviderId || '').trim();
   if (explicit) return explicit;
   const role = gatewayRoleForModality(modality);
   if (!role) return undefined;
   const picked = pickBinding(registryId || canonicalModelId, role);
   if (!picked) return undefined;
-  const providerId = GATEWAY_CHANNEL_PROVIDER[picked.channel];
-  if (!providerId) return undefined;
-  // Platform proxy may still be pinned; BYOK channels must not hijack default Gateway jobs.
-  if (picked.channel === 'vertex-proxy') return providerId;
-  if (explicitByok) return providerId;
-  return undefined;
+  return GATEWAY_CHANNEL_PROVIDER[picked.channel];
 }
 
 export async function runUnifiedGeneration(request: UnifiedGenerationRequest): Promise<AiJobDetail> {

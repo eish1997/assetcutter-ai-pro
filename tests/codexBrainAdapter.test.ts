@@ -46,7 +46,7 @@ function createFakeCodexProcess(onPrompt: (prompt: string) => void, outputEvents
 }
 
 describe('Codex brain adapter', () => {
-  it('configures AssetCutter MCP and passes the MCP token as an environment variable', async () => {
+  it('does not inject AssetCutter MCP token or write Codex MCP config (CLI-only)', async () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ac-codex-brain-'));
     const spawns: Array<{ command: string; args: string[]; options: any }> = [];
     const mcpWrites: any[] = [];
@@ -83,15 +83,10 @@ describe('Codex brain adapter', () => {
       events.push(ev);
     }
 
-    expect(mcpWrites).toEqual([
-      {
-        url: 'http://127.0.0.1:19120/mcp',
-        tokenEnvVar: 'ASSETCUTTER_MCP_TOKEN',
-      },
-    ]);
+    expect(mcpWrites).toEqual([]);
     expect(spawns).toHaveLength(1);
     expect(spawns[0].command).toBe('codex-test');
-    expect(spawns[0].options.env.ASSETCUTTER_MCP_TOKEN).toBe('assetcutter-secret-token');
+    expect(spawns[0].options.env.ASSETCUTTER_MCP_TOKEN).toBeUndefined();
     expect(spawns[0].args).toContain('exec');
     expect(spawns[0].args).toEqual(
       expect.arrayContaining(['--model', 'gpt-5-codex', '--sandbox', 'workspace-write', '-C', process.cwd()]),

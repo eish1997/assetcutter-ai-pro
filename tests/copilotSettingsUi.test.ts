@@ -41,8 +41,8 @@ describe('copilot settings UI', () => {
   });
 
   it('uses Workbench as the first shell entry and moves home diagnostics into categorized settings', () => {
-    const html = fs.readFileSync(shellIndexPath, 'utf8');
-    const main = fs.readFileSync(shellMainPath, 'utf8');
+    const html = fs.readFileSync(shellIndexPath, 'utf8').replace(/\r\n/g, '\n');
+    const main = fs.readFileSync(shellMainPath, 'utf8').replace(/\r\n/g, '\n');
 
     expect(html).not.toContain('id="view-home"');
     expect(html).not.toContain('data-view="home"');
@@ -119,7 +119,7 @@ describe('copilot settings UI', () => {
     expect(html).toContain('agentPolicyTemplates');
     expect(html).toContain('renderAgentPolicyTemplates');
     expect(html).toContain('templateId: id');
-    expect(html).toContain('display: flex;\n      flex-direction: column;\n      gap: 8px;');
+    expect(html.replace(/\r\n/g, '\n')).toContain('display: flex;\n      flex-direction: column;\n      gap: 8px;');
     expect(html).toContain('renderCodexRuntimeStatus');
     expect(html).toContain('codexRuntimeStatusCache');
     expect(html).toContain('agent.probeAllBrains');
@@ -137,12 +137,9 @@ describe('copilot settings UI', () => {
   it('renders the workbench e2e status as the Copilot entrance chain', () => {
     const html = fs.readFileSync(shellIndexPath, 'utf8');
 
-    expect(html).toContain('Workbench MCP chain passed');
-    expect(html).toContain('ensure_ready');
-    expect(html).toContain('create_project');
-    expect(html).toContain('run_capability');
-    expect(html).toContain('list_assets');
-    expect(html).toContain('get_asset');
+    expect(html).toContain('外部 Agent（已改 CLI）');
+    expect(html).toContain('npm run agent:init');
+    expect(html).toContain('npm run agent:cli');
   });
 
   it('shows workbench login diagnostics in the e2e entrance state', () => {
@@ -280,7 +277,7 @@ describe('copilot settings UI', () => {
     expect(html).toContain('dryRun: false');
     expect(html).toContain('authRequired=true');
     expect(html).toContain('noEvents=true');
-    expect(html).toContain('MCP Token');
+    expect(html).toContain('外部 Agent（已改 CLI）');
     expect(html).toContain('usage.generatedAt');
     expect(html).toContain('compactAgentUsageNumber(totals.totalTokens)');
     expect(html).toContain('totals.freshInputTokens');
@@ -294,7 +291,6 @@ describe('copilot settings UI', () => {
     expect(html).toContain('Workbench entrance ready');
     expect(html).toContain('Workbench login required');
     expect(html).toContain('Workbench E2E missing');
-    expect(html).toContain('smoke:agent-mcp:e2e:wait-login');
     expect(html).toContain('cookieCount');
     expect(html).toContain('hasLikelyAuthCookie');
     expect(html).toContain('account && typeof account.hasAuthCookie');

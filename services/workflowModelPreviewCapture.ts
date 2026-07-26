@@ -15,6 +15,7 @@ import {
   createWorkflowModelViewerStageAsync,
   enhanceLoadedModelMaterials,
 } from './workflowModelViewerStage';
+import { createRenderHost, type RenderHost } from './renderCore';
 
 export type CaptureWorkflowModelThumbOptions = {
   modelSrc: string;
@@ -26,11 +27,27 @@ export type CaptureWorkflowModelThumbOptions = {
   timeoutMs?: number;
 };
 
+/** Serialize offscreen captures — concurrent WebGL+PMREM storms black-screen Electron companion. */
+let captureQueueTail: Promise<unknown> = Promise.resolve();
+
 /**
  * 离屏加载模型并渲染若干帧后导出 JPEG data URL，供工作区卡片缩略图使用。
  * 灯光与主预览一致（HDR→PMREM，失败则 Room）；使用 `preserveDrawingBuffer` 以稳定 `toDataURL`。
+ * Captures are globally serialized (one at a time).
  */
 export function captureWorkflowModelThumbnailDataUrl(
+  opts: CaptureWorkflowModelThumbOptions
+): Promise<string | null> {
+  const run = () => captureWorkflowModelThumbnailDataUrlNow(opts);
+  const next = captureQueueTail.then(run, run);
+  captureQueueTail = next.then(
+    () => undefined,
+    () => undefined
+  );
+  return next;
+}
+
+function captureWorkflowModelThumbnailDataUrlNow(
   opts: CaptureWorkflowModelThumbOptions
 ): Promise<string | null> {
   const modelSrc = String(opts.modelSrc || '').trim();
@@ -49,30 +66,13 @@ export function captureWorkflowModelThumbnailDataUrl(
     let loadedRoot: THREE.Object3D | null = null;
     let groundMesh: THREE.Mesh | null = null;
     let stage: Awaited<ReturnType<typeof createWorkflowModelViewerStageAsync>> | null = null;
+    let renderHost: RenderHost | null = null;
+    let renderer: THREE.WebGLRenderer | null = null;
+    let controls: OrbitControls | null = null;
 
     const scene = new THREE.Scene();
     const camera = new THREE.PerspectiveCamera(50, w / h, 0.01, 2000);
     camera.position.set(0, 0.6, 2.4);
-
-    const renderer = new THREE.WebGLRenderer({
-      antialias: true,
-      alpha: false,
-      preserveDrawingBuffer: true,
-    });
-    renderer.outputColorSpace = THREE.SRGBColorSpace;
-    renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 1.02;
-    renderer.setPixelRatio(1);
-    renderer.setSize(w, h);
-    configureWorkflowModelSoftShadows(renderer);
-
-    const controls = new OrbitControls(camera, renderer.domElement);
-    controls.enableDamping = true;
-    controls.dampingFactor = 0.12;
-    controls.enablePan = false;
-    controls.minDistance = 0.25;
-    controls.maxDistance = 20;
-    controls.target.set(0, 0, 0);
 
     const teardown = () => {
       if (torn) return;
@@ -90,8 +90,11 @@ export function captureWorkflowModelThumbnailDataUrl(
       }
       stage?.dispose();
       stage = null;
-      controls.dispose();
-      renderer.dispose();
+      controls?.dispose();
+      controls = null;
+      renderHost?.dispose();
+      renderHost = null;
+      renderer = null;
     };
 
     const finish = (v: string | null) => {
@@ -113,7 +116,7 @@ export function captureWorkflowModelThumbnailDataUrl(
         disposeObjectHierarchy(object);
         return;
       }
-      if (!stage) {
+      if (!stage || !renderHost || !controls || !renderer) {
         disposeObjectHierarchy(object);
         finish(null);
         return;
@@ -139,9 +142,11 @@ export function captureWorkflowModelThumbnailDataUrl(
         if (groundMesh) scene.add(groundMesh);
         for (let i = 0; i < 18; i += 1) {
           controls.update();
-          renderer.render(scene, camera);
+          renderHost.render(scene, camera);
         }
-        const dataUrl = renderer.domElement.toDataURL('image/jpeg', 0.9);
+        const dataUrl =
+          renderHost.capture('image/jpeg', 0.9) ||
+          renderer.domElement.toDataURL('image/jpeg', 0.9);
         const ok =
           dataUrl.startsWith('data:image/jpeg') || dataUrl.startsWith('data:image/png');
         finish(ok ? dataUrl : null);
@@ -152,6 +157,39 @@ export function captureWorkflowModelThumbnailDataUrl(
 
     void (async () => {
       try {
+        renderHost = createRenderHost({
+          // Offscreen thumbs use PMREM → classic WebGL only (never probe WebGPU).
+          preferredBackend: 'webgl',
+          fallbackBackend: 'webgl',
+          requireClassicWebGl: true,
+          visual: {
+            antialias: true,
+            alpha: false,
+            preserveDrawingBuffer: true,
+            outputColorSpace: THREE.SRGBColorSpace,
+            toneMapping: THREE.ACESFilmicToneMapping,
+            toneMappingExposure: 1.02,
+          },
+        });
+        await renderHost.init();
+        const raw = renderHost.getRawRenderer();
+        const canvas = renderHost.getDomElement();
+        if (!(raw instanceof THREE.WebGLRenderer) || !canvas) {
+          finish(null);
+          return;
+        }
+        renderer = raw;
+        renderHost.resize(w, h, 1);
+        configureWorkflowModelSoftShadows(renderer);
+
+        controls = new OrbitControls(camera, canvas);
+        controls.enableDamping = true;
+        controls.dampingFactor = 0.12;
+        controls.enablePan = false;
+        controls.minDistance = 0.25;
+        controls.maxDistance = 20;
+        controls.target.set(0, 0, 0);
+
         // 离屏缩略图：50% 中性灰底（#808080），便于观察光照与阴影
         stage = await createWorkflowModelViewerStageAsync(scene, renderer, 0x808080);
       } catch {

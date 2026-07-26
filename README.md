@@ -20,6 +20,9 @@ AI-assisted asset workflow workbench (workspace, capability presets, experimenta
 - [x] AI Gateway single execution door: catalog/ops route, image/Jimeng/video via Jobs; B-round ops (failure filters, auto-circuit, trend snapshots, cancel); BYOK only when explicit; no Jimeng digital-human / music-worker / client async-batch
 - [x] Env acceptance profiles: `npm run env:profile:dev|prod-like` (C-round local↔prod contract)
 - [x] Acceptance-as-production (D-round): smoke matrix skips ≠ green; credits STRICT; vision/3D/storyboard via Gateway Jobs; doc scrub of async-batch / local 9001 paths
+- [x] Multi-provider Gateway routing: default jobs omit client `provider` pin; Gemini/GPT can fall back to keyed aggregators (302/AIHubMix); `guard:ai-routing` includes client pin check; prompt arena/translate via Gateway Jobs
+- [x] WebGPU-first RenderHost (`services/renderCore/`) with classic WebGL path for PMREM; companion shell can disable WebGPU
+- [x] Agent CLI (`npm run agent:cli` / `agent:init`): HTTP Soul API + workbench asset merge (`source=agent-cli`); see `docs/Cursor与Codex-Agent-CLI接入.md`
 - [ ] Removed: standalone dialog page, texture pattern extract page, prompt-effect analysis page
 
 ## Sidebar / pages

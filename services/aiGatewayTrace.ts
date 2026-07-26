@@ -59,7 +59,8 @@ export function buildAiGatewayImageJobBody(
   return {
     modality: 'image',
     capability: 'image.generate',
-    provider: input.useVertex ? 'vertex-site' : undefined,
+    // Do not pin vertex-site here: local stacks often only have aggregator Keys (302/AIHubMix).
+    // Gateway route decision will choose among providers that have usable platform Keys.
     model: input.model,
     canonicalModelId: registryId,
     registryId,

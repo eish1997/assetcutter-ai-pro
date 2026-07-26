@@ -67,6 +67,15 @@ describe("model route catalog", () => {
     });
   });
 
+  it("exposes Gemini text/image routes on 302.AI and AIHubMix aggregators", () => {
+    const textRoutes = listModelRoutes("gemini-2.5-flash");
+    const imageRoutes = listModelRoutes("gemini-3-pro-image");
+    expect(textRoutes.some((route) => route.providerId === "302ai")).toBe(true);
+    expect(textRoutes.some((route) => route.providerId === "aihubmix")).toBe(true);
+    expect(imageRoutes.some((route) => route.providerId === "302ai")).toBe(true);
+    expect(imageRoutes.some((route) => route.providerId === "aihubmix")).toBe(true);
+  });
+
   it("advertises Gemini 3.1 image family as Gateway executable", () => {
     const route = listModelRoutes("gemini-3.1-flash-image").find((row) => row.providerId === "vertex-site");
     expect(route).toMatchObject({

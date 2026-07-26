@@ -9,7 +9,7 @@ import {
   readAiGatewayOpsControlConfigSync,
 } from './ops-control.js';
 import { normalizeAiGatewayProviderId } from '../../shared/aiGatewayModelRoutes.js';
-import { resolveGatewayRouteConfig } from './route-config-source.js';
+import { listGatewayRouteConfigs, resolveGatewayRouteConfig } from './route-config-source.js';
 
 function nonEmptyString(value) {
   return typeof value === 'string' && value.trim() ? value.trim() : '';
@@ -58,15 +58,23 @@ function selectedRouteFromExecutableModelTable(job, opsControl = {}, modelOpsCon
       modelRouteInference: null,
     };
   }
-  const modelRoute = resolveGatewayRouteConfig(
-    {
-      canonicalModelId,
-      modality: job.modality,
-      provider: explicitProvider || undefined,
-      disabledProviders: opsControl.disabledProviders,
-    },
-    modelOpsConfig || {}
-  );
+  const routeInput = {
+    canonicalModelId,
+    modality: job.modality,
+    provider: explicitProvider || undefined,
+    disabledProviders: opsControl.disabledProviders,
+  };
+  // Multi-provider families (Gemini/GPT) must not silent-pick seed[0] (often vertex-site)
+  // without Key-aware route decision. Only infer when exactly one seed route remains.
+  if (!explicitProvider) {
+    const candidates = listGatewayRouteConfigs(routeInput, modelOpsConfig || {}).filter(
+      (row) => row?.providerId && row.enabled !== false
+    );
+    if (candidates.length !== 1) {
+      return { selectedRoute: null, modelRouteInference: null };
+    }
+  }
+  const modelRoute = resolveGatewayRouteConfig(routeInput, modelOpsConfig || {});
   if (!modelRoute?.providerId || modelRoute.enabled === false) {
     return {
       selectedRoute: explicitProvider ? { providerId: explicitProvider } : null,

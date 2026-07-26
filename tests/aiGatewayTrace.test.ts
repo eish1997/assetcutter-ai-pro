@@ -58,7 +58,6 @@ describe('aiGatewayTrace', () => {
     expect(body).toMatchObject({
       modality: 'image',
       capability: 'image.generate',
-      provider: 'vertex-site',
       model: 'gemini-3.1-flash-image',
       estimatedCredits: 50,
       metadata: {
@@ -72,6 +71,7 @@ describe('aiGatewayTrace', () => {
         estimatedCredits: 50,
       },
     });
+    expect(body).not.toHaveProperty('provider');
   });
 
   it('extracts trace job ids from gateway responses', () => {
@@ -93,12 +93,12 @@ describe('aiGatewayTrace', () => {
     expect(body).toMatchObject({
       modality: 'image',
       capability: 'image.generate',
-      provider: 'vertex-site',
       metadata: {
         proxyPath: '/proxy/gemini/async',
         useVertex: true,
       },
     });
+    expect(body).not.toHaveProperty('provider');
     expect((body.metadata as Record<string, unknown>).traceOnly).toBeUndefined();
   });
 });

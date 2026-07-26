@@ -19,6 +19,9 @@ const GEMINI_CHANNELS: readonly ChannelTemplate[] = [
   { channel: "vertex-proxy", priority: 10, defaultEnabled: true },
   { channel: "toapis-gemini", priority: 20 },
   { channel: "vectorengine", priority: 30 },
+  // Aggregators expose Gemini via OpenAI-compatible /v1 (same channel as GPT rows).
+  { channel: "302ai-openai", priority: 35, defaultEnabled: false },
+  { channel: "aihubmix-openai", priority: 36, defaultEnabled: false },
   { channel: "gemini-aistudio", priority: 40, defaultEnabled: false },
 ];
 

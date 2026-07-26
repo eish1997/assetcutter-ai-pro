@@ -10,6 +10,8 @@ export type WorkspaceProject = {
   id: string;
   name: string;
   createdAt: number;
+  /** Agent CLI（云端 Soul API）创建的项目，工作台列表合并展示 */
+  source?: 'agent-cli';
   /** @deprecated 历史字段，不再使用项目绑定 */
   boundUserId?: string;
   /** @deprecated 历史字段，不再使用项目绑定 */

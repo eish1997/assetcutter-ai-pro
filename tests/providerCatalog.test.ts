@@ -96,6 +96,24 @@ describe("provider catalog", () => {
     });
   });
 
+  it("advertises Gemini text/image SKUs on 302.AI and AIHubMix aggregators", () => {
+    const models302 = listProviderModels("302ai");
+    const modelsMix = listProviderModels("aihubmix");
+
+    expect(models302.some((model) => model.registryId?.startsWith("gemini-") && model.modality === "text")).toBe(
+      true
+    );
+    expect(models302.some((model) => model.registryId?.startsWith("gemini-") && model.modality === "image")).toBe(
+      true
+    );
+    expect(modelsMix.some((model) => model.registryId?.startsWith("gemini-") && model.modality === "text")).toBe(
+      true
+    );
+    expect(modelsMix.some((model) => model.registryId?.startsWith("gemini-") && model.modality === "image")).toBe(
+      true
+    );
+  });
+
   it("mirrors Jimeng static catalog into provider model catalog", () => {
     expect(providerModelCount("volcengine-jimeng")).toBeGreaterThan(5);
     expect(listProviderModels("volcengine-jimeng").some((model) => model.modality === "video")).toBe(true);

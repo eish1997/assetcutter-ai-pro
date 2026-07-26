@@ -36,6 +36,7 @@ import {
   createWorkflowModelViewerStageAsync,
   enhanceLoadedModelMaterials,
 } from '../../../services/workflowModelViewerStage';
+import { createRenderHost, type RenderHost } from '../../../services/renderCore';
 
 type ViewerStatus = 'loading' | 'ready' | 'error' | 'unsupported';
 const MODEL3D_STATS_EVENT = 'asset-preview:model3d-stats';
@@ -601,6 +602,11 @@ const ImageModel3DViewer: React.FC<LazyImagePreviewViewerProps> = ({
     let loadedRoot: THREE.Object3D | null = null;
     let groundMesh: THREE.Mesh | null = null;
     let stage: Awaited<ReturnType<typeof createWorkflowModelViewerStageAsync>> | null = null;
+    let renderHost: RenderHost | null = null;
+    let controls: OrbitControls | null = null;
+    let renderer: THREE.WebGLRenderer | null = null;
+    let resizeObserver: ResizeObserver | null = null;
+    let domElement: HTMLCanvasElement | null = null;
     const originalMaterials = new WeakMap<THREE.Mesh, THREE.Material | THREE.Material[]>();
     const clayMaterial = new THREE.MeshStandardMaterial({
       color: 0x808080,
@@ -622,80 +628,6 @@ const ImageModel3DViewer: React.FC<LazyImagePreviewViewerProps> = ({
 
     const camera = new THREE.PerspectiveCamera(50, width / height, 0.01, 2000);
     camera.position.set(0, 0.6, 2.4);
-
-    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
-    renderer.setClearColor(0x000000, 0);
-    renderer.outputColorSpace = THREE.SRGBColorSpace;
-    renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 1.02;
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
-    renderer.setSize(width, height);
-    configureWorkflowModelSoftShadows(renderer);
-
-    while (mount.firstChild) mount.removeChild(mount.firstChild);
-    mount.appendChild(renderer.domElement);
-    renderer.domElement.style.width = '100%';
-    renderer.domElement.style.height = '100%';
-    renderer.domElement.style.display = 'block';
-    renderer.domElement.style.background = 'transparent';
-    renderer.domElement.style.cursor = 'grab';
-    renderer.domElement.style.touchAction = 'none';
-    renderer.domElement.tabIndex = 0;
-    renderer.domElement.setAttribute('aria-label', '3D model viewport');
-
-    const controls = new OrbitControls(camera, renderer.domElement);
-    controls.enableDamping = true;
-    controls.dampingFactor = 0.08;
-    controls.enablePan = true;
-    controls.minDistance = 0.25;
-    controls.maxDistance = 20;
-    controls.target.set(0, 0, 0);
-    controls.mouseButtons = {
-      LEFT: THREE.MOUSE.ROTATE,
-      MIDDLE: THREE.MOUSE.PAN,
-      RIGHT: null,
-    };
-
-    const onMouseDown = () => {
-      renderer.domElement.focus({ preventScroll: true });
-      renderer.domElement.style.cursor = 'grabbing';
-    };
-    const onMouseUp = () => {
-      renderer.domElement.style.cursor = 'grab';
-    };
-    const onContextMenu = (e: MouseEvent) => {
-      e.preventDefault();
-    };
-    renderer.domElement.addEventListener('mousedown', onMouseDown);
-    renderer.domElement.addEventListener('mouseup', onMouseUp);
-    renderer.domElement.addEventListener('mouseleave', onMouseUp);
-    renderer.domElement.addEventListener('contextmenu', onContextMenu);
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.ctrlKey || e.metaKey || e.altKey) return;
-      if (e.code !== 'KeyF') return;
-      if (!loadedRoot) return;
-      e.preventDefault();
-      e.stopPropagation();
-      frameCameraToObject(camera, controls, loadedRoot, {
-        defaultView: '+x',
-        preserveViewDirection: true,
-      });
-    };
-    renderer.domElement.addEventListener('keydown', onKeyDown);
-
-    const onGlLost = (e: Event) => {
-      try {
-        e.preventDefault();
-      } catch {
-        /* ignore */
-      }
-      if (cancelled) return;
-      setStatus('error');
-      setMessage(
-        'WebGL 上下文已丢失（常见于系统「另存为」对话框弹出时 GPU 被抢占）。请关闭弹窗后重新打开大图预览，或刷新页面。'
-      );
-    };
-    renderer.domElement.addEventListener('webglcontextlost', onGlLost);
 
     setStatus('loading');
     setMessage('');
@@ -726,6 +658,57 @@ const ImageModel3DViewer: React.FC<LazyImagePreviewViewerProps> = ({
       });
     };
 
+    const onMouseDown = () => {
+      if (!domElement) return;
+      domElement.focus({ preventScroll: true });
+      domElement.style.cursor = 'grabbing';
+    };
+    const onMouseUp = () => {
+      if (!domElement) return;
+      domElement.style.cursor = 'grab';
+    };
+    const onContextMenu = (e: MouseEvent) => {
+      e.preventDefault();
+    };
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (!controls || !loadedRoot) return;
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      if (e.code !== 'KeyF') return;
+      e.preventDefault();
+      e.stopPropagation();
+      frameCameraToObject(camera, controls, loadedRoot, {
+        defaultView: '+x',
+        preserveViewDirection: true,
+      });
+    };
+    const onGlLost = (e: Event) => {
+      try {
+        e.preventDefault();
+      } catch {
+        /* ignore */
+      }
+      if (cancelled) return;
+      setStatus('error');
+      setMessage(
+        'WebGL 上下文已丢失（常见于系统「另存为」对话框弹出时 GPU 被抢占）。请关闭弹窗后重新打开大图预览，或刷新页面。'
+      );
+    };
+
+    const syncViewCube = () => {
+      if (!controls) return;
+      const cube = viewCubeRef.current;
+      if (!cube) return;
+      const offset = camera.position.clone().sub(controls.target);
+      if (offset.lengthSq() <= 1e-8) return;
+      offset.normalize();
+      const yaw = Math.atan2(offset.z, offset.x);
+      const pitch = Math.asin(THREE.MathUtils.clamp(offset.y, -1, 1));
+      const cubeYaw = yaw - Math.PI / 2;
+      cube.style.transform = `rotateX(${-pitch}rad) rotateY(${cubeYaw}rad)`;
+      cube.style.setProperty('--view-cube-corner-tilt', `${pitch}rad`);
+      cube.style.setProperty('--view-cube-corner-turn', `${-cubeYaw}rad`);
+    };
+
     applyDisplayModeRef.current = (mode: NonNullable<LazyImagePreviewViewerProps['model3dDisplayMode']>) => {
       if (!loadedRoot) return;
       restoreOriginalMaterials();
@@ -743,36 +726,6 @@ const ImageModel3DViewer: React.FC<LazyImagePreviewViewerProps> = ({
       applyBackfaceCulling();
     };
 
-    resetCameraRef.current = () => {
-      if (!loadedRoot) return;
-      frameCameraToObject(camera, controls, loadedRoot, {
-        defaultView: '+x',
-        preserveViewDirection: true,
-      });
-    };
-
-    setModelViewDirectionRef.current = (direction: ViewCubeDirection) => {
-      if (!loadedRoot) return;
-      frameCameraToObject(camera, controls, loadedRoot, {
-        viewDirection: new THREE.Vector3(direction[0], direction[1], direction[2]),
-        fitPadding: 1.12,
-      });
-    };
-
-    const syncViewCube = () => {
-      const cube = viewCubeRef.current;
-      if (!cube) return;
-      const offset = camera.position.clone().sub(controls.target);
-      if (offset.lengthSq() <= 1e-8) return;
-      offset.normalize();
-      const yaw = Math.atan2(offset.z, offset.x);
-      const pitch = Math.asin(THREE.MathUtils.clamp(offset.y, -1, 1));
-      const cubeYaw = yaw - Math.PI / 2;
-      cube.style.transform = `rotateX(${-pitch}rad) rotateY(${cubeYaw}rad)`;
-      cube.style.setProperty('--view-cube-corner-tilt', `${pitch}rad`);
-      cube.style.setProperty('--view-cube-corner-turn', `${-cubeYaw}rad`);
-    };
-
     setGridVisibleRef.current = (visible: boolean) => {
       if (groundMesh) groundMesh.visible = visible && displayModeRef.current !== 'wire' && displayModeRef.current !== 'normal';
     };
@@ -788,7 +741,7 @@ const ImageModel3DViewer: React.FC<LazyImagePreviewViewerProps> = ({
     };
 
     const finishLoad = (object: THREE.Object3D) => {
-      if (cancelled || !stage) return;
+      if (cancelled || !stage || !controls) return;
       loadedRoot = object;
       ensureObjectUsesPbrMaterials(object);
       enhanceLoadedModelMaterials(object);
@@ -832,66 +785,156 @@ const ImageModel3DViewer: React.FC<LazyImagePreviewViewerProps> = ({
 
     void (async () => {
       try {
-        stage = await createWorkflowModelViewerStageAsync(scene, renderer, null, { signal: abortEnv.signal });
-      } catch (e) {
-        if (cancelled || (e instanceof DOMException && e.name === 'AbortError')) return;
-        if (!cancelled) {
-          setStatus('error');
-          setMessage('3D 环境（HDR）加载失败，请刷新重试。');
+        while (mount.firstChild) mount.removeChild(mount.firstChild);
+
+        renderHost = createRenderHost({
+          // HDR/PMREM stage still needs classic WebGLRenderer in three r182.
+          preferredBackend: 'webgl',
+          fallbackBackend: 'webgl',
+          requireClassicWebGl: true,
+          container: mount,
+          visual: {
+            antialias: true,
+            alpha: true,
+            preserveDrawingBuffer: true,
+            outputColorSpace: THREE.SRGBColorSpace,
+            toneMapping: THREE.ACESFilmicToneMapping,
+            toneMappingExposure: 1.02,
+            clearColor: 0x000000,
+            clearAlpha: 0,
+          },
+        });
+        await renderHost.init();
+        if (cancelled) return;
+
+        const raw = renderHost.getRawRenderer();
+        const canvas = renderHost.getDomElement();
+        if (!(raw instanceof THREE.WebGLRenderer) || !canvas) {
+          throw new Error('RenderHost did not produce a WebGLRenderer');
         }
-        return;
-      }
-      if (cancelled) {
-        stage?.dispose();
-        stage = null;
-        return;
-      }
-      if (format === 'gltf') {
-        new GLTFLoader().load(src, (gltf) => finishLoad(gltf.scene), undefined, onLoadError);
-      } else if (format === 'fbx') {
-        new FBXLoader().load(src, (group) => finishLoad(group), undefined, onLoadError);
-      } else {
-        new OBJLoader().load(src, (group) => finishLoad(group), undefined, onLoadError);
+        renderer = raw;
+        domElement = canvas;
+
+        renderHost.resize(width, height, Math.min(window.devicePixelRatio, 1.5));
+        configureWorkflowModelSoftShadows(renderer);
+
+        canvas.style.width = '100%';
+        canvas.style.height = '100%';
+        canvas.style.display = 'block';
+        canvas.style.background = 'transparent';
+        canvas.style.cursor = 'grab';
+        canvas.style.touchAction = 'none';
+        canvas.tabIndex = 0;
+        canvas.setAttribute('aria-label', '3D model viewport');
+
+        controls = new OrbitControls(camera, canvas);
+        controls.enableDamping = true;
+        controls.dampingFactor = 0.08;
+        controls.enablePan = true;
+        controls.minDistance = 0.25;
+        controls.maxDistance = 20;
+        controls.target.set(0, 0, 0);
+        controls.mouseButtons = {
+          LEFT: THREE.MOUSE.ROTATE,
+          MIDDLE: THREE.MOUSE.PAN,
+          RIGHT: null,
+        };
+
+        canvas.addEventListener('mousedown', onMouseDown);
+        canvas.addEventListener('mouseup', onMouseUp);
+        canvas.addEventListener('mouseleave', onMouseUp);
+        canvas.addEventListener('contextmenu', onContextMenu);
+        canvas.addEventListener('keydown', onKeyDown);
+        canvas.addEventListener('webglcontextlost', onGlLost);
+
+        resetCameraRef.current = () => {
+          if (!loadedRoot || !controls) return;
+          frameCameraToObject(camera, controls, loadedRoot, {
+            defaultView: '+x',
+            preserveViewDirection: true,
+          });
+        };
+
+        setModelViewDirectionRef.current = (direction: ViewCubeDirection) => {
+          if (!loadedRoot || !controls) return;
+          frameCameraToObject(camera, controls, loadedRoot, {
+            viewDirection: new THREE.Vector3(direction[0], direction[1], direction[2]),
+            fitPadding: 1.12,
+          });
+        };
+
+        resizeObserver = new ResizeObserver(() => {
+          if (cancelled || !mount || !renderHost) return;
+          const w = Math.max(1, mount.clientWidth || root.clientWidth);
+          const h = Math.max(1, mount.clientHeight || root.clientHeight || 1);
+          camera.aspect = w / h;
+          camera.updateProjectionMatrix();
+          renderHost.resize(w, h, Math.min(window.devicePixelRatio, 1.5));
+        });
+        resizeObserver.observe(root);
+
+        const tick = () => {
+          if (cancelled || !renderHost || !controls) return;
+          rafId = requestAnimationFrame(tick);
+          try {
+            if (renderer) {
+              const gl = renderer.getContext() as WebGLRenderingContext | null;
+              if (gl?.isContextLost?.()) return;
+            }
+            controls.update();
+            syncViewCube();
+            renderHost.render(scene, camera);
+          } catch {
+            /* 上下文丢失后 render 可能抛错，避免拖垮 React */
+          }
+        };
+        tick();
+
+        try {
+          stage = await createWorkflowModelViewerStageAsync(scene, renderer, null, {
+            signal: abortEnv.signal,
+          });
+        } catch (e) {
+          if (cancelled || (e instanceof DOMException && e.name === 'AbortError')) return;
+          if (!cancelled) {
+            setStatus('error');
+            setMessage('3D 环境（HDR）加载失败，请刷新重试。');
+          }
+          return;
+        }
+        if (cancelled) {
+          stage?.dispose();
+          stage = null;
+          return;
+        }
+        if (format === 'gltf') {
+          new GLTFLoader().load(src, (gltf) => finishLoad(gltf.scene), undefined, onLoadError);
+        } else if (format === 'fbx') {
+          new FBXLoader().load(src, (group) => finishLoad(group), undefined, onLoadError);
+        } else {
+          new OBJLoader().load(src, (group) => finishLoad(group), undefined, onLoadError);
+        }
+      } catch (e) {
+        if (cancelled) return;
+        setStatus('error');
+        setMessage(e instanceof Error ? e.message : '3D 渲染初始化失败。');
       }
     })();
-
-    const ro = new ResizeObserver(() => {
-      if (cancelled || !mount) return;
-      const w = Math.max(1, mount.clientWidth || root.clientWidth);
-      const h = Math.max(1, mount.clientHeight || root.clientHeight || 1);
-      camera.aspect = w / h;
-      camera.updateProjectionMatrix();
-      renderer.setSize(w, h);
-    });
-    ro.observe(root);
-
-    const tick = () => {
-      if (cancelled) return;
-      rafId = requestAnimationFrame(tick);
-      try {
-        const gl = renderer.getContext() as WebGLRenderingContext | null;
-        if (gl?.isContextLost?.()) return;
-        controls.update();
-        syncViewCube();
-        renderer.render(scene, camera);
-      } catch {
-        /* 上下文丢失后 render 可能抛错，避免拖垮 React */
-      }
-    };
-    tick();
 
     return () => {
       cancelled = true;
       abortEnv.abort();
       cancelAnimationFrame(rafId);
-      ro.disconnect();
-      controls.dispose();
-      renderer.domElement.removeEventListener('mousedown', onMouseDown);
-      renderer.domElement.removeEventListener('mouseup', onMouseUp);
-      renderer.domElement.removeEventListener('mouseleave', onMouseUp);
-      renderer.domElement.removeEventListener('contextmenu', onContextMenu);
-      renderer.domElement.removeEventListener('keydown', onKeyDown);
-      renderer.domElement.removeEventListener('webglcontextlost', onGlLost);
+      resizeObserver?.disconnect();
+      controls?.dispose();
+      if (domElement) {
+        domElement.removeEventListener('mousedown', onMouseDown);
+        domElement.removeEventListener('mouseup', onMouseUp);
+        domElement.removeEventListener('mouseleave', onMouseUp);
+        domElement.removeEventListener('contextmenu', onContextMenu);
+        domElement.removeEventListener('keydown', onKeyDown);
+        domElement.removeEventListener('webglcontextlost', onGlLost);
+      }
       applyDisplayModeRef.current = null;
       resetCameraRef.current = null;
       setModelViewDirectionRef.current = null;
@@ -912,8 +955,7 @@ const ImageModel3DViewer: React.FC<LazyImagePreviewViewerProps> = ({
       wireMaterial.dispose();
       normalMaterial.dispose();
       stage?.dispose();
-      renderer.dispose();
-      if (renderer.domElement.parentNode === mount) mount.removeChild(renderer.domElement);
+      renderHost?.dispose();
     };
   }, [modelSrc, modelFileName, model3dAssetId, pbrStorageKey, publishModelPbrEdit]);
 

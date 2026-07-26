@@ -25,6 +25,7 @@ describe('persistent AI gateway job store', () => {
       {
         id: 'aijob_persist_1',
         modality: 'image',
+        provider: 'vertex-site',
         model: 'gemini-3-pro-image-preview',
         userId: 'user_1',
         input: {
@@ -63,6 +64,7 @@ describe('persistent AI gateway job store', () => {
       {
         id: 'aijob_persist_2',
         modality: 'image',
+        provider: 'vertex-site',
         model: 'gemini-3-pro-image-preview',
         userId: 'user_2',
         input: {
@@ -126,6 +128,7 @@ describe('persistent AI gateway job store', () => {
     const plan = createAiGatewayJobPlan({
       id: 'aijob_persist_large_output',
       modality: 'image',
+      provider: 'vertex-site',
       model: 'gemini-3-pro-image-preview',
       input: { contents: [{ role: 'user', parts: [{ text: 'tiny prompt' }] }] },
     });
@@ -164,6 +167,7 @@ describe('persistent AI gateway job store', () => {
       {
         id: 'aijob_filter_image',
         modality: 'image',
+        provider: 'vertex-site',
         model: 'gemini-3-pro-image-preview',
         userId: 'user_filter_1',
         input: { contents: [{ role: 'user', parts: [{ text: 'filter image' }] }] },
@@ -202,6 +206,7 @@ describe('persistent AI gateway job store', () => {
       {
         id: 'aijob_fail_upstream',
         modality: 'image',
+        provider: 'vertex-site',
         model: 'gemini-3-pro-image-preview',
         userId: 'user_fail_1',
         input: { contents: [{ role: 'user', parts: [{ text: 'x' }] }] },
@@ -212,6 +217,7 @@ describe('persistent AI gateway job store', () => {
       {
         id: 'aijob_fail_bare',
         modality: 'image',
+        provider: 'vertex-site',
         model: 'gemini-3-pro-image-preview',
         userId: 'user_fail_2',
         input: { contents: [{ role: 'user', parts: [{ text: 'y' }] }] },

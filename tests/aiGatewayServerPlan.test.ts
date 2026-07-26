@@ -98,12 +98,28 @@ describe('server AI gateway job planning', () => {
     });
   });
 
-  it('plans image generation through the existing Vertex-backed AI Worker Proxy by default', () => {
+  it('refuses to silent-pick vertex-site for multi-provider Gemini without route decision', () => {
+    expect(() =>
+      createAiGatewayJobPlan({
+        id: 'aijob_test_1',
+        modality: 'image',
+        capability: 'image.generate',
+        model: 'gemini-3-pro-image-preview',
+        input: {
+          contents: [{ role: 'user', parts: [{ text: 'make a clean product render' }] }],
+          config: { responseModalities: ['IMAGE'] },
+        },
+      })
+    ).toThrow(/No selectedRoute\/provider|AI_GATEWAY_NO_PROVIDER_ROUTE/);
+  });
+
+  it('plans Gemini image through Vertex only when provider is explicit (or route decision selected)', () => {
     const plan = createAiGatewayJobPlan(
       {
         id: 'aijob_test_1',
         modality: 'image',
         capability: 'image.generate',
+        provider: 'vertex-site',
         model: 'gemini-3-pro-image-preview',
         userId: 'user_1',
         correlationId: 'corr_1',
@@ -149,6 +165,7 @@ describe('server AI gateway job planning', () => {
         id: 'aijob_text_estimate',
         modality: 'text',
         capability: 'text.generate',
+        provider: 'vertex-site',
         model: 'gemini-3-flash-preview',
         userId: 'user_1',
         input: {
@@ -704,32 +721,32 @@ describe('server AI gateway job planning', () => {
     });
   });
 
-  it('uses ops control to pause providers and fall back to the next route', () => {
-    const plan = createAiGatewayJobPlan(
-      {
-        modality: 'image',
-        model: 'gemini-3-pro-image-preview',
-        input: { contents: [{ role: 'user', parts: [{ text: 'fallback' }] }] },
-      },
-      {
-        opsControl: {
-          disabledProviders: ['vertex-site'],
-          disabledModels: [],
-          modelOverrides: [],
+  it('does not re-rank multi-provider Gemini inside createAiGatewayJobPlan when Vertex is paused', () => {
+    // Key-aware fallback belongs to resolveAiGatewayRouteDecision, not silent seed[0]/next.
+    expect(() =>
+      createAiGatewayJobPlan(
+        {
+          modality: 'image',
+          model: 'gemini-3-pro-image-preview',
+          input: { contents: [{ role: 'user', parts: [{ text: 'fallback' }] }] },
         },
-      }
-    );
-
-    expect(plan.route.providerId).toBe('gemini-aistudio');
-    expect(plan.route.workerId).toBe('image-worker');
-    expect(plan.adapterRequest.body.aiBackend).toBeUndefined();
+        {
+          opsControl: {
+            disabledProviders: ['vertex-site'],
+            disabledModels: [],
+            modelOverrides: [],
+          },
+        }
+      )
+    ).toThrow(/No selectedRoute\/provider|AI_GATEWAY_NO_PROVIDER_ROUTE/);
   });
 
-  it('keeps legacy vertex-gemini pause rules compatible with vertex-site routes', () => {
+  it('materializes gemini-aistudio when route decision (or explicit provider) selects it after Vertex pause', () => {
     const plan = createAiGatewayJobPlan(
       {
         modality: 'image',
         model: 'gemini-3-pro-image-preview',
+        provider: 'gemini-aistudio',
         input: { contents: [{ role: 'user', parts: [{ text: 'fallback' }] }] },
       },
       {
@@ -742,6 +759,7 @@ describe('server AI gateway job planning', () => {
     );
 
     expect(plan.route.providerId).toBe('gemini-aistudio');
+    expect(plan.adapterRequest.body.aiBackend).toBeUndefined();
   });
 
   it('uses ops control to pause a model or override it before routing', () => {
@@ -749,6 +767,7 @@ describe('server AI gateway job planning', () => {
       createAiGatewayJobPlan(
         {
           modality: 'image',
+          provider: 'vertex-site',
           model: 'gemini-3-pro-image-preview',
           input: { contents: [{ role: 'user', parts: [{ text: 'blocked' }] }] },
         },
@@ -765,6 +784,7 @@ describe('server AI gateway job planning', () => {
     const plan = createAiGatewayJobPlan(
       {
         modality: 'image',
+        provider: 'vertex-site',
         model: 'gemini-3-pro-image-preview',
         input: { contents: [{ role: 'user', parts: [{ text: 'downgrade' }] }] },
       },

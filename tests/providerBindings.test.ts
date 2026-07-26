@@ -63,4 +63,22 @@ describe("providerBindings", () => {
     expect(aistudio.length).toBeGreaterThan(0);
     expect(aistudio.every((b) => !b.defaultEnabled)).toBe(true);
   });
+
+  it("offers 302.AI / AIHubMix OpenAI-compatible channels on Gemini bindings as opt-in", () => {
+    const bindings = getBindingsForRegistry("gemini-2.5-flash", "text");
+    const via302 = bindings.find((b) => b.channel === "302ai-openai");
+    const viaMix = bindings.find((b) => b.channel === "aihubmix-openai");
+    expect(via302).toMatchObject({
+      registryId: "gemini-2.5-flash",
+      role: "text",
+      priority: 35,
+      defaultEnabled: false,
+    });
+    expect(viaMix).toMatchObject({
+      registryId: "gemini-2.5-flash",
+      role: "text",
+      priority: 36,
+      defaultEnabled: false,
+    });
+  });
 });

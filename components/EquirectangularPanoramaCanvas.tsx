@@ -13,6 +13,7 @@ import {
   worldDirOnFlippedPanoSphereToEquirectUv,
   wrap01PanoU,
 } from '../services/panoEquirectThreeMapping';
+import { createRenderHost, type RenderHost } from '../services/renderCore';
 
 const DEFAULT_ORBIT_D = 0.02;
 const DEFAULT_PANO_FOV = 70;
@@ -144,9 +145,10 @@ export const EquirectangularPanoramaCanvas = forwardRef<
     camera: THREE.PerspectiveCamera | null;
     mesh: THREE.Mesh | null;
     renderer: THREE.WebGLRenderer | null;
+    host: RenderHost | null;
     scene: THREE.Scene | null;
     controls: OrbitControls | null;
-  }>({ camera: null, mesh: null, renderer: null, scene: null, controls: null });
+  }>({ camera: null, mesh: null, renderer: null, host: null, scene: null, controls: null });
 
   const animListenersRef = useRef(new Set<() => void>());
   const savedPanoPoseRef = useRef<SavedPanoPose | null>(null);
@@ -222,7 +224,11 @@ export const EquirectangularPanoramaCanvas = forwardRef<
         };
       },
       captureViewDataUrl(mime, quality) {
-        const { renderer } = liveRef.current;
+        const { host, renderer } = liveRef.current;
+        if (host) {
+          const fromHost = host.capture(mime ?? 'image/png', quality);
+          if (fromHost) return fromHost;
+        }
         if (!renderer) return null;
         try {
           return renderer.domElement.toDataURL(mime ?? 'image/png', quality);
@@ -301,6 +307,12 @@ export const EquirectangularPanoramaCanvas = forwardRef<
     let material: THREE.MeshBasicMaterial | null = null;
     let texture: THREE.Texture | null = null;
     let controls: OrbitControls | null = null;
+    let renderHost: RenderHost | null = null;
+    let renderer: THREE.WebGLRenderer | null = null;
+    let domElement: HTMLCanvasElement | null = null;
+    let resizeObserver: ResizeObserver | null = null;
+    const geometry = new THREE.SphereGeometry(500, 64, 48);
+    geometry.scale(-1, 1, 1);
 
     const width = Math.max(1, mount.clientWidth || root.clientWidth);
     const height = Math.max(1, mount.clientHeight || root.clientHeight || width * 0.56);
@@ -310,15 +322,6 @@ export const EquirectangularPanoramaCanvas = forwardRef<
 
     const camera = new THREE.PerspectiveCamera(DEFAULT_PANO_FOV, width / height, 0.1, 2000);
     camera.position.set(DEFAULT_ORBIT_D, 0, 0);
-
-    /** `preserveDrawingBuffer`：`captureViewDataUrl` / 裁切依赖 `toDataURL`，默认 false 时帧缓冲可能被清空导致透明快照 */
-    const renderer = new THREE.WebGLRenderer({ antialias: false, alpha: false, preserveDrawingBuffer: true });
-    renderer.setSize(width, height);
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
-    renderer.outputColorSpace = THREE.SRGBColorSpace;
-
-    const geometry = new THREE.SphereGeometry(500, 64, 48);
-    geometry.scale(-1, 1, 1);
 
     const onWheelZoom = (e: WheelEvent) => {
       e.preventDefault();
@@ -332,16 +335,16 @@ export const EquirectangularPanoramaCanvas = forwardRef<
     };
 
     const onCanvasMouseDown = () => {
-      renderer.domElement.style.cursor = 'grabbing';
+      if (domElement) domElement.style.cursor = 'grabbing';
     };
     const onCanvasMouseUp = () => {
-      renderer.domElement.style.cursor = 'grab';
+      if (domElement) domElement.style.cursor = 'grab';
     };
 
     const onCanvasDblClick = (e: MouseEvent) => {
       e.preventDefault();
       e.stopPropagation();
-      if (!controls) return;
+      if (!controls || !renderer) return;
       const rw = Math.max(1, mount.clientWidth || root.clientWidth);
       const rh = Math.max(1, mount.clientHeight || root.clientHeight || rw * 0.56);
       camera.position.set(DEFAULT_ORBIT_D, 0, 0);
@@ -356,111 +359,142 @@ export const EquirectangularPanoramaCanvas = forwardRef<
       renderer.render(scene, camera);
     };
 
-    while (mount.firstChild) {
-      mount.removeChild(mount.firstChild);
-    }
-    mount.appendChild(renderer.domElement);
-    renderer.domElement.style.display = 'block';
-    renderer.domElement.style.width = '100%';
-    renderer.domElement.style.height = '100%';
-    renderer.domElement.style.cursor = 'grab';
-    renderer.domElement.addEventListener('wheel', onWheelZoom, { passive: false });
-    renderer.domElement.addEventListener('mousedown', onCanvasMouseDown);
-    renderer.domElement.addEventListener('mouseup', onCanvasMouseUp);
-    renderer.domElement.addEventListener('dblclick', onCanvasDblClick);
-
-    controls = new OrbitControls(camera, renderer.domElement);
-    controls.enablePan = false;
-    controls.enableZoom = false;
-    controls.rotateSpeed = -0.32;
-    controls.minPolarAngle = 0.08;
-    controls.maxPolarAngle = Math.PI - 0.08;
-    controls.target.set(0, 0, 0);
-    controls.minDistance = DEFAULT_ORBIT_D;
-    controls.maxDistance = DEFAULT_ORBIT_D;
-    controls.enableDamping = true;
-    controls.dampingFactor = 0.08;
-    controls.update();
-
-    liveRef.current = { camera, mesh: null, renderer, scene, controls };
-
     setStatus('loading');
-    void loadImageElement(imageSrc)
-      .then((img) => {
+
+    void (async () => {
+      try {
+        while (mount.firstChild) {
+          mount.removeChild(mount.firstChild);
+        }
+
+        /** `preserveDrawingBuffer`：截图/裁切依赖 `toDataURL`；截图稳定性优先经典 WebGL */
+        renderHost = createRenderHost({
+          preferredBackend: 'webgl',
+          fallbackBackend: 'webgl',
+          requireClassicWebGl: true,
+          container: mount,
+          visual: {
+            antialias: false,
+            alpha: false,
+            preserveDrawingBuffer: true,
+            outputColorSpace: THREE.SRGBColorSpace,
+          },
+        });
+        await renderHost.init();
         if (cancelled) return;
-        let tex: THREE.CanvasTexture;
-        try {
-          tex = buildPanoramaTextureFromImage(img);
-        } catch {
-          if (!cancelled) setStatus('error');
-          return;
-        }
-        if (cancelled) {
-          tex.dispose();
-          return;
-        }
-        texture = tex;
-        material = new THREE.MeshBasicMaterial({ map: texture });
-        mesh = new THREE.Mesh(geometry, material);
-        scene.add(mesh);
-        liveRef.current = { camera, mesh, renderer, scene, controls };
 
-        const pose = savedPanoPoseRef.current;
-        const keyOk =
-          typeof preserveViewKey === 'string' &&
-          preserveViewKey.length > 0 &&
-          lastSavedPanoPreserveKeyRef.current === preserveViewKey;
-        if (pose && keyOk) {
-          camera.position.set(pose.pos[0], pose.pos[1], pose.pos[2]);
-          camera.quaternion.set(pose.quat[0], pose.quat[1], pose.quat[2], pose.quat[3]);
-          camera.fov = pose.fov;
-          camera.aspect = width / height;
+        const raw = renderHost.getRawRenderer();
+        const canvas = renderHost.getDomElement();
+        if (!(raw instanceof THREE.WebGLRenderer) || !canvas) {
+          throw new Error('RenderHost did not produce a WebGLRenderer');
+        }
+        renderer = raw;
+        domElement = canvas;
+
+        renderHost.resize(width, height, Math.min(window.devicePixelRatio, 1.5));
+        canvas.style.display = 'block';
+        canvas.style.width = '100%';
+        canvas.style.height = '100%';
+        canvas.style.cursor = 'grab';
+        canvas.addEventListener('wheel', onWheelZoom, { passive: false });
+        canvas.addEventListener('mousedown', onCanvasMouseDown);
+        canvas.addEventListener('mouseup', onCanvasMouseUp);
+        canvas.addEventListener('dblclick', onCanvasDblClick);
+
+        controls = new OrbitControls(camera, canvas);
+        controls.enablePan = false;
+        controls.enableZoom = false;
+        controls.rotateSpeed = -0.32;
+        controls.minPolarAngle = 0.08;
+        controls.maxPolarAngle = Math.PI - 0.08;
+        controls.target.set(0, 0, 0);
+        controls.minDistance = DEFAULT_ORBIT_D;
+        controls.maxDistance = DEFAULT_ORBIT_D;
+        controls.enableDamping = true;
+        controls.dampingFactor = 0.08;
+        controls.update();
+
+        liveRef.current = { camera, mesh: null, renderer, host: renderHost, scene, controls };
+
+        void loadImageElement(imageSrc)
+          .then((img) => {
+            if (cancelled || !controls || !renderer) return;
+            let tex: THREE.CanvasTexture;
+            try {
+              tex = buildPanoramaTextureFromImage(img);
+            } catch {
+              if (!cancelled) setStatus('error');
+              return;
+            }
+            if (cancelled) {
+              tex.dispose();
+              return;
+            }
+            texture = tex;
+            material = new THREE.MeshBasicMaterial({ map: texture });
+            mesh = new THREE.Mesh(geometry, material);
+            scene.add(mesh);
+            liveRef.current = { camera, mesh, renderer, host: renderHost, scene, controls };
+
+            const pose = savedPanoPoseRef.current;
+            const keyOk =
+              typeof preserveViewKey === 'string' &&
+              preserveViewKey.length > 0 &&
+              lastSavedPanoPreserveKeyRef.current === preserveViewKey;
+            if (pose && keyOk) {
+              camera.position.set(pose.pos[0], pose.pos[1], pose.pos[2]);
+              camera.quaternion.set(pose.quat[0], pose.quat[1], pose.quat[2], pose.quat[3]);
+              camera.fov = pose.fov;
+              camera.aspect = width / height;
+              camera.updateProjectionMatrix();
+              camera.updateMatrixWorld(true);
+              controls.target.set(0, 0, 0);
+              zeroOrbitControlDeltas(controls);
+              controls.update();
+              renderer.render(scene, camera);
+            }
+
+            controls.saveState();
+            setStatus('ready');
+          })
+          .catch(() => {
+            if (!cancelled) setStatus('error');
+          });
+
+        resizeObserver = new ResizeObserver(() => {
+          if (cancelled || !mount || !renderHost) return;
+          const w = Math.max(1, mount.clientWidth || root.clientWidth);
+          const h = Math.max(1, mount.clientHeight || root.clientHeight);
+          camera.aspect = w / h;
           camera.updateProjectionMatrix();
-          camera.updateMatrixWorld(true);
-          controls.target.set(0, 0, 0);
-          zeroOrbitControlDeltas(controls);
-          controls.update();
-          renderer.render(scene, camera);
-        }
+          renderHost.resize(w, h, Math.min(window.devicePixelRatio, 1.5));
+        });
+        resizeObserver.observe(root);
 
-        controls.saveState();
-        setStatus('ready');
-      })
-      .catch(() => {
-        if (!cancelled) setStatus('error');
-      });
-
-    const ro = new ResizeObserver(() => {
-      if (cancelled || !mount) return;
-      const w = Math.max(1, mount.clientWidth || root.clientWidth);
-      const h = Math.max(1, mount.clientHeight || root.clientHeight);
-      camera.aspect = w / h;
-      camera.updateProjectionMatrix();
-      renderer.setSize(w, h);
-    });
-    ro.observe(root);
-
-    let lastPanoAnimSig = '';
-    const tick = () => {
-      if (cancelled) return;
-      animationId = requestAnimationFrame(tick);
-      controls?.update();
-      const el = renderer.domElement;
-      const sig = panoramaAnimSignature(camera, el.width, el.height);
-      const animChanged = sig !== lastPanoAnimSig;
-      if (animChanged) lastPanoAnimSig = sig;
-      renderer.render(scene, camera);
-      if (animChanged) {
-        for (const fn of animListenersRef.current) {
-          try {
-            fn();
-          } catch {
-            /* ignore */
+        let lastPanoAnimSig = '';
+        const tick = () => {
+          if (cancelled || !renderHost || !domElement) return;
+          animationId = requestAnimationFrame(tick);
+          controls?.update();
+          const sig = panoramaAnimSignature(camera, domElement.width, domElement.height);
+          const animChanged = sig !== lastPanoAnimSig;
+          if (animChanged) lastPanoAnimSig = sig;
+          renderHost.render(scene, camera);
+          if (animChanged) {
+            for (const fn of animListenersRef.current) {
+              try {
+                fn();
+              } catch {
+                /* ignore */
+              }
+            }
           }
-        }
+        };
+        tick();
+      } catch {
+        if (!cancelled) setStatus('error');
       }
-    };
-    tick();
+    })();
 
     return () => {
       cancelled = true;
@@ -484,22 +518,28 @@ export const EquirectangularPanoramaCanvas = forwardRef<
         savedPanoPoseRef.current = null;
         lastSavedPanoPreserveKeyRef.current = undefined;
       }
-      liveRef.current = { camera: null, mesh: null, renderer: null, scene: null, controls: null };
+      liveRef.current = {
+        camera: null,
+        mesh: null,
+        renderer: null,
+        host: null,
+        scene: null,
+        controls: null,
+      };
       cancelAnimationFrame(animationId);
-      ro.disconnect();
-      renderer.domElement.removeEventListener('wheel', onWheelZoom);
-      renderer.domElement.removeEventListener('mousedown', onCanvasMouseDown);
-      renderer.domElement.removeEventListener('mouseup', onCanvasMouseUp);
-      renderer.domElement.removeEventListener('dblclick', onCanvasDblClick);
+      resizeObserver?.disconnect();
+      if (domElement) {
+        domElement.removeEventListener('wheel', onWheelZoom);
+        domElement.removeEventListener('mousedown', onCanvasMouseDown);
+        domElement.removeEventListener('mouseup', onCanvasMouseUp);
+        domElement.removeEventListener('dblclick', onCanvasDblClick);
+      }
       controls?.dispose();
       if (mesh) scene.remove(mesh);
       geometry.dispose();
       material?.dispose();
       texture?.dispose();
-      renderer.dispose();
-      if (renderer.domElement.parentNode === mount) {
-        mount.removeChild(renderer.domElement);
-      }
+      renderHost?.dispose();
     };
   }, [imageSrc, preserveViewKey]);
 

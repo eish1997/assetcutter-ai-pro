@@ -30,11 +30,6 @@ import {
   parseJsonObjectFromModelText,
   buildStoryboardSheetStructureAnalysisPrompt,
   generatePBRTexture as generatePBRTextureRaw,
-  generateArenaABPrompts as generateArenaABPromptsRaw,
-  generateArenaPrompts as generateArenaPromptsRaw,
-  optimizeLoserPrompt as optimizeLoserPromptRaw,
-  generateNewChallenger as generateNewChallengerRaw,
-  translateToChinese as translateToChineseRaw,
   type StoryboardSheetStructureAnalysisRaw,
   type GeminiRequestOptions,
 } from "./geminiService";
@@ -390,7 +385,7 @@ export async function dialogGenerateImage(
 
 const SITE_ASSISTANT_SYSTEM = `You are the in-app assistant for AssetCutter AI Pro, a web app for intelligent asset production. You help users with:
 - How to use features: 工作流 (compose / generate), 贴图修缝 / 生成贴图, 生成3D, 能力预设, 提示词擂台, 设置.
-- Troubleshooting: e.g. "贴图修缝" needs Python backend or Pyodide; 生成贴图 / 工作流生图 need Gemini API Key saved in Settings.
+- Troubleshooting: e.g. "贴图修缝" needs Python backend or Pyodide; 生成贴图 / 工作流生图 go through the platform AI Gateway (operator Key pool in Admin).
 - Other questions about the product. Reply in the same language as the user. Be concise and helpful.`;
 
 /** @kind workflow_chat — 网站助手（经 gate → AI Gateway Job，C8） */
@@ -719,64 +714,308 @@ Output ONLY the image.`;
   );
 }
 
-/** @kind workflow_chat — 擂台 A/B 提示词（经 gate） */
+function arenaWriterSystemPrompt(options?: GeminiRequestOptions): string {
+  const fromOpt =
+    options?.arenaPromptWriter?.trim() ||
+    options?.arenaPromptAb?.trim() ||
+    options?.arenaPromptAbN?.trim();
+  const base = (fromOpt || DEFAULT_PROMPTS.arena_writer).trim();
+  return base || DEFAULT_PROMPTS.arena_writer;
+}
+
+function stripJsonFence(raw: string): string {
+  return raw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
+}
+
+async function arenaTextViaGateway(args: {
+  contents: Array<{ role: "user" | "model"; parts: Array<{ text: string }> }>;
+  model?: string;
+  uiSource: string;
+  abortSignal?: AbortSignal;
+  responseMimeType?: string;
+}): Promise<string> {
+  const model = String(args.model || "").trim() || DEFAULT_MODEL_TEXT;
+  return runUnifiedContentsTextGeneration({
+    contents: args.contents,
+    model,
+    responseMimeType: args.responseMimeType,
+    uiSource: args.uiSource,
+    abortSignal: args.abortSignal,
+    metadata: { source: args.uiSource },
+  });
+}
+
+/** @kind workflow_chat — 擂台 A/B 提示词（经 gate → AI Gateway Job；不经浏览器 Vertex 同步代理） */
 export async function generateArenaABPrompts(
-  userDescription: Parameters<typeof generateArenaABPromptsRaw>[0],
-  model?: Parameters<typeof generateArenaABPromptsRaw>[1],
-  options?: Parameters<typeof generateArenaABPromptsRaw>[2]
-): ReturnType<typeof generateArenaABPromptsRaw> {
+  userDescription: string,
+  model?: string,
+  options?: GeminiRequestOptions
+): Promise<{ reasoning?: string; promptA: string; promptB: string; rawResponse?: string }> {
   const resolvedModel = model != null && model !== "" ? String(model) : undefined;
   return runMeteredAiCall(
-    { kind: "workflow_chat", registryId: resolvedModel, role: "text", debugFields: () => ({ registryId: resolvedModel }) },
-    () => generateArenaABPromptsRaw(userDescription, model, options)
+    {
+      kind: "workflow_chat",
+      registryId: resolvedModel,
+      role: "text",
+      debugFields: () => ({ registryId: resolvedModel, textPath: "ai_gateway" }),
+    },
+    async () => {
+      const sysAb = arenaWriterSystemPrompt(options);
+      const raw = await arenaTextViaGateway({
+        contents: [
+          {
+            role: "user",
+            parts: [
+              { text: sysAb },
+              {
+                text: `User description: ${(userDescription || "").trim().slice(0, 500)}\n\nN = 2. Output exactly 2 prompts (promptA, promptB). Important: These prompts will be sent to the image model together with the user's uploaded image. Ensure each prompt is an instruction to modify or transform that image (not a standalone description of a new scene).`,
+              },
+            ],
+          },
+        ],
+        model: resolvedModel,
+        uiSource: "unifiedAiGateway.generateArenaABPrompts",
+        abortSignal: options?.abortSignal,
+        responseMimeType: "application/json",
+      });
+      try {
+        const cleaned = stripJsonFence(raw);
+        const obj = JSON.parse(cleaned);
+        const reasoning = typeof obj.reasoning === "string" ? obj.reasoning.trim() : undefined;
+        const promptA = typeof obj.promptA === "string" ? obj.promptA.trim() : "";
+        const promptB = typeof obj.promptB === "string" ? obj.promptB.trim() : "";
+        if (!promptA || !promptB) throw new Error("Missing promptA or promptB");
+        return { reasoning, promptA, promptB, rawResponse: raw };
+      } catch (e) {
+        const fallback = (raw || "").split(/\n+/).map((s) => s.trim()).filter(Boolean);
+        if (fallback.length >= 2) return { promptA: fallback[0], promptB: fallback[1], rawResponse: raw };
+        throw new Error("Failed to parse arena A/B prompts: " + String(e));
+      }
+    }
   );
 }
 
-/** @kind workflow_chat — 擂台提示词（经 gate） */
+/** @kind workflow_chat — 擂台提示词（经 gate → AI Gateway Job） */
 export async function generateArenaPrompts(
-  ...args: Parameters<typeof generateArenaPromptsRaw>
-): ReturnType<typeof generateArenaPromptsRaw> {
-  const model = args[2];
+  userDescription: string,
+  count: 2 | 3 | 4,
+  model?: string,
+  options?: GeminiRequestOptions
+): Promise<{ reasoning?: string; prompts: string[]; rawResponse?: string }> {
+  if (count === 2) {
+    const out = await generateArenaABPrompts(userDescription, model, options);
+    return { reasoning: out.reasoning, prompts: [out.promptA, out.promptB], rawResponse: out.rawResponse };
+  }
   const resolvedModel = model != null && model !== "" ? String(model) : undefined;
   return runMeteredAiCall(
-    { kind: "workflow_chat", registryId: resolvedModel, role: "text", debugFields: () => ({ registryId: resolvedModel }) },
-    () => generateArenaPromptsRaw(...args)
+    {
+      kind: "workflow_chat",
+      registryId: resolvedModel,
+      role: "text",
+      debugFields: () => ({ registryId: resolvedModel, textPath: "ai_gateway" }),
+    },
+    async () => {
+      const sysWriter = arenaWriterSystemPrompt(options);
+      const raw = await arenaTextViaGateway({
+        contents: [
+          {
+            role: "user",
+            parts: [
+              { text: sysWriter },
+              {
+                text: `User description: ${(userDescription || "").trim().slice(0, 500)}\n\nN = ${count}. Output exactly ${count} prompts (promptA, promptB${count >= 3 ? ", promptC" : ""}${count >= 4 ? ", promptD" : ""}). Important: These prompts will be sent to the image model together with the user's uploaded image; ensure each prompt is an instruction to modify or transform that image (not a standalone description of a new scene).`,
+              },
+            ],
+          },
+        ],
+        model: resolvedModel,
+        uiSource: "unifiedAiGateway.generateArenaPrompts",
+        abortSignal: options?.abortSignal,
+        responseMimeType: "application/json",
+      });
+      try {
+        const cleaned = stripJsonFence(raw);
+        const obj = JSON.parse(cleaned);
+        const reasoning = typeof obj.reasoning === "string" ? obj.reasoning.trim() : undefined;
+        const prompts: string[] = [
+          obj.promptA,
+          obj.promptB,
+          count >= 3 && obj.promptC ? obj.promptC : null,
+          count >= 4 && obj.promptD ? obj.promptD : null,
+        ]
+          .filter(Boolean)
+          .map((p: string) => (typeof p === "string" ? p : "").trim());
+        if (prompts.length !== count) throw new Error(`Expected ${count} prompts, got ${prompts.length}`);
+        return { reasoning, prompts, rawResponse: raw };
+      } catch (e) {
+        const fallback = (raw || "")
+          .split(/\n+/)
+          .map((s: string) => s.trim())
+          .filter(Boolean)
+          .slice(0, count);
+        if (fallback.length >= count) return { prompts: fallback, rawResponse: raw };
+        throw new Error("Failed to parse arena N prompts: " + String(e));
+      }
+    }
   );
 }
 
-/** @kind workflow_chat — 擂台优化败者（经 gate） */
+/** @kind workflow_chat — 擂台优化败者（经 gate → AI Gateway Job） */
 export async function optimizeLoserPrompt(
-  ...args: Parameters<typeof optimizeLoserPromptRaw>
-): ReturnType<typeof optimizeLoserPromptRaw> {
-  const model = args[3];
+  winnerPrompt: string,
+  loserPrompt: string,
+  userDescription?: string,
+  model?: string,
+  allPreviousPrompts?: string[],
+  userReportedGaps?: string[],
+  winnerStrength?: string,
+  loserRemark?: string,
+  options?: GeminiRequestOptions
+): Promise<{ reasoning?: string; prompt: string; rawResponse?: string }> {
   const resolvedModel = model != null && model !== "" ? String(model) : undefined;
   return runMeteredAiCall(
-    { kind: "workflow_chat", registryId: resolvedModel, role: "text", debugFields: () => ({ registryId: resolvedModel }) },
-    () => optimizeLoserPromptRaw(...args)
+    {
+      kind: "workflow_chat",
+      registryId: resolvedModel,
+      role: "text",
+      debugFields: () => ({ registryId: resolvedModel, textPath: "ai_gateway" }),
+    },
+    async () => {
+      const userText = [
+        `Winner prompt (user preferred): ${winnerPrompt}`,
+        `Loser prompt (to improve): ${loserPrompt}`,
+        userDescription ? `Original user intent: ${userDescription}` : "",
+        allPreviousPrompts && allPreviousPrompts.length > 0
+          ? `Other prompts already in this arena (avoid repeating, use for context):\n${allPreviousPrompts.map((p, i) => `[${i + 1}] ${p}`).join("\n")}`
+          : "",
+        userReportedGaps && userReportedGaps.length > 0
+          ? `User-reported gaps in the loser (address or avoid these when improving): ${userReportedGaps.join(", ")}`
+          : "",
+        winnerStrength && winnerStrength.trim()
+          ? `User-reported strength of the winner (preserve or learn from): ${winnerStrength.trim()}`
+          : "",
+        loserRemark && loserRemark.trim()
+          ? `User-reported remark about the loser (one sentence, address when improving): ${loserRemark.trim()}`
+          : "",
+      ]
+        .filter(Boolean)
+        .join("\n\n");
+      const sysOpt =
+        (options?.arenaPromptOptimizeLoser ?? DEFAULT_PROMPTS.arena_optimize_loser).trim() ||
+        DEFAULT_PROMPTS.arena_optimize_loser;
+      const raw = await arenaTextViaGateway({
+        contents: [{ role: "user", parts: [{ text: sysOpt }, { text: userText }] }],
+        model: resolvedModel,
+        uiSource: "unifiedAiGateway.optimizeLoserPrompt",
+        abortSignal: options?.abortSignal,
+        responseMimeType: "application/json",
+      });
+      try {
+        const cleaned = stripJsonFence(raw);
+        const obj = JSON.parse(cleaned);
+        const reasoning = typeof obj.reasoning === "string" ? obj.reasoning.trim() : undefined;
+        const prompt = (typeof obj.prompt === "string" ? obj.prompt : raw)
+          .replace(/^["']|["']$/g, "")
+          .trim()
+          .slice(0, 2000);
+        if (!prompt) throw new Error("Missing prompt in response");
+        return { reasoning, prompt, rawResponse: raw };
+      } catch (e) {
+        throw new Error("Failed to parse optimize-loser response: " + String(e));
+      }
+    }
   );
 }
 
-/** @kind workflow_chat — 擂台新挑战者（经 gate） */
+/** @kind workflow_chat — 擂台新挑战者（经 gate → AI Gateway Job） */
 export async function generateNewChallenger(
-  ...args: Parameters<typeof generateNewChallengerRaw>
-): ReturnType<typeof generateNewChallengerRaw> {
-  const model = args[2];
+  userIntent: string,
+  championPrompt: string,
+  allPreviousPrompts: string[],
+  model?: string,
+  options?: GeminiRequestOptions
+): Promise<{ reasoning?: string; prompt: string; rawResponse?: string }> {
   const resolvedModel = model != null && model !== "" ? String(model) : undefined;
   return runMeteredAiCall(
-    { kind: "workflow_chat", registryId: resolvedModel, role: "text", debugFields: () => ({ registryId: resolvedModel }) },
-    () => generateNewChallengerRaw(...args)
+    {
+      kind: "workflow_chat",
+      registryId: resolvedModel,
+      role: "text",
+      debugFields: () => ({ registryId: resolvedModel, textPath: "ai_gateway" }),
+    },
+    async () => {
+      const userText = [
+        `Original user intent: ${userIntent}`,
+        `Current champion (winner) prompt: ${championPrompt}`,
+        allPreviousPrompts.length > 0
+          ? `All other prompts already in this arena (be distinct from these):\n${allPreviousPrompts.map((p, i) => `[${i + 1}] ${p}`).join("\n")}`
+          : "",
+      ]
+        .filter(Boolean)
+        .join("\n\n");
+      const sysNc =
+        (options?.arenaPromptNewChallenger ?? DEFAULT_PROMPTS.arena_new_challenger).trim() ||
+        DEFAULT_PROMPTS.arena_new_challenger;
+      const raw = await arenaTextViaGateway({
+        contents: [{ role: "user", parts: [{ text: sysNc }, { text: userText }] }],
+        model: resolvedModel,
+        uiSource: "unifiedAiGateway.generateNewChallenger",
+        abortSignal: options?.abortSignal,
+        responseMimeType: "application/json",
+      });
+      try {
+        const cleaned = stripJsonFence(raw || "");
+        const obj = JSON.parse(cleaned);
+        const reasoning = typeof obj.reasoning === "string" ? obj.reasoning.trim() : undefined;
+        const prompt = (typeof obj.prompt === "string" ? obj.prompt : raw)
+          .replace(/^["']|["']$/g, "")
+          .trim()
+          .slice(0, 2000);
+        if (!prompt) throw new Error("Missing prompt in response");
+        return { reasoning, prompt, rawResponse: raw };
+      } catch (e) {
+        throw new Error("Failed to parse new-challenger response: " + String(e));
+      }
+    }
   );
 }
 
-/** @kind workflow_chat — 翻译（经 gate） */
+/** @kind workflow_chat — 翻译（经 gate → AI Gateway Job） */
 export async function translateToChinese(
-  ...args: Parameters<typeof translateToChineseRaw>
-): ReturnType<typeof translateToChineseRaw> {
-  const model = args[1];
+  text: string,
+  model?: string,
+  options?: GeminiRequestOptions
+): Promise<string> {
+  const source = (text || "").trim();
+  if (!source) return "";
   const resolvedModel = model != null && model !== "" ? String(model) : undefined;
   return runMeteredAiCall(
-    { kind: "workflow_chat", registryId: resolvedModel, role: "text", debugFields: () => ({ registryId: resolvedModel }) },
-    () => translateToChineseRaw(...args)
+    {
+      kind: "workflow_chat",
+      registryId: resolvedModel,
+      role: "text",
+      debugFields: () => ({ registryId: resolvedModel, textPath: "ai_gateway" }),
+    },
+    async () => {
+      const out = await arenaTextViaGateway({
+        contents: [
+          {
+            role: "user",
+            parts: [
+              {
+                text: "Translate the following text into concise Simplified Chinese. Keep structure, bullet points, and code-like fragments when possible. Output ONLY the translated text.",
+              },
+              { text: source.slice(0, 12000) },
+            ],
+          },
+        ],
+        model: resolvedModel,
+        uiSource: "unifiedAiGateway.translateToChinese",
+        abortSignal: options?.abortSignal,
+      });
+      if (!out?.trim()) throw new Error("Empty translation response");
+      return out.trim();
+    }
   );
 }
 

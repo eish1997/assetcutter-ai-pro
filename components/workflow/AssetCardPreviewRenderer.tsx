@@ -5,11 +5,6 @@ import { resolveWorkflowStepModelUrls } from '../../services/workflowStepModels'
 import { resolveWorkflowAssetActiveVariant, resolveWorkflowAssetKind } from '../../services/workflowAssetVariants';
 import { captureWorkflowModelThumbnailDataUrl } from '../../services/workflowModelPreviewCapture';
 import { WorkflowGridImage } from '../ProgressivePreviewImage';
-import {
-  getLazyImagePreviewViewer,
-  PreviewViewerErrorBoundary,
-  PreviewViewerFallback,
-} from '../preview';
 import AppIcon from '../ui/AppIcon';
 
 type AssetCardPreviewRendererProps = {
@@ -31,10 +26,28 @@ type AssetCardPreviewRendererProps = {
 
 const modelThumbnailCache = new Map<string, string | null>();
 const modelThumbnailPending = new Map<string, Promise<string | null>>();
-const LazyImageModel3DViewer = getLazyImagePreviewViewer('image.model3d');
+
+/** @internal vitest only */
+export function resetAssetCardModelThumbnailCachesForTests(): void {
+  modelThumbnailCache.clear();
+  modelThumbnailPending.clear();
+}
 
 function firstModelPreviewSrc(modelUrls?: string[], fallbackUrl?: string): string {
   return (modelUrls || []).find((value) => String(value || '').trim())?.trim() || String(fallbackUrl || '').trim();
+}
+
+/** Real poster/thumb already on the asset — never re-run offscreen 3D capture. */
+function hasPersistedModelThumbnail(...candidates: Array<string | undefined>): boolean {
+  for (const raw of candidates) {
+    const s = String(raw || '').trim();
+    if (!s) continue;
+    if (/^data:image\/svg\+xml/i.test(s)) continue;
+    // jpeg/png/webp data URLs, companion http(s), blob image posters, relative R2/API paths
+    if (/^data:image\//i.test(s)) return true;
+    if (/^(https?:|blob:|\/|\.\/)/i.test(s)) return true;
+  }
+  return false;
 }
 
 function modelFileNameHint(asset: WorkflowAsset, activeVariant: ReturnType<typeof resolveWorkflowAssetActiveVariant>, modelSrc: string): string {
@@ -117,38 +130,6 @@ function FilePlaceholder({ label }: { label: string }) {
   );
 }
 
-function isWorkflowModelPlaceholderPreview(src: string): boolean {
-  const s = String(src || '').trim();
-  return !s || /^data:image\/svg\+xml/i.test(s);
-}
-
-function InlineModelPreview({
-  modelSrc,
-  modelFileName,
-}: {
-  modelSrc: string;
-  modelFileName: string;
-}) {
-  if (!LazyImageModel3DViewer) return null;
-  return (
-    <div className="pointer-events-none absolute inset-0 z-0 overflow-hidden bg-[#111827]">
-      <PreviewViewerErrorBoundary mode="image.model3d" label="3D">
-        <React.Suspense fallback={<PreviewViewerFallback label="3D" />}>
-          <LazyImageModel3DViewer
-            imageSrc=""
-            modelSrc={modelSrc}
-            modelFileName={modelFileName}
-            model3dDisplayMode="material"
-            model3dShowGrid={false}
-            model3dBackfaceCulling={false}
-            className="h-full w-full min-h-0"
-          />
-        </React.Suspense>
-      </PreviewViewerErrorBoundary>
-    </div>
-  );
-}
-
 export const AssetCardPreviewRenderer: React.FC<AssetCardPreviewRendererProps> = ({
   asset,
   previewSrc,
@@ -174,16 +155,32 @@ export const AssetCardPreviewRenderer: React.FC<AssetCardPreviewRendererProps> =
       activeVariant?.kind === 'model3d' ? activeVariant?.url : ''
     ) || firstModelPreviewSrc(resolveWorkflowStepModelUrls(asset, activeKey));
   const hasModelPreview = Boolean(activeKind === 'model3d' || modelSrc);
+  // Stable key: do not include ephemeral blob: model URLs (they change every hydrate → false recapture).
   const modelThumbCacheKey =
-    hasModelPreview && modelSrc
-      ? `${asset.id}:${activeKey}:${modelSrc}`
+    hasModelPreview
+      ? `${asset.id}:${activeKey}:${String(asset.modelSourceName || activeVariant?.modelCompanionKeys?.[0] || activeVariant?.modelFormats?.[0] || 'model3d')}`
       : '';
-  const [capturedModelThumb, setCapturedModelThumb] = React.useState<string>(() =>
-    modelThumbCacheKey ? modelThumbnailCache.get(modelThumbCacheKey) || '' : ''
-  );
+  // previewSrc / posterUrl = image poster only; never treat model file URL (glb/fbx blob) as a thumb.
+  const persistedPreview =
+    hasModelPreview && hasPersistedModelThumbnail(previewSrc, activeVariant?.posterUrl);
+  const [capturedModelThumb, setCapturedModelThumb] = React.useState<string>(() => {
+    if (!modelThumbCacheKey) return '';
+    const cached = modelThumbnailCache.get(modelThumbCacheKey);
+    if (cached) return cached;
+    return '';
+  });
 
   React.useEffect(() => {
     if (!hasModelPreview || !modelSrc || !modelThumbCacheKey) {
+      setCapturedModelThumb('');
+      return;
+    }
+    // Already have a real poster/thumb on the asset — show image only, do not load 3D.
+    if (persistedPreview) {
+      const seed = String(previewSrc || activeVariant?.posterUrl || '').trim();
+      if (seed && !/^data:image\/svg\+xml/i.test(seed)) {
+        modelThumbnailCache.set(modelThumbCacheKey, seed);
+      }
       setCapturedModelThumb('');
       return;
     }
@@ -211,7 +208,8 @@ export const AssetCardPreviewRenderer: React.FC<AssetCardPreviewRendererProps> =
     }
     pending.then((thumb) => {
       modelThumbnailCache.set(modelThumbCacheKey, thumb || null);
-      if (!cancelled) setCapturedModelThumb(thumb || '');
+      if (cancelled) return;
+      setCapturedModelThumb(thumb || '');
       if (thumb) onModelThumbnailCaptured?.(asset.id, activeKey, thumb);
     });
     return () => {
@@ -219,10 +217,13 @@ export const AssetCardPreviewRenderer: React.FC<AssetCardPreviewRendererProps> =
     };
   }, [
     hasModelPreview,
+    persistedPreview,
+    previewSrc,
     activeKey,
     activeVariant?.id,
     activeVariant?.modelCompanionKeys,
     activeVariant?.modelFormats,
+    activeVariant?.posterUrl,
     asset.id,
     asset.modelSourceName,
     modelSrc,
@@ -234,14 +235,6 @@ export const AssetCardPreviewRenderer: React.FC<AssetCardPreviewRendererProps> =
     hasModelPreview
       ? capturedModelThumb || previewSrc || activeVariant?.posterUrl || ''
       : previewSrc || activeVariant?.posterUrl || activeVariant?.url || '';
-  const shouldShowLiveModelPreview =
-    hasModelPreview &&
-    modelSrc &&
-    !capturedModelThumb &&
-    isWorkflowModelPlaceholderPreview(previewSrc || activeVariant?.posterUrl || '');
-  const modelNameHint = shouldShowLiveModelPreview
-    ? modelFileNameHint(asset, activeVariant, modelSrc)
-    : '';
 
   if (activeKind === 'text' && !displaySrc.trim()) {
     const { title, body } = readableText(asset, textDisplay);
@@ -273,9 +266,7 @@ export const AssetCardPreviewRenderer: React.FC<AssetCardPreviewRendererProps> =
 
   return (
     <div className="relative flex h-full w-full justify-center bg-[#141416]">
-      {shouldShowLiveModelPreview ? (
-        <InlineModelPreview modelSrc={modelSrc} modelFileName={modelNameHint} />
-      ) : (
+      {displaySrc.trim() ? (
         <WorkflowGridImage
           fullSrc={displaySrc}
           cacheKey={cacheKey}
@@ -294,12 +285,16 @@ export const AssetCardPreviewRenderer: React.FC<AssetCardPreviewRendererProps> =
           onDragStart={(e) => e.preventDefault()}
           onIntrinsicSize={onIntrinsicSize}
         />
-      )}
+      ) : hasModelPreview ? (
+        <FilePlaceholder label={activeVariant?.modelFormats?.filter(Boolean).join(' + ') || '3D'} />
+      ) : null}
       {activeKind === 'video' ? <Badge icon="video" label="Video" compact={compactBadges} /> : null}
       {hasModelPreview ? (
         <Badge icon="cube" label={activeVariant?.modelFormats?.filter(Boolean).join(' + ') || '3D'} compact={compactBadges} />
       ) : null}
-      {!displaySrc.trim() && activeKind !== 'image' ? <FilePlaceholder label={activeVariant?.label || activeKind} /> : null}
+      {!displaySrc.trim() && !hasModelPreview && activeKind !== 'image' ? (
+        <FilePlaceholder label={activeVariant?.label || activeKind} />
+      ) : null}
       <div
         aria-hidden
         className="absolute inset-0 z-[1]"

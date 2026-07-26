@@ -139,7 +139,7 @@ describe('AI gateway model publication guard', () => {
         model: 'gemini-3-pro-image-preview',
         disabledProviders: ['vertex-site'],
       }).map((route) => route.providerId)
-    ).toEqual(['gemini-aistudio']);
+    ).toEqual(['gemini-aistudio', '302ai', 'aihubmix']);
   });
 
   it('reports paused providers separately from missing model routes', async () => {
@@ -166,14 +166,14 @@ describe('AI gateway model publication guard', () => {
       validateAiGatewayModelRouteExecutable(
         { modality: 'image', model: 'gemini-3-pro-image-preview' },
         {
-          disabledProviders: ['vertex-site', 'gemini-aistudio'],
+          disabledProviders: ['vertex-site', 'gemini-aistudio', '302ai', 'aihubmix'],
           listProviderKeys: async () => [],
         }
       )
     ).rejects.toMatchObject({
       code: 'AI_GATEWAY_PROVIDER_PAUSED',
       details: {
-        providerIds: ['vertex-site', 'gemini-aistudio'],
+        providerIds: ['vertex-site', 'gemini-aistudio', '302ai', 'aihubmix'],
         canonicalModelId: 'gemini-3-pro-image-preview',
         modality: 'image',
       },
@@ -341,6 +341,21 @@ describe('AI gateway model publication guard', () => {
       ok: true,
       checked: true,
       route: { providerId: 'volcengine-ark' },
+    });
+  });
+
+  it('selects 302ai for Gemini image when only the aggregator platform key is usable', async () => {
+    await expect(
+      validateAiGatewayModelRouteExecutable(
+        { modality: 'image', model: 'gemini-3-pro-image-preview' },
+        {
+          listProviderKeys: async () => [{ provider: '302ai', enabled: true, hasSecret: true }],
+        }
+      )
+    ).resolves.toMatchObject({
+      ok: true,
+      checked: true,
+      route: { providerId: '302ai' },
     });
   });
 

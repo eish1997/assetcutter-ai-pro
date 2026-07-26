@@ -98,14 +98,15 @@ describe('companionConnect', () => {
       },
       { paths: [cfgPath] },
     );
-    expect(r.written).toContain(cfgPath);
+    expect(r.written).toEqual([]);
+    expect(r.removed).toBe(true);
     const j = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
     expect(j.mcpServers.other.url).toBe('http://x');
-    expect(j.mcpServers['assetcutter-body'].url).toContain('19120');
+    expect(j.mcpServers['assetcutter-body']).toBeUndefined();
     fs.rmSync(tmp, { recursive: true, force: true });
   });
 
-  it('exports current connection bundle with a generated MCP token', () => {
+  it('exports connection bundle with MCP disabled (CLI-only)', () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ac-connect-export-'));
     const store = createAgentStore({ getRoot: () => path.join(tmp, 'agent-store') });
     store.ensureLayout();
@@ -121,15 +122,14 @@ describe('companionConnect', () => {
       getExportRoot: () => path.join(tmp, 'exports'),
     };
     const exported = companionConnect.exportCurrentConnectionBundle(ctx, { writeMcp: false });
-    expect(store.readSettings().mcpEnabled).toBe(true);
-    expect(String(store.readSettings().mcpToken).length).toBeGreaterThanOrEqual(16);
+    expect(store.readSettings().mcpEnabled).toBe(false);
+    expect(exported.mcpWrite.removed).toBe(true);
     expect(fs.existsSync(exported.exported.bundlePath)).toBe(true);
-    expect(fs.existsSync(exported.exported.mcpPath)).toBe(true);
     expect(exported.bundle.instructions.join('\n')).toContain(`${ALL_TOOL_SCHEMAS.length} 个 ac.*`);
     fs.rmSync(tmp, { recursive: true, force: true });
   });
 
-  it('can write a Codex MCP config from the exported connection bundle without storing the token', () => {
+  it('refuses to write Codex MCP config after MCP removal', () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ac-connect-codex-'));
     const store = createAgentStore({ getRoot: () => path.join(tmp, 'agent-store') });
     store.ensureLayout();
@@ -150,12 +150,9 @@ describe('companionConnect', () => {
       writeCodexMcp: true,
       codexConfigPath,
     });
-    expect(exported.codexMcpWrite.ok).toBe(true);
-    expect(exported.codexMcpWrite.written).toContain(codexConfigPath);
-    const text = fs.readFileSync(codexConfigPath, 'utf8');
-    expect(text).toContain('[mcp_servers.assetcutter-body]');
-    expect(text).toContain('bearer_token_env_var = "ASSETCUTTER_MCP_TOKEN"');
-    expect(text).not.toContain(String(store.readSettings().mcpToken));
+    expect(exported.codexMcpWrite.ok).toBe(false);
+    expect(exported.codexMcpWrite.removed).toBe(true);
+    expect(fs.existsSync(codexConfigPath)).toBe(false);
     fs.rmSync(tmp, { recursive: true, force: true });
   });
 

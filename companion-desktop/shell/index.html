@@ -4544,10 +4544,14 @@
       <p id="hermesSettingsHint" class="mono set-feedback" hidden></p>
     </div>
     <div class="set-section">
-      <h3 title="&#20801;&#35768;&#22806;&#37096; Agent&#65288;Hermes/Codex&#65289;&#36890;&#36807; MCP &#35843;&#29992;&#21516;&#19968;&#32452; ac.* &#36523;&#20307;&#24037;&#20855;">&#22806;&#37096; Agent&#65288;MCP&#65289;</h3>
+      <h3 title="External Agent MCP removed; use AssetCutter CLI">外部 Agent（已改 CLI）</h3>
+      <p class="muted" style="margin:0 0 10px;line-height:1.45">
+        MCP 产品面已移除。Cursor / Codex 请使用仓库根命令
+        <code>npm run agent:init</code> 与 <code>npm run agent:cli</code>（云端 API，资产进平台列表并可审计）。
+      </p>
       <label class="pair-label-gap">
-        <input type="checkbox" id="inpMcpEnabled" title="&#40664;&#35748;&#20851;&#38381;&#65307;&#24320;&#21551;&#21518;&#26412;&#26426; 127.0.0.1 &#30417;&#21548; JSON-RPC" />
-        &#20801;&#35768; MCP &#25511;&#21046;&#26412;&#24179;&#21488;
+        <input type="checkbox" id="inpMcpEnabled" disabled title="MCP removed; use npm run agent:cli" />
+        MCP 已移除（请用 CLI）
       </label>
       <label class="pair-label-gap" title="&#20869;&#32622; Copilot &#40664;&#35748;&#22823;&#33041;">Copilot &#40664;&#35748;&#22823;&#33041;</label>
       <div class="shell-brain-picker" id="shellBrainPicker" role="listbox" aria-label="Copilot &#40664;&#35748;&#22823;&#33041;"></div>

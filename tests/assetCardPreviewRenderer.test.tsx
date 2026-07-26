@@ -1,21 +1,14 @@
 // @vitest-environment jsdom
 
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
-import type { ReactNode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { WorkflowAsset } from '../types';
-import { AssetCardPreviewRenderer } from '../components/workflow/AssetCardPreviewRenderer';
+import {
+  AssetCardPreviewRenderer,
+  resetAssetCardModelThumbnailCachesForTests,
+} from '../components/workflow/AssetCardPreviewRenderer';
 import { captureWorkflowModelThumbnailDataUrl } from '../services/workflowModelPreviewCapture';
-
-vi.mock('../components/preview', () => ({
-  getLazyImagePreviewViewer: () =>
-    function MockModel3DViewer({ modelSrc }: { modelSrc: string }) {
-      return <canvas data-testid="asset-card-model3d" data-model-src={modelSrc} />;
-    },
-  PreviewViewerErrorBoundary: ({ children }: { children: ReactNode }) => <>{children}</>,
-  PreviewViewerFallback: ({ label }: { label: string }) => <div>{label}</div>,
-}));
 
 vi.mock('../services/workflowModelPreviewCapture', () => ({
   captureWorkflowModelThumbnailDataUrl: vi.fn(() => Promise.resolve(null)),
@@ -23,6 +16,8 @@ vi.mock('../services/workflowModelPreviewCapture', () => ({
 
 afterEach(() => {
   cleanup();
+  resetAssetCardModelThumbnailCachesForTests();
+  vi.mocked(captureWorkflowModelThumbnailDataUrl).mockReset();
   vi.mocked(captureWorkflowModelThumbnailDataUrl).mockResolvedValue(null);
 });
 
@@ -122,23 +117,48 @@ describe('AssetCardPreviewRenderer', () => {
     expect(document.querySelector('img')?.getAttribute('src')).toBe('data:image/png;base64,POSTER');
   });
 
-  it('renders an inline 3D preview for imported models before a thumbnail is captured', () => {
+  it('skips 3D capture when a persisted thumbnail image already exists', () => {
     render(
       <AssetCardPreviewRenderer
         asset={makeAsset({
-          original: 'data:image/svg+xml;base64,PLACEHOLDER',
+          original: 'data:image/jpeg;base64,THUMB',
           displayKey: 'original',
           stepModelUrls: { original: ['blob:local-model'] },
           stepModelFormats: { original: ['fbx'] },
           modelUrls: ['blob:local-model'],
           modelSourceName: 'temp.fbx',
         })}
-        previewSrc="data:image/svg+xml;base64,PLACEHOLDER"
-        cacheKey="local-model"
+        previewSrc="data:image/jpeg;base64,THUMB"
+        cacheKey="local-model-persisted"
       />
     );
 
-    expect(screen.getByTestId('asset-card-model3d').getAttribute('data-model-src')).toBe('blob:local-model');
+    expect(captureWorkflowModelThumbnailDataUrl).not.toHaveBeenCalled();
+    expect(document.querySelector('img')?.getAttribute('src')).toBe('data:image/jpeg;base64,THUMB');
+    expect(screen.getByText('fbx')).toBeTruthy();
+  });
+
+  it('shows a static placeholder (no live 3D) while thumbnail capture is pending', () => {
+    vi.mocked(captureWorkflowModelThumbnailDataUrl).mockImplementationOnce(
+      () => new Promise(() => undefined)
+    );
+
+    render(
+      <AssetCardPreviewRenderer
+        asset={makeAsset({
+          original: 'data:image/svg+xml;base64,PLACEHOLDER',
+          displayKey: 'original',
+          stepModelUrls: { original: ['blob:local-model-pending'] },
+          stepModelFormats: { original: ['fbx'] },
+          modelUrls: ['blob:local-model-pending'],
+          modelSourceName: 'temp.fbx',
+        })}
+        previewSrc="data:image/svg+xml;base64,PLACEHOLDER"
+        cacheKey="local-model-pending"
+      />
+    );
+
+    expect(screen.queryByTestId('asset-card-model3d')).toBeNull();
     expect(screen.getByText('fbx')).toBeTruthy();
   });
 

@@ -128,6 +128,7 @@ async function respondCompanionElectronUpdaterYaml(res, { kind, platform, channe
 
 import { getWorkspaceUsedBytes } from './workspace-storage-usage.js';
 import { handleAgentWorkbenchRoutes } from './agent-workbench-api.js';
+import { handleAgentCliRoutes } from './agent-cli-api.js';
 import {
   API_JSON_BODY_MAX_BYTES,
   BRIDGE_SEND_MESSAGE_MAX_BODY_BYTES,
@@ -545,7 +546,8 @@ function assertWriteOrigin(req, res) {
   const serverSideCreditsPath =
     pathOnly === '/api/auth/credits-gate' ||
     pathOnly.startsWith('/api/internal/credits/') ||
-    pathOnly === '/api/internal/ai-gateway/validate-handoff';
+    pathOnly === '/api/internal/ai-gateway/validate-handoff' ||
+    pathOnly.startsWith('/api/agent/cli');
   if (serverSideCreditsPath && !origin) return true;
   if (isAllowedOrigin(origin)) return true;
   json(res, 403, { error: 'Origin not allowed' });
@@ -607,6 +609,8 @@ function assertCsrf(req, res) {
   if (pathOnly === '/api/internal/ai-gateway/validate-handoff') return true;
   /** 伴侣 Agent：partition Cookie 无法带 X-CSRF-Token，由 requireAgentAuth + 会话 Cookie 约束 */
   if (pathOnly.startsWith('/api/agent/workbench')) return true;
+  /** Agent CLI：Bearer PAT / device flow；无浏览器 CSRF */
+  if (pathOnly.startsWith('/api/agent/cli')) return true;
   if (pathOnly.startsWith('/api/debug/client-log')) return true;
   if (pathOnly.startsWith('/api/admin')) {
     const origin = String(req.headers.origin || '');
@@ -4295,6 +4299,21 @@ const server = http.createServer(async (req, res) => {
         json,
         readBody,
         getWorkspaceUsedBytes,
+      })
+    ) {
+      return;
+    }
+
+    if (
+      await handleAgentCliRoutes(req, res, path, {
+        requireAuth,
+        json,
+        readBody,
+        publicSiteUrl: process.env.PUBLIC_SITE_URL || process.env.VITE_SITE_URL || 'http://localhost:3000',
+        authApiPublicUrl:
+          process.env.AUTH_API_PUBLIC_URL ||
+          process.env.VITE_AUTH_API_BASE_URL ||
+          `http://127.0.0.1:${process.env.PORT || 9100}`,
       })
     ) {
       return;

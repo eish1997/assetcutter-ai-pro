@@ -42,6 +42,29 @@ describe('AI gateway executor fallback', () => {
     process.env.AI_GATEWAY_EXECUTION_ENABLED = 'true';
   }
 
+  /** Multi-provider GPT plans must not silent-pick seed[0]; simulate Key-aware auto-select. */
+  function planAutoSelectedGptText(job: Record<string, unknown>) {
+    const prevMeta =
+      job.metadata && typeof job.metadata === 'object' ? (job.metadata as Record<string, unknown>) : {};
+    const prevFallback =
+      prevMeta.aiGatewayFallback && typeof prevMeta.aiGatewayFallback === 'object'
+        ? (prevMeta.aiGatewayFallback as Record<string, unknown>)
+        : {};
+    return createAiGatewayJobPlan(
+      {
+        ...job,
+        metadata: {
+          ...prevMeta,
+          aiGatewayFallback: {
+            autoSelectedProvider: true,
+            ...prevFallback,
+          },
+        },
+      },
+      { selectedRoute: { providerId: 'openai-official' } }
+    );
+  }
+
   it('falls back from a rate-limited inferred OpenAI route to the next OpenAI-compatible provider', async () => {
     useTempStore();
     await saveProviderKeys([
@@ -49,7 +72,7 @@ describe('AI gateway executor fallback', () => {
       { id: 'key_tinysnow_fallback_secondary', provider: 'tinysnow', label: 'TinySnow', secret: 'sk-tinysnow', enabled: true },
     ]);
     const store = createInMemoryAiJobStore();
-    const plan = await store.put(createAiGatewayJobPlan({
+    const plan = await store.put(planAutoSelectedGptText({
       id: 'aijob_fallback_text',
       modality: 'text',
       model: 'gpt-4o-mini',
@@ -168,7 +191,7 @@ describe('AI gateway executor fallback', () => {
       { id: 'key_tinysnow_reason_secondary', provider: 'tinysnow', label: 'TinySnow', secret: 'sk-tinysnow', enabled: true },
     ]);
     const store = createInMemoryAiJobStore();
-    const plan = await store.put(createAiGatewayJobPlan({
+    const plan = await store.put(planAutoSelectedGptText({
       id: 'aijob_fallback_selection_reason',
       modality: 'text',
       model: 'gpt-4o-mini',
@@ -209,7 +232,7 @@ describe('AI gateway executor fallback', () => {
       { id: 'key_tinysnow_timeout_secondary', provider: 'tinysnow', label: 'TinySnow', secret: 'sk-tinysnow', enabled: true },
     ]);
     const store = createInMemoryAiJobStore();
-    const plan = await store.put(createAiGatewayJobPlan({
+    const plan = await store.put(planAutoSelectedGptText({
       id: 'aijob_fallback_timeout_same_route',
       modality: 'text',
       model: 'gpt-4o-mini',
@@ -270,7 +293,7 @@ describe('AI gateway executor fallback', () => {
       { id: 'key_tinysnow_timeout_fail', provider: 'tinysnow', label: 'TinySnow', secret: 'sk-tinysnow', enabled: true },
     ]);
     const store = createInMemoryAiJobStore();
-    const plan = await store.put(createAiGatewayJobPlan({
+    const plan = await store.put(planAutoSelectedGptText({
       id: 'aijob_fallback_timeout_fail',
       modality: 'text',
       model: 'gpt-4o-mini',
@@ -319,7 +342,7 @@ describe('AI gateway executor fallback', () => {
       { id: 'key_tinysnow_policy_secondary', provider: 'tinysnow', label: 'TinySnow', secret: 'sk-tinysnow', enabled: true },
     ]);
     const store = createInMemoryAiJobStore();
-    const plan = await store.put(createAiGatewayJobPlan({
+    const plan = await store.put(planAutoSelectedGptText({
       id: 'aijob_fallback_policy_skip',
       modality: 'text',
       model: 'gpt-4o-mini',
@@ -377,7 +400,7 @@ describe('AI gateway executor fallback', () => {
       { id: 'key_toapis_max_third', provider: 'toapis', label: 'ToAPIs', secret: 'sk-toapis', enabled: true },
     ]);
     const store = createInMemoryAiJobStore();
-    const plan = await store.put(createAiGatewayJobPlan({
+    const plan = await store.put(planAutoSelectedGptText({
       id: 'aijob_fallback_max_attempts',
       modality: 'text',
       model: 'gpt-4o-mini',

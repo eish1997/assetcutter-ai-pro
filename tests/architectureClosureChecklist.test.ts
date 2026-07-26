@@ -33,8 +33,5 @@ describe('architecture closure checklist', () => {
     expect(text).toContain('persist:assetcutter-team');
     expect(text).toContain('共享登录态门槛');
     expect(text).toContain('壳内工作台登录后');
-    expect(text).toContain('smoke:agent-mcp:e2e');
-    expect(text).toContain('ac.shell.get_state.account');
-    expect(text).toContain('server-status.readiness.account');
   });
 });

@@ -243,46 +243,31 @@ function mergeMcpConfig(existing, incoming) {
   return base;
 }
 
-function writeHermesMcpImport(mcpConfig, options) {
+function writeHermesMcpImport(_mcpConfig, options) {
   const opts = options && typeof options === 'object' ? options : {};
-  const written = [];
-  const skipped = [];
   const paths = Array.isArray(opts.paths) && opts.paths.length ? opts.paths : hermesMcpConfigCandidatePaths();
-  for (const p of paths) {
-    try {
-      const cur = fs.existsSync(p) ? readJsonFile(p, {}) : {};
-      const next = mergeMcpConfig(cur, mcpConfig);
-      writeJsonFile(p, next);
-      written.push(p);
-    } catch (e) {
-      skipped.push({ path: p, error: e instanceof Error ? e.message : String(e) });
-    }
-  }
-  return { written, skipped };
+  // MCP product surface removed (CLI-only). Never write external mcp.json.
+  return {
+    written: [],
+    skipped: paths.map((p) => ({ path: p, error: 'mcp_removed', hint: 'use_agent_cli' })),
+    removed: true,
+  };
 }
 
-function writeCodexMcpConfig(mcpConfig, options) {
+function writeCodexMcpConfig(_mcpConfig, options) {
   const opts = options && typeof options === 'object' ? options : {};
-  try {
-    const result = upsertCodexMcpServerFromClientConfig(mcpConfig, {
-      codexHome: opts.codexHome,
-      configPath: opts.configPath,
-      name: opts.name,
-      tokenEnvVar: opts.tokenEnvVar || DEFAULT_CODEX_MCP_TOKEN_ENV,
-    });
-    return { ok: true, written: result.path ? [result.path] : [], skipped: [], result };
-  } catch (e) {
-    return {
-      ok: false,
-      written: [],
-      skipped: [
-        {
-          path: opts.configPath || opts.codexHome || 'codex-config',
-          error: e instanceof Error ? e.message : String(e),
-        },
-      ],
-    };
-  }
+  return {
+    ok: false,
+    written: [],
+    skipped: [
+      {
+        path: opts.configPath || opts.codexHome || 'codex-config',
+        error: 'mcp_removed',
+        hint: 'use_agent_cli',
+      },
+    ],
+    removed: true,
+  };
 }
 
 function exportConnectBundle(exportRoot, bundle) {
@@ -295,32 +280,27 @@ function exportConnectBundle(exportRoot, bundle) {
 }
 
 function ensureMcpTokenInSettings(writeAgentSettings, readAgentSettings) {
+  // MCP removed: ensure disabled; do not mint tokens for external Agents.
   const cur = readAgentSettings();
-  if (cur.mcpToken && String(cur.mcpToken).length >= 16) return cur;
-  const token = randomBytes(24).toString('hex');
-  return writeAgentSettings({ mcpToken: token, mcpEnabled: true });
+  if (cur && cur.mcpEnabled === false) return cur;
+  return writeAgentSettings({ mcpEnabled: false });
 }
 
 function exportCurrentConnectionBundle(ctx, options) {
   const opts = options && typeof options === 'object' ? options : {};
-  if (opts.enableMcp !== false) {
-    ctx.writeAgentSettings({ mcpEnabled: true });
-    ensureMcpTokenInSettings(ctx.writeAgentSettings.bind(ctx), ctx.readAgentSettings.bind(ctx));
-  }
+  ctx.writeAgentSettings({ mcpEnabled: false });
+  ensureMcpTokenInSettings(ctx.writeAgentSettings.bind(ctx), ctx.readAgentSettings.bind(ctx));
   const bundle = buildConnectBundle(ctx);
   const exportRoot =
     typeof ctx.getExportRoot === 'function'
       ? ctx.getExportRoot()
       : path.join(agentStoreRootFromUserData(defaultCompanionUserDataDir()), EXPORT_DIR_NAME);
   const exported = exportConnectBundle(exportRoot, bundle);
-  const mcpWrite = opts.writeMcp ? writeHermesMcpImport(bundle.mcp, { paths: opts.mcpPaths }) : { written: [], skipped: [] };
-  const codexMcpWrite = opts.writeCodexMcp
-    ? writeCodexMcpConfig(bundle.mcp, {
-        codexHome: opts.codexHome,
-        configPath: opts.codexConfigPath,
-        tokenEnvVar: opts.codexTokenEnvVar,
-      })
-    : { ok: true, written: [], skipped: [] };
+  const mcpWrite = { written: [], skipped: [{ error: 'mcp_removed', hint: 'use_agent_cli' }], removed: true };
+  const codexMcpWrite = { ok: false, written: [], skipped: [{ error: 'mcp_removed', hint: 'use_agent_cli' }], removed: true };
+  if (opts.writeMcp || opts.writeCodexMcp) {
+    /* intentionally no-op: external MCP config writes are retired */
+  }
   return { bundle, exported, mcpWrite, codexMcpWrite };
 }
 
@@ -360,14 +340,9 @@ async function connectExistingHermes(ctx, options) {
     defaultBrainId: 'hermes',
     brainSetupCompleted: true,
   };
-  if (opts.enableMcp !== false) {
-    agentPatch.mcpEnabled = true;
-  }
+  agentPatch.mcpEnabled = false;
   let settings = ctx.writeAgentSettings(agentPatch);
-  if (opts.enableMcp !== false) {
-    settings = ensureMcpTokenInSettings(ctx.writeAgentSettings.bind(ctx), ctx.readAgentSettings.bind(ctx));
-    if (typeof ctx.syncMcp === 'function') await ctx.syncMcp();
-  }
+  settings = ensureMcpTokenInSettings(ctx.writeAgentSettings.bind(ctx), ctx.readAgentSettings.bind(ctx));
 
   let scriptHub = null;
   if (opts.connectScriptHub !== false) {
@@ -381,18 +356,12 @@ async function connectExistingHermes(ctx, options) {
       : path.join(agentStoreRootFromUserData(defaultCompanionUserDataDir()), EXPORT_DIR_NAME);
   const exported = exportConnectBundle(exportRoot, bundle);
 
-  let mcpWrite = { written: [], skipped: [] };
-  if (opts.writeMcp !== false) {
-    mcpWrite = writeHermesMcpImport(bundle.mcp, { paths: opts.mcpPaths });
-  }
-  const codexMcpWrite =
-    opts.writeCodexMcp === false
-      ? { ok: true, written: [], skipped: [] }
-      : writeCodexMcpConfig(bundle.mcp, {
-          codexHome: opts.codexHome,
-          configPath: opts.codexConfigPath,
-          tokenEnvVar: opts.codexTokenEnvVar,
-        });
+  const mcpWrite = writeHermesMcpImport(bundle.mcp, { paths: opts.mcpPaths });
+  const codexMcpWrite = writeCodexMcpConfig(bundle.mcp, {
+    codexHome: opts.codexHome,
+    configPath: opts.codexConfigPath,
+    tokenEnvVar: opts.codexTokenEnvVar,
+  });
 
   return {
     ok: true,
@@ -403,7 +372,7 @@ async function connectExistingHermes(ctx, options) {
     exported,
     mcpWrite,
     codexMcpWrite,
-    message: '已连接已有 Hermes Gateway；MCP 配置已导出/写入（若路径可写）',
+    message: '已连接已有 Hermes Gateway；外部 MCP 已移除，请使用 npm run agent:cli / agent:init',
   };
 }
 
