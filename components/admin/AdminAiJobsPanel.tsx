@@ -33,7 +33,7 @@ import {
   aiJobMediaArchiveStatus,
 } from '../../services/aiJobDisplay';
 import { matchesGatewayFailureFilters } from '../../shared/aiGatewayJobFailureFilters.js';
-import CustomDropdown from '../ui/CustomDropdown';
+import { CustomDropdown } from '../ui/CustomDropdown';
 export {
   aiJobCreditsLabel,
   aiJobRouteLabel,
