@@ -67,11 +67,40 @@ import { useUsageQuoteForSteps } from '../hooks/useUsageQuoteForSteps';
 import WorkflowZeroBalanceBanner from './WorkflowZeroBalanceBanner';
 import { DEFAULT_MODEL_TEXT } from '../services/modelRegistry/constants';
 import {
+  applyPbrTextureAssetIdToDoc,
+  collectPbrTextureAssetIds,
+  diffRemovedPbrTextureAssetIds,
+  filterUnreferencedPbrTextureAssetIds,
   normalizeWorkflowModelPbrEditDoc,
+  pbrTextureEditMatchesRewriteSource,
   WORKFLOW_MODEL_PBR_EDIT_PERSIST_EVENT,
   type WorkflowModelPbrEditPersistEventDetail,
   type WorkflowModelPbrTextureRewriteTarget,
 } from '../services/workflowModelPbrEdits';
+import {
+  acknowledgeWorkflowModelPbrSlotGenerate,
+  completeWorkflowModelPbrSlotGenerate,
+  reportWorkflowModelPbrSlotGenerateImage,
+  reportWorkflowModelPbrSlotGenerateProgress,
+  takeWorkflowModelPbrSlotGenerateAbortSignal,
+  WORKFLOW_MODEL_PBR_SLOT_GENERATE_REQUEST_EVENT,
+  type WorkflowModelPbrSlotGenerateImage,
+  type WorkflowModelPbrSlotGenerateRequestDetail,
+} from '../services/workflowModelPbrSlotGenerateBridge';
+import {
+  acknowledgePromotePbrTextureAsset,
+  acknowledgeReleasePbrTextureAssets,
+  completePromotePbrTextureAsset,
+  completeReleasePbrTextureAssets,
+  WORKFLOW_MODEL_PBR_TEXTURE_PROMOTE_REQUEST_EVENT,
+  WORKFLOW_MODEL_PBR_TEXTURE_RELEASE_REQUEST_EVENT,
+  type WorkflowModelPbrTexturePromoteRequestDetail,
+  type WorkflowModelPbrTextureReleaseRequestDetail,
+} from '../services/workflowModelPbrTextureAssetBridge';
+import {
+  WORKFLOW_MODEL_PBR_TEXTURE_ACTION_EVENT,
+  type WorkflowModelPbrTextureAction,
+} from '../services/workflowModelPbrTextureActions';
 import { detectCutImageBoxes, FALLBACK_CUT_IMAGE_PRESET, FULL_IMAGE_BOX } from '../services/cutImageExecution';
 import {
   isCutImageCapabilityPreset,
@@ -278,6 +307,8 @@ import WorkflowTextLightboxCenter, {
 import {
   buildComposerTextAssetThumbDataUrl,
   clampWorkflowTextBody,
+  healWorkflowAssetDisplayKeyIfEmpty,
+  isWorkflowModelSvgPlaceholderSrc,
   isWorkflowTextAsset,
   resolveWorkflowDisplaySlot,
   workflowAssetAllowedForCapabilityDrop,
@@ -393,7 +424,10 @@ import {
   WORKFLOW_IMAGE_PREVIEW_RAIL,
   WORKFLOW_CARD_DISMISS_ICON_BTN,
 } from './workflow/workflowSectionUiConstants';
-import { sortRootWorkflowAssetsNewestFirst } from './workflow/workflowOutlineUtils';
+import {
+  dedupeWorkflowAssetsById,
+  sortRootWorkflowAssetsNewestFirst,
+} from './workflow/workflowOutlineUtils';
 import {
   getGroupCoverImage,
   getGroupMemberIds,
@@ -577,6 +611,7 @@ import {
   parseDataUrlToBlob,
   putWorkflowModelFileToCompanion,
   putWorkflowOriginalBlobToCompanion,
+  imageSrcToDataUrlForCompanion,
   putWorkflowOriginalImageFromAnyUrl,
   putWorkflowOriginalImageToCompanion,
   putWorkflowResultImageFromAnyUrl,
@@ -590,6 +625,7 @@ import {
   workflowAssetNeedsCompanionOriginalHydrate,
   workflowAssetNeedsCompanionResultHydrate,
 } from '../services/workflowCompanionAssets';
+import { fetchMediaUrlViaAuthApi } from '../services/mediaUrlAuthFetch';
 import {
   applyCompanionHydratePatches,
   buildCompanionHydrateSessionKey,
@@ -2441,19 +2477,35 @@ const WorkflowSection: React.FC<{
     if (!projectId) return '';
     const base = normalizeCompanionBaseUrl(String(getCompanionLocalBaseUrl() || '').trim());
     if (!base) return '';
+    const toUrl = (key: string) =>
+      key
+        ? `${base}/v1/projects/${encodeURIComponent(projectId)}/assets/${encodeURIComponent(key)}`
+        : '';
     const dk = String(a.displayKey || 'original').trim() || 'original';
-    const key =
-      dk !== 'original'
-        ? String(a.resultsCompanionKeys?.[dk] || '').trim()
-        : String(a.originalCompanionKey || '').trim();
-    if (!key) return '';
-    return `${base}/v1/projects/${encodeURIComponent(projectId)}/assets/${encodeURIComponent(key)}`;
+    if (dk !== 'original') {
+      const stepKey = String(a.resultsCompanionKeys?.[dk] || '').trim();
+      if (stepKey) return toUrl(stepKey);
+      // 当前步 companion 已丢时回退原图键，避免暗空卡假「丢资产」
+      const origKey = String(a.originalCompanionKey || '').trim();
+      if (origKey) return toUrl(origKey);
+      for (const stepId of a.resultOrder || Object.keys(a.resultsCompanionKeys || {})) {
+        const alt = String(a.resultsCompanionKeys?.[stepId] || '').trim();
+        if (alt) return toUrl(alt);
+      }
+      return '';
+    }
+    return toUrl(String(a.originalCompanionKey || '').trim());
   }, [workspaceProjectChrome?.activeProjectId]);
   const getWorkflowAssetActiveCompanionKey = useCallback((a: WorkflowAsset): string => {
     const dk = String(a.displayKey || 'original').trim() || 'original';
     const modelKey = resolveWorkflowStepModelCompanionKeys(a, dk).find((key) => String(key || '').trim());
     if (modelKey) return String(modelKey).trim();
-    if (dk !== 'original') return String(a.resultsCompanionKeys?.[dk] || '').trim();
+    if (dk !== 'original') {
+      return (
+        String(a.resultsCompanionKeys?.[dk] || '').trim() ||
+        String(a.originalCompanionKey || '').trim()
+      );
+    }
     return String(a.originalCompanionKey || '').trim();
   }, []);
   const getAssetDisplayImage = useCallback((
@@ -2464,28 +2516,33 @@ const WorkflowSection: React.FC<{
     if (isWorkflowStoryboardTableAsset(a)) {
       return storyboardTableCoverImage(a);
     }
-    const orig = asWorkflowImageString(a.original);
-    if (isWorkflowTextAsset(a)) {
-      const slot = resolveWorkflowDisplaySlot(a);
+    const healed = healWorkflowAssetDisplayKeyIfEmpty(a);
+    const orig = asWorkflowImageString(healed.original);
+    if (isWorkflowTextAsset(healed)) {
+      const slot = resolveWorkflowDisplaySlot(healed);
       if (slot.modality === 'image' || slot.modality === 'video') {
         return (
           asWorkflowImageString(slot.imageSrc) ||
-          resolveAssetObjectKeyDisplayImage(a) ||
-          resolveAssetCompanionKeyDisplayImage(a) ||
+          resolveAssetObjectKeyDisplayImage(healed) ||
+          resolveAssetCompanionKeyDisplayImage(healed) ||
           ''
         );
       }
       return '';
     }
-    if (a.displayKey === 'original') {
-      return orig || resolveAssetObjectKeyDisplayImage(a) || resolveAssetCompanionKeyDisplayImage(a);
+    const slot = resolveWorkflowDisplaySlot(healed);
+    if (slot.modality === 'image' || slot.modality === 'video') {
+      const fromSlot =
+        asWorkflowImageString(slot.imageSrc) ||
+        resolveAssetObjectKeyDisplayImage(healed) ||
+        resolveAssetCompanionKeyDisplayImage(healed);
+      if (fromSlot) return fromSlot;
     }
-    const fromResults = (a.results as Record<string, unknown>)[a.displayKey];
     return (
-      asWorkflowImageString(fromResults) ||
-      resolveAssetObjectKeyDisplayImage(a) ||
-      resolveAssetCompanionKeyDisplayImage(a) ||
-      orig
+      orig ||
+      resolveAssetObjectKeyDisplayImage({ ...healed, displayKey: 'original' }) ||
+      resolveAssetCompanionKeyDisplayImage({ ...healed, displayKey: 'original' }) ||
+      ''
     );
   }, [resolveAssetCompanionKeyDisplayImage, resolveAssetObjectKeyDisplayImage]);
 
@@ -3191,18 +3248,29 @@ ${lineSvg}
     if (display) return workflowSafeImgSrc(display);
     return buildTextLightboxPreviewDataUrl(asset.textTitle || '', getAssetDisplayText(asset));
   }, [buildTextLightboxPreviewDataUrl, getAssetDisplayImage, getAssetDisplayText]);
+  const workflowAssetIdSig = useMemo(
+    () => assets.map((a) => String(a.id || '').trim()).join('\0'),
+    [assets]
+  );
   useEffect(() => {
     setAssets((prev) => {
       let changed = false;
       const next = prev.map((a) => {
         const { next: normalized, changed: tagChanged } = normalizeWorkflowTagMapToChinese(a.imageTags);
-        if (!tagChanged) return a;
-        changed = true;
-        return { ...a, imageTags: normalized };
+        let row = tagChanged ? { ...a, imageTags: normalized } : a;
+        if (tagChanged) changed = true;
+        const healed = healWorkflowAssetDisplayKeyIfEmpty(row);
+        if (healed !== row && healed.displayKey !== row.displayKey) {
+          changed = true;
+          row = healed;
+        }
+        return row;
       });
-      return changed ? next : prev;
+      const deduped = dedupeWorkflowAssetsById(next);
+      if (deduped.length !== next.length) changed = true;
+      return changed ? deduped : prev;
     });
-  }, [setAssets]);
+  }, [workflowAssetIdSig, setAssets]);
   const buildPendingTaskFromAssetSnapshot = useCallback(
     (
       asset: WorkflowAsset,
@@ -4219,9 +4287,18 @@ ${lineSvg}
             let materialChanged = false;
             for (const slot of targetSlots) {
               const edit = nextSlots[slot];
-              if (!edit?.enabled || String(edit.dataUrl || '').trim() !== sourceSrc) continue;
+              if (
+                !pbrTextureEditMatchesRewriteSource(edit, target, (textureAssetId) => {
+                  const tex = prev.find((a) => a.id === textureAssetId);
+                  return tex ? getAssetDisplayImage(tex) : '';
+                })
+              ) {
+                continue;
+              }
+              // 清旧 assetId，避免 resolve 仍指向旧正式资产；新结果以 dataUrl 展示，随后 migrate 再升格
+              const { assetId: _dropAssetId, ...editRest } = edit;
               nextSlots[slot] = {
-                ...edit,
+                ...editRest,
                 dataUrl: result,
                 fileName: target.textureLabel ? `${target.textureLabel}-regen.png` : 'texture-regen.png',
                 mimeType: result.startsWith('data:image/') ? result.slice(5, result.indexOf(';')) || edit.mimeType : edit.mimeType,
@@ -4254,7 +4331,7 @@ ${lineSvg}
       );
       return applied;
     },
-    [setAssets]
+    [getAssetDisplayImage, setAssets]
   );
 
   const executePending = useCallback(
@@ -7972,15 +8049,15 @@ ${lineSvg}
   }, [assets, groupFilterId]);
   const rootCanvasAssets = useMemo(() => {
     if (!showAllInGroup) return visibleAssets;
-    return [...assets]
-      .filter((a) => {
+    return sortRootWorkflowAssetsNewestFirst(
+      assets.filter((a) => {
         if (a.archived || a.inRepository) return false;
         // 显示全部：隐藏“组容器”本体，仅展示可见叶子资产（含组内子资产）
         if (isGroupAsset(a)) return false;
         if (isGroupChildAsset(a)) return true;
         return !a.hiddenInGrid;
       })
-      .sort((a, b) => b.createdAt - a.createdAt);
+    );
   }, [assets, showAllInGroup, visibleAssets]);
 
   useEffect(() => {
@@ -8038,6 +8115,13 @@ ${lineSvg}
     for (const a of assets) map.set(a.id, a);
     return map;
   }, [assets]);
+
+  /** 根画布专用：与 justified boxes 对齐，避免重复 id / 缺 box 造成隐形空位 */
+  const rootCanvasAssetsById = useMemo(() => {
+    const map = new Map<string, WorkflowAsset>();
+    for (const a of rootCanvasAssets) map.set(a.id, a);
+    return map;
+  }, [rootCanvasAssets]);
 
   const rootExecutingTaskByAssetId = useMemo(() => {
     const map = new Map<string, WorkflowPendingTask>();
@@ -8955,11 +9039,15 @@ ${lineSvg}
         projectId,
         companionBaseUrl: base,
       });
-      if (!canOpenWorkflowAssetFolder(handle)) {
+      // 无键，或键在但磁盘无文件 → 用当前预览图补写本地
+      const needsPersist =
+        !canOpenWorkflowAssetFolder(handle) || handle.onDiskConfirmed === false;
+      if (needsPersist) {
         const ensured = await ensureWorkflowAssetCompanionKeyForReveal({
           asset: working,
           projectId,
           companionBaseUrl: base,
+          rewriteIfMissingOnDisk: true,
         });
         if (ensured.ok === false) {
           onLog?.(
@@ -8981,7 +9069,7 @@ ${lineSvg}
           companionBaseUrl: base,
         });
       }
-      if (!canOpenWorkflowAssetFolder(handle)) {
+      if (!canOpenWorkflowAssetFolder(handle) || handle.onDiskConfirmed === false) {
         onLog?.('warn', handle.reasonZh || '无法打开资产文件夹');
         return;
       }
@@ -9104,6 +9192,24 @@ ${lineSvg}
     onLog?.('info', '大图标注已写入当前显示版本（随项目保存）');
   }, [lightboxAssetId, onLog, setAssets]);
 
+  /** 快捷栏 / pending 仍占用的贴图资产（删孤儿时不得释放） */
+  const collectExternalPbrTextureAssetRefs = useCallback((): string[] => {
+    const ids: string[] = [];
+    const pushSlot = (slot: { assetId?: string; modelPbrTextureRewriteTarget?: WorkflowModelPbrTextureRewriteTarget }) => {
+      const aid = String(slot.assetId || '').trim();
+      if (aid) ids.push(aid);
+      const srcAid = String(slot.modelPbrTextureRewriteTarget?.sourceTextureAssetId || '').trim();
+      if (srcAid) ids.push(srcAid);
+    };
+    for (const slot of quickComposeMainDropSlotsRef.current) pushSlot(slot);
+    for (const slot of quickComposeReferenceDropSlotsRef.current) pushSlot(slot);
+    for (const task of pendingRef.current) {
+      const srcAid = String(task.modelPbrTextureRewriteTarget?.sourceTextureAssetId || '').trim();
+      if (srcAid) ids.push(srcAid);
+    }
+    return ids;
+  }, []);
+
   /** 关闭大图前写入资产，使再次打开仍为上次的标注/裁切/局部重绘状态 */
   useEffect(() => {
     const onPersistModelPbrEdit = (event: Event) => {
@@ -9112,20 +9218,309 @@ ${lineSvg}
       const doc = normalizeWorkflowModelPbrEditDoc(detail?.doc);
       if (!assetId || !doc) return;
       setAssets((prev) => {
-        let touched = false;
-        const next = prev.map((asset) => {
-          if (asset.id !== assetId) return asset;
-          touched = true;
-          return { ...asset, modelPbrEdits: doc };
-        });
-        return touched ? next : prev;
+        const host = prev.find((asset) => asset.id === assetId);
+        if (!host) return prev;
+        const removedFromHost = diffRemovedPbrTextureAssetIds(host.modelPbrEdits, doc);
+        let next = prev.map((asset) => (asset.id === assetId ? { ...asset, modelPbrEdits: doc } : asset));
+        const orphanSet = new Set(
+          filterUnreferencedPbrTextureAssetIds(removedFromHost, next, {
+            excludeAssetId: assetId,
+            extraReferencedIds: collectExternalPbrTextureAssetRefs(),
+          })
+        );
+        if (orphanSet.size > 0) {
+          const removedList = next.filter((a) => orphanSet.has(a.id));
+          next = next.filter((a) => !orphanSet.has(a.id));
+          for (const removed of removedList) {
+            revokeWorkflowModelBlobUrlsAfterAssetRemoved(removed, next);
+            deleteWorkflowAssetCompanionObjects(removed, next);
+          }
+        }
+        return next;
       });
     };
     window.addEventListener(WORKFLOW_MODEL_PBR_EDIT_PERSIST_EVENT, onPersistModelPbrEdit);
     return () => {
       window.removeEventListener(WORKFLOW_MODEL_PBR_EDIT_PERSIST_EVENT, onPersistModelPbrEdit);
     };
-  }, [setAssets]);
+  }, [collectExternalPbrTextureAssetRefs, deleteWorkflowAssetCompanionObjects, setAssets]);
+
+  /**
+   * 3D 贴图槽生成：Viewer 经事件桥接，由本组件执行 executeCapability，
+   * 避免 ImageModel3DViewer 动态 import capabilityExecutor 触发模块环栈溢出。
+   * 用 ref 取最新 presets/onLog，避免 effect 频繁重绑。
+   */
+  const pbrGenerateActionModulesRef = useRef(actionModules);
+  const pbrGenerateCapabilityPresetsRef = useRef(capabilityPresets);
+  const pbrGenerateOnLogRef = useRef(onLog);
+  const pbrGenerateProjectIdRef = useRef(String(workspaceProjectChrome?.activeProjectId || '').trim());
+  pbrGenerateActionModulesRef.current = actionModules;
+  pbrGenerateCapabilityPresetsRef.current = capabilityPresets;
+  pbrGenerateOnLogRef.current = onLog;
+  pbrGenerateProjectIdRef.current = String(workspaceProjectChrome?.activeProjectId || '').trim();
+
+  useEffect(() => {
+    const isAbortMessage = (msg: string) => /^(Aborted|请求已取消|已取消)$/i.test(msg.trim()) || /AbortError/i.test(msg);
+
+    const onGenerateRequest = (event: Event) => {
+      const detail = (event as CustomEvent<WorkflowModelPbrSlotGenerateRequestDetail>).detail;
+      const requestId = String(detail?.requestId || '').trim();
+      if (!requestId) return;
+      acknowledgeWorkflowModelPbrSlotGenerate(requestId);
+      void (async () => {
+        const presetId = String(detail?.presetId || '').trim();
+        const sourceRaw = String(detail?.sourceDataUrl || '').trim();
+        const count = Math.max(1, Math.min(16, Math.floor(Number(detail?.count) || 1)));
+        const inputText = String(detail?.inputText || '').trim() || undefined;
+        const abortSignal = takeWorkflowModelPbrSlotGenerateAbortSignal(requestId);
+        if (!presetId || !sourceRaw) {
+          completeWorkflowModelPbrSlotGenerate(requestId, { ok: false, error: '缺少预设或原始贴图' });
+          return;
+        }
+        const modules = pbrGenerateActionModulesRef.current;
+        const presetsList = pbrGenerateCapabilityPresetsRef.current;
+        const log = pbrGenerateOnLogRef.current;
+        const preset = modules.find((m) => m.id === presetId) ?? presetsList.find((p) => p.id === presetId);
+        if (!preset) {
+          completeWorkflowModelPbrSlotGenerate(requestId, { ok: false, error: '未找到能力预设' });
+          return;
+        }
+        // 与快捷栏/能力库同一物化入口：blob/http → data URL，失败再按 companion 键兜底
+        const companionProjectId = pbrGenerateProjectIdRef.current;
+        const companionBaseUrl = String(getCompanionLocalBaseUrl() || '').trim();
+        const textureAssetId = String(detail?.sourceTextureAssetId || '').trim();
+        const textureAsset = textureAssetId
+          ? assetsRef.current.find((a) => a.id === textureAssetId) ?? null
+          : null;
+        const resolvedImg = await resolveCapabilityInputImageForExecute({
+          inputImage: sourceRaw,
+          asset: textureAsset,
+          sourceDisplayKey: 'original',
+          companionBaseUrl,
+          companionProjectId,
+        });
+        if (resolvedImg.ok === false) {
+          completeWorkflowModelPbrSlotGenerate(requestId, {
+            ok: false,
+            error: resolvedImg.error || '贴图无法解析',
+          });
+          return;
+        }
+        const sourceDataUrl = resolvedImg.dataUrl;
+        if (abortSignal?.aborted) {
+          completeWorkflowModelPbrSlotGenerate(requestId, { ok: false, error: '已取消' });
+          return;
+        }
+        const images: WorkflowModelPbrSlotGenerateImage[] = [];
+        reportWorkflowModelPbrSlotGenerateProgress(requestId, count);
+        for (let i = 0; i < count; i += 1) {
+          if (abortSignal?.aborted) break;
+          try {
+            const out = await executeCapability(
+              preset,
+              sourceDataUrl,
+              { onLog: log, abortSignal },
+              { inputText }
+            );
+            if (abortSignal?.aborted) break;
+            if (!out.ok) {
+              if (images.length > 0) break;
+              const errMsg =
+                'error' in out && typeof out.error === 'string' && out.error.trim()
+                  ? out.error
+                  : '生成失败';
+              completeWorkflowModelPbrSlotGenerate(requestId, {
+                ok: false,
+                error: isAbortMessage(errMsg) ? '已取消' : errMsg,
+              });
+              return;
+            }
+            if (out.kind !== 'image' || !out.image) {
+              if (images.length > 0) break;
+              completeWorkflowModelPbrSlotGenerate(requestId, {
+                ok: false,
+                error: '该预设未返回图片结果',
+              });
+              return;
+            }
+            const mime =
+              out.image.startsWith('data:image/')
+                ? out.image.slice(5, out.image.indexOf(';')) || 'image/png'
+                : 'image/png';
+            const image: WorkflowModelPbrSlotGenerateImage = {
+              dataUrl: out.image,
+              fileName: `${preset.label || preset.id}-${i + 1}.png`,
+              mimeType: mime,
+              presetId: preset.id,
+            };
+            images.push(image);
+            reportWorkflowModelPbrSlotGenerateImage(requestId, image, i);
+            reportWorkflowModelPbrSlotGenerateProgress(requestId, count - images.length);
+          } catch (err) {
+            if (abortSignal?.aborted) break;
+            if (images.length > 0) break;
+            const msg = err instanceof Error ? err.message : '生成失败';
+            completeWorkflowModelPbrSlotGenerate(requestId, {
+              ok: false,
+              error: isAbortMessage(msg) ? '已取消' : msg,
+            });
+            return;
+          }
+        }
+        if (images.length === 0) {
+          completeWorkflowModelPbrSlotGenerate(requestId, {
+            ok: false,
+            error: abortSignal?.aborted ? '已取消' : '未生成任何结果',
+          });
+          return;
+        }
+        completeWorkflowModelPbrSlotGenerate(requestId, { ok: true, images });
+      })();
+    };
+    window.addEventListener(WORKFLOW_MODEL_PBR_SLOT_GENERATE_REQUEST_EVENT, onGenerateRequest);
+    return () => {
+      window.removeEventListener(WORKFLOW_MODEL_PBR_SLOT_GENERATE_REQUEST_EVENT, onGenerateRequest);
+    };
+  }, []);
+
+  /** PBR 贴图升格为正式隐藏资产并伴侣落盘 */
+  useEffect(() => {
+    const onPromote = (event: Event) => {
+      const detail = (event as CustomEvent<WorkflowModelPbrTexturePromoteRequestDetail>).detail;
+      const requestId = String(detail?.requestId || '').trim();
+      if (!requestId) return;
+      acknowledgePromotePbrTextureAsset(requestId);
+      void (async () => {
+        let dataUrl = String(detail?.dataUrl || '').trim();
+        const hostAssetId = String(detail?.hostAssetId || '').trim();
+        if (!dataUrl || !hostAssetId) {
+          completePromotePbrTextureAsset(requestId, { ok: false, error: '缺少贴图或宿主资产' });
+          return;
+        }
+        // Gemini 等常返回跨域 https：先物化为 data URL，避免仅挂远程链、伴侣 PUT 失败时盘上无文件
+        if (!parseDataUrlToBlob(dataUrl)) {
+          const materialized = await imageSrcToDataUrlForCompanion(dataUrl);
+          if (materialized) {
+            dataUrl = materialized;
+          } else if (/^https?:\/\//i.test(dataUrl)) {
+            try {
+              const blob = await fetchMediaUrlViaAuthApi(dataUrl);
+              dataUrl = await new Promise<string>((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = () => resolve(String(reader.result || ''));
+                reader.onerror = () => reject(reader.error || new Error('read_failed'));
+                reader.readAsDataURL(blob);
+              });
+            } catch (e) {
+              onLog?.(
+                'warn',
+                '贴图远程地址未能物化，将尝试伴侣直拉',
+                e instanceof Error ? e.message : String(e)
+              );
+            }
+          }
+        }
+        const id = uuid();
+        const fileName = String(detail?.fileName || '').trim() || 'texture.png';
+        const mimeType = String(detail?.mimeType || '').trim() || undefined;
+        const slot = detail?.slot;
+        const materialId = String(detail?.materialId || '').trim();
+        const source = detail?.source === 'generate' ? 'generate' : 'upload';
+        const newAsset = attachInitialVgpToNewAsset({
+          id,
+          original: dataUrl,
+          displayKey: 'original',
+          results: {},
+          resultOrder: [],
+          archived: false,
+          hiddenInGrid: true,
+          createdAt: Date.now(),
+          resultMeta: {
+            original: {
+              executedAt: Date.now(),
+              displayStepLabel: 'PBR Texture',
+              source: {
+                source: 'local',
+                capability: 'pbr_texture',
+                paramsSnapshot: {
+                  pbrHostAssetId: hostAssetId,
+                  ...(materialId ? { materialId } : {}),
+                  ...(slot ? { slot } : {}),
+                  pbrSource: source,
+                  ...(detail?.presetId ? { presetId: detail.presetId } : {}),
+                  fileName,
+                  ...(mimeType ? { mimeType } : {}),
+                },
+              },
+            },
+          },
+        });
+        setAssets((prev) => [...prev, newAsset]);
+        const base = String(getCompanionLocalBaseUrl() || '').trim();
+        const pid = String(workspaceProjectChrome?.activeProjectId || '').trim();
+        if (!base || !pid) {
+          onLog?.(
+            'warn',
+            '本地伴侣未连接或无项目，贴图仅在内存；连接伴侣后右键「打开资产文件夹」可补写'
+          );
+          completePromotePbrTextureAsset(requestId, { ok: true, assetId: id, previewSrc: dataUrl });
+          return;
+        }
+        const put = parseDataUrlToBlob(dataUrl)
+          ? await putWorkflowOriginalImageToCompanion(base, pid, id, dataUrl)
+          : await putWorkflowOriginalImageFromAnyUrl(base, pid, id, dataUrl);
+        if (put.ok === false) {
+          onLog?.('warn', '本地伴侣原图落盘失败（画布仍在内存）', put.error);
+          completePromotePbrTextureAsset(requestId, { ok: true, assetId: id, previewSrc: dataUrl });
+          return;
+        }
+        setAssets((prev) =>
+          prev.some((x) => x.id === id)
+            ? prev.map((x) => (x.id === id ? { ...x, originalCompanionKey: put.key } : x))
+            : prev
+        );
+        completePromotePbrTextureAsset(requestId, { ok: true, assetId: id, previewSrc: dataUrl });
+      })();
+    };
+    const onRelease = (event: Event) => {
+      const detail = (event as CustomEvent<WorkflowModelPbrTextureReleaseRequestDetail>).detail;
+      const requestId = String(detail?.requestId || '').trim();
+      if (!requestId) return;
+      acknowledgeReleasePbrTextureAssets(requestId);
+      const ids = [...new Set((detail?.assetIds || []).map((x) => String(x || '').trim()).filter(Boolean))];
+      if (ids.length === 0) {
+        completeReleasePbrTextureAssets(requestId, { ok: true });
+        return;
+      }
+      setAssets((prev) => {
+        const toRemove = filterUnreferencedPbrTextureAssetIds(ids, prev, {
+          extraReferencedIds: collectExternalPbrTextureAssetRefs(),
+        });
+        if (toRemove.length === 0) return prev;
+        const removeSet = new Set(toRemove);
+        const removedList = prev.filter((a) => removeSet.has(a.id));
+        const next = prev.filter((a) => !removeSet.has(a.id));
+        for (const removed of removedList) {
+          revokeWorkflowModelBlobUrlsAfterAssetRemoved(removed, next);
+          deleteWorkflowAssetCompanionObjects(removed, next);
+        }
+        return next;
+      });
+      completeReleasePbrTextureAssets(requestId, { ok: true });
+    };
+    window.addEventListener(WORKFLOW_MODEL_PBR_TEXTURE_PROMOTE_REQUEST_EVENT, onPromote);
+    window.addEventListener(WORKFLOW_MODEL_PBR_TEXTURE_RELEASE_REQUEST_EVENT, onRelease);
+    return () => {
+      window.removeEventListener(WORKFLOW_MODEL_PBR_TEXTURE_PROMOTE_REQUEST_EVENT, onPromote);
+      window.removeEventListener(WORKFLOW_MODEL_PBR_TEXTURE_RELEASE_REQUEST_EVENT, onRelease);
+    };
+  }, [
+    collectExternalPbrTextureAssetRefs,
+    deleteWorkflowAssetCompanionObjects,
+    onLog,
+    setAssets,
+    workspaceProjectChrome?.activeProjectId,
+  ]);
 
   const flushLightboxOverlayToAsset = useCallback(() => {
     const id = lightboxAssetIdRef.current;
@@ -9895,13 +10290,24 @@ ${lineSvg}
   const removeAsset = useCallback((assetId: string) => {
     setAssets((prev) => {
       const removed = prev.find((a) => a.id === assetId);
-      const next = prev.filter((a) => a.id !== assetId);
-      if (removed) {
-        if (isWorkflowStoryboardTableAsset(removed)) {
-          onStoryboardTableAssetRemoved?.(assetId);
+      if (!removed) return prev;
+      const pbrTexIds = filterUnreferencedPbrTextureAssetIds(
+        collectPbrTextureAssetIds(removed.modelPbrEdits),
+        prev,
+        {
+          excludeAssetId: assetId,
+          extraReferencedIds: collectExternalPbrTextureAssetRefs(),
         }
-        revokeWorkflowModelBlobUrlsAfterAssetRemoved(removed, next);
-        deleteWorkflowAssetCompanionObjects(removed, next);
+      );
+      const removeSet = new Set<string>([assetId, ...pbrTexIds]);
+      const removedList = prev.filter((a) => removeSet.has(a.id));
+      const next = prev.filter((a) => !removeSet.has(a.id));
+      for (const item of removedList) {
+        if (isWorkflowStoryboardTableAsset(item)) {
+          onStoryboardTableAssetRemoved?.(item.id);
+        }
+        revokeWorkflowModelBlobUrlsAfterAssetRemoved(item, next);
+        deleteWorkflowAssetCompanionObjects(item, next);
       }
       return next;
     });
@@ -9938,7 +10344,19 @@ ${lineSvg}
     if (storyboardPanelAssetId === assetId) setStoryboardPanelAssetId(null);
     // 如果删除的是当前查看的组，清除组筛选
     if (groupFilterId === assetId) setGroupFilterId(null);
-  }, [deleteWorkflowAssetCompanionObjects, lightboxAssetId, archivedDetailAssetId, groupFilterId, storyboardPanelAssetId, assetSetPanelAssetId, onStoryboardTableAssetRemoved, resetLightboxBoot, setAssets, setPending]);
+  }, [
+    collectExternalPbrTextureAssetRefs,
+    deleteWorkflowAssetCompanionObjects,
+    lightboxAssetId,
+    archivedDetailAssetId,
+    groupFilterId,
+    storyboardPanelAssetId,
+    assetSetPanelAssetId,
+    onStoryboardTableAssetRemoved,
+    resetLightboxBoot,
+    setAssets,
+    setPending,
+  ]);
 
   const archivedDetailAsset = archivedDetailAssetId ? assets.find((a) => a.id === archivedDetailAssetId) : null;
 
@@ -10026,7 +10444,8 @@ ${lineSvg}
           !!textDisplay ||
           !!(a.textTitle || '').trim() ||
           Object.values(a.textResults || {}).some((v) => String(v || '').trim() !== '');
-        const hasDisplayImage = getAssetDisplayImage(a).trim() !== '';
+        const displayImg = getAssetDisplayImage(a).trim();
+        const hasDisplayImage = displayImg !== '' && !isWorkflowModelSvgPlaceholderSrc(displayImg);
         return {
           id: a.id,
           aspectRatio: resolveWorkflowCanvasCardAspect(a, cardAspectByAssetId, {
@@ -11109,6 +11528,167 @@ ${lineSvg}
     },
     [onLog, setAssets]
   );
+
+  /** 3D PBR 贴图右键：加入输入框 / 打开贴图（或宿主）资产文件夹 */
+  useEffect(() => {
+    const onTextureAction = (event: Event) => {
+      const detail = (event as CustomEvent<WorkflowModelPbrTextureAction>).detail;
+      if (!detail?.action) return;
+      const hostAssetId = String(detail.assetId || '').trim();
+      if (!hostAssetId) return;
+      const hostAsset = assetsRef.current.find((a) => a.id === hostAssetId);
+      if (detail.action === 'open-folder') {
+        void (async () => {
+          const textureAssetId = String(detail.textureAssetId || '').trim();
+          let target =
+            (textureAssetId ? assetsRef.current.find((a) => a.id === textureAssetId) : null) || null;
+          const dataUrl = String(detail.dataUrl || '').trim();
+          // 改代码前的贴图：只有预览、没有正式资产 → 打开前升格并落盘
+          if (!target && dataUrl && hostAsset) {
+            const id = uuid();
+            const fileName = String(detail.fileName || '').trim() || 'texture.png';
+            const slot = detail.slot;
+            const materialId = String(detail.materialId || '').trim();
+            const newAsset = attachInitialVgpToNewAsset({
+              id,
+              original: dataUrl,
+              displayKey: 'original',
+              results: {},
+              resultOrder: [],
+              archived: false,
+              hiddenInGrid: true,
+              createdAt: Date.now(),
+              resultMeta: {
+                original: {
+                  executedAt: Date.now(),
+                  displayStepLabel: 'PBR Texture',
+                  source: {
+                    source: 'local',
+                    capability: 'pbr_texture',
+                    paramsSnapshot: {
+                      pbrHostAssetId: hostAssetId,
+                      ...(materialId ? { materialId } : {}),
+                      ...(slot ? { slot } : {}),
+                      pbrSource: 'upload',
+                      fileName,
+                      promotedOnOpenFolder: true,
+                    },
+                  },
+                },
+              },
+            });
+            setAssets((prev) => {
+              let next = [...prev, newAsset];
+              if (materialId && slot) {
+                next = next.map((asset) => {
+                  if (asset.id !== hostAssetId) return asset;
+                  const doc = normalizeWorkflowModelPbrEditDoc(asset.modelPbrEdits);
+                  if (!doc) return asset;
+                  // 同时挂槽位与同 dataUrl 候选
+                  let patched = applyPbrTextureAssetIdToDoc(doc, {
+                    materialId,
+                    slot,
+                    kind: 'slot',
+                    assetId: id,
+                  });
+                  const list = patched.materials[materialId]?.slotCandidates?.[slot] || [];
+                  const matchCand = list.find((c) => String(c.dataUrl || '').trim() === dataUrl);
+                  if (matchCand) {
+                    patched = applyPbrTextureAssetIdToDoc(patched, {
+                      materialId,
+                      slot,
+                      kind: 'candidate',
+                      candidateId: matchCand.id,
+                      assetId: id,
+                    });
+                  }
+                  return { ...asset, modelPbrEdits: patched };
+                });
+              }
+              return next;
+            });
+            scheduleCompanionPersistOriginalAny(id, dataUrl);
+            target = newAsset;
+            onLog?.('info', '旧贴图尚未落盘，已创建本地资产并写入…');
+          }
+          if (!target) target = hostAsset;
+          if (!target) {
+            onLog?.('warn', '打开资产文件夹失败：未找到贴图或宿主资产');
+            return;
+          }
+          await handleWorkflowAssetOpenFolder(target);
+        })();
+        return;
+      }
+      if (detail.action === 'add-to-compose') {
+        if (!hostAsset) {
+          onLog?.('warn', '添加到输入框失败：未找到宿主 3D 资产');
+          return;
+        }
+        const textureAssetId = String(detail.textureAssetId || '').trim();
+        const textureAsset = textureAssetId
+          ? assetsRef.current.find((a) => a.id === textureAssetId)
+          : null;
+        const src =
+          (textureAsset ? getAssetDisplayImage(textureAsset).trim() : '') ||
+          String(detail.dataUrl || '').trim();
+        if (!src && !textureAsset) {
+          onLog?.('warn', '底部快捷栏：贴图没有可用预览');
+          return;
+        }
+        const slotKey = detail.slots?.[0] || 'baseColor';
+        if (textureAsset) {
+          const label = detail.textureLabel || detail.fileName || 'Texture';
+          const rewriteTarget: WorkflowModelPbrTextureRewriteTarget = {
+            assetId: hostAsset.id,
+            sourceTextureSrc: src || getAssetDisplayImage(textureAsset),
+            sourceTextureAssetId: textureAsset.id,
+            slots: detail.slots?.length ? detail.slots : ['baseColor'],
+            ...(detail.materialIds?.length ? { materialIds: detail.materialIds } : {}),
+            textureLabel: label,
+          };
+          setQuickComposeMainDropSlots((prev) =>
+            renumberQuickComposeMainDropSlotLabels([
+              ...prev.filter((slot) => slot.assetId !== textureAsset.id),
+              {
+                assetId: textureAsset.id,
+                previewSrc: src || getAssetDisplayImage(textureAsset),
+                label,
+                modelPbrTextureRewriteTarget: rewriteTarget,
+              },
+            ])
+          );
+          setQuickComposeReferenceDropSlots((prev) =>
+            prev.filter((slot) => slot.assetId !== textureAsset.id)
+          );
+          onLog?.('info', '底部快捷栏：贴图资产已加入主图，生成结果将写回 3D 资产');
+          return;
+        }
+        handleWorkflowTextureAddToComposeInput(hostAsset, {
+          kind: 'texture',
+          nodeId: `pbr-tex-node:${hostAssetId}:${slotKey}`,
+          textureId: `pbr-tex:${hostAssetId}:${slotKey}`,
+          label: detail.textureLabel || detail.fileName || 'Texture',
+          src,
+          slots: detail.slots?.length ? detail.slots : ['baseColor'],
+          ...(detail.materialIds?.length ? { materialIds: detail.materialIds } : {}),
+        });
+      }
+    };
+    window.addEventListener(WORKFLOW_MODEL_PBR_TEXTURE_ACTION_EVENT, onTextureAction);
+    return () => {
+      window.removeEventListener(WORKFLOW_MODEL_PBR_TEXTURE_ACTION_EVENT, onTextureAction);
+    };
+  }, [
+    getAssetDisplayImage,
+    handleWorkflowAssetOpenFolder,
+    handleWorkflowTextureAddToComposeInput,
+    onLog,
+    scheduleCompanionPersistOriginalAny,
+    setAssets,
+    setQuickComposeMainDropSlots,
+    setQuickComposeReferenceDropSlots,
+  ]);
 
   const handleLightboxNodeGraphMenuAction = useCallback(
     (action: WorkflowStepNodeGraphMenuAction, node: WorkflowStepNodeGraphNodeContext) => {
@@ -14835,14 +15415,17 @@ ${lineSvg}
                   ['--wf-card-gap' as string]: `${WORKFLOW_ASSET_GRID_GAP_PX}px`,
                 }}
               >
-                {rootCanvasAssets.map((a) => {
+                {(rootJustifiedLayout.ready ? rootJustifiedLayout.boxes : []).map((layoutBox) => {
+                  const a = rootCanvasAssetsById.get(layoutBox.id);
+                  if (!a) return null;
                   const textDisplay = getAssetDisplayText(a);
                   const hasTextPayload =
                     !!textDisplay ||
                     !!(a.textTitle || '').trim() ||
                     Object.values(a.textResults || {}).some((v) => String(v || '').trim() !== '');
                   const baseDisplayImage = getAssetDisplayImage(a);
-                  const hasDisplayImage = baseDisplayImage.trim() !== '';
+                  const hasDisplayImage =
+                    baseDisplayImage.trim() !== '' && !isWorkflowModelSvgPlaceholderSrc(baseDisplayImage);
                   const isBusy = busyAssetIds.has(a.id);
                   const isPendingOnly = pendingAssetIds.has(a.id) && !executingQueue;
                   const taskForRootSlot = rootExecutingTaskByAssetId.get(a.id) ?? null;
@@ -14907,7 +15490,6 @@ ${lineSvg}
                     showSetRunProgress && !selectedAssetIds.has(a.id)
                       ? 'ring-2 ring-blue-500/35 shadow-[0_0_22px_rgba(59,130,246,0.14)]'
                       : '';
-                  const layoutBox = rootJustifiedLayout.boxById.get(a.id);
                   const stepBadge = resolveWorkflowAssetStepBadge(a, assets, {
                     groupPreviewIndex: groupPreviewIndexById[a.id],
                   });
@@ -14921,16 +15503,12 @@ ${lineSvg}
                         selectedAssetIds.has(a.id) ? WORKFLOW_CARD_SHELL_SELECTED : WORKFLOW_CARD_SHELL_IDLE
                       }`}
                       data-workflow-thumb-key={a.id}
-                      style={
-                        layoutBox
-                          ? {
-                              left: layoutBox.left,
-                              top: layoutBox.top,
-                              width: layoutBox.width,
-                              height: layoutBox.height,
-                            }
-                          : undefined
-                      }
+                      style={{
+                        left: layoutBox.left,
+                        top: layoutBox.top,
+                        width: layoutBox.width,
+                        height: layoutBox.height,
+                      }}
                       onDragOver={(e) => {
                         handleWorkflowAssetDropHostDragOver(e, a.id, {
                           allowGroup: !isWorkflowTextAsset(a),
@@ -15409,11 +15987,20 @@ ${lineSvg}
                   variant={lightboxMediaCenterVariant}
                   assetId={lightboxAsset.id}
                   model3dPbrEditDoc={lightboxAsset.modelPbrEdits ?? null}
+                  resolvePbrTextureAssetSrc={(textureAssetId) => {
+                    const tex = assetsRef.current.find((a) => a.id === textureAssetId);
+                    return tex ? getAssetDisplayImage(tex) : '';
+                  }}
                   model3dDisplayMode={lightboxModel3dDisplayMode}
                 model3dResetViewNonce={lightboxModel3dResetViewNonce}
                 model3dShowGrid={lightboxModel3dShowGrid}
                 model3dBackfaceCulling={lightboxModel3dBackfaceCulling}
                 capturePreviewNonce={lightboxMediaCapturePreviewNonce}
+                uiRightInset={
+                  lightboxChromeReady && !lightboxUiHidden
+                    ? WORKFLOW_LIGHTBOX_ASSET_THUMB_STRIP_INSET
+                    : '0px'
+                }
                 onAddToComposeInput={(text) => appendQuickComposeTextInput(text, '媒体资产引用')}
               />
             ) : undefined
@@ -15475,6 +16062,10 @@ ${lineSvg}
           modelUrls={lightboxTexturePreviewSrc ? [] : lightboxModelUrls}
           modelFileName={lightboxTexturePreviewSrc ? undefined : lightboxModelFileNameHint}
           model3dPbrEditDoc={lightboxTexturePreviewSrc ? null : lightboxAsset.modelPbrEdits ?? null}
+          resolvePbrTextureAssetSrc={(textureAssetId) => {
+            const tex = assetsRef.current.find((a) => a.id === textureAssetId);
+            return tex ? getAssetDisplayImage(tex) : '';
+          }}
           model3dDisplayMode={lightboxModel3dDisplayMode}
           model3dResetViewNonce={lightboxModel3dResetViewNonce}
           model3dShowGrid={lightboxModel3dShowGrid}
@@ -15898,6 +16489,10 @@ ${lineSvg}
             }}
             activePreviewTextureSrc={lightboxTexturePreviewSrc}
             onNodeMenuAction={handleLightboxNodeGraphMenuAction}
+            resolvePbrTextureAssetSrc={(textureAssetId) => {
+              const tex = assetsRef.current.find((a) => a.id === textureAssetId);
+              return tex ? getAssetDisplayImage(tex) : '';
+            }}
             pixelBusy={busyAssetIds.has(lightboxAsset.id)}
             pixelBusyInputDisplayKeys={busyInputDisplayKeysByAssetId.get(lightboxAsset.id) || []}
           />

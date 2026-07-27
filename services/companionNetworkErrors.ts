@@ -19,7 +19,21 @@ export function humanMessageForCompanionClientFailure(code: string | undefined, 
   if (fb === 'bearer_invalid') return CODE_ZH.AUTH_TOKEN_INVALID!;
   if (fb === 'bearer_revoked') return CODE_ZH.AUTH_TOKEN_REVOKED!;
 
-  if (/failed to fetch|fetch failed|networkerror|load failed|connection refused|econnrefused|network request failed/i.test(fb)) {
+  /**
+   * 伴侣已响应但 outbound 拉 CDN 失败时，上游常返回 `fetch failed`。
+   * 不可误报成「无法连接本地伴侣」（进程其实在线）。
+   */
+  if (c === 'STORAGE_IMPORT_FAILED' || /^upstream_http_\d+/i.test(fb)) {
+    return `伴侣拉取远程文件失败：${fb || 'unknown'}（请检查 .env.local 的 TRIPO_PROXY/HTTPS_PROXY，常见 http://127.0.0.1:7890）`;
+  }
+
+  // 仅浏览器连不上伴侣进程时（无业务 code）才提示「无法连接」
+  if (
+    !c &&
+    /failed to fetch|fetch failed|networkerror|load failed|connection refused|econnrefused|network request failed/i.test(
+      fb
+    )
+  ) {
     return '无法连接本地伴侣。请确认桌面伴侣已启动（默认 http://127.0.0.1:18765），OCR 已一键安装，且设置里地址/Token 与壳内配对一致。';
   }
 

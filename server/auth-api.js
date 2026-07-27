@@ -604,6 +604,8 @@ function assertCsrf(req, res) {
   if (pathOnly === '/api/auth/credits-release') return true;
   if (pathOnly === '/api/ai/jobs' || pathOnly.startsWith('/api/ai/jobs/')) return true;
   if (pathOnly.startsWith('/api/ai/provider-artifacts/')) return true;
+  /** 会话代拉远程媒体（伴侣 import-url / CORS 回退）；与 provider-artifacts 相同，依赖 requireAuth + assertWriteOrigin */
+  if (pathOnly.startsWith('/api/media')) return true;
   if (pathOnly === '/api/internal/credits/precheck') return true;
   if (pathOnly === '/api/internal/credits/validate-reserve') return true;
   if (pathOnly === '/api/internal/ai-gateway/validate-handoff') return true;
@@ -4245,6 +4247,72 @@ const server = http.createServer(async (req, res) => {
         const detail = formatFetchError(e);
         json(res, 502, {
           error: `${providerId} provider file fetch failed: ${detail.message}`,
+          ...(detail.code ? { code: detail.code } : {}),
+        });
+      }
+      return;
+    }
+
+    /**
+     * Session-authenticated media fetch for companion persist when browser CORS
+     * and companion import-url both fail. Uses the same outbound proxy as Tripo.
+     */
+    if (path === '/api/media/fetch-url' && req.method === 'POST') {
+      const auth = await requireAuth(req, res);
+      if (!auth) return;
+      const body = await readBody(req);
+      const fileUrl = normalizeTrimmed(body.url);
+      if (!fileUrl) {
+        json(res, 400, { error: '缺少 url' });
+        return;
+      }
+      let parsed;
+      try {
+        parsed = new URL(fileUrl);
+      } catch {
+        json(res, 400, { error: 'url 非法' });
+        return;
+      }
+      const proto = String(parsed.protocol || '').toLowerCase();
+      if (proto !== 'https:' && proto !== 'http:') {
+        json(res, 400, { error: '仅支持 http/https url' });
+        return;
+      }
+      try {
+        const upstreamResp = await fetch(fileUrl, {
+          method: 'GET',
+          redirect: 'follow',
+          signal: AbortSignal.timeout(TRIPO_TIMEOUT_MS),
+        });
+        if (!upstreamResp.ok) {
+          const data = await readJsonSafe(upstreamResp);
+          json(res, upstreamResp.status >= 400 && upstreamResp.status < 600 ? upstreamResp.status : 502, {
+            error: `upstream_http_${upstreamResp.status}`,
+            ...(data && typeof data === 'object' ? data : {}),
+          });
+          return;
+        }
+        const arrayBuffer = await upstreamResp.arrayBuffer();
+        const buf = Buffer.from(arrayBuffer);
+        if (!buf.byteLength) {
+          json(res, 400, { error: 'empty_upstream_body' });
+          return;
+        }
+        const contentType =
+          normalizeTrimmed(upstreamResp.headers.get('content-type') || '') || 'application/octet-stream';
+        res.writeHead(200, {
+          'Content-Type': contentType,
+          'Content-Length': String(buf.byteLength),
+          'Cache-Control': 'no-store',
+        });
+        res.end(buf);
+      } catch (e) {
+        const detail = formatFetchError(e);
+        json(res, 502, {
+          error: `media fetch failed: ${detail.message}`,
+          hint: TRIPO_PROXY
+            ? '已启用 TRIPO_PROXY，请检查代理是否可用'
+            : '当前未配置 TRIPO_PROXY/HTTPS_PROXY；若网络受限请在 .env.local 配置 TRIPO_PROXY=http://127.0.0.1:7890',
           ...(detail.code ? { code: detail.code } : {}),
         });
       }

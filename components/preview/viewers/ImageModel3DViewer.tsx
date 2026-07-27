@@ -6,12 +6,23 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js';
 import './ImageModel3DViewer.css';
 import type { LazyImagePreviewViewerProps } from '../registry';
+import ModelPbrSlotGeneratePanel, {
+  type ModelPbrSlotGenerateJobView,
+} from './ModelPbrSlotGeneratePanel';
+import ModelPbrTextureContextMenu from './ModelPbrTextureContextMenu';
 import {
+  appendWorkflowPbrSlotCandidates,
+  applyPbrTextureAssetIdToDoc,
+  createWorkflowPbrSlotCandidate,
   defaultWorkflowPbrChannel,
   defaultWorkflowPbrColorSpace,
   inferWorkflowPbrSlotsFromFileName,
+  listLegacyPbrTextureDataUrlRefs,
+  MAX_PBR_SLOT_GENERATE_COUNT,
   normalizeWorkflowModelPbrEditDoc,
   readWorkflowModelPbrEditDoc,
+  resolvePbrTextureSrc,
+  textureEditFromPbrCandidate,
   WORKFLOW_MODEL_PBR_EDIT_PERSIST_EVENT,
   workflowModelPbrEditKey,
   WORKFLOW_MODEL_PBR_SLOTS,
@@ -21,8 +32,19 @@ import {
   type WorkflowModelPbrEditPersistEventDetail,
   type WorkflowModelPbrMaterialEdit,
   type WorkflowModelPbrSlot,
+  type WorkflowModelPbrSlotCandidate,
   type WorkflowModelPbrTextureEdit,
 } from '../../../services/workflowModelPbrEdits';
+import { requestWorkflowModelPbrSlotGenerate } from '../../../services/workflowModelPbrSlotGenerateBridge';
+import {
+  requestPromotePbrTextureAsset,
+  requestReleasePbrTextureAssets,
+} from '../../../services/workflowModelPbrTextureAssetBridge';
+import {
+  dispatchWorkflowModelPbrTextureAction,
+  downloadPbrTextureDataUrl,
+} from '../../../services/workflowModelPbrTextureActions';
+import { copyWorkflowAssetOriginalImageToClipboard } from '../../../services/workflowAssetClipboard';
 import {
   disposeObjectHierarchy,
   frameCameraToObject,
@@ -340,23 +362,33 @@ function readFileAsDataUrl(file: File): Promise<string> {
 function loadImageElement(src: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const img = new Image();
+    // companion / 跨端口 http(s) 需匿名 CORS，否则 canvas getImageData 污染失败
+    if (/^https?:\/\//i.test(src)) {
+      img.crossOrigin = 'anonymous';
+    }
     img.onload = () => resolve(img);
     img.onerror = () => reject(new Error('Failed to decode texture'));
     img.src = src;
   });
 }
 
-async function prepareTextureDataUrl(edit: WorkflowModelPbrTextureEdit, slot: WorkflowModelPbrSlot): Promise<string> {
+async function prepareTextureDataUrl(
+  edit: WorkflowModelPbrTextureEdit,
+  slot: WorkflowModelPbrSlot,
+  sourceSrc: string
+): Promise<string> {
+  const src = String(sourceSrc || '').trim();
+  if (!src) return '';
   const channel = slot === 'normal' ? 'rgb' : edit.channel;
   const flipNormalR = slot === 'normal' && edit.normalFlipR === true;
   const flipNormalG = slot === 'normal' && edit.normalFlipG === true;
-  if (channel === 'rgb' && !flipNormalR && !flipNormalG) return edit.dataUrl;
-  const img = await loadImageElement(edit.dataUrl);
+  if (channel === 'rgb' && !flipNormalR && !flipNormalG) return src;
+  const img = await loadImageElement(src);
   const canvas = document.createElement('canvas');
   canvas.width = Math.max(1, img.naturalWidth || img.width || 1);
   canvas.height = Math.max(1, img.naturalHeight || img.height || 1);
   const ctx = canvas.getContext('2d');
-  if (!ctx) return edit.dataUrl;
+  if (!ctx) return src;
   ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
   const image = ctx.getImageData(0, 0, canvas.width, canvas.height);
   if (channel === 'rgb') {
@@ -378,9 +410,14 @@ async function prepareTextureDataUrl(edit: WorkflowModelPbrTextureEdit, slot: Wo
   return canvas.toDataURL('image/png');
 }
 
-async function createTextureFromEdit(edit: WorkflowModelPbrTextureEdit, slot: WorkflowModelPbrSlot): Promise<THREE.Texture> {
-  const src = await prepareTextureDataUrl(edit, slot);
-  const texture = await new THREE.TextureLoader().loadAsync(src);
+async function createTextureFromEdit(
+  edit: WorkflowModelPbrTextureEdit,
+  slot: WorkflowModelPbrSlot,
+  sourceSrc: string
+): Promise<THREE.Texture | null> {
+  const prepared = await prepareTextureDataUrl(edit, slot, sourceSrc);
+  if (!prepared) return null;
+  const texture = await new THREE.TextureLoader().loadAsync(prepared);
   texture.name = edit.fileName;
   texture.colorSpace = edit.colorSpace === 'srgb' ? THREE.SRGBColorSpace : THREE.NoColorSpace;
   texture.wrapS = THREE.RepeatWrapping;
@@ -432,9 +469,24 @@ function applyPbrSlotParamToMaterial(
 async function applyPbrSlotToMaterial(
   material: PbrEditableMaterial,
   slot: WorkflowModelPbrSlot,
-  edit: WorkflowModelPbrTextureEdit | undefined
+  edit: WorkflowModelPbrTextureEdit | undefined,
+  resolveAssetSrc?: ((assetId: string) => string) | null
 ): Promise<void> {
-  const texture = edit?.enabled ? await createTextureFromEdit(edit, slot) : null;
+  const channel = slot === 'normal' ? 'rgb' : edit?.channel || 'rgb';
+  const needsCanvasChannel =
+    Boolean(edit?.enabled) &&
+    !(
+      channel === 'rgb' &&
+      !(slot === 'normal' && edit?.normalFlipR === true) &&
+      !(slot === 'normal' && edit?.normalFlipG === true)
+    );
+  // 通道拆解走 canvas：优先内嵌 dataUrl，避免 companion http 跨端口污染
+  const sourceSrc = !edit?.enabled
+    ? ''
+    : needsCanvasChannel && edit.dataUrl
+      ? String(edit.dataUrl).trim()
+      : resolvePbrTextureSrc(edit, resolveAssetSrc);
+  const texture = sourceSrc ? await createTextureFromEdit(edit!, slot, sourceSrc) : null;
   if (slot === 'baseColor') {
     replaceWorkflowTexture(material, 'map', texture);
     if (texture && !material.userData.workflowPbrBaseColor) material.userData.workflowPbrBaseColor = material.color.clone();
@@ -477,11 +529,15 @@ async function applyPbrSlotToMaterial(
   material.needsUpdate = true;
 }
 
-async function applyMaterialEditToSlot(slot: MaterialSlotInfo, edit: WorkflowModelPbrMaterialEdit | undefined): Promise<void> {
+async function applyMaterialEditToSlot(
+  slot: MaterialSlotInfo,
+  edit: WorkflowModelPbrMaterialEdit | undefined,
+  resolveAssetSrc?: ((assetId: string) => string) | null
+): Promise<void> {
   if (!edit) return;
   for (const pbrSlot of WORKFLOW_MODEL_PBR_SLOTS) {
     const textureEdit = edit.slots[pbrSlot];
-    await applyPbrSlotToMaterial(slot.material, pbrSlot, textureEdit);
+    await applyPbrSlotToMaterial(slot.material, pbrSlot, textureEdit, resolveAssetSrc);
     if (!textureEdit?.enabled || pbrSlot === 'normal') applyPbrSlotParamToMaterial(slot.material, pbrSlot, edit.params?.[pbrSlot]);
   }
 }
@@ -492,13 +548,22 @@ const ImageModel3DViewer: React.FC<LazyImagePreviewViewerProps> = ({
   model3dVariantId,
   model3dModelKey,
   model3dPbrEditDoc,
+  resolvePbrTextureAssetSrc,
   modelFileName,
   model3dDisplayMode = 'material',
   model3dResetViewNonce = 0,
   model3dShowGrid = true,
   model3dBackfaceCulling = true,
+  uiRightInset = '0px',
   className,
 }) => {
+  const resolveTextureAssetSrcRef = useRef(resolvePbrTextureAssetSrc);
+  resolveTextureAssetSrcRef.current = resolvePbrTextureAssetSrc;
+  const resolveTexSrc = useCallback(
+    (ref: { assetId?: string; dataUrl?: string } | null | undefined) =>
+      resolvePbrTextureSrc(ref, resolveTextureAssetSrcRef.current),
+    []
+  );
   const rootRef = useRef<HTMLDivElement>(null);
   const mountRef = useRef<HTMLDivElement>(null);
   const viewCubeRef = useRef<HTMLDivElement>(null);
@@ -517,8 +582,33 @@ const ImageModel3DViewer: React.FC<LazyImagePreviewViewerProps> = ({
   const [pbrDoc, setPbrDoc] = useState<WorkflowModelPbrEditDoc | null>(null);
   const [draftSlotParams, setDraftSlotParams] = useState<Record<string, number>>({});
   const [, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const [generatePanelSlot, setGeneratePanelSlot] = useState<WorkflowModelPbrSlot | null>(null);
+  const [panelSourceDataUrl, setPanelSourceDataUrl] = useState<string | null>(null);
+  /** 按材质+槽位保存生成进度，关浮层再开仍可恢复占位/动画 */
+  const [slotGenerateJobs, setSlotGenerateJobs] = useState<Record<string, ModelPbrSlotGenerateJobView>>({});
+  const [slotContextMenu, setSlotContextMenu] = useState<{
+    slot: WorkflowModelPbrSlot;
+    dataUrl: string;
+    fileName: string;
+    mimeType?: string;
+    textureId: string;
+    textureAssetId?: string;
+    x: number;
+    y: number;
+  } | null>(null);
   const pbrDocRef = useRef<WorkflowModelPbrEditDoc | null>(null);
   const materialSlotsRef = useRef<MaterialSlotInfo[]>([]);
+  const pbrPanelShellRef = useRef<HTMLDivElement>(null);
+  /** 串行化 promote+append，避免并行 onImage 覆盖候选 */
+  const pbrAppendQueueRef = useRef(Promise.resolve());
+  const enqueuePbrAppend = useCallback((task: () => Promise<void>) => {
+    const next = pbrAppendQueueRef.current.then(task, task);
+    pbrAppendQueueRef.current = next.then(
+      () => undefined,
+      () => undefined
+    );
+    return next;
+  }, []);
   const pbrStorageKey = useMemo(
     () => workflowModelPbrEditKey(model3dAssetId, model3dVariantId, model3dModelKey || modelSrc || modelFileName),
     [model3dAssetId, model3dModelKey, model3dVariantId, modelFileName, modelSrc]
@@ -775,7 +865,11 @@ const ImageModel3DViewer: React.FC<LazyImagePreviewViewerProps> = ({
       applyDisplayModeRef.current?.(displayModeRef.current);
       publishModel3DStats(collectModel3DStats(object, src, modelFileName, format));
       if (savedDoc) {
-        void Promise.all(slots.map((slot) => applyMaterialEditToSlot(slot, savedDoc.materials[slot.id]))).then(() => {
+        void Promise.all(
+          slots.map((slot) =>
+            applyMaterialEditToSlot(slot, savedDoc.materials[slot.id], resolveTextureAssetSrcRef.current)
+          )
+        ).then(() => {
           publishModel3DStats(collectModel3DStats(object, src, modelFileName, format));
         });
         if (!assetSavedDoc && model3dAssetId) publishModelPbrEdit(savedDoc);
@@ -987,6 +1081,67 @@ const ImageModel3DViewer: React.FC<LazyImagePreviewViewerProps> = ({
     }
   };
 
+  /** 旧 dataUrl 贴图惰性升格为正式隐藏资产（逐条 commit，cancel 时释放未挂载资产） */
+  useEffect(() => {
+    const hostId = String(model3dAssetId || '').trim();
+    if (!hostId || status !== 'ready') return;
+    const snapshot = pbrDocRef.current;
+    if (!snapshot) return;
+    const legacy = listLegacyPbrTextureDataUrlRefs(snapshot);
+    if (legacy.length === 0) return;
+    let cancelled = false;
+    void (async () => {
+      for (const ref of legacy) {
+        if (cancelled) return;
+        const current = pbrDocRef.current;
+        if (!current) return;
+        // 用户可能已改掉该槽/候选，或其它路径已挂上 assetId
+        const stillLegacy = listLegacyPbrTextureDataUrlRefs(current).some(
+          (item) =>
+            item.materialId === ref.materialId &&
+            item.slot === ref.slot &&
+            item.kind === ref.kind &&
+            (item.candidateId || '') === (ref.candidateId || '') &&
+            item.dataUrl === ref.dataUrl
+        );
+        if (!stillLegacy) continue;
+        const promoted = await requestPromotePbrTextureAsset({
+          dataUrl: ref.dataUrl,
+          fileName: ref.fileName,
+          mimeType: ref.mimeType,
+          hostAssetId: hostId,
+          materialId: ref.materialId,
+          slot: ref.slot,
+          source: ref.source,
+        });
+        if (!promoted.ok) continue;
+        if (cancelled) {
+          void requestReleasePbrTextureAssets([promoted.assetId]);
+          return;
+        }
+        const base = pbrDocRef.current;
+        if (!base) {
+          void requestReleasePbrTextureAssets([promoted.assetId]);
+          return;
+        }
+        commitPbrDoc(
+          applyPbrTextureAssetIdToDoc(base, {
+            materialId: ref.materialId,
+            slot: ref.slot,
+            kind: ref.kind,
+            candidateId: ref.candidateId,
+            assetId: promoted.assetId,
+          })
+        );
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // 仅在宿主/就绪变化时扫遗留；不跟 updatedAt，避免编辑打断导致重复 promote
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [model3dAssetId, status]);
+
   const buildNextDoc = (
     material: MaterialSlotInfo,
     updater: (edit: WorkflowModelPbrMaterialEdit) => WorkflowModelPbrMaterialEdit
@@ -1027,8 +1182,33 @@ const ImageModel3DViewer: React.FC<LazyImagePreviewViewerProps> = ({
       },
     }));
     commitPbrDoc(next);
-    await applyPbrSlotToMaterial(material.material, slot, edit);
+    await applyPbrSlotToMaterial(material.material, slot, edit, resolveTextureAssetSrcRef.current);
     if (!edit?.enabled || slot === 'normal') applyPbrSlotParamToMaterial(material.material, slot, next.materials[material.id]?.params?.[slot]);
+  };
+
+  const promoteTextureToAsset = async (input: {
+    dataUrl: string;
+    fileName?: string;
+    mimeType?: string;
+    slot: WorkflowModelPbrSlot;
+    materialId: string;
+    source: 'generate' | 'upload';
+    presetId?: string;
+  }) => {
+    const hostId = String(model3dAssetId || '').trim();
+    if (!hostId) return null;
+    const promoted = await requestPromotePbrTextureAsset({
+      dataUrl: input.dataUrl,
+      fileName: input.fileName,
+      mimeType: input.mimeType,
+      hostAssetId: hostId,
+      materialId: input.materialId,
+      slot: input.slot,
+      source: input.source,
+      ...(input.presetId ? { presetId: input.presetId } : {}),
+    });
+    if (!promoted.ok) return null;
+    return promoted;
   };
 
   const handleTextureFile = async (targetSlot: WorkflowModelPbrSlot, file: File) => {
@@ -1042,17 +1222,32 @@ const ImageModel3DViewer: React.FC<LazyImagePreviewViewerProps> = ({
       let nextDoc = pbrDocRef.current || buildNextDoc(material, (prev) => prev);
       const materialEdit = nextDoc.materials[material.id] || { materialName: material.label, slots: {} };
       const nextSlots = { ...materialEdit.slots };
+      const nextCandidates = { ...(materialEdit.slotCandidates || {}) };
+      const nextActiveIds = { ...(materialEdit.activeCandidateIds || {}) };
       const now = nowMs();
+      let previewSrc = dataUrl;
       for (const slot of slotsToApply) {
-        nextSlots[slot] = {
+        const promoted = await promoteTextureToAsset({
           dataUrl,
           fileName: file.name || 'texture',
           mimeType: file.type || undefined,
-          channel: defaultWorkflowPbrChannel(slot),
-          colorSpace: defaultWorkflowPbrColorSpace(slot),
-          enabled: true,
-          updatedAt: now,
-        };
+          slot,
+          materialId: material.id,
+          source: 'upload',
+        });
+        const candidate = createWorkflowPbrSlotCandidate({
+          ...(promoted
+            ? { assetId: promoted.assetId, dataUrl: promoted.previewSrc }
+            : { dataUrl }),
+          fileName: file.name || 'texture',
+          mimeType: file.type || undefined,
+          source: 'upload',
+          createdAt: now,
+        });
+        previewSrc = resolveTexSrc(candidate) || dataUrl;
+        nextSlots[slot] = textureEditFromPbrCandidate(candidate, slot, nextSlots[slot]);
+        nextCandidates[slot] = appendWorkflowPbrSlotCandidates(nextCandidates[slot], [candidate]);
+        nextActiveIds[slot] = candidate.id;
       }
       nextDoc = {
         ...nextDoc,
@@ -1066,13 +1261,23 @@ const ImageModel3DViewer: React.FC<LazyImagePreviewViewerProps> = ({
             materialName: material.label,
             slots: nextSlots,
             params: materialEdit.params,
+            slotCandidates: nextCandidates,
+            activeCandidateIds: nextActiveIds,
           },
         },
       };
       commitPbrDoc(nextDoc);
       for (const slot of slotsToApply) {
-        await applyPbrSlotToMaterial(material.material, slot, nextSlots[slot]);
+        await applyPbrSlotToMaterial(
+          material.material,
+          slot,
+          nextSlots[slot],
+          resolveTextureAssetSrcRef.current
+        );
         if (slot === 'normal') applyPbrSlotParamToMaterial(material.material, slot, materialEdit.params?.[slot]);
+      }
+      if (generatePanelSlot && slotsToApply.includes(generatePanelSlot)) {
+        setPanelSourceDataUrl(previewSrc);
       }
     } catch {
       setSaveState('error');
@@ -1093,7 +1298,245 @@ const ImageModel3DViewer: React.FC<LazyImagePreviewViewerProps> = ({
   const clearSlot = async (slot: WorkflowModelPbrSlot) => {
     const material = activeMaterial;
     if (!material) return;
-    await updateTextureSlot(material, slot, undefined);
+    const next = buildNextDoc(material, (prev) => {
+      const nextSlots = { ...prev.slots };
+      delete nextSlots[slot];
+      const nextActive = { ...(prev.activeCandidateIds || {}) };
+      delete nextActive[slot];
+      return {
+        ...prev,
+        materialName: material.label,
+        slots: nextSlots,
+        activeCandidateIds: Object.keys(nextActive).length > 0 ? nextActive : undefined,
+      };
+    });
+    commitPbrDoc(next);
+    await applyPbrSlotToMaterial(material.material, slot, undefined, resolveTextureAssetSrcRef.current);
+    applyPbrSlotParamToMaterial(material.material, slot, next.materials[material.id]?.params?.[slot]);
+    if (generatePanelSlot === slot) setPanelSourceDataUrl(null);
+  };
+
+  const applyCandidateToSlot = async (slot: WorkflowModelPbrSlot, candidate: WorkflowModelPbrSlotCandidate) => {
+    const material = activeMaterial;
+    if (!material) return;
+    const prev = activeEdit?.slots[slot];
+    const edit = textureEditFromPbrCandidate(candidate, slot, prev);
+    const next = buildNextDoc(material, (mat) => ({
+      ...mat,
+      materialName: material.label,
+      slots: {
+        ...mat.slots,
+        [slot]: edit,
+      },
+      activeCandidateIds: {
+        ...(mat.activeCandidateIds || {}),
+        [slot]: candidate.id,
+      },
+    }));
+    commitPbrDoc(next);
+    await applyPbrSlotToMaterial(material.material, slot, edit, resolveTextureAssetSrcRef.current);
+    if (slot === 'normal') applyPbrSlotParamToMaterial(material.material, slot, next.materials[material.id]?.params?.[slot]);
+    if (generatePanelSlot === slot) setPanelSourceDataUrl(resolveTexSrc(candidate) || null);
+  };
+
+  const appendCandidatesToSlot = (
+    slot: WorkflowModelPbrSlot,
+    items: WorkflowModelPbrSlotCandidate[],
+    applyLast = true,
+    materialOverride?: MaterialSlotInfo | null
+  ) => {
+    const material = materialOverride ?? activeMaterial;
+    if (!material || items.length === 0) return;
+    const last = items[items.length - 1]!;
+    const next = buildNextDoc(material, (mat) => {
+      const prevSlot = mat.slots[slot];
+      const nextCandidates = {
+        ...(mat.slotCandidates || {}),
+        [slot]: appendWorkflowPbrSlotCandidates(mat.slotCandidates?.[slot], items),
+      };
+      const nextActive = { ...(mat.activeCandidateIds || {}) };
+      const nextSlots = { ...mat.slots };
+      if (applyLast) {
+        nextSlots[slot] = textureEditFromPbrCandidate(last, slot, prevSlot);
+        nextActive[slot] = last.id;
+      }
+      return {
+        ...mat,
+        materialName: material.label,
+        slots: nextSlots,
+        slotCandidates: nextCandidates,
+        activeCandidateIds: nextActive,
+      };
+    });
+    commitPbrDoc(next);
+    if (applyLast) {
+      void applyPbrSlotToMaterial(
+        material.material,
+        slot,
+        next.materials[material.id]?.slots[slot],
+        resolveTextureAssetSrcRef.current
+      );
+      if (slot === 'normal') {
+        applyPbrSlotParamToMaterial(material.material, slot, next.materials[material.id]?.params?.[slot]);
+      }
+      if (generatePanelSlot === slot) setPanelSourceDataUrl(resolveTexSrc(last) || null);
+    }
+  };
+
+  const removeCandidateFromSlot = (slot: WorkflowModelPbrSlot, candidateId: string) => {
+    const material = activeMaterial;
+    if (!material) return;
+    const next = buildNextDoc(material, (mat) => {
+      const list = (mat.slotCandidates?.[slot] || []).filter((c) => c.id !== candidateId);
+      const nextCandidates = { ...(mat.slotCandidates || {}) };
+      if (list.length > 0) nextCandidates[slot] = list;
+      else delete nextCandidates[slot];
+      const nextActive = { ...(mat.activeCandidateIds || {}) };
+      if (nextActive[slot] === candidateId) delete nextActive[slot];
+      return {
+        ...mat,
+        slotCandidates: Object.keys(nextCandidates).length > 0 ? nextCandidates : undefined,
+        activeCandidateIds: Object.keys(nextActive).length > 0 ? nextActive : undefined,
+      };
+    });
+    commitPbrDoc(next);
+  };
+
+  const slotGenerateJobKey = (materialId: string, slot: WorkflowModelPbrSlot) => `${materialId}:${slot}`;
+
+  const openOrToggleGeneratePanel = (slot: WorkflowModelPbrSlot) => {
+    // 再点同槽关闭；点别槽切换显示（不因点空白自动关）
+    if (generatePanelSlot === slot) {
+      setGeneratePanelSlot(null);
+      return;
+    }
+    const current = activeEdit?.slots[slot];
+    setGeneratePanelSlot(slot);
+    const src = current?.enabled ? resolveTexSrc(current) : '';
+    setPanelSourceDataUrl(src || null);
+    setSlotContextMenu(null);
+  };
+
+  const runSlotGenerate = async (
+    slot: WorkflowModelPbrSlot,
+    input: { presetId: string; count: number; inputText?: string }
+  ) => {
+    const material = activeMaterial;
+    if (!material) return;
+    const sourceDataUrl = panelSourceDataUrl;
+    if (!sourceDataUrl) {
+      const key = slotGenerateJobKey(material.id, slot);
+      setSlotGenerateJobs((prev) => ({
+        ...prev,
+        [key]: { generating: false, pendingCount: 0, totalCount: 0, error: '请先上传或放入原始贴图' },
+      }));
+      return;
+    }
+    const n = Math.min(MAX_PBR_SLOT_GENERATE_COUNT, Math.max(1, Math.floor(input.count) || 1));
+    const key = slotGenerateJobKey(material.id, slot);
+    setSlotGenerateJobs((prev) => ({
+      ...prev,
+      [key]: { generating: true, pendingCount: n, totalCount: n, error: null },
+    }));
+    let received = 0;
+    const promoteAppendTasks: Promise<void>[] = [];
+    try {
+      const sourceTextureAssetId = String(activeEdit?.slots[slot]?.assetId || '').trim();
+      const result = await requestWorkflowModelPbrSlotGenerate({
+        presetId: input.presetId,
+        sourceDataUrl,
+        ...(sourceTextureAssetId ? { sourceTextureAssetId } : {}),
+        count: n,
+        inputText: input.inputText,
+        onProgress: (remaining) => {
+          setSlotGenerateJobs((prev) => {
+            const cur = prev[key];
+            if (!cur?.generating) return prev;
+            return {
+              ...prev,
+              [key]: { ...cur, pendingCount: remaining },
+            };
+          });
+        },
+        onImage: (item, index) => {
+          received += 1;
+          promoteAppendTasks.push(
+            enqueuePbrAppend(async () => {
+              const promoted = await promoteTextureToAsset({
+                dataUrl: item.dataUrl,
+                fileName: item.fileName || `${slot}-${input.presetId}-${index + 1}.png`,
+                mimeType: item.mimeType,
+                slot,
+                materialId: material.id,
+                source: 'generate',
+                presetId: item.presetId,
+              });
+              const candidate = createWorkflowPbrSlotCandidate({
+                ...(promoted
+                  ? { assetId: promoted.assetId, dataUrl: promoted.previewSrc }
+                  : { dataUrl: item.dataUrl }),
+                fileName: item.fileName || `${slot}-${input.presetId}-${index + 1}.png`,
+                mimeType: item.mimeType,
+                source: 'generate',
+                presetId: item.presetId,
+              });
+              // 完成一张立刻写入列表并套到材质（最后一张生效）；钉死开跑时的材质，避免切换材质串写
+              appendCandidatesToSlot(slot, [candidate], true, material);
+              setSlotGenerateJobs((prev) => {
+                const cur = prev[key];
+                if (!cur?.generating) return prev;
+                return {
+                  ...prev,
+                  [key]: {
+                    ...cur,
+                    pendingCount: Math.max(0, n - received),
+                  },
+                };
+              });
+            })
+          );
+        },
+      });
+      await Promise.allSettled(promoteAppendTasks);
+      if (result.ok === false) {
+        setSlotGenerateJobs((prev) => ({
+          ...prev,
+          [key]: {
+            generating: false,
+            pendingCount: 0,
+            totalCount: n,
+            error: result.error || '生成失败',
+          },
+        }));
+        return;
+      }
+      if (received === 0 && result.images.length === 0) {
+        setSlotGenerateJobs((prev) => ({
+          ...prev,
+          [key]: {
+            generating: false,
+            pendingCount: 0,
+            totalCount: n,
+            error: '该预设未返回图片结果',
+          },
+        }));
+        return;
+      }
+      setSlotGenerateJobs((prev) => ({
+        ...prev,
+        [key]: { generating: false, pendingCount: 0, totalCount: n, error: null },
+      }));
+    } catch (err) {
+      setSlotGenerateJobs((prev) => ({
+        ...prev,
+        [key]: {
+          generating: false,
+          pendingCount: 0,
+          totalCount: n,
+          error: err instanceof Error ? err.message : '生成失败',
+        },
+      }));
+    }
   };
 
   const updateSlotParam = (slot: WorkflowModelPbrSlot, value: number) => {
@@ -1120,6 +1563,29 @@ const ImageModel3DViewer: React.FC<LazyImagePreviewViewerProps> = ({
       return nextDrafts;
     });
   };
+
+  useEffect(() => {
+    if (!generatePanelSlot && !slotContextMenu) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      if (typeof document !== 'undefined') {
+        if (document.querySelector('[data-ac-dropdown-overlay]')) return;
+        if (document.querySelector('[data-model-pbr-candidate-menu],[data-model-pbr-texture-context-menu]')) {
+          return;
+        }
+      }
+      if (slotContextMenu) {
+        setSlotContextMenu(null);
+        return;
+      }
+      // Esc 仍可关浮层；点空白不再自动关
+      setGeneratePanelSlot(null);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+    };
+  }, [generatePanelSlot, slotContextMenu]);
 
   const handleViewCubePick = useCallback((direction: ViewCubeDirection) => {
     setModelViewDirectionRef.current?.(direction);
@@ -1168,17 +1634,68 @@ const ImageModel3DViewer: React.FC<LazyImagePreviewViewerProps> = ({
       ) : null}
       {status === 'ready' && materialSlots.length > 0 ? (
         <div
-          className="pointer-events-auto absolute right-8 top-1/2 z-[4] flex max-h-[calc(100vh-5rem)] -translate-y-1/2 overflow-hidden rounded-xl border border-white/10 bg-[#0d0e12]/92 text-gray-200 shadow-2xl ring-1 ring-white/[0.05] backdrop-blur-xl"
+          ref={pbrPanelShellRef}
+          className="pointer-events-auto absolute top-1/2 z-[4] flex max-h-[calc(100vh-5rem)] -translate-y-1/2 items-stretch gap-2"
+          style={{ right: `calc(${uiRightInset || '0px'} + 0.5rem)` }}
           data-image-preview-no-wheel
-          data-image-preview-scroll
+          data-ac-allow-context-menu
           onClick={(e) => e.stopPropagation()}
+          onPointerDown={(e) => e.stopPropagation()}
           onWheel={(e) => e.stopPropagation()}
         >
+          {generatePanelSlot && activeMaterial ? (
+            <ModelPbrSlotGeneratePanel
+              slot={generatePanelSlot}
+              slotLabel={PBR_SLOT_LABELS[generatePanelSlot]}
+              hostAssetId={model3dAssetId}
+              hostMaterialId={activeMaterial.id}
+              sourceDataUrl={panelSourceDataUrl}
+              onSourceDataUrlChange={(dataUrl) => setPanelSourceDataUrl(dataUrl)}
+              candidates={activeEdit?.slotCandidates?.[generatePanelSlot] || []}
+              activeCandidateId={activeEdit?.activeCandidateIds?.[generatePanelSlot]}
+              resolveCandidateSrc={resolveTexSrc}
+              onApplyCandidate={(candidate) => void applyCandidateToSlot(generatePanelSlot, candidate)}
+              onAddUploadedCandidate={(dataUrl, fileName, mimeType) => {
+                void (async () => {
+                  const promoted = await promoteTextureToAsset({
+                    dataUrl,
+                    fileName,
+                    mimeType,
+                    slot: generatePanelSlot,
+                    materialId: activeMaterial.id,
+                    source: 'upload',
+                  });
+                  const candidate = createWorkflowPbrSlotCandidate({
+                    ...(promoted
+                      ? { assetId: promoted.assetId, dataUrl: promoted.previewSrc }
+                      : { dataUrl }),
+                    fileName,
+                    mimeType,
+                    source: 'upload',
+                  });
+                  appendCandidatesToSlot(generatePanelSlot, [candidate], true);
+                })();
+              }}
+              onRemoveCandidate={(candidateId) => removeCandidateFromSlot(generatePanelSlot, candidateId)}
+              generateJob={
+                slotGenerateJobs[slotGenerateJobKey(activeMaterial.id, generatePanelSlot)] || null
+              }
+              onGenerate={(input) => {
+                void runSlotGenerate(generatePanelSlot, input);
+              }}
+            />
+          ) : null}
+          <div
+            className="flex max-h-full overflow-hidden rounded-xl border border-white/10 bg-[#0d0e12]/92 text-gray-200 shadow-2xl ring-1 ring-white/[0.05] backdrop-blur-xl"
+            data-image-preview-scroll
+          >
           <div className="w-[9.5rem] p-2">
             <div className="space-y-1.5">
               {WORKFLOW_MODEL_PBR_SLOTS.map((slot) => {
                 const edit = activeEdit?.slots[slot];
-                const hasTexture = Boolean(edit?.enabled && edit.dataUrl);
+                const slotPreviewSrc = edit?.enabled ? resolveTexSrc(edit) : '';
+                const hasTexture = Boolean(edit?.enabled && slotPreviewSrc);
+                const panelOpen = generatePanelSlot === slot;
                 const paramAdjustable = canAdjustSlotParam(slot, hasTexture);
                 const paramRange = PBR_SLOT_PARAM_RANGE[slot];
                 const paramKey = `${activeMaterial?.id || 'none'}:${slot}`;
@@ -1197,7 +1714,9 @@ const ImageModel3DViewer: React.FC<LazyImagePreviewViewerProps> = ({
                 return (
                   <div
                     key={slot}
-                    className="flex h-[4.5rem] items-stretch gap-1 rounded-md border border-white/10 bg-white/[0.035] p-1.5"
+                    className={`flex h-[4.5rem] items-stretch gap-1 rounded-md border bg-white/[0.035] p-1.5 ${
+                      panelOpen ? 'border-blue-400/50' : 'border-white/10'
+                    }`}
                     onDragOver={(event) => {
                       event.preventDefault();
                       event.stopPropagation();
@@ -1253,38 +1772,41 @@ const ImageModel3DViewer: React.FC<LazyImagePreviewViewerProps> = ({
                           })}
                     </div>
                     <div className="flex min-w-0 flex-1 items-stretch gap-1">
-                      <label className="relative flex min-w-0 flex-1 cursor-pointer items-center justify-center overflow-hidden rounded-md border border-white/10 bg-black/30 text-[10px] font-black text-white hover:bg-white/[0.06]">
+                      <button
+                        type="button"
+                        title={hasTexture ? '打开贴图生成 / 再点关闭 · 右键更多' : '打开贴图生成（可先上传）'}
+                        aria-pressed={panelOpen}
+                        data-ac-allow-context-menu
+                        onClick={() => openOrToggleGeneratePanel(slot)}
+                        onContextMenu={(event) => {
+                          if (!hasTexture || !edit) return;
+                          event.preventDefault();
+                          event.stopPropagation();
+                          const activeCandId = activeEdit?.activeCandidateIds?.[slot];
+                          const textureAssetId = String(edit.assetId || activeCandId || '').trim() || undefined;
+                          setSlotContextMenu({
+                            slot,
+                            dataUrl: slotPreviewSrc,
+                            fileName: edit.fileName || `${slot}.png`,
+                            mimeType: edit.mimeType,
+                            textureId: textureAssetId || `${model3dAssetId || 'pbr'}:${slot}`,
+                            ...(textureAssetId ? { textureAssetId } : {}),
+                            x: event.clientX,
+                            y: event.clientY,
+                          });
+                        }}
+                        className={`relative flex min-w-0 flex-1 cursor-pointer items-center justify-center overflow-hidden rounded-md border bg-black/30 text-[10px] font-black text-white hover:bg-white/[0.06] ${
+                          panelOpen ? 'border-blue-400/60' : 'border-white/10'
+                        }`}
+                      >
                         {hasTexture ? (
-                          <img src={edit!.dataUrl} alt="" className="absolute inset-0 h-full w-full object-cover" draggable={false} />
+                          <img src={slotPreviewSrc} alt="" className="absolute inset-0 h-full w-full object-cover" draggable={false} />
                         ) : null}
                         <span className={`relative z-[1] max-w-[4.9rem] truncate rounded bg-black/45 px-1.5 py-0.5 text-center ${hasTexture ? 'text-white' : 'text-gray-400'}`}>
                           {PBR_SLOT_LABELS[slot]}
                         </span>
                         {!hasTexture ? <span className="absolute right-1.5 top-1/2 -translate-y-1/2 text-[14px] text-gray-500">+</span> : null}
-                        {hasTexture ? (
-                          <button
-                            type="button"
-                            className="absolute right-1 top-1 z-[2] rounded bg-black/55 px-1 py-0.5 text-[8px] font-bold text-gray-300 ring-1 ring-white/10 hover:bg-black/75 hover:text-white"
-                            onClick={(event) => {
-                              event.preventDefault();
-                              event.stopPropagation();
-                              void clearSlot(slot);
-                            }}
-                          >
-                            x
-                          </button>
-                        ) : null}
-                        <input
-                          type="file"
-                          accept="image/*"
-                          className="sr-only"
-                          onChange={(event) => {
-                            const file = event.currentTarget.files?.[0];
-                            event.currentTarget.value = '';
-                            if (file) void handleTextureFile(slot, file);
-                          }}
-                        />
-                      </label>
+                      </button>
                       <div
                         className={`workflow-pbr-param-slider-shell relative h-full w-4 shrink-0 ${paramAdjustable ? '' : 'opacity-35'}`}
                         role="slider"
@@ -1346,7 +1868,14 @@ const ImageModel3DViewer: React.FC<LazyImagePreviewViewerProps> = ({
                   title={`${slot.label} · ${slot.meshCount} mesh`}
                   aria-label={slot.label}
                   aria-pressed={active}
-                  onClick={() => setActiveMaterialId(slot.id)}
+                  onClick={() => {
+                    setActiveMaterialId(slot.id);
+                    if (generatePanelSlot) {
+                      const nextEdit = pbrDocRef.current?.materials[slot.id]?.slots[generatePanelSlot];
+                      const src = nextEdit?.enabled ? resolveTexSrc(nextEdit) : '';
+                      setPanelSourceDataUrl(src || null);
+                    }
+                  }}
                   className={`relative flex h-9 w-9 items-center justify-center rounded-full transition-transform ${
                     active ? 'scale-105 ring-2 ring-blue-300/80' : 'ring-1 ring-white/12 hover:scale-105 hover:ring-white/30'
                   }`}
@@ -1361,8 +1890,69 @@ const ImageModel3DViewer: React.FC<LazyImagePreviewViewerProps> = ({
               );
             })}
           </div>
+          </div>
         </div>
       ) : null}
+      <ModelPbrTextureContextMenu
+        open={Boolean(slotContextMenu)}
+        x={slotContextMenu?.x ?? 0}
+        y={slotContextMenu?.y ?? 0}
+        canDelete
+        canOpenFolder={Boolean(slotContextMenu?.textureAssetId || model3dAssetId)}
+        openFolderDisabledReason={
+          slotContextMenu?.textureAssetId || model3dAssetId ? undefined : '缺少贴图或宿主资产'
+        }
+        onDelete={() => {
+          if (!slotContextMenu) return;
+          void clearSlot(slotContextMenu.slot);
+        }}
+        onDownload={() => {
+          if (!slotContextMenu) return;
+          void downloadPbrTextureDataUrl(slotContextMenu.dataUrl, slotContextMenu.fileName);
+        }}
+        onAddToCompose={() => {
+          if (!slotContextMenu || !model3dAssetId) return;
+          dispatchWorkflowModelPbrTextureAction({
+            action: 'add-to-compose',
+            assetId: model3dAssetId,
+            ...(slotContextMenu.textureAssetId
+              ? { textureAssetId: slotContextMenu.textureAssetId }
+              : {}),
+            dataUrl: slotContextMenu.dataUrl,
+            fileName: slotContextMenu.fileName,
+            slots: [slotContextMenu.slot],
+            ...(activeMaterial?.id ? { materialIds: [activeMaterial.id] } : {}),
+            textureLabel: slotContextMenu.fileName || PBR_SLOT_LABELS[slotContextMenu.slot],
+          });
+        }}
+        onCopy={() => {
+          if (!slotContextMenu) return;
+          void copyWorkflowAssetOriginalImageToClipboard({ imageSrc: slotContextMenu.dataUrl });
+        }}
+        onCopyId={() => {
+          if (!slotContextMenu) return;
+          void navigator.clipboard?.writeText(slotContextMenu.textureId);
+        }}
+        onOpenFolder={
+          model3dAssetId || slotContextMenu?.textureAssetId || slotContextMenu?.dataUrl
+            ? () => {
+                if (!slotContextMenu) return;
+                dispatchWorkflowModelPbrTextureAction({
+                  action: 'open-folder',
+                  assetId: model3dAssetId || slotContextMenu.textureAssetId || '',
+                  ...(slotContextMenu.textureAssetId
+                    ? { textureAssetId: slotContextMenu.textureAssetId }
+                    : {}),
+                  ...(slotContextMenu.dataUrl ? { dataUrl: slotContextMenu.dataUrl } : {}),
+                  ...(slotContextMenu.fileName ? { fileName: slotContextMenu.fileName } : {}),
+                  slot: slotContextMenu.slot,
+                  ...(activeMaterial?.id ? { materialId: activeMaterial.id } : {}),
+                });
+              }
+            : undefined
+        }
+        onClose={() => setSlotContextMenu(null)}
+      />
       {status === 'loading' ? (
         <div className="absolute inset-0 z-[2] flex items-center justify-center text-[10px] text-gray-500 pointer-events-none">
           3D 环境与模型加载中…

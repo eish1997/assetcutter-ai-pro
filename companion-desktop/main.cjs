@@ -201,7 +201,8 @@ let shellWorkbenchSidebarInsetPx = SHELL_SIDEBAR_WIDTH_EXPANDED;
 const SHELL_COPILOT_WIDTH_DEFAULT = 360;
 const SHELL_COPILOT_WIDTH_MIN = 360;
 const SHELL_COPILOT_WIDTH_MAX = 720;
-const SHELL_COPILOT_WIDTH_COLLAPSED = 48;
+/** Collapsed Copilot leaves no residual rail; titlebar button expands it again. */
+const SHELL_COPILOT_WIDTH_COLLAPSED = 0;
 /** @type {boolean} */
 let shellCopilotCollapsed = false;
 /** @type {number} */
@@ -2930,6 +2931,34 @@ async function startLocalCompanion() {
     ...cfg.envExtra,
     COMPANION_OPEN_BROWSER: '0',
   };
+  /** Dev: pull outbound proxy from repo .env.local so import-url can reach CDNs (auth-api already uses --env-file). */
+  try {
+    if (!app.isPackaged) {
+      const envLocalPath = path.resolve(__dirname, '..', '.env.local');
+      if (fs.existsSync(envLocalPath)) {
+        const text = fs.readFileSync(envLocalPath, 'utf8');
+        for (const line of text.split(/\r?\n/)) {
+          const t = String(line || '').trim();
+          if (!t || t.startsWith('#')) continue;
+          const eq = t.indexOf('=');
+          if (eq <= 0) continue;
+          const key = t.slice(0, eq).trim();
+          if (key !== 'TRIPO_PROXY' && key !== 'HTTPS_PROXY' && key !== 'HTTP_PROXY') continue;
+          if (String(env[key] || '').trim()) continue;
+          let val = t.slice(eq + 1).trim();
+          if (
+            (val.startsWith('"') && val.endsWith('"')) ||
+            (val.startsWith("'") && val.endsWith("'"))
+          ) {
+            val = val.slice(1, -1);
+          }
+          if (val) env[key] = val;
+        }
+      }
+    }
+  } catch {
+    /* ignore */
+  }
   const sbRoot = companionSandboxPaths.getCompanionSandboxRoot();
   if (sbRoot) {
     env.COMPANION_SANDBOX_ROOT = sbRoot;
@@ -4185,8 +4214,12 @@ if (!gotLock) {
     return { ok: true };
   });
 
-  ipcMain.handle('shell-workbench-sidebar-inset', (_e, px) => {
-    const n = Number(px);
+  ipcMain.handle('shell-workbench-sidebar-inset', (_e, payload) => {
+    const raw =
+      payload && typeof payload === 'object' && !Array.isArray(payload)
+        ? payload.px
+        : payload;
+    const n = Number(raw);
     const inset = Number.isFinite(n)
       ? Math.max(0, Math.min(Math.round(n), SHELL_SIDEBAR_WIDTH_EXPANDED))
       : SHELL_SIDEBAR_WIDTH_EXPANDED;

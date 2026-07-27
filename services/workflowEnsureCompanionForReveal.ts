@@ -4,6 +4,7 @@
  */
 
 import type { WorkflowAsset } from '../types';
+import { getCompanionAssetMeta } from './companionClient/storage';
 import { normalizeCompanionBaseUrl } from './companionLocalPrefs';
 import {
   putWorkflowOriginalImageFromAnyUrl,
@@ -42,13 +43,27 @@ export type EnsureCompanionForRevealResult =
   | { ok: true; asset: WorkflowAsset; companionKey: string; wrote: boolean }
   | { ok: false; error: string; asset: WorkflowAsset };
 
+async function companionKeyOnDisk(base: string, projectId: string, key: string): Promise<boolean> {
+  const k = String(key || '').trim();
+  if (!k) return false;
+  try {
+    const meta = await getCompanionAssetMeta(base, projectId, k);
+    return Boolean(meta.ok && meta.data?.onDisk);
+  } catch {
+    return false;
+  }
+}
+
 /**
- * If the current display slot has no companion key but has a raster URL, PUT/import then return patched asset.
+ * If the current display slot has no companion key (or key missing on disk) but has a raster URL,
+ * PUT/import then return patched asset.
  */
 export async function ensureWorkflowAssetCompanionKeyForReveal(input: {
   asset: WorkflowAsset;
   projectId: string;
   companionBaseUrl: string;
+  /** 为 true 时即使已有键也会探测磁盘，缺失则重写 */
+  rewriteIfMissingOnDisk?: boolean;
 }): Promise<EnsureCompanionForRevealResult> {
   const asset = input.asset;
   const projectId = String(input.projectId || '').trim();
@@ -59,8 +74,15 @@ export async function ensureWorkflowAssetCompanionKeyForReveal(input: {
   const slot = resolveWorkflowDisplaySlot(asset);
   const displayKey = slot.displayKey;
   const existing = resolveActiveVariantCompanionKey(asset, displayKey);
+  const rewriteIfMissing = input.rewriteIfMissingOnDisk !== false;
   if (existing) {
-    return { ok: true, asset, companionKey: existing, wrote: false };
+    if (!rewriteIfMissing) {
+      return { ok: true, asset, companionKey: existing, wrote: false };
+    }
+    if (await companionKeyOnDisk(base, projectId, existing)) {
+      return { ok: true, asset, companionKey: existing, wrote: false };
+    }
+    // 键在元数据里但磁盘没有 → 继续用当前 raster 重写
   }
 
   const src = String(slot.imageSrc || '').trim();

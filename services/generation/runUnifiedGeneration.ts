@@ -254,8 +254,7 @@ const AI_GATEWAY_IMAGE_REFERENCE_MAX_BYTES = 900 * 1024;
 async function normalizeImageReferenceForGateway(input: string): Promise<string> {
   const raw = String(input || '').trim();
   if (!raw) return raw;
-  const inline = inlineDataFromDataUrl(raw);
-  if (!inline?.data) return raw;
+  // 统一走物化+压缩：blob:/http(s): 会先 fetch 成真 data URL，禁止把 URL 原文当 base64
   const normalized = await normalizeDataUrlForVisionApi(raw, AI_GATEWAY_IMAGE_REFERENCE_MAX_BYTES);
   if (dataUrlPayloadBytes(normalized) > AI_GATEWAY_IMAGE_REFERENCE_MAX_BYTES) {
     throw new Error('输入图片过大，已尝试压缩但仍超过网关请求上限；请缩小图片后重试');

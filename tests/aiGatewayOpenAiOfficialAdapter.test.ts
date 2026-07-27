@@ -2,7 +2,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createAiGatewayJobPlan } from '../server/ai-gateway/index.js';
 import { createInMemoryAiJobStore } from '../server/ai-gateway/job-store.js';
 import { listProviderKeyHealthEvents, resetProviderKeyRuntimeForTests, saveProviderKeys } from '../server/ai-gateway/provider-key-store.js';
-import { startOpenAiOfficialExecution } from '../server/ai-gateway/adapters/openai-official-adapter.js';
+import {
+  buildOpenAiOfficialRequest,
+  mapOpenAiImageModel,
+  startOpenAiOfficialExecution,
+} from '../server/ai-gateway/adapters/openai-official-adapter.js';
 import { writeModelOpsConfig } from '../server/ai-gateway/model-ops-config-store.js';
 import fs from 'fs';
 import os from 'os';
@@ -178,6 +182,159 @@ describe('OpenAI official AI Gateway adapter', () => {
     expect(imageEntry?.[1]).toBeInstanceOf(Blob);
     expect((imageEntry?.[1] as Blob).type).toBe('image/jpeg');
     expect(await (imageEntry?.[1] as Blob).text()).toBe('ABCD');
+  });
+
+  it('rejects unresolved blob URL at shared textFromContents (before any upstream fetch)', () => {
+    expect(() =>
+      createAiGatewayJobPlan({
+        id: 'aijob_302_blob_payload',
+        modality: 'image',
+        capability: 'workflow_image_edit',
+        provider: '302ai',
+        model: 'gpt-image-1.5',
+        input: {
+          contents: [
+            {
+              role: 'user',
+              parts: [
+                { text: 'texture variant' },
+                { inlineData: { mimeType: 'image/jpeg', data: 'blob:http://localhost:3000/dead-beef' } },
+              ],
+            },
+          ],
+          config: { imageConfig: { size: '1024x1024' } },
+        },
+      })
+    ).toThrow(/blob URL/i);
+  });
+
+  it('routes Gemini image on 302.AI via Google-native /google/v1/models/{model}', () => {
+    expect(mapOpenAiImageModel('gemini-2.5-flash-image', '302ai')).toBe('gemini-2.5-flash-image');
+    expect(mapOpenAiImageModel('gemini-3-pro-image', '302ai')).toBe('gemini-3-pro-image');
+    expect(mapOpenAiImageModel('gemini-3-pro-image', 'openai-official')).toBe('gpt-image-1.5');
+
+    const flash = buildOpenAiOfficialRequest(
+      {
+        id: 'aijob_gemini_302',
+        modality: 'image',
+        model: 'gemini-2.5-flash-image',
+        correlationId: 'corr_gemini_302',
+        input: {
+          contents: [
+            {
+              role: 'user',
+              parts: [
+                { text: 'basecolor variant' },
+                { inlineData: { mimeType: 'image/png', data: 'data:image/png;base64,QUJDRA==' } },
+              ],
+            },
+          ],
+          config: { imageConfig: { aspectRatio: '1:1', imageSize: '1K' } },
+        },
+      },
+      { providerId: '302ai', adapterId: '302ai-openai' }
+    );
+    expect(flash.path).toBe('/google/v1/models/gemini-2.5-flash-image');
+    expect(flash.providerBaseUrl).toBe('https://api.302.ai');
+    expect(flash.body).toMatchObject({
+      generationConfig: {
+        responseModalities: ['TEXT', 'IMAGE'],
+        imageConfig: { aspectRatio: '1:1', imageSize: '1K' },
+      },
+    });
+    expect(Array.isArray(flash.body.contents)).toBe(true);
+    expect(flash.body).not.toHaveProperty('model');
+    expect(flash.body).not.toHaveProperty('messages');
+    expect(flash.body).not.toHaveProperty('images');
+
+    const pro = buildOpenAiOfficialRequest(
+      {
+        id: 'aijob_gemini_302_pro',
+        modality: 'image',
+        model: 'gemini-3-pro-image',
+        correlationId: 'corr_gemini_302_pro',
+        input: {
+          contents: [{ role: 'user', parts: [{ text: 'hi' }] }],
+          config: { imageConfig: { aspectRatio: '16:9' } },
+        },
+      },
+      { providerId: '302ai', adapterId: '302ai-openai' }
+    );
+    // 302 文档模型 id 为 preview
+    expect(pro.path).toBe('/google/v1/models/gemini-3-pro-image-preview');
+
+    expect(() =>
+      buildOpenAiOfficialRequest(
+        {
+          id: 'aijob_gemini_blob',
+          modality: 'image',
+          model: 'gemini-3-pro-image',
+          correlationId: 'corr_gemini_blob',
+          input: {
+            contents: [
+              {
+                role: 'user',
+                parts: [
+                  { text: 'x' },
+                  { inlineData: { mimeType: 'image/jpeg', data: 'blob:http://localhost:3000/dead' } },
+                ],
+              },
+            ],
+          },
+        },
+        { providerId: '302ai', adapterId: '302ai-openai' }
+      )
+    ).toThrow(/blob URL/i);
+  });
+
+  it('sends 302.AI image edit handoff as multipart image (not JSON)', async () => {
+    useTempStore();
+    await saveProviderKeys([
+      { id: 'key_302_edit', provider: '302ai', label: '302 edit', secret: 'sk-302', enabled: true },
+    ]);
+    const store = createInMemoryAiJobStore();
+    const plan = await store.put(createAiGatewayJobPlan({
+      id: 'aijob_302_image_edit',
+      modality: 'image',
+      capability: 'workflow_image_edit',
+      provider: '302ai',
+      model: 'gpt-image-1.5',
+      input: {
+        contents: [
+          {
+            role: 'user',
+            parts: [
+              { text: 'texture variant' },
+              { inlineData: { mimeType: 'image/png', data: 'data:image/png;base64,QUJDRA==' } },
+            ],
+          },
+        ],
+        config: { imageConfig: { size: '1024x1024' } },
+      },
+    }));
+    const calls: Array<{ url: string; init: RequestInit }> = [];
+    const fetchImpl = async (url: string, init: RequestInit) => {
+      calls.push({ url, init });
+      return new Response(JSON.stringify({ id: 'img_edit_302', data: [{ b64_json: 'aW1hZ2U=' }] }), { status: 200 });
+    };
+
+    await startOpenAiOfficialExecution(plan, { store, fetchImpl });
+
+    expect(calls[0].url).toBe('https://api.302.ai/v1/images/edits');
+    expect(calls[0].init.headers).toMatchObject({ Authorization: 'Bearer sk-302' });
+    expect(calls[0].init.headers).not.toMatchObject({ 'Content-Type': 'application/json' });
+    expect(calls[0].init.body).toBeInstanceOf(FormData);
+    const entries = Array.from((calls[0].init.body as FormData).entries());
+    expect(entries).toEqual(
+      expect.arrayContaining([
+        ['model', 'gpt-image-1.5'],
+        ['prompt', 'texture variant'],
+        ['size', '1024x1024'],
+      ])
+    );
+    const imageEntry = entries.find(([key]) => key === 'image');
+    expect(imageEntry?.[1]).toBeInstanceOf(Blob);
+    expect(entries.some(([key]) => key === 'images')).toBe(false);
   });
 
   it('sends TinySnow image edit handoff as normalized JSON images', async () => {
@@ -447,6 +604,103 @@ describe('OpenAI official AI Gateway adapter', () => {
     });
     expect(await listProviderKeyHealthEvents({ keyId: 'key_ark', limit: 5 })).toEqual([
       expect.objectContaining({ type: 'success', provider: 'volcengine-ark' }),
+    ]);
+  });
+
+  it('retries once when 302 Gemini native returns empty candidates, then fails clearly', async () => {
+    useTempStore();
+    await saveProviderKeys([
+      { id: 'key_302_empty', provider: '302ai', label: '302', secret: 'sk-302', enabled: true },
+    ]);
+    const store = createInMemoryAiJobStore();
+    const plan = await store.put(
+      createAiGatewayJobPlan({
+        id: 'aijob_gemini_empty_candidates',
+        modality: 'image',
+        capability: 'workflow_image_edit',
+        provider: '302ai',
+        model: 'gemini-2.5-flash-image',
+        input: {
+          contents: [
+            {
+              role: 'user',
+              parts: [
+                { text: 'warm variant' },
+                { inlineData: { mimeType: 'image/png', data: 'data:image/png;base64,QUJDRA==' } },
+              ],
+            },
+          ],
+          config: { imageConfig: { aspectRatio: '1:1' } },
+        },
+      })
+    );
+    expect(plan.adapterRequest?.path).toMatch(/^\/google\/v1\/models\//);
+    expect(plan.adapterRequest?.body?.generationConfig?.imageConfig).toEqual({ aspectRatio: '1:1' });
+
+    let calls = 0;
+    const fetchImpl = async () => {
+      calls += 1;
+      return new Response(
+        JSON.stringify({
+          candidates: [],
+          modelVersion: 'gemini-2.5-flash-image',
+          usageMetadata: { promptTokenCount: 10, totalTokenCount: 10 },
+        }),
+        { status: 200 }
+      );
+    };
+
+    await expect(startOpenAiOfficialExecution(plan, { store, fetchImpl })).rejects.toMatchObject({
+      message: expect.stringMatching(/no image artifacts|empty/i),
+    });
+    expect(calls).toBe(2);
+    const stored = await store.get('aijob_gemini_empty_candidates');
+    expect(stored?.job.status).not.toBe('succeeded');
+  });
+
+  it('prefers https url artifact when Gemini native returns both url and inlineData', async () => {
+    useTempStore();
+    await saveProviderKeys([
+      { id: 'key_302_url', provider: '302ai', label: '302', secret: 'sk-302', enabled: true },
+    ]);
+    const store = createInMemoryAiJobStore();
+    const plan = await store.put(
+      createAiGatewayJobPlan({
+        id: 'aijob_gemini_prefer_https',
+        modality: 'image',
+        provider: '302ai',
+        model: 'gemini-2.5-flash-image',
+        input: {
+          contents: [{ role: 'user', parts: [{ text: 'hi' }] }],
+        },
+      })
+    );
+    const fetchImpl = async () =>
+      new Response(
+        JSON.stringify({
+          candidates: [
+            {
+              content: {
+                parts: [
+                  { inlineData: { mimeType: 'image/png', data: 'a'.repeat(100) } },
+                  { url: 'https://file.302.ai/gpt/imgs/demo.png' },
+                ],
+              },
+              finishReason: 'STOP',
+            },
+          ],
+        }),
+        { status: 200 }
+      );
+
+    await startOpenAiOfficialExecution(plan, { store, fetchImpl });
+    const stored = await store.get('aijob_gemini_prefer_https');
+    expect(stored?.job.status).toBe('succeeded');
+    expect(stored?.job.artifacts).toEqual([
+      expect.objectContaining({
+        kind: 'image',
+        url: 'https://file.302.ai/gpt/imgs/demo.png',
+      }),
     ]);
   });
 

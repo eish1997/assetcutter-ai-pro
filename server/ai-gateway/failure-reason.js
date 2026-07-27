@@ -186,6 +186,14 @@ const CODE_TABLE = Object.freeze({
     adminMessage: 'Adapter result failed AiGatewayAdapterResult contract validation',
     nextAction: 'Normalize adapter output to status/artifacts/output/usage/failureReason',
   },
+  AI_GATEWAY_UPSTREAM_EMPTY_IMAGE: {
+    stage: 'upstream',
+    owner: 'upstream',
+    retryable: true,
+    userMessage: '生图服务返回了空结果，请重试一次',
+    adminMessage: 'Upstream image API returned HTTP 200 with empty candidates/artifacts',
+    nextAction: 'Retry; prefer camelCase imageConfig; inspect provider empty-candidate rate',
+  },
   AI_GATEWAY_ASYNC_POLL_TIMEOUT: {
     stage: 'upstream',
     owner: 'upstream',

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { AiGatewayValidationError } from '../server/ai-gateway/job.js';
 import {
   appendAiGatewayFallbackAttempt,
   classifyAiGatewayFallbackError,
@@ -25,6 +26,18 @@ describe('AI gateway route fallback policy', () => {
       reason: 'http_401',
       retryable: false,
       status: 401,
+      policyKind: 'none',
+    });
+  });
+
+  it('does not retry AiGatewayValidationError (client/contract payload faults)', () => {
+    const err = new AiGatewayValidationError(
+      'Image payload contains unresolved blob URL inside data URL',
+      'AI_GATEWAY_OPENAI_EDIT_IMAGE_INVALID'
+    );
+    expect(classifyAiGatewayFallbackError(err)).toMatchObject({
+      reason: 'validation_error',
+      retryable: false,
       policyKind: 'none',
     });
   });

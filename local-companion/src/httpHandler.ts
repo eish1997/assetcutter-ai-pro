@@ -34,8 +34,10 @@ import {
   renameWorkspaceProjectInRepo,
   restoreWorkspaceProjectFromTrash,
 } from './storage/workspaceProjects.js';
+import { readWorkflowSnapshot, writeWorkflowSnapshot } from './storage/workflowStore.js';
 import { listRecentJobs, submitJob, getJob, deleteJob, listJobEvents } from './compute/jobsStore.js';
 import { readRequestBodyRaw } from './httpReadBody.js';
+import { outboundFetch } from './outboundFetch.js';
 import {
   checkBearerAuthorization,
   isBearerExemptPath,
@@ -768,6 +770,44 @@ export async function handleRequest(
       return;
     }
 
+    const mWorkflow = path.match(/^\/v1\/projects\/([^/]+)\/workflow$/);
+    if (mWorkflow && method === 'GET') {
+      const r = readWorkflowSnapshot(mWorkflow[1]!);
+      if ('ok' in r) sendJson(res, 200, r.body, origin);
+      else
+        sendJson(
+          res,
+          r.code === 'STORAGE_NOT_FOUND' ? 404 : 400,
+          { error: r.error, code: r.code },
+          origin,
+        );
+      return;
+    }
+    if (mWorkflow && method === 'PUT') {
+      const raw = await readRequestBodyRaw(req);
+      let parsed: { assets?: unknown[]; pending?: unknown[]; capabilityRefs?: unknown[] } = {};
+      try {
+        parsed = JSON.parse(Buffer.from(raw).toString('utf8') || '{}') as typeof parsed;
+      } catch {
+        sendJson(res, 400, { error: 'invalid_json', code: 'BAD_REQUEST' }, origin);
+        return;
+      }
+      const out = writeWorkflowSnapshot(mWorkflow[1]!, {
+        assets: Array.isArray(parsed.assets) ? parsed.assets : [],
+        pending: Array.isArray(parsed.pending) ? parsed.pending : [],
+        ...(Array.isArray(parsed.capabilityRefs) ? { capabilityRefs: parsed.capabilityRefs } : {}),
+      });
+      if ('ok' in out) sendJson(res, 200, { ok: true, workflow: out.body }, origin);
+      else
+        sendJson(
+          res,
+          out.code === 'STORAGE_INVALID_ID' ? 400 : 500,
+          { error: out.error, code: out.code },
+          origin,
+        );
+      return;
+    }
+
     const mMeta = path.match(/^\/v1\/projects\/([^/]+)\/assets\/(.+)\/meta$/);
     if (mMeta && method === 'GET') {
       const key = decodeURIComponent(mMeta[2]!);
@@ -853,7 +893,8 @@ export async function handleRequest(
         return;
       }
       try {
-        const upstream = await fetch(sourceUrl, { redirect: 'follow' });
+        // Prefer TRIPO_PROXY/HTTPS_PROXY (Node fetch alone often cannot reach CDN from CN).
+        const upstream = await outboundFetch(sourceUrl, { redirect: 'follow' });
         if (!upstream.ok) {
           sendJson(res, 502, { error: `upstream_http_${upstream.status}`, code: 'STORAGE_IMPORT_FAILED' }, origin);
           return;

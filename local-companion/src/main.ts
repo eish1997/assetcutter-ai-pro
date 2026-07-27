@@ -1,4 +1,8 @@
 import { startCompanionHttpServer, type CompanionHttpServer } from './httpServer.js';
+import {
+  loadRepoEnvLocalProxies,
+  outboundProxyConfigured,
+} from './loadRepoEnvLocalProxies.js';
 import { openDefaultBrowser } from './openBrowser.js';
 import { startRelayIfConfigured, stopRelayChild } from './relaySupervisor.js';
 import { startSamLocalIfConfigured, stopSamLocalChild } from './samLocalSupervisor.js';
@@ -6,6 +10,12 @@ import { startPaddleOcrIfConfigured, stopPaddleOcrChild } from './paddleOcrSuper
 
 /** 供信号处理里优雅关端口，避免 tsx watch 重启时 EADDRINUSE */
 let companionHttp: CompanionHttpServer | null = null;
+
+/** 须在任何 outboundFetch 之前：裸 local-companion:dev 也能吃到仓库代理 */
+const appliedProxyKeys = loadRepoEnvLocalProxies();
+if (appliedProxyKeys.length > 0) {
+  console.log(`[local-companion] 已从仓库 .env.local 加载出站代理键: ${appliedProxyKeys.join(', ')}`);
+}
 
 function envPort(): number {
   const raw = process.env.COMPANION_HTTP_PORT?.trim();
@@ -35,6 +45,9 @@ async function main(): Promise<void> {
   const base = `http://127.0.0.1:${srv.port}`;
   console.log(`[local-companion] 本机管理页 ${base}/（默认不自动打开浏览器；需要时请设置 COMPANION_OPEN_BROWSER=1）`);
   console.log(`[local-companion] health ${base}/v1/health`);
+  console.log(
+    `[local-companion] 出站代理: ${outboundProxyConfigured() ? '已配置 (TRIPO_PROXY/HTTPS_PROXY/HTTP_PROXY)' : '未配置 — import-url 拉 CDN 可能失败'}`
+  );
   console.log(`[local-companion] 卷根 COMPANION_VOLUME_ROOT=${process.env.COMPANION_VOLUME_ROOT ?? '(默认 ~/.assetcutter-companion/volume)'}`);
   console.log('[local-companion] 存储 API: GET /v1/projects , GET|PUT /v1/projects/:id/assets/:key');
   console.log(

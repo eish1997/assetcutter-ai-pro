@@ -25,6 +25,12 @@ export type LazyImagePreviewViewerProps = {
   model3dShowGrid?: boolean;
   /** 3D 模型：true=背面消隐，false=双面显示。 */
   model3dBackfaceCulling?: boolean;
+  /**
+   * 右侧 UI 避让宽度（如大图资产缩略图条）。PBR 面板会相对该 inset 左移，避免被遮挡。
+   */
+  uiRightInset?: string;
+  /** 解析 PBR 正式贴图资产的当前预览 URL（companion hydrate 后的 blob / original） */
+  resolvePbrTextureAssetSrc?: (assetId: string) => string;
   className?: string;
   /** 全景：与上次卸载前相同 key 时换纹理后恢复相机位姿（如大图内切换版本，传 `innerLayoutStableKey`） */
   panoPreserveViewKey?: string;

@@ -278,6 +278,8 @@ export default defineConfig(({ mode }) => {
           '/api/ai-worker-proxy': authApiProxy,
           '/api/gemini-proxy': authApiProxy,
           '/api/tripo/upload': authApiProxy,
+          /** HTTPS 结果代拉（companion import-url / CORS 失败时的回退） */
+          '/api/media': authApiProxy,
           '/api/debug': authApiProxy,
           /** 用户用量记账（Phase 0/1）：summary / events / export */
           '/api/usage': authApiProxy,

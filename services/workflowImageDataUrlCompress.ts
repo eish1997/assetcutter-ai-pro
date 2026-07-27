@@ -15,6 +15,53 @@ function parseDataUrlParts(input: string): { mimeType: string; data: string; isD
   return { mimeType, data, isDataUrl: true };
 }
 
+function isRawBase64Payload(value: string): boolean {
+  const stripped = String(value || '').replace(/\s/g, '');
+  return stripped.length >= 64 && /^[A-Za-z0-9+/]+=*$/.test(stripped);
+}
+
+async function blobToDataUrl(blob: Blob): Promise<string> {
+  if (typeof FileReader !== 'undefined') {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const result = String(reader.result || '');
+        if (!result.startsWith('data:')) {
+          reject(new Error('图片读取失败'));
+          return;
+        }
+        resolve(result);
+      };
+      reader.onerror = () => reject(new Error('图片读取失败'));
+      reader.readAsDataURL(blob);
+    });
+  }
+  const buf = Buffer.from(await blob.arrayBuffer());
+  const mime = blob.type || 'image/png';
+  return `data:${mime};base64,${buf.toString('base64')}`;
+}
+
+/** blob: / http(s): / 站内路径 → 真实 data URL（禁止把 URL 字符串当 base64 拼接） */
+export async function materializeImageSrcToDataUrl(input: string): Promise<string> {
+  const trimmed = String(input || '').trim();
+  if (!trimmed) return trimmed;
+  if (trimmed.startsWith('data:')) return trimmed;
+  if (/^blob:/i.test(trimmed) || /^https?:\/\//i.test(trimmed) || trimmed.startsWith('/')) {
+    const res = await fetch(trimmed, {
+      mode: 'cors',
+      credentials: trimmed.startsWith('/') || /^https?:\/\//i.test(trimmed) ? 'include' : 'omit',
+    });
+    if (!res.ok) {
+      throw new Error(`无法读取图片（HTTP ${res.status}）`);
+    }
+    return blobToDataUrl(await res.blob());
+  }
+  if (isRawBase64Payload(trimmed)) {
+    return `data:image/jpeg;base64,${trimmed.replace(/\s/g, '')}`;
+  }
+  throw new Error('图片格式无效：需要 data URL、blob URL 或可访问的图片地址');
+}
+
 export function base64PayloadBytes(base64: string): number {
   const raw = String(base64 || '').trim().replace(/\s+/g, '');
   if (!raw) return 0;
@@ -98,7 +145,6 @@ export async function normalizeDataUrlForVisionApi(
 ): Promise<string> {
   const trimmed = String(input || '').trim();
   if (!trimmed) return trimmed;
-  const parts = parseDataUrlParts(trimmed);
-  const dataUrl = parts.isDataUrl ? trimmed : `data:image/jpeg;base64,${parts.data}`;
+  const dataUrl = await materializeImageSrcToDataUrl(trimmed);
   return compressDataUrlForVisionApi(dataUrl, maxBytes);
 }

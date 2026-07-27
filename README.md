@@ -19,8 +19,9 @@ AI-assisted asset workflow workbench (workspace, capability presets, experimenta
 - [x] Vertex route: default `us-central1`; Gemini 3.x models hybrid to `global` (avoids regional Publisher 404)
 - [x] AI Gateway single execution door: catalog/ops route, image/Jimeng/video via Jobs; B-round ops (failure filters, auto-circuit, trend snapshots, cancel); BYOK only when explicit; no Jimeng digital-human / music-worker / client async-batch
 - [x] Env acceptance profiles: `npm run env:profile:dev|prod-like` (C-round local↔prod contract)
-- [x] Acceptance-as-production (D-round): smoke matrix skips ≠ green; credits STRICT; vision/3D/storyboard via Gateway Jobs; doc scrub of async-batch / local 9001 paths
+- [x] Acceptance-as-production (D-round): smoke matrix skips �?green; credits STRICT; vision/3D/storyboard via Gateway Jobs; doc scrub of async-batch / local 9001 paths
 - [x] Multi-provider Gateway routing: default jobs omit client `provider` pin; Gemini/GPT can fall back to keyed aggregators (302/AIHubMix); `guard:ai-routing` includes client pin check; prompt arena/translate via Gateway Jobs
+- [x] 302 Gemini image: Google-native `/google/v1/models/{model}`; empty-candidates retry; CSRF-safe `/api/media/fetch-url`; PBR textures promote to companion assets
 - [x] WebGPU-first RenderHost (`services/renderCore/`) with classic WebGL path for PMREM; companion shell can disable WebGPU
 - [x] Agent CLI (`npm run agent:cli` / `agent:init`): HTTP Soul API + workbench asset merge (`source=agent-cli`); see `docs/Cursor与Codex-Agent-CLI接入.md`
 - [x] Companion local object keys: `{assetId}/{mediaKind}-{full|thumb}-{slot}-{id8}.{ext}` (legacy `result-*` / `image-N` read-compat only)
@@ -28,7 +29,7 @@ AI-assisted asset workflow workbench (workspace, capability presets, experimenta
 
 ## Sidebar / pages
 
-- **Workspace**: main asset canvas + function sidebar; content slot switches assets ↔ presets; Project Agent dock (right)
+- **Workspace**: main asset canvas + function sidebar; content slot switches assets �?presets; Project Agent dock (right)
 - **Settings**: API keys, sync, companion
 - **Admin** (staff): opens `/admin`
 - **Dev log** (staff, below Admin): R2 push summaries in plain Chinese; day thermal receipt PNG; `npm run dev-log:post-push` / `dev-log:rewrite`

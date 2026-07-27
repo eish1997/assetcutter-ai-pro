@@ -4,11 +4,13 @@ import type { WorkflowAsset } from '../types';
 const mocks = vi.hoisted(() => ({
   importCompanionAssetFromUrl: vi.fn(),
   putCompanionAsset: vi.fn(),
+  getCompanionAssetMeta: vi.fn(),
 }));
 
 vi.mock('../services/companionClient/storage', () => ({
   fetchCompanionAssetBlob: vi.fn(),
   getCompanionManifest: vi.fn(),
+  getCompanionAssetMeta: mocks.getCompanionAssetMeta,
   importCompanionAssetFromUrl: mocks.importCompanionAssetFromUrl,
   listCompanionProjects: vi.fn(),
   putCompanionAsset: mocks.putCompanionAsset,
@@ -67,6 +69,7 @@ describe('ensureWorkflowAssetCompanionKeyForReveal', () => {
   afterEach(() => {
     mocks.importCompanionAssetFromUrl.mockReset();
     mocks.putCompanionAsset.mockReset();
+    mocks.getCompanionAssetMeta.mockReset();
   });
 
   it('writes resultsCompanionKeys for text birth shell TTI (never originalCompanionKey)', async () => {
@@ -92,7 +95,11 @@ describe('ensureWorkflowAssetCompanionKeyForReveal', () => {
     expect(mocks.importCompanionAssetFromUrl).toHaveBeenCalled();
   });
 
-  it('is a no-op when resultsCompanionKeys already present', async () => {
+  it('is a no-op when resultsCompanionKeys already on disk', async () => {
+    mocks.getCompanionAssetMeta.mockResolvedValue({
+      ok: true,
+      data: { onDisk: true, key: `${ASSET_ID}/image-full-0-550e8400.png` },
+    });
     const asset = textCardWithTtiResult({
       resultsCompanionKeys: { text_to_image: `${ASSET_ID}/image-full-0-550e8400.png` },
     });
@@ -105,5 +112,29 @@ describe('ensureWorkflowAssetCompanionKeyForReveal', () => {
     if (out.ok !== true) return;
     expect(out.wrote).toBe(false);
     expect(mocks.importCompanionAssetFromUrl).not.toHaveBeenCalled();
+  });
+
+  it('rewrites when companion key exists but file missing on disk', async () => {
+    mocks.getCompanionAssetMeta.mockResolvedValue({
+      ok: true,
+      data: { onDisk: false, key: `${ASSET_ID}/image-full-0-550e8400.png` },
+    });
+    mocks.importCompanionAssetFromUrl.mockResolvedValue({
+      ok: true,
+      data: { key: `${ASSET_ID}/image-full-0-550e8400.png` },
+    });
+    mocks.putCompanionAsset.mockResolvedValue({ ok: true, data: { key: 'preview' } });
+    const asset = textCardWithTtiResult({
+      resultsCompanionKeys: { text_to_image: `${ASSET_ID}/image-full-0-550e8400.png` },
+    });
+    const out = await ensureWorkflowAssetCompanionKeyForReveal({
+      asset,
+      projectId: 'proj-1',
+      companionBaseUrl: 'http://127.0.0.1:18765',
+    });
+    expect(out.ok).toBe(true);
+    if (out.ok !== true) return;
+    expect(out.wrote).toBe(true);
+    expect(mocks.importCompanionAssetFromUrl).toHaveBeenCalled();
   });
 });
