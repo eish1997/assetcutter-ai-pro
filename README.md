@@ -24,6 +24,7 @@ AI-assisted asset workflow workbench (workspace, capability presets, experimenta
 - [x] 302 Gemini image: Google-native `/google/v1/models/{model}`; empty-candidates retry; CSRF-safe `/api/media/fetch-url`; PBR textures promote to companion assets
 - [x] 3D preview PBR slot generate: override params panel (aspect/size/understand/count 1x�x4); defaults keep preset aspect/size/understand; only explicit picks override
 - [x] AI Gateway image timeout: Gemini/image modality jobs use 600s AbortSignal (not 120s); auth-store JSON fallback uses atomic write + UNKNOWN/EPERM retries
+- [x] OpenAI `/images/edits`: undici fetch must use undici `FormData` (Node global FormData becomes `text/plain` / `[object FormData]`)
 - [x] WebGPU-first RenderHost (`services/renderCore/`) with classic WebGL path for PMREM; companion shell can disable WebGPU
 - [x] Agent CLI (`npm run agent:cli` / `agent:init`): HTTP Soul API + workbench asset merge (`source=agent-cli`); see `docs/Cursor与Codex-Agent-CLI接入.md`
 - [x] Companion local object keys: `{assetId}/{mediaKind}-{full|thumb}-{slot}-{id8}.{ext}` (legacy `result-*` / `image-N` read-compat only)

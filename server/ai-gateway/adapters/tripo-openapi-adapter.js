@@ -1,4 +1,5 @@
-import { fetch as undiciFetch } from 'undici';
+// FormData 必须用 undici 的：Node 全局 FormData 会被 undici fetch 当成字符串 → Content-Type: text/plain
+import { fetch as undiciFetch, FormData } from 'undici';
 import { PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import crypto from 'crypto';
 import { acquireProviderKey, recordProviderKeyError, recordProviderKeySuccess } from '../provider-key-store.js';

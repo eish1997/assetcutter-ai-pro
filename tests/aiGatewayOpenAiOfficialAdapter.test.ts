@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import http from 'http';
+import { FormData, fetch as undiciFetch } from 'undici';
 import { createAiGatewayJobPlan } from '../server/ai-gateway/index.js';
 import { createInMemoryAiJobStore } from '../server/ai-gateway/job-store.js';
 import { listProviderKeyHealthEvents, resetProviderKeyRuntimeForTests, saveProviderKeys } from '../server/ai-gateway/provider-key-store.js';
@@ -182,6 +184,65 @@ describe('OpenAI official AI Gateway adapter', () => {
     expect(imageEntry?.[1]).toBeInstanceOf(Blob);
     expect((imageEntry?.[1] as Blob).type).toBe('image/jpeg');
     expect(await (imageEntry?.[1] as Blob).text()).toBe('ABCD');
+  });
+
+  it('real undici fetch sends /images/edits as multipart/form-data (not text/plain)', async () => {
+    useTempStore();
+    const seen: { contentType: string; bodyText: string } = { contentType: '', bodyText: '' };
+    const server = http.createServer(async (req, res) => {
+      const chunks: Buffer[] = [];
+      for await (const chunk of req) chunks.push(Buffer.from(chunk));
+      seen.contentType = String(req.headers['content-type'] || '');
+      seen.bodyText = Buffer.concat(chunks).toString('utf8');
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ id: 'img_edit_live', data: [{ b64_json: 'aW1hZ2U=' }] }));
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const { port } = server.address() as { port: number };
+    try {
+      await saveProviderKeys([
+        {
+          id: 'key_openai_undici_multipart',
+          provider: 'openai-official',
+          label: 'OpenAI undici',
+          secret: 'sk-openai',
+          enabled: true,
+          credentials: { baseUrl: `http://127.0.0.1:${port}/v1` },
+        },
+      ]);
+      const store = createInMemoryAiJobStore();
+      const plan = await store.put(
+        createAiGatewayJobPlan({
+          id: 'aijob_openai_undici_multipart',
+          modality: 'image',
+          capability: 'workflow_image_edit',
+          provider: 'openai-official',
+          model: 'gpt-image-1.5',
+          input: {
+            contents: [
+              {
+                role: 'user',
+                parts: [
+                  { text: 'variant' },
+                  { inlineData: { mimeType: 'image/png', data: 'data:image/png;base64,QUJDRA==' } },
+                ],
+              },
+            ],
+            config: { imageConfig: { size: '1024x1024' } },
+          },
+        })
+      );
+
+      await startOpenAiOfficialExecution(plan, { store, fetchImpl: undiciFetch });
+
+      expect(seen.contentType).toMatch(/^multipart\/form-data;/i);
+      expect(seen.contentType).not.toMatch(/text\/plain/i);
+      expect(seen.bodyText).not.toBe('[object FormData]');
+      expect(seen.bodyText).toContain('name="prompt"');
+      expect(seen.bodyText).toContain('name="image[]"');
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve())));
+    }
   });
 
   it('rejects unresolved blob URL at shared textFromContents (before any upstream fetch)', () => {

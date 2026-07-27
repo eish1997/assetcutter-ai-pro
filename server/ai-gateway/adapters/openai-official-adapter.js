@@ -1,4 +1,5 @@
-import { fetch as undiciFetch, ProxyAgent } from 'undici';
+// FormData 必须用 undici 的：Node 全局 FormData 会被 undici fetch 当成字符串 → Content-Type: text/plain
+import { fetch as undiciFetch, FormData, ProxyAgent } from 'undici';
 import { AiGatewayValidationError } from '../job.js';
 import { finalizeAiGatewayTerminalPlan } from '../execution-finalize.js';
 import { applyAiGatewayAdapterResult } from '../adapter-result.js';
