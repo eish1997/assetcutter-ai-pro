@@ -3,7 +3,7 @@
   "id": "transfer-maps-batch",
   "name": "批量传递贴图",
   "description": "在已打开的 Maya 中打开批量传递贴图工具（Command Port 注入）",
-  "semver": "1.0.0",
+  "semver": "1.1.0",
   "launch": {
     "kind": "shell_module",
     "module": "module/panel.json"

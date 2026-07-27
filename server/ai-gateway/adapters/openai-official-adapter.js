@@ -231,10 +231,26 @@ function resolveOpenAiImageSize(model, imageConfig) {
 }
 
 function resolveOpenAiRequestTimeoutMs(plan, options = {}, providerKey = null) {
-  const explicit = Number(options.timeoutMs || providerKey?.credentials?.requestTimeoutMs || process.env.AI_GATEWAY_OPENAI_TIMEOUT_MS || 0);
-  if (Number.isFinite(explicit) && explicit > 0) return explicit;
-  const requestModel = plan?.workerRequest?.body?.model || plan?.adapterRequest?.body?.model || plan?.job?.model;
-  return isGptImage2Model(requestModel) ? GPT_IMAGE2_DEFAULT_TIMEOUT_MS : 120_000;
+  const requestModel =
+    plan?.workerRequest?.body?.model || plan?.adapterRequest?.body?.model || plan?.job?.model;
+  const modality = String(plan?.job?.modality || '').trim().toLowerCase();
+  // 生图（含 302 Gemini native / gpt-image-2 / 其它 image modality）对齐客户端 600s；
+  // 避免运营短 requestTimeoutMs（45–60s）或默认 120s 把慢图生图误杀成 network unavailable。
+  const longImageJob =
+    isGptImage2Model(requestModel) ||
+    isGeminiImageFamilyModel(requestModel) ||
+    modality === 'image';
+  const floorMs = longImageJob ? GPT_IMAGE2_DEFAULT_TIMEOUT_MS : 120_000;
+  const explicit = Number(
+    options.timeoutMs ||
+      providerKey?.credentials?.requestTimeoutMs ||
+      process.env.AI_GATEWAY_OPENAI_TIMEOUT_MS ||
+      0
+  );
+  if (Number.isFinite(explicit) && explicit > 0) {
+    return longImageJob ? Math.max(explicit, floorMs) : explicit;
+  }
+  return floorMs;
 }
 
 function textFromContents(contents) {

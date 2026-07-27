@@ -8,11 +8,161 @@ import os
 import re
 import sys
 import math
+import shutil
+import tempfile
+import hashlib
 
 try:
     import maya.cmds as cmds
 except ImportError:
     cmds = None
+
+
+def _ensure_dir(path):
+    """创建目录（兼容 Maya 2020 / Python 2：无 exist_ok）。"""
+    if not path:
+        return False
+    try:
+        if not os.path.isdir(path):
+            os.makedirs(path)
+        return True
+    except Exception:
+        return os.path.isdir(path)
+
+
+def _path_has_non_ascii(path):
+    """路径是否含非 ASCII（中文等）。Maya 2020 surfaceSampler 常无法打开此类路径。"""
+    if not path:
+        return False
+    try:
+        if isinstance(path, bytes):
+            path.decode("ascii")
+        else:
+            path.encode("ascii")
+        return False
+    except (UnicodeError, AttributeError):
+        return True
+
+
+def _maya_needs_ascii_output_bridge():
+    """Maya 2020（及 Python2）写出贴图时建议走 ASCII 临时路径。"""
+    if sys.version_info[0] < 3:
+        return True
+    if not cmds:
+        return False
+    try:
+        ver = cmds.about(version=True) or ""
+        # "2020" / "2020 Preview Release" / "2022"
+        m = re.search(r"(\d{4})", str(ver))
+        if m and int(m.group(1)) < 2022:
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def _ascii_temp_root():
+    """返回尽量纯 ASCII 的临时根目录（避免用户名含中文时 TEMP 仍不可用）。"""
+    candidates = []
+    for key in ("TEMP", "TMP"):
+        v = os.environ.get(key)
+        if v:
+            candidates.append(v)
+    try:
+        candidates.append(tempfile.gettempdir())
+    except Exception:
+        pass
+    candidates.extend([
+        r"C:\Temp",
+        r"C:\Windows\Temp",
+        r"D:\Temp",
+    ])
+    if cmds:
+        try:
+            proj = cmds.workspace(query=True, rootDirectory=True) or ""
+            if proj:
+                candidates.append(os.path.join(proj, "tmp"))
+        except Exception:
+            pass
+    for c in candidates:
+        if not c or _path_has_non_ascii(c):
+            continue
+        if _ensure_dir(c):
+            return c
+    # 实在没有：退回 gettempdir（可能仍含中文，但总比没有好）
+    try:
+        d = tempfile.gettempdir()
+        _ensure_dir(d)
+        return d
+    except Exception:
+        return r"C:\Temp"
+
+
+def _ascii_bridge_write_path(final_path):
+    """为 surfaceSampler 生成仅含 ASCII 的临时写出路径；成功后需复制到 final_path。
+
+    返回 (sampler_path_no_ext, final_path, need_copy)。
+    """
+    if not final_path:
+        return final_path, final_path, False
+    final_path = os.path.normpath(final_path)
+    if not (_maya_needs_ascii_output_bridge() and _path_has_non_ascii(final_path)):
+        return os.path.splitext(final_path)[0], final_path, False
+    # 用 hash 保证短且唯一、纯 ASCII
+    try:
+        raw = final_path.encode("utf-8")
+    except Exception:
+        raw = str(final_path)
+    digest = hashlib.md5(raw).hexdigest()[:16]
+    bridge_dir = os.path.join(_ascii_temp_root(), "TransferMapsBatch_MayaTmp")
+    _ensure_dir(bridge_dir)
+    bridge_base = os.path.join(bridge_dir, "tmb_%s" % digest)
+    return bridge_base, final_path, True
+
+
+def _finalize_bridged_output(bridge_base, final_path, ext, log_fn=None):
+    """将 ASCII 临时文件复制到最终（可含中文）输出路径。"""
+    if not bridge_base or not final_path:
+        return False
+    ext = ext if ext.startswith(".") else (".%s" % ext if ext else ".png")
+    candidates = [
+        bridge_base + ext,
+        bridge_base + ext.lower(),
+        bridge_base + ext.upper(),
+    ]
+    # surfaceSampler 有时会直接用无扩展名再追加
+    src = None
+    for c in candidates:
+        if os.path.isfile(c):
+            src = c
+            break
+    if src is None:
+        # 再扫同名前缀
+        try:
+            parent = os.path.dirname(bridge_base)
+            prefix = os.path.basename(bridge_base)
+            for name in os.listdir(parent):
+                if name.startswith(prefix) and os.path.isfile(os.path.join(parent, name)):
+                    src = os.path.join(parent, name)
+                    break
+        except Exception:
+            pass
+    if not src:
+        if log_fn:
+            log_fn(u"临时写出文件未找到: %s%s" % (bridge_base, ext))
+        return False
+    _ensure_dir(os.path.dirname(final_path))
+    try:
+        shutil.copy2(src, final_path)
+        try:
+            os.remove(src)
+        except Exception:
+            pass
+        return True
+    except Exception as e:
+        if log_fn:
+            log_fn(u"复制过程贴图失败 %s -> %s: %s" % (src, final_path, str(e)))
+        return False
 
 try:
     import maya.api.OpenMaya as om2
@@ -1556,30 +1706,28 @@ def _run_single(low_transform, high_transform, texture_path, output_path, config
         if not ext:
             ext = "png"
         file_format = ext if ext in ("png", "jpg", "jpeg", "tga", "tif", "tiff", "exr", "bmp") else "png"
-        filename_no_ext = output_path
-        if output_path.lower().endswith((".png", ".jpg", ".jpeg", ".tga", ".tif", ".tiff", ".exr", ".bmp")):
-            filename_no_ext = os.path.splitext(output_path)[0]
-
-        # 输出目录不存在则自动创建
-        out_dir = os.path.dirname(output_path)
-        if out_dir:
-            try:
-                os.makedirs(out_dir, exist_ok=True)
-            except Exception:
-                pass
+        # Maya 2020：exist_ok 不可用 + surfaceSampler 无法打开含中文路径
+        filename_no_ext, final_output, need_bridge = _ascii_bridge_write_path(output_path)
+        write_ext = os.path.splitext(final_output)[1] or (".%s" % file_format)
+        _ensure_dir(os.path.dirname(filename_no_ext))
+        _ensure_dir(os.path.dirname(final_output))
+        if need_bridge and log_fn:
+            log_fn(u"Maya2020 兼容：经 ASCII 临时目录写出后再复制到目标路径")
 
         # surfaceSampler: source/target 指定源与目标 mesh。
         # transfer_in 对应 ignoreTransforms：world=使用变换(世界空间)，object=忽略变换(对象空间)。
         transfer_in = (config.get("transfer_in") or "world").lower()
         ignore_transforms = (transfer_in == "object")
         max_search = float(config.get("max_search_distance", 0.0) or 0.0)
+        # Maya 2020 的 cmds 更稳妥使用正斜杠路径
+        sampler_filename = filename_no_ext.replace("\\", "/")
         sampler_kwargs = dict(
             source=source_shape,
             target=target_shape,
             mapOutput="diffuseRGB",
             mapWidth=width,
             mapHeight=height,
-            filename=filename_no_ext,
+            filename=sampler_filename,
             fileFormat=file_format,
             filterSize=float(config.get("filter_size", 3.0)),
             filterType=_filter_type_to_int(config.get("filter_type")),
@@ -1594,8 +1742,14 @@ def _run_single(low_transform, high_transform, texture_path, output_path, config
         if max_search > 0.0:
             sampler_kwargs["maxSearchDistance"] = max_search
         cmds.surfaceSampler(**sampler_kwargs)
-        if log_fn and os.path.isfile(output_path):
-            log_fn(u"已写出: %s" % output_path)
+        if need_bridge:
+            ok = _finalize_bridged_output(filename_no_ext, final_output, write_ext, log_fn)
+            if not ok:
+                raise RuntimeError(
+                    u"Failed to open/copy output file: %s" % final_output
+                )
+        if log_fn and os.path.isfile(final_output):
+            log_fn(u"已写出: %s" % final_output)
     except Exception as e:
         if log_fn:
             log_fn(u"surfaceSampler 失败: %s" % str(e))
@@ -1985,12 +2139,7 @@ def _merge_channel_images(image_paths, output_path, log_fn=None):
                     if src.red() != 0 or src.green() != 0 or src.blue() != 0:
                         base.setPixelColor(x, y, src)
     # 保存合并结果
-    out_dir = os.path.dirname(output_path)
-    if out_dir:
-        try:
-            os.makedirs(out_dir, exist_ok=True)
-        except Exception:
-            pass
+    _ensure_dir(os.path.dirname(output_path))
     base.save(output_path)
     if log_fn:
         log_fn(u"已写出合并贴图: %s" % output_path)
@@ -2155,10 +2304,8 @@ def execute_transfer_job(job, log_fn=None, cancel_check=None):
     if jtype == "ensure_dir":
         path = job.get("path")
         if path:
-            try:
-                os.makedirs(path, exist_ok=True)
-            except Exception:
-                pass
+            if not _ensure_dir(path) and log_fn:
+                log_fn(u"无法创建目录: %s" % path)
         return "ok"
     if jtype == "single":
         if cancel_check and cancel_check():

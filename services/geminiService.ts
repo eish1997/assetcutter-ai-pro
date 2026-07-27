@@ -2149,6 +2149,9 @@ function aiGatewayStructuredErrorMessage(err: unknown): string | null {
 
 export function normalizeApiErrorMessage(err: unknown): string {
   const earlyRaw = String((err as any)?.message ?? err);
+  if (/The operation was aborted due to timeout|TimeoutError|aborted due to timeout/i.test(earlyRaw)) {
+    return "生图请求超时。请缩小参考图或改用更小输出尺寸（如 1K/2K）后重试；若仍失败请检查供应商代理与网络。";
+  }
   if (/terminated|connection terminated|UND_ERR_SOCKET|other side closed|ECONNRESET|ETIMEDOUT/i.test(earlyRaw)) {
     return "生图连接中断，系统已尽量重试。请单次重试；如果仍失败，请先把参考图缩小或减少参考图数量后再生成 4K。";
   }

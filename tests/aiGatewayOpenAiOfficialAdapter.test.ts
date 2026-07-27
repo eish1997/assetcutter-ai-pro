@@ -506,6 +506,103 @@ describe('OpenAI official AI Gateway adapter', () => {
     expect(timeoutSpy).toHaveBeenCalledWith(45_500);
   });
 
+  it('uses 600s AbortSignal for Gemini image jobs via 302 (not 120s)', async () => {
+    useTempStore();
+    await saveProviderKeys([
+      {
+        id: 'key_302_gemini_img',
+        provider: '302ai',
+        label: '302 Gemini',
+        secret: 'sk-302',
+        enabled: true,
+        credentials: { baseUrl: 'https://api.302.ai/v1' },
+      },
+    ]);
+    const timeoutSpy = vi.spyOn(AbortSignal, 'timeout').mockImplementation((ms: number) => {
+      const controller = new AbortController();
+      Object.defineProperty(controller.signal, '__timeoutMs', { value: ms });
+      return controller.signal;
+    });
+    const store = createInMemoryAiJobStore();
+    const plan = await store.put(createAiGatewayJobPlan({
+      id: 'aijob_302_gemini_image_timeout',
+      modality: 'image',
+      provider: '302ai',
+      model: 'gemini-3-pro-image',
+      input: {
+        contents: [{ role: 'user', parts: [{ text: 'edit this' }] }],
+        config: { imageConfig: { aspectRatio: '1:1', imageSize: '2K' } },
+      },
+    }));
+    const fetchImpl = async () =>
+      new Response(
+        JSON.stringify({
+          candidates: [
+            {
+              content: {
+                parts: [{ inlineData: { mimeType: 'image/png', data: 'aaaa' } }],
+              },
+            },
+          ],
+        }),
+        { status: 200 }
+      );
+
+    await startOpenAiOfficialExecution(plan, { store, fetchImpl });
+
+    expect(timeoutSpy).toHaveBeenCalledWith(600_000);
+  });
+
+  it('does not let short providerOverrides cut Gemini image below 600s', async () => {
+    useTempStore();
+    await writeModelOpsConfig({
+      version: 2,
+      providerOverrides: [{ providerId: '302ai', requestTimeoutMs: 45_500 }],
+    });
+    await saveProviderKeys([
+      {
+        id: 'key_302_short_override',
+        provider: '302ai',
+        label: '302',
+        secret: 'sk-302',
+        enabled: true,
+        credentials: { baseUrl: 'https://api.302.ai/v1' },
+      },
+    ]);
+    const timeoutSpy = vi.spyOn(AbortSignal, 'timeout').mockImplementation((ms: number) => {
+      const controller = new AbortController();
+      Object.defineProperty(controller.signal, '__timeoutMs', { value: ms });
+      return controller.signal;
+    });
+    const store = createInMemoryAiJobStore();
+    const plan = await store.put(createAiGatewayJobPlan({
+      id: 'aijob_302_override_floor',
+      modality: 'image',
+      provider: '302ai',
+      model: 'gemini-3-pro-image',
+      input: {
+        contents: [{ role: 'user', parts: [{ text: 'edit' }] }],
+      },
+    }));
+    const fetchImpl = async () =>
+      new Response(
+        JSON.stringify({
+          candidates: [
+            {
+              content: {
+                parts: [{ inlineData: { mimeType: 'image/png', data: 'bbbb' } }],
+              },
+            },
+          ],
+        }),
+        { status: 200 }
+      );
+
+    await startOpenAiOfficialExecution(plan, { store, fetchImpl });
+
+    expect(timeoutSpy).toHaveBeenCalledWith(600_000);
+  });
+
   it('executes TinySnow OpenAI-compatible jobs through the TinySnow key pool', async () => {
     useTempStore();
     await saveProviderKeys([

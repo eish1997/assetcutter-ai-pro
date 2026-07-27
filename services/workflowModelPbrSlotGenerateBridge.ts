@@ -11,11 +11,11 @@ import { overrideSkipUnderstandFromUnderstandEnabled } from './workflowUnderstan
 export const WORKFLOW_MODEL_PBR_SLOT_GENERATE_REQUEST_EVENT =
   'asset-preview:model3d-pbr-slot-generate-request';
 
-/** 贴图槽生成「覆盖参数」：强制覆盖预设同名字段（可忽略预设） */
+/** 贴图槽生成「覆盖参数」：有明确取值时强制覆盖预设；自适应/- 表示沿用预设 */
 export type WorkflowModelPbrSlotGenerateOverrides = {
-  /** 画面比例；`adaptive` 或空 = 清除预设比例 */
+  /** 画面比例；`adaptive` 或空 = 沿用预设比例（不覆盖） */
   aspectRatio?: string;
-  /** 输出尺寸 1K/2K/4K；空 = 清除预设尺寸 */
+  /** 输出尺寸 1K/2K/4K；空 = 沿用预设尺寸（不覆盖） */
   imageSize?: string;
   /** true=理解，false=直发；会写成 skipUnderstand */
   understand?: boolean;
@@ -32,34 +32,41 @@ export type WorkflowModelPbrSlotGenerateRequestDetail = {
   overrides?: WorkflowModelPbrSlotGenerateOverrides;
 };
 
-/** 将覆盖参数强制合并进预设副本（忽略预设原 aspect/size/skipUnderstand） */
+/**
+ * 将覆盖参数合并进预设副本。
+ * - 明确比例/尺寸：强制覆盖预设
+ * - 自适应 / 空尺寸：不改预设（避免默认面板把预设 imageSize 清掉导致上游 handoff 失败）
+ * - 理解/直发：仅当 overrides 显式带 understand 时写入 skipUnderstand
+ */
 export function applyPbrSlotGenerateOverrides(
   preset: CustomAppModule,
   overrides?: WorkflowModelPbrSlotGenerateOverrides | null
 ): CustomAppModule {
   if (!overrides) return preset;
+  let touched = false;
   const next: CustomAppModule = { ...preset };
   if ('aspectRatio' in overrides) {
     const aspect = String(overrides.aspectRatio || '').trim();
     if (aspect && aspect !== 'adaptive') {
       next.imageAspectRatio = aspect;
-    } else {
-      delete next.imageAspectRatio;
+      touched = true;
     }
   }
   if ('imageSize' in overrides) {
     const size = String(overrides.imageSize || '').trim();
     if (size === '1K' || size === '2K' || size === '4K') {
       next.imageSize = size;
-    } else {
-      delete next.imageSize;
+      touched = true;
     }
   }
   if (typeof overrides.understand === 'boolean') {
     const skip = overrideSkipUnderstandFromUnderstandEnabled(overrides.understand);
-    if (typeof skip === 'boolean') next.skipUnderstand = skip;
+    if (typeof skip === 'boolean') {
+      next.skipUnderstand = skip;
+      touched = true;
+    }
   }
-  return next;
+  return touched ? next : preset;
 }
 
 export type WorkflowModelPbrSlotGenerateImage = {

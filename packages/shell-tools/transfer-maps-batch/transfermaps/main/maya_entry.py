@@ -61,10 +61,6 @@ def show_transfer_window():
     return win
 
 
-# 宿主契约别名（shell_tool_bundle / Command Port 注入）
-show_ui = show_transfer_window
-
-
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     show_transfer_window()

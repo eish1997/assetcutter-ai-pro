@@ -88,6 +88,7 @@ import {
   type WorkflowModelPbrSlotGenerateImage,
   type WorkflowModelPbrSlotGenerateRequestDetail,
 } from '../services/workflowModelPbrSlotGenerateBridge';
+import { normalizeDataUrlForVisionApi } from '../services/workflowImageDataUrlCompress';
 import {
   acknowledgePromotePbrTextureAsset,
   acknowledgeReleasePbrTextureAssets,
@@ -9261,7 +9262,9 @@ ${lineSvg}
   pbrGenerateProjectIdRef.current = String(workspaceProjectChrome?.activeProjectId || '').trim();
 
   useEffect(() => {
-    const isAbortMessage = (msg: string) => /^(Aborted|请求已取消|已取消)$/i.test(msg.trim()) || /AbortError/i.test(msg);
+    const isAbortMessage = (msg: string) =>
+      /^(Aborted|请求已取消|已取消)$/i.test(msg.trim()) ||
+      (/AbortError/i.test(msg) && !/timeout/i.test(msg));
 
     const onGenerateRequest = (event: Event) => {
       const detail = (event as CustomEvent<WorkflowModelPbrSlotGenerateRequestDetail>).detail;
@@ -9286,7 +9289,7 @@ ${lineSvg}
           completeWorkflowModelPbrSlotGenerate(requestId, { ok: false, error: '未找到能力预设' });
           return;
         }
-        // 覆盖参数强制覆盖预设 aspect/size/skipUnderstand（可忽略预设原值）
+        // 覆盖参数：明确比例/尺寸才覆盖预设；自适应/- 沿用预设（避免默认清掉 imageSize 致 handoff 失败）
         const preset = applyPbrSlotGenerateOverrides(presetBase, detail?.overrides);
         // 与快捷栏/能力库同一物化入口：blob/http → data URL，失败再按 companion 键兜底
         const companionProjectId = pbrGenerateProjectIdRef.current;
@@ -9309,7 +9312,7 @@ ${lineSvg}
           });
           return;
         }
-        const sourceDataUrl = resolvedImg.dataUrl;
+        const sourceDataUrl = await normalizeDataUrlForVisionApi(resolvedImg.dataUrl);
         if (abortSignal?.aborted) {
           completeWorkflowModelPbrSlotGenerate(requestId, { ok: false, error: '已取消' });
           return;

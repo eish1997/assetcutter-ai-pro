@@ -132,17 +132,68 @@ async function ensurePostgres() {
   pgReady = true;
 }
 
+function sleepSyncMs(ms) {
+  const wait = Math.max(0, Math.floor(Number(ms) || 0));
+  if (wait <= 0) return;
+  try {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, wait);
+  } catch {
+    const end = Date.now() + wait;
+    while (Date.now() < end) {
+      /* spin — sync FS retry only */
+    }
+  }
+}
+
+/** Windows AV/indexer 偶发 libuv UNKNOWN/EPERM/EBUSY on open */
+function isRetryableFsError(err) {
+  const code = String(err?.code || '').toUpperCase();
+  if (['UNKNOWN', 'EPERM', 'EBUSY', 'EACCES', 'EAGAIN'].includes(code)) return true;
+  const msg = String(err?.message || '');
+  return /unknown error,\s*open/i.test(msg);
+}
+
+function withFsRetry(fn) {
+  const maxAttempts = 8;
+  let lastErr;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      return fn();
+    } catch (err) {
+      lastErr = err;
+      if (!isRetryableFsError(err) || attempt === maxAttempts) throw err;
+      sleepSyncMs(12 * attempt * attempt);
+    }
+  }
+  throw lastErr;
+}
+
+function replaceFileSync(tmpPath, destPath) {
+  try {
+    fs.renameSync(tmpPath, destPath);
+    return;
+  } catch (renameErr) {
+    // Windows：目标已存在时 rename 常失败；改 copy 覆盖再删 tmp
+    fs.copyFileSync(tmpPath, destPath);
+    try {
+      fs.unlinkSync(tmpPath);
+    } catch {
+      /* ignore stale tmp */
+    }
+  }
+}
+
 function ensureDb() {
   if (!fs.existsSync(DB_DIR)) fs.mkdirSync(DB_DIR, { recursive: true });
   if (!fs.existsSync(DB_FILE)) {
     const init = { version: 1, users: [], sessions: [] };
-    fs.writeFileSync(DB_FILE, JSON.stringify(init, null, 2), 'utf8');
+    writeDb(init);
   }
 }
 
 function readDb() {
   ensureDb();
-  const raw = fs.readFileSync(DB_FILE, 'utf8');
+  const raw = withFsRetry(() => fs.readFileSync(DB_FILE, 'utf8'));
   const parsed = JSON.parse(raw || '{}');
   if (!Array.isArray(parsed.users)) parsed.users = [];
   if (!Array.isArray(parsed.sessions)) parsed.sessions = [];
@@ -160,7 +211,22 @@ function readDb() {
 }
 
 function writeDb(db) {
-  fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2), 'utf8');
+  if (!fs.existsSync(DB_DIR)) fs.mkdirSync(DB_DIR, { recursive: true });
+  const payload = `${JSON.stringify(db, null, 2)}\n`;
+  withFsRetry(() => {
+    const tmp = `${DB_FILE}.${process.pid}.${Date.now()}.tmp`;
+    try {
+      fs.writeFileSync(tmp, payload, 'utf8');
+      replaceFileSync(tmp, DB_FILE);
+    } catch (err) {
+      try {
+        fs.unlinkSync(tmp);
+      } catch {
+        /* ignore */
+      }
+      throw err;
+    }
+  });
 }
 
 function normalizeEmail(email) {

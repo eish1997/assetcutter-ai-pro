@@ -112,14 +112,25 @@ describe('applyPbrSlotGenerateOverrides', () => {
     expect(next.skipUnderstand).toBe(true);
   });
 
-  it('clears preset aspect/size when adaptive / empty', () => {
+  it('keeps preset aspect/size when adaptive / empty (default panel)', () => {
+    const next = applyPbrSlotGenerateOverrides(base, {
+      aspectRatio: 'adaptive',
+      imageSize: '',
+      understand: false,
+    });
+    expect(next.imageAspectRatio).toBe('16:9');
+    expect(next.imageSize).toBe('1K');
+    expect(next.skipUnderstand).toBe(true);
+  });
+
+  it('writes understand without clearing aspect/size', () => {
     const next = applyPbrSlotGenerateOverrides(base, {
       aspectRatio: 'adaptive',
       imageSize: '',
       understand: true,
     });
-    expect(next.imageAspectRatio).toBeUndefined();
-    expect(next.imageSize).toBeUndefined();
+    expect(next.imageAspectRatio).toBe('16:9');
+    expect(next.imageSize).toBe('1K');
     expect(next.skipUnderstand).toBe(false);
   });
 });

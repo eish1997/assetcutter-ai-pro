@@ -52,7 +52,7 @@ export type ModelPbrSlotGenerateInput = {
   presetId: string;
   count: number;
   inputText?: string;
-  overrides: WorkflowModelPbrSlotGenerateOverrides;
+  overrides?: WorkflowModelPbrSlotGenerateOverrides;
 };
 
 function listTextureCapablePresets(): CustomAppModule[] {
@@ -124,7 +124,8 @@ export default function ModelPbrSlotGeneratePanel({
   const [count, setCount] = useState(1);
   const [aspectRatio, setAspectRatio] = useState('adaptive');
   const [imageSize, setImageSize] = useState('');
-  const [understand, setUnderstand] = useState(false);
+  /** null = 沿用预设 skipUnderstand，不写覆盖 */
+  const [understandOverride, setUnderstandOverride] = useState<boolean | null>(null);
   const [paramsOpen, setParamsOpen] = useState(false);
   const [panelPos, setPanelPos] = useState<{ left: number; top: number } | null>(null);
   const [extraPrompt, setExtraPrompt] = useState('');
@@ -147,12 +148,26 @@ export default function ModelPbrSlotGeneratePanel({
   const overridesActive =
     (aspectRatio && aspectRatio !== 'adaptive') ||
     Boolean(imageSize) ||
-    understand ||
+    understandOverride !== null ||
     count !== 1;
+
+  /** 展示用：未手动覆盖时按预设 skipUnderstand 显示直发/理解 */
+  const understandUi = (() => {
+    if (understandOverride !== null) return understandOverride;
+    const p = presets.find((x) => x.id === presetId);
+    if (p?.skipUnderstand === true) return false;
+    if (p?.skipUnderstand === false) return true;
+    return false;
+  })();
 
   useEffect(() => {
     if (!presetId && presets[0]?.id) setPresetId(presets[0].id);
   }, [presetId, presets]);
+
+  useEffect(() => {
+    // 换预设时清掉理解覆盖，避免把上一个预设的直发/理解带到新预设
+    setUnderstandOverride(null);
+  }, [presetId]);
 
   useLayoutEffect(() => {
     if (!paramsOpen) {
@@ -219,16 +234,16 @@ export default function ModelPbrSlotGeneratePanel({
     setLocalError(null);
     setParamsOpen(false);
     const n = Math.min(4, Math.max(1, count));
-    const overrides: WorkflowModelPbrSlotGenerateOverrides = {
-      aspectRatio: aspectRatio || 'adaptive',
-      imageSize: imageSize || '',
-      understand,
-    };
+    // 未改参数时不传 overrides，行为与加面板前完全一致（避免默认强制 skipUnderstand）
+    const overrides: WorkflowModelPbrSlotGenerateOverrides = {};
+    if (aspectRatio && aspectRatio !== 'adaptive') overrides.aspectRatio = aspectRatio;
+    if (imageSize === '1K' || imageSize === '2K' || imageSize === '4K') overrides.imageSize = imageSize;
+    if (understandOverride !== null) overrides.understand = understandOverride;
     onGenerate({
       presetId: preset.id,
       count: n,
       inputText: extraPrompt.trim() || undefined,
-      overrides,
+      ...(Object.keys(overrides).length > 0 ? { overrides } : {}),
     });
   };
 
@@ -332,16 +347,16 @@ export default function ModelPbrSlotGeneratePanel({
                 <div className="flex min-w-0 w-full flex-nowrap items-stretch gap-1">
                   <button
                     type="button"
-                    onClick={() => setUnderstand(true)}
-                    className={chipClsStretch(understand)}
+                    onClick={() => setUnderstandOverride(true)}
+                    className={chipClsStretch(understandUi === true)}
                     title="先理解意图，再生成画面"
                   >
                     理解
                   </button>
                   <button
                     type="button"
-                    onClick={() => setUnderstand(false)}
-                    className={chipClsStretch(!understand)}
+                    onClick={() => setUnderstandOverride(false)}
+                    className={chipClsStretch(understandUi === false)}
                     title="跳过理解，直接发送提示词生成"
                   >
                     直发
