@@ -21,6 +21,9 @@ type Props = {
   model3dShowGrid?: boolean;
   model3dBackfaceCulling?: boolean;
   capturePreviewNonce?: number;
+  /** 右侧缩略图条宽度，传给 3D Viewer 做 PBR 面板避让 */
+  uiRightInset?: string;
+  resolvePbrTextureAssetSrc?: (assetId: string) => string;
   onAddToComposeInput?: (text: string) => void;
 };
 
@@ -155,6 +158,8 @@ function Model3DAssetViewer({
   model3dShowGrid,
   model3dBackfaceCulling,
   capturePreviewNonce,
+  uiRightInset,
+  resolvePbrTextureAssetSrc,
 }: {
   variant: WorkflowAssetVariant;
   assetId?: string;
@@ -165,6 +170,8 @@ function Model3DAssetViewer({
   model3dShowGrid?: boolean;
   model3dBackfaceCulling?: boolean;
   capturePreviewNonce?: number;
+  uiRightInset?: string;
+  resolvePbrTextureAssetSrc?: (assetId: string) => string;
 }) {
   const hostRef = React.useRef<HTMLDivElement | null>(null);
 
@@ -197,6 +204,8 @@ function Model3DAssetViewer({
               model3dResetViewNonce={model3dResetViewNonce}
               model3dShowGrid={model3dShowGrid}
               model3dBackfaceCulling={model3dBackfaceCulling}
+              uiRightInset={uiRightInset}
+              resolvePbrTextureAssetSrc={resolvePbrTextureAssetSrc}
               className="h-full w-full min-h-0"
             />
           </div>
@@ -230,6 +239,8 @@ export const AssetMediaPreviewCenter: React.FC<Props> = ({
   model3dShowGrid = true,
   model3dBackfaceCulling = true,
   capturePreviewNonce = 0,
+  uiRightInset,
+  resolvePbrTextureAssetSrc,
 }) => {
   const url = clean(variant.url);
   const modelUrl = variant.kind === 'model3d' ? pickModelUrl(variant) : '';
@@ -257,6 +268,8 @@ export const AssetMediaPreviewCenter: React.FC<Props> = ({
           model3dShowGrid={model3dShowGrid}
           model3dBackfaceCulling={model3dBackfaceCulling}
           capturePreviewNonce={capturePreviewNonce}
+          uiRightInset={uiRightInset}
+          resolvePbrTextureAssetSrc={resolvePbrTextureAssetSrc}
         />
       ) : usableUrl ? (
         <FileAssetViewer url={usableUrl} />

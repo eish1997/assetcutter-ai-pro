@@ -64,13 +64,34 @@ export function checkBearerAuthorization(header: string | undefined): BearerChec
   return 'ok';
 }
 
+/**
+ * 本机管理页（同源打开 `http://127.0.0.1:18765/`）通常不带 Bearer；
+ * 配对后桌面壳会注入 COMPANION_SHARED_TOKEN，若状态接口不豁免，管理页会误报「无法连接本机 API」。
+ * 仅豁免「无 Origin / loopback Origin」的只读状态；网站跨域仍须 Bearer。
+ */
+export function isLoopbackAdminOrigin(requestOrigin: string | undefined): boolean {
+  if (!requestOrigin) return true;
+  return /^http:\/\/(127\.0\.0\.1|localhost|\[::1\]):\d+$/i.test(requestOrigin);
+}
+
 /** 不设 Token 时不校验；仅对「需保护的 API」在 httpHandler 中调用。 */
-export function isBearerExemptPath(pathname: string, method: string): boolean {
+export function isBearerExemptPath(
+  pathname: string,
+  method: string,
+  requestOrigin?: string,
+): boolean {
   const m = method.toUpperCase();
   if (m === 'OPTIONS') return true;
   if (pathname === '/v1/health' && m === 'GET') return true;
   if ((pathname === '/' || pathname === '/index.html') && m === 'GET') return true;
   if (pathname === '/v1/pairing/session' && m === 'GET') return true;
+  if (
+    m === 'GET' &&
+    (pathname === '/v1/runtime-status' || pathname === '/v1/capabilities') &&
+    isLoopbackAdminOrigin(requestOrigin)
+  ) {
+    return true;
+  }
   return false;
 }
 

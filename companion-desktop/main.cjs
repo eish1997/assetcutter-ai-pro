@@ -119,20 +119,16 @@ try {
 
 const DEFAULT_HTTP_PORT = 18765;
 
-function isProxyOrAbortLoadError(err) {
-  const msg = err instanceof Error ? err.message : String(err || '');
-  // 系统代理挂掉时，Chromium 可能报 ERR_PROXY_*，也可能只报 ERR_ABORTED(-3)
-  return /ERR_PROXY|PROXY_CONNECTION_FAILED|ERR_PROXY_CONNECTION_FAILED|ERR_ABORTED|\(-3\)/i.test(
-    msg,
-  );
-}
+const { isProxyOrTransientLoadError } = require('./workbench-load-errors.cjs');
 
 /** 串行化同一 webContents 的 load，避免第二次导航把第一次取消成 ERR_ABORTED */
 const workbenchLoadChains = new WeakMap();
 
 /**
- * loadURL：先试当前会话代理；失败且像代理/中止时改 direct 再试一次。
- * 适用于任意用户机（系统开了代理软件但未启动、或并发导航）。
+ * loadURL + 代理回退（任意用户机）：
+ * - 安装包：先 direct（系统代理常把 Chromium 拖进超时，而 WinHTTP/浏览器仍通）
+ * - 开发壳：先当前/系统代理（本机 Vite），失败再 direct
+ * 可回退错误含 PROXY / ABORTED / CONNECTION_TIMED_OUT(-118) / RESET 等。
  */
 async function loadUrlWithProxyFallback(webContents, target) {
   if (!webContents || webContents.isDestroyed()) {
@@ -152,12 +148,47 @@ async function loadUrlWithProxyFallback(webContents, target) {
   );
   await prev.catch(() => {});
 
+  const packaged = (() => {
+    try {
+      return Boolean(app.isPackaged);
+    } catch {
+      return false;
+    }
+  })();
+
   try {
+    const ses = webContents.session;
+    const setMode = async (mode) => {
+      if (ses && typeof ses.setProxy === 'function') {
+        await ses.setProxy({ mode });
+      }
+    };
+
+    if (packaged) {
+      try {
+        await setMode('direct');
+        if (webContents.isDestroyed()) throw new Error('webContents_destroyed');
+        await webContents.loadURL(target);
+        return;
+      } catch (e) {
+        if (!isProxyOrTransientLoadError(e)) throw e;
+        companionLog(
+          'warn',
+          '[companion-desktop] loadURL direct failed, retry system proxy:',
+          e instanceof Error ? e.message : e,
+        );
+        if (webContents.isDestroyed()) throw new Error('webContents_destroyed');
+        await setMode('system');
+        await webContents.loadURL(target);
+        return;
+      }
+    }
+
     try {
       await webContents.loadURL(target);
       return;
     } catch (e) {
-      if (!isProxyOrAbortLoadError(e)) throw e;
+      if (!isProxyOrTransientLoadError(e)) throw e;
       companionLog(
         'warn',
         '[companion-desktop] loadURL failed, retry with direct:',
@@ -165,10 +196,7 @@ async function loadUrlWithProxyFallback(webContents, target) {
       );
     }
     if (webContents.isDestroyed()) throw new Error('webContents_destroyed');
-    const ses = webContents.session;
-    if (ses && typeof ses.setProxy === 'function') {
-      await ses.setProxy({ mode: 'direct' });
-    }
+    await setMode('direct');
     await webContents.loadURL(target);
   } finally {
     release();

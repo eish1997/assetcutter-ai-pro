@@ -126,7 +126,7 @@ export async function persistTripoModelsForWorkflowAsset(params: {
   const baseRaw = String(params.companionBaseUrl || '').trim();
   const pid = String(params.companionProjectId || '').trim();
   const base = baseRaw ? normalizeCompanionBaseUrl(baseRaw) : '';
-  const useCompanion = Boolean(base && pid);
+  const useCompanion = Boolean(base && pid && pid !== 'default');
   const includeFbx = params.includeFbxArchive !== false;
   const log = params.onLog;
 

@@ -20,7 +20,11 @@ import { getRepositoryRoot } from '../repositoryVolume.js';
 
 export const MAYA_BRIDGE_MARKER_START = '# ========== AssetCutter Maya Bridge (commandPort) ==========';
 export const MAYA_BRIDGE_MARKER_END = '# ========== AssetCutter Maya Bridge end ==========';
+export const MAYA_BRIDGE_MEL_MARKER_START = '// ========== AssetCutter Maya Bridge (commandPort) ==========';
+export const MAYA_BRIDGE_MEL_MARKER_END = '// ========== AssetCutter Maya Bridge end ==========';
 export const MAYA_BRIDGE_PY_NAME = 'script_hub_bridge.py';
+/** Pure-ASCII boot module: Maya 2020 (Py2.7) can still import this if userSetup.py is encoding-broken. */
+export const MAYA_BRIDGE_BOOT_PY_NAME = 'assetcutter_maya_cmdport_boot.py';
 export const DEFAULT_MAYA_BRIDGE_PORT = 7001;
 
 export type MayaBridgeVersion = {
@@ -115,70 +119,140 @@ function userSetupHasMarker(content: string): boolean {
   return content.includes(MAYA_BRIDGE_MARKER_START);
 }
 
+/**
+ * latin1 按字节往返：中文 Windows 上 Maya 2020 的 userSetup 常为 GBK。
+ * 若用 utf8 读改写会破坏原文 → 整个 userSetup 语法错误 → 桥接块永不执行。
+ * 标记块为纯 ASCII，在 latin1 下 strip/append 安全。
+ */
 export function readUserSetup(path: string): string {
   if (!existsSync(path)) return '';
   try {
-    return readFileSync(path, 'utf8');
+    return readFileSync(path, 'latin1');
   } catch {
-    try {
-      return readFileSync(path, 'utf8');
-    } catch {
-      return '';
-    }
+    return '';
   }
 }
 
-/** Remove AssetCutter Maya Bridge marker block (idempotent). */
-export function stripMayaBridgeBlock(content: string): string {
-  const start = content.indexOf(MAYA_BRIDGE_MARKER_START);
-  if (start < 0) return content;
-  const end = content.indexOf(MAYA_BRIDGE_MARKER_END, start);
-  if (end < 0) {
-    return (content.slice(0, start) + content.slice(start + MAYA_BRIDGE_MARKER_START.length)).replace(
-      /\n{3,}/g,
-      '\n\n',
-    );
+function writeUserSetup(path: string, content: string): void {
+  const tmp = path + '.tmp';
+  writeFileSync(tmp, content, 'latin1');
+  renameSync(tmp, path);
+}
+
+/**
+ * Maya 2020 = Python 2.7：源文件默认按 ASCII 解析。
+ * 若已有 GBK 中文注释且无 coding 声明 → 整文件 SyntaxError，桥接块永远不跑。
+ * 2022 = Python 3，默认 UTF-8，故同文件在 2022 往往仍能加载。
+ */
+export function ensurePy2SourceCodingCookie(content: string): string {
+  if (!content) return content;
+  if (!/[\x80-\xff]/.test(content)) return content;
+  const head = content.slice(0, 512);
+  if (/coding[:=][ \t]*[-_.a-zA-Z0-9]+/.test(head)) return content;
+  if (content.startsWith('#!')) {
+    const nl = content.indexOf('\n');
+    if (nl >= 0) {
+      return `${content.slice(0, nl + 1)}# -*- coding: gb18030 -*-\n${content.slice(nl + 1)}`;
+    }
   }
-  const after = end + MAYA_BRIDGE_MARKER_END.length;
+  return `# -*- coding: gb18030 -*-\n${content}`;
+}
+
+function stripMarkedBlock(content: string, startMark: string, endMark: string): string {
+  const start = content.indexOf(startMark);
+  if (start < 0) return content;
+  const end = content.indexOf(endMark, start);
+  if (end < 0) {
+    return (content.slice(0, start) + content.slice(start + startMark.length)).replace(/\n{3,}/g, '\n\n');
+  }
+  const after = end + endMark.length;
   let next = content.slice(0, start) + content.slice(after);
   next = next.replace(/\n{3,}/g, '\n\n').replace(/^\s+/, '').replace(/\s+$/, '');
   return next ? next + '\n' : '';
 }
 
+/** Remove AssetCutter Maya Bridge marker block (idempotent). */
+export function stripMayaBridgeBlock(content: string): string {
+  return stripMarkedBlock(content, MAYA_BRIDGE_MARKER_START, MAYA_BRIDGE_MARKER_END);
+}
+
+export function stripMayaBridgeMelBlock(content: string): string {
+  return stripMarkedBlock(content, MAYA_BRIDGE_MEL_MARKER_START, MAYA_BRIDGE_MEL_MARKER_END);
+}
+
+/** Pure ASCII boot module body (written to scripts/). */
+export function buildMayaBridgeBootPy(port: number): string {
+  const p = Number.isFinite(port) && port > 0 && port <= 65535 ? Math.floor(port) : DEFAULT_MAYA_BRIDGE_PORT;
+  return `# AssetCutter Maya Command Port boot (ASCII only; Maya 2020 Py2 + 2022+ Py3)
+def ensure(port=${p}):
+    import maya.cmds as cmds
+    names = (
+        "127.0.0.1:%d" % port,
+        "localhost:%d" % port,
+        ":%d" % port,
+    )
+    def _open():
+        for name in names:
+            try:
+                if cmds.commandPort(name, q=True):
+                    print("[AssetCutter Maya Bridge] commandPort already open: %s" % name)
+                    return
+            except Exception:
+                pass
+        last_err = None
+        for name in names:
+            try:
+                try:
+                    cmds.commandPort(name=name, sourceType="python", echoOutput=False)
+                except Exception:
+                    cmds.commandPort(name=name, sourceType="python")
+                print("[AssetCutter Maya Bridge] commandPort ready: %s" % name)
+                return
+            except Exception as e:
+                last_err = e
+                print("[AssetCutter Maya Bridge] commandPort try failed (%s): %s" % (name, e))
+        print("[AssetCutter Maya Bridge] commandPort failed: %s" % last_err)
+    try:
+        import maya.utils as utils
+        utils.executeDeferred(_open)
+    except Exception:
+        _open()
+`;
+}
+
 export function buildMayaBridgeUserSetupBlock(port: number): string {
   const p = Number.isFinite(port) && port > 0 && port <= 65535 ? Math.floor(port) : DEFAULT_MAYA_BRIDGE_PORT;
+  // Thin ASCII shim — real logic lives in assetcutter_maya_cmdport_boot.py
   return `${MAYA_BRIDGE_MARKER_START}
 try:
-    import maya.cmds as _ac_maya_bridge_cmds
-    _ac_maya_bridge_port = ${p}
-
-    def _ac_maya_bridge_ensure_port():
-        name = "127.0.0.1:%d" % _ac_maya_bridge_port
-        try:
-            if _ac_maya_bridge_cmds.commandPort(name, q=True):
-                return
-            try:
-                _ac_maya_bridge_cmds.commandPort(
-                    name=name,
-                    sourceType="python",
-                    securityWarning=False,
-                    bufferSize=262144,
-                )
-            except TypeError:
-                _ac_maya_bridge_cmds.commandPort(name=name, sourceType="python")
-            print("[AssetCutter Maya Bridge] commandPort ready: %s" % name)
-        except Exception as e:
-            print("[AssetCutter Maya Bridge] commandPort failed: %s" % e)
-
-    try:
-        import maya.utils as _ac_maya_bridge_utils
-        _ac_maya_bridge_utils.executeDeferred(_ac_maya_bridge_ensure_port)
-    except Exception:
-        _ac_maya_bridge_ensure_port()
+    import assetcutter_maya_cmdport_boot as _ac_maya_cmdport_boot
+    _ac_maya_cmdport_boot.ensure(${p})
 except Exception as e:
     print("[AssetCutter Maya Bridge] userSetup error: %s" % e)
 ${MAYA_BRIDGE_MARKER_END}
 `;
+}
+
+export function buildMayaBridgeUserSetupMelBlock(port: number): string {
+  const p = Number.isFinite(port) && port > 0 && port <= 65535 ? Math.floor(port) : DEFAULT_MAYA_BRIDGE_PORT;
+  // MEL still loads even when userSetup.py dies on Py2 encoding errors.
+  return `${MAYA_BRIDGE_MEL_MARKER_START}
+global proc assetCutterMayaBridgeBoot()
+{
+    python("import assetcutter_maya_cmdport_boot as _ac_b; _ac_b.ensure(${p})");
+}
+evalDeferred("assetCutterMayaBridgeBoot()");
+${MAYA_BRIDGE_MEL_MARKER_END}
+`;
+}
+
+export function writeMayaBridgeBootPy(scriptsDir: string, port: number): string {
+  if (!existsSync(scriptsDir)) mkdirSync(scriptsDir, { recursive: true });
+  const bootPath = join(scriptsDir, MAYA_BRIDGE_BOOT_PY_NAME);
+  const tmp = bootPath + '.tmp';
+  writeFileSync(tmp, buildMayaBridgeBootPy(port), 'utf8');
+  renameSync(tmp, bootPath);
+  return bootPath;
 }
 
 export function upsertMayaBridgeUserSetup(userSetupPath: string, port: number): { wrote: boolean; path: string } {
@@ -186,11 +260,22 @@ export function upsertMayaBridgeUserSetup(userSetupPath: string, port: number): 
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
   const existing = readUserSetup(userSetupPath);
   const stripped = stripMayaBridgeBlock(existing);
-  const next = (stripped ? stripped.replace(/\s*$/, '\n\n') : '') + buildMayaBridgeUserSetupBlock(port);
-  const tmp = userSetupPath + '.tmp';
-  writeFileSync(tmp, next, 'utf8');
-  renameSync(tmp, userSetupPath);
+  const withCookie = ensurePy2SourceCodingCookie(stripped);
+  const next = (withCookie ? withCookie.replace(/\s*$/, '\n\n') : '') + buildMayaBridgeUserSetupBlock(port);
+  writeUserSetup(userSetupPath, next);
   return { wrote: true, path: userSetupPath };
+}
+
+export function upsertMayaBridgeUserSetupMel(userSetupMelPath: string, port: number): { wrote: boolean; path: string } {
+  const dir = dirname(userSetupMelPath);
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+  const existing = existsSync(userSetupMelPath) ? readFileSync(userSetupMelPath, 'latin1') : '';
+  const stripped = stripMayaBridgeMelBlock(existing);
+  const next = (stripped ? stripped.replace(/\s*$/, '\n\n') : '') + buildMayaBridgeUserSetupMelBlock(port);
+  const tmp = userSetupMelPath + '.tmp';
+  writeFileSync(tmp, next, 'latin1');
+  renameSync(tmp, userSetupMelPath);
+  return { wrote: true, path: userSetupMelPath };
 }
 
 export function removeMayaBridgeUserSetup(userSetupPath: string): { removed: boolean; path: string } {
@@ -198,26 +283,52 @@ export function removeMayaBridgeUserSetup(userSetupPath: string): { removed: boo
   const existing = readUserSetup(userSetupPath);
   if (!userSetupHasMarker(existing)) return { removed: false, path: userSetupPath };
   const next = stripMayaBridgeBlock(existing);
-  const tmp = userSetupPath + '.tmp';
-  writeFileSync(tmp, next, 'utf8');
-  renameSync(tmp, userSetupPath);
+  writeUserSetup(userSetupPath, next);
   return { removed: true, path: userSetupPath };
 }
 
+export function removeMayaBridgeUserSetupMel(userSetupMelPath: string): { removed: boolean; path: string } {
+  if (!existsSync(userSetupMelPath)) return { removed: false, path: userSetupMelPath };
+  const existing = readFileSync(userSetupMelPath, 'latin1');
+  if (!existing.includes(MAYA_BRIDGE_MEL_MARKER_START)) return { removed: false, path: userSetupMelPath };
+  const next = stripMayaBridgeMelBlock(existing);
+  const tmp = userSetupMelPath + '.tmp';
+  writeFileSync(tmp, next, 'latin1');
+  renameSync(tmp, userSetupMelPath);
+  return { removed: true, path: userSetupMelPath };
+}
+
 function versionFromScriptsDir(scriptsDir: string, mayaRoot: string): MayaBridgeVersion {
-  const rel = scriptsDir.replace(/\\/g, '/');
+  const resolvedDir = resolve(scriptsDir);
+  const rel = resolvedDir.replace(/\\/g, '/');
   const m = rel.match(/\/maya\/(\d{4})\/scripts\/?$/i);
-  const id = m ? m[1]! : scriptsDir === join(mayaRoot, 'scripts') ? 'shared' : scriptsDir;
-  const label = m ? `Maya ${m[1]}` : id === 'shared' ? 'Maya（共享 scripts）' : scriptsDir;
-  const userSetupPath = join(scriptsDir, 'userSetup.py');
+  const yearOrShared = m ? m[1]! : resolvedDir === resolve(join(mayaRoot, 'scripts')) ? 'shared' : 'custom';
+  // id 必须能区分「Documents vs 文档 / OneDrive」等同年版本多路径，否则勾选 2020 只装到其中一个
+  const id = `${yearOrShared}::${resolvedDir}`;
+  const label = m
+    ? `Maya ${m[1]}`
+    : yearOrShared === 'shared'
+      ? 'Maya（共享 scripts）'
+      : `Maya（${resolvedDir}）`;
+  const userSetupPath = join(resolvedDir, 'userSetup.py');
+  const userSetupMelPath = join(resolvedDir, 'userSetup.mel');
   const content = readUserSetup(userSetupPath);
+  let melHas = false;
+  try {
+    if (existsSync(userSetupMelPath)) {
+      melHas = readFileSync(userSetupMelPath, 'latin1').includes(MAYA_BRIDGE_MEL_MARKER_START);
+    }
+  } catch {
+    melHas = false;
+  }
+  const bootHas = existsSync(join(resolvedDir, MAYA_BRIDGE_BOOT_PY_NAME));
   return {
     id,
     label,
-    scriptsDir,
+    scriptsDir: resolvedDir,
     userSetupPath,
-    hasUserSetupMarker: userSetupHasMarker(content),
-    hasBridgePy: existsSync(join(scriptsDir, MAYA_BRIDGE_PY_NAME)),
+    hasUserSetupMarker: userSetupHasMarker(content) || melHas || bootHas,
+    hasBridgePy: existsSync(join(resolvedDir, MAYA_BRIDGE_PY_NAME)),
   };
 }
 
@@ -379,10 +490,29 @@ function resolveInstallTargets(
   }
   if (wantVersions.length) {
     const targets: MayaBridgeVersion[] = [];
+    const seen = new Set<string>();
     for (const id of wantVersions) {
-      const v = byId.get(id);
-      if (!v) return { targets: [], error: `unknown_version:${id}` };
-      targets.push(v);
+      const exact = byId.get(id);
+      if (exact) {
+        const key = resolve(exact.scriptsDir);
+        if (!seen.has(key)) {
+          seen.add(key);
+          targets.push(exact);
+        }
+        continue;
+      }
+      // 兼容旧 UI：仅传 "2020" 时安装所有匹配该年份的 scripts 路径
+      const year = String(id).trim();
+      const yearMatches = discovered.filter(
+        (v) => v.id === year || v.id.startsWith(`${year}::`) || v.label === `Maya ${year}`,
+      );
+      if (!yearMatches.length) return { targets: [], error: `unknown_version:${id}` };
+      for (const v of yearMatches) {
+        const key = resolve(v.scriptsDir);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        targets.push(v);
+      }
     }
     return { targets };
   }
@@ -437,7 +567,9 @@ export function installMayaBridge(body: MayaBridgeInstallBody = {}): MayaBridgeI
     if (!existsSync(t.scriptsDir)) mkdirSync(t.scriptsDir, { recursive: true });
     const bridgePyPath = join(t.scriptsDir, MAYA_BRIDGE_PY_NAME);
     copyFileSync(source, bridgePyPath);
+    writeMayaBridgeBootPy(t.scriptsDir, port);
     const { path: userSetupPath } = upsertMayaBridgeUserSetup(t.userSetupPath, port);
+    upsertMayaBridgeUserSetupMel(join(t.scriptsDir, 'userSetup.mel'), port);
     installed.push({
       versionId: t.id,
       scriptsDir: t.scriptsDir,
@@ -453,11 +585,14 @@ export function installMayaBridge(body: MayaBridgeInstallBody = {}): MayaBridgeI
     versionIds: installed.map((x) => x.versionId),
   });
 
+  const pathHint = installed.map((x) => `${x.versionId.split('::')[0]} → ${x.userSetupPath}`).join('\n');
   return {
     ok: true,
     port,
     installed,
-    message: '已写入 userSetup 与 Script Hub Bridge。请重启或打开 Maya，再点「探测连接」。',
+    message:
+      '已写入 userSetup.py / userSetup.mel / boot 与 Script Hub Bridge（兼容 Maya 2020 Py2）。请重启对应版本的 Maya，再点「探测连接」。\n' +
+      pathHint,
   };
 }
 
@@ -498,7 +633,12 @@ export function uninstallMayaBridge(body: MayaBridgeUninstallBody = {}): {
   const removed: Array<{ versionId: string; userSetupPath: string; removed: boolean }> = [];
   for (const t of list) {
     const r = removeMayaBridgeUserSetup(t.userSetupPath);
-    removed.push({ versionId: t.id, userSetupPath: t.userSetupPath, removed: r.removed });
+    const mel = removeMayaBridgeUserSetupMel(join(t.scriptsDir, 'userSetup.mel'));
+    removed.push({
+      versionId: t.id,
+      userSetupPath: t.userSetupPath,
+      removed: r.removed || mel.removed,
+    });
   }
 
   if (body.clearRecord !== false) {
@@ -508,6 +648,7 @@ export function uninstallMayaBridge(body: MayaBridgeUninstallBody = {}): {
   return {
     ok: true,
     removed,
-    message: '已移除 userSetup 中的桥接标记块（保留 script_hub_bridge.py）。重启 Maya 后端口不再自动开启。',
+    message:
+      '已移除 userSetup.py / userSetup.mel 中的桥接标记块（保留 script_hub_bridge.py 与 boot）。重启 Maya 后端口不再自动开启。',
   };
 }

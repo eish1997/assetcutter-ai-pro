@@ -273,6 +273,65 @@ export function loadOrCreateProjectAgentThread(key: ProjectAgentThreadStoreKey):
   return loadProjectAgentThread(key) ?? createProjectAgentThread(key);
 }
 
+/** 刷新/重开项目后：内存执行已断，持久化里的 in-flight 助手气泡会假「还在跑」。 */
+export const PROJECT_AGENT_STALE_INTERRUPTED_MESSAGE =
+  '页面已刷新或重新打开项目，进行中的回合已中断';
+
+function isInFlightAssistantStatus(
+  status: QuickComposeThreadMessage['status']
+): boolean {
+  return (
+    status === 'submitted' ||
+    status === 'queued' ||
+    status === 'understanding' ||
+    status === 'running'
+  );
+}
+
+/**
+ * 将热线程中僵尸 in-flight 助手消息收成 error，并结束其 childRuns。
+ * 打开项目 / 云 hydrate 后调用并落盘，避免「助手处理中」假锁死。
+ */
+export function finalizeStaleInFlightProjectAgentThread(
+  thread: ProjectAgentThread
+): { thread: ProjectAgentThread; changed: boolean } {
+  let changed = false;
+  const now = Date.now();
+  const messages = thread.messages.map((m) => {
+    if (m.role !== 'assistant') return m;
+    let next = m;
+    if (isInFlightAssistantStatus(m.status)) {
+      changed = true;
+      next = {
+        ...m,
+        status: 'error',
+        errorMessage: PROJECT_AGENT_STALE_INTERRUPTED_MESSAGE,
+      };
+    }
+    const runs = next.childRuns;
+    if (!runs?.length) return next;
+    let runsChanged = false;
+    const childRuns = runs.map((r) => {
+      if (r.status !== 'queued' && r.status !== 'running') return r;
+      runsChanged = true;
+      return {
+        ...r,
+        status: 'cancelled' as const,
+        errorMessage: PROJECT_AGENT_STALE_INTERRUPTED_MESSAGE,
+        endedAt: r.endedAt ?? now,
+      };
+    });
+    if (!runsChanged) return next;
+    changed = true;
+    return { ...next, childRuns };
+  });
+  if (!changed) return { thread, changed: false };
+  return {
+    thread: { ...thread, messages, updatedAt: now },
+    changed: true,
+  };
+}
+
 export type AppendProjectAgentMessageInput = Omit<QuickComposeThreadMessage, 'id' | 'timestamp'> &
   Partial<Pick<QuickComposeThreadMessage, 'id' | 'timestamp'>>;
 

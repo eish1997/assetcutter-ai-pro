@@ -93,13 +93,18 @@ const PBR_TEXTURE_SLOT_PRIORITY: WorkflowModelPbrSlot[] = [
   'height',
 ];
 
-function collectPbrTextureInputNodes(doc: WorkflowModelPbrEditDoc | null | undefined): PbrTextureInputNode[] {
+function collectPbrTextureInputNodes(
+  doc: WorkflowModelPbrEditDoc | null | undefined,
+  resolveAssetSrc?: ((assetId: string) => string) | null
+): PbrTextureInputNode[] {
   if (!doc?.materials) return [];
   const bySrc = new Map<string, { src: string; fileName: string; slots: Set<WorkflowModelPbrSlot>; materialIds: Set<string>; updatedAt: number }>();
   for (const [materialId, material] of Object.entries(doc.materials)) {
     for (const slot of WORKFLOW_MODEL_PBR_SLOTS) {
       const edit = material.slots?.[slot];
-      const src = String(edit?.dataUrl || '').trim();
+      const assetId = String(edit?.assetId || '').trim();
+      const fromAsset = assetId && resolveAssetSrc ? String(resolveAssetSrc(assetId) || '').trim() : '';
+      const src = fromAsset || String(edit?.dataUrl || '').trim() || (assetId ? `pbr-asset:${assetId}` : '');
       if (!edit?.enabled || !src) continue;
       const item = bySrc.get(src) || {
         src,
@@ -267,6 +272,8 @@ export type WorkflowStepNodeGraphOverlayProps = {
   onPreviewTexture?: (src: string) => void;
   activePreviewTextureSrc?: string;
   onNodeMenuAction?: (action: WorkflowStepNodeGraphMenuAction, node: WorkflowStepNodeGraphNodeContext) => void;
+  /** 解析 PBR 正式贴图资产预览 URL */
+  resolvePbrTextureAssetSrc?: (assetId: string) => string;
   /** 当前资产在执行队列或 pending 中：在选中步骤下方追加占位节点并显示生成动画（不盖在原缩略图上） */
   pixelBusy?: boolean;
   pixelBusyInputDisplayKeys?: string[];
@@ -282,6 +289,7 @@ export function WorkflowStepNodeGraphOverlay({
   onPreviewTexture,
   activePreviewTextureSrc = '',
   onNodeMenuAction,
+  resolvePbrTextureAssetSrc,
   pixelBusy = false,
   pixelBusyInputDisplayKeys = [],
 }: WorkflowStepNodeGraphOverlayProps) {
@@ -308,8 +316,8 @@ export function WorkflowStepNodeGraphOverlay({
     const ids = new Set(vgp.versionOrder);
     const rewriteNodes = collectPbrTextureRewriteNodes(displayAsset.modelPbrTextureLineage);
     const rewrittenResultSrcs = new Set(rewriteNodes.map((node) => node.resultSrc));
-    const pbrNodes = collectPbrTextureInputNodes(displayAsset.modelPbrEdits)
-      .filter((node) => !rewrittenResultSrcs.has(node.src));
+    const pbrNodes = collectPbrTextureInputNodes(displayAsset.modelPbrEdits, resolvePbrTextureAssetSrc)
+      .filter((node) => !rewrittenResultSrcs.has(node.src) && !node.src.startsWith('pbr-asset:'));
     const modelVersionIds = orderedVersions
       .filter((v) => {
         const key = v.imageRef.kind === 'original_field' ? 'original' : v.imageRef.key;
@@ -403,7 +411,7 @@ export function WorkflowStepNodeGraphOverlay({
       textureInputEdges: textureEdges,
       textureRewriteEdges: rewriteEdges,
     };
-  }, [displayAsset, selectedId, vgp]);
+  }, [displayAsset, resolvePbrTextureAssetSrc, selectedId, vgp]);
 
   const busyParentVersionId = useMemo(() => {
     if (!pixelBusy || !vgp) return null;

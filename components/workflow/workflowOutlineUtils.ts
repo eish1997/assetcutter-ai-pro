@@ -1,8 +1,21 @@
 import type { WorkflowAsset } from '../../types';
 
+/** 按 id 去重（保留首次出现）。重复 id 会导致 justified 占两格但 React 只挂一卡 → 中间隐形空位。 */
+export function dedupeWorkflowAssetsById(list: WorkflowAsset[]): WorkflowAsset[] {
+  const seen = new Set<string>();
+  const out: WorkflowAsset[] = [];
+  for (const asset of list) {
+    const id = String(asset?.id || '').trim();
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    out.push(asset);
+  }
+  return out;
+}
+
 /** 根级网格 / 大图列表：新到旧（createdAt 降序） */
 export function sortRootWorkflowAssetsNewestFirst(list: WorkflowAsset[]): WorkflowAsset[] {
-  return [...list].sort((a, b) => {
+  return dedupeWorkflowAssetsById(list).sort((a, b) => {
     const ca = a.createdAt ?? 0;
     const cb = b.createdAt ?? 0;
     if (cb !== ca) return cb - ca;

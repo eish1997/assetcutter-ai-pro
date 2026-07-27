@@ -199,6 +199,7 @@
               if (v.hasUserSetupMarker) marks.push('已写入');
               if (v.hasBridgePy) marks.push('有 bridge.py');
               const mark = marks.length ? ' · ' + marks.join(' · ') : '';
+              const dirHint = v.scriptsDir ? '<div class="bridge-version-path">' + esc(v.scriptsDir) + '</div>' : '';
               return (
                 '<li><label><input type="checkbox" data-maya-version="' +
                 esc(v.id) +
@@ -208,7 +209,9 @@
                 esc(v.label) +
                 '</span><span style="color:var(--muted)">' +
                 esc(mark) +
-                '</span></label></li>'
+                '</span>' +
+                dirHint +
+                '</label></li>'
               );
             })
             .join('') +

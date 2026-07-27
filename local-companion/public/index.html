@@ -335,6 +335,20 @@
 
       async function refreshOverview() {
         try {
+          // 连接态以 health 为准（始终免 Token）；runtime-status 在配对后也可能需 Bearer
+          try {
+            const t0 = performance.now();
+            const hr = await fetch('/v1/health', { method: 'GET' });
+            const hms = Math.round(performance.now() - t0);
+            if (!hr.ok) throw new Error('HTTP ' + hr.status);
+            setConn(true, hms);
+          } catch (he) {
+            setConn(false);
+            setQuickStatus(
+              '连接失败：请确认本机伴侣已启动。若在网站使用本机处理，请在网站「设置 → 本地伴侣」连接。',
+            );
+            return;
+          }
           const { data: rt, ms } = await fetchJson('/v1/runtime-status');
           setConn(true, ms);
           $('runtimePre').textContent = JSON.stringify(rt, null, 2);
@@ -372,9 +386,11 @@
           );
           renderPlugins(rt.plugins || []);
         } catch (e) {
-          setConn(false);
+          // health 已绿时勿因详情接口失败改判「未连接」
           $('runtimePre').textContent = String(e);
-          setQuickStatus('连接失败：请确认本机伴侣已启动。若在网站使用本机处理，请在网站「设置 → 本地伴侣」连接。');
+          setQuickStatus(
+            '本机 API 已响应，但读取状态失败：' + (e && e.message ? e.message : String(e)),
+          );
         }
       }
 

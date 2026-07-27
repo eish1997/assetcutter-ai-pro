@@ -34,6 +34,8 @@ async function main() {
     }
   }
 
+  // CJS has no import.meta.url; without this polyfill, fileURLToPath(import.meta.url)
+  // crashes at boot (loadRepoEnvLocalProxies / public path / Maya bridge, etc.).
   await esbuild.build({
     absWorkingDir: path.join(repoRoot, 'local-companion'),
     entryPoints: [entry],
@@ -43,6 +45,12 @@ async function main() {
     format: 'cjs',
     outfile: outFile,
     logLevel: 'info',
+    banner: {
+      js: 'var __ac_import_meta_url = require("url").pathToFileURL(__filename).href;',
+    },
+    define: {
+      'import.meta.url': '__ac_import_meta_url',
+    },
   });
 
   const pubFrom = path.join(repoRoot, 'local-companion', 'public');
@@ -71,6 +79,34 @@ async function main() {
   const st = fs.statSync(outFile);
   if (!st.isFile() || st.size < 1024) {
     throw new Error(`bundle 异常（过小或不存在）: ${outFile}`);
+  }
+
+  const bundledSrc = fs.readFileSync(outFile, 'utf8');
+  if (!bundledSrc.includes('__ac_import_meta_url')) {
+    throw new Error(
+      'bundle 缺少 import.meta.url CJS polyfill（__ac_import_meta_url）；安装包会在 fileURLToPath 处秒崩',
+    );
+  }
+
+  // Smoke: module must load under plain Node CJS (same as ELECTRON_RUN_AS_NODE).
+  // COMPANION_HTTP_PORT=0 exits after env/proxy load without binding the port.
+  const { spawnSync } = require('child_process');
+  const smoke = spawnSync(process.execPath, [outFile], {
+    cwd: outDir,
+    env: { ...process.env, COMPANION_HTTP_PORT: '0' },
+    encoding: 'utf8',
+    timeout: 15000,
+  });
+  const smokeOut = `${smoke.stdout || ''}${smoke.stderr || ''}`;
+  if (smokeOut.includes('ERR_INVALID_ARG_TYPE') || smokeOut.includes('fileURLToPath')) {
+    throw new Error(
+      `bundle smoke failed (import.meta.url / fileURLToPath):\n${smokeOut.slice(0, 2000)}`,
+    );
+  }
+  if (!smokeOut.includes('COMPANION_HTTP_PORT=0')) {
+    throw new Error(
+      `bundle smoke unexpected exit (expected PORT=0 message):\ncode=${smoke.status}\n${smokeOut.slice(0, 2000)}`,
+    );
   }
 
   console.log('[bundle-local-companion-runtime] ok', outDir);

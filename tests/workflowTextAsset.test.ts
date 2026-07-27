@@ -3,6 +3,9 @@ import { describe, expect, it } from 'vitest';
 import type { WorkflowAsset } from '../types';
 import {
   buildComposerTextAssetThumbDataUrl,
+  healWorkflowAssetDisplayKeyIfEmpty,
+  isWorkflowModelSvgPlaceholderSrc,
+  resolveWorkflowDisplaySlot,
   workflowAssetAllowedForCapabilityDrop,
   workflowAssetCurrentDisplayIsTextChannel,
   workflowAssetLightboxRasterEligible,
@@ -29,6 +32,79 @@ function makeTextAsset(partial?: Partial<WorkflowAsset>): WorkflowAsset {
     ...partial,
   };
 }
+
+describe('healWorkflowAssetDisplayKeyIfEmpty', () => {
+  it('displayKey 指向空步骤时回退到仍有 companion 的原图槽', () => {
+    const asset: WorkflowAsset = {
+      id: 'img-1',
+      original: '',
+      originalCompanionKey: 'a1/image-full-orig.png',
+      displayKey: 'step_b',
+      results: {},
+      resultOrder: ['step_a', 'step_b'],
+      resultsCompanionKeys: {},
+      archived: false,
+      hiddenInGrid: false,
+      createdAt: 1,
+    };
+    const healed = healWorkflowAssetDisplayKeyIfEmpty(asset);
+    expect(healed.displayKey).toBe('original');
+    expect(resolveWorkflowDisplaySlot(healed).modality).toBe('image');
+  });
+
+  it('识别 3D SVG 本地预览占位', () => {
+    expect(isWorkflowModelSvgPlaceholderSrc('data:image/svg+xml;base64,abc')).toBe(true);
+    expect(isWorkflowModelSvgPlaceholderSrc('data:image/png;base64,abc')).toBe(false);
+  });
+});
+
+describe('resolveWorkflowDisplaySlot', () => {
+  it('文字出生卡 original 为文本槽', () => {
+    const slot = resolveWorkflowDisplaySlot(makeTextAsset());
+    expect(slot.modality).toBe('text');
+    expect(slot.text).toBe('原始正文');
+  });
+
+  it('仅有 originalObjectKey 时 original 仍为 image 槽', () => {
+    const slot = resolveWorkflowDisplaySlot({
+      id: 'img-ok',
+      original: '',
+      originalObjectKey: 'r2/key.png',
+      displayKey: 'original',
+      results: {},
+      resultOrder: [],
+      archived: false,
+      hiddenInGrid: false,
+      createdAt: 1,
+    });
+    expect(slot.modality).toBe('image');
+  });
+
+  it('displayKey 指向 results 位图时为 image 槽', () => {
+    const slot = resolveWorkflowDisplaySlot(
+      makeTextAsset({
+        displayKey: 'gen_v1',
+        results: { gen_v1: 'data:image/png;base64,AAA' },
+        resultsCompanionKeys: { gen_v1: 'assets/t/result-gen_v1.png' },
+      })
+    );
+    expect(slot.modality).toBe('image');
+    expect(slot.imageSrc).toContain('data:image');
+    expect(slot.companionKey).toContain('result-gen_v1');
+  });
+
+  it('同一 key 有 results 时不读 textResults（禁止双读）', () => {
+    const slot = resolveWorkflowDisplaySlot(
+      makeTextAsset({
+        displayKey: 'step_a',
+        results: { step_a: 'data:image/png;base64,AAA' },
+        textResults: { step_a: '这段文不应被当成当前输出' },
+      })
+    );
+    expect(slot.modality).toBe('image');
+    expect(slot.text).toBeUndefined();
+  });
+});
 
 describe('workflowAssetToInputText', () => {
   it('当 displayKey 指向扩写版本时，使用 textResults 的当前版本正文', () => {
@@ -131,7 +207,7 @@ describe('workflowAssetLightboxRasterEligible', () => {
     expect(workflowAssetLightboxRasterEligible(makeTextAsset(), '')).toBe(false);
   });
 
-  it('文字资产 results 中的图版本可走位图 chrome', () => {
+  it('文字资产当前显示为 results 图时可走位图 chrome', () => {
     expect(
       workflowAssetLightboxRasterEligible(
         makeTextAsset({
@@ -292,5 +368,46 @@ describe('workflowAssetAllowedForCapabilityDrop', () => {
       createdAt: Date.now(),
     };
     expect(workflowAssetAllowedForCapabilityDrop(empty, genVideoPreset)).toBe(false);
+  });
+
+  const imageToImagePreset: CustomAppModule = {
+    id: 'i2i',
+    label: '图生图',
+    category: 'image_to_image',
+    instruction: '',
+  };
+
+  it('图生图接受文字出生卡当前显示为图时', () => {
+    expect(
+      workflowAssetAllowedForCapabilityDrop(
+        makeTextAsset({
+          displayKey: 'gen_v1',
+          results: { gen_v1: 'data:image/png;base64,AAA' },
+        }),
+        imageToImagePreset
+      )
+    ).toBe(true);
+  });
+
+  it('图生图拒绝文字出生卡当前仍显示正文时', () => {
+    expect(workflowAssetAllowedForCapabilityDrop(makeTextAsset(), imageToImagePreset)).toBe(false);
+  });
+
+  it('文生图在当前显示为图时仍可用（有正文载荷）', () => {
+    const tti: CustomAppModule = {
+      id: 'tti',
+      label: '文生图',
+      category: 'text_to_image',
+      instruction: '',
+    };
+    expect(
+      workflowAssetAllowedForCapabilityDrop(
+        makeTextAsset({
+          displayKey: 'gen_v1',
+          results: { gen_v1: 'data:image/png;base64,AAA' },
+        }),
+        tti
+      )
+    ).toBe(true);
   });
 });

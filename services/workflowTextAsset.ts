@@ -12,7 +12,133 @@ export function isWorkflowTextAsset(a: WorkflowAsset): boolean {
   return a.assetKind === 'text';
 }
 
-/** 文字卡拖入能力时拼接为 inputText */
+/** 显示态：displayKey 指向的槽模态（assetKind 仅表出生壳） */
+export type WorkflowDisplaySlotModality = 'text' | 'image' | 'video' | 'model' | 'empty';
+
+export type WorkflowDisplaySlot = {
+  displayKey: string;
+  modality: WorkflowDisplaySlotModality;
+  imageSrc?: string;
+  text?: string;
+  companionKey?: string;
+};
+
+function hasRasterPayloadAtKey(asset: WorkflowAsset, key: string): boolean {
+  const k = String(key || '').trim() || 'original';
+  if (k === 'original') {
+    return Boolean(
+      String(asset.original || '').trim() ||
+        String(asset.originalCompanionKey || '').trim() ||
+        String(asset.originalObjectKey || '').trim()
+    );
+  }
+  return Boolean(
+    String((asset.results || {})[k] ?? '').trim() ||
+      String((asset.resultsCompanionKeys || {})[k] || '').trim() ||
+      String((asset.resultsObjectKeys || {})[k] || '').trim()
+  );
+}
+
+/**
+ * displayKey 指向空槽时，回退到仍有载荷的槽（原图优先，再 resultOrder）。
+ * 用于 gaps 清键后避免「角标 2 + 暗空卡」假丢资产。
+ */
+export function healWorkflowAssetDisplayKeyIfEmpty(asset: WorkflowAsset): WorkflowAsset {
+  if (isWorkflowTextAsset(asset)) {
+    const slot = resolveWorkflowDisplaySlot(asset);
+    if (slot.modality !== 'empty') return asset;
+    if (hasAnyTextPayload(asset) && String(asset.displayKey || '') !== 'original') {
+      return { ...asset, displayKey: 'original' };
+    }
+    return asset;
+  }
+  const slot = resolveWorkflowDisplaySlot(asset);
+  if (slot.modality !== 'empty') return asset;
+  if (hasRasterPayloadAtKey(asset, 'original')) {
+    if (String(asset.displayKey || 'original') === 'original') return asset;
+    return { ...asset, displayKey: 'original' };
+  }
+  const order =
+    Array.isArray(asset.resultOrder) && asset.resultOrder.length > 0
+      ? asset.resultOrder
+      : Object.keys(asset.results || {});
+  for (const key of order) {
+    const stepId = String(key || '').trim();
+    if (!stepId || !hasRasterPayloadAtKey(asset, stepId)) continue;
+    if (String(asset.displayKey || '') === stepId) return asset;
+    return { ...asset, displayKey: stepId };
+  }
+  return asset;
+}
+
+/** 3D 导入用的 SVG「本地预览」占位，不算真实位图预览 */
+export function isWorkflowModelSvgPlaceholderSrc(src: string | undefined | null): boolean {
+  const s = String(src || '').trim();
+  if (!s) return false;
+  return /^data:image\/svg\+xml/i.test(s);
+}
+
+/**
+ * 按 displayKey 解析当前输出槽。
+ * 硬规则：同一 key 不可双读 — 有 results[k] 则为图/视频槽；否则才读 textResults[k]。
+ */
+export function resolveWorkflowDisplaySlot(asset: WorkflowAsset): WorkflowDisplaySlot {
+  const displayKey = String(asset.displayKey || 'original').trim() || 'original';
+
+  if (displayKey === 'original') {
+    if (isWorkflowTextAsset(asset)) {
+      const text = String(asset.textBody || '').trim();
+      return {
+        displayKey,
+        modality: text || String(asset.textTitle || '').trim() ? 'text' : 'empty',
+        ...(text ? { text } : {}),
+      };
+    }
+    const imageSrc = String(asset.original || '').trim();
+    const companionKey = String(asset.originalCompanionKey || '').trim();
+    const objectKey = String(asset.originalObjectKey || '').trim();
+    if (imageSrc || companionKey || objectKey) {
+      return {
+        displayKey,
+        modality: 'image',
+        ...(imageSrc ? { imageSrc } : {}),
+        ...(companionKey ? { companionKey } : {}),
+      };
+    }
+    return { displayKey, modality: 'empty' };
+  }
+
+  const raster = String((asset.results || {})[displayKey] ?? '').trim();
+  const mediaKind = asset.resultMeta?.[displayKey]?.mediaKind;
+  const resultCompanionKey = String((asset.resultsCompanionKeys || {})[displayKey] || '').trim();
+  const resultObjectKey = String((asset.resultsObjectKeys || {})[displayKey] || '').trim();
+
+  if (raster || resultCompanionKey || resultObjectKey) {
+    if (mediaKind === 'video' || (raster && /\.(mp4|webm|mov)(\?|#|$)/i.test(raster))) {
+      return {
+        displayKey,
+        modality: 'video',
+        ...(raster ? { imageSrc: raster } : {}),
+        ...(resultCompanionKey ? { companionKey: resultCompanionKey } : {}),
+      };
+    }
+    return {
+      displayKey,
+      modality: 'image',
+      ...(raster ? { imageSrc: raster } : {}),
+      ...(resultCompanionKey ? { companionKey: resultCompanionKey } : {}),
+    };
+  }
+
+  const textBody = String((asset.textResults || {})[displayKey] ?? '').trim();
+  if (textBody) {
+    return { displayKey, modality: 'text', text: textBody };
+  }
+
+  return { displayKey, modality: 'empty' };
+}
+
+/** 文字卡拖入能力时拼接为 inputText（始终取正文/文槽，不跟显示图） */
 export function workflowAssetToInputText(a: WorkflowAsset): string {
   const t = (a.textTitle || '').trim();
   const displayKey = (a.displayKey || 'original').trim() || 'original';
@@ -25,31 +151,25 @@ export function workflowAssetToInputText(a: WorkflowAsset): string {
   return b || t;
 }
 
-/**
- * 文字资产当前显示版本是否应按 **文本** 参与拖放（底部栏草稿、队列 `inputText`、微调弹窗等）。
- * 当 `displayKey` 指向 `results` 中的图（如文生图结果）时为 false，应按 **当前图**（`getAssetDisplayImage`）处理。
- */
+/** 当前显示是否为文本通道（跟 displayKey 槽，不跟 assetKind） */
 export function workflowAssetCurrentDisplayIsTextChannel(a: WorkflowAsset): boolean {
-  if (!isWorkflowTextAsset(a)) return false;
-  const dk = (a.displayKey || 'original').trim() || 'original';
-  if (dk === 'original') return true;
-  const raster = String((a.results || {})[dk] ?? '').trim();
-  return !raster;
+  return resolveWorkflowDisplaySlot(a).modality === 'text';
 }
 
 /** 大图预览是否应按位图处理（标注 / SAM / overlay 写回 / @当前画面 等） */
 export function workflowAssetLightboxRasterEligible(a: WorkflowAsset, displayImage: string): boolean {
-  if (isWorkflowTextAsset(a) && workflowAssetCurrentDisplayIsTextChannel(a)) return false;
-  return Boolean(String(displayImage || '').trim());
+  const slot = resolveWorkflowDisplaySlot(a);
+  if (slot.modality === 'text' || slot.modality === 'empty') return false;
+  return Boolean(String(displayImage || '').trim() || slot.imageSrc || slot.companionKey);
 }
 
-/** 工作区卡片悬停 W 放大：当前有位图时可放大；纯文字通道的文字资产也可放大阅读 */
+/** 工作区卡片悬停 W 放大：当前有位图时可放大；纯文字通道也可放大阅读 */
 export function workflowAssetCardZoomEligible(a: WorkflowAsset, displayImage: string): boolean {
   if (Boolean(String(displayImage || '').trim())) return true;
-  return isWorkflowTextAsset(a) && workflowAssetCurrentDisplayIsTextChannel(a);
+  return workflowAssetCurrentDisplayIsTextChannel(a);
 }
 
-/** 文字卡可拖入：文生文、文生图 */
+/** 文字卡可拖入：文生文、文生图（指预设类别，不表示显示态） */
 export function workflowPresetAcceptsTextCardDrag(mod: CustomAppModule): boolean {
   return mod.category === 'text_to_text' || mod.category === 'text_to_image';
 }
@@ -61,18 +181,28 @@ function hasAnyTextPayload(asset: WorkflowAsset): boolean {
 }
 
 function hasAnyImagePayload(asset: WorkflowAsset): boolean {
-  if (String(asset.original || '').trim()) return true;
+  // Birth shell does not veto: text cards may hold results rasters.
+  if (!isWorkflowTextAsset(asset) && String(asset.original || '').trim()) return true;
+  if (!isWorkflowTextAsset(asset) && String(asset.originalCompanionKey || '').trim()) return true;
   if (asset.displayKey && asset.displayKey !== 'original') {
     const curr = String((asset.results || {})[asset.displayKey] || '').trim();
     if (curr) return true;
+    if (String((asset.resultsCompanionKeys || {})[asset.displayKey] || '').trim()) return true;
   }
   const results = asset.results || {};
   if (Object.values(results).some((v) => String(v || '').trim() !== '')) return true;
+  const rck = asset.resultsCompanionKeys || {};
+  if (Object.values(rck).some((v) => String(v || '').trim() !== '')) return true;
   if ((asset.cutImageGroup || []).some((it) => typeof it === 'string' && it.trim() !== '')) return true;
   return false;
 }
 
-/** 根资产拖入某预设时是否允许（按输入格式匹配资产类型） */
+function currentDisplayIsImageLike(asset: WorkflowAsset): boolean {
+  const m = resolveWorkflowDisplaySlot(asset).modality;
+  return m === 'image' || m === 'video';
+}
+
+/** 根资产拖入某预设：图类能力看当前显示槽；文生* 看是否有正文载荷 */
 export function workflowAssetAllowedForCapabilityDrop(asset: WorkflowAsset, mod: CustomAppModule): boolean {
   if (presetUsesHostBundleProcessor(mod)) {
     return hasAnyImagePayload(asset) || hasAnyTextPayload(asset);
@@ -81,7 +211,7 @@ export function workflowAssetAllowedForCapabilityDrop(asset: WorkflowAsset, mod:
     return hasAnyTextPayload(asset);
   }
   if (mod.category === 'generate_video') {
-    return hasAnyImagePayload(asset) || hasAnyTextPayload(asset);
+    return currentDisplayIsImageLike(asset) || workflowAssetCurrentDisplayIsTextChannel(asset);
   }
   if (
     mod.category === 'image_process' ||
@@ -89,7 +219,7 @@ export function workflowAssetAllowedForCapabilityDrop(asset: WorkflowAsset, mod:
     mod.category === 'image_to_text' ||
     mod.category === 'generate_3d'
   ) {
-    return hasAnyImagePayload(asset);
+    return currentDisplayIsImageLike(asset);
   }
   return false;
 }
@@ -106,19 +236,20 @@ export function workflowTextAssetOutlineLabel(a: WorkflowAsset): string {
   return '文字';
 }
 
-/** VGP 步骤树 / 版本节点：该 resultKey 是否按文本通道展示（无位图） */
+/** VGP 步骤树 / 版本节点：该 resultKey 是否按文本通道展示 */
 export function workflowVersionDisplayIsTextChannel(asset: WorkflowAsset, resultKey: string): boolean {
-  if (!isWorkflowTextAsset(asset)) return false;
   const key = String(resultKey || 'original').trim() || 'original';
-  if (key === 'original') return true;
-  return !String((asset.results || {})[key] ?? '').trim();
+  if (key === 'original') return isWorkflowTextAsset(asset);
+  if (String((asset.results || {})[key] ?? '').trim()) return false;
+  if (String((asset.resultsCompanionKeys || {})[key] || '').trim()) return false;
+  return Boolean(String((asset.textResults || {})[key] ?? '').trim()) || isWorkflowTextAsset(asset);
 }
 
 export function resolveWorkflowVersionDisplayText(
   asset: WorkflowAsset,
   resultKey: string
 ): { title: string; body: string } {
-  if (!isWorkflowTextAsset(asset)) return { title: '', body: '' };
+  if (!workflowVersionDisplayIsTextChannel(asset, resultKey)) return { title: '', body: '' };
   const key = String(resultKey || 'original').trim() || 'original';
   if (key === 'original') {
     return { title: String(asset.textTitle || ''), body: String(asset.textBody || '') };

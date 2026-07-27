@@ -53,4 +53,12 @@ describe('loadRepoEnvLocalProxies', () => {
     expect(process.env.HTTP_PROXY).toBe('http://keep-me:1');
     expect(outboundProxyConfigured()).toBe(true);
   });
+
+  it('returns empty when env file path does not exist (no throw)', () => {
+    delete process.env.TRIPO_PROXY;
+    const applied = loadRepoEnvLocalProxies(
+      path.join(os.tmpdir(), `ac-env-proxy-missing-${Date.now()}.env`)
+    );
+    expect(applied).toEqual([]);
+  });
 });

@@ -4,6 +4,10 @@
  * (e.g. bare `npm run local-companion:dev` under concurrently).
  *
  * Never overrides keys already set in the process environment.
+ *
+ * Packaged CJS bundle (esbuild format:cjs under Electron RUN_AS_NODE) may not
+ * have a usable `import.meta.url`; skip auto path resolution in that case —
+ * install shells inject proxy env separately and have no repo `.env.local`.
  */
 
 import fs from 'node:fs';
@@ -12,10 +16,16 @@ import { fileURLToPath } from 'node:url';
 
 const PROXY_KEYS = ['TRIPO_PROXY', 'HTTPS_PROXY', 'HTTP_PROXY'] as const;
 
-function repoRootFromHere(): string {
-  const here = path.dirname(fileURLToPath(import.meta.url));
-  // local-companion/src → repo root
-  return path.resolve(here, '..', '..');
+function repoRootFromHere(): string | null {
+  try {
+    const metaUrl: unknown = import.meta.url;
+    if (typeof metaUrl !== 'string' || !metaUrl) return null;
+    const here = path.dirname(fileURLToPath(metaUrl));
+    // local-companion/src → repo root
+    return path.resolve(here, '..', '..');
+  } catch {
+    return null;
+  }
 }
 
 function stripQuotes(val: string): string {
@@ -33,7 +43,12 @@ function stripQuotes(val: string): string {
  * @returns keys that were newly applied from `.env.local`
  */
 export function loadRepoEnvLocalProxies(envLocalPath?: string): string[] {
-  const filePath = envLocalPath || path.join(repoRootFromHere(), '.env.local');
+  let filePath = envLocalPath || '';
+  if (!filePath) {
+    const root = repoRootFromHere();
+    if (!root) return [];
+    filePath = path.join(root, '.env.local');
+  }
   if (!fs.existsSync(filePath)) return [];
   let text = '';
   try {

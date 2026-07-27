@@ -205,19 +205,15 @@ export function CustomDropdown({
       const target = e.target as Node | null;
       if (!target) return;
       const list = listRef.current;
-      if (list && list.contains(target)) {
-        const { scrollTop, scrollHeight, clientHeight } = list;
-        if (scrollHeight <= clientHeight + 1) {
-          e.preventDefault();
-          e.stopPropagation();
-          return;
-        }
-        const delta = e.deltaY;
-        const atTop = scrollTop <= 0 && delta < 0;
-        const atBottom = scrollTop + clientHeight >= scrollHeight - 1 && delta > 0;
-        if (atTop || atBottom) {
-          e.preventDefault();
-          e.stopPropagation();
+      const overList =
+        (list && list.contains(target)) ||
+        (target instanceof Element && Boolean(target.closest('[data-ac-dropdown-list]')));
+      if (overList && list) {
+        // 大图/3D 等全局 wheel 捕获会抢走原生滚动；列表内改为手动 scrollTop
+        e.preventDefault();
+        e.stopPropagation();
+        if (list.scrollHeight > list.clientHeight + 1) {
+          list.scrollTop += e.deltaY;
         }
         return;
       }

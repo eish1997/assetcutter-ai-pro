@@ -98,12 +98,17 @@ async function getCachedEngineProbes(): Promise<{
 
 let cachedIndexHtml: string | null = null;
 
-/** 桌面壳 spawn 的 cwd 恒为伴侣根目录；bundle 与源码布局下均为 `<根>/public/index.html` */
+/** 桌面壳 spawn 的 cwd 恒为伴侣根目录；bundle 为 `<bundle>/public`，源码为 `local-companion/public` */
 function resolvePublicIndexHtmlPath(): string {
   const fromCwd = join(process.cwd(), 'public', 'index.html');
   if (existsSync(fromCwd)) return fromCwd;
   const here = dirname(fileURLToPath(import.meta.url));
-  return join(here, '..', 'public', 'index.html');
+  // CJS 单文件 bundle：main.cjs 与 public/ 同级；tsx 源码：src/ → ../public
+  const candidates = [join(here, 'public', 'index.html'), join(here, '..', 'public', 'index.html')];
+  for (const p of candidates) {
+    if (existsSync(p)) return p;
+  }
+  return candidates[0];
 }
 
 function loadIndexHtml(): string {
@@ -292,7 +297,7 @@ export async function handleRequest(
     return;
   }
 
-  if (!isBearerExemptPath(path, method)) {
+  if (!isBearerExemptPath(path, method, origin)) {
     const ah = req.headers.authorization;
     const ahv = Array.isArray(ah) ? ah[0] : ah;
     const bc = checkBearerAuthorization(ahv);

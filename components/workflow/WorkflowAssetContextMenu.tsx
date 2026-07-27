@@ -10,6 +10,7 @@ export type WorkflowAssetContextMenuProps = {
   onCopyImage: () => void;
   onCopyId: () => void;
   canOpenFolder?: boolean;
+  openFolderDisabledReason?: string;
   onOpenFolder?: () => void;
   canAddToComposeInput?: boolean;
   onAddToComposeInput?: () => void;
@@ -17,7 +18,7 @@ export type WorkflowAssetContextMenuProps = {
 };
 
 /**
- * 工作区资产图：右键「复制 / 复制 ID / 添加到输入框」。
+ * 工作区资产图：右键「复制 / 复制 ID / 打开资产文件夹 / 添加到输入框」。
  */
 export default function WorkflowAssetContextMenu({
   open,
@@ -27,6 +28,7 @@ export default function WorkflowAssetContextMenu({
   onCopyImage,
   onCopyId,
   canOpenFolder = false,
+  openFolderDisabledReason = '',
   onOpenFolder,
   canAddToComposeInput = false,
   onAddToComposeInput,
@@ -48,9 +50,7 @@ export default function WorkflowAssetContextMenu({
     const rect = el.getBoundingClientRect();
     const vw = window.innerWidth;
     const vh = window.innerHeight;
-    setPosition(
-      computeContextMenuPosition(x, y, rect.width, rect.height, vw, vh)
-    );
+    setPosition(computeContextMenuPosition(x, y, rect.width, rect.height, vw, vh));
   }, [open, x, y, canAddToComposeInput, canCopyImage, canOpenFolder]);
 
   useEffect(() => {
@@ -129,6 +129,11 @@ export default function WorkflowAssetContextMenu({
         <button
           type="button"
           disabled={!canOpenFolder}
+          title={
+            !canOpenFolder
+              ? openFolderDisabledReason || '当前资产尚未落到本地，无法打开资产文件夹'
+              : openFolderDisabledReason || undefined
+          }
           className="block w-full px-2.5 py-1.5 text-left text-[11px] text-gray-200 transition-colors hover:bg-white/[0.06] disabled:cursor-not-allowed disabled:opacity-35"
           onClick={() => {
             if (!canOpenFolder) return;

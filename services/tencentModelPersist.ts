@@ -89,7 +89,7 @@ export async function persistTencentModelsForWorkflowAsset(params: {
   const baseRaw = String(params.companionBaseUrl || '').trim();
   const pid = String(params.companionProjectId || '').trim();
   const base = baseRaw ? normalizeCompanionBaseUrl(baseRaw) : '';
-  const useCompanion = Boolean(base && pid);
+  const useCompanion = Boolean(base && pid && pid !== 'default');
   const proxyUrl = params.creds.proxyUrl;
   const log = params.onLog;
 

@@ -85,10 +85,14 @@ export function computeWorkflowJustifiedLayout(
   const rows: RowDraft[] = [];
   let currentRow: WorkflowJustifiedLayoutInput[] = [];
   let aspectSum = 0;
+  const seenIds = new Set<string>();
 
   for (const item of items) {
+    const id = String(item.id || '').trim();
+    if (!id || seenIds.has(id)) continue;
+    seenIds.add(id);
     const ar = item.aspectRatio > 0 ? item.aspectRatio : 1;
-    currentRow.push({ ...item, aspectRatio: ar });
+    currentRow.push({ ...item, id, aspectRatio: ar });
     aspectSum += ar;
     const h = rowHeightForAspectSum(aspectSum, currentRow.length, containerWidth, gap);
     if (h > 0 && h <= targetRowHeight) {

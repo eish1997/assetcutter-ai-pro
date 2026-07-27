@@ -231,10 +231,16 @@ export const AssetCardPreviewRenderer: React.FC<AssetCardPreviewRendererProps> =
     onModelThumbnailCaptured,
   ]);
 
-  const displaySrc =
-    hasModelPreview
-      ? capturedModelThumb || previewSrc || activeVariant?.posterUrl || ''
-      : previewSrc || activeVariant?.posterUrl || activeVariant?.url || '';
+  // Never show the SVG "本地预览" placeholder as if it were a captured model thumb.
+  const rasterPreview =
+    String(capturedModelThumb || '').trim() ||
+    (hasPersistedModelThumbnail(previewSrc) ? String(previewSrc || '').trim() : '') ||
+    (hasPersistedModelThumbnail(activeVariant?.posterUrl)
+      ? String(activeVariant?.posterUrl || '').trim()
+      : '');
+  const displaySrc = hasModelPreview
+    ? rasterPreview
+    : previewSrc || activeVariant?.posterUrl || activeVariant?.url || '';
 
   if (activeKind === 'text' && !displaySrc.trim()) {
     const { title, body } = readableText(asset, textDisplay);
@@ -287,13 +293,12 @@ export const AssetCardPreviewRenderer: React.FC<AssetCardPreviewRendererProps> =
         />
       ) : hasModelPreview ? (
         <FilePlaceholder label={activeVariant?.modelFormats?.filter(Boolean).join(' + ') || '3D'} />
-      ) : null}
+      ) : (
+        <FilePlaceholder label="无预览" />
+      )}
       {activeKind === 'video' ? <Badge icon="video" label="Video" compact={compactBadges} /> : null}
       {hasModelPreview ? (
         <Badge icon="cube" label={activeVariant?.modelFormats?.filter(Boolean).join(' + ') || '3D'} compact={compactBadges} />
-      ) : null}
-      {!displaySrc.trim() && !hasModelPreview && activeKind !== 'image' ? (
-        <FilePlaceholder label={activeVariant?.label || activeKind} />
       ) : null}
       <div
         aria-hidden

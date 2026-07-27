@@ -181,8 +181,19 @@ import {
   type CompanionWorkspaceTrashProjectV1,
 } from './services/companionClient';
 import {
-  attemptRepairCompanionManifestKeyGaps,
-  findCompanionKeysMissingFromManifest,
+  fetchCompanionWorkflowSnapshot,
+  preferCompanionWorkflowBundle,
+  putCompanionWorkflowSnapshot,
+} from './services/workflowCompanionProjectSync';
+import {
+  beginWorkflowProjectBoot,
+  createWorkflowProjectBootBarrier,
+  finishWorkflowProjectBoot,
+  isWorkflowProjectAutosaveAllowed,
+} from './services/workflowProjectBootBarrier';
+import { resolveWorkspaceTruthPolicy } from './services/workspaceTruthPolicy';
+import {
+  resolveCompanionManifestGapsForProjectOpen,
   removeMissingCompanionKeyReferences,
   mergeUnlinkedManifestEntriesIntoWorkflowAssets,
 } from './services/workflowManifestCrossCheck';
@@ -601,6 +612,13 @@ const MainApp: React.FC = () => {
   const explicitlyRemovedStoryboardIdsRef = useRef<Set<string>>(new Set());
   /** 当前项目 bundle 已从 IDB/本地读完并写入 React，避免首屏 autosave 用空/缺表状态覆盖 */
   const workflowProjectLoadCompleteRef = useRef(false);
+  /**
+   * Companion open restore barrier: IDB autosave / companion workflow PUT from canvas churn
+   * must wait until workflow.json prefer + manifest gap resolve finish (or no companion).
+   */
+  const workflowCompanionBootBarrierRef = useRef(createWorkflowProjectBootBarrier());
+  const workflowCompanionBootReadyRef = useRef(true);
+  const [workflowCompanionBootReady, setWorkflowCompanionBootReady] = useState(true);
 
   const workflowBundleSaveOpts = useCallback(
     () => ({
@@ -1239,7 +1257,14 @@ const MainApp: React.FC = () => {
       if (!rows.length) return;
       setWorkflowAssets((prev) => {
         const next = mergeAgentCliAssetsIntoWorkflow(prev, rows);
-        if (next !== prev && workspaceLocalIdbHydrateReadyRef.current) {
+        if (
+          next !== prev &&
+          isWorkflowProjectAutosaveAllowed({
+            idbHydrateReady: workspaceLocalIdbHydrateReadyRef.current,
+            projectLoadComplete: workflowProjectLoadCompleteRef.current,
+            companionBootReady: workflowCompanionBootReadyRef.current,
+          })
+        ) {
           trySaveWorkflowBundle(
             pid,
             { assets: next, pending: workflowPendingRef.current },
@@ -1268,7 +1293,14 @@ const MainApp: React.FC = () => {
     void (async () => {
       const pid = activeWorkspaceProjectIdRef.current;
       const scope = userIdRef.current ?? null;
-      if (pid && workspaceLocalIdbHydrateReadyRef.current && workflowProjectLoadCompleteRef.current) {
+      if (
+        pid &&
+        isWorkflowProjectAutosaveAllowed({
+          idbHydrateReady: workspaceLocalIdbHydrateReadyRef.current,
+          projectLoadComplete: workflowProjectLoadCompleteRef.current,
+          companionBootReady: workflowCompanionBootReadyRef.current,
+        })
+      ) {
         trySaveWorkflowBundle(
           pid,
           {
@@ -1580,7 +1612,14 @@ const MainApp: React.FC = () => {
   }, [workflowAssets]);
 
   useEffect(() => {
-    if (!activeWorkspaceProjectId || !workspaceLocalIdbHydrateReady || !workflowProjectLoadCompleteRef.current) {
+    if (
+      !activeWorkspaceProjectId ||
+      !isWorkflowProjectAutosaveAllowed({
+        idbHydrateReady: workspaceLocalIdbHydrateReady,
+        projectLoadComplete: workflowProjectLoadCompleteRef.current,
+        companionBootReady: workflowCompanionBootReady,
+      })
+    ) {
       return;
     }
     if (skipEmptyWorkflowAutosaveOnceRef.current && workflowAssets.length === 0) {
@@ -1588,15 +1627,39 @@ const MainApp: React.FC = () => {
       return;
     }
     const scope = user?.id ?? null;
+    const bootGenAtSchedule = workflowCompanionBootBarrierRef.current.generation;
     const t = window.setTimeout(() => {
+      // Slow companion GET: do not let a timer scheduled before/during boot overwrite workflow.json.
+      if (
+        !isWorkflowProjectAutosaveAllowed({
+          idbHydrateReady: workspaceLocalIdbHydrateReadyRef.current,
+          projectLoadComplete: workflowProjectLoadCompleteRef.current,
+          companionBootReady: workflowCompanionBootReadyRef.current,
+        }) ||
+        workflowCompanionBootBarrierRef.current.generation !== bootGenAtSchedule ||
+        activeWorkspaceProjectIdRef.current !== activeWorkspaceProjectId
+      ) {
+        return;
+      }
       const result = trySaveWorkflowBundle(
         activeWorkspaceProjectId,
         { assets: workflowAssets, pending: workflowPending },
         scope,
         workflowBundleSaveOpts()
       );
+      const assetsForCompanion =
+        result.restoredStoryboardAssets.length > 0
+          ? applyStoryboardRestoresFromSave(workflowAssets, result)
+          : workflowAssets;
       if (result.restoredStoryboardAssets.length > 0) {
-        setWorkflowAssets((prev) => applyStoryboardRestoresFromSave(prev, result));
+        setWorkflowAssets(assetsForCompanion);
+      }
+      const companionBase = String(getCompanionLocalBaseUrl() || '').trim();
+      if (companionBase && result.saved) {
+        void putCompanionWorkflowSnapshot(companionBase, activeWorkspaceProjectId, {
+          assets: assetsForCompanion,
+          pending: workflowPending,
+        }).catch((e) => console.warn('[workspace] companion workflow snapshot save failed', e));
       }
     }, 650);
     return () => window.clearTimeout(t);
@@ -1606,6 +1669,7 @@ const MainApp: React.FC = () => {
     workflowPending,
     user?.id,
     workspaceLocalIdbHydrateReady,
+    workflowCompanionBootReady,
     workflowBundleSaveOpts,
     applyStoryboardRestoresFromSave,
   ]);
@@ -1677,7 +1741,14 @@ const MainApp: React.FC = () => {
     setWorkspaceCloudHydratingProjectId(null);
     const scope = userIdRef.current ?? null;
     const pid = activeWorkspaceProjectIdRef.current;
-    const shouldSave = Boolean(pid && workspaceLocalIdbHydrateReadyRef.current);
+    const shouldSave = Boolean(
+      pid &&
+        isWorkflowProjectAutosaveAllowed({
+          idbHydrateReady: workspaceLocalIdbHydrateReadyRef.current,
+          projectLoadComplete: workflowProjectLoadCompleteRef.current,
+          companionBootReady: workflowCompanionBootReadyRef.current,
+        })
+    );
     // Snapshot refs before clearing UI — save must not run on the click path (clone+stringify can stall seconds).
     const snapshot = shouldSave
       ? {
@@ -1713,6 +1784,20 @@ const MainApp: React.FC = () => {
   const loadWorkspaceProjectInternal = useCallback(
     (id: string) => {
       workflowProjectLoadCompleteRef.current = false;
+      const bootGen = beginWorkflowProjectBoot(workflowCompanionBootBarrierRef.current);
+      workflowCompanionBootReadyRef.current = false;
+      setWorkflowCompanionBootReady(false);
+      const markCompanionBootReady = () => {
+        if (
+          finishWorkflowProjectBoot(workflowCompanionBootBarrierRef.current, {
+            generation: bootGen,
+            stillActive: activeWorkspaceProjectIdRef.current === id,
+          })
+        ) {
+          workflowCompanionBootReadyRef.current = true;
+          setWorkflowCompanionBootReady(true);
+        }
+      };
       const scope = userIdRef.current ?? null;
       const doLoad = () => {
         const local = loadWorkflowBundle(id, scope);
@@ -1734,17 +1819,25 @@ const MainApp: React.FC = () => {
 
         const uidMerge = userIdRef.current;
         const unameMerge = usernameRef.current;
-        if (
-          uidMerge &&
-          unameMerge &&
-          scope === uidMerge &&
-          isWorkspaceCloudEnabled() &&
-          !isWorkspaceCompanionDirectorySourceOfTruth() &&
-          isWorkspaceCloudBundleMergeEnabled() &&
-          workspaceCloudPushAllowedUserIdRef.current === uidMerge &&
-          !workspaceCloudQuotaSuspendedRef.current &&
-          canSyncWorkspaceProjectToCloud(id)
-        ) {
+        const companionBase = String(getCompanionLocalBaseUrl() || '').trim();
+        const truthPolicy = resolveWorkspaceTruthPolicy({
+          companionOnline: Boolean(companionBase),
+          companionDirectorySourceOfTruth: isWorkspaceCompanionDirectorySourceOfTruth(),
+          cloudEnabled: isWorkspaceCloudEnabled(),
+          cloudBundleMergeEnabled: isWorkspaceCloudBundleMergeEnabled(),
+          canSyncProjectToCloud: canSyncWorkspaceProjectToCloud(id),
+          cloudPushAllowed: Boolean(uidMerge && workspaceCloudPushAllowedUserIdRef.current === uidMerge),
+          cloudQuotaSuspended: workspaceCloudQuotaSuspendedRef.current,
+        });
+        const sessionReadyForCloud = Boolean(uidMerge && unameMerge && scope === uidMerge);
+        const cloudMergeWillRun = truthPolicy.runCloudBundleMerge && sessionReadyForCloud;
+        // Unlock autosave only after companion restore AND cloud merge (when either runs) settle.
+        let companionPhaseDone = !companionBase;
+        let cloudMergePhaseDone = !cloudMergeWillRun;
+        const tryUnlockBoot = () => {
+          if (companionPhaseDone && cloudMergePhaseDone) markCompanionBootReady();
+        };
+        if (cloudMergeWillRun && uidMerge && unameMerge) {
           setWorkspaceCloudHydratingProjectId(id);
           void reconcileWorkflowBundleWithCloud({ projectId: id, userId: uidMerge, username: unameMerge })
             .then((r) => {
@@ -1767,115 +1860,177 @@ const MainApp: React.FC = () => {
               setWorkflowAssets(applyStoryboardRestoresFromSave(bundlePayload.assets, saveResult));
               setWorkflowPending(r.bundle.pending);
               workspaceCloudPostPullDirtySuppressRef.current += 1;
+              // Align companion after cloud merge (truthPolicy forbids parallel prefer).
+              const companionBaseAfterMerge = String(getCompanionLocalBaseUrl() || '').trim();
+              if (companionBaseAfterMerge) {
+                void putCompanionWorkflowSnapshot(companionBaseAfterMerge, id, bundlePayload);
+              }
             })
             .catch((e) => console.warn('[workspace cloud] bundle reconcile', e))
             .finally(() => {
               setWorkspaceCloudHydratingProjectId((cur) => (cur === id ? null : cur));
+              cloudMergePhaseDone = true;
+              tryUnlockBoot();
             });
         }
 
-        const companionBase = String(getCompanionLocalBaseUrl() || '').trim();
-        if (!companionBase) return;
+        if (!companionBase) {
+          companionPhaseDone = true;
+          tryUnlockBoot();
+          return;
+        }
         void (async () => {
-          const m = await getCompanionManifest(companionBase, id);
-          if (m.ok === false) {
-            addGlobalLog('工作区', 'warn', '本地伴侣项目 manifest 读取失败（资产从伴侣恢复可能受影响）', `${id}: ${m.error}`);
-            return;
-          }
-          let manifestData = m.data;
-          const mid = String(manifestData.projectId || '').trim();
-          if (mid && mid !== id) {
-            addGlobalLog(
-              '工作区',
-              'warn',
-              '本地伴侣 manifest.projectId 与当前项目 id 不一致',
-              `manifest=${mid} selected=${id}`
-            );
-          }
-          const recon = await reconcileCompanionManifestFromDisk(companionBase, id);
-          if (recon.ok && recon.data.added > 0) {
-            const kp = recon.data.keys.slice(0, 5).join(', ') + (recon.data.keys.length > 5 ? '…' : '');
-            addGlobalLog('工作区', 'info', '本地伴侣已从磁盘补全 manifest', `${recon.data.added} 项 ${kp}`);
-            const m2 = await getCompanionManifest(companionBase, id);
-            if (m2.ok) manifestData = m2.data;
-          } else if (recon.ok === false) {
-            addGlobalLog('工作区', 'warn', '本地伴侣 manifest 磁盘补全请求失败', String(recon.error));
-          }
-          const assetsSnap = workflowAssetsRef.current;
-          const gaps = findCompanionKeysMissingFromManifest(assetsSnap, manifestData);
-          if (gaps.length > 0) {
-            const nOrig = gaps.filter((g) => g.kind === 'original').length;
-            const nRes = gaps.filter((g) => g.kind === 'result').length;
-            const nMdl = gaps.filter((g) => g.kind === 'model').length;
-            const head = gaps
-              .slice(0, 5)
-              .map((g) =>
-                g.kind === 'original'
-                  ? `${g.assetId}:orig`
-                  : g.kind === 'model'
-                    ? `${g.assetId}:mdl:${g.slotIndex}`
-                    : `${g.assetId}:res:${g.stepId}`
-              )
-              .join('; ');
-            addGlobalLog(
-              '工作区',
-              'warn',
-              '部分伴侣对象键未出现在 manifest（可能未完成写入或 manifest 未更新）',
-              `${gaps.length} 项（原图键 ${nOrig} / 步骤结果键 ${nRes} / 3D 模型键 ${nMdl}） ${head}${gaps.length > 5 ? '…' : ''}`
-            );
-            void attemptRepairCompanionManifestKeyGaps(companionBase, id, assetsSnap, gaps, (level, title, detail) =>
-              addGlobalLog('工作区', level, title, detail)
-            );
-          }
-          if (gaps.length > 0) {
-            setWorkflowAssets((prev) => {
-              const cleaned = removeMissingCompanionKeyReferences(prev, gaps);
-              if (cleaned.removed === 0) return prev;
-              const scopeInner = userIdRef.current ?? null;
-              const saveResult = trySaveWorkflowBundle(
-                id,
-                { assets: cleaned.assets, pending: workflowPendingRef.current },
-                scopeInner,
-                workflowBundleSaveOpts()
-              );
+          try {
+            const snap = await fetchCompanionWorkflowSnapshot(companionBase, id);
+            if (activeWorkspaceProjectIdRef.current !== id) return;
+            if (snap.ok) {
+              if (truthPolicy.preferCompanionWorkflowOnOpen) {
+                const preferred = preferCompanionWorkflowBundle({ local, companion: snap.data });
+                if (
+                  preferred &&
+                  activeWorkspaceProjectIdRef.current === id &&
+                  (JSON.stringify(preferred.assets) !== JSON.stringify(local.assets) ||
+                    JSON.stringify(preferred.pending) !== JSON.stringify(local.pending))
+                ) {
+                  const saveResult = trySaveWorkflowBundle(
+                    id,
+                    preferred,
+                    scope,
+                    workflowBundleSaveOpts()
+                  );
+                  if (activeWorkspaceProjectIdRef.current !== id) return;
+                  setWorkflowAssets(applyStoryboardRestoresFromSave(preferred.assets, saveResult));
+                  setWorkflowPending(preferred.pending);
+                  addGlobalLog('工作区', 'info', '已从本地伴侣 workflow.json 恢复画布', id);
+                }
+              }
+            } else if (!snap.notFound) {
+              addGlobalLog('工作区', 'warn', '读取本地伴侣 workflow.json 失败', `${id}: ${snap.error}`);
+            } else if (local.assets.length > 0 || local.pending.length > 0) {
+              // Seed companion snapshot from IDB cache on first open.
+              void putCompanionWorkflowSnapshot(companionBase, id, {
+                assets: local.assets,
+                pending: local.pending,
+              });
+            }
+
+            if (activeWorkspaceProjectIdRef.current !== id) return;
+            const m = await getCompanionManifest(companionBase, id);
+            if (m.ok === false) {
+              addGlobalLog('工作区', 'warn', '本地伴侣项目 manifest 读取失败（资产从伴侣恢复可能受影响）', `${id}: ${m.error}`);
+              return;
+            }
+            let manifestData = m.data;
+            const mid = String(manifestData.projectId || '').trim();
+            if (mid && mid !== id) {
               addGlobalLog(
                 '工作区',
                 'warn',
-                '已清理项目中丢失的本地资产引用',
-                `${cleaned.removed} 项；资产卡片和其它步骤结果已保留`
+                '本地伴侣 manifest.projectId 与当前项目 id 不一致',
+                `manifest=${mid} selected=${id}`
               );
-              return applyStoryboardRestoresFromSave(cleaned.assets, saveResult);
+            }
+            const recon = await reconcileCompanionManifestFromDisk(companionBase, id);
+            if (recon.ok && recon.data.added > 0) {
+              const kp = recon.data.keys.slice(0, 5).join(', ') + (recon.data.keys.length > 5 ? '…' : '');
+              addGlobalLog('工作区', 'info', '本地伴侣已从磁盘补全 manifest', `${recon.data.added} 项 ${kp}`);
+              const m2 = await getCompanionManifest(companionBase, id);
+              if (m2.ok) manifestData = m2.data;
+            } else if (recon.ok === false) {
+              addGlobalLog('工作区', 'warn', '本地伴侣 manifest 磁盘补全请求失败', String(recon.error));
+            }
+            if (activeWorkspaceProjectIdRef.current !== id) return;
+            const assetsSnap = workflowAssetsRef.current;
+            const resolvedGaps = await resolveCompanionManifestGapsForProjectOpen({
+              baseUrl: companionBase,
+              projectId: id,
+              assets: assetsSnap,
+              manifest: manifestData,
+              reconcile: () => reconcileCompanionManifestFromDisk(companionBase, id),
+              refetchManifest: () => getCompanionManifest(companionBase, id),
+              onLog: (level, title, detail) => addGlobalLog('工作区', level, title, detail),
             });
+            if (activeWorkspaceProjectIdRef.current !== id) return;
+            manifestData = resolvedGaps.manifest;
+            const gaps = resolvedGaps.initialGaps;
+            const gapsToClean = resolvedGaps.gapsToClean;
+            if (gaps.length > 0) {
+              const nOrig = gaps.filter((g) => g.kind === 'original').length;
+              const nRes = gaps.filter((g) => g.kind === 'result').length;
+              const nMdl = gaps.filter((g) => g.kind === 'model').length;
+              const head = gaps
+                .slice(0, 5)
+                .map((g) =>
+                  g.kind === 'original'
+                    ? `${g.assetId}:orig`
+                    : g.kind === 'model'
+                      ? `${g.assetId}:mdl:${g.slotIndex}`
+                      : `${g.assetId}:res:${g.stepId}`
+                )
+                .join('; ');
+              addGlobalLog(
+                '工作区',
+                'warn',
+                '部分伴侣对象键未出现在 manifest（可能未完成写入或 manifest 未更新）',
+                `${gaps.length} 项（原图键 ${nOrig} / 步骤结果键 ${nRes} / 3D 模型键 ${nMdl}） ${head}${gaps.length > 5 ? '…' : ''}`
+              );
+            }
+            if (gapsToClean.length > 0 && activeWorkspaceProjectIdRef.current === id) {
+              setWorkflowAssets((prev) => {
+                if (activeWorkspaceProjectIdRef.current !== id) return prev;
+                const cleaned = removeMissingCompanionKeyReferences(prev, gapsToClean);
+                if (cleaned.removed === 0) return prev;
+                const scopeInner = userIdRef.current ?? null;
+                const saveResult = trySaveWorkflowBundle(
+                  id,
+                  { assets: cleaned.assets, pending: workflowPendingRef.current },
+                  scopeInner,
+                  workflowBundleSaveOpts()
+                );
+                addGlobalLog(
+                  '工作区',
+                  'warn',
+                  '已清理项目中丢失的本地资产引用',
+                  `${cleaned.removed} 项；资产卡片和其它步骤结果已保留`
+                );
+                return applyStoryboardRestoresFromSave(cleaned.assets, saveResult);
+              });
+            }
+            const newAssetId = () =>
+              typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+                ? crypto.randomUUID()
+                : `import-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+            if (activeWorkspaceProjectIdRef.current !== id) return;
+            setWorkflowAssets((prev) => {
+              if (activeWorkspaceProjectIdRef.current !== id) return prev;
+              const { nextAssets, importedKeys } = mergeUnlinkedManifestEntriesIntoWorkflowAssets(
+                prev,
+                manifestData,
+                newAssetId,
+                { importLegacyOrphans: WORKSPACE_IMPORT_LEGACY_COMPANION_ORPHANS }
+              );
+              if (importedKeys.length === 0) return prev;
+              const scopeInner = userIdRef.current ?? null;
+              const saveResult = trySaveWorkflowBundle(
+                id,
+                { assets: nextAssets, pending: workflowPendingRef.current },
+                scopeInner,
+                workflowBundleSaveOpts()
+              );
+              const mergedAssets = applyStoryboardRestoresFromSave(nextAssets, saveResult);
+              const head = importedKeys.slice(0, 6).join(', ') + (importedKeys.length > 6 ? '…' : '');
+              addGlobalLog(
+                '工作区',
+                'info',
+                '已根据本地伴侣 manifest 自动挂载磁盘资产到画布',
+                `${importedKeys.length} 项 ${head}`
+              );
+              return mergedAssets;
+            });
+          } finally {
+            companionPhaseDone = true;
+            tryUnlockBoot();
           }
-          const newAssetId = () =>
-            typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
-              ? crypto.randomUUID()
-              : `import-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-          setWorkflowAssets((prev) => {
-            const { nextAssets, importedKeys } = mergeUnlinkedManifestEntriesIntoWorkflowAssets(
-              prev,
-              manifestData,
-              newAssetId,
-              { importLegacyOrphans: WORKSPACE_IMPORT_LEGACY_COMPANION_ORPHANS }
-            );
-            if (importedKeys.length === 0) return prev;
-            const scopeInner = userIdRef.current ?? null;
-            const saveResult = trySaveWorkflowBundle(
-              id,
-              { assets: nextAssets, pending: workflowPendingRef.current },
-              scopeInner,
-              workflowBundleSaveOpts()
-            );
-            const mergedAssets = applyStoryboardRestoresFromSave(nextAssets, saveResult);
-            const head = importedKeys.slice(0, 6).join(', ') + (importedKeys.length > 6 ? '…' : '');
-            addGlobalLog(
-              '工作区',
-              'info',
-              '已根据本地伴侣 manifest 自动挂载磁盘资产到画布',
-              `${importedKeys.length} 项 ${head}`
-            );
-            return mergedAssets;
-          });
         })();
       };
       if (typeof indexedDB !== 'undefined' && !workspaceLocalIdbHydrateReadyRef.current) {
@@ -1972,10 +2127,8 @@ const MainApp: React.FC = () => {
         saveWorkspaceProjects(refreshed, scope);
       }
       setLastOpenedWorkspaceProjectId(restoredProjectId, scope);
-      setActiveWorkspaceProjectId(restoredProjectId);
-      const b = loadWorkflowBundle(restoredProjectId, scope);
-      setWorkflowAssets(b.assets);
-      setWorkflowPending(b.pending);
+      // Full open path: boot barrier + companion prefer + manifest gaps (do not IDB-only hydrate).
+      loadWorkspaceProjectInternal(restoredProjectId);
       addGlobalLog(
         '工作区',
         'info',
@@ -1992,7 +2145,14 @@ const MainApp: React.FC = () => {
           : prev
       );
     },
-    [addGlobalLog, pullWorkspaceProjectsFromCompanion, user?.id, workspaceTrashDialog, markWorkspaceLocalIdbHydrateReady]
+    [
+      addGlobalLog,
+      loadWorkspaceProjectInternal,
+      pullWorkspaceProjectsFromCompanion,
+      user?.id,
+      workspaceTrashDialog,
+      markWorkspaceLocalIdbHydrateReady,
+    ]
   );
 
   const openWorkspaceProject = useCallback(
@@ -2012,7 +2172,13 @@ const MainApp: React.FC = () => {
           assets: workflowAssetsRef.current,
           pending: workflowPendingRef.current,
         };
-        if (workspaceLocalIdbHydrateReadyRef.current) {
+        if (
+          isWorkflowProjectAutosaveAllowed({
+            idbHydrateReady: workspaceLocalIdbHydrateReadyRef.current,
+            projectLoadComplete: workflowProjectLoadCompleteRef.current,
+            companionBootReady: workflowCompanionBootReadyRef.current,
+          })
+        ) {
           trySaveWorkflowBundle(curId, prevBundle, scope);
         }
         const uid = userIdRef.current;
@@ -2329,7 +2495,13 @@ const MainApp: React.FC = () => {
             const next = [built.asset, ...prev];
             workflowAssetsRef.current = next;
             workflowSessionHadNonEmptyAssetsRef.current = true;
-            if (workspaceLocalIdbHydrateReadyRef.current && workflowProjectLoadCompleteRef.current) {
+            if (
+              isWorkflowProjectAutosaveAllowed({
+                idbHydrateReady: workspaceLocalIdbHydrateReadyRef.current,
+                projectLoadComplete: workflowProjectLoadCompleteRef.current,
+                companionBootReady: workflowCompanionBootReadyRef.current,
+              })
+            ) {
               trySaveWorkflowBundle(
                 targetProjectId,
                 { assets: next, pending: workflowPendingRef.current },
@@ -2388,7 +2560,13 @@ const MainApp: React.FC = () => {
             const next = [built.asset, ...prev];
             workflowAssetsRef.current = next;
             workflowSessionHadNonEmptyAssetsRef.current = true;
-            if (workspaceLocalIdbHydrateReadyRef.current && workflowProjectLoadCompleteRef.current) {
+            if (
+              isWorkflowProjectAutosaveAllowed({
+                idbHydrateReady: workspaceLocalIdbHydrateReadyRef.current,
+                projectLoadComplete: workflowProjectLoadCompleteRef.current,
+                companionBootReady: workflowCompanionBootReadyRef.current,
+              })
+            ) {
               trySaveWorkflowBundle(
                 targetProjectId,
                 { assets: next, pending: workflowPendingRef.current },

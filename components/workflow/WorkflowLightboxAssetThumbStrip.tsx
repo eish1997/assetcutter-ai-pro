@@ -18,6 +18,7 @@ export type WorkflowLightboxAssetThumbStripProps = {
   onCopyImage?: (asset: WorkflowAsset) => void | Promise<void>;
   onCopyId?: (asset: WorkflowAsset) => void | Promise<void>;
   canOpenFolder?: (asset: WorkflowAsset) => boolean;
+  openFolderDisabledReason?: (asset: WorkflowAsset) => string;
   onOpenFolder?: (asset: WorkflowAsset) => void | Promise<void>;
   onAddToComposeInput?: (asset: WorkflowAsset) => void | Promise<void>;
   canAddToComposeInput?: (asset: WorkflowAsset) => boolean;
@@ -39,6 +40,7 @@ export default function WorkflowLightboxAssetThumbStrip({
   onCopyImage,
   onCopyId,
   canOpenFolder,
+  openFolderDisabledReason,
   onOpenFolder,
   onAddToComposeInput,
   canAddToComposeInput,
@@ -199,6 +201,7 @@ export default function WorkflowLightboxAssetThumbStrip({
             if (onCopyId) void onCopyId(contextMenu.asset);
           }}
           canOpenFolder={canOpenFolder?.(contextMenu.asset) ?? Boolean(onOpenFolder)}
+          openFolderDisabledReason={openFolderDisabledReason?.(contextMenu.asset) || ''}
           onOpenFolder={
             onOpenFolder
               ? () => {

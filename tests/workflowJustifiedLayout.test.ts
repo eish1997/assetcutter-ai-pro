@@ -57,6 +57,19 @@ describe('computeWorkflowJustifiedLayout', () => {
     const rowTops = [...new Set(result.boxes.map((b) => b.top))];
     expect(rowTops.length).toBeGreaterThan(1);
   });
+
+  it('skips duplicate ids so layout slots match unique cards', () => {
+    const result = computeWorkflowJustifiedLayout(
+      [
+        { id: 'a', aspectRatio: 1 },
+        { id: 'a', aspectRatio: 1.5 },
+        { id: 'b', aspectRatio: 1 },
+      ],
+      900,
+      { gap: 8, targetRowHeight: 200, maxRowHeight: 400 }
+    );
+    expect(result.boxes.map((b) => b.id)).toEqual(['a', 'b']);
+  });
 });
 
 describe('workflowJustifiedTargetRowHeight', () => {

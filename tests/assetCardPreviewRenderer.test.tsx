@@ -159,7 +159,9 @@ describe('AssetCardPreviewRenderer', () => {
     );
 
     expect(screen.queryByTestId('asset-card-model3d')).toBeNull();
-    expect(screen.getByText('fbx')).toBeTruthy();
+    expect(screen.getAllByText('fbx').length).toBeGreaterThan(0);
+    // SVG "本地预览" placeholder must not be painted as the card image.
+    expect(screen.queryByRole('img')).toBeNull();
   });
 
   it('notifies when a model thumbnail is captured for persistence', async () => {

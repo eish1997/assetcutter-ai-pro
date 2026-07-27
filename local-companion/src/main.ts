@@ -54,7 +54,9 @@ async function main(): Promise<void> {
     '[local-companion] 计算 API: POST /v1/compute/jobs  body: { type, jobId?, projectId?, inputs?, params? }  试 { "type": "stub.ping" }；sam_segment 见 COMPANION_SAM_SEGMENT_URL；调试 GET /v1/debug/sam-segment-health；宿主包 { "type":"host_bundle.exec","inputs":{"dirName":"<host-bundles 目录名>"} }',
   );
   console.log('[local-companion] 扩展包: GET /v1/host-plugins/bundles , POST /v1/host-plugins/install-from-url（ZIP 将解压至 host-bundles/<ver>/extracted/）');
-  console.log('[local-companion] 小工具: GET /v1/shell-tools , POST /v1/shell-tools/install-from-url , POST /v1/shell-tools/:id/run');
+  console.log(
+    '[local-companion] 小工具: GET /v1/shell-tools , POST /v1/shell-tools/install-from-url , POST /v1/shell-tools/:id/run , POST /v1/shell-tools/:id/open-in-host',
+  );
 
   startRelayIfConfigured();
   startSamLocalIfConfigured();

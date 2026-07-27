@@ -25,6 +25,11 @@ export type WorkflowAssetLocalHandle = {
   availability: WorkflowLocalHandleAvailability;
   /** Human-readable disable / fallback reason (zh). */
   reasonZh: string;
+  /**
+   * Async probe result: true=磁盘确认有文件；false=键存在但磁盘无文件；
+   * undefined=未探测（同步 resolve）。
+   */
+  onDiskConfirmed?: boolean;
 };
 
 export function companionAssetDirectoryIdFromKey(key: string): string {
@@ -147,7 +152,9 @@ export async function resolveWorkflowAssetLocalHandleOnDisk(
     return Boolean(meta.ok && meta.data.onDisk);
   };
 
-  if (await probe(sync.companionKey)) return sync;
+  if (await probe(sync.companionKey)) {
+    return { ...sync, onDiskConfirmed: true };
+  }
 
   const candidates = collectWorkflowAssetCompanionKeys(input.asset)
     .map((x) => String(x.key || '').trim())
@@ -160,14 +167,16 @@ export async function resolveWorkflowAssetLocalHandleOnDisk(
         companionKey: key,
         isExactVariant: false,
         availability: 'asset_dir_fallback',
+        onDiskConfirmed: true,
         reasonZh: '当前步骤文件缺失，将打开该资产其它本机文件所在目录',
       };
     }
   }
 
-  // Keep keyed handle so reveal can still attempt project-fallback / legacy keys.
+  // 键在元数据里但磁盘无文件：交给上层 ensure 重写后再 reveal
   return {
     ...sync,
-    reasonZh: sync.reasonZh || '本地键尚未在 manifest 确认，仍尝试打开',
+    onDiskConfirmed: false,
+    reasonZh: sync.reasonZh || '本地文件缺失，将尝试从预览重新写入',
   };
 }

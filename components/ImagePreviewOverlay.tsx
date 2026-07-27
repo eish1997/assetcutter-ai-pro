@@ -214,6 +214,8 @@ export type ImagePreviewOverlayProps = {
   model3dVariantId?: string;
   model3dModelKey?: string;
   model3dPbrEditDoc?: WorkflowModelPbrEditDoc | null;
+  /** 解析 PBR 正式贴图资产预览 URL */
+  resolvePbrTextureAssetSrc?: (assetId: string) => string;
   /** 3D 模型显示模式，由父级工具条控制 */
   model3dDisplayMode?: Model3DDisplayMode;
   /** 3D 模型：递增后重置相机视角 */
@@ -370,6 +372,7 @@ export function ImagePreviewOverlay({
   model3dVariantId,
   model3dModelKey,
   model3dPbrEditDoc,
+  resolvePbrTextureAssetSrc,
   model3dDisplayMode = 'material',
   model3dResetViewNonce = 0,
   model3dShowGrid = true,
@@ -1532,11 +1535,13 @@ export function ImagePreviewOverlay({
                   model3dVariantId={model3dVariantId}
                   model3dModelKey={model3dModelKey || previewModelSrc || modelFileName}
                   model3dPbrEditDoc={model3dPbrEditDoc}
+                  resolvePbrTextureAssetSrc={resolvePbrTextureAssetSrc}
                   modelFileName={modelFileName}
                   model3dDisplayMode={model3dDisplayMode}
                   model3dResetViewNonce={model3dResetViewNonce}
                   model3dShowGrid={model3dShowGrid}
                   model3dBackfaceCulling={model3dBackfaceCulling}
+                  uiRightInset={rightRailOverlayActive || useSplitLayout ? contentRightInset : '0px'}
                   className="h-full w-full min-h-0"
                 />
               </Suspense>

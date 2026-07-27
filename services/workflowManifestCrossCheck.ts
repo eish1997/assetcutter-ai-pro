@@ -5,7 +5,7 @@ import {
 } from './companionClient/storage';
 import { attachInitialVgpToNewAsset } from './vgp/vgpStore';
 import { isWorkflowStoryboardTableAsset } from './storyboardTableAsset';
-import { isWorkflowTextAsset } from './workflowTextAsset';
+import { healWorkflowAssetDisplayKeyIfEmpty, isWorkflowTextAsset } from './workflowTextAsset';
 import {
   imageSrcToDataUrlForCompanion,
   legacyWorkflowCompanionAssetKeyCandidates,
@@ -219,7 +219,7 @@ export function removeMissingCompanionKeyReferences(
       }
     }
 
-    return next;
+    return healWorkflowAssetDisplayKeyIfEmpty(next);
   });
 
   return removed > 0 ? { assets: nextAssets, removed } : { assets, removed: 0 };

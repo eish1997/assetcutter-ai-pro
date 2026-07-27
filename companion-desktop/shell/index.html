@@ -4001,12 +4001,22 @@
       list-style: none;
     }
     .bridge-versions label {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
+      display: block;
       font-size: 11px;
       color: rgba(228, 228, 231, 0.88);
       cursor: pointer;
+      max-width: 100%;
+    }
+    .bridge-versions label > input {
+      margin-right: 6px;
+      vertical-align: middle;
+    }
+    .bridge-version-path {
+      display: block;
+      font-size: 10px;
+      color: var(--muted);
+      word-break: break-all;
+      padding: 2px 0 0 18px;
     }
     .bridge-row {
       display: flex;
@@ -5851,7 +5861,9 @@
         const capSub = cap && typeof cap.subline === 'string' && cap.subline.trim() ? cap.subline.trim() : '';
         const capTone = cap && typeof cap.tone === 'string' ? cap.tone : '';
         if (sum && sum.updater) applyUpdaterUi(sum.updater);
-        portEl.textContent = sum && sum.port ? 'Companion connected' : '';
+        // port 是配置端口，不能当「已连接」；仅 connected 时显示本机端口提示
+        portEl.textContent =
+          sum && sum.connected && sum.port ? `本机 :${sum.port}` : sum && sum.port ? `配置端口 ${sum.port}` : '';
         if (!sum || sum.connected === false) {
           dot.className = 'status-dot bad';
           label.textContent = '本地服务未连接';
