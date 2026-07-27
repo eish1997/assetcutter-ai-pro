@@ -78,15 +78,20 @@ export function authApiDirectUrl(path: string): string {
 
 /**
  * 工作区 R2 中间层（与 auth 同源时会话 Cookie 才能带上）。
- * 未设 `VITE_R2_API_BASE_URL` 时回退到 `VITE_AUTH_API_BASE_URL`；皆空则用同源 `/api/r2`（本地 Vite 代理到 auth）。
+ * 与 `apiUrl` 一致：本地 DEV / Vercel 同源反代时返回相对 `/api/r2/...`，
+ * 禁止拼出 `http://127.0.0.1:9100` 或 Render 绝对地址（否则 localhost Cookie 带不上 →「未登录」）。
+ * 仅当显式 `VITE_R2_API_BASE_URL` 且非 same-origin、且当前未走同源 auth 反代时，才用绝对 R2 根。
  */
 export function r2ApiUrl(subpath: string): string {
-  const r2 = String(import.meta.env?.VITE_R2_API_BASE_URL || '').trim();
-  const auth = String(import.meta.env?.VITE_AUTH_API_BASE_URL || '').trim();
-  const origin = trimSlash(r2 || auth);
   const s = subpath.startsWith('/') ? subpath : `/${subpath}`;
   const full = `/api/r2${s}`;
-  if (!origin) return full;
-  return `${origin}${full}`;
+  const r2Raw = String(import.meta.env?.VITE_R2_API_BASE_URL || '').trim();
+  const authBase = resolvedAuthApiBaseUrl();
+  // 同源 auth 反代（DEV Vite / Vercel）：一律相对路径，Cookie 跟页面同源
+  if (!authBase) return full;
+  if (r2Raw && r2Raw.toLowerCase() !== 'same-origin') {
+    return `${trimSlash(r2Raw)}${full}`;
+  }
+  return `${authBase}${full}`;
 }
 

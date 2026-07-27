@@ -1,30 +1,58 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
+import { SlidersHorizontal } from 'lucide-react';
 import { CustomDropdown, DROPDOWN_TRIGGER_COMPACT } from '../../ui/CustomDropdown';
 import { isImageProcessPreset } from '../../../services/capabilityEngineKind';
 import { loadCapabilityPresets } from '../../../services/capabilityPresetStore';
 import {
-  MAX_PBR_SLOT_GENERATE_COUNT,
   type WorkflowModelPbrSlot,
   type WorkflowModelPbrSlotCandidate,
 } from '../../../services/workflowModelPbrEdits';
+import type { WorkflowModelPbrSlotGenerateOverrides } from '../../../services/workflowModelPbrSlotGenerateBridge';
 import {
   dispatchWorkflowModelPbrTextureAction,
   downloadPbrTextureDataUrl,
 } from '../../../services/workflowModelPbrTextureActions';
 import { copyWorkflowAssetOriginalImageToClipboard } from '../../../services/workflowAssetClipboard';
-import type { CustomAppModule } from '../../../types';
+import { SUPPORTED_ASPECT_RATIOS, SUPPORTED_IMAGE_SIZES, type CustomAppModule } from '../../../types';
 import ModelPbrTextureContextMenu from './ModelPbrTextureContextMenu';
 
-const COUNT_OPTIONS = Array.from({ length: MAX_PBR_SLOT_GENERATE_COUNT }, (_, i) => ({
-  value: String(i + 1),
-  label: String(i + 1),
-}));
+/** 与快捷输入框参数面板一致：1x～x4 */
+const COUNT_OPTIONS = [1, 2, 3, 4] as const;
+
+const chipCls = (on: boolean) =>
+  `inline-flex shrink-0 items-center justify-center whitespace-nowrap rounded-md px-2 py-0.5 text-[9px] font-bold tabular-nums ring-1 transition-colors ${
+    on
+      ? 'bg-white/[0.16] text-white ring-white/[0.22]'
+      : 'bg-white/[0.04] text-gray-400 ring-white/[0.07] hover:bg-white/[0.08]'
+  }`;
+
+const chipClsStretch = (on: boolean) =>
+  `flex min-h-[1.5rem] min-w-0 flex-1 items-center justify-center whitespace-nowrap rounded-md px-1 py-0.5 text-[9px] font-bold tabular-nums ring-1 transition-colors ${
+    on
+      ? 'bg-white/[0.16] text-white ring-white/[0.22]'
+      : 'bg-white/[0.04] text-gray-400 ring-white/[0.07] hover:bg-white/[0.08]'
+  }`;
+
+const countChipClsStretch = (on: boolean) =>
+  `flex min-h-[1.5rem] min-w-0 flex-1 items-center justify-center whitespace-nowrap rounded-md px-1 py-0.5 text-[9px] font-black ring-1 transition-colors ${
+    on
+      ? 'bg-white text-[#0a0a0c] ring-white'
+      : 'bg-white/[0.05] text-gray-300 ring-white/[0.07] hover:bg-white/[0.1]'
+  }`;
 
 export type ModelPbrSlotGenerateJobView = {
   generating: boolean;
   pendingCount: number;
   totalCount: number;
   error: string | null;
+};
+
+export type ModelPbrSlotGenerateInput = {
+  presetId: string;
+  count: number;
+  inputText?: string;
+  overrides: WorkflowModelPbrSlotGenerateOverrides;
 };
 
 function listTextureCapablePresets(): CustomAppModule[] {
@@ -66,7 +94,7 @@ export type ModelPbrSlotGeneratePanelProps = {
   onRemoveCandidate: (candidateId: string) => void;
   /** 由 Viewer 持有，关面板再开仍可恢复进度 */
   generateJob?: ModelPbrSlotGenerateJobView | null;
-  onGenerate: (input: { presetId: string; count: number; inputText?: string }) => void;
+  onGenerate: (input: ModelPbrSlotGenerateInput) => void;
 };
 
 export default function ModelPbrSlotGeneratePanel({
@@ -94,6 +122,11 @@ export default function ModelPbrSlotGeneratePanel({
   );
   const [presetId, setPresetId] = useState(() => presets[0]?.id || '');
   const [count, setCount] = useState(1);
+  const [aspectRatio, setAspectRatio] = useState('adaptive');
+  const [imageSize, setImageSize] = useState('');
+  const [understand, setUnderstand] = useState(false);
+  const [paramsOpen, setParamsOpen] = useState(false);
+  const [panelPos, setPanelPos] = useState<{ left: number; top: number } | null>(null);
   const [extraPrompt, setExtraPrompt] = useState('');
   const [localError, setLocalError] = useState<string | null>(null);
   const [candidateMenu, setCandidateMenu] = useState<{
@@ -103,15 +136,74 @@ export default function ModelPbrSlotGeneratePanel({
   } | null>(null);
   const sourceInputRef = useRef<HTMLInputElement>(null);
   const uploadInputRef = useRef<HTMLInputElement>(null);
+  const paramsTriggerRef = useRef<HTMLButtonElement>(null);
+  const paramsPanelRef = useRef<HTMLDivElement>(null);
 
   const generating = Boolean(generateJob?.generating);
   const pendingCount = Math.max(0, generateJob?.pendingCount ?? 0);
   const totalCount = Math.max(0, generateJob?.totalCount ?? count);
   const error = localError || generateJob?.error || null;
 
+  const overridesActive =
+    (aspectRatio && aspectRatio !== 'adaptive') ||
+    Boolean(imageSize) ||
+    understand ||
+    count !== 1;
+
   useEffect(() => {
     if (!presetId && presets[0]?.id) setPresetId(presets[0].id);
   }, [presetId, presets]);
+
+  useLayoutEffect(() => {
+    if (!paramsOpen) {
+      setPanelPos(null);
+      return;
+    }
+    const place = () => {
+      const trigger = paramsTriggerRef.current;
+      if (!trigger) return;
+      const rect = trigger.getBoundingClientRect();
+      const panelW = 280;
+      const gap = 6;
+      let left = rect.right + gap;
+      if (left + panelW > window.innerWidth - 8) {
+        left = Math.max(8, rect.left - panelW - gap);
+      }
+      let top = rect.top;
+      const approxH = 168;
+      if (top + approxH > window.innerHeight - 8) {
+        top = Math.max(8, window.innerHeight - approxH - 8);
+      }
+      setPanelPos({ left, top });
+    };
+    place();
+    window.addEventListener('resize', place);
+    window.addEventListener('scroll', place, true);
+    return () => {
+      window.removeEventListener('resize', place);
+      window.removeEventListener('scroll', place, true);
+    };
+  }, [paramsOpen]);
+
+  useEffect(() => {
+    if (!paramsOpen) return;
+    const onPointerDown = (e: PointerEvent) => {
+      const t = e.target as Node | null;
+      if (!t) return;
+      if (paramsTriggerRef.current?.contains(t)) return;
+      if (paramsPanelRef.current?.contains(t)) return;
+      setParamsOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setParamsOpen(false);
+    };
+    document.addEventListener('pointerdown', onPointerDown, true);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown, true);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [paramsOpen]);
 
   const handleGenerate = () => {
     const preset = presets.find((p) => p.id === presetId);
@@ -125,11 +217,18 @@ export default function ModelPbrSlotGeneratePanel({
     }
     if (generating) return;
     setLocalError(null);
-    const n = Math.min(MAX_PBR_SLOT_GENERATE_COUNT, Math.max(1, count));
+    setParamsOpen(false);
+    const n = Math.min(4, Math.max(1, count));
+    const overrides: WorkflowModelPbrSlotGenerateOverrides = {
+      aspectRatio: aspectRatio || 'adaptive',
+      imageSize: imageSize || '',
+      understand,
+    };
     onGenerate({
       presetId: preset.id,
       count: n,
       inputText: extraPrompt.trim() || undefined,
+      overrides,
     });
   };
 
@@ -163,6 +262,115 @@ export default function ModelPbrSlotGeneratePanel({
         : '生成';
 
   const menuCandidate = candidateMenu?.candidate;
+
+  const paramsPanel =
+    paramsOpen && panelPos && typeof document !== 'undefined'
+      ? createPortal(
+          <div
+            ref={paramsPanelRef}
+            className="fixed z-[2601] inline-table max-w-[min(20rem,calc(100vw-1.5rem))] border-separate border-spacing-y-1 border-spacing-x-0 rounded-xl border border-white/10 bg-[#0f0f12] p-1.5 shadow-xl ring-1 ring-white/[0.05]"
+            style={{ left: panelPos.left, top: panelPos.top }}
+            role="dialog"
+            aria-label="覆盖参数"
+            data-ac-allow-context-menu
+            data-image-preview-no-wheel
+            onClick={(e) => e.stopPropagation()}
+            onPointerDown={(e) => e.stopPropagation()}
+            onWheel={(e) => e.stopPropagation()}
+          >
+            <div className="table-row">
+              <div className="table-cell p-0 align-middle">
+                <div className="flex flex-nowrap items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => setAspectRatio('adaptive')}
+                    className={chipCls(aspectRatio === 'adaptive')}
+                  >
+                    自适应
+                  </button>
+                  {SUPPORTED_ASPECT_RATIOS.map((r) => (
+                    <button
+                      key={r.value}
+                      type="button"
+                      onClick={() => setAspectRatio(r.value)}
+                      className={chipCls(aspectRatio === r.value)}
+                    >
+                      {r.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <div className="table-row">
+              <div className="table-cell w-full min-w-0 p-0 align-middle">
+                <div className="flex min-w-0 w-full flex-nowrap items-stretch gap-1">
+                  <button
+                    type="button"
+                    onClick={() => setImageSize('')}
+                    className={chipClsStretch(!imageSize)}
+                    title="不指定输出尺寸"
+                  >
+                    -
+                  </button>
+                  {SUPPORTED_IMAGE_SIZES.map((s) => (
+                    <button
+                      key={s.value}
+                      type="button"
+                      onClick={() => setImageSize(s.value)}
+                      className={chipClsStretch(imageSize === s.value)}
+                    >
+                      {s.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <div className="table-row">
+              <div className="table-cell w-full min-w-0 p-0 align-middle">
+                <div className="flex min-w-0 w-full flex-nowrap items-stretch gap-1">
+                  <button
+                    type="button"
+                    onClick={() => setUnderstand(true)}
+                    className={chipClsStretch(understand)}
+                    title="先理解意图，再生成画面"
+                  >
+                    理解
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setUnderstand(false)}
+                    className={chipClsStretch(!understand)}
+                    title="跳过理解，直接发送提示词生成"
+                  >
+                    直发
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div className="table-row">
+              <div className="table-cell w-full min-w-0 p-0 align-middle">
+                <div className="flex min-w-0 w-full flex-nowrap items-stretch gap-1">
+                  {COUNT_OPTIONS.map((n) => (
+                    <button
+                      key={n}
+                      type="button"
+                      onClick={() => setCount(n)}
+                      disabled={generating}
+                      className={countChipClsStretch(count === n)}
+                    >
+                      {n === 1 ? '1x' : `x${n}`}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>,
+          document.body
+        )
+      : null;
 
   return (
     <div
@@ -220,14 +428,22 @@ export default function ModelPbrSlotGeneratePanel({
             listMinWidth={180}
             disabled={generating}
           />
-          <CustomDropdown
-            value={String(count)}
-            options={COUNT_OPTIONS}
-            onChange={(v) => setCount(Math.max(1, Math.min(MAX_PBR_SLOT_GENERATE_COUNT, Number(v) || 1)))}
-            triggerClassName={`${DROPDOWN_TRIGGER_COMPACT} w-[2.6rem] shrink-0 py-1 text-[9px]`}
-            portalZIndex={{ backdrop: 2400, list: 2401 }}
+          <button
+            ref={paramsTriggerRef}
+            type="button"
+            title="覆盖参数（强制覆盖预设）"
             disabled={generating}
-          />
+            aria-expanded={paramsOpen}
+            aria-haspopup="dialog"
+            onClick={() => setParamsOpen((o) => !o)}
+            className={`${DROPDOWN_TRIGGER_COMPACT} flex w-[1.85rem] shrink-0 items-center justify-center py-1 disabled:cursor-not-allowed disabled:opacity-40 ${
+              paramsOpen || overridesActive
+                ? 'bg-white/[0.14] text-white ring-white/[0.2]'
+                : 'text-gray-400'
+            }`}
+          >
+            <SlidersHorizontal className="h-3 w-3" strokeWidth={2.25} />
+          </button>
         </div>
         <div className="flex items-stretch gap-1">
           <input
@@ -317,6 +533,8 @@ export default function ModelPbrSlotGeneratePanel({
           }}
         />
       </div>
+
+      {paramsPanel}
 
       <ModelPbrTextureContextMenu
         open={Boolean(candidateMenu && menuCandidate)}

@@ -31,6 +31,7 @@ import {
 import { defaultEnabledChannelIds } from './modelRegistry/providerBindings';
 import type { ChannelId } from './modelRegistry/types';
 import { normalizeOpenAiBaseUrl } from './openaiAdapter';
+import { r2ApiUrl } from './apiBase';
 
 const STORAGE_KEY_GEMINI = 'ac_gemini_api_key';
 const STORAGE_KEY_ENABLED_CHANNELS = 'ac_enabled_channels';
@@ -518,24 +519,12 @@ export function getTencentCreds(): { secretId: string; secretKey: string } {
 
 // ----- 能力商店（远程预设 Catalog URL）-----
 const CAPABILITY_STORE_CATALOG_PATH = '/api/r2/capability-store/catalog';
-/** 固定 R2 源：本地可走同源 /api/r2 代理；线上优先拼接 VITE_R2_API_BASE_URL / VITE_AUTH_API_BASE_URL */
+/** 固定 R2 源：与 r2ApiUrl 同源反代规则一致 */
 export const DEFAULT_CAPABILITY_STORE_R2_CATALOG_URL = CAPABILITY_STORE_CATALOG_PATH;
-
-function trimSlash(input: string): string {
-  return String(input || '').trim().replace(/\/+$/, '');
-}
 
 function resolveCapabilityStoreCatalogUrl(): string {
   try {
-    const env =
-      typeof import.meta !== 'undefined'
-        ? (import.meta as { env?: Record<string, string | undefined> }).env
-        : undefined;
-    const r2Base = trimSlash(env?.VITE_R2_API_BASE_URL || '');
-    const authBase = trimSlash(env?.VITE_AUTH_API_BASE_URL || '');
-    const base = r2Base || authBase;
-    if (!base) return CAPABILITY_STORE_CATALOG_PATH;
-    return `${base}${CAPABILITY_STORE_CATALOG_PATH}`;
+    return r2ApiUrl('/capability-store/catalog');
   } catch {
     return CAPABILITY_STORE_CATALOG_PATH;
   }

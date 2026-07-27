@@ -79,6 +79,7 @@ import {
 } from '../services/workflowModelPbrEdits';
 import {
   acknowledgeWorkflowModelPbrSlotGenerate,
+  applyPbrSlotGenerateOverrides,
   completeWorkflowModelPbrSlotGenerate,
   reportWorkflowModelPbrSlotGenerateImage,
   reportWorkflowModelPbrSlotGenerateProgress,
@@ -9280,11 +9281,13 @@ ${lineSvg}
         const modules = pbrGenerateActionModulesRef.current;
         const presetsList = pbrGenerateCapabilityPresetsRef.current;
         const log = pbrGenerateOnLogRef.current;
-        const preset = modules.find((m) => m.id === presetId) ?? presetsList.find((p) => p.id === presetId);
-        if (!preset) {
+        const presetBase = modules.find((m) => m.id === presetId) ?? presetsList.find((p) => p.id === presetId);
+        if (!presetBase) {
           completeWorkflowModelPbrSlotGenerate(requestId, { ok: false, error: '未找到能力预设' });
           return;
         }
+        // 覆盖参数强制覆盖预设 aspect/size/skipUnderstand（可忽略预设原值）
+        const preset = applyPbrSlotGenerateOverrides(presetBase, detail?.overrides);
         // 与快捷栏/能力库同一物化入口：blob/http → data URL，失败再按 companion 键兜底
         const companionProjectId = pbrGenerateProjectIdRef.current;
         const companionBaseUrl = String(getCompanionLocalBaseUrl() || '').trim();

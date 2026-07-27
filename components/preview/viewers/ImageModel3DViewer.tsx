@@ -1419,7 +1419,16 @@ const ImageModel3DViewer: React.FC<LazyImagePreviewViewerProps> = ({
 
   const runSlotGenerate = async (
     slot: WorkflowModelPbrSlot,
-    input: { presetId: string; count: number; inputText?: string }
+    input: {
+      presetId: string;
+      count: number;
+      inputText?: string;
+      overrides?: {
+        aspectRatio?: string;
+        imageSize?: string;
+        understand?: boolean;
+      };
+    }
   ) => {
     const material = activeMaterial;
     if (!material) return;
@@ -1448,6 +1457,7 @@ const ImageModel3DViewer: React.FC<LazyImagePreviewViewerProps> = ({
         ...(sourceTextureAssetId ? { sourceTextureAssetId } : {}),
         count: n,
         inputText: input.inputText,
+        ...(input.overrides ? { overrides: input.overrides } : {}),
         onProgress: (remaining) => {
           setSlotGenerateJobs((prev) => {
             const cur = prev[key];

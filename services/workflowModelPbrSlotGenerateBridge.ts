@@ -5,8 +5,21 @@
  * 注意：生成生命周期独立于浮层挂载；面板卸载不得 abort（否则会秒报 Aborted）。
  */
 
+import type { CustomAppModule } from '../types';
+import { overrideSkipUnderstandFromUnderstandEnabled } from './workflowUnderstandOverride';
+
 export const WORKFLOW_MODEL_PBR_SLOT_GENERATE_REQUEST_EVENT =
   'asset-preview:model3d-pbr-slot-generate-request';
+
+/** 贴图槽生成「覆盖参数」：强制覆盖预设同名字段（可忽略预设） */
+export type WorkflowModelPbrSlotGenerateOverrides = {
+  /** 画面比例；`adaptive` 或空 = 清除预设比例 */
+  aspectRatio?: string;
+  /** 输出尺寸 1K/2K/4K；空 = 清除预设尺寸 */
+  imageSize?: string;
+  /** true=理解，false=直发；会写成 skipUnderstand */
+  understand?: boolean;
+};
 
 export type WorkflowModelPbrSlotGenerateRequestDetail = {
   requestId: string;
@@ -16,7 +29,38 @@ export type WorkflowModelPbrSlotGenerateRequestDetail = {
   sourceTextureAssetId?: string;
   count: number;
   inputText?: string;
+  overrides?: WorkflowModelPbrSlotGenerateOverrides;
 };
+
+/** 将覆盖参数强制合并进预设副本（忽略预设原 aspect/size/skipUnderstand） */
+export function applyPbrSlotGenerateOverrides(
+  preset: CustomAppModule,
+  overrides?: WorkflowModelPbrSlotGenerateOverrides | null
+): CustomAppModule {
+  if (!overrides) return preset;
+  const next: CustomAppModule = { ...preset };
+  if ('aspectRatio' in overrides) {
+    const aspect = String(overrides.aspectRatio || '').trim();
+    if (aspect && aspect !== 'adaptive') {
+      next.imageAspectRatio = aspect;
+    } else {
+      delete next.imageAspectRatio;
+    }
+  }
+  if ('imageSize' in overrides) {
+    const size = String(overrides.imageSize || '').trim();
+    if (size === '1K' || size === '2K' || size === '4K') {
+      next.imageSize = size;
+    } else {
+      delete next.imageSize;
+    }
+  }
+  if (typeof overrides.understand === 'boolean') {
+    const skip = overrideSkipUnderstandFromUnderstandEnabled(overrides.understand);
+    if (typeof skip === 'boolean') next.skipUnderstand = skip;
+  }
+  return next;
+}
 
 export type WorkflowModelPbrSlotGenerateImage = {
   dataUrl: string;
@@ -49,6 +93,23 @@ function newRequestId(): string {
   return `pbr-gen-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+function sanitizeOverrides(
+  overrides?: WorkflowModelPbrSlotGenerateOverrides | null
+): WorkflowModelPbrSlotGenerateOverrides | undefined {
+  if (!overrides || typeof overrides !== 'object') return undefined;
+  const out: WorkflowModelPbrSlotGenerateOverrides = {};
+  if ('aspectRatio' in overrides) {
+    const aspect = String(overrides.aspectRatio || '').trim();
+    out.aspectRatio = aspect || 'adaptive';
+  }
+  if ('imageSize' in overrides) {
+    const size = String(overrides.imageSize || '').trim();
+    out.imageSize = size === '1K' || size === '2K' || size === '4K' ? size : '';
+  }
+  if (typeof overrides.understand === 'boolean') out.understand = overrides.understand;
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
 /** Viewer 面板调用：派发请求并等待 WorkflowSection 回传 */
 export function requestWorkflowModelPbrSlotGenerate(input: {
   presetId: string;
@@ -56,6 +117,7 @@ export function requestWorkflowModelPbrSlotGenerate(input: {
   sourceTextureAssetId?: string;
   count: number;
   inputText?: string;
+  overrides?: WorkflowModelPbrSlotGenerateOverrides;
   onProgress?: (remaining: number) => void;
   onImage?: (image: WorkflowModelPbrSlotGenerateImage, index: number) => void;
 }): Promise<WorkflowModelPbrSlotGenerateResult> {
@@ -83,6 +145,7 @@ export function requestWorkflowModelPbrSlotGenerate(input: {
     }, 8_000);
     pendingByRequestId.set(requestId, entry);
     const textureAssetId = String(input.sourceTextureAssetId || '').trim();
+    const overrides = sanitizeOverrides(input.overrides);
     const detail: WorkflowModelPbrSlotGenerateRequestDetail = {
       requestId,
       presetId: String(input.presetId || '').trim(),
@@ -90,6 +153,7 @@ export function requestWorkflowModelPbrSlotGenerate(input: {
       ...(textureAssetId ? { sourceTextureAssetId: textureAssetId } : {}),
       count: Math.max(1, Math.floor(Number(input.count) || 1)),
       ...(input.inputText?.trim() ? { inputText: input.inputText.trim() } : {}),
+      ...(overrides ? { overrides } : {}),
     };
     window.dispatchEvent(
       new CustomEvent<WorkflowModelPbrSlotGenerateRequestDetail>(WORKFLOW_MODEL_PBR_SLOT_GENERATE_REQUEST_EVENT, {

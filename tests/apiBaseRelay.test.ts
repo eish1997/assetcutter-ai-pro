@@ -58,6 +58,29 @@ describe('resolvedAuthApiBaseUrl on Vercel', () => {
       'https://assetcutter-auth-api.onrender.com/api/auth/login'
     );
   });
+
+  it('r2ApiUrl stays same-origin so session cookies are sent', async () => {
+    const { r2ApiUrl } = await import('../services/apiBase');
+    expect(r2ApiUrl('/capability-store/publish')).toBe('/api/r2/capability-store/publish');
+    expect(r2ApiUrl('objects/foo')).toBe('/api/r2/objects/foo');
+  });
+});
+
+describe('r2ApiUrl in local DEV with VITE_AUTH_API_BASE_URL', () => {
+  beforeEach(() => {
+    vi.stubEnv('DEV', true);
+    vi.stubEnv('PROD', false);
+    vi.stubEnv('VITE_AUTH_API_BASE_URL', 'http://127.0.0.1:9100');
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('does not absolute-link to 127.0.0.1 (localhost cookie would not attach)', async () => {
+    const { r2ApiUrl } = await import('../services/apiBase');
+    expect(r2ApiUrl('/capability-store/publish')).toBe('/api/r2/capability-store/publish');
+  });
 });
 
 describe('authApiDirectUrl fallback base', () => {
