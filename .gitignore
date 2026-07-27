@@ -23,6 +23,8 @@ companion-desktop/dist/
 companion-desktop/dist-out-*/
 companion-desktop/release/
 companion-desktop/release*/
+# 小工具包发行 ZIP（npm run pack:shell-tool → dist-out-shell-tools/<id>-<semver>.zip）
+dist-out-shell-tools/
 companion-desktop/local-companion-bundle/
 companion-desktop/build-constants.json
 companion-desktop/sam-local-bundled/

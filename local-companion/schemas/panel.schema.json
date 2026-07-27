@@ -114,7 +114,8 @@
       "properties": {
         "id": { "type": "string", "pattern": "^[a-zA-Z][a-zA-Z0-9_-]{0,63}$" },
         "label": { "type": "string", "minLength": 1, "maxLength": 128 },
-        "kind": { "enum": ["run", "openPath"] },
+        "kind": { "enum": ["run", "openPath", "open_in_host"] },
+        "host": { "enum": ["maya"] },
         "style": { "enum": ["primary", "default"] }
       }
     },

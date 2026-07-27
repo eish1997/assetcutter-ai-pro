@@ -105,6 +105,18 @@ Sources:
 - `.cursor/rules/auto-restart-services.mdc`
 - `.cursor/rules/companion-desktop-restart.mdc`
 
+## Companion release pack
+
+When the user asks to **打包** / pack the local companion or shell tool ZIPs for
+admin upload, read `.cursor/skills/companion-release-pack/SKILL.md` and run:
+
+```powershell
+npm run companion-desktop:release:pack
+```
+
+Outputs: `companion-desktop/dist-out-<verNoDots>/installer/` and
+`dist-out-shell-tools/`. Do not commit those directories.
+
 ## Git and Deploy
 
 - Commit messages must be English.

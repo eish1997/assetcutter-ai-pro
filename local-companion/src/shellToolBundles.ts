@@ -1,4 +1,4 @@
-import { existsSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { cp, mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -204,17 +204,37 @@ export async function installShellToolBundleFromUrl(input: {
   }
 }
 
+/** toolId → packages/shell-tools/<folder> */
+const BUILTIN_SHELL_TOOL_EXAMPLE_FOLDERS: Record<string, string> = {
+  'image-format-converter': 'example-image-converter',
+  'transfer-maps-batch': 'transfer-maps-batch',
+};
+
+const BUILTIN_SHELL_TOOL_EXAMPLE_IDS = Object.keys(BUILTIN_SHELL_TOOL_EXAMPLE_FOLDERS);
+
 /** 解析内置示例包目录（开发仓库或 COMPANION_SHELL_TOOL_EXAMPLE_DIR）。 */
-export function resolveExampleShellToolSourceDir(): string | null {
+export function resolveExampleShellToolSourceDir(exampleId?: string): string | null {
+  const want = String(exampleId || EXAMPLE_SHELL_TOOL_ID).trim() || EXAMPLE_SHELL_TOOL_ID;
   const fromEnv = process.env.COMPANION_SHELL_TOOL_EXAMPLE_DIR?.trim();
-  if (fromEnv && existsSync(join(fromEnv, 'tool.json'))) return resolve(fromEnv);
+  if (fromEnv && existsSync(join(fromEnv, 'tool.json'))) {
+    // Env override applies to the default example only; explicit exampleId must match package id.
+    if (!exampleId) return resolve(fromEnv);
+    try {
+      const raw = JSON.parse(readFileSync(join(fromEnv, 'tool.json'), 'utf8')) as { id?: string };
+      if (raw.id === want) return resolve(fromEnv);
+    } catch {
+      /* fall through to repo candidates */
+    }
+  }
 
   const here = dirname(fileURLToPath(import.meta.url));
+  const folder = BUILTIN_SHELL_TOOL_EXAMPLE_FOLDERS[want] || want;
   const candidates = [
-    join(here, '..', 'packages', 'shell-tools', 'example-image-converter'),
-    join(here, '..', '..', 'packages', 'shell-tools', 'example-image-converter'),
-    join(here, '..', 'shell-tools', 'example-image-converter'),
-    join(here, 'example-image-converter'),
+    join(process.cwd(), 'packages', 'shell-tools', folder),
+    join(here, '..', '..', 'packages', 'shell-tools', folder),
+    join(here, '..', 'packages', 'shell-tools', folder),
+    join(here, '..', 'shell-tools', folder),
+    join(here, folder),
   ];
   for (const c of candidates) {
     if (existsSync(join(c, 'tool.json'))) return resolve(c);
@@ -222,8 +242,14 @@ export function resolveExampleShellToolSourceDir(): string | null {
   return null;
 }
 
-export async function installExampleShellTool(): Promise<{ toolId: string; manifest: ShellToolBundleManifest }> {
-  const dir = resolveExampleShellToolSourceDir();
+export function listBuiltinShellToolExampleIds(): string[] {
+  return BUILTIN_SHELL_TOOL_EXAMPLE_IDS.filter((id) => Boolean(resolveExampleShellToolSourceDir(id)));
+}
+
+export async function installExampleShellTool(
+  exampleId?: string,
+): Promise<{ toolId: string; manifest: ShellToolBundleManifest }> {
+  const dir = resolveExampleShellToolSourceDir(exampleId);
   if (!dir) throw new Error('example_tool_unavailable');
   return installShellToolFromLocalDir(dir);
 }

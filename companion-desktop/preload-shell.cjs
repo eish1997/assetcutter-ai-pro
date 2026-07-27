@@ -75,7 +75,9 @@ contextBridge.exposeInMainWorld('companionShell', {
   workbenchReload: () => timedInvoke('shell-workbench-reload'),
   workbenchReloadHard: () => timedInvoke('shell-workbench-reload-hard'),
   workbenchOpenExternal: () => timedInvoke('shell-workbench-open-external'),
-  setWorkbenchSidebarInsetPx: (px) => timedInvoke('shell-workbench-sidebar-inset', px),
+  // Pass object so numeric 0 is not eaten by timedInvoke's trailing-timeout heuristic.
+  setWorkbenchSidebarInsetPx: (px) =>
+    timedInvoke('shell-workbench-sidebar-inset', { px: Math.max(0, Math.round(Number(px) || 0)) }),
   loadPairing: () => timedInvoke('shell-load-pairing'),
   savePairing: (payload) => timedInvoke('shell-save-pairing', payload || {}),
   copyText: (text) => {

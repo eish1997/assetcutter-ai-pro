@@ -66,4 +66,17 @@ describe('shellToolSpec', () => {
     run.paramsMode = 'params-file';
     expect(parseShellToolSpecJson(raw)).toBeNull();
   });
+
+  it('accepts open_in_host panel action kind', () => {
+    const raw = JSON.parse(readFileSync(join(examplePkg, 'module', 'panel.json'), 'utf8')) as Record<
+      string,
+      unknown
+    >;
+    const actions = raw.actions as { kind: string; host?: string }[];
+    actions[0] = { ...actions[0], kind: 'open_in_host', host: 'maya' };
+    // panel alone may parse; package validation still needs host.open + maya on tool
+    const panel = parseShellToolPanelSpecJson(raw);
+    expect(panel?.actions[0]?.kind).toBe('open_in_host');
+    expect(panel?.actions[0]?.host).toBe('maya');
+  });
 });

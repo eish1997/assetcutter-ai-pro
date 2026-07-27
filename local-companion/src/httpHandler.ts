@@ -50,17 +50,25 @@ import {
   getShellToolDetail,
   installShellToolBundleFromUrl,
   installExampleShellTool,
+  listBuiltinShellToolExampleIds,
   listInstalledShellTools,
   resolveExampleShellToolSourceDir,
   uninstallShellTool,
 } from './shellToolBundles.js';
 import { runShellTool } from './shellToolRun.js';
+import { openShellToolInHost } from './shellToolOpenInHost.js';
 import { validateShellToolPackageDir } from './shellToolSpec.js';
 import { probeSamSegmentBackendHealth } from './compute/samSegmentAdapter.js';
 import { probeRembgPythonHealth } from './compute/rembgAdapter.js';
 import { probePaddleOcrBackendHealth } from './compute/paddleOcrAdapter.js';
 import { parseRuntimeProbeCacheTtlMs } from './runtimeProbeCacheTtl.js';
 import { buildScriptConnectorsPayload } from './scriptRun/scriptConnectorsSnapshot.js';
+import {
+  getMayaBridgeStatus,
+  installMayaBridge,
+  listBridgesCatalog,
+  uninstallMayaBridge,
+} from './bridges/mayaBridgeInstall.js';
 
 let runtimeEngineProbesCache: {
   at: number;
@@ -353,6 +361,70 @@ export async function handleRequest(
       return;
     }
 
+    if (path === '/v1/bridges' && method === 'GET') {
+      sendJson(res, 200, { bridges: listBridgesCatalog() }, origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/maya' && method === 'GET') {
+      sendJson(res, 200, getMayaBridgeStatus(), origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/maya/install' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+          return;
+        }
+      }
+      const versions = Array.isArray(body.versions)
+        ? body.versions.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const scriptsDirs = Array.isArray(body.scriptsDirs)
+        ? body.scriptsDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const portRaw = body.port != null ? Number(body.port) : undefined;
+      const result = installMayaBridge({
+        versions,
+        scriptsDirs,
+        ...(Number.isFinite(portRaw as number) ? { port: portRaw as number } : {}),
+      });
+      if (!result.ok) {
+        const code = result.error === 'bridge_source_missing' ? 500 : 422;
+        sendJson(res, code, { error: result.error, message: result.message }, origin);
+        return;
+      }
+      sendJson(res, 200, result, origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/maya/uninstall' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+          return;
+        }
+      }
+      const versions = Array.isArray(body.versions)
+        ? body.versions.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const scriptsDirs = Array.isArray(body.scriptsDirs)
+        ? body.scriptsDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const result = uninstallMayaBridge({ versions, scriptsDirs });
+      sendJson(res, 200, result, origin);
+      return;
+    }
+
     if (path === '/v1/pairing/session' && method === 'GET') {
       sendJson(res, 200, { pairing: getPairingSessionSummary() }, origin);
       return;
@@ -465,6 +537,57 @@ export async function handleRequest(
       return;
     }
 
+    const mShellToolOpenInHost = path.match(
+      /^\/v1\/shell-tools\/([a-z][a-z0-9-]{1,63})\/open-in-host$/,
+    );
+    const mShellToolOpenInMaya = path.match(
+      /^\/v1\/shell-tools\/([a-z][a-z0-9-]{1,63})\/open-in-maya$/,
+    );
+    if ((mShellToolOpenInHost || mShellToolOpenInMaya) && method === 'POST') {
+      const toolId = (mShellToolOpenInHost || mShellToolOpenInMaya)![1]!;
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json' }, origin);
+          return;
+        }
+      }
+      const result = await openShellToolInHost(toolId, {
+        host: mShellToolOpenInMaya ? 'maya' : typeof body.host === 'string' ? body.host : 'maya',
+        mayaHost: typeof body.mayaHost === 'string' ? body.mayaHost : undefined,
+        mayaPort: body.mayaPort as number | string | undefined,
+      });
+      if (!result.ok) {
+        const code =
+          result.error === 'tool_not_found'
+            ? 404
+            : result.error === 'permission_denied'
+              ? 403
+              : result.error === 'maya_not_connected'
+                ? 503
+                : result.error === 'maya_not_configured' || result.error === 'host_unsupported'
+                  ? 422
+                  : 400;
+        sendJson(
+          res,
+          code,
+          { error: result.error, message: result.message, code: result.code || result.error },
+          origin,
+        );
+        return;
+      }
+      sendJson(
+        res,
+        200,
+        { ok: true, host: result.host, message: result.message, stdout: result.stdout || '' },
+        origin,
+      );
+      return;
+    }
+
     const mShellToolId = path.match(/^\/v1\/shell-tools\/([a-z][a-z0-9-]{1,63})$/);
     if (mShellToolId && method === 'GET') {
       const detail = await getShellToolDetail(mShellToolId[1]!);
@@ -503,16 +626,32 @@ export async function handleRequest(
     }
 
     if (path === '/v1/shell-tools/example-available' && method === 'GET') {
+      const exampleIds = listBuiltinShellToolExampleIds();
       const dir = resolveExampleShellToolSourceDir();
       if (!dir) {
-        sendJson(res, 200, { available: false }, origin);
+        sendJson(res, 200, { available: false, examples: [] }, origin);
         return;
       }
       const validation = validateShellToolPackageDir(dir);
       if (!validation.ok) {
-        sendJson(res, 200, { available: false }, origin);
+        sendJson(res, 200, { available: false, examples: [] }, origin);
         return;
       }
+      const examples = exampleIds
+        .map((id) => {
+          const d = resolveExampleShellToolSourceDir(id);
+          if (!d) return null;
+          const v = validateShellToolPackageDir(d);
+          if (!v.ok) return null;
+          return {
+            toolId: v.tool.id,
+            name: v.tool.name,
+            description: v.tool.description,
+            semver: v.tool.semver,
+            tags: v.tool.tags ?? [],
+          };
+        })
+        .filter(Boolean);
       sendJson(
         res,
         200,
@@ -523,6 +662,7 @@ export async function handleRequest(
           description: validation.tool.description,
           semver: validation.tool.semver,
           tags: validation.tool.tags ?? [],
+          examples,
         },
         origin,
       );
@@ -530,8 +670,24 @@ export async function handleRequest(
     }
 
     if (path === '/v1/shell-tools/install-example' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json' }, origin);
+          return;
+        }
+      }
+      const exampleId =
+        typeof body.exampleId === 'string'
+          ? body.exampleId.trim()
+          : typeof body.toolId === 'string'
+            ? body.toolId.trim()
+            : undefined;
       try {
-        const result = await installExampleShellTool();
+        const result = await installExampleShellTool(exampleId || undefined);
         sendJson(res, 200, { ok: true, toolId: result.toolId, manifest: result.manifest }, origin);
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);

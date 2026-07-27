@@ -479,6 +479,37 @@ describe('copilot settings UI', () => {
     expect(panel).toContain('usageAudit,');
   });
 
+  it('passes sidebar inset as an object so collapsed width 0 is not eaten as IPC timeout', () => {
+    const preload = fs.readFileSync(shellPreloadPath, 'utf8');
+    const main = fs.readFileSync(shellMainPath, 'utf8');
+
+    expect(preload).toContain("timedInvoke('shell-workbench-sidebar-inset', { px:");
+    expect(preload).not.toMatch(
+      /setWorkbenchSidebarInsetPx:\s*\(px\)\s*=>\s*timedInvoke\('shell-workbench-sidebar-inset',\s*px\)/,
+    );
+    expect(main).toContain("payload.px");
+    expect(main).toContain("shell-workbench-sidebar-inset");
+  });
+
+  it('hides Copilot completely when collapsed and puts the toggle next to window controls', () => {
+    const panel = fs.readFileSync(copilotPanelPath, 'utf8');
+    const html = fs.readFileSync(shellIndexPath, 'utf8').replace(/\r\n/g, '\n');
+    const main = fs.readFileSync(shellMainPath, 'utf8');
+
+    expect(html).toMatch(
+      /id="copilot-toggle"[\s\S]*?id="btnTrafficMin"/,
+    );
+    expect(html).not.toMatch(
+      /<aside class="shell-copilot"[\s\S]*?id="copilot-toggle"/,
+    );
+    expect(html).toContain('body.shell-copilot-collapsed aside.shell-copilot');
+    expect(html).toContain('visibility: hidden');
+    expect(html).toContain('body.shell-sidebar-collapsed nav.shell-sidebar');
+    expect(html).not.toContain('flex: 0 0 48px');
+    expect(panel).toContain('const COPILOT_COLLAPSED_WIDTH = 0');
+    expect(main).toContain('const SHELL_COPILOT_WIDTH_COLLAPSED = 0');
+  });
+
   it('keeps the right-side Copilot aligned to the long-work P0 home screen', () => {
     const panel = fs.readFileSync(copilotPanelPath, 'utf8');
     const html = fs.readFileSync(shellIndexPath, 'utf8');

@@ -110,7 +110,70 @@ try {
   /* ignore */
 }
 
+/** 系统代理挂了时，Chromium 仍可能把回环流量送进代理；绕过 127.0.0.1/localhost */
+try {
+  app.commandLine.appendSwitch('proxy-bypass-list', '<-loopback>;127.0.0.1;localhost;::1');
+} catch {
+  /* ignore */
+}
+
 const DEFAULT_HTTP_PORT = 18765;
+
+function isProxyOrAbortLoadError(err) {
+  const msg = err instanceof Error ? err.message : String(err || '');
+  // 系统代理挂掉时，Chromium 可能报 ERR_PROXY_*，也可能只报 ERR_ABORTED(-3)
+  return /ERR_PROXY|PROXY_CONNECTION_FAILED|ERR_PROXY_CONNECTION_FAILED|ERR_ABORTED|\(-3\)/i.test(
+    msg,
+  );
+}
+
+/** 串行化同一 webContents 的 load，避免第二次导航把第一次取消成 ERR_ABORTED */
+const workbenchLoadChains = new WeakMap();
+
+/**
+ * loadURL：先试当前会话代理；失败且像代理/中止时改 direct 再试一次。
+ * 适用于任意用户机（系统开了代理软件但未启动、或并发导航）。
+ */
+async function loadUrlWithProxyFallback(webContents, target) {
+  if (!webContents || webContents.isDestroyed()) {
+    throw new Error('webContents_destroyed');
+  }
+  const prev = workbenchLoadChains.get(webContents) || Promise.resolve();
+  let release;
+  const gate = new Promise((r) => {
+    release = r;
+  });
+  workbenchLoadChains.set(
+    webContents,
+    prev.then(
+      () => gate,
+      () => gate,
+    ),
+  );
+  await prev.catch(() => {});
+
+  try {
+    try {
+      await webContents.loadURL(target);
+      return;
+    } catch (e) {
+      if (!isProxyOrAbortLoadError(e)) throw e;
+      companionLog(
+        'warn',
+        '[companion-desktop] loadURL failed, retry with direct:',
+        e instanceof Error ? e.message : e,
+      );
+    }
+    if (webContents.isDestroyed()) throw new Error('webContents_destroyed');
+    const ses = webContents.session;
+    if (ses && typeof ses.setProxy === 'function') {
+      await ses.setProxy({ mode: 'direct' });
+    }
+    await webContents.loadURL(target);
+  } finally {
+    release();
+  }
+}
 
 /** 开发：`npm start`；安装包：未保存过主站时的「打开网站」默认 */
 const DEFAULT_SHELL_SITE_DEV = 'http://localhost:3000';
@@ -2164,8 +2227,19 @@ async function fetchHostBundleCatalogFromSite() {
   const api = `${origin}/api/companion-artifacts/catalog`;
   try {
     const r = await fetch(api, { method: 'GET', signal: AbortSignal.timeout(20000) });
-    if (!r.ok) return { ok: false, error: `http_${r.status}` };
-    const j = await r.json();
+    let j = null;
+    try {
+      j = await r.json();
+    } catch {
+      j = null;
+    }
+    if (!r.ok) {
+      const detail =
+        j && typeof j.error === 'string' && j.error.trim()
+          ? String(j.error).trim()
+          : `http_${r.status}`;
+      return { ok: false, error: detail, httpStatus: r.status };
+    }
     const raw = j && Array.isArray(j.artifacts) ? j.artifacts : [];
     return { ok: true, artifacts: raw };
   } catch (e) {
@@ -2901,6 +2975,32 @@ function stopStatusPolling() {
   statusPollTimer = null;
 }
 
+async function waitForCompanionHealth(timeoutMs) {
+  const deadline = Date.now() + Math.max(500, Number(timeoutMs) || 8000);
+  while (Date.now() < deadline) {
+    if (await probeCompanionHealth()) return true;
+    await sleep(280);
+  }
+  return false;
+}
+
+function resolveCompanionSpawnLogPath() {
+  try {
+    return path.join(app.getPath('userData'), 'local-companion-spawn.log');
+  } catch {
+    return '';
+  }
+}
+
+function appendCompanionSpawnLog(logPath, text) {
+  if (!logPath) return;
+  try {
+    fs.appendFileSync(logPath, text);
+  } catch {
+    /* ignore */
+  }
+}
+
 async function startLocalCompanion() {
   const hasExistingCompanion = await probeCompanionHealth();
   if (hasExistingCompanion) {
@@ -2931,6 +3031,14 @@ async function startLocalCompanion() {
     ...cfg.envExtra,
     COMPANION_OPEN_BROWSER: '0',
   };
+  /** 安装包：去掉易导致子进程异常退出的继承变量（任意用户机通用） */
+  if (app.isPackaged) {
+    delete env.NODE_OPTIONS;
+    delete env.VSCODE_INSPECTOR_OPTIONS;
+    // 强制使用壳指定端口；忽略系统里误设的 COMPANION_HTTP_PORT
+    delete env.COMPANION_HTTP_PORT;
+    env.COMPANION_HTTP_PORT = String(readHttpPort() || DEFAULT_HTTP_PORT);
+  }
   /** Dev: pull outbound proxy from repo .env.local so import-url can reach CDNs (auth-api already uses --env-file). */
   try {
     if (!app.isPackaged) {
@@ -2962,6 +3070,19 @@ async function startLocalCompanion() {
   const sbRoot = companionSandboxPaths.getCompanionSandboxRoot();
   if (sbRoot) {
     env.COMPANION_SANDBOX_ROOT = sbRoot;
+  }
+  /** Packaged: pin Maya bridge source so install works even if cwd ≠ bundle root */
+  if (app.isPackaged) {
+    const bridgePy = path.join(
+      process.resourcesPath,
+      'local-companion-bundle',
+      'maya-plugins',
+      'script-hub-bridge',
+      'script_hub_bridge.py',
+    );
+    if (fs.existsSync(bridgePy)) {
+      env.COMPANION_MAYA_BRIDGE_SOURCE = bridgePy;
+    }
   }
   /** SamLocal 走 127.0.0.1；系统 HTTP_PROXY 未排除回环时 fetch 会报 COMPUTE_SAM_BACKEND */
   const loopNoProxy = '127.0.0.1,localhost,::1';
@@ -3000,18 +3121,14 @@ async function startLocalCompanion() {
   }
 
   let stdio = process.stdout?.isTTY ? 'inherit' : 'ignore';
-  let spawnLogPath = '';
-  if (app.isPackaged && stdio === 'ignore') {
-    spawnLogPath = path.join(app.getPath('userData'), 'local-companion-spawn.log');
-    try {
-      fs.appendFileSync(
-        spawnLogPath,
-        `\n---------- ${new Date().toISOString()} spawn ${cfg.nodeBin} ${cfg.args.join(' ')} ----------\n`,
-      );
-    } catch {
-      spawnLogPath = '';
-    }
-    if (spawnLogPath) stdio = ['ignore', 'pipe', 'pipe'];
+  /** 安装包始终落盘 spawn 日志，便于任意用户机排障（与是否 TTY 无关） */
+  let spawnLogPath = app.isPackaged ? resolveCompanionSpawnLogPath() : '';
+  if (app.isPackaged) {
+    appendCompanionSpawnLog(
+      spawnLogPath,
+      `\n---------- ${new Date().toISOString()} spawn ${cfg.nodeBin} ${cfg.args.join(' ')} cwd=${companionRoot} ----------\n`,
+    );
+    stdio = spawnLogPath ? ['ignore', 'pipe', 'pipe'] : 'ignore';
   }
 
   companion = spawn(cfg.nodeBin, cfg.args, {
@@ -3022,17 +3139,11 @@ async function startLocalCompanion() {
   });
 
   if (spawnLogPath && companion.stdout && companion.stderr) {
-    const append = (chunk) => {
-      try {
-        fs.appendFileSync(spawnLogPath, chunk);
-      } catch {
-        /* ignore */
-      }
-    };
+    const append = (chunk) => appendCompanionSpawnLog(spawnLogPath, chunk);
     companion.stdout.on('data', append);
     companion.stderr.on('data', append);
   }
-  companionStatusNote = '伴侣运行中';
+  companionStatusNote = '伴侣启动中…';
   companionLastError = null;
   lastStatusAlertKey = null;
   updateTrayTooltip();
@@ -3062,13 +3173,33 @@ async function startLocalCompanion() {
       companionLastError = null;
     } else {
       companionStatusNote = '伴侣异常退出';
-      companionLastError = `退出码=${code ?? 'null'} 信号=${signal ?? 'null'}`;
+      const logHint = spawnLogPath ? `；日志 ${spawnLogPath}` : '';
+      companionLastError = `退出码=${code ?? 'null'} 信号=${signal ?? 'null'}${logHint}`;
       notifyCompanionFailure(companionLastError);
     }
     updateTrayTooltip();
     rebuildTrayMenu();
     companion = null;
   });
+
+  /** 任意用户机：spawn 后必须确认 /v1/health，避免「壳在跑、18765 没人听」却静默当成成功 */
+  void (async () => {
+    const ok = await waitForCompanionHealth(10000);
+    if (ok) {
+      companionStatusNote = '伴侣运行中';
+      companionLastError = null;
+      updateTrayTooltip();
+      rebuildTrayMenu();
+      return;
+    }
+    if (await probeCompanionHealth()) return;
+    companionStatusNote = '伴侣未就绪';
+    const logHint = spawnLogPath ? ` 详见 ${spawnLogPath}` : '';
+    companionLastError = `本机 HTTP（127.0.0.1:${readHttpPort()}）未响应。请托盘「重新启动本地伴侣」。${logHint}`;
+    updateTrayTooltip();
+    rebuildTrayMenu();
+    notifyCompanionFailure(companionLastError);
+  })();
 }
 
 function stopLocalCompanion() {
@@ -3519,7 +3650,7 @@ async function attachWorkbenchBrowserView() {
 
   if (needLoad) {
     try {
-      await wc.loadURL(target);
+      await loadUrlWithProxyFallback(wc, target);
     } catch (e) {
       detachWorkbenchBrowserView();
       return { ok: false, error: e instanceof Error ? e.message : String(e) };
@@ -3603,7 +3734,7 @@ async function attachScriptsBrowserView() {
 
   if (needLoad) {
     try {
-      await wc.loadURL(target);
+      await loadUrlWithProxyFallback(wc, target);
     } catch (e) {
       detachAllEmbeddedBrowserViews();
       return { ok: false, error: e instanceof Error ? e.message : String(e) };
@@ -3941,7 +4072,7 @@ if (!gotLock) {
           void (async () => {
             try {
               await prepareWorkbenchPairingForWorkbenchUrl(target);
-              await workbenchBrowserView.webContents.loadURL(target);
+              await loadUrlWithProxyFallback(workbenchBrowserView.webContents, target);
             } catch (e) {
               console.error('[companion-desktop] workbench loadURL after settings save:', e);
             }
@@ -4116,23 +4247,43 @@ if (!gotLock) {
 
   ipcMain.handle('shell-builtin-example-available', () => {
     try {
-      const exampleDir = path.resolve(__dirname, '..', 'packages', 'shell-tools', 'example-image-converter');
-      const toolJsonPath = path.join(exampleDir, 'tool.json');
-      if (!fs.existsSync(toolJsonPath)) {
-        return { ok: true, available: false };
+      const packagesRoot = path.resolve(__dirname, '..', 'packages', 'shell-tools');
+      const folders = ['example-image-converter', 'transfer-maps-batch'];
+      const examples = [];
+      for (const folder of folders) {
+        const toolJsonPath = path.join(packagesRoot, folder, 'tool.json');
+        if (!fs.existsSync(toolJsonPath)) continue;
+        try {
+          const tool = JSON.parse(fs.readFileSync(toolJsonPath, 'utf8'));
+          const toolId = String(tool.id || '').trim();
+          if (!toolId) continue;
+          examples.push({
+            toolId,
+            name: String(tool.name || '').trim(),
+            description: String(tool.description || '').trim(),
+            semver: String(tool.semver || '').trim(),
+            tags: Array.isArray(tool.tags) ? tool.tags : [],
+          });
+        } catch {
+          /* skip broken package */
+        }
       }
-      const tool = JSON.parse(fs.readFileSync(toolJsonPath, 'utf8'));
+      if (!examples.length) {
+        return { ok: true, available: false, examples: [] };
+      }
+      const primary = examples[0];
       return {
         ok: true,
         available: true,
-        toolId: String(tool.id || '').trim(),
-        name: String(tool.name || '').trim(),
-        description: String(tool.description || '').trim(),
-        semver: String(tool.semver || '').trim(),
-        tags: Array.isArray(tool.tags) ? tool.tags : [],
+        toolId: primary.toolId,
+        name: primary.name,
+        description: primary.description,
+        semver: primary.semver,
+        tags: primary.tags,
+        examples,
       };
     } catch (e) {
-      return { ok: false, error: e instanceof Error ? e.message : String(e), available: false };
+      return { ok: false, error: e instanceof Error ? e.message : String(e), available: false, examples: [] };
     }
   });
 

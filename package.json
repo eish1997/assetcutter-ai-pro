@@ -84,6 +84,8 @@
     "companion-desktop:dist:portable": "npm run dist:portable --prefix companion-desktop",
     "companion-desktop:dist:retry": "powershell -NoProfile -ExecutionPolicy Bypass -File \"scripts/companion-desktop-dist.ps1\" -Target both -Retries 3",
     "companion-desktop:release:check": "powershell -NoProfile -ExecutionPolicy Bypass -File \"scripts/companion-desktop-release-check.ps1\"",
+    "companion-desktop:check-asar-files": "node scripts/check-companion-desktop-asar-files.mjs",
+    "companion-desktop:release:pack": "powershell -NoProfile -ExecutionPolicy Bypass -File \"scripts/companion-release-pack.ps1\"",
     "dev-log:post-push": "node --env-file=.env.local scripts/dev-log-post-push.mjs",
     "dev-log:rewrite": "node --env-file=.env.local scripts/dev-log-post-push.mjs --rewrite"
   },

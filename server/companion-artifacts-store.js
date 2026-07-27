@@ -128,19 +128,29 @@ function makeId() {
   return crypto.randomBytes(12).toString('hex');
 }
 
-export async function listCompanionArtifacts() {
-  await ensureCompanionArtifactsPg();
-  if (USE_COMPANION_PG) {
-    const p = getCompanionPool();
-    const r = await p.query(
-      `SELECT id, kind, semver, channel, platform, file_name, r2_key, sha256, sha512, bytes, notes, label, published_at, created_by_user_id
-       FROM companion_artifacts
-       ORDER BY published_at DESC`
-    );
-    return r.rows.map((row) => mapPgRow(row));
-  }
+async function listCompanionArtifactsFromFile() {
   const data = await readRaw();
   return [...(data.artifacts || [])].sort((a, b) => String(b.publishedAt).localeCompare(String(a.publishedAt)));
+}
+
+export async function listCompanionArtifacts() {
+  if (USE_COMPANION_PG) {
+    try {
+      await ensureCompanionArtifactsPg();
+      const p = getCompanionPool();
+      const r = await p.query(
+        `SELECT id, kind, semver, channel, platform, file_name, r2_key, sha256, sha512, bytes, notes, label, published_at, created_by_user_id
+         FROM companion_artifacts
+         ORDER BY published_at DESC`
+      );
+      return r.rows.map((row) => mapPgRow(row));
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      console.warn('[companion-artifacts] Postgres unavailable, falling back to local JSON:', msg);
+      return listCompanionArtifactsFromFile();
+    }
+  }
+  return listCompanionArtifactsFromFile();
 }
 
 /**

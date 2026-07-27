@@ -13,6 +13,12 @@
     run_not_configured: '该工具未配置运行命令',
     run_timeout: '运行超时',
     invalid_params: '参数不完整或路径无效',
+    maya_not_connected: '无法连接 Maya Command Port',
+    maya_not_configured: '该工具未配置 Maya 入口',
+    host_unsupported: '暂不支持该宿主',
+    MAYA_NOT_CONNECTED: '无法连接 Maya Command Port',
+    MAYA_EXEC_TIMEOUT: 'Maya 执行超时',
+    MAYA_RUNTIME_ERROR: 'Maya 执行失败',
   };
 
   function formatError(code, message) {
@@ -159,6 +165,47 @@
             logEl,
             '打开失败：' + (e instanceof Error ? e.message : String(e)) + '\n',
           );
+        }
+        return;
+      }
+      if (act.kind === 'open_in_host') {
+        const host = String(act.host || 'maya').trim().toLowerCase() || 'maya';
+        setActionsBusy(true);
+        window.ShellToolsModule.clearLog(logEl);
+        window.ShellToolsModule.appendLog(logEl, '正在注入 ' + host + '…\n');
+        try {
+          const mayaHost =
+            typeof fieldState.mayaHost === 'string' && fieldState.mayaHost.trim()
+              ? fieldState.mayaHost.trim()
+              : undefined;
+          const mayaPortRaw =
+            typeof fieldState.mayaPort === 'string' && fieldState.mayaPort.trim()
+              ? fieldState.mayaPort.trim()
+              : undefined;
+          const openR = await api.api(
+            'POST',
+            '/v1/shell-tools/' + encodeURIComponent(toolId) + '/open-in-host',
+            {
+              host: host,
+              mayaHost: mayaHost,
+              mayaPort: mayaPortRaw,
+            },
+            { timeoutMs: Math.max(timeoutMs, 90000) },
+          );
+          if (!openR.ok) {
+            const err = openR.json && openR.json.error ? openR.json.error : '';
+            window.ShellToolsModule.appendLog(
+              logEl,
+              '失败：' + formatError(err, openR.json && openR.json.message) + '\n',
+            );
+            return;
+          }
+          const j = openR.json || {};
+          if (j.message) window.ShellToolsModule.appendLog(logEl, j.message + '\n');
+          if (j.stdout) window.ShellToolsModule.appendLog(logEl, j.stdout + (j.stdout.endsWith('\n') ? '' : '\n'));
+          window.ShellToolsModule.appendLog(logEl, '完成\n');
+        } finally {
+          setActionsBusy(false);
         }
         return;
       }

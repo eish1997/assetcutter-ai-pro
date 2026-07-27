@@ -8,14 +8,17 @@ import { join } from 'node:path';
 
 export const TOOL_ID_PATTERN = /^[a-z][a-z0-9-]{1,63}$/;
 
-export const SHELL_TOOL_PERMISSIONS = ['path.pick', 'tool.run'] as const;
+export const SHELL_TOOL_PERMISSIONS = ['path.pick', 'tool.run', 'host.open'] as const;
 export type ShellToolPermissionV1 = (typeof SHELL_TOOL_PERMISSIONS)[number];
 
 export const PANEL_FIELD_TYPES = ['path', 'select', 'text', 'toggle'] as const;
 export type PanelFieldTypeV1 = (typeof PANEL_FIELD_TYPES)[number];
 
-export const PANEL_ACTION_KINDS = ['run', 'openPath'] as const;
+export const PANEL_ACTION_KINDS = ['run', 'openPath', 'open_in_host'] as const;
 export type PanelActionKindV1 = (typeof PANEL_ACTION_KINDS)[number];
+
+export const SHELL_TOOL_HOSTS = ['maya'] as const;
+export type ShellToolHostV1 = (typeof SHELL_TOOL_HOSTS)[number];
 
 export const PANEL_OUTPUT_TYPES = ['log'] as const;
 export type PanelOutputTypeV1 = (typeof PANEL_OUTPUT_TYPES)[number];
@@ -32,6 +35,14 @@ export type ShellToolLaunchSpecV1 = {
   module: string;
 };
 
+/** Maya-in-process UI entry (Command Port inject). */
+export type ShellToolMayaSpecV1 = {
+  entryModule: string;
+  entryFunc: string;
+  /** Relative dirs under package root added to sys.path (default ["."]). */
+  pythonPath?: string[];
+};
+
 export type ShellToolSpecV1 = {
   schemaVersion: 1;
   id: string;
@@ -41,6 +52,7 @@ export type ShellToolSpecV1 = {
   icon?: string;
   launch: ShellToolLaunchSpecV1;
   run?: ShellToolRunSpecV1;
+  maya?: ShellToolMayaSpecV1;
   permissions: ShellToolPermissionV1[];
   tags?: string[];
   minCompanionSemver?: string;
@@ -86,6 +98,8 @@ export type PanelActionV1 = {
   id: string;
   label: string;
   kind: PanelActionKindV1;
+  /** Required when kind is open_in_host (first host: maya). */
+  host?: ShellToolHostV1;
   style?: 'primary' | 'default';
 };
 
@@ -133,6 +147,31 @@ function parseRun(raw: unknown): ShellToolRunSpecV1 | null {
     const n = Number(o.timeoutMs);
     if (!Number.isFinite(n) || n < 1000 || n > 3_600_000) return null;
     out.timeoutMs = Math.floor(n);
+  }
+  return out;
+}
+
+function isMayaModuleName(s: string): boolean {
+  return /^[a-zA-Z_][a-zA-Z0-9_]*(\.[a-zA-Z_][a-zA-Z0-9_]*)*$/.test(s);
+}
+
+function parseMaya(raw: unknown): ShellToolMayaSpecV1 | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const o = raw as Record<string, unknown>;
+  if (typeof o.entryModule !== 'string' || !isMayaModuleName(o.entryModule.trim())) return null;
+  if (typeof o.entryFunc !== 'string' || !/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(o.entryFunc.trim())) return null;
+  const out: ShellToolMayaSpecV1 = {
+    entryModule: o.entryModule.trim(),
+    entryFunc: o.entryFunc.trim(),
+  };
+  if (o.pythonPath !== undefined) {
+    if (!Array.isArray(o.pythonPath) || o.pythonPath.length === 0) return null;
+    const paths: string[] = [];
+    for (const p of o.pythonPath) {
+      if (typeof p !== 'string' || !p.trim() || p.includes('..')) return null;
+      paths.push(p.trim().replace(/\\/g, '/'));
+    }
+    out.pythonPath = paths;
   }
   return out;
 }
@@ -228,6 +267,11 @@ export function parseShellToolSpecJson(raw: unknown): ShellToolSpecV1 | null {
     if (!run) return null;
     out.run = run;
   }
+  if (o.maya !== undefined) {
+    const maya = parseMaya(o.maya);
+    if (!maya) return null;
+    out.maya = maya;
+  }
   if (typeof o.minCompanionSemver === 'string' && o.minCompanionSemver.trim()) {
     out.minCompanionSemver = o.minCompanionSemver.trim();
   }
@@ -251,6 +295,7 @@ export function parseShellToolSpecJson(raw: unknown): ShellToolSpecV1 | null {
   }
 
   if (out.permissions.includes('tool.run') && !out.run) return null;
+  if (out.permissions.includes('host.open') && !out.maya) return null;
   return out;
 }
 
@@ -282,8 +327,13 @@ export function parseShellToolPanelSpecJson(raw: unknown): ShellToolPanelSpecV1 
     if (!act || typeof act !== 'object') return null;
     const a = act as Record<string, unknown>;
     if (!isIdentifier(a.id) || typeof a.label !== 'string' || !a.label.trim()) return null;
-    if (a.kind !== 'run' && a.kind !== 'openPath') return null;
+    if (a.kind !== 'run' && a.kind !== 'openPath' && a.kind !== 'open_in_host') return null;
     const action: PanelActionV1 = { id: a.id, label: a.label.trim(), kind: a.kind };
+    if (a.kind === 'open_in_host') {
+      const host = typeof a.host === 'string' ? a.host.trim().toLowerCase() : 'maya';
+      if (!(SHELL_TOOL_HOSTS as readonly string[]).includes(host)) return null;
+      action.host = host as ShellToolHostV1;
+    }
     if (a.style === 'primary' || a.style === 'default') action.style = a.style;
     actions.push(action);
   }
@@ -358,6 +408,14 @@ export function validateShellToolPackageDir(extractedRoot: string): ShellToolPac
     }
     if (a.kind === 'openPath' && !tool.permissions.includes('path.pick')) {
       return { ok: false, error: 'openPath action requires path.pick permission' };
+    }
+    if (a.kind === 'open_in_host') {
+      if (!tool.permissions.includes('host.open')) {
+        return { ok: false, error: 'open_in_host action requires host.open permission' };
+      }
+      if (a.host === 'maya' && !tool.maya) {
+        return { ok: false, error: 'open_in_host maya requires tool.json maya block' };
+      }
     }
   }
 

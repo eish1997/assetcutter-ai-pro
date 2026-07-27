@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 /**
  * Pack packages/shell-tools/<name>/ into a ZIP for shell_tool_bundle distribution.
- * Usage: npx tsx scripts/pack-shell-tool.mjs [toolDirName]
+ * Output root (unified release drop): dist-out-shell-tools/<id>-<semver>.zip
+ * Usage: npm run pack:shell-tool -- [toolDirName]
  */
 import { createWriteStream, existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { mkdir, rm } from 'node:fs/promises';
@@ -34,7 +35,7 @@ async function packOne(name) {
   const v = validateShellToolPackageDir(src);
   if (!v.ok) throw new Error(`校验失败: ${v.error}`);
 
-  const outDir = join(repoRoot, 'dist', 'shell-tools');
+  const outDir = join(repoRoot, 'dist-out-shell-tools');
   await mkdir(outDir, { recursive: true });
   const outZip = join(outDir, `${v.tool.id}-${v.tool.semver}.zip`);
   await rm(outZip, { force: true });

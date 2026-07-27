@@ -200,6 +200,8 @@ export function buildCapabilitiesPayload() {
       listProjects: 'GET /v1/projects',
       getManifest: 'GET /v1/projects/:projectId/manifest',
       reconcileManifest: 'POST /v1/projects/:projectId/manifest/reconcile',
+      getWorkflow: 'GET /v1/projects/:projectId/workflow',
+      putWorkflow: 'PUT /v1/projects/:projectId/workflow',
       putAsset: 'PUT /v1/projects/:projectId/assets/:key',
       importAssetFromUrl: 'POST /v1/projects/:projectId/assets/:key/import-url',
       getAsset: 'GET /v1/projects/:projectId/assets/:key',

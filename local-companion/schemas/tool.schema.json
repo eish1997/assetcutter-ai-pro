@@ -39,12 +39,35 @@
         "timeoutMs": { "type": "integer", "minimum": 1000, "maximum": 3600000 }
       }
     },
+    "maya": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["entryModule", "entryFunc"],
+      "properties": {
+        "entryModule": {
+          "type": "string",
+          "pattern": "^[a-zA-Z_][a-zA-Z0-9_]*(\\.[a-zA-Z_][a-zA-Z0-9_]*)*$",
+          "maxLength": 256
+        },
+        "entryFunc": {
+          "type": "string",
+          "pattern": "^[a-zA-Z_][a-zA-Z0-9_]*$",
+          "maxLength": 128
+        },
+        "pythonPath": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 16,
+          "items": { "type": "string", "minLength": 1, "maxLength": 256 }
+        }
+      }
+    },
     "permissions": {
       "type": "array",
       "minItems": 1,
       "uniqueItems": true,
       "items": {
-        "enum": ["path.pick", "tool.run"]
+        "enum": ["path.pick", "tool.run", "host.open"]
       }
     },
     "minCompanionSemver": { "type": "string", "maxLength": 64 },

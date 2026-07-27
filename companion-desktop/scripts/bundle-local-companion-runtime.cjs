@@ -58,6 +58,16 @@ async function main() {
     fs.cpSync(ocrFrom, ocrTo, { recursive: true });
   }
 
+  // Maya Command Port bridge source for GET/POST /v1/bridges/maya (one-click install).
+  const mayaBridgeFrom = path.join(repoRoot, 'maya-plugins', 'script-hub-bridge');
+  const mayaBridgeTo = path.join(outDir, 'maya-plugins', 'script-hub-bridge');
+  const mayaBridgePy = path.join(mayaBridgeFrom, 'script_hub_bridge.py');
+  if (!fs.existsSync(mayaBridgePy)) {
+    throw new Error(`缺少 Maya bridge 源: ${mayaBridgePy}`);
+  }
+  fs.mkdirSync(path.dirname(mayaBridgeTo), { recursive: true });
+  fs.cpSync(mayaBridgeFrom, mayaBridgeTo, { recursive: true });
+
   const st = fs.statSync(outFile);
   if (!st.isFile() || st.size < 1024) {
     throw new Error(`bundle 异常（过小或不存在）: ${outFile}`);

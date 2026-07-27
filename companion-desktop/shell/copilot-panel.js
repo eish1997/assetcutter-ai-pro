@@ -50,7 +50,12 @@
   const COPILOT_EXPANDED_MIN_WIDTH = 360;
   const COPILOT_EXPANDED_DEFAULT_WIDTH = 380;
   const COPILOT_EXPANDED_MAX_WIDTH = 720;
-  const COPILOT_COLLAPSED_WIDTH = 48;
+  /** Collapsed: fully hidden (no residual rail). Toggle lives in the titlebar. */
+  const COPILOT_COLLAPSED_WIDTH = 0;
+  const COPILOT_TOGGLE_ICON_EXPANDED =
+    '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="7" height="16" rx="1.5" opacity="0.42" /><rect x="14" y="4" width="7" height="16" rx="1.5" /></svg>';
+  const COPILOT_TOGGLE_ICON_COLLAPSED =
+    '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="7" height="16" rx="1.5" opacity="0.42" /><rect x="14" y="4" width="7" height="16" rx="1.5" opacity="0.28" /></svg>';
 
   const EXAMPLE_PHRASES = [
     '\u6253\u5f00\u811a\u672c\u9875',
@@ -608,11 +613,11 @@
 
   function renderToggleIcon(collapsed) {
     if (!toggleBtn) return;
-    toggleBtn.innerHTML = collapsed
-      ? '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6" /></svg>'
-      : '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6" /></svg>';
+    toggleBtn.innerHTML = collapsed ? COPILOT_TOGGLE_ICON_COLLAPSED : COPILOT_TOGGLE_ICON_EXPANDED;
     toggleBtn.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
-    toggleBtn.title = collapsed ? '展开 Copilot' : '收起 Copilot';
+    toggleBtn.setAttribute('aria-pressed', collapsed ? 'true' : 'false');
+    toggleBtn.setAttribute('aria-label', collapsed ? '\u5c55\u5f00 Copilot' : '\u6536\u8d77 Copilot');
+    toggleBtn.title = collapsed ? '\u5c55\u5f00 Copilot' : '\u6536\u8d77 Copilot';
   }
 
   function scrollMessagesToBottom() {

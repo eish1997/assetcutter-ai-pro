@@ -149,18 +149,32 @@
       map.set(id, cur);
     }
 
-    if (exampleMeta && exampleMeta.available && !map.has(exampleMeta.toolId || EXAMPLE_TOOL_ID)) {
-      const id = exampleMeta.toolId || EXAMPLE_TOOL_ID;
-      map.set(id, {
-        id,
-        name: exampleMeta.name || '图片格式转换',
-        description: exampleMeta.description || '为指定文件夹内图片批量转换格式（内置示例包）',
-        tags: mergeTags(exampleMeta.tags, ['示例']),
+    const exampleList =
+      exampleMeta && Array.isArray(exampleMeta.examples) && exampleMeta.examples.length
+        ? exampleMeta.examples
+        : exampleMeta && exampleMeta.available
+          ? [
+              {
+                toolId: exampleMeta.toolId || EXAMPLE_TOOL_ID,
+                name: exampleMeta.name,
+                description: exampleMeta.description,
+                semver: exampleMeta.semver,
+                tags: exampleMeta.tags,
+              },
+            ]
+          : [];
+    for (const ex of exampleList) {
+      if (!ex || !ex.toolId || map.has(ex.toolId)) continue;
+      map.set(ex.toolId, {
+        id: ex.toolId,
+        name: ex.name || ex.toolId,
+        description: ex.description || '内置示例包',
+        tags: mergeTags(ex.tags, ['示例']),
         local: null,
         cloud: null,
         builtin: true,
         semverLocal: null,
-        semverCloud: exampleMeta.semver || '1.0.0',
+        semverCloud: ex.semver || '1.0.0',
       });
     }
 
@@ -228,7 +242,10 @@
       if (typeof shell.fetchShellToolCatalog === 'function') {
         const r = await shell.fetchShellToolCatalog();
         if (r && r.ok && Array.isArray(r.artifacts)) return r.artifacts;
-        if (r && !r.ok && r.error) return { __catalogError: formatShellToolError(r.error, r.error) };
+        if (r && !r.ok && r.error) {
+          // Catalog is optional for builtin/local tools; keep message readable.
+          return { __catalogError: formatShellToolError(r.error, r.error) };
+        }
       }
       return [];
     },
@@ -238,6 +255,7 @@
         try {
           const shellR = await shell.builtinExampleAvailable();
           if (shellR && shellR.ok && shellR.available) {
+            const examples = Array.isArray(shellR.examples) ? shellR.examples : [];
             return {
               available: true,
               toolId: shellR.toolId || EXAMPLE_TOOL_ID,
@@ -245,6 +263,18 @@
               description: shellR.description,
               semver: shellR.semver,
               tags: Array.isArray(shellR.tags) ? shellR.tags : [],
+              examples:
+                examples.length > 0
+                  ? examples
+                  : [
+                      {
+                        toolId: shellR.toolId || EXAMPLE_TOOL_ID,
+                        name: shellR.name,
+                        description: shellR.description,
+                        semver: shellR.semver,
+                        tags: Array.isArray(shellR.tags) ? shellR.tags : [],
+                      },
+                    ],
             };
           }
         } catch {
@@ -252,7 +282,7 @@
         }
       }
       const r = await shell.api('GET', '/v1/shell-tools/example-available', null);
-      if (!r.ok || !r.json || !r.json.available) return { available: false };
+      if (!r.ok || !r.json || !r.json.available) return { available: false, examples: [] };
       return {
         available: true,
         toolId: r.json.toolId || EXAMPLE_TOOL_ID,
@@ -260,6 +290,7 @@
         description: r.json.description,
         semver: r.json.semver,
         tags: Array.isArray(r.json.tags) ? r.json.tags : [],
+        examples: Array.isArray(r.json.examples) ? r.json.examples : [],
       };
     },
 
@@ -522,9 +553,14 @@
       let ok = false;
       try {
         if (entry.builtin) {
-          const r = await shell.api('POST', '/v1/shell-tools/install-example', null, {
-            timeoutMs: INSTALL_TIMEOUT_MS,
-          });
+          const r = await shell.api(
+            'POST',
+            '/v1/shell-tools/install-example',
+            { exampleId: entry.id },
+            {
+              timeoutMs: INSTALL_TIMEOUT_MS,
+            },
+          );
           if (!r.ok) {
             window.alert('安装失败：' + formatShellToolError(r.json && r.json.error, r.json && r.json.message));
             return false;
@@ -608,16 +644,17 @@
 
     bind(shell) {
       this._shell = shell;
+      if (window.ShellToolsBridges) window.ShellToolsBridges.bind(shell);
       $('btnToolsRefresh')?.addEventListener('click', () => void this.reloadAll(shell));
       $('toolsSearchInput')?.addEventListener('input', (ev) => {
         this.searchQuery = ev.target && ev.target.value != null ? String(ev.target.value) : '';
         this.renderGrid();
       });
-      document.querySelectorAll('[data-filter-source]').forEach((btn) => {
+      document.querySelectorAll('#tools-rack [data-filter-source]').forEach((btn) => {
         btn.addEventListener('click', () => {
           const v = btn.getAttribute('data-filter-source') || 'all';
           this.filterSource = v === 'local' || v === 'cloud' ? v : 'all';
-          document.querySelectorAll('[data-filter-source]').forEach((b) => {
+          document.querySelectorAll('#tools-rack [data-filter-source]').forEach((b) => {
             b.classList.toggle('active', b.getAttribute('data-filter-source') === this.filterSource);
           });
           this.renderGrid();
@@ -627,7 +664,11 @@
 
     async onViewShown(shell) {
       this._shell = shell;
-      await this.reloadAll(shell);
+      if (window.ShellToolsBridges) {
+        await window.ShellToolsBridges.onViewShown(shell);
+      }
+      // Prefetch rack list in background so switching tabs is snappy.
+      void this.reloadAll(shell);
     },
   };
 })();

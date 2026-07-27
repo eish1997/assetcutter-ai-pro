@@ -1456,10 +1456,17 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (path === '/api/companion-artifacts/catalog' && req.method === 'GET') {
-      const rows = await listCompanionArtifacts();
-      json(res, 200, {
-        artifacts: rows.map((r) => companionArtifactToPublicClient(r)).filter(Boolean),
-      });
+      try {
+        const rows = await listCompanionArtifacts();
+        json(res, 200, {
+          artifacts: rows.map((r) => companionArtifactToPublicClient(r)).filter(Boolean),
+        });
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        console.warn('[auth-api] companion-artifacts catalog failed:', msg);
+        // Public catalog must not 500/400 the tools page when DB is down; return empty list.
+        json(res, 200, { artifacts: [], warning: msg });
+      }
       return;
     }
 

@@ -1,0 +1,39 @@
+{
+  "schemaVersion": 1,
+  "title": "批量传递贴图",
+  "sections": [
+    {
+      "id": "maya",
+      "fields": [
+        {
+          "type": "text",
+          "id": "mayaHost",
+          "label": "Maya Host",
+          "default": "127.0.0.1"
+        },
+        {
+          "type": "text",
+          "id": "mayaPort",
+          "label": "Command Port",
+          "default": "7001"
+        }
+      ]
+    }
+  ],
+  "actions": [
+    {
+      "id": "openMaya",
+      "label": "在 Maya 中打开",
+      "kind": "open_in_host",
+      "host": "maya",
+      "style": "primary"
+    }
+  ],
+  "outputs": [
+    {
+      "type": "log",
+      "id": "runLog",
+      "label": "状态"
+    }
+  ]
+}
