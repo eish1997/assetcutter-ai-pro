@@ -1,13 +1,13 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js';
-import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
-import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js';
 import {
-  disposeObjectHierarchy,
   frameCameraToObject,
   inferModelFormat,
 } from './workflowModelThreeShared';
+import {
+  acquireWorkflowModelSceneInstance,
+  disposeWorkflowModelSceneInstance,
+} from './workflowModelSceneCache';
 import {
   aimWorkflowModelLightsAtBox,
   configureWorkflowModelSoftShadows,
@@ -34,6 +34,7 @@ let captureQueueTail: Promise<unknown> = Promise.resolve();
  * 离屏加载模型并渲染若干帧后导出 JPEG data URL，供工作区卡片缩略图使用。
  * 灯光与主预览一致（HDR→PMREM，失败则 Room）；使用 `preserveDrawingBuffer` 以稳定 `toDataURL`。
  * Captures are globally serialized (one at a time).
+ * 模型解析走 {@link acquireWorkflowModelSceneInstance}，与大图预览共用 LRU，避免重复 parse。
  */
 export function captureWorkflowModelThumbnailDataUrl(
   opts: CaptureWorkflowModelThumbOptions
@@ -79,7 +80,7 @@ function captureWorkflowModelThumbnailDataUrlNow(
       torn = true;
       if (loadedRoot) {
         scene.remove(loadedRoot);
-        disposeObjectHierarchy(loadedRoot);
+        disposeWorkflowModelSceneInstance(loadedRoot);
         loadedRoot = null;
       }
       if (groundMesh) {
@@ -107,17 +108,13 @@ function captureWorkflowModelThumbnailDataUrlNow(
 
     const timer = window.setTimeout(() => finish(null), timeoutMs);
 
-    const onError = () => {
-      finish(null);
-    };
-
     const onLoaded = (object: THREE.Object3D) => {
       if (settled) {
-        disposeObjectHierarchy(object);
+        disposeWorkflowModelSceneInstance(object);
         return;
       }
       if (!stage || !renderHost || !controls || !renderer) {
-        disposeObjectHierarchy(object);
+        disposeWorkflowModelSceneInstance(object);
         finish(null);
         return;
       }
@@ -201,12 +198,14 @@ function captureWorkflowModelThumbnailDataUrlNow(
         stage = null;
         return;
       }
-      if (format === 'gltf') {
-        new GLTFLoader().load(modelSrc, (gltf) => onLoaded(gltf.scene), undefined, onError);
-      } else if (format === 'fbx') {
-        new FBXLoader().load(modelSrc, (group) => onLoaded(group), undefined, onError);
-      } else {
-        new OBJLoader().load(modelSrc, (group) => onLoaded(group), undefined, onError);
+      try {
+        const { root } = await acquireWorkflowModelSceneInstance({
+          src: modelSrc,
+          fileName: opts.modelFileName,
+        });
+        onLoaded(root);
+      } catch {
+        finish(null);
       }
     })();
   });

@@ -90,6 +90,76 @@ export function frameCameraToObject(
   controls.update();
 }
 
+function isFiniteVec3(v: unknown): v is [number, number, number] {
+  return (
+    Array.isArray(v) &&
+    v.length === 3 &&
+    Number.isFinite(v[0]) &&
+    Number.isFinite(v[1]) &&
+    Number.isFinite(v[2])
+  );
+}
+
+/** 校验/归一化持久化的 3D 视口状态；非法则返回 null */
+export function normalizeWorkflowModel3dViewState(raw: unknown): {
+  camera: { position: [number, number, number]; target: [number, number, number] };
+  displayMode?: 'material' | 'clay' | 'wire' | 'normal';
+  showGrid?: boolean;
+  backfaceCulling?: boolean;
+  updatedAt: number;
+} | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const rec = raw as Record<string, unknown>;
+  const cam = rec.camera;
+  if (!cam || typeof cam !== 'object') return null;
+  const camRec = cam as Record<string, unknown>;
+  if (!isFiniteVec3(camRec.position) || !isFiniteVec3(camRec.target)) return null;
+  const mode = rec.displayMode;
+  const displayMode =
+    mode === 'material' || mode === 'clay' || mode === 'wire' || mode === 'normal' ? mode : undefined;
+  return {
+    camera: {
+      position: [camRec.position[0], camRec.position[1], camRec.position[2]],
+      target: [camRec.target[0], camRec.target[1], camRec.target[2]],
+    },
+    ...(displayMode ? { displayMode } : {}),
+    ...(typeof rec.showGrid === 'boolean' ? { showGrid: rec.showGrid } : {}),
+    ...(typeof rec.backfaceCulling === 'boolean' ? { backfaceCulling: rec.backfaceCulling } : {}),
+    updatedAt: Number.isFinite(rec.updatedAt) ? Number(rec.updatedAt) : Date.now(),
+  };
+}
+
+/** 在已 frame 好 near/far/min/max 后覆盖相机位姿 */
+export function applyWorkflowModel3dCameraPose(
+  camera: THREE.PerspectiveCamera,
+  controls: OrbitControls,
+  pose: { position: [number, number, number]; target: [number, number, number] }
+): void {
+  camera.position.set(pose.position[0], pose.position[1], pose.position[2]);
+  controls.target.set(pose.target[0], pose.target[1], pose.target[2]);
+  controls.update();
+}
+
+/**
+ * 判断持久化相机是否仍能看到模型。坏姿态（钻进模型、飞到天外、target 偏离）会导致「打开后一片毛玻璃」。
+ */
+export function isWorkflowModel3dCameraPoseSane(
+  pose: { position: [number, number, number]; target: [number, number, number] },
+  box: THREE.Box3
+): boolean {
+  if (box.isEmpty()) return false;
+  const center = box.getCenter(new THREE.Vector3());
+  const sphere = box.getBoundingSphere(new THREE.Sphere());
+  const radius = Math.max(sphere.radius, 1e-4);
+  const pos = new THREE.Vector3(pose.position[0], pose.position[1], pose.position[2]);
+  const target = new THREE.Vector3(pose.target[0], pose.target[1], pose.target[2]);
+  if (![pos.x, pos.y, pos.z, target.x, target.y, target.z].every(Number.isFinite)) return false;
+  const dist = pos.distanceTo(target);
+  if (!(dist > radius * 0.05 && dist < radius * 80)) return false;
+  if (target.distanceTo(center) > radius * 4) return false;
+  return true;
+}
+
 export function disposeObjectHierarchy(root: THREE.Object3D): void {
   root.traverse((obj) => {
     const mesh = obj as THREE.Mesh;

@@ -28,6 +28,29 @@ export function getDefaultWorkflowViewerHdrUrl(): string {
   return `${normalized}hdr/studio_small_09_1k.hdr`;
 }
 
+/** Decoded equirect HDR textures (CPU); each WebGL context still builds its own PMREM. */
+const hdrEquirectCache = new Map<string, Promise<THREE.DataTexture>>();
+
+async function loadHdrEquirectCached(hdrUrl: string, signal: AbortSignal | undefined): Promise<THREE.DataTexture> {
+  const key = String(hdrUrl || '').trim();
+  let pending = hdrEquirectCache.get(key);
+  if (!pending) {
+    pending = (async () => {
+      const loader = new HDRLoader();
+      const tex = await loader.loadAsync(key);
+      tex.mapping = THREE.EquirectangularReflectionMapping;
+      return tex;
+    })().catch((err) => {
+      hdrEquirectCache.delete(key);
+      throw err;
+    });
+    hdrEquirectCache.set(key, pending);
+  }
+  const tex = await pending;
+  if (signal?.aborted) throw new DOMException('aborted', 'AbortError');
+  return tex;
+}
+
 async function buildPmremEnvironment(
   renderer: THREE.WebGLRenderer,
   pmremGenerator: THREE.PMREMGenerator,
@@ -37,17 +60,12 @@ async function buildPmremEnvironment(
   const tryHdr = Boolean(hdrUrl?.trim());
   if (tryHdr && !signal?.aborted) {
     try {
-      const loader = new HDRLoader();
-      const tex = await loader.loadAsync(hdrUrl!);
-      if (signal?.aborted) {
-        tex.dispose();
-        throw new DOMException('aborted', 'AbortError');
-      }
-      tex.mapping = THREE.EquirectangularReflectionMapping;
-      const rt = pmremGenerator.fromEquirectangular(tex);
-      tex.dispose();
-      return rt;
-    } catch {
+      const tex = await loadHdrEquirectCached(hdrUrl!, signal);
+      if (signal?.aborted) throw new DOMException('aborted', 'AbortError');
+      // fromEquirectangular copies into a context-local RT; do not dispose shared equirect.
+      return pmremGenerator.fromEquirectangular(tex);
+    } catch (e) {
+      if (e instanceof DOMException && e.name === 'AbortError') throw e;
       /* 网络/404 时回退 Room */
     }
   }

@@ -1,11 +1,12 @@
-import React, { Suspense } from 'react';
+import React, { Suspense, useEffect, useMemo } from 'react';
 
-import type { WorkflowAssetVariant } from '../../types';
+import type { WorkflowAssetVariant, WorkflowModel3dViewState } from '../../types';
 import type { WorkflowModelPbrEditDoc } from '../../services/workflowModelPbrEdits';
 import {
   getLazyImagePreviewViewer,
   PreviewViewerErrorBoundary,
   PreviewViewerFallback,
+  type ImagePreviewWebCaptureApi,
   type Model3DDisplayMode,
 } from '../preview';
 import AppIcon from '../ui/AppIcon';
@@ -25,6 +26,11 @@ type Props = {
   uiRightInset?: string;
   resolvePbrTextureAssetSrc?: (assetId: string) => string;
   onAddToComposeInput?: (text: string) => void;
+  /** 纯 model3d centerSlot：注册截取当前 WebGL 画面 */
+  onWebPreviewCaptureApiChange?: (api: ImagePreviewWebCaptureApi | null) => void;
+  onModel3dViewDirty?: () => void;
+  model3dViewState?: WorkflowModel3dViewState | null;
+  onModel3dViewStateChange?: (state: WorkflowModel3dViewState, assetId?: string) => void;
 };
 
 function clean(value: unknown): string {
@@ -160,6 +166,10 @@ function Model3DAssetViewer({
   capturePreviewNonce,
   uiRightInset,
   resolvePbrTextureAssetSrc,
+  onWebPreviewCaptureApiChange,
+  onModel3dViewDirty,
+  model3dViewState,
+  onModel3dViewStateChange,
 }: {
   variant: WorkflowAssetVariant;
   assetId?: string;
@@ -172,19 +182,43 @@ function Model3DAssetViewer({
   capturePreviewNonce?: number;
   uiRightInset?: string;
   resolvePbrTextureAssetSrc?: (assetId: string) => string;
+  onWebPreviewCaptureApiChange?: (api: ImagePreviewWebCaptureApi | null) => void;
+  onModel3dViewDirty?: () => void;
+  model3dViewState?: WorkflowModel3dViewState | null;
+  onModel3dViewStateChange?: (state: WorkflowModel3dViewState, assetId?: string) => void;
 }) {
   const hostRef = React.useRef<HTMLDivElement | null>(null);
+  const viewerCaptureRef = React.useRef<ImagePreviewWebCaptureApi | null>(null);
+
+  const captureApi = useMemo<ImagePreviewWebCaptureApi>(
+    () => ({
+      captureCurrentViewAsDataUrl: () => {
+        const fromViewer = viewerCaptureRef.current?.captureCurrentViewAsDataUrl();
+        if (fromViewer?.startsWith('data:image/')) return fromViewer;
+        const canvas = hostRef.current?.querySelector('canvas');
+        if (!(canvas instanceof HTMLCanvasElement) || canvas.width < 2 || canvas.height < 2) return null;
+        try {
+          return canvas.toDataURL('image/png');
+        } catch {
+          return null;
+        }
+      },
+    }),
+    []
+  );
+
+  useEffect(() => {
+    if (!onWebPreviewCaptureApiChange) return;
+    onWebPreviewCaptureApiChange(captureApi);
+    return () => onWebPreviewCaptureApiChange(null);
+  }, [captureApi, onWebPreviewCaptureApiChange]);
 
   React.useEffect(() => {
     if (!capturePreviewNonce) return;
-    const canvas = hostRef.current?.querySelector('canvas');
-    if (!(canvas instanceof HTMLCanvasElement) || canvas.width < 2 || canvas.height < 2) return;
-    try {
-      downloadDataUrl(canvas.toDataURL('image/png'), `${inferFileName(variant).replace(/\.[^.]+$/, '') || 'model-view'}.png`);
-    } catch {
-      /* Canvas may be tainted by cross-origin model textures; ignore and keep the preview usable. */
-    }
-  }, [capturePreviewNonce, variant]);
+    const dataUrl = captureApi.captureCurrentViewAsDataUrl();
+    if (!dataUrl) return;
+    downloadDataUrl(dataUrl, `${inferFileName(variant).replace(/\.[^.]+$/, '') || 'model-view'}.png`);
+  }, [captureApi, capturePreviewNonce, variant]);
 
   if (!LazyImageModel3DViewer) return <MissingMedia variant={variant} />;
   return (
@@ -197,13 +231,19 @@ function Model3DAssetViewer({
               modelSrc={url}
               model3dAssetId={assetId}
               model3dVariantId={variant.id}
-              model3dModelKey={url || variant.modelCompanionKeys?.[0] || variant.id}
+              model3dModelKey={variant.modelCompanionKeys?.[0] || variant.id || url}
               model3dPbrEditDoc={model3dPbrEditDoc}
               modelFileName={inferFileName(variant)}
               model3dDisplayMode={model3dDisplayMode}
               model3dResetViewNonce={model3dResetViewNonce}
               model3dShowGrid={model3dShowGrid}
               model3dBackfaceCulling={model3dBackfaceCulling}
+              onModel3dViewDirty={onModel3dViewDirty}
+              model3dViewState={model3dViewState}
+              onModel3dViewStateChange={onModel3dViewStateChange}
+              onModel3dCaptureApiChange={(api) => {
+                viewerCaptureRef.current = api;
+              }}
               uiRightInset={uiRightInset}
               resolvePbrTextureAssetSrc={resolvePbrTextureAssetSrc}
               className="h-full w-full min-h-0"
@@ -241,6 +281,10 @@ export const AssetMediaPreviewCenter: React.FC<Props> = ({
   capturePreviewNonce = 0,
   uiRightInset,
   resolvePbrTextureAssetSrc,
+  onWebPreviewCaptureApiChange,
+  onModel3dViewDirty,
+  model3dViewState,
+  onModel3dViewStateChange,
 }) => {
   const url = clean(variant.url);
   const modelUrl = variant.kind === 'model3d' ? pickModelUrl(variant) : '';
@@ -270,6 +314,10 @@ export const AssetMediaPreviewCenter: React.FC<Props> = ({
           capturePreviewNonce={capturePreviewNonce}
           uiRightInset={uiRightInset}
           resolvePbrTextureAssetSrc={resolvePbrTextureAssetSrc}
+          onWebPreviewCaptureApiChange={onWebPreviewCaptureApiChange}
+          onModel3dViewDirty={onModel3dViewDirty}
+          model3dViewState={model3dViewState}
+          onModel3dViewStateChange={onModel3dViewStateChange}
         />
       ) : usableUrl ? (
         <FileAssetViewer url={usableUrl} />

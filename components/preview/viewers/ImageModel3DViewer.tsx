@@ -1,9 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js';
-import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
-import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js';
 import './ImageModel3DViewer.css';
 import type { LazyImagePreviewViewerProps } from '../registry';
 import ModelPbrSlotGeneratePanel, {
@@ -46,19 +43,36 @@ import {
 } from '../../../services/workflowModelPbrTextureActions';
 import { copyWorkflowAssetOriginalImageToClipboard } from '../../../services/workflowAssetClipboard';
 import {
-  disposeObjectHierarchy,
+  applyWorkflowModel3dCameraPose,
   frameCameraToObject,
   inferModelFormat,
+  isWorkflowModel3dCameraPoseSane,
+  normalizeWorkflowModel3dViewState,
 } from '../../../services/workflowModelThreeShared';
+import {
+  acquireWorkflowModelSceneInstance,
+  disposeWorkflowModelSceneInstance,
+  resolveWorkflowModelSceneCacheKey,
+} from '../../../services/workflowModelSceneCache';
+import {
+  peekWorkflowModelViewerUiSticky,
+  rememberWorkflowModelViewerUiSticky,
+} from '../../../services/workflowModelViewerUiSticky';
+import { acquireWorkflowModelViewerWarmRuntime, releaseWorkflowModelViewerWarmRuntime } from '../../../services/workflowModelViewerGlWarm';
+
+/** Cancelled on StrictMode remount so we do not setAssets mid-flash. */
+let deferredViewStatePersist: {
+  loadKey: string;
+  timer: ReturnType<typeof setTimeout>;
+} | null = null;
+import type { WorkflowModel3dViewState } from '../../../types';
 import type { Model3DInspectionStats } from '../assetPreviewTypes';
 import {
   aimWorkflowModelLightsAtBox,
-  configureWorkflowModelSoftShadows,
   createStudioGroundMesh,
-  createWorkflowModelViewerStageAsync,
   enhanceLoadedModelMaterials,
 } from '../../../services/workflowModelViewerStage';
-import { createRenderHost, type RenderHost } from '../../../services/renderCore';
+import type { RenderHost } from '../../../services/renderCore';
 
 type ViewerStatus = 'loading' | 'ready' | 'error' | 'unsupported';
 const MODEL3D_STATS_EVENT = 'asset-preview:model3d-stats';
@@ -554,15 +568,56 @@ const ImageModel3DViewer: React.FC<LazyImagePreviewViewerProps> = ({
   model3dResetViewNonce = 0,
   model3dShowGrid = true,
   model3dBackfaceCulling = true,
+  onModel3dViewDirty,
+  model3dViewState,
+  onModel3dViewStateChange,
+  onModel3dCaptureApiChange,
   uiRightInset = '0px',
   className,
 }) => {
   const resolveTextureAssetSrcRef = useRef(resolvePbrTextureAssetSrc);
   resolveTextureAssetSrcRef.current = resolvePbrTextureAssetSrc;
+  const onModel3dViewDirtyRef = useRef(onModel3dViewDirty);
+  onModel3dViewDirtyRef.current = onModel3dViewDirty;
+  const onModel3dViewStateChangeRef = useRef(onModel3dViewStateChange);
+  onModel3dViewStateChangeRef.current = onModel3dViewStateChange;
+  const onModel3dCaptureApiChangeRef = useRef(onModel3dCaptureApiChange);
+  onModel3dCaptureApiChangeRef.current = onModel3dCaptureApiChange;
+  const captureFrameRef = useRef<(() => string | null) | null>(null);
+  const model3dViewStateRef = useRef(model3dViewState);
+  model3dViewStateRef.current = model3dViewState;
+  const modelSrcRef = useRef(modelSrc);
+  modelSrcRef.current = modelSrc;
+  const modelFileNameRef = useRef(modelFileName);
+  modelFileNameRef.current = modelFileName;
+  const markViewDirty = useCallback(() => {
+    onModel3dViewDirtyRef.current?.();
+  }, []);
   const resolveTexSrc = useCallback(
     (ref: { assetId?: string; dataUrl?: string } | null | undefined) =>
       resolvePbrTextureSrc(ref, resolveTextureAssetSrcRef.current),
     []
+  );
+  /** Prefer companion/file identity; never treat blob:/data: as the stable key. */
+  const stableModelIdentity = useMemo(() => {
+    for (const candidate of [model3dModelKey, modelFileName, model3dVariantId]) {
+      const value = String(candidate || '').trim();
+      if (value && !/^(blob:|data:)/i.test(value)) return value;
+    }
+    const src = String(modelSrc || '').trim();
+    if (src && !/^(blob:|data:)/i.test(src)) return src;
+    return String(modelFileName || model3dVariantId || '').trim();
+  }, [model3dModelKey, modelFileName, model3dVariantId, modelSrc]);
+  const sceneLoadKey = useMemo(
+    () =>
+      resolveWorkflowModelSceneCacheKey({
+        src: String(modelSrc || ''),
+        fileName: modelFileName,
+        assetId: model3dAssetId,
+        variantId: model3dVariantId,
+        modelKey: stableModelIdentity,
+      }),
+    [model3dAssetId, model3dVariantId, stableModelIdentity, modelFileName, modelSrc]
   );
   const rootRef = useRef<HTMLDivElement>(null);
   const mountRef = useRef<HTMLDivElement>(null);
@@ -575,11 +630,34 @@ const ImageModel3DViewer: React.FC<LazyImagePreviewViewerProps> = ({
   const displayModeRef = useRef<NonNullable<LazyImagePreviewViewerProps['model3dDisplayMode']>>('material');
   const showGridRef = useRef(model3dShowGrid);
   const backfaceCullingRef = useRef(model3dBackfaceCulling);
-  const [status, setStatus] = useState<ViewerStatus>('loading');
+  const snapshotViewState = useCallback(
+    (
+      camera: THREE.PerspectiveCamera,
+      controls: OrbitControls
+    ): WorkflowModel3dViewState => ({
+      camera: {
+        position: [camera.position.x, camera.position.y, camera.position.z],
+        target: [controls.target.x, controls.target.y, controls.target.z],
+      },
+      displayMode: displayModeRef.current,
+      showGrid: showGridRef.current,
+      backfaceCulling: backfaceCullingRef.current,
+      updatedAt: Date.now(),
+    }),
+    []
+  );
+  const stickyUi = peekWorkflowModelViewerUiSticky(sceneLoadKey);
+  const [status, setStatus] = useState<ViewerStatus>(() =>
+    stickyUi?.status === 'ready' ? 'ready' : 'loading'
+  );
   const [message, setMessage] = useState<string>('');
-  const [materialSlots, setMaterialSlots] = useState<MaterialSlotInfo[]>([]);
-  const [activeMaterialId, setActiveMaterialId] = useState<string>('');
-  const [pbrDoc, setPbrDoc] = useState<WorkflowModelPbrEditDoc | null>(null);
+  const [materialSlots, setMaterialSlots] = useState<MaterialSlotInfo[]>(
+    () => (stickyUi?.materialSlots as MaterialSlotInfo[] | undefined) || []
+  );
+  const [activeMaterialId, setActiveMaterialId] = useState<string>(
+    () => stickyUi?.activeMaterialId || ''
+  );
+  const [pbrDoc, setPbrDoc] = useState<WorkflowModelPbrEditDoc | null>(() => stickyUi?.pbrDoc ?? null);
   const [draftSlotParams, setDraftSlotParams] = useState<Record<string, number>>({});
   const [, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [generatePanelSlot, setGeneratePanelSlot] = useState<WorkflowModelPbrSlot | null>(null);
@@ -610,8 +688,13 @@ const ImageModel3DViewer: React.FC<LazyImagePreviewViewerProps> = ({
     return next;
   }, []);
   const pbrStorageKey = useMemo(
-    () => workflowModelPbrEditKey(model3dAssetId, model3dVariantId, model3dModelKey || modelSrc || modelFileName),
-    [model3dAssetId, model3dModelKey, model3dVariantId, modelFileName, modelSrc]
+    () =>
+      workflowModelPbrEditKey(
+        model3dAssetId,
+        model3dVariantId,
+        stableModelIdentity || modelFileName || 'unknown_model'
+      ),
+    [model3dAssetId, model3dVariantId, stableModelIdentity, modelFileName]
   );
   const persistedPbrDoc = useMemo(
     () => normalizeWorkflowModelPbrEditDoc(model3dPbrEditDoc),
@@ -625,12 +708,14 @@ const ImageModel3DViewer: React.FC<LazyImagePreviewViewerProps> = ({
       publishWorkflowModelPbrEdit({
         assetId,
         variantId: model3dVariantId || doc.variantId,
-        modelKey: model3dModelKey || modelSrc || modelFileName || doc.modelKey,
+        modelKey: stableModelIdentity || modelFileName || doc.modelKey,
         doc,
       });
     },
-    [model3dAssetId, model3dModelKey, model3dVariantId, modelFileName, modelSrc]
+    [model3dAssetId, model3dVariantId, stableModelIdentity, modelFileName]
   );
+  const publishModelPbrEditRef = useRef(publishModelPbrEdit);
+  publishModelPbrEditRef.current = publishModelPbrEdit;
 
   useEffect(() => {
     pbrDocRef.current = pbrDoc;
@@ -668,19 +753,28 @@ const ImageModel3DViewer: React.FC<LazyImagePreviewViewerProps> = ({
     const root = rootRef.current;
     const mount = mountRef.current;
     if (!root || !mount) return;
-    const src = (modelSrc || '').trim();
-    setMaterialSlots([]);
-    setActiveMaterialId('');
-    setPbrDoc(null);
-    setDraftSlotParams({});
-    setSaveState('idle');
+    // Read latest blob URL from ref — effect must not re-run when ephemeral URLs churn.
+    const src = String(modelSrcRef.current || '').trim();
+    const fileName = modelFileNameRef.current;
+    const keepUi = peekWorkflowModelViewerUiSticky(sceneLoadKey)?.status === 'ready';
+    if (deferredViewStatePersist?.loadKey === sceneLoadKey) {
+      clearTimeout(deferredViewStatePersist.timer);
+      deferredViewStatePersist = null;
+    }
+    if (!keepUi) {
+      setMaterialSlots([]);
+      setActiveMaterialId('');
+      setPbrDoc(null);
+      setDraftSlotParams({});
+      setSaveState('idle');
+    }
     if (!src) {
       setStatus('unsupported');
       setMessage('当前资产没有可预览的 3D 模型链接。');
       return;
     }
 
-    const format = inferModelFormat(src, modelFileName);
+    const format = inferModelFormat(src, fileName);
     if (format === 'unknown') {
       setStatus('unsupported');
       setMessage('无法识别模型格式。本地文件请保留扩展名（.glb / .gltf / .fbx / .obj）。');
@@ -691,12 +785,18 @@ const ImageModel3DViewer: React.FC<LazyImagePreviewViewerProps> = ({
     let rafId = 0;
     let loadedRoot: THREE.Object3D | null = null;
     let groundMesh: THREE.Mesh | null = null;
-    let stage: Awaited<ReturnType<typeof createWorkflowModelViewerStageAsync>> | null = null;
+    let stage: import('../../../services/workflowModelViewerStage').WorkflowModelViewerStage | null = null;
     let renderHost: RenderHost | null = null;
     let controls: OrbitControls | null = null;
     let renderer: THREE.WebGLRenderer | null = null;
     let resizeObserver: ResizeObserver | null = null;
     let domElement: HTMLCanvasElement | null = null;
+    let persistViewState: (() => void) | null = null;
+    let captureViewStateLocal: (() => void) | null = null;
+    let latestViewStateLocal: WorkflowModel3dViewState | null = null;
+    let scene: THREE.Scene | null = null;
+    let camera: THREE.PerspectiveCamera | null = null;
+    let heldWarmRuntime = false;
     const originalMaterials = new WeakMap<THREE.Mesh, THREE.Material | THREE.Material[]>();
     const clayMaterial = new THREE.MeshStandardMaterial({
       color: 0x808080,
@@ -714,13 +814,12 @@ const ImageModel3DViewer: React.FC<LazyImagePreviewViewerProps> = ({
 
     const width = Math.max(1, mount.clientWidth || root.clientWidth);
     const height = Math.max(1, mount.clientHeight || root.clientHeight || width * 0.56);
-    const scene = new THREE.Scene();
+    const persistAssetId = String(model3dAssetId || '').trim();
 
-    const camera = new THREE.PerspectiveCamera(50, width / height, 0.01, 2000);
-    camera.position.set(0, 0.6, 2.4);
-
-    setStatus('loading');
-    setMessage('');
+    if (!keepUi) {
+      setStatus('loading');
+      setMessage('');
+    }
 
     const restoreOriginalMaterials = () => {
       if (!loadedRoot) return;
@@ -761,7 +860,7 @@ const ImageModel3DViewer: React.FC<LazyImagePreviewViewerProps> = ({
       e.preventDefault();
     };
     const onKeyDown = (e: KeyboardEvent) => {
-      if (!controls || !loadedRoot) return;
+      if (!controls || !loadedRoot || !camera) return;
       if (e.ctrlKey || e.metaKey || e.altKey) return;
       if (e.code !== 'KeyF') return;
       e.preventDefault();
@@ -770,6 +869,8 @@ const ImageModel3DViewer: React.FC<LazyImagePreviewViewerProps> = ({
         defaultView: '+x',
         preserveViewDirection: true,
       });
+      persistViewState?.();
+      markViewDirty();
     };
     const onGlLost = (e: Event) => {
       try {
@@ -785,7 +886,7 @@ const ImageModel3DViewer: React.FC<LazyImagePreviewViewerProps> = ({
     };
 
     const syncViewCube = () => {
-      if (!controls) return;
+      if (!controls || !camera) return;
       const cube = viewCubeRef.current;
       if (!cube) return;
       const offset = camera.position.clone().sub(controls.target);
@@ -824,14 +925,8 @@ const ImageModel3DViewer: React.FC<LazyImagePreviewViewerProps> = ({
       applyBackfaceCulling();
     };
 
-    const onLoadError = () => {
-      if (cancelled) return;
-      setStatus('error');
-      setMessage('3D 模型加载失败（链接、跨域或文件损坏）。含贴图的 OBJ 需同目录 .mtl 时可能不完整。');
-    };
-
     const finishLoad = (object: THREE.Object3D) => {
-      if (cancelled || !stage || !controls) return;
+      if (cancelled || !stage || !controls || !scene || !camera) return;
       loadedRoot = object;
       ensureObjectUsesPbrMaterials(object);
       enhanceLoadedModelMaterials(object);
@@ -854,8 +949,25 @@ const ImageModel3DViewer: React.FC<LazyImagePreviewViewerProps> = ({
       pbrDocRef.current = savedDoc;
       materialSlotsRef.current = slots;
       scene.add(object);
+      // 先设宽松限位，再 frame（frame 会按包围盒改写 min/max/near/far）
+      controls.minDistance = 0.001;
+      controls.maxDistance = 1e6;
       frameCameraToObject(camera, controls, object, { defaultView: '+x' });
       const box = new THREE.Box3().setFromObject(object);
+      const savedView = normalizeWorkflowModel3dViewState(model3dViewStateRef.current);
+      if (savedView && isWorkflowModel3dCameraPoseSane(savedView.camera, box)) {
+        applyWorkflowModel3dCameraPose(camera, controls, savedView.camera);
+        // OrbitControls may clamp; if pose becomes unusable, fall back to default frame.
+        if (!isWorkflowModel3dCameraPoseSane(
+          {
+            position: [camera.position.x, camera.position.y, camera.position.z],
+            target: [controls.target.x, controls.target.y, controls.target.z],
+          },
+          box
+        )) {
+          frameCameraToObject(camera, controls, object, { defaultView: '+x' });
+        }
+      }
       aimWorkflowModelLightsAtBox(stage.keyLight, stage.fillLight, stage.rimLight, stage.bounceFill, box);
       groundMesh = createStudioGroundMesh(box);
       if (groundMesh) {
@@ -863,76 +975,82 @@ const ImageModel3DViewer: React.FC<LazyImagePreviewViewerProps> = ({
         scene.add(groundMesh);
       }
       applyDisplayModeRef.current?.(displayModeRef.current);
-      publishModel3DStats(collectModel3DStats(object, src, modelFileName, format));
+      publishModel3DStats(collectModel3DStats(object, src, fileName, format));
       if (savedDoc) {
         void Promise.all(
           slots.map((slot) =>
             applyMaterialEditToSlot(slot, savedDoc.materials[slot.id], resolveTextureAssetSrcRef.current)
           )
         ).then(() => {
-          publishModel3DStats(collectModel3DStats(object, src, modelFileName, format));
+          publishModel3DStats(collectModel3DStats(object, src, fileName, format));
         });
-        if (!assetSavedDoc && model3dAssetId) publishModelPbrEdit(savedDoc);
+        if (!assetSavedDoc && model3dAssetId) publishModelPbrEditRef.current(savedDoc);
       }
+      rememberWorkflowModelViewerUiSticky({
+        loadKey: sceneLoadKey,
+        status: 'ready',
+        materialSlots: slots,
+        activeMaterialId: slots[0]?.id || '',
+        pbrDoc: savedDoc,
+      });
       setStatus('ready');
     };
 
     void (async () => {
       try {
-        while (mount.firstChild) mount.removeChild(mount.firstChild);
-
-        renderHost = createRenderHost({
-          // HDR/PMREM stage still needs classic WebGLRenderer in three r182.
-          preferredBackend: 'webgl',
-          fallbackBackend: 'webgl',
-          requireClassicWebGl: true,
-          container: mount,
-          visual: {
-            antialias: true,
-            alpha: true,
-            preserveDrawingBuffer: true,
-            outputColorSpace: THREE.SRGBColorSpace,
-            toneMapping: THREE.ACESFilmicToneMapping,
-            toneMappingExposure: 1.02,
-            clearColor: 0x000000,
-            clearAlpha: 0,
-          },
+        // Do not strip mount children before acquire — if a warm canvas is still
+        // parented here, removeChild would drop it out of the document and can
+        // lose the WebGL context. acquire() reparents the parked canvas itself.
+        const acquired = await acquireWorkflowModelViewerWarmRuntime(mount, {
+          signal: abortEnv.signal,
+          width,
+          height,
         });
-        await renderHost.init();
-        if (cancelled) return;
-
-        const raw = renderHost.getRawRenderer();
-        const canvas = renderHost.getDomElement();
-        if (!(raw instanceof THREE.WebGLRenderer) || !canvas) {
-          throw new Error('RenderHost did not produce a WebGLRenderer');
+        if (cancelled) {
+          releaseWorkflowModelViewerWarmRuntime();
+          return;
         }
-        renderer = raw;
+        heldWarmRuntime = true;
+        renderHost = acquired.runtime.renderHost;
+        renderer = acquired.runtime.renderer;
+        scene = acquired.runtime.scene;
+        camera = acquired.runtime.camera;
+        stage = acquired.runtime.stage;
+        const canvas = renderHost.getDomElement();
+        if (!canvas) throw new Error('RenderHost missing canvas');
+        if (canvas.parentElement !== mount) {
+          mount.appendChild(canvas);
+        }
+        // Drop any leftover non-canvas nodes in the mount.
+        for (const child of [...mount.childNodes]) {
+          if (child !== canvas) mount.removeChild(child);
+        }
         domElement = canvas;
-
-        renderHost.resize(width, height, Math.min(window.devicePixelRatio, 1.5));
-        configureWorkflowModelSoftShadows(renderer);
-
-        canvas.style.width = '100%';
-        canvas.style.height = '100%';
-        canvas.style.display = 'block';
-        canvas.style.background = 'transparent';
-        canvas.style.cursor = 'grab';
-        canvas.style.touchAction = 'none';
-        canvas.tabIndex = 0;
-        canvas.setAttribute('aria-label', '3D model viewport');
 
         controls = new OrbitControls(camera, canvas);
         controls.enableDamping = true;
         controls.dampingFactor = 0.08;
         controls.enablePan = true;
-        controls.minDistance = 0.25;
-        controls.maxDistance = 20;
+        controls.minDistance = 0.001;
+        controls.maxDistance = 1e6;
         controls.target.set(0, 0, 0);
         controls.mouseButtons = {
           LEFT: THREE.MOUSE.ROTATE,
           MIDDLE: THREE.MOUSE.PAN,
           RIGHT: null,
         };
+        // `start` = 用户开始拖拽/缩放；`end` 再标一次，避免仅滚轮微调漏标 dirty
+        controls.addEventListener('start', markViewDirty);
+        controls.addEventListener('end', markViewDirty);
+        // 仅写入本地最新姿态；禁止在 orbit end 里回调父级 setAssets（会卡顿整页）
+        captureViewStateLocal = () => {
+          if (!camera || !controls) return;
+          latestViewStateLocal = snapshotViewState(camera, controls);
+        };
+        persistViewState = () => {
+          captureViewStateLocal?.();
+        };
+        controls.addEventListener('end', captureViewStateLocal);
 
         canvas.addEventListener('mousedown', onMouseDown);
         canvas.addEventListener('mouseup', onMouseUp);
@@ -940,25 +1058,29 @@ const ImageModel3DViewer: React.FC<LazyImagePreviewViewerProps> = ({
         canvas.addEventListener('contextmenu', onContextMenu);
         canvas.addEventListener('keydown', onKeyDown);
         canvas.addEventListener('webglcontextlost', onGlLost);
+        // OrbitControls 滚轮缩放不派发 start/end，需单独标 dirty
+        canvas.addEventListener('wheel', markViewDirty, { passive: true });
 
         resetCameraRef.current = () => {
-          if (!loadedRoot || !controls) return;
+          if (!loadedRoot || !controls || !camera) return;
           frameCameraToObject(camera, controls, loadedRoot, {
             defaultView: '+x',
             preserveViewDirection: true,
           });
+          persistViewState?.();
         };
 
         setModelViewDirectionRef.current = (direction: ViewCubeDirection) => {
-          if (!loadedRoot || !controls) return;
+          if (!loadedRoot || !controls || !camera) return;
           frameCameraToObject(camera, controls, loadedRoot, {
             viewDirection: new THREE.Vector3(direction[0], direction[1], direction[2]),
             fitPadding: 1.12,
           });
+          persistViewState?.();
         };
 
         resizeObserver = new ResizeObserver(() => {
-          if (cancelled || !mount || !renderHost) return;
+          if (cancelled || !mount || !renderHost || !camera) return;
           const w = Math.max(1, mount.clientWidth || root.clientWidth);
           const h = Math.max(1, mount.clientHeight || root.clientHeight || 1);
           camera.aspect = w / h;
@@ -968,7 +1090,7 @@ const ImageModel3DViewer: React.FC<LazyImagePreviewViewerProps> = ({
         resizeObserver.observe(root);
 
         const tick = () => {
-          if (cancelled || !renderHost || !controls) return;
+          if (cancelled || !renderHost || !controls || !scene || !camera) return;
           rafId = requestAnimationFrame(tick);
           try {
             if (renderer) {
@@ -982,36 +1104,58 @@ const ImageModel3DViewer: React.FC<LazyImagePreviewViewerProps> = ({
             /* 上下文丢失后 render 可能抛错，避免拖垮 React */
           }
         };
+        captureFrameRef.current = () => {
+          if (cancelled || !renderHost || !scene || !camera || !domElement) return null;
+          if (domElement.width < 2 || domElement.height < 2) return null;
+          try {
+            const gl = renderer?.getContext() as WebGLRenderingContext | null;
+            if (gl?.isContextLost?.()) return null;
+            controls?.update();
+            renderHost.render(scene, camera);
+            return domElement.toDataURL('image/png');
+          } catch {
+            return null;
+          }
+        };
+        onModel3dCaptureApiChangeRef.current?.({
+          captureCurrentViewAsDataUrl: () => captureFrameRef.current?.() ?? null,
+        });
         tick();
 
-        try {
-          stage = await createWorkflowModelViewerStageAsync(scene, renderer, null, {
-            signal: abortEnv.signal,
-          });
-        } catch (e) {
-          if (cancelled || (e instanceof DOMException && e.name === 'AbortError')) return;
-          if (!cancelled) {
-            setStatus('error');
-            setMessage('3D 环境（HDR）加载失败，请刷新重试。');
-          }
-          return;
-        }
+        const { root: modelRoot, fromCache } = await acquireWorkflowModelSceneInstance({
+          src,
+          fileName,
+          cacheKey: sceneLoadKey,
+          assetId: model3dAssetId,
+          variantId: model3dVariantId,
+          modelKey: stableModelIdentity,
+          signal: abortEnv.signal,
+        });
         if (cancelled) {
-          stage?.dispose();
-          stage = null;
+          disposeWorkflowModelSceneInstance(modelRoot);
           return;
         }
-        if (format === 'gltf') {
-          new GLTFLoader().load(src, (gltf) => finishLoad(gltf.scene), undefined, onLoadError);
-        } else if (format === 'fbx') {
-          new FBXLoader().load(src, (group) => finishLoad(group), undefined, onLoadError);
-        } else {
-          new OBJLoader().load(src, (group) => finishLoad(group), undefined, onLoadError);
+        if (import.meta.env.DEV) {
+          // eslint-disable-next-line no-console -- intentional reopen/cache diagnostics
+          console.debug('[workflow-model3d]', {
+            fromCache,
+            glRecycled: acquired.recycled,
+            loadKey: sceneLoadKey,
+            src: src.slice(0, 96),
+          });
         }
+        finishLoad(modelRoot);
       } catch (e) {
-        if (cancelled) return;
-        setStatus('error');
-        setMessage(e instanceof Error ? e.message : '3D 渲染初始化失败。');
+        if (cancelled || (e instanceof DOMException && e.name === 'AbortError')) return;
+        if (!cancelled) {
+          setStatus('error');
+          const msg = e instanceof Error ? e.message : '3D 渲染初始化失败。';
+          setMessage(
+            /hdr|环境/i.test(msg) ? '3D 环境（HDR）加载失败，请刷新重试。' : msg.includes('model') || msg.includes('load')
+              ? '3D 模型加载失败（链接、跨域或文件损坏）。含贴图的 OBJ 需同目录 .mtl 时可能不完整。'
+              : msg
+          );
+        }
       }
     })();
 
@@ -1020,7 +1164,37 @@ const ImageModel3DViewer: React.FC<LazyImagePreviewViewerProps> = ({
       abortEnv.abort();
       cancelAnimationFrame(rafId);
       resizeObserver?.disconnect();
+      if (controls && persistViewState && loadedRoot && camera) {
+        try {
+          persistViewState();
+        } catch {
+          /* ignore */
+        }
+      }
+      // 只在卸载时写回资产，避免交互中触发 WorkflowSection 全量重渲染。
+      // StrictMode 会立刻再挂载：延迟写回，新 effect 同 loadKey 时取消，避免 setAssets 闪一次。
+      if (latestViewStateLocal) {
+        const stateToPersist = latestViewStateLocal;
+        const assetIdToPersist = persistAssetId || undefined;
+        const loadKeyToPersist = sceneLoadKey;
+        if (deferredViewStatePersist) clearTimeout(deferredViewStatePersist.timer);
+        deferredViewStatePersist = {
+          loadKey: loadKeyToPersist,
+          timer: setTimeout(() => {
+            deferredViewStatePersist = null;
+            try {
+              onModel3dViewStateChangeRef.current?.(stateToPersist, assetIdToPersist);
+            } catch {
+              /* ignore */
+            }
+          }, 80),
+        };
+      }
+      if (captureViewStateLocal) controls?.removeEventListener('end', captureViewStateLocal);
+      controls?.removeEventListener('start', markViewDirty);
+      controls?.removeEventListener('end', markViewDirty);
       controls?.dispose();
+      controls = null;
       if (domElement) {
         domElement.removeEventListener('mousedown', onMouseDown);
         domElement.removeEventListener('mouseup', onMouseUp);
@@ -1028,18 +1202,22 @@ const ImageModel3DViewer: React.FC<LazyImagePreviewViewerProps> = ({
         domElement.removeEventListener('contextmenu', onContextMenu);
         domElement.removeEventListener('keydown', onKeyDown);
         domElement.removeEventListener('webglcontextlost', onGlLost);
+        domElement.removeEventListener('wheel', markViewDirty);
       }
       applyDisplayModeRef.current = null;
       resetCameraRef.current = null;
       setModelViewDirectionRef.current = null;
       setGridVisibleRef.current = null;
       setBackfaceCullingRef.current = null;
+      captureFrameRef.current = null;
+      onModel3dCaptureApiChangeRef.current?.(null);
       restoreOriginalMaterials();
-      if (loadedRoot) {
+      if (loadedRoot && scene) {
         scene.remove(loadedRoot);
-        disposeObjectHierarchy(loadedRoot);
+        disposeWorkflowModelSceneInstance(loadedRoot);
+        loadedRoot = null;
       }
-      if (groundMesh) {
+      if (groundMesh && scene) {
         scene.remove(groundMesh);
         groundMesh.geometry.dispose();
         (groundMesh.material as THREE.Material).dispose();
@@ -1048,10 +1226,12 @@ const ImageModel3DViewer: React.FC<LazyImagePreviewViewerProps> = ({
       clayMaterial.dispose();
       wireMaterial.dispose();
       normalMaterial.dispose();
-      stage?.dispose();
-      renderHost?.dispose();
+      // Keep WebGL+PMREM warm for fast reopen; do not dispose stage/renderHost here.
+      if (heldWarmRuntime) releaseWorkflowModelViewerWarmRuntime();
+      stage = null;
+      renderHost = null;
     };
-  }, [modelSrc, modelFileName, model3dAssetId, pbrStorageKey, publishModelPbrEdit]);
+  }, [markViewDirty, sceneLoadKey, snapshotViewState]);
 
   const activeMaterial = materialSlots.find((slot) => slot.id === activeMaterialId) || materialSlots[0] || null;
   const activeEdit = activeMaterial ? pbrDoc?.materials[activeMaterial.id] : undefined;
@@ -1150,7 +1330,7 @@ const ImageModel3DViewer: React.FC<LazyImagePreviewViewerProps> = ({
       version: 1 as const,
       assetId: model3dAssetId || 'unknown_asset',
       variantId: model3dVariantId,
-      modelKey: model3dModelKey || modelSrc || modelFileName || 'unknown_model',
+      modelKey: stableModelIdentity || modelFileName || 'unknown_model',
       updatedAt: nowMs(),
       materials: {},
     };
@@ -1159,7 +1339,7 @@ const ImageModel3DViewer: React.FC<LazyImagePreviewViewerProps> = ({
       ...current,
       assetId: model3dAssetId || current.assetId || 'unknown_asset',
       variantId: model3dVariantId || current.variantId,
-      modelKey: model3dModelKey || modelSrc || modelFileName || current.modelKey,
+      modelKey: stableModelIdentity || modelFileName || current.modelKey,
       updatedAt: nowMs(),
       materials: {
         ...current.materials,
@@ -1253,7 +1433,7 @@ const ImageModel3DViewer: React.FC<LazyImagePreviewViewerProps> = ({
         ...nextDoc,
         assetId: model3dAssetId || nextDoc.assetId || 'unknown_asset',
         variantId: model3dVariantId || nextDoc.variantId,
-        modelKey: model3dModelKey || modelSrc || modelFileName || nextDoc.modelKey,
+        modelKey: stableModelIdentity || modelFileName || nextDoc.modelKey,
         updatedAt: now,
         materials: {
           ...nextDoc.materials,
@@ -1597,9 +1777,13 @@ const ImageModel3DViewer: React.FC<LazyImagePreviewViewerProps> = ({
     };
   }, [generatePanelSlot, slotContextMenu]);
 
-  const handleViewCubePick = useCallback((direction: ViewCubeDirection) => {
-    setModelViewDirectionRef.current?.(direction);
-  }, []);
+  const handleViewCubePick = useCallback(
+    (direction: ViewCubeDirection) => {
+      setModelViewDirectionRef.current?.(direction);
+      markViewDirty();
+    },
+    [markViewDirty]
+  );
 
   return (
     <div
@@ -1963,7 +2147,7 @@ const ImageModel3DViewer: React.FC<LazyImagePreviewViewerProps> = ({
         }
         onClose={() => setSlotContextMenu(null)}
       />
-      {status === 'loading' ? (
+      {status === 'loading' && materialSlots.length === 0 ? (
         <div className="absolute inset-0 z-[2] flex items-center justify-center text-[10px] text-gray-500 pointer-events-none">
           3D 环境与模型加载中…
         </div>

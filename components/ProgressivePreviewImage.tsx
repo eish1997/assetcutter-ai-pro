@@ -219,6 +219,9 @@ export const ProgressivePreviewImage = forwardRef<HTMLImageElement, ProgressiveP
       const companionMicroKey = canUseCompanionThumbs
         ? workflowPreviewThumbCompanionStorageKey(cacheKey, 'micro', microEdge)
         : '';
+      // Fresh data: URL previews (e.g. 3D lightbox capture) must regenerate — do not
+      // serve a stale companion thumb that shares the stable storage key.
+      const sourceIsInlineData = /^data:image\//i.test(s);
 
       let cancelled = false;
 
@@ -300,7 +303,7 @@ export const ProgressivePreviewImage = forwardRef<HTMLImageElement, ProgressiveP
       };
 
       if (!microHit) {
-        if (companionMicroKey) {
+        if (companionMicroKey && !sourceIsInlineData) {
           void fetchWorkflowPreviewThumbFromCompanion(companionBase, companionProject, companionMicroKey).then((m) => {
             if (cancelled) return;
             if (m) {
@@ -317,7 +320,7 @@ export const ProgressivePreviewImage = forwardRef<HTMLImageElement, ProgressiveP
         }
       }
 
-      if (companionThumbKey) {
+      if (companionThumbKey && !sourceIsInlineData) {
         void fetchWorkflowPreviewThumbFromCompanion(companionBase, companionProject, companionThumbKey).then(async (t) => {
           if (cancelled) return;
           if (!t) {

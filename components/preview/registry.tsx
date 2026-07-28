@@ -4,6 +4,8 @@
 import { lazy, type ComponentType, type LazyExoticComponent } from 'react';
 import { importWithChunkRetry } from '../../services/lazyImportWithRetry';
 import type { WorkflowModelPbrEditDoc } from '../../services/workflowModelPbrEdits';
+import type { WorkflowModel3dViewState } from '../../types';
+import type { ImagePreviewWebCaptureApi } from './types';
 
 /** 与懒加载 Viewer 对齐的最小 props（图片类）；其它类型可另建 registry 或扩展联合类型 */
 export type Model3DDisplayMode = 'material' | 'clay' | 'wire' | 'normal';
@@ -25,12 +27,20 @@ export type LazyImagePreviewViewerProps = {
   model3dShowGrid?: boolean;
   /** 3D 模型：true=背面消隐，false=双面显示。 */
   model3dBackfaceCulling?: boolean;
+  /** 用户改变过相机/视角立方体时回调（用于关闭大图后刷新卡片预览图） */
+  onModel3dViewDirty?: () => void;
+  /** 上次保存的 3D 视口（相机 + 显示模式等） */
+  model3dViewState?: WorkflowModel3dViewState | null;
+  /** 视口变化时写回资产（仅卸载时；勿在 orbit end 调用） */
+  onModel3dViewStateChange?: (state: WorkflowModel3dViewState, assetId?: string) => void;
   /**
    * 右侧 UI 避让宽度（如大图资产缩略图条）。PBR 面板会相对该 inset 左移，避免被遮挡。
    */
   uiRightInset?: string;
   /** 解析 PBR 正式贴图资产的当前预览 URL（companion hydrate 后的 blob / original） */
   resolvePbrTextureAssetSrc?: (assetId: string) => string;
+  /** 关窗前截取当前帧（会先 render 再 toDataURL，比裸查 canvas 稳） */
+  onModel3dCaptureApiChange?: (api: ImagePreviewWebCaptureApi | null) => void;
   className?: string;
   /** 全景：与上次卸载前相同 key 时换纹理后恢复相机位姿（如大图内切换版本，传 `innerLayoutStableKey`） */
   panoPreserveViewKey?: string;

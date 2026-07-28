@@ -19,14 +19,26 @@ function guessAssetPart(cacheKey: string): string {
   return sanitizeCompanionPathSegment(first).slice(0, 36) || 'asset';
 }
 
+/**
+ * Grid cacheKey often ends with `:fp{fingerprint}` of the current preview bytes.
+ * Companion storage must ignore that suffix so reopen/close overwrites one file
+ * instead of creating `thumb-mi/th-*-{newHash}` forever.
+ */
+export function stableWorkflowPreviewThumbCacheKey(cacheKey: string): string {
+  return String(cacheKey || '')
+    .trim()
+    .replace(/:fp[a-z0-9-]+$/i, '');
+}
+
 export function workflowPreviewThumbCompanionStorageKey(
   cacheKey: string,
   kind: WorkflowPreviewThumbKind,
   maxEdge: number
 ): string {
-  const assetPart = guessAssetPart(cacheKey);
+  const stable = stableWorkflowPreviewThumbCacheKey(cacheKey);
+  const assetPart = guessAssetPart(stable);
   const edge = Math.max(1, Math.round(maxEdge || 1)).toString(36);
-  const hash = hashString(`${kind}\0${edge}\0${cacheKey}`);
+  const hash = hashString(`${kind}\0${edge}\0${stable}`);
   const ext = kind === 'micro' ? 'webp' : 'jpg';
   return `${assetPart}/thumb-${kind === 'micro' ? 'mi' : 'th'}-${edge}-${hash}.${ext}`;
 }
@@ -41,7 +53,7 @@ function blobToDataUrl(blob: Blob): Promise<string> {
 }
 
 const fetchPending = new Map<string, Promise<string | null>>();
-const putPending = new Set<string>();
+const putPending = new Map<string, Promise<void>>();
 
 function requestKey(baseUrl: string, projectId: string, key: string): string {
   return `${normalizeCompanionBaseUrl(baseUrl)}\0${String(projectId || '').trim()}\0${String(key || '').trim()}`;
@@ -87,13 +99,24 @@ export async function putWorkflowPreviewThumbToCompanion(
   const parsed = parseDataUrlToBlob(dataUrl);
   if (!parsed) return;
   const pendingKey = requestKey(base, pid, k);
-  if (putPending.has(pendingKey)) return;
-  putPending.add(pendingKey);
-  try {
+  // Serialize puts per key but never drop the latest bytes (old early-return skipped updates).
+  const prev = putPending.get(pendingKey);
+  const run = (async () => {
+    if (prev) {
+      try {
+        await prev;
+      } catch {
+        /* ignore prior failure */
+      }
+    }
     await putCompanionAsset(base, pid, k, parsed.blob, parsed.mime || 'image/jpeg');
+  })();
+  putPending.set(pendingKey, run);
+  try {
+    await run;
   } catch {
     /* best-effort thumbnail cache */
   } finally {
-    putPending.delete(pendingKey);
+    if (putPending.get(pendingKey) === run) putPending.delete(pendingKey);
   }
 }

@@ -27,6 +27,7 @@ import {
 import type {
   WorkflowAsset,
   WorkflowAssetVariant,
+  WorkflowModel3dViewState,
   WorkflowPendingTask,
   CapabilitySet,
   VgpGenStepCapture,
@@ -262,7 +263,10 @@ import { CustomDropdown } from './ui/CustomDropdown';
 import { resolveCapabilityPreviewSrc } from '../services/capabilityPreviewUrl';
 import { WorkflowCapabilityHoverPreview } from './WorkflowCapabilityHoverPreview';
 import { WorkflowGridImage } from './ProgressivePreviewImage';
-import { AssetCardPreviewRenderer } from './workflow/AssetCardPreviewRenderer';
+import {
+  AssetCardPreviewRenderer,
+  rememberAssetCardModelThumbnail,
+} from './workflow/AssetCardPreviewRenderer';
 import WorkflowPixelBusyOverlay from './WorkflowPixelBusyOverlay';
 import { workflowResultUsesVideoPreview, workflowSafeImgSrc } from '../services/workflowImageDisplay';
 import { previewSrcCacheFingerprint } from '../services/workflowImageThumb';
@@ -590,6 +594,7 @@ import {
   workflowLocalModelFileExceedsPreviewLimit,
 } from '../services/workflowModelBlob';
 import { captureWorkflowModelThumbnailDataUrl } from '../services/workflowModelPreviewCapture';
+import { normalizeWorkflowModel3dViewState } from '../services/workflowModelThreeShared';
 import { getCompanionLocalBaseUrl, normalizeCompanionBaseUrl } from '../services/companionLocalPrefs';
 import {
   canAttemptOpenWorkflowAssetFolder,
@@ -603,6 +608,7 @@ import {
   deleteCompanionAssetDirectory,
   getCompanionAssetMeta,
   probeCompanionSamSegmentHealth,
+  putCompanionAsset,
   revealCompanionAssetFolderWithProjectFallback,
 } from '../services/companionClient';
 import {
@@ -1149,6 +1155,14 @@ const WorkflowSection: React.FC<{
   const [lightboxInstantShellAssetId, setLightboxInstantShellAssetId] = useState<string | null>(null);
   /** 延后挂载完整预览层，避免与 instant shell 同帧 reconcile */
   const [lightboxOverlayMounted, setLightboxOverlayMounted] = useState(false);
+  /**
+   * 关 3D 大图：先视觉隐藏壳（露出资产列表），保留 3D 模块截缩略图后再卸载。
+   */
+  const [lightboxOverlayClosingHidden, setLightboxOverlayClosingHidden] = useState(false);
+  const lightboxOverlayClosingHiddenRef = useRef(false);
+  lightboxOverlayClosingHiddenRef.current = lightboxOverlayClosingHidden;
+  /** 取消进行中的「隐藏后截图再关」 */
+  const lightboxModelThumbCloseGenRef = useRef(0);
   const [lightboxPlaceholderImageSrc, setLightboxPlaceholderImageSrc] = useState<string | null>(null);
   const [lightboxLaunchAnimation, setLightboxLaunchAnimation] =
     useState<LightboxLaunchAnimation | null>(null);
@@ -1320,6 +1334,40 @@ const WorkflowSection: React.FC<{
   const onLightboxWebPreviewCaptureApiChange = useCallback((api: ImagePreviewWebCaptureApi | null) => {
     lightboxWebPreviewCaptureApiRef.current = api;
   }, []);
+  /** 3D 预览内用户改过视角/显示/PBR 时，关闭大图后强制刷新卡片缩略图 */
+  const lightboxModel3dViewDirtyRef = useRef(false);
+  const markLightboxModel3dViewDirty = useCallback(() => {
+    lightboxModel3dViewDirtyRef.current = true;
+  }, []);
+  const persistLightboxModel3dViewState = useCallback(
+    (state: WorkflowModel3dViewState, assetIdHint?: string) => {
+      const id = String(assetIdHint || lightboxAssetIdRef.current || '').trim();
+      if (!id) return;
+      const next = normalizeWorkflowModel3dViewState(state);
+      if (!next) return;
+      setAssets((prev) => {
+        const cur = prev.find((asset) => asset.id === id);
+        if (!cur) return prev;
+        const prevState = normalizeWorkflowModel3dViewState(cur.model3dViewState);
+        if (
+          prevState &&
+          prevState.camera.position[0] === next.camera.position[0] &&
+          prevState.camera.position[1] === next.camera.position[1] &&
+          prevState.camera.position[2] === next.camera.position[2] &&
+          prevState.camera.target[0] === next.camera.target[0] &&
+          prevState.camera.target[1] === next.camera.target[1] &&
+          prevState.camera.target[2] === next.camera.target[2] &&
+          prevState.displayMode === next.displayMode &&
+          prevState.showGrid === next.showGrid &&
+          prevState.backfaceCulling === next.backfaceCulling
+        ) {
+          return prev;
+        }
+        return prev.map((asset) => (asset.id === id ? { ...asset, model3dViewState: next } : asset));
+      });
+    },
+    [setAssets]
+  );
   /** 工作流大图：高度 3D 工具条 portal 宿主（右侧详情列上方，与详情同宽） */
   const lightboxHeightfieldToolbarHostRef = useRef<HTMLDivElement | null>(null);
   /** 大图局部重绘选区底边中点（视口），快捷栏锚在框下方 */
@@ -2173,7 +2221,9 @@ const WorkflowSection: React.FC<{
   const openStoryboardTablePanel = useCallback((assetId: string) => {
     setStoryboardPanelAssetId(assetId);
     setAssetSetPanelAssetId(null);
+    lightboxModelThumbCloseGenRef.current += 1;
     setLightboxInstantShellAssetId(null);
+    setLightboxOverlayClosingHidden(false);
     setLightboxOverlayMounted(false);
     setLightboxAssetId(null);
     setLightboxListBackdropUrl(null);
@@ -2185,7 +2235,9 @@ const WorkflowSection: React.FC<{
   const openAssetSetPanel = useCallback((assetId: string) => {
     setAssetSetPanelAssetId(assetId);
     setStoryboardPanelAssetId(null);
+    lightboxModelThumbCloseGenRef.current += 1;
     setLightboxInstantShellAssetId(null);
+    setLightboxOverlayClosingHidden(false);
     setLightboxOverlayMounted(false);
     setLightboxAssetId(null);
     setLightboxListBackdropUrl(null);
@@ -2234,9 +2286,13 @@ const WorkflowSection: React.FC<{
         setLightboxInstantShellAssetId(assetId);
         setLightboxPlaceholderImageSrc(placeholder);
         setLightboxOverlayMounted(false);
+        setLightboxOverlayClosingHidden(false);
         setLightboxSourceSlot(sourceSlot ?? null);
         setLightboxListBackdropUrl(null);
       });
+
+      lightboxModel3dViewDirtyRef.current = false;
+      lightboxModelThumbCloseGenRef.current += 1;
 
       window.requestAnimationFrame(() => {
         if (lightboxOpenGenRef.current !== openGen) return;
@@ -3031,22 +3087,24 @@ const WorkflowSection: React.FC<{
   );
 
   const persistCapturedWorkflowModelThumbnail = useCallback(
-    (assetId: string, variantIdRaw: string, dataUrl: string) => {
+    (assetId: string, variantIdRaw: string, dataUrl: string, opts?: { force?: boolean }) => {
       const id = String(assetId || '').trim();
       const variantId = String(variantIdRaw || '').trim() || 'original';
       const thumb = String(dataUrl || '').trim();
+      const force = Boolean(opts?.force);
       if (!id || !thumb || !parseDataUrlToBlob(thumb)) return;
       const slotKey = `${id}:${variantId}`;
-      if (persistedModelThumbnailSlotsRef.current.has(slotKey)) return;
+      if (!force && persistedModelThumbnailSlotsRef.current.has(slotKey)) return;
       persistedModelThumbnailSlotsRef.current.add(slotKey);
       const thumbRatio = clampWorkflowCardAspectRatio(1280, 800);
+      rememberAssetCardModelThumbnail(id, variantId, thumb);
 
       setAssets((prev) => {
         const asset = prev.find((x) => x.id === id);
         if (!asset) return prev;
         if (variantId === 'original') {
           const current = asWorkflowImageString(asset.original).trim();
-          if (current && !/^data:image\/svg\+xml/i.test(current)) return prev;
+          if (!force && current && !/^data:image\/svg\+xml/i.test(current)) return prev;
           return prev.map((x) =>
             x.id === id
               ? {
@@ -3058,7 +3116,7 @@ const WorkflowSection: React.FC<{
           );
         }
         const current = asWorkflowImageString(asset.results?.[variantId]).trim();
-        if (current && !/^data:image\/svg\+xml/i.test(current)) return prev;
+        if (!force && current && !/^data:image\/svg\+xml/i.test(current)) return prev;
         return prev.map((x) =>
           x.id === id
             ? {
@@ -3076,6 +3134,20 @@ const WorkflowSection: React.FC<{
       if (!base || !pid) return;
       void (async () => {
         const asset = assetsRef.current.find((x) => x.id === id);
+        const existingKey =
+          variantId === 'original'
+            ? String(asset?.originalCompanionKey || '').trim()
+            : String(asset?.resultsCompanionKeys?.[variantId] || '').trim();
+        // Prefer overwrite of the existing companion object — never mint a new id each close.
+        if (existingKey) {
+          const parsed = parseDataUrlToBlob(thumb);
+          if (!parsed) return;
+          const res = await putCompanionAsset(base, pid, existingKey, parsed.blob, parsed.mime);
+          if (res.ok === false) {
+            onLog?.('warn', '3D 缩略图覆盖落盘失败', res.error);
+          }
+          return;
+        }
         const slotIndex = resolveWorkflowImageSlotIndex(asset?.resultOrder, variantId);
         const put =
           variantId === 'original'
@@ -8281,10 +8353,30 @@ ${lineSvg}
   /** 右侧步骤时间线 / 左侧 VGP 缩略图树（含文字源资产） */
   const lightboxStepSideChrome = Boolean(lightboxAsset && !isGroupAsset(lightboxAsset));
   const lightboxModelPreviewActive = Boolean(
-    !lightboxTexturePreviewSrc &&
-    lightboxMediaCenterVariant?.kind === 'model3d' ||
+    (!lightboxTexturePreviewSrc && lightboxMediaCenterVariant?.kind === 'model3d') ||
       (!lightboxTexturePreviewSrc && !lightboxMediaCenterVariant && lightboxPreviewLayout === 'model3d')
   );
+  const lightboxModelPreviewActiveRef = useRef(false);
+  lightboxModelPreviewActiveRef.current = lightboxModelPreviewActive;
+
+  /** 打开/切换大图资产时，恢复该资产上次的 3D 显示模式等 chrome */
+  useEffect(() => {
+    if (!lightboxAssetId) return;
+    const asset = assetsRef.current.find((x) => x.id === lightboxAssetId);
+    const vs = normalizeWorkflowModel3dViewState(asset?.model3dViewState);
+    if (!vs) {
+      setLightboxModel3dDisplayMode('material');
+      setLightboxModel3dShowGrid(true);
+      setLightboxModel3dBackfaceCulling(true);
+      return;
+    }
+    if (vs.displayMode) setLightboxModel3dDisplayMode(vs.displayMode);
+    else setLightboxModel3dDisplayMode('material');
+    if (typeof vs.showGrid === 'boolean') setLightboxModel3dShowGrid(vs.showGrid);
+    else setLightboxModel3dShowGrid(true);
+    if (typeof vs.backfaceCulling === 'boolean') setLightboxModel3dBackfaceCulling(vs.backfaceCulling);
+    else setLightboxModel3dBackfaceCulling(true);
+  }, [lightboxAssetId]);
   const lightboxModelUrls = useMemo(() => {
     if (!lightboxAsset) return [];
     return resolveWorkflowStepModelUrls(lightboxAsset, lightboxAsset.displayKey);
@@ -9219,6 +9311,9 @@ ${lineSvg}
       const assetId = String(detail?.assetId || '').trim();
       const doc = normalizeWorkflowModelPbrEditDoc(detail?.doc);
       if (!assetId || !doc) return;
+      if (assetId === lightboxAssetIdRef.current) {
+        lightboxModel3dViewDirtyRef.current = true;
+      }
       setAssets((prev) => {
         const host = prev.find((asset) => asset.id === assetId);
         if (!host) return prev;
@@ -9573,23 +9668,78 @@ ${lineSvg}
           detail: { context: 'workflow_lightbox_close' },
         });
       }
-      if (opts.flush) flushLightboxOverlayToAsset();
-      lightboxOpenGenRef.current += 1;
-      setQuickComposeSegmentsTracked((prev) => stripCurrentViewFromQuickComposeSegments(prev));
-      setLightboxInstantShellAssetId(null);
-      setLightboxOverlayMounted(false);
-      setLightboxAssetId(null);
-      setLightboxListBackdropUrl(null);
-      setLightboxPlaceholderImageSrc(null);
-      resetLightboxBoot();
-      setLightboxSourceSlot(null);
-      setLightboxRembgPreview(null);
-      setLightboxRembgInstallModalOpen(false);
-      setLightboxOverlayDirtyCloseDialogOpen(false);
-      lightboxOverlayDirtyCloseDialogOpenRef.current = false;
-      lightboxDirtyClosePersistedRef.current = null;
+
+      const finishUnmount = () => {
+        lightboxModel3dViewDirtyRef.current = false;
+        lightboxOverlayClosingHiddenRef.current = false;
+        setLightboxOverlayClosingHidden(false);
+        if (opts.flush) flushLightboxOverlayToAsset();
+        lightboxOpenGenRef.current += 1;
+        setQuickComposeSegmentsTracked((prev) => stripCurrentViewFromQuickComposeSegments(prev));
+        setLightboxInstantShellAssetId(null);
+        setLightboxOverlayMounted(false);
+        setLightboxAssetId(null);
+        setLightboxListBackdropUrl(null);
+        setLightboxPlaceholderImageSrc(null);
+        resetLightboxBoot();
+        setLightboxSourceSlot(null);
+        setLightboxRembgPreview(null);
+        setLightboxRembgInstallModalOpen(false);
+        setLightboxOverlayDirtyCloseDialogOpen(false);
+        lightboxOverlayDirtyCloseDialogOpenRef.current = false;
+        lightboxDirtyClosePersistedRef.current = null;
+      };
+
+      // 纯 model3d centerSlot：关窗时总是尝试截当前帧（不依赖 dirty，避免漏标）
+      const shouldCaptureModelThumb = lightboxModelPreviewActiveRef.current;
+
+      if (shouldCaptureModelThumb) {
+        const assetIdAtClose = String(lightboxAssetIdRef.current || '').trim();
+        const closeGen = ++lightboxModelThumbCloseGenRef.current;
+
+        // 1) 趁壳层仍可见、WebGL 尺寸正常，同步截帧（强制 render 已在 capture API 内）
+        let dataUrl: string | null = null;
+        try {
+          dataUrl = lightboxWebPreviewCaptureApiRef.current?.captureCurrentViewAsDataUrl() ?? null;
+        } catch {
+          dataUrl = null;
+        }
+        if (!dataUrl?.startsWith('data:image/') && import.meta.env.DEV) {
+          // eslint-disable-next-line no-console -- diagnose silent thumb miss
+          console.warn('[workflow-model3d-thumb] capture failed on close', {
+            assetId: assetIdAtClose,
+            hasApi: Boolean(lightboxWebPreviewCaptureApiRef.current),
+          });
+        }
+
+        // 2) 立刻藏壳，露出资产列表；3D 仍挂载
+        lightboxOverlayClosingHiddenRef.current = true;
+        setLightboxOverlayClosingHidden(true);
+
+        // 3) 写回预览（同步 setAssets），再下一帧卸载 3D
+        const asset = assetIdAtClose ? assetsRef.current.find((x) => x.id === assetIdAtClose) : null;
+        if (asset && dataUrl?.startsWith('data:image/')) {
+          const activeVariant = resolveWorkflowAssetActiveVariant(asset);
+          const displayKey = String(asset.displayKey || 'original').trim() || 'original';
+          // 卡片读 displayKey 槽；model3d poster 也在 results[variantId]
+          const variantId =
+            activeVariant?.kind === 'model3d' && activeVariant.id
+              ? activeVariant.id
+              : displayKey;
+          persistCapturedWorkflowModelThumbnail(asset.id, variantId, dataUrl, { force: true });
+        }
+
+        lightboxModel3dViewDirtyRef.current = false;
+        window.requestAnimationFrame(() => {
+          if (lightboxModelThumbCloseGenRef.current !== closeGen) return;
+          finishUnmount();
+        });
+        return;
+      }
+
+      finishUnmount();
     },
-    [flushLightboxOverlayToAsset, resetLightboxBoot, setQuickComposeSegmentsTracked]
+    [flushLightboxOverlayToAsset, persistCapturedWorkflowModelThumbnail, resetLightboxBoot, setQuickComposeSegmentsTracked]
   );
 
   const cancelLightboxOverlayDirtyCloseDialog = useCallback(() => {
@@ -10338,7 +10488,9 @@ ${lineSvg}
     });
     setWorkflowAssetContextMenu((prev) => (prev?.assetId === assetId ? null : prev));
     if (lightboxAssetId === assetId) {
+      lightboxModelThumbCloseGenRef.current += 1;
       setLightboxInstantShellAssetId(null);
+      setLightboxOverlayClosingHidden(false);
       setLightboxOverlayMounted(false);
       setLightboxAssetId(null);
       setLightboxListBackdropUrl(null);
@@ -15940,6 +16092,7 @@ ${lineSvg}
           previewKindOverride={lightboxTexturePreviewSrc ? 'image' : undefined}
           previewLayout={lightboxPreviewLayout}
           bootPhase={lightboxBootPhase}
+          shellVisuallyHidden={lightboxOverlayClosingHidden}
           onPrimaryImageReady={notifyLightboxPrimaryReady}
           backdropImageSrc={lightboxListBackdropUrl}
           placeholderImageSrc={lightboxPlaceholderImageSrc}
@@ -16006,6 +16159,26 @@ ${lineSvg}
                   lightboxChromeReady && !lightboxUiHidden
                     ? WORKFLOW_LIGHTBOX_ASSET_THUMB_STRIP_INSET
                     : '0px'
+                }
+                onWebPreviewCaptureApiChange={
+                  lightboxMediaCenterVariant.kind === 'model3d'
+                    ? onLightboxWebPreviewCaptureApiChange
+                    : undefined
+                }
+                onModel3dViewDirty={
+                  lightboxMediaCenterVariant.kind === 'model3d'
+                    ? markLightboxModel3dViewDirty
+                    : undefined
+                }
+                model3dViewState={
+                  lightboxMediaCenterVariant.kind === 'model3d'
+                    ? lightboxAsset.model3dViewState ?? null
+                    : undefined
+                }
+                onModel3dViewStateChange={
+                  lightboxMediaCenterVariant.kind === 'model3d'
+                    ? persistLightboxModel3dViewState
+                    : undefined
                 }
                 onAddToComposeInput={(text) => appendQuickComposeTextInput(text, '媒体资产引用')}
               />
@@ -16076,7 +16249,14 @@ ${lineSvg}
           model3dResetViewNonce={lightboxModel3dResetViewNonce}
           model3dShowGrid={lightboxModel3dShowGrid}
           model3dBackfaceCulling={lightboxModel3dBackfaceCulling}
-          onModel3dDisplayModeChange={lightboxTexturePreviewSrc ? undefined : setLightboxModel3dDisplayMode}
+          onModel3dDisplayModeChange={
+            lightboxTexturePreviewSrc
+              ? undefined
+              : (mode) => {
+                  markLightboxModel3dViewDirty();
+                  setLightboxModel3dDisplayMode(mode);
+                }
+          }
           onDownloadCurrent={handleLightboxDownloadCurrent}
           onCopyCurrent={handleLightboxCopyCurrent}
           onStartCrop={handleLightboxStartCrop}
@@ -16088,13 +16268,28 @@ ${lineSvg}
           }
           onAddCurrentToInput={handleLightboxAddCurrentToInput}
           onModel3dResetView={
-            lightboxTexturePreviewSrc ? undefined : () => setLightboxModel3dResetViewNonce((nonce) => nonce + 1)
+            lightboxTexturePreviewSrc
+              ? undefined
+              : () => {
+                  markLightboxModel3dViewDirty();
+                  setLightboxModel3dResetViewNonce((nonce) => nonce + 1);
+                }
           }
           onModel3dToggleGrid={
-            lightboxTexturePreviewSrc ? undefined : () => setLightboxModel3dShowGrid((visible) => !visible)
+            lightboxTexturePreviewSrc
+              ? undefined
+              : () => {
+                  markLightboxModel3dViewDirty();
+                  setLightboxModel3dShowGrid((visible) => !visible);
+                }
           }
           onModel3dToggleBackfaceCulling={
-            lightboxTexturePreviewSrc ? undefined : () => setLightboxModel3dBackfaceCulling((enabled) => !enabled)
+            lightboxTexturePreviewSrc
+              ? undefined
+              : () => {
+                  markLightboxModel3dViewDirty();
+                  setLightboxModel3dBackfaceCulling((enabled) => !enabled);
+                }
           }
           onUseCapabilityOutputAsInput={handleLightboxUseCapabilityOutputAsInput}
           onSaveCapabilityOutput={handleLightboxSaveCapabilityOutput}
@@ -16105,8 +16300,23 @@ ${lineSvg}
           }
           panoViewerRef={lightboxPanoViewerRef}
           onWebPreviewCaptureApiChange={
-            lightboxChromeReady && lightboxRasterChrome
+            lightboxChromeReady && lightboxRasterChrome && !lightboxModelPreviewActive
               ? onLightboxWebPreviewCaptureApiChange
+              : undefined
+          }
+          onModel3dViewDirty={
+            lightboxChromeReady && !lightboxTexturePreviewSrc
+              ? markLightboxModel3dViewDirty
+              : undefined
+          }
+          model3dViewState={
+            lightboxChromeReady && !lightboxTexturePreviewSrc
+              ? lightboxAsset.model3dViewState ?? null
+              : undefined
+          }
+          onModel3dViewStateChange={
+            lightboxChromeReady && !lightboxTexturePreviewSrc
+              ? persistLightboxModel3dViewState
               : undefined
           }
           heightfieldToolbarHostRef={lightboxHeightfieldToolbarHostRef}

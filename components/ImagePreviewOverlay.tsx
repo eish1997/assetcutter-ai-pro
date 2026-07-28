@@ -241,6 +241,10 @@ export type ImagePreviewOverlayProps = {
    * 传给 PreviewShell 的全屏层 z-index（Tailwind 类）。嵌套在更高 z 的全屏壳内（如工作流编排 `z-[2100]`）时必须高于父层，否则预览会显示在父层背后。
    */
   shellZIndexClassName?: string;
+  /**
+   * 视觉隐藏预览壳但保持挂载（关 3D 大图时先露列表、截缩略图再卸载）。
+   */
+  shellVisuallyHidden?: boolean;
   /** 遮罩下的静态底图（如工作流列表卸载前的截图） */
   backdropImageSrc?: string | null;
   /** 主图解码前的占位（如网格缩略图），配合壳层先开 */
@@ -285,6 +289,12 @@ export type ImagePreviewOverlayProps = {
    * 卸载时传 `null`。
    */
   onWebPreviewCaptureApiChange?: (api: ImagePreviewWebCaptureApi | null) => void;
+  /** 3D 模型视口被用户改过（轨道/视角立方体）时通知父级 */
+  onModel3dViewDirty?: () => void;
+  /** 上次保存的 3D 视口 */
+  model3dViewState?: import('../types').WorkflowModel3dViewState | null;
+  /** 3D 视口写回资产（仅卸载时） */
+  onModel3dViewStateChange?: (state: import('../types').WorkflowModel3dViewState, assetId?: string) => void;
   /**
    * 为真时：平面主图不响应缩放/平移等 `onMouseDown` 手势（如本机 SAM 武装时点选/框选需独占指针）。
    */
@@ -382,6 +392,7 @@ export function ImagePreviewOverlay({
   rightRail,
   shellRightGutter,
   shellZIndexClassName,
+  shellVisuallyHidden = false,
   backdropImageSrc,
   placeholderImageSrc,
   bootPhase = 't3',
@@ -397,6 +408,9 @@ export function ImagePreviewOverlay({
   onPreviewLayoutChange,
   onUiHiddenChange,
   onWebPreviewCaptureApiChange,
+  onModel3dViewDirty,
+  model3dViewState,
+  onModel3dViewStateChange,
   suppressFlatImageInteraction = false,
   imageResizeWriteBack = null,
 }: ImagePreviewOverlayProps) {
@@ -579,9 +593,12 @@ export function ImagePreviewOverlay({
 
   useEffect(() => {
     if (!onWebPreviewCaptureApiChange) return;
+    // centerSlot (e.g. workflow AssetMediaPreviewCenter) owns the capture API — do not clobber it
+    // with this overlay's flat/pano/heightfield helper (which returns null for flat + centerSlot).
+    if (centerSlot) return;
     onWebPreviewCaptureApiChange(webPreviewCaptureApi);
     return () => onWebPreviewCaptureApiChange(null);
-  }, [onWebPreviewCaptureApiChange, webPreviewCaptureApi]);
+  }, [onWebPreviewCaptureApiChange, webPreviewCaptureApi, centerSlot]);
 
   /** 全景模式下叠一层与平面一致的 object-contain 贴图 + 标注，使裁切/局部重绘等仍可用（底图透明，仍见 WebGL 全景） */
   const panoAnnotationBridge = Boolean(panoLayoutActive && flatImageOverlay);
@@ -1418,6 +1435,7 @@ export function ImagePreviewOverlay({
         }
         backdropImageSrc={backdropImageSrc}
         shellRightGutter={shellRightGutter}
+        visuallyHidden={shellVisuallyHidden}
       >
         <PreviewImageLoadingState placeholderSrc={placeholderImageSrc} label="预览加载中…" />
         {children}
@@ -1533,7 +1551,7 @@ export function ImagePreviewOverlay({
                   modelSrc={previewModelSrc ?? undefined}
                   model3dAssetId={model3dAssetId}
                   model3dVariantId={model3dVariantId}
-                  model3dModelKey={model3dModelKey || previewModelSrc || modelFileName}
+                  model3dModelKey={model3dModelKey || modelFileName || previewModelSrc}
                   model3dPbrEditDoc={model3dPbrEditDoc}
                   resolvePbrTextureAssetSrc={resolvePbrTextureAssetSrc}
                   modelFileName={modelFileName}
@@ -1541,6 +1559,9 @@ export function ImagePreviewOverlay({
                   model3dResetViewNonce={model3dResetViewNonce}
                   model3dShowGrid={model3dShowGrid}
                   model3dBackfaceCulling={model3dBackfaceCulling}
+                  onModel3dViewDirty={onModel3dViewDirty}
+                  model3dViewState={model3dViewState}
+                  onModel3dViewStateChange={onModel3dViewStateChange}
                   uiRightInset={rightRailOverlayActive || useSplitLayout ? contentRightInset : '0px'}
                   className="h-full w-full min-h-0"
                 />
@@ -1925,6 +1946,7 @@ export function ImagePreviewOverlay({
       }
       backdropImageSrc={backdropImageSrc}
       shellRightGutter={shellRightGutter}
+      visuallyHidden={shellVisuallyHidden}
     >
       {rightRailOverlayActive ? (
         <div className="relative h-full w-full min-h-0 overflow-hidden">

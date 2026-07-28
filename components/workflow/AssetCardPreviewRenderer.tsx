@@ -33,6 +33,24 @@ export function resetAssetCardModelThumbnailCachesForTests(): void {
   modelThumbnailPending.clear();
 }
 
+/** 关闭 3D 预览强制写回缩略图后，同步网格缓存键前缀 `${assetId}:${variantId}:` */
+export function rememberAssetCardModelThumbnail(
+  assetId: string,
+  variantId: string,
+  dataUrl: string
+): void {
+  const id = String(assetId || '').trim();
+  const vid = String(variantId || '').trim() || 'original';
+  const thumb = String(dataUrl || '').trim();
+  if (!id || !thumb) return;
+  const prefix = `${id}:${vid}:`;
+  for (const key of [...modelThumbnailCache.keys()]) {
+    if (key.startsWith(prefix)) modelThumbnailCache.set(key, thumb);
+  }
+  modelThumbnailCache.set(`${prefix}lightbox`, thumb);
+  modelThumbnailCache.set(`${prefix}model3d`, thumb);
+}
+
 function firstModelPreviewSrc(modelUrls?: string[], fallbackUrl?: string): string {
   return (modelUrls || []).find((value) => String(value || '').trim())?.trim() || String(fallbackUrl || '').trim();
 }
@@ -180,6 +198,8 @@ export const AssetCardPreviewRenderer: React.FC<AssetCardPreviewRendererProps> =
       const seed = String(previewSrc || activeVariant?.posterUrl || '').trim();
       if (seed && !/^data:image\/svg\+xml/i.test(seed)) {
         modelThumbnailCache.set(modelThumbCacheKey, seed);
+        setCapturedModelThumb(seed);
+        return;
       }
       setCapturedModelThumb('');
       return;

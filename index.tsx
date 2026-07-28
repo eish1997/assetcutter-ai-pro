@@ -1,4 +1,3 @@
-import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App';
 import AuthGate from './components/auth/AuthGate';
@@ -11,14 +10,14 @@ if (!rootElement) {
 }
 
 const root = ReactDOM.createRoot(rootElement);
+// Avoid React.StrictMode remounting WebGL/3D viewers (ImageModel3DViewer): in DEV it
+// mount→unmount→remount after a cache-fast ready frame, which flashes「加载中」and drops the PBR panel.
 root.render(
-  <React.StrictMode>
-    <AuthProvider>
-      <AuthGate>
-        <AuthShell>
-          <App />
-        </AuthShell>
-      </AuthGate>
-    </AuthProvider>
-  </React.StrictMode>
+  <AuthProvider>
+    <AuthGate>
+      <AuthShell>
+        <App />
+      </AuthShell>
+    </AuthGate>
+  </AuthProvider>
 );

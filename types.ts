@@ -3,6 +3,21 @@ import type { DialogImageGear, DialogImageModelRegistryId } from './services/mod
 import type { PanoLocalReprojectSnapshot } from './services/panoViewportProjection';
 import type { WorkflowModelPbrEditDoc, WorkflowModelPbrTextureLineage, WorkflowModelPbrTextureRewriteTarget } from './services/workflowModelPbrEdits';
 
+/** 工作流 3D 预览：OrbitControls 相机位姿（世界坐标） */
+export type WorkflowModel3dCameraPose = {
+  position: [number, number, number];
+  target: [number, number, number];
+};
+
+/** 工作流 3D 预览：按资产记住的上次视口（再次打开恢复） */
+export type WorkflowModel3dViewState = {
+  camera: WorkflowModel3dCameraPose;
+  displayMode?: 'material' | 'clay' | 'wire' | 'normal';
+  showGrid?: boolean;
+  backfaceCulling?: boolean;
+  updatedAt: number;
+};
+
 export type { VgpAssetExtension, VgpGenStepCapture } from './types/vgp';
 export type {
   PipelinePlan,
@@ -648,6 +663,8 @@ export type WorkflowAsset = {
   modelSourceName?: string;
   /** 3D model PBR texture edits; saved with the project and restored for the same asset. */
   modelPbrEdits?: WorkflowModelPbrEditDoc;
+  /** 3D 预览上次相机/显示模式；再次打开大图时恢复 */
+  model3dViewState?: WorkflowModel3dViewState;
   /** Texture rewrite history for the 3D model node graph. */
   modelPbrTextureLineage?: WorkflowModelPbrTextureLineage[];
   /** 各步骤结果在 R2 的键，hydrate 后写回 results */

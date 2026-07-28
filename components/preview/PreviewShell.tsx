@@ -27,6 +27,11 @@ export type PreviewShellProps = {
    * 例：`min(28rem, 30vw)`；未设时仍为 `inset-0` 全屏。
    */
   shellRightGutter?: string;
+  /**
+   * 视觉上隐藏壳层但保持挂载（关窗截 3D 缩略图：先露列表，截完再卸载）。
+   * 隐藏期间不响应 Esc / 点击关闭。
+   */
+  visuallyHidden?: boolean;
 };
 
 /**
@@ -43,6 +48,7 @@ export const PreviewShell = forwardRef<HTMLDivElement, PreviewShellProps>(functi
     backdropTintClassName = 'bg-black/72 backdrop-blur-sm',
     backdropImageSrc,
     shellRightGutter,
+    visuallyHidden = false,
   },
   ref
 ) {
@@ -52,7 +58,7 @@ export const PreviewShell = forwardRef<HTMLDivElement, PreviewShellProps>(functi
   }, [onClose]);
 
   useLayoutEffect(() => {
-    if (!open) return;
+    if (!open || visuallyHidden) return;
     const onEscCapture = (e: KeyboardEvent) => {
       if (!isEscapeKey(e)) return;
       e.preventDefault();
@@ -75,7 +81,7 @@ export const PreviewShell = forwardRef<HTMLDivElement, PreviewShellProps>(functi
       document.removeEventListener('keyup', onEscCaptureUp, true);
       window.removeEventListener('keyup', onEscCaptureUp, true);
     };
-  }, [open]);
+  }, [open, visuallyHidden]);
 
   const rootRef = useRef<HTMLDivElement | null>(null);
   const setRootRef = useCallback(
@@ -87,12 +93,12 @@ export const PreviewShell = forwardRef<HTMLDivElement, PreviewShellProps>(functi
   );
 
   useLayoutEffect(() => {
-    if (!open) return;
+    if (!open || visuallyHidden) return;
     rootRef.current?.focus({ preventScroll: true });
-  }, [open, focusKey]);
+  }, [open, focusKey, visuallyHidden]);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open || visuallyHidden) return;
     const blockContextMenu = (e: MouseEvent) => {
       if (e.target instanceof Element && e.target.closest('[data-ac-allow-context-menu]')) return;
       e.preventDefault();
@@ -100,7 +106,7 @@ export const PreviewShell = forwardRef<HTMLDivElement, PreviewShellProps>(functi
     };
     window.addEventListener('contextmenu', blockContextMenu, true);
     return () => window.removeEventListener('contextmenu', blockContextMenu, true);
-  }, [open]);
+  }, [open, visuallyHidden]);
 
   if (!open) return null;
 
@@ -109,23 +115,36 @@ export const PreviewShell = forwardRef<HTMLDivElement, PreviewShellProps>(functi
       ref={setRootRef}
       tabIndex={-1}
       role="dialog"
-      aria-modal
-      className={`fixed ${shellRightGutter ? 'top-0 left-0 bottom-0' : 'inset-0'} ${zIndexClassName} animate-in fade-in outline-none`}
+      aria-modal={!visuallyHidden}
+      aria-hidden={visuallyHidden || undefined}
+      className={`fixed ${shellRightGutter ? 'top-0 left-0 bottom-0' : 'inset-0'} ${zIndexClassName} outline-none ${
+        visuallyHidden
+          ? 'pointer-events-none opacity-0'
+          : 'animate-in fade-in'
+      }`}
       style={shellRightGutter ? { right: shellRightGutter } : undefined}
-      data-ac-esc-sink
-      data-ac-block-workflow-marquee
-      onKeyDownCapture={(e) => {
-        if (!isEscapeKey(e)) return;
-        e.preventDefault();
-        e.stopPropagation();
-        onCloseRef.current();
-      }}
-      onClick={onClose}
-      onContextMenuCapture={(e) => {
-        if (e.target instanceof Element && e.target.closest('[data-ac-allow-context-menu]')) return;
-        e.preventDefault();
-        e.stopPropagation();
-      }}
+      data-ac-esc-sink={visuallyHidden ? undefined : ''}
+      data-ac-block-workflow-marquee={visuallyHidden ? undefined : ''}
+      onKeyDownCapture={
+        visuallyHidden
+          ? undefined
+          : (e) => {
+              if (!isEscapeKey(e)) return;
+              e.preventDefault();
+              e.stopPropagation();
+              onCloseRef.current();
+            }
+      }
+      onClick={visuallyHidden ? undefined : onClose}
+      onContextMenuCapture={
+        visuallyHidden
+          ? undefined
+          : (e) => {
+              if (e.target instanceof Element && e.target.closest('[data-ac-allow-context-menu]')) return;
+              e.preventDefault();
+              e.stopPropagation();
+            }
+      }
     >
       {backdropImageSrc ? (
         <img
@@ -138,12 +157,16 @@ export const PreviewShell = forwardRef<HTMLDivElement, PreviewShellProps>(functi
       <div className={`pointer-events-none absolute inset-0 ${backdropTintClassName}`} aria-hidden />
       <div
         className="relative h-full w-full overflow-hidden"
-        onClick={(e) => e.stopPropagation()}
-        onContextMenuCapture={(e) => {
-          if (e.target instanceof Element && e.target.closest('[data-ac-allow-context-menu]')) return;
-          e.preventDefault();
-          e.stopPropagation();
-        }}
+        onClick={visuallyHidden ? undefined : (e) => e.stopPropagation()}
+        onContextMenuCapture={
+          visuallyHidden
+            ? undefined
+            : (e) => {
+                if (e.target instanceof Element && e.target.closest('[data-ac-allow-context-menu]')) return;
+                e.preventDefault();
+                e.stopPropagation();
+              }
+        }
       >
         {children}
       </div>
