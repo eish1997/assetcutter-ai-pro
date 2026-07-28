@@ -5,12 +5,32 @@ import { publicAiGatewayFailureReason, resolveAiGatewayFailureReason } from './f
 const SUPPORTED_MODALITIES = new Set(['text', 'image', 'video', 'model3d']);
 const TERMINAL_STATUSES = new Set(['succeeded', 'failed', 'cancelled']);
 
+/** Admin Generation Test wait defaults. 3D/video upstream often exceeds 3 minutes (Tripo ~3–5min). */
+const DEFAULT_GENERATION_TEST_TIMEOUT_MS = Object.freeze({
+  text: 180_000,
+  image: 300_000,
+  video: 660_000,
+  model3d: 660_000,
+});
+
 function nonEmptyString(value) {
   return typeof value === 'string' && value.trim() ? value.trim() : '';
 }
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+export function resolveAdminGenerationTestTimeoutMs(modality, options = {}) {
+  if (options.timeoutMs != null && Number.isFinite(Number(options.timeoutMs))) {
+    return Math.max(1000, Number(options.timeoutMs));
+  }
+  const envRaw = process.env.AI_GATEWAY_ADMIN_GENERATION_TEST_TIMEOUT_MS;
+  if (envRaw != null && String(envRaw).trim() !== '' && Number.isFinite(Number(envRaw))) {
+    return Math.max(1000, Number(envRaw));
+  }
+  const key = nonEmptyString(modality).toLowerCase();
+  return DEFAULT_GENERATION_TEST_TIMEOUT_MS[key] || DEFAULT_GENERATION_TEST_TIMEOUT_MS.text;
 }
 
 function normalizeGenerationTestInput(input) {
@@ -184,7 +204,7 @@ function buildJobBody(input) {
 
 async function waitForTerminalJob(jobId, options = {}) {
   const store = options.store || persistentAiGatewayJobStore;
-  const timeoutMs = Math.max(1000, Number(options.timeoutMs || process.env.AI_GATEWAY_ADMIN_GENERATION_TEST_TIMEOUT_MS || 180_000));
+  const timeoutMs = resolveAdminGenerationTestTimeoutMs(options.modality, options);
   const intervalMs = Math.max(250, Number(options.intervalMs || process.env.AI_GATEWAY_ADMIN_GENERATION_TEST_INTERVAL_MS || 1500));
   const startedAt = Date.now();
   let plan = await store.get(jobId);
@@ -238,7 +258,7 @@ export async function testAiGatewayModelGeneration(req, input = {}, user = {}, o
   const terminal =
     initialPlan && TERMINAL_STATUSES.has(initialStatus)
       ? { timedOut: false, plan: initialPlan }
-      : await waitForTerminalJob(jobId, options);
+      : await waitForTerminalJob(jobId, { ...options, modality: normalized.modality });
   const plan = terminal.plan;
   if (!plan) {
     return failedResult(normalized, 'AI_GATEWAY_GENERATION_JOB_NOT_FOUND', 'Generation Test created a job but could not read it back', {

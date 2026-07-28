@@ -40,4 +40,23 @@ describe('deriveWorkflowStepTimelineRows', () => {
     const rows = deriveWorkflowStepTimelineRows(a, () => 'x');
     expect(rows).toEqual([]);
   });
+
+  it('marks model3d steps from stepModelCompanionKeys', () => {
+    const a: WorkflowAsset = {
+      ...baseAsset(),
+      resultOrder: ['generate_3d', 'generate_3d__v__m2'],
+      results: {},
+      resultMeta: {
+        generate_3d: { executedAt: 1, mediaKind: 'model3d', displayStepLabel: '3D A' },
+        'generate_3d__v__m2': { executedAt: 2, mediaKind: 'model3d', displayStepLabel: '3D B' },
+      },
+      stepModelCompanionKeys: {
+        generate_3d: ['k1'],
+        'generate_3d__v__m2': ['k2'],
+      },
+    };
+    const rows = deriveWorkflowStepTimelineRows(a, (k) => k);
+    expect(rows).toHaveLength(2);
+    expect(rows.every((r) => r.hasModel3d)).toBe(true);
+  });
 });

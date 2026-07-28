@@ -4,6 +4,7 @@ import {
   buildWorkflow3dPersistedSlotUrls,
   normalizeWorkflow3dPreviewResultUrl,
 } from './workflowModelSlots';
+import { applyVgpAfterSuccessfulGen } from './vgp/vgpStore';
 
 export type Workflow3dJobMetaPatch = {
   aiGatewayJobId?: string;
@@ -13,9 +14,21 @@ export type Workflow3dJobMetaPatch = {
   tencentLastError?: undefined;
 };
 
+function vgpAlreadyHasResultKey(asset: WorkflowAsset, resultKey: string): boolean {
+  const vgp = asset.vgp;
+  if (!vgp || !resultKey) return false;
+  for (const id of vgp.versionOrder) {
+    const v = vgp.versionsById[id];
+    if (!v) continue;
+    if (v.stepKey === resultKey) return true;
+    if (v.imageRef.kind === 'result_key' && v.imageRef.key === resultKey) return true;
+  }
+  return false;
+}
+
 export function patchWorkflowAssetsWith3dResult(params: {
   prev: WorkflowAsset[];
-  task?: { assetId?: string; actionType?: string };
+  task?: { assetId?: string; actionType?: string; resultKey?: string; inputSourceDisplayKey?: string };
   preset: { id: string; label: string };
   imageBase64: string;
   workflowAssetId: string;
@@ -46,11 +59,29 @@ export function patchWorkflowAssetsWith3dResult(params: {
 
   const persistedSlotUrls = buildWorkflow3dPersistedSlotUrls(localModelUrls, modelCompanionKeys);
   const persistedPreviewUrl = normalizeWorkflow3dPreviewResultUrl(localPreviewUrl, previewCompanionKey);
+  const key =
+    String(resultKey || '').trim() ||
+    String(task?.resultKey || '').trim() ||
+    String(task?.actionType || '').trim() ||
+    preset.id;
+  const inputSourceDisplayKey =
+    String(task?.inputSourceDisplayKey || '').trim() || 'original';
+
+  const attachVgp = (asset: WorkflowAsset): WorkflowAsset => {
+    if (vgpAlreadyHasResultKey(asset, key)) return asset;
+    return applyVgpAfterSuccessfulGen(asset, {
+      resultKey: key,
+      vgpSteps: [],
+      semanticSummary: preset.label || '生成3D',
+      hadPromptOverride: false,
+      inputSourceDisplayKey,
+      userPromptRecord: preset.label || '生成3D',
+    });
+  };
 
   if (task?.assetId) {
     return prev.map((a) => {
       if (a.id !== task.assetId) return a;
-      const key = task.actionType || preset.id;
       const hasOrder = (a.resultOrder || []).includes(key);
       const nextOrder = hasOrder ? (a.resultOrder || []) : [...(a.resultOrder || []), key];
       const nextResults =
@@ -68,17 +99,20 @@ export function patchWorkflowAssetsWith3dResult(params: {
           ...jobMeta,
           presetActionIdSnapshot: oldMeta.presetActionIdSnapshot || preset.id,
           ...(oldMeta.displayStepLabel?.trim() ? {} : { displayStepLabel: preset.label }),
+          ...(oldMeta.inputSourceDisplayKeySnapshot
+            ? {}
+            : { inputSourceDisplayKeySnapshot: inputSourceDisplayKey }),
           ...(persistedPreviewUrl || previewCompanionKey
             ? { mediaKind: 'image' as const }
             : { mediaKind: 'model3d' as const }),
         },
       };
-      return {
+      const patched: WorkflowAsset = {
         ...a,
         results: nextResults,
         resultsCompanionKeys:
           Object.keys(nextResultsCompanionKeys).length > 0 ? nextResultsCompanionKeys : a.resultsCompanionKeys,
-        displayKey: persistedPreviewUrl || previewCompanionKey ? key : a.displayKey,
+        displayKey: key,
         resultOrder: nextOrder,
         stepModelUrls: { ...(a.stepModelUrls || {}), [key]: persistedSlotUrls },
         stepModelCompanionKeys:
@@ -95,37 +129,40 @@ export function patchWorkflowAssetsWith3dResult(params: {
         resultMeta: nextMeta,
         hiddenInGrid: false,
       };
+      return attachVgp(patched);
     });
   }
 
   const now = Date.now();
-  const presetKey = preset.id;
-  const nextResultsCompanionKeys = previewCompanionKey ? { [presetKey]: previewCompanionKey } : undefined;
+  const nextResultsCompanionKeys = previewCompanionKey ? { [key]: previewCompanionKey } : undefined;
   const next: WorkflowAsset = {
     id: workflowAssetId,
     original: imageBase64,
-    displayKey: persistedPreviewUrl || previewCompanionKey ? presetKey : 'original',
-    results: persistedPreviewUrl ? { [presetKey]: persistedPreviewUrl } : {},
+    displayKey: key,
+    results: persistedPreviewUrl ? { [key]: persistedPreviewUrl } : {},
     resultsCompanionKeys: nextResultsCompanionKeys,
-    stepModelUrls: { [presetKey]: persistedSlotUrls },
-    stepModelCompanionKeys: modelCompanionKeys.length > 0 ? { [presetKey]: modelCompanionKeys } : undefined,
-    stepModelFormats: stepModelFormats.length > 0 ? { [presetKey]: stepModelFormats } : undefined,
+    stepModelUrls: { [key]: persistedSlotUrls },
+    stepModelCompanionKeys: modelCompanionKeys.length > 0 ? { [key]: modelCompanionKeys } : undefined,
+    stepModelFormats: stepModelFormats.length > 0 ? { [key]: stepModelFormats } : undefined,
     modelUrls: persistedSlotUrls,
     modelCompanionKeys: modelCompanionKeys.length > 0 ? modelCompanionKeys : undefined,
     modelSourceName: modelSourceName || undefined,
-    resultOrder: persistedPreviewUrl || previewCompanionKey ? [presetKey] : [],
+    resultOrder: [key],
     resultMeta: {
-      [presetKey]: {
+      [key]: {
         executedAt: now,
         ...jobMeta,
         presetActionIdSnapshot: preset.id,
         displayStepLabel: preset.label,
-        ...(persistedPreviewUrl || previewCompanionKey ? { mediaKind: 'image' as const } : {}),
+        inputSourceDisplayKeySnapshot: inputSourceDisplayKey,
+        ...(persistedPreviewUrl || previewCompanionKey
+          ? { mediaKind: 'image' as const }
+          : { mediaKind: 'model3d' as const }),
       },
     },
     archived: false,
     hiddenInGrid: false,
     createdAt: now,
   };
-  return [next, ...prev];
+  return [attachVgp(next), ...prev];
 }

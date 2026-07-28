@@ -15,6 +15,7 @@ import WorkflowPixelBusyOverlay from './WorkflowPixelBusyOverlay';
 import { resolveVersionImageSrc } from './WorkflowGenerationRecordPanel';
 import { resolveWorkflowStepModelCompanionKeys, resolveWorkflowStepModelUrls } from '../services/workflowStepModels';
 import {
+  resolveWorkflowAssetPbrEditDoc,
   WORKFLOW_MODEL_PBR_SLOTS,
   type WorkflowModelPbrEditDoc,
   type WorkflowModelPbrTextureLineage,
@@ -316,7 +317,10 @@ export function WorkflowStepNodeGraphOverlay({
     const ids = new Set(vgp.versionOrder);
     const rewriteNodes = collectPbrTextureRewriteNodes(displayAsset.modelPbrTextureLineage);
     const rewrittenResultSrcs = new Set(rewriteNodes.map((node) => node.resultSrc));
-    const pbrNodes = collectPbrTextureInputNodes(displayAsset.modelPbrEdits, resolvePbrTextureAssetSrc)
+    const pbrNodes = collectPbrTextureInputNodes(
+      resolveWorkflowAssetPbrEditDoc(displayAsset, { stepKey: displayAsset.displayKey }),
+      resolvePbrTextureAssetSrc
+    )
       .filter((node) => !rewrittenResultSrcs.has(node.src) && !node.src.startsWith('pbr-asset:'));
     const modelVersionIds = orderedVersions
       .filter((v) => {

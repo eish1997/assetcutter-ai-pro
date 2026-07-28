@@ -661,7 +661,15 @@ export type WorkflowAsset = {
   stepModelFormats?: Record<string, WorkflowModelFormat[]>;
   /** 本地 blob 模型无 URL 后缀时，用原始文件名推断格式（.glb/.fbx/.obj 等） */
   modelSourceName?: string;
-  /** 3D model PBR texture edits; saved with the project and restored for the same asset. */
+  /**
+   * 3D PBR 贴图编辑（按 `displayKey` / 模型步骤键分槽）。
+   * 同卡多模型版本必须分槽，禁止共用一份 atlas。
+   */
+  stepModelPbrEdits?: Record<string, WorkflowModelPbrEditDoc>;
+  /**
+   * @deprecated 单槽遗留；读写请优先 `stepModelPbrEdits[displayKey]`。
+   * 仍可能被旧数据/旧路径写入，解析时仅当 modelKey/variantId 匹配当前模型才采用。
+   */
   modelPbrEdits?: WorkflowModelPbrEditDoc;
   /** 3D 预览上次相机/显示模式；再次打开大图时恢复 */
   model3dViewState?: WorkflowModel3dViewState;
@@ -711,6 +719,8 @@ export type WorkflowAsset = {
       usedCapabilityUnderstand?: boolean;
       /** 入队时标记跳过理解（预设 skipUnderstand 等） */
       skipUnderstandSnapshot?: boolean;
+      /** 入队时的输入展示键（`original` / 某结果槽）；供 VGP 父节点与迁移重建树 */
+      inputSourceDisplayKeySnapshot?: string;
       /** 标签精修等扩展字段（可选） */
       semanticSummary?: string;
       /** AI Gateway job id：用于从工作区结果反查统一任务中心 */
@@ -764,6 +774,12 @@ export type WorkflowPendingTask = {
   assetId: string;
   /** 能力模块 id */
   actionType: string;
+  /**
+   * 结果槽位 key（可含 `__v__` 版本后缀）。
+   * 生成3D 等同异步管线在提交时分配，完成写回必须用此键，避免同能力重跑覆盖旧版本。
+   * 缺省时回退 `actionType`（兼容旧任务）。
+   */
+  resultKey?: string;
   inputImage: string;
   /** 待处理缩略图在 R2 的键，hydrate 后写回 inputImage */
   inputImageObjectKey?: string;

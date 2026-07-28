@@ -308,12 +308,15 @@ export const WorkflowStepTimelineDetailPanel: React.FC<WorkflowStepTimelineDetai
             {timelineRow?.hasText ? (
               <span className="rounded border border-white/10 px-1 py-0.5 text-[7px] uppercase text-gray-400">文</span>
             ) : null}
-            {timelineRow?.mediaKind ? (
+            {timelineRow?.hasModel3d ? (
+              <span className="rounded border border-white/10 px-1 py-0.5 text-[7px] uppercase text-gray-400">3D</span>
+            ) : null}
+            {timelineRow?.mediaKind && timelineRow.mediaKind !== 'model3d' ? (
               <span className="rounded border border-white/10 px-1 py-0.5 text-[7px] uppercase text-gray-400">
                 {timelineRow.mediaKind}
               </span>
             ) : null}
-            {!timelineRow?.hasImage && !timelineRow?.hasText && selectedResultKey === 'original' ? (
+            {!timelineRow?.hasImage && !timelineRow?.hasText && !timelineRow?.hasModel3d && selectedResultKey === 'original' ? (
               <span className="text-gray-500">原图输入</span>
             ) : null}
           </dd>

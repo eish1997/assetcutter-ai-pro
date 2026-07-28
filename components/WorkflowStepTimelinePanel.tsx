@@ -78,6 +78,16 @@ export const WorkflowStepTimelinePanel: React.FC<WorkflowStepTimelinePanelProps>
               >
                 <div className="font-semibold text-blue-200/95 leading-snug break-words">{row.label}</div>
                 <div className="mt-0.5 font-mono text-[8px] text-gray-500 tabular-nums">{timeLine}</div>
+                <div className="mt-0.5 text-[8px] text-gray-500">
+                  {[
+                    row.hasImage ? '图' : null,
+                    row.hasText ? '文' : null,
+                    row.hasModel3d ? '3D' : null,
+                    row.mediaKind && !row.hasModel3d ? row.mediaKind : null,
+                  ]
+                    .filter(Boolean)
+                    .join(' · ') || '—'}
+                </div>
                 <div className="mt-0.5 flex flex-wrap gap-1 text-[7px] uppercase tracking-wide text-gray-500">
                   {row.hasImage ? (
                     <span className="rounded border border-white/10 px-1 py-0.5 text-gray-400">图</span>
@@ -85,7 +95,10 @@ export const WorkflowStepTimelinePanel: React.FC<WorkflowStepTimelinePanelProps>
                   {row.hasText ? (
                     <span className="rounded border border-white/10 px-1 py-0.5 text-gray-400">文</span>
                   ) : null}
-                  {row.mediaKind ? (
+                  {row.hasModel3d ? (
+                    <span className="rounded border border-white/10 px-1 py-0.5 text-gray-400">3D</span>
+                  ) : null}
+                  {row.mediaKind && row.mediaKind !== 'model3d' && row.mediaKind !== 'image' && row.mediaKind !== 'text' ? (
                     <span className="rounded border border-white/10 px-1 py-0.5 text-gray-400">{row.mediaKind}</span>
                   ) : null}
                   <span className="rounded border border-white/10 px-1 py-0.5 font-mono text-gray-500 truncate max-w-[10rem]">

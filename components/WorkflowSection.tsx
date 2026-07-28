@@ -69,12 +69,14 @@ import WorkflowZeroBalanceBanner from './WorkflowZeroBalanceBanner';
 import { DEFAULT_MODEL_TEXT } from '../services/modelRegistry/constants';
 import {
   applyPbrTextureAssetIdToDoc,
-  collectPbrTextureAssetIds,
-  diffRemovedPbrTextureAssetIds,
+  collectAssetAllPbrTextureAssetIds,
   filterUnreferencedPbrTextureAssetIds,
   normalizeWorkflowModelPbrEditDoc,
   pbrTextureEditMatchesRewriteSource,
+  resolveStepModelPbrSlotKey,
+  resolveWorkflowAssetPbrEditDoc,
   WORKFLOW_MODEL_PBR_EDIT_PERSIST_EVENT,
+  writeWorkflowAssetStepPbrEdit,
   type WorkflowModelPbrEditPersistEventDetail,
   type WorkflowModelPbrTextureRewriteTarget,
 } from '../services/workflowModelPbrEdits';
@@ -198,6 +200,7 @@ import {
   getWorkflowStepModelPersistStatus,
   workflowModelPersistStatusLabel,
 } from '../services/workflowStepModels';
+import { collectWorkflow3dBlobUrlsToRevoke } from '../services/workflowModelSlots';
 import { downloadWorkflowStepModelSlot } from '../services/downloadModelFile';
 import {
   collectWorkflowAssetIdsFromDragSources,
@@ -390,6 +393,7 @@ import {
   baseActionId,
   makeVersionKey,
   stripResultKeyToBaseActionId,
+  allocateWorkflowResultVersionKey,
   WORKFLOW_LIGHTBOX_RESIZE_WRITEBACK_ACTION_ID,
   WORKFLOW_LIGHTBOX_SPLIT_STRETCH_WRITEBACK_ACTION_ID,
 } from './workflow/workflowIds';
@@ -595,6 +599,10 @@ import {
 } from '../services/workflowModelBlob';
 import { captureWorkflowModelThumbnailDataUrl } from '../services/workflowModelPreviewCapture';
 import { normalizeWorkflowModel3dViewState } from '../services/workflowModelThreeShared';
+import {
+  patchAssetWithModelViewportThumb,
+  resolveModelViewportThumbPreviewCompanionKey,
+} from '../services/workflowModelViewportThumbPersist';
 import { getCompanionLocalBaseUrl, normalizeCompanionBaseUrl } from '../services/companionLocalPrefs';
 import {
   canAttemptOpenWorkflowAssetFolder,
@@ -924,16 +932,19 @@ function buildWorkflowStepResultMetaInputSnapshots(
   inputTextSnapshot?: string;
   usedCapabilityUnderstand: boolean;
   skipUnderstandSnapshot?: boolean;
+  inputSourceDisplayKeySnapshot?: string;
 } {
   const used = Array.isArray(vgpSteps) && vgpSteps.length > 0;
   const po = String(task.promptOverride ?? '').trim();
   const it = String(task.inputText ?? '').trim();
+  const src = String(task.inputSourceDisplayKey ?? '').trim();
   return {
     presetActionIdSnapshot: baseActionId(task.actionType),
     ...(po ? { promptOverrideSnapshot: po } : {}),
     ...(it ? { inputTextSnapshot: it } : {}),
     usedCapabilityUnderstand: used,
     ...(task.overrideSkipUnderstand === true ? { skipUnderstandSnapshot: true } : {}),
+    ...(src ? { inputSourceDisplayKeySnapshot: src } : {}),
   };
 }
 
@@ -3099,79 +3110,41 @@ const WorkflowSection: React.FC<{
       const thumbRatio = clampWorkflowCardAspectRatio(1280, 800);
       rememberAssetCardModelThumbnail(id, variantId, thumb);
 
-      setAssets((prev) => {
-        const asset = prev.find((x) => x.id === id);
-        if (!asset) return prev;
-        if (variantId === 'original') {
-          const current = asWorkflowImageString(asset.original).trim();
-          if (!force && current && !/^data:image\/svg\+xml/i.test(current)) return prev;
-          return prev.map((x) =>
-            x.id === id
-              ? {
-                  ...x,
-                  original: thumb,
-                  gridCardAspectRatio: thumbRatio,
-                }
-              : x
-          );
-        }
-        const current = asWorkflowImageString(asset.results?.[variantId]).trim();
-        if (!force && current && !/^data:image\/svg\+xml/i.test(current)) return prev;
-        return prev.map((x) =>
-          x.id === id
-            ? {
-                ...x,
-                results: { ...(x.results || {}), [variantId]: thumb },
-                gridCardAspectRatio: thumbRatio,
-              }
-            : x
-        );
+      const currentAsset = assetsRef.current.find((x) => x.id === id);
+      if (!currentAsset) return;
+      const patched = patchAssetWithModelViewportThumb(currentAsset, variantId, thumb, {
+        force,
+        aspectRatio: thumbRatio,
       });
+      if (patched.changed) {
+        setAssets((prev) => prev.map((x) => (x.id === id ? patched.asset : x)));
+      }
       setCardAspectByAssetId((prev) => ({ ...prev, [id]: thumbRatio }));
 
+      if (!patched.shouldPersistPreviewCompanion) return;
       const base = String(getCompanionLocalBaseUrl() || '').trim();
       const pid = String(workspaceProjectChrome?.activeProjectId || '').trim();
       if (!base || !pid) return;
       void (async () => {
         const asset = assetsRef.current.find((x) => x.id === id);
-        const existingKey =
-          variantId === 'original'
-            ? String(asset?.originalCompanionKey || '').trim()
-            : String(asset?.resultsCompanionKeys?.[variantId] || '').trim();
-        // Prefer overwrite of the existing companion object — never mint a new id each close.
-        if (existingKey) {
-          const parsed = parseDataUrlToBlob(thumb);
-          if (!parsed) return;
-          const res = await putCompanionAsset(base, pid, existingKey, parsed.blob, parsed.mime);
-          if (res.ok === false) {
-            onLog?.('warn', '3D 缩略图覆盖落盘失败', res.error);
-          }
-          return;
-        }
-        const slotIndex = resolveWorkflowImageSlotIndex(asset?.resultOrder, variantId);
-        const put =
-          variantId === 'original'
-            ? await putWorkflowOriginalImageToCompanion(base, pid, id, thumb)
-            : await putWorkflowResultImageToCompanion(base, pid, id, variantId, thumb, { slotIndex });
-        if (put.ok === false) {
-          onLog?.('warn', '3D 缩略图持久化失败', put.error);
+        const previewKey = resolveModelViewportThumbPreviewCompanionKey(asset, id, variantId);
+        if (!previewKey) return;
+        const parsed = parseDataUrlToBlob(thumb);
+        if (!parsed) return;
+        const res = await putCompanionAsset(base, pid, previewKey, parsed.blob, parsed.mime);
+        if (res.ok === false) {
+          onLog?.('warn', '3D 预览缩略图落盘失败', res.error);
           return;
         }
         setAssets((prev) =>
           prev.map((x) => {
             if (x.id !== id) return x;
-            if (variantId === 'original') return { ...x, originalCompanionKey: put.key };
             return {
               ...x,
-              resultsCompanionKeys: { ...(x.resultsCompanionKeys || {}), [variantId]: put.key },
-              ...('previewKey' in put && put.previewKey
-                ? {
-                    resultsPreviewCompanionKeys: {
-                      ...(x.resultsPreviewCompanionKeys || {}),
-                      [variantId]: put.previewKey,
-                    },
-                  }
-                : {}),
+              resultsPreviewCompanionKeys: {
+                ...(x.resultsPreviewCompanionKeys || {}),
+                [variantId]: previewKey,
+              },
             };
           })
         );
@@ -3360,7 +3333,20 @@ ${lineSvg}
         actionModules.find((m) => m.id === actionType) ??
         capabilityPresets.find((p) => p.id === actionType) ??
         getQuickComposePlainModule(actionType);
-      const inputImage = getAssetDisplayImage(asset);
+      let inputImage = getAssetDisplayImage(asset);
+      let inputSourceDisplayKey = asset.displayKey;
+      // 同卡再生成 3D：当前若停在模型版本上，父节点与输入仍回到该模型的输入图（默认原图），避免 0→1→2 串联
+      if (mod?.category === 'generate_3d') {
+        const active = resolveWorkflowAssetActiveVariant(asset);
+        if (active?.kind === 'model3d') {
+          const snap = String(asset.resultMeta?.[asset.displayKey]?.inputSourceDisplayKeySnapshot || '').trim();
+          inputSourceDisplayKey = snap || 'original';
+          inputImage =
+            getAssetDisplayImage({ ...asset, displayKey: inputSourceDisplayKey }) ||
+            asWorkflowImageString(asset.original) ||
+            inputImage;
+        }
+      }
       if (mod && !workflowAssetAllowedForCapabilityDrop(asset, mod)) {
         onLog?.('warn', '当前显示内容与该能力不匹配（请切换到对应版本，或选用匹配能力）');
         return null;
@@ -3380,7 +3366,7 @@ ${lineSvg}
         actionType,
         inputImage,
         addedAt: Date.now(),
-        inputSourceDisplayKey: asset.displayKey,
+        inputSourceDisplayKey,
         ...(options?.promptOverride != null ? { promptOverride: options.promptOverride } : {}),
         ...(options?.overrideImageModelRegistryId || options?.overrideImageGear
           ? {
@@ -3852,10 +3838,16 @@ ${lineSvg}
           return { image: null };
         }
         try {
+          const assetSnap = assetsRef.current.find((a) => a.id === task.assetId);
+          const baseId = baseActionId(task.actionType);
+          const versionKey =
+            String(task.resultKey || '').trim() ||
+            (assetSnap ? allocateWorkflowResultVersionKey(assetSnap, baseId) : baseId);
+          task.resultKey = versionKey;
           setAssets((prev) =>
             prev.map((a) => {
               if (a.id !== task.assetId) return a;
-              const key = task.actionType;
+              const key = versionKey;
               const hasOrder = (a.resultOrder || []).includes(key);
               const old = a.resultMeta?.[key];
               return {
@@ -3868,7 +3860,7 @@ ${lineSvg}
                     ...(old || {}),
                     ...(task.displayStepLabel ? { displayStepLabel: task.displayStepLabel } : {}),
                     ...buildWorkflowStepResultMetaInputSnapshots(task, null),
-                    presetActionIdSnapshot: baseActionId(task.actionType),
+                    presetActionIdSnapshot: baseId,
                     mediaKind: 'model3d' as const,
                   },
                 },
@@ -4347,7 +4339,14 @@ ${lineSvg}
       setAssets((prev) =>
         prev.map((asset) => {
           if (asset.id !== assetId) return asset;
-          const doc = normalizeWorkflowModelPbrEditDoc(asset.modelPbrEdits);
+          const stepKey = resolveStepModelPbrSlotKey({
+            displayKey: asset.displayKey,
+            variantId: asset.displayKey,
+          });
+          const doc = resolveWorkflowAssetPbrEditDoc(asset, {
+            stepKey,
+            modelKey: undefined,
+          });
           if (!doc) return asset;
           const nextDoc = {
             ...doc,
@@ -4388,8 +4387,7 @@ ${lineSvg}
           if (!changed) return asset;
           applied = true;
           return {
-            ...asset,
-            modelPbrEdits: nextDoc,
+            ...writeWorkflowAssetStepPbrEdit(asset, stepKey || asset.displayKey || doc.modelKey, nextDoc),
             modelPbrTextureLineage: [
               ...(asset.modelPbrTextureLineage || []),
               {
@@ -8288,23 +8286,10 @@ ${lineSvg}
     [lightboxAsset]
   );
   const lightboxPreviewVariant = useMemo(() => {
-    if (!lightboxAsset || !lightboxActiveVariant) return lightboxActiveVariant;
-    if (lightboxActiveVariant.kind !== 'model3d') return lightboxActiveVariant;
-    if (
-      workflowAssetVariantHasDirectModelUrl(lightboxActiveVariant) ||
-      workflowAssetVariantHasModelCompanionKey(lightboxActiveVariant)
-    ) {
-      return lightboxActiveVariant;
-    }
-    return (
-      resolveWorkflowAssetVariants(lightboxAsset).find(
-        (variant) =>
-          variant.kind === 'model3d' &&
-          (workflowAssetVariantHasDirectModelUrl(variant) ||
-            workflowAssetVariantHasModelCompanionKey(variant))
-      ) || lightboxActiveVariant
-    );
-  }, [lightboxActiveVariant, lightboxAsset]);
+    // Always keep the active displayKey's variant. Falling back to "first model3d with
+    // URL" made version switches keep showing the previous model's mesh + textures.
+    return lightboxActiveVariant;
+  }, [lightboxActiveVariant]);
   const lightboxShowsImage = Boolean(lightboxAsset && getAssetDisplayImage(lightboxAsset).trim());
   const lightboxTexturePreviewSrc =
     lightboxTexturePreview && lightboxAsset && lightboxTexturePreview.assetId === lightboxAsset.id
@@ -9314,11 +9299,18 @@ ${lineSvg}
       if (assetId === lightboxAssetIdRef.current) {
         lightboxModel3dViewDirtyRef.current = true;
       }
+      const stepKey = resolveStepModelPbrSlotKey({
+        variantId: detail?.variantId || doc.variantId,
+        modelKey: detail?.modelKey || doc.modelKey,
+      });
       setAssets((prev) => {
         const host = prev.find((asset) => asset.id === assetId);
         if (!host) return prev;
-        const removedFromHost = diffRemovedPbrTextureAssetIds(host.modelPbrEdits, doc);
-        let next = prev.map((asset) => (asset.id === assetId ? { ...asset, modelPbrEdits: doc } : asset));
+        const beforeIds = collectAssetAllPbrTextureAssetIds(host);
+        const patchedHost = writeWorkflowAssetStepPbrEdit(host, stepKey || doc.modelKey, doc);
+        const afterIds = collectAssetAllPbrTextureAssetIds(patchedHost);
+        const removedFromHost = [...beforeIds].filter((id) => !afterIds.has(id));
+        let next = prev.map((asset) => (asset.id === assetId ? { ...asset, ...patchedHost } : asset));
         const orphanSet = new Set(
           filterUnreferencedPbrTextureAssetIds(removedFromHost, next, {
             excludeAssetId: assetId,
@@ -10338,6 +10330,7 @@ ${lineSvg}
       onLog?.('warn', '丢弃版本被 VGP 引用链阻止（已写入会话审计环）');
       return;
     }
+    const revokeUrls = collectWorkflow3dBlobUrlsToRevoke(cur, actionType);
     setAssets((prev) =>
       prev.map((a) => {
         if (a.id !== assetId) return a;
@@ -10362,7 +10355,24 @@ ${lineSvg}
         delete nextTags[actionType];
         const nextTagStage = { ...(a.imageTagStage || {}) };
         delete nextTagStage[actionType];
+        const nextStepModelUrls = { ...(a.stepModelUrls || {}) };
+        delete nextStepModelUrls[actionType];
+        const nextStepModelCompanionKeys = { ...(a.stepModelCompanionKeys || {}) };
+        delete nextStepModelCompanionKeys[actionType];
+        const nextStepModelFormats = { ...(a.stepModelFormats || {}) };
+        delete nextStepModelFormats[actionType];
+        const nextStepModelPbrEdits = { ...(a.stepModelPbrEdits || {}) };
+        delete nextStepModelPbrEdits[actionType];
         const displayKey = a.displayKey === actionType ? 'original' : a.displayKey;
+        let modelUrls = a.modelUrls;
+        let modelCompanionKeys = a.modelCompanionKeys;
+        if (displayKey === 'original') {
+          modelUrls = undefined;
+          modelCompanionKeys = undefined;
+        } else if (nextStepModelUrls[displayKey] || nextStepModelCompanionKeys[displayKey]) {
+          modelUrls = nextStepModelUrls[displayKey];
+          modelCompanionKeys = nextStepModelCompanionKeys[displayKey];
+        }
         return {
           ...a,
           vgp: nextVgp,
@@ -10376,9 +10386,24 @@ ${lineSvg}
           imageOverlayAnnotationsPano: Object.keys(nextOverlayPano).length ? nextOverlayPano : undefined,
           imageTags: Object.keys(nextTags).length ? nextTags : undefined,
           imageTagStage: Object.keys(nextTagStage).length ? nextTagStage : undefined,
+          stepModelUrls: Object.keys(nextStepModelUrls).length ? nextStepModelUrls : undefined,
+          stepModelCompanionKeys: Object.keys(nextStepModelCompanionKeys).length
+            ? nextStepModelCompanionKeys
+            : undefined,
+          stepModelFormats: Object.keys(nextStepModelFormats).length ? nextStepModelFormats : undefined,
+          stepModelPbrEdits: Object.keys(nextStepModelPbrEdits).length ? nextStepModelPbrEdits : undefined,
+          modelUrls,
+          modelCompanionKeys,
         };
       })
     );
+    for (const u of revokeUrls) {
+      try {
+        URL.revokeObjectURL(u);
+      } catch {
+        /* ignore */
+      }
+    }
   };
 
   const markArchived = (assetId: string) => {
@@ -10448,7 +10473,7 @@ ${lineSvg}
       const removed = prev.find((a) => a.id === assetId);
       if (!removed) return prev;
       const pbrTexIds = filterUnreferencedPbrTextureAssetIds(
-        collectPbrTextureAssetIds(removed.modelPbrEdits),
+        collectAssetAllPbrTextureAssetIds(removed),
         prev,
         {
           excludeAssetId: assetId,
@@ -11740,7 +11765,9 @@ ${lineSvg}
               if (materialId && slot) {
                 next = next.map((asset) => {
                   if (asset.id !== hostAssetId) return asset;
-                  const doc = normalizeWorkflowModelPbrEditDoc(asset.modelPbrEdits);
+                  const doc = resolveWorkflowAssetPbrEditDoc(asset, {
+                    stepKey: asset.displayKey,
+                  });
                   if (!doc) return asset;
                   // 同时挂槽位与同 dataUrl 候选
                   let patched = applyPbrTextureAssetIdToDoc(doc, {
@@ -11760,7 +11787,7 @@ ${lineSvg}
                       assetId: id,
                     });
                   }
-                  return { ...asset, modelPbrEdits: patched };
+                  return writeWorkflowAssetStepPbrEdit(asset, asset.displayKey || patched.modelKey, patched);
                 });
               }
               return next;
@@ -16145,7 +16172,13 @@ ${lineSvg}
                 <AssetMediaPreviewCenter
                   variant={lightboxMediaCenterVariant}
                   assetId={lightboxAsset.id}
-                  model3dPbrEditDoc={lightboxAsset.modelPbrEdits ?? null}
+                  model3dPbrEditDoc={resolveWorkflowAssetPbrEditDoc(lightboxAsset, {
+                    stepKey: lightboxAsset.displayKey,
+                    variantId: lightboxMediaCenterVariant?.id,
+                    modelKey:
+                      lightboxMediaCenterVariant?.modelCompanionKeys?.[0] ||
+                      lightboxMediaCenterVariant?.id,
+                  })}
                   resolvePbrTextureAssetSrc={(textureAssetId) => {
                     const tex = assetsRef.current.find((a) => a.id === textureAssetId);
                     return tex ? getAssetDisplayImage(tex) : '';
@@ -16240,7 +16273,17 @@ ${lineSvg}
           enablePanoramaMode={Boolean(lightboxTexturePreviewSrc || lightboxShowsImage)}
           modelUrls={lightboxTexturePreviewSrc ? [] : lightboxModelUrls}
           modelFileName={lightboxTexturePreviewSrc ? undefined : lightboxModelFileNameHint}
-          model3dPbrEditDoc={lightboxTexturePreviewSrc ? null : lightboxAsset.modelPbrEdits ?? null}
+          model3dPbrEditDoc={
+            lightboxTexturePreviewSrc
+              ? null
+              : resolveWorkflowAssetPbrEditDoc(lightboxAsset, {
+                  stepKey: lightboxAsset.displayKey,
+                  variantId: lightboxMediaCenterVariant?.id,
+                  modelKey:
+                    lightboxMediaCenterVariant?.modelCompanionKeys?.[0] ||
+                    lightboxMediaCenterVariant?.id,
+                })
+          }
           resolvePbrTextureAssetSrc={(textureAssetId) => {
             const tex = assetsRef.current.find((a) => a.id === textureAssetId);
             return tex ? getAssetDisplayImage(tex) : '';

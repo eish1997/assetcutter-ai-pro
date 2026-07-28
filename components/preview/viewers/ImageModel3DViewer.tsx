@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ChevronsRight } from 'lucide-react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import './ImageModel3DViewer.css';
@@ -7,6 +8,10 @@ import ModelPbrSlotGeneratePanel, {
   type ModelPbrSlotGenerateJobView,
 } from './ModelPbrSlotGeneratePanel';
 import ModelPbrTextureContextMenu from './ModelPbrTextureContextMenu';
+import {
+  buildSeededPbrDocFromMaterialSlots,
+  isolateImageDataToChannel,
+} from '../../../services/workflowModelPbrExtractFromMaterials';
 import {
   appendWorkflowPbrSlotCandidates,
   applyPbrTextureAssetIdToDoc,
@@ -17,12 +22,14 @@ import {
   listLegacyPbrTextureDataUrlRefs,
   MAX_PBR_SLOT_GENERATE_COUNT,
   normalizeWorkflowModelPbrEditDoc,
+  pbrEditDocHasUserAuthoredTextures,
   readWorkflowModelPbrEditDoc,
   resolvePbrTextureSrc,
   textureEditFromPbrCandidate,
   WORKFLOW_MODEL_PBR_EDIT_PERSIST_EVENT,
   workflowModelPbrEditKey,
   WORKFLOW_MODEL_PBR_SLOTS,
+  workflowPbrEditDocMatchesModel,
   writeWorkflowModelPbrEditDoc,
   type WorkflowModelPbrChannel,
   type WorkflowModelPbrEditDoc,
@@ -411,14 +418,7 @@ async function prepareTextureDataUrl(
       if (flipNormalG) image.data[i + 1] = 255 - image.data[i + 1];
     }
   } else {
-    const channelIndex = channel === 'r' ? 0 : channel === 'g' ? 1 : channel === 'b' ? 2 : 3;
-    for (let i = 0; i < image.data.length; i += 4) {
-      const v = image.data[i + channelIndex];
-      image.data[i] = v;
-      image.data[i + 1] = v;
-      image.data[i + 2] = v;
-      image.data[i + 3] = 255;
-    }
+    isolateImageDataToChannel(image, channel);
   }
   ctx.putImageData(image, 0, 0);
   return canvas.toDataURL('image/png');
@@ -433,6 +433,8 @@ async function createTextureFromEdit(
   if (!prepared) return null;
   const texture = await new THREE.TextureLoader().loadAsync(prepared);
   texture.name = edit.fileName;
+  // glTF / Tripo UVs expect flipY=false; TextureLoader defaults to true and scrambles maps on re-apply.
+  texture.flipY = false;
   texture.colorSpace = edit.colorSpace === 'srgb' ? THREE.SRGBColorSpace : THREE.NoColorSpace;
   texture.wrapS = THREE.RepeatWrapping;
   texture.wrapT = THREE.RepeatWrapping;
@@ -662,6 +664,10 @@ const ImageModel3DViewer: React.FC<LazyImagePreviewViewerProps> = ({
   const [, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [generatePanelSlot, setGeneratePanelSlot] = useState<WorkflowModelPbrSlot | null>(null);
   const [panelSourceDataUrl, setPanelSourceDataUrl] = useState<string | null>(null);
+  /** 贴图槽列表默认收起；单击材质球打开 */
+  const [pbrSlotsPanelOpen, setPbrSlotsPanelOpen] = useState(false);
+  /** Channel-isolated slot thumbs (packed ORM looks like noise if shown as full RGB). */
+  const [slotChannelPreviewByKey, setSlotChannelPreviewByKey] = useState<Record<string, string>>({});
   /** 按材质+槽位保存生成进度，关浮层再开仍可恢复占位/动画 */
   const [slotGenerateJobs, setSlotGenerateJobs] = useState<Record<string, ModelPbrSlotGenerateJobView>>({});
   const [slotContextMenu, setSlotContextMenu] = useState<{
@@ -942,12 +948,46 @@ const ImageModel3DViewer: React.FC<LazyImagePreviewViewerProps> = ({
       ensureAoUv2(object);
       const slots = collectMaterialSlots(object);
       const assetSavedDoc = persistedPbrDocRef.current;
-      const savedDoc = assetSavedDoc || readWorkflowModelPbrEditDoc(pbrStorageKey);
+      const localDoc = readWorkflowModelPbrEditDoc(pbrStorageKey);
+      const modelIdentity = stableModelIdentity || modelFileName || 'unknown_model';
+      // Same card can host multiple 3D versions — only reuse a doc that belongs to THIS model.
+      const matchedAssetDoc = workflowPbrEditDocMatchesModel(assetSavedDoc, {
+        modelKey: modelIdentity,
+        variantId: model3dVariantId,
+      })
+        ? assetSavedDoc
+        : null;
+      const matchedLocalDoc = workflowPbrEditDocMatchesModel(localDoc, {
+        modelKey: modelIdentity,
+        variantId: model3dVariantId,
+      })
+        ? localDoc
+        : null;
+      let savedDoc = matchedAssetDoc || matchedLocalDoc;
+      const hasUserAuthored = pbrEditDocHasUserAuthoredTextures(savedDoc);
+      // Pure embedded seeds (or poisoned cross-version seeds): always refresh from THIS mesh
+      // so switching models updates panel thumbs and never paints another atlas onto the GLB.
+      if (!hasUserAuthored) {
+        const seeded = buildSeededPbrDocFromMaterialSlots(
+          slots.map((slot) => ({ id: slot.id, label: slot.label, material: slot.material })),
+          {
+            assetId: model3dAssetId || 'unknown_asset',
+            variantId: model3dVariantId,
+            modelKey: modelIdentity,
+          }
+        );
+        if (seeded) {
+          savedDoc = seeded;
+          writeWorkflowModelPbrEditDoc(pbrStorageKey, seeded);
+          if (model3dAssetId) publishModelPbrEditRef.current(seeded);
+        }
+      }
       setMaterialSlots(slots);
       setActiveMaterialId((current) => current || slots[0]?.id || '');
       setPbrDoc(savedDoc);
       pbrDocRef.current = savedDoc;
       materialSlotsRef.current = slots;
+      setSlotChannelPreviewByKey({});
       scene.add(object);
       // 先设宽松限位，再 frame（frame 会按包围盒改写 min/max/near/far）
       controls.minDistance = 0.001;
@@ -976,7 +1016,8 @@ const ImageModel3DViewer: React.FC<LazyImagePreviewViewerProps> = ({
       }
       applyDisplayModeRef.current?.(displayModeRef.current);
       publishModel3DStats(collectModel3DStats(object, src, fileName, format));
-      if (savedDoc) {
+      // Only re-apply user upload/generate maps. Embedded seeds stay on the GLB materials.
+      if (hasUserAuthored && savedDoc) {
         void Promise.all(
           slots.map((slot) =>
             applyMaterialEditToSlot(slot, savedDoc.materials[slot.id], resolveTextureAssetSrcRef.current)
@@ -984,7 +1025,7 @@ const ImageModel3DViewer: React.FC<LazyImagePreviewViewerProps> = ({
         ).then(() => {
           publishModel3DStats(collectModel3DStats(object, src, fileName, format));
         });
-        if (!assetSavedDoc && model3dAssetId) publishModelPbrEditRef.current(savedDoc);
+        if (!matchedAssetDoc && model3dAssetId) publishModelPbrEditRef.current(savedDoc);
       }
       rememberWorkflowModelViewerUiSticky({
         loadKey: sceneLoadKey,
@@ -1235,6 +1276,44 @@ const ImageModel3DViewer: React.FC<LazyImagePreviewViewerProps> = ({
 
   const activeMaterial = materialSlots.find((slot) => slot.id === activeMaterialId) || materialSlots[0] || null;
   const activeEdit = activeMaterial ? pbrDoc?.materials[activeMaterial.id] : undefined;
+
+  useEffect(() => {
+    if (!pbrSlotsPanelOpen || !activeMaterial || !activeEdit) return;
+    let cancelled = false;
+    const materialId = activeMaterial.id;
+    const run = async () => {
+      const entries = await Promise.all(
+        WORKFLOW_MODEL_PBR_SLOTS.map(async (slot) => {
+          const edit = activeEdit.slots[slot];
+          const raw = edit?.enabled ? resolveTexSrc(edit) : '';
+          if (!edit?.enabled || !raw) return null;
+          const key = `${materialId}:${slot}:${edit.updatedAt}:${edit.channel}:${edit.assetId || ''}:${raw.slice(0, 48)}`;
+          if (edit.channel === 'rgb' && slot !== 'normal') {
+            return [key, raw] as const;
+          }
+          try {
+            const prepared = await prepareTextureDataUrl(edit, slot, raw);
+            return [key, prepared || raw] as const;
+          } catch {
+            return [key, raw] as const;
+          }
+        })
+      );
+      if (cancelled) return;
+      setSlotChannelPreviewByKey((prev) => {
+        const next = { ...prev };
+        for (const entry of entries) {
+          if (entry) next[entry[0]] = entry[1];
+        }
+        return next;
+      });
+    };
+    void run();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeEdit, activeMaterial, pbrSlotsPanelOpen, resolveTexSrc]);
+
   const editedMaterialIds = useMemo(() => {
     const ids = new Set<string>();
     for (const [id, edit] of Object.entries((pbrDoc?.materials || {}) as WorkflowModelPbrEditDoc['materials'])) {
@@ -1837,7 +1916,7 @@ const ImageModel3DViewer: React.FC<LazyImagePreviewViewerProps> = ({
           onPointerDown={(e) => e.stopPropagation()}
           onWheel={(e) => e.stopPropagation()}
         >
-          {generatePanelSlot && activeMaterial ? (
+          {pbrSlotsPanelOpen && generatePanelSlot && activeMaterial ? (
             <ModelPbrSlotGeneratePanel
               slot={generatePanelSlot}
               slotLabel={PBR_SLOT_LABELS[generatePanelSlot]}
@@ -1880,15 +1959,26 @@ const ImageModel3DViewer: React.FC<LazyImagePreviewViewerProps> = ({
             />
           ) : null}
           <div
-            className="flex max-h-full overflow-hidden rounded-xl border border-white/10 bg-[#0d0e12]/92 text-gray-200 shadow-2xl ring-1 ring-white/[0.05] backdrop-blur-xl"
-            data-image-preview-scroll
+            className={
+              pbrSlotsPanelOpen
+                ? 'flex max-h-full overflow-hidden rounded-xl border border-white/10 bg-[#0d0e12]/92 text-gray-200 shadow-2xl ring-1 ring-white/[0.05] backdrop-blur-xl'
+                : 'flex items-center overflow-visible text-gray-200'
+            }
+            {...(pbrSlotsPanelOpen ? { 'data-image-preview-scroll': true } : {})}
           >
-          <div className="w-[9.5rem] p-2">
+          {pbrSlotsPanelOpen ? (
+          <div className="w-[9.5rem] overflow-y-auto p-2" data-image-preview-scroll>
             <div className="space-y-1.5">
               {WORKFLOW_MODEL_PBR_SLOTS.map((slot) => {
                 const edit = activeEdit?.slots[slot];
-                const slotPreviewSrc = edit?.enabled ? resolveTexSrc(edit) : '';
-                const hasTexture = Boolean(edit?.enabled && slotPreviewSrc);
+                const rawPreviewSrc = edit?.enabled ? resolveTexSrc(edit) : '';
+                const previewCacheKey =
+                  edit?.enabled && activeMaterial && rawPreviewSrc
+                    ? `${activeMaterial.id}:${slot}:${edit.updatedAt}:${edit.channel}:${edit.assetId || ''}:${rawPreviewSrc.slice(0, 48)}`
+                    : '';
+                const slotPreviewSrc =
+                  (previewCacheKey && slotChannelPreviewByKey[previewCacheKey]) || rawPreviewSrc;
+                const hasTexture = Boolean(edit?.enabled && rawPreviewSrc);
                 const panelOpen = generatePanelSlot === slot;
                 const paramAdjustable = canAdjustSlotParam(slot, hasTexture);
                 const paramRange = PBR_SLOT_PARAM_RANGE[slot];
@@ -1994,7 +2084,7 @@ const ImageModel3DViewer: React.FC<LazyImagePreviewViewerProps> = ({
                         }`}
                       >
                         {hasTexture ? (
-                          <img src={slotPreviewSrc} alt="" className="absolute inset-0 h-full w-full object-cover" draggable={false} />
+                          <img src={slotPreviewSrc} alt="" className="absolute inset-0 h-full w-full object-contain" draggable={false} />
                         ) : null}
                         <span className={`relative z-[1] max-w-[4.9rem] truncate rounded bg-black/45 px-1.5 py-0.5 text-center ${hasTexture ? 'text-white' : 'text-gray-400'}`}>
                           {PBR_SLOT_LABELS[slot]}
@@ -2051,7 +2141,14 @@ const ImageModel3DViewer: React.FC<LazyImagePreviewViewerProps> = ({
               })}
             </div>
           </div>
-          <div className="flex w-12 shrink-0 flex-col items-center gap-2 overflow-y-auto border-l border-white/10 bg-white/[0.025] p-2">
+          ) : null}
+          <div
+            className={`flex shrink-0 flex-col items-center ${
+              pbrSlotsPanelOpen
+                ? 'max-h-full w-12 gap-2 overflow-y-auto border-l border-white/10 bg-white/[0.025] p-2'
+                : 'w-auto gap-1.5 overflow-visible bg-transparent p-1'
+            }`}
+          >
             {materialSlots.map((slot) => {
               const active = slot.id === activeMaterial?.id;
               const edited = editedMaterialIds.has(slot.id);
@@ -2059,18 +2156,30 @@ const ImageModel3DViewer: React.FC<LazyImagePreviewViewerProps> = ({
                 <button
                   key={slot.id}
                   type="button"
-                  title={`${slot.label} · ${slot.meshCount} mesh`}
+                  title={
+                    pbrSlotsPanelOpen
+                      ? `${slot.label} · ${slot.meshCount} mesh`
+                      : `${slot.label} · 单击打开贴图面板`
+                  }
                   aria-label={slot.label}
                   aria-pressed={active}
                   onClick={() => {
+                    const switching = slot.id !== activeMaterial?.id;
                     setActiveMaterialId(slot.id);
+                    if (!pbrSlotsPanelOpen) {
+                      setPbrSlotsPanelOpen(true);
+                    } else if (!switching && active) {
+                      setPbrSlotsPanelOpen(false);
+                      setGeneratePanelSlot(null);
+                      return;
+                    }
                     if (generatePanelSlot) {
                       const nextEdit = pbrDocRef.current?.materials[slot.id]?.slots[generatePanelSlot];
                       const src = nextEdit?.enabled ? resolveTexSrc(nextEdit) : '';
                       setPanelSourceDataUrl(src || null);
                     }
                   }}
-                  className={`relative flex h-9 w-9 items-center justify-center rounded-full transition-transform ${
+                  className={`relative flex h-9 w-9 shrink-0 items-center justify-center rounded-full transition-transform ${
                     active ? 'scale-105 ring-2 ring-blue-300/80' : 'ring-1 ring-white/12 hover:scale-105 hover:ring-white/30'
                   }`}
                 >
@@ -2083,6 +2192,20 @@ const ImageModel3DViewer: React.FC<LazyImagePreviewViewerProps> = ({
                 </button>
               );
             })}
+            {pbrSlotsPanelOpen ? (
+              <button
+                type="button"
+                title="收起贴图面板"
+                aria-label="收起贴图面板"
+                onClick={() => {
+                  setPbrSlotsPanelOpen(false);
+                  setGeneratePanelSlot(null);
+                }}
+                className="mt-auto flex h-8 w-8 items-center justify-center rounded-md text-gray-400 ring-1 ring-white/10 transition-colors hover:bg-white/[0.08] hover:text-gray-100"
+              >
+                <ChevronsRight className="h-4 w-4" aria-hidden />
+              </button>
+            ) : null}
           </div>
           </div>
         </div>

@@ -22,6 +22,11 @@ export type WorkflowModelPbrTextureEdit = {
   mimeType?: string;
   channel: WorkflowModelPbrChannel;
   colorSpace: WorkflowModelPbrColorSpace;
+  /**
+   * embedded = 从当前 GLB 材质导出；user = 上传/生成。
+   * 加载时仅 user 贴图回写到网格，避免版本切换把别的模型 atlas 涂上去。
+   */
+  source?: 'embedded' | 'user';
   normalFlipR?: boolean;
   normalFlipG?: boolean;
   enabled: boolean;
@@ -128,6 +133,7 @@ function normalizeTextureEdit(value: unknown): WorkflowModelPbrTextureEdit | nul
     mimeType: clean(rec.mimeType) || undefined,
     channel: channel === 'rgb' || channel === 'r' || channel === 'g' || channel === 'b' || channel === 'a' ? channel : 'rgb',
     colorSpace: colorSpace === 'srgb' ? 'srgb' : 'linear',
+    source: rec.source === 'user' || rec.source === 'embedded' ? rec.source : assetId ? 'user' : undefined,
     normalFlipR: rec.normalFlipR === true || undefined,
     normalFlipG: rec.normalFlipG === true || undefined,
     enabled: rec.enabled !== false,
@@ -253,6 +259,7 @@ export function textureEditFromPbrCandidate(
     mimeType: candidate.mimeType || prev?.mimeType,
     channel: prev?.channel || defaultWorkflowPbrChannel(slot),
     colorSpace: prev?.colorSpace || defaultWorkflowPbrColorSpace(slot),
+    source: 'user',
     normalFlipR: prev?.normalFlipR,
     normalFlipG: prev?.normalFlipG,
     enabled: true,
@@ -301,13 +308,13 @@ export function diffRemovedPbrTextureAssetIds(
 }
 
 /**
- * 从候选 id 中筛出「当前资产列表里已无任何 modelPbrEdits 引用」的贴图资产。
+ * 从候选 id 中筛出「当前资产列表里已无任何 modelPbrEdits / stepModelPbrEdits 引用」的贴图资产。
  * `excludeAssetId`：正在被替换/删除的宿主，不参与引用统计。
  * `extraReferencedIds`：快捷栏等外部仍占用的 id。
  */
 export function filterUnreferencedPbrTextureAssetIds(
   candidateIds: Iterable<string>,
-  assets: Array<{ id: string; modelPbrEdits?: WorkflowModelPbrEditDoc | null }>,
+  assets: Array<WorkflowAssetPbrHost & { id: string }>,
   options?: { excludeAssetId?: string; extraReferencedIds?: Iterable<string> }
 ): string[] {
   const exclude = clean(options?.excludeAssetId);
@@ -318,11 +325,112 @@ export function filterUnreferencedPbrTextureAssetIds(
   }
   for (const asset of assets) {
     if (exclude && asset.id === exclude) continue;
-    for (const texId of collectPbrTextureAssetIds(asset.modelPbrEdits)) {
+    for (const texId of collectAssetAllPbrTextureAssetIds(asset)) {
       still.add(texId);
     }
   }
   return [...new Set([...candidateIds].map(clean).filter(Boolean))].filter((id) => !still.has(id));
+}
+
+/** Minimal host shape for per-step PBR docs (avoids importing full WorkflowAsset). */
+export type WorkflowAssetPbrHost = {
+  modelPbrEdits?: WorkflowModelPbrEditDoc | null;
+  stepModelPbrEdits?: Record<string, WorkflowModelPbrEditDoc> | null;
+  displayKey?: string;
+};
+
+export function resolveStepModelPbrSlotKey(opts: {
+  variantId?: string;
+  displayKey?: string;
+  modelKey?: string;
+}): string {
+  return clean(opts.variantId) || clean(opts.displayKey) || clean(opts.modelKey);
+}
+
+/**
+ * Resolve PBR edits for one model version.
+ * Never reuse another version's seeded atlas via the legacy single `modelPbrEdits` field.
+ */
+export function resolveWorkflowAssetPbrEditDoc(
+  asset: WorkflowAssetPbrHost | null | undefined,
+  opts?: { stepKey?: string; variantId?: string; modelKey?: string }
+): WorkflowModelPbrEditDoc | null {
+  if (!asset) return null;
+  const stepKey = resolveStepModelPbrSlotKey({
+    variantId: opts?.variantId,
+    displayKey: opts?.stepKey || asset.displayKey,
+    modelKey: opts?.modelKey,
+  });
+  const modelKey = clean(opts?.modelKey);
+
+  if (stepKey) {
+    const fromStep = normalizeWorkflowModelPbrEditDoc(asset.stepModelPbrEdits?.[stepKey]);
+    if (fromStep) return fromStep;
+    const legacy = normalizeWorkflowModelPbrEditDoc(asset.modelPbrEdits);
+    if (!legacy) return null;
+    // Explicit step requested but empty: only accept legacy when it clearly is this step.
+    if (clean(legacy.variantId) === stepKey) return legacy;
+    if (!clean(legacy.variantId) && modelKey && clean(legacy.modelKey) === modelKey) return legacy;
+    return null;
+  }
+
+  if (modelKey && asset.stepModelPbrEdits) {
+    for (const doc of Object.values(asset.stepModelPbrEdits)) {
+      const normalized = normalizeWorkflowModelPbrEditDoc(doc);
+      if (normalized && clean(normalized.modelKey) === modelKey) return normalized;
+    }
+  }
+
+  const legacy = normalizeWorkflowModelPbrEditDoc(asset.modelPbrEdits);
+  if (!legacy) return null;
+  if (modelKey && clean(legacy.modelKey) === modelKey) return legacy;
+  if (modelKey || stepKey) return null;
+  return legacy;
+}
+
+/** Write PBR edits into `stepModelPbrEdits[stepKey]`; mirror to legacy `modelPbrEdits` for old readers. */
+export function writeWorkflowAssetStepPbrEdit<T extends WorkflowAssetPbrHost>(
+  asset: T,
+  stepKey: string,
+  doc: WorkflowModelPbrEditDoc
+): T {
+  const key = clean(stepKey);
+  const nextSteps = { ...(asset.stepModelPbrEdits || {}) };
+  if (key) nextSteps[key] = doc;
+  return {
+    ...asset,
+    ...(key ? { stepModelPbrEdits: nextSteps } : {}),
+    modelPbrEdits: doc,
+  };
+}
+
+export function collectAssetAllPbrTextureAssetIds(asset: WorkflowAssetPbrHost | null | undefined): Set<string> {
+  const out = collectPbrTextureAssetIds(asset?.modelPbrEdits);
+  for (const doc of Object.values(asset?.stepModelPbrEdits || {})) {
+    for (const id of collectPbrTextureAssetIds(doc)) out.add(id);
+  }
+  return out;
+}
+
+/** True when a persisted doc is safe to apply onto the currently loaded model. */
+export function workflowPbrEditDocMatchesModel(
+  doc: WorkflowModelPbrEditDoc | null | undefined,
+  opts: { modelKey?: string; variantId?: string }
+): boolean {
+  if (!doc) return false;
+  const modelKey = clean(opts.modelKey);
+  const variantId = clean(opts.variantId);
+  const docVariant = clean(doc.variantId);
+  const docModel = clean(doc.modelKey);
+  // When the viewer knows its version id, require an exact variant match (or legacy
+  // doc with no variantId but the same modelKey). Never accept another step's doc.
+  if (variantId) {
+    if (docVariant === variantId) return true;
+    if (!docVariant && modelKey && docModel === modelKey) return true;
+    return false;
+  }
+  if (modelKey && docModel === modelKey) return true;
+  return false;
 }
 
 /** 槽位 edit 是否对应当前 rewrite 源（assetId 优先，再比 dataUrl/展示 URL） */
@@ -499,6 +607,25 @@ function readAllDocs(): Record<string, WorkflowModelPbrEditDoc> {
     }
     return out;
   });
+}
+
+/** User upload/generate maps that must be re-applied onto the mesh on reopen. */
+export function pbrEditDocHasUserAuthoredTextures(doc: WorkflowModelPbrEditDoc | null | undefined): boolean {
+  if (!doc?.materials) return false;
+  for (const mat of Object.values(doc.materials)) {
+    for (const slot of WORKFLOW_MODEL_PBR_SLOTS) {
+      const edit = mat.slots?.[slot];
+      if (!edit?.enabled) continue;
+      if (edit.source === 'user') return true;
+      if (edit.source === 'embedded') continue;
+      // Legacy: formal texture asset or generate/upload candidates imply user authorship.
+      if (clean(edit.assetId)) return true;
+      const cands = mat.slotCandidates?.[slot] || [];
+      if (cands.some((c) => c.source === 'generate' || c.source === 'upload')) return true;
+    }
+    if (Object.keys(mat.params || {}).length > 0) return true;
+  }
+  return false;
 }
 
 export function workflowModelPbrEditKey(assetId: string | undefined, variantId: string | undefined, modelKey: string | undefined): string {

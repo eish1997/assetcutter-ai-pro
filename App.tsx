@@ -3256,6 +3256,7 @@ const MainApp: React.FC = () => {
     options?: { forceNewTask?: boolean; resumeExistingTask?: boolean }
   ) => {
     if (preset.category !== 'generate_3d' || !preset.generate3D) return;
+    const resultSlotKey = String(task?.resultKey || task?.actionType || preset.id || '').trim();
     const g = normalizeGenerate3DPresetForRun(preset.generate3D);
     const provider = resolveGenerate3dProviderId(g);
     const companionProjectIdForPreflight = String(activeWorkspaceProjectId || '').trim() || 'default';
@@ -3302,16 +3303,16 @@ const MainApp: React.FC = () => {
         if (!result.modelUrls.length) {
           throw new Error('混元任务完成但未返回可下载模型链接');
         }
-        if (task?.assetId && task?.actionType && result.aiGatewayJobId) {
+        if (task?.assetId && resultSlotKey && result.aiGatewayJobId) {
           setWorkflowAssets((prev) =>
             prev.map((a) => {
               if (a.id !== task.assetId) return a;
-              const old = a.resultMeta?.[task.actionType] || { executedAt: Date.now() };
+              const old = a.resultMeta?.[resultSlotKey] || { executedAt: Date.now() };
               return {
                 ...a,
                 resultMeta: {
                   ...(a.resultMeta || {}),
-                  [task.actionType]: {
+                  [resultSlotKey]: {
                     ...old,
                     tencentJobId: result.aiGatewayJobId,
                     aiGatewayJobId: result.aiGatewayJobId,
@@ -3328,7 +3329,7 @@ const MainApp: React.FC = () => {
         const companionBase = getCompanionLocalBaseUrl();
         const companionProjectId = String(activeWorkspaceProjectId || '').trim() || 'default';
         const workflowAssetId = task?.assetId || `wf_tencent_${Math.random().toString(36).slice(2, 11)}`;
-        const resultKey = task?.actionType || preset.id;
+        const resultKey = resultSlotKey;
         const persisted = await persistWorkflow3dSlots({
           provider: 'tencent-hunyuan',
           taskId: result.aiGatewayJobId,
@@ -3395,16 +3396,16 @@ const MainApp: React.FC = () => {
       } catch (e) {
         const msg = normalizeApiErrorMessage(e);
         updateTask(taskId, { status: 'FAILED', error: msg });
-        if (task?.assetId && task?.actionType) {
+        if (task?.assetId && resultSlotKey) {
           setWorkflowAssets((prev) =>
             prev.map((a) => {
               if (a.id !== task.assetId) return a;
-              const old = a.resultMeta?.[task.actionType] || { executedAt: Date.now() };
+              const old = a.resultMeta?.[resultSlotKey] || { executedAt: Date.now() };
               return {
                 ...a,
                 resultMeta: {
                   ...(a.resultMeta || {}),
-                  [task.actionType]: {
+                  [resultSlotKey]: {
                     ...old,
                     tencentLastError: msg,
                   },
@@ -3445,7 +3446,7 @@ const MainApp: React.FC = () => {
         const companionBase = getCompanionLocalBaseUrl();
         const companionProjectId = String(activeWorkspaceProjectId || '').trim() || 'default';
         const workflowAssetId = task?.assetId || `wf_ark3d_${Math.random().toString(36).slice(2, 11)}`;
-        const resultKey = task?.actionType || preset.id;
+        const resultKey = resultSlotKey;
         const persisted = await persistWorkflow3dSlots({
           provider: 'volcengine-ark',
           taskId: result.aiGatewayJobId,
@@ -3560,9 +3561,9 @@ const MainApp: React.FC = () => {
         addGenerate3DLog('warn', '[工作流] 用户选择重新提交新任务（可能计费）');
       }
       const recoverTaskId =
-        !forceNewTask && task?.assetId && task?.actionType
+        !forceNewTask && task?.assetId && resultSlotKey
           ? String(
-              workflowAssetsRef.current.find((a) => a.id === task.assetId)?.resultMeta?.[task.actionType]?.tripoTaskId || ''
+              workflowAssetsRef.current.find((a) => a.id === task.assetId)?.resultMeta?.[resultSlotKey]?.tripoTaskId || ''
             ).trim()
           : '';
       const {
@@ -3586,16 +3587,16 @@ const MainApp: React.FC = () => {
       } else {
         addGenerate3DLog('info', '[工作流] 已创建新 Tripo 任务（可能计费）', { taskId: createdTaskId });
       }
-      if (task?.assetId && task?.actionType) {
+      if (task?.assetId && resultSlotKey) {
         setWorkflowAssets((prev) =>
           prev.map((a) => {
             if (a.id !== task.assetId) return a;
-            const old = a.resultMeta?.[task.actionType] || { executedAt: Date.now() };
+            const old = a.resultMeta?.[resultSlotKey] || { executedAt: Date.now() };
             return {
               ...a,
               resultMeta: {
                 ...(a.resultMeta || {}),
-                [task.actionType]: {
+                [resultSlotKey]: {
                   ...old,
                   tripoTaskId: createdTaskId,
                   ...(aiGatewayJobId ? { aiGatewayJobId } : {}),
@@ -3634,7 +3635,7 @@ const MainApp: React.FC = () => {
       const companionBase = getCompanionLocalBaseUrl();
       const companionProjectId = String(activeWorkspaceProjectId || '').trim() || 'default';
       const workflowAssetId = task?.assetId || `wf_tripo_${Math.random().toString(36).slice(2, 11)}`;
-      const resultKey = task?.actionType || preset.id;
+      const resultKey = resultSlotKey;
       const persisted = await persistWorkflow3dSlots({
         provider: 'tripo',
         apiKey: tripoApiKey,
@@ -3699,16 +3700,16 @@ const MainApp: React.FC = () => {
     } catch (e) {
       const msg = normalizeApiErrorMessage(e);
       updateTask(taskId, { status: 'FAILED', error: msg });
-      if (task?.assetId && task?.actionType) {
+      if (task?.assetId && resultSlotKey) {
         setWorkflowAssets((prev) =>
           prev.map((a) => {
             if (a.id !== task.assetId) return a;
-            const old = a.resultMeta?.[task.actionType] || { executedAt: Date.now() };
+            const old = a.resultMeta?.[resultSlotKey] || { executedAt: Date.now() };
             return {
               ...a,
               resultMeta: {
                 ...(a.resultMeta || {}),
-                [task.actionType]: {
+                [resultSlotKey]: {
                   ...old,
                   tripoLastError: msg,
                 },

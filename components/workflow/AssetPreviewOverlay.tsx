@@ -9,6 +9,7 @@ import type {
 } from '../preview';
 import { AssetPreviewShell } from '../preview';
 import type { WorkflowAsset, WorkflowAssetKind, WorkflowAssetVariant } from '../../types';
+import { resolveWorkflowAssetPbrEditDoc } from '../../services/workflowModelPbrEdits';
 
 export type AssetPreviewOverlayProps = ImagePreviewOverlayProps & {
   /**
@@ -125,7 +126,11 @@ export const AssetPreviewOverlay: React.FC<AssetPreviewOverlayProps> = ({
     model3dAssetId: asset?.id,
     model3dVariantId: variant?.id,
     model3dModelKey: variant?.modelUrls?.[0] || variant?.url || props.modelUrls?.[0],
-    model3dPbrEditDoc: asset?.modelPbrEdits ?? null,
+    model3dPbrEditDoc: resolveWorkflowAssetPbrEditDoc(asset, {
+      stepKey: asset?.displayKey,
+      variantId: variant?.id,
+      modelKey: variant?.modelCompanionKeys?.[0] || variant?.modelUrls?.[0] || variant?.url || props.modelUrls?.[0],
+    }),
   };
 
   return (

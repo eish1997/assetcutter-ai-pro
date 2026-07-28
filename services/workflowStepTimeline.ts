@@ -28,6 +28,7 @@ export type WorkflowStepTimelineRow = {
   mediaKind?: string;
   hasImage: boolean;
   hasText: boolean;
+  hasModel3d: boolean;
 };
 
 /**
@@ -44,6 +45,8 @@ export function deriveWorkflowStepTimelineRows(
   const meta = asset.resultMeta || {};
   const results = asset.results || {};
   const textResults = asset.textResults || {};
+  const stepModelUrls = asset.stepModelUrls || {};
+  const stepModelCompanionKeys = asset.stepModelCompanionKeys || {};
 
   const rows: WorkflowStepTimelineRow[] = order.map((resultKey) => {
     const m = meta[resultKey];
@@ -52,6 +55,10 @@ export function deriveWorkflowStepTimelineRows(
     const executedAt = typeof m?.executedAt === 'number' && Number.isFinite(m.executedAt) ? m.executedAt : 0;
     const img = results[resultKey];
     const txt = textResults[resultKey];
+    const hasModel3d =
+      m?.mediaKind === 'model3d' ||
+      (stepModelUrls[resultKey] || []).some((u) => String(u || '').trim() !== '') ||
+      (stepModelCompanionKeys[resultKey] || []).some((k) => String(k || '').trim() !== '');
     return {
       resultKey,
       label,
@@ -59,6 +66,7 @@ export function deriveWorkflowStepTimelineRows(
       mediaKind: m?.mediaKind,
       hasImage: Boolean(img != null && String(img).trim() !== ''),
       hasText: Boolean(txt != null && String(txt).trim() !== ''),
+      hasModel3d,
     };
   });
 

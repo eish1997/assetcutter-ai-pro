@@ -39,6 +39,67 @@ function vgpStepKeysCoverResultOrder(asset: WorkflowAsset, vgp: VgpAssetExtensio
   return true;
 }
 
+function expectedParentDisplayKeyForResult(asset: WorkflowAsset, resultKey: string): string | null {
+  const snap = String(asset.resultMeta?.[resultKey]?.inputSourceDisplayKeySnapshot || '').trim();
+  if (snap) return snap;
+  const mediaKind = asset.resultMeta?.[resultKey]?.mediaKind;
+  const hasModel =
+    mediaKind === 'model3d' ||
+    (asset.stepModelUrls?.[resultKey] || []).some((u) => String(u || '').trim() !== '') ||
+    (asset.stepModelCompanionKeys?.[resultKey] || []).some((k) => String(k || '').trim() !== '');
+  if (hasModel) return 'original';
+  return null;
+}
+
+function findVersionIdForStepKey(vgp: VgpAssetExtension, stepKey: string): string | null {
+  if (stepKey === 'original') {
+    return vgp.originalVersionId ?? vgp.versionOrder[0] ?? null;
+  }
+  for (const id of vgp.versionOrder) {
+    const v = vgp.versionsById[id];
+    if (!v) continue;
+    if (v.stepKey === stepKey) return id;
+    if (v.imageRef.kind === 'result_key' && v.imageRef.key === stepKey) return id;
+  }
+  return null;
+}
+
+/** 已有节点齐全但父边与输入快照/3D 默认原图不一致时，也应重建（修复同卡多模型被串成链）。 */
+function vgpParentsMatchExpected(asset: WorkflowAsset, vgp: VgpAssetExtension): boolean {
+  for (const key of asset.resultOrder ?? []) {
+    const expectedKey = expectedParentDisplayKeyForResult(asset, key);
+    if (!expectedKey) continue;
+    const vid = findVersionIdForStepKey(vgp, key);
+    if (!vid) return false;
+    const parentId = vgp.versionsById[vid]?.parentVersionId ?? null;
+    const expectedParentId = findVersionIdForStepKey(vgp, expectedKey);
+    if (!expectedParentId) continue;
+    if (parentId !== expectedParentId) return false;
+  }
+  return true;
+}
+
+/** 迁移重建父节点：优先 meta 快照；3D 无快照时挂原图（避免同卡多模型被串成链）。 */
+function resolveMigratedParentVersionId(
+  asset: WorkflowAsset,
+  vgp: VgpAssetExtension,
+  resultKey: string,
+  fallbackHeadId: string,
+  origId: string
+): string {
+  const snap = String(asset.resultMeta?.[resultKey]?.inputSourceDisplayKeySnapshot || '').trim();
+  if (snap) {
+    return findVersionIdForStepKey(vgp, snap) || (snap === 'original' ? origId : fallbackHeadId);
+  }
+  const mediaKind = asset.resultMeta?.[resultKey]?.mediaKind;
+  const hasModel =
+    mediaKind === 'model3d' ||
+    (asset.stepModelUrls?.[resultKey] || []).some((u) => String(u || '').trim() !== '') ||
+    (asset.stepModelCompanionKeys?.[resultKey] || []).some((k) => String(k || '').trim() !== '');
+  if (hasModel) return origId;
+  return fallbackHeadId;
+}
+
 /**
  * 无 vgp 的旧资产：补全最小合法扩展；已有 resultOrder 时尽力重建链（语义/prompt 为占位）。
  * 若已存在 `vgp` 但 `versionOrder` 无法解析出任何版本节点，视为损坏并丢弃后按上式重建。
@@ -46,7 +107,7 @@ function vgpStepKeysCoverResultOrder(asset: WorkflowAsset, vgp: VgpAssetExtensio
  */
 export function ensureWorkflowAssetVgp(asset: WorkflowAsset): WorkflowAsset {
   if (asset.vgp && countValidVgpOrderedVersions(asset.vgp) > 0) {
-    if (vgpStepKeysCoverResultOrder(asset, asset.vgp)) {
+    if (vgpStepKeysCoverResultOrder(asset, asset.vgp) && vgpParentsMatchExpected(asset, asset.vgp)) {
       return asset;
     }
   }
@@ -63,7 +124,13 @@ export function ensureWorkflowAssetVgp(asset: WorkflowAsset): WorkflowAsset {
     return { ...source, vgp: base };
   }
 
-  const vgp = { ...base, versionsById: { ...base.versionsById }, versionOrder: [...base.versionOrder], semanticsById: { ...base.semanticsById }, promptsById: { ...base.promptsById } };
+  const vgp = {
+    ...base,
+    versionsById: { ...base.versionsById },
+    versionOrder: [...base.versionOrder],
+    semanticsById: { ...base.semanticsById },
+    promptsById: { ...base.promptsById },
+  };
 
   for (const key of order) {
     const semId = newVgpId();
@@ -92,10 +159,11 @@ export function ensureWorkflowAssetVgp(asset: WorkflowAsset): WorkflowAsset {
 
     const verId = newVgpId();
     const lineageRoot = vgp.versionsById[origId]?.lineageRootId ?? origId;
+    const parentVersionId = resolveMigratedParentVersionId(source, vgp, key, headId, origId);
     const iv: ImageVersion = {
       id: verId,
       assetId: source.id,
-      parentVersionId: headId,
+      parentVersionId,
       lineageRootId: lineageRoot,
       stepIndex,
       stepKey: key,

@@ -1,6 +1,9 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 
-import { testAiGatewayModelGeneration } from '../server/ai-gateway/model-generation-test.js';
+import {
+  resolveAdminGenerationTestTimeoutMs,
+  testAiGatewayModelGeneration,
+} from '../server/ai-gateway/model-generation-test.js';
 
 function fakeStore(plan: any) {
   return {
@@ -11,6 +14,67 @@ function fakeStore(plan: any) {
 }
 
 describe('AI gateway model generation test', () => {
+  afterEach(() => {
+    delete process.env.AI_GATEWAY_ADMIN_GENERATION_TEST_TIMEOUT_MS;
+  });
+
+  it('uses longer default wait for model3d than text', () => {
+    expect(resolveAdminGenerationTestTimeoutMs('text')).toBe(180_000);
+    expect(resolveAdminGenerationTestTimeoutMs('model3d')).toBe(660_000);
+    expect(resolveAdminGenerationTestTimeoutMs('video')).toBe(660_000);
+    expect(resolveAdminGenerationTestTimeoutMs('model3d', { timeoutMs: 12_000 })).toBe(12_000);
+  });
+
+  it('times out queued jobs before they reach a terminal state', async () => {
+    let calls = 0;
+    const store = {
+      async get() {
+        calls += 1;
+        return {
+          job: {
+            id: 'job_timeout_1',
+            status: 'running',
+            modality: 'model3d',
+            capability: 'model3d.generate',
+            provider: 'tripo',
+            model: 'tripo-v3.1',
+            userId: 'admin_1',
+            correlationId: 'corr_timeout_1',
+            createdAt: '2026-07-18T00:00:00.000Z',
+            updatedAt: '2026-07-18T00:00:01.000Z',
+            output: {},
+            artifacts: [],
+            metadata: {},
+          },
+          route: { providerId: 'tripo', adapterId: 'tripo-openapi' },
+        };
+      },
+    };
+    const result = await testAiGatewayModelGeneration(
+      null,
+      { canonicalModelId: 'tripo-v3.1', modality: 'model3d', providerId: 'tripo' },
+      { id: 'admin_1' },
+      {
+        store,
+        timeoutMs: 40,
+        intervalMs: 10,
+        createJob: async () => ({
+          status: 202,
+          body: { job: { id: 'job_timeout_1', status: 'queued' } },
+        }),
+      }
+    );
+
+    expect(calls).toBeGreaterThan(1);
+    expect(result).toMatchObject({
+      ok: false,
+      status: 'failed',
+      code: 'AI_GATEWAY_GENERATION_TEST_TIMEOUT',
+      jobId: 'job_timeout_1',
+      createsGenerationTask: true,
+    });
+  });
+
   it('rejects unsupported modalities before creating a job', async () => {
     const result = await testAiGatewayModelGeneration(null, {
       canonicalModelId: 'music-manual',

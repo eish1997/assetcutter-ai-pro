@@ -22,3 +22,37 @@ export const stripResultKeyToBaseActionId = (k: string): string => {
 };
 
 export const makeVersionKey = (baseId: string) => `${baseId}${RESULT_VER_SEP}${Date.now().toString(36)}`;
+
+/** 判断资产上是否已有同能力的结果槽（图/文/3D/meta/order）。 */
+export function assetHasResultVersionForBase(
+  asset: {
+    resultOrder?: string[];
+    results?: Record<string, unknown>;
+    textResults?: Record<string, unknown>;
+    stepModelUrls?: Record<string, unknown>;
+    stepModelCompanionKeys?: Record<string, unknown>;
+    resultMeta?: Record<string, unknown>;
+  },
+  baseId: string
+): boolean {
+  const base = String(baseId || '').trim();
+  if (!base) return false;
+  const match = (k: string) => baseActionId(k) === base;
+  if ((asset.resultOrder || []).some(match)) return true;
+  if (Object.keys(asset.results || {}).some(match)) return true;
+  if (Object.keys(asset.textResults || {}).some(match)) return true;
+  if (Object.keys(asset.stepModelUrls || {}).some(match)) return true;
+  if (Object.keys(asset.stepModelCompanionKeys || {}).some(match)) return true;
+  if (Object.keys(asset.resultMeta || {}).some(match)) return true;
+  return false;
+}
+
+/** 同能力首次写回用裸 baseId；再次生成则 `__v__` 追加新版本（对齐图片）。 */
+export function allocateWorkflowResultVersionKey(
+  asset: Parameters<typeof assetHasResultVersionForBase>[0],
+  baseId: string
+): string {
+  const base = String(baseId || '').trim();
+  if (!base) return base;
+  return assetHasResultVersionForBase(asset, base) ? makeVersionKey(base) : base;
+}

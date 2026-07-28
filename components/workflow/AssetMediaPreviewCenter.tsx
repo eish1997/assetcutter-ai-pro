@@ -303,6 +303,7 @@ export const AssetMediaPreviewCenter: React.FC<Props> = ({
         <AudioAssetViewer url={usableUrl} />
       ) : variant.kind === 'model3d' && usableUrl ? (
         <Model3DAssetViewer
+          key={`${assetId || 'asset'}:${variant.id}`}
           variant={variant}
           assetId={assetId}
           model3dPbrEditDoc={model3dPbrEditDoc}
