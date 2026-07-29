@@ -112,7 +112,7 @@ export type PanelOutputV1 = {
 export type ShellToolPanelSpecV1 = {
   schemaVersion: 1;
   title: string;
-  sections: { id: string; fields: PanelFieldV1[] }[];
+  sections: { id: string; title?: string; fields: PanelFieldV1[] }[];
   actions: PanelActionV1[];
   outputs: PanelOutputV1[];
 };
@@ -319,7 +319,11 @@ export function parseShellToolPanelSpecJson(raw: unknown): ShellToolPanelSpecV1 
       if (!field) return null;
       fields.push(field);
     }
-    sections.push({ id: s.id, fields });
+    sections.push({
+      id: s.id,
+      fields,
+      ...(typeof s.title === 'string' && s.title.trim() ? { title: s.title.trim() } : {}),
+    });
   }
 
   const actions: PanelActionV1[] = [];

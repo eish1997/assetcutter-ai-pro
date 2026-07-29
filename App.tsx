@@ -258,6 +258,7 @@ const AdminCapabilityPresetsPanel = lazyChunk(() => import('./components/admin/A
 const AdminSystemStatusPanel = lazyChunk(() => import('./components/admin/AdminSystemStatusPanel'));
 const AdminInvitesPanel = lazyChunk(() => import('./components/admin/AdminInvitesPanel'));
 const AdminCompanionArtifactsPanel = lazyChunk(() => import('./components/admin/AdminCompanionArtifactsPanel'));
+const AdminShellToolSubmissionsPanel = lazyChunk(() => import('./components/admin/AdminShellToolSubmissionsPanel'));
 const AdminGeminiFairnessPanel = lazyChunk(() => import('./components/admin/AdminGeminiFairnessPanel'));
 const AdminProviderKeysPanel = lazyChunk(() => import('./components/admin/AdminProviderKeysPanel'));
 /** 主内容区滚动容器 ref，用于全局回到顶部 */
@@ -454,6 +455,8 @@ const AdminAppShell: React.FC = () => {
             <AdminInvitesPanel />
           ) : pathname === '/admin/companion-artifacts' ? (
             <AdminCompanionArtifactsPanel />
+          ) : pathname === '/admin/shell-tool-submissions' ? (
+            <AdminShellToolSubmissionsPanel />
           ) : pathname === '/admin/gemini-fairness' ? (
             <AdminGeminiFairnessPanel />
           ) : pathname === '/admin/ai-provider-keys' ? (

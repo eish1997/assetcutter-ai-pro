@@ -299,7 +299,7 @@ describe('agent tool execution audit', () => {
 describe('agent P2 tool schemas', () => {
   it('registers P2 tools including governed workflow promotion preflights', () => {
     expect(P2_TOOL_SCHEMAS).toHaveLength(12);
-    expect(ALL_TOOL_SCHEMAS).toHaveLength(32);
+    expect(ALL_TOOL_SCHEMAS).toHaveLength(37);
     expect(P2_TOOL_SCHEMAS.map((tool: { name: string }) => tool.name)).toContain(
       'ac.workflow.promote_workbench_preset',
     );

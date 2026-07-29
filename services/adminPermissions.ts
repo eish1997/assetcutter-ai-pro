@@ -146,6 +146,12 @@ export const ADMIN_NAV_ITEMS: readonly AdminNavItem[] = [
     group: 'content',
   },
   {
+    label: '小工具审批',
+    path: '/admin/shell-tool-submissions',
+    permission: PERMISSIONS.COMPANION_READ,
+    group: 'content',
+  },
+  {
     label: '系统状态',
     path: '/admin/system-status',
     permission: PERMISSIONS.SYSTEM_STATUS_READ,

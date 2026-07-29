@@ -45,6 +45,7 @@ contextBridge.exposeInMainWorld('companionShell', {
   pickPath: (opts) => timedInvoke('shell-pick-path', opts || {}),
   openToolWindow: (toolId) => timedInvoke('shell-open-tool-window', toolId),
   closeToolWindow: (toolId) => timedInvoke('shell-close-tool-window', toolId),
+  submitShellToolForReview: (toolId) => timedInvoke('shell-submit-shell-tool-review', toolId, 600000),
   builtinExampleAvailable: () => timedInvoke('shell-builtin-example-available'),
   samLocalDesktopState: () => timedInvoke('shell-sam-local-desktop-state'),
   samLocalBootstrapRun: () => timedInvoke('shell-sam-local-bootstrap-run'),
@@ -164,6 +165,16 @@ contextBridge.exposeInMainWorld('companionShell', {
   })(),
   setCopilotLayout: (layout) => timedInvoke('shell-set-copilot-layout', layout || {}),
   getCopilotLayout: () => timedInvoke('shell-get-copilot-layout'),
+  onCopilotLayout: (handler) => {
+    if (typeof handler !== 'function') return;
+    ipcRenderer.on('shell-copilot-layout', (_evt, payload) => {
+      try {
+        handler(payload);
+      } catch {
+        /* ignore */
+      }
+    });
+  },
   onShellViewSync: (handler) => {
     if (typeof handler !== 'function') return;
     ipcRenderer.on('shell-sync-view', (_evt, payload) => {

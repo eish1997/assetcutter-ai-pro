@@ -4505,9 +4505,12 @@
             <input type="search" class="tools-search" id="toolsSearchInput" placeholder="搜索名称、ID、标签…" autocomplete="off" />
             <div class="tools-filters" id="toolsFilterRow">
               <button type="button" class="tools-filter-chip active" data-filter-source="all">全部</button>
+              <button type="button" class="tools-filter-chip" data-filter-source="mine">我的</button>
               <button type="button" class="tools-filter-chip" data-filter-source="local">本地</button>
               <button type="button" class="tools-filter-chip" data-filter-source="cloud">云端</button>
               <span class="tools-filter-sep" aria-hidden="true"></span>
+              <button type="button" class="tools-filter-chip" id="btnToolsImportZip" title="从 ZIP 导入为我的工具">导入</button>
+              <button type="button" class="tools-filter-chip" id="btnToolsScaffold" title="创建空壳小工具">新建</button>
               <span id="toolsTagFilters"></span>
             </div>
           </div>

@@ -1,0 +1,94 @@
+{
+  "schemaVersion": 1,
+  "title": "Maya 模型单独导出 FBX",
+  "sections": [
+    {
+      "id": "maya",
+      "title": "Maya 连接",
+      "fields": [
+        {
+          "type": "text",
+          "id": "mayaHost",
+          "label": "Maya 地址",
+          "default": "127.0.0.1"
+        },
+        {
+          "type": "text",
+          "id": "mayaPort",
+          "label": "命令端口",
+          "default": "7001"
+        }
+      ]
+    },
+    {
+      "id": "export",
+      "title": "导出选项",
+      "fields": [
+        {
+          "type": "path",
+          "id": "outputDir",
+          "label": "输出目录",
+          "pick": "directory",
+          "required": true
+        },
+        {
+          "type": "select",
+          "id": "source",
+          "label": "导出范围",
+          "options": [
+            { "value": "selection", "label": "当前选中模型" },
+            { "value": "scene", "label": "场景顶层模型" }
+          ],
+          "default": "selection"
+        },
+        {
+          "type": "select",
+          "id": "nameMode",
+          "label": "命名方式",
+          "options": [
+            { "value": "node", "label": "使用节点名" },
+            { "value": "index", "label": "使用序号" }
+          ],
+          "default": "node"
+        },
+        {
+          "type": "text",
+          "id": "prefix",
+          "label": "文件名前缀"
+        },
+        {
+          "type": "text",
+          "id": "suffix",
+          "label": "文件名后缀"
+        },
+        {
+          "type": "toggle",
+          "id": "includeHidden",
+          "label": "包含隐藏模型",
+          "default": false
+        },
+        {
+          "type": "toggle",
+          "id": "overwrite",
+          "label": "覆盖已有文件",
+          "default": true
+        }
+      ]
+    }
+  ],
+  "actions": [
+    {
+      "id": "exportFbx",
+      "label": "导出 FBX",
+      "kind": "run",
+      "style": "primary"
+    }
+  ],
+  "outputs": [
+    {
+      "type": "log",
+      "id": "runLog",
+      "label": "运行日志"
+    }
+  ]
+}

@@ -7,198 +7,351 @@
   <title>工具</title>
   <style>
     :root {
-      --bg: #0c0c0e;
-      --border: #2e2e32;
-      --text: #e4e4e7;
-      --muted: #71717a;
-      --accent: #3b82f6;
+      --bg: #0a0b0d;
+      --bg-panel: #12141a;
+      --bg-input: #0c0e12;
+      --border: #2a2e38;
+      --border-strong: #3a4150;
+      --text: #e8eaef;
+      --muted: #8b93a7;
+      --accent: #c4a35a;
+      --accent-dim: rgba(196, 163, 90, 0.18);
+      --accent-blue: #5b8def;
+      --danger: #f87171;
+      --ok: #86efac;
+      --radius: 4px;
+      --ctrl-h: 28px;
+      --label-w: 84px;
+      --font: "Segoe UI", "PingFang SC", "Microsoft YaHei", ui-sans-serif, system-ui, sans-serif;
+      --mono: ui-monospace, "Cascadia Mono", "Consolas", monospace;
     }
     * { box-sizing: border-box; }
     html, body { height: 100%; margin: 0; overflow: hidden; }
     body {
-      font-family: ui-sans-serif, system-ui, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
-      background: var(--bg);
+      font-family: var(--font);
+      background:
+        radial-gradient(1200px 400px at 10% -10%, rgba(196, 163, 90, 0.06), transparent 55%),
+        linear-gradient(180deg, #0d0f14 0%, var(--bg) 40%);
       color: var(--text);
-      font-size: 13px;
+      font-size: 12px;
       display: flex;
       flex-direction: column;
       padding-top: 30px;
     }
     .app-titlebar {
       position: fixed;
-      top: 0;
-      left: 0;
-      right: 0;
+      top: 0; left: 0; right: 0;
       height: 30px;
       display: flex;
       align-items: center;
       justify-content: space-between;
       padding: 0 0 0 12px;
       border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-      background: rgba(10, 10, 12, 0.88);
-      backdrop-filter: blur(16px);
+      background: rgba(10, 11, 13, 0.92);
+      backdrop-filter: blur(14px);
       z-index: 150;
       -webkit-app-region: drag;
       user-select: none;
     }
     .titlebar-title {
-      flex: 1;
-      min-width: 0;
-      font-size: 11px;
-      font-weight: 600;
-      color: rgba(228, 228, 231, 0.85);
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
+      flex: 1; min-width: 0;
+      font-size: 11px; font-weight: 600;
+      letter-spacing: 0.02em;
+      color: rgba(232, 234, 239, 0.88);
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
       padding-right: 8px;
     }
-    .titlebar-actions {
-      display: flex;
-      align-items: center;
+    .titlebar-version {
+      flex: 0 0 auto;
+      font-size: 10px;
+      font-family: var(--mono);
+      color: var(--muted);
+      margin-right: 4px;
+      padding: 1px 6px;
+      border: 1px solid var(--border);
+      border-radius: 999px;
       -webkit-app-region: no-drag;
     }
-    .titlebar-pin {
-      width: 36px;
-      height: 30px;
-      border: none;
-      background: transparent;
-      color: rgba(228, 228, 231, 0.65);
-      cursor: pointer;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-    }
-    .titlebar-pin:hover { background: rgba(255, 255, 255, 0.08); color: #fff; }
-    .titlebar-pin.pinned { color: #86efac; }
+    .titlebar-actions { display: flex; align-items: center; -webkit-app-region: no-drag; }
+    .titlebar-pin,
     .traffic {
-      width: 46px;
-      height: 30px;
-      border: none;
-      background: transparent;
-      color: rgba(228, 228, 231, 0.72);
-      cursor: pointer;
-      font-size: 12px;
+      width: 40px; height: 30px; border: none; background: transparent;
+      color: rgba(228, 228, 231, 0.72); cursor: pointer;
+      display: inline-flex; align-items: center; justify-content: center;
+      padding: 0;
     }
+    .titlebar-pin:hover,
     .traffic:hover { background: rgba(255, 255, 255, 0.1); color: #fff; }
+    .titlebar-pin.pinned { color: var(--ok); }
     .traffic.close:hover { background: #e81123; color: #fff; }
+    .titlebar-pin svg,
+    .traffic svg { display: block; }
+
     .tool-body {
-      flex: 1;
-      min-height: 0;
-      overflow: auto;
-      padding: 14px 16px 16px;
+      flex: 1; min-height: 0; overflow: auto;
+      padding: 10px 12px 12px;
     }
-    .tool-head {
-      display: flex;
-      align-items: baseline;
-      gap: 8px;
-      margin-bottom: 14px;
-    }
-    .tool-head h1 { margin: 0; font-size: 16px; flex: 1; }
-    .tool-version { font-size: 10px; color: var(--muted); font-family: ui-monospace, monospace; }
-    .btn {
-      padding: 8px 12px;
-      border-radius: 8px;
+
+    .shell-tool-form { display: flex; flex-direction: column; gap: 10px; }
+    .shell-tool-section {
+      background: var(--bg-panel);
       border: 1px solid var(--border);
-      background: #1a1a1f;
-      color: var(--text);
-      font-size: 12px;
-      cursor: pointer;
+      border-radius: 6px;
+      padding: 8px 10px 10px;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.03);
     }
-    .btn:hover { background: #222228; }
-    .btn-primary { background: #1e3a5f; border-color: rgba(59, 130, 246, 0.45); color: #dbeafe; }
-    .btn-primary:hover { background: #264f7a; }
-    .btn-row { display: flex; flex-wrap: wrap; gap: 8px; }
-    .shell-tool-field { margin-bottom: 12px; }
-    .shell-tool-label { display: block; font-size: 11px; color: var(--muted); margin-bottom: 6px; }
-    .shell-tool-control { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-    .shell-tool-input {
-      flex: 1 1 160px;
+    .shell-tool-section-head {
+      display: flex; align-items: center; gap: 8px;
+      margin-bottom: 8px;
+    }
+    .shell-tool-section-rail {
+      width: 3px; height: 12px; border-radius: 1px;
+      background: linear-gradient(180deg, var(--accent), rgba(196,163,90,0.35));
+      flex: 0 0 auto;
+    }
+    .shell-tool-section-title {
+      margin: 0;
+      font-size: 10px; font-weight: 700;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+    .shell-tool-section-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px 10px;
+      align-items: start;
+    }
+    .shell-tool-field {
+      display: grid;
+      grid-template-columns: var(--label-w) minmax(0, 1fr);
+      gap: 6px;
+      align-items: center;
       min-width: 0;
-      padding: 8px 10px;
-      border-radius: 8px;
+    }
+    .shell-tool-field.span-2 { grid-column: 1 / -1; }
+    .shell-tool-label {
+      margin: 0;
+      font-size: 11px;
+      color: var(--muted);
+      line-height: 1.2;
+      text-align: right;
+      padding-right: 2px;
+    }
+    .shell-tool-control {
+      display: flex; gap: 6px; align-items: center; min-width: 0;
+    }
+
+    .shell-tool-input {
+      flex: 1 1 auto; min-width: 0; width: 100%;
+      height: var(--ctrl-h);
+      padding: 0 8px;
+      border-radius: var(--radius);
       border: 1px solid var(--border);
-      background: #0a0a0c;
+      background: var(--bg-input);
       color: var(--text);
       font-size: 12px;
+      font-family: inherit;
+      outline: none;
     }
-    .shell-tool-dd { position: relative; flex: 1 1 160px; min-width: 140px; }
+    .shell-tool-input:focus {
+      border-color: rgba(91, 141, 239, 0.55);
+      box-shadow: 0 0 0 1px rgba(91, 141, 239, 0.2);
+    }
+    .shell-tool-input.mono { font-family: var(--mono); font-size: 11px; }
+    .shell-tool-input[readonly] { color: #c8cedc; }
+
+    /* Select = distinct from text input */
+    .shell-tool-dd { position: relative; flex: 1 1 auto; min-width: 0; width: 100%; }
     .shell-tool-dd-trigger {
-      width: 100%;
+      width: 100%; height: var(--ctrl-h);
+      display: flex; align-items: center; justify-content: space-between; gap: 6px;
       text-align: left;
-      padding: 8px 10px;
-      border-radius: 8px;
-      border: 1px solid var(--border);
-      background: #0f0f0f;
+      padding: 0 8px 0 8px;
+      border-radius: var(--radius);
+      border: 1px solid rgba(196, 163, 90, 0.35);
+      background: linear-gradient(180deg, #171a22 0%, #12151c 100%);
       color: var(--text);
       font-size: 12px;
       cursor: pointer;
+      font-family: inherit;
     }
+    .shell-tool-dd-trigger:hover {
+      border-color: rgba(196, 163, 90, 0.55);
+      background: linear-gradient(180deg, #1b1f29 0%, #141821 100%);
+    }
+    .shell-tool-dd.open .shell-tool-dd-trigger {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 1px var(--accent-dim);
+    }
+    .shell-tool-dd-label {
+      flex: 1; min-width: 0;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .shell-tool-dd-chevron {
+      flex: 0 0 auto;
+      display: inline-flex;
+      color: var(--accent);
+      opacity: 0.9;
+    }
+    .shell-tool-dd.open .shell-tool-dd-chevron { transform: rotate(180deg); }
     .shell-tool-dd-list {
       display: none;
       position: absolute;
-      left: 0;
-      right: 0;
-      top: calc(100% + 4px);
+      left: 0; right: 0; top: calc(100% + 3px);
       z-index: 200;
-      background: #0f0f0f;
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+      background: #10131a;
+      border: 1px solid var(--border-strong);
+      border-radius: var(--radius);
+      box-shadow: 0 10px 28px rgba(0, 0, 0, 0.5);
       max-height: 200px;
       overflow: auto;
+      padding: 3px;
     }
     .shell-tool-dd.open .shell-tool-dd-list { display: block; }
     .shell-tool-dd-item {
-      display: block;
-      width: 100%;
+      display: block; width: 100%;
       text-align: left;
-      padding: 8px 10px;
-      border: none;
+      padding: 6px 8px;
+      border: none; border-radius: 3px;
       background: transparent;
       color: var(--text);
       font-size: 12px;
       cursor: pointer;
+      font-family: inherit;
     }
-    .shell-tool-dd-item:hover { background: rgba(59, 130, 246, 0.15); }
+    .shell-tool-dd-item:hover { background: rgba(196, 163, 90, 0.12); }
+    .shell-tool-dd-item.is-active {
+      background: var(--accent-dim);
+      color: #f5e6c0;
+    }
+
+    /* Toggle = industrial switch */
+    .shell-tool-toggle-row {
+      display: flex; align-items: center; gap: 10px;
+      cursor: pointer; user-select: none;
+      min-height: var(--ctrl-h);
+      padding: 0 2px;
+    }
+    .shell-tool-toggle { position: absolute; opacity: 0; width: 0; height: 0; }
+    .shell-tool-switch {
+      position: relative;
+      width: 34px; height: 18px; flex: 0 0 auto;
+      border-radius: 999px;
+      background: #1a1e27;
+      border: 1px solid var(--border-strong);
+      transition: background 0.15s ease, border-color 0.15s ease;
+    }
+    .shell-tool-switch::after {
+      content: '';
+      position: absolute; top: 1px; left: 2px;
+      width: 14px; height: 14px; border-radius: 50%;
+      background: #9aa3b5;
+      transition: transform 0.15s ease, background 0.15s ease;
+    }
+    .shell-tool-toggle:checked + .shell-tool-switch {
+      background: rgba(196, 163, 90, 0.25);
+      border-color: rgba(196, 163, 90, 0.55);
+    }
+    .shell-tool-toggle:checked + .shell-tool-switch::after {
+      transform: translateX(14px);
+      background: var(--accent);
+    }
+    .shell-tool-toggle-text { font-size: 12px; color: var(--text); }
+
+    .btn {
+      height: var(--ctrl-h);
+      padding: 0 10px;
+      border-radius: var(--radius);
+      border: 1px solid var(--border);
+      background: #171a22;
+      color: var(--text);
+      font-size: 11px;
+      cursor: pointer;
+      font-family: inherit;
+      white-space: nowrap;
+    }
+    .btn:hover { background: #1e2330; border-color: var(--border-strong); }
+    .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+    .btn-ghost { background: #14171f; }
+    .btn-compact { padding: 0 8px; letter-spacing: 0.04em; }
+    .btn-primary {
+      background: linear-gradient(180deg, #2a3344 0%, #1c2433 100%);
+      border-color: rgba(91, 141, 239, 0.45);
+      color: #dbe7ff;
+      font-weight: 600;
+      min-width: 96px;
+    }
+    .btn-primary:hover {
+      background: linear-gradient(180deg, #334056 0%, #222c3f 100%);
+      border-color: rgba(91, 141, 239, 0.7);
+    }
+    .btn-row { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; }
+    .shell-tool-actions {
+      margin-top: 10px;
+      padding-top: 10px;
+      border-top: 1px solid rgba(255,255,255,0.06);
+    }
+
     #toolModuleLog {
-      margin-top: 12px;
-      max-height: 180px;
+      margin-top: 10px;
+      max-height: 160px;
       overflow: auto;
-      padding: 10px;
+      padding: 8px 10px;
       font-size: 10px;
-      line-height: 1.4;
+      line-height: 1.45;
       white-space: pre-wrap;
       word-break: break-word;
-      background: rgba(0, 0, 0, 0.35);
+      background: #07080b;
       border: 1px solid var(--border);
-      border-radius: 8px;
-      font-family: ui-monospace, monospace;
+      border-radius: var(--radius);
+      font-family: var(--mono);
+      color: #b7c0d1;
     }
     .hidden { display: none !important; }
-    .tool-load-error { color: #fca5a5; font-size: 12px; line-height: 1.5; }
+    .tool-load-error { color: var(--danger); font-size: 12px; line-height: 1.5; margin-bottom: 8px; }
+    .tool-draft-banner {
+      margin: 0 0 8px !important;
+      padding: 6px 8px !important;
+      border-radius: var(--radius) !important;
+      font-size: 11px !important;
+    }
+
+    @media (max-width: 400px) {
+      .shell-tool-section-grid { grid-template-columns: 1fr; }
+      .shell-tool-field { grid-template-columns: 72px minmax(0, 1fr); }
+      :root { --label-w: 72px; }
+    }
   </style>
 </head>
 <body>
   <header class="app-titlebar">
     <div class="titlebar-title" id="titlebarToolName">工具</div>
+    <span class="titlebar-version" id="toolModuleVersion" hidden></span>
     <div class="titlebar-actions">
       <button type="button" class="titlebar-pin" id="btnToolPin" aria-label="置顶" title="置顶" aria-pressed="false">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-          <path d="M12 17v5M9 3h6l1 7h4l-7 8-7-8h4l1-7z" />
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <circle cx="6" cy="3.25" r="1.75" />
+          <path d="M6 5v5.25" />
+          <path d="M4.25 7.25h3.5" />
         </svg>
       </button>
-      <button type="button" class="traffic minimize" id="btnToolMin" aria-label="最小化" title="最小化">─</button>
-      <button type="button" class="traffic close" id="btnToolClose" aria-label="关闭" title="关闭">×</button>
+      <button type="button" class="traffic minimize" id="btnToolMin" aria-label="最小化" title="最小化">
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" aria-hidden="true">
+          <path d="M2.5 6h7" />
+        </svg>
+      </button>
+      <button type="button" class="traffic close" id="btnToolClose" aria-label="关闭" title="关闭">
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" aria-hidden="true">
+          <path d="M3 3l6 6M9 3L3 9" />
+        </svg>
+      </button>
     </div>
   </header>
   <main class="tool-body">
-    <div class="tool-head">
-      <h1 id="toolModuleTitle">加载中…</h1>
-      <span id="toolModuleVersion" class="tool-version"></span>
-    </div>
     <div id="toolLoadError" class="tool-load-error hidden"></div>
     <div id="toolModuleBody"></div>
-    <div id="toolModuleActions" style="margin-top:14px;"></div>
+    <div id="toolModuleActions"></div>
     <pre id="toolModuleLog" class="hidden"></pre>
   </main>
   <script src="tools-module.js"></script>

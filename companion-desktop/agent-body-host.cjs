@@ -684,6 +684,154 @@ function createAgentBodyHost(deps) {
         return { ok: true, content: JSON.stringify(r, null, 2), structured: r };
       }
 
+      if (name === 'ac.shell_tool.list') {
+        if (typeof deps.companionApiRequest !== 'function') {
+          return toolUnavailable('companion');
+        }
+        let aborted = abortIfNeeded(ctx);
+        if (aborted) return aborted;
+        const installed = await deps.companionApiRequest('GET', '/v1/shell-tools', null, httpOpts(ctx, { timeoutMs: 15000 }));
+        aborted = abortIfNeeded(ctx);
+        if (aborted) return aborted;
+        const authored = await deps.companionApiRequest('GET', '/v1/shell-tools/authored', null, httpOpts(ctx, { timeoutMs: 15000 }));
+        aborted = abortIfNeeded(ctx);
+        if (aborted) return aborted;
+        const payload = {
+          installed: installed.ok ? installed.json?.tools || [] : [],
+          authored: authored.ok ? authored.json?.tools || [] : [],
+          installedError: installed.ok ? null : installed.text || 'list failed',
+          authoredError: authored.ok ? null : authored.text || 'list failed',
+        };
+        return { ok: true, content: JSON.stringify(payload, null, 2), structured: payload };
+      }
+
+      if (name === 'ac.shell_tool.scaffold') {
+        if (typeof deps.companionApiRequest !== 'function') {
+          return toolUnavailable('companion');
+        }
+        let aborted = abortIfNeeded(ctx);
+        if (aborted) return aborted;
+        const body = {
+          id: String(safeArgs.id || '').trim(),
+          name: safeArgs.name != null ? String(safeArgs.name) : undefined,
+          description: safeArgs.description != null ? String(safeArgs.description) : undefined,
+          tags: Array.isArray(safeArgs.tags) ? safeArgs.tags.map(String) : undefined,
+          overwrite: Boolean(safeArgs.overwrite),
+          install: true,
+        };
+        const r = await deps.companionApiRequest(
+          'POST',
+          '/v1/shell-tools/authored/scaffold',
+          body,
+          httpOpts(ctx, { timeoutMs: 60000 }),
+        );
+        aborted = abortIfNeeded(ctx);
+        if (aborted) return aborted;
+        if (r.error === 'aborted') return abortedToolResult();
+        if (!r.ok) {
+          return {
+            ok: false,
+            content: r.text || '',
+            error: { code: 'AGENT_SHELL_TOOL_SCAFFOLD_FAILED', message: r.text || 'scaffold failed' },
+          };
+        }
+        const toolId = r.json?.toolId;
+        if (safeArgs.open !== false && toolId && typeof deps.runShellTool === 'function') {
+          await deps.runShellTool(String(toolId));
+        }
+        return { ok: true, content: JSON.stringify(r.json, null, 2), structured: r.json };
+      }
+
+      if (name === 'ac.shell_tool.authored_upsert') {
+        if (typeof deps.companionApiRequest !== 'function') {
+          return toolUnavailable('companion');
+        }
+        let aborted = abortIfNeeded(ctx);
+        if (aborted) return aborted;
+        const files = Array.isArray(safeArgs.files)
+          ? safeArgs.files.map((f) => ({
+              path: String(f?.path || ''),
+              content: String(f?.content ?? ''),
+            }))
+          : [];
+        const r = await deps.companionApiRequest(
+          'POST',
+          '/v1/shell-tools/authored',
+          { toolId: String(safeArgs.toolId || '').trim(), files },
+          httpOpts(ctx, { timeoutMs: 60000 }),
+        );
+        aborted = abortIfNeeded(ctx);
+        if (aborted) return aborted;
+        if (r.error === 'aborted') return abortedToolResult();
+        if (!r.ok) {
+          return {
+            ok: false,
+            content: r.text || '',
+            error: { code: 'AGENT_SHELL_TOOL_UPSERT_FAILED', message: r.text || 'upsert failed' },
+          };
+        }
+        return { ok: true, content: JSON.stringify(r.json, null, 2), structured: r.json };
+      }
+
+      if (name === 'ac.shell_tool.export') {
+        if (typeof deps.companionApiRequest !== 'function') {
+          return toolUnavailable('companion');
+        }
+        let aborted = abortIfNeeded(ctx);
+        if (aborted) return aborted;
+        const toolId = String(safeArgs.toolId || '').trim();
+        const body =
+          safeArgs.destZipPath != null && String(safeArgs.destZipPath).trim()
+            ? { destZipPath: String(safeArgs.destZipPath).trim() }
+            : {};
+        const r = await deps.companionApiRequest(
+          'POST',
+          `/v1/shell-tools/authored/${encodeURIComponent(toolId)}/pack`,
+          body,
+          httpOpts(ctx, { timeoutMs: 120000 }),
+        );
+        aborted = abortIfNeeded(ctx);
+        if (aborted) return aborted;
+        if (r.error === 'aborted') return abortedToolResult();
+        if (!r.ok) {
+          return {
+            ok: false,
+            content: r.text || '',
+            error: { code: 'AGENT_SHELL_TOOL_EXPORT_FAILED', message: r.text || 'export failed' },
+          };
+        }
+        return { ok: true, content: JSON.stringify(r.json, null, 2), structured: r.json };
+      }
+
+      if (name === 'ac.shell_tool.import') {
+        if (typeof deps.companionApiRequest !== 'function') {
+          return toolUnavailable('companion');
+        }
+        let aborted = abortIfNeeded(ctx);
+        if (aborted) return aborted;
+        const r = await deps.companionApiRequest(
+          'POST',
+          '/v1/shell-tools/authored/import',
+          { zipPath: String(safeArgs.zipPath || '').trim() },
+          httpOpts(ctx, { timeoutMs: 120000 }),
+        );
+        aborted = abortIfNeeded(ctx);
+        if (aborted) return aborted;
+        if (r.error === 'aborted') return abortedToolResult();
+        if (!r.ok) {
+          return {
+            ok: false,
+            content: r.text || '',
+            error: { code: 'AGENT_SHELL_TOOL_IMPORT_FAILED', message: r.text || 'import failed' },
+          };
+        }
+        const toolId = r.json?.toolId;
+        if (safeArgs.open !== false && toolId && typeof deps.runShellTool === 'function') {
+          await deps.runShellTool(String(toolId));
+        }
+        return { ok: true, content: JSON.stringify(r.json, null, 2), structured: r.json };
+      }
+
       if (name === 'ac.shell.bootstrap') {
         if (typeof deps.runShellBootstrap !== 'function') {
           return toolUnavailable('shell_bootstrap');

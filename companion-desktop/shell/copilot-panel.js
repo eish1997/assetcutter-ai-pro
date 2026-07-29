@@ -1419,6 +1419,17 @@
         void refreshOnboardingState();
       });
     }
+    if (typeof shell.onCopilotLayout === 'function') {
+      shell.onCopilotLayout((payload) => {
+        const collapsed = Boolean(payload && payload.collapsed);
+        const widthPx = collapsed
+          ? COPILOT_COLLAPSED_WIDTH
+          : Math.max(Number(payload && payload.widthPx) || 0, COPILOT_EXPANDED_MIN_WIDTH);
+        applyCopilotWidthPx(widthPx, collapsed);
+        document.body.classList.toggle('shell-copilot-collapsed', collapsed);
+        renderToggleIcon(collapsed);
+      });
+    }
   }
 
   /** Soft-format assistant text so Chinese walls and label lines are readable. */

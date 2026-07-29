@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "id": "maya-export-models-fbx",
+  "name": "Maya 模型单独导出 FBX",
+  "description": "使用本地壳中文界面配置导出参数，并通过 Maya Command Port 后台将模型逐个导出为 FBX。",
+  "semver": "0.2.0",
+  "launch": {
+    "kind": "shell_module",
+    "module": "module/panel.json"
+  },
+  "run": {
+    "command": [
+      "node",
+      "scripts/run-export-fbx.mjs"
+    ],
+    "cwd": ".",
+    "paramsMode": "env",
+    "timeoutMs": 600000
+  },
+  "permissions": [
+    "path.pick",
+    "tool.run"
+  ],
+  "tags": [
+    "Maya",
+    "FBX",
+    "导出"
+  ],
+  "minCompanionSemver": "0.1.0"
+}

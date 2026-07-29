@@ -55,6 +55,16 @@ import {
   resolveExampleShellToolSourceDir,
   uninstallShellTool,
 } from './shellToolBundles.js';
+import {
+  deleteAuthoredTool,
+  getAuthoredHotState,
+  importAuthoredFromZip,
+  installAuthoredTool,
+  listAuthoredTools,
+  packAuthoredTool,
+  scaffoldAuthoredTool,
+  upsertAuthoredFiles,
+} from './shellToolAuthored.js';
 import { runShellTool } from './shellToolRun.js';
 import { openShellToolInHost } from './shellToolOpenInHost.js';
 import { validateShellToolPackageDir } from './shellToolSpec.js';
@@ -593,6 +603,186 @@ export async function handleRequest(
       return;
     }
 
+    // Authored routes must run before /v1/shell-tools/:id (id would otherwise match "authored").
+    if (path === '/v1/shell-tools/authored' && method === 'GET') {
+      const tools = await listAuthoredTools();
+      sendJson(res, 200, { tools }, origin);
+      return;
+    }
+
+    if (path === '/v1/shell-tools/authored/scaffold' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json' }, origin);
+          return;
+        }
+      }
+      try {
+        const id = typeof body.id === 'string' ? body.id.trim() : '';
+        const result = await scaffoldAuthoredTool({
+          id,
+          name: typeof body.name === 'string' ? body.name : undefined,
+          description: typeof body.description === 'string' ? body.description : undefined,
+          tags: Array.isArray(body.tags) ? body.tags.map(String) : undefined,
+          overwrite: Boolean(body.overwrite),
+        });
+        let installed = null as Awaited<ReturnType<typeof installAuthoredTool>> | null;
+        if (body.install !== false) {
+          installed = await installAuthoredTool(result.toolId);
+        }
+        sendJson(
+          res,
+          200,
+          { ok: true, toolId: result.toolId, path: result.path, installed: Boolean(installed), manifest: installed?.manifest },
+          origin,
+        );
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        const code = msg === 'authored_exists' ? 409 : 400;
+        sendJson(res, code, { error: msg }, origin);
+      }
+      return;
+    }
+
+    if (path === '/v1/shell-tools/authored' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json' }, origin);
+          return;
+        }
+      }
+      try {
+        const toolId = typeof body.toolId === 'string' ? body.toolId.trim() : '';
+        const files = Array.isArray(body.files) ? body.files : [];
+        const normalized = files.map((f) => {
+          const row = f as { path?: unknown; content?: unknown };
+          return { path: String(row.path || ''), content: String(row.content ?? '') };
+        });
+        const result = await upsertAuthoredFiles({ toolId, files: normalized });
+        sendJson(res, 200, { ok: true, ...result, hot: getAuthoredHotState(result.toolId) }, origin);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        sendJson(res, 400, { error: msg }, origin);
+      }
+      return;
+    }
+
+    if (path === '/v1/shell-tools/authored/import' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json' }, origin);
+          return;
+        }
+      }
+      try {
+        const zipPath = typeof body.zipPath === 'string' ? body.zipPath.trim() : '';
+        const result = await importAuthoredFromZip(zipPath);
+        sendJson(res, 200, { ok: true, toolId: result.toolId, manifest: result.manifest }, origin);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        sendJson(res, 400, { error: msg }, origin);
+      }
+      return;
+    }
+
+    const mAuthoredId = path.match(/^\/v1\/shell-tools\/authored\/([a-z][a-z0-9-]{1,63})$/);
+    if (mAuthoredId && method === 'DELETE') {
+      const ok = await deleteAuthoredTool(mAuthoredId[1]!);
+      if (!ok) {
+        sendJson(res, 404, { error: 'authored_not_found' }, origin);
+        return;
+      }
+      sendJson(res, 200, { ok: true }, origin);
+      return;
+    }
+
+    const mAuthoredInstall = path.match(/^\/v1\/shell-tools\/authored\/([a-z][a-z0-9-]{1,63})\/install$/);
+    if (mAuthoredInstall && method === 'POST') {
+      try {
+        const result = await installAuthoredTool(mAuthoredInstall[1]!);
+        sendJson(res, 200, { ok: true, toolId: result.toolId, manifest: result.manifest }, origin);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        sendJson(res, msg === 'authored_not_found' ? 404 : 400, { error: msg }, origin);
+      }
+      return;
+    }
+
+    const mAuthoredPack = path.match(/^\/v1\/shell-tools\/authored\/([a-z][a-z0-9-]{1,63})\/pack$/);
+    if (mAuthoredPack && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json' }, origin);
+          return;
+        }
+      }
+      try {
+        const destZipPath = typeof body.destZipPath === 'string' ? body.destZipPath.trim() : undefined;
+        const result = await packAuthoredTool(mAuthoredPack[1]!, destZipPath || undefined);
+        sendJson(res, 200, { ok: true, ...result }, origin);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        sendJson(res, msg === 'authored_not_found' ? 404 : 400, { error: msg }, origin);
+      }
+      return;
+    }
+
+    const mAuthoredHot = path.match(/^\/v1\/shell-tools\/authored\/([a-z][a-z0-9-]{1,63})\/hot$/);
+    if (mAuthoredHot && method === 'GET') {
+      const hot = getAuthoredHotState(mAuthoredHot[1]!);
+      if (!hot) {
+        sendJson(res, 400, { error: 'invalid_tool_id' }, origin);
+        return;
+      }
+      sendJson(res, 200, hot, origin);
+      return;
+    }
+
+    const mReviewStatus = path.match(/^\/v1\/shell-tools\/([a-z][a-z0-9-]{1,63})\/review-status$/);
+    if (mReviewStatus && method === 'POST') {
+      const toolId = mReviewStatus[1]!;
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json' }, origin);
+          return;
+        }
+      }
+      try {
+        const { readFile, writeFile } = await import('node:fs/promises');
+        const { join } = await import('node:path');
+        const { ensureRepositoryRoot } = await import('./repositoryVolume.js');
+        const p = join(ensureRepositoryRoot(), 'shell-tools', toolId, 'manifest.json');
+        const cur = JSON.parse(await readFile(p, 'utf8')) as Record<string, unknown>;
+        if (typeof body.reviewStatus === 'string') cur.reviewStatus = body.reviewStatus;
+        if (typeof body.submissionId === 'string') cur.submissionId = body.submissionId;
+        await writeFile(p, `${JSON.stringify(cur, null, 2)}\n`, 'utf8');
+        sendJson(res, 200, { ok: true, toolId, reviewStatus: cur.reviewStatus, submissionId: cur.submissionId }, origin);
+      } catch {
+        sendJson(res, 404, { error: 'tool_not_found' }, origin);
+      }
+      return;
+    }
+
     const mShellToolId = path.match(/^\/v1\/shell-tools\/([a-z][a-z0-9-]{1,63})$/);
     if (mShellToolId && method === 'GET') {
       const detail = await getShellToolDetail(mShellToolId[1]!);
@@ -600,6 +790,7 @@ export async function handleRequest(
         sendJson(res, 404, { error: 'tool_not_found' }, origin);
         return;
       }
+      const hot = getAuthoredHotState(mShellToolId[1]!);
       sendJson(
         res,
         200,
@@ -608,6 +799,11 @@ export async function handleRequest(
           panel: detail.panel,
           permissions: detail.permissions,
           installedAt: detail.installedAt,
+          origin: detail.origin || null,
+          reviewStatus: detail.reviewStatus || null,
+          contentRev: hot?.contentRev ?? detail.contentRev ?? 0,
+          draftError: hot?.draftError ?? detail.draftError ?? null,
+          watching: hot?.watching ?? false,
         },
         origin,
       );

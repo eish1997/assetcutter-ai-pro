@@ -35,5 +35,6 @@ contextBridge.exposeInMainWorld('companionToolWindow', {
   close: () => timedInvoke('shell-tool-window-close'),
   togglePin: (pinned) => timedInvoke('shell-tool-window-toggle-pin', pinned),
   getPin: () => timedInvoke('shell-tool-window-get-pin'),
+  reportRunFailure: (payload) => timedInvoke('shell-tool-report-run-failure', payload || {}, 600000),
   platform: process.platform,
 });

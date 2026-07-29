@@ -2247,6 +2247,97 @@ async function fetchShellToolCatalogFromSite() {
   return { ok: true, artifacts };
 }
 
+async function submitShellToolForReview(toolIdRaw) {
+  const toolId = String(toolIdRaw || '').trim();
+  if (!/^[a-z][a-z0-9-]{1,63}$/.test(toolId)) {
+    return { ok: false, error: 'invalid_tool_id' };
+  }
+  const origin = resolveAuthApiOriginForCompanionApi();
+  if (!origin) return { ok: false, error: 'invalid_auth_api_origin' };
+
+  const pack = await companionApiRequest('POST', `/v1/shell-tools/authored/${encodeURIComponent(toolId)}/pack`, {}, {
+    timeoutMs: 120000,
+  });
+  if (!pack.ok || !pack.json || !pack.json.zipPath) {
+    return { ok: false, error: pack.json?.error || pack.text || 'pack_failed' };
+  }
+  const zipPath = String(pack.json.zipPath);
+  let buf;
+  try {
+    buf = await fsp.readFile(zipPath);
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+  const sha256 = require('node:crypto').createHash('sha256').update(buf).digest('hex');
+  const fileName = String(pack.json.fileName || path.basename(zipPath));
+  const semver = String(pack.json.semver || '0.1.0');
+
+  const { fetchWithPartition } = require('./agent-partition-fetch.cjs');
+  const authMe = await readShellAccountStatus();
+  if (!authMe || !authMe.loggedIn) {
+    return { ok: false, error: 'not_logged_in', message: '请先在工作台登录团队账号后再提交审批' };
+  }
+
+  const presign = await fetchWithPartition(FIRST_PARTY_WEB_PARTITION, `${origin}/api/shell-tool-submissions/upload-url`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify({ fileName, contentType: 'application/zip' }),
+  });
+  if (!presign.ok || !presign.json || !presign.json.uploadUrl) {
+    return {
+      ok: false,
+      error: presign.json?.error || presign.text || 'presign_failed',
+      status: presign.status,
+    };
+  }
+
+  try {
+    const putRes = await fetch(presign.json.uploadUrl, {
+      method: 'PUT',
+      headers: { 'Content-Type': presign.json.contentType || 'application/zip' },
+      body: buf,
+    });
+    if (!putRes.ok) {
+      return { ok: false, error: `upload_failed_${putRes.status}` };
+    }
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+
+  const detail = await companionApiRequest('GET', `/v1/shell-tools/${encodeURIComponent(toolId)}`, null, {
+    timeoutMs: 15000,
+  });
+  const label = detail.json?.tool?.name || toolId;
+  const notes = detail.json?.tool?.description || '';
+
+  const reg = await fetchWithPartition(FIRST_PARTY_WEB_PARTITION, `${origin}/api/shell-tool-submissions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify({
+      toolId,
+      semver,
+      label,
+      notes,
+      fileName,
+      r2Key: presign.json.objectKey,
+      sha256,
+      bytes: buf.length,
+    }),
+  });
+  if (!reg.ok || !reg.json || !reg.json.submission) {
+    return { ok: false, error: reg.json?.error || reg.text || 'register_failed', status: reg.status };
+  }
+
+  await companionApiRequest(
+    'POST',
+    `/v1/shell-tools/${encodeURIComponent(toolId)}/review-status`,
+    { reviewStatus: 'pending', submissionId: reg.json.submission.id },
+    { timeoutMs: 15000 },
+  );
+
+  return { ok: true, submissionId: reg.json.submission.id, submission: reg.json.submission };
+}
+
 async function fetchHostBundleCatalogFromSite() {
   const origin = resolveAuthApiOriginForCompanionApi();
   if (!origin) {
@@ -4277,6 +4368,14 @@ if (!gotLock) {
     }
   });
 
+  ipcMain.handle('shell-submit-shell-tool-review', async (_e, toolId) => {
+    try {
+      return await submitShellToolForReview(toolId);
+    } catch (e) {
+      return { ok: false, error: e instanceof Error ? e.message : String(e) };
+    }
+  });
+
   ipcMain.handle('shell-close-tool-window', async (_e, toolId) => {
     try {
       return closeShellToolWindow(toolId);
@@ -4360,6 +4459,118 @@ if (!gotLock) {
     const win = BrowserWindow.fromWebContents(event.sender);
     if (!win || win.isDestroyed()) return { ok: false, error: 'window_not_found' };
     return { ok: true, pinned: win.isAlwaysOnTop() };
+  });
+
+  /** Dedup auto-fix prompts from tool windows (toolId+fingerprint). */
+  const shellToolAutoFixRecent = new Map();
+
+  function expandCopilotPanelForAutoFix() {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    if (!shellCopilotCollapsed) return;
+    shellCopilotCollapsed = false;
+    if (agentStore) {
+      agentStore.writeSettings({ copilotCollapsed: false });
+    }
+    layoutShellChrome();
+    try {
+      mainWindow.webContents.send('shell-copilot-layout', {
+        collapsed: false,
+        widthPx: shellCopilotWidthPx,
+        effectiveWidthPx: getCopilotEffectiveWidthPx(),
+      });
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function buildShellToolAutoFixPrompt(payload) {
+    const toolId = String(payload && payload.toolId ? payload.toolId : '').trim();
+    const toolName = String(payload && payload.toolName ? payload.toolName : toolId).trim() || toolId;
+    const actionId = String(payload && payload.actionId ? payload.actionId : '').trim();
+    const origin = String(payload && payload.origin ? payload.origin : '').trim();
+    const error = String(payload && payload.error ? payload.error : '').trim();
+    const message = String(payload && payload.message ? payload.message : '').trim();
+    const exitCode = payload && payload.exitCode != null ? String(payload.exitCode) : '';
+    const stdout = String(payload && payload.stdout ? payload.stdout : '');
+    const stderr = String(payload && payload.stderr ? payload.stderr : '');
+    const params =
+      payload && payload.params && typeof payload.params === 'object' ? payload.params : {};
+    const clip = (s, n) => {
+      const t = String(s || '');
+      return t.length > n ? t.slice(0, n) + '\n…(已截断)' : t;
+    };
+    const editable = origin === 'authored' || origin === 'import';
+    const lines = [
+      `小工具「${toolName}」(${toolId}) 刚才运行失败。请直接修复，不要让我手动粘贴日志。`,
+      editable
+        ? '请用 ac.shell_tool.authored_upsert 修改本机草稿（tool.json / module/panel.json / scripts），保存后会自动热重载；修好后可用 ac.shell_tool.run 再打开窗口让我复测。'
+        : '该工具不是本机自建包，请先说明原因与改法；若可复制为我的工具再修，请提示我导入/scaffold。',
+      actionId ? `动作: ${actionId}` : '',
+      error ? `错误码: ${error}` : '',
+      message ? `错误信息: ${message}` : '',
+      exitCode !== '' ? `退出码: ${exitCode}` : '',
+      `参数 JSON:\n\`\`\`json\n${clip(JSON.stringify(params, null, 2), 2000)}\n\`\`\``,
+      stdout.trim() ? `stdout:\n\`\`\`\n${clip(stdout, 4000)}\n\`\`\`` : '',
+      stderr.trim() ? `stderr:\n\`\`\`\n${clip(stderr, 4000)}\n\`\`\`` : '',
+    ].filter(Boolean);
+    return lines.join('\n\n');
+  }
+
+  async function sendShellToolAutoFixToCopilot(payload) {
+    if (!agentSessionService) return { ok: false, error: 'agent_not_ready' };
+    const toolId = String(payload && payload.toolId ? payload.toolId : '').trim();
+    if (!/^[a-z][a-z0-9-]{1,63}$/.test(toolId)) {
+      return { ok: false, error: 'invalid_tool_id' };
+    }
+    const prompt = buildShellToolAutoFixPrompt(payload || {});
+    const fp = require('node:crypto')
+      .createHash('sha256')
+      .update(
+        [
+          toolId,
+          payload && payload.actionId,
+          payload && payload.error,
+          payload && payload.exitCode,
+          String(payload && payload.stderr ? payload.stderr : '').slice(0, 500),
+          String(payload && payload.stdout ? payload.stdout : '').slice(0, 500),
+        ].join('|'),
+      )
+      .digest('hex')
+      .slice(0, 16);
+    const now = Date.now();
+    const prev = shellToolAutoFixRecent.get(`${toolId}:${fp}`) || 0;
+    if (now - prev < 12000) {
+      return { ok: true, skipped: true, reason: 'duplicate_recent' };
+    }
+    shellToolAutoFixRecent.set(`${toolId}:${fp}`, now);
+
+    expandCopilotPanelForAutoFix();
+
+    const trySend = async () => agentSessionService.sendUserMessage(prompt);
+    let result = await trySend();
+    if (result && result.error === 'turn_in_progress') {
+      for (let i = 0; i < 8; i++) {
+        await new Promise((r) => setTimeout(r, 1500));
+        result = await trySend();
+        if (!result || result.error !== 'turn_in_progress') break;
+      }
+    }
+    if (result && result.ok === false) {
+      return {
+        ok: false,
+        error: result.error || 'send_failed',
+        queued: result.error === 'turn_in_progress',
+      };
+    }
+    return { ok: true, sent: true };
+  }
+
+  ipcMain.handle('shell-tool-report-run-failure', async (_e, payload) => {
+    try {
+      return await sendShellToolAutoFixToCopilot(payload);
+    } catch (e) {
+      return { ok: false, error: e instanceof Error ? e.message : String(e) };
+    }
   });
 
   ipcMain.handle('shell-set-view', async (_e, view) => transitionMainProcessShellView(view));

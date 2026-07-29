@@ -121,6 +121,8 @@
         local: t,
         cloud: null,
         builtin: false,
+        origin: t.origin || null,
+        reviewStatus: t.reviewStatus || null,
         semverLocal: t.semver,
         semverCloud: null,
       });
@@ -190,6 +192,8 @@
         needsUpgrade,
         canDownload,
         displaySemver: e.semverLocal || e.semverCloud || '—',
+        origin: e.origin || (e.local && e.local.origin) || null,
+        reviewStatus: e.reviewStatus || (e.local && e.local.reviewStatus) || null,
       };
     });
   }
@@ -392,6 +396,7 @@
     getFilteredEntries() {
       const q = this.searchQuery.trim().toLowerCase();
       return this.mergedEntries.filter((e) => {
+        if (this.filterSource === 'mine' && !(e.origin === 'authored' || e.origin === 'import')) return false;
         if (this.filterSource === 'local' && !e.hasLocal) return false;
         if (this.filterSource === 'cloud' && !e.hasCloud) return false;
         if (this.filterTag && !(e.tags || []).includes(this.filterTag)) return false;
@@ -463,6 +468,13 @@
           .map((t) => '<span class="tools-card-tag">' + esc(t) + '</span>')
           .join('');
 
+        const originBadge =
+          e.origin === 'authored' || e.origin === 'import'
+            ? '<span class="tools-card-badge" style="background:rgba(59,130,246,0.2);color:#93c5fd">我的</span>'
+            : e.reviewStatus === 'pending'
+              ? '<span class="tools-card-badge" style="background:rgba(250,204,21,0.2);color:#fde68a">审批中</span>'
+              : '';
+
         card.innerHTML =
           '<div class="tools-card-top">' +
           '<div class="tools-card-origins">' +
@@ -477,6 +489,7 @@
           ICON_CLOUD +
           '</span>' +
           '</div>' +
+          originBadge +
           '<span class="tools-card-badge' +
           (e.canDownload ? '' : ' hidden') +
           '">' +
@@ -502,6 +515,12 @@
           '<button type="button" class="tools-card-action tools-card-open' +
           (e.hasLocal ? '' : ' hidden') +
           '">打开</button>' +
+          '<button type="button" class="tools-card-action tools-card-export' +
+          (e.origin === 'authored' || e.origin === 'import' ? '' : ' hidden') +
+          '">导出</button>' +
+          '<button type="button" class="tools-card-action tools-card-submit' +
+          (e.origin === 'authored' || e.origin === 'import' ? '' : ' hidden') +
+          '">提交审批</button>' +
           '</div>';
 
         card.addEventListener('click', (ev) => {
@@ -524,6 +543,20 @@
             void this.openToolWindow(shell, e.id);
           });
         }
+        const exportBtn = card.querySelector('.tools-card-export');
+        if (exportBtn) {
+          exportBtn.addEventListener('click', (ev) => {
+            ev.stopPropagation();
+            void this.exportAuthored(shell, e.id);
+          });
+        }
+        const submitBtn = card.querySelector('.tools-card-submit');
+        if (submitBtn) {
+          submitBtn.addEventListener('click', (ev) => {
+            ev.stopPropagation();
+            void this.submitAuthored(shell, e.id, e.name);
+          });
+        }
 
         if (e.hasLocal) {
           const uninstallBtn = document.createElement('button');
@@ -544,6 +577,74 @@
 
         grid.appendChild(wrap);
       }
+    },
+
+    async exportAuthored(shell, toolId) {
+      const r = await shell.api('POST', '/v1/shell-tools/authored/' + encodeURIComponent(toolId) + '/pack', {});
+      if (!r.ok) {
+        window.alert('导出失败：' + formatShellToolError(r.json && r.json.error, r.json && r.json.message));
+        return;
+      }
+      const zipPath = r.json && r.json.zipPath;
+      window.alert('已导出：\n' + (zipPath || ''));
+      if (zipPath && typeof shell.openFolderPath === 'function') {
+        try {
+          await shell.openFolderPath(zipPath);
+        } catch {
+          /* ignore */
+        }
+      }
+    },
+
+    async submitAuthored(shell, toolId, toolName) {
+      if (!window.confirm('将「' + (toolName || toolId) + '」提交管理员审批？通过后全员可下载。')) return;
+      if (typeof shell.submitShellToolForReview !== 'function') {
+        window.alert('当前壳版本尚不支持提交审批，请更新本地伴侣。');
+        return;
+      }
+      const r = await shell.submitShellToolForReview(toolId);
+      if (!r || !r.ok) {
+        window.alert('提交失败：' + (r && (r.error || r.message) ? r.error || r.message : '未知错误'));
+        return;
+      }
+      window.alert('已提交审批' + (r.submissionId ? '：' + r.submissionId : ''));
+      await this.reloadAll(shell);
+    },
+
+    async importZip(shell) {
+      if (typeof shell.pickPath !== 'function') {
+        window.alert('无法选择文件');
+        return;
+      }
+      const picked = await shell.pickPath({ pick: 'file', title: '选择小工具 ZIP' });
+      const zipPath = picked && picked.ok && picked.path ? picked.path : '';
+      if (!zipPath || picked.canceled) return;
+      const r = await shell.api('POST', '/v1/shell-tools/authored/import', { zipPath }, { timeoutMs: INSTALL_TIMEOUT_MS });
+      if (!r.ok) {
+        window.alert('导入失败：' + formatShellToolError(r.json && r.json.error, r.json && r.json.message));
+        return;
+      }
+      await this.reloadAll(shell);
+      if (r.json && r.json.toolId) await this.openToolWindow(shell, r.json.toolId);
+    },
+
+    async scaffoldMine(shell) {
+      const idRaw = window.prompt('工具 ID（小写字母开头，仅 a-z 0-9 -）', 'my-tool');
+      if (!idRaw) return;
+      const id = String(idRaw).trim().toLowerCase();
+      const name = window.prompt('显示名称', id) || id;
+      const r = await shell.api(
+        'POST',
+        '/v1/shell-tools/authored/scaffold',
+        { id, name, description: '用户自建小工具', install: true },
+        { timeoutMs: INSTALL_TIMEOUT_MS },
+      );
+      if (!r.ok) {
+        window.alert('创建失败：' + formatShellToolError(r.json && r.json.error, r.json && r.json.message));
+        return;
+      }
+      await this.reloadAll(shell);
+      if (r.json && r.json.toolId) await this.openToolWindow(shell, r.json.toolId);
     },
 
     async installEntry(shell, entry) {
@@ -646,6 +747,8 @@
       this._shell = shell;
       if (window.ShellToolsBridges) window.ShellToolsBridges.bind(shell);
       $('btnToolsRefresh')?.addEventListener('click', () => void this.reloadAll(shell));
+      $('btnToolsImportZip')?.addEventListener('click', () => void this.importZip(shell));
+      $('btnToolsScaffold')?.addEventListener('click', () => void this.scaffoldMine(shell));
       $('toolsSearchInput')?.addEventListener('input', (ev) => {
         this.searchQuery = ev.target && ev.target.value != null ? String(ev.target.value) : '';
         this.renderGrid();
@@ -653,7 +756,7 @@
       document.querySelectorAll('#tools-rack [data-filter-source]').forEach((btn) => {
         btn.addEventListener('click', () => {
           const v = btn.getAttribute('data-filter-source') || 'all';
-          this.filterSource = v === 'local' || v === 'cloud' ? v : 'all';
+          this.filterSource = v === 'local' || v === 'cloud' || v === 'mine' ? v : 'all';
           document.querySelectorAll('#tools-rack [data-filter-source]').forEach((b) => {
             b.classList.toggle('active', b.getAttribute('data-filter-source') === this.filterSource);
           });

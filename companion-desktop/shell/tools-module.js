@@ -1,54 +1,97 @@
 /**
  * Shell tool panel renderer (PanelSpec v1 whitelist).
+ * Compact industrial layout; type-distinct controls.
  * @see docs/本地伴侣-小工具架开发规格.md
  */
 (function () {
   'use strict';
 
+  var SECTION_TITLE_FALLBACK = {
+    maya: '连接',
+    connection: '连接',
+    export: '导出',
+    input: '输入',
+    output: '输出',
+    main: '参数',
+    options: '选项',
+  };
+
   function el(tag, className, text) {
-    const n = document.createElement(tag);
+    var n = document.createElement(tag);
     if (className) n.className = className;
     if (text != null) n.textContent = text;
     return n;
   }
 
   function closeAllDropdowns(except) {
-    document.querySelectorAll('.shell-tool-dd.open').forEach((node) => {
+    document.querySelectorAll('.shell-tool-dd.open').forEach(function (node) {
       if (except && node === except) return;
       node.classList.remove('open');
     });
   }
 
-  document.addEventListener('click', () => closeAllDropdowns(null));
+  document.addEventListener('click', function () {
+    closeAllDropdowns(null);
+  });
 
   function createCustomSelect(field, value, onChange) {
-    const wrap = el('div', 'shell-tool-dd');
-    const trigger = el('button', 'shell-tool-dd-trigger', '');
+    var wrap = el('div', 'shell-tool-dd');
+    var trigger = el('button', 'shell-tool-dd-trigger', '');
     trigger.type = 'button';
-    const opts = field.options || [];
-    const current = opts.find((o) => o.value === value) || opts[0];
-    trigger.textContent = current ? current.label : '—';
-    const list = el('div', 'shell-tool-dd-list');
-    for (const opt of opts) {
-      const item = el('button', 'shell-tool-dd-item', opt.label);
-      item.type = 'button';
-      item.addEventListener('click', (e) => {
-        e.stopPropagation();
-        trigger.textContent = opt.label;
-        wrap.classList.remove('open');
-        onChange(opt.value);
-      });
-      list.appendChild(item);
+    trigger.setAttribute('aria-haspopup', 'listbox');
+    var opts = field.options || [];
+    var current = opts.find(function (o) {
+      return o.value === value;
+    }) || opts[0];
+    var labelSpan = el('span', 'shell-tool-dd-label', current ? current.label : '—');
+    var chevron = el('span', 'shell-tool-dd-chevron', '');
+    chevron.innerHTML =
+      '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>';
+    trigger.appendChild(labelSpan);
+    trigger.appendChild(chevron);
+    var list = el('div', 'shell-tool-dd-list');
+    list.setAttribute('role', 'listbox');
+    for (var i = 0; i < opts.length; i++) {
+      (function (opt) {
+        var item = el('button', 'shell-tool-dd-item', opt.label);
+        item.type = 'button';
+        if (current && opt.value === current.value) item.classList.add('is-active');
+        item.addEventListener('click', function (e) {
+          e.stopPropagation();
+          labelSpan.textContent = opt.label;
+          list.querySelectorAll('.shell-tool-dd-item').forEach(function (n) {
+            n.classList.toggle('is-active', n === item);
+          });
+          wrap.classList.remove('open');
+          trigger.setAttribute('aria-expanded', 'false');
+          onChange(opt.value);
+        });
+        list.appendChild(item);
+      })(opts[i]);
     }
-    trigger.addEventListener('click', (e) => {
+    trigger.addEventListener('click', function (e) {
       e.stopPropagation();
-      const wasOpen = wrap.classList.contains('open');
+      var wasOpen = wrap.classList.contains('open');
       closeAllDropdowns(wrap);
       wrap.classList.toggle('open', !wasOpen);
+      trigger.setAttribute('aria-expanded', wasOpen ? 'false' : 'true');
     });
     wrap.appendChild(trigger);
     wrap.appendChild(list);
     return wrap;
+  }
+
+  function sectionTitle(sec) {
+    if (sec && typeof sec.title === 'string' && sec.title.trim()) return sec.title.trim();
+    var id = sec && sec.id ? String(sec.id) : '';
+    return SECTION_TITLE_FALLBACK[id] || id || '参数';
+  }
+
+  function fieldSpanClass(field) {
+    if (field.type === 'path') return 'shell-tool-field span-2 type-path';
+    if (field.type === 'toggle') return 'shell-tool-field span-2 type-toggle';
+    if (field.type === 'select') return 'shell-tool-field type-select';
+    return 'shell-tool-field type-text';
   }
 
   /**
@@ -60,92 +103,143 @@
    */
   function renderPanelFields(container, panel, state, handlers, onStateChange) {
     container.innerHTML = '';
-    for (const sec of panel.sections || []) {
-      const secEl = el('div', 'shell-tool-section');
-      for (const field of sec.fields || []) {
-        const row = el('div', 'shell-tool-field');
+    var form = el('div', 'shell-tool-form');
+    for (var s = 0; s < (panel.sections || []).length; s++) {
+      var sec = panel.sections[s];
+      var secEl = el('section', 'shell-tool-section');
+      var head = el('div', 'shell-tool-section-head');
+      head.appendChild(el('span', 'shell-tool-section-rail', ''));
+      head.appendChild(el('h2', 'shell-tool-section-title', sectionTitle(sec)));
+      secEl.appendChild(head);
+
+      var grid = el('div', 'shell-tool-section-grid');
+      for (var f = 0; f < (sec.fields || []).length; f++) {
+        var field = sec.fields[f];
+        var row = el('div', fieldSpanClass(field));
+        var id = field.id;
+
+        if (field.type === 'toggle') {
+          var togLabel = el('label', 'shell-tool-toggle-row');
+          var togInp = el('input', 'shell-tool-toggle');
+          togInp.type = 'checkbox';
+          togInp.checked = Boolean(state[id] != null ? state[id] : field.default);
+          state[id] = togInp.checked;
+          togInp.addEventListener(
+            'change',
+            (function (fieldId, inputEl) {
+              return function () {
+                state[fieldId] = inputEl.checked;
+                onStateChange(Object.assign({}, state));
+              };
+            })(id, togInp),
+          );
+          var switchUi = el('span', 'shell-tool-switch', '');
+          var text = el('span', 'shell-tool-toggle-text', field.label);
+          togLabel.appendChild(togInp);
+          togLabel.appendChild(switchUi);
+          togLabel.appendChild(text);
+          row.appendChild(togLabel);
+          grid.appendChild(row);
+          continue;
+        }
+
         row.appendChild(el('label', 'shell-tool-label', field.label));
-        const control = el('div', 'shell-tool-control');
-        const id = field.id;
+        var control = el('div', 'shell-tool-control');
+
         if (field.type === 'path') {
-          const inp = el('input', 'shell-tool-input mono');
-          inp.type = 'text';
-          inp.readOnly = true;
-          inp.value = typeof state[id] === 'string' ? state[id] : '';
-          inp.placeholder = field.pick === 'file' ? '未选择文件' : '未选择文件夹';
-          const btn = el('button', 'btn', '选择…');
+          var pathInp = el('input', 'shell-tool-input mono');
+          pathInp.type = 'text';
+          pathInp.readOnly = true;
+          pathInp.value = typeof state[id] === 'string' ? state[id] : '';
+          pathInp.placeholder = field.pick === 'file' ? '未选择文件' : '未选择文件夹';
+          var btn = el('button', 'btn btn-ghost btn-compact', '浏览');
           btn.type = 'button';
           if (!handlers.pickPath) {
             btn.disabled = true;
             btn.title = '此工具未声明 path.pick 权限';
           } else {
-            btn.addEventListener('click', async () => {
-            if (!handlers.pickPath) return;
-            try {
-              const r = await handlers.pickPath({ pick: field.pick || 'directory' });
-              if (r && r.ok && r.path) {
-                state[id] = r.path;
-                inp.value = r.path;
-                onStateChange({ ...state });
-              }
-            } catch {
-              /* ignore */
-            }
-          });
+            btn.addEventListener('click', (function (fieldId, inputEl, pick) {
+              return async function () {
+                if (!handlers.pickPath) return;
+                try {
+                  var r = await handlers.pickPath({ pick: pick || 'directory' });
+                  if (r && r.ok && r.path) {
+                    state[fieldId] = r.path;
+                    inputEl.value = r.path;
+                    onStateChange(Object.assign({}, state));
+                  }
+                } catch {
+                  /* ignore */
+                }
+              };
+            })(id, pathInp, field.pick));
           }
-          control.appendChild(inp);
+          control.appendChild(pathInp);
           control.appendChild(btn);
         } else if (field.type === 'select') {
-          const val = typeof state[id] === 'string' ? state[id] : field.default || '';
+          var val = typeof state[id] === 'string' ? state[id] : field.default || '';
           if (!state[id] && field.default) state[id] = field.default;
           control.appendChild(
-            createCustomSelect(field, val, (v) => {
-              state[id] = v;
-              onStateChange({ ...state });
-            }),
+            createCustomSelect(field, val, (function (fieldId) {
+              return function (v) {
+                state[fieldId] = v;
+                onStateChange(Object.assign({}, state));
+              };
+            })(id)),
           );
         } else if (field.type === 'text') {
-          const inp = el('input', 'shell-tool-input');
-          inp.type = 'text';
-          inp.value = typeof state[id] === 'string' ? state[id] : field.default || '';
+          var textInp = el('input', 'shell-tool-input' + (looksLikeHostOrPort(field) ? ' mono' : ''));
+          textInp.type = 'text';
+          textInp.value = typeof state[id] === 'string' ? state[id] : field.default || '';
           if (!state[id] && field.default) state[id] = field.default;
-          inp.addEventListener('input', () => {
-            state[id] = inp.value;
-            onStateChange({ ...state });
-          });
-          control.appendChild(inp);
-        } else if (field.type === 'toggle') {
-          const inp = el('input', 'shell-tool-toggle');
-          inp.type = 'checkbox';
-          inp.checked = Boolean(state[id] ?? field.default ?? false);
-          state[id] = inp.checked;
-          inp.addEventListener('change', () => {
-            state[id] = inp.checked;
-            onStateChange({ ...state });
-          });
-          control.appendChild(inp);
+          if (field.id && /port/i.test(field.id)) textInp.inputMode = 'numeric';
+          textInp.addEventListener(
+            'input',
+            (function (fieldId, inputEl) {
+              return function () {
+                state[fieldId] = inputEl.value;
+                onStateChange(Object.assign({}, state));
+              };
+            })(id, textInp),
+          );
+          control.appendChild(textInp);
         }
+
         row.appendChild(control);
-        secEl.appendChild(row);
+        grid.appendChild(row);
       }
-      container.appendChild(secEl);
+      secEl.appendChild(grid);
+      form.appendChild(secEl);
     }
+    container.appendChild(form);
+  }
+
+  function looksLikeHostOrPort(field) {
+    var id = String((field && field.id) || '');
+    var label = String((field && field.label) || '');
+    return /host|port|addr|ip/i.test(id) || /地址|端口|host|port/i.test(label);
   }
 
   function renderActions(container, panel, onAction) {
     container.innerHTML = '';
-    const row = el('div', 'btn-row');
-    for (const act of panel.actions || []) {
-      const btn = el(
-        'button',
-        'btn ' + (act.style === 'primary' ? 'btn-primary' : ''),
-        act.label || act.id,
-      );
-      btn.type = 'button';
-      btn.addEventListener('click', () => onAction(act));
-      row.appendChild(btn);
+    var footer = el('div', 'shell-tool-actions');
+    var row = el('div', 'btn-row');
+    for (var i = 0; i < (panel.actions || []).length; i++) {
+      (function (act) {
+        var btn = el(
+          'button',
+          'btn ' + (act.style === 'primary' ? 'btn-primary' : 'btn-ghost'),
+          act.label || act.id,
+        );
+        btn.type = 'button';
+        btn.addEventListener('click', function () {
+          onAction(act);
+        });
+        row.appendChild(btn);
+      })(panel.actions[i]);
     }
-    container.appendChild(row);
+    footer.appendChild(row);
+    container.appendChild(footer);
   }
 
   function appendLog(logEl, text) {
@@ -162,9 +256,9 @@
   }
 
   window.ShellToolsModule = {
-    renderPanelFields,
-    renderActions,
-    appendLog,
-    clearLog,
+    renderPanelFields: renderPanelFields,
+    renderActions: renderActions,
+    appendLog: appendLog,
+    clearLog: clearLog,
   };
 })();

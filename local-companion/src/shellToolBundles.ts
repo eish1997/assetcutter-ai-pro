@@ -25,6 +25,11 @@ export type ShellToolBundleManifest = {
   installedAt: string;
   bundleFormat: 'zip' | 'bin';
   extractedRelativeDir: 'extracted';
+  origin?: 'authored' | 'catalog' | 'example' | 'import';
+  reviewStatus?: 'local' | 'pending' | 'approved' | 'rejected';
+  submissionId?: string;
+  contentRev?: number;
+  draftError?: string | null;
 };
 
 export type ShellToolSummary = {
@@ -36,6 +41,10 @@ export type ShellToolSummary = {
   installedAt: string;
   permissions: ShellToolSpecV1['permissions'];
   tags?: string[];
+  origin?: ShellToolBundleManifest['origin'];
+  reviewStatus?: ShellToolBundleManifest['reviewStatus'];
+  contentRev?: number;
+  draftError?: string | null;
 };
 
 export type ShellToolDetail = ShellToolSummary & {
@@ -323,6 +332,10 @@ export async function listInstalledShellTools(): Promise<ShellToolSummary[]> {
       installedAt: manifest.installedAt,
       permissions: validation.tool.permissions,
       ...(validation.tool.tags?.length ? { tags: validation.tool.tags } : {}),
+      ...(manifest.origin ? { origin: manifest.origin } : {}),
+      ...(manifest.reviewStatus ? { reviewStatus: manifest.reviewStatus } : {}),
+      ...(typeof manifest.contentRev === 'number' ? { contentRev: manifest.contentRev } : {}),
+      ...(manifest.draftError != null ? { draftError: manifest.draftError } : {}),
     });
   }
   out.sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'));
@@ -347,6 +360,10 @@ export async function getShellToolDetail(toolIdRaw: string): Promise<ShellToolDe
     tool: validation.tool,
     panel: validation.panel,
     bundlePath: join(toolDir(toolId), 'bundle.bin'),
+    ...(manifest.origin ? { origin: manifest.origin } : {}),
+    ...(manifest.reviewStatus ? { reviewStatus: manifest.reviewStatus } : {}),
+    ...(typeof manifest.contentRev === 'number' ? { contentRev: manifest.contentRev } : {}),
+    ...(manifest.draftError != null ? { draftError: manifest.draftError } : {}),
   };
 }
 

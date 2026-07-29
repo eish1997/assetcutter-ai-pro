@@ -62,6 +62,14 @@ async function main(): Promise<void> {
   startSamLocalIfConfigured();
   startPaddleOcrIfConfigured();
 
+  try {
+    const { bootstrapAuthoredWatchers } = await import('./shellToolAuthored.js');
+    await bootstrapAuthoredWatchers();
+    console.log('[local-companion] 已启动用户自建小工具热重载监视');
+  } catch (e) {
+    console.warn('[local-companion] authored watchers bootstrap failed:', e instanceof Error ? e.message : e);
+  }
+
   if (shouldOpenBrowser()) {
     setTimeout(() => openDefaultBrowser(`${base}/`), 500);
   }

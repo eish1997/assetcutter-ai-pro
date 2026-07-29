@@ -52,17 +52,17 @@ describe('agent P0 tool schemas', () => {
 });
 
 describe('agent P1 tool schemas', () => {
-  it('registers sixteen P1 tools', () => {
-    expect(P1_TOOL_SCHEMAS).toHaveLength(16);
+  it('registers twenty-one P1 tools', () => {
+    expect(P1_TOOL_SCHEMAS).toHaveLength(21);
   });
 
   it('ALL_TOOL_SCHEMAS combines P0 P1 P2', () => {
-    expect(ALL_TOOL_SCHEMAS).toHaveLength(32);
+    expect(ALL_TOOL_SCHEMAS).toHaveLength(37);
   });
 
   it('buildToolCatalog groups tools by surface and summarizes risk', () => {
     const catalog = buildToolCatalog(ALL_TOOL_SCHEMAS);
-    expect(catalog.total).toBe(32);
+    expect(catalog.total).toBe(37);
     expect(catalog.riskCounts.safe).toBeGreaterThan(0);
     expect(catalog.riskCounts.confirm).toBeGreaterThan(0);
     const workbench = catalog.surfaces.find((s: { id: string }) => s.id === 'workbench');

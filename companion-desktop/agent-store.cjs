@@ -5,7 +5,7 @@ const path = require('path');
 const { randomUUID } = require('node:crypto');
 
 const SCHEMA_VERSION = 1;
-const BODY_TOOLS_VERSION = 7;
+const BODY_TOOLS_VERSION = 8;
 const DEFAULT_SESSION_ID = 'default';
 
 function ensureDir(p) {

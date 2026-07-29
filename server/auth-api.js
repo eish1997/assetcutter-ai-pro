@@ -100,6 +100,13 @@ import {
   toPublicSummary,
 } from './companion-artifacts-store.js';
 import {
+  addShellToolSubmission,
+  getShellToolSubmission,
+  listShellToolSubmissions,
+  updateShellToolSubmission,
+  SHELL_TOOL_SUBMISSION_R2_PREFIX,
+} from './shell-tool-submissions-store.js';
+import {
   companionDistPublicHttpBase,
   publicFileUrlForR2Key,
   writeCompanionElectronUpdaterYamlResponse,
@@ -611,6 +618,8 @@ function assertCsrf(req, res) {
   if (pathOnly === '/api/internal/ai-gateway/validate-handoff') return true;
   /** 伴侣 Agent：partition Cookie 无法带 X-CSRF-Token，由 requireAgentAuth + 会话 Cookie 约束 */
   if (pathOnly.startsWith('/api/agent/workbench')) return true;
+  /** 桌面壳提交小工具审批：partition Cookie，无 CSRF 头 */
+  if (pathOnly.startsWith('/api/shell-tool-submissions')) return true;
   /** Agent CLI：Bearer PAT / device flow；无浏览器 CSRF */
   if (pathOnly.startsWith('/api/agent/cli')) return true;
   if (pathOnly.startsWith('/api/debug/client-log')) return true;
@@ -3528,6 +3537,179 @@ const server = http.createServer(async (req, res) => {
       const staff = await requirePermission(req, res, PERMISSIONS.COMPANION_READ);
       if (!staff) return;
       json(res, 200, { artifacts: await listCompanionArtifacts() });
+      return;
+    }
+
+    // --- shell tool submissions (user submit → admin approve) ---
+    if (path === '/api/shell-tool-submissions/upload-url' && req.method === 'POST') {
+      const user = await requireAuth(req, res);
+      if (!user) return;
+      if (!isR2Configured()) {
+        json(res, 503, { error: 'R2 未配置' });
+        return;
+      }
+      const body = await readBody(req);
+      const fileName = normalizeTrimmed(body.fileName) || 'tool.zip';
+      const safeBase = fileName.replace(/[^a-zA-Z0-9._-]+/g, '_').slice(0, 120) || 'tool.zip';
+      const objectKey = `${SHELL_TOOL_SUBMISSION_R2_PREFIX}${user.id}_${Date.now()}_${safeBase}`;
+      const contentType = normalizeTrimmed(body.contentType) || 'application/zip';
+      try {
+        const out = await presignPutCompanionDistribution({ objectKey, contentType, expiresIn: body.expiresIn });
+        await createAuditLog({
+          actorUserId: user.id,
+          actorIdentifier: user.username,
+          action: 'shell_tool_submission_presign_put',
+          meta: { objectKey: out.objectKey },
+          ip: getClientIp(req),
+          userAgent: req.headers['user-agent'],
+        });
+        json(res, 200, out);
+      } catch (e) {
+        json(res, 400, { error: e instanceof Error ? e.message : String(e) });
+      }
+      return;
+    }
+
+    if (path === '/api/shell-tool-submissions' && req.method === 'POST') {
+      const user = await requireAuth(req, res);
+      if (!user) return;
+      if (!isR2Configured()) {
+        json(res, 503, { error: 'R2 未配置' });
+        return;
+      }
+      const body = await readBody(req);
+      try {
+        const r2Key = normalizeTrimmed(body.r2Key);
+        if (!r2Key || !r2Key.startsWith(SHELL_TOOL_SUBMISSION_R2_PREFIX)) {
+          json(res, 400, { error: `r2Key 须以 ${SHELL_TOOL_SUBMISSION_R2_PREFIX} 开头` });
+          return;
+        }
+        const toolId = normalizeTrimmed(body.toolId);
+        const notesBase = normalizeTrimmed(body.notes) || '';
+        const notes = `${notesBase}\n#toolId:${toolId}`.trim();
+        const rec = await addShellToolSubmission({
+          toolId,
+          semver: body.semver,
+          label: body.label || toolId,
+          notes,
+          fileName: body.fileName,
+          r2Key,
+          sha256: body.sha256,
+          bytes: body.bytes,
+          submittedByUserId: user.id,
+          submittedByUsername: user.username || '',
+        });
+        await createAuditLog({
+          actorUserId: user.id,
+          actorIdentifier: user.username,
+          action: 'shell_tool_submission_create',
+          meta: { id: rec.id, toolId: rec.toolId, semver: rec.semver },
+          ip: getClientIp(req),
+          userAgent: req.headers['user-agent'],
+        });
+        json(res, 200, { submission: rec });
+      } catch (e) {
+        json(res, 400, { error: e instanceof Error ? e.message : String(e) });
+      }
+      return;
+    }
+
+    if (path === '/api/shell-tool-submissions/mine' && req.method === 'GET') {
+      const user = await requireAuth(req, res);
+      if (!user) return;
+      const list = await listShellToolSubmissions({ userId: user.id });
+      json(res, 200, { submissions: list });
+      return;
+    }
+
+    if (path === '/api/admin/shell-tool-submissions' && req.method === 'GET') {
+      const staff = await requirePermission(req, res, PERMISSIONS.COMPANION_READ);
+      if (!staff) return;
+      const status = String(new URL(req.url || '', 'http://x').searchParams.get('status') || '').trim();
+      const list = await listShellToolSubmissions(status ? { status } : {});
+      json(res, 200, { submissions: list });
+      return;
+    }
+
+    const mSubApprove = path.match(/^\/api\/admin\/shell-tool-submissions\/([^/]+)\/approve$/);
+    if (mSubApprove && req.method === 'POST') {
+      const staff = await requirePermission(req, res, PERMISSIONS.COMPANION_WRITE);
+      if (!staff) return;
+      const user = staff.user;
+      const sub = await getShellToolSubmission(mSubApprove[1]);
+      if (!sub) {
+        json(res, 404, { error: 'submission_not_found' });
+        return;
+      }
+      if (sub.status !== 'pending') {
+        json(res, 400, { error: 'not_pending' });
+        return;
+      }
+      try {
+        const artifact = await addCompanionArtifact({
+          kind: 'shell_tool_bundle',
+          semver: sub.semver,
+          channel: 'stable',
+          platform: 'universal',
+          fileName: sub.fileName,
+          r2Key: sub.r2Key,
+          sha256: sub.sha256,
+          bytes: sub.bytes,
+          notes: sub.notes || `#toolId:${sub.toolId}`,
+          label: sub.label || sub.toolId,
+          createdByUserId: user.id,
+        });
+        const updated = await updateShellToolSubmission(sub.id, {
+          status: 'approved',
+          reviewedByUserId: user.id,
+          reviewedAt: new Date().toISOString(),
+          artifactId: artifact.id,
+        });
+        await createAuditLog({
+          actorUserId: user.id,
+          actorIdentifier: user.username,
+          action: 'shell_tool_submission_approve',
+          meta: { id: sub.id, artifactId: artifact.id, toolId: sub.toolId },
+          ip: getClientIp(req),
+          userAgent: req.headers['user-agent'],
+        });
+        json(res, 200, { submission: updated, artifact });
+      } catch (e) {
+        json(res, 400, { error: e instanceof Error ? e.message : String(e) });
+      }
+      return;
+    }
+
+    const mSubReject = path.match(/^\/api\/admin\/shell-tool-submissions\/([^/]+)\/reject$/);
+    if (mSubReject && req.method === 'POST') {
+      const staff = await requirePermission(req, res, PERMISSIONS.COMPANION_WRITE);
+      if (!staff) return;
+      const user = staff.user;
+      const body = await readBody(req);
+      const sub = await getShellToolSubmission(mSubReject[1]);
+      if (!sub) {
+        json(res, 404, { error: 'submission_not_found' });
+        return;
+      }
+      if (sub.status !== 'pending') {
+        json(res, 400, { error: 'not_pending' });
+        return;
+      }
+      const updated = await updateShellToolSubmission(sub.id, {
+        status: 'rejected',
+        reviewedByUserId: user.id,
+        reviewedAt: new Date().toISOString(),
+        rejectReason: normalizeTrimmed(body.reason) || 'rejected',
+      });
+      await createAuditLog({
+        actorUserId: user.id,
+        actorIdentifier: user.username,
+        action: 'shell_tool_submission_reject',
+        meta: { id: sub.id, toolId: sub.toolId, reason: updated.rejectReason },
+        ip: getClientIp(req),
+        userAgent: req.headers['user-agent'],
+      });
+      json(res, 200, { submission: updated });
       return;
     }
 

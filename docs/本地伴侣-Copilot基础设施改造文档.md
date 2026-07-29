@@ -220,40 +220,20 @@ npm run smoke:agent-p2-p3
 
 目标：用户把重复工作沉淀成自己的工具。
 
-这一步必须在 P0/P1 稳定后做。Copilot 负责创建草稿、解释和确认；Script Hub 负责工具资产化、版本、运行和审计；工具页负责展示、编辑、运行和禁用；`ac.*` 负责正式执行入口。
+已落地路径（2026-07-29）：**真 `shell_tool_bundle`**（与管理员上架同规格），不是仅组合 `ac.*` 的弱定义。
 
 ```text
-外部大脑 / 内置轻量入口
-  → 生成用户工具草稿
-  → Copilot 让用户确认名称、输入项、步骤、风险、权限
-  → 写入 Script Hub / agent-store 工具资产
-  → 工具页出现新工具
-  → 外部大脑和内置入口都可调用
+Copilot scaffold / authored_upsert
+  → shell-tools-authored/<toolId>/（保存即 fs.watch 热重载）
+  → 本机工具架「我的」
+  → 导出 ZIP / 提交审批（staging R2）
+  → 管理员 /admin/shell-tool-submissions 通过
+  → companion-artifacts 公开 catalog → 全员可下载
 ```
 
-建议工具定义：
+原则：优先受控 `ac.shell_tool.*` 写包；包内仍禁止任意 HTML/eval；公共架必须审批，不开放 `companion.write` 给全员。
 
-```ts
-type UserToolDefinition = {
-  id: string;
-  name: string;
-  description: string;
-  triggers: string[];
-  inputs: ToolInputSchema[];
-  steps: Array<{
-    tool: string; // ac.*
-    argsTemplate: Record<string, unknown>;
-  }>;
-  risk: 'safe' | 'confirm' | 'destructive';
-  surfaces: Array<'shell' | 'workbench' | 'script_hub' | 'companion'>;
-  createdBy: 'agent_console';
-  enabled: boolean;
-  createdAt: string;
-  updatedAt?: string;
-};
-```
-
-原则：优先组合已有 `ac.*`，不要让 Copilot 直接生成任意脚本并执行。确实需要脚本时，也必须进入工具页/Script Hub 的受控发布、确认和审计链路。
+历史草案 `UserToolDefinition`（组合已有 `ac.*`）仍可作为后续 Script Hub 沉淀补充，与小工具架正交。
 
 ---
 

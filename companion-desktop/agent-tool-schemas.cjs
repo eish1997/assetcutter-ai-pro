@@ -305,6 +305,88 @@ const P1_TOOL_SCHEMAS = [
     },
   },
   {
+    name: 'ac.shell_tool.list',
+    description: '列出已安装小工具与本机自建草稿',
+    risk: 'safe',
+    surfaces: ['shell'],
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
+  {
+    name: 'ac.shell_tool.scaffold',
+    description: '创建最小可运行自建小工具壳，安装到本机工具架并打开窗口',
+    risk: 'confirm',
+    surfaces: ['shell'],
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'toolId，小写字母开头' },
+        name: { type: 'string' },
+        description: { type: 'string' },
+        tags: { type: 'array', items: { type: 'string' } },
+        overwrite: { type: 'boolean' },
+        open: { type: 'boolean', description: '是否打开工具窗，默认 true' },
+      },
+      required: ['id'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'ac.shell_tool.authored_upsert',
+    description: '写入自建小工具草稿文件（tool.json / panel.json / scripts）；保存后自动热重载',
+    risk: 'confirm',
+    surfaces: ['shell'],
+    inputSchema: {
+      type: 'object',
+      properties: {
+        toolId: { type: 'string' },
+        files: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              path: { type: 'string' },
+              content: { type: 'string' },
+            },
+            required: ['path', 'content'],
+            additionalProperties: false,
+          },
+        },
+      },
+      required: ['toolId', 'files'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'ac.shell_tool.export',
+    description: '将自建小工具打成 ZIP（与管理员上架同形）',
+    risk: 'confirm',
+    surfaces: ['shell'],
+    inputSchema: {
+      type: 'object',
+      properties: {
+        toolId: { type: 'string' },
+        destZipPath: { type: 'string' },
+      },
+      required: ['toolId'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'ac.shell_tool.import',
+    description: '从本机 ZIP 导入为自建小工具并安装',
+    risk: 'confirm',
+    surfaces: ['shell'],
+    inputSchema: {
+      type: 'object',
+      properties: {
+        zipPath: { type: 'string' },
+        open: { type: 'boolean' },
+      },
+      required: ['zipPath'],
+      additionalProperties: false,
+    },
+  },
+  {
     name: 'ac.shell.bootstrap',
     description: '触发本机引擎一键安装（sam_local / rembg / paddleocr）',
     risk: 'confirm',
@@ -654,6 +736,39 @@ const TOOL_GUIDANCE = {
     whenToUse: '用户要启动本地伴侣内置的小工具界面时使用。',
     exampleArguments: { toolId: 'tool-id' },
     successSignals: ['返回工具窗口打开结果。'],
+  },
+  'ac.shell_tool.list': {
+    title: '列出小工具',
+    whenToUse: '需要查看已安装或自建草稿小工具时使用。',
+    exampleArguments: {},
+    successSignals: ['返回 installed 与 authored 列表。'],
+  },
+  'ac.shell_tool.scaffold': {
+    title: '创建自建小工具壳',
+    whenToUse: '用户要用 Copilot 新建本机小工具时，先 scaffold 再迭代改包。',
+    exampleArguments: { id: 'my-converter', name: '我的转换器', open: true },
+    successSignals: ['返回 toolId，工具架出现「我的」工具并可开窗。'],
+  },
+  'ac.shell_tool.authored_upsert': {
+    title: '更新自建小工具文件',
+    whenToUse: '修改 tool.json、panel.json 或 scripts 后保存；保存即热重载。',
+    exampleArguments: {
+      toolId: 'my-converter',
+      files: [{ path: 'module/panel.json', content: '{}' }],
+    },
+    successSignals: ['返回 written 文件列表；工具窗自动刷新。'],
+  },
+  'ac.shell_tool.export': {
+    title: '导出小工具 ZIP',
+    whenToUse: '用户要导出或准备提交审批时打包 ZIP。',
+    exampleArguments: { toolId: 'my-converter' },
+    successSignals: ['返回 zipPath、sha256、bytes。'],
+  },
+  'ac.shell_tool.import': {
+    title: '导入小工具 ZIP',
+    whenToUse: '用户提供本机 ZIP 路径，导入为我的工具。',
+    exampleArguments: { zipPath: 'C:/temp/my-converter-0.1.0.zip', open: true },
+    successSignals: ['返回 toolId 与安装结果。'],
   },
   'ac.shell.bootstrap': {
     title: '安装本机引擎',
