@@ -4,6 +4,7 @@ import type { WorkflowAsset } from '../../types';
 import { resolveWorkflowStepModelUrls } from '../../services/workflowStepModels';
 import { resolveWorkflowAssetActiveVariant, resolveWorkflowAssetKind } from '../../services/workflowAssetVariants';
 import { captureWorkflowModelThumbnailDataUrl } from '../../services/workflowModelPreviewCapture';
+import { previewSrcCacheFingerprint } from '../../services/workflowImageThumb';
 import { WorkflowGridImage } from '../ProgressivePreviewImage';
 import AppIcon from '../ui/AppIcon';
 
@@ -195,8 +196,13 @@ export const AssetCardPreviewRenderer: React.FC<AssetCardPreviewRendererProps> =
     }
     // Already have a real poster/thumb on the asset — show image only, do not load 3D.
     if (persistedPreview) {
-      const seed = String(previewSrc || activeVariant?.posterUrl || '').trim();
-      if (seed && !/^data:image\/svg\+xml/i.test(seed)) {
+      const fromPoster = hasPersistedModelThumbnail(activeVariant?.posterUrl)
+        ? String(activeVariant?.posterUrl || '').trim()
+        : '';
+      const fromPreview = hasPersistedModelThumbnail(previewSrc) ? String(previewSrc || '').trim() : '';
+      // Prefer viewport/close poster over stale original / image-full card face.
+      const seed = fromPoster || fromPreview;
+      if (seed) {
         modelThumbnailCache.set(modelThumbCacheKey, seed);
         setCapturedModelThumb(seed);
         return;
@@ -290,12 +296,15 @@ export const AssetCardPreviewRenderer: React.FC<AssetCardPreviewRendererProps> =
     return <FilePlaceholder label={activeVariant?.label || 'File'} />;
   }
 
+  // Bust ProgressivePreview LRU when viewport poster bytes change but parent cacheKey is stable.
+  const gridCacheKey = `${cacheKey}:fp${previewSrcCacheFingerprint(displaySrc || previewSrc)}`;
+
   return (
     <div className="relative flex h-full w-full justify-center bg-[#141416]">
       {displaySrc.trim() ? (
         <WorkflowGridImage
           fullSrc={displaySrc}
-          cacheKey={cacheKey}
+          cacheKey={gridCacheKey}
           mediaVariant={activeKind === 'video' ? 'video' : 'image'}
           autoPlayVideo={activeKind === 'video' && autoPlayVideo}
           videoPosterSrc={activeKind === 'video' ? activeVariant?.posterUrl : undefined}

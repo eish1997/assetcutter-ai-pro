@@ -3,12 +3,16 @@ import { createPortal } from 'react-dom';
 import type { WorkflowAsset } from '../types';
 import type { ImageVersion, VgpAssetExtension } from '../types/vgp';
 import { ensureWorkflowAssetVgp } from '../services/vgp/migrateLegacyAsset';
+import { resolveWorkflowModelStepPosterSrc } from '../services/workflowModelViewportThumbPersist';
 
 const PREVIEW_LEN = 120;
 
 export function resolveVersionImageSrc(asset: WorkflowAsset, v: ImageVersion): string {
+  const key = v.imageRef.kind === 'original_field' ? 'original' : v.imageRef.key;
+  // Model step (incl. manual import on original): prefer viewport poster over photo / empty original
+  const modelPoster = resolveWorkflowModelStepPosterSrc(asset, key);
+  if (modelPoster) return modelPoster;
   if (v.imageRef.kind === 'original_field') return asset.original;
-  const key = v.imageRef.key;
   if (key === 'cut_image') {
     return asset.displayKey === 'cut_image' ? asset.original : asset.results[key] ?? asset.original;
   }

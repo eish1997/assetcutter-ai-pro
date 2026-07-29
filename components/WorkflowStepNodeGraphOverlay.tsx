@@ -669,17 +669,22 @@ export function WorkflowStepNodeGraphOverlay({
     const textThumb = !String(verSrc || '').trim()
       ? workflowVersionTextThumbLines(displayAsset, key)
       : null;
-    const companionKey =
+    const previewCompanionKey = String(displayAsset.resultsPreviewCompanionKeys?.[key] || '').trim();
+    const fullCompanionKey =
       key === 'original'
         ? String(displayAsset.originalCompanionKey || '').trim()
         : String(displayAsset.resultsCompanionKeys?.[key] || '').trim();
+    // Model viewport poster lives in image-thumb (*Preview*); never pin cache to image-full.
+    const companionKey = previewCompanionKey || fullCompanionKey;
     const nodeAsset = key === displayAsset.displayKey ? displayAsset : { ...displayAsset, displayKey: key };
     const isModelNode =
       resolveWorkflowStepModelUrls(displayAsset, key).some((url) => String(url || '').trim()) ||
       resolveWorkflowStepModelCompanionKeys(displayAsset, key).some((modelKey) => String(modelKey || '').trim());
+    // Always fingerprint verSrc + preview rev so close-3D / overwritten thumb busts Progressive LRU.
+    const previewRev = Number(displayAsset.resultsPreviewRev?.[key]) || 0;
     const thumbCacheKey = companionKey
-      ? `${displayAsset.id}:vgp-step-graph:${v.id}:ck:${companionKey}`
-      : `${displayAsset.id}:vgp-step-graph:${v.id}:fp${previewSrcCacheFingerprint(verSrc)}`;
+      ? `${displayAsset.id}:vgp-step-graph:${v.id}:ck:${companionKey}:fp${previewSrcCacheFingerprint(verSrc)}:r${previewRev}`
+      : `${displayAsset.id}:vgp-step-graph:${v.id}:fp${previewSrcCacheFingerprint(verSrc)}:r${previewRev}`;
     return (
       <button
         key={id}

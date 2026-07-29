@@ -219,13 +219,15 @@ export const ProgressivePreviewImage = forwardRef<HTMLImageElement, ProgressiveP
       const companionMicroKey = canUseCompanionThumbs
         ? workflowPreviewThumbCompanionStorageKey(cacheKey, 'micro', microEdge)
         : '';
-      // Fresh data: URL previews (e.g. 3D lightbox capture) must regenerate — do not
-      // serve a stale companion thumb that shares the stable storage key.
+      // Fresh data URLs (e.g. 3D lightbox capture) must regenerate — do not serve a
+      // stale memory/companion thumb that shares a stable cacheKey (strip / VGP tree).
       const sourceIsInlineData = /^data:image\//i.test(s);
 
       let cancelled = false;
 
-      if (thumbHit) {
+      // Only reuse LRU / companion thumbs for non-inline sources. Same cacheKey + new
+      // viewport JPEG would otherwise keep showing the previous / previous-previous thumb.
+      if (thumbHit && !sourceIsInlineData) {
         if (microHit) {
           microPaintedRef.current = true;
           setMicroSrc(microHit);
@@ -256,7 +258,7 @@ export const ProgressivePreviewImage = forwardRef<HTMLImageElement, ProgressiveP
         };
       }
 
-      if (microHit) {
+      if (microHit && !sourceIsInlineData) {
         microPaintedRef.current = true;
         setMicroSrc(microHit);
       }

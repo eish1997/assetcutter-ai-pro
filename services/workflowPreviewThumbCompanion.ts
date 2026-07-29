@@ -20,14 +20,24 @@ function guessAssetPart(cacheKey: string): string {
 }
 
 /**
- * Grid cacheKey often ends with `:fp{fingerprint}` of the current preview bytes.
- * Companion storage must ignore that suffix so reopen/close overwrites one file
+ * Grid / strip / VGP cacheKeys append volatile suffixes for in-memory LRU busting:
+ * - `:fp{fingerprint}` — preview bytes changed
+ * - `:r{rev}` — resultsPreviewRev
+ * - `:ck:{companionObjectKey}` — image-full → image-thumb path change
+ * Companion disk keys must ignore all of these so reopen/close overwrites one file
  * instead of creating `thumb-mi/th-*-{newHash}` forever.
  */
 export function stableWorkflowPreviewThumbCacheKey(cacheKey: string): string {
-  return String(cacheKey || '')
-    .trim()
-    .replace(/:fp[a-z0-9-]+$/i, '');
+  let s = String(cacheKey || '').trim();
+  let prev = '';
+  while (s !== prev) {
+    prev = s;
+    s = s
+      .replace(/:fp[a-z0-9-]+$/i, '')
+      .replace(/:r\d+$/i, '')
+      .replace(/:ck:[^:]+$/i, '');
+  }
+  return s;
 }
 
 export function workflowPreviewThumbCompanionStorageKey(

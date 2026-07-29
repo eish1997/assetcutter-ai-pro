@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import type { WorkflowAsset } from '../../types';
 import { resolveWorkflowStepModelUrls } from '../../services/workflowStepModels';
 import { resolveWorkflowAssetActiveVariant, resolveWorkflowAssetKind } from '../../services/workflowAssetVariants';
+import { previewSrcCacheFingerprint } from '../../services/workflowImageThumb';
 import { workflowVersionTextThumbLines } from '../../services/workflowTextAsset';
 import { WorkflowGridImage } from '../ProgressivePreviewImage';
 import { AssetCardPreviewRenderer } from './AssetCardPreviewRenderer';
@@ -109,6 +110,7 @@ export default function WorkflowLightboxAssetThumbStrip({
                 !String(previewSrc || '').trim()
                   ? workflowVersionTextThumbLines(asset, asset.displayKey || 'original')
                   : null;
+              const stripCacheKey = `lightbox-strip:${asset.id}:${asset.displayKey}:fp${previewSrcCacheFingerprint(previewSrc)}`;
               return (
                 <button
                   key={asset.id}
@@ -144,7 +146,7 @@ export default function WorkflowLightboxAssetThumbStrip({
                     <AssetCardPreviewRenderer
                       asset={asset}
                       previewSrc={previewSrc}
-                      cacheKey={`lightbox-strip:${asset.id}:${asset.displayKey}`}
+                      cacheKey={stripCacheKey}
                       thumbMaxEdge={128}
                       deferThumbnail={false}
                       autoPlayVideo={active}
@@ -156,7 +158,7 @@ export default function WorkflowLightboxAssetThumbStrip({
                   ) : (
                     <WorkflowGridImage
                       fullSrc={previewSrc}
-                      cacheKey={`lightbox-strip:${asset.id}:${asset.displayKey}`}
+                      cacheKey={stripCacheKey}
                       thumbMaxEdge={128}
                       mediaVariant={getMediaVariant?.(asset) ?? 'image'}
                       autoPlayVideo={active}

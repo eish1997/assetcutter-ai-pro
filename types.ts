@@ -684,6 +684,11 @@ export type WorkflowAsset = {
    * 对齐 3D 的 model + preview 双文件；打开资产文件夹时应能看到。
    */
   resultsPreviewCompanionKeys?: Record<string, string>;
+  /**
+   * 各步骤 viewport/preview 缩略图内容修订号（毫秒时间戳）。
+   * 同名 `image-thumb-*` 覆写后用于 `?v=` 与 UI cacheKey 破缓存。
+   */
+  resultsPreviewRev?: Record<string, number>;
   /** 所属组的唯一 ID，null/undefined = 不在任何组 */
   groupId?: string | null;
   /** 组显示名称（冗余存，UI 直接用） */
