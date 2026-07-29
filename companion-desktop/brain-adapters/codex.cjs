@@ -4,6 +4,11 @@ const fs = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
 const { workbenchStandardFlowText } = require('../agent-workbench-flow.cjs');
+const {
+  DEFAULT_CODEX_MCP_TOKEN_ENV,
+  buildCodexSpawnEnv,
+  upsertCodexMcpServerConfig,
+} = require('../codex-mcp-config.cjs');
 
 function defaultCodexCommand() {
   return process.platform === 'win32' ? 'codex.cmd' : 'codex';
@@ -22,6 +27,13 @@ function spawnCodexForDeps(deps, command, args, options) {
     return deps.spawnCodex(command, args, options || {});
   }
   return spawnCodex(command, args, options);
+}
+
+function upsertCodexMcpServerConfigForDeps(deps, options) {
+  if (deps && typeof deps.upsertCodexMcpServerConfig === 'function') {
+    return deps.upsertCodexMcpServerConfig(options || {});
+  }
+  return upsertCodexMcpServerConfig(options);
 }
 
 function defaultCodexCwd() {
@@ -48,6 +60,10 @@ function settingsFromStore(deps) {
     model: String(process.env.COMPANION_AGENT_CODEX_MODEL || s.codexModel || '').trim(),
     sandbox: normalizeSandbox(process.env.COMPANION_AGENT_CODEX_SANDBOX || s.codexSandbox),
   };
+}
+
+function agentSettingsFromStore(deps) {
+  return deps && deps.store && typeof deps.store.readSettings === 'function' ? deps.store.readSettings() : {};
 }
 
 function sessionsFile(deps) {
@@ -96,10 +112,14 @@ function buildToolContext(input) {
   const lines = [
     'AssetCutter Copilot context:',
     '- You are running as the Copilot brain inside AssetCutter local companion.',
-    '- Prefer AssetCutter CLI (`npm run agent:cli`) for platform project/asset operations; do not use MCP.',
+    '- Workbench actions MUST use the AssetCutter MCP server `assetcutter-body` (ac.* body tools). Do not invent PowerShell/curl/JSON-RPC scripts, and do not edit agent-store settings.',
+    '- Codex may expose these tools with an MCP prefix such as `mcp__assetcutter-body__ac.workbench.create_text_asset`. Prefer that MCP tool over shell.',
+    '- For a new text note in the open workbench project, call ac.workbench.create_text_asset (or the mcp__assetcutter-body__ prefixed equivalent) with { text }. Never use Agent CLI aga_* / npm run agent:cli for workbench assets.',
+    '- To import a local/Downloads image into the open workbench project, call ac.workbench.create_image_asset with { localPath } (absolute file path only). NEVER pass image base64 / imageDataUrl for real imports — that blows up tool args even for ~100KB files. Companion reads the file from disk.',
     `- Workbench standard flow: ${workbenchStandardFlowText()}.`,
     '- If a tool reports AGENT_AUTH_REQUIRED or authRequired, ask the user to open the workbench and log in, then retry the same flow.',
     '- If a tool reports requiresFrontendAuthorization, keep Copilot open and wait for the user to approve in the frontend.',
+    '- If MCP tools are missing, say Body MCP is not connected (need ASSETCUTTER_MCP_TOKEN + 127.0.0.1:19120). Do not fall back to shell hacks.',
   ];
   if (shellTools.length) lines.push(`- Shell tools available: ${shellTools.join(', ')}`);
   if (workbenchTools.length) lines.push(`- Workbench tools available: ${workbenchTools.join(', ')}`);
@@ -273,6 +293,7 @@ function createCodexBrainAdapter(deps) {
     }
 
     const cfg = settingsFromStore(deps);
+    const agentSettings = agentSettingsFromStore(deps);
     const cwd = fs.existsSync(cfg.cwd) ? cfg.cwd : process.cwd();
     const sessionId = String(input.sessionId || 'default');
     const sessionMap = readSessionMap(deps);
@@ -301,12 +322,40 @@ function createCodexBrainAdapter(deps) {
     let stderrText = '';
     const completedItemText = new Map();
 
-    // MCP loopback injection removed (CLI-only Agent). Codex runs without AssetCutter MCP tools.
+    const mcpToken = String(agentSettings.mcpToken || '').trim();
+    const mcpPort = Number(agentSettings.mcpPort) || 19120;
+    const mcpEnabled = Boolean(agentSettings.mcpEnabled);
+    if (!mcpEnabled || !mcpToken) {
+      yield {
+        type: 'activity',
+        phase: 'error',
+        name: 'codex.mcp_config',
+        detail:
+          'Body MCP is disabled or missing token. Enable Copilot Body MCP (mcpEnabled) so Codex can call ac.workbench.* tools.',
+      };
+    } else {
+      try {
+        upsertCodexMcpServerConfigForDeps(deps, {
+          url: `http://127.0.0.1:${mcpPort}/mcp`,
+          tokenEnvVar: DEFAULT_CODEX_MCP_TOKEN_ENV,
+          startupTimeoutSec: 30,
+        });
+      } catch (e) {
+        yield {
+          type: 'activity',
+          phase: 'error',
+          name: 'codex.mcp_config',
+          detail: e instanceof Error ? e.message : String(e),
+        };
+      }
+    }
+
     const child = spawnCodexForDeps(deps, cfg.command, args, {
       cwd,
-      env: {
-        ...process.env,
-      },
+      env: buildCodexSpawnEnv(process.env, {
+        mcpToken,
+        tokenEnvVar: DEFAULT_CODEX_MCP_TOKEN_ENV,
+      }),
     });
     const abortHandler = () => {
       try {
@@ -436,7 +485,17 @@ function createCodexBrainAdapter(deps) {
     if (exitCode && exitCode !== 0) return;
   }
 
-  return { id, displayName, probe, streamTurn };
+  function clearSession(sessionId) {
+    const id = String(sessionId || '').trim();
+    if (!id) return { ok: false, error: 'session_id_required' };
+    const map = readSessionMap(deps);
+    if (!Object.prototype.hasOwnProperty.call(map, id)) return { ok: true, cleared: false, sessionId: id };
+    delete map[id];
+    writeSessionMap(deps, map);
+    return { ok: true, cleared: true, sessionId: id };
+  }
+
+  return { id, displayName, probe, streamTurn, clearSession };
 }
 
 module.exports = { createCodexBrainAdapter, buildCodexPrompt };

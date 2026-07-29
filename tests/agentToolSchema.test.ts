@@ -52,17 +52,17 @@ describe('agent P0 tool schemas', () => {
 });
 
 describe('agent P1 tool schemas', () => {
-  it('registers fourteen P1 tools', () => {
-    expect(P1_TOOL_SCHEMAS).toHaveLength(14);
+  it('registers sixteen P1 tools', () => {
+    expect(P1_TOOL_SCHEMAS).toHaveLength(16);
   });
 
   it('ALL_TOOL_SCHEMAS combines P0 P1 P2', () => {
-    expect(ALL_TOOL_SCHEMAS).toHaveLength(30);
+    expect(ALL_TOOL_SCHEMAS).toHaveLength(32);
   });
 
   it('buildToolCatalog groups tools by surface and summarizes risk', () => {
     const catalog = buildToolCatalog(ALL_TOOL_SCHEMAS);
-    expect(catalog.total).toBe(30);
+    expect(catalog.total).toBe(32);
     expect(catalog.riskCounts.safe).toBeGreaterThan(0);
     expect(catalog.riskCounts.confirm).toBeGreaterThan(0);
     const workbench = catalog.surfaces.find((s: { id: string }) => s.id === 'workbench');
@@ -71,6 +71,8 @@ describe('agent P1 tool schemas', () => {
     expect(workbench?.tools.some((t: { name: string }) => t.name === 'ac.workbench.list_assets')).toBe(true);
     expect(workbench?.tools.some((t: { name: string }) => t.name === 'ac.workbench.get_asset')).toBe(true);
     expect(workbench?.tools.some((t: { name: string }) => t.name === 'ac.workbench.run_capability')).toBe(true);
+    expect(workbench?.tools.some((t: { name: string }) => t.name === 'ac.workbench.create_text_asset')).toBe(true);
+    expect(workbench?.tools.some((t: { name: string }) => t.name === 'ac.workbench.create_image_asset')).toBe(true);
     const ensureReady = workbench?.tools.find((t: { name: string }) => t.name === 'ac.workbench.ensure_ready');
     expect(ensureReady?.risk).toBe('safe');
     expect(ensureReady?.title).toBe('准备工作台');
@@ -93,6 +95,15 @@ describe('agent P1 tool schemas', () => {
     expect(runCapability?.whenToUse).toContain('能力预设');
     expect(runCapability?.exampleArguments.presetId).toBe('preset-id');
     expect(runCapability?.successSignals[0]).toContain('run_capability');
+    const createTextAsset = workbench?.tools.find((t: { name: string }) => t.name === 'ac.workbench.create_text_asset');
+    expect(createTextAsset?.risk).toBe('confirm');
+    expect(createTextAsset?.input.required).toContain('text');
+    expect(createTextAsset?.title).toContain('文本');
+    const createImageAsset = workbench?.tools.find((t: { name: string }) => t.name === 'ac.workbench.create_image_asset');
+    expect(createImageAsset?.risk).toBe('confirm');
+    expect(createImageAsset?.input.required || []).not.toContain('imageDataUrl');
+    expect(createImageAsset?.inputSchema.properties.localPath).toBeTruthy();
+    expect(createImageAsset?.title).toContain('图片');
     expect(catalog.recommendedFlow[0]).toContain('ac.shell.get_state');
   });
 });

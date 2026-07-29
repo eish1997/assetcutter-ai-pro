@@ -564,6 +564,30 @@ function createAgentBodyHost(deps) {
         return out;
       }
 
+      if (name === 'ac.workbench.create_text_asset') {
+        if (!deps.workbenchClient) {
+          return toolUnavailable('workbench_client');
+        }
+        let aborted = abortIfNeeded(ctx);
+        if (aborted) return aborted;
+        const out = await deps.workbenchClient.createTextAsset(safeArgs);
+        aborted = abortIfNeeded(ctx);
+        if (aborted) return aborted;
+        return out;
+      }
+
+      if (name === 'ac.workbench.create_image_asset') {
+        if (!deps.workbenchClient) {
+          return toolUnavailable('workbench_client');
+        }
+        let aborted = abortIfNeeded(ctx);
+        if (aborted) return aborted;
+        const out = await deps.workbenchClient.createImageAsset(safeArgs);
+        aborted = abortIfNeeded(ctx);
+        if (aborted) return aborted;
+        return out;
+      }
+
       if (name === 'ac.script_hub.list_scripts') {
         if (!deps.scriptHubClient) {
           return toolUnavailable('script_hub_client');

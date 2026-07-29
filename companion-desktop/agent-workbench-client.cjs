@@ -1,5 +1,8 @@
 'use strict';
 
+const fs = require('fs');
+const path = require('path');
+const http = require('http');
 const {
   fetchWithPartition,
   inspectPartitionSession,
@@ -9,6 +12,66 @@ const {
 const TEAM_WEB_PARTITION = 'persist:assetcutter-team';
 const WORKBENCH_PARTITION = TEAM_WEB_PARTITION;
 
+/** Match local-companion default upload cap (100MB). */
+const MAX_CREATE_IMAGE_FILE_BYTES = 100 * 1024 * 1024;
+/** Above this, avoid stuffing base64 through BrowserView executeJavaScript. */
+const INLINE_BRIDGE_MAX_IMAGE_BYTES = 3 * 1024 * 1024;
+
+function mimeFromImageExt(ext) {
+  const e = String(ext || '')
+    .replace(/^\./, '')
+    .toLowerCase();
+  if (e === 'png') return 'image/png';
+  if (e === 'jpg' || e === 'jpeg') return 'image/jpeg';
+  if (e === 'webp') return 'image/webp';
+  if (e === 'gif') return 'image/gif';
+  if (e === 'bmp') return 'image/bmp';
+  if (e === 'avif') return 'image/avif';
+  if (e === 'svg') return 'image/svg+xml';
+  return '';
+}
+
+function extFromMime(mime) {
+  const m = String(mime || '')
+    .split(';')[0]
+    .trim()
+    .toLowerCase();
+  if (m === 'image/png') return 'png';
+  if (m === 'image/webp') return 'webp';
+  if (m === 'image/gif') return 'gif';
+  if (m === 'image/svg+xml') return 'svg';
+  if (m === 'image/bmp') return 'bmp';
+  if (m === 'image/avif') return 'avif';
+  return 'jpg';
+}
+
+function sanitizeCompanionPathSegment(s) {
+  return (
+    String(s || '')
+      .trim()
+      .replace(/[^a-zA-Z0-9_.-]/g, '_')
+      .replace(/_+/g, '_')
+      .replace(/^_+|_+$/g, '')
+      .slice(0, 120) || 'x'
+  );
+}
+
+function companionAssetId8(assetId) {
+  const raw = String(assetId || '')
+    .trim()
+    .toLowerCase()
+    .replace(/-/g, '')
+    .replace(/[^a-z0-9]/g, '');
+  return (raw.slice(0, 8) || '00000000').padEnd(8, '0').slice(0, 8);
+}
+
+function workflowOriginalCompanionStorageKey(assetId, ext) {
+  const id = sanitizeCompanionPathSegment(String(assetId || '').trim() || 'unknown').slice(0, 96);
+  const safeExt = sanitizeCompanionPathSegment(ext || 'jpg').slice(0, 12) || 'jpg';
+  const file = sanitizeCompanionPathSegment(`image-full-0-${companionAssetId8(assetId)}.${safeExt}`).slice(0, 120);
+  return `${id}/${file}`;
+}
+
 /**
  * @param {{
  *   getSiteUrl: () => string;
@@ -17,6 +80,8 @@ const WORKBENCH_PARTITION = TEAM_WEB_PARTITION;
  *   fetchWithPartition?: (partition: string, url: string, init?: object) => Promise<object>;
  *   invokeBridge: (method: string, args?: object) => Promise<unknown>;
  *   navigateShell: (view: string) => Promise<{ ok: boolean; error?: string }>;
+ *   getCompanionHttpPort?: () => number;
+ *   getCompanionSharedToken?: () => string | null | undefined;
  * }} deps
  */
 function createAgentWorkbenchClient(deps) {
@@ -615,7 +680,361 @@ function createAgentWorkbenchClient(deps) {
     });
   }
 
-  return { ensureReady, getContext, createProject, openProject, listAssets, getAsset, runCapability, agentFetch };
+  async function createTextAsset(args) {
+    const text = String((args && args.text) || '').trim();
+    if (!text) {
+      return {
+        ok: false,
+        content: '',
+        error: { code: 'AGENT_TOOL_INVALID_ARGS', message: 'missing text' },
+      };
+    }
+    await deps.navigateShell('workbench');
+    const body = {
+      text,
+      name: args && args.name != null ? String(args.name) : undefined,
+      projectId: args && args.projectId ? String(args.projectId) : undefined,
+    };
+    const server = await agentFetch('/agent/workbench/create-text-asset', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (server.authRequired) {
+      return {
+        ok: false,
+        content: '',
+        error: { code: 'AGENT_AUTH_REQUIRED', message: '请在工作台登录主站' },
+        structured: { authRequired: true, view: 'workbench', authDiagnostics: await authDiagnostics() },
+      };
+    }
+    if (server.forbidden) {
+      return {
+        ok: false,
+        content: '',
+        error: { code: 'AGENT_FORBIDDEN', message: server.detail || server.text || 'create-text-asset forbidden' },
+      };
+    }
+    if (!server.ok) {
+      return {
+        ok: false,
+        content: server.text || '',
+        error: { code: 'AGENT_WORKBENCH_HTTP', message: server.text || 'create-text-asset failed' },
+      };
+    }
+    let bridge = { ok: false, error: 'bridge_unavailable' };
+    try {
+      bridge = await deps.invokeBridge('createTextAsset', body);
+    } catch (e) {
+      bridge = { ok: false, error: e instanceof Error ? e.message : String(e) };
+    }
+    return buildWorkbenchOutput('createTextAsset', server.json, bridge, {
+      projectId: body.projectId || null,
+      name: body.name || null,
+      textLength: text.length,
+    });
+  }
+
+  async function createImageAsset(args) {
+    const localPathRaw = args && args.localPath != null ? String(args.localPath).trim() : '';
+    const imageDataUrlRaw = args && args.imageDataUrl != null ? String(args.imageDataUrl).trim() : '';
+    const name = args && args.name != null ? String(args.name) : undefined;
+    let projectId = args && args.projectId ? String(args.projectId) : undefined;
+
+    if (!localPathRaw && !imageDataUrlRaw) {
+      return {
+        ok: false,
+        content: '',
+        error: {
+          code: 'AGENT_TOOL_INVALID_ARGS',
+          message: 'missing localPath or imageDataUrl (prefer localPath for any real image file)',
+        },
+      };
+    }
+
+    let imageDataUrl = '';
+    let byteLength = 0;
+    let mime = 'image/png';
+    let sourceLocalPath = '';
+
+    if (localPathRaw) {
+      const resolved = path.resolve(localPathRaw);
+      if (!fs.existsSync(resolved) || !fs.statSync(resolved).isFile()) {
+        return {
+          ok: false,
+          content: '',
+          error: { code: 'AGENT_TOOL_INVALID_ARGS', message: `localPath not found: ${resolved}` },
+        };
+      }
+      const st = fs.statSync(resolved);
+      if (st.size <= 0) {
+        return {
+          ok: false,
+          content: '',
+          error: { code: 'AGENT_TOOL_INVALID_ARGS', message: 'localPath file is empty' },
+        };
+      }
+      if (st.size > MAX_CREATE_IMAGE_FILE_BYTES) {
+        return {
+          ok: false,
+          content: '',
+          error: {
+            code: 'AGENT_TOOL_INVALID_ARGS',
+            message: `image file too large (${st.size} bytes); max ${MAX_CREATE_IMAGE_FILE_BYTES}`,
+          },
+          structured: {
+            error: 'image_too_large',
+            byteLength: st.size,
+            maxBytes: MAX_CREATE_IMAGE_FILE_BYTES,
+            nextStep: '请换较小图片，或拆分后导入（上限约 100MB）。',
+          },
+        };
+      }
+      mime = mimeFromImageExt(path.extname(resolved));
+      if (!mime) {
+        return {
+          ok: false,
+          content: '',
+          error: {
+            code: 'AGENT_TOOL_INVALID_ARGS',
+            message: 'localPath must be an image file (.png/.jpg/.jpeg/.webp/.gif/.bmp/.avif/.svg)',
+          },
+        };
+      }
+      const buf = fs.readFileSync(resolved);
+      byteLength = buf.length;
+      sourceLocalPath = resolved;
+      // Only build data URL when we will inline through BrowserView bridge.
+      if (byteLength <= INLINE_BRIDGE_MAX_IMAGE_BYTES) {
+        imageDataUrl = `data:${mime};base64,${buf.toString('base64')}`;
+      } else {
+        // Keep buffer on disk path; companion PUT reads the file again below.
+        imageDataUrl = '';
+      }
+    } else {
+      if (!/^data:image\/[a-z0-9.+-]+;base64,/i.test(imageDataUrlRaw)) {
+        return {
+          ok: false,
+          content: '',
+          error: { code: 'AGENT_TOOL_INVALID_ARGS', message: 'imageDataUrl must be data:image/...;base64,...' },
+        };
+      }
+      imageDataUrl = imageDataUrlRaw;
+      const comma = imageDataUrl.indexOf(',');
+      const b64 = comma >= 0 ? imageDataUrl.slice(comma + 1) : '';
+      byteLength = Math.floor((b64.length * 3) / 4);
+      const mimeMatch = /^data:(image\/[a-z0-9.+-]+);base64,/i.exec(imageDataUrl);
+      mime = mimeMatch ? mimeMatch[1].toLowerCase() : 'image/png';
+      if (byteLength > MAX_CREATE_IMAGE_FILE_BYTES) {
+        return {
+          ok: false,
+          content: '',
+          error: {
+            code: 'AGENT_TOOL_INVALID_ARGS',
+            message: `imageDataUrl too large (~${byteLength} bytes); prefer localPath (max ${MAX_CREATE_IMAGE_FILE_BYTES})`,
+          },
+          structured: {
+            error: 'image_too_large',
+            byteLength,
+            maxBytes: MAX_CREATE_IMAGE_FILE_BYTES,
+            nextStep: '请改用 localPath 传入本机路径，不要把大图 base64 塞进工具参数。',
+          },
+        };
+      }
+    }
+
+    await deps.navigateShell('workbench');
+
+    if (!projectId) {
+      try {
+        const ctx = await deps.invokeBridge('getContext', {});
+        if (ctx && ctx.ok !== false && ctx.activeProjectId) {
+          projectId = String(ctx.activeProjectId);
+        }
+      } catch {
+        /* bridge may still accept without projectId and fail with project_required */
+      }
+    }
+
+    const useCompanionPut = Boolean(sourceLocalPath) && byteLength > INLINE_BRIDGE_MAX_IMAGE_BYTES;
+    let bridgeArgs = {
+      name,
+      projectId,
+      imageDataUrl,
+    };
+    let companionKey = null;
+    let preassignedAssetId = null;
+
+    if (useCompanionPut) {
+      if (!projectId) {
+        return {
+          ok: false,
+          content: '',
+          error: { code: 'AGENT_TOOL_INVALID_ARGS', message: 'project_required for large localPath import' },
+          structured: {
+            error: 'project_required',
+            nextStep: '请先打开或创建工作台项目，再导入大图。',
+          },
+        };
+      }
+      preassignedAssetId = `agent_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      const ext = extFromMime(mime);
+      companionKey = workflowOriginalCompanionStorageKey(preassignedAssetId, ext);
+      const put = await putCompanionAssetBinary({
+        projectId,
+        key: companionKey,
+        bytes: fs.readFileSync(sourceLocalPath),
+        contentType: mime,
+      });
+      if (!put.ok) {
+        return {
+          ok: false,
+          content: '',
+          error: { code: 'AGENT_COMPANION_PUT', message: put.error || 'companion put failed' },
+          structured: {
+            error: 'companion_put_failed',
+            companionKey,
+            nextStep: '确认本地伴侣 18765 可用后重试；或换较小图片走 inline 导入。',
+          },
+        };
+      }
+      bridgeArgs = {
+        name,
+        projectId,
+        assetId: preassignedAssetId,
+        originalCompanionKey: companionKey,
+        mime,
+        imageByteLength: byteLength,
+        localPath: sourceLocalPath,
+      };
+    }
+
+    const server = await agentFetch('/agent/workbench/create-image-asset', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        imageDataUrlPresent: !useCompanionPut,
+        imageDataUrlLength: useCompanionPut ? 0 : imageDataUrl.length,
+        localPath: sourceLocalPath || null,
+        originalCompanionKey: companionKey,
+        imageByteLength: byteLength,
+        name: name || null,
+        projectId: projectId || null,
+      }),
+    });
+    if (server.authRequired) {
+      return {
+        ok: false,
+        content: '',
+        error: { code: 'AGENT_AUTH_REQUIRED', message: '请在工作台登录主站' },
+        structured: { authRequired: true, view: 'workbench', authDiagnostics: await authDiagnostics() },
+      };
+    }
+    if (server.forbidden) {
+      return {
+        ok: false,
+        content: '',
+        error: { code: 'AGENT_FORBIDDEN', message: server.detail || server.text || 'create-image-asset forbidden' },
+      };
+    }
+    if (!server.ok) {
+      return {
+        ok: false,
+        content: server.text || '',
+        error: { code: 'AGENT_WORKBENCH_HTTP', message: server.text || 'create-image-asset failed' },
+      };
+    }
+    let bridge = { ok: false, error: 'bridge_unavailable' };
+    try {
+      bridge = await deps.invokeBridge('createImageAsset', bridgeArgs);
+    } catch (e) {
+      bridge = { ok: false, error: e instanceof Error ? e.message : String(e) };
+    }
+    return buildWorkbenchOutput('createImageAsset', server.json, bridge, {
+      projectId: projectId || null,
+      name: name || null,
+      localPath: sourceLocalPath || null,
+      imageByteLength: byteLength,
+      originalCompanionKey: companionKey,
+      transport: useCompanionPut ? 'companion_put' : 'inline_data_url',
+    });
+  }
+
+  function putCompanionAssetBinary(input) {
+    const projectId = String(input.projectId || '').trim();
+    const key = String(input.key || '').trim();
+    const bytes = Buffer.isBuffer(input.bytes) ? input.bytes : Buffer.from(input.bytes || []);
+    const contentType = String(input.contentType || 'application/octet-stream');
+    if (!projectId || !key || !bytes.length) {
+      return Promise.resolve({ ok: false, error: 'invalid_put_args' });
+    }
+    const port =
+      typeof deps.getCompanionHttpPort === 'function' ? Number(deps.getCompanionHttpPort()) || 18765 : 18765;
+    const token =
+      typeof deps.getCompanionSharedToken === 'function' ? String(deps.getCompanionSharedToken() || '').trim() : '';
+    const pathname = `/v1/projects/${encodeURIComponent(projectId)}/assets/${encodeURIComponent(key)}`;
+    return new Promise((resolve) => {
+      const headers = {
+        'Content-Type': contentType,
+        'Content-Length': bytes.length,
+      };
+      if (token) headers.Authorization = `Bearer ${token}`;
+      const req = http.request(
+        {
+          hostname: '127.0.0.1',
+          port,
+          path: pathname,
+          method: 'PUT',
+          headers,
+          timeout: 120000,
+        },
+        (res) => {
+          const chunks = [];
+          res.on('data', (c) => chunks.push(c));
+          res.on('end', () => {
+            const text = Buffer.concat(chunks).toString('utf8');
+            if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {
+              resolve({ ok: true, status: res.statusCode, text });
+              return;
+            }
+            resolve({
+              ok: false,
+              error: `HTTP ${res.statusCode || 0}: ${text.slice(0, 200)}`,
+              status: res.statusCode || 0,
+            });
+          });
+        },
+      );
+      req.on('timeout', () => {
+        req.destroy();
+        resolve({ ok: false, error: 'companion_put_timeout' });
+      });
+      req.on('error', (e) => {
+        resolve({ ok: false, error: e instanceof Error ? e.message : String(e) });
+      });
+      req.write(bytes);
+      req.end();
+    });
+  }
+
+  return {
+    ensureReady,
+    getContext,
+    createProject,
+    openProject,
+    listAssets,
+    getAsset,
+    runCapability,
+    createTextAsset,
+    createImageAsset,
+    agentFetch,
+  };
 }
 
-module.exports = { createAgentWorkbenchClient, WORKBENCH_PARTITION, TEAM_WEB_PARTITION };
+module.exports = {
+  createAgentWorkbenchClient,
+  WORKBENCH_PARTITION,
+  TEAM_WEB_PARTITION,
+  MAX_CREATE_IMAGE_FILE_BYTES,
+  INLINE_BRIDGE_MAX_IMAGE_BYTES,
+};

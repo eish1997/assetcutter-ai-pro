@@ -13,6 +13,7 @@
   const abortBtn = document.getElementById('copilot-abort');
   const toggleBtn = document.getElementById('copilot-toggle');
   const brainSettingsBtn = document.getElementById('copilot-brain-settings');
+  const clearHistoryBtn = document.getElementById('copilot-clear-history');
   const brainLabel = document.getElementById('copilot-brain-label');
   const statusEl = document.getElementById('copilot-status');
   const examplesEl = document.getElementById('copilot-examples');
@@ -946,7 +947,7 @@
       return;
     }
     examplesEl.hidden = false;
-    const phrases = ['Check current project status', 'Open Workbench', 'Fix the last error', 'Summarize project capabilities'];
+    const phrases = EXAMPLE_PHRASES.slice();
     for (const phrase of phrases) {
       const chip = document.createElement('button');
       chip.type = 'button';
@@ -1420,10 +1421,28 @@
     }
   }
 
+  /** Soft-format assistant text so Chinese walls and label lines are readable. */
+  function formatCopilotAssistantText(text) {
+    let t = String(text || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    // Break before common result labels when model forgot newlines.
+    t = t.replace(/([^\n])(\s*)(资产\s*ID|类型|内容|项目\s*ID|验证|结果|下一步)\s*[：:]/g, '$1\n$3：');
+    // Soft-break after Chinese sentence terminators when the next char continues the wall.
+    t = t.replace(/([。！？；])(?=[^\n\s「」『』》）\]\}])/g, '$1\n');
+    // Collapse 3+ blank lines.
+    t = t.replace(/\n{3,}/g, '\n\n');
+    return t.trimEnd();
+  }
+
+  function setBubbleText(el, role, text) {
+    if (!el) return;
+    const raw = text == null ? '' : String(text);
+    el.textContent = role === 'assistant' ? formatCopilotAssistantText(raw) : raw;
+  }
+
   function appendBubble(role, text, extraClass) {
     const div = document.createElement('div');
     div.className = 'copilot-msg copilot-msg-' + role + (extraClass ? ' ' + extraClass : '');
-    div.textContent = text;
+    setBubbleText(div, role, text);
     messagesEl.appendChild(div);
     scrollMessagesToBottom();
     return div;
@@ -1451,9 +1470,9 @@
     const isExternalMcp = ev && ev.clientId === 'mcp';
     const title = document.createElement('div');
     title.className = 'copilot-confirm-title';
-    title.textContent = (isExternalMcp ? 'External Agent requests: ' : 'Confirm tool: ') + (ev.name || 'tool');
+    title.textContent = (isExternalMcp ? '\u5916\u90e8 Agent \u8bf7\u6c42\uff1a' : '\u786e\u8ba4\u5de5\u5177\uff1a') + (ev.name || 'tool');
     const argsEl = document.createElement('div');
-    if (isCodexFullAccess) title.textContent = 'Authorize Codex full access for this turn';
+    if (isCodexFullAccess) title.textContent = '\u6388\u6743 Codex \u672c\u8f6e\u5168\u6743\u8bbf\u95ee';
     argsEl.className = 'copilot-confirm-args';
     try {
       argsEl.textContent = JSON.stringify(ev.arguments || {}, null, 2);
@@ -1461,25 +1480,23 @@
       argsEl.textContent = String(ev.arguments || '');
     }
     if (isCodexFullAccess) {
-      argsEl.textContent = 'After approval, this Codex turn can read/write the workspace and run local commands.';
+      argsEl.textContent = '\u6279\u51c6\u540e\uff0c\u672c\u8f6e Codex \u53ef\u8bfb\u5199\u5de5\u4f5c\u533a\u5e76\u8fd0\u884c\u672c\u673a\u547d\u4ee4\u3002';
     }
     const actions = document.createElement('div');
     actions.className = 'copilot-confirm-actions';
     const approveBtn = document.createElement('button');
     approveBtn.type = 'button';
     approveBtn.className = 'copilot-confirm-approve';
-    approveBtn.textContent = 'Allow';
+    approveBtn.textContent = '\u5141\u8bb8';
     const rejectBtn = document.createElement('button');
-    rejectBtn.textContent = 'Deny';
     rejectBtn.type = 'button';
     rejectBtn.className = 'copilot-confirm-reject';
-    rejectBtn.textContent = 'Deny';
+    rejectBtn.textContent = '\u62d2\u7edd';
     actions.appendChild(approveBtn);
-    rejectBtn.textContent = '鎷掔粷';
     actions.appendChild(rejectBtn);
     const status = document.createElement('div');
     status.className = 'copilot-confirm-status';
-    status.textContent = 'Waiting for your confirmation';
+    status.textContent = '\u7b49\u5f85\u4f60\u7684\u786e\u8ba4';
     card.appendChild(title);
     card.appendChild(argsEl);
     card.appendChild(actions);
@@ -1493,7 +1510,7 @@
       settled = true;
       card.classList.remove('is-error');
       card.classList.add('is-submitting');
-      status.textContent = approved ? 'Submitting approval...' : 'Submitting rejection...';
+      status.textContent = approved ? '\u6b63\u5728\u63d0\u4ea4\u6279\u51c6\u2026' : '\u6b63\u5728\u63d0\u4ea4\u62d2\u7edd\u2026';
       approveBtn.disabled = true;
       rejectBtn.disabled = true;
       try {
@@ -1502,23 +1519,53 @@
           if (!r || r.ok === false) throw new Error((r && r.error) || 'confirm_failed');
         }
         card.classList.remove('is-submitting');
-        card.classList.add('copilot-confirm-settled');
-        status.textContent = approved ? 'Approved, Copilot is continuing' : 'Rejected';
-        setStatus(approved ? 'Approved, continuing...' : 'Rejected');
+        setStatus(approved ? '\u5df2\u6279\u51c6\uff0c\u7ee7\u7eed\u4e2d\u2026' : '\u5df2\u62d2\u7edd');
+        if (card.parentNode) card.parentNode.removeChild(card);
       } catch (e) {
         settled = false;
         approveBtn.disabled = false;
         rejectBtn.disabled = false;
         card.classList.remove('is-submitting');
         card.classList.add('is-error');
-        status.textContent = 'Submit failed: ' + (e && e.message ? e.message : String(e));
+        status.textContent = '\u63d0\u4ea4\u5931\u8d25\uff1a' + (e && e.message ? e.message : String(e));
         setStatus(status.textContent);
       }
     };
     approveBtn.addEventListener('click', () => void settle(true));
     rejectBtn.addEventListener('click', () => void settle(false));
-    setTimeout(() => setStatus(isCodexFullAccess ? 'Waiting for authorization...' : 'Waiting for confirmation...'), 0);
-    setStatus('Waiting for confirmation...');
+    setTimeout(() => setStatus(isCodexFullAccess ? '\u7b49\u5f85\u6388\u6743\u2026' : '\u7b49\u5f85\u786e\u8ba4\u2026'), 0);
+    setStatus('\u7b49\u5f85\u786e\u8ba4\u2026');
+  }
+
+  function activityDisplayName(ev) {
+    const name = String((ev && ev.name) || 'activity');
+    if (name === 'codex.command') return '\u547d\u4ee4';
+    return name;
+  }
+
+  /** L1: routine start/done stay in status bar; only failures become chat cards. */
+  function shouldMuteActivityInChat(ev) {
+    if (!ev) return true;
+    if (ev.phase === 'error') return false;
+    return ev.phase === 'start' || ev.phase === 'done';
+  }
+
+  function noteActivityProgress(ev) {
+    const label = activityDisplayName(ev);
+    if (ev.phase === 'start') {
+      setStatus('\u6b63\u5728\u6267\u884c\uff1a' + label);
+      updateActiveTaskThread('progress', label + ' \u5df2\u5f00\u59cb');
+      return;
+    }
+    if (ev.phase === 'done') {
+      setStatus('\u5df2\u5b8c\u6210\uff1a' + label);
+      updateActiveTaskThread('progress', label + ' \u5df2\u5b8c\u6210');
+      return;
+    }
+    if (ev.phase === 'error') {
+      setStatus('\u6267\u884c\u5931\u8d25\uff1a' + label);
+      updateActiveTaskThread('error', (ev.detail && String(ev.detail).slice(0, 120)) || label + ' \u5931\u8d25');
+    }
   }
 
   function appendActivityCard(ev) {
@@ -1527,16 +1574,17 @@
     card.className = 'copilot-activity-card';
     if (ev.phase === 'error') card.classList.add('is-error');
     if (ev.phase === 'done') card.classList.add('is-done');
-    const phaseText = ev.phase === 'start' ? 'started' : ev.phase === 'done' ? 'done' : 'failed';
-    const nameText = ev.name === 'codex.command' ? 'Codex command' : ev.name || 'activity';
+    const phaseText =
+      ev.phase === 'start' ? '\u5f00\u59cb' : ev.phase === 'done' ? '\u5b8c\u6210' : '\u5931\u8d25';
+    const nameText = activityDisplayName(ev);
     const summary = document.createElement('div');
     summary.className = 'copilot-activity-summary';
     const title = document.createElement('span');
     title.className = 'copilot-activity-title';
-    title.textContent = phaseText + ' · ' + nameText;
+    title.textContent = phaseText + ' \u00b7 ' + nameText;
     const toggle = document.createElement('span');
     toggle.className = 'copilot-activity-toggle';
-    toggle.textContent = '详情';
+    toggle.textContent = '\u8be6\u60c5';
     summary.appendChild(title);
     summary.appendChild(toggle);
     card.appendChild(summary);
@@ -1548,7 +1596,7 @@
       card.addEventListener('click', () => {
         const expanded = !card.classList.contains('is-expanded');
         card.classList.toggle('is-expanded', expanded);
-        toggle.textContent = expanded ? '收起' : '详情';
+        toggle.textContent = expanded ? '\u6536\u8d77' : '\u8be6\u60c5';
       });
     } else {
       toggle.textContent = '';
@@ -1791,12 +1839,7 @@
       ? messagesEl.querySelectorAll('.copilot-confirm-card[data-confirm-id="' + confirmId + '"]')
       : messagesEl.querySelectorAll('.copilot-confirm-card');
     cards.forEach((card) => {
-      card.querySelectorAll('button').forEach((btn) => {
-        btn.disabled = true;
-      });
-      const status = card.querySelector('.copilot-confirm-status');
-      if (status) status.textContent = 'Handled';
-      card.classList.add('copilot-confirm-settled');
+      if (card.parentNode) card.parentNode.removeChild(card);
     });
   }
 
@@ -1819,9 +1862,8 @@
       for (const m of r.messages) {
         if (m.role === 'user' || m.role === 'assistant') {
           appendBubble(m.role, m.content || '');
-        } else if (m.role === 'tool') {
-          appendBubble('tool', (m.name || 'tool') + '\n' + (m.content || ''), 'copilot-msg-tool');
         }
+        // Skip historical tool rows in the chat stream (activity/recovery remain for live turns).
       }
       scrollMessagesToBottom();
     } catch {
@@ -1887,6 +1929,50 @@
     brainSettingsBtn.addEventListener('click', () => toggleBrainStateCard());
   }
 
+  async function clearCopilotHistory() {
+    if (turnBusy) {
+      const stopOk = window.confirm('\u5f53\u524d\u4efb\u52a1\u8fd8\u5728\u8fd0\u884c\u3002\u662f\u5426\u505c\u6b62\u5e76\u6e05\u7a7a\u5bf9\u8bdd\u5386\u53f2\uff1f');
+      if (!stopOk) return;
+    } else {
+      const ok = window.confirm('\u6e05\u7a7a\u5f53\u524d Copilot \u5bf9\u8bdd\u5386\u53f2\uff0c\u5e76\u5f00\u59cb\u65b0\u5bf9\u8bdd\uff1f\n\uff08\u672c\u5730\u5ba1\u8ba1\u4e0e\u7528\u91cf\u8bb0\u5f55\u4e0d\u4f1a\u5220\u9664\uff09');
+      if (!ok) return;
+    }
+    setStatus('\u6b63\u5728\u6e05\u7a7a\u5bf9\u8bdd\u2026');
+    try {
+      if (typeof agent.clearHistory !== 'function') {
+        throw new Error('clear_history_unavailable');
+      }
+      const r = await agent.clearHistory();
+      if (!r || r.ok === false) {
+        throw new Error((r && r.error) || 'clear_failed');
+      }
+      finishStream();
+      streamingText = '';
+      turnBusy = false;
+      root.classList.remove('is-busy');
+      if (sendBtn) sendBtn.disabled = false;
+      if (abortBtn) abortBtn.disabled = true;
+      pendingTaskThreadPrompt = '';
+      activeTaskThreadCard = null;
+      activeTaskThreadEls = null;
+      lastUsageSnapshot = null;
+      updateTokenUsageBar({});
+      if (tokenPopoverEl) tokenPopoverEl.hidden = true;
+      removeOnboardCard();
+      messagesEl.innerHTML = '';
+      showExampleChips(false);
+      await refreshOnboardingState();
+      setStatus('\u5df2\u5f00\u59cb\u65b0\u5bf9\u8bdd');
+      setTimeout(() => setStatus(''), 2000);
+    } catch (e) {
+      setStatus('\u6e05\u7a7a\u5931\u8d25\uff1a' + (e && e.message ? e.message : String(e)));
+    }
+  }
+
+  if (clearHistoryBtn) {
+    clearHistoryBtn.addEventListener('click', () => void clearCopilotHistory());
+  }
+
   if (tokenBarEl && tokenPopoverEl) {
     tokenBarEl.addEventListener('click', () => {
       tokenPopoverEl.hidden = !tokenPopoverEl.hidden;
@@ -1938,17 +2024,17 @@
       if (ev.type === 'text_delta') {
         streamingText += ev.text || '';
         const bubble = ensureStreamBubble();
-        bubble.textContent = streamingText;
+        setBubbleText(bubble, 'assistant', streamingText);
         scrollMessagesToBottom();
       } else if (ev.type === 'tool_call') {
+        // L1: progress on task-thread only; do not dump "> tool" bubbles into the chat.
         updateActiveTaskThread('progress', (ev.name || 'tool') + ' \u5df2\u5f00\u59cb');
-        appendBubble('tool', '> ' + (ev.name || 'tool'), 'copilot-msg-tool-call');
       } else if (ev.type === 'confirm_required') {
         showConfirmCard(ev);
       } else if (ev.type === 'confirm_cancelled') {
         dismissPendingConfirmCards(ev.confirmId);
         if (ev.reason === 'timeout') {
-          setStatus('Confirmation timed out');
+          setStatus('\u786e\u8ba4\u5df2\u8d85\u65f6');
           setTimeout(() => setStatus(''), 2500);
         }
       } else if (ev.type === 'tool_status') {
@@ -1960,13 +2046,14 @@
             tool: ev.name,
             errorCode: ev.errorCode,
           });
-          appendBubble('tool', 'done ' + (ev.name || '') + (ev.detail ? ': ' + ev.detail : ''), 'copilot-msg-tool');
         } else if (ev.phase) {
           updateActiveTaskThread('progress', (ev.name || 'tool') + ' ' + ev.phase);
         }
       } else if (ev.type === 'activity') {
-        updateActiveTaskThread('progress', ev.summary || ev.title || ev.message || '\u6709\u65b0\u8fdb\u5ea6');
-        appendActivityCard(ev);
+        noteActivityProgress(ev);
+        if (!shouldMuteActivityInChat(ev)) {
+          appendActivityCard(ev);
+        }
       } else if (ev.type === 'usage') {
         appendUsageCard(ev.usage);
         void refreshBrainStateCard();
@@ -1975,11 +2062,14 @@
         dismissPendingConfirmCards();
         if (ev.stopReason === 'aborted') {
           updateActiveTaskThread('error', '\u5df2\u505c\u6b62\uff0c\u53ef\u4ece\u539f\u76ee\u6807\u91cd\u8bd5');
-          setStatus('Stopped');
+          setStatus('\u5df2\u505c\u6b62');
         } else {
           const doneText = '\u5df2\u5b8c\u6210\uff0c\u7ed3\u679c\u53ef\u7ee7\u7eed\u5199\u56de\u8d44\u4ea7\u5e93\u6216\u4fdd\u5b58\u4e3a\u6d41\u7a0b\u8349\u7a3f';
           updateActiveTaskThread('done', doneText);
-          appendResultCard(doneText);
+          // Result card only for explicit work tasks (active task-thread), not casual chat.
+          if (activeTaskThreadEls) {
+            appendResultCard(doneText);
+          }
           void loadWorkbenchContextSnapshot();
           setStatus('');
         }
@@ -2008,10 +2098,9 @@
     lastUserPrompt = text;
     if (sendBtn) sendBtn.disabled = true;
     if (abortBtn) abortBtn.disabled = false;
+    // Casual composer chat: no task-thread card. Quick tasks set pendingTaskThreadPrompt first.
     if (pendingTaskThreadPrompt === text) {
       pendingTaskThreadPrompt = '';
-    } else {
-      appendTaskThreadCard(text, { source: 'composer' });
     }
     appendBubble('user', text);
     inputEl.value = '';

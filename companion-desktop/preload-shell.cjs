@@ -196,6 +196,7 @@ contextBridge.exposeInMainWorld('companionShell', {
   },
   agentSession: {
     listMessages: (sessionId) => timedInvoke('agent-session-list-messages', sessionId),
+    clearHistory: (sessionId) => timedInvoke('agent-session-clear-history', sessionId),
     send: (text) => timedInvoke('agent-session-send', text, 600000),
     abort: () => timedInvoke('agent-session-abort'),
     confirm: (confirmId, approved) => timedInvoke('agent-session-confirm', confirmId, approved),

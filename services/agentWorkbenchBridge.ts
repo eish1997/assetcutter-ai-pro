@@ -5,6 +5,7 @@
 import type { CustomAppModule, GeneratedAssetSourceMeta, WorkflowAsset } from '../types';
 import type { CapabilityExecuteResult } from './capabilityExecutor';
 import { getCapabilityEngine, isImageProcessPreset } from './capabilityEngineKind';
+import { clampWorkflowTextBody } from './workflowTextLimits';
 
 export type AgentCapabilityPresetSummary = {
   id: string;
@@ -112,6 +113,21 @@ type BridgeHandlers = {
     imageDataUrl?: string;
     inputAssetId?: string;
     inputAssetDisplayKey?: string;
+  }) => Promise<AgentWorkbenchBridgeResult>;
+  createTextAsset: (args: {
+    text: string;
+    name?: string;
+    projectId?: string;
+  }) => Promise<AgentWorkbenchBridgeResult>;
+  createImageAsset: (args: {
+    imageDataUrl?: string;
+    name?: string;
+    projectId?: string;
+    assetId?: string;
+    originalCompanionKey?: string;
+    mime?: string;
+    imageByteLength?: number;
+    localPath?: string;
   }) => Promise<AgentWorkbenchBridgeResult>;
 };
 
@@ -257,6 +273,128 @@ export function buildAgentCapabilityOutputAsset(args: {
   };
 }
 
+/**
+ * Create a human-shaped text WorkflowAsset (displayKey=original) for Copilot / ac.workbench.create_text_asset.
+ */
+export function buildAgentCreatedTextAsset(args: {
+  text: string;
+  name?: string;
+  now?: number;
+}): { asset: WorkflowAsset; assetId: string; output: Extract<AgentCapabilityAssetOutput, { kind: 'text' }> } {
+  const now = Number.isFinite(args.now) ? Number(args.now) : Date.now();
+  const suffix = Math.random().toString(36).slice(2, 8);
+  const assetId = `agent_${now}_${suffix}`;
+  const text = clampWorkflowTextBody(String(args.text || ''));
+  const title =
+    String(args.name || '').trim() ||
+    textPreview(text, 40) ||
+    '文本资产';
+  const source: GeneratedAssetSourceMeta = {
+    source: 'local',
+    capability: 'ac.workbench.create_text_asset',
+    createdAt: new Date(now).toISOString(),
+  };
+  const asset: WorkflowAsset = {
+    id: assetId,
+    assetKind: 'text',
+    textTitle: title,
+    textBody: text,
+    original: '',
+    displayKey: 'original',
+    results: {},
+    resultOrder: [],
+    resultMeta: {
+      original: {
+        executedAt: now,
+        displayStepLabel: 'Copilot 创建文本',
+        source,
+      },
+    },
+    archived: false,
+    hiddenInGrid: false,
+    createdAt: now,
+  };
+  return {
+    asset,
+    assetId,
+    output: { kind: 'text', text, assetId, resultKey: 'original' },
+  };
+}
+
+const MAX_AGENT_CREATED_IMAGE_DATA_URL_CHARS = 20_000_000;
+
+export function normalizeAgentCreatedImageDataUrl(raw: unknown): { ok: true; imageDataUrl: string } | { ok: false; error: string } {
+  const imageDataUrl = String(raw || '').trim();
+  if (!imageDataUrl) return { ok: false, error: 'missing_image' };
+  if (!/^data:image\/[a-z0-9.+-]+;base64,/i.test(imageDataUrl)) {
+    return { ok: false, error: 'invalid_image_data_url' };
+  }
+  if (imageDataUrl.length > MAX_AGENT_CREATED_IMAGE_DATA_URL_CHARS) {
+    return { ok: false, error: 'image_too_large' };
+  }
+  return { ok: true, imageDataUrl };
+}
+
+/**
+ * Create a human-shaped image WorkflowAsset (displayKey=original) for Copilot / ac.workbench.create_image_asset.
+ * Prefer inline imageDataUrl for small images; large imports may pass originalCompanionKey only.
+ */
+export function buildAgentCreatedImageAsset(args: {
+  imageDataUrl?: string;
+  originalCompanionKey?: string;
+  assetId?: string;
+  name?: string;
+  now?: number;
+  imageByteLength?: number;
+}): { asset: WorkflowAsset; assetId: string; output: Extract<AgentCapabilityAssetOutput, { kind: 'image' }> } {
+  const now = Number.isFinite(args.now) ? Number(args.now) : Date.now();
+  const suffix = Math.random().toString(36).slice(2, 8);
+  const assetId = String(args.assetId || '').trim() || `agent_${now}_${suffix}`;
+  const imageDataUrl = String(args.imageDataUrl || '').trim();
+  const companionKey = String(args.originalCompanionKey || '').trim();
+  const title = String(args.name || '').trim() || '导入图片';
+  const source: GeneratedAssetSourceMeta = {
+    source: 'local',
+    capability: 'ac.workbench.create_image_asset',
+    createdAt: new Date(now).toISOString(),
+  };
+  const asset: WorkflowAsset = {
+    id: assetId,
+    assetKind: 'image',
+    original: imageDataUrl,
+    ...(companionKey ? { originalCompanionKey: companionKey } : {}),
+    displayKey: 'original',
+    results: {},
+    resultOrder: [],
+    resultMeta: {
+      original: {
+        executedAt: now,
+        displayStepLabel: title,
+        mediaKind: 'image',
+        source,
+      },
+    },
+    archived: false,
+    hiddenInGrid: false,
+    createdAt: now,
+  };
+  const imageLength =
+    Number.isFinite(Number(args.imageByteLength)) && Number(args.imageByteLength) > 0
+      ? Number(args.imageByteLength)
+      : imageDataUrl.length;
+  return {
+    asset,
+    assetId,
+    output: {
+      kind: 'image',
+      imageAvailable: Boolean(imageDataUrl || companionKey),
+      imageLength,
+      assetId,
+      resultKey: 'original',
+    },
+  };
+}
+
 function textPreview(value: unknown, max = 180): string | undefined {
   const s = String(value || '').replace(/\s+/g, ' ').trim();
   if (!s) return undefined;
@@ -340,6 +478,8 @@ declare global {
       listAssets: (args?: Record<string, unknown>) => Promise<unknown>;
       getAsset: (args: Record<string, unknown>) => Promise<unknown>;
       runCapability: (args: Record<string, unknown>) => Promise<unknown>;
+      createTextAsset: (args: Record<string, unknown>) => Promise<unknown>;
+      createImageAsset: (args: Record<string, unknown>) => Promise<unknown>;
     };
   }
 }
@@ -376,6 +516,25 @@ export function initAgentWorkbenchBridge(handlers: BridgeHandlers) {
           inputAssetDisplayKey: args.inputAssetDisplayKey != null ? String(args.inputAssetDisplayKey) : undefined,
         });
       }
+      if (m === 'createTextAsset') {
+        return handlers.createTextAsset({
+          text: String(args.text || ''),
+          name: args.name != null ? String(args.name) : undefined,
+          projectId: args.projectId != null ? String(args.projectId) : undefined,
+        });
+      }
+      if (m === 'createImageAsset') {
+        return handlers.createImageAsset({
+          imageDataUrl: args.imageDataUrl != null ? String(args.imageDataUrl) : undefined,
+          name: args.name != null ? String(args.name) : undefined,
+          projectId: args.projectId != null ? String(args.projectId) : undefined,
+          assetId: args.assetId != null ? String(args.assetId) : undefined,
+          originalCompanionKey: args.originalCompanionKey != null ? String(args.originalCompanionKey) : undefined,
+          mime: args.mime != null ? String(args.mime) : undefined,
+          imageByteLength: args.imageByteLength != null ? Number(args.imageByteLength) : undefined,
+          localPath: args.localPath != null ? String(args.localPath) : undefined,
+        });
+      }
       return { ok: false, error: 'unknown_method' };
     },
     getContext: () => handlers.getContext(),
@@ -399,6 +558,23 @@ export function initAgentWorkbenchBridge(handlers: BridgeHandlers) {
         imageDataUrl: args.imageDataUrl != null ? String(args.imageDataUrl) : undefined,
         inputAssetId: args.inputAssetId != null ? String(args.inputAssetId) : undefined,
         inputAssetDisplayKey: args.inputAssetDisplayKey != null ? String(args.inputAssetDisplayKey) : undefined,
+      }),
+    createTextAsset: (args: Record<string, unknown>) =>
+      handlers.createTextAsset({
+        text: String(args.text || ''),
+        name: args.name != null ? String(args.name) : undefined,
+        projectId: args.projectId != null ? String(args.projectId) : undefined,
+      }),
+    createImageAsset: (args: Record<string, unknown>) =>
+      handlers.createImageAsset({
+        imageDataUrl: args.imageDataUrl != null ? String(args.imageDataUrl) : undefined,
+        name: args.name != null ? String(args.name) : undefined,
+        projectId: args.projectId != null ? String(args.projectId) : undefined,
+        assetId: args.assetId != null ? String(args.assetId) : undefined,
+        originalCompanionKey: args.originalCompanionKey != null ? String(args.originalCompanionKey) : undefined,
+        mime: args.mime != null ? String(args.mime) : undefined,
+        imageByteLength: args.imageByteLength != null ? Number(args.imageByteLength) : undefined,
+        localPath: args.localPath != null ? String(args.localPath) : undefined,
       }),
   };
 

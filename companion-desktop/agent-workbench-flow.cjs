@@ -8,6 +8,8 @@ const WORKBENCH_REQUIRED_TOOLS = [
   'ac.workbench.create_project',
   'ac.workbench.open_project',
   'ac.workbench.run_capability',
+  'ac.workbench.create_text_asset',
+  'ac.workbench.create_image_asset',
   'ac.workbench.list_assets',
   'ac.workbench.get_asset',
 ];
@@ -48,15 +50,17 @@ const WORKBENCH_CANONICAL_FLOW = [
   },
   {
     id: 'capability',
-    tool: 'ac.workbench.run_capability',
+    tool: 'ac.workbench.run_capability or ac.workbench.create_text_asset or ac.workbench.create_image_asset',
     required: true,
     constraints: [
-      'Choose a preset with directRunSupported=true.',
+      'For a plain text note in the open project, prefer ac.workbench.create_text_asset with { text }.',
+      'To import a local image into the open project, prefer ac.workbench.create_image_asset with { localPath } (absolute path). Do not convert the file to base64 for the tool call.',
+      'For capability presets, choose a preset with directRunSupported=true.',
       'Use inputText for text-capable presets.',
-      'Use imageDataUrl for direct image input.',
+      'Use imageDataUrl for direct image input to run_capability (generation), not as a substitute for create_image_asset import.',
       'Use inputAssetId or inputAssetDisplayKey when chaining from an existing workbench asset.',
     ],
-    successSignals: ['assetId and resultKey are returned'],
+    successSignals: ['assetId (and resultKey when applicable) are returned'],
   },
   {
     id: 'verify-list',
@@ -99,7 +103,7 @@ const WORKBENCH_E2E_GATES = {
 };
 
 function workbenchStandardFlowText() {
-  return 'ac.workbench.ensure_ready -> ac.workbench.get_context/create_project/open_project -> ac.workbench.run_capability -> ac.workbench.list_assets -> ac.workbench.get_asset';
+  return 'ac.workbench.ensure_ready -> ac.workbench.get_context/create_project/open_project -> (ac.workbench.create_text_asset | ac.workbench.create_image_asset | ac.workbench.run_capability) -> ac.workbench.list_assets -> ac.workbench.get_asset';
 }
 
 function buildWorkbenchFlowDocument() {

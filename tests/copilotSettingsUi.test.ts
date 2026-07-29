@@ -28,6 +28,7 @@ describe('copilot settings UI', () => {
       /[\u93bc\u93bb\u95c1\u6d93\u9420\u95ca\u93b4\u7480]/,
       /[\u5a34\u6fee\u6fec\u6fe1\u9428\u95b3]/,
       /[\u9396\u934f\u93c8\u9422\u6957\u6faa]/,
+      /鎷掔粷/,
     ];
 
     for (const filePath of checkedFiles) {
@@ -38,6 +39,52 @@ describe('copilot settings UI', () => {
       }).slice(0, 8);
       expect(matches, `${path.relative(process.cwd(), filePath)} mojibake markers`).toEqual([]);
     }
+  });
+
+  it('denoise casual Copilot chat: Chinese confirm, no composer task-thread, no tool-call bubbles', () => {
+    const panel = fs.readFileSync(copilotPanelPath, 'utf8').replace(/\r\n/g, '\n');
+
+    expect(panel).toContain("rejectBtn.textContent = '\\u62d2\\u7edd'");
+    expect(panel).toContain("approveBtn.textContent = '\\u5141\\u8bb8'");
+    expect(panel).not.toContain('鎷掔粷');
+    expect(panel).not.toContain("appendTaskThreadCard(text, { source: 'composer' })");
+    expect(panel).toContain("appendTaskThreadCard(text, { source: 'quick_task' })");
+    expect(panel).toContain('const phrases = EXAMPLE_PHRASES.slice()');
+    expect(panel).not.toContain("appendBubble('tool', '> '");
+    expect(panel).not.toContain("appendBubble('tool', 'done '");
+    expect(panel).toContain('shouldMuteActivityInChat');
+    expect(panel).toContain('noteActivityProgress');
+    expect(panel).toContain('formatCopilotAssistantText');
+    expect(panel).toContain('if (activeTaskThreadEls)');
+    expect(panel).toContain('function dismissPendingConfirmCards');
+    expect(panel).toContain('if (card.parentNode) card.parentNode.removeChild(card)');
+    expect(panel).not.toContain("status.textContent = 'Handled'");
+  });
+
+  it('exposes Copilot clear-history entrance through panel, preload, and main IPC', () => {
+    const panel = fs.readFileSync(copilotPanelPath, 'utf8').replace(/\r\n/g, '\n');
+    const html = fs.readFileSync(shellIndexPath, 'utf8').replace(/\r\n/g, '\n');
+    const preload = fs.readFileSync(shellPreloadPath, 'utf8').replace(/\r\n/g, '\n');
+    const main = fs.readFileSync(shellMainPath, 'utf8').replace(/\r\n/g, '\n');
+
+    expect(html).toContain('id="copilot-clear-history"');
+    expect(html).toContain('copilot-head-actions');
+    expect(panel).toContain('clearCopilotHistory');
+    expect(panel).toContain('agent.clearHistory');
+    expect(preload).toContain("clearHistory: (sessionId) => timedInvoke('agent-session-clear-history'");
+    expect(main).toContain("ipcMain.handle('agent-session-clear-history'");
+    expect(main).toContain('agentSessionService.clearHistory');
+  });
+
+  it('keeps assistant bubbles pre-wrap and mutes routine Codex activity cards', () => {
+    const panel = fs.readFileSync(copilotPanelPath, 'utf8').replace(/\r\n/g, '\n');
+    const html = fs.readFileSync(shellIndexPath, 'utf8').replace(/\r\n/g, '\n');
+
+    expect(panel).toContain("return ev.phase === 'start' || ev.phase === 'done'");
+    expect(panel).toContain('if (!shouldMuteActivityInChat(ev))');
+    expect(panel).toContain("setBubbleText(bubble, 'assistant', streamingText)");
+    expect(html).toContain('#shell-copilot .copilot-msg');
+    expect(html).toMatch(/#shell-copilot \.copilot-msg \{[\s\S]*?white-space:\s*pre-wrap\s*!important/);
   });
 
   it('uses Workbench as the first shell entry and moves home diagnostics into categorized settings', () => {

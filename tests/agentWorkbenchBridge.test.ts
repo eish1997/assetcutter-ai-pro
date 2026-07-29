@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { AGENT_WORKBENCH_SMOKE_PRESET_ID, buildAgentCapabilityOutputAsset, getAgentWorkbenchSmokePresetSummary, summarizeAgentCapabilityPreset, summarizeAgentWorkflowAsset, summarizeAgentWorkflowAssetDetail } from '../services/agentWorkbenchBridge';
+import { AGENT_WORKBENCH_SMOKE_PRESET_ID, buildAgentCapabilityOutputAsset, buildAgentCreatedImageAsset, buildAgentCreatedTextAsset, getAgentWorkbenchSmokePresetSummary, normalizeAgentCreatedImageDataUrl, summarizeAgentCapabilityPreset, summarizeAgentWorkflowAsset, summarizeAgentWorkflowAssetDetail } from '../services/agentWorkbenchBridge';
 import type { CustomAppModule, WorkflowAsset } from '../types';
 
 function preset(patch: Partial<CustomAppModule>): CustomAppModule {
@@ -43,6 +43,59 @@ describe('agent workbench bridge', () => {
     const summary = summarizeAgentCapabilityPreset(preset({ id: 'cut_image', category: 'image_to_image' }));
     expect(summary.directRunSupported).toBe(false);
     expect(summary.unsupportedReason).toContain('工作流交互');
+  });
+
+  it('builds a human-shaped text asset for create_text_asset', () => {
+    const built = buildAgentCreatedTextAsset({
+      text: '这是一条测试文本',
+      name: '测试文本',
+      now: 1700000000000,
+    });
+    expect(built.asset.assetKind).toBe('text');
+    expect(built.asset.displayKey).toBe('original');
+    expect(built.asset.textBody).toBe('这是一条测试文本');
+    expect(built.asset.textTitle).toBe('测试文本');
+    expect(built.output.kind).toBe('text');
+    expect(built.output.resultKey).toBe('original');
+    expect(built.asset.resultMeta?.original?.source?.capability).toBe('ac.workbench.create_text_asset');
+  });
+
+  it('builds a human-shaped image asset for create_image_asset', () => {
+    const imageDataUrl = 'data:image/png;base64,iVBORw0KGgo=';
+    const built = buildAgentCreatedImageAsset({
+      imageDataUrl,
+      name: '样例图',
+      now: 1700000000000,
+    });
+    expect(built.asset.assetKind).toBe('image');
+    expect(built.asset.displayKey).toBe('original');
+    expect(built.asset.original).toBe(imageDataUrl);
+    expect(built.output.kind).toBe('image');
+    expect(built.output.resultKey).toBe('original');
+    expect(built.asset.resultMeta?.original?.displayStepLabel).toBe('样例图');
+    expect(built.asset.resultMeta?.original?.source?.capability).toBe('ac.workbench.create_image_asset');
+  });
+
+  it('builds a human-shaped image asset with companion key only', () => {
+    const built = buildAgentCreatedImageAsset({
+      originalCompanionKey: 'agent_1/image-full-0-agent001.png',
+      assetId: 'agent_1',
+      name: '大图',
+      imageByteLength: 12_000_000,
+      now: 1700000000000,
+    });
+    expect(built.assetId).toBe('agent_1');
+    expect(built.asset.original).toBe('');
+    expect(built.asset.originalCompanionKey).toBe('agent_1/image-full-0-agent001.png');
+    expect(built.output.imageAvailable).toBe(true);
+    expect(built.output.imageLength).toBe(12_000_000);
+  });
+
+  it('normalizes create_image_asset data URLs and rejects non-images', () => {
+    expect(normalizeAgentCreatedImageDataUrl('data:image/jpeg;base64,abc').ok).toBe(true);
+    expect(normalizeAgentCreatedImageDataUrl('https://example.com/a.png').ok).toBe(false);
+    expect(normalizeAgentCreatedImageDataUrl('data:text/plain;base64,abc').ok).toBe(false);
+    expect(normalizeAgentCreatedImageDataUrl('').ok).toBe(false);
   });
 
   it('builds a traceable workflow text asset from agent capability output', () => {

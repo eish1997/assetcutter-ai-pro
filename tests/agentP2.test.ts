@@ -299,7 +299,7 @@ describe('agent tool execution audit', () => {
 describe('agent P2 tool schemas', () => {
   it('registers P2 tools including governed workflow promotion preflights', () => {
     expect(P2_TOOL_SCHEMAS).toHaveLength(12);
-    expect(ALL_TOOL_SCHEMAS).toHaveLength(30);
+    expect(ALL_TOOL_SCHEMAS).toHaveLength(32);
     expect(P2_TOOL_SCHEMAS.map((tool: { name: string }) => tool.name)).toContain(
       'ac.workflow.promote_workbench_preset',
     );
@@ -512,6 +512,14 @@ describe('agent workbench flow contract', () => {
     ]);
     expect(workbenchStandardFlowText()).toContain('ac.workbench.ensure_ready');
     expect(workbenchStandardFlowText()).toContain('ac.workbench.get_asset');
+    expect(workbenchStandardFlowText()).toContain('ac.workbench.create_text_asset');
+    expect(workbenchStandardFlowText()).toContain('ac.workbench.create_image_asset');
+    expect(doc.canonicalFlow.find((step: { id: string }) => step.id === 'capability')?.tool).toContain(
+      'create_text_asset',
+    );
+    expect(doc.canonicalFlow.find((step: { id: string }) => step.id === 'capability')?.tool).toContain(
+      'create_image_asset',
+    );
     expect(doc.canonicalFlow.map((step: { id: string }) => step.id)).toEqual([
       'ready',
       'context',
@@ -526,10 +534,10 @@ describe('agent workbench flow contract', () => {
 });
 
 describe('agent P2 MCP server', () => {
-  it('MCP HTTP product surface is removed (CLI-only Agent)', async () => {
+  it('starts local Body MCP loopback when enabled', async () => {
     const server = createAgentBodyMcpServer({
-      readSettings: () => ({ mcpEnabled: true, mcpPort: 19120, mcpToken: 'test-token-12345678' }),
-      writeSettings: (p) => p,
+      readSettings: () => ({ mcpEnabled: true, mcpPort: 19121, mcpToken: 'test-token-12345678' }),
+      writeSettings: (p: object) => ({ mcpEnabled: true, mcpPort: 19121, mcpToken: 'test-token-12345678', ...p }),
       bodyHost: { listTools: async () => [], executeTool: async () => ({ ok: true, content: '' }) },
       gateTool: () => 'allow',
       readPolicy: () => ({ confirmTools: true, autoConfirmTools: [], forbiddenTools: [] }),
@@ -538,14 +546,12 @@ describe('agent P2 MCP server', () => {
       log: () => {},
     });
     const started = await server.start();
-    expect(started.running).toBe(false);
-    expect(started.error).toBe('mcp_removed');
-    expect(server.status().removed).toBe(true);
+    expect(started.running).toBe(true);
+    expect(started.port).toBe(19121);
+    expect(server.status().running).toBe(true);
+    expect(server.status().removed).toBeUndefined();
     const cfg = server.buildMcpClientConfig();
-    expect(cfg.removed).toBe(true);
-    expect(cfg.mcpServers).toEqual({});
-    const probe = await server.probeSelf();
-    expect(probe.error).toBe('mcp_removed');
-    expect(probe.hint).toBe('use_agent_cli');
+    expect(cfg.mcpServers['assetcutter-body'].url).toContain('19121');
+    await server.stop();
   });
 });

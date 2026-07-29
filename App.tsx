@@ -25,7 +25,7 @@ import { loadSnippets } from './services/snippetStore';
 import { AppMode, LibraryItem, SystemConfig, AppTask, AssetCategory, type CustomAppModule, type CapabilitySet, type WorkflowAsset, type WorkflowPendingTask, type ArenaCurrentStep, type ArenaStepEntry, type ArenaTimelineBlock } from './types';
 import { runCapabilityTest } from './services/capabilityTestRunner';
 import { executeCapability } from './services/capabilityExecutor';
-import { AGENT_WORKBENCH_SMOKE_PRESET_ID, buildAgentCapabilityOutputAsset, getAgentWorkbenchSmokePresetSummary, initAgentWorkbenchBridge, summarizeAgentCapabilityPreset, summarizeAgentWorkflowAsset, summarizeAgentWorkflowAssetDetail } from './services/agentWorkbenchBridge';
+import { AGENT_WORKBENCH_SMOKE_PRESET_ID, buildAgentCapabilityOutputAsset, buildAgentCreatedImageAsset, buildAgentCreatedTextAsset, getAgentWorkbenchSmokePresetSummary, initAgentWorkbenchBridge, normalizeAgentCreatedImageDataUrl, summarizeAgentCapabilityPreset, summarizeAgentWorkflowAsset, summarizeAgentWorkflowAssetDetail } from './services/agentWorkbenchBridge';
 import {
   fetchAgentCliPlatformAssets,
   fetchAgentCliPlatformProjects,
@@ -2281,7 +2281,7 @@ const MainApp: React.FC = () => {
             capabilityPresets: capabilityPresets.length + 1,
           },
           nextStep: activeWorkspaceProjectId
-            ? '可以调用 ac.workbench.run_capability 执行支持直接运行的能力。'
+            ? '可以调用 ac.workbench.create_text_asset / create_image_asset 写入资产，或 ac.workbench.run_capability 执行支持直接运行的能力。'
             : '请先调用 ac.workbench.create_project 创建项目，或打开已有工作区项目。',
         };
       },
@@ -2604,6 +2604,170 @@ const MainApp: React.FC = () => {
           durationMs: result.durationMs,
           output,
           nextStep: result.ok ? 'done' : '请查看 error，调整输入或切换能力后重试。',
+        };
+      },
+      createTextAsset: async ({ text, name, projectId }) => {
+        const body = String(text || '').trim();
+        if (!body) {
+          return {
+            ok: false,
+            error: 'missing_text',
+            nextStep: '请传入 text（非空字符串）。',
+          };
+        }
+        const targetProjectId = projectId ? String(projectId) : activeWorkspaceProjectId;
+        if (!targetProjectId) {
+          return {
+            ok: false,
+            error: 'project_required',
+            nextStep: '请先在工作台打开或创建一个项目，再调用 ac.workbench.create_text_asset。',
+          };
+        }
+        if (!workspaceProjects.some((p) => p.id === targetProjectId)) {
+          return {
+            ok: false,
+            error: 'project_not_found',
+            projectId: targetProjectId,
+            nextStep: '请先调用 ac.workbench.get_context 查看可用项目 id。',
+          };
+        }
+        if (targetProjectId !== activeWorkspaceProjectId) {
+          await openWorkspaceProject(targetProjectId);
+        }
+        const built = buildAgentCreatedTextAsset({
+          text: body,
+          name: name != null ? String(name) : undefined,
+        });
+        setWorkflowAssets((prev) => {
+          const next = [built.asset, ...prev];
+          workflowAssetsRef.current = next;
+          workflowSessionHadNonEmptyAssetsRef.current = true;
+          if (
+            isWorkflowProjectAutosaveAllowed({
+              idbHydrateReady: workspaceLocalIdbHydrateReadyRef.current,
+              projectLoadComplete: workflowProjectLoadCompleteRef.current,
+              companionBootReady: workflowCompanionBootReadyRef.current,
+            })
+          ) {
+            trySaveWorkflowBundle(
+              targetProjectId,
+              { assets: next, pending: workflowPendingRef.current },
+              userIdRef.current ?? null,
+              workflowBundleSaveOpts()
+            );
+          }
+          return next;
+        });
+        addGlobalLog('Copilot', 'info', `Agent 已创建文本资产：${built.asset.textTitle || built.assetId}`, built.assetId);
+        return {
+          ok: true,
+          action: 'createTextAsset',
+          projectId: targetProjectId,
+          assetId: built.assetId,
+          resultKey: built.output.resultKey,
+          kind: 'text',
+          output: built.output,
+          asset: summarizeAgentWorkflowAsset(built.asset),
+          nextStep: 'done',
+        };
+      },
+      createImageAsset: async ({
+        imageDataUrl,
+        name,
+        projectId,
+        assetId,
+        originalCompanionKey,
+        imageByteLength,
+        localPath,
+      }) => {
+        const companionKey = String(originalCompanionKey || '').trim();
+        const inline = String(imageDataUrl || '').trim();
+        if (!companionKey) {
+          const normalized = normalizeAgentCreatedImageDataUrl(inline);
+          if (!normalized.ok) {
+            return {
+              ok: false,
+              error: normalized.error,
+              nextStep:
+                normalized.error === 'image_too_large'
+                  ? '图片过大。请让工具改用 localPath（本机路径），不要传 imageDataUrl。'
+                  : '请传入 localPath，或 data:image/...;base64,... 形式的小图 imageDataUrl。',
+            };
+          }
+        }
+        const targetProjectId = projectId ? String(projectId) : activeWorkspaceProjectId;
+        if (!targetProjectId) {
+          return {
+            ok: false,
+            error: 'project_required',
+            nextStep: '请先在工作台打开或创建一个项目，再调用 ac.workbench.create_image_asset。',
+          };
+        }
+        if (!workspaceProjects.some((p) => p.id === targetProjectId)) {
+          return {
+            ok: false,
+            error: 'project_not_found',
+            projectId: targetProjectId,
+            nextStep: '请先调用 ac.workbench.get_context 查看可用项目 id。',
+          };
+        }
+        if (targetProjectId !== activeWorkspaceProjectId) {
+          await openWorkspaceProject(targetProjectId);
+        }
+        const displayName =
+          String(name || '').trim() ||
+          (localPath ? String(localPath).split(/[/\\]/).pop() || '' : '') ||
+          '导入图片';
+        const built = buildAgentCreatedImageAsset({
+          imageDataUrl: companionKey ? inline || undefined : inline,
+          originalCompanionKey: companionKey || undefined,
+          assetId: assetId != null ? String(assetId) : undefined,
+          name: displayName,
+          imageByteLength: imageByteLength != null ? Number(imageByteLength) : undefined,
+        });
+        if (!companionKey && !String(built.asset.original || '').trim()) {
+          return {
+            ok: false,
+            error: 'missing_image',
+            nextStep: '请传入 localPath 或有效的 imageDataUrl。',
+          };
+        }
+        setWorkflowAssets((prev) => {
+          const next = [built.asset, ...prev];
+          workflowAssetsRef.current = next;
+          workflowSessionHadNonEmptyAssetsRef.current = true;
+          if (
+            isWorkflowProjectAutosaveAllowed({
+              idbHydrateReady: workspaceLocalIdbHydrateReadyRef.current,
+              projectLoadComplete: workflowProjectLoadCompleteRef.current,
+              companionBootReady: workflowCompanionBootReadyRef.current,
+            })
+          ) {
+            trySaveWorkflowBundle(
+              targetProjectId,
+              { assets: next, pending: workflowPendingRef.current },
+              userIdRef.current ?? null,
+              workflowBundleSaveOpts()
+            );
+          }
+          return next;
+        });
+        addGlobalLog(
+          'Copilot',
+          'info',
+          `Agent 已导入图片资产：${displayName}`,
+          built.assetId,
+        );
+        return {
+          ok: true,
+          action: 'createImageAsset',
+          projectId: targetProjectId,
+          assetId: built.assetId,
+          resultKey: built.output.resultKey,
+          kind: 'image',
+          output: built.output,
+          asset: summarizeAgentWorkflowAsset(built.asset),
+          nextStep: 'done',
         };
       },
     });

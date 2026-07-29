@@ -136,5 +136,78 @@ export async function handleAgentWorkbenchRoutes(req, res, path, ctx) {
     return true;
   }
 
+  if (path === '/api/agent/workbench/create-text-asset' && req.method === 'POST') {
+    const user = await requireAuth(req, res);
+    if (!user) return true;
+    const body = await readBody(req);
+    const text = String(body.text || '').trim();
+    if (!text) {
+      json(res, 400, {
+        error: '缺少 text',
+        code: 'AGENT_TOOL_INVALID_ARGS',
+      });
+      return true;
+    }
+    json(res, 200, {
+      ok: true,
+      projectId: body.projectId ? String(body.projectId) : null,
+      name: body.name != null ? String(body.name) : null,
+      textLength: text.length,
+      userId: user.id,
+      bridgeRequired: true,
+      hint: '实际创建由 workbench bridge 写入当前工作区项目资产列表。',
+    });
+    return true;
+  }
+
+  if (path === '/api/agent/workbench/create-image-asset' && req.method === 'POST') {
+    const user = await requireAuth(req, res);
+    if (!user) return true;
+    const body = await readBody(req);
+    const imageDataUrl = String(body.imageDataUrl || '').trim();
+    const localPath = body.localPath != null ? String(body.localPath).trim() : '';
+    const originalCompanionKey =
+      body.originalCompanionKey != null ? String(body.originalCompanionKey).trim() : '';
+    const imageDataUrlPresent =
+      Boolean(body.imageDataUrlPresent) ||
+      (imageDataUrl.length > 0 && /^data:image\/[a-z0-9.+-]+;base64,/i.test(imageDataUrl));
+    const imageDataUrlLength =
+      Number.isFinite(Number(body.imageDataUrlLength)) && Number(body.imageDataUrlLength) > 0
+        ? Number(body.imageDataUrlLength)
+        : imageDataUrl.length;
+    const imageByteLength =
+      Number.isFinite(Number(body.imageByteLength)) && Number(body.imageByteLength) > 0
+        ? Number(body.imageByteLength)
+        : null;
+    if (!imageDataUrlPresent && !localPath && !originalCompanionKey && !imageDataUrl) {
+      json(res, 400, {
+        error: '缺少 localPath 或 imageDataUrl',
+        code: 'AGENT_TOOL_INVALID_ARGS',
+      });
+      return true;
+    }
+    if (imageDataUrl && !/^data:image\/[a-z0-9.+-]+;base64,/i.test(imageDataUrl)) {
+      json(res, 400, {
+        error: 'imageDataUrl 须为 data:image/...;base64,...',
+        code: 'AGENT_TOOL_INVALID_ARGS',
+      });
+      return true;
+    }
+    json(res, 200, {
+      ok: true,
+      projectId: body.projectId ? String(body.projectId) : null,
+      name: body.name != null ? String(body.name) : null,
+      imageDataUrlPresent: Boolean(imageDataUrlPresent),
+      imageDataUrlLength,
+      imageByteLength,
+      localPath: localPath || null,
+      originalCompanionKey: originalCompanionKey || null,
+      userId: user.id,
+      bridgeRequired: true,
+      hint: '实际导入由 workbench bridge 写入当前工作区项目资产列表；大图优先 localPath → 伴侣落盘。',
+    });
+    return true;
+  }
+
   return false;
 }

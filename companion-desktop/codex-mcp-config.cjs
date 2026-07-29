@@ -47,11 +47,49 @@ function buildCodexMcpTomlBlock(options) {
   const url = String(opts.url || '').trim();
   if (!url) throw new Error('codex_mcp_url_required');
   const tokenEnv = String(opts.tokenEnvVar || DEFAULT_CODEX_MCP_TOKEN_ENV).trim() || DEFAULT_CODEX_MCP_TOKEN_ENV;
+  const startupTimeout = Number.isFinite(Number(opts.startupTimeoutSec))
+    ? Math.max(5, Number(opts.startupTimeoutSec))
+    : 30;
   return [
     `[mcp_servers.${name}]`,
+    'enabled = true',
+    'required = true',
+    `startup_timeout_sec = ${startupTimeout}`,
     `url = ${tomlString(url)}`,
     `bearer_token_env_var = ${tomlString(tokenEnv)}`,
   ].join('\n');
+}
+
+/**
+ * Codex HTTP MCP must reach 127.0.0.1 without going through a system HTTP(S) proxy,
+ * and must see ASSETCUTTER_MCP_TOKEN in the process environment.
+ */
+function buildCodexSpawnEnv(baseEnv, options) {
+  const opts = options && typeof options === 'object' ? options : {};
+  const env = { ...(baseEnv && typeof baseEnv === 'object' ? baseEnv : process.env) };
+  const proxyKeys = [
+    'HTTP_PROXY',
+    'HTTPS_PROXY',
+    'ALL_PROXY',
+    'http_proxy',
+    'https_proxy',
+    'all_proxy',
+  ];
+  for (const key of proxyKeys) {
+    if (Object.prototype.hasOwnProperty.call(env, key)) delete env[key];
+  }
+  const loopback = '127.0.0.1,localhost,::1';
+  const prevNo = String(env.NO_PROXY || env.no_proxy || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const merged = Array.from(new Set([...prevNo, ...loopback.split(',')]));
+  env.NO_PROXY = merged.join(',');
+  env.no_proxy = env.NO_PROXY;
+  const token = String(opts.mcpToken || '').trim();
+  const tokenEnv = String(opts.tokenEnvVar || DEFAULT_CODEX_MCP_TOKEN_ENV).trim() || DEFAULT_CODEX_MCP_TOKEN_ENV;
+  if (token) env[tokenEnv] = token;
+  return env;
 }
 
 function upsertCodexMcpServerConfig(options) {
@@ -97,6 +135,7 @@ module.exports = {
   DEFAULT_CODEX_MCP_TOKEN_ENV,
   codexConfigPath,
   buildCodexMcpTomlBlock,
+  buildCodexSpawnEnv,
   upsertCodexMcpServerConfig,
   codexMcpConfigFromMcpClientConfig,
   upsertCodexMcpServerFromClientConfig,

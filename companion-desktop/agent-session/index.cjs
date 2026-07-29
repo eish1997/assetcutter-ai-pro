@@ -456,6 +456,34 @@ function createAgentSessionService(deps) {
     return deps.store.readMessages(id);
   }
 
+  function clearHistory(sessionId) {
+    const id = sessionId || deps.store.getOrCreateDefaultSessionId();
+    if (turnBusy || activeAbort) {
+      try {
+        abortTurn();
+      } catch {
+        /* ignore */
+      }
+    }
+    const cleared = deps.store.clearMessages(id);
+    let brainCleared = null;
+    try {
+      const brain = getBrain();
+      if (brain && typeof brain.clearSession === 'function') {
+        brainCleared = brain.clearSession(id);
+      }
+    } catch {
+      /* ignore */
+    }
+    emit({ type: 'history_cleared', sessionId: id });
+    return {
+      ok: true,
+      sessionId: id,
+      messagesCleared: Boolean(cleared && cleared.ok),
+      brainCleared,
+    };
+  }
+
   async function probeBrain() {
     if (typeof deps.ensureBrainReady === 'function') {
       await deps.ensureBrainReady();
@@ -467,6 +495,7 @@ function createAgentSessionService(deps) {
     sendUserMessage,
     abortTurn,
     listMessages,
+    clearHistory,
     probeBrain,
     getBrainId: () => getBrain().id,
   };

@@ -23,6 +23,8 @@ describe('codexMcpConfig', () => {
       expect(text).toContain('[mcp_servers.assetcutter-body]');
       expect(text).toContain('url = "http://127.0.0.1:19120/mcp"');
       expect(text).toContain('bearer_token_env_var = "ASSETCUTTER_MCP_TOKEN"');
+      expect(text).toContain('enabled = true');
+      expect(text).toContain('required = true');
       expect(text).not.toContain('Bearer ');
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });
@@ -89,5 +91,22 @@ describe('codexMcpConfig', () => {
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });
     }
+  });
+
+  it('buildCodexSpawnEnv clears HTTP proxies and injects MCP token for loopback', () => {
+    const env = codexMcp.buildCodexSpawnEnv(
+      {
+        PATH: 'x',
+        HTTP_PROXY: 'http://127.0.0.1:7890',
+        HTTPS_PROXY: 'http://127.0.0.1:7890',
+        NO_PROXY: 'example.com',
+      },
+      { mcpToken: 'token-value-123456789012' },
+    );
+    expect(env.HTTP_PROXY).toBeUndefined();
+    expect(env.HTTPS_PROXY).toBeUndefined();
+    expect(env.ASSETCUTTER_MCP_TOKEN).toBe('token-value-123456789012');
+    expect(env.NO_PROXY).toContain('127.0.0.1');
+    expect(env.NO_PROXY).toContain('example.com');
   });
 });

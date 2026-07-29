@@ -168,6 +168,46 @@ const P1_TOOL_SCHEMAS = [
     },
   },
   {
+    name: 'ac.workbench.create_text_asset',
+    description:
+      '在当前工作台项目（或指定 projectId）新建一条文本资产，写入工作区资产列表（不是 Agent CLI aga_* 库）。',
+    risk: 'confirm',
+    surfaces: ['workbench'],
+    inputSchema: {
+      type: 'object',
+      properties: {
+        text: { type: 'string', description: '文本内容（必填）' },
+        name: { type: 'string', description: '可选标题；默认取正文前若干字' },
+        projectId: { type: 'string', description: '可选；默认当前打开的工作台项目' },
+      },
+      required: ['text'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'ac.workbench.create_image_asset',
+    description:
+      '把一张图片写入当前工作台项目资产列表（人手导入形态）。优先传本机绝对路径 localPath（伴侣读盘入库）；不要把大图 base64 塞进 imageDataUrl。imageDataUrl 仅适合极小图调试。',
+    risk: 'confirm',
+    surfaces: ['workbench'],
+    inputSchema: {
+      type: 'object',
+      properties: {
+        localPath: {
+          type: 'string',
+          description: '本机图片绝对路径（推荐）。例如 C:\\\\Users\\\\me\\\\Downloads\\\\a.png',
+        },
+        imageDataUrl: {
+          type: 'string',
+          description: '可选；仅小图调试用 data:image/...;base64,...。真实导入请用 localPath。',
+        },
+        name: { type: 'string', description: '可选显示名；默认取文件名或「导入图片」' },
+        projectId: { type: 'string', description: '可选；默认当前打开的工作台项目' },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
     name: 'ac.script_hub.list_scripts',
     description: '列出 ScriptHub Tool Bridge 平台工具（GET /tool-bridge/tools）',
     risk: 'safe',
@@ -550,6 +590,33 @@ const TOOL_GUIDANCE = {
     successSignals: [
       '返回 action=run_capability，nextStep 指示是否完成或需要用户检查工作台。',
       '若返回 input_image_required，请补充 imageDataUrl，或传入可解析图片的 inputAssetId。',
+    ],
+  },
+  'ac.workbench.create_text_asset': {
+    title: '创建文本资产',
+    whenToUse: '用户要求在当前工作台项目里新增一条文本/备注资产时使用（不是 Agent CLI 旁路库）。',
+    exampleArguments: {
+      text: '这是一条测试文本',
+      name: '测试文本',
+      projectId: 'project-id',
+    },
+    successSignals: [
+      '返回 action=createTextAsset、assetId，且 list_assets 能看到新文本资产。',
+      '若返回 project_required，先 create_project 或让用户打开项目。',
+    ],
+  },
+  'ac.workbench.create_image_asset': {
+    title: '导入图片资产',
+    whenToUse: '用户要求把本机/下载目录图片放入当前工作台项目时使用。必须传 localPath（绝对路径），不要把图片内容转成 base64 塞进工具参数。',
+    exampleArguments: {
+      localPath: 'C:\\\\Users\\\\me\\\\Downloads\\\\sample.png',
+      name: '下载文件夹里的样例图',
+      projectId: 'project-id',
+    },
+    successSignals: [
+      '返回 action=createImageAsset、assetId，且 list_assets 能看到新图片资产。',
+      '若返回 localPath not found，检查路径是否绝对路径且文件存在。',
+      '若返回 image_too_large，文件超过约 100MB，请换较小文件。',
     ],
   },
   'ac.script_hub.list_scripts': {

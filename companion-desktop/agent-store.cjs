@@ -5,7 +5,7 @@ const path = require('path');
 const { randomUUID } = require('node:crypto');
 
 const SCHEMA_VERSION = 1;
-const BODY_TOOLS_VERSION = 4;
+const BODY_TOOLS_VERSION = 7;
 const DEFAULT_SESSION_ID = 'default';
 
 function ensureDir(p) {
@@ -365,6 +365,22 @@ function createAgentStore(deps) {
     fs.appendFileSync(file, line, 'utf8');
   }
 
+  function clearMessages(sessionId) {
+    const id = String(sessionId || DEFAULT_SESSION_ID).trim() || DEFAULT_SESSION_ID;
+    const dir = sessionDir(id);
+    const file = path.join(dir, 'messages.jsonl');
+    fs.writeFileSync(file, '', 'utf8');
+    const snap = path.join(dir, 'context-snapshot.json');
+    if (fs.existsSync(snap)) {
+      try {
+        fs.unlinkSync(snap);
+      } catch {
+        /* ignore */
+      }
+    }
+    return { ok: true, sessionId: id };
+  }
+
   function writeContextSnapshot(sessionId, snapshot) {
     const file = path.join(sessionDir(sessionId), 'context-snapshot.json');
     fs.writeFileSync(file, `${JSON.stringify(snapshot, null, 2)}\n`, 'utf8');
@@ -595,6 +611,7 @@ function createAgentStore(deps) {
     readProfileSystemPrompt,
     readMessages,
     appendMessage,
+    clearMessages,
     writeContextSnapshot,
     appendAudit,
     readAuditEntries,

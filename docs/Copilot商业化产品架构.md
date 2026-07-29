@@ -82,8 +82,8 @@
 | --- | --- |
 | 不做另一个网页聊天机器人 | 聊天不是壁垒，生产环境连接和治理才是壁垒 |
 | 不重新发明比 Codex 更强的大脑 | 第一阶段复用成熟 Agent，产品重点是接入、治理、产物闭环 |
-| 不让 Copilot 绕过工作台 API / MCP 直接改业务数据 | 否则权限、审计、版本和恢复都会失控 |
-| 不把普通用户暴露在 MCP / Token / Gateway 配置里 | 配置属于管理员和工程态，成员只需要任务入口 |
+| 不让 Copilot / 大脑绕过 `ac.*`（及工作台受控 API）直接改业务数据 | 否则权限、审计、版本和恢复都会失控；MCP 只是对外插头，不是唯一合法路径 |
+| 不把普通用户暴露在 MCP / Token / Gateway 配置里 | 配置属于管理员和工程态，成员只需要任务入口；操作工作台不必强制经 MCP |
 | 不一开始做 Agent 市场和复杂多 Agent 编排 | 先证明团队能稳定完成工作，再做生态 |
 
 ---
@@ -133,7 +133,7 @@ flowchart TB
 | 入口层 | 本地壳、工作台、右侧 Copilot、后续一方网页统一登录态 | `persist:assetcutter-team`、Workbench WebView、Script Hub WebView |
 | Copilot 交互层 | 任务入口、上下文摘要、状态、确认、失败恢复、结果呈现 | `companion-desktop/shell/copilot-panel.js` |
 | Agent Runtime 层 | 接 Codex / Hermes / 外部 Agent，执行 turn、工具调用、取消和恢复 | `AgentSessionService`、Brain Adapter |
-| Body / MCP 控制层 | 标准 `ac.*` 身体工具，连接工作台、Script Hub、本地伴侣和壳 | `agent-body-host.cjs`、`agent-body-mcp.cjs` |
+| Body 控制层（`ac.*`）+ MCP 插头 | 执行真源是 BodyHost/`ac.*`；MCP 把同一工具表暴露给外部大脑 | `agent-body-host.cjs`、`agent-body-mcp.cjs` |
 | 工作台业务层 | 项目、资产、能力、知识库、工作流、产物版本 | Workbench Agent API、能力预设、资产库 |
 | 治理层 | 团队账号、权限、凭据、策略、用量、配额、审计、证据 | `agent-store`、usage audit、policy、server-status blockers |
 
@@ -144,7 +144,8 @@ flowchart TB
 ```text
 Copilot UI
   -> Agent Runtime
-  -> Body MCP / ac.*
+  -> ac.*（BodyHost，可直连）
+  -> （可选）Body MCP 对外插头
   -> Workbench / Script Hub / Companion APIs
   -> 业务资产和产物
 ```
@@ -153,8 +154,10 @@ Copilot UI
 
 - Copilot UI 直接写工作台业务数据。
 - 大脑绕过 `ac.*` 直接调用内部私有接口。
+- 以 DOM / 点选工作台 UI 当主控制路径。
 - 工作台业务逻辑依赖某个具体大脑。
 - 普通用户入口暴露底层 MCP 配置。
+- 把「全权」设为默认权限模式。
 
 ---
 
@@ -235,7 +238,7 @@ Copilot UI
 
 | 治理对象 | 第一阶段做法 | 后续商业化形态 |
 | --- | --- | --- |
-| 权限 | safe / confirm / forbidden | 团队角色模板、项目级权限 |
+| 权限 | safe / confirm / forbidden；Ask/Sandbox/Auto 为显式模式 | 团队角色模板、项目级权限；全权非默认 |
 | 凭据 | 本地壳持有，不进日志 | 团队凭据分发和轮换 |
 | 用量 | 本地 usage audit + dry-run upload | 云端 quota policy 强制执行 |
 | 审计 | tool execution 摘要 | 可搜索、可导出、可回放证据链 |

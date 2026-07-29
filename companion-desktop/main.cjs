@@ -3824,6 +3824,8 @@ function initAgentPlatform() {
     normalizeSiteUrl: normalizeWorkbenchSiteUrl,
     invokeBridge: invokeWorkbenchBridge,
     navigateShell: navigateShellFromAgent,
+    getCompanionHttpPort: () => readHttpPort(),
+    getCompanionSharedToken: () => readSharedToken(),
   });
   agentWorkbenchClient = workbenchClient;
 
@@ -3883,6 +3885,16 @@ function initAgentPlatform() {
     await syncCodexSharedAuthIfEnabled('startup');
     await ensureAgentBrainReady();
   })();
+  // Copilot/Codex needs local Body MCP loopback to call ac.* (127.0.0.1 only).
+  try {
+    const s = agentStore.readSettings();
+    if (!s.mcpEnabled || !s.mcpToken) {
+      agentStore.writeSettings({ mcpEnabled: true });
+      agentMcpServer.ensureMcpToken(agentStore.readSettings());
+    }
+  } catch (e) {
+    companionLog('warn', `ensure Copilot Body MCP: ${e instanceof Error ? e.message : String(e)}`);
+  }
   void agentMcpServer.syncFromSettings();
   void bootstrapHermesGatewayIfNeeded();
 }
@@ -4441,6 +4453,15 @@ if (!gotLock) {
   ipcMain.handle('agent-session-list-messages', (_e, sessionId) => {
     if (!agentSessionService) return { ok: false, error: 'agent_not_ready' };
     return { ok: true, messages: agentSessionService.listMessages(sessionId) };
+  });
+
+  ipcMain.handle('agent-session-clear-history', (_e, sessionId) => {
+    if (!agentSessionService) return { ok: false, error: 'agent_not_ready' };
+    try {
+      return agentSessionService.clearHistory(sessionId);
+    } catch (e) {
+      return { ok: false, error: e && e.message ? e.message : String(e) };
+    }
   });
 
   ipcMain.handle('agent-session-send', async (_e, text) => {

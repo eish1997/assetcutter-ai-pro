@@ -46,7 +46,7 @@ function createFakeCodexProcess(onPrompt: (prompt: string) => void, outputEvents
 }
 
 describe('Codex brain adapter', () => {
-  it('does not inject AssetCutter MCP token or write Codex MCP config (CLI-only)', async () => {
+  it('injects AssetCutter MCP token and writes Codex MCP config for Copilot loopback', async () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ac-codex-brain-'));
     const spawns: Array<{ command: string; args: string[]; options: any }> = [];
     const mcpWrites: any[] = [];
@@ -57,6 +57,7 @@ describe('Codex brain adapter', () => {
         codexCwd: process.cwd(),
         codexModel: 'gpt-5-codex',
         codexSandbox: 'workspace-write',
+        mcpEnabled: true,
         mcpToken: 'assetcutter-secret-token',
         mcpPort: 19120,
       }),
@@ -78,20 +79,33 @@ describe('Codex brain adapter', () => {
     for await (const ev of adapter.streamTurn({
       sessionId: 'session_1',
       messages: [{ role: 'user', content: 'run workbench task' }],
-      tools: [{ name: 'ac.workbench.ensure_ready' }, { name: 'ac.workbench.run_capability' }],
+      tools: [{ name: 'ac.workbench.ensure_ready' }, { name: 'ac.workbench.run_capability' }, { name: 'ac.workbench.create_text_asset' }, { name: 'ac.workbench.create_image_asset' }],
     })) {
       events.push(ev);
     }
 
-    expect(mcpWrites).toEqual([]);
+    expect(mcpWrites).toEqual([
+      {
+        url: 'http://127.0.0.1:19120/mcp',
+        tokenEnvVar: 'ASSETCUTTER_MCP_TOKEN',
+        startupTimeoutSec: 30,
+      },
+    ]);
     expect(spawns).toHaveLength(1);
     expect(spawns[0].command).toBe('codex-test');
-    expect(spawns[0].options.env.ASSETCUTTER_MCP_TOKEN).toBeUndefined();
+    expect(spawns[0].options.env.ASSETCUTTER_MCP_TOKEN).toBe('assetcutter-secret-token');
+    expect(spawns[0].options.env.NO_PROXY).toContain('127.0.0.1');
+    expect(spawns[0].options.env.HTTP_PROXY).toBeUndefined();
     expect(spawns[0].args).toContain('exec');
     expect(spawns[0].args).toEqual(
       expect.arrayContaining(['--model', 'gpt-5-codex', '--sandbox', 'workspace-write', '-C', process.cwd()]),
     );
     expect(prompts.join('\n')).toContain('AssetCutter Copilot context');
+    expect(prompts.join('\n')).toContain('ac.workbench.create_text_asset');
+    expect(prompts.join('\n')).toContain('ac.workbench.create_image_asset');
+    expect(prompts.join('\n')).toContain('localPath');
+    expect(prompts.join('\n')).toContain('mcp__assetcutter-body__');
+    expect(prompts.join('\n')).toContain('Do not invent PowerShell');
     expect(events.some((ev: any) => ev.type === 'usage')).toBe(true);
     expect(events.some((ev: any) => ev.type === 'done')).toBe(true);
   });
@@ -127,7 +141,9 @@ describe('Codex brain adapter', () => {
         codexCommand: 'codex-test',
         codexCwd: process.cwd(),
         codexSandbox: 'workspace-write',
+        mcpEnabled: true,
         mcpToken: 'assetcutter-secret-token',
+        mcpPort: 19120,
       }),
       brainsDir: () => process.cwd(),
     };

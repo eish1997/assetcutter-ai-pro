@@ -922,6 +922,17 @@ function createAgentBodyMcpServer(deps) {
     };
   }
 
+  function sanitizeToolArgsForConfirm(toolName, args) {
+    const out = args && typeof args === 'object' && !Array.isArray(args) ? { ...args } : {};
+    if (typeof out.imageDataUrl === 'string' && out.imageDataUrl.length > 96) {
+      out.imageDataUrl = `[data-url omitted, chars=${out.imageDataUrl.length}]`;
+    }
+    if (String(toolName || '').includes('create_image_asset') && !out.localPath && out.imageDataUrl) {
+      out.hint = 'Prefer localPath for real imports; imageDataUrl is for tiny debug only.';
+    }
+    return out;
+  }
+
   async function waitForConfirmWithSignal(confirmId, meta, signal) {
     if (isAbortSignalAborted(signal)) return { approved: false, reason: 'cancelled' };
     const confirmPromise = deps.waitForConfirm(confirmId, { ...(meta || {}), signal });
@@ -1154,7 +1165,7 @@ function createAgentBodyMcpServer(deps) {
           confirmId,
           {
             name,
-            arguments: args && typeof args === 'object' ? args : {},
+            arguments: sanitizeToolArgsForConfirm(name, args && typeof args === 'object' ? args : {}),
             clientId: 'mcp',
             sessionId: 'mcp',
             toolCallId,
@@ -2505,42 +2516,52 @@ function createAgentBodyMcpServer(deps) {
 
   async function start() {
     await stop();
-    // Product surface removed (CLI-only Agent). HTTP MCP must never listen.
-    if (typeof deps.writeSettings === 'function') {
-      try {
-        const cur = deps.readSettings();
-        if (cur && cur.mcpEnabled) deps.writeSettings({ mcpEnabled: false });
-      } catch {
-        /* ignore */
-      }
+    let settings = deps.readSettings();
+    if (!settings.mcpEnabled) {
+      return { ok: true, running: false, enabled: false };
     }
-    log('MCP product surface removed; use AssetCutter CLI (npm run agent:cli / agent:init). HTTP MCP will not start.');
+    settings = ensureMcpToken(settings);
+    const port = Number.isFinite(Number(settings.mcpPort))
+      ? Math.min(65535, Math.max(1024, Number(settings.mcpPort)))
+      : DEFAULT_MCP_PORT;
+
+    server = http.createServer((req, res) => {
+      void handleHttp(req, res);
+    });
+
+    await new Promise((resolve, reject) => {
+      server.once('error', reject);
+      server.listen(port, MCP_BIND, () => resolve());
+    });
+    runningPort = port;
+    log(`listening http://${MCP_BIND}:${port}/ (POST JSON-RPC)`);
     return {
-      ok: false,
-      running: false,
-      enabled: false,
-      error: 'mcp_removed',
-      hint: 'use_agent_cli',
+      ok: true,
+      running: true,
+      enabled: true,
+      port,
+      bind: MCP_BIND,
+      tokenHint: settings.mcpToken ? `${String(settings.mcpToken).slice(0, 8)}…` : null,
     };
   }
 
   async function syncFromSettings() {
-    return start();
+    const settings = deps.readSettings();
+    if (settings.mcpEnabled) return start();
+    return stop();
   }
 
   function status() {
     const settings = deps.readSettings();
     return {
-      enabled: false,
-      running: false,
-      removed: true,
-      hint: 'use_agent_cli',
+      enabled: Boolean(settings.mcpEnabled),
+      running: Boolean(server && server.listening),
       port: runningPort || settings.mcpPort || DEFAULT_MCP_PORT,
       bind: MCP_BIND,
       hasToken: Boolean(settings.mcpToken),
-      activeRequestCount: 0,
-      subscribedResourceCount: 0,
-      subscribedResources: [],
+      activeRequestCount: activeRequests.size,
+      subscribedResourceCount: subscribedResources.size,
+      subscribedResources: Array.from(subscribedResources.keys()).sort(),
       loggingLevel,
     };
   }
@@ -2975,23 +2996,53 @@ function createAgentBodyMcpServer(deps) {
     const endpoint = `http://${MCP_BIND}:${port}/mcp`;
     const checkedAt = new Date().toISOString();
     const state = status();
+    if (!state.enabled) {
+      return { ok: false, endpoint, checkedAt, state, error: 'mcp_disabled' };
+    }
+    if (!state.running) {
+      return { ok: false, endpoint, checkedAt, state, error: 'mcp_not_running' };
+    }
+    if (!settings.mcpToken) {
+      return { ok: false, endpoint, checkedAt, state, error: 'mcp_token_missing' };
+    }
+
+    const init = await requestJsonRpc(
+      { jsonrpc: '2.0', id: 'probe-init', method: 'initialize', params: { protocolVersion: '2024-11-05' } },
+      5000,
+    );
+    if (!init.ok || !init.json || init.json.error) {
+      return { ok: false, endpoint, checkedAt, state, step: 'initialize', probe: init };
+    }
+
+    const tools = await requestJsonRpc({ jsonrpc: '2.0', id: 'probe-tools', method: 'tools/list', params: {} }, 5000);
+    if (!tools.ok || !tools.json || tools.json.error) {
+      return { ok: false, endpoint, checkedAt, state, step: 'tools/list', probe: tools };
+    }
+
+    const listedTools = Array.isArray(tools.json.result?.tools) ? tools.json.result.tools : [];
     return {
-      ok: false,
+      ok: true,
       endpoint,
       checkedAt,
       state,
-      error: 'mcp_removed',
-      hint: 'use_agent_cli',
-      message: 'External MCP removed. Use npm run agent:cli / agent:init.',
+      protocolVersion: init.json.result?.protocolVersion || null,
+      serverInfo: init.json.result?.serverInfo || null,
+      toolCount: listedTools.length,
+      toolsSample: listedTools.slice(0, 8).map((t) => t.name).filter(Boolean),
     };
   }
 
   function buildMcpClientConfig() {
+    const settings = deps.readSettings();
+    const port = runningPort || settings.mcpPort || DEFAULT_MCP_PORT;
+    const token = settings.mcpToken ? String(settings.mcpToken) : '<token>';
     return {
-      removed: true,
-      hint: 'use_agent_cli',
-      message: 'External MCP removed. Use npm run agent:cli / agent:init.',
-      mcpServers: {},
+      mcpServers: {
+        'assetcutter-body': {
+          url: `http://${MCP_BIND}:${port}/mcp`,
+          headers: { Authorization: `Bearer ${token}` },
+        },
+      },
     };
   }
 

@@ -44,6 +44,38 @@ function createClient(overrides: Record<string, unknown> = {}) {
           text: '',
         };
       }
+      if (url.endsWith('/agent/workbench/create-text-asset')) {
+        const body = init?.body ? JSON.parse(init.body) : {};
+        return {
+          ok: true,
+          status: 200,
+          json: {
+            ok: true,
+            projectId: body.projectId || null,
+            name: body.name || null,
+            textLength: String(body.text || '').length,
+          },
+          text: '',
+        };
+      }
+      if (url.endsWith('/agent/workbench/create-image-asset')) {
+        const body = init?.body ? JSON.parse(init.body) : {};
+        return {
+          ok: true,
+          status: 200,
+          json: {
+            ok: true,
+            projectId: body.projectId || null,
+            name: body.name || null,
+            imageDataUrlPresent: Boolean(body.imageDataUrlPresent || body.imageDataUrl),
+            imageDataUrlLength: body.imageDataUrlLength || String(body.imageDataUrl || '').length,
+            localPath: body.localPath || null,
+            imageByteLength: body.imageByteLength || null,
+            originalCompanionKey: body.originalCompanionKey || null,
+          },
+          text: '',
+        };
+      }
       return { ok: false, status: 404, json: null, text: 'not found' };
     },
     invokeBridge: async (method: string, args: Record<string, unknown>) => {
@@ -63,6 +95,26 @@ function createClient(overrides: Record<string, unknown> = {}) {
       if (method === 'listAssets') return { ok: true, projectId: args.projectId || 'p1', count: 1, assets: [{ id: 'a1', kind: 'text' }] };
       if (method === 'getAsset') return { ok: true, projectId: args.projectId || 'p1', asset: { id: args.assetId, textResults: [{ key: 'k', text: 'hello' }] } };
       if (method === 'runCapability') return { ok: true, kind: 'text', durationMs: 18 };
+      if (method === 'createTextAsset') {
+        return {
+          ok: true,
+          action: 'createTextAsset',
+          projectId: args.projectId || 'p1',
+          assetId: 'agent_text_1',
+          kind: 'text',
+          resultKey: 'original',
+        };
+      }
+      if (method === 'createImageAsset') {
+        return {
+          ok: true,
+          action: 'createImageAsset',
+          projectId: args.projectId || 'p1',
+          assetId: 'agent_image_1',
+          kind: 'image',
+          resultKey: 'original',
+        };
+      }
       return { ok: false, error: 'unknown_method' };
     },
     navigateShell: async () => ({ ok: true }),
@@ -233,6 +285,72 @@ describe('agent workbench client', () => {
     expect(result.structured.server.assetId).toBe('a1');
     expect(result.structured.asset.id).toBe('a1');
     expect(result.structured.bridge.asset.textResults[0].text).toBe('hello');
+  });
+
+  it('creates a human-shaped text asset through server auth check and bridge', async () => {
+    const client = createClient();
+    const result = await client.createTextAsset({ text: '这是一条测试文本', name: '测试文本', projectId: 'p1' });
+    expect(result.ok).toBe(true);
+    expect(result.structured.action).toBe('createTextAsset');
+    expect(result.structured.server.textLength).toBe('这是一条测试文本'.length);
+    expect(result.structured.bridge.assetId).toBe('agent_text_1');
+    expect(result.structured.nextStep).toBe('done');
+  });
+
+  it('rejects createTextAsset without text', async () => {
+    const client = createClient();
+    const result = await client.createTextAsset({ text: '   ' });
+    expect(result.ok).toBe(false);
+    expect(result.error.code).toBe('AGENT_TOOL_INVALID_ARGS');
+  });
+
+  it('creates a human-shaped image asset through server auth check and bridge', async () => {
+    const client = createClient();
+    const imageDataUrl = 'data:image/png;base64,iVBORw0KGgo=';
+    const result = await client.createImageAsset({
+      imageDataUrl,
+      name: '样例图',
+      projectId: 'p1',
+    });
+    expect(result.ok).toBe(true);
+    expect(result.structured.action).toBe('createImageAsset');
+    expect(result.structured.bridge.assetId).toBe('agent_image_1');
+    expect(result.structured.nextStep).toBe('done');
+  });
+
+  it('creates an image asset from localPath without requiring imageDataUrl', async () => {
+    const fs = await import('node:fs');
+    const os = await import('node:os');
+    const path = await import('node:path');
+    const tmp = path.join(os.tmpdir(), `ac-smoke-img-${Date.now()}.png`);
+    fs.writeFileSync(
+      tmp,
+      Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64'),
+    );
+    try {
+      const client = createClient();
+      const result = await client.createImageAsset({
+        localPath: tmp,
+        name: '本地路径图',
+        projectId: 'p1',
+      });
+      expect(result.ok).toBe(true);
+      expect(result.structured.action).toBe('createImageAsset');
+      expect(result.structured.localPath).toBe(tmp);
+      expect(result.structured.transport).toBe('inline_data_url');
+    } finally {
+      fs.unlinkSync(tmp);
+    }
+  });
+
+  it('rejects createImageAsset without a valid data URL or localPath', async () => {
+    const client = createClient();
+    const missing = await client.createImageAsset({});
+    expect(missing.ok).toBe(false);
+    expect(missing.error.code).toBe('AGENT_TOOL_INVALID_ARGS');
+    const bad = await client.createImageAsset({ imageDataUrl: 'https://example.com/a.png' });
+    expect(bad.ok).toBe(false);
+    expect(bad.error.code).toBe('AGENT_TOOL_INVALID_ARGS');
   });
 
   it('maps bridge input requirements to a standard input-required error', async () => {
