@@ -1,7 +1,7 @@
 import { WORKFLOW_IMG_EMPTY_PLACEHOLDER, workflowSafeImgSrc } from './workflowImageDisplay';
 
 /** 缩略解码并发上限：避免首屏大量 `drawImage` 与大图 decode 抢主线程，拖慢当前视口内卡片 */
-const PREVIEW_THUMB_DECODE_MAX_PARALLEL = 2;
+const PREVIEW_THUMB_DECODE_MAX_PARALLEL = 1;
 
 let previewThumbDecodeRunning = 0;
 const previewThumbDecodeHighQueue: Array<() => void> = [];
@@ -90,7 +90,80 @@ export function shouldUseWorkflowGridThumb(src: string): boolean {
   return shouldUsePreviewThumbnail(src);
 }
 
+/** Skip grid decode for oversized sources (UV atlases) — prevents GPU black screens. */
+export const PREVIEW_THUMB_MAX_DATA_URL_CHARS = 1_800_000; // ~1.3MB binary
+export const PREVIEW_THUMB_MAX_BLOB_BYTES = 3_500_000; // ~3.5MB
+
 function drawSrcToCanvas(safeSrc: string, maxEdge: number): Promise<HTMLCanvasElement | null> {
+  // Giant inline data URLs: never decode full atlas for a grid thumb.
+  if (safeSrc.startsWith('data:') && safeSrc.length > PREVIEW_THUMB_MAX_DATA_URL_CHARS) {
+    return Promise.resolve(null);
+  }
+
+  const paintBitmap = (bitmap: ImageBitmap): HTMLCanvasElement | null => {
+    try {
+      const w = bitmap.width;
+      const h = bitmap.height;
+      if (!w || !h) return null;
+      const scale = Math.min(1, maxEdge / Math.max(w, h));
+      const tw = Math.max(1, Math.round(w * scale));
+      const th = Math.max(1, Math.round(h * scale));
+      const canvas = document.createElement('canvas');
+      canvas.width = tw;
+      canvas.height = th;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return null;
+      ctx.drawImage(bitmap, 0, 0, tw, th);
+      return canvas;
+    } catch {
+      return null;
+    } finally {
+      try {
+        bitmap.close();
+      } catch {
+        /* ignore */
+      }
+    }
+  };
+
+  // Prefer createImageBitmap(+resize) so the browser can decode at reduced size when supported.
+  if (typeof createImageBitmap === 'function' && typeof fetch === 'function') {
+    return (async () => {
+      try {
+        let blob: Blob;
+        if (safeSrc.startsWith('blob:') || /^https?:/i.test(safeSrc) || safeSrc.startsWith('data:')) {
+          const res = await fetch(safeSrc);
+          if (!res.ok) return null;
+          blob = await res.blob();
+        } else {
+          return null;
+        }
+        if (blob.size > PREVIEW_THUMB_MAX_BLOB_BYTES) return null;
+        const opts: ImageBitmapOptions = { resizeQuality: 'low' };
+        // Hint downscale before full decode when the engine supports it.
+        (opts as ImageBitmapOptions & { resizeWidth?: number }).resizeWidth = Math.max(1, Math.floor(maxEdge));
+        let bitmap: ImageBitmap;
+        try {
+          bitmap = await createImageBitmap(blob, opts);
+        } catch {
+          bitmap = await createImageBitmap(blob);
+        }
+        // Still too huge after decode — refuse to upload to GPU canvas at full size.
+        if (bitmap.width * bitmap.height > 4096 * 4096) {
+          try {
+            bitmap.close();
+          } catch {
+            /* ignore */
+          }
+          return null;
+        }
+        return paintBitmap(bitmap);
+      } catch {
+        return null;
+      }
+    })();
+  }
+
   return new Promise((resolve) => {
     const img = new Image();
     if (/^https?:/i.test(safeSrc)) {
@@ -105,6 +178,10 @@ function drawSrcToCanvas(safeSrc: string, maxEdge: number): Promise<HTMLCanvasEl
         const w = img.naturalWidth;
         const h = img.naturalHeight;
         if (!w || !h) {
+          resolve(null);
+          return;
+        }
+        if (w * h > 4096 * 4096) {
           resolve(null);
           return;
         }

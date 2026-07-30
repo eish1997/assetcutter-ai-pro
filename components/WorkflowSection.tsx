@@ -8116,21 +8116,28 @@ ${lineSvg}
     showArchived,
   ]);
 
+  // Heal for display/filter without setState loops; persist at most once per asset-id set.
+  const gridAssets = useMemo(() => healWorkflowPbrTextureGridVisibility(assets), [assets]);
   const pbrGridHideContext = useMemo(() => {
-    const referencedPbrTextureIds = collectReferencedPbrTextureAssetIdsFromAssets(assets);
-    return { referencedPbrTextureIds, pbrTextureDataUrls: undefined as Set<string> | undefined };
-  }, [assets]);
+    const referencedPbrTextureIds = collectReferencedPbrTextureAssetIdsFromAssets(gridAssets);
+    return { referencedPbrTextureIds };
+  }, [gridAssets]);
   const referencedPbrTextureIds = pbrGridHideContext.referencedPbrTextureIds;
-
+  const pbrHealPersistSigRef = React.useRef('');
   useEffect(() => {
-    const healed = healWorkflowPbrTextureGridVisibility(assets);
-    if (healed === assets) return;
-    setAssets(healed);
-  }, [assets, setAssets]);
+    if (gridAssets === assets) return;
+    const sig = gridAssets
+      .map((a) => `${a.id}:${a.hiddenInGrid ? 1 : 0}:${String(a.pbrHostAssetId || '')}`)
+      .join('|');
+    if (sig === pbrHealPersistSigRef.current) return;
+    pbrHealPersistSigRef.current = sig;
+    const t = window.setTimeout(() => setAssets(gridAssets), 300);
+    return () => window.clearTimeout(t);
+  }, [assets, gridAssets, setAssets]);
 
   const visibleAssets = useMemo(() => {
-    const hideOpts = { referencedPbrTextureIds: pbrGridHideContext.referencedPbrTextureIds };
-    const base = assets.filter(
+    const hideOpts = pbrGridHideContext;
+    const base = gridAssets.filter(
       (a) => !a.archived && !a.inRepository && !isWorkflowAssetHiddenFromAssetGrid(a, hideOpts)
     );
     // 组筛选模式：显示该组成员
@@ -8156,11 +8163,11 @@ ${lineSvg}
     return sortRootWorkflowAssetsNewestFirst(
       base.filter((a) => !a.groupId)
     );
-  }, [assets, groupFilterId, pbrGridHideContext]);
+  }, [gridAssets, groupFilterId, pbrGridHideContext]);
   const rootCanvasAssets = useMemo(() => {
     if (!showAllInGroup) return visibleAssets;
     return sortRootWorkflowAssetsNewestFirst(
-      assets.filter((a) => {
+      gridAssets.filter((a) => {
         if (a.archived || a.inRepository) return false;
         if (isWorkflowAssetHiddenFromAssetGrid(a, pbrGridHideContext)) return false;
         // 显示全部：隐藏“组容器”本体，仅展示可见叶子资产（含组内子资产）
@@ -8169,7 +8176,7 @@ ${lineSvg}
         return true;
       })
     );
-  }, [assets, showAllInGroup, visibleAssets, pbrGridHideContext]);
+  }, [gridAssets, showAllInGroup, visibleAssets, pbrGridHideContext]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -8913,7 +8920,7 @@ ${lineSvg}
   const lightboxList = useMemo(
     () =>
       sortRootWorkflowAssetsNewestFirst(
-        assets.filter(
+        gridAssets.filter(
           (a) =>
             !a.archived &&
             !isWorkflowAssetHiddenFromAssetGrid(a, pbrGridHideContext) &&
@@ -8922,7 +8929,7 @@ ${lineSvg}
             !isGroupAsset(a)
         )
       ),
-    [assets, referencedPbrTextureIds]
+    [gridAssets, pbrGridHideContext]
   );
   const lightboxListRef = useRef(lightboxList);
   lightboxListRef.current = lightboxList;

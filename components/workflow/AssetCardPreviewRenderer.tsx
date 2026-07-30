@@ -27,6 +27,16 @@ type AssetCardPreviewRendererProps = {
 
 const modelThumbnailCache = new Map<string, string | null>();
 const modelThumbnailPending = new Map<string, Promise<string | null>>();
+/** Serialize offscreen 3D thumb captures — parallel FBX/GLB decode black-screens GPUs. */
+let modelThumbCaptureChain: Promise<unknown> = Promise.resolve();
+function enqueueModelThumbCapture<T>(fn: () => Promise<T>): Promise<T> {
+  const run = modelThumbCaptureChain.then(fn, fn);
+  modelThumbCaptureChain = run.then(
+    () => undefined,
+    () => undefined
+  );
+  return run;
+}
 
 /** @internal vitest only */
 export function resetAssetCardModelThumbnailCachesForTests(): void {
