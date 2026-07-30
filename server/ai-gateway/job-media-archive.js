@@ -3,7 +3,7 @@ import { fetch as undiciFetch } from 'undici';
 import { isR2Configured, putPublicR2Object, publicR2UrlForKey } from '../r2-storage-handlers.js';
 
 const MAX_ARCHIVE_BYTES = Number(process.env.AI_GATEWAY_MEDIA_ARCHIVE_MAX_BYTES || 25 * 1024 * 1024);
-const REMOTE_FETCH_TIMEOUT_MS = Number(process.env.AI_GATEWAY_MEDIA_ARCHIVE_FETCH_TIMEOUT_MS || 45_000);
+const REMOTE_FETCH_TIMEOUT_MS = Number(process.env.AI_GATEWAY_MEDIA_ARCHIVE_FETCH_TIMEOUT_MS || 120_000);
 
 function nonEmptyString(value) {
   return typeof value === 'string' && value.trim() ? value.trim() : '';

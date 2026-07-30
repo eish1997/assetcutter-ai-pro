@@ -645,7 +645,6 @@ import {
   workflowAssetNeedsCompanionOriginalHydrate,
   workflowAssetNeedsCompanionResultHydrate,
 } from '../services/workflowCompanionAssets';
-import { fetchMediaUrlViaAuthApi } from '../services/mediaUrlAuthFetch';
 import {
   applyCompanionHydratePatches,
   buildCompanionHydrateSessionKey,
@@ -9516,27 +9515,13 @@ ${lineSvg}
           completePromotePbrTextureAsset(requestId, { ok: false, error: '缺少贴图或宿主资产' });
           return;
         }
-        // Gemini 等常返回跨域 https：先物化为 data URL，避免仅挂远程链、伴侣 PUT 失败时盘上无文件
+        // Gemini 等常返回跨域 https：优先浏览器物化为 data URL；失败则保留远程 URL，
+        // 交给下方 putWorkflowOriginalImageFromAnyUrl（伴侣 import-url → auth 代拉），
+        // 避免在此抢先 auth 代拉失败时刷出误导性 WARN（伴侣往往仍能落盘）。
         if (!parseDataUrlToBlob(dataUrl)) {
           const materialized = await imageSrcToDataUrlForCompanion(dataUrl);
           if (materialized) {
             dataUrl = materialized;
-          } else if (/^https?:\/\//i.test(dataUrl)) {
-            try {
-              const blob = await fetchMediaUrlViaAuthApi(dataUrl);
-              dataUrl = await new Promise<string>((resolve, reject) => {
-                const reader = new FileReader();
-                reader.onload = () => resolve(String(reader.result || ''));
-                reader.onerror = () => reject(reader.error || new Error('read_failed'));
-                reader.readAsDataURL(blob);
-              });
-            } catch (e) {
-              onLog?.(
-                'warn',
-                '贴图远程地址未能物化，将尝试伴侣直拉',
-                e instanceof Error ? e.message : String(e)
-              );
-            }
           }
         }
         const id = uuid();

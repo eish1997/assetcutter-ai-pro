@@ -351,6 +351,10 @@ const INVITE_VALIDATE_RATE_LIMIT_MAX = Number(process.env.AUTH_INVITE_VALIDATE_R
 const CSRF_COOKIE_NAME = 'ac_csrf';
 const BRIDGE_REQUIRE_AUTH = String(process.env.BRIDGE_REQUIRE_AUTH || 'true').trim().toLowerCase() !== 'false';
 const TRIPO_TIMEOUT_MS = Number(process.env.TRIPO_TIMEOUT_MS || 45_000);
+/** 贴图/大图代拉：默认可长于 Tripo API，避免 2K/4K 生成图在代理下误杀 */
+const MEDIA_FETCH_TIMEOUT_MS = Number(
+  process.env.MEDIA_FETCH_TIMEOUT_MS || process.env.TRIPO_TIMEOUT_MS || 120_000
+);
 const TRIPO_PROXY = String(process.env.TRIPO_PROXY || process.env.HTTPS_PROXY || process.env.HTTP_PROXY || '').trim();
 const CLIENT_DEBUG_LOG_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 const CLIENT_DEBUG_LOG_DIR = path.resolve(process.cwd(), '.data', 'debug');
@@ -359,9 +363,14 @@ const CLIENT_DEBUG_LOG_FILE = path.join(CLIENT_DEBUG_LOG_DIR, 'client-runtime.nd
 if (TRIPO_PROXY) {
   try {
     setGlobalDispatcher(new ProxyAgent(TRIPO_PROXY));
+    console.log(`[auth-api] outbound proxy enabled: ${TRIPO_PROXY}`);
   } catch (e) {
     console.warn('[auth-api] tripo proxy init failed:', e instanceof Error ? e.message : String(e));
   }
+} else {
+  console.warn(
+    '[auth-api] outbound proxy disabled — /api/media/fetch-url 与 Tripo 出站可能超时；可在 .env.local 配置 TRIPO_PROXY=http://127.0.0.1:7890'
+  );
 }
 
 const allowedOrigins = AUTH_ALLOWED_ORIGINS
@@ -4471,7 +4480,7 @@ const server = http.createServer(async (req, res) => {
         const upstreamResp = await fetch(fileUrl, {
           method: 'GET',
           redirect: 'follow',
-          signal: AbortSignal.timeout(TRIPO_TIMEOUT_MS),
+          signal: AbortSignal.timeout(MEDIA_FETCH_TIMEOUT_MS),
         });
         if (!upstreamResp.ok) {
           const data = await readJsonSafe(upstreamResp);
@@ -4500,8 +4509,8 @@ const server = http.createServer(async (req, res) => {
         json(res, 502, {
           error: `media fetch failed: ${detail.message}`,
           hint: TRIPO_PROXY
-            ? '已启用 TRIPO_PROXY，请检查代理是否可用'
-            : '当前未配置 TRIPO_PROXY/HTTPS_PROXY；若网络受限请在 .env.local 配置 TRIPO_PROXY=http://127.0.0.1:7890',
+            ? '已启用出站代理，请检查代理是否可用，或增大 MEDIA_FETCH_TIMEOUT_MS'
+            : '服务端未配置出站代理（TRIPO_PROXY/HTTPS_PROXY）。本地可在 .env.local 配置；线上请在托管环境变量中配置，或确保生成结果已归档到 R2 后勿再回拉供应商临时链',
           ...(detail.code ? { code: detail.code } : {}),
         });
       }

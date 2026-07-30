@@ -177,8 +177,11 @@
   animation: ac-workflow-capability-jump-flash 0.72s cubic-bezier(0.34, 1.15, 0.45, 1) both;
 }
 
-/* 工作流列表：拖放插入 / 成组提示（data-drop-intent on [data-workflow-drop-host]） */
-[data-workflow-drop-host] {
+/* 工作流列表：拖放插入 / 成组提示（data-drop-intent on [data-workflow-drop-host]）
+ * 勿无 position:relative 覆盖 justified 网格卡上的 Tailwind `absolute`：
+ * 同优先级时若本文件晚于 utilities，relative 会赢，left/top 变成相对偏移 → 楼梯斜排。
+ * 仅非 absolute 宿主需要定位上下文给 ::before/::after。 */
+[data-workflow-drop-host]:not(.absolute) {
   position: relative;
 }
 
