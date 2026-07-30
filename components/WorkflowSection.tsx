@@ -8916,6 +8916,7 @@ ${lineSvg}
       ),
     [assets, referencedPbrTextureIds]
   );
+  const lightboxListRef = useRef(lightboxList);
   lightboxListRef.current = lightboxList;
   const lightboxIndex = lightboxAssetId ? lightboxList.findIndex((a) => a.id === lightboxAssetId) : -1;
   useEffect(() => {
