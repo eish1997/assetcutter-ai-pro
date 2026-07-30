@@ -27,6 +27,22 @@ export function inferModelFormat(url: string, fileName?: string): ModelFormat {
 }
 
 /**
+ * PBR 槽位 TextureLoader 贴图的 flipY。
+ * - glTF/GLB：false（与 GLTFLoader 一致）
+ * - FBX/OBJ：true（TextureLoader / OpenGL 默认；手动导入贴图常用此约定）
+ * - unknown：用户稿 true，embedded false
+ */
+export function resolveWorkflowPbrTextureFlipY(
+  modelFormat: ModelFormat,
+  edit?: { source?: 'embedded' | 'user' } | null
+): boolean {
+  if (modelFormat === 'gltf') return false;
+  if (modelFormat === 'fbx' || modelFormat === 'obj') return true;
+  if (edit?.source === 'embedded') return false;
+  return true;
+}
+
+/**
  * 默认观察方位（世界坐标系，Y 向上）：
  * - `+x`：相机在物体 **+X** 一侧，朝原点看 → 物体 **-X 面**朝向镜头，常见资产里常对应「把右侧当正面」的观感。
  * - `+z`：相机在 **+Z** 侧（旧默认）。

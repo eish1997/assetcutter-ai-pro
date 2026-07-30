@@ -25,6 +25,7 @@ import {
   pbrEditDocHasUserAuthoredTextures,
   readWorkflowModelPbrEditDoc,
   resolvePbrTextureSrc,
+  shouldReseedEmbeddedPbrDocFromMesh,
   textureEditFromPbrCandidate,
   WORKFLOW_MODEL_PBR_EDIT_PERSIST_EVENT,
   workflowModelPbrEditKey,
@@ -55,6 +56,8 @@ import {
   inferModelFormat,
   isWorkflowModel3dCameraPoseSane,
   normalizeWorkflowModel3dViewState,
+  resolveWorkflowPbrTextureFlipY,
+  type ModelFormat,
 } from '../../../services/workflowModelThreeShared';
 import {
   acquireWorkflowModelSceneInstance,
@@ -427,14 +430,15 @@ async function prepareTextureDataUrl(
 async function createTextureFromEdit(
   edit: WorkflowModelPbrTextureEdit,
   slot: WorkflowModelPbrSlot,
-  sourceSrc: string
+  sourceSrc: string,
+  modelFormat: ModelFormat = 'unknown'
 ): Promise<THREE.Texture | null> {
   const prepared = await prepareTextureDataUrl(edit, slot, sourceSrc);
   if (!prepared) return null;
   const texture = await new THREE.TextureLoader().loadAsync(prepared);
   texture.name = edit.fileName;
-  // glTF / Tripo UVs expect flipY=false; TextureLoader defaults to true and scrambles maps on re-apply.
-  texture.flipY = false;
+  // glTF → flipY false；FBX/OBJ 手动贴图 → true（见 resolveWorkflowPbrTextureFlipY）
+  texture.flipY = resolveWorkflowPbrTextureFlipY(modelFormat, edit);
   texture.colorSpace = edit.colorSpace === 'srgb' ? THREE.SRGBColorSpace : THREE.NoColorSpace;
   texture.wrapS = THREE.RepeatWrapping;
   texture.wrapT = THREE.RepeatWrapping;
@@ -486,7 +490,8 @@ async function applyPbrSlotToMaterial(
   material: PbrEditableMaterial,
   slot: WorkflowModelPbrSlot,
   edit: WorkflowModelPbrTextureEdit | undefined,
-  resolveAssetSrc?: ((assetId: string) => string) | null
+  resolveAssetSrc?: ((assetId: string) => string) | null,
+  modelFormat: ModelFormat = 'unknown'
 ): Promise<void> {
   const channel = slot === 'normal' ? 'rgb' : edit?.channel || 'rgb';
   const needsCanvasChannel =
@@ -502,7 +507,7 @@ async function applyPbrSlotToMaterial(
     : needsCanvasChannel && edit.dataUrl
       ? String(edit.dataUrl).trim()
       : resolvePbrTextureSrc(edit, resolveAssetSrc);
-  const texture = sourceSrc ? await createTextureFromEdit(edit!, slot, sourceSrc) : null;
+  const texture = sourceSrc ? await createTextureFromEdit(edit!, slot, sourceSrc, modelFormat) : null;
   if (slot === 'baseColor') {
     replaceWorkflowTexture(material, 'map', texture);
     if (texture && !material.userData.workflowPbrBaseColor) material.userData.workflowPbrBaseColor = material.color.clone();
@@ -548,13 +553,21 @@ async function applyPbrSlotToMaterial(
 async function applyMaterialEditToSlot(
   slot: MaterialSlotInfo,
   edit: WorkflowModelPbrMaterialEdit | undefined,
-  resolveAssetSrc?: ((assetId: string) => string) | null
+  resolveAssetSrc?: ((assetId: string) => string) | null,
+  modelFormat: ModelFormat = 'unknown'
 ): Promise<void> {
   if (!edit) return;
   for (const pbrSlot of WORKFLOW_MODEL_PBR_SLOTS) {
     const textureEdit = edit.slots[pbrSlot];
-    await applyPbrSlotToMaterial(slot.material, pbrSlot, textureEdit, resolveAssetSrc);
-    if (!textureEdit?.enabled || pbrSlot === 'normal') applyPbrSlotParamToMaterial(slot.material, pbrSlot, edit.params?.[pbrSlot]);
+    // Embedded seeds stay on the GLB materials — never TextureLoader-repaint them.
+    if (textureEdit?.source === 'embedded') {
+      if (pbrSlot !== 'normal') applyPbrSlotParamToMaterial(slot.material, pbrSlot, edit.params?.[pbrSlot]);
+      continue;
+    }
+    await applyPbrSlotToMaterial(slot.material, pbrSlot, textureEdit, resolveAssetSrc, modelFormat);
+    if (!textureEdit?.enabled || pbrSlot === 'normal') {
+      applyPbrSlotParamToMaterial(slot.material, pbrSlot, edit.params?.[pbrSlot]);
+    }
   }
 }
 
@@ -592,6 +605,7 @@ const ImageModel3DViewer: React.FC<LazyImagePreviewViewerProps> = ({
   modelSrcRef.current = modelSrc;
   const modelFileNameRef = useRef(modelFileName);
   modelFileNameRef.current = modelFileName;
+  const modelFormatRef = useRef<ModelFormat>('unknown');
   const markViewDirty = useCallback(() => {
     onModel3dViewDirtyRef.current?.();
   }, []);
@@ -781,6 +795,7 @@ const ImageModel3DViewer: React.FC<LazyImagePreviewViewerProps> = ({
     }
 
     const format = inferModelFormat(src, fileName);
+    modelFormatRef.current = format;
     if (format === 'unknown') {
       setStatus('unsupported');
       setMessage('无法识别模型格式。本地文件请保留扩展名（.glb / .gltf / .fbx / .obj）。');
@@ -965,9 +980,9 @@ const ImageModel3DViewer: React.FC<LazyImagePreviewViewerProps> = ({
         : null;
       let savedDoc = matchedAssetDoc || matchedLocalDoc;
       const hasUserAuthored = pbrEditDocHasUserAuthoredTextures(savedDoc);
-      // Pure embedded seeds (or poisoned cross-version seeds): always refresh from THIS mesh
-      // so switching models updates panel thumbs and never paints another atlas onto the GLB.
-      if (!hasUserAuthored) {
+      // Only seed when no matched persisted doc. Replacing embedded-only docs on every open
+      // wiped assetIds → duplicate promote → PBR textures leaked into the asset list.
+      if (shouldReseedEmbeddedPbrDocFromMesh(savedDoc)) {
         const seeded = buildSeededPbrDocFromMaterialSlots(
           slots.map((slot) => ({ id: slot.id, label: slot.label, material: slot.material })),
           {
@@ -981,6 +996,9 @@ const ImageModel3DViewer: React.FC<LazyImagePreviewViewerProps> = ({
           writeWorkflowModelPbrEditDoc(pbrStorageKey, seeded);
           if (model3dAssetId) publishModelPbrEditRef.current(seeded);
         }
+      } else if (savedDoc && !matchedAssetDoc && model3dAssetId) {
+        // Local cache already has this model's doc — sync onto the host asset once.
+        publishModelPbrEditRef.current(savedDoc);
       }
       setMaterialSlots(slots);
       setActiveMaterialId((current) => current || slots[0]?.id || '');
@@ -1020,7 +1038,12 @@ const ImageModel3DViewer: React.FC<LazyImagePreviewViewerProps> = ({
       if (hasUserAuthored && savedDoc) {
         void Promise.all(
           slots.map((slot) =>
-            applyMaterialEditToSlot(slot, savedDoc.materials[slot.id], resolveTextureAssetSrcRef.current)
+            applyMaterialEditToSlot(
+              slot,
+              savedDoc.materials[slot.id],
+              resolveTextureAssetSrcRef.current,
+              modelFormatRef.current
+            )
           )
         ).then(() => {
           publishModel3DStats(collectModel3DStats(object, src, fileName, format));
@@ -1441,7 +1464,13 @@ const ImageModel3DViewer: React.FC<LazyImagePreviewViewerProps> = ({
       },
     }));
     commitPbrDoc(next);
-    await applyPbrSlotToMaterial(material.material, slot, edit, resolveTextureAssetSrcRef.current);
+    await applyPbrSlotToMaterial(
+      material.material,
+      slot,
+      edit,
+      resolveTextureAssetSrcRef.current,
+      modelFormatRef.current
+    );
     if (!edit?.enabled || slot === 'normal') applyPbrSlotParamToMaterial(material.material, slot, next.materials[material.id]?.params?.[slot]);
   };
 
@@ -1531,7 +1560,8 @@ const ImageModel3DViewer: React.FC<LazyImagePreviewViewerProps> = ({
           material.material,
           slot,
           nextSlots[slot],
-          resolveTextureAssetSrcRef.current
+          resolveTextureAssetSrcRef.current,
+          modelFormatRef.current
         );
         if (slot === 'normal') applyPbrSlotParamToMaterial(material.material, slot, materialEdit.params?.[slot]);
       }
@@ -1570,7 +1600,13 @@ const ImageModel3DViewer: React.FC<LazyImagePreviewViewerProps> = ({
       };
     });
     commitPbrDoc(next);
-    await applyPbrSlotToMaterial(material.material, slot, undefined, resolveTextureAssetSrcRef.current);
+    await applyPbrSlotToMaterial(
+      material.material,
+      slot,
+      undefined,
+      resolveTextureAssetSrcRef.current,
+      modelFormatRef.current
+    );
     applyPbrSlotParamToMaterial(material.material, slot, next.materials[material.id]?.params?.[slot]);
     if (generatePanelSlot === slot) setPanelSourceDataUrl(null);
   };
@@ -1593,7 +1629,13 @@ const ImageModel3DViewer: React.FC<LazyImagePreviewViewerProps> = ({
       },
     }));
     commitPbrDoc(next);
-    await applyPbrSlotToMaterial(material.material, slot, edit, resolveTextureAssetSrcRef.current);
+    await applyPbrSlotToMaterial(
+      material.material,
+      slot,
+      edit,
+      resolveTextureAssetSrcRef.current,
+      modelFormatRef.current
+    );
     if (slot === 'normal') applyPbrSlotParamToMaterial(material.material, slot, next.materials[material.id]?.params?.[slot]);
     if (generatePanelSlot === slot) setPanelSourceDataUrl(resolveTexSrc(candidate) || null);
   };
@@ -1633,7 +1675,8 @@ const ImageModel3DViewer: React.FC<LazyImagePreviewViewerProps> = ({
         material.material,
         slot,
         next.materials[material.id]?.slots[slot],
-        resolveTextureAssetSrcRef.current
+        resolveTextureAssetSrcRef.current,
+        modelFormatRef.current
       );
       if (slot === 'normal') {
         applyPbrSlotParamToMaterial(material.material, slot, next.materials[material.id]?.params?.[slot]);

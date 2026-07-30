@@ -153,6 +153,8 @@ function buildModelVariant(asset: WorkflowAsset, key: string): WorkflowAssetVari
     return modelFormatFromUrlOrKey(url, modelCompanionKeys[index] || '');
   });
   const posterUrl = cleanString((asset.results || {})[key]);
+  const posterPreviewKey = cleanString(asset.resultsPreviewCompanionKeys?.[key]);
+  const posterFullKey = cleanString(asset.resultsCompanionKeys?.[key]);
   return {
     id: key,
     label: labelForVariant(asset, key),
@@ -161,7 +163,8 @@ function buildModelVariant(asset: WorkflowAsset, key: string): WorkflowAssetVari
     url: modelUrls.find(Boolean) || undefined,
     posterUrl: posterUrl || undefined,
     posterObjectKey: cleanString(asset.resultsObjectKeys?.[key]) || undefined,
-    posterCompanionKey: cleanString(asset.resultsCompanionKeys?.[key]) || undefined,
+    // Prefer viewport/preview thumb (image-thumb-*) over full result companion for card face
+    posterCompanionKey: posterPreviewKey || posterFullKey || undefined,
     modelUrls,
     modelCompanionKeys,
     modelFormats,

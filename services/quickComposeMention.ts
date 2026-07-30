@@ -1,5 +1,8 @@
 import type { WorkflowAsset } from '../types';
-import type { WorkflowModelPbrTextureRewriteTarget } from './workflowModelPbrEdits';
+import {
+  isWorkflowAssetHiddenFromAssetGrid,
+  type WorkflowModelPbrTextureRewriteTarget,
+} from './workflowModelPbrEdits';
 import { isWorkflowTextAsset, workflowAssetToInputText } from './workflowTextAsset';
 
 export const QUICK_COMPOSE_CURRENT_VIEW_LABEL = '当前画面';
@@ -537,7 +540,7 @@ export function listQuickComposeMentionCandidates(
   }
   for (const a of assets) {
     if (a.archived && !options?.archivedVisible) continue;
-    if (a.hiddenInGrid) continue;
+    if (isWorkflowAssetHiddenFromAssetGrid(a)) continue;
     if (a.isGroup) continue;
     out.push({
       kind: 'asset',

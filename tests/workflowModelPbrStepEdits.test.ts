@@ -75,10 +75,13 @@ describe('stepModelPbrEdits per model version', () => {
     ).toBeNull();
   });
 
-  it('workflowPbrEditDocMatchesModel requires variantId when provided', () => {
+  it('workflowPbrEditDocMatchesModel requires exact variantId when provided', () => {
     const doc = makeDoc('model-a', 'step-a');
     expect(workflowPbrEditDocMatchesModel(doc, { modelKey: 'model-a' })).toBe(true);
     expect(workflowPbrEditDocMatchesModel(doc, { variantId: 'step-a' })).toBe(true);
     expect(workflowPbrEditDocMatchesModel(doc, { variantId: 'step-b', modelKey: 'model-a' })).toBe(false);
+    // No variant on doc: must not match a viewer that knows its version (prevents cross-atlas).
+    const legacy = makeDoc('model-a');
+    expect(workflowPbrEditDocMatchesModel(legacy, { variantId: 'step-a', modelKey: 'model-a' })).toBe(false);
   });
 });

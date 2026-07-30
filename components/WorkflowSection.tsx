@@ -71,6 +71,8 @@ import {
   applyPbrTextureAssetIdToDoc,
   collectAssetAllPbrTextureAssetIds,
   filterUnreferencedPbrTextureAssetIds,
+  isWorkflowAssetHiddenFromAssetGrid,
+  isWorkflowPbrTextureAsset,
   normalizeWorkflowModelPbrEditDoc,
   pbrTextureEditMatchesRewriteSource,
   resolveStepModelPbrSlotKey,
@@ -602,6 +604,8 @@ import { normalizeWorkflowModel3dViewState } from '../services/workflowModelThre
 import {
   patchAssetWithModelViewportThumb,
   resolveModelViewportThumbPreviewCompanionKey,
+  resolveWorkflowModelStepPosterSrc,
+  workflowAssetHasModelAtStep,
 } from '../services/workflowModelViewportThumbPersist';
 import { getCompanionLocalBaseUrl, normalizeCompanionBaseUrl } from '../services/companionLocalPrefs';
 import {
@@ -2551,6 +2555,9 @@ const WorkflowSection: React.FC<{
         ? `${base}/v1/projects/${encodeURIComponent(projectId)}/assets/${encodeURIComponent(key)}`
         : '';
     const dk = String(a.displayKey || 'original').trim() || 'original';
+    // Model viewport / grid poster (image-thumb-*) must win over image-full / originalCompanionKey
+    const modelPoster = resolveWorkflowModelStepPosterSrc(a, dk, toUrl);
+    if (modelPoster) return modelPoster;
     if (dk !== 'original') {
       const stepKey = String(a.resultsCompanionKeys?.[dk] || '').trim();
       if (stepKey) return toUrl(stepKey);
@@ -2569,6 +2576,8 @@ const WorkflowSection: React.FC<{
     const dk = String(a.displayKey || 'original').trim() || 'original';
     const modelKey = resolveWorkflowStepModelCompanionKeys(a, dk).find((key) => String(key || '').trim());
     if (modelKey) return String(modelKey).trim();
+    const previewKey = String(a.resultsPreviewCompanionKeys?.[dk] || '').trim();
+    if (previewKey) return previewKey;
     if (dk !== 'original') {
       return (
         String(a.resultsCompanionKeys?.[dk] || '').trim() ||
@@ -2586,6 +2595,14 @@ const WorkflowSection: React.FC<{
       return storyboardTableCoverImage(a);
     }
     const healed = healWorkflowAssetDisplayKeyIfEmpty(a);
+    const dk = String(healed.displayKey || 'original').trim() || 'original';
+    const modelPoster = resolveWorkflowModelStepPosterSrc(healed, dk, null);
+    if (modelPoster) return modelPoster;
+    // Model cards: companion image-thumb must win over hydrated image-full in asset.original
+    if (workflowAssetHasModelAtStep(healed, dk)) {
+      const fromCompanion = resolveAssetCompanionKeyDisplayImage(healed);
+      if (fromCompanion) return fromCompanion;
+    }
     const orig = asWorkflowImageString(healed.original);
     if (isWorkflowTextAsset(healed)) {
       const slot = resolveWorkflowDisplaySlot(healed);
@@ -3524,8 +3541,9 @@ ${lineSvg}
       setAssets((prev) =>
         prev.map((x) => {
           if (x.id !== task.assetId) return x;
-          // 对话文生文保持不入格
+          // 对话文生文 / PBR 贴图保持不入格
           if (x.assetKind === 'text' && x.hiddenInGrid) return x;
+          if (isWorkflowPbrTextureAsset(x)) return { ...x, hiddenInGrid: true };
           return { ...x, hiddenInGrid: false };
         })
       );
@@ -4130,13 +4148,15 @@ ${lineSvg}
                 },
               },
               displayKey: tKey,
-              // 对话文生文资产保持 hidden；组内子项保留原值；其余生成完成后入格
+              // 对话文生文资产保持 hidden；PBR 贴图永不入格；组内子项保留原值；其余生成完成后入格
               hiddenInGrid:
-                a.assetKind === 'text' && a.hiddenInGrid
+                isWorkflowPbrTextureAsset(a)
                   ? true
-                  : a.groupId
-                    ? a.hiddenInGrid
-                    : false,
+                  : a.assetKind === 'text' && a.hiddenInGrid
+                    ? true
+                    : a.groupId
+                      ? a.hiddenInGrid
+                      : false,
             };
           })
         );
@@ -4177,7 +4197,7 @@ ${lineSvg}
                 imageTags: { ...(a.imageTags || {}), [key]: tagList },
                 imageTagStage: { ...(a.imageTagStage || {}), [key]: 'coarse' as const },
                 displayKey: key,
-                hiddenInGrid: a.groupId ? a.hiddenInGrid : false,
+                hiddenInGrid: isWorkflowPbrTextureAsset(a) ? true : a.groupId ? a.hiddenInGrid : false,
               };
               const hadOverride = task.promptOverride != null && task.promptOverride.trim() !== '';
               next = applyVgpAfterSuccessfulGen(next, {
@@ -4742,13 +4762,15 @@ ${lineSvg}
                     resultOrder: nextOrder,
                     resultMeta: nextMeta,
                     displayKey: tKey,
-                    // 对话文生文资产保持 hidden；组内子项保留原值；其余生成完成后入格
+                    // 对话文生文资产保持 hidden；PBR 贴图永不入格；组内子项保留原值；其余生成完成后入格
                     hiddenInGrid:
-                      a.assetKind === 'text' && a.hiddenInGrid
+                      isWorkflowPbrTextureAsset(a)
                         ? true
-                        : a.groupId
-                          ? a.hiddenInGrid
-                          : false,
+                        : a.assetKind === 'text' && a.hiddenInGrid
+                          ? true
+                          : a.groupId
+                            ? a.hiddenInGrid
+                            : false,
                   };
                   return next;
                 })
@@ -4797,7 +4819,7 @@ ${lineSvg}
                       imageTags: { ...(a.imageTags || {}), [key]: tagList },
                       imageTagStage: { ...(a.imageTagStage || {}), [key]: 'coarse' as const },
                       displayKey: key,
-                      hiddenInGrid: a.groupId ? a.hiddenInGrid : false,
+                      hiddenInGrid: isWorkflowPbrTextureAsset(a) ? true : a.groupId ? a.hiddenInGrid : false,
                     };
                     const hadOverride = task.promptOverride != null && task.promptOverride.trim() !== '';
                     const summaryLabel = getTaskLogLabel(task);
@@ -4893,7 +4915,7 @@ ${lineSvg}
                           }
                         : {}),
                       displayKey: result ? key : a.displayKey,
-                      hiddenInGrid: a.groupId ? a.hiddenInGrid : false,
+                      hiddenInGrid: isWorkflowPbrTextureAsset(a) ? true : a.groupId ? a.hiddenInGrid : false,
                     };
                     if (result) {
                       const hadOverride = task.promptOverride != null && task.promptOverride.trim() !== '';
@@ -8094,7 +8116,10 @@ ${lineSvg}
   ]);
 
   const visibleAssets = useMemo(() => {
-    const base = assets.filter((a) => !a.archived && !a.inRepository && !a.hiddenInGrid);
+    // hiddenInGrid + PBR 贴图（capability=pbr_texture）永不入格
+    const base = assets.filter(
+      (a) => !a.archived && !a.inRepository && !isWorkflowAssetHiddenFromAssetGrid(a)
+    );
     // 组筛选模式：显示该组成员
     if (groupFilterId) {
       const group = assets.find(
@@ -8124,10 +8149,11 @@ ${lineSvg}
     return sortRootWorkflowAssetsNewestFirst(
       assets.filter((a) => {
         if (a.archived || a.inRepository) return false;
+        if (isWorkflowAssetHiddenFromAssetGrid(a)) return false;
         // 显示全部：隐藏“组容器”本体，仅展示可见叶子资产（含组内子资产）
         if (isGroupAsset(a)) return false;
         if (isGroupChildAsset(a)) return true;
-        return !a.hiddenInGrid;
+        return true;
       })
     );
   }, [assets, showAllInGroup, visibleAssets]);
@@ -8877,7 +8903,7 @@ ${lineSvg}
         assets.filter(
           (a) =>
             !a.archived &&
-            !a.hiddenInGrid &&
+            !isWorkflowAssetHiddenFromAssetGrid(a) &&
             !a.parentAssetId &&
             !isWorkflowStoryboardTableAsset(a) &&
             !isGroupAsset(a)
@@ -9518,7 +9544,12 @@ ${lineSvg}
         const mimeType = String(detail?.mimeType || '').trim() || undefined;
         const slot = detail?.slot;
         const materialId = String(detail?.materialId || '').trim();
-        const source = detail?.source === 'generate' ? 'generate' : 'upload';
+        const source =
+          detail?.source === 'generate'
+            ? 'generate'
+            : detail?.source === 'embedded'
+              ? 'embedded'
+              : 'upload';
         const newAsset = attachInitialVgpToNewAsset({
           id,
           original: dataUrl,
@@ -9526,6 +9557,7 @@ ${lineSvg}
           results: {},
           resultOrder: [],
           archived: false,
+          // 落盘隐藏资产：列表靠 hiddenInGrid + capability=pbr_texture 双保险过滤
           hiddenInGrid: true,
           createdAt: Date.now(),
           resultMeta: {
@@ -10411,7 +10443,16 @@ ${lineSvg}
     setAssets((prev) =>
       prev.map((a) => {
         if (a.id === assetId) {
-          return { ...a, archived: true, inRepository: true, hiddenInGrid: false, groupId: undefined, groupLabel: undefined, groupOrder: undefined };
+          return {
+            ...a,
+            archived: true,
+            inRepository: true,
+            // PBR 贴图即使进仓库也保持隐藏，列表靠 capability 双保险
+            hiddenInGrid: isWorkflowPbrTextureAsset(a) ? true : false,
+            groupId: undefined,
+            groupLabel: undefined,
+            groupOrder: undefined,
+          };
         }
         // 如果是组容器，从 assetIds 中移除
         if (isGroupAsset(a)) {

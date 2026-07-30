@@ -2,7 +2,10 @@
  * PBR 贴图升格为正式资产：Viewer 不直接改 setAssets，经事件由 WorkflowSection 创建并落盘。
  */
 
-import type { WorkflowModelPbrSlot, WorkflowModelPbrSlotCandidateSource } from './workflowModelPbrEdits';
+import type {
+  WorkflowModelPbrSlot,
+  WorkflowModelPbrTexturePromoteSource,
+} from './workflowModelPbrEdits';
 
 export const WORKFLOW_MODEL_PBR_TEXTURE_PROMOTE_REQUEST_EVENT =
   'asset-preview:model3d-pbr-texture-promote-request';
@@ -17,7 +20,7 @@ export type WorkflowModelPbrTexturePromoteRequestDetail = {
   hostAssetId: string;
   materialId?: string;
   slot?: WorkflowModelPbrSlot;
-  source: WorkflowModelPbrSlotCandidateSource;
+  source: WorkflowModelPbrTexturePromoteSource;
   presetId?: string;
 };
 
@@ -69,7 +72,7 @@ export function requestPromotePbrTextureAsset(input: {
   hostAssetId: string;
   materialId?: string;
   slot?: WorkflowModelPbrSlot;
-  source: WorkflowModelPbrSlotCandidateSource;
+  source: WorkflowModelPbrTexturePromoteSource;
   presetId?: string;
 }): Promise<WorkflowModelPbrTexturePromoteResult> {
   if (typeof window === 'undefined') {

@@ -422,12 +422,10 @@ export function workflowPbrEditDocMatchesModel(
   const variantId = clean(opts.variantId);
   const docVariant = clean(doc.variantId);
   const docModel = clean(doc.modelKey);
-  // When the viewer knows its version id, require an exact variant match (or legacy
-  // doc with no variantId but the same modelKey). Never accept another step's doc.
+  // Viewer knows its version: require exact variant match. Do NOT fall back to
+  // modelKey alone — shared filenames / companion keys caused cross-version atlas paint.
   if (variantId) {
-    if (docVariant === variantId) return true;
-    if (!docVariant && modelKey && docModel === modelKey) return true;
-    return false;
+    return docVariant === variantId;
   }
   if (modelKey && docModel === modelKey) return true;
   return false;
@@ -450,6 +448,9 @@ export function pbrTextureEditMatchesRewriteSource(
   return false;
 }
 
+/** 升格来源：候选 generate/upload，或 GLB 嵌入贴图 embedded */
+export type WorkflowModelPbrTexturePromoteSource = WorkflowModelPbrSlotCandidateSource | 'embedded';
+
 /** 仅有 dataUrl、尚无 assetId 的槽/候选（惰性升格用） */
 export function listLegacyPbrTextureDataUrlRefs(doc: WorkflowModelPbrEditDoc | null | undefined): Array<{
   materialId: string;
@@ -459,7 +460,7 @@ export function listLegacyPbrTextureDataUrlRefs(doc: WorkflowModelPbrEditDoc | n
   dataUrl: string;
   fileName: string;
   mimeType?: string;
-  source: WorkflowModelPbrSlotCandidateSource;
+  source: WorkflowModelPbrTexturePromoteSource;
 }> {
   const out: Array<{
     materialId: string;
@@ -469,7 +470,7 @@ export function listLegacyPbrTextureDataUrlRefs(doc: WorkflowModelPbrEditDoc | n
     dataUrl: string;
     fileName: string;
     mimeType?: string;
-    source: WorkflowModelPbrSlotCandidateSource;
+    source: WorkflowModelPbrTexturePromoteSource;
   }> = [];
   if (!doc?.materials) return out;
   for (const [materialId, mat] of Object.entries(doc.materials)) {
@@ -484,7 +485,7 @@ export function listLegacyPbrTextureDataUrlRefs(doc: WorkflowModelPbrEditDoc | n
           dataUrl: editData,
           fileName: edit.fileName || 'texture',
           mimeType: edit.mimeType,
-          source: 'upload',
+          source: edit.source === 'embedded' ? 'embedded' : 'upload',
         });
       }
       for (const cand of mat.slotCandidates?.[slot] || []) {
@@ -615,17 +616,57 @@ export function pbrEditDocHasUserAuthoredTextures(doc: WorkflowModelPbrEditDoc |
   for (const mat of Object.values(doc.materials)) {
     for (const slot of WORKFLOW_MODEL_PBR_SLOTS) {
       const edit = mat.slots?.[slot];
-      if (!edit?.enabled) continue;
-      if (edit.source === 'user') return true;
-      if (edit.source === 'embedded') continue;
-      // Legacy: formal texture asset or generate/upload candidates imply user authorship.
-      if (clean(edit.assetId)) return true;
-      const cands = mat.slotCandidates?.[slot] || [];
-      if (cands.some((c) => c.source === 'generate' || c.source === 'upload')) return true;
+      if (!shouldApplyPbrTextureEditToMesh(edit)) continue;
+      return true;
     }
-    if (Object.keys(mat.params || {}).length > 0) return true;
   }
   return false;
+}
+
+/**
+ * Whether a slot edit should be painted onto the live mesh.
+ * Embedded GLB extracts are panel-only — re-applying them via TextureLoader
+ * flips/scrambling UV atlases and can paste another version's map onto the wrong mesh.
+ */
+export function shouldApplyPbrTextureEditToMesh(
+  edit: WorkflowModelPbrTextureEdit | null | undefined
+): boolean {
+  if (!edit?.enabled) return false;
+  if (edit.source === 'embedded') return false;
+  if (edit.source === 'user') return true;
+  // Legacy: formal asset / dataUrl without source tag (pre-source field).
+  return Boolean(clean(edit.assetId) || clean(edit.dataUrl));
+}
+
+/** 正式 PBR 贴图资产（capability=pbr_texture）；应落盘但永不进资产网格。 */
+export function isWorkflowPbrTextureAsset(asset: {
+  resultMeta?: Record<string, { source?: { capability?: string } | null } | null | undefined> | null | undefined;
+} | null | undefined): boolean {
+  const meta = asset?.resultMeta;
+  if (!meta || typeof meta !== 'object') return false;
+  for (const entry of Object.values(meta)) {
+    if (String(entry?.source?.capability || '').trim() === 'pbr_texture') return true;
+  }
+  return false;
+}
+
+/** 资产列表 / 灯箱条 / @提及：hidden 或 PBR 贴图一律不展示。 */
+export function isWorkflowAssetHiddenFromAssetGrid(asset: {
+  hiddenInGrid?: boolean;
+  resultMeta?: Record<string, { source?: { capability?: string } | null } | null | undefined> | null | undefined;
+} | null | undefined): boolean {
+  if (!asset) return true;
+  return !!asset.hiddenInGrid || isWorkflowPbrTextureAsset(asset);
+}
+
+/**
+ * 重开 3D：已有匹配到本模型的持久化 doc（含仅 embedded 且已升格）时不要再从 mesh 覆盖，
+ * 否则会清掉 assetId、重复 promote、资产列表/伴侣膨胀。
+ */
+export function shouldReseedEmbeddedPbrDocFromMesh(
+  matchedDoc: WorkflowModelPbrEditDoc | null | undefined
+): boolean {
+  return !matchedDoc;
 }
 
 export function workflowModelPbrEditKey(assetId: string | undefined, variantId: string | undefined, modelKey: string | undefined): string {
