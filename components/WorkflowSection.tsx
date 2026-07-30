@@ -70,6 +70,7 @@ import { DEFAULT_MODEL_TEXT } from '../services/modelRegistry/constants';
 import {
   applyPbrTextureAssetIdToDoc,
   collectAssetAllPbrTextureAssetIds,
+  collectReferencedPbrTextureAssetIdsFromAssets,
   filterUnreferencedPbrTextureAssetIds,
   isWorkflowAssetHiddenFromAssetGrid,
   isWorkflowPbrTextureAsset,
@@ -8114,10 +8115,15 @@ ${lineSvg}
     showArchived,
   ]);
 
+  const referencedPbrTextureIds = useMemo(
+    () => collectReferencedPbrTextureAssetIdsFromAssets(assets),
+    [assets]
+  );
+
   const visibleAssets = useMemo(() => {
     // hiddenInGrid + PBR 贴图（capability=pbr_texture）永不入格
     const base = assets.filter(
-      (a) => !a.archived && !a.inRepository && !isWorkflowAssetHiddenFromAssetGrid(a)
+      (a) => !a.archived && !a.inRepository && !isWorkflowAssetHiddenFromAssetGrid(a, { referencedPbrTextureIds })
     );
     // 组筛选模式：显示该组成员
     if (groupFilterId) {
@@ -8142,20 +8148,20 @@ ${lineSvg}
     return sortRootWorkflowAssetsNewestFirst(
       base.filter((a) => !a.groupId)
     );
-  }, [assets, groupFilterId]);
+  }, [assets, groupFilterId, referencedPbrTextureIds]);
   const rootCanvasAssets = useMemo(() => {
     if (!showAllInGroup) return visibleAssets;
     return sortRootWorkflowAssetsNewestFirst(
       assets.filter((a) => {
         if (a.archived || a.inRepository) return false;
-        if (isWorkflowAssetHiddenFromAssetGrid(a)) return false;
+        if (isWorkflowAssetHiddenFromAssetGrid(a, { referencedPbrTextureIds })) return false;
         // 显示全部：隐藏“组容器”本体，仅展示可见叶子资产（含组内子资产）
         if (isGroupAsset(a)) return false;
         if (isGroupChildAsset(a)) return true;
         return true;
       })
     );
-  }, [assets, showAllInGroup, visibleAssets]);
+  }, [assets, showAllInGroup, visibleAssets, referencedPbrTextureIds]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -8902,15 +8908,14 @@ ${lineSvg}
         assets.filter(
           (a) =>
             !a.archived &&
-            !isWorkflowAssetHiddenFromAssetGrid(a) &&
+            !isWorkflowAssetHiddenFromAssetGrid(a, { referencedPbrTextureIds }) &&
             !a.parentAssetId &&
             !isWorkflowStoryboardTableAsset(a) &&
             !isGroupAsset(a)
         )
       ),
-    [assets]
+    [assets, referencedPbrTextureIds]
   );
-  const lightboxListRef = useRef(lightboxList);
   lightboxListRef.current = lightboxList;
   const lightboxIndex = lightboxAssetId ? lightboxList.findIndex((a) => a.id === lightboxAssetId) : -1;
   useEffect(() => {

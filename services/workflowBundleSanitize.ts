@@ -10,6 +10,7 @@ import {
   normalizeStoryboardTableOnAsset,
   upgradeLegacyWorkflowStoryboardTableAsset,
 } from './storyboardTableAsset';
+import { healWorkflowPbrTextureGridVisibility } from './workflowModelPbrEdits';
 
 export type WorkflowBundleSanitizeStats = {
   /** 从组 assetIds 中移除的无效或重复引用条数 */
@@ -40,7 +41,7 @@ export function sanitizeWorkflowProjectBundle(
 
   const validIds = new Set(assets.map((a) => a.id));
 
-  const nextAssets = assets.map((a) => {
+  let nextAssets = assets.map((a) => {
     const upgradedSet = upgradeLegacyWorkflowAssetSetAsset(a);
     if (isWorkflowAssetSetAsset(upgradedSet)) {
       try {
@@ -95,6 +96,7 @@ export function sanitizeWorkflowProjectBundle(
     return a;
   });
 
+  nextAssets = healWorkflowPbrTextureGridVisibility(nextAssets);
   const validAfter = new Set(nextAssets.map((x) => x.id));
   const nextPending = pending.filter((t) => {
     const aid = String(t.assetId || '').trim();

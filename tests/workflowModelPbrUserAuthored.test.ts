@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
+  collectReferencedPbrTextureAssetIdsFromAssets,
+  healWorkflowPbrTextureGridVisibility,
   isWorkflowAssetHiddenFromAssetGrid,
   isWorkflowPbrTextureAsset,
   listLegacyPbrTextureDataUrlRefs,
@@ -166,7 +168,84 @@ describe('PBR texture grid visibility (scheme B)', () => {
     ).toBe(false);
   });
 
-  it('hides pbr textures even when hiddenInGrid flag is lost', () => {
+  it('hides by displayStepLabel / paramsSnapshot when capability missing', () => {
+    expect(
+      isWorkflowPbrTextureAsset({
+        resultMeta: {
+          original: { displayStepLabel: 'PBR Texture', source: { capability: 'image_gen' } },
+        },
+      })
+    ).toBe(true);
+    expect(
+      isWorkflowPbrTextureAsset({
+        resultMeta: {
+          original: {
+            source: {
+              capability: 'image_gen',
+              paramsSnapshot: { pbrHostAssetId: 'host-1', pbrSource: 'generate' },
+            },
+          },
+        },
+      })
+    ).toBe(true);
+  });
+
+  it('hides assets referenced by host PBR docs even without meta', () => {
+    const refs = new Set(['tex-1']);
+    expect(
+      isWorkflowAssetHiddenFromAssetGrid(
+        { id: 'tex-1', hiddenInGrid: false, resultMeta: {} },
+        { referencedPbrTextureIds: refs }
+      )
+    ).toBe(true);
+    expect(
+      isWorkflowAssetHiddenFromAssetGrid(
+        { id: 'other', hiddenInGrid: false, resultMeta: {} },
+        { referencedPbrTextureIds: refs }
+      )
+    ).toBe(false);
+  });
+
+  it('heals lost hiddenInGrid + capability from host slot refs', () => {
+    const host = {
+      id: 'host',
+      hiddenInGrid: false,
+      modelPbrEdits: {
+        version: 1 as const,
+        assetId: 'host',
+        modelKey: 'm',
+        updatedAt: 1,
+        materials: {
+          mat: {
+            materialName: 'mat',
+            slots: {
+              baseColor: {
+                assetId: 'tex-orphan',
+                fileName: 'a.png',
+                channel: 'rgb' as const,
+                colorSpace: 'srgb' as const,
+                source: 'user' as const,
+                enabled: true,
+                updatedAt: 1,
+              },
+            },
+          },
+        },
+      },
+    };
+    const tex = {
+      id: 'tex-orphan',
+      hiddenInGrid: false,
+      resultMeta: {},
+    };
+    const healed = healWorkflowPbrTextureGridVisibility([host, tex] as any);
+    const nextTex = healed.find((a: any) => a.id === 'tex-orphan');
+    expect(nextTex?.hiddenInGrid).toBe(true);
+    expect(nextTex?.resultMeta?.original?.source?.capability).toBe('pbr_texture');
+    expect(collectReferencedPbrTextureAssetIdsFromAssets(healed).has('tex-orphan')).toBe(true);
+  });
+
+    it('hides pbr textures even when hiddenInGrid flag is lost', () => {
     expect(
       isWorkflowAssetHiddenFromAssetGrid({
         hiddenInGrid: false,

@@ -638,31 +638,121 @@ export function shouldApplyPbrTextureEditToMesh(
   return Boolean(clean(edit.assetId) || clean(edit.dataUrl));
 }
 
-/** 正式 PBR 贴图资产（capability=pbr_texture）；应落盘但永不进资产网格。 */
+type WorkflowPbrTextureMetaEntry = {
+  displayStepLabel?: string | null;
+  source?: {
+    capability?: string | null;
+    paramsSnapshot?: unknown;
+  } | null;
+} | null | undefined;
+
+function pbrParamsSnapshotLooksLikeTexture(snapshot: unknown): boolean {
+  if (!snapshot || typeof snapshot !== 'object') return false;
+  const snap = snapshot as Record<string, unknown>;
+  if (clean(String(snap.pbrHostAssetId || ''))) return true;
+  const src = clean(String(snap.pbrSource || ''));
+  return src === 'upload' || src === 'generate' || src === 'embedded';
+}
+
+/** Formal PBR texture assets: persist on disk but never enter the asset grid. */
 export function isWorkflowPbrTextureAsset(asset: {
-  resultMeta?: Record<string, { source?: { capability?: string } | null } | null | undefined> | null | undefined;
+  resultMeta?: Record<string, WorkflowPbrTextureMetaEntry> | null | undefined;
 } | null | undefined): boolean {
   const meta = asset?.resultMeta;
   if (!meta || typeof meta !== 'object') return false;
   for (const entry of Object.values(meta)) {
     if (String(entry?.source?.capability || '').trim() === 'pbr_texture') return true;
+    if (String(entry?.displayStepLabel || '').trim() === 'PBR Texture') return true;
+    if (pbrParamsSnapshotLooksLikeTexture(entry?.source?.paramsSnapshot)) return true;
   }
   return false;
 }
 
-/** 资产列表 / 灯箱条 / @提及：hidden 或 PBR 贴图一律不展示。 */
-export function isWorkflowAssetHiddenFromAssetGrid(asset: {
-  hiddenInGrid?: boolean;
-  resultMeta?: Record<string, { source?: { capability?: string } | null } | null | undefined> | null | undefined;
-} | null | undefined): boolean {
-  if (!asset) return true;
-  return !!asset.hiddenInGrid || isWorkflowPbrTextureAsset(asset);
+/** Collect texture asset ids referenced by any host PBR docs. */
+export function collectReferencedPbrTextureAssetIdsFromAssets(
+  assets: Array<WorkflowAssetPbrHost & { id?: string }> | null | undefined
+): Set<string> {
+  const out = new Set<string>();
+  for (const asset of assets || []) {
+    for (const id of collectAssetAllPbrTextureAssetIds(asset)) out.add(id);
+  }
+  return out;
 }
 
 /**
- * 重开 3D：已有匹配到本模型的持久化 doc（含仅 embedded 且已升格）时不要再从 mesh 覆盖，
- * 否则会清掉 assetId、重复 promote、资产列表/伴侣膨胀。
+ * Heal after load/merge: force hiddenInGrid + capability for PBR textures
+ * (by meta or by host slot reference) so re-login cannot re-show them in the grid.
  */
+export function healWorkflowPbrTextureGridVisibility<
+  T extends WorkflowAssetPbrHost & {
+    id: string;
+    hiddenInGrid?: boolean;
+    resultMeta?: Record<string, WorkflowPbrTextureMetaEntry> | null;
+  },
+>(assets: T[]): T[] {
+  if (!assets.length) return assets;
+  const refs = collectReferencedPbrTextureAssetIdsFromAssets(assets);
+  let changed = false;
+  const next = assets.map((asset) => {
+    const byRef = refs.has(asset.id);
+    const byMeta = isWorkflowPbrTextureAsset(asset);
+    if (!byRef && !byMeta) return asset;
+
+    let patched: T = asset;
+    if (!patched.hiddenInGrid) {
+      patched = { ...patched, hiddenInGrid: true };
+      changed = true;
+    }
+
+    const meta = { ...(patched.resultMeta || {}) };
+    const original =
+      meta.original && typeof meta.original === 'object'
+        ? { ...(meta.original as Record<string, unknown>) }
+        : ({ executedAt: Date.now() } as Record<string, unknown>);
+    const prevSource = original.source;
+    const source =
+      prevSource && typeof prevSource === 'object'
+        ? { ...(prevSource as Record<string, unknown>) }
+        : ({ source: 'local' } as Record<string, unknown>);
+    const capability = String(source.capability || '').trim();
+    const label = String(original.displayStepLabel || '').trim();
+    let metaTouched = false;
+    if (capability !== 'pbr_texture') {
+      source.capability = 'pbr_texture';
+      metaTouched = true;
+    }
+    if (label !== 'PBR Texture') {
+      original.displayStepLabel = 'PBR Texture';
+      metaTouched = true;
+    }
+    if (metaTouched || !meta.original) {
+      original.source = source;
+      if (typeof original.executedAt !== 'number') original.executedAt = Date.now();
+      meta.original = original as WorkflowPbrTextureMetaEntry;
+      patched = { ...patched, resultMeta: meta };
+      changed = true;
+    }
+    return patched;
+  });
+  return changed ? next : assets;
+}
+
+/** Asset grid / lightbox / @mention: hide flagged, PBR-tagged, or PBR-referenced assets. */
+export function isWorkflowAssetHiddenFromAssetGrid(
+  asset: {
+    id?: string;
+    hiddenInGrid?: boolean;
+    resultMeta?: Record<string, WorkflowPbrTextureMetaEntry> | null | undefined;
+  } | null | undefined,
+  options?: { referencedPbrTextureIds?: ReadonlySet<string> }
+): boolean {
+  if (!asset) return true;
+  if (asset.hiddenInGrid || isWorkflowPbrTextureAsset(asset)) return true;
+  const id = clean(asset.id);
+  if (id && options?.referencedPbrTextureIds?.has(id)) return true;
+  return false;
+}
+
 export function shouldReseedEmbeddedPbrDocFromMesh(
   matchedDoc: WorkflowModelPbrEditDoc | null | undefined
 ): boolean {
