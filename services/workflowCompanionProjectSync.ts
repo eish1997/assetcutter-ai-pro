@@ -133,17 +133,20 @@ export function preferCompanionWorkflowBundle(params: {
   // Never replace a canvas that has assets with a companion snapshot that has none.
   if (localAssets > 0 && cAssets === 0) return cloneLocalBundle(local);
 
-  // Companion poorer in assets: only take it if explicitly newer.
+  // Companion poorer/richer: only replace local when companion is strictly newer.
+  // Richer-but-stale companion must not resurrect assets the user just deleted
+  // (IDB already saved fewer rows while companion PUT lagged).
   const localUpdatedAt = Number(params.localUpdatedAt || 0);
   const companionUpdatedAt = Number(companion.updatedAt || 0);
-  if (cAssets < localAssets) {
+  if (cAssets !== localAssets) {
     if (companionUpdatedAt > 0 && localUpdatedAt > 0 && companionUpdatedAt > localUpdatedAt) {
       return companionBundle;
     }
-    return cloneLocalBundle(local);
+    if (localAssets > 0) return cloneLocalBundle(local);
+    return companionBundle;
   }
 
-  // Equal or richer companion asset set → prefer companion (source of truth when healthy).
+  // Equal asset count → prefer companion (source of truth when healthy).
   if (cAssets > 0 || (cPending > 0 && localAssets === 0)) {
     return companionBundle;
   }

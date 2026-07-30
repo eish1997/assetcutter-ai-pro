@@ -83,4 +83,54 @@ describe('preferCompanionWorkflowBundle', () => {
     });
     expect(out?.assets.map((a) => a.id)).toEqual(['newer']);
   });
+
+  it('does not resurrect deleted assets from a richer but stale companion snapshot', () => {
+    const out = preferCompanionWorkflowBundle({
+      local: { assets: [asset('kept')], pending: [] },
+      companion: {
+        schemaVersion: 1,
+        projectId: 'p1',
+        updatedAt: 10,
+        bundle: {
+          assets: [asset('kept'), asset('deleted-tex-1'), asset('deleted-tex-2')],
+          pending: [],
+        },
+      },
+      localUpdatedAt: 20,
+    });
+    expect(out?.assets.map((a) => a.id)).toEqual(['kept']);
+  });
+
+  it('keeps local after delete when companion is richer and localUpdatedAt is missing', () => {
+    const out = preferCompanionWorkflowBundle({
+      local: { assets: [asset('kept')], pending: [] },
+      companion: {
+        schemaVersion: 1,
+        projectId: 'p1',
+        updatedAt: 99,
+        bundle: {
+          assets: [asset('kept'), asset('stale-tex')],
+          pending: [],
+        },
+      },
+    });
+    expect(out?.assets.map((a) => a.id)).toEqual(['kept']);
+  });
+
+  it('accepts richer companion when companion updatedAt is strictly newer', () => {
+    const out = preferCompanionWorkflowBundle({
+      local: { assets: [asset('kept')], pending: [] },
+      companion: {
+        schemaVersion: 1,
+        projectId: 'p1',
+        updatedAt: 50,
+        bundle: {
+          assets: [asset('kept'), asset('from-other-device')],
+          pending: [],
+        },
+      },
+      localUpdatedAt: 20,
+    });
+    expect(out?.assets.map((a) => a.id)).toEqual(['kept', 'from-other-device']);
+  });
 });

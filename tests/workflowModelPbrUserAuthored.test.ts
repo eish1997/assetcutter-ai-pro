@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   collectReferencedPbrTextureAssetIdsFromAssets,
+  detachPbrTextureAssetIdsFromAssets,
   healWorkflowPbrTextureGridVisibility,
   isWorkflowAssetHiddenFromAssetGrid,
   isWorkflowPbrTextureAsset,
@@ -8,6 +9,7 @@ import {
   pbrEditDocHasUserAuthoredTextures,
   shouldApplyPbrTextureEditToMesh,
   shouldReseedEmbeddedPbrDocFromMesh,
+  stripInlineDataUrlsFromPbrEditDoc,
   type WorkflowModelPbrEditDoc,
 } from '../services/workflowModelPbrEdits';
 
@@ -326,5 +328,92 @@ describe('PBR texture grid visibility (scheme B)', () => {
     });
     expect(refs).toHaveLength(1);
     expect(refs[0]?.source).toBe('embedded');
+  });
+
+  it('strips nested PBR dataUrls once assetId is present', () => {
+    const big = `data:image/png;base64,${'A'.repeat(100_000)}`;
+    const doc: WorkflowModelPbrEditDoc = {
+      version: 1,
+      assetId: 'host',
+      modelKey: 'm',
+      updatedAt: 1,
+      materials: {
+        mat1: {
+          slots: {
+            baseColor: {
+              assetId: 'tex-1',
+              dataUrl: big,
+              fileName: 'atlas.png',
+              channel: 'rgb',
+              colorSpace: 'srgb',
+              enabled: true,
+              updatedAt: 1,
+            },
+          },
+        },
+      },
+    };
+    const stripped = stripInlineDataUrlsFromPbrEditDoc(doc, {
+      resolvableAssetIds: new Set(['tex-1']),
+    });
+    expect(stripped?.materials.mat1.slots?.baseColor?.assetId).toBe('tex-1');
+    expect(stripped?.materials.mat1.slots?.baseColor?.dataUrl).toBeUndefined();
+  });
+
+  it('keeps nested dataUrl when texture asset is not yet resolvable', () => {
+    const big = `data:image/png;base64,${'A'.repeat(100_000)}`;
+    const doc: WorkflowModelPbrEditDoc = {
+      version: 1,
+      assetId: 'host',
+      modelKey: 'm',
+      updatedAt: 1,
+      materials: {
+        mat1: {
+          slots: {
+            baseColor: {
+              assetId: 'tex-1',
+              dataUrl: big,
+              fileName: 'atlas.png',
+              channel: 'rgb',
+              colorSpace: 'srgb',
+              enabled: true,
+              updatedAt: 1,
+            },
+          },
+        },
+      },
+    };
+    const kept = stripInlineDataUrlsFromPbrEditDoc(doc, {
+      resolvableAssetIds: new Set(),
+    });
+    expect(kept?.materials.mat1.slots?.baseColor?.dataUrl).toBe(big);
+  });
+
+  it('detaches deleted texture assetIds from host PBR docs', () => {
+    const host = {
+      id: 'host',
+      modelPbrEdits: {
+        version: 1 as const,
+        assetId: 'host',
+        modelKey: 'm',
+        updatedAt: 1,
+        materials: {
+          mat1: {
+            slots: {
+              baseColor: {
+                assetId: 'tex-1',
+                fileName: 'a.png',
+                channel: 'rgb' as const,
+                colorSpace: 'srgb' as const,
+                enabled: true,
+                updatedAt: 1,
+              },
+            },
+          },
+        },
+      },
+    };
+    const next = detachPbrTextureAssetIdsFromAssets([host], new Set(['tex-1']));
+    expect(next[0]?.modelPbrEdits?.materials.mat1.slots?.baseColor).toBeUndefined();
   });
 });

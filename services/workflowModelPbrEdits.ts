@@ -308,6 +308,203 @@ export function diffRemovedPbrTextureAssetIds(
 }
 
 /**
+ * Persist/sync: drop nested atlas dataUrls once the formal texture asset can be
+ * reloaded (companion / object key). Never strip dataUrl-only seeds (pre-promote).
+ */
+export function stripInlineDataUrlsFromPbrEditDoc(
+  doc: WorkflowModelPbrEditDoc | null | undefined,
+  options?: {
+    dropAllDataUrls?: boolean;
+    /** Only strip when assetId is in this set (has companion/object/http original). */
+    resolvableAssetIds?: ReadonlySet<string>;
+  }
+): WorkflowModelPbrEditDoc | null {
+  const normalized = normalizeWorkflowModelPbrEditDoc(doc);
+  if (!normalized) return doc ? { ...doc } : null;
+  const dropAll = Boolean(options?.dropAllDataUrls);
+  const resolvable = options?.resolvableAssetIds;
+  let touched = false;
+  const materials: WorkflowModelPbrEditDoc['materials'] = {};
+  for (const [matId, mat] of Object.entries(normalized.materials || {})) {
+    const nextSlots: WorkflowModelPbrMaterialEdit['slots'] = { ...(mat.slots || {}) };
+    for (const slot of WORKFLOW_MODEL_PBR_SLOTS) {
+      const edit = nextSlots[slot];
+      if (!edit?.dataUrl) continue;
+      const aid = clean(edit.assetId);
+      const shouldDrop =
+        dropAll ||
+        (Boolean(aid) && (!resolvable || resolvable.has(aid)));
+      if (!shouldDrop) continue;
+      const { dataUrl: _d, ...rest } = edit;
+      nextSlots[slot] = rest;
+      touched = true;
+    }
+    const nextCands: NonNullable<WorkflowModelPbrMaterialEdit['slotCandidates']> = {
+      ...(mat.slotCandidates || {}),
+    };
+    for (const slot of WORKFLOW_MODEL_PBR_SLOTS) {
+      const list = nextCands[slot];
+      if (!list?.length) continue;
+      nextCands[slot] = list.map((c) => {
+        if (!c.dataUrl) return c;
+        const aid = clean(c.assetId);
+        const shouldDrop =
+          dropAll ||
+          (Boolean(aid) && (!resolvable || resolvable.has(aid)));
+        if (!shouldDrop) return c;
+        const { dataUrl: _d, ...rest } = c;
+        touched = true;
+        return rest;
+      });
+    }
+    materials[matId] = {
+      ...mat,
+      slots: nextSlots,
+      slotCandidates: Object.keys(nextCands).length ? nextCands : mat.slotCandidates,
+    };
+  }
+  if (!touched) return normalized;
+  return { ...normalized, materials, updatedAt: Date.now() };
+}
+
+export function stripInlineDataUrlsFromAssetPbrFields<
+  T extends WorkflowAssetPbrHost,
+>(
+  asset: T,
+  options?: {
+    dropAllDataUrls?: boolean;
+    resolvableAssetIds?: ReadonlySet<string>;
+  }
+): T {
+  let next: T = asset;
+  if (asset.modelPbrEdits) {
+    const stripped = stripInlineDataUrlsFromPbrEditDoc(asset.modelPbrEdits, options);
+    if (stripped && stripped !== asset.modelPbrEdits) {
+      next = { ...next, modelPbrEdits: stripped };
+    }
+  }
+  if (asset.stepModelPbrEdits && typeof asset.stepModelPbrEdits === 'object') {
+    let stepTouched = false;
+    const steps: NonNullable<WorkflowAssetPbrHost['stepModelPbrEdits']> = {
+      ...asset.stepModelPbrEdits,
+    };
+    for (const [k, doc] of Object.entries(steps)) {
+      const stripped = stripInlineDataUrlsFromPbrEditDoc(doc, options);
+      if (stripped && stripped !== doc) {
+        steps[k] = stripped;
+        stepTouched = true;
+      }
+    }
+    if (stepTouched) next = { ...next, stepModelPbrEdits: steps };
+  }
+  return next;
+}
+
+/** Remove texture assetId refs from a PBR doc (after user deletes texture cards). */
+export function detachPbrTextureAssetIdsFromDoc(
+  doc: WorkflowModelPbrEditDoc | null | undefined,
+  removeIds: ReadonlySet<string>
+): WorkflowModelPbrEditDoc | null {
+  const normalized = normalizeWorkflowModelPbrEditDoc(doc);
+  if (!normalized || !removeIds.size) return normalized;
+  let touched = false;
+  const materials: WorkflowModelPbrEditDoc['materials'] = {};
+  for (const [matId, mat] of Object.entries(normalized.materials || {})) {
+    const nextSlots: WorkflowModelPbrMaterialEdit['slots'] = { ...(mat.slots || {}) };
+    for (const slot of WORKFLOW_MODEL_PBR_SLOTS) {
+      const edit = nextSlots[slot];
+      if (!edit) continue;
+      const aid = clean(edit.assetId);
+      if (!aid || !removeIds.has(aid)) continue;
+      const { assetId: _a, dataUrl, ...rest } = edit;
+      const kept = clean(dataUrl);
+      if (kept) {
+        nextSlots[slot] = { ...rest, dataUrl: kept };
+      } else {
+        delete nextSlots[slot];
+      }
+      touched = true;
+    }
+    const nextCands: NonNullable<WorkflowModelPbrMaterialEdit['slotCandidates']> = {
+      ...(mat.slotCandidates || {}),
+    };
+    for (const slot of WORKFLOW_MODEL_PBR_SLOTS) {
+      const list = nextCands[slot];
+      if (!list?.length) continue;
+      const filtered = list
+        .map((c) => {
+          const aid = clean(c.assetId);
+          if (!aid || !removeIds.has(aid)) return c;
+          const { assetId: _a, dataUrl, ...rest } = c;
+          const kept = clean(dataUrl);
+          touched = true;
+          if (kept) return { ...rest, id: rest.id || aid, dataUrl: kept };
+          return null;
+        })
+        .filter(Boolean) as WorkflowModelPbrSlotCandidate[];
+      nextCands[slot] = filtered;
+    }
+    let nextActive = mat.activeCandidateIds;
+    if (nextActive) {
+      const activeNext = { ...nextActive };
+      let activeTouched = false;
+      for (const slot of WORKFLOW_MODEL_PBR_SLOTS) {
+        const cur = clean(activeNext[slot]);
+        if (cur && removeIds.has(cur)) {
+          delete activeNext[slot];
+          activeTouched = true;
+          touched = true;
+        }
+      }
+      nextActive = activeTouched ? activeNext : nextActive;
+    }
+    materials[matId] = {
+      ...mat,
+      slots: nextSlots,
+      slotCandidates: Object.keys(nextCands).length ? nextCands : mat.slotCandidates,
+      activeCandidateIds: nextActive,
+    };
+  }
+  if (!touched) return normalized;
+  return { ...normalized, materials, updatedAt: Date.now() };
+}
+
+export function detachPbrTextureAssetIdsFromAssets<T extends WorkflowAssetPbrHost & { id: string }>(
+  assets: T[],
+  removeIds: ReadonlySet<string>
+): T[] {
+  if (!assets.length || !removeIds.size) return assets;
+  let changed = false;
+  const next = assets.map((asset) => {
+    let patched: T = asset;
+    if (asset.modelPbrEdits) {
+      const doc = detachPbrTextureAssetIdsFromDoc(asset.modelPbrEdits, removeIds);
+      if (doc && doc !== asset.modelPbrEdits) {
+        patched = { ...patched, modelPbrEdits: doc };
+        changed = true;
+      }
+    }
+    if (asset.stepModelPbrEdits && typeof asset.stepModelPbrEdits === 'object') {
+      let stepTouched = false;
+      const steps = { ...asset.stepModelPbrEdits };
+      for (const [k, doc] of Object.entries(steps)) {
+        const scrubbed = detachPbrTextureAssetIdsFromDoc(doc, removeIds);
+        if (scrubbed && scrubbed !== doc) {
+          steps[k] = scrubbed;
+          stepTouched = true;
+        }
+      }
+      if (stepTouched) {
+        patched = { ...patched, stepModelPbrEdits: steps };
+        changed = true;
+      }
+    }
+    return patched;
+  });
+  return changed ? next : assets;
+}
+
+/**
  * 从候选 id 中筛出「当前资产列表里已无任何 modelPbrEdits / stepModelPbrEdits 引用」的贴图资产。
  * `excludeAssetId`：正在被替换/删除的宿主，不参与引用统计。
  * `extraReferencedIds`：快捷栏等外部仍占用的 id。
@@ -722,6 +919,13 @@ function collectAllPbrTextureDataUrls(
     /* ignore */
   }
   return out;
+}
+
+/** Host + localStorage PBR docs' inline dataUrls (for grid hide when original was stripped). */
+export function collectReferencedPbrTextureDataUrlsFromAssets(
+  assets: Array<WorkflowAssetPbrHost> | null | undefined
+): Set<string> {
+  return collectAllPbrTextureDataUrls(assets);
 }
 
 /**

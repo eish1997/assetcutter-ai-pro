@@ -53,6 +53,28 @@ export function workflowBundleStorageKey(projectId: string, persistUserId: Works
     : `ac_workflow_bundle_v1_${projectId}`;
 }
 
+function workflowBundleSavedAtKey(projectId: string, persistUserId: WorkspacePersistUserId): string {
+  return `${workflowBundleStorageKey(projectId, persistUserId)}__savedAt`;
+}
+
+/** Last successful local bundle save time (ms); used to beat stale companion prefers. */
+export function readWorkflowBundleSavedAt(
+  projectId: string,
+  persistUserId: WorkspacePersistUserId = null
+): number {
+  const raw = readLocalString(workflowBundleSavedAtKey(projectId, persistUserId));
+  const n = Number(raw || 0);
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+function writeWorkflowBundleSavedAt(
+  projectId: string,
+  persistUserId: WorkspacePersistUserId,
+  atMs: number = Date.now()
+): void {
+  writeLocalString(workflowBundleSavedAtKey(projectId, persistUserId), String(atMs));
+}
+
 /** 浏览器端持久化 workflow bundle 的 schema 版本；历史包缺此字段视为 0 */
 export const WORKFLOW_BUNDLE_SCHEMA_CURRENT = 1;
 
@@ -616,6 +638,7 @@ export function saveWorkflowBundle(
   syncStoryboardPersistGuardFromAssets(key, snapshot.assets, opts?.explicitlyRemovedStoryboardIds);
   const payload = JSON.stringify(stripWorkflowBundleForIdbPersist(snapshot));
   schedulePersistToIdb(key, payload, opts);
+  writeWorkflowBundleSavedAt(projectId, persistUserId);
   return { saved: true, restoredStoryboardAssets };
 }
 

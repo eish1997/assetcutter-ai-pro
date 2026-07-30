@@ -25,7 +25,8 @@ AI-assisted asset workflow workbench (workspace, capability presets, experimenta
 - [x] Fix workspace asset grid staircase (drop-host `relative` no longer overrides justified `absolute`); PBR promote prefers companion import; media/archive fetch timeout default 120s
 - [x] PBR texture assets stay out of the workspace grid after re-login: heal `hiddenInGrid`+capability+`pbrHostAssetId` on sanitize; also hide by host slot refs / label / paramsSnapshot
 - [x] Workspace grid uses progressive thumbs for http(s)/blob (not full-res `<img>`), preventing UV-atlas decode black screens
-- [x] 3D preview PBR slot generate: override params panel (aspect/size/understand/count 1xï¿½x4); defaults keep preset aspect/size/understand; only explicit picks override
+- [x] PBR black-screen hardening: stale richer companion snapshots do not resurrect deleted assets; tighter grid thumb decode limits; strip nested PBR dataUrls only when resolvable; PBR textures still hydrate for 3D panel (stay hidden from grid)
+- [x] 3D preview PBR slot generate: override params panel (aspect/size/understand/count 1x–4); defaults keep preset aspect/size/understand; only explicit picks override
 - [x] Workflow 3D lightbox: remember camera/view; GL/scene warm cache; close captures live frame as card poster only (never overwrite `original` / full companion images); multi-version `__v__` models + per-step PBR seeds; side-tree/strip thumbs refresh on close; companion `thumb-mi/th` overwrite stable keys (strip `:fp`/`:r`/`:ck`)
 - [x] Admin Tripo Generation Test: video/model3d wait default 660s (avoids false timeout while upstream still succeeds)
 - [x] AI Gateway image timeout: Gemini/image modality jobs use 600s AbortSignal (not 120s); auth-store JSON fallback uses atomic write + UNKNOWN/EPERM retries

@@ -4,6 +4,7 @@ import { isWorkflowStoryboardTableAsset } from './storyboardTableAsset';
 import { r2ApiUrl } from './apiBase';
 import { requestJson } from './httpClient';
 import { fetchCompanionAssetAsDataUrl } from './workflowCompanionAssets';
+import { stripInlineDataUrlsFromAssetPbrFields } from './workflowModelPbrEdits';
 
 type UploadUrlResponse = { uploadUrl: string; objectKey: string };
 type DownloadUrlResponse = { downloadUrl: string; objectKey: string };
@@ -408,6 +409,23 @@ export async function packWorkflowBundleForCloud(
   packOpts?: PackWorkflowBundleForCloudOptions
 ): Promise<WorkflowCloudBundleV2> {
   const assets: WorkflowAsset[] = JSON.parse(JSON.stringify(bundle.assets)) as WorkflowAsset[];
+  const resolvable = new Set(
+    assets
+      .filter((x) => {
+        const id = String(x.id || '').trim();
+        if (!id) return false;
+        if (String(x.originalCompanionKey || '').trim()) return true;
+        if (String(x.originalObjectKey || '').trim()) return true;
+        return /^https?:\/\//i.test(String(x.original || '').trim());
+      })
+      .map((x) => String(x.id || '').trim())
+      .filter(Boolean)
+  );
+  for (let i = 0; i < assets.length; i += 1) {
+    assets[i] = stripInlineDataUrlsFromAssetPbrFields(assets[i], {
+      resolvableAssetIds: resolvable,
+    }) as WorkflowAsset;
+  }
   const pending: WorkflowPendingTask[] = JSON.parse(JSON.stringify(bundle.pending)) as WorkflowPendingTask[];
   const dataUrlToKey = new Map<string, string>();
   const contentHashToKey = new Map<string, string>();

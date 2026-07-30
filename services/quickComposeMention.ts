@@ -1,6 +1,7 @@
 import type { WorkflowAsset } from '../types';
 import {
   collectReferencedPbrTextureAssetIdsFromAssets,
+  collectReferencedPbrTextureDataUrlsFromAssets,
   isWorkflowAssetHiddenFromAssetGrid,
   type WorkflowModelPbrTextureRewriteTarget,
 } from './workflowModelPbrEdits';
@@ -537,12 +538,13 @@ export function listQuickComposeMentionCandidates(
 ): QuickComposeMentionCandidate[] {
   const out: QuickComposeMentionCandidate[] = [];
   const referencedPbrTextureIds = collectReferencedPbrTextureAssetIdsFromAssets(assets);
+  const pbrTextureDataUrls = collectReferencedPbrTextureDataUrlsFromAssets(assets);
   if (options?.includeCurrentView) {
     out.push({ kind: 'current_view', label: QUICK_COMPOSE_CURRENT_VIEW_LABEL });
   }
   for (const a of assets) {
     if (a.archived && !options?.archivedVisible) continue;
-    if (isWorkflowAssetHiddenFromAssetGrid(a, { referencedPbrTextureIds })) continue;
+    if (isWorkflowAssetHiddenFromAssetGrid(a, { referencedPbrTextureIds, pbrTextureDataUrls })) continue;
     if (a.isGroup) continue;
     out.push({
       kind: 'asset',

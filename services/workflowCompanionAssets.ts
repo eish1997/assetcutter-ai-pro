@@ -19,6 +19,7 @@ import { fetchMediaUrlViaAuthApi } from './mediaUrlAuthFetch';
 import { workflowModelSlotMayNeedCompanionHydrate, isWorkflowModelUrlReadable } from './workflowModelBlob';
 import { normalizeDataUrlForVisionApi } from './workflowImageDataUrlCompress';
 import { createPreviewThumbnail } from './workflowImageThumb';
+import { stripInlineDataUrlsFromAssetPbrFields } from './workflowModelPbrEdits';
 
 /** 与 `storyboardNamedAssetImage.StoryboardNamedAssetImageFields` 同形；内联避免 companion 模块环 */
 type StoryboardNamedAssetImageFields = {
@@ -1177,7 +1178,27 @@ function shouldStripModelUrlForPersist(url: string): boolean {
 export function stripWorkflowBundleForIdbPersist(bundle: WorkflowProjectBundle): WorkflowProjectBundle {
   const raw = JSON.stringify(bundle);
   const out = JSON.parse(raw) as WorkflowProjectBundle;
+  const resolvablePbrAssetIds = new Set(
+    out.assets
+      .filter((x) => {
+        const id = String(x.id || '').trim();
+        if (!id) return false;
+        if (String(x.originalCompanionKey || '').trim()) return true;
+        if (String((x as { originalObjectKey?: string }).originalObjectKey || '').trim()) return true;
+        const orig = String(x.original || '').trim();
+        return /^https?:\/\//i.test(orig);
+      })
+      .map((x) => String(x.id || '').trim())
+      .filter(Boolean)
+  );
   for (const a of out.assets) {
+    const strippedPbr = stripInlineDataUrlsFromAssetPbrFields(a, {
+      resolvableAssetIds: resolvablePbrAssetIds,
+    });
+    if (strippedPbr !== a) {
+      a.modelPbrEdits = strippedPbr.modelPbrEdits;
+      a.stepModelPbrEdits = strippedPbr.stepModelPbrEdits;
+    }
     if (String(a.originalCompanionKey || '').trim() && shouldStripOriginalForPersist(String(a.original || ''))) {
       a.original = '';
     }

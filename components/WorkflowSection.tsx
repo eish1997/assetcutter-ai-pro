@@ -71,6 +71,8 @@ import {
   applyPbrTextureAssetIdToDoc,
   collectAssetAllPbrTextureAssetIds,
   collectReferencedPbrTextureAssetIdsFromAssets,
+  collectReferencedPbrTextureDataUrlsFromAssets,
+  detachPbrTextureAssetIdsFromAssets,
   filterUnreferencedPbrTextureAssetIds,
   healWorkflowPbrTextureGridVisibility,
   isWorkflowAssetHiddenFromAssetGrid,
@@ -8120,7 +8122,8 @@ ${lineSvg}
   const gridAssets = useMemo(() => healWorkflowPbrTextureGridVisibility(assets), [assets]);
   const pbrGridHideContext = useMemo(() => {
     const referencedPbrTextureIds = collectReferencedPbrTextureAssetIdsFromAssets(gridAssets);
-    return { referencedPbrTextureIds };
+    const pbrTextureDataUrls = collectReferencedPbrTextureDataUrlsFromAssets(gridAssets);
+    return { referencedPbrTextureIds, pbrTextureDataUrls };
   }, [gridAssets]);
   const referencedPbrTextureIds = pbrGridHideContext.referencedPbrTextureIds;
   const pbrHealPersistSigRef = React.useRef('');
@@ -8131,8 +8134,9 @@ ${lineSvg}
       .join('|');
     if (sig === pbrHealPersistSigRef.current) return;
     pbrHealPersistSigRef.current = sig;
-    const t = window.setTimeout(() => setAssets(gridAssets), 300);
-    return () => window.clearTimeout(t);
+    // Sync write-back so the first paint after reload does not briefly show PBR cards
+    // and so autosave does not push an un-healed snapshot to companion/cloud.
+    setAssets(gridAssets);
   }, [assets, gridAssets, setAssets]);
 
   const visibleAssets = useMemo(() => {
@@ -10529,8 +10533,11 @@ ${lineSvg}
         }
       );
       const removeSet = new Set<string>([assetId, ...pbrTexIds]);
+      // Deleting a texture card (or host cascade): also scrub host PBR docs so reopen
+      // does not keep dead assetId refs that confuse heal / re-promote.
       const removedList = prev.filter((a) => removeSet.has(a.id));
-      const next = prev.filter((a) => !removeSet.has(a.id));
+      let next = prev.filter((a) => !removeSet.has(a.id));
+      next = detachPbrTextureAssetIdsFromAssets(next, removeSet);
       for (const item of removedList) {
         if (isWorkflowStoryboardTableAsset(item)) {
           onStoryboardTableAssetRemoved?.(item.id);

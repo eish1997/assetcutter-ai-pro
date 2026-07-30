@@ -91,8 +91,10 @@ export function shouldUseWorkflowGridThumb(src: string): boolean {
 }
 
 /** Skip grid decode for oversized sources (UV atlases) — prevents GPU black screens. */
-export const PREVIEW_THUMB_MAX_DATA_URL_CHARS = 1_800_000; // ~1.3MB binary
-export const PREVIEW_THUMB_MAX_BLOB_BYTES = 3_500_000; // ~3.5MB
+export const PREVIEW_THUMB_MAX_DATA_URL_CHARS = 900_000; // ~0.65MB binary
+export const PREVIEW_THUMB_MAX_BLOB_BYTES = 750_000; // ~0.75MB — UV atlases often compress under 3MB
+/** Refuse to upload decoded bitmaps larger than this to a canvas (grid thumbs only). */
+export const PREVIEW_THUMB_MAX_PIXELS = 2048 * 2048;
 
 function drawSrcToCanvas(safeSrc: string, maxEdge: number): Promise<HTMLCanvasElement | null> {
   // Giant inline data URLs: never decode full atlas for a grid thumb.
@@ -149,7 +151,7 @@ function drawSrcToCanvas(safeSrc: string, maxEdge: number): Promise<HTMLCanvasEl
           bitmap = await createImageBitmap(blob);
         }
         // Still too huge after decode — refuse to upload to GPU canvas at full size.
-        if (bitmap.width * bitmap.height > 4096 * 4096) {
+        if (bitmap.width * bitmap.height > PREVIEW_THUMB_MAX_PIXELS) {
           try {
             bitmap.close();
           } catch {
@@ -181,7 +183,7 @@ function drawSrcToCanvas(safeSrc: string, maxEdge: number): Promise<HTMLCanvasEl
           resolve(null);
           return;
         }
-        if (w * h > 4096 * 4096) {
+        if (w * h > PREVIEW_THUMB_MAX_PIXELS) {
           resolve(null);
           return;
         }
@@ -240,7 +242,7 @@ export function createPreviewMicroThumbnail(
           try {
             resolve(canvas.toDataURL('image/jpeg', jpegFallbackQuality));
           } catch {
-            resolve(safe);
+            resolve(WORKFLOW_IMG_EMPTY_PLACEHOLDER);
           }
         }
       });

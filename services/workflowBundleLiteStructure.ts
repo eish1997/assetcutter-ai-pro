@@ -1,4 +1,5 @@
 import type { WorkflowAsset, WorkflowPendingTask } from '../types';
+import { stripInlineDataUrlsFromAssetPbrFields } from './workflowModelPbrEdits';
 
 /** data: / blob: 或明显内联大串，不写入轻量结构快照 */
 function isStrippableInlineMedia(s: string): boolean {
@@ -9,8 +10,13 @@ function isStrippableInlineMedia(s: string): boolean {
   return false;
 }
 
-function stripAssetForLite(a: WorkflowAsset): WorkflowAsset {
-  const out = { ...a } as WorkflowAsset;
+function stripAssetForLite(
+  a: WorkflowAsset,
+  resolvableAssetIds?: ReadonlySet<string>
+): WorkflowAsset {
+  const out = stripInlineDataUrlsFromAssetPbrFields({ ...a } as WorkflowAsset, {
+    resolvableAssetIds,
+  }) as WorkflowAsset;
   if (isStrippableInlineMedia(String(out.original || ''))) {
     out.original = '';
   }
@@ -65,8 +71,20 @@ export function stripInlineMediaFromWorkflowBundleForLiteSync(bundle: {
   pending: WorkflowPendingTask[];
   capabilityRefs?: Array<{ kind: 'preset' | 'set'; id: string; snapshot?: unknown }>;
 } {
+  const resolvable = new Set(
+    (bundle.assets || [])
+      .filter((x) => {
+        const id = String(x.id || '').trim();
+        if (!id) return false;
+        if (String(x.originalCompanionKey || '').trim()) return true;
+        if (String(x.originalObjectKey || '').trim()) return true;
+        return /^https?:\/\//i.test(String(x.original || '').trim());
+      })
+      .map((x) => String(x.id || '').trim())
+      .filter(Boolean)
+  );
   return {
-    assets: (bundle.assets || []).map((a) => stripAssetForLite({ ...a })),
+    assets: (bundle.assets || []).map((a) => stripAssetForLite({ ...a }, resolvable)),
     pending: (bundle.pending || []).map((t) => stripPendingForLite({ ...t })),
     ...(Array.isArray(bundle.capabilityRefs) && bundle.capabilityRefs.length
       ? { capabilityRefs: bundle.capabilityRefs }

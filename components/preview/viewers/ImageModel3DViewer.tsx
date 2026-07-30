@@ -435,7 +435,11 @@ async function createTextureFromEdit(
 ): Promise<THREE.Texture | null> {
   const prepared = await prepareTextureDataUrl(edit, slot, sourceSrc);
   if (!prepared) return null;
-  const texture = await new THREE.TextureLoader().loadAsync(prepared);
+  const loader = new THREE.TextureLoader();
+  if (/^https?:\/\//i.test(prepared)) {
+    loader.setCrossOrigin('anonymous');
+  }
+  const texture = await loader.loadAsync(prepared);
   texture.name = edit.fileName;
   // glTF → flipY false；FBX/OBJ 手动贴图 → true（见 resolveWorkflowPbrTextureFlipY）
   texture.flipY = resolveWorkflowPbrTextureFlipY(modelFormat, edit);

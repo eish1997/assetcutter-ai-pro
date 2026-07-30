@@ -91,6 +91,7 @@ import {
   createWorkspaceProject,
   getLastOpenedWorkspaceProjectId,
   loadWorkflowBundle,
+  readWorkflowBundleSavedAt,
   saveWorkflowBundle,
   consumeWorkspaceMigrationNotices,
   consumeWorkflowBundleLoadDegraded,
@@ -1888,7 +1889,11 @@ const MainApp: React.FC = () => {
             if (activeWorkspaceProjectIdRef.current !== id) return;
             if (snap.ok) {
               if (truthPolicy.preferCompanionWorkflowOnOpen) {
-                const preferred = preferCompanionWorkflowBundle({ local, companion: snap.data });
+                const preferred = preferCompanionWorkflowBundle({
+                  local,
+                  companion: snap.data,
+                  localUpdatedAt: readWorkflowBundleSavedAt(id, scope) || undefined,
+                });
                 if (
                   preferred &&
                   activeWorkspaceProjectIdRef.current === id &&

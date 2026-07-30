@@ -13,6 +13,7 @@ import {
 import {
   collectReferencedPbrTextureAssetIdsFromAssets,
   isWorkflowAssetHiddenFromAssetGrid,
+  isWorkflowPbrTextureAsset,
 } from './workflowModelPbrEdits';
 
 export const WORKFLOW_COMPANION_LAZY_HYDRATE_MAX_PARALLEL = 4;
@@ -39,7 +40,11 @@ function buildCompanionLazyHydrateTasks(
   const hideOpts = { referencedPbrTextureIds };
 
   for (const a of assets) {
-    if (isWorkflowAssetHiddenFromAssetGrid(a, hideOpts)) continue;
+    // PBR textures are hidden from the grid but must still hydrate: persist often
+    // keeps only assetId on slots; the 3D panel resolves via asset.original / companion.
+    const isPbrTexture =
+      isWorkflowPbrTextureAsset(a) || referencedPbrTextureIds.has(a.id);
+    if (isWorkflowAssetHiddenFromAssetGrid(a, hideOpts) && !isPbrTexture) continue;
     const inView = visibleAssetIds.has(a.id);
     const priority = inView ? 0 : 1;
     const origKey = String(a.originalCompanionKey || '').trim();

@@ -2,6 +2,8 @@
 import {
   shouldUsePreviewThumbnail,
   PREVIEW_THUMB_MAX_DATA_URL_CHARS,
+  PREVIEW_THUMB_MAX_BLOB_BYTES,
+  PREVIEW_THUMB_MAX_PIXELS,
 } from '../services/workflowImageThumb';
 
 describe('shouldUsePreviewThumbnail', () => {
@@ -16,5 +18,7 @@ describe('shouldUsePreviewThumbnail', () => {
 
   it('exports size gates for oversized atlas sources', () => {
     expect(PREVIEW_THUMB_MAX_DATA_URL_CHARS).toBeGreaterThan(100_000);
+    expect(PREVIEW_THUMB_MAX_BLOB_BYTES).toBeLessThanOrEqual(1_000_000);
+    expect(PREVIEW_THUMB_MAX_PIXELS).toBeLessThanOrEqual(2048 * 2048);
   });
 });

@@ -17,6 +17,10 @@ import {
   workflowOriginalCompanionStorageKey,
   workflowResultCompanionStorageKey,
 } from './workflowCompanionAssets';
+import {
+  collectReferencedPbrTextureAssetIdsFromAssets,
+  healWorkflowPbrTextureGridVisibility,
+} from './workflowModelPbrEdits';
 
 export type CompanionManifestKeyGap =
   | { kind: 'original'; assetId: string; key: string }
@@ -872,6 +876,7 @@ export function mergeUnlinkedManifestEntriesIntoWorkflowAssets(
 
   let nextAssets = assets.map((a) => ({ ...a }));
   const newAssets: WorkflowAsset[] = [];
+  const knownPbrTexIds = collectReferencedPbrTextureAssetIdsFromAssets(assets);
 
   for (const g of wfGroups.values()) {
     const idx = findExistingAssetIndexForCompanionGroup(nextAssets, g.canonicalAssetId);
@@ -887,6 +892,7 @@ export function mergeUnlinkedManifestEntriesIntoWorkflowAssets(
       const resultOrder = Object.keys(g.results).sort();
       const rck =
         Object.keys(g.results).length > 0 ? { ...g.results } : undefined;
+      const isPbrTexture = knownPbrTexIds.has(g.canonicalAssetId);
       newAssets.push(
         attachInitialVgpToNewAsset({
           id: g.canonicalAssetId,
@@ -899,7 +905,22 @@ export function mergeUnlinkedManifestEntriesIntoWorkflowAssets(
           modelCompanionKeys: mck,
           modelUrls: [],
           archived: false,
-          hiddenInGrid: false,
+          hiddenInGrid: isPbrTexture,
+          ...(isPbrTexture
+            ? {
+                resultMeta: {
+                  original: {
+                    executedAt: Date.now(),
+                    displayStepLabel: 'PBR Texture',
+                    source: {
+                      source: 'local',
+                      capability: 'pbr_texture',
+                      paramsSnapshot: { pbrSource: 'embedded' },
+                    },
+                  },
+                },
+              }
+            : {}),
           createdAt: Date.now(),
         })
       );
@@ -950,5 +971,9 @@ export function mergeUnlinkedManifestEntriesIntoWorkflowAssets(
   if (importedKeys.length === 0) {
     return { nextAssets: assets, importedKeys: [] };
   }
-  return { nextAssets: [...nextAssets, ...newAssets], importedKeys };
+  const merged = [...nextAssets, ...newAssets];
+  return {
+    nextAssets: healWorkflowPbrTextureGridVisibility(merged),
+    importedKeys,
+  };
 }
