@@ -1,7 +1,7 @@
 import { WORKFLOW_IMG_EMPTY_PLACEHOLDER, workflowSafeImgSrc } from './workflowImageDisplay';
 
 /** 缩略解码并发上限：避免首屏大量 `drawImage` 与大图 decode 抢主线程，拖慢当前视口内卡片 */
-const PREVIEW_THUMB_DECODE_MAX_PARALLEL = 3;
+const PREVIEW_THUMB_DECODE_MAX_PARALLEL = 2;
 
 let previewThumbDecodeRunning = 0;
 const previewThumbDecodeHighQueue: Array<() => void> = [];
@@ -56,10 +56,12 @@ export const WORKFLOW_GRID_THUMB_DATA_URL_MIN_CHARS = PREVIEW_THUMB_MIN_DATA_URL
 
 export function shouldUsePreviewThumbnail(src: string): boolean {
   const s = workflowSafeImgSrc(src);
-  if (!s.startsWith('data:')) return false;
-  if (s.length < PREVIEW_THUMB_MIN_DATA_URL_CHARS) return false;
-  if (s === WORKFLOW_IMG_EMPTY_PLACEHOLDER) return false;
-  return true;
+  if (!s || s === WORKFLOW_IMG_EMPTY_PLACEHOLDER) return false;
+  // data: short placeholders can bind directly; large data URLs need progressive thumbs.
+  if (s.startsWith('data:')) return s.length >= PREVIEW_THUMB_MIN_DATA_URL_CHARS;
+  // http(s)/blob: never bind full-res into grid cards (UV atlases black-screen GPUs).
+  if (/^(https?:|blob:)/i.test(s)) return true;
+  return false;
 }
 
 /**
@@ -88,9 +90,16 @@ export function shouldUseWorkflowGridThumb(src: string): boolean {
   return shouldUsePreviewThumbnail(src);
 }
 
-function drawDataUrlToCanvas(safeDataUrl: string, maxEdge: number): Promise<HTMLCanvasElement | null> {
+function drawSrcToCanvas(safeSrc: string, maxEdge: number): Promise<HTMLCanvasElement | null> {
   return new Promise((resolve) => {
     const img = new Image();
+    if (/^https?:/i.test(safeSrc)) {
+      try {
+        img.crossOrigin = 'anonymous';
+      } catch {
+        /* ignore */
+      }
+    }
     img.onload = () => {
       try {
         const w = img.naturalWidth;
@@ -117,7 +126,7 @@ function drawDataUrlToCanvas(safeDataUrl: string, maxEdge: number): Promise<HTML
       }
     };
     img.onerror = () => resolve(null);
-    img.src = safeDataUrl;
+    img.src = safeSrc;
   });
 }
 
@@ -133,12 +142,14 @@ export function createPreviewMicroThumbnail(
   decodePriority: PreviewThumbDecodePriority = 'low'
 ): Promise<string> {
   const safe = workflowSafeImgSrc(dataUrl);
-  if (typeof document === 'undefined' || !safe.startsWith('data:')) return Promise.resolve(safe);
+  if (typeof document === 'undefined') return Promise.resolve(safe);
+  if (!safe.startsWith('data:') && !/^(https?:|blob:)/i.test(safe)) return Promise.resolve(safe);
   return runPreviewThumbDecode(decodePriority, () =>
     new Promise<string>((resolve) => {
-      void drawDataUrlToCanvas(safe, maxEdge).then((canvas) => {
+      void drawSrcToCanvas(safe, maxEdge).then((canvas) => {
         if (!canvas) {
-          resolve(safe);
+          // CORS/taint or decode failure: never fall back to full-res in grid.
+          resolve(WORKFLOW_IMG_EMPTY_PLACEHOLDER);
           return;
         }
         try {
@@ -171,18 +182,19 @@ export function createPreviewThumbnail(
   decodePriority: PreviewThumbDecodePriority = 'low'
 ): Promise<string> {
   const safe = workflowSafeImgSrc(dataUrl);
-  if (typeof document === 'undefined' || !safe.startsWith('data:')) return Promise.resolve(safe);
+  if (typeof document === 'undefined') return Promise.resolve(safe);
+  if (!safe.startsWith('data:') && !/^(https?:|blob:)/i.test(safe)) return Promise.resolve(safe);
   return runPreviewThumbDecode(decodePriority, () =>
     new Promise<string>((resolve) => {
-      void drawDataUrlToCanvas(safe, maxEdge).then((canvas) => {
+      void drawSrcToCanvas(safe, maxEdge).then((canvas) => {
         if (!canvas) {
-          resolve(safe);
+          resolve(WORKFLOW_IMG_EMPTY_PLACEHOLDER);
           return;
         }
         try {
           resolve(canvas.toDataURL('image/jpeg', quality));
         } catch {
-          resolve(safe);
+          resolve(WORKFLOW_IMG_EMPTY_PLACEHOLDER);
         }
       });
     })

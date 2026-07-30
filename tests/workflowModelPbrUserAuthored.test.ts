@@ -168,6 +168,23 @@ describe('PBR texture grid visibility (scheme B)', () => {
     ).toBe(false);
   });
 
+  it('hides by top-level pbrHostAssetId', () => {
+    expect(
+      isWorkflowPbrTextureAsset({
+        pbrHostAssetId: 'host-1',
+        resultMeta: {},
+      })
+    ).toBe(true);
+    expect(
+      isWorkflowAssetHiddenFromAssetGrid({
+        id: 'tex',
+        hiddenInGrid: false,
+        pbrHostAssetId: 'host-1',
+        resultMeta: {},
+      })
+    ).toBe(true);
+  });
+
   it('hides by displayStepLabel / paramsSnapshot when capability missing', () => {
     expect(
       isWorkflowPbrTextureAsset({

@@ -654,10 +654,28 @@ function pbrParamsSnapshotLooksLikeTexture(snapshot: unknown): boolean {
   return src === 'upload' || src === 'generate' || src === 'embedded';
 }
 
+function collectPbrTextureDataUrlsFromDoc(doc: WorkflowModelPbrEditDoc | null | undefined): Set<string> {
+  const out = new Set<string>();
+  if (!doc?.materials) return out;
+  for (const mat of Object.values(doc.materials)) {
+    for (const slot of WORKFLOW_MODEL_PBR_SLOTS) {
+      const du = clean(mat.slots?.[slot]?.dataUrl);
+      if (du) out.add(du);
+      for (const cand of mat.slotCandidates?.[slot] || []) {
+        const cdu = clean(cand.dataUrl);
+        if (cdu) out.add(cdu);
+      }
+    }
+  }
+  return out;
+}
+
 /** Formal PBR texture assets: persist on disk but never enter the asset grid. */
 export function isWorkflowPbrTextureAsset(asset: {
+  pbrHostAssetId?: string | null;
   resultMeta?: Record<string, WorkflowPbrTextureMetaEntry> | null | undefined;
 } | null | undefined): boolean {
+  if (clean(asset?.pbrHostAssetId)) return true;
   const meta = asset?.resultMeta;
   if (!meta || typeof meta !== 'object') return false;
   for (const entry of Object.values(meta)) {
@@ -668,7 +686,7 @@ export function isWorkflowPbrTextureAsset(asset: {
   return false;
 }
 
-/** Collect texture asset ids referenced by any host PBR docs. */
+/** Collect texture asset ids referenced by any host PBR docs (incl. localStorage cache). */
 export function collectReferencedPbrTextureAssetIdsFromAssets(
   assets: Array<WorkflowAssetPbrHost & { id?: string }> | null | undefined
 ): Set<string> {
@@ -676,31 +694,102 @@ export function collectReferencedPbrTextureAssetIdsFromAssets(
   for (const asset of assets || []) {
     for (const id of collectAssetAllPbrTextureAssetIds(asset)) out.add(id);
   }
+  try {
+    for (const doc of Object.values(readAllDocs())) {
+      for (const id of collectPbrTextureAssetIds(doc)) out.add(id);
+    }
+  } catch {
+    /* ignore */
+  }
+  return out;
+}
+
+function collectAllPbrTextureDataUrls(
+  assets: Array<WorkflowAssetPbrHost> | null | undefined
+): Set<string> {
+  const out = new Set<string>();
+  for (const asset of assets || []) {
+    for (const du of collectPbrTextureDataUrlsFromDoc(asset.modelPbrEdits)) out.add(du);
+    for (const doc of Object.values(asset.stepModelPbrEdits || {})) {
+      for (const du of collectPbrTextureDataUrlsFromDoc(doc)) out.add(du);
+    }
+  }
+  try {
+    for (const doc of Object.values(readAllDocs())) {
+      for (const du of collectPbrTextureDataUrlsFromDoc(doc)) out.add(du);
+    }
+  } catch {
+    /* ignore */
+  }
   return out;
 }
 
 /**
- * Heal after load/merge: force hiddenInGrid + capability for PBR textures
- * (by meta or by host slot reference) so re-login cannot re-show them in the grid.
+ * Heal after load/merge: force hiddenInGrid + capability + pbrHostAssetId for PBR textures
+ * (by meta, host slot ref, localStorage doc, or matching embedded dataUrl).
  */
 export function healWorkflowPbrTextureGridVisibility<
   T extends WorkflowAssetPbrHost & {
     id: string;
+    original?: string;
     hiddenInGrid?: boolean;
+    pbrHostAssetId?: string;
     resultMeta?: Record<string, WorkflowPbrTextureMetaEntry> | null;
   },
 >(assets: T[]): T[] {
   if (!assets.length) return assets;
   const refs = collectReferencedPbrTextureAssetIdsFromAssets(assets);
+  const dataUrls = collectAllPbrTextureDataUrls(assets);
+  // Infer host for referenced tex ids from docs
+  const hostByTex = new Map<string, string>();
+  for (const asset of assets) {
+    const hostId = clean(asset.id);
+    if (!hostId) continue;
+    for (const texId of collectAssetAllPbrTextureAssetIds(asset)) {
+      if (!hostByTex.has(texId)) hostByTex.set(texId, hostId);
+    }
+  }
+  try {
+    for (const doc of Object.values(readAllDocs())) {
+      const hostId = clean(doc.assetId);
+      if (!hostId) continue;
+      for (const texId of collectPbrTextureAssetIds(doc)) {
+        if (!hostByTex.has(texId)) hostByTex.set(texId, hostId);
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+
   let changed = false;
   const next = assets.map((asset) => {
+    const orig = clean(asset.original);
     const byRef = refs.has(asset.id);
+    const byDataUrl = Boolean(orig && dataUrls.has(orig));
     const byMeta = isWorkflowPbrTextureAsset(asset);
-    if (!byRef && !byMeta) return asset;
+    if (!byRef && !byDataUrl && !byMeta) return asset;
 
     let patched: T = asset;
     if (!patched.hiddenInGrid) {
       patched = { ...patched, hiddenInGrid: true };
+      changed = true;
+    }
+    const inferredHost =
+      clean(patched.pbrHostAssetId) ||
+      hostByTex.get(asset.id) ||
+      (() => {
+        const meta = patched.resultMeta || {};
+        for (const entry of Object.values(meta)) {
+          const snap = entry?.source?.paramsSnapshot;
+          if (snap && typeof snap === 'object') {
+            const hid = clean(String((snap as Record<string, unknown>).pbrHostAssetId || ''));
+            if (hid) return hid;
+          }
+        }
+        return '';
+      })();
+    if (inferredHost && clean(patched.pbrHostAssetId) !== inferredHost) {
+      patched = { ...patched, pbrHostAssetId: inferredHost };
       changed = true;
     }
 
@@ -725,6 +814,17 @@ export function healWorkflowPbrTextureGridVisibility<
       original.displayStepLabel = 'PBR Texture';
       metaTouched = true;
     }
+    if (inferredHost) {
+      const snap =
+        source.paramsSnapshot && typeof source.paramsSnapshot === 'object'
+          ? { ...(source.paramsSnapshot as Record<string, unknown>) }
+          : {};
+      if (clean(String(snap.pbrHostAssetId || '')) !== inferredHost) {
+        snap.pbrHostAssetId = inferredHost;
+        source.paramsSnapshot = snap;
+        metaTouched = true;
+      }
+    }
     if (metaTouched || !meta.original) {
       original.source = source;
       if (typeof original.executedAt !== 'number') original.executedAt = Date.now();
@@ -741,15 +841,22 @@ export function healWorkflowPbrTextureGridVisibility<
 export function isWorkflowAssetHiddenFromAssetGrid(
   asset: {
     id?: string;
+    original?: string;
     hiddenInGrid?: boolean;
+    pbrHostAssetId?: string | null;
     resultMeta?: Record<string, WorkflowPbrTextureMetaEntry> | null | undefined;
   } | null | undefined,
-  options?: { referencedPbrTextureIds?: ReadonlySet<string> }
+  options?: {
+    referencedPbrTextureIds?: ReadonlySet<string>;
+    pbrTextureDataUrls?: ReadonlySet<string>;
+  }
 ): boolean {
   if (!asset) return true;
   if (asset.hiddenInGrid || isWorkflowPbrTextureAsset(asset)) return true;
   const id = clean(asset.id);
   if (id && options?.referencedPbrTextureIds?.has(id)) return true;
+  const orig = clean(asset.original);
+  if (orig && options?.pbrTextureDataUrls?.has(orig)) return true;
   return false;
 }
 

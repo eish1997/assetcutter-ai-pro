@@ -10,6 +10,10 @@ import {
   fetchWorkflowOriginalFromCompanionAsObjectUrl,
   shouldKeepExistingCompanionRasterUrl,
 } from './workflowCompanionAssets';
+import {
+  collectReferencedPbrTextureAssetIdsFromAssets,
+  isWorkflowAssetHiddenFromAssetGrid,
+} from './workflowModelPbrEdits';
 
 export const WORKFLOW_COMPANION_LAZY_HYDRATE_MAX_PARALLEL = 4;
 export const WORKFLOW_COMPANION_LAZY_HYDRATE_BATCH_MS = 48;
@@ -31,8 +35,11 @@ function buildCompanionLazyHydrateTasks(
   visibleAssetIds: Set<string>
 ): WorkflowCompanionLazyHydrateTask[] {
   const tasks: WorkflowCompanionLazyHydrateTask[] = [];
+  const referencedPbrTextureIds = collectReferencedPbrTextureAssetIdsFromAssets(assets);
+  const hideOpts = { referencedPbrTextureIds };
 
   for (const a of assets) {
+    if (isWorkflowAssetHiddenFromAssetGrid(a, hideOpts)) continue;
     const inView = visibleAssetIds.has(a.id);
     const priority = inView ? 0 : 1;
     const origKey = String(a.originalCompanionKey || '').trim();

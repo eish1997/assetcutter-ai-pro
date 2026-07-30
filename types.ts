@@ -755,6 +755,10 @@ export type WorkflowAsset = {
   /** true=仅在仓库列显示；false/undefined=在工作区列显示 */
   inRepository?: boolean;
   hiddenInGrid: boolean;
+  /**
+   * PBR 贴图资产挂靠的宿主 3D 资产 id。有值则永不进资产网格（比嵌套 resultMeta 更抗云同步丢失）。
+   */
+  pbrHostAssetId?: string;
   createdAt: number;
   /**
    * 主网格卡片占位宽高比（宽/高，约 0.5～2），与 `workflowCardAspect` 的 clamp 一致。

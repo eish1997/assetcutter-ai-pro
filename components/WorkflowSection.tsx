@@ -72,6 +72,7 @@ import {
   collectAssetAllPbrTextureAssetIds,
   collectReferencedPbrTextureAssetIdsFromAssets,
   filterUnreferencedPbrTextureAssetIds,
+  healWorkflowPbrTextureGridVisibility,
   isWorkflowAssetHiddenFromAssetGrid,
   isWorkflowPbrTextureAsset,
   normalizeWorkflowModelPbrEditDoc,
@@ -8115,15 +8116,22 @@ ${lineSvg}
     showArchived,
   ]);
 
-  const referencedPbrTextureIds = useMemo(
-    () => collectReferencedPbrTextureAssetIdsFromAssets(assets),
-    [assets]
-  );
+  const pbrGridHideContext = useMemo(() => {
+    const referencedPbrTextureIds = collectReferencedPbrTextureAssetIdsFromAssets(assets);
+    return { referencedPbrTextureIds, pbrTextureDataUrls: undefined as Set<string> | undefined };
+  }, [assets]);
+  const referencedPbrTextureIds = pbrGridHideContext.referencedPbrTextureIds;
+
+  useEffect(() => {
+    const healed = healWorkflowPbrTextureGridVisibility(assets);
+    if (healed === assets) return;
+    setAssets(healed);
+  }, [assets, setAssets]);
 
   const visibleAssets = useMemo(() => {
-    // hiddenInGrid + PBR 贴图（capability=pbr_texture）永不入格
+    const hideOpts = { referencedPbrTextureIds: pbrGridHideContext.referencedPbrTextureIds };
     const base = assets.filter(
-      (a) => !a.archived && !a.inRepository && !isWorkflowAssetHiddenFromAssetGrid(a, { referencedPbrTextureIds })
+      (a) => !a.archived && !a.inRepository && !isWorkflowAssetHiddenFromAssetGrid(a, hideOpts)
     );
     // 组筛选模式：显示该组成员
     if (groupFilterId) {
@@ -8148,20 +8156,20 @@ ${lineSvg}
     return sortRootWorkflowAssetsNewestFirst(
       base.filter((a) => !a.groupId)
     );
-  }, [assets, groupFilterId, referencedPbrTextureIds]);
+  }, [assets, groupFilterId, pbrGridHideContext]);
   const rootCanvasAssets = useMemo(() => {
     if (!showAllInGroup) return visibleAssets;
     return sortRootWorkflowAssetsNewestFirst(
       assets.filter((a) => {
         if (a.archived || a.inRepository) return false;
-        if (isWorkflowAssetHiddenFromAssetGrid(a, { referencedPbrTextureIds })) return false;
+        if (isWorkflowAssetHiddenFromAssetGrid(a, pbrGridHideContext)) return false;
         // 显示全部：隐藏“组容器”本体，仅展示可见叶子资产（含组内子资产）
         if (isGroupAsset(a)) return false;
         if (isGroupChildAsset(a)) return true;
         return true;
       })
     );
-  }, [assets, showAllInGroup, visibleAssets, referencedPbrTextureIds]);
+  }, [assets, showAllInGroup, visibleAssets, pbrGridHideContext]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -8908,7 +8916,7 @@ ${lineSvg}
         assets.filter(
           (a) =>
             !a.archived &&
-            !isWorkflowAssetHiddenFromAssetGrid(a, { referencedPbrTextureIds }) &&
+            !isWorkflowAssetHiddenFromAssetGrid(a, pbrGridHideContext) &&
             !a.parentAssetId &&
             !isWorkflowStoryboardTableAsset(a) &&
             !isGroupAsset(a)
@@ -9550,6 +9558,7 @@ ${lineSvg}
           archived: false,
           // 落盘隐藏资产：列表靠 hiddenInGrid + capability=pbr_texture 双保险过滤
           hiddenInGrid: true,
+          pbrHostAssetId: hostAssetId,
           createdAt: Date.now(),
           resultMeta: {
             original: {
@@ -11772,6 +11781,7 @@ ${lineSvg}
               resultOrder: [],
               archived: false,
               hiddenInGrid: true,
+              pbrHostAssetId: hostAssetId,
               createdAt: Date.now(),
               resultMeta: {
                 original: {
