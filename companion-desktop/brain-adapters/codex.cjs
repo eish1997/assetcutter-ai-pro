@@ -248,6 +248,21 @@ function codexItemCompletedOk(item) {
   return true;
 }
 
+function codexTransportActivity(message) {
+  const text = String(message || '').trim();
+  if (!text) return null;
+  const lower = text.toLowerCase();
+  if (lower.includes('reconnecting') || lower.includes('falling back') || lower.includes('request timed out')) {
+    return {
+      type: 'activity',
+      phase: 'start',
+      name: 'codex.network',
+      detail: text,
+    };
+  }
+  return null;
+}
+
 /**
  * Codex CLI brain adapter.
  * It intentionally shells out to the installed CLI instead of calling OpenAI
@@ -414,6 +429,26 @@ function createCodexBrainAdapter(deps) {
           queue.push({ type: 'text_delta', text: text.startsWith(prev) ? text.slice(prev.length) : text });
           completedItemText.set(itemId, text);
         }
+        return;
+      }
+      if (ev.type === 'error' && ev.message) {
+        const activity = codexTransportActivity(ev.message);
+        if (activity) queue.push(activity);
+        return;
+      }
+      if (ev.type === 'turn.failed') {
+        const message = (ev.error && ev.error.message) || ev.message || 'Codex turn failed';
+        queue.push({
+          type: 'error',
+          code: 'CODEX_TURN_FAILED',
+          message: compactDetail(message, 1200),
+        });
+        return;
+      }
+      if (ev.type === 'item.completed' && ev.item && ev.item.type === 'error') {
+        const message = ev.item.message || ev.item.text || ev.item.error || '';
+        const activity = codexTransportActivity(message);
+        if (activity) queue.push(activity);
         return;
       }
       if (ev.type === 'item.started' && ev.item && ev.item.type === 'command_execution') {

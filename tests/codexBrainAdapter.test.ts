@@ -185,4 +185,54 @@ describe('Codex brain adapter', () => {
     });
     expect(toolActivities[1].detail).toContain('AGENT_AUTH_REQUIRED');
   });
+
+  it('surfaces Codex transport retries without failing the turn', async () => {
+    const outputEvents = [
+      { type: 'thread.started', thread_id: 'thread_retry' },
+      { type: 'turn.started' },
+      { type: 'error', message: 'Reconnecting... 2/5 (request timed out)' },
+      {
+        type: 'item.completed',
+        item: {
+          id: 'transport_1',
+          type: 'error',
+          message: 'Falling back from WebSockets to HTTPS transport. request timed out',
+        },
+      },
+      { type: 'item.completed', item: { id: 'msg_1', type: 'agent_message', text: 'OK' } },
+      { type: 'turn.completed', usage: { input_tokens: 8, output_tokens: 2 } },
+    ];
+    const store = {
+      readSettings: () => ({
+        codexCommand: 'codex-test',
+        codexCwd: process.cwd(),
+        codexSandbox: 'workspace-write',
+        mcpEnabled: true,
+        mcpToken: 'assetcutter-secret-token',
+        mcpPort: 19120,
+      }),
+      brainsDir: () => process.cwd(),
+    };
+    const adapter = createCodexBrainAdapter({
+      store,
+      upsertCodexMcpServerConfig: () => ({ ok: true, changed: false, path: 'config.toml' }),
+      spawnCodex: () => createFakeCodexProcess(() => {}, outputEvents),
+    });
+
+    const events = [];
+    for await (const ev of adapter.streamTurn({
+      sessionId: 'session_retry',
+      messages: [{ role: 'user', content: 'say ok' }],
+      tools: [],
+    })) {
+      events.push(ev);
+    }
+
+    const networkEvents = events.filter((ev: any) => ev.type === 'activity' && ev.name === 'codex.network');
+    expect(networkEvents).toHaveLength(2);
+    expect(networkEvents[0].detail).toContain('Reconnecting');
+    expect(networkEvents[1].detail).toContain('Falling back');
+    expect(events.find((ev: any) => ev.type === 'text_delta')).toMatchObject({ text: 'OK' });
+    expect(events.some((ev: any) => ev.type === 'error')).toBe(false);
+  });
 });
