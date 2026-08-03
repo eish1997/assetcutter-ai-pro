@@ -14,6 +14,7 @@ const codexAuthEnvExportPath = path.resolve(process.cwd(), 'scripts/export-codex
 const codexProductionCheckPath = path.resolve(process.cwd(), 'scripts/verify-codex-one-click-production.mjs');
 const desktopUploadManifestPath = path.resolve(process.cwd(), 'scripts/prepare-companion-desktop-upload-manifest.mjs');
 const desktopPublishPath = path.resolve(process.cwd(), 'scripts/publish-companion-desktop-artifact.mjs');
+const codexFinalizeProductionPath = path.resolve(process.cwd(), 'scripts/finalize-codex-one-click-production.mjs');
 const companionReleaseCheckPath = path.resolve(process.cwd(), 'scripts/companion-desktop-release-check.ps1');
 const renderYamlPath = path.resolve(process.cwd(), 'render.yaml');
 
@@ -284,6 +285,7 @@ describe('copilot settings UI', () => {
     const productionScript = fs.readFileSync(codexProductionCheckPath, 'utf8');
     const uploadManifestScript = fs.readFileSync(desktopUploadManifestPath, 'utf8');
     const publishScript = fs.readFileSync(desktopPublishPath, 'utf8');
+    const finalizeScript = fs.readFileSync(codexFinalizeProductionPath, 'utf8');
     const releaseCheck = fs.readFileSync(companionReleaseCheckPath, 'utf8');
     const renderYaml = fs.readFileSync(renderYamlPath, 'utf8');
 
@@ -292,6 +294,7 @@ describe('copilot settings UI', () => {
     expect(pkg).toContain('"companion:codex-production-check": "node scripts/verify-codex-one-click-production.mjs"');
     expect(pkg).toContain('"companion:desktop-upload-manifest": "node scripts/prepare-companion-desktop-upload-manifest.mjs"');
     expect(pkg).toContain('"companion:desktop-publish": "node scripts/publish-companion-desktop-artifact.mjs"');
+    expect(pkg).toContain('"companion:codex-finalize-production": "node scripts/finalize-codex-one-click-production.mjs"');
     expect(script).toContain('Codex one-click readiness check');
     expect(script).toContain('CODEX_SHARED_AUTH_JSON_BASE64');
     expect(script).toContain('CODEX_SHARED_AUTH_JSON');
@@ -324,6 +327,12 @@ describe('copilot settings UI', () => {
     expect(publishScript).toContain('companion-desktop/package.json');
     expect(publishScript).toContain('defaultManifestPath()');
     expect(publishScript).not.toContain('dist-out-0211');
+    expect(finalizeScript).toContain('Codex one-click production finalizer');
+    expect(finalizeScript).toContain("args.has('--publish')");
+    expect(finalizeScript).toContain('companion:desktop-upload-manifest');
+    expect(finalizeScript).toContain('companion:desktop-publish');
+    expect(finalizeScript).toContain('companion:codex-production-check');
+    expect(finalizeScript).toContain('Missing admin cookie');
   });
 
   it('renders the workbench e2e status as the Copilot entrance chain', () => {
