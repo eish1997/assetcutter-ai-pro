@@ -89,7 +89,7 @@ const WORKBENCH_RECOVERY_CONTRACT = {
 
 const WORKBENCH_E2E_GATES = {
   inProduct: 'Companion Settings -> External Agent (MCP) -> 工作台验收',
-  cli: 'npm run smoke:agent-mcp:e2e -- --config <hermes-mcp-import.json>',
+  cli: 'npm run smoke:agent-mcp:e2e -- --config <codex-mcp-import.json>',
   accountPrerequisite: {
     source: 'assetcutter://mcp/server-status',
     field: 'readiness.account.loggedIn',

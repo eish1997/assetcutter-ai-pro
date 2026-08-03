@@ -49,6 +49,9 @@
   let activeTaskThreadEls = null;
   let pendingTaskThreadPrompt = '';
   let permissionPolicySyncedForMode = '';
+  let codexWaitHintTimer = null;
+  let codexWaitStartedAt = 0;
+  let codexLastProgressLabel = '';
   const COPILOT_EXPANDED_MIN_WIDTH = 360;
   const COPILOT_EXPANDED_DEFAULT_WIDTH = 380;
   const COPILOT_EXPANDED_MAX_WIDTH = 720;
@@ -68,6 +71,54 @@
   function setStatus(text) {
     if (!statusEl) return;
     statusEl.textContent = text || '';
+  }
+
+  function clearCodexWaitHintTimer() {
+    if (!codexWaitHintTimer) return;
+    clearTimeout(codexWaitHintTimer);
+    codexWaitHintTimer = null;
+    codexWaitStartedAt = 0;
+    codexLastProgressLabel = '';
+  }
+
+  function startCodexWaitHintTimer() {
+    clearCodexWaitHintTimer();
+    codexWaitStartedAt = Date.now();
+    const tick = () => {
+      if (!turnBusy) return;
+      const elapsed = Math.max(1, Math.round((Date.now() - codexWaitStartedAt) / 1000));
+      const label = codexLastProgressLabel ? ` \u00b7 ${codexLastProgressLabel}` : '';
+      setStatus(`Codex \u6b63\u5728\u601d\u8003 ${elapsed}s${label}`);
+      codexWaitHintTimer = setTimeout(tick, elapsed < 8 ? 4000 : 5000);
+    };
+    codexWaitHintTimer = setTimeout(tick, 4000);
+  }
+
+  function rememberCodexProgress(ev) {
+    const name = String((ev && ev.name) || '').trim();
+    const phase = String((ev && ev.phase) || '').trim();
+    if (name === 'codex.network') {
+      codexLastProgressLabel = '\u7f51\u7edc\u6b63\u5728\u91cd\u8bd5';
+    } else if (name === 'codex.command') {
+      codexLastProgressLabel = phase === 'done' ? '\u547d\u4ee4\u5df2\u5b8c\u6210' : '\u6b63\u5728\u8fd0\u884c\u547d\u4ee4';
+    } else if (name.startsWith('codex.') && name !== 'codex.turn' && name !== 'codex.thinking') {
+      codexLastProgressLabel = phase === 'done' ? '\u5de5\u5177\u5df2\u8fd4\u56de' : '\u6b63\u5728\u8c03\u7528\u5de5\u5177';
+    } else if (name === 'codex.thinking' || name === 'codex.turn') {
+      codexLastProgressLabel = '\u7b49\u5f85 Codex \u8fd4\u56de\u6587\u672c';
+    }
+  }
+
+  function formatCodexSetupChecks(result) {
+    const checks = Array.isArray(result && result.setupChecks) ? result.setupChecks : [];
+    if (!checks.length) return '';
+    return checks
+      .map((check) => {
+        const mark = check && check.ok ? '\u5df2\u901a\u8fc7' : '\u672a\u901a\u8fc7';
+        const label = String((check && check.label) || (check && check.id) || '').trim();
+        const next = check && !check.ok ? String(check.nextAction || '').trim() : '';
+        return [mark, label, next ? '\u5efa\u8bae\uff1a' + next : ''].filter(Boolean).join(' ');
+      })
+      .join(' / ');
   }
 
   function openCopilotSettings() {
@@ -904,7 +955,11 @@
     try {
       let setup = null;
       if (typeof agent.setupCodex === 'function') {
-        setup = await setupCodexWithLoginRecovery({ install: true, progressRunId: activeCodexSetupRunId });
+        setup = await setupCodexWithLoginRecovery({
+          install: true,
+          progressRunId: activeCodexSetupRunId,
+          verifyConversation: true,
+        });
       } else {
         if (typeof agent.syncCodexAuth === 'function') {
           const sync = await agent.syncCodexAuth();
@@ -924,7 +979,8 @@
         setStatus(codexSetupFailureMessage(setup));
         return;
       }
-      setStatus('Codex \u5df2\u5c31\u7eea');
+      const checksText = formatCodexSetupChecks(setup);
+      setStatus(checksText ? 'Codex \u5df2\u5c31\u7eea \u00b7 ' + checksText : 'Codex \u5df2\u5c31\u7eea');
       setTimeout(() => setStatus(''), 1800);
     } catch (e) {
       setStatus(e && e.message ? e.message : String(e));
@@ -935,15 +991,43 @@
 
   function codexSetupFailureMessage(setup) {
     const r = setup && typeof setup === 'object' ? setup : {};
+    const checks = Array.isArray(r.setupChecks) ? r.setupChecks : [];
+    const failedWithAction = checks.find((check) => check && !check.ok && check.nextAction);
+    if (failedWithAction && failedWithAction.nextAction) return String(failedWithAction.nextAction);
     const install = r.install || {};
     const probe = r.probe || {};
     if (install.error === 'npm_missing') return '\u81ea\u52a8\u5b89\u88c5 Node/npm \u672a\u5b8c\u6210\uff0c\u8bf7\u68c0\u67e5\u7f51\u7edc\u6216\u7cfb\u7edf\u5b89\u88c5\u6743\u9650\u540e\u518d\u70b9\u4e00\u6b21\u3002';
-    if (install.error === 'codex_install_failed') return 'Codex CLI \u5b89\u88c5\u5931\u8d25\uff0c\u8bf7\u68c0\u67e5\u7f51\u7edc\u6216 npm \u6743\u9650\u3002';
+    if (install.error === 'codex_install_failed') return 'Codex CLI \u5b89\u88c5\u5931\u8d25\uff0c\u5df2\u5c1d\u8bd5\u7cfb\u7edf npm \u548c\u4fbf\u643a npm\uff0c\u8bf7\u68c0\u67e5\u7f51\u7edc\u6216\u4ee3\u7406\u3002';
     if (r.cloudAuthLoginRequired) return '\u8bf7\u5148\u767b\u5f55\u5de5\u4f5c\u53f0\uff0c\u518d\u70b9\u4e00\u6b21\u4e00\u952e\u914d\u7f6e\u3002';
     if (r.cloudAuthRouteMissing) return '\u4e91\u7aef Codex \u8eab\u4efd\u63a5\u53e3\u8fd8\u672a\u4e0a\u7ebf\uff0c\u8bf7\u7ba1\u7406\u5458\u5148\u53d1\u5e03\u65b0\u7248 auth-api\u3002';
     if (r.cloudAuthNotConfigured) return '\u4e91\u7aef\u56e2\u961f Codex \u8eab\u4efd\u8fd8\u672a\u914d\u7f6e\u3002';
     if (r.needsLogin) return 'Codex \u9700\u8981\u767b\u5f55\u3002\u8bf7\u6253\u5f00 Codex \u5b8c\u6210\u767b\u5f55\uff0c\u518d\u70b9\u4e00\u6b21\u3002';
     return probe.detail || r.error || 'Codex \u4ecd\u672a\u5c31\u7eea\u3002';
+  }
+
+  function codexLastSetupRecoveryDetail(settings) {
+    const s = settings && typeof settings === 'object' ? settings : {};
+    const report = s.codexLastSetupReport && typeof s.codexLastSetupReport === 'object' ? s.codexLastSetupReport : null;
+    const checks = report && Array.isArray(report.checks) ? report.checks : [];
+    const failed = checks.find((check) => check && !check.ok && check.nextAction);
+    if (failed && failed.nextAction) return String(failed.nextAction);
+    if (report && report.ok === false) return 'Click one-click Codex setup again; it will re-check this machine, install missing pieces, sync team identity, and test the conversation.';
+    return '';
+  }
+
+  function codexLastSetupReportAllowsSend(settings, runtime) {
+    const s = settings && typeof settings === 'object' ? settings : {};
+    const report = s.codexLastSetupReport && typeof s.codexLastSetupReport === 'object' ? s.codexLastSetupReport : null;
+    const rt = runtime && typeof runtime === 'object' ? runtime : {};
+    return Boolean(
+      report &&
+      report.ok &&
+      report.cloudIdentitySynced &&
+      report.conversationVerified &&
+      rt.readyHint &&
+      rt.auth &&
+      rt.auth.exists,
+    );
   }
 
   async function ensureCodexReadyBeforeSend() {
@@ -962,9 +1046,16 @@
     const probeOk = Boolean(codexMeta && codexMeta.lastProbeOk);
     if (desired !== 'codex') return { ok: true, skipped: true };
     if (active === 'codex' && probeOk) return { ok: true, skipped: true };
+    if (active === 'codex' && codexLastSetupReportAllowsSend(s.settings, s.codexRuntime)) {
+      return { ok: true, skipped: true, trustedSetupReport: true };
+    }
     activeCodexSetupRunId = 'send-' + Date.now() + '-' + Math.random().toString(16).slice(2);
     setStatus('\u6b63\u5728\u914d\u7f6e Codex...');
-    const setup = await setupCodexWithLoginRecovery({ install: true, progressRunId: activeCodexSetupRunId });
+    const setup = await setupCodexWithLoginRecovery({
+      install: true,
+      progressRunId: activeCodexSetupRunId,
+      verifyConversation: false,
+    });
     lastProbeSnapshot = null;
     await refreshBrainLabel();
     await refreshBrainStateCard({ forceProbe: true });
@@ -1455,24 +1546,20 @@
         let detail;
         if (settingsResp) {
           const s = settingsResp;
-          const wantHermes = s && s.settings && s.settings.defaultBrainId === 'hermes';
-          const gwOk = s && s.hermesGateway && s.hermesGateway.probe && s.hermesGateway.probe.ok;
+          const oneClickRecovery = codexLastSetupRecoveryDetail(s.settings);
           const wantCodex = s && s.settings && s.settings.defaultBrainId === 'codex';
           const authExists = s && s.codexAuth && s.codexAuth.exists;
           const sharedEnabled = s && s.settings && s.settings.codexSharedAuthEnabled;
-          if (wantHermes && !gwOk) {
-            detail = 'Hermes Gateway is selected but not responding. Start it or check the URL.';
-          } else if (s && s.settings && s.settings.defaultBrainId === 'codex') {
-            detail = 'Codex CLI is selected but not available. Install/login Codex CLI or check settings.';
-          }
-          if (!wantCodex) {
-            detail = 'Switch to the team-recommended Codex brain first.';
+          if (oneClickRecovery) {
+            detail = oneClickRecovery;
+          } else if (!wantCodex) {
+            detail = 'Click one-click Codex setup to switch to the team-recommended Codex brain and finish setup.';
           } else if (sharedEnabled && !authExists) {
-            detail = 'Team credentials have not been synced to this machine yet.';
+            detail = 'Click one-click Codex setup to sync team credentials to this machine.';
           } else if (!authExists) {
-            detail = 'Local Codex auth is missing. Refresh credentials or configure auth sync in settings.';
+            detail = 'Click one-click Codex setup to pull team identity, or complete Codex login once.';
           } else if (wantCodex) {
-            detail = 'Codex command is not available. Check the command path in settings.';
+            detail = 'Click one-click Codex setup; it will repair the Codex command path or install missing pieces.';
           }
         }
         showMemberOnboardCard(detail, { ready: false });
@@ -1971,7 +2058,7 @@
           const desired = (s.settings && s.settings.defaultBrainId) || 'stub';
           const active = s.activeBrainId || desired;
           brainLabel.textContent = active === desired ? desired : desired + ' -> ' + active;
-          brainLabel.title = 'Click to switch brain';
+          brainLabel.title = 'Codex';
           return;
         }
       }
@@ -1984,34 +2071,9 @@
     }
   }
 
-  async function cycleBrain() {
-    if (turnBusy || typeof agent.loadSettings !== 'function' || typeof agent.saveSettings !== 'function') return;
-    try {
-      const s = await agent.loadSettings();
-      if (!s || !s.ok || !Array.isArray(s.brains) || !s.brains.length) return;
-      const ids = s.brains.map((b) => b.id);
-      const cur = (s.settings && s.settings.defaultBrainId) || s.activeBrainId || ids[0];
-      const idx = Math.max(0, ids.indexOf(cur));
-      const next = cur !== 'codex' && ids.includes('codex') ? 'codex' : ids[(idx + 1) % ids.length];
-      setStatus('Switching brain...');
-      const r = await agent.saveSettings({ defaultBrainId: next });
-      if (r && r.ok) {
-        await refreshBrainLabel();
-        await refreshBrainStateCard({ forceProbe: true });
-        await refreshOnboardingState();
-        setStatus('Switched to ' + next);
-        setTimeout(() => setStatus(''), 2000);
-      } else {
-        setStatus('Switch failed');
-      }
-    } catch (e) {
-      setStatus(e && e.message ? e.message : String(e));
-    }
-  }
-
   if (brainLabel) {
-    brainLabel.style.cursor = 'pointer';
-    brainLabel.addEventListener('click', () => void cycleBrain());
+    brainLabel.style.cursor = 'default';
+    brainLabel.title = 'Codex';
   }
 
   if (brainSettingsBtn) {
@@ -2113,6 +2175,7 @@
     agent.onEvent((ev) => {
       if (!ev || typeof ev !== 'object') return;
       if (ev.type === 'text_delta') {
+        clearCodexWaitHintTimer();
         streamingText += ev.text || '';
         const bubble = ensureStreamBubble();
         setBubbleText(bubble, 'assistant', streamingText);
@@ -2141,6 +2204,7 @@
           updateActiveTaskThread('progress', (ev.name || 'tool') + ' ' + ev.phase);
         }
       } else if (ev.type === 'activity') {
+        rememberCodexProgress(ev);
         noteActivityProgress(ev);
         if (!shouldMuteActivityInChat(ev)) {
           appendActivityCard(ev);
@@ -2149,6 +2213,7 @@
         appendUsageCard(ev.usage);
         void refreshBrainStateCard();
       } else if (ev.type === 'done') {
+        clearCodexWaitHintTimer();
         finishStream();
         dismissPendingConfirmCards();
         if (ev.stopReason === 'aborted') {
@@ -2165,6 +2230,7 @@
           setStatus('');
         }
       } else if (ev.type === 'error') {
+        clearCodexWaitHintTimer();
         finishStream();
         updateActiveTaskThread('error', ev.message || '\u4efb\u52a1\u5931\u8d25\uff0c\u5df2\u751f\u6210\u6062\u590d\u52a8\u4f5c');
         appendRecoveryCard(ev.message || 'Task failed. Refresh credentials, open settings, or ask Copilot to inspect it.');
@@ -2197,7 +2263,7 @@
     inputEl.value = '';
     resizeComposer();
     showExampleChips(false);
-    setStatus('Thinking...');
+    setStatus('Codex \u6b63\u5728\u601d\u8003...');
     finishStream();
     try {
       const setupReady = await ensureCodexReadyBeforeSend();
@@ -2208,7 +2274,8 @@
         appendRecoveryCard(message);
         return;
       }
-      setStatus('Thinking...');
+      setStatus('Codex \u6b63\u5728\u601d\u8003...');
+      startCodexWaitHintTimer();
       const r = await agent.send(text);
       if (r && !r.ok && r.error) {
         setStatus(String(r.error));
@@ -2220,6 +2287,7 @@
       updateActiveTaskThread('error', e && e.message ? e.message : String(e));
       appendRecoveryCard(e && e.message ? e.message : String(e));
     } finally {
+      clearCodexWaitHintTimer();
       turnBusy = false;
       root.classList.remove('is-busy');
       if (sendBtn) sendBtn.disabled = false;
@@ -2245,9 +2313,26 @@
 
   if (typeof agent.onCodexSetupProgress === 'function') {
     agent.onCodexSetupProgress((payload) => {
-      if (!payload || String(payload.runId || '') !== activeCodexSetupRunId) return;
+      if (!payload) return;
+      const runId = String(payload.runId || '');
+      const isLaunchSetup = runId.startsWith('launch-');
+      if (isLaunchSetup && !activeCodexSetupRunId) {
+        activeCodexSetupRunId = runId;
+        turnBusy = true;
+        root.classList.add('is-busy');
+        if (sendBtn) sendBtn.disabled = true;
+      }
+      if (runId !== activeCodexSetupRunId) return;
       const message = payload.message ? String(payload.message) : '';
       if (message) setStatus(message);
+      if (payload.id === 'launch_complete' || payload.id === 'launch_failed') {
+        activeCodexSetupRunId = '';
+        turnBusy = false;
+        root.classList.remove('is-busy');
+        if (sendBtn) sendBtn.disabled = false;
+        void refreshBrainStateCard({ forceProbe: true });
+        void refreshOnboardingState();
+      }
     });
   }
 

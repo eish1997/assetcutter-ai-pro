@@ -128,15 +128,39 @@ function companionArtifactToPublicClient(rec) {
   return s;
 }
 
+function parseTeamCodexAuthJsonValue(value) {
+  let raw = value;
+  if (raw && typeof raw === 'object' && raw.authJsonBase64) {
+    raw = Buffer.from(String(raw.authJsonBase64), 'base64').toString('utf8');
+  } else if (raw && typeof raw === 'object' && raw.authJson != null) {
+    raw = raw.authJson;
+  }
+  if (typeof raw === 'string') raw = JSON.parse(raw);
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new Error('codex_auth_json_must_be_object');
+  }
+  return raw;
+}
+
+function validateTeamCodexAuthPayload(payload) {
+  if (!payload) return { ok: false, error: 'codex_shared_auth_not_configured' };
+  try {
+    parseTeamCodexAuthJsonValue(payload);
+    return { ok: true, payload };
+  } catch (e) {
+    return { ok: false, error: `invalid_codex_shared_auth: ${e instanceof Error ? e.message : String(e)}` };
+  }
+}
+
 function readTeamCodexAuthPayload() {
   const rawJson = String(process.env.CODEX_SHARED_AUTH_JSON || '').trim();
   const rawBase64 = String(process.env.CODEX_SHARED_AUTH_JSON_BASE64 || '').trim();
-  if (!rawJson && !rawBase64) return null;
+  if (!rawJson && !rawBase64) return { ok: false, error: 'codex_shared_auth_not_configured' };
   if (rawBase64) {
-    return {
+    return validateTeamCodexAuthPayload({
       authJsonBase64: rawBase64,
       updatedAt: String(process.env.CODEX_SHARED_AUTH_UPDATED_AT || '').trim() || null,
-    };
+    });
   }
   let parsed = null;
   try {
@@ -145,15 +169,15 @@ function readTeamCodexAuthPayload() {
     parsed = rawJson;
   }
   if (parsed && typeof parsed === 'object' && (parsed.authJson != null || parsed.authJsonBase64 != null)) {
-    return {
+    return validateTeamCodexAuthPayload({
       ...parsed,
       updatedAt: parsed.updatedAt || String(process.env.CODEX_SHARED_AUTH_UPDATED_AT || '').trim() || null,
-    };
+    });
   }
-  return {
+  return validateTeamCodexAuthPayload({
     authJson: parsed,
     updatedAt: String(process.env.CODEX_SHARED_AUTH_UPDATED_AT || '').trim() || null,
-  };
+  });
 }
 
 async function respondCompanionElectronUpdaterYaml(res, { kind, platform, channel }) {
@@ -1504,13 +1528,13 @@ const server = http.createServer(async (req, res) => {
     if (path === '/api/team/codex/auth' && req.method === 'GET') {
       const user = await requireAuth(req, res);
       if (!user) return;
-      const payload = readTeamCodexAuthPayload();
-      if (!payload) {
-        json(res, 503, { error: 'codex_shared_auth_not_configured' });
+      const sharedAuth = readTeamCodexAuthPayload();
+      if (!sharedAuth.ok) {
+        json(res, 503, { error: sharedAuth.error || 'codex_shared_auth_not_configured' });
         return;
       }
       res.setHeader('Cache-Control', 'no-store');
-      json(res, 200, payload);
+      json(res, 200, sharedAuth.payload);
       return;
     }
 

@@ -133,4 +133,30 @@ describe('preferCompanionWorkflowBundle', () => {
     });
     expect(out?.assets.map((a) => a.id)).toEqual(['kept', 'from-other-device']);
   });
+
+  it('keeps equal-count local when localUpdatedAt is newer or equal (PBR slotCandidates race)', () => {
+    const localNewer = preferCompanionWorkflowBundle({
+      local: { assets: [asset('local-fresh')], pending: [] },
+      companion: {
+        schemaVersion: 1,
+        projectId: 'p1',
+        updatedAt: 10,
+        bundle: { assets: [asset('companion-stale')], pending: [] },
+      },
+      localUpdatedAt: 20,
+    });
+    expect(localNewer?.assets[0]?.id).toBe('local-fresh');
+
+    const localEqual = preferCompanionWorkflowBundle({
+      local: { assets: [asset('local-tie')], pending: [] },
+      companion: {
+        schemaVersion: 1,
+        projectId: 'p1',
+        updatedAt: 20,
+        bundle: { assets: [asset('companion-tie')], pending: [] },
+      },
+      localUpdatedAt: 20,
+    });
+    expect(localEqual?.assets[0]?.id).toBe('local-tie');
+  });
 });

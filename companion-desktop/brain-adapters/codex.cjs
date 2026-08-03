@@ -328,14 +328,34 @@ function createCodexBrainAdapter(deps) {
 
     const escalated = Boolean(input.codexEscalated);
     const args = codexThreadId
-      ? escalated
-        ? ['exec', 'resume', '--dangerously-bypass-approvals-and-sandbox', '--json', codexThreadId, '-']
-        : ['exec', 'resume', '--json', codexThreadId, '-']
-      : escalated
-        ? ['exec', '--dangerously-bypass-approvals-and-sandbox', '--json', '--color', 'never', '-C', cwd, '-']
-        : ['exec', '--json', '--color', 'never', '--sandbox', cfg.sandbox, '-C', cwd, '-'];
+      ? [
+          'exec',
+          'resume',
+          ...(escalated ? ['--dangerously-bypass-approvals-and-sandbox'] : []),
+          '--json',
+          '--disable',
+          'plugins',
+          '--ignore-rules',
+          '--skip-git-repo-check',
+          codexThreadId,
+          '-',
+        ]
+      : [
+          'exec',
+          ...(escalated ? ['--dangerously-bypass-approvals-and-sandbox'] : ['--sandbox', cfg.sandbox]),
+          '--json',
+          '--color',
+          'never',
+          '--disable',
+          'plugins',
+          '--ignore-rules',
+          '--skip-git-repo-check',
+          '-C',
+          cwd,
+          '-',
+        ];
     if (cfg.model) {
-      const insertAt = codexThreadId ? (escalated ? 3 : 2) : 1;
+      const insertAt = codexThreadId ? 2 : 1;
       args.splice(insertAt, 0, '--model', cfg.model);
     }
 
@@ -419,6 +439,15 @@ function createCodexBrainAdapter(deps) {
           updatedAt: new Date().toISOString(),
         };
         writeSessionMap(deps, next);
+        return;
+      }
+      if (ev.type === 'turn.started') {
+        queue.push({
+          type: 'activity',
+          phase: 'start',
+          name: 'codex.thinking',
+          detail: 'Codex turn started. Waiting for the CLI to finish or emit tool activity.',
+        });
         return;
       }
       if (ev.type === 'item.completed' && ev.item && ev.item.type === 'agent_message') {

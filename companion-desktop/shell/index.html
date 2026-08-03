@@ -1730,30 +1730,6 @@
       color: var(--text);
       border-color: rgba(255, 255, 255, 0.18);
     }
-    .hermes-status-row {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      margin: 0 0 10px;
-    }
-    .hermes-status-dot {
-      width: 8px;
-      height: 8px;
-      border-radius: 50%;
-      flex-shrink: 0;
-      background: #71717a;
-    }
-    .hermes-status-dot.is-ok {
-      background: #22c55e;
-      box-shadow: 0 0 6px rgba(34, 197, 94, 0.55);
-    }
-    .hermes-status-dot.is-bad {
-      background: #ef4444;
-      box-shadow: 0 0 6px rgba(239, 68, 68, 0.45);
-    }
-    .hermes-status-dot.is-warn {
-      background: #eab308;
-    }
     .copilot-input-row {
       display: flex;
       gap: 6px;
@@ -4785,42 +4761,13 @@
         </section>
         <section class="settings-group" id="settings-agent" data-settings-section-panel="agent" hidden>
           <div class="settings-group-head"><h2>Agent</h2></div>
-    <div class="set-section" id="hermesBrainSetupSection">
-      <h3 title="Copilot &#23545;&#35805;&#25152;&#38656;&#30340; Hermes Gateway&#65288;OpenAI &#20860;&#23481;&#65289;">AI &#22823;&#33041;&#65288;Hermes&#65289;</h3>
-      <div class="hermes-status-row">
-        <span class="hermes-status-dot" id="hermesStatusDot" aria-hidden="true"></span>
-        <span id="hermesStatusText" class="mono set-feedback" style="margin: 0">&#26816;&#27979;&#20013;...</span>
-      </div>
-      <label for="inpHermesGatewayUrl" title="OpenAI &#20860;&#23481; Gateway &#26681;&#36335;&#24452;&#65292;&#36890;&#24120;&#20197; /v1 &#32467;&#23614;">Gateway URL</label>
-      <input type="text" id="inpHermesGatewayUrl" placeholder="http://127.0.0.1:8642/v1" autocomplete="off" class="mono" />
-      <label for="inpHermesApiKey" class="pair-label-gap" title="Bearer Token&#65288;&#23448;&#26041; Hermes &#30340; API_SERVER_KEY&#65289;">API Key</label>
-      <input type="password" id="inpHermesApiKey" placeholder="&#23433;&#35013;&#21518;&#33258;&#21160;&#20889;&#20837;" autocomplete="off" class="mono" />
-      <label class="pair-label-gap">
-        <input type="checkbox" id="inpHermesDevStub" title="&#20165;&#24320;&#21457;&#32852;&#35843;&#65306;&#20351;&#29992; dev-gateway.mjs (:19119)" />
-        &#20351;&#29992;&#24320;&#21457;&#32852;&#35843;&#26729;&#65288;19119&#65292;&#38750;&#23448;&#26041; Hermes&#65289;
-      </label>
-      <div class="btn-row">
-        <button type="button" class="btn btn-primary" id="btnHermesOneClickSetup">&#19968;&#38190;&#23433;&#35013;&#24182;&#21551;&#21160; Hermes</button>
-        <button type="button" class="btn" id="btnHermesInstallOnly">&#20165;&#23433;&#35013; Hermes &#23448;&#26041;&#29256;</button>
-        <button type="button" class="btn" id="btnHermesConnectExisting" title="&#33258;&#21160;&#25506;&#27979;&#26412;&#26426;&#24050;&#26377; Hermes Gateway &#24182;&#20889;&#20837; MCP &#37197;&#32622;">&#36830;&#25509;&#24050;&#26377; Hermes</button>
-        <button type="button" class="btn" id="btnHermesProbe">&#25506;&#27979;&#36830;&#25509;</button>
-        <button type="button" class="btn" id="btnSaveHermesSettings">&#20445;&#23384;</button>
-      </div>
-      <pre id="hermesBootstrapLogArea" class="mono storage-hint" style="display: none; margin: 8px 0 0; max-height: 160px; overflow: auto; white-space: pre-wrap"></pre>
-      <p id="hermesConnectExportHint" class="storage-hint" style="display: none; margin: 8px 0 0; font-size: 10px; line-height: 1.45"></p>
-      <p id="hermesSettingsHint" class="mono set-feedback" hidden></p>
-    </div>
     <div class="set-section">
-      <h3 title="External Agent MCP removed; use AssetCutter CLI">外部 Agent（已改 CLI）</h3>
-      <p class="muted" style="margin:0 0 10px;line-height:1.45">
-        MCP 产品面已移除。Cursor / Codex 请使用仓库根命令
-        <code>npm run agent:init</code> 与 <code>npm run agent:cli</code>（云端 API，资产进平台列表并可审计）。
-      </p>
+      <h3 title="Copilot currently uses Codex only">Codex</h3>
       <label class="pair-label-gap">
-        <input type="checkbox" id="inpMcpEnabled" disabled title="MCP removed; use npm run agent:cli" />
-        MCP 已移除（请用 CLI）
+        <input type="checkbox" id="inpMcpEnabled" disabled title="Codex configures the local tool channel automatically" />
+        &#26412;&#22320;&#24037;&#20855;&#36890;&#36947;&#30001; Codex &#33258;&#21160;&#37197;&#32622;
       </label>
-      <label class="pair-label-gap" title="&#20869;&#32622; Copilot &#40664;&#35748;&#22823;&#33041;">Copilot &#40664;&#35748;&#22823;&#33041;</label>
+      <label class="pair-label-gap" title="Copilot &#24403;&#21069;&#21482;&#20351;&#29992; Codex">Copilot</label>
       <div class="shell-brain-picker" id="shellBrainPicker" role="listbox" aria-label="Copilot &#40664;&#35748;&#22823;&#33041;"></div>
       <div class="codex-runtime-grid" aria-label="Codex CLI &#36816;&#34892;&#35774;&#32622;">
         <div>
@@ -4844,6 +4791,7 @@
       <div class="btn-row">
         <button type="button" class="btn btn-primary" id="btnSetupCodexRuntime">一键配置 Codex</button>
         <button type="button" class="btn" id="btnProbeCodexRuntime">&#25506;&#27979; Codex</button>
+        <button type="button" class="btn" id="btnCopyCodexSetupReport" title="Copy the last Codex setup diagnostics">&#22797;&#21046;&#25253;&#21578;</button>
       </div>
       <label class="pair-label-gap">
         <input type="checkbox" id="inpCodexSharedAuthEnabled" title="&#20020;&#26102;&#26041;&#26696;&#65306;&#20174;&#20113;&#31471;&#25289;&#21462;&#22242;&#38431;&#20849;&#20139; Codex CLI auth.json &#21040;&#26412;&#26426; ~/.codex/auth.json" />
@@ -4952,7 +4900,7 @@
       </div>
       <label for="inpMcpToken" class="pair-label-gap" title="Bearer Token；请勿泄露">MCP Token</label>
       <input type="text" id="inpMcpToken" readonly placeholder="开启 MCP 后生成" autocomplete="off" />
-      <label for="inpMcpConfig" class="pair-label-gap" title="可复制到 Hermes / Claude Desktop MCP 配置">MCP 客户端配置片段</label>
+      <label for="inpMcpConfig" class="pair-label-gap" title="Codex 本地工具通道配置">MCP 客户端配置片段</label>
       <textarea id="inpMcpConfig" class="mono" rows="6" readonly placeholder="开启 MCP 后显示 JSON 配置"></textarea>
       <div class="btn-row">
         <button type="button" class="btn btn-primary" id="btnSaveAgentSettings">保存 Agent 设置</button>
@@ -5433,7 +5381,6 @@
           void refreshVolumeEffectiveHint();
           void loadPairingFields();
           void loadAgentSettingsUi();
-          void loadHermesSettingsUi();
         }
       }
 
@@ -5799,6 +5746,37 @@
         if (!login || !login.ok) return first;
         setSetFeedback(hintEl, '\u767b\u5f55\u5b8c\u6210\uff0c\u7ee7\u7eed\u914d\u7f6e Codex...');
         return agent.setupCodex({ ...opts, retryAfterLogin: true });
+      }
+
+      function formatCodexSetupChecks(result) {
+        const checks = Array.isArray(result && result.setupChecks) ? result.setupChecks : [];
+        if (!checks.length) return '';
+        return checks
+          .map((check) => {
+            const mark = check && check.ok ? '\u5df2\u901a\u8fc7' : '\u672a\u901a\u8fc7';
+            const label = String((check && check.label) || (check && check.id) || '').trim();
+            const detail = String((check && check.detail) || '').trim();
+            const next = String((check && check.nextAction) || '').trim();
+            return [mark, label, detail, next ? '\u5efa\u8bae\uff1a' + next : ''].filter(Boolean).join(' \u00b7 ');
+          })
+          .join('\n');
+      }
+
+      function formatCodexLastSetupReport(settings) {
+        const report = settings && settings.codexLastSetupReport && typeof settings.codexLastSetupReport === 'object'
+          ? settings.codexLastSetupReport
+          : null;
+        const checks = Array.isArray(report && report.checks) ? report.checks : [];
+        if (!report || !checks.length) return '';
+        const head = (report.ok ? '\u4e0a\u6b21\u4e00\u952e\u914d\u7f6e\uff1a\u5df2\u901a\u8fc7' : '\u4e0a\u6b21\u4e00\u952e\u914d\u7f6e\uff1a\u672a\u901a\u8fc7') + (report.at ? ' \u00b7 ' + report.at : '');
+        const lines = checks.map((check) => {
+          const mark = check && check.ok ? '\u5df2\u901a\u8fc7' : '\u672a\u901a\u8fc7';
+          const label = String((check && check.label) || (check && check.id) || '').trim();
+          const detail = String((check && check.detail) || '').trim();
+          const next = String((check && check.nextAction) || '').trim();
+          return [mark, label, detail, next ? '\u5efa\u8bae\uff1a' + next : ''].filter(Boolean).join(' \u00b7 ');
+        });
+        return [head, ...lines].join('\n');
       }
 
       async function requestShellUpdateCheckForCodexSetupUi(result, hintEl) {
@@ -6269,305 +6247,17 @@
       let agentPolicyTemplatesCache = [];
       let codexRuntimeStatusCache = null;
 
-      function applyHermesStatusUi(hermesGateway, activeBrainId) {
-        const dot = $('hermesStatusDot');
-        const text = $('hermesStatusText');
-        if (!dot || !text) return;
-        dot.classList.remove('is-ok', 'is-bad', 'is-warn');
-        const probeOk = hermesGateway && hermesGateway.probe && hermesGateway.probe.ok;
-        const brainOk = activeBrainId === 'hermes' && probeOk;
-        if (brainOk) {
-          dot.classList.add('is-ok');
-          const kind = hermesGateway && hermesGateway.kind === 'dev' ? 'Dev' : 'Official Hermes';
-          text.textContent = kind + ' Gateway is ready for Copilot.';
-        } else if (probeOk) {
-          dot.classList.add('is-warn');
-          text.textContent = 'Gateway is reachable, but Copilot is using ' + (activeBrainId || 'stub');
-        } else if (hermesGateway && hermesGateway.running) {
-          dot.classList.add('is-warn');
-          text.textContent = 'Gateway is running; probe detail: ' + ((hermesGateway.probe && hermesGateway.probe.detail) || '');
-        } else {
-          dot.classList.add('is-bad');
-          const detail = (hermesGateway && hermesGateway.probe && hermesGateway.probe.detail) || 'not detected';
-          text.textContent = 'Gateway not ready: ' + detail;
-        }
-      }
-
-      async function loadHermesSettingsUi() {
-        const agent = shell.agentSession;
-        if (!agent || typeof agent.hermesGatewayState !== 'function') return;
-        try {
-          const r = await agent.hermesGatewayState();
-          if (!r || !r.ok) return;
-          const s = r.settings || {};
-          if ($('inpHermesGatewayUrl')) $('inpHermesGatewayUrl').value = s.hermesGatewayUrl || '';
-          if ($('inpHermesApiKey')) $('inpHermesApiKey').value = s.hermesApiKey || '';
-          if ($('inpHermesDevStub')) {
-            $('inpHermesDevStub').checked = s.hermesGatewayKind === 'dev';
-          }
-          if (typeof shell.hermesDesktopState === 'function') {
-            const hd = await shell.hermesDesktopState();
-            if (hd && hd.ok && !hd.installed && $('hermesStatusText')) {
-              /* keep probe text from applyHermesStatusUi */
-            }
-          }
-          if ($('codexAuthStatus')) {
-            const auth = r.codexAuth || {};
-            const lastSync = r.settings && r.settings.codexSharedAuthLastSyncAt;
-            const lastError = r.settings && r.settings.codexSharedAuthLastError;
-            $('codexAuthStatus').textContent =
-              'Codex auth: ' +
-              (auth.exists ? 'local auth present' : 'local auth missing') +
-              (auth.path ? ' 路 ' + auth.path : '') +
-              (lastSync ? '\nLast sync: ' + lastSync : '') +
-              (lastError ? '\nLast error: ' + lastError : '');
-          }
-          applyHermesStatusUi(r.hermesGateway, r.activeBrainId);
-        } catch {
-          /* ignore */
-        }
-      }
-
-      let hermesBootstrapBusy = false;
-
-      function appendHermesBootstrapLog(payload) {
-        const logEl = $('hermesBootstrapLogArea');
-        if (!logEl || !payload) return;
-        logEl.style.display = 'block';
-        let msg = '';
-        if (payload.type === 'phase') {
-          msg = '\n' + (payload.msg || '');
-        } else if (payload.type === 'bootstrap-finished') {
-          const ok = payload.ok !== false && payload.msg !== 'fail';
-          msg = ok ? '\nInstall configured.' : '\nInstall failed.';
-        } else if (typeof payload.msg === 'string') {
-          msg = payload.msg;
-        } else if (payload.msg != null) {
-          msg = typeof payload.msg === 'object' ? JSON.stringify(payload.msg) : String(payload.msg);
-        }
-        if (msg) logEl.textContent += msg + '\n';
-        logEl.scrollTop = logEl.scrollHeight;
-      }
-
-      if (typeof shell.onHermesBootstrapLog === 'function') {
-        shell.onHermesBootstrapLog((payload) => appendHermesBootstrapLog(payload));
-      }
-
-      async function runHermesInstallOnly() {
-        const hintEl = $('hermesSettingsHint');
-        const btn = $('btnHermesInstallOnly');
-        if (!shell || typeof shell.hermesBootstrapRun !== 'function') return;
-        if (hermesBootstrapBusy) return;
-        hermesBootstrapBusy = true;
-        if (btn) btn.disabled = true;
-        const logEl = $('hermesBootstrapLogArea');
-        if (logEl) {
-          logEl.style.display = 'block';
-          logEl.textContent = '';
-        }
-        setSetFeedback(hintEl, 'Installing official Hermes; this may take a few minutes.');
-        try {
-          const r = await shell.hermesBootstrapRun();
-          if (r && r.ok) {
-            setSetFeedback(hintEl, 'Hermes install finished; click one-click setup to start.');
-            void loadHermesSettingsUi();
-          } else {
-            setSetFeedback(hintEl, 'Install failed: ' + ((r && r.error) || 'unknown error'));
-          }
-        } catch (e) {
-          setSetFeedback(hintEl, e && e.message ? e.message : String(e));
-        } finally {
-          hermesBootstrapBusy = false;
-          if (btn) btn.disabled = false;
-        }
-      }
-
-      if ($('btnHermesInstallOnly')) {
-        $('btnHermesInstallOnly').addEventListener('click', () => void runHermesInstallOnly());
-      }
-
-      if ($('btnHermesOneClickSetup')) {
-        $('btnHermesOneClickSetup').addEventListener('click', async () => {
-          const agent = shell.agentSession;
-          const hintEl = $('hermesSettingsHint');
-          const btn = $('btnHermesOneClickSetup');
-          if (!agent || typeof agent.hermesGatewaySetup !== 'function') return;
-          btn.disabled = true;
-          const logEl = $('hermesBootstrapLogArea');
-          if (logEl) {
-            logEl.style.display = 'block';
-            logEl.textContent = '';
-          }
-          setSetFeedback(hintEl, 'Installing/starting Hermes Gateway; first run may take a while.');
-          try {
-            const r = await agent.hermesGatewaySetup({
-              useDevStub: Boolean($('inpHermesDevStub') && $('inpHermesDevStub').checked),
-            });
-            if (r && r.ok) {
-              if ($('inpHermesGatewayUrl') && r.settings) {
-                $('inpHermesGatewayUrl').value = r.settings.hermesGatewayUrl || '';
-                $('inpHermesApiKey').value = r.settings.hermesApiKey || '';
-                if ($('inpHermesDevStub')) $('inpHermesDevStub').checked = r.settings.hermesGatewayKind === 'dev';
-              }
-              applyHermesStatusUi(r.hermesGateway, r.activeBrainId);
-              setSetFeedback(
-                hintEl,
-                r.settings && r.settings.hermesGatewayKind === 'dev'
-                  ? 'Dev stub is ready'
-                  : 'Hermes Gateway is ready; configure the model if chat still fails.',
-              );
-              void loadAgentSettingsUi();
-              if (typeof window.__acCopilotRefreshOnboarding === 'function') {
-                window.__acCopilotRefreshOnboarding();
-              }
-            } else {
-              applyHermesStatusUi(r && r.hermesGateway, r && r.activeBrainId);
-              setSetFeedback(hintEl, 'Setup failed: ' + ((r && r.error) || 'unknown error'));
-            }
-          } catch (e) {
-            setSetFeedback(hintEl, e && e.message ? e.message : String(e));
-          } finally {
-            btn.disabled = false;
-          }
-        });
-      }
-
-      if ($('btnHermesConnectExisting')) {
-        $('btnHermesConnectExisting').addEventListener('click', async () => {
-          const agent = shell.agentSession;
-          const hintEl = $('hermesSettingsHint');
-          const exportHint = $('hermesConnectExportHint');
-          const btn = $('btnHermesConnectExisting');
-          if (!agent || typeof agent.companionConnect !== 'function') return;
-          btn.disabled = true;
-          setSetFeedback(hintEl, 'Detecting and connecting existing Hermes...');
-          try {
-            const gatewayUrl = $('inpHermesGatewayUrl') ? $('inpHermesGatewayUrl').value.trim() : '';
-            const apiKey = $('inpHermesApiKey') ? $('inpHermesApiKey').value.trim() : '';
-            const r = await agent.companionConnect({
-              mode: 'all',
-              detect: true,
-              writeMcp: true,
-              gatewayUrl: gatewayUrl || undefined,
-              apiKey: apiKey || undefined,
-            });
-            if (r && r.ok) {
-              if ($('inpHermesGatewayUrl') && r.settings) {
-                $('inpHermesGatewayUrl').value = r.settings.hermesGatewayUrl || '';
-                $('inpHermesApiKey').value = r.settings.hermesApiKey || '';
-                if ($('inpHermesDevStub')) $('inpHermesDevStub').checked = r.settings.hermesGatewayKind === 'dev';
-              }
-              applyHermesStatusUi(r.hermesGateway, r.activeBrainId);
-              if ($('inpMcpEnabled')) $('inpMcpEnabled').checked = Boolean(r.settings && r.settings.mcpEnabled);
-              if ($('inpMcpToken') && r.settings && r.settings.mcpToken) {
-                $('inpMcpToken').value = String(r.settings.mcpToken);
-              }
-              if ($('inpMcpConfig') && r.mcpConfig) {
-                $('inpMcpConfig').value = JSON.stringify(r.mcpConfig, null, 2);
-              }
-              setSetFeedback(hintEl, r.message || 'Connected to Hermes');
-              if (exportHint && r.exported) {
-                exportHint.style.display = 'block';
-                exportHint.textContent =
-                  'Exported: ' +
-                  (r.exported.bundlePath || '') +
-                  (r.mcpWrite && r.mcpWrite.written && r.mcpWrite.written.length
-                    ? ' / MCP written: ' + r.mcpWrite.written.join(', ')
-                    : '');
-              }
-              void loadAgentSettingsUi();
-              if (typeof window.__acCopilotRefreshOnboarding === 'function') {
-                window.__acCopilotRefreshOnboarding();
-              }
-            } else {
-              applyHermesStatusUi(r && r.hermesGateway, r && r.activeBrainId);
-              setSetFeedback(hintEl, 'Connect failed: ' + ((r && r.error) || 'Gateway not detected'));
-            }
-          } catch (e) {
-            setSetFeedback(hintEl, e && e.message ? e.message : String(e));
-          } finally {
-            btn.disabled = false;
-          }
-        });
-      }
-
-      if ($('btnHermesProbe')) {
-        $('btnHermesProbe').addEventListener('click', async () => {
-          const agent = shell.agentSession;
-          const hintEl = $('hermesSettingsHint');
-          if (!agent || typeof agent.hermesGatewayProbe !== 'function') return;
-          setSetFeedback(hintEl, 'Probing...');
-          try {
-            const r = await agent.hermesGatewayProbe();
-            if (r && r.ok && r.probe) {
-              applyHermesStatusUi(r.hermesGateway, null);
-              setSetFeedback(hintEl, r.probe.ok ? 'Connection ok' : 'Connection failed: ' + (r.probe.detail || ''));
-            }
-          } catch (e) {
-            setSetFeedback(hintEl, e && e.message ? e.message : String(e));
-          }
-        });
-      }
-
-      if ($('btnSaveHermesSettings')) {
-        $('btnSaveHermesSettings').addEventListener('click', async () => {
-          const agent = shell.agentSession;
-          const hintEl = $('hermesSettingsHint');
-          if (!agent || typeof agent.saveSettings !== 'function') return;
-          const btn = $('btnSaveHermesSettings');
-          btn.disabled = true;
-          setSetFeedback(hintEl, 'Saving...');
-          try {
-            const useDev = Boolean($('inpHermesDevStub') && $('inpHermesDevStub').checked);
-            const patch = {
-              hermesGatewayUrl: $('inpHermesGatewayUrl') ? $('inpHermesGatewayUrl').value.trim() : '',
-              hermesApiKey: $('inpHermesApiKey') ? $('inpHermesApiKey').value.trim() : '',
-              hermesManagedGateway: true,
-              hermesGatewayKind: useDev ? 'dev' : 'official',
-              hermesModel: useDev ? 'default' : 'hermes-agent',
-              defaultBrainId: 'hermes',
-              brainSetupCompleted: true,
-            };
-            const r = await agent.saveSettings(patch);
-            if (r && r.ok) {
-              applyHermesStatusUi(r.hermesGateway, r.activeBrainId);
-              setSetFeedback(hintEl, 'Hermes settings saved.');
-              void loadAgentSettingsUi();
-              if (typeof window.__acCopilotRefreshOnboarding === 'function') {
-                window.__acCopilotRefreshOnboarding();
-              }
-            } else {
-              setSetFeedback(hintEl, 'Save failed.');
-            }
-          } catch (e) {
-            setSetFeedback(hintEl, e && e.message ? e.message : String(e));
-          } finally {
-            btn.disabled = false;
-          }
-        });
-      }
-
       function renderBrainPicker(activeId) {
         const host = $('shellBrainPicker');
         if (!host) return;
         host.innerHTML = '';
-        const list = agentBrainCatalog.length
-          ? agentBrainCatalog
-          : [{ id: 'codex' }, { id: 'hermes' }, { id: 'stub' }, { id: 'openai_compat' }, { id: 'claude_code' }];
-        for (const b of list) {
-          const btn = document.createElement('button');
-          btn.type = 'button';
-          btn.className = 'shell-brain-option' + (b.id === activeId ? ' is-active' : '');
-          btn.textContent = b.displayName ? b.id + ' 路 ' + b.displayName : b.id;
-          btn.dataset.brainId = b.id;
-          btn.addEventListener('click', () => {
-            for (const el of host.querySelectorAll('.shell-brain-option')) {
-              el.classList.toggle('is-active', el.dataset.brainId === b.id);
-            }
-            agentSettingsCache.defaultBrainId = b.id;
-          });
-          host.appendChild(btn);
-        }
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'shell-brain-option is-active';
+        btn.textContent = 'Codex CLI';
+        btn.dataset.brainId = 'codex';
+        btn.disabled = true;
+        host.appendChild(btn);
       }
 
       function renderCodexSandboxPicker(activeValue) {
@@ -6956,7 +6646,7 @@
           el.innerHTML +=
             '<div class="agent-mcp-e2e-freshness">' +
             `<strong>${escapeAgentMcpHtml(workflowLabel)}</strong>` +
-            `<div>${escapeAgentMcpHtml(workflowNext || 'External Agents can save a skill draft first, then use governed publication.')}</div>` +
+            `<div>${escapeAgentMcpHtml(workflowNext || 'Codex can save a skill draft first, then use governed publication.')}</div>` +
             (phase ? `<div>${escapeAgentMcpHtml(phase)}</div>` : '') +
             (draftTool ? `<div>${escapeAgentMcpHtml(draftTool)}</div>` : '') +
             (promotionLine ? `<div>${escapeAgentMcpHtml(promotionLine)}</div>` : '') +
@@ -7605,7 +7295,7 @@
             '<li>list_assets</li>' +
             '<li>get_asset</li>' +
             '</ol>' +
-            `<div>External Agents can use Workbench through MCP${assetText}.</div>`;
+            `<div>Codex can use Workbench through the local tool channel${assetText}.</div>`;
           el.innerHTML += freshness;
           if (actions) actions.hidden = true;
           return;
@@ -7925,7 +7615,8 @@
               (lastSync ? '\nLast sync: ' + lastSync : '') +
               (lastError ? '\nLast error: ' + lastError : '');
           }
-          applyHermesStatusUi(r.hermesGateway, r.activeBrainId);
+          const lastSetupText = formatCodexLastSetupReport(r.settings);
+          if (lastSetupText) setSetFeedback($('agentSettingsHint'), lastSetupText);
           void loadAgentUsageSummaryUi();
           void loadAgentExecutionsUi();
         } catch {
@@ -8096,7 +7787,8 @@
                           : r && r.needsLogin
                             ? 'Codex \u9700\u8981\u767b\u5f55\u3002\u8bf7\u5148\u6253\u5f00 Codex \u767b\u5f55\uff0c\u518d\u70b9\u4e00\u6b21\u3002'
                             : 'Codex \u4ecd\u672a\u5c31\u7eea\uff1a' + (probe.detail || 'unknown');
-            setSetFeedback(hintEl, message);
+            const checksText = formatCodexSetupChecks(r);
+            setSetFeedback(hintEl, checksText ? `${message}\n${checksText}` : message);
             if (typeof window.__acCopilotRefreshOnboarding === 'function') {
               window.__acCopilotRefreshOnboarding();
             }
@@ -8240,6 +7932,18 @@
           if (text) {
             shell.copyText(text);
             setSetFeedback(agentSettingsHint, 'MCP config copied');
+          }
+        });
+      }
+
+      if ($('btnCopyCodexSetupReport')) {
+        $('btnCopyCodexSetupReport').addEventListener('click', () => {
+          const text = formatCodexLastSetupReport(agentSettingsCache);
+          if (text && shell.copyText) {
+            shell.copyText(text);
+            setSetFeedback($('agentSettingsHint'), 'Codex setup report copied');
+          } else {
+            setSetFeedback($('agentSettingsHint'), 'No Codex setup report yet');
           }
         });
       }

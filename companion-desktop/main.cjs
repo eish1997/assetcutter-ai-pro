@@ -5,6 +5,7 @@ const fs = require('fs');
 const fsp = fs.promises;
 const os = require('os');
 const http = require('http');
+const https = require('https');
 const {
   app,
   Tray,
@@ -18,7 +19,7 @@ const {
   dialog,
 } = require('electron');
 const { spawn, execSync } = require('child_process');
-const { randomBytes } = require('node:crypto');
+const { createHash, randomBytes } = require('node:crypto');
 const companionSandboxPaths = require('./companion-sandbox-paths.cjs');
 const { createCompanionAutoUpdate } = require('./companion-auto-update.cjs');
 const { computeEmbeddedBrowserBounds, detachBrowserViews } = require('./embedded-browser-manager.cjs');
@@ -48,9 +49,6 @@ const { createBrainAdapter, listBrainCatalog } = require('./brain-adapters/index
 const { createAgentBodyMcpServer } = require('./agent-body-mcp.cjs');
 const { codexAuthStatus, syncCodexAuthFromCloud } = require('./codex-auth-sync.cjs');
 const { removeCodexMcpServerConfig } = require('./codex-mcp-config.cjs');
-const hermesGatewayHost = require('./hermes-gateway-host.cjs');
-const hermesOfficialHost = require('./hermes-official-host.cjs');
-const companionConnect = require('./companion-connect.cjs');
 
 /** 打包壳无控制台时 stdout/stderr 可能 EPIPE；避免 uncaughtException 弹窗 */
 function ignoreStreamEpipe(stream) {
@@ -208,6 +206,7 @@ async function loadUrlWithProxyFallback(webContents, target) {
 const DEFAULT_SHELL_SITE_DEV = 'http://localhost:3000';
 const DEFAULT_SHELL_SITE_PACKAGED = 'https://assetcutter-ai-pro.vercel.app/';
 const DEFAULT_AUTH_API_ORIGIN_DEV = 'http://127.0.0.1:9100';
+const DEFAULT_AUTH_API_ORIGIN_PROD = 'https://assetcutter-auth-api.onrender.com';
 const DEFAULT_SCRIPT_HUB_DEV = 'http://localhost:5173/';
 const DEFAULT_SCRIPT_HUB_API_DEV = 'http://localhost:8787/';
 const DEFAULT_SCRIPT_HUB_PACKAGED = 'https://scripts.adrazzo.com/';
@@ -299,6 +298,8 @@ const SHELL_COPILOT_WIDTH_COLLAPSED = 0;
 let shellCopilotCollapsed = false;
 /** @type {number} */
 let shellCopilotWidthPx = SHELL_COPILOT_WIDTH_DEFAULT;
+let codexLaunchSetupInFlight = false;
+const AUTO_CODEX_SETUP_ARG = '--assetcutter-codex-one-click-setup';
 const SHELL_TITLEBAR_HEIGHT = 30;
 /** 与 `shell/index.html` 一致：工作台顶栏已移除，BrowserView 从标题栏下缘起算 */
 const SHELL_WORKBENCH_TOOLBAR_HEIGHT = 0;
@@ -362,32 +363,13 @@ let samBootstrapChild = null;
 let rembgBootstrapChild = null;
 /** @type {import('child_process').ChildProcess | null} */
 let paddleOcrBootstrapChild = null;
-/** @type {import('child_process').ChildProcess | null} */
-let hermesBootstrapChild = null;
 
 function anyDesktopBootstrapChildRunning() {
   const sam = samBootstrapChild && samBootstrapChild.exitCode === null && !samBootstrapChild.killed;
   const rem = rembgBootstrapChild && rembgBootstrapChild.exitCode === null && !rembgBootstrapChild.killed;
   const ocr =
     paddleOcrBootstrapChild && paddleOcrBootstrapChild.exitCode === null && !paddleOcrBootstrapChild.killed;
-  const hermes =
-    hermesBootstrapChild && hermesBootstrapChild.exitCode === null && !hermesBootstrapChild.killed;
-  return Boolean(sam || rem || ocr || hermes);
-}
-
-function getHermesUserRoot() {
-  return path.join(app.getPath('userData'), 'hermes-runtime');
-}
-
-function hermesBootstrapScriptPath() {
-  try {
-    if (app.isPackaged) {
-      return path.join(process.resourcesPath, 'hermes-bootstrap', 'hermes-bootstrap.cjs');
-    }
-  } catch {
-    /* ignore */
-  }
-  return path.join(__dirname, 'hermes-bootstrap', 'hermes-bootstrap.cjs');
+  return Boolean(sam || rem || ocr);
 }
 
 function shellSettingsPath() {
@@ -678,7 +660,11 @@ async function ensureAgentBrainReady() {
   if (!agentBrainInitPromise) {
     agentBrainInitPromise = (async () => {
       const settings = agentStore.readSettings();
-      const preferred = String(settings.defaultBrainId || 'stub').trim() || 'stub';
+      let preferred = String(settings.defaultBrainId || 'codex').trim() || 'codex';
+      if (preferred !== 'codex') {
+        preferred = 'codex';
+        agentStore.writeSettings({ defaultBrainId: 'codex' });
+      }
       if (preferred === 'stub') {
         agentBrainInstance = createBrainAdapter('stub', { store: agentStore });
         agentBrainInstanceId = 'stub';
@@ -759,7 +745,7 @@ function migrateAgentSettingsToCodexDefault() {
   const settings = agentStore.readSettings();
   if (settings.codexDefaultMigrated) return;
   const current = String(settings.defaultBrainId || '').trim();
-  if (current === 'hermes' || current === 'stub' || !current) {
+  if (current !== 'codex') {
     agentStore.writeSettings({
       defaultBrainId: 'codex',
       codexDefaultMigrated: true,
@@ -768,17 +754,6 @@ function migrateAgentSettingsToCodexDefault() {
     return;
   }
   agentStore.writeSettings({ codexDefaultMigrated: true });
-}
-
-function hermesSettingsChanged(prev, next) {
-  if (!prev || !next) return false;
-  return (
-    prev.hermesGatewayUrl !== next.hermesGatewayUrl ||
-    prev.hermesApiKey !== next.hermesApiKey ||
-    prev.hermesModel !== next.hermesModel ||
-    prev.hermesManagedGateway !== next.hermesManagedGateway ||
-    prev.hermesGatewayKind !== next.hermesGatewayKind
-  );
 }
 
 function codexSettingsChanged(prev, next) {
@@ -819,8 +794,10 @@ function buildCodexRuntimeStatus(settings) {
 
 function runSetupCommand(command, args, options) {
   return new Promise((resolve) => {
+    const opts = options && typeof options === 'object' ? options : {};
+    const { timeoutMs, ...spawnOptions } = opts;
     const child = spawn(command, args || [], {
-      ...(options || {}),
+      ...spawnOptions,
       shell: process.platform === 'win32',
       windowsHide: true,
     });
@@ -833,7 +810,7 @@ function runSetupCommand(command, args, options) {
         /* ignore */
       }
       resolve({ ok: false, code: null, detail: 'timeout' });
-    }, Number(options && options.timeoutMs) || 120000);
+    }, Number(timeoutMs) || 120000);
     if (child.stdout) {
       child.stdout.on('data', (chunk) => {
         out += chunk.toString('utf8');
@@ -869,10 +846,87 @@ async function probeCodexBrainDirect() {
   }
 }
 
+async function runCodexConversationSmokeTest(options) {
+  if (!agentStore) return { ok: false, error: 'agent_not_ready' };
+  const opts = options && typeof options === 'object' ? options : {};
+  const timeoutMs = Math.max(10000, Math.min(120000, Number(opts.timeoutMs) || 45000));
+  const adapter = createBrainAdapter('codex', { store: agentStore });
+  const sessionId = `setup-smoke-${Date.now()}`;
+  const ac = new AbortController();
+  const timer = setTimeout(() => {
+    try {
+      ac.abort();
+    } catch {
+      /* ignore */
+    }
+  }, timeoutMs);
+  let text = '';
+  const activities = [];
+  try {
+    for await (const ev of adapter.streamTurn({
+      sessionId,
+      messages: [{ role: 'user', content: 'Reply with exactly: assetcutter-codex-ready' }],
+      tools: [],
+      signal: ac.signal,
+    })) {
+      if (!ev) continue;
+      if (ev.type === 'text_delta') text += String(ev.text || '');
+      if (ev.type === 'activity') activities.push({ phase: ev.phase, name: ev.name, detail: ev.detail });
+      if (ev.type === 'error') {
+        return { ok: false, error: ev.message || 'codex_smoke_failed', text: text.trim(), activities };
+      }
+      if (ev.type === 'done') break;
+    }
+    const normalized = text.trim().toLowerCase();
+    return {
+      ok: normalized.includes('assetcutter-codex-ready'),
+      text: text.trim(),
+      activities,
+      error: normalized.includes('assetcutter-codex-ready') ? null : 'unexpected_codex_smoke_reply',
+    };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e), text: text.trim(), activities };
+  } finally {
+    clearTimeout(timer);
+    if (typeof adapter.clearSession === 'function') {
+      try {
+        adapter.clearSession(sessionId);
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+}
+
 function defaultCodexSharedAuthUrl() {
-  const authOrigin = resolveAuthApiOriginForCompanionApi();
+  let authOrigin = resolveAuthApiOriginForCompanionApi() || DEFAULT_AUTH_API_ORIGIN_PROD;
+  try {
+    const u = new URL(authOrigin);
+    const host = String(u.hostname || '').toLowerCase();
+    if (
+      !String(process.env.COMPANION_AUTH_API_ORIGIN || '').trim() &&
+      (host === 'localhost' || host === '127.0.0.1' || host === '::1')
+    ) {
+      authOrigin = DEFAULT_AUTH_API_ORIGIN_PROD;
+    }
+  } catch {
+    authOrigin = DEFAULT_AUTH_API_ORIGIN_PROD;
+  }
   if (!authOrigin) return '';
   return `${authOrigin}/api/team/codex/auth`;
+}
+
+function shouldReplaceCodexSharedAuthUrl(value, fallback) {
+  const current = String(value || '').trim();
+  if (!current) return true;
+  if (!fallback) return false;
+  try {
+    const u = new URL(current);
+    const host = String(u.hostname || '').toLowerCase();
+    return host === 'localhost' || host === '127.0.0.1' || host === '::1';
+  } catch {
+    return true;
+  }
 }
 
 function codexProbeLooksMissing(probe) {
@@ -898,6 +952,7 @@ function knownWindowsNpmPaths() {
   const programFiles = String(process.env.ProgramFiles || 'C:\\Program Files');
   const programFilesX86 = String(process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)');
   const appData = String(process.env.APPDATA || '');
+  candidates.push(...portableNodeNpmCandidatesForSetup());
   candidates.push(path.join(programFiles, 'nodejs', 'npm.cmd'));
   candidates.push(path.join(programFilesX86, 'nodejs', 'npm.cmd'));
   if (appData) candidates.push(path.join(appData, 'npm', 'npm.cmd'));
@@ -910,15 +965,285 @@ function knownWindowsCodexPaths() {
   const appData = String(process.env.APPDATA || '');
   const programFiles = String(process.env.ProgramFiles || 'C:\\Program Files');
   const programFilesX86 = String(process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)');
+  candidates.push(path.join(codexNpmGlobalPrefixForSetup(), 'codex.cmd'));
   if (appData) candidates.push(path.join(appData, 'npm', 'codex.cmd'));
   candidates.push(path.join(programFiles, 'nodejs', 'codex.cmd'));
   candidates.push(path.join(programFilesX86, 'nodejs', 'codex.cmd'));
   return candidates;
 }
 
+function setupCommandEnv(extraPaths) {
+  const env = { ...process.env };
+  const paths = Array.isArray(extraPaths) ? extraPaths.filter(Boolean).map(String) : [];
+  if (!paths.length) return env;
+  const pathKey = Object.prototype.hasOwnProperty.call(env, 'Path') ? 'Path' : 'PATH';
+  const current = String(env[pathKey] || env.PATH || '');
+  const existing = current.split(path.delimiter).filter(Boolean);
+  const seen = new Set(existing.map((p) => p.toLowerCase()));
+  const merged = [...existing];
+  for (const p of paths) {
+    const key = p.toLowerCase();
+    if (!seen.has(key)) {
+      seen.add(key);
+      merged.unshift(p);
+    }
+  }
+  env[pathKey] = merged.join(path.delimiter);
+  if (pathKey !== 'PATH') env.PATH = env[pathKey];
+  return env;
+}
+
+function setupToolPathDirs() {
+  if (process.platform !== 'win32') return [];
+  const dirs = [];
+  const appData = String(process.env.APPDATA || '');
+  const programFiles = String(process.env.ProgramFiles || 'C:\\Program Files');
+  const programFilesX86 = String(process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)');
+  dirs.push(codexNpmGlobalPrefixForSetup());
+  dirs.push(...portableNodePathDirsForSetup());
+  if (appData) dirs.push(path.join(appData, 'npm'));
+  dirs.push(path.join(programFiles, 'nodejs'));
+  dirs.push(path.join(programFilesX86, 'nodejs'));
+  return dirs;
+}
+
+const NODE_LTS_DIST_URL = 'https://nodejs.org/dist/latest-v22.x/';
+
+function nodeWindowsMsiArchForSetup() {
+  return os.arch() === 'arm64' ? 'arm64' : 'x64';
+}
+
+function portableNodeRuntimeRootForSetup() {
+  const root = companionSandboxPaths.sandboxRuntimesRoot() || path.join(app.getPath('userData'), 'runtimes');
+  return path.join(root, 'codex-node');
+}
+
+function codexNpmGlobalPrefixForSetup() {
+  const root = companionSandboxPaths.sandboxRuntimesRoot() || path.join(app.getPath('userData'), 'runtimes');
+  return path.join(root, 'codex-npm-global');
+}
+
+function setupNpmGlobalEnv(extraPaths) {
+  const prefix = codexNpmGlobalPrefixForSetup();
+  fs.mkdirSync(prefix, { recursive: true });
+  const env = setupCommandEnv([prefix, ...(Array.isArray(extraPaths) ? extraPaths : []), ...setupToolPathDirs()]);
+  env.NPM_CONFIG_PREFIX = prefix;
+  env.npm_config_prefix = prefix;
+  return env;
+}
+
+function portableNodePathDirsForSetup() {
+  if (process.platform !== 'win32') return [];
+  const root = portableNodeRuntimeRootForSetup();
+  if (!fs.existsSync(root)) return [];
+  const out = [];
+  for (const name of fs.readdirSync(root)) {
+    const dir = path.join(root, name);
+    if (!fs.existsSync(path.join(dir, 'node.exe'))) continue;
+    out.push(dir);
+    const npmBin = path.join(dir, 'node_modules', 'npm', 'bin');
+    if (fs.existsSync(npmBin)) out.push(npmBin);
+  }
+  return out;
+}
+
+function portableNodeNpmCandidatesForSetup() {
+  if (process.platform !== 'win32') return [];
+  const out = [];
+  for (const dir of portableNodePathDirsForSetup()) {
+    const npm = path.join(dir, 'npm.cmd');
+    if (fs.existsSync(npm)) out.push(npm);
+  }
+  return out;
+}
+
+function psSingleQuote(value) {
+  return `'${String(value || '').replace(/'/g, "''")}'`;
+}
+
+function fetchTextDirectForSetup(url, timeoutMs) {
+  return new Promise((resolve) => {
+    let parsed;
+    try {
+      parsed = new URL(url);
+    } catch (e) {
+      resolve({ ok: false, error: e instanceof Error ? e.message : String(e), text: '' });
+      return;
+    }
+    const client = parsed.protocol === 'https:' ? https : http;
+    const req = client.get(parsed, { timeout: Number(timeoutMs) || 30000 }, (res) => {
+      if (res.statusCode < 200 || res.statusCode >= 300) {
+        res.resume();
+        resolve({ ok: false, error: `http_${res.statusCode}`, text: '' });
+        return;
+      }
+      const chunks = [];
+      res.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
+      res.on('end', () => {
+        resolve({ ok: true, text: Buffer.concat(chunks).toString('utf8') });
+      });
+    });
+    req.on('timeout', () => req.destroy(new Error('timeout')));
+    req.on('error', (e) => resolve({ ok: false, error: e instanceof Error ? e.message : String(e), text: '' }));
+  });
+}
+
+async function fetchTextViaPowerShellForSetup(url, timeoutMs) {
+  if (process.platform !== 'win32') return { ok: false, error: 'powershell_fetch_unsupported', text: '' };
+  const command =
+    `$ProgressPreference='SilentlyContinue';` +
+    `$r=Invoke-WebRequest -Uri ${psSingleQuote(url)} -UseBasicParsing -TimeoutSec ${Math.max(5, Math.ceil((Number(timeoutMs) || 30000) / 1000))};` +
+    `[Console]::OutputEncoding=[System.Text.Encoding]::UTF8;` +
+    `Write-Output $r.Content`;
+  const result = await runSetupCommand(
+    'powershell.exe',
+    ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', command],
+    { timeoutMs: Number(timeoutMs) || 30000 },
+  );
+  return result.ok
+    ? { ok: true, text: result.detail || '', method: 'powershell' }
+    : { ok: false, error: result.detail || `powershell exited ${result.code}`, text: '', method: 'powershell' };
+}
+
+async function fetchTextForSetup(url, timeoutMs) {
+  const direct = await fetchTextDirectForSetup(url, timeoutMs);
+  if (direct.ok || process.platform !== 'win32') return direct;
+  const fallback = await fetchTextViaPowerShellForSetup(url, timeoutMs);
+  return fallback.ok ? { ...fallback, directError: direct.error || '' } : { ...direct, fallback };
+}
+
+function downloadFileDirectForSetup(url, targetPath, expectedSha256, timeoutMs) {
+  return new Promise((resolve) => {
+    let parsed;
+    try {
+      parsed = new URL(url);
+    } catch (e) {
+      resolve({ ok: false, error: e instanceof Error ? e.message : String(e) });
+      return;
+    }
+    fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+    const file = fs.createWriteStream(targetPath);
+    const hash = createHash('sha256');
+    let settled = false;
+    const finish = (payload) => {
+      if (settled) return;
+      settled = true;
+      try {
+        file.close();
+      } catch {
+        /* ignore */
+      }
+      if (!payload.ok) {
+        try {
+          fs.rmSync(targetPath, { force: true });
+        } catch {
+          /* ignore */
+        }
+      }
+      resolve(payload);
+    };
+    const client = parsed.protocol === 'https:' ? https : http;
+    const req = client.get(parsed, { timeout: Number(timeoutMs) || 300000 }, (res) => {
+      if (res.statusCode < 200 || res.statusCode >= 300) {
+        res.resume();
+        finish({ ok: false, error: `http_${res.statusCode}` });
+        return;
+      }
+      res.on('data', (chunk) => {
+        hash.update(chunk);
+        file.write(chunk);
+      });
+      res.on('end', () => {
+        file.end(() => {
+          const sha256 = hash.digest('hex');
+          if (expectedSha256 && sha256.toLowerCase() !== String(expectedSha256).toLowerCase()) {
+            finish({ ok: false, error: 'sha256_mismatch', sha256 });
+            return;
+          }
+          finish({ ok: true, sha256, filePath: targetPath });
+        });
+      });
+    });
+    req.on('timeout', () => req.destroy(new Error('timeout')));
+    req.on('error', (e) => finish({ ok: false, error: e instanceof Error ? e.message : String(e) }));
+    file.on('error', (e) => finish({ ok: false, error: e instanceof Error ? e.message : String(e) }));
+  });
+}
+
+async function downloadFileViaPowerShellForSetup(url, targetPath, expectedSha256, timeoutMs) {
+  if (process.platform !== 'win32') return { ok: false, error: 'powershell_download_unsupported' };
+  fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+  const command =
+    `$ProgressPreference='SilentlyContinue';` +
+    `Invoke-WebRequest -Uri ${psSingleQuote(url)} -OutFile ${psSingleQuote(targetPath)} -UseBasicParsing -TimeoutSec ${Math.max(5, Math.ceil((Number(timeoutMs) || 300000) / 1000))}`;
+  const result = await runSetupCommand(
+    'powershell.exe',
+    ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', command],
+    { timeoutMs: Number(timeoutMs) || 300000 },
+  );
+  if (!result.ok) {
+    try {
+      fs.rmSync(targetPath, { force: true });
+    } catch {
+      /* ignore */
+    }
+    return { ok: false, error: result.detail || `powershell exited ${result.code}`, method: 'powershell' };
+  }
+  try {
+    const sha256 = createHash('sha256').update(fs.readFileSync(targetPath)).digest('hex');
+    if (expectedSha256 && sha256.toLowerCase() !== String(expectedSha256).toLowerCase()) {
+      fs.rmSync(targetPath, { force: true });
+      return { ok: false, error: 'sha256_mismatch', sha256, method: 'powershell' };
+    }
+    return { ok: true, sha256, filePath: targetPath, method: 'powershell' };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e), method: 'powershell' };
+  }
+}
+
+async function downloadFileForSetup(url, targetPath, expectedSha256, timeoutMs) {
+  const direct = await downloadFileDirectForSetup(url, targetPath, expectedSha256, timeoutMs);
+  if (direct.ok || process.platform !== 'win32') return direct;
+  const fallback = await downloadFileViaPowerShellForSetup(url, targetPath, expectedSha256, timeoutMs);
+  return fallback.ok ? { ...fallback, directError: direct.error || '' } : { ...direct, fallback };
+}
+
+async function resolveLatestNodeMsiForSetup() {
+  const arch = nodeWindowsMsiArchForSetup();
+  const sums = await fetchTextForSetup(`${NODE_LTS_DIST_URL}SHASUMS256.txt`, 30000);
+  if (!sums.ok) return { ok: false, error: sums.error || 'node_shasums_unavailable' };
+  const pattern = new RegExp(`^([a-f0-9]{64})\\s+(node-v[^\\s]+-${arch}\\.msi)$`, 'im');
+  const match = String(sums.text || '').match(pattern);
+  if (!match) return { ok: false, error: `node_msi_not_found_${arch}` };
+  return {
+    ok: true,
+    sha256: match[1],
+    fileName: match[2],
+    url: `${NODE_LTS_DIST_URL}${match[2]}`,
+  };
+}
+
+async function resolveLatestNodeZipForSetup() {
+  const arch = nodeWindowsMsiArchForSetup();
+  const sums = await fetchTextForSetup(`${NODE_LTS_DIST_URL}SHASUMS256.txt`, 30000);
+  if (!sums.ok) return { ok: false, error: sums.error || 'node_shasums_unavailable' };
+  const pattern = new RegExp(`^([a-f0-9]{64})\\s+(node-v[^\\s]+-win-${arch}\\.zip)$`, 'im');
+  const match = String(sums.text || '').match(pattern);
+  if (!match) return { ok: false, error: `node_zip_not_found_${arch}` };
+  return {
+    ok: true,
+    sha256: match[1],
+    fileName: match[2],
+    url: `${NODE_LTS_DIST_URL}${match[2]}`,
+  };
+}
+
 async function resolveNpmCommandForSetup() {
   const defaultCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm';
-  const probe = await runSetupCommand(defaultCommand, ['--version'], { timeoutMs: 15000 });
+  const probe = await runSetupCommand(defaultCommand, ['--version'], {
+    timeoutMs: 15000,
+    env: setupCommandEnv(setupToolPathDirs()),
+  });
   if (probe.ok) return { ok: true, command: defaultCommand, probe };
   for (const candidate of knownWindowsNpmPaths()) {
     if (!fs.existsSync(candidate)) continue;
@@ -930,10 +1255,16 @@ async function resolveNpmCommandForSetup() {
 
 async function resolveCodexCommandForSetup(npmCommand) {
   const defaultCommand = process.platform === 'win32' ? 'codex.cmd' : 'codex';
-  const direct = await runSetupCommand(defaultCommand, ['--version'], { timeoutMs: 15000 });
+  const direct = await runSetupCommand(defaultCommand, ['--version'], {
+    timeoutMs: 15000,
+    env: setupCommandEnv(setupToolPathDirs()),
+  });
   if (direct.ok) return { ok: true, command: defaultCommand, probe: direct };
   if (npmCommand) {
-    const prefix = await runSetupCommand(npmCommand, ['config', 'get', 'prefix'], { timeoutMs: 15000 });
+    const prefix = await runSetupCommand(npmCommand, ['config', 'get', 'prefix'], {
+      timeoutMs: 15000,
+      env: setupNpmGlobalEnv(),
+    });
     if (prefix.ok && prefix.detail) {
       const dir = prefix.detail.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).pop() || '';
       const candidate = path.join(dir, process.platform === 'win32' ? 'codex.cmd' : 'codex');
@@ -951,14 +1282,113 @@ async function resolveCodexCommandForSetup(npmCommand) {
   return { ok: false, command: defaultCommand, probe: direct };
 }
 
-async function installNodeRuntimeForSetup() {
+async function installNodeFromOfficialMsiForSetup(progress) {
+  if (process.platform !== 'win32') {
+    return { ok: false, skipped: true, error: 'node_msi_auto_install_unsupported' };
+  }
+  if (typeof progress === 'function') progress('node_msi_resolve', '\u6b63\u5728\u51c6\u5907 Node.js LTS \u5b89\u88c5\u5305');
+  const msi = await resolveLatestNodeMsiForSetup();
+  if (!msi.ok) return { ok: false, method: 'official_msi', error: msi.error || 'node_msi_resolve_failed' };
+  const dir = path.join(os.tmpdir(), `assetcutter-node-lts-${Date.now()}`);
+  const target = path.join(dir, msi.fileName);
+  if (typeof progress === 'function') progress('node_msi_download', '\u6b63\u5728\u4e0b\u8f7d Node.js LTS');
+  const download = await downloadFileForSetup(msi.url, target, msi.sha256, 300000);
+  if (!download.ok) {
+    return { ok: false, method: 'official_msi', error: download.error || 'node_msi_download_failed', detail: msi.url };
+  }
+  if (typeof progress === 'function') progress('node_msi_install', '\u6b63\u5728\u5b89\u88c5 Node.js LTS');
+  const install = await runSetupCommand('msiexec.exe', ['/i', target, '/qn', '/norestart'], { timeoutMs: 600000 });
+  try {
+    fs.rmSync(dir, { recursive: true, force: true });
+  } catch {
+    /* ignore */
+  }
+  if (!install.ok) {
+    return {
+      ok: false,
+      method: 'official_msi',
+      error: 'node_msi_install_failed',
+      detail: install.detail || `msiexec exited ${install.code}`,
+    };
+  }
+  return { ok: true, method: 'official_msi', detail: `${msi.fileName} ${download.sha256}` };
+}
+
+async function installPortableNodeForSetup(progress) {
+  if (process.platform !== 'win32') {
+    return { ok: false, skipped: true, error: 'portable_node_auto_install_unsupported' };
+  }
+  if (typeof progress === 'function') progress('node_portable_resolve', '\u6b63\u5728\u51c6\u5907\u4fbf\u643a Node.js');
+  const zip = await resolveLatestNodeZipForSetup();
+  if (!zip.ok) return { ok: false, method: 'portable_zip', error: zip.error || 'node_zip_resolve_failed' };
+  const runtimeRoot = portableNodeRuntimeRootForSetup();
+  const downloadDir = path.join(runtimeRoot, '_downloads');
+  const target = path.join(downloadDir, zip.fileName);
+  if (typeof progress === 'function') progress('node_portable_download', '\u6b63\u5728\u4e0b\u8f7d\u4fbf\u643a Node.js');
+  const download = await downloadFileForSetup(zip.url, target, zip.sha256, 300000);
+  if (!download.ok) {
+    return { ok: false, method: 'portable_zip', error: download.error || 'node_zip_download_failed', detail: zip.url };
+  }
+  if (typeof progress === 'function') progress('node_portable_extract', '\u6b63\u5728\u89e3\u538b\u4fbf\u643a Node.js');
+  fs.mkdirSync(runtimeRoot, { recursive: true });
+  const expand = await runSetupCommand(
+    'powershell.exe',
+    [
+      '-NoProfile',
+      '-ExecutionPolicy',
+      'Bypass',
+      '-Command',
+      `Expand-Archive -LiteralPath ${psSingleQuote(target)} -DestinationPath ${psSingleQuote(runtimeRoot)} -Force`,
+    ],
+    { timeoutMs: 300000 },
+  );
+  try {
+    fs.rmSync(downloadDir, { recursive: true, force: true });
+  } catch {
+    /* ignore */
+  }
+  if (!expand.ok) {
+    return {
+      ok: false,
+      method: 'portable_zip',
+      error: 'node_zip_extract_failed',
+      detail: expand.detail || `Expand-Archive exited ${expand.code}`,
+    };
+  }
+  const folderName = zip.fileName.replace(/\.zip$/i, '');
+  const nodeDir = path.join(runtimeRoot, folderName);
+  const npm = path.join(nodeDir, 'npm.cmd');
+  const npmProbe = fs.existsSync(npm)
+    ? await runSetupCommand(npm, ['--version'], { timeoutMs: 15000, env: setupCommandEnv([nodeDir]) })
+    : { ok: false, detail: 'npm.cmd missing after extract' };
+  if (!npmProbe.ok) {
+    return { ok: false, method: 'portable_zip', error: 'portable_npm_missing', detail: npmProbe.detail || npm };
+  }
+  return { ok: true, method: 'portable_zip', detail: `${zip.fileName} ${download.sha256}`, nodeDir, npmCommand: npm };
+}
+
+async function installNodeRuntimeForSetup(progress) {
   if (process.platform !== 'win32') {
     return { ok: false, skipped: true, error: 'node_auto_install_unsupported' };
   }
   const wingetProbe = await runSetupCommand('winget', ['--version'], { timeoutMs: 15000 });
   if (!wingetProbe.ok) {
-    return { ok: false, skipped: true, error: 'winget_missing', detail: wingetProbe.detail || 'winget is not available' };
+    const msi = await installNodeFromOfficialMsiForSetup(progress);
+    if (msi.ok) return { ...msi, winget: { ok: false, detail: wingetProbe.detail || 'winget is not available' } };
+    const portable = await installPortableNodeForSetup(progress);
+    return portable.ok
+      ? { ...portable, winget: { ok: false, detail: wingetProbe.detail || 'winget is not available' }, msi }
+      : {
+          ok: false,
+          method: 'official_msi_then_portable_zip',
+          error: portable.error || msi.error || 'winget_missing',
+          detail: portable.detail || msi.detail || wingetProbe.detail || 'all Node.js install methods failed',
+          winget: { ok: false, detail: wingetProbe.detail || 'winget is not available' },
+          msi,
+          portable,
+        };
   }
+  if (typeof progress === 'function') progress('node_winget_install', '\u6b63\u5728\u901a\u8fc7 winget \u5b89\u88c5 Node.js LTS');
   const install = await runSetupCommand(
     'winget',
     [
@@ -973,9 +1403,33 @@ async function installNodeRuntimeForSetup() {
     { timeoutMs: 600000 },
   );
   if (!install.ok) {
-    return { ok: false, error: 'node_install_failed', detail: install.detail || `winget exited ${install.code}` };
+    const msi = await installNodeFromOfficialMsiForSetup(progress);
+    if (msi.ok) return { ...msi, winget: { ok: false, detail: install.detail || `winget exited ${install.code}` } };
+    const portable = await installPortableNodeForSetup(progress);
+    return portable.ok
+      ? { ...portable, winget: { ok: false, detail: install.detail || `winget exited ${install.code}` }, msi }
+      : {
+          ok: false,
+          method: 'winget_then_official_msi_then_portable_zip',
+          error: 'node_install_failed',
+          detail: `${install.detail || `winget exited ${install.code}`}; ${msi.detail || msi.error || 'official MSI failed'}; ${portable.detail || portable.error || 'portable zip failed'}`,
+          winget: { ok: false, detail: install.detail || `winget exited ${install.code}` },
+          msi,
+          portable,
+        };
   }
-  return { ok: true, detail: install.detail };
+  return { ok: true, method: 'winget', detail: install.detail };
+}
+
+async function installCodexWithNpmForSetup(npmCommand) {
+  const install = await runSetupCommand(npmCommand, ['install', '-g', '@openai/codex'], {
+    timeoutMs: 300000,
+    env: setupNpmGlobalEnv(),
+  });
+  return {
+    ...install,
+    npmCommand,
+  };
 }
 
 async function installCodexCliForSetup(progress) {
@@ -983,7 +1437,7 @@ async function installCodexCliForSetup(progress) {
   let nodeInstall = { ok: false, skipped: true, reason: 'npm_available' };
   if (!npm.ok) {
     if (typeof progress === 'function') progress('install_node', '\u6b63\u5728\u5b89\u88c5 Node.js \u8fd0\u884c\u73af\u5883');
-    nodeInstall = await installNodeRuntimeForSetup();
+    nodeInstall = await installNodeRuntimeForSetup(progress);
     if (typeof progress === 'function') progress('probe_npm_after_node', '\u6b63\u5728\u68c0\u67e5 npm');
     npm = await resolveNpmCommandForSetup();
   }
@@ -998,13 +1452,36 @@ async function installCodexCliForSetup(progress) {
   }
   const npmCommand = npm.command;
   if (typeof progress === 'function') progress('install_codex_cli', '\u6b63\u5728\u5b89\u88c5 Codex CLI');
-  const install = await runSetupCommand(npmCommand, ['install', '-g', '@openai/codex'], { timeoutMs: 300000 });
-  if (!install.ok) {
-    return { ok: false, error: 'codex_install_failed', detail: install.detail || `npm exited ${install.code}`, nodeInstall };
+  let install = await installCodexWithNpmForSetup(npmCommand);
+  let codexNodeFallback = null;
+  if (!install.ok && process.platform === 'win32') {
+    if (typeof progress === 'function') {
+      progress('install_codex_cli_portable', '\u6b63\u5728\u7528\u4fbf\u643a Node/npm \u91cd\u8bd5 Codex CLI');
+    }
+    codexNodeFallback = await installPortableNodeForSetup(progress);
+    if (codexNodeFallback.ok && codexNodeFallback.npmCommand) {
+      const retry = await installCodexWithNpmForSetup(codexNodeFallback.npmCommand);
+      install = {
+        ...retry,
+        firstAttempt: install,
+        fallback: codexNodeFallback,
+      };
+    }
   }
-  const codex = await resolveCodexCommandForSetup(npmCommand);
+  if (!install.ok) {
+    return {
+      ok: false,
+      error: 'codex_install_failed',
+      detail: install.detail || `npm exited ${install.code}`,
+      nodeInstall,
+      fallback: codexNodeFallback,
+      firstAttempt: install.firstAttempt || null,
+    };
+  }
+  const finalNpmCommand = install.npmCommand || npmCommand;
+  const codex = await resolveCodexCommandForSetup(finalNpmCommand);
   const commandPath = codex.ok && codex.command !== (process.platform === 'win32' ? 'codex.cmd' : 'codex') ? codex.command : '';
-  return { ok: true, detail: install.detail, commandPath, nodeInstall };
+  return { ok: true, detail: install.detail, commandPath, nodeInstall, fallback: codexNodeFallback, npmCommand: finalNpmCommand };
 }
 
 function sendCodexSetupProgress(options, id, message) {
@@ -1017,6 +1494,102 @@ function sendCodexSetupProgress(options, id, message) {
     message,
     at: new Date().toISOString(),
   });
+}
+
+function codexSetupCheck(id, label, ok, detail, nextAction) {
+  return {
+    id,
+    label,
+    ok: Boolean(ok),
+    status: ok ? 'ok' : 'failed',
+    detail: detail ? String(detail) : '',
+    nextAction: !ok && nextAction ? String(nextAction) : '',
+  };
+}
+
+function codexCloudIdentityNextAction(sync) {
+  const error = String(sync && sync.error ? sync.error : '');
+  if (!error) return '';
+  if (error.startsWith('http_401')) return 'Workbench sign-in is open. Setup will continue after sign-in; if it times out, run one-click setup again.';
+  if (error.startsWith('http_404')) return 'Publish the auth-api version that includes /api/team/codex/auth, then update the desktop app.';
+  if (error.startsWith('http_503')) return 'Configure CODEX_SHARED_AUTH_JSON_BASE64 or CODEX_SHARED_AUTH_JSON in the cloud auth service.';
+  if (error === 'missing_codex_shared_auth_url') return 'Configure the cloud Codex identity URL, or let one-click setup fill the default team route.';
+  return 'Check network access to the team identity service, then run one-click setup again.';
+}
+
+function codexCliNextAction(probe, install) {
+  const installError = String(install && install.error ? install.error : '');
+  if (installError === 'npm_missing') return 'Install Node.js/npm or allow the one-click setup to install Node.js, then run setup again.';
+  if (installError === 'codex_install_failed') return 'Check network/proxy/npm permissions, then run one-click setup again.';
+  const detail = String(probe && probe.detail ? probe.detail : '').toLowerCase();
+  if (detail.includes('not logged in') || detail.includes('login') || detail.includes('auth')) {
+    return 'Open Codex login once, or enable team Codex identity sync, then run setup again.';
+  }
+  return 'Install or repair Codex CLI, then run one-click setup again.';
+}
+
+function buildCodexSetupChecks(parts) {
+  const p = parts && typeof parts === 'object' ? parts : {};
+  const settings = p.settings || {};
+  const mcp = p.mcp || {};
+  const sync = p.sync || {};
+  const probe = p.probe || {};
+  const smoke = p.smoke || {};
+  const install = p.install || {};
+  const requireCloudIdentity = p.requireCloudIdentity !== false;
+  return [
+    codexSetupCheck(
+      'local_settings',
+      'Local settings',
+      settings.defaultBrainId === 'codex',
+      'Codex is the default conversation engine.',
+      'Run one-click setup again so Copilot can switch the default brain to Codex.',
+    ),
+    codexSetupCheck(
+      'mcp',
+      'Local tool channel',
+      Boolean(mcp.running || mcp.enabled),
+      mcp.running ? `127.0.0.1:${mcp.port}/mcp` : 'MCP is enabled.',
+      'Restart the local companion, then run one-click setup again.',
+    ),
+    codexSetupCheck(
+      'cloud_identity',
+      'Cloud identity',
+      requireCloudIdentity ? Boolean(sync.ok && !sync.skipped) : Boolean(sync.ok || sync.skipped),
+      sync.ok ? 'Synced.' : sync.skipped ? 'Skipped.' : sync.error || '',
+      codexCloudIdentityNextAction(sync),
+    ),
+    codexSetupCheck('codex_cli', 'Codex CLI', Boolean(probe.ok), probe.detail || '', codexCliNextAction(probe, install)),
+    codexSetupCheck(
+      'active_brain',
+      'Conversation engine',
+      p.activeBrainId === 'codex',
+      p.activeBrainId || '',
+      'Run one-click setup again after Codex CLI is available.',
+    ),
+    codexSetupCheck(
+      'conversation',
+      'Conversation verification',
+      Boolean(smoke.ok),
+      smoke.ok ? 'Test conversation completed.' : smoke.error || smoke.text || '',
+      'Open Codex login or check network/proxy, then run one-click setup with conversation verification again.',
+    ),
+  ];
+}
+
+function buildCodexSetupReport(parts) {
+  const p = parts && typeof parts === 'object' ? parts : {};
+  const checks = Array.isArray(p.checks) ? p.checks : [];
+  return {
+    ok: Boolean(p.ok),
+    at: new Date().toISOString(),
+    desktopVersion: readDesktopShellPackageVersion(),
+    activeBrainId: p.activeBrainId ? String(p.activeBrainId) : '',
+    cloudIdentitySynced: Boolean(p.cloudIdentitySynced),
+    conversationVerified: Boolean(p.conversationVerified),
+    checks,
+    failed: checks.filter((check) => check && !check.ok).map((check) => check.id || check.label || 'unknown'),
+  };
 }
 
 async function runCodexOneClickSetup(options) {
@@ -1032,8 +1605,20 @@ async function runCodexOneClickSetup(options) {
   progress('start', '\u6b63\u5728\u542f\u52a8 Codex \u4e00\u952e\u914d\u7f6e');
 
   const before = agentStore.readSettings();
-  const codexCwd = before.codexCwd || (typeof agentStore.codexWorkspaceDir === 'function' ? agentStore.codexWorkspaceDir() : '');
+  const previousSetupReport =
+    before && before.codexLastSetupReport && typeof before.codexLastSetupReport === 'object'
+      ? before.codexLastSetupReport
+      : null;
+  const codexCwd =
+    opts.codexCwd != null
+      ? String(opts.codexCwd || '').trim()
+      : typeof agentStore.codexWorkspaceDir === 'function'
+        ? agentStore.codexWorkspaceDir()
+        : before.codexCwd || '';
   const defaultSharedAuthUrl = defaultCodexSharedAuthUrl();
+  const codexSharedAuthUrl = shouldReplaceCodexSharedAuthUrl(before.codexSharedAuthUrl, defaultSharedAuthUrl)
+    ? defaultSharedAuthUrl
+    : before.codexSharedAuthUrl;
   progress('settings', '\u6b63\u5728\u914d\u7f6e\u672c\u673a\u8bbe\u7f6e');
   const patched = agentStore.writeSettings({
     defaultBrainId: 'codex',
@@ -1041,7 +1626,7 @@ async function runCodexOneClickSetup(options) {
     codexCwd,
     codexSharedAuthEnabled: opts.cloudIdentity === false ? before.codexSharedAuthEnabled : true,
     codexSharedAuthAutoUpdate: opts.cloudIdentity === false ? before.codexSharedAuthAutoUpdate : true,
-    codexSharedAuthUrl: before.codexSharedAuthUrl || defaultSharedAuthUrl,
+    codexSharedAuthUrl,
   });
   if (agentMcpServer) {
     agentMcpServer.ensureMcpToken(patched);
@@ -1089,128 +1674,77 @@ async function runCodexOneClickSetup(options) {
   progress('activate', '\u6b63\u5728\u542f\u7528 Codex \u5bf9\u8bdd');
   resetAgentBrainCache();
   await ensureAgentBrainReady();
-  const settings = agentStore.readSettings();
+  let settings = agentStore.readSettings();
   const mcpEntranceStatus = await buildAgentMcpEntranceStatus();
   const activeBrainId = agentSessionService ? agentSessionService.getBrainId() : 'stub';
+  const shouldVerifyConversation = opts.verifyConversation !== false;
+  const requireCloudIdentity = opts.cloudIdentity !== false;
+  let conversation = { ok: false, skipped: true, error: 'not_run' };
+  if (shouldVerifyConversation && probe && probe.ok && activeBrainId === 'codex') {
+    progress('conversation_test', '\u6b63\u5728\u8fdb\u884c Codex \u6d4b\u8bd5\u5bf9\u8bdd');
+    conversation = await runCodexConversationSmokeTest({ timeoutMs: opts.verifyTimeoutMs });
+    record('conversation_test', conversation);
+  } else if (!shouldVerifyConversation) {
+    conversation = { ok: true, skipped: true, error: '' };
+  }
+  const cloudIdentitySynced = Boolean(sync && sync.ok && !sync.skipped);
+  const identityOk = requireCloudIdentity ? cloudIdentitySynced : Boolean(sync && (sync.ok || sync.skipped));
+  const setupOk = Boolean(identityOk && probe && probe.ok && activeBrainId === 'codex' && conversation.ok);
+  if (setupOk && !settings.brainSetupCompleted) {
+    settings = agentStore.writeSettings({ brainSetupCompleted: true });
+  }
+  const mcpStatus = agentMcpServer ? agentMcpServer.status() : null;
+  const mcpConfig = agentMcpServer ? agentMcpServer.buildMcpClientConfig() : null;
+  const codexAuth = codexAuthStatus();
+  const setupChecks = buildCodexSetupChecks({
+    settings,
+    mcp: mcpStatus,
+    sync,
+    probe,
+    smoke: conversation,
+    install,
+    activeBrainId,
+    requireCloudIdentity,
+  });
+  const conversationVerified = Boolean(
+    (shouldVerifyConversation && conversation && conversation.ok && !conversation.skipped) ||
+      (!shouldVerifyConversation && previousSetupReport && previousSetupReport.conversationVerified),
+  );
+  const reportCloudIdentitySynced = Boolean(
+    cloudIdentitySynced ||
+      (!requireCloudIdentity && previousSetupReport && previousSetupReport.cloudIdentitySynced) ||
+      (!shouldVerifyConversation && previousSetupReport && previousSetupReport.cloudIdentitySynced),
+  );
+  const setupReport = buildCodexSetupReport({
+    ok: setupOk,
+    checks: setupChecks,
+    activeBrainId,
+    cloudIdentitySynced: reportCloudIdentitySynced,
+    conversationVerified,
+  });
+  settings = agentStore.writeSettings({ codexLastSetupReport: setupReport });
   return {
-    ok: Boolean(probe && probe.ok && activeBrainId === 'codex'),
+    ok: setupOk,
     steps,
     authSync: sync,
     install,
     probe,
+    conversation,
     settings,
-    mcp: agentMcpServer ? agentMcpServer.status() : null,
-    mcpConfig: agentMcpServer ? agentMcpServer.buildMcpClientConfig() : null,
+    setupChecks,
+    mcp: mcpStatus,
+    mcpConfig,
     mcpToolCatalog: await buildAgentMcpToolCatalog(),
     mcpEntranceStatus,
     codexRuntime: buildCodexRuntimeStatus(settings),
-    codexAuth: codexAuthStatus(),
+    codexAuth,
     activeBrainId,
+    cloudIdentitySynced,
     cloudAuthLoginRequired: Boolean(sync && !sync.ok && String(sync.error || '').startsWith('http_401')),
     cloudAuthRouteMissing: Boolean(sync && !sync.ok && String(sync.error || '').startsWith('http_404')),
     cloudAuthNotConfigured: Boolean(sync && !sync.ok && String(sync.error || '').startsWith('http_503')),
-    needsLogin: Boolean(!(codexAuthStatus().exists)),
+    needsLogin: Boolean(!(codexAuth.exists)),
   };
-}
-
-async function buildHermesGatewayStatus(settings) {
-  const state = hermesOfficialHost.getState(settings, getHermesUserRoot());
-  const apiKey = state.apiKey === '<unset>' ? '' : state.apiKey;
-  const probe = await hermesGatewayHost.probeGateway(state.gatewayUrl, apiKey);
-  return { ...state, probe };
-}
-
-async function bootstrapHermesGatewayIfNeeded() {
-  if (!agentStore) return;
-  const settings = agentStore.readSettings();
-  if (String(settings.defaultBrainId || '') !== 'hermes') return;
-  if (!settings.hermesManagedGateway) return;
-  const state = hermesOfficialHost.getState(settings, getHermesUserRoot());
-  const apiKey = state.apiKey === '<unset>' ? '' : state.apiKey;
-  const probe = await hermesGatewayHost.probeGateway(state.gatewayUrl, apiKey);
-  if (probe.ok) return;
-  const start = await hermesOfficialHost.startManagedGateway(settings, getHermesUserRoot());
-  if (!start.ok) {
-    if (start.needsBootstrap) return;
-    companionLog('warn', '[hermes] auto-start failed:', start.error || 'unknown');
-    return;
-  }
-  if (start.started || start.alreadyRunning || start.external) {
-    const ready = await hermesOfficialHost.waitForOfficialReady(state.gatewayUrl, apiKey, 120000);
-    if (ready.ok) {
-      agentStore.writeSettings({ brainSetupCompleted: true });
-      resetAgentBrainCache();
-      await ensureAgentBrainReady();
-      notifyCopilotRefreshOnboarding();
-    }
-  }
-}
-
-function runHermesBootstrapChild(sendLog) {
-  return new Promise((resolve) => {
-    const scriptPath = hermesBootstrapScriptPath();
-    if (!fs.existsSync(scriptPath)) {
-      resolve({ ok: false, error: '缺少 hermes-bootstrap 脚本' });
-      return;
-    }
-    const userRoot = getHermesUserRoot();
-    const st = hermesOfficialHost.readHermesRuntimeState(userRoot);
-    hermesBootstrapChild = spawn(process.execPath, [scriptPath], {
-      env: {
-        ...process.env,
-        ELECTRON_RUN_AS_NODE: '1',
-        AC_HERMES_USER_ROOT: userRoot,
-        ...(st && st.apiKey ? { AC_HERMES_API_KEY: st.apiKey } : {}),
-      },
-      windowsHide: true,
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-    let outCarry = '';
-    let errCarry = '';
-    const feedLines = (carry, chunk) => {
-      const s = carry + String(chunk);
-      const parts = s.split(/\r?\n/);
-      const rest = parts.pop() || '';
-      for (const line of parts) {
-        const t = line.trim();
-        if (!t) continue;
-        try {
-          sendLog(JSON.parse(t));
-        } catch {
-          sendLog({ type: 'log', msg: t });
-        }
-      }
-      return rest;
-    };
-    const flushCarry = (carry) => {
-      const t = String(carry || '').trim();
-      if (!t) return;
-      try {
-        sendLog(JSON.parse(t));
-      } catch {
-        sendLog({ type: 'log', msg: t });
-      }
-    };
-    hermesBootstrapChild.stdout.on('data', (b) => {
-      outCarry = feedLines(outCarry, b);
-    });
-    hermesBootstrapChild.stderr.on('data', (b) => {
-      errCarry = feedLines(errCarry, b);
-    });
-    hermesBootstrapChild.on('error', (err) => {
-      hermesBootstrapChild = null;
-      sendLog({ type: 'error', msg: err.message });
-      resolve({ ok: false, error: err.message });
-    });
-    hermesBootstrapChild.on('close', (code) => {
-      flushCarry(outCarry);
-      flushCarry(errCarry);
-      hermesBootstrapChild = null;
-      const ok = code === 0;
-      sendLog({ type: 'bootstrap-finished', ok, exitCode: code });
-      resolve(ok ? { ok: true } : { ok: false, error: `安装失败 exit=${code}` });
-    });
-  });
 }
 
 function notifyCopilotRefreshOnboarding() {
@@ -1220,21 +1754,6 @@ function notifyCopilotRefreshOnboarding() {
   } catch {
     /* ignore */
   }
-}
-
-function createCompanionConnectContext() {
-  return {
-    readAgentSettings: () => agentStore.readSettings(),
-    writeAgentSettings: (patch) => agentStore.writeSettings(patch),
-    readShellSettings: () => readShellSettings(),
-    writeShellSettings: (patch) => saveShellSettings(patch),
-    buildMcpClientConfig: () => (agentMcpServer ? agentMcpServer.buildMcpClientConfig() : null),
-    syncMcp: async () => {
-      if (agentMcpServer) await agentMcpServer.syncFromSettings();
-    },
-    getExportRoot: () => path.join(getAgentStoreRoot(), 'connect-exports'),
-    getHermesRuntime: () => hermesOfficialHost.readHermesRuntimeState(getHermesUserRoot()),
-  };
 }
 
 function maybeFocusCopilotOnboarding() {
@@ -1248,6 +1767,104 @@ function maybeFocusCopilotOnboarding() {
     mainWindow.webContents.send('shell-focus-copilot-onboarding');
   } catch {
     /* ignore */
+  }
+}
+
+async function openWorkbenchForCodexLaunchLogin() {
+  try {
+    openMainWindow();
+  } catch {
+    /* ignore */
+  }
+  shellCopilotCollapsed = false;
+  if (agentStore) agentStore.writeSettings({ copilotCollapsed: false });
+  layoutShellChrome();
+  await transitionMainProcessShellView('workbench', { notifyRenderer: true });
+  try {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.show();
+      mainWindow.focus();
+    }
+  } catch {
+    /* ignore */
+  }
+  try {
+    if (workbenchBrowserView && !workbenchBrowserView.webContents.isDestroyed()) {
+      workbenchBrowserView.webContents.reload();
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
+async function waitForShellLoginForCodexLaunch(timeoutMs) {
+  const deadline = Date.now() + Math.max(5000, Number(timeoutMs) || 120000);
+  let last = null;
+  while (Date.now() <= deadline) {
+    last = await readShellAccountStatus();
+    if (last && last.loggedIn) return { ok: true, account: last };
+    if (Date.now() >= deadline) break;
+    await sleep(Math.min(2000, Math.max(250, deadline - Date.now())));
+  }
+  return { ok: false, account: last };
+}
+
+function argvWantsCodexAutoSetup(argv) {
+  const items = Array.isArray(argv) ? argv : process.argv;
+  return items.some((item) => String(item || '').trim() === AUTO_CODEX_SETUP_ARG);
+}
+
+async function maybeRunCodexOneClickSetupFromLaunch(argv) {
+  if (!argvWantsCodexAutoSetup(argv)) return { ok: true, skipped: true };
+  if (codexLaunchSetupInFlight) return { ok: true, skipped: true, inFlight: true };
+  if (!agentStore) return { ok: false, error: 'agent_not_ready' };
+  codexLaunchSetupInFlight = true;
+  const progressRunId = `launch-${Date.now()}-${randomBytes(4).toString('hex')}`;
+  try {
+    shellCopilotCollapsed = false;
+    agentStore.writeSettings({ copilotCollapsed: false, defaultBrainId: 'codex' });
+    layoutShellChrome();
+    notifyCopilotRefreshOnboarding();
+    let result = await runCodexOneClickSetup({
+      install: true,
+      verifyConversation: true,
+      progressRunId,
+      source: 'launch_arg',
+    });
+    if (result && result.cloudAuthLoginRequired) {
+      sendCodexSetupProgress(
+        { progressRunId },
+        'launch_wait_login',
+        '需要登录工作台，已打开登录页面；登录后会自动继续配置 Codex。',
+      );
+      await openWorkbenchForCodexLaunchLogin();
+      const login = await waitForShellLoginForCodexLaunch(120000);
+      if (login && login.ok) {
+        sendCodexSetupProgress({ progressRunId }, 'launch_retry_after_login', '登录完成，继续配置 Codex。');
+        result = await runCodexOneClickSetup({
+          install: true,
+          verifyConversation: true,
+          progressRunId,
+          source: 'launch_arg_retry_after_login',
+          retryAfterLogin: true,
+        });
+      } else {
+        sendCodexSetupProgress({ progressRunId }, 'launch_login_timeout', '仍未检测到工作台登录，稍后可再次一键配置。');
+      }
+    }
+    sendCodexSetupProgress(
+      { progressRunId },
+      result && result.ok ? 'launch_complete' : 'launch_failed',
+      result && result.ok ? 'Codex 自动配置已完成' : 'Codex 自动配置未完成，请查看配置报告',
+    );
+    notifyCopilotRefreshOnboarding();
+    return result;
+  } catch (e) {
+    const error = e instanceof Error ? e.message : String(e);
+    sendCodexSetupProgress({ progressRunId }, 'launch_failed', error);
+    return { ok: false, error };
+  } finally {
+    codexLaunchSetupInFlight = false;
   }
 }
 
@@ -4291,7 +4908,6 @@ function initAgentPlatform() {
     companionLog('warn', `ensure Copilot Body MCP: ${e instanceof Error ? e.message : String(e)}`);
   }
   void agentMcpServer.syncFromSettings();
-  void bootstrapHermesGatewayIfNeeded();
 }
 
 async function buildAgentMcpToolCatalog() {
@@ -4356,6 +4972,9 @@ function openMainWindow() {
       broadcastShellUpdaterState(companionUpdater.getUpdaterUiState());
     }
     setTimeout(() => maybeFocusCopilotOnboarding(), 120);
+    setTimeout(() => {
+      void maybeRunCodexOneClickSetupFromLaunch(process.argv);
+    }, 420);
   });
 
   const shellHtml = path.join(__dirname, 'shell', 'index.html');
@@ -5031,7 +5650,6 @@ if (!gotLock) {
     const mcpToolCatalog = await buildAgentMcpToolCatalog();
     const mcpEntranceStatus = await buildAgentMcpEntranceStatus();
     const agentPolicyConfig = agentPolicy ? agentPolicy.readPolicy() : null;
-    const hermesGateway = await buildHermesGatewayStatus(settings);
     return {
       ok: true,
       settings,
@@ -5041,7 +5659,6 @@ if (!gotLock) {
       mcpEntranceStatus,
       agentPolicy: agentPolicyConfig,
       policyTemplates: agentPolicy && typeof agentPolicy.listPolicyTemplates === 'function' ? agentPolicy.listPolicyTemplates() : [],
-      hermesGateway,
       codexRuntime: buildCodexRuntimeStatus(settings),
       codexAuth: codexAuthStatus(),
       brains: listBrainCatalog(),
@@ -5052,20 +5669,19 @@ if (!gotLock) {
 
   ipcMain.handle('agent-settings-save', async (_e, patch) => {
     if (!agentStore) return { ok: false, error: 'agent_not_ready' };
-    const normalizedPatch = patch && typeof patch === 'object' ? patch : {};
+    const normalizedPatch = { ...(patch && typeof patch === 'object' ? patch : {}), defaultBrainId: 'codex' };
     const prev = agentStore.readSettings();
     const next = agentStore.writeSettings(normalizedPatch);
     if (agentPolicy && Object.prototype.hasOwnProperty.call(normalizedPatch, 'codexPermissionMode')) {
       agentPolicy.writePolicy({ confirmTools: next.codexPermissionMode !== 'full' });
     }
-    if (prev.defaultBrainId !== next.defaultBrainId || hermesSettingsChanged(prev, next) || codexSettingsChanged(prev, next)) {
+    if (prev.defaultBrainId !== next.defaultBrainId || codexSettingsChanged(prev, next)) {
       resetAgentBrainCache();
       await ensureAgentBrainReady();
     }
     if (agentMcpServer) {
       await agentMcpServer.syncFromSettings();
     }
-    const hermesGateway = await buildHermesGatewayStatus(next);
     const mcpEntranceStatus = await buildAgentMcpEntranceStatus();
     return {
       ok: true,
@@ -5076,7 +5692,6 @@ if (!gotLock) {
       mcpEntranceStatus,
       agentPolicy: agentPolicy ? agentPolicy.readPolicy() : null,
       policyTemplates: agentPolicy && typeof agentPolicy.listPolicyTemplates === 'function' ? agentPolicy.listPolicyTemplates() : [],
-      hermesGateway,
       codexRuntime: buildCodexRuntimeStatus(next),
       codexAuth: codexAuthStatus(),
       activeBrainId: agentSessionService ? agentSessionService.getBrainId() : 'stub',
@@ -5311,182 +5926,6 @@ if (!gotLock) {
     };
   });
 
-  ipcMain.handle('agent-hermes-gateway-state', async () => {
-    if (!agentStore) return { ok: false, error: 'agent_not_ready' };
-    const settings = agentStore.readSettings();
-    const hermesGateway = await buildHermesGatewayStatus(settings);
-    return {
-      ok: true,
-      settings,
-      hermesGateway,
-      activeBrainId: agentSessionService ? agentSessionService.getBrainId() : 'stub',
-    };
-  });
-
-  ipcMain.handle('agent-hermes-gateway-probe', async () => {
-    if (!agentStore) return { ok: false, error: 'agent_not_ready' };
-    const settings = agentStore.readSettings();
-    const hermesGateway = await buildHermesGatewayStatus(settings);
-    return { ok: true, probe: hermesGateway.probe, hermesGateway };
-  });
-
-  ipcMain.handle('agent-hermes-gateway-setup', async (event, options) => {
-    if (!agentStore) return { ok: false, error: 'agent_not_ready' };
-    const opts = options && typeof options === 'object' ? options : {};
-    const useDevStub = Boolean(opts.useDevStub);
-
-    if (useDevStub) {
-      const defaults = {
-        hermesGatewayKind: 'dev',
-        hermesGatewayUrl: hermesGatewayHost.DEFAULT_BASE,
-        hermesApiKey: 'hermes-local',
-        hermesModel: 'default',
-        hermesManagedGateway: true,
-        defaultBrainId: 'hermes',
-        mcpEnabled: true,
-      };
-      const next = agentStore.writeSettings(defaults);
-      hermesOfficialHost.stopOfficialGateway();
-      const start = await hermesGatewayHost.startManagedGateway(next);
-      if (!start.ok) {
-        return { ok: false, error: start.error || '启动开发桩失败', settings: next };
-      }
-      const { gatewayUrl, apiKey } = hermesGatewayHost.getState(next);
-      const probe =
-        start.probe && start.probe.ok ? start.probe : await hermesGatewayHost.waitForGatewayReady(gatewayUrl, apiKey, 15000);
-      if (probe.ok) agentStore.writeSettings({ brainSetupCompleted: true });
-      resetAgentBrainCache();
-      await ensureAgentBrainReady();
-      const hermesGateway = await buildHermesGatewayStatus(agentStore.readSettings());
-      if (probe.ok) notifyCopilotRefreshOnboarding();
-      return {
-        ok: Boolean(probe.ok),
-        probe,
-        settings: agentStore.readSettings(),
-        hermesGateway,
-        activeBrainId: agentSessionService ? agentSessionService.getBrainId() : 'stub',
-        started: Boolean(start.started),
-        external: Boolean(start.external),
-        error: probe.ok ? null : probe.detail || '开发桩未就绪',
-      };
-    }
-
-    const userRoot = getHermesUserRoot();
-    let runtime = hermesOfficialHost.readHermesRuntimeState(userRoot);
-    const win = BrowserWindow.fromWebContents(event.sender) || mainWindow;
-    const sendLog = (payload) => {
-      try {
-        if (win && !win.isDestroyed()) win.webContents.send('hermes-bootstrap-log', payload);
-      } catch {
-        /* ignore */
-      }
-    };
-
-    if (!runtime || !runtime.hermesCli) {
-      if (process.platform !== 'win32') {
-        return { ok: false, error: '请先在本机安装 Hermes Agent，再使用「连接已有 Hermes」' };
-      }
-      if (anyDesktopBootstrapChildRunning()) {
-        return { ok: false, error: '正在安装中，请稍候' };
-      }
-      sendLog({ type: 'phase', msg: '开始安装 Hermes 官方版…' });
-      const boot = await runHermesBootstrapChild(sendLog);
-      if (!boot.ok) {
-        return { ok: false, error: boot.error || 'Hermes 安装失败' };
-      }
-      runtime = hermesOfficialHost.readHermesRuntimeState(userRoot);
-    }
-
-    const gatewayUrl = (runtime && runtime.gatewayUrl) || hermesOfficialHost.DEFAULT_OFFICIAL_BASE;
-    const apiKey = (runtime && runtime.apiKey) || '';
-    const defaults = {
-      hermesGatewayKind: 'official',
-      hermesGatewayUrl: gatewayUrl,
-      hermesApiKey: apiKey,
-      hermesModel: 'hermes-agent',
-      hermesManagedGateway: true,
-      defaultBrainId: 'hermes',
-      mcpEnabled: true,
-    };
-    const next = agentStore.writeSettings(defaults);
-    if (!next.mcpToken || String(next.mcpToken).length < 16) {
-      agentMcpServer?.ensureMcpToken(next);
-    }
-    if (agentMcpServer) await agentMcpServer.syncFromSettings();
-
-    const start = await hermesOfficialHost.startManagedGateway(next, userRoot, sendLog);
-    if (!start.ok) {
-      return { ok: false, error: start.error || '启动 Hermes Gateway 失败', settings: next, needsBootstrap: start.needsBootstrap };
-    }
-    if (start.apiKey && start.apiKey !== next.hermesApiKey) {
-      agentStore.writeSettings({ hermesApiKey: start.apiKey });
-    }
-    const state = hermesOfficialHost.getState(agentStore.readSettings(), userRoot);
-    const probeKeys = hermesOfficialHost.collectProbeApiKeys(
-      hermesOfficialHost.resolveGatewayConfig(agentStore.readSettings(), userRoot),
-      userRoot,
-    );
-    const probe =
-      start.probe && start.probe.ok
-        ? start.probe
-        : await hermesOfficialHost.waitForOfficialReady(state.gatewayUrl, state.apiKey, 120000, probeKeys);
-    if (probe.ok) {
-      agentStore.writeSettings({ brainSetupCompleted: true });
-    }
-    resetAgentBrainCache();
-    await ensureAgentBrainReady();
-    const hermesGateway = await buildHermesGatewayStatus(agentStore.readSettings());
-    const settingsOut = agentStore.readSettings();
-    if (probe.ok) notifyCopilotRefreshOnboarding();
-    return {
-      ok: Boolean(probe.ok),
-      probe,
-      settings: settingsOut,
-      hermesGateway,
-      activeBrainId: agentSessionService ? agentSessionService.getBrainId() : 'stub',
-      started: Boolean(start.started),
-      external: Boolean(start.external),
-      installed: Boolean(runtime && runtime.hermesCli),
-      error: probe.ok ? null : probe.detail || 'Hermes Gateway 未就绪（可运行 hermes model 配置模型）',
-    };
-  });
-
-  ipcMain.handle('agent-hermes-gateway-stop', () => {
-    const r = hermesOfficialHost.stopManagedGateway();
-    return { ok: true, ...r };
-  });
-
-  ipcMain.handle('agent-companion-connect', async (_e, options) => {
-    if (!agentStore) return { ok: false, error: 'agent_not_ready' };
-    const opts = options && typeof options === 'object' ? options : {};
-    const mode = String(opts.mode || 'all').trim().toLowerCase();
-    const ctx = createCompanionConnectContext();
-    let result;
-    if (mode === 'hermes') {
-      result = await companionConnect.connectExistingHermes(ctx, opts);
-    } else if (mode === 'scripthub') {
-      result = await companionConnect.connectScriptHub(ctx, opts);
-    } else {
-      result = await companionConnect.connectAll(ctx, opts);
-    }
-    if (result && result.ok) {
-      resetAgentBrainCache();
-      await ensureAgentBrainReady();
-      if (agentMcpServer) await agentMcpServer.syncFromSettings();
-      notifyCopilotRefreshOnboarding();
-    }
-    const settings = agentStore.readSettings();
-    const hermesGateway = await buildHermesGatewayStatus(settings);
-    return {
-      ...(result || { ok: false, error: 'connect_failed' }),
-      settings,
-      hermesGateway,
-      activeBrainId: agentSessionService ? agentSessionService.getBrainId() : 'stub',
-      mcp: agentMcpServer ? agentMcpServer.status() : null,
-      mcpConfig: agentMcpServer ? agentMcpServer.buildMcpClientConfig() : null,
-    };
-  });
-
   ipcMain.handle('agent-probe-all-brains', async () => {
     if (!agentStore) return { ok: false, error: 'agent_not_ready' };
     const catalog = listBrainCatalog();
@@ -5579,40 +6018,6 @@ if (!gotLock) {
     });
     if (r.canceled || !r.filePaths[0]) return { ok: false, canceled: true };
     return { ok: true, path: r.filePaths[0] };
-  });
-
-  ipcMain.handle('shell-hermes-desktop-state', () => {
-    const userRoot = getHermesUserRoot();
-    const runtime = hermesOfficialHost.readHermesRuntimeState(userRoot);
-    const settings = agentStore ? agentStore.readSettings() : null;
-    return {
-      ok: true,
-      platformUnsupported: process.platform !== 'win32',
-      hasBootstrapScript: fs.existsSync(hermesBootstrapScriptPath()),
-      installed: Boolean(runtime && runtime.hermesCli),
-      runtime,
-      hermesCli: hermesOfficialHost.findHermesCli() || null,
-      settings,
-    };
-  });
-
-  ipcMain.handle('shell-hermes-bootstrap-run', async (event) => {
-    if (process.platform !== 'win32') {
-      return { ok: false, error: 'Hermes 壳内安装当前仅支持 Windows' };
-    }
-    if (anyDesktopBootstrapChildRunning()) {
-      return { ok: false, error: '正在安装中，请稍候' };
-    }
-    const win = BrowserWindow.fromWebContents(event.sender) || mainWindow;
-    const sendLog = (payload) => {
-      try {
-        if (win && !win.isDestroyed()) win.webContents.send('hermes-bootstrap-log', payload);
-      } catch {
-        /* ignore */
-      }
-    };
-    const boot = await runHermesBootstrapChild(sendLog);
-    return boot.ok ? { ok: true, started: true } : { ok: false, error: boot.error || '安装失败' };
   });
 
   ipcMain.handle('shell-sam-local-desktop-state', () => {
@@ -5945,14 +6350,19 @@ if (!gotLock) {
   });
 
   app.on('second-instance', (_event, commandLine) => {
-    void commandLine;
     if (mainWindow && !mainWindow.isDestroyed()) {
       if (mainWindow.isMinimized()) mainWindow.restore();
       mainWindow.show();
       mainWindow.focus();
+      setTimeout(() => {
+        void maybeRunCodexOneClickSetupFromLaunch(commandLine);
+      }, 250);
       return;
     }
     openMainWindow();
+    setTimeout(() => {
+      void maybeRunCodexOneClickSetupFromLaunch(commandLine);
+    }, 700);
   });
 
   app.whenReady().then(() => {
@@ -5979,7 +6389,7 @@ if (!gotLock) {
         }, 45000);
       }
     });
-    if (process.env.COMPANION_DESKTOP_NO_AUTO_SHELL !== '1') {
+    if (process.env.COMPANION_DESKTOP_NO_AUTO_SHELL !== '1' || argvWantsCodexAutoSetup(process.argv)) {
       const delayMs = peekProtocolUrl() ? 400 : 900;
       setTimeout(() => openMainWindow(), delayMs);
     }
@@ -6001,7 +6411,6 @@ if (!gotLock) {
     } catch (e) {
       companionLog('warn', '[codex-mcp] remove on quit failed', e instanceof Error ? e.message : e);
     }
-    hermesOfficialHost.stopManagedGateway();
     companionUpdater.dispose();
     if (desktopReleaseCheckTimer) {
       clearInterval(desktopReleaseCheckTimer);

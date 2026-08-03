@@ -172,11 +172,59 @@ else {
 # --- checksums ---
 $installerDir = Join-Path $RepoRoot "companion-desktop\$outRootName\installer"
 if (Test-Path -LiteralPath $installerDir) {
+  $codexCleanMachinePs1 = Join-Path $RepoRoot 'scripts\verify-codex-clean-machine.ps1'
+  if (Test-Path -LiteralPath $codexCleanMachinePs1) {
+    Copy-Item -LiteralPath $codexCleanMachinePs1 -Destination (Join-Path $installerDir 'verify-codex-clean-machine.ps1') -Force
+    Write-Host "[release-pack] Copied verify-codex-clean-machine.ps1 to $installerDir" -ForegroundColor DarkCyan
+  }
+  $latestInstaller = Get-ChildItem -LiteralPath $installerDir -File -Filter "AssetCutterCompanion-$cur-*-x64.exe" -ErrorAction SilentlyContinue |
+    Sort-Object LastWriteTime -Descending |
+    Select-Object -First 1
+  $acceptancePs1 = Join-Path $installerDir 'verify-codex-clean-machine.ps1'
+  if ($latestInstaller -and (Test-Path -LiteralPath $acceptancePs1)) {
+    $readmePath = Join-Path $installerDir 'README-clean-machine.txt'
+    $readmeLines = @(
+      'AssetCutter Codex clean-machine acceptance',
+      '',
+      'Use this package on a fresh Windows PC to prove one-click Codex setup works end to end.',
+      '',
+      '1. Unzip AssetCutterCompanion-*-clean-machine-acceptance.zip.',
+      '2. Run this command in PowerShell from the unzipped folder:',
+      '   powershell -ExecutionPolicy Bypass -File .\verify-codex-clean-machine.ps1 -LaunchInstaller -AutoCodexSetup -Strict -Cookie <logged-in-cookie>',
+      '3. Wait until the script writes codex-clean-machine-report-*.json.',
+      '4. Send that report back to the release finalizer.',
+      '',
+      'Success requires cloudIdentitySynced=true and conversationVerified=true.'
+    )
+    $utf8 = New-Object System.Text.UTF8Encoding $false
+    [System.IO.File]::WriteAllLines($readmePath, $readmeLines, $utf8)
+    Write-Host "[release-pack] Wrote clean-machine README: $readmePath" -ForegroundColor DarkCyan
+    $zipName = "AssetCutterCompanion-$cur-clean-machine-acceptance.zip"
+    $zipPath = Join-Path $installerDir $zipName
+    $stageDir = Join-Path $installerDir 'clean-machine-acceptance'
+    if (Test-Path -LiteralPath $stageDir) { Remove-Item -LiteralPath $stageDir -Recurse -Force }
+    New-Item -ItemType Directory -Path $stageDir -Force | Out-Null
+    Copy-Item -LiteralPath $latestInstaller.FullName -Destination (Join-Path $stageDir $latestInstaller.Name) -Force
+    Copy-Item -LiteralPath $acceptancePs1 -Destination (Join-Path $stageDir 'verify-codex-clean-machine.ps1') -Force
+    Copy-Item -LiteralPath $readmePath -Destination (Join-Path $stageDir 'README-clean-machine.txt') -Force
+    if (Test-Path -LiteralPath $zipPath) { Remove-Item -LiteralPath $zipPath -Force }
+    $stageFiles = @(Get-ChildItem -LiteralPath $stageDir -File | Select-Object -ExpandProperty FullName)
+    if ($stageFiles.Count -lt 3) { throw "Clean-machine acceptance staging incomplete: $stageDir" }
+    Compress-Archive -LiteralPath $stageFiles -DestinationPath $zipPath -Force
+    Remove-Item -LiteralPath $stageDir -Recurse -Force
+    Write-Host "[release-pack] Wrote clean-machine acceptance ZIP: $zipPath" -ForegroundColor DarkCyan
+  }
   $exeNames = @(Get-ChildItem -LiteralPath $installerDir -File -Filter 'AssetCutterCompanion-*.exe' |
       Select-Object -ExpandProperty Name)
   $blockNames = @(Get-ChildItem -LiteralPath $installerDir -File -Filter 'AssetCutterCompanion-*.exe.blockmap' |
       Select-Object -ExpandProperty Name)
-  Write-Sha256Sums -Dir $installerDir -Names ($exeNames + $blockNames)
+  $acceptanceNames = @(Get-ChildItem -LiteralPath $installerDir -File -Filter 'verify-codex-clean-machine.ps1' |
+      Select-Object -ExpandProperty Name)
+  $acceptanceZipNames = @(Get-ChildItem -LiteralPath $installerDir -File -Filter 'AssetCutterCompanion-*-clean-machine-acceptance.zip' |
+      Select-Object -ExpandProperty Name)
+  $acceptanceReadmeNames = @(Get-ChildItem -LiteralPath $installerDir -File -Filter 'README-clean-machine.txt' |
+      Select-Object -ExpandProperty Name)
+  Write-Sha256Sums -Dir $installerDir -Names ($exeNames + $blockNames + $acceptanceNames + $acceptanceZipNames + $acceptanceReadmeNames)
 }
 
 $shellOut = Join-Path $RepoRoot 'dist-out-shell-tools'

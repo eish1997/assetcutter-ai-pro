@@ -146,8 +146,12 @@ export function preferCompanionWorkflowBundle(params: {
     return companionBundle;
   }
 
-  // Equal asset count → prefer companion (source of truth when healthy).
+  // Equal asset count: prefer the newer snapshot. A just-saved local IDB (with
+  // fresher modelPbrEdits / slotCandidates) must not lose to a lagging companion PUT.
   if (cAssets > 0 || (cPending > 0 && localAssets === 0)) {
+    if (localUpdatedAt > 0 && companionUpdatedAt > 0 && localUpdatedAt >= companionUpdatedAt) {
+      return cloneLocalBundle(local);
+    }
     return companionBundle;
   }
 

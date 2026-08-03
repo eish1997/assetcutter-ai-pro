@@ -5,9 +5,15 @@ import os from 'node:os';
 import path from 'node:path';
 
 function readArg(name, fallback = '') {
+  const argv = process.argv.slice(2);
   const prefix = `${name}=`;
-  const hit = process.argv.slice(2).find((arg) => arg.startsWith(prefix));
-  return hit ? hit.slice(prefix.length) : fallback;
+  const hit = argv.find((arg) => arg.startsWith(prefix));
+  if (hit) return hit.slice(prefix.length);
+  const index = argv.indexOf(name);
+  if (index >= 0 && argv[index + 1] && !String(argv[index + 1]).startsWith('--')) {
+    return argv[index + 1];
+  }
+  return fallback;
 }
 
 function hasFlag(name) {

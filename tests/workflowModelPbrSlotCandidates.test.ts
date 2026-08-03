@@ -4,7 +4,9 @@ import {
   createWorkflowPbrSlotCandidate,
   MAX_PBR_SLOT_CANDIDATES,
   normalizeWorkflowModelPbrEditDoc,
+  pickPreferredWorkflowModelPbrEditDoc,
   textureEditFromPbrCandidate,
+  type WorkflowModelPbrEditDoc,
 } from '../services/workflowModelPbrEdits';
 
 describe('workflowModelPbrEdits slot candidates', () => {
@@ -69,5 +71,68 @@ describe('workflowModelPbrEdits slot candidates', () => {
     expect(edit.enabled).toBe(true);
     expect(edit.channel).toBe('g');
     expect(edit.colorSpace).toBe('linear');
+  });
+
+  it('pickPreferredWorkflowModelPbrEditDoc keeps richer slotCandidates across remount', () => {
+    const staleHost: WorkflowModelPbrEditDoc = {
+      version: 1,
+      assetId: 'host',
+      modelKey: 'm1',
+      variantId: 'original',
+      updatedAt: 100,
+      materials: {
+        mat0: {
+          materialName: 'Body',
+          slots: {},
+          slotCandidates: {
+            baseColor: [
+              createWorkflowPbrSlotCandidate({
+                assetId: 'old-tex',
+                dataUrl: 'data:image/png;base64,old',
+                source: 'generate',
+              }),
+            ],
+          },
+        },
+      },
+    };
+    const localFresh: WorkflowModelPbrEditDoc = {
+      version: 1,
+      assetId: 'host',
+      modelKey: 'm1',
+      variantId: 'original',
+      updatedAt: 90,
+      materials: {
+        mat0: {
+          materialName: 'Body',
+          slots: {},
+          slotCandidates: {
+            baseColor: [
+              createWorkflowPbrSlotCandidate({
+                assetId: 'old-tex',
+                dataUrl: 'data:image/png;base64,old',
+                source: 'generate',
+              }),
+              createWorkflowPbrSlotCandidate({
+                assetId: 'new-tex-1',
+                dataUrl: 'data:image/png;base64,n1',
+                source: 'generate',
+              }),
+              createWorkflowPbrSlotCandidate({
+                assetId: 'new-tex-2',
+                dataUrl: 'data:image/png;base64,n2',
+                source: 'generate',
+              }),
+            ],
+          },
+        },
+      },
+    };
+    const picked = pickPreferredWorkflowModelPbrEditDoc(staleHost, localFresh);
+    expect(picked?.materials.mat0?.slotCandidates?.baseColor?.map((c) => c.assetId)).toEqual([
+      'old-tex',
+      'new-tex-1',
+      'new-tex-2',
+    ]);
   });
 });

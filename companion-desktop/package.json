@@ -52,15 +52,13 @@
       "agent-workbench-flow.cjs",
       "codex-auth-sync.cjs",
       "codex-mcp-config.cjs",
-      "hermes-official-host.cjs",
-      "hermes-cli-resolve.cjs",
-      "hermes-gateway-host.cjs",
-      "companion-connect.cjs",
       "agent-skills.cjs",
       "agent-memory.cjs",
       "agent-types.d.ts",
       "agent-session/index.cjs",
-      "brain-adapters/**/*",
+      "brain-adapters/index.cjs",
+      "brain-adapters/stub.cjs",
+      "brain-adapters/codex.cjs",
       "shell/**/*",
       "package.json"
     ],
@@ -95,16 +93,6 @@
         "from": "paddleocr-bootstrap",
         "to": "paddleocr-bootstrap",
         "filter": ["**/*"]
-      },
-      {
-        "from": "../hermes-bootstrap",
-        "to": "hermes-bootstrap",
-        "filter": ["dev-gateway.mjs"]
-      },
-      {
-        "from": "hermes-bootstrap",
-        "to": "hermes-bootstrap",
-        "filter": ["hermes-bootstrap.cjs"]
       },
       {
         "from": "../local-companion/paddleocr-service",

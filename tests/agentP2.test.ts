@@ -273,6 +273,43 @@ describe('agent tool execution audit', () => {
     expect(readBack.mcpWorkbenchLastE2e).toEqual(lastE2e);
   });
 
+  it('normalizes the last Codex setup report before writing settings JSON', () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ac-agent-store-'));
+    const store = createAgentStore({ getRoot: () => tmp });
+    const longDetail = 'x'.repeat(700);
+
+    store.writeSettings({
+      codexLastSetupReport: {
+        ok: false,
+        at: '2026-08-03T12:00:00.000Z',
+        desktopVersion: '0.2.12',
+        activeBrainId: 'codex',
+        cloudIdentitySynced: false,
+        conversationVerified: true,
+        extra: { shouldNotPersist: true },
+        checks: [
+          {
+            id: 'cloud_identity',
+            label: 'Cloud identity',
+            ok: false,
+            status: 'failed',
+            detail: longDetail,
+            nextAction: 'Run setup again.',
+            nested: { shouldNotPersist: true },
+          },
+        ],
+      },
+    });
+
+    const raw = fs.readFileSync(path.join(tmp, 'settings.json'), 'utf8');
+    const parsed = JSON.parse(raw);
+
+    expect(parsed.codexLastSetupReport.extra).toBeUndefined();
+    expect(parsed.codexLastSetupReport.checks[0].nested).toBeUndefined();
+    expect(parsed.codexLastSetupReport.checks[0].detail).toHaveLength(500);
+    expect(store.readSettings().codexLastSetupReport.failed).toEqual(['cloud_identity']);
+  });
+
   it('lists recent tool executions from audit logs', () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ac-agent-store-'));
     const store = createAgentStore({ getRoot: () => tmp });

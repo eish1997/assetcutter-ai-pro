@@ -27,6 +27,7 @@ import {
   resolvePbrTextureSrc,
   shouldReseedEmbeddedPbrDocFromMesh,
   textureEditFromPbrCandidate,
+  pickPreferredWorkflowModelPbrEditDoc,
   WORKFLOW_MODEL_PBR_EDIT_PERSIST_EVENT,
   workflowModelPbrEditKey,
   WORKFLOW_MODEL_PBR_SLOTS,
@@ -982,7 +983,9 @@ const ImageModel3DViewer: React.FC<LazyImagePreviewViewerProps> = ({
       })
         ? localDoc
         : null;
-      let savedDoc = matchedAssetDoc || matchedLocalDoc;
+      // Prefer newer/richer of host asset vs localStorage — admin SPA remount often
+      // reloads a stale host doc that would otherwise wipe generated slotCandidates.
+      let savedDoc = pickPreferredWorkflowModelPbrEditDoc(matchedAssetDoc, matchedLocalDoc);
       const hasUserAuthored = pbrEditDocHasUserAuthoredTextures(savedDoc);
       // Only seed when no matched persisted doc. Replacing embedded-only docs on every open
       // wiped assetIds → duplicate promote → PBR textures leaked into the asset list.
@@ -1000,9 +1003,12 @@ const ImageModel3DViewer: React.FC<LazyImagePreviewViewerProps> = ({
           writeWorkflowModelPbrEditDoc(pbrStorageKey, seeded);
           if (model3dAssetId) publishModelPbrEditRef.current(seeded);
         }
-      } else if (savedDoc && !matchedAssetDoc && model3dAssetId) {
-        // Local cache already has this model's doc — sync onto the host asset once.
-        publishModelPbrEditRef.current(savedDoc);
+      } else if (savedDoc && model3dAssetId) {
+        // Heal host + localStorage when either side was stale/partial after remount.
+        writeWorkflowModelPbrEditDoc(pbrStorageKey, savedDoc);
+        if (savedDoc !== matchedAssetDoc) {
+          publishModelPbrEditRef.current(savedDoc);
+        }
       }
       setMaterialSlots(slots);
       setActiveMaterialId((current) => current || slots[0]?.id || '');
@@ -1052,7 +1058,6 @@ const ImageModel3DViewer: React.FC<LazyImagePreviewViewerProps> = ({
         ).then(() => {
           publishModel3DStats(collectModel3DStats(object, src, fileName, format));
         });
-        if (!matchedAssetDoc && model3dAssetId) publishModelPbrEditRef.current(savedDoc);
       }
       rememberWorkflowModelViewerUiSticky({
         loadKey: sceneLoadKey,

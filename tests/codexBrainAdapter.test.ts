@@ -28,6 +28,7 @@ function createFakeCodexProcess(onPrompt: (prompt: string) => void, outputEvents
         outputEvents ||
         [
           { type: 'thread.started', thread_id: 'thread_123' },
+          { type: 'turn.started' },
           { type: 'item.completed', item: { id: 'msg_1', type: 'agent_message', text: 'ready' } },
           { type: 'turn.completed', usage: { input_tokens: 12, output_tokens: 3 } },
         ];
@@ -100,6 +101,8 @@ describe('Codex brain adapter', () => {
     expect(spawns[0].args).toEqual(
       expect.arrayContaining(['--model', 'gpt-5-codex', '--sandbox', 'workspace-write', '-C', process.cwd()]),
     );
+    expect(spawns[0].args).toEqual(expect.arrayContaining(['--ignore-rules', '--skip-git-repo-check']));
+    expect(spawns[0].args).toEqual(expect.arrayContaining(['--disable', 'plugins']));
     expect(prompts.join('\n')).toContain('AssetCutter Copilot context');
     expect(prompts.join('\n')).toContain('ac.workbench.create_text_asset');
     expect(prompts.join('\n')).toContain('ac.workbench.create_image_asset');
@@ -108,6 +111,7 @@ describe('Codex brain adapter', () => {
     expect(prompts.join('\n')).toContain('Do not invent PowerShell');
     expect(events).toEqual(expect.arrayContaining([
       expect.objectContaining({ type: 'activity', phase: 'start', name: 'codex.turn' }),
+      expect.objectContaining({ type: 'activity', phase: 'start', name: 'codex.thinking' }),
       expect.objectContaining({ type: 'activity', phase: 'done', name: 'codex.turn' }),
     ]));
     expect(events.some((ev: any) => ev.type === 'usage')).toBe(true);

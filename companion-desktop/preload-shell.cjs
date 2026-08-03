@@ -49,8 +49,6 @@ contextBridge.exposeInMainWorld('companionShell', {
   builtinExampleAvailable: () => timedInvoke('shell-builtin-example-available'),
   samLocalDesktopState: () => timedInvoke('shell-sam-local-desktop-state'),
   samLocalBootstrapRun: () => timedInvoke('shell-sam-local-bootstrap-run'),
-  hermesDesktopState: () => timedInvoke('shell-hermes-desktop-state'),
-  hermesBootstrapRun: () => timedInvoke('shell-hermes-bootstrap-run', 1200000),
   rembgDesktopState: () => timedInvoke('shell-rembg-desktop-state'),
   rembgBootstrapRun: () => timedInvoke('shell-rembg-bootstrap-run'),
   paddleOcrDesktopState: () => timedInvoke('shell-paddleocr-desktop-state'),
@@ -100,16 +98,6 @@ contextBridge.exposeInMainWorld('companionShell', {
   onSamLocalBootstrapLog: (handler) => {
     if (typeof handler !== 'function') return;
     ipcRenderer.on('sam-local-bootstrap-log', (_evt, payload) => {
-      try {
-        handler(payload);
-      } catch {
-        /* ignore */
-      }
-    });
-  },
-  onHermesBootstrapLog: (handler) => {
-    if (typeof handler !== 'function') return;
-    ipcRenderer.on('hermes-bootstrap-log', (_evt, payload) => {
       try {
         handler(payload);
       } catch {
@@ -248,11 +236,6 @@ contextBridge.exposeInMainWorld('companionShell', {
     mcpToolCatalog: () => timedInvoke('agent-mcp-tool-catalog'),
     loadPolicy: () => timedInvoke('agent-policy-load'),
     savePolicy: (patch) => timedInvoke('agent-policy-save', patch || {}),
-    hermesGatewayState: () => timedInvoke('agent-hermes-gateway-state'),
-    hermesGatewayProbe: () => timedInvoke('agent-hermes-gateway-probe'),
-    hermesGatewaySetup: (options) => timedInvoke('agent-hermes-gateway-setup', options || {}, 1200000),
-    hermesGatewayStop: () => timedInvoke('agent-hermes-gateway-stop'),
-    companionConnect: (options) => timedInvoke('agent-companion-connect', options || {}, 120000),
     onEvent: (handler) => {
       if (typeof handler !== 'function') return;
       ipcRenderer.on('agent-session:event', (_evt, payload) => {

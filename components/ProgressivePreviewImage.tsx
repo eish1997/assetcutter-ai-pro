@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback, forwardRef, useRef } from 'react';
-import { workflowSafeImgSrc } from '../services/workflowImageDisplay';
+import { WORKFLOW_IMG_EMPTY_PLACEHOLDER, workflowSafeImgSrc } from '../services/workflowImageDisplay';
 import { SiteImage } from './SiteImage';
 import {
   createPreviewMicroThumbnail,
@@ -44,6 +44,14 @@ function thumbCacheKey(cacheKey: string): string {
 
 function microCacheKey(cacheKey: string): string {
   return `micro:${cacheKey}`;
+}
+
+function isEmptyPreviewThumb(src: string | null | undefined): boolean {
+  return workflowSafeImgSrc(src) === WORKFLOW_IMG_EMPTY_PLACEHOLDER;
+}
+
+function canDirectLoadAfterThumbMiss(src: string): boolean {
+  return /^(https?:|blob:)/i.test(workflowSafeImgSrc(src));
 }
 
 /**
@@ -150,6 +158,7 @@ export const ProgressivePreviewImage = forwardRef<HTMLImageElement, ProgressiveP
     const [microSrc, setMicroSrc] = useState<string | null>(null);
     const [thumbSrc, setThumbSrc] = useState<string | null>(null);
     const [thumbReady, setThumbReady] = useState(false);
+    const [directFallbackSrc, setDirectFallbackSrc] = useState<string | null>(null);
     /** 无微图时小图直接显现，不做叠化（避免「还在加载一层」的观感） */
     const thumbRevealSkipTransitionRef = useRef(false);
     const microPaintedRef = useRef(false);
@@ -188,6 +197,7 @@ export const ProgressivePreviewImage = forwardRef<HTMLImageElement, ProgressiveP
         setMicroSrc(null);
         setThumbSrc(null);
         setThumbReady(false);
+        setDirectFallbackSrc(null);
         return;
       }
 
@@ -196,6 +206,7 @@ export const ProgressivePreviewImage = forwardRef<HTMLImageElement, ProgressiveP
         setMicroSrc(null);
         setThumbSrc(safe);
         setThumbReady(true);
+        setDirectFallbackSrc(null);
         thumbRevealSkipTransitionRef.current = true;
         return;
       }
@@ -203,6 +214,7 @@ export const ProgressivePreviewImage = forwardRef<HTMLImageElement, ProgressiveP
       setMicroSrc(null);
       setThumbSrc(null);
       setThumbReady(false);
+      setDirectFallbackSrc(null);
       thumbRevealSkipTransitionRef.current = false;
       microPaintedRef.current = false;
 
@@ -222,15 +234,28 @@ export const ProgressivePreviewImage = forwardRef<HTMLImageElement, ProgressiveP
       // Fresh data URLs (e.g. 3D lightbox capture) must regenerate — do not serve a
       // stale memory/companion thumb that shares a stable cacheKey (strip / VGP tree).
       const sourceIsInlineData = /^data:image\//i.test(s);
+      const directFallbackSource = canDirectLoadAfterThumbMiss(s) ? s : '';
 
       let cancelled = false;
+      const showDirectFallback = (): boolean => {
+        if (!directFallbackSource) return false;
+        setDirectFallbackSrc(directFallbackSource);
+        return true;
+      };
 
       // Only reuse LRU / companion thumbs for non-inline sources. Same cacheKey + new
       // viewport JPEG would otherwise keep showing the previous / previous-previous thumb.
       if (thumbHit && !sourceIsInlineData) {
+        if (isEmptyPreviewThumb(thumbHit) && showDirectFallback()) {
+          return () => {
+            cancelled = true;
+          };
+        }
         if (microHit) {
-          microPaintedRef.current = true;
-          setMicroSrc(microHit);
+          if (!isEmptyPreviewThumb(microHit)) {
+            microPaintedRef.current = true;
+            setMicroSrc(microHit);
+          }
           setThumbSrc(thumbHit);
           thumbRevealSkipTransitionRef.current = false;
           void preloadImageDataUrl(thumbHit).then(() => {
@@ -258,7 +283,7 @@ export const ProgressivePreviewImage = forwardRef<HTMLImageElement, ProgressiveP
         };
       }
 
-      if (microHit && !sourceIsInlineData) {
+      if (microHit && !sourceIsInlineData && !isEmptyPreviewThumb(microHit)) {
         microPaintedRef.current = true;
         setMicroSrc(microHit);
       }
@@ -270,6 +295,13 @@ export const ProgressivePreviewImage = forwardRef<HTMLImageElement, ProgressiveP
         void createPreviewThumbnail(s, thumbMaxEdge, 0.82, decodePri).then(async (t) => {
           if (cancelled || thumbDoneRef.current) return;
           thumbDoneRef.current = true;
+          if (isEmptyPreviewThumb(t)) {
+            if (!showDirectFallback()) {
+              setThumbSrc(t);
+              setThumbReady(true);
+            }
+            return;
+          }
           cacheSet(tKey, t);
           if (companionThumbKey) {
             void putWorkflowPreviewThumbToCompanion(companionBase, companionProject, companionThumbKey, t);
@@ -294,6 +326,7 @@ export const ProgressivePreviewImage = forwardRef<HTMLImageElement, ProgressiveP
       const runMicro = () => {
         void createPreviewMicroThumbnail(s, microEdge, 0.62, 0.72, decodePri).then((m) => {
           if (cancelled) return;
+          if (isEmptyPreviewThumb(m)) return;
           cacheSet(mKey, m);
           if (companionMicroKey) {
             void putWorkflowPreviewThumbToCompanion(companionBase, companionProject, companionMicroKey, m);
@@ -309,6 +342,7 @@ export const ProgressivePreviewImage = forwardRef<HTMLImageElement, ProgressiveP
           void fetchWorkflowPreviewThumbFromCompanion(companionBase, companionProject, companionMicroKey).then((m) => {
             if (cancelled) return;
             if (m) {
+              if (isEmptyPreviewThumb(m)) return;
               cacheSet(mKey, m);
               if (thumbDoneRef.current) return;
               microPaintedRef.current = true;
@@ -331,6 +365,13 @@ export const ProgressivePreviewImage = forwardRef<HTMLImageElement, ProgressiveP
           }
           if (thumbDoneRef.current) return;
           thumbDoneRef.current = true;
+          if (isEmptyPreviewThumb(t)) {
+            if (!showDirectFallback()) {
+              setThumbSrc(t);
+              setThumbReady(true);
+            }
+            return;
+          }
           cacheSet(tKey, t);
           thumbRevealSkipTransitionRef.current = !microPaintedRef.current;
           if (microPaintedRef.current) {
@@ -361,6 +402,28 @@ export const ProgressivePreviewImage = forwardRef<HTMLImageElement, ProgressiveP
 
     if (deferThumbnail) {
       return <div className={`${className ?? 'relative w-full h-full'} ${PLACEHOLDER_BG} overflow-hidden`} />;
+    }
+
+    if (directFallbackSrc) {
+      return (
+        <div className={`${className ?? 'relative w-full h-full'} ${PLACEHOLDER_BG} overflow-hidden`}>
+          <SiteImage
+            ref={assignVisibleRef}
+            src={directFallbackSrc}
+            alt={alt}
+            draggable={draggable}
+            onDragStart={onDragStart}
+            loading={imageFetchPriority === 'high' ? 'eager' : 'lazy'}
+            fetchPriority={imageFetchPriority}
+            onIntrinsicSize={onIntrinsicSize}
+            onClick={onClick}
+            title={title}
+            className={imgClassName}
+            style={imgStyle}
+            fallback={directLoadFallback}
+          />
+        </div>
+      );
     }
 
     // 极短 data URL 或非 data：无渐进必要；http(s) 走 SiteImage 多候选重试（与全站直链一致）

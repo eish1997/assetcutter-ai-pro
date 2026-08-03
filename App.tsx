@@ -1358,6 +1358,9 @@ const MainApp: React.FC = () => {
     window.addEventListener('online', onOnline);
     return () => {
       if (visFlushTimer != null) window.clearTimeout(visFlushTimer);
+      // SPA 跳转 /admin 会卸载 MainApp：必须立刻落盘，否则 650ms autosave 被 clearTimeout 丢掉
+      // 刚生成的 PBR 贴图候选与隐藏资产标记。
+      flushProjectPersistence();
       document.removeEventListener('visibilitychange', onVis);
       window.removeEventListener('pagehide', onHide);
       window.removeEventListener('online', onOnline);

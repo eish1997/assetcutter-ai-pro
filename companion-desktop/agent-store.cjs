@@ -28,6 +28,40 @@ function normalizeCodexCwd(value, fallback) {
   return s;
 }
 
+function shortText(value, max = 500) {
+  const s = value == null ? '' : String(value);
+  return s.length > max ? s.slice(0, max) : s;
+}
+
+function normalizeCodexLastSetupReport(value) {
+  if (!value || typeof value !== 'object') return null;
+  const checks = Array.isArray(value.checks)
+    ? value.checks
+        .filter((check) => check && typeof check === 'object')
+        .slice(0, 20)
+        .map((check) => ({
+          id: shortText(check.id, 80),
+          label: shortText(check.label, 120),
+          ok: Boolean(check.ok),
+          status: check.status === 'ok' ? 'ok' : 'failed',
+          detail: shortText(check.detail, 500),
+          nextAction: check.ok ? '' : shortText(check.nextAction, 500),
+        }))
+    : [];
+  return {
+    ok: Boolean(value.ok),
+    at: shortText(value.at || new Date().toISOString(), 80),
+    desktopVersion: shortText(value.desktopVersion, 40),
+    activeBrainId: shortText(value.activeBrainId, 80),
+    cloudIdentitySynced: Boolean(value.cloudIdentitySynced),
+    conversationVerified: Boolean(value.conversationVerified),
+    checks,
+    failed: Array.isArray(value.failed)
+      ? value.failed.map((item) => shortText(item, 120)).filter(Boolean).slice(0, 20)
+      : checks.filter((check) => !check.ok).map((check) => check.id || check.label || 'unknown'),
+  };
+}
+
 /**
  * @param {{ getRoot: () => string }} deps
  */
@@ -131,11 +165,6 @@ function createAgentStore(deps) {
       mcpEnabled: false,
       mcpPort: 19120,
       mcpToken: null,
-      hermesGatewayUrl: 'http://127.0.0.1:8642/v1',
-      hermesApiKey: '',
-      hermesModel: 'hermes-agent',
-      hermesManagedGateway: true,
-      hermesGatewayKind: 'official',
       codexCommand: process.platform === 'win32' ? 'codex.cmd' : 'codex',
       codexCwd: codexWorkspaceDir(),
       codexModel: '',
@@ -148,6 +177,7 @@ function createAgentStore(deps) {
       codexSharedAuthLastSyncAt: '',
       codexSharedAuthLastError: '',
       codexDefaultMigrated: false,
+      codexLastSetupReport: null,
       brainSetupCompleted: false,
       mcpWorkbenchLastE2e: null,
     };
@@ -165,18 +195,6 @@ function createAgentStore(deps) {
           ? Math.min(65535, Math.max(1024, Number(j.mcpPort)))
           : defaults.mcpPort,
         mcpToken: j.mcpToken != null ? String(j.mcpToken) : null,
-        hermesGatewayUrl:
-          j.hermesGatewayUrl != null
-            ? String(j.hermesGatewayUrl).trim().replace(/\/$/, '') || defaults.hermesGatewayUrl
-            : defaults.hermesGatewayUrl,
-        hermesApiKey: j.hermesApiKey != null ? String(j.hermesApiKey).trim() : defaults.hermesApiKey,
-        hermesModel: j.hermesModel != null ? String(j.hermesModel).trim() : defaults.hermesModel,
-        hermesManagedGateway:
-          j.hermesManagedGateway != null ? Boolean(j.hermesManagedGateway) : defaults.hermesManagedGateway,
-        hermesGatewayKind:
-          j.hermesGatewayKind === 'dev' || j.hermesGatewayKind === 'official'
-            ? j.hermesGatewayKind
-            : defaults.hermesGatewayKind,
         codexCommand:
           j.codexCommand != null ? String(j.codexCommand).trim() || defaults.codexCommand : defaults.codexCommand,
         codexCwd: normalizeCodexCwd(j.codexCwd, defaults.codexCwd),
@@ -211,6 +229,7 @@ function createAgentStore(deps) {
             : defaults.codexSharedAuthLastError,
         codexDefaultMigrated:
           j.codexDefaultMigrated != null ? Boolean(j.codexDefaultMigrated) : defaults.codexDefaultMigrated,
+        codexLastSetupReport: normalizeCodexLastSetupReport(j.codexLastSetupReport),
         brainSetupCompleted: j.brainSetupCompleted != null ? Boolean(j.brainSetupCompleted) : defaults.brainSetupCompleted,
         mcpWorkbenchLastE2e:
           j.mcpWorkbenchLastE2e && typeof j.mcpWorkbenchLastE2e === 'object' ? j.mcpWorkbenchLastE2e : null,
@@ -224,23 +243,11 @@ function createAgentStore(deps) {
     const cur = readSettings();
     const raw = patch && typeof patch === 'object' ? patch : {};
     const normalized = { ...raw };
-    if (raw.hermesGatewayUrl != null) {
-      const u = String(raw.hermesGatewayUrl).trim().replace(/\/$/, '');
-      normalized.hermesGatewayUrl = u || cur.hermesGatewayUrl;
-    }
-    if (raw.hermesApiKey != null) {
-      normalized.hermesApiKey = String(raw.hermesApiKey).trim();
-    }
-    if (raw.hermesModel != null) {
-      normalized.hermesModel = String(raw.hermesModel).trim();
-    }
-    if (raw.hermesManagedGateway != null) {
-      normalized.hermesManagedGateway = Boolean(raw.hermesManagedGateway);
-    }
-    if (raw.hermesGatewayKind != null) {
-      const k = String(raw.hermesGatewayKind).trim();
-      if (k === 'dev' || k === 'official') normalized.hermesGatewayKind = k;
-    }
+    delete normalized.hermesGatewayUrl;
+    delete normalized.hermesApiKey;
+    delete normalized.hermesModel;
+    delete normalized.hermesManagedGateway;
+    delete normalized.hermesGatewayKind;
     if (raw.brainSetupCompleted != null) {
       normalized.brainSetupCompleted = Boolean(raw.brainSetupCompleted);
     }
@@ -289,6 +296,9 @@ function createAgentStore(deps) {
     }
     if (raw.codexDefaultMigrated != null) {
       normalized.codexDefaultMigrated = Boolean(raw.codexDefaultMigrated);
+    }
+    if (raw.codexLastSetupReport != null) {
+      normalized.codexLastSetupReport = normalizeCodexLastSetupReport(raw.codexLastSetupReport);
     }
     if (raw.mcpWorkbenchLastE2e != null) {
       normalized.mcpWorkbenchLastE2e =

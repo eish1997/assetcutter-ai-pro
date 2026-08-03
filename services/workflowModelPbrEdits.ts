@@ -217,6 +217,120 @@ export function appendWorkflowPbrSlotCandidates(
   return [...(existing || []), ...additions].slice(-MAX_PBR_SLOT_CANDIDATES);
 }
 
+function countPbrSlotCandidates(doc: WorkflowModelPbrEditDoc): number {
+  let n = 0;
+  for (const mat of Object.values(doc.materials || {})) {
+    for (const slot of WORKFLOW_MODEL_PBR_SLOTS) {
+      n += mat.slotCandidates?.[slot]?.length || 0;
+    }
+  }
+  return n;
+}
+
+function candidateDedupeKey(c: WorkflowModelPbrSlotCandidate): string {
+  return clean(c.assetId) || clean(c.id) || clean(c.dataUrl);
+}
+
+/**
+ * Merge slotCandidates from `secondary` into `primary` (primary wins on id conflicts).
+ * Used when host asset doc and localStorage diverge after admin navigation / remount.
+ */
+export function mergeWorkflowModelPbrEditDocsPreferringPrimary(
+  primary: WorkflowModelPbrEditDoc,
+  secondary: WorkflowModelPbrEditDoc | null | undefined
+): WorkflowModelPbrEditDoc {
+  const sec = normalizeWorkflowModelPbrEditDoc(secondary);
+  if (!sec) return primary;
+  let touched = false;
+  const materials: WorkflowModelPbrEditDoc['materials'] = { ...primary.materials };
+  for (const [matId, secMat] of Object.entries(sec.materials || {})) {
+    const priMat = materials[matId] || {
+      materialName: secMat.materialName,
+      slots: {},
+    };
+    const nextCandidates: NonNullable<WorkflowModelPbrMaterialEdit['slotCandidates']> = {
+      ...(priMat.slotCandidates || {}),
+    };
+    for (const slot of WORKFLOW_MODEL_PBR_SLOTS) {
+      const secList = secMat.slotCandidates?.[slot];
+      if (!secList?.length) continue;
+      const priList = nextCandidates[slot] || [];
+      const seen = new Set(priList.map(candidateDedupeKey).filter(Boolean));
+      const extras = secList.filter((c) => {
+        const key = candidateDedupeKey(c);
+        if (!key || seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+      if (extras.length === 0) continue;
+      nextCandidates[slot] = appendWorkflowPbrSlotCandidates(priList, extras);
+      touched = true;
+    }
+    const nextSlots = { ...(priMat.slots || {}) };
+    for (const slot of WORKFLOW_MODEL_PBR_SLOTS) {
+      if (nextSlots[slot] || !secMat.slots?.[slot]) continue;
+      nextSlots[slot] = secMat.slots[slot];
+      touched = true;
+    }
+    const nextActive = { ...(priMat.activeCandidateIds || {}) };
+    for (const slot of WORKFLOW_MODEL_PBR_SLOTS) {
+      if (clean(nextActive[slot]) || !clean(secMat.activeCandidateIds?.[slot])) continue;
+      nextActive[slot] = secMat.activeCandidateIds![slot]!;
+      touched = true;
+    }
+    materials[matId] = {
+      ...priMat,
+      materialName: priMat.materialName || secMat.materialName,
+      slots: nextSlots,
+      params: priMat.params || secMat.params,
+      slotCandidates: Object.keys(nextCandidates).length ? nextCandidates : priMat.slotCandidates,
+      activeCandidateIds: Object.keys(nextActive).length ? nextActive : priMat.activeCandidateIds,
+    };
+  }
+  if (!touched) return primary;
+  return {
+    ...primary,
+    materials,
+    updatedAt: Math.max(primary.updatedAt || 0, sec.updatedAt || 0, Date.now()),
+  };
+}
+
+/**
+ * Prefer the newer host/localStorage PBR doc, then union slotCandidates from the other side
+ * so admin remount cannot drop generated texture previews.
+ */
+export function pickPreferredWorkflowModelPbrEditDoc(
+  a: WorkflowModelPbrEditDoc | null | undefined,
+  b: WorkflowModelPbrEditDoc | null | undefined
+): WorkflowModelPbrEditDoc | null {
+  const na = normalizeWorkflowModelPbrEditDoc(a);
+  const nb = normalizeWorkflowModelPbrEditDoc(b);
+  if (!na) return nb;
+  if (!nb) return na;
+  const ca = countPbrSlotCandidates(na);
+  const cb = countPbrSlotCandidates(nb);
+  // Richer candidate set wins when clocks are close (stale host after SPA remount).
+  let primary = na;
+  let secondary = nb;
+  if (ca !== cb) {
+    const richer = ca > cb ? na : nb;
+    const poorer = richer === na ? nb : na;
+    const richerTs = richer.updatedAt || 0;
+    const poorerTs = poorer.updatedAt || 0;
+    if (richerTs + 60_000 >= poorerTs) {
+      primary = richer;
+      secondary = poorer;
+    } else {
+      primary = poorerTs >= richerTs ? poorer : richer;
+      secondary = primary === poorer ? richer : poorer;
+    }
+  } else if ((nb.updatedAt || 0) > (na.updatedAt || 0)) {
+    primary = nb;
+    secondary = na;
+  }
+  return mergeWorkflowModelPbrEditDocsPreferringPrimary(primary, secondary);
+}
+
 export function createWorkflowPbrSlotCandidate(input: {
   assetId?: string;
   dataUrl?: string;
