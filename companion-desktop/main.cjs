@@ -5006,6 +5006,19 @@ if (!gotLock) {
     return { ok: true, brainId: agentSessionService.getBrainId(), probe };
   });
 
+  ipcMain.handle('agent-runtime-status', async () => {
+    if (!agentStore) return { ok: false, error: 'agent_not_ready' };
+    const settings = agentStore.readSettings();
+    return {
+      ok: true,
+      settings,
+      codexRuntime: buildCodexRuntimeStatus(settings),
+      codexAuth: codexAuthStatus(),
+      brainMetas: agentStore.listBrainMetas(),
+      activeBrainId: agentSessionService ? agentSessionService.getBrainId() : 'stub',
+    };
+  });
+
   ipcMain.handle('agent-session-confirm', (_e, confirmId, approved) => {
     return resolveAgentConfirm(confirmId, approved);
   });

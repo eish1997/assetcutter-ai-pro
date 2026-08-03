@@ -364,6 +364,12 @@ function createCodexBrainAdapter(deps) {
         tokenEnvVar: DEFAULT_CODEX_MCP_TOKEN_ENV,
       }),
     });
+    queue.push({
+      type: 'activity',
+      phase: 'start',
+      name: 'codex.turn',
+      detail: codexThreadId ? 'Resuming Codex conversation.' : 'Starting Codex conversation.',
+    });
     const abortHandler = () => {
       try {
         child.kill();
@@ -455,6 +461,12 @@ function createCodexBrainAdapter(deps) {
         if (ev.usage && typeof ev.usage === 'object') {
           queue.push({ type: 'usage', usage: ev.usage });
         }
+        queue.push({
+          type: 'activity',
+          phase: 'done',
+          name: 'codex.turn',
+          detail: 'Codex response completed.',
+        });
         queue.push({ type: 'done', stopReason: 'stop' });
       }
     });

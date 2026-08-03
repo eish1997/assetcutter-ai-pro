@@ -214,6 +214,7 @@ contextBridge.exposeInMainWorld('companionShell', {
     confirm: (confirmId, approved) => timedInvoke('agent-session-confirm', confirmId, approved),
     probeBrain: () => timedInvoke('agent-session-probe-brain'),
     probeAllBrains: () => timedInvoke('agent-probe-all-brains', 60000),
+    runtimeStatus: () => timedInvoke('agent-runtime-status'),
     loadSettings: () => timedInvoke('agent-settings-load'),
     saveSettings: (patch) => timedInvoke('agent-settings-save', patch || {}),
     syncCodexAuth: () => timedInvoke('agent-codex-auth-sync', 120000),

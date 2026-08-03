@@ -200,6 +200,7 @@ describe('copilot settings UI', () => {
 
     expect(panel).toContain('function ensureCodexReadyBeforeSend');
     expect(panel).toContain('await ensureCodexReadyBeforeSend()');
+    expect(panel).toContain('agent.runtimeStatus');
     expect(panel).toContain('progressRunId');
     expect(panel).toContain('agent.onCodexSetupProgress');
     expect(panel).toContain('activeCodexSetupRunId');
@@ -213,10 +214,13 @@ describe('copilot settings UI', () => {
     expect(panel).toContain("active === 'codex' && probeOk");
     expect(panel).toContain('codexSetupFailureMessage');
     expect(preload).toContain("setupCodex: (options) => timedInvoke('agent-codex-one-click-setup'");
+    expect(preload).toContain("runtimeStatus: () => timedInvoke('agent-runtime-status')");
     expect(preload).toContain("checkShellUpdate: () => timedInvoke('shell-check-shell-update')");
     expect(preload).toContain("ipcRenderer.on('agent-codex-setup-progress'");
     expect(preload).toContain("return () => ipcRenderer.removeListener('agent-codex-setup-progress', listener)");
     expect(main).toContain("ipcMain.handle('agent-codex-one-click-setup'");
+    expect(main).toContain("ipcMain.handle('agent-runtime-status'");
+    expect(main).toContain('codexRuntime: buildCodexRuntimeStatus(settings)');
     expect(main).toContain("ipcMain.handle('shell-check-shell-update'");
     expect(main).toContain('companionUpdater.checkNow(true)');
     expect(main).toContain("mainWindow.webContents.send('agent-codex-setup-progress'");

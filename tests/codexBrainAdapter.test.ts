@@ -106,6 +106,10 @@ describe('Codex brain adapter', () => {
     expect(prompts.join('\n')).toContain('localPath');
     expect(prompts.join('\n')).toContain('mcp__assetcutter-body__');
     expect(prompts.join('\n')).toContain('Do not invent PowerShell');
+    expect(events).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'activity', phase: 'start', name: 'codex.turn' }),
+      expect.objectContaining({ type: 'activity', phase: 'done', name: 'codex.turn' }),
+    ]));
     expect(events.some((ev: any) => ev.type === 'usage')).toBe(true);
     expect(events.some((ev: any) => ev.type === 'done')).toBe(true);
   });
@@ -163,17 +167,22 @@ describe('Codex brain adapter', () => {
     }
 
     const activities = events.filter((ev: any) => ev.type === 'activity');
-    expect(activities).toHaveLength(2);
-    expect(activities[0]).toMatchObject({
+    expect(activities).toEqual(expect.arrayContaining([
+      expect.objectContaining({ phase: 'start', name: 'codex.turn' }),
+      expect.objectContaining({ phase: 'done', name: 'codex.turn' }),
+    ]));
+    const toolActivities = activities.filter((ev: any) => ev.name === 'codex.ac.workbench.ensure_ready');
+    expect(toolActivities).toHaveLength(2);
+    expect(toolActivities[0]).toMatchObject({
       phase: 'start',
       name: 'codex.ac.workbench.ensure_ready',
     });
-    expect(activities[0].detail).toContain('assetcutter-body');
-    expect(activities[0].detail).toContain('requireProject');
-    expect(activities[1]).toMatchObject({
+    expect(toolActivities[0].detail).toContain('assetcutter-body');
+    expect(toolActivities[0].detail).toContain('requireProject');
+    expect(toolActivities[1]).toMatchObject({
       phase: 'error',
       name: 'codex.ac.workbench.ensure_ready',
     });
-    expect(activities[1].detail).toContain('AGENT_AUTH_REQUIRED');
+    expect(toolActivities[1].detail).toContain('AGENT_AUTH_REQUIRED');
   });
 });

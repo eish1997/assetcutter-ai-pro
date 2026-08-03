@@ -947,8 +947,14 @@
   }
 
   async function ensureCodexReadyBeforeSend() {
-    if (!agent || typeof agent.loadSettings !== 'function' || typeof agent.setupCodex !== 'function') return { ok: true, skipped: true };
-    const s = await agent.loadSettings();
+    if (!agent || typeof agent.setupCodex !== 'function') return { ok: true, skipped: true };
+    const loadRuntime = typeof agent.runtimeStatus === 'function'
+      ? agent.runtimeStatus
+      : typeof agent.loadSettings === 'function'
+        ? agent.loadSettings
+        : null;
+    if (!loadRuntime) return { ok: true, skipped: true };
+    const s = await loadRuntime();
     if (!s || s.ok === false) return { ok: true, skipped: true };
     const desired = (s.settings && s.settings.defaultBrainId) || 'codex';
     const active = s.activeBrainId || desired;
