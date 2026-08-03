@@ -36,9 +36,16 @@ function upsertCodexMcpServerConfigForDeps(deps, options) {
   return upsertCodexMcpServerConfig(options);
 }
 
-function defaultCodexCwd() {
+function defaultCodexCwd(deps) {
   const envCwd = String(process.env.COMPANION_AGENT_CODEX_CWD || '').trim();
   if (envCwd) return envCwd;
+  if (deps && deps.store && typeof deps.store.codexWorkspaceDir === 'function') {
+    try {
+      return deps.store.codexWorkspaceDir();
+    } catch {
+      /* fall through */
+    }
+  }
   try {
     return path.resolve(__dirname, '..', '..');
   } catch {
@@ -56,7 +63,7 @@ function settingsFromStore(deps) {
   const s = deps && deps.store && typeof deps.store.readSettings === 'function' ? deps.store.readSettings() : {};
   return {
     command: String(process.env.COMPANION_AGENT_CODEX_COMMAND || s.codexCommand || defaultCodexCommand()).trim(),
-    cwd: String(process.env.COMPANION_AGENT_CODEX_CWD || s.codexCwd || defaultCodexCwd()).trim(),
+    cwd: String(process.env.COMPANION_AGENT_CODEX_CWD || s.codexCwd || defaultCodexCwd(deps)).trim(),
     model: String(process.env.COMPANION_AGENT_CODEX_MODEL || s.codexModel || '').trim(),
     sandbox: normalizeSandbox(process.env.COMPANION_AGENT_CODEX_SANDBOX || s.codexSandbox),
   };

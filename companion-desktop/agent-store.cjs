@@ -12,6 +12,22 @@ function ensureDir(p) {
   fs.mkdirSync(p, { recursive: true });
 }
 
+function isPackagedCompanionResourceDir(value) {
+  const s = String(value || '').trim();
+  if (!s) return false;
+  const normalized = s.replace(/\\/g, '/').replace(/\/+$/, '');
+  const parts = normalized.split('/').filter(Boolean).map((part) => part.toLowerCase());
+  const leaf = parts[parts.length - 1] || '';
+  const parent = parts[parts.length - 2] || '';
+  return leaf === 'resources' && parent === 'assetcuttercompanion';
+}
+
+function normalizeCodexCwd(value, fallback) {
+  const s = String(value || '').trim();
+  if (!s || isPackagedCompanionResourceDir(s)) return fallback;
+  return s;
+}
+
 /**
  * @param {{ getRoot: () => string }} deps
  */
@@ -20,6 +36,12 @@ function createAgentStore(deps) {
     const r = deps.getRoot();
     ensureDir(r);
     return r;
+  }
+
+  function codexWorkspaceDir() {
+    const dir = path.join(rootDir(), 'codex-workspace');
+    ensureDir(dir);
+    return dir;
   }
 
   function manifestPath() {
@@ -115,7 +137,7 @@ function createAgentStore(deps) {
       hermesManagedGateway: true,
       hermesGatewayKind: 'official',
       codexCommand: process.platform === 'win32' ? 'codex.cmd' : 'codex',
-      codexCwd: path.resolve(__dirname, '..'),
+      codexCwd: codexWorkspaceDir(),
       codexModel: '',
       codexSandbox: 'workspace-write',
       codexPermissionMode: 'ask',
@@ -157,8 +179,7 @@ function createAgentStore(deps) {
             : defaults.hermesGatewayKind,
         codexCommand:
           j.codexCommand != null ? String(j.codexCommand).trim() || defaults.codexCommand : defaults.codexCommand,
-        codexCwd:
-          j.codexCwd != null ? String(j.codexCwd).trim() || defaults.codexCwd : defaults.codexCwd,
+        codexCwd: normalizeCodexCwd(j.codexCwd, defaults.codexCwd),
         codexModel: j.codexModel != null ? String(j.codexModel).trim() : defaults.codexModel,
         codexSandbox:
           j.codexSandbox === 'read-only' ||
@@ -227,7 +248,7 @@ function createAgentStore(deps) {
       normalized.codexCommand = String(raw.codexCommand).trim() || cur.codexCommand;
     }
     if (raw.codexCwd != null) {
-      normalized.codexCwd = String(raw.codexCwd).trim() || cur.codexCwd;
+      normalized.codexCwd = normalizeCodexCwd(raw.codexCwd, cur.codexCwd);
     }
     if (raw.codexModel != null) {
       normalized.codexModel = String(raw.codexModel).trim();
@@ -622,6 +643,7 @@ function createAgentStore(deps) {
     skillsDir,
     memoryDir,
     brainsDir,
+    codexWorkspaceDir,
     writeBrainMeta,
     listBrainMetas,
     DEFAULT_SESSION_ID,

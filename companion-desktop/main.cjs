@@ -47,6 +47,7 @@ const {
 const { createBrainAdapter, listBrainCatalog } = require('./brain-adapters/index.cjs');
 const { createAgentBodyMcpServer } = require('./agent-body-mcp.cjs');
 const { codexAuthStatus, syncCodexAuthFromCloud } = require('./codex-auth-sync.cjs');
+const { removeCodexMcpServerConfig } = require('./codex-mcp-config.cjs');
 const hermesGatewayHost = require('./hermes-gateway-host.cjs');
 const hermesOfficialHost = require('./hermes-official-host.cjs');
 const companionConnect = require('./companion-connect.cjs');
@@ -733,7 +734,11 @@ async function syncCodexSharedAuthIfEnabled(reason) {
     return { ok: true, skipped: true, status: codexAuthStatus() };
   }
   try {
-    const result = await syncCodexAuthFromCloud(settings);
+    const fetchWithShellSession = async (url, init) => {
+      const ses = session.fromPartition(FIRST_PARTY_WEB_PARTITION);
+      return ses.fetch(url, init || {});
+    };
+    const result = await syncCodexAuthFromCloud(settings, { fetch: fetchWithShellSession });
     agentStore.writeSettings({
       codexSharedAuthLastSyncAt: result.updatedAt || new Date().toISOString(),
       codexSharedAuthLastError: '',
@@ -789,7 +794,10 @@ function codexSettingsChanged(prev, next) {
 function buildCodexRuntimeStatus(settings) {
   const s = settings && typeof settings === 'object' ? settings : {};
   const command = String(s.codexCommand || (process.platform === 'win32' ? 'codex.cmd' : 'codex')).trim();
-  const cwd = String(s.codexCwd || path.resolve(__dirname, '..')).trim();
+  const defaultCwd = agentStore && typeof agentStore.codexWorkspaceDir === 'function'
+    ? agentStore.codexWorkspaceDir()
+    : path.join(getAgentStoreRoot(), 'codex-workspace');
+  const cwd = String(s.codexCwd || defaultCwd).trim();
   const cwdExists = Boolean(cwd && fs.existsSync(cwd));
   const auth = codexAuthStatus();
   const defaultBrain = String(s.defaultBrainId || 'codex').trim();
@@ -806,6 +814,302 @@ function buildCodexRuntimeStatus(settings) {
       path: auth.path ? String(auth.path) : '',
     },
     readyHint: Boolean(command && cwdExists),
+  };
+}
+
+function runSetupCommand(command, args, options) {
+  return new Promise((resolve) => {
+    const child = spawn(command, args || [], {
+      ...(options || {}),
+      shell: process.platform === 'win32',
+      windowsHide: true,
+    });
+    let out = '';
+    let err = '';
+    const timer = setTimeout(() => {
+      try {
+        child.kill();
+      } catch {
+        /* ignore */
+      }
+      resolve({ ok: false, code: null, detail: 'timeout' });
+    }, Number(options && options.timeoutMs) || 120000);
+    if (child.stdout) {
+      child.stdout.on('data', (chunk) => {
+        out += chunk.toString('utf8');
+      });
+    }
+    if (child.stderr) {
+      child.stderr.on('data', (chunk) => {
+        err += chunk.toString('utf8');
+      });
+    }
+    child.on('error', (e) => {
+      clearTimeout(timer);
+      resolve({ ok: false, code: null, detail: e instanceof Error ? e.message : String(e) });
+    });
+    child.on('exit', (code) => {
+      clearTimeout(timer);
+      resolve({
+        ok: code === 0,
+        code,
+        detail: (out || err || '').trim(),
+      });
+    });
+  });
+}
+
+async function probeCodexBrainDirect() {
+  if (!agentStore) return { ok: false, detail: 'agent_not_ready' };
+  const adapter = createBrainAdapter('codex', { store: agentStore });
+  try {
+    return await adapter.probe();
+  } catch (e) {
+    return { ok: false, detail: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+function defaultCodexSharedAuthUrl() {
+  const authOrigin = resolveAuthApiOriginForCompanionApi();
+  if (!authOrigin) return '';
+  return `${authOrigin}/api/team/codex/auth`;
+}
+
+function codexProbeLooksMissing(probe) {
+  const detail = String(probe && probe.detail ? probe.detail : '').toLowerCase();
+  return (
+    !probe ||
+    !probe.ok && (
+      detail.includes('is not recognized as an internal or external command') ||
+      detail.includes('not recognized') ||
+      detail.includes('not found') ||
+      detail.includes('enoent') ||
+      detail.includes('cannot find') ||
+      detail.includes('\u4e0d\u662f\u5185\u90e8\u6216\u5916\u90e8\u547d\u4ee4') ||
+      detail.includes('\u65e0\u6cd5\u8bc6\u522b') ||
+      detail.includes('\ufffd') && detail.includes('codex')
+    )
+  );
+}
+
+function knownWindowsNpmPaths() {
+  if (process.platform !== 'win32') return [];
+  const candidates = [];
+  const programFiles = String(process.env.ProgramFiles || 'C:\\Program Files');
+  const programFilesX86 = String(process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)');
+  const appData = String(process.env.APPDATA || '');
+  candidates.push(path.join(programFiles, 'nodejs', 'npm.cmd'));
+  candidates.push(path.join(programFilesX86, 'nodejs', 'npm.cmd'));
+  if (appData) candidates.push(path.join(appData, 'npm', 'npm.cmd'));
+  return candidates;
+}
+
+function knownWindowsCodexPaths() {
+  if (process.platform !== 'win32') return [];
+  const candidates = [];
+  const appData = String(process.env.APPDATA || '');
+  const programFiles = String(process.env.ProgramFiles || 'C:\\Program Files');
+  const programFilesX86 = String(process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)');
+  if (appData) candidates.push(path.join(appData, 'npm', 'codex.cmd'));
+  candidates.push(path.join(programFiles, 'nodejs', 'codex.cmd'));
+  candidates.push(path.join(programFilesX86, 'nodejs', 'codex.cmd'));
+  return candidates;
+}
+
+async function resolveNpmCommandForSetup() {
+  const defaultCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+  const probe = await runSetupCommand(defaultCommand, ['--version'], { timeoutMs: 15000 });
+  if (probe.ok) return { ok: true, command: defaultCommand, probe };
+  for (const candidate of knownWindowsNpmPaths()) {
+    if (!fs.existsSync(candidate)) continue;
+    const directProbe = await runSetupCommand(candidate, ['--version'], { timeoutMs: 15000 });
+    if (directProbe.ok) return { ok: true, command: candidate, probe: directProbe };
+  }
+  return { ok: false, command: defaultCommand, probe };
+}
+
+async function resolveCodexCommandForSetup(npmCommand) {
+  const defaultCommand = process.platform === 'win32' ? 'codex.cmd' : 'codex';
+  const direct = await runSetupCommand(defaultCommand, ['--version'], { timeoutMs: 15000 });
+  if (direct.ok) return { ok: true, command: defaultCommand, probe: direct };
+  if (npmCommand) {
+    const prefix = await runSetupCommand(npmCommand, ['config', 'get', 'prefix'], { timeoutMs: 15000 });
+    if (prefix.ok && prefix.detail) {
+      const dir = prefix.detail.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).pop() || '';
+      const candidate = path.join(dir, process.platform === 'win32' ? 'codex.cmd' : 'codex');
+      if (candidate && fs.existsSync(candidate)) {
+        const probe = await runSetupCommand(candidate, ['--version'], { timeoutMs: 15000 });
+        if (probe.ok) return { ok: true, command: candidate, probe };
+      }
+    }
+  }
+  for (const candidate of knownWindowsCodexPaths()) {
+    if (!fs.existsSync(candidate)) continue;
+    const probe = await runSetupCommand(candidate, ['--version'], { timeoutMs: 15000 });
+    if (probe.ok) return { ok: true, command: candidate, probe };
+  }
+  return { ok: false, command: defaultCommand, probe: direct };
+}
+
+async function installNodeRuntimeForSetup() {
+  if (process.platform !== 'win32') {
+    return { ok: false, skipped: true, error: 'node_auto_install_unsupported' };
+  }
+  const wingetProbe = await runSetupCommand('winget', ['--version'], { timeoutMs: 15000 });
+  if (!wingetProbe.ok) {
+    return { ok: false, skipped: true, error: 'winget_missing', detail: wingetProbe.detail || 'winget is not available' };
+  }
+  const install = await runSetupCommand(
+    'winget',
+    [
+      'install',
+      '--id',
+      'OpenJS.NodeJS.LTS',
+      '--exact',
+      '--silent',
+      '--accept-package-agreements',
+      '--accept-source-agreements',
+    ],
+    { timeoutMs: 600000 },
+  );
+  if (!install.ok) {
+    return { ok: false, error: 'node_install_failed', detail: install.detail || `winget exited ${install.code}` };
+  }
+  return { ok: true, detail: install.detail };
+}
+
+async function installCodexCliForSetup(progress) {
+  let npm = await resolveNpmCommandForSetup();
+  let nodeInstall = { ok: false, skipped: true, reason: 'npm_available' };
+  if (!npm.ok) {
+    if (typeof progress === 'function') progress('install_node', '\u6b63\u5728\u5b89\u88c5 Node.js \u8fd0\u884c\u73af\u5883');
+    nodeInstall = await installNodeRuntimeForSetup();
+    if (typeof progress === 'function') progress('probe_npm_after_node', '\u6b63\u5728\u68c0\u67e5 npm');
+    npm = await resolveNpmCommandForSetup();
+  }
+  if (!npm.ok) {
+    return {
+      ok: false,
+      skipped: true,
+      error: 'npm_missing',
+      detail: (npm.probe && npm.probe.detail) || 'npm is not available',
+      nodeInstall,
+    };
+  }
+  const npmCommand = npm.command;
+  if (typeof progress === 'function') progress('install_codex_cli', '\u6b63\u5728\u5b89\u88c5 Codex CLI');
+  const install = await runSetupCommand(npmCommand, ['install', '-g', '@openai/codex'], { timeoutMs: 300000 });
+  if (!install.ok) {
+    return { ok: false, error: 'codex_install_failed', detail: install.detail || `npm exited ${install.code}`, nodeInstall };
+  }
+  const codex = await resolveCodexCommandForSetup(npmCommand);
+  const commandPath = codex.ok && codex.command !== (process.platform === 'win32' ? 'codex.cmd' : 'codex') ? codex.command : '';
+  return { ok: true, detail: install.detail, commandPath, nodeInstall };
+}
+
+function sendCodexSetupProgress(options, id, message) {
+  const opts = options && typeof options === 'object' ? options : {};
+  const runId = String(opts.progressRunId || '').trim();
+  if (!runId || !mainWindow || !mainWindow.webContents) return;
+  mainWindow.webContents.send('agent-codex-setup-progress', {
+    runId,
+    id,
+    message,
+    at: new Date().toISOString(),
+  });
+}
+
+async function runCodexOneClickSetup(options) {
+  if (!agentStore) return { ok: false, error: 'agent_not_ready' };
+  const opts = options && typeof options === 'object' ? options : {};
+  const steps = [];
+  const record = (id, result) => {
+    steps.push({ id, ...(result && typeof result === 'object' ? result : { ok: Boolean(result) }) });
+    return result;
+  };
+
+  const progress = (id, message) => sendCodexSetupProgress(opts, id, message);
+  progress('start', '\u6b63\u5728\u542f\u52a8 Codex \u4e00\u952e\u914d\u7f6e');
+
+  const before = agentStore.readSettings();
+  const codexCwd = before.codexCwd || (typeof agentStore.codexWorkspaceDir === 'function' ? agentStore.codexWorkspaceDir() : '');
+  const defaultSharedAuthUrl = defaultCodexSharedAuthUrl();
+  progress('settings', '\u6b63\u5728\u914d\u7f6e\u672c\u673a\u8bbe\u7f6e');
+  const patched = agentStore.writeSettings({
+    defaultBrainId: 'codex',
+    mcpEnabled: true,
+    codexCwd,
+    codexSharedAuthEnabled: opts.cloudIdentity === false ? before.codexSharedAuthEnabled : true,
+    codexSharedAuthAutoUpdate: opts.cloudIdentity === false ? before.codexSharedAuthAutoUpdate : true,
+    codexSharedAuthUrl: before.codexSharedAuthUrl || defaultSharedAuthUrl,
+  });
+  if (agentMcpServer) {
+    agentMcpServer.ensureMcpToken(patched);
+    await agentMcpServer.syncFromSettings();
+  }
+  record('settings', { ok: true });
+
+  progress('auth_sync', '\u6b63\u5728\u62c9\u53d6\u4e91\u7aef\u56e2\u961f\u8eab\u4efd');
+  const sync = await syncCodexSharedAuthIfEnabled('manual');
+  record('auth_sync', sync);
+
+  progress('probe_before_install', '\u6b63\u5728\u68c0\u67e5 Codex CLI');
+  const existingCodex = await resolveCodexCommandForSetup();
+  record('resolve_existing_codex_cli', existingCodex);
+  if (existingCodex && existingCodex.ok && existingCodex.command) {
+    const defaultCodexCommand = process.platform === 'win32' ? 'codex.cmd' : 'codex';
+    const currentCommand = String(patched.codexCommand || '').trim();
+    if (existingCodex.command !== defaultCodexCommand && currentCommand !== existingCodex.command) {
+      progress('codex_command_path', '\u6b63\u5728\u4fdd\u5b58 Codex \u547d\u4ee4\u8def\u5f84');
+      agentStore.writeSettings({ codexCommand: existingCodex.command });
+      record('codex_command_path', { ok: true, command: existingCodex.command, source: 'existing' });
+    }
+  }
+  let probe = await probeCodexBrainDirect();
+  record('probe_before_install', probe);
+  let install = { ok: false, skipped: true, reason: 'probe_not_missing' };
+  const shouldInstallCodex = opts.install !== false && (
+    !existingCodex ||
+    !existingCodex.ok ||
+    (!probe.ok && codexProbeLooksMissing(probe))
+  );
+  if (shouldInstallCodex) {
+    install = await installCodexCliForSetup(progress);
+    record('install_codex_cli', install);
+    if (install && install.ok && install.commandPath) {
+      progress('codex_command_path', '\u6b63\u5728\u4fdd\u5b58 Codex \u547d\u4ee4\u8def\u5f84');
+      agentStore.writeSettings({ codexCommand: install.commandPath });
+      record('codex_command_path', { ok: true, command: install.commandPath });
+    }
+    progress('probe_after_install', '\u6b63\u5728\u590d\u68c0 Codex CLI');
+    probe = await probeCodexBrainDirect();
+    record('probe_after_install', probe);
+  }
+
+  progress('activate', '\u6b63\u5728\u542f\u7528 Codex \u5bf9\u8bdd');
+  resetAgentBrainCache();
+  await ensureAgentBrainReady();
+  const settings = agentStore.readSettings();
+  const mcpEntranceStatus = await buildAgentMcpEntranceStatus();
+  const activeBrainId = agentSessionService ? agentSessionService.getBrainId() : 'stub';
+  return {
+    ok: Boolean(probe && probe.ok && activeBrainId === 'codex'),
+    steps,
+    authSync: sync,
+    install,
+    probe,
+    settings,
+    mcp: agentMcpServer ? agentMcpServer.status() : null,
+    mcpConfig: agentMcpServer ? agentMcpServer.buildMcpClientConfig() : null,
+    mcpToolCatalog: await buildAgentMcpToolCatalog(),
+    mcpEntranceStatus,
+    codexRuntime: buildCodexRuntimeStatus(settings),
+    codexAuth: codexAuthStatus(),
+    activeBrainId,
+    cloudAuthLoginRequired: Boolean(sync && !sync.ok && String(sync.error || '').startsWith('http_401')),
+    cloudAuthRouteMissing: Boolean(sync && !sync.ok && String(sync.error || '').startsWith('http_404')),
+    cloudAuthNotConfigured: Boolean(sync && !sync.ok && String(sync.error || '').startsWith('http_503')),
+    needsLogin: Boolean(!(codexAuthStatus().exists)),
   };
 }
 
@@ -4152,6 +4456,17 @@ if (!gotLock) {
     return { ok: true };
   });
 
+  ipcMain.handle('shell-check-shell-update', async () => {
+    if (!companionUpdater || typeof companionUpdater.checkNow !== 'function') {
+      return { ok: false, error: 'updater_unavailable' };
+    }
+    await companionUpdater.checkNow(true);
+    return {
+      ok: true,
+      updater: companionUpdater.getUpdaterUiState ? companionUpdater.getUpdaterUiState() : null,
+    };
+  });
+
   ipcMain.handle('workbench-save-blob-download', async (event, payload) => {
     if (!workbenchBrowserView || event.sender !== workbenchBrowserView.webContents) {
       return { ok: false, error: 'not_workbench' };
@@ -4767,6 +5082,10 @@ if (!gotLock) {
       codexRuntime: buildCodexRuntimeStatus(settings),
       activeBrainId: agentSessionService ? agentSessionService.getBrainId() : 'stub',
     };
+  });
+
+  ipcMain.handle('agent-codex-one-click-setup', async (_e, options) => {
+    return runCodexOneClickSetup(options);
   });
 
   ipcMain.handle('agent-usage-summary', async (_e, options) => {
@@ -5662,6 +5981,13 @@ if (!gotLock) {
 
   app.on('before-quit', () => {
     isQuitting = true;
+    // Drop AssetCutter MCP from shared ~/.codex so ChatGPT desktop is not left
+    // requiring ASSETCUTTER_MCP_TOKEN after the companion exits.
+    try {
+      removeCodexMcpServerConfig({});
+    } catch (e) {
+      companionLog('warn', '[codex-mcp] remove on quit failed', e instanceof Error ? e.message : e);
+    }
     hermesOfficialHost.stopManagedGateway();
     companionUpdater.dispose();
     if (desktopReleaseCheckTimer) {

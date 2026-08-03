@@ -4842,6 +4842,7 @@
       </div>
       <div class="agent-mcp-detail" id="codexRuntimeStatusDetail" hidden></div>
       <div class="btn-row">
+        <button type="button" class="btn btn-primary" id="btnSetupCodexRuntime">一键配置 Codex</button>
         <button type="button" class="btn" id="btnProbeCodexRuntime">&#25506;&#27979; Codex</button>
       </div>
       <label class="pair-label-gap">
@@ -5786,6 +5787,29 @@
           await shellUiDelay(intervalMs);
         }
         return { ok: false, timeout: true, account: last };
+      }
+
+      async function setupCodexWithLoginRecoveryUi(agent, options, hintEl) {
+        const opts = options && typeof options === 'object' ? options : {};
+        const first = await agent.setupCodex(opts);
+        if (!first || !first.cloudAuthLoginRequired) return first;
+        setSetFeedback(hintEl, '\u9700\u8981\u767b\u5f55\u5de5\u4f5c\u53f0\uff0c\u5df2\u4e3a\u4f60\u6253\u5f00\u3002');
+        await openWorkbenchLoginUi();
+        const login = await waitForShellAccountLoginUi({ timeoutMs: 120000, intervalMs: 2000 });
+        if (!login || !login.ok) return first;
+        setSetFeedback(hintEl, '\u767b\u5f55\u5b8c\u6210\uff0c\u7ee7\u7eed\u914d\u7f6e Codex...');
+        return agent.setupCodex({ ...opts, retryAfterLogin: true });
+      }
+
+      async function requestShellUpdateCheckForCodexSetupUi(result, hintEl) {
+        if (!result || !result.cloudAuthRouteMissing) return;
+        if (!shell || typeof shell.checkShellUpdate !== 'function') return;
+        try {
+          setSetFeedback(hintEl, '\u4e91\u7aef\u914d\u7f6e\u8fd8\u672a\u5c31\u7eea\uff0c\u6b63\u5728\u68c0\u67e5\u684c\u9762\u7aef\u66f4\u65b0...');
+          await shell.checkShellUpdate();
+        } catch {
+          /* Update checks are best-effort; keep the Codex setup result visible. */
+        }
       }
 
       async function loadPairingFields() {
@@ -8010,6 +8034,76 @@
           } catch (e) {
             setSetFeedback(hintEl, e && e.message ? e.message : String(e));
           } finally {
+            btn.disabled = false;
+          }
+        });
+      }
+
+      if ($('btnSetupCodexRuntime')) {
+        $('btnSetupCodexRuntime').addEventListener('click', async () => {
+          const agent = shell.agentSession;
+          const btn = $('btnSetupCodexRuntime');
+          const hintEl = $('agentSettingsHint');
+          if (!agent || typeof agent.setupCodex !== 'function') return;
+          btn.disabled = true;
+          const progressRunId = 'settings-' + Date.now() + '-' + Math.random().toString(16).slice(2);
+          let unsubscribeProgress = null;
+          if (typeof agent.onCodexSetupProgress === 'function') {
+            unsubscribeProgress = agent.onCodexSetupProgress((payload) => {
+              if (!payload || String(payload.runId || '') !== progressRunId) return;
+              if (payload.message) setSetFeedback(hintEl, String(payload.message));
+            });
+          }
+          setSetFeedback(hintEl, '\u6b63\u5728\u4e00\u952e\u914d\u7f6e Codex...');
+          try {
+            const r = await setupCodexWithLoginRecoveryUi(agent, { install: true, progressRunId }, hintEl);
+            if (r && r.settings) {
+              agentSettingsCache = { ...(r.settings || {}) };
+              if ($('inpMcpEnabled')) $('inpMcpEnabled').checked = Boolean(r.settings.mcpEnabled);
+              if ($('inpMcpToken') && r.settings.mcpToken) $('inpMcpToken').value = String(r.settings.mcpToken);
+              if ($('inpCodexCommand')) $('inpCodexCommand').value = String(r.settings.codexCommand || '');
+              if ($('inpCodexCwd')) $('inpCodexCwd').value = String(r.settings.codexCwd || '');
+              if ($('inpCodexModel')) $('inpCodexModel').value = String(r.settings.codexModel || '');
+              renderBrainPicker(r.settings.defaultBrainId || 'codex');
+              renderCodexSandboxPicker(r.settings.codexSandbox);
+            }
+            renderCodexRuntimeStatus(r && r.codexRuntime, r && r.probe);
+            renderAgentMcpProbe({ mcp: r && r.mcp, mcpConfig: r && r.mcpConfig, mcpToolCatalog: r && r.mcpToolCatalog });
+            if ($('inpMcpConfig') && r && r.mcpConfig) $('inpMcpConfig').value = JSON.stringify(r.mcpConfig, null, 2);
+            if ($('agentMcpStatus') && r && r.mcp) {
+              $('agentMcpStatus').textContent = r.mcp.running
+                ? `MCP running: http://127.0.0.1:${r.mcp.port}/mcp`
+                : r.mcp.enabled
+                  ? 'MCP enabled but not running'
+                  : 'MCP disabled';
+            }
+            const install = (r && r.install) || {};
+            const probe = (r && r.probe) || {};
+            await requestShellUpdateCheckForCodexSetupUi(r, hintEl);
+            const message =
+              r && r.ok
+                ? 'Codex \u5df2\u5c31\u7eea\uff0c\u53ef\u4ee5\u76f4\u63a5\u5f00\u59cb\u5bf9\u8bdd\u3002'
+                : install.error === 'npm_missing'
+                  ? '\u81ea\u52a8\u5b89\u88c5 Node/npm \u672a\u5b8c\u6210\uff0c\u8bf7\u68c0\u67e5\u7f51\u7edc\u6216\u7cfb\u7edf\u5b89\u88c5\u6743\u9650\u540e\u518d\u70b9\u4e00\u6b21\u3002'
+                  : install.error === 'codex_install_failed'
+                    ? 'Codex CLI \u5b89\u88c5\u5931\u8d25\uff0c\u8bf7\u68c0\u67e5\u7f51\u7edc\u6216 npm \u6743\u9650\u3002'
+                    : r && r.cloudAuthLoginRequired
+                      ? '\u8bf7\u5148\u767b\u5f55\u5de5\u4f5c\u53f0\uff0c\u518d\u70b9\u4e00\u6b21\u4e00\u952e\u914d\u7f6e\u3002'
+                      : r && r.cloudAuthRouteMissing
+                        ? '\u4e91\u7aef Codex \u8eab\u4efd\u63a5\u53e3\u8fd8\u672a\u4e0a\u7ebf\uff0c\u8bf7\u7ba1\u7406\u5458\u5148\u53d1\u5e03\u65b0\u7248 auth-api\u3002'
+                        : r && r.cloudAuthNotConfigured
+                          ? '\u4e91\u7aef\u56e2\u961f Codex \u8eab\u4efd\u8fd8\u672a\u914d\u7f6e\u3002'
+                          : r && r.needsLogin
+                            ? 'Codex \u9700\u8981\u767b\u5f55\u3002\u8bf7\u5148\u6253\u5f00 Codex \u767b\u5f55\uff0c\u518d\u70b9\u4e00\u6b21\u3002'
+                            : 'Codex \u4ecd\u672a\u5c31\u7eea\uff1a' + (probe.detail || 'unknown');
+            setSetFeedback(hintEl, message);
+            if (typeof window.__acCopilotRefreshOnboarding === 'function') {
+              window.__acCopilotRefreshOnboarding();
+            }
+          } catch (e) {
+            setSetFeedback(hintEl, e && e.message ? e.message : String(e));
+          } finally {
+            if (typeof unsubscribeProgress === 'function') unsubscribeProgress();
             btn.disabled = false;
           }
         });

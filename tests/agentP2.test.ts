@@ -234,6 +234,23 @@ describe('agent tool execution audit', () => {
     expect(afterInvalidSandbox.codexSandbox).toBe('read-only');
   });
 
+  it('keeps Codex default cwd in the user agent store instead of the packaged app resources dir', () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ac-agent-store-'));
+    const store = createAgentStore({ getRoot: () => tmp });
+    const expected = path.join(tmp, 'codex-workspace');
+
+    const defaults = store.readSettings();
+    expect(defaults.codexCwd).toBe(expected);
+    expect(fs.existsSync(expected)).toBe(true);
+
+    store.writeSettings({ codexCwd: 'C:\\Program Files\\AssetCutterCompanion\\resources' });
+    expect(store.readSettings().codexCwd).toBe(expected);
+
+    const custom = path.join(tmp, 'custom-codex-project');
+    store.writeSettings({ codexCwd: custom });
+    expect(store.readSettings().codexCwd).toBe(custom);
+  });
+
   it('preserves the last workbench e2e entrance summary in settings', () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ac-agent-store-'));
     const store = createAgentStore({ getRoot: () => tmp });

@@ -6,7 +6,16 @@ const shellIndexPath = path.resolve(process.cwd(), 'companion-desktop/shell/inde
 const shellMainPath = path.resolve(process.cwd(), 'companion-desktop/main.cjs');
 const shellPreloadPath = path.resolve(process.cwd(), 'companion-desktop/preload-shell.cjs');
 const copilotPanelPath = path.resolve(process.cwd(), 'companion-desktop/shell/copilot-panel.js');
+const authApiPath = path.resolve(process.cwd(), 'server/auth-api.js');
 const scriptHubClientPath = path.resolve(process.cwd(), 'companion-desktop/agent-script-hub-client.cjs');
+const packageJsonPath = path.resolve(process.cwd(), 'package.json');
+const codexOneClickCheckPath = path.resolve(process.cwd(), 'scripts/check-codex-one-click-readiness.mjs');
+const codexAuthEnvExportPath = path.resolve(process.cwd(), 'scripts/export-codex-shared-auth-env.mjs');
+const codexProductionCheckPath = path.resolve(process.cwd(), 'scripts/verify-codex-one-click-production.mjs');
+const desktopUploadManifestPath = path.resolve(process.cwd(), 'scripts/prepare-companion-desktop-upload-manifest.mjs');
+const desktopPublishPath = path.resolve(process.cwd(), 'scripts/publish-companion-desktop-artifact.mjs');
+const companionReleaseCheckPath = path.resolve(process.cwd(), 'scripts/companion-desktop-release-check.ps1');
+const renderYamlPath = path.resolve(process.cwd(), 'render.yaml');
 
 describe('copilot settings UI', () => {
   it('keeps the shell page scripts parseable after wiring product entrances', () => {
@@ -150,6 +159,7 @@ describe('copilot settings UI', () => {
     expect(html).toContain('id="inpCodexModel"');
     expect(html).toContain('id="codexSandboxPicker"');
     expect(html).toContain('id="codexRuntimeStatusDetail"');
+    expect(html).toContain('id="btnSetupCodexRuntime"');
     expect(html).toContain('id="btnProbeCodexRuntime"');
     expect(html).toMatch(
       /<div class="agent-mcp-title">[\s\S]*?<span id="agentMcpProbeTitle">[\s\S]*?<\/span>\s*<\/div>\s*<span class="agent-mcp-endpoint" id="agentMcpEndpoint">/,
@@ -170,6 +180,7 @@ describe('copilot settings UI', () => {
     expect(html).toContain('renderCodexRuntimeStatus');
     expect(html).toContain('codexRuntimeStatusCache');
     expect(html).toContain('agent.probeAllBrains');
+    expect(html).toContain('agent.setupCodex');
     expect(html).toContain("codexCommand: $('inpCodexCommand')");
     expect(html).toContain("codexCwd: $('inpCodexCwd')");
     expect(html).toContain("codexModel: $('inpCodexModel')");
@@ -179,6 +190,140 @@ describe('copilot settings UI', () => {
     expect(main).toContain('codexRuntime: buildCodexRuntimeStatus');
     expect(main).toContain('cwdExists');
     expect(main).toContain('readyHint');
+  });
+
+  it('auto-runs Codex setup before sending when the desired brain has fallen back to stub', () => {
+    const panel = fs.readFileSync(copilotPanelPath, 'utf8');
+    const preload = fs.readFileSync(shellPreloadPath, 'utf8');
+    const main = fs.readFileSync(shellMainPath, 'utf8');
+
+    expect(panel).toContain('function ensureCodexReadyBeforeSend');
+    expect(panel).toContain('await ensureCodexReadyBeforeSend()');
+    expect(panel).toContain('progressRunId');
+    expect(panel).toContain('agent.onCodexSetupProgress');
+    expect(panel).toContain('activeCodexSetupRunId');
+    expect(panel).toContain('setupCodexWithLoginRecovery');
+    expect(panel).toContain('requestShellUpdateCheckForCodexSetup');
+    expect(panel).toContain('first.cloudAuthLoginRequired');
+    expect(panel).toContain('switchToWorkbench()');
+    expect(panel).toContain('waitForTeamAccountLogin(120000)');
+    expect(panel).toContain('retryAfterLogin: true');
+    expect(panel).toContain("desired !== 'codex'");
+    expect(panel).toContain("active === 'codex' && probeOk");
+    expect(panel).toContain('codexSetupFailureMessage');
+    expect(preload).toContain("setupCodex: (options) => timedInvoke('agent-codex-one-click-setup'");
+    expect(preload).toContain("checkShellUpdate: () => timedInvoke('shell-check-shell-update')");
+    expect(preload).toContain("ipcRenderer.on('agent-codex-setup-progress'");
+    expect(preload).toContain("return () => ipcRenderer.removeListener('agent-codex-setup-progress', listener)");
+    expect(main).toContain("ipcMain.handle('agent-codex-one-click-setup'");
+    expect(main).toContain("ipcMain.handle('shell-check-shell-update'");
+    expect(main).toContain('companionUpdater.checkNow(true)');
+    expect(main).toContain("mainWindow.webContents.send('agent-codex-setup-progress'");
+    expect(main).toContain('runCodexOneClickSetup');
+    expect(main).toContain("['install', '-g', '@openai/codex']");
+    expect(main).toContain('installNodeRuntimeForSetup');
+    expect(main).toContain('OpenJS.NodeJS.LTS');
+    expect(main).toContain('resolveNpmCommandForSetup');
+    expect(main).toContain('resolveCodexCommandForSetup');
+    expect(main).toContain('knownWindowsCodexPaths');
+    expect(main).toContain('resolve_existing_codex_cli');
+    expect(main).toContain("source: 'existing'");
+    expect(main).toContain('const shouldInstallCodex = opts.install !== false');
+    expect(main).toContain('!existingCodex.ok');
+    expect(main).toContain("detail.includes('\\ufffd') && detail.includes('codex')");
+    expect(main).not.toContain("detail.includes('exited 1')");
+
+    const sendStart = panel.indexOf('async function sendMessage()');
+    const setupCall = panel.indexOf('const setupReady = await ensureCodexReadyBeforeSend()', sendStart);
+    const failureReturn = panel.indexOf('return;', setupCall);
+    const sendCall = panel.indexOf('const r = await agent.send(text)', setupCall);
+    expect(sendStart).toBeGreaterThanOrEqual(0);
+    expect(setupCall).toBeGreaterThan(sendStart);
+    expect(failureReturn).toBeGreaterThan(setupCall);
+    expect(sendCall).toBeGreaterThan(failureReturn);
+  });
+
+  it('wires one-click Codex setup to the shell team identity route by default', () => {
+    const main = fs.readFileSync(shellMainPath, 'utf8');
+    const authApi = fs.readFileSync(authApiPath, 'utf8');
+
+    expect(main).toContain('defaultCodexSharedAuthUrl');
+    expect(main).toContain('/api/team/codex/auth');
+    expect(main).toContain('codexSharedAuthEnabled: opts.cloudIdentity === false ? before.codexSharedAuthEnabled : true');
+    expect(main).toContain('session.fromPartition(FIRST_PARTY_WEB_PARTITION)');
+    expect(main).toContain('cloudAuthLoginRequired');
+    expect(main).toContain('cloudAuthRouteMissing');
+    expect(main).toContain("startsWith('http_404')");
+    expect(authApi).toContain("path === '/api/team/codex/auth'");
+    expect(authApi).toContain('const user = await requireAuth(req, res)');
+    expect(authApi).toContain('CODEX_SHARED_AUTH_JSON_BASE64');
+  });
+
+  it('opens Workbench login and retries Codex setup when cloud identity needs login', () => {
+    const html = fs.readFileSync(shellIndexPath, 'utf8');
+    const panel = fs.readFileSync(copilotPanelPath, 'utf8');
+
+    expect(html).toContain('setupCodexWithLoginRecoveryUi');
+    expect(html).toContain('requestShellUpdateCheckForCodexSetupUi');
+    expect(html).toContain('shell.checkShellUpdate');
+    expect(html).toContain('first.cloudAuthLoginRequired');
+    expect(html).toContain('await openWorkbenchLoginUi()');
+    expect(html).toContain('waitForShellAccountLoginUi({ timeoutMs: 120000, intervalMs: 2000 })');
+    expect(html).toContain('retryAfterLogin: true');
+    expect(html).toContain('cloudAuthRouteMissing');
+    expect(html).toContain('let unsubscribeProgress = null');
+    expect(html).toContain("if (typeof unsubscribeProgress === 'function') unsubscribeProgress()");
+    expect(panel).toContain('setupCodexWithLoginRecovery({ install: true, progressRunId: activeCodexSetupRunId })');
+    expect(panel).toContain('cloudAuthRouteMissing');
+  });
+
+  it('keeps a release readiness check for Codex one-click setup', () => {
+    const pkg = fs.readFileSync(packageJsonPath, 'utf8');
+    const script = fs.readFileSync(codexOneClickCheckPath, 'utf8');
+    const exportScript = fs.readFileSync(codexAuthEnvExportPath, 'utf8');
+    const productionScript = fs.readFileSync(codexProductionCheckPath, 'utf8');
+    const uploadManifestScript = fs.readFileSync(desktopUploadManifestPath, 'utf8');
+    const publishScript = fs.readFileSync(desktopPublishPath, 'utf8');
+    const releaseCheck = fs.readFileSync(companionReleaseCheckPath, 'utf8');
+    const renderYaml = fs.readFileSync(renderYamlPath, 'utf8');
+
+    expect(pkg).toContain('"companion:codex-one-click-check": "node scripts/check-codex-one-click-readiness.mjs"');
+    expect(pkg).toContain('"companion:codex-auth-env": "node scripts/export-codex-shared-auth-env.mjs"');
+    expect(pkg).toContain('"companion:codex-production-check": "node scripts/verify-codex-one-click-production.mjs"');
+    expect(pkg).toContain('"companion:desktop-upload-manifest": "node scripts/prepare-companion-desktop-upload-manifest.mjs"');
+    expect(pkg).toContain('"companion:desktop-publish": "node scripts/publish-companion-desktop-artifact.mjs"');
+    expect(script).toContain('Codex one-click readiness check');
+    expect(script).toContain('CODEX_SHARED_AUTH_JSON_BASE64');
+    expect(script).toContain('CODEX_SHARED_AUTH_JSON');
+    expect(script).toContain('Local companion health');
+    expect(script).toContain('Cloud Codex identity route');
+    expect(script).toContain('Desktop package includes Codex setup files');
+    expect(script).toContain('codex-auth-sync.cjs');
+    expect(script).toContain('route exists, login or shared identity is required');
+    expect(releaseCheck).toContain('$routeExistsWithoutCookie');
+    expect(releaseCheck).toContain('pass -CodexAuthCookie to verify logged-in payload');
+    expect(renderYaml).toContain('CODEX_SHARED_AUTH_JSON_BASE64');
+    expect(renderYaml).toContain('CODEX_SHARED_AUTH_JSON');
+    expect(exportScript).toContain('.env.codex-shared-auth.local');
+    expect(exportScript).toContain('Secret value was written to the output file, not printed.');
+    expect(exportScript).toContain('JSON.parse(raw)');
+    expect(productionScript).toContain('Codex one-click production verification');
+    expect(productionScript).toContain('/api/team/codex/auth');
+    expect(productionScript).toContain('/api/companion-artifacts/electron-updater/win32/stable/latest.yml');
+    expect(productionScript).toContain('Desktop update feed contains target version');
+    expect(uploadManifestScript).toContain('Admin registration payload');
+    expect(uploadManifestScript).toContain('blockMapR2Key');
+    expect(uploadManifestScript).toContain("hashFile(exePath, 'sha512')");
+    expect(uploadManifestScript).toContain('.sort((a, b) => b.mtimeMs - a.mtimeMs');
+    expect(publishScript).toContain('COMPANION_ADMIN_COOKIE');
+    expect(publishScript).toContain('/api/admin/companion-artifacts/upload-url');
+    expect(publishScript).toContain('/api/admin/companion-artifacts');
+    expect(publishScript).toContain('--dry-run');
+    expect(publishScript).toContain('function readDesktopVersion()');
+    expect(publishScript).toContain('function defaultManifestPath()');
+    expect(publishScript).toContain('companion-desktop/package.json');
+    expect(publishScript).toContain('defaultManifestPath()');
+    expect(publishScript).not.toContain('dist-out-0211');
   });
 
   it('renders the workbench e2e status as the Copilot entrance chain', () => {

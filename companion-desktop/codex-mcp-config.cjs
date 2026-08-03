@@ -50,10 +50,13 @@ function buildCodexMcpTomlBlock(options) {
   const startupTimeout = Number.isFinite(Number(opts.startupTimeoutSec))
     ? Math.max(5, Number(opts.startupTimeoutSec))
     : 30;
+  // required=false: ChatGPT desktop / other Codex clients share ~/.codex/config.toml.
+  // A required server that needs ASSETCUTTER_MCP_TOKEN bricks those clients when the
+  // companion is not spawning Codex (token only injected via buildCodexSpawnEnv).
   return [
     `[mcp_servers.${name}]`,
     'enabled = true',
-    'required = true',
+    'required = false',
     `startup_timeout_sec = ${startupTimeout}`,
     `url = ${tomlString(url)}`,
     `bearer_token_env_var = ${tomlString(tokenEnv)}`,
@@ -90,6 +93,25 @@ function buildCodexSpawnEnv(baseEnv, options) {
   const tokenEnv = String(opts.tokenEnvVar || DEFAULT_CODEX_MCP_TOKEN_ENV).trim() || DEFAULT_CODEX_MCP_TOKEN_ENV;
   if (token) env[tokenEnv] = token;
   return env;
+}
+
+function removeCodexMcpServerConfig(options) {
+  const opts = options && typeof options === 'object' ? options : {};
+  const home = opts.codexHome ? path.resolve(String(opts.codexHome)) : defaultCodexHome();
+  const file = opts.configPath ? path.resolve(String(opts.configPath)) : codexConfigPath(home);
+  const name = String(opts.name || DEFAULT_CODEX_MCP_SERVER_NAME).trim() || DEFAULT_CODEX_MCP_SERVER_NAME;
+  const tableName = `mcp_servers.${name}`;
+  if (!fs.existsSync(file)) {
+    return { ok: true, changed: false, path: file, serverName: name };
+  }
+  const current = fs.readFileSync(file, 'utf8');
+  const next = `${removeTomlTableBlock(current, tableName)}\n`;
+  if (current === next || current.trimEnd() === next.trimEnd()) {
+    const alreadyGone = !current.includes(`[${tableName}]`);
+    return { ok: true, changed: false, path: file, serverName: name, alreadyGone };
+  }
+  fs.writeFileSync(file, next.endsWith('\n') ? next : `${next}\n`, 'utf8');
+  return { ok: true, changed: true, path: file, serverName: name };
 }
 
 function upsertCodexMcpServerConfig(options) {
@@ -136,6 +158,7 @@ module.exports = {
   codexConfigPath,
   buildCodexMcpTomlBlock,
   buildCodexSpawnEnv,
+  removeCodexMcpServerConfig,
   upsertCodexMcpServerConfig,
   codexMcpConfigFromMcpClientConfig,
   upsertCodexMcpServerFromClientConfig,

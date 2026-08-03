@@ -44,6 +44,7 @@
   let lastProjectMemorySnapshot = null;
   let lastUsageSnapshot = null;
   let lastUserPrompt = '';
+  let activeCodexSetupRunId = '';
   let activeTaskThreadCard = null;
   let activeTaskThreadEls = null;
   let pendingTaskThreadPrompt = '';
@@ -585,6 +586,31 @@
     return account;
   }
 
+  async function setupCodexWithLoginRecovery(options) {
+    if (!agent || typeof agent.setupCodex !== 'function') return { ok: false, error: 'setup_unavailable' };
+    const opts = options && typeof options === 'object' ? options : {};
+    const first = await agent.setupCodex(opts);
+    if (!first || !first.cloudAuthLoginRequired) return first;
+    setStatus('\u9700\u8981\u767b\u5f55\u5de5\u4f5c\u53f0\uff0c\u5df2\u4e3a\u4f60\u6253\u5f00\u3002');
+    switchToWorkbench();
+    const login = await waitForTeamAccountLogin(120000);
+    if (!login || !login.loggedIn) return first;
+    setStatus('\u767b\u5f55\u5b8c\u6210\uff0c\u7ee7\u7eed\u914d\u7f6e Codex...');
+    return agent.setupCodex({ ...opts, retryAfterLogin: true });
+  }
+
+  async function requestShellUpdateCheckForCodexSetup(setup) {
+    const r = setup && typeof setup === 'object' ? setup : {};
+    if (!r.cloudAuthRouteMissing) return;
+    if (!shell || typeof shell.checkShellUpdate !== 'function') return;
+    try {
+      setStatus('\u4e91\u7aef\u914d\u7f6e\u8fd8\u672a\u5c31\u7eea\uff0c\u6b63\u5728\u68c0\u67e5\u684c\u9762\u7aef\u66f4\u65b0...');
+      await shell.checkShellUpdate();
+    } catch {
+      /* Update checks are best-effort; keep the Codex setup error visible. */
+    }
+  }
+
   async function runWorkbenchEntranceValidation(btn, options) {
     if (!agent || typeof agent.mcpWorkbenchE2e !== 'function') {
       openCopilotSettings();
@@ -739,7 +765,7 @@
     const useCodex = document.createElement('button');
     useCodex.type = 'button';
     useCodex.className = 'copilot-mini-btn';
-    useCodex.textContent = 'Use Codex';
+    useCodex.textContent = '\u4e00\u952e\u914d\u7f6e';
     const testCodex = document.createElement('button');
     testCodex.type = 'button';
     testCodex.className = 'copilot-mini-btn';
@@ -748,9 +774,9 @@
     openSettings.type = 'button';
     openSettings.className = 'copilot-mini-btn';
     openSettings.textContent = 'Settings';
-    useCodex.textContent = 'Use Codex';
-    testCodex.textContent = 'Test';
-    openSettings.textContent = 'Settings';
+    useCodex.textContent = '\u4e00\u952e\u914d\u7f6e';
+    testCodex.textContent = '\u68c0\u6d4b';
+    openSettings.textContent = '\u8bbe\u7f6e';
     actions.appendChild(useCodex);
     actions.appendChild(testCodex);
     actions.appendChild(openSettings);
@@ -782,7 +808,7 @@
     card.appendChild(modes);
     body.insertBefore(card, body.firstChild);
 
-    useCodex.addEventListener('click', () => void switchToCodex());
+    useCodex.addEventListener('click', () => void refreshTeamCodexAndTest(useCodex));
     testCodex.addEventListener('click', () => void refreshBrainStateCard({ forceProbe: true, toast: true }));
     openSettings.addEventListener('click', () => {
       if (typeof shell.setShellView === 'function') void shell.setShellView('settings');
@@ -795,7 +821,7 @@
     fullBtn.addEventListener('click', () => void setPermissionMode('full'));
 
     brainStateCard = card;
-    brainStateEls = { dot, title, mode, sub, askBtn, sandboxBtn, fullBtn };
+    brainStateEls = { dot, title, mode, sub, useCodex, testCodex, askBtn, sandboxBtn, fullBtn };
     return brainStateEls;
   }
 
@@ -873,25 +899,73 @@
   async function refreshTeamCodexAndTest(btn) {
     if (!agent || typeof agent.saveSettings !== 'function') return;
     if (btn) btn.disabled = true;
-    setStatus('Preparing Copilot...');
+    activeCodexSetupRunId = 'copilot-' + Date.now() + '-' + Math.random().toString(16).slice(2);
+    setStatus('\u6b63\u5728\u914d\u7f6e Codex...');
     try {
-      if (typeof agent.syncCodexAuth === 'function') {
-        const sync = await agent.syncCodexAuth();
-        if (sync && sync.ok === false && !sync.skipped) {
-          setStatus('Team credential refresh failed: ' + (sync.error || 'check settings'));
-          return;
+      let setup = null;
+      if (typeof agent.setupCodex === 'function') {
+        setup = await setupCodexWithLoginRecovery({ install: true, progressRunId: activeCodexSetupRunId });
+      } else {
+        if (typeof agent.syncCodexAuth === 'function') {
+          const sync = await agent.syncCodexAuth();
+          if (sync && sync.ok === false && !sync.skipped) {
+            setStatus('\u56e2\u961f\u51ed\u636e\u5237\u65b0\u5931\u8d25: ' + (sync.error || 'check settings'));
+            return;
+          }
         }
+        await agent.saveSettings({ defaultBrainId: 'codex' });
       }
-      await agent.saveSettings({ defaultBrainId: 'codex' });
       lastProbeSnapshot = null;
       await refreshBrainLabel();
       await refreshBrainStateCard({ forceProbe: true, toast: true });
       await refreshOnboardingState();
+      if (setup && setup.ok === false) {
+        await requestShellUpdateCheckForCodexSetup(setup);
+        setStatus(codexSetupFailureMessage(setup));
+        return;
+      }
+      setStatus('Codex \u5df2\u5c31\u7eea');
+      setTimeout(() => setStatus(''), 1800);
     } catch (e) {
       setStatus(e && e.message ? e.message : String(e));
     } finally {
       if (btn) btn.disabled = false;
     }
+  }
+
+  function codexSetupFailureMessage(setup) {
+    const r = setup && typeof setup === 'object' ? setup : {};
+    const install = r.install || {};
+    const probe = r.probe || {};
+    if (install.error === 'npm_missing') return '\u81ea\u52a8\u5b89\u88c5 Node/npm \u672a\u5b8c\u6210\uff0c\u8bf7\u68c0\u67e5\u7f51\u7edc\u6216\u7cfb\u7edf\u5b89\u88c5\u6743\u9650\u540e\u518d\u70b9\u4e00\u6b21\u3002';
+    if (install.error === 'codex_install_failed') return 'Codex CLI \u5b89\u88c5\u5931\u8d25\uff0c\u8bf7\u68c0\u67e5\u7f51\u7edc\u6216 npm \u6743\u9650\u3002';
+    if (r.cloudAuthLoginRequired) return '\u8bf7\u5148\u767b\u5f55\u5de5\u4f5c\u53f0\uff0c\u518d\u70b9\u4e00\u6b21\u4e00\u952e\u914d\u7f6e\u3002';
+    if (r.cloudAuthRouteMissing) return '\u4e91\u7aef Codex \u8eab\u4efd\u63a5\u53e3\u8fd8\u672a\u4e0a\u7ebf\uff0c\u8bf7\u7ba1\u7406\u5458\u5148\u53d1\u5e03\u65b0\u7248 auth-api\u3002';
+    if (r.cloudAuthNotConfigured) return '\u4e91\u7aef\u56e2\u961f Codex \u8eab\u4efd\u8fd8\u672a\u914d\u7f6e\u3002';
+    if (r.needsLogin) return 'Codex \u9700\u8981\u767b\u5f55\u3002\u8bf7\u6253\u5f00 Codex \u5b8c\u6210\u767b\u5f55\uff0c\u518d\u70b9\u4e00\u6b21\u3002';
+    return probe.detail || r.error || 'Codex \u4ecd\u672a\u5c31\u7eea\u3002';
+  }
+
+  async function ensureCodexReadyBeforeSend() {
+    if (!agent || typeof agent.loadSettings !== 'function' || typeof agent.setupCodex !== 'function') return { ok: true, skipped: true };
+    const s = await agent.loadSettings();
+    if (!s || s.ok === false) return { ok: true, skipped: true };
+    const desired = (s.settings && s.settings.defaultBrainId) || 'codex';
+    const active = s.activeBrainId || desired;
+    const codexMeta = Array.isArray(s.brainMetas) ? s.brainMetas.find((b) => b && b.id === 'codex') : null;
+    const probeOk = Boolean(codexMeta && codexMeta.lastProbeOk);
+    if (desired !== 'codex') return { ok: true, skipped: true };
+    if (active === 'codex' && probeOk) return { ok: true, skipped: true };
+    activeCodexSetupRunId = 'send-' + Date.now() + '-' + Math.random().toString(16).slice(2);
+    setStatus('\u6b63\u5728\u914d\u7f6e Codex...');
+    const setup = await setupCodexWithLoginRecovery({ install: true, progressRunId: activeCodexSetupRunId });
+    lastProbeSnapshot = null;
+    await refreshBrainLabel();
+    await refreshBrainStateCard({ forceProbe: true });
+    await refreshOnboardingState();
+    if (setup && setup.ok) return { ok: true, setup };
+    await requestShellUpdateCheckForCodexSetup(setup);
+    return { ok: false, setup, error: codexSetupFailureMessage(setup) };
   }
 
   async function refreshBrainStateCard(options) {
@@ -2120,6 +2194,15 @@
     setStatus('Thinking...');
     finishStream();
     try {
+      const setupReady = await ensureCodexReadyBeforeSend();
+      if (!setupReady.ok) {
+        const message = setupReady.error || 'Codex \u4ecd\u672a\u5c31\u7eea\u3002';
+        setStatus(message);
+        updateActiveTaskThread('error', message);
+        appendRecoveryCard(message);
+        return;
+      }
+      setStatus('Thinking...');
       const r = await agent.send(text);
       if (r && !r.ok && r.error) {
         setStatus(String(r.error));
@@ -2151,6 +2234,14 @@
     abortBtn.disabled = true;
     abortBtn.addEventListener('click', () => {
       void agent.abort();
+    });
+  }
+
+  if (typeof agent.onCodexSetupProgress === 'function') {
+    agent.onCodexSetupProgress((payload) => {
+      if (!payload || String(payload.runId || '') !== activeCodexSetupRunId) return;
+      const message = payload.message ? String(payload.message) : '';
+      if (message) setStatus(message);
     });
   }
 

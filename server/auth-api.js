@@ -128,6 +128,34 @@ function companionArtifactToPublicClient(rec) {
   return s;
 }
 
+function readTeamCodexAuthPayload() {
+  const rawJson = String(process.env.CODEX_SHARED_AUTH_JSON || '').trim();
+  const rawBase64 = String(process.env.CODEX_SHARED_AUTH_JSON_BASE64 || '').trim();
+  if (!rawJson && !rawBase64) return null;
+  if (rawBase64) {
+    return {
+      authJsonBase64: rawBase64,
+      updatedAt: String(process.env.CODEX_SHARED_AUTH_UPDATED_AT || '').trim() || null,
+    };
+  }
+  let parsed = null;
+  try {
+    parsed = JSON.parse(rawJson);
+  } catch {
+    parsed = rawJson;
+  }
+  if (parsed && typeof parsed === 'object' && (parsed.authJson != null || parsed.authJsonBase64 != null)) {
+    return {
+      ...parsed,
+      updatedAt: parsed.updatedAt || String(process.env.CODEX_SHARED_AUTH_UPDATED_AT || '').trim() || null,
+    };
+  }
+  return {
+    authJson: parsed,
+    updatedAt: String(process.env.CODEX_SHARED_AUTH_UPDATED_AT || '').trim() || null,
+  };
+}
+
 async function respondCompanionElectronUpdaterYaml(res, { kind, platform, channel }) {
   const latest = await pickLatestArtifact({ kind, platform, channel });
   writeCompanionElectronUpdaterYamlResponse(res, latest);
@@ -1470,6 +1498,19 @@ const server = http.createServer(async (req, res) => {
         addSetCookieHeader(res, csrf.cookie);
       }
       sendAuthUser(res, user, 200, { workspaceUsedBytes: getWorkspaceUsedBytes(user.id) });
+      return;
+    }
+
+    if (path === '/api/team/codex/auth' && req.method === 'GET') {
+      const user = await requireAuth(req, res);
+      if (!user) return;
+      const payload = readTeamCodexAuthPayload();
+      if (!payload) {
+        json(res, 503, { error: 'codex_shared_auth_not_configured' });
+        return;
+      }
+      res.setHeader('Cache-Control', 'no-store');
+      json(res, 200, payload);
       return;
     }
 

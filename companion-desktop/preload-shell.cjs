@@ -56,6 +56,7 @@ contextBridge.exposeInMainWorld('companionShell', {
   paddleOcrDesktopState: () => timedInvoke('shell-paddleocr-desktop-state'),
   paddleOcrBootstrapRun: (opts) => timedInvoke('shell-paddleocr-bootstrap-run', opts || {}),
   traySummary: () => timedInvoke('shell-tray-summary'),
+  checkShellUpdate: () => timedInvoke('shell-check-shell-update'),
   installShellUpdate: () => timedInvoke('shell-install-shell-update'),
   loadSettings: () => timedInvoke('shell-settings-load'),
   saveSettings: (patch) => timedInvoke('shell-settings-save', patch),
@@ -216,6 +217,19 @@ contextBridge.exposeInMainWorld('companionShell', {
     loadSettings: () => timedInvoke('agent-settings-load'),
     saveSettings: (patch) => timedInvoke('agent-settings-save', patch || {}),
     syncCodexAuth: () => timedInvoke('agent-codex-auth-sync', 120000),
+    setupCodex: (options) => timedInvoke('agent-codex-one-click-setup', options || {}, 600000),
+    onCodexSetupProgress: (handler) => {
+      if (typeof handler !== 'function') return () => {};
+      const listener = (_evt, payload) => {
+        try {
+          handler(payload);
+        } catch {
+          /* ignore */
+        }
+      };
+      ipcRenderer.on('agent-codex-setup-progress', listener);
+      return () => ipcRenderer.removeListener('agent-codex-setup-progress', listener);
+    },
     usageSummary: (options) => timedInvoke('agent-usage-summary', options || {}),
     usageUploadCloudDraft: (options) => timedInvoke('agent-usage-upload-cloud-draft', options || {}, 120000),
     usageQuotaPolicyProbe: () => timedInvoke('agent-usage-quota-policy-probe', 120000),

@@ -30,10 +30,12 @@ function parseAuthPayload(payload) {
   return value;
 }
 
-async function fetchJson(url, token) {
+async function fetchJson(url, token, options) {
+  const opts = options && typeof options === 'object' ? options : {};
   const headers = { Accept: 'application/json' };
   if (token) headers.Authorization = `Bearer ${token}`;
-  const resp = await fetch(url, { method: 'GET', headers });
+  const fetchImpl = typeof opts.fetch === 'function' ? opts.fetch : fetch;
+  const resp = await fetchImpl(url, { method: 'GET', credentials: 'include', headers });
   if (!resp.ok) {
     const text = await resp.text().catch(() => '');
     throw new Error(`http_${resp.status}${text ? `: ${text.slice(0, 160)}` : ''}`);
@@ -55,11 +57,11 @@ function writeCodexAuthJson(authJson) {
   return target;
 }
 
-async function syncCodexAuthFromCloud(settings) {
+async function syncCodexAuthFromCloud(settings, options) {
   const url = String((settings && settings.codexSharedAuthUrl) || '').trim();
   if (!url) return { ok: false, skipped: true, error: 'missing_codex_shared_auth_url' };
   const token = String((settings && settings.codexSharedAuthToken) || '').trim();
-  const payload = await fetchJson(url, token);
+  const payload = await fetchJson(url, token, options);
   const authJson = parseAuthPayload(payload);
   const target = writeCodexAuthJson(authJson);
   return {

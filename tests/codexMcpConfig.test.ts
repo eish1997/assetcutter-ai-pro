@@ -24,8 +24,43 @@ describe('codexMcpConfig', () => {
       expect(text).toContain('url = "http://127.0.0.1:19120/mcp"');
       expect(text).toContain('bearer_token_env_var = "ASSETCUTTER_MCP_TOKEN"');
       expect(text).toContain('enabled = true');
-      expect(text).toContain('required = true');
+      expect(text).toContain('required = false');
+      expect(text).not.toContain('required = true');
       expect(text).not.toContain('Bearer ');
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it('removeCodexMcpServerConfig strips AssetCutter block and keeps other tables', () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ac-codex-mcp-'));
+    const configPath = path.join(tmp, 'config.toml');
+    try {
+      fs.writeFileSync(
+        configPath,
+        [
+          'model = "gpt-5"',
+          '',
+          '[mcp_servers.node_repl]',
+          'command = "node"',
+          '',
+          '[mcp_servers.assetcutter-body]',
+          'enabled = true',
+          'required = true',
+          'url = "http://127.0.0.1:19120/mcp"',
+          'bearer_token_env_var = "ASSETCUTTER_MCP_TOKEN"',
+          '',
+        ].join('\n'),
+        'utf8',
+      );
+      const r = codexMcp.removeCodexMcpServerConfig({ configPath });
+      expect(r.ok).toBe(true);
+      expect(r.changed).toBe(true);
+      const text = fs.readFileSync(configPath, 'utf8');
+      expect(text).toContain('model = "gpt-5"');
+      expect(text).toContain('[mcp_servers.node_repl]');
+      expect(text).not.toContain('assetcutter-body');
+      expect(text).not.toContain('ASSETCUTTER_MCP_TOKEN');
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });
     }
