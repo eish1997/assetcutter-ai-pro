@@ -88,7 +88,11 @@
       if (!turnBusy) return;
       const elapsed = Math.max(1, Math.round((Date.now() - codexWaitStartedAt) / 1000));
       const label = codexLastProgressLabel ? ` \u00b7 ${codexLastProgressLabel}` : '';
-      setStatus(`Codex \u6b63\u5728\u601d\u8003 ${elapsed}s${label}`);
+      if (codexLastProgressLabel === '\u7f51\u7edc\u6b63\u5728\u91cd\u8bd5' && elapsed >= 25) {
+        setStatus(`Codex \u7f51\u7edc\u8fde\u63a5\u4e0d\u7a33\u5b9a ${elapsed}s \u00b7 \u6b63\u5728\u91cd\u8bd5\uff1b\u53ef\u68c0\u67e5\u4ee3\u7406/\u767b\u5f55\u6001`);
+      } else {
+        setStatus(`Codex \u6b63\u5728\u601d\u8003 ${elapsed}s${label}`);
+      }
       codexWaitHintTimer = setTimeout(tick, elapsed < 8 ? 4000 : 5000);
     };
     codexWaitHintTimer = setTimeout(tick, 4000);

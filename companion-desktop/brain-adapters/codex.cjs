@@ -14,6 +14,63 @@ function defaultCodexCommand() {
   return process.platform === 'win32' ? 'codex.cmd' : 'codex';
 }
 
+function defaultCodexHome() {
+  const envHome = String(process.env.CODEX_HOME || '').trim();
+  if (envHome) return envHome;
+  const home = process.env.USERPROFILE || process.env.HOME || '';
+  return home ? path.join(home, '.codex') : '';
+}
+
+function codexModelsCachePath(deps) {
+  const fromDeps = deps && typeof deps.codexHome === 'function' ? deps.codexHome() : '';
+  const home = String(fromDeps || defaultCodexHome()).trim();
+  return home ? path.join(home, 'models_cache.json') : '';
+}
+
+function codexModelsCacheLooksStale(value) {
+  const models = Array.isArray(value)
+    ? value
+    : Array.isArray(value && value.models)
+      ? value.models
+      : Array.isArray(value && value.data)
+        ? value.data
+        : [];
+  if (!models.length) return false;
+  return models.some((model) => {
+    if (!model || typeof model !== 'object') return false;
+    return !Object.prototype.hasOwnProperty.call(model, 'supports_reasoning_summaries');
+  });
+}
+
+function repairCodexModelsCache(deps) {
+  const file = codexModelsCachePath(deps);
+  if (!file || !fs.existsSync(file)) return { ok: true, changed: false };
+  let parsed;
+  try {
+    parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch {
+    return { ok: true, changed: false };
+  }
+  if (!codexModelsCacheLooksStale(parsed)) return { ok: true, changed: false };
+  const backup = `${file}.stale-${Date.now()}.bak`;
+  try {
+    fs.renameSync(file, backup);
+    return { ok: true, changed: true, path: file, backup };
+  } catch (e) {
+    try {
+      fs.unlinkSync(file);
+      return { ok: true, changed: true, path: file, deleted: true };
+    } catch {
+      return {
+        ok: false,
+        changed: false,
+        path: file,
+        error: e instanceof Error ? e.message : String(e),
+      };
+    }
+  }
+}
+
 function spawnCodex(command, args, options) {
   return spawn(command, args, {
     ...(options || {}),
@@ -67,6 +124,24 @@ function settingsFromStore(deps) {
     model: String(process.env.COMPANION_AGENT_CODEX_MODEL || s.codexModel || '').trim(),
     sandbox: normalizeSandbox(process.env.COMPANION_AGENT_CODEX_SANDBOX || s.codexSandbox),
   };
+}
+
+function codexThreadMaxAgeMs() {
+  const raw = Number(process.env.COMPANION_AGENT_CODEX_THREAD_MAX_AGE_MS);
+  if (Number.isFinite(raw) && raw >= 0) return raw;
+  return 2 * 60 * 60 * 1000;
+}
+
+function shouldResumeCodexThread(entry, deps) {
+  const threadId = String(entry && entry.threadId ? entry.threadId : '').trim();
+  if (!threadId) return false;
+  const maxAgeMs = codexThreadMaxAgeMs();
+  if (maxAgeMs <= 0) return false;
+  const updatedAt = Date.parse(String(entry && entry.updatedAt ? entry.updatedAt : ''));
+  if (!Number.isFinite(updatedAt)) return true;
+  const now = deps && typeof deps.now === 'function' ? Number(deps.now()) : Date.now();
+  if (!Number.isFinite(now)) return true;
+  return now - updatedAt <= maxAgeMs;
 }
 
 function agentSettingsFromStore(deps) {
@@ -319,7 +394,8 @@ function createCodexBrainAdapter(deps) {
     const cwd = fs.existsSync(cfg.cwd) ? cfg.cwd : process.cwd();
     const sessionId = String(input.sessionId || 'default');
     const sessionMap = readSessionMap(deps);
-    const codexThreadId = sessionMap[sessionId] && sessionMap[sessionId].threadId;
+    const codexThreadEntry = sessionMap[sessionId] || null;
+    const codexThreadId = shouldResumeCodexThread(codexThreadEntry, deps) ? codexThreadEntry.threadId : '';
     const prompt = buildCodexPrompt(input);
     if (!prompt) {
       yield { type: 'error', code: 'CODEX_EMPTY_PROMPT', message: 'empty prompt' };
@@ -363,6 +439,23 @@ function createCodexBrainAdapter(deps) {
     let exitCode = null;
     let stderrText = '';
     const completedItemText = new Map();
+
+    const cacheRepair = repairCodexModelsCache(deps);
+    if (cacheRepair.changed) {
+      queue.push({
+        type: 'activity',
+        phase: 'done',
+        name: 'codex.cache',
+        detail: 'Removed stale Codex models cache so the CLI can refresh it with the current schema.',
+      });
+    } else if (cacheRepair.ok === false) {
+      queue.push({
+        type: 'activity',
+        phase: 'error',
+        name: 'codex.cache',
+        detail: cacheRepair.error || 'Failed to repair Codex models cache.',
+      });
+    }
 
     const mcpToken = String(agentSettings.mcpToken || '').trim();
     const mcpPort = Number(agentSettings.mcpPort) || 19120;

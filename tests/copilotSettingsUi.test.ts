@@ -343,6 +343,10 @@ describe('copilot settings UI', () => {
     expect(main).toContain('/api/team/codex/auth');
     expect(main).toContain('codexSharedAuthEnabled: opts.cloudIdentity === false ? before.codexSharedAuthEnabled : true');
     expect(main).toContain('session.fromPartition(FIRST_PARTY_WEB_PARTITION)');
+    expect(main).toContain('fetchCodexSharedAuthWithShellSession');
+    expect(main).toContain('shellSessionCookieHeaderForCodexAuth');
+    expect(main).toContain('Cookie: cookieHeader');
+    expect(main).toContain('missing_shell_session_cookie');
     expect(main).toContain('cloudAuthLoginRequired');
     expect(main).toContain('cloudAuthRouteMissing');
     expect(main).toContain("startsWith('http_404')");
@@ -637,17 +641,22 @@ describe('copilot settings UI', () => {
   });
 
   it('keeps the web Agent settings focused on Codex only', () => {
-    const html = fs.readFileSync(rootIndexPath, 'utf8');
+    const rootHtml = fs.readFileSync(rootIndexPath, 'utf8');
+    const shellHtml = fs.readFileSync(shellIndexPath, 'utf8');
+    const app = fs.readFileSync(path.resolve(process.cwd(), 'App.tsx'), 'utf8');
 
-    expect(html).toContain('Copilot 当前只保留 Codex');
-    expect(html).not.toContain('btnHermesOneClickSetup');
-    expect(html).not.toContain('btnHermesConnectExisting');
-    expect(html).not.toContain('hermesGatewaySetup');
-    expect(html).not.toContain('companionConnect');
-    expect(html).not.toContain('openai_compat');
-    expect(html).not.toContain('claude_code');
-    expect(html).not.toContain('npm run agent:init');
-    expect(html).not.toContain('npm run agent:cli');
+    expect(rootHtml).toContain('/index.tsx');
+    expect(shellHtml).toContain('Copilot currently uses Codex only');
+    for (const text of [rootHtml, shellHtml, app]) {
+      expect(text).not.toContain('btnHermesOneClickSetup');
+      expect(text).not.toContain('btnHermesConnectExisting');
+      expect(text).not.toContain('hermesGatewaySetup');
+      expect(text).not.toContain('companionConnect');
+      expect(text).not.toContain('openai_compat');
+      expect(text).not.toContain('claude_code');
+      expect(text).not.toContain('npm run agent:init');
+      expect(text).not.toContain('npm run agent:cli');
+    }
   });
 
   it('shows workbench login diagnostics in the e2e entrance state', () => {

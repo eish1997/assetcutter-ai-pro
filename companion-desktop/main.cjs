@@ -720,11 +720,7 @@ async function syncCodexSharedAuthIfEnabled(reason) {
     return { ok: true, skipped: true, status: codexAuthStatus() };
   }
   try {
-    const fetchWithShellSession = async (url, init) => {
-      const ses = session.fromPartition(FIRST_PARTY_WEB_PARTITION);
-      return ses.fetch(url, init || {});
-    };
-    const result = await syncCodexAuthFromCloud(settings, { fetch: fetchWithShellSession });
+    const result = await syncCodexAuthFromCloud(settings, { fetch: fetchCodexSharedAuthWithShellSession });
     agentStore.writeSettings({
       codexSharedAuthLastSyncAt: result.updatedAt || new Date().toISOString(),
       codexSharedAuthLastError: '',
@@ -738,6 +734,88 @@ async function syncCodexSharedAuthIfEnabled(reason) {
     });
     return { ok: false, error: message, status: codexAuthStatus() };
   }
+}
+
+function headerObjectFromInitHeaders(headers) {
+  const out = {};
+  if (!headers) return out;
+  if (typeof Headers !== 'undefined' && headers instanceof Headers) {
+    headers.forEach((value, key) => {
+      out[key] = value;
+    });
+    return out;
+  }
+  if (Array.isArray(headers)) {
+    for (const pair of headers) {
+      if (!Array.isArray(pair) || pair.length < 2) continue;
+      out[String(pair[0])] = String(pair[1]);
+    }
+    return out;
+  }
+  if (typeof headers === 'object') {
+    for (const [key, value] of Object.entries(headers)) {
+      if (value == null) continue;
+      out[key] = String(value);
+    }
+  }
+  return out;
+}
+
+async function shellSessionCookieHeaderForCodexAuth(url) {
+  const ses = session.fromPartition(FIRST_PARTY_WEB_PARTITION);
+  const origins = [];
+  try {
+    origins.push(new URL(String(url || '')).origin);
+  } catch {
+    /* ignore */
+  }
+  try {
+    const settings = readShellSettings();
+    if (settings.siteUrl) origins.push(new URL(settings.siteUrl).origin);
+  } catch {
+    /* ignore */
+  }
+  const authOrigin = resolveAuthApiOriginForCompanionApi();
+  if (authOrigin) origins.unshift(authOrigin);
+
+  const byName = new Map();
+  for (const origin of [...new Set(origins.filter(Boolean))]) {
+    try {
+      const cookies = await ses.cookies.get({ url: origin });
+      for (const cookie of Array.isArray(cookies) ? cookies : []) {
+        const name = String(cookie && cookie.name ? cookie.name : '').trim();
+        const value = String(cookie && cookie.value != null ? cookie.value : '');
+        if (!name || byName.has(name)) continue;
+        byName.set(name, value);
+      }
+    } catch {
+      /* keep trying other origins */
+    }
+  }
+  return [...byName.entries()]
+    .map(([name, value]) => `${encodeURIComponent(name)}=${encodeURIComponent(value)}`)
+    .join('; ');
+}
+
+async function fetchCodexSharedAuthWithShellSession(url, init) {
+  const ses = session.fromPartition(FIRST_PARTY_WEB_PARTITION);
+  const baseHeaders = headerObjectFromInitHeaders(init && init.headers);
+  const cookieHeader = await shellSessionCookieHeaderForCodexAuth(url);
+  const hasAuthCookie = cookieHeader
+    .split(';')
+    .some((part) => isLikelyShellAuthCookieName(String(part || '').split('=')[0].trim()));
+  const hasBearer = Boolean(baseHeaders.Authorization || baseHeaders.authorization);
+  if (!hasAuthCookie && !hasBearer) {
+    throw new Error('http_401: missing_shell_session_cookie');
+  }
+  return ses.fetch(url, {
+    ...(init || {}),
+    credentials: 'include',
+    headers: {
+      ...baseHeaders,
+      ...(cookieHeader ? { Cookie: cookieHeader } : {}),
+    },
+  });
 }
 
 function migrateAgentSettingsToCodexDefault() {

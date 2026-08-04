@@ -190,6 +190,67 @@ describe('Codex brain adapter', () => {
     expect(toolActivities[1].detail).toContain('AGENT_AUTH_REQUIRED');
   });
 
+  it('starts a fresh Codex thread when the saved thread is stale', async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ac-codex-thread-'));
+    fs.writeFileSync(
+      path.join(tmp, 'codex-sessions.json'),
+      JSON.stringify({
+        session_stale: {
+          threadId: 'thread_old',
+          cwd: process.cwd(),
+          updatedAt: '2026-08-04T00:00:00.000Z',
+        },
+        session_fresh: {
+          threadId: 'thread_fresh',
+          cwd: process.cwd(),
+          updatedAt: '2026-08-04T01:59:00.000Z',
+        },
+      }),
+      'utf8',
+    );
+    const spawns: Array<{ args: string[] }> = [];
+    const store = {
+      readSettings: () => ({
+        codexCommand: 'codex-test',
+        codexCwd: process.cwd(),
+        codexSandbox: 'workspace-write',
+        mcpEnabled: true,
+        mcpToken: 'assetcutter-secret-token',
+        mcpPort: 19120,
+      }),
+      brainsDir: () => tmp,
+    };
+    const adapter = createCodexBrainAdapter({
+      store,
+      now: () => Date.parse('2026-08-04T02:30:00.000Z'),
+      upsertCodexMcpServerConfig: () => ({ ok: true, changed: false, path: 'config.toml' }),
+      spawnCodex: (_command: string, args: string[]) => {
+        spawns.push({ args });
+        return createFakeCodexProcess(() => {});
+      },
+    });
+
+    for await (const _ev of adapter.streamTurn({
+      sessionId: 'session_stale',
+      messages: [{ role: 'user', content: 'say ok' }],
+      tools: [],
+    })) {
+      /* drain */
+    }
+    for await (const _ev of adapter.streamTurn({
+      sessionId: 'session_fresh',
+      messages: [{ role: 'user', content: 'say ok' }],
+      tools: [],
+    })) {
+      /* drain */
+    }
+
+    expect(spawns[0].args).not.toContain('resume');
+    expect(spawns[0].args).not.toContain('thread_old');
+    expect(spawns[1].args).toEqual(expect.arrayContaining(['resume', 'thread_fresh']));
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+
   it('surfaces Codex transport retries without failing the turn', async () => {
     const outputEvents = [
       { type: 'thread.started', thread_id: 'thread_retry' },
@@ -238,5 +299,59 @@ describe('Codex brain adapter', () => {
     expect(networkEvents[1].detail).toContain('Falling back');
     expect(events.find((ev: any) => ev.type === 'text_delta')).toMatchObject({ text: 'OK' });
     expect(events.some((ev: any) => ev.type === 'error')).toBe(false);
+  });
+
+  it('repairs stale Codex models cache before starting a turn', async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ac-codex-cache-'));
+    const codexHome = path.join(tmp, '.codex');
+    fs.mkdirSync(codexHome, { recursive: true });
+    const cachePath = path.join(codexHome, 'models_cache.json');
+    fs.writeFileSync(
+      cachePath,
+      JSON.stringify({
+        models: [
+          {
+            slug: 'codex-auto',
+            display_name: 'Codex Auto',
+            supported_reasoning_levels: ['low', 'medium'],
+          },
+        ],
+      }),
+      'utf8',
+    );
+
+    const store = {
+      readSettings: () => ({
+        codexCommand: 'codex-test',
+        codexCwd: process.cwd(),
+        codexSandbox: 'workspace-write',
+        mcpEnabled: true,
+        mcpToken: 'assetcutter-secret-token',
+        mcpPort: 19120,
+      }),
+      brainsDir: () => tmp,
+    };
+    const adapter = createCodexBrainAdapter({
+      store,
+      codexHome: () => codexHome,
+      upsertCodexMcpServerConfig: () => ({ ok: true, changed: false, path: 'config.toml' }),
+      spawnCodex: () => createFakeCodexProcess(() => {}),
+    });
+
+    const events = [];
+    for await (const ev of adapter.streamTurn({
+      sessionId: 'session_cache',
+      messages: [{ role: 'user', content: 'say ok' }],
+      tools: [],
+    })) {
+      events.push(ev);
+    }
+
+    expect(fs.existsSync(cachePath)).toBe(false);
+    expect(fs.readdirSync(codexHome).some((name) => name.startsWith('models_cache.json.stale-'))).toBe(true);
+    expect(events).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'activity', phase: 'done', name: 'codex.cache' }),
+    ]));
+    fs.rmSync(tmp, { recursive: true, force: true });
   });
 });
