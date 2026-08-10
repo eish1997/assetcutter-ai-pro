@@ -353,7 +353,7 @@ describe('agent tool execution audit', () => {
 describe('agent P2 tool schemas', () => {
   it('registers P2 tools including governed workflow promotion preflights', () => {
     expect(P2_TOOL_SCHEMAS).toHaveLength(12);
-    expect(ALL_TOOL_SCHEMAS).toHaveLength(37);
+    expect(ALL_TOOL_SCHEMAS).toHaveLength(59);
     expect(P2_TOOL_SCHEMAS.map((tool: { name: string }) => tool.name)).toContain(
       'ac.workflow.promote_workbench_preset',
     );
@@ -568,6 +568,7 @@ describe('agent workbench flow contract', () => {
     expect(workbenchStandardFlowText()).toContain('ac.workbench.get_asset');
     expect(workbenchStandardFlowText()).toContain('ac.workbench.create_text_asset');
     expect(workbenchStandardFlowText()).toContain('ac.workbench.create_image_asset');
+    expect(workbenchStandardFlowText()).toContain('ac.capability.create_draft');
     expect(doc.canonicalFlow.find((step: { id: string }) => step.id === 'capability')?.tool).toContain(
       'create_text_asset',
     );

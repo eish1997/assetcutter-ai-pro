@@ -95,8 +95,8 @@ function createAgentScriptHubClient(deps) {
       const token =
         typeof deps.getScriptHubApiToken === 'function' ? String(deps.getScriptHubApiToken() || '').trim() : '';
       const message = token
-        ? 'ScriptHub Tool Bridge 鉴权失败，请检查设置中的 scriptHubApiToken 是否与 SCRIPTHUB_TOOL_BRIDGE_TOKEN 一致'
-        : 'ScriptHub 需要登录或 Tool Bridge Token：请在脚本页登录，或在伴侣设置中填写 scriptHubApiToken';
+        ? 'Workflow Tool Bridge 鉴权失败，请检查设置中的 Token 是否与 ASSETCUTTER_WORKFLOW_TOOL_BRIDGE_TOKEN 一致'
+        : 'Workflow 需要登录或 Tool Bridge Token：请在 Workflow 页登录，或在伴侣设置中填写 Token';
       return {
         ok: false,
         content: '',
@@ -274,7 +274,7 @@ function createAgentScriptHubClient(deps) {
       };
     }
     return runScript({
-      toolName: 'scriptHub.maya.export_selection_fbx',
+      toolName: 'workflow.maya.export_selection_fbx',
       input: {
         output_path: outputPath,
         overwrite: Boolean(args.overwrite),
@@ -288,4 +288,6 @@ function createAgentScriptHubClient(deps) {
   return { listScripts, runScript, getRun, exportMayaSelection, INTEGRATION_VERSION };
 }
 
-module.exports = { createAgentScriptHubClient, SCRIPT_HUB_PARTITION, INTEGRATION_VERSION };
+const createAgentWorkflowClient = createAgentScriptHubClient;
+
+module.exports = { createAgentScriptHubClient, createAgentWorkflowClient, SCRIPT_HUB_PARTITION, INTEGRATION_VERSION };

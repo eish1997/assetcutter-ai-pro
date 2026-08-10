@@ -111,6 +111,12 @@ import {
   publicFileUrlForR2Key,
   writeCompanionElectronUpdaterYamlResponse,
 } from './companion-electron-feed.js';
+import {
+  activateHostBridgeVersion,
+  addHostBridgeVersion,
+  listHostBridgeDefinitions,
+  listHostBridgeVersions,
+} from './host-bridges-store.js';
 
 /** 公开摘要；host_plugin_bundle / shell_tool_bundle 在配置 COMPANION_DIST_PUBLIC_HTTP_BASE 时附带直链（供桌面壳调用伴侣 install-from-url，免登录预签名） */
 function companionArtifactToPublicClient(rec) {
@@ -454,6 +460,32 @@ function json(res, status, data) {
   const body = JSON.stringify(data);
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Content-Length': Buffer.byteLength(body, 'utf8') });
   res.end(body);
+}
+
+function hostBridgeErrorMessage(code) {
+  const messages = {
+    host_id_invalid: '宿主 id 不合法。',
+    host_id_mismatch: '提交路径中的宿主 id 与宿主定义 id 不一致。',
+    cloud_version_not_found: '只能切换云端已有版本。',
+    version_note_required: '版本说明不能为空。',
+    definition_required: '宿主定义不能为空。',
+    definition_name_required: '宿主名称不能为空。',
+    definition_category_invalid: '宿主分类不合法。',
+    definition_port_invalid: '默认端口必须在 1 到 65535 之间。',
+    definition_template_required: '桥接模板不能为空。',
+    definition_template_invalid: '桥接模板未注册，不能提交云端。',
+    definition_entry_file_invalid: '桥接入口文件路径不安全。',
+    definition_manual_target_required: '必须声明手动添加版本可接受的目录类型。',
+    definition_probe_required: '必须声明真实连接探测方式。',
+    definition_probe_invalid: '真实连接探测类型不合法。',
+    definition_probe_port_invalid: '探测端口必须在 1 到 65535 之间。',
+    definition_probe_http_path_invalid: 'HTTP 探测路径必须为 /health。',
+    definition_probe_heartbeat_file_invalid: '心跳文件路径不安全。',
+    definition_uninstall_required: '必须声明卸载规则。',
+    definition_uninstall_generated_files_required: '必须声明卸载时处理的生成文件。',
+    definition_uninstall_generated_file_invalid: '卸载文件路径不安全。',
+  };
+  return messages[String(code || '').trim()] || String(code || '宿主桥接操作失败。');
 }
 
 function normalizeTrimmed(input) {
@@ -1553,6 +1585,27 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (path === '/api/host-bridges' && req.method === 'GET') {
+      try {
+        json(res, 200, { hosts: await listHostBridgeDefinitions() });
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        json(res, 500, { error: message, message: hostBridgeErrorMessage(message) });
+      }
+      return;
+    }
+
+    const publicHostBridgeVersionsMatch = path.match(/^\/api\/host-bridges\/([^/]+)\/versions$/);
+    if (publicHostBridgeVersionsMatch && req.method === 'GET') {
+      try {
+        json(res, 200, { versions: await listHostBridgeVersions(decodeURIComponent(publicHostBridgeVersionsMatch[1] || '')) });
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        json(res, message === 'host_id_invalid' ? 400 : 500, { error: message, message: hostBridgeErrorMessage(message) });
+      }
+      return;
+    }
+
     if (path === '/api/companion-artifacts/latest' && req.method === 'GET') {
       let u;
       try {
@@ -1653,6 +1706,66 @@ const server = http.createServer(async (req, res) => {
           workspaceUsedBytes: getWorkspaceUsedBytes(payload.user.id),
         },
       });
+      return;
+    }
+
+    const adminHostBridgeVersionsMatch = path.match(/^\/api\/admin\/host-bridges\/([^/]+)\/versions$/);
+    if (adminHostBridgeVersionsMatch && req.method === 'POST') {
+      const payload = await requireAdminMe(req, res);
+      if (!payload) return;
+      try {
+        const body = await readBody(req);
+        const hostId = decodeURIComponent(adminHostBridgeVersionsMatch[1] || '');
+        const definition = body && typeof body.definition === 'object' ? body.definition : null;
+        if (definition && !definition.id) definition.id = hostId;
+        if (definition && String(definition.id || '').trim().toLowerCase() !== String(hostId || '').trim().toLowerCase()) {
+          json(res, 400, { error: 'host_id_mismatch', message: hostBridgeErrorMessage('host_id_mismatch') });
+          return;
+        }
+        const version = await addHostBridgeVersion({
+          definition,
+          semver: body.semver,
+          note: body.note,
+          publishedBy: payload.user?.username || payload.user?.id || '',
+        });
+        await createAuditLog({
+          actorUserId: payload.user.id,
+          actorIdentifier: payload.user.username,
+          action: 'admin.host_bridge_version_publish',
+          meta: { hostId: version.hostId, versionId: version.id, semver: version.semver },
+          ip: getClientIp(req),
+          userAgent: req.headers['user-agent'],
+        });
+        json(res, 200, { ok: true, version });
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        json(res, 400, { error: message, message: hostBridgeErrorMessage(message) });
+      }
+      return;
+    }
+
+    const adminHostBridgeActivateMatch = path.match(/^\/api\/admin\/host-bridges\/([^/]+)\/versions\/([^/]+)\/activate$/);
+    if (adminHostBridgeActivateMatch && req.method === 'POST') {
+      const payload = await requireAdminMe(req, res);
+      if (!payload) return;
+      try {
+        const version = await activateHostBridgeVersion(
+          decodeURIComponent(adminHostBridgeActivateMatch[1] || ''),
+          decodeURIComponent(adminHostBridgeActivateMatch[2] || ''),
+        );
+        await createAuditLog({
+          actorUserId: payload.user.id,
+          actorIdentifier: payload.user.username,
+          action: 'admin.host_bridge_version_activate',
+          meta: { hostId: version.hostId, versionId: version.id, semver: version.semver },
+          ip: getClientIp(req),
+          userAgent: req.headers['user-agent'],
+        });
+        json(res, 200, { ok: true, version });
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        json(res, message === 'cloud_version_not_found' ? 404 : 400, { error: message, message: hostBridgeErrorMessage(message) });
+      }
       return;
     }
 

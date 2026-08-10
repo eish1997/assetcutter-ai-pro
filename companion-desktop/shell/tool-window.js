@@ -1,6 +1,5 @@
 /**
- * Standalone shell tool window (one tool per BrowserWindow).
- * Authored tools poll contentRev and auto-refresh panel without a reload button.
+ * Shell tool workspace: one BrowserWindow, many tool tabs.
  */
 (function () {
   'use strict';
@@ -23,6 +22,14 @@
     MAYA_RUNTIME_ERROR: 'Maya 执行失败',
   };
 
+  function $(id) {
+    return document.getElementById(id);
+  }
+
+  function esc(s) {
+    return String(s || '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+  }
+
   function formatError(code, message) {
     const c = String(code || '').trim();
     const base = ERROR_MESSAGES[c] || c || '未知错误';
@@ -30,13 +37,16 @@
     return detail ? base + '：' + detail : base;
   }
 
-  function toolIdFromQuery() {
+  function toolIdsFromQuery() {
     const q = new URLSearchParams(window.location.search);
-    return String(q.get('toolId') || '').trim();
+    const raw = String(q.get('toolId') || '').trim();
+    return raw ? [raw] : [];
   }
 
-  function $(id) {
-    return document.getElementById(id);
+  function runTimeoutMs(tool) {
+    const n = Number(tool && tool.run && tool.run.timeoutMs);
+    if (Number.isFinite(n) && n >= 1000) return Math.min(Math.floor(n), DEFAULT_RUN_TIMEOUT_MS);
+    return DEFAULT_RUN_TIMEOUT_MS;
   }
 
   function firstPathFieldValue(panel, fieldState) {
@@ -51,57 +61,30 @@
     return '';
   }
 
-  function runTimeoutMs(tool) {
-    const n = Number(tool && tool.run && tool.run.timeoutMs);
-    if (Number.isFinite(n) && n >= 1000) return Math.min(Math.floor(n), DEFAULT_RUN_TIMEOUT_MS);
-    return DEFAULT_RUN_TIMEOUT_MS;
-  }
-
-  function ensureDraftBanner() {
-    let el = $('toolDraftBanner');
-    if (el) return el;
-    el = document.createElement('div');
-    el.id = 'toolDraftBanner';
-    el.className = 'tool-draft-banner hidden';
-    el.style.cssText =
-      'margin:0 0 12px;padding:8px 10px;border-radius:8px;border:1px solid rgba(250,204,21,0.35);background:rgba(113,63,18,0.35);color:#fde68a;font-size:11px;line-height:1.45;';
-    const body = $('toolModuleBody');
-    if (body && body.parentNode) body.parentNode.insertBefore(el, body);
-    return el;
-  }
-
-  function setDraftBanner(text) {
-    const el = ensureDraftBanner();
-    const t = String(text || '').trim();
-    if (!t) {
-      el.textContent = '';
-      el.classList.add('hidden');
-      return;
-    }
-    el.textContent = t;
-    el.classList.remove('hidden');
+  function shortIcon(name, id) {
+    const raw = String(name || id || 'T').trim();
+    const ascii = raw.match(/[a-zA-Z0-9]/);
+    return (ascii ? ascii[0] : raw[0] || 'T').toUpperCase();
   }
 
   async function init() {
     const api = window.companionToolWindow;
-    if (!api) {
-      $('toolLoadError').textContent = '窗口 API 未就绪';
-      $('toolLoadError').classList.remove('hidden');
-      return;
-    }
+    if (!api) return;
 
-    const toolId = toolIdFromQuery();
-    if (!toolId) {
-      $('toolLoadError').textContent = '缺少 toolId 参数';
-      $('toolLoadError').classList.remove('hidden');
-      return;
-    }
+    const workspace = $('toolWorkspace');
+    const navList = $('toolNavList');
+    const panelsEl = $('toolPanels');
+    const titleEl = $('titlebarToolName');
+    const verEl = $('toolModuleVersion');
+    const tabs = new Map();
+    let activeToolId = '';
+    let detailsHidden = false;
+    let pinned = false;
 
     $('btnToolMin').addEventListener('click', () => void api.minimize());
     $('btnToolClose').addEventListener('click', () => void api.close());
 
     const pinBtn = $('btnToolPin');
-    let pinned = false;
     try {
       const pinState = await api.getPin();
       if (pinState && pinState.ok) pinned = Boolean(pinState.pinned);
@@ -126,189 +109,263 @@
       applyPinUi();
     });
 
-    const fieldState = {};
-    let panel = null;
-    let tool = {};
-    let permissions = [];
-    let contentRev = -1;
-    let hotPollTimer = null;
-    let running = false;
-    let enableHotPoll = false;
-    let toolOrigin = null;
-    let reportingFix = false;
+    function setWorkspaceTitle(tab) {
+      if (!tab) {
+        document.title = '工具';
+        titleEl.textContent = '工具';
+        verEl.setAttribute('hidden', '');
+        verEl.textContent = '';
+        return;
+      }
+      const title = tab.title || tab.toolId;
+      document.title = title;
+      titleEl.textContent = title;
+      const v = tab.tool && tab.tool.semver ? 'v' + tab.tool.semver : '';
+      verEl.textContent = v;
+      if (v) verEl.removeAttribute('hidden');
+      else verEl.setAttribute('hidden', '');
+    }
 
-    const logEl = $('toolModuleLog');
-    const actionsEl = $('toolModuleActions');
+    function setDetailsHidden(hidden) {
+      detailsHidden = Boolean(hidden);
+      workspace.classList.toggle('details-hidden', detailsHidden);
+      document.body.classList.toggle('details-hidden', detailsHidden);
+      if (typeof api.setDetailsCollapsed === 'function') {
+        void api.setDetailsCollapsed(detailsHidden).catch(() => {});
+      }
+    }
 
-    function setActionsBusy(busy) {
-      running = busy;
-      if (!actionsEl) return;
-      actionsEl.querySelectorAll('button').forEach((btn) => {
+    function createTabShell(toolId) {
+      const navBtn = document.createElement('button');
+      navBtn.type = 'button';
+      navBtn.className = 'tool-nav-item';
+      navBtn.innerHTML =
+        '<span class="tool-nav-icon">' + esc(shortIcon('', toolId)) + '</span><span class="tool-nav-name">' + esc(toolId) + '</span>';
+      const navIcon = navBtn.querySelector('.tool-nav-icon');
+      const navName = navBtn.querySelector('.tool-nav-name');
+
+      const panel = document.createElement('div');
+      panel.className = 'tool-panel';
+      panel.innerHTML =
+        '<div class="tool-body">' +
+        '<div class="tool-load-error hidden"></div>' +
+        '<div class="tool-module-body"></div>' +
+        '<div class="tool-module-actions"></div>' +
+        '<pre class="tool-module-log hidden"></pre>' +
+        '</div>';
+
+      navList.appendChild(navBtn);
+      panelsEl.appendChild(panel);
+
+      const tab = {
+        toolId,
+        navBtn,
+        navIcon,
+        navName,
+        panel,
+        loadError: panel.querySelector('.tool-load-error'),
+        bodyEl: panel.querySelector('.tool-module-body'),
+        actionsEl: panel.querySelector('.tool-module-actions'),
+        logEl: panel.querySelector('.tool-module-log'),
+        fieldState: {},
+        panelSpec: null,
+        tool: {},
+        permissions: [],
+        contentRev: -1,
+        hotPollTimer: null,
+        running: false,
+        enableHotPoll: false,
+        toolOrigin: null,
+        reportingFix: false,
+        clickTimer: null,
+        title: toolId,
+      };
+
+      navBtn.addEventListener('click', () => {
+        if (tab.clickTimer) clearTimeout(tab.clickTimer);
+        tab.clickTimer = setTimeout(() => {
+          tab.clickTimer = null;
+          if (activeToolId === toolId) {
+            setDetailsHidden(!detailsHidden);
+          } else {
+            activateTool(toolId, true);
+          }
+        }, 220);
+      });
+      navBtn.addEventListener('dblclick', (ev) => {
+        ev.preventDefault();
+        if (tab.clickTimer) {
+          clearTimeout(tab.clickTimer);
+          tab.clickTimer = null;
+        }
+        closeToolTab(toolId);
+      });
+      return tab;
+    }
+
+    function activateTool(toolId, showDetails) {
+      if (!tabs.has(toolId)) return;
+      activeToolId = toolId;
+      for (const [id, tab] of tabs) {
+        const active = id === toolId;
+        tab.navBtn.classList.toggle('active', active);
+        tab.panel.classList.toggle('active', active);
+      }
+      if (showDetails) setDetailsHidden(false);
+      setWorkspaceTitle(tabs.get(toolId));
+    }
+
+    function closeToolTab(toolId) {
+      const tab = tabs.get(toolId);
+      if (!tab) return;
+      if (tab.clickTimer) clearTimeout(tab.clickTimer);
+      if (tab.hotPollTimer) clearInterval(tab.hotPollTimer);
+      tab.navBtn.remove();
+      tab.panel.remove();
+      tabs.delete(toolId);
+      if (activeToolId === toolId) {
+        const next = Array.from(tabs.keys()).pop() || '';
+        if (next) activateTool(next, !detailsHidden);
+        else {
+          setDetailsHidden(false);
+          setWorkspaceTitle(null);
+        }
+      }
+      if (!tabs.size) void api.close();
+    }
+
+    function ensureDraftBanner(tab) {
+      let el = tab.panel.querySelector('.tool-draft-banner');
+      if (el) return el;
+      el = document.createElement('div');
+      el.className = 'tool-draft-banner hidden';
+      el.style.cssText =
+        'margin:0 0 12px;padding:8px 10px;border-radius:8px;border:1px solid rgba(250,204,21,0.35);background:rgba(113,63,18,0.35);color:#fde68a;font-size:11px;line-height:1.45;';
+      const body = tab.bodyEl;
+      if (body && body.parentNode) body.parentNode.insertBefore(el, body);
+      return el;
+    }
+
+    function setDraftBanner(tab, text) {
+      const el = ensureDraftBanner(tab);
+      const t = String(text || '').trim();
+      if (!t) {
+        el.textContent = '';
+        el.classList.add('hidden');
+        return;
+      }
+      el.textContent = t;
+      el.classList.remove('hidden');
+    }
+
+    function setActionsBusy(tab, busy) {
+      tab.running = busy;
+      tab.actionsEl.querySelectorAll('button').forEach((btn) => {
         btn.disabled = busy;
       });
     }
 
-    async function autoSendFailureToCopilot(payload) {
+    async function autoSendFailureToCopilot(tab, payload) {
       if (typeof api.reportRunFailure !== 'function') return;
-      if (reportingFix) return;
-      reportingFix = true;
+      if (tab.reportingFix) return;
+      tab.reportingFix = true;
       try {
-        window.ShellToolsModule.appendLog(logEl, '正在把报错发给 Copilot 自动修复…\n');
+        window.ShellToolsModule.appendLog(tab.logEl, '正在把报错发给 Copilot 自动修复…\n');
         const r = await api.reportRunFailure({
-          toolId,
-          toolName: (tool && tool.name) || toolId,
-          origin: toolOrigin,
+          toolId: tab.toolId,
+          toolName: (tab.tool && tab.tool.name) || tab.toolId,
+          origin: tab.toolOrigin,
           ...payload,
         });
-        if (r && r.skipped) {
-          window.ShellToolsModule.appendLog(logEl, '相同报错刚发过，已跳过重复发送\n');
-        } else if (r && r.ok) {
-          window.ShellToolsModule.appendLog(logEl, '已发给 Copilot，请在右侧看修复进度\n');
-        } else {
-          window.ShellToolsModule.appendLog(
-            logEl,
-            '自动发送失败：' + (r && r.error ? r.error : '未知错误') + '（可手动粘贴日志）\n',
-          );
-        }
+        if (r && r.skipped) window.ShellToolsModule.appendLog(tab.logEl, '相同报错刚发过，已跳过重复发送\n');
+        else if (r && r.ok) window.ShellToolsModule.appendLog(tab.logEl, '已发给 Copilot，请在右侧看修复进度\n');
+        else window.ShellToolsModule.appendLog(tab.logEl, '自动发送失败，可手动粘贴日志\n');
       } catch (e) {
-        window.ShellToolsModule.appendLog(
-          logEl,
-          '自动发送失败：' + (e instanceof Error ? e.message : String(e)) + '\n',
-        );
+        window.ShellToolsModule.appendLog(tab.logEl, '自动发送失败：' + (e instanceof Error ? e.message : String(e)) + '\n');
       } finally {
-        reportingFix = false;
+        tab.reportingFix = false;
       }
     }
 
-    function mergeFieldDefaults(nextPanel) {
+    function mergeFieldDefaults(tab, nextPanel) {
       for (const sec of nextPanel.sections || []) {
         for (const field of sec.fields || []) {
-          if (Object.prototype.hasOwnProperty.call(fieldState, field.id)) continue;
-          if (field.type === 'toggle') fieldState[field.id] = Boolean(field.default);
-          else if (field.default != null) fieldState[field.id] = field.default;
-          else if (field.type === 'path' || field.type === 'text' || field.type === 'select') fieldState[field.id] = '';
+          if (Object.prototype.hasOwnProperty.call(tab.fieldState, field.id)) continue;
+          if (field.type === 'toggle') tab.fieldState[field.id] = Boolean(field.default);
+          else if (field.default != null) tab.fieldState[field.id] = field.default;
+          else if (field.type === 'path' || field.type === 'text' || field.type === 'select') tab.fieldState[field.id] = '';
         }
       }
-      // Drop state for removed fields
       const ids = new Set();
       for (const sec of nextPanel.sections || []) {
         for (const field of sec.fields || []) ids.add(field.id);
       }
-      for (const key of Object.keys(fieldState)) {
-        if (!ids.has(key)) delete fieldState[key];
+      for (const key of Object.keys(tab.fieldState)) {
+        if (!ids.has(key)) delete tab.fieldState[key];
       }
     }
 
-    function bindActions() {
-      const canPickPath = permissions.includes('path.pick') && typeof api.pickPath === 'function';
+    function bindActions(tab) {
+      const canPickPath = tab.permissions.includes('path.pick') && typeof api.pickPath === 'function';
       const canOpenPath = typeof api.openFolderPath === 'function';
-      const timeoutMs = runTimeoutMs(tool);
+      const timeoutMs = runTimeoutMs(tab.tool);
 
       window.ShellToolsModule.renderPanelFields(
-        $('toolModuleBody'),
-        panel,
-        fieldState,
+        tab.bodyEl,
+        tab.panelSpec,
+        tab.fieldState,
         { pickPath: canPickPath ? (opts) => api.pickPath(opts) : undefined },
-        (next) => {
-          Object.assign(fieldState, next);
-        },
+        (next) => Object.assign(tab.fieldState, next),
       );
-      window.ShellToolsModule.renderActions(actionsEl, panel, async (act) => {
-        if (running) return;
+
+      window.ShellToolsModule.renderActions(tab.actionsEl, tab.panelSpec, async (act) => {
+        if (tab.running) return;
         if (act.kind === 'openPath') {
-          const pathVal = firstPathFieldValue(panel, fieldState);
+          const pathVal = firstPathFieldValue(tab.panelSpec, tab.fieldState);
           if (!pathVal) {
-            window.ShellToolsModule.appendLog(logEl, '请先选择路径\n');
+            window.ShellToolsModule.appendLog(tab.logEl, '请先选择路径\n');
             return;
           }
           if (!canOpenPath) {
-            window.ShellToolsModule.appendLog(logEl, '当前环境不支持打开路径\n');
+            window.ShellToolsModule.appendLog(tab.logEl, '当前环境不支持打开路径\n');
             return;
           }
           try {
             const openR = await api.openFolderPath(pathVal);
-            if (!openR || !openR.ok) {
-              window.ShellToolsModule.appendLog(logEl, '无法打开路径\n');
-            }
+            if (!openR || !openR.ok) window.ShellToolsModule.appendLog(tab.logEl, '无法打开路径\n');
           } catch (e) {
-            window.ShellToolsModule.appendLog(
-              logEl,
-              '打开失败：' + (e instanceof Error ? e.message : String(e)) + '\n',
-            );
+            window.ShellToolsModule.appendLog(tab.logEl, '打开失败：' + (e instanceof Error ? e.message : String(e)) + '\n');
           }
           return;
         }
-        if (act.kind === 'open_in_host') {
-          const host = String(act.host || 'maya').trim().toLowerCase() || 'maya';
-          setActionsBusy(true);
-          window.ShellToolsModule.clearLog(logEl);
-          window.ShellToolsModule.appendLog(logEl, '正在注入 ' + host + '…\n');
-          try {
-            const mayaHost =
-              typeof fieldState.mayaHost === 'string' && fieldState.mayaHost.trim()
-                ? fieldState.mayaHost.trim()
-                : undefined;
-            const mayaPortRaw =
-              typeof fieldState.mayaPort === 'string' && fieldState.mayaPort.trim()
-                ? fieldState.mayaPort.trim()
-                : undefined;
-            const openR = await api.api(
-              'POST',
-              '/v1/shell-tools/' + encodeURIComponent(toolId) + '/open-in-host',
-              {
-                host: host,
-                mayaHost: mayaHost,
-                mayaPort: mayaPortRaw,
-              },
-              { timeoutMs: Math.max(timeoutMs, 90000) },
-            );
-            if (!openR.ok) {
-              const err = openR.json && openR.json.error ? openR.json.error : '';
-              const msg = openR.json && openR.json.message ? openR.json.message : '';
-              window.ShellToolsModule.appendLog(
-                logEl,
-                '失败：' + formatError(err, msg) + '\n',
-              );
-              void autoSendFailureToCopilot({
-                actionId: act.id,
-                error: err,
-                message: msg,
-                params: fieldState,
-              });
-              return;
-            }
-            const j = openR.json || {};
-            if (j.message) window.ShellToolsModule.appendLog(logEl, j.message + '\n');
-            if (j.stdout) window.ShellToolsModule.appendLog(logEl, j.stdout + (j.stdout.endsWith('\n') ? '' : '\n'));
-            window.ShellToolsModule.appendLog(logEl, '完成\n');
-          } finally {
-            setActionsBusy(false);
-          }
-          return;
-        }
-        if (act.kind !== 'run') return;
-        setActionsBusy(true);
-        window.ShellToolsModule.clearLog(logEl);
-        window.ShellToolsModule.appendLog(logEl, '运行中…\n');
+
+        if (act.kind !== 'run' && act.kind !== 'open_in_host') return;
+        setActionsBusy(tab, true);
+        window.ShellToolsModule.clearLog(tab.logEl);
+        window.ShellToolsModule.appendLog(tab.logEl, (act.kind === 'open_in_host' ? '正在注入…' : '运行中…') + '\n');
         try {
-          const runR = await api.api(
-            'POST',
-            '/v1/shell-tools/' + encodeURIComponent(toolId) + '/run',
-            {
-              actionId: act.id,
-              params: fieldState,
-            },
-            { timeoutMs },
-          );
+          const path =
+            act.kind === 'open_in_host'
+              ? '/v1/shell-tools/' + encodeURIComponent(tab.toolId) + '/open-in-host'
+              : '/v1/shell-tools/' + encodeURIComponent(tab.toolId) + '/run';
+          const body =
+            act.kind === 'open_in_host'
+              ? {
+                  host: String(act.host || 'maya').trim().toLowerCase() || 'maya',
+                  mayaHost: typeof tab.fieldState.mayaHost === 'string' ? tab.fieldState.mayaHost.trim() : undefined,
+                  mayaPort: typeof tab.fieldState.mayaPort === 'string' ? tab.fieldState.mayaPort.trim() : undefined,
+                }
+              : { actionId: act.id, params: tab.fieldState };
+          const runR = await api.api('POST', path, body, { timeoutMs: act.kind === 'open_in_host' ? Math.max(timeoutMs, 90000) : timeoutMs });
           if (!runR.ok) {
             const err = runR.json && runR.json.error ? runR.json.error : '';
             const msg = runR.json && runR.json.message ? runR.json.message : '';
-            window.ShellToolsModule.appendLog(logEl, '失败：' + formatError(err, msg) + '\n');
-            void autoSendFailureToCopilot({
+            window.ShellToolsModule.appendLog(tab.logEl, '失败：' + formatError(err, msg) + '\n');
+            void autoSendFailureToCopilot(tab, {
               actionId: act.id,
               error: err,
               message: msg,
-              params: fieldState,
+              params: tab.fieldState,
               stdout: runR.json && runR.json.stdout,
               stderr: runR.json && runR.json.stderr,
               exitCode: runR.json && runR.json.exitCode,
@@ -316,63 +373,57 @@
             return;
           }
           const j = runR.json || {};
-          if (j.stdout) window.ShellToolsModule.appendLog(logEl, j.stdout + (j.stdout.endsWith('\n') ? '' : '\n'));
-          if (j.stderr) window.ShellToolsModule.appendLog(logEl, j.stderr + (j.stderr.endsWith('\n') ? '' : '\n'));
+          if (j.message) window.ShellToolsModule.appendLog(tab.logEl, j.message + '\n');
+          if (j.stdout) window.ShellToolsModule.appendLog(tab.logEl, j.stdout + (j.stdout.endsWith('\n') ? '' : '\n'));
+          if (j.stderr) window.ShellToolsModule.appendLog(tab.logEl, j.stderr + (j.stderr.endsWith('\n') ? '' : '\n'));
           if (j.ok === false) {
-            window.ShellToolsModule.appendLog(logEl, '退出码 ' + j.exitCode + '\n');
-            void autoSendFailureToCopilot({
+            window.ShellToolsModule.appendLog(tab.logEl, '退出码 ' + j.exitCode + '\n');
+            void autoSendFailureToCopilot(tab, {
               actionId: act.id,
               error: 'non_zero_exit',
               message: '脚本退出码非 0',
-              params: fieldState,
+              params: tab.fieldState,
               stdout: j.stdout,
               stderr: j.stderr,
               exitCode: j.exitCode,
             });
-          } else window.ShellToolsModule.appendLog(logEl, '完成\n');
+          } else {
+            window.ShellToolsModule.appendLog(tab.logEl, '完成\n');
+          }
         } finally {
-          setActionsBusy(false);
+          setActionsBusy(tab, false);
         }
       });
     }
 
-    function applyPayload(json) {
-      panel = json.panel;
-      tool = json.tool || {};
-      permissions = Array.isArray(json.permissions) ? json.permissions : [];
-      contentRev = typeof json.contentRev === 'number' ? json.contentRev : 0;
-      toolOrigin = json.origin || null;
-      const title = panel.title || tool.name || toolId;
-      document.title = title;
-      $('titlebarToolName').textContent = title;
-      const verEl = $('toolModuleVersion');
-      if (verEl) {
-        const v = tool.semver ? 'v' + tool.semver : '';
-        verEl.textContent = v;
-        if (v) verEl.removeAttribute('hidden');
-        else verEl.setAttribute('hidden', '');
-      }
-      $('toolLoadError').classList.add('hidden');
-      mergeFieldDefaults(panel);
-      bindActions();
-      if (json.draftError) {
-        setDraftBanner('草稿无效，仍显示上一可用版：' + String(json.draftError));
-      } else if (json.origin === 'authored' || json.origin === 'import') {
-        setDraftBanner(running ? '已保存；新脚本将用于下次运行' : '');
-      } else {
-        setDraftBanner('');
-      }
-      enableHotPoll = json.origin === 'authored' || json.origin === 'import' || Boolean(json.watching);
+    function applyPayload(tab, json) {
+      tab.panelSpec = json.panel;
+      tab.tool = json.tool || {};
+      tab.permissions = Array.isArray(json.permissions) ? json.permissions : [];
+      tab.contentRev = typeof json.contentRev === 'number' ? json.contentRev : 0;
+      tab.toolOrigin = json.origin || null;
+      tab.title = tab.panelSpec.title || tab.tool.name || tab.toolId;
+      tab.navName.textContent = tab.title;
+      tab.navIcon.textContent = shortIcon(tab.title, tab.toolId);
+      tab.navBtn.title = tab.title;
+      tab.navBtn.setAttribute('aria-label', tab.title);
+      tab.loadError.classList.add('hidden');
+      mergeFieldDefaults(tab, tab.panelSpec);
+      bindActions(tab);
+      if (json.draftError) setDraftBanner(tab, '草稿无效，仍显示上一可用版：' + String(json.draftError));
+      else if (json.origin === 'authored' || json.origin === 'import') setDraftBanner(tab, tab.running ? '已保存；新脚本将用于下次运行' : '');
+      else setDraftBanner(tab, '');
+      tab.enableHotPoll = json.origin === 'authored' || json.origin === 'import' || Boolean(json.watching);
+      if (activeToolId === tab.toolId) setWorkspaceTitle(tab);
     }
 
-    async function loadTool(isHot) {
-      const r = await api.api('GET', '/v1/shell-tools/' + encodeURIComponent(toolId), null);
+    async function loadTool(tab, isHot) {
+      const r = await api.api('GET', '/v1/shell-tools/' + encodeURIComponent(tab.toolId), null);
       if (!r.ok || !r.json || !r.json.panel) {
         if (!isHot) {
           const err = r.json && r.json.error ? r.json.error : '';
-          $('titlebarToolName').textContent = '无法加载';
-          $('toolLoadError').textContent = formatError(err, r.json && r.json.message);
-          $('toolLoadError').classList.remove('hidden');
+          tab.loadError.textContent = formatError(err, r.json && r.json.message);
+          tab.loadError.classList.remove('hidden');
         }
         return false;
       }
@@ -380,36 +431,29 @@
       const draftErr = r.json.draftError || null;
       if (isHot) {
         if (draftErr) {
-          setDraftBanner('草稿无效，仍显示上一可用版：' + String(draftErr));
+          setDraftBanner(tab, '草稿无效，仍显示上一可用版：' + String(draftErr));
           return true;
         }
-        if (nextRev === contentRev) return true;
-        if (running) {
-          setDraftBanner('已保存；新脚本将用于下次运行（UI 将在空闲时刷新）');
-          // Still refresh UI when not mid-run field edits — but skip full rebind while running
+        if (nextRev === tab.contentRev) return true;
+        if (tab.running) {
+          setDraftBanner(tab, '已保存；新脚本将用于下次运行，空闲时刷新');
           return true;
         }
       }
-      applyPayload(r.json);
+      applyPayload(tab, r.json);
       return true;
     }
 
-    const ok = await loadTool(false);
-    if (!ok) return;
-
-    async function pollHot() {
-      if (!enableHotPoll) return;
+    async function pollHot(tab) {
+      if (!tab.enableHotPoll) return;
       try {
-        const hot = await api.api('GET', '/v1/shell-tools/authored/' + encodeURIComponent(toolId) + '/hot', null);
+        const hot = await api.api('GET', '/v1/shell-tools/authored/' + encodeURIComponent(tab.toolId) + '/hot', null);
         if (hot.ok && hot.json) {
-          if (hot.json.draftError) {
-            setDraftBanner('草稿无效，仍显示上一可用版：' + String(hot.json.draftError));
-          } else if (typeof hot.json.contentRev === 'number' && hot.json.contentRev !== contentRev) {
-            await loadTool(true);
-          } else if (!hot.json.draftError && !running) {
-            // clear transient banner
-            const el = $('toolDraftBanner');
-            if (el && el.textContent && el.textContent.indexOf('下次运行') >= 0) setDraftBanner('');
+          if (hot.json.draftError) setDraftBanner(tab, '草稿无效，仍显示上一可用版：' + String(hot.json.draftError));
+          else if (typeof hot.json.contentRev === 'number' && hot.json.contentRev !== tab.contentRev) await loadTool(tab, true);
+          else if (!hot.json.draftError && !tab.running) {
+            const el = tab.panel.querySelector('.tool-draft-banner');
+            if (el && el.textContent && el.textContent.indexOf('下次运行') >= 0) setDraftBanner(tab, '');
           }
         }
       } catch {
@@ -417,12 +461,37 @@
       }
     }
 
-    if (enableHotPoll) {
-      hotPollTimer = setInterval(() => void pollHot(), HOT_POLL_MS);
-      window.addEventListener('beforeunload', () => {
-        if (hotPollTimer) clearInterval(hotPollTimer);
-      });
+    async function addTool(toolIdRaw) {
+      const toolId = String(toolIdRaw || '').trim();
+      if (!/^[a-z][a-z0-9-]{1,63}$/.test(toolId)) return;
+      let tab = tabs.get(toolId);
+      if (tab) {
+        activateTool(toolId, true);
+        return;
+      }
+      tab = createTabShell(toolId);
+      tabs.set(toolId, tab);
+      activateTool(toolId, true);
+      await loadTool(tab, false);
+      if (tab.enableHotPoll && !tab.hotPollTimer) {
+        tab.hotPollTimer = setInterval(() => void pollHot(tab), HOT_POLL_MS);
+      }
     }
+
+    window.addEventListener('beforeunload', () => {
+      for (const tab of tabs.values()) {
+        if (tab.hotPollTimer) clearInterval(tab.hotPollTimer);
+      }
+    });
+
+    if (typeof api.onOpenTool === 'function') {
+      api.onOpenTool((payload) => void addTool(payload && payload.toolId));
+    }
+    if (typeof api.onCloseTool === 'function') {
+      api.onCloseTool((payload) => closeToolTab(payload && payload.toolId));
+    }
+
+    for (const id of toolIdsFromQuery()) await addTool(id);
   }
 
   void init();

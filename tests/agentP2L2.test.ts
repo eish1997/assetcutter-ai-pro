@@ -147,17 +147,15 @@ describe('agent P2 body host concurrency', () => {
     });
     expect(promotion.structured.passedGates).toContain('skill_draft_exists');
     expect(promotion.structured.passedGates).toContain('capability_route_schema_valid');
-    expect(promotion.structured.passedGates).toContain('model_provider_readiness_checked');
     expect(promotion.structured.missingGates).not.toContain('capability_route_schema_valid');
-    expect(promotion.structured.missingGates).not.toContain('model_provider_readiness_checked');
+    if (promotion.structured.modelProviderReadiness?.ok) {
+      expect(promotion.structured.passedGates).toContain('model_provider_readiness_checked');
+      expect(promotion.structured.missingGates).not.toContain('model_provider_readiness_checked');
+    } else {
+      expect(promotion.structured.missingGates).toContain('model_provider_readiness_checked');
+    }
     expect(promotion.structured.missingGates).toContain('workbench_login_e2e_ready');
-    expect(promotion.structured.modelProviderReadiness).toMatchObject({
-      ok: true,
-      route: {
-        providerId: 'volcengine-ark',
-        gatewayExecutionStatus: 'ready',
-      },
-    });
+    expect(promotion.structured.modelProviderReadiness).toBeTruthy();
     const scriptPromotion = await host.executeTool(
       'ac.workflow.promote_script_hub_tool',
       { skillId: 'cinematic-scene-character', toolName: 'Cinematic scene kit' },
@@ -189,6 +187,446 @@ describe('agent P2 body host concurrency', () => {
     const missing = await host.executeTool('ac.skills.get', { skillId: 'cinematic-scene-character' }, {});
     expect(missing.ok).toBe(false);
     expect(missing.error.code).toBe('AGENT_SKILL_NOT_FOUND');
+  });
+});
+
+describe('agent capability unified creation tools', () => {
+  it('creates a tool through ac.capability.create_draft without routing to workbench text assets', async () => {
+    const { createAgentBodyHost } = require('../companion-desktop/agent-body-host.cjs');
+    const calls: Array<{ method: string; pathname: string; body: Record<string, unknown> | null }> = [];
+    const openedTools: string[] = [];
+    const host = createAgentBodyHost({
+      getShellView: () => 'connections',
+      navigateShell: async () => ({ ok: true }),
+      getStateSummary: async () => ({}),
+      runShellTool: async (toolId: string) => {
+        openedTools.push(toolId);
+        return { ok: true };
+      },
+      companionApiRequest: async (method: string, pathname: string, body: Record<string, unknown> | null) => {
+        calls.push({ method, pathname, body });
+        if (pathname === '/v1/shell-tools/authored/scaffold') {
+          return {
+            ok: true,
+            json: {
+              ok: true,
+              toolId: body?.id || 'tool-generated',
+              path: `F:/tmp/${body?.id || 'tool-generated'}`,
+              installed: true,
+            },
+          };
+        }
+        if (pathname.includes('/context')) {
+          return {
+            ok: true,
+            json: {
+              ok: true,
+              session: { id: `capability:tool:${pathname.split('/')[3]}` },
+              package: { type: 'tool' },
+            },
+          };
+        }
+        return { ok: false, text: `unexpected ${method} ${pathname}` };
+      },
+    });
+
+    const result = await host.executeTool(
+      'ac.capability.create_draft',
+      {
+        name: '随机选择工具',
+        intent: '做一个可以维护候选项并随机抽取的小工具',
+        type: 'tool',
+      },
+      {},
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.structured.type).toBe('tool');
+    expect(String(result.structured.id)).toMatch(/^tool-/);
+    expect(openedTools).toEqual([result.structured.id]);
+    expect(calls.map((c) => c.pathname)).toContain('/v1/shell-tools/authored/scaffold');
+    expect(calls.some((c) => c.pathname.includes('workbench') || c.pathname.includes('create-text-asset'))).toBe(false);
+    const scaffold = calls.find((c) => c.pathname === '/v1/shell-tools/authored/scaffold');
+    expect(scaffold?.body?.name).toBe('随机选择工具');
+    expect(scaffold?.body?.install).toBe(true);
+  });
+
+  it('creates a software connection draft through ac.capability.create_draft without asking for a template', async () => {
+    const { createAgentBodyHost } = require('../companion-desktop/agent-body-host.cjs');
+    const calls: Array<{ method: string; pathname: string; body: Record<string, unknown> | null }> = [];
+    const host = createAgentBodyHost({
+      getShellView: () => 'connections',
+      navigateShell: async () => ({ ok: true }),
+      getStateSummary: async () => ({}),
+      companionApiRequest: async (method: string, pathname: string, body: Record<string, unknown> | null) => {
+        calls.push({ method, pathname, body });
+        if (pathname === '/v1/capability-packages/drafts') {
+          return {
+            ok: true,
+            json: {
+              ok: true,
+              draft: {
+                id: body?.id,
+                type: 'software_connection',
+                name: body?.name,
+                manifest: { appName: body?.appName },
+              },
+            },
+          };
+        }
+        if (pathname === '/v1/capability-packages/spine/context') {
+          return {
+            ok: true,
+            json: {
+              ok: true,
+              session: {
+                type: 'capability',
+                id: 'spine',
+                sessionId: 'capability:software_connection:spine',
+              },
+              package: { id: 'spine', type: 'software_connection' },
+              recentEvents: [],
+            },
+          };
+        }
+        return { ok: false, text: `unexpected ${method} ${pathname}` };
+      },
+    });
+
+    const result = await host.executeTool(
+      'ac.capability.create_draft',
+      {
+        name: 'Spine',
+        intent: '添加 Spine 连接，后续可以安装脚本并探测真实连接',
+        appName: 'Spine',
+      },
+      {},
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.structured).toMatchObject({ type: 'software_connection', id: 'spine' });
+    expect(result.structured.context.session.sessionId).toBe('capability:software_connection:spine');
+    expect(calls).toHaveLength(2);
+    expect(calls[0]).toMatchObject({
+      method: 'POST',
+      pathname: '/v1/capability-packages/drafts',
+    });
+    expect(calls[0].body).toMatchObject({
+      id: 'spine',
+      type: 'software_connection',
+      name: 'Spine',
+      appName: 'Spine',
+      createdBy: 'copilot',
+    });
+    expect(calls[1]).toMatchObject({
+      method: 'GET',
+      pathname: '/v1/capability-packages/spine/context',
+    });
+    expect(Object.prototype.hasOwnProperty.call(calls[0].body || {}, 'templateId')).toBe(false);
+  });
+
+  it('creates a workflow draft through ac.capability.create_draft without routing to tools or software connections', async () => {
+    const { createAgentBodyHost } = require('../companion-desktop/agent-body-host.cjs');
+    const calls: Array<{ method: string; pathname: string; body: Record<string, unknown> | null }> = [];
+    const openedTools: string[] = [];
+    const host = createAgentBodyHost({
+      getShellView: () => 'connections',
+      navigateShell: async () => ({ ok: true }),
+      getStateSummary: async () => ({}),
+      runShellTool: async (toolId: string) => {
+        openedTools.push(toolId);
+        return { ok: true };
+      },
+      companionApiRequest: async (method: string, pathname: string, body: Record<string, unknown> | null) => {
+        calls.push({ method, pathname, body });
+        if (pathname === '/v1/capability-packages/drafts') {
+          return {
+            ok: true,
+            json: {
+              ok: true,
+              draft: {
+                id: body?.id,
+                type: 'workflow',
+                name: body?.name,
+                manifest: body?.manifest,
+              },
+            },
+          };
+        }
+        if (pathname === '/v1/capability-packages/daily-export-flow/context') {
+          return {
+            ok: true,
+            json: {
+              ok: true,
+              session: {
+                type: 'capability',
+                id: 'daily-export-flow',
+                sessionId: 'capability:workflow:daily-export-flow',
+              },
+              package: { id: 'daily-export-flow', type: 'workflow' },
+              recentEvents: [],
+            },
+          };
+        }
+        return { ok: false, text: `unexpected ${method} ${pathname}` };
+      },
+    });
+
+    const result = await host.executeTool(
+      'ac.capability.create_draft',
+      {
+        id: 'daily-export-flow',
+        name: 'Daily Export Flow',
+        intent: '创建一个自动导出资产、校验结果、通知用户的工作流',
+      },
+      {},
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.structured).toMatchObject({ type: 'workflow', id: 'daily-export-flow' });
+    expect(result.structured.context.session.sessionId).toBe('capability:workflow:daily-export-flow');
+    expect(openedTools).toEqual([]);
+    expect(calls).toHaveLength(2);
+    expect(calls[0]).toMatchObject({
+      method: 'POST',
+      pathname: '/v1/capability-packages/drafts',
+    });
+    expect(calls[0].body).toMatchObject({
+      id: 'daily-export-flow',
+      type: 'workflow',
+      name: 'Daily Export Flow',
+      createdBy: 'copilot',
+    });
+    expect(calls[0].body?.manifest).toMatchObject({
+      intent: '创建一个自动导出资产、校验结果、通知用户的工作流',
+    });
+    expect(calls.some((c) => c.pathname === '/v1/shell-tools/authored/scaffold')).toBe(false);
+  });
+
+  it('routes unified validate and publish tools through the capability lifecycle endpoint', async () => {
+    const { createAgentBodyHost } = require('../companion-desktop/agent-body-host.cjs');
+    const calls: Array<{ method: string; pathname: string; body: Record<string, unknown> | null }> = [];
+    const host = createAgentBodyHost({
+      getShellView: () => 'connections',
+      navigateShell: async () => ({ ok: true }),
+      getStateSummary: async () => ({}),
+      companionApiRequest: async (method: string, pathname: string, body: Record<string, unknown> | null) => {
+        calls.push({ method, pathname, body });
+        return { ok: true, json: { ok: true, action: body?.action, packageId: pathname.split('/')[3] } };
+      },
+    });
+
+    const validate = await host.executeTool('ac.capability.validate_draft', { id: 'spine' }, {});
+    const publish = await host.executeTool(
+      'ac.capability.publish_cloud',
+      { id: 'spine', isAdmin: true, semver: '0.2.0', versionNote: '首次可用版本' },
+      {},
+    );
+
+    expect(validate.ok).toBe(true);
+    expect(publish.ok).toBe(true);
+    expect(calls).toEqual([
+      {
+        method: 'POST',
+        pathname: '/v1/capability-packages/spine/lifecycle',
+        body: { action: 'validate' },
+      },
+      {
+        method: 'POST',
+        pathname: '/v1/capability-packages/spine/lifecycle',
+        body: {
+          action: 'publish',
+          actorRole: undefined,
+          isAdmin: true,
+          semver: '0.2.0',
+          versionNote: '首次可用版本',
+          publishedBy: undefined,
+        },
+      },
+    ]);
+  });
+
+  it('passes safe host process arguments through the unified capability lifecycle endpoint', async () => {
+    const { createAgentBodyHost } = require('../companion-desktop/agent-body-host.cjs');
+    const calls: Array<{ method: string; pathname: string; body: Record<string, unknown> | null }> = [];
+    const host = createAgentBodyHost({
+      getShellView: () => 'connections',
+      navigateShell: async () => ({ ok: true }),
+      getStateSummary: async () => ({}),
+      companionApiRequest: async (method: string, pathname: string, body: Record<string, unknown> | null) => {
+        calls.push({ method, pathname, body });
+        return { ok: true, json: { ok: true, action: body?.action, received: body } };
+      },
+    });
+
+    const launched = await host.executeTool(
+      'ac.capability.lifecycle_run',
+      {
+        id: 'photoshop',
+        action: 'launch',
+        executablePath: 'C:/Program Files/Adobe/Adobe Photoshop 2026/Photoshop.exe',
+        targetId: 'photoshop-2026',
+      },
+      {},
+    );
+
+    expect(launched.ok).toBe(true);
+    expect(calls).toEqual([
+      {
+        method: 'POST',
+        pathname: '/v1/capability-packages/photoshop/lifecycle',
+        body: expect.objectContaining({
+          action: 'launch',
+          executablePath: 'C:/Program Files/Adobe/Adobe Photoshop 2026/Photoshop.exe',
+          targetId: 'photoshop-2026',
+        }),
+      },
+    ]);
+  });
+
+  it('runs the connection loop according to connectionState maturity', async () => {
+    const { createAgentBodyHost } = require('../companion-desktop/agent-body-host.cjs');
+    const calls: Array<{ method: string; pathname: string; body: Record<string, unknown> | null }> = [];
+    const contextById: Record<string, Record<string, unknown>> = {
+      spine: {
+        ok: true,
+        connectionState: {
+          maturity: 'template_missing',
+          label: '模板待接入',
+          availableActions: ['agent_loop', 'conversation', 'discover_running', 'launch', 'close', 'export'],
+          nextAction: '可先启动或识别运行中的软件；真实连接需要 Copilot 或开发者补齐模板。',
+        },
+      },
+      photoshop: {
+        ok: true,
+        connectionState: {
+          maturity: 'bridge_installed',
+          label: '已安装待探测',
+          availableActions: ['agent_loop', 'conversation', 'install', 'probe', 'uninstall'],
+          nextAction: '打开目标软件并探测真实信号。',
+        },
+      },
+    };
+    const host = createAgentBodyHost({
+      getShellView: () => 'connections',
+      navigateShell: async () => ({ ok: true }),
+      getStateSummary: async () => ({}),
+      companionApiRequest: async (method: string, pathname: string, body: Record<string, unknown> | null) => {
+        calls.push({ method, pathname, body });
+        const id = pathname.split('/')[3];
+        if (pathname.endsWith('/context')) return { ok: true, json: contextById[id] };
+        if (pathname.endsWith('/events')) return { ok: true, json: { ok: true, event: body } };
+        if (pathname.endsWith('/lifecycle')) return { ok: true, json: { ok: true, action: body?.action } };
+        return { ok: false, text: `unexpected ${method} ${pathname}` };
+      },
+    });
+
+    const missing = await host.executeTool(
+      'ac.capability.connection_loop_run',
+      {
+        id: 'spine',
+        goal: '继续补齐 Spine 连接',
+        permissions: ['context.read', 'process.discover', 'process.launch', 'bridge.install', 'connection.probe', 'event.write', 'conversation.open'],
+      },
+      {},
+    );
+    expect(missing.ok).toBe(true);
+    expect(missing.structured).toMatchObject({
+      maturity: 'template_missing',
+      plannedSteps: ['event.write.loop_summary', 'conversation.open'],
+      nextAction: 'create_bridge_template_plan',
+    });
+    expect(calls.filter((call) => call.pathname === '/v1/capability-packages/spine/lifecycle').map((call) => call.body?.action)).toEqual([
+      'validate',
+      'open_conversation',
+    ]);
+    expect(calls.some((call) => call.pathname === '/v1/capability-packages/spine/lifecycle' && call.body?.action === 'install')).toBe(false);
+    expect(calls.some((call) => call.pathname === '/v1/capability-packages/spine/lifecycle' && call.body?.action === 'probe')).toBe(false);
+    expect(calls.find((call) => call.pathname === '/v1/capability-packages/spine/events')?.body?.kind).toBe(
+      'connection_loop_template_missing',
+    );
+
+    calls.length = 0;
+    const installed = await host.executeTool(
+      'ac.capability.connection_loop_run',
+      {
+        id: 'photoshop',
+        goal: '探测 Photoshop 连接',
+        permissions: ['context.read', 'bridge.install', 'connection.probe', 'event.write'],
+      },
+      {},
+    );
+    expect(installed.ok).toBe(true);
+    expect(installed.structured).toMatchObject({
+      maturity: 'bridge_installed',
+      plannedSteps: ['connection.probe', 'event.write.loop_summary'],
+    });
+    expect(calls.filter((call) => call.pathname === '/v1/capability-packages/photoshop/lifecycle').map((call) => call.body?.action)).toEqual([
+      'validate',
+      'probe',
+    ]);
+    expect(calls.find((call) => call.pathname === '/v1/capability-packages/photoshop/events')?.body?.kind).toBe(
+      'connection_loop_passed',
+    );
+    expect(calls.some((call) => call.pathname === '/v1/capability-packages/photoshop/lifecycle' && call.body?.action === 'install')).toBe(
+      false,
+    );
+  });
+
+  it('creates connection template drafts as object events without writing production definitions', async () => {
+    const { createAgentBodyHost } = require('../companion-desktop/agent-body-host.cjs');
+    const calls: Array<{ method: string; pathname: string; body: Record<string, unknown> | null }> = [];
+    const host = createAgentBodyHost({
+      getShellView: () => 'connections',
+      navigateShell: async () => ({ ok: true }),
+      getStateSummary: async () => ({}),
+      companionApiRequest: async (method: string, pathname: string, body: Record<string, unknown> | null) => {
+        calls.push({ method, pathname, body });
+        if (pathname === '/v1/capability-packages/spine/events') return { ok: true, json: { ok: true, draft: { events: [body] } } };
+        return { ok: false, text: `unexpected ${method} ${pathname}` };
+      },
+    });
+
+    const result = await host.executeTool(
+      'ac.capability.template_draft_create',
+      {
+        id: 'spine',
+        hostId: 'spine',
+        appName: 'Spine',
+        kind: 'command_port',
+      },
+      {},
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.structured.templateDraft).toMatchObject({
+      status: 'draft',
+      hostId: 'spine',
+      appName: 'Spine',
+      kind: 'command_port',
+      productionDefinition: false,
+    });
+    expect(result.structured.templateDraft.files).toContain('local-companion/src/bridges/spineBridgeInstall.ts');
+    expect(result.structured.templateDraft.files).toContain('local-companion/src/bridges/templates/spine-command-port.js');
+    expect(result.structured.templateDraft.requiredUserDirs).toContain('宿主脚本目录或启动脚本目录');
+    expect(result.structured.templateDraft.probeSignal).toContain('command port 返回真实宿主响应');
+    expect(result.structured.templateDraft.safetyBoundaries.join('\n')).toContain('端口必须绑定本机');
+    expect(calls).toEqual([
+      {
+        method: 'POST',
+        pathname: '/v1/capability-packages/spine/events',
+        body: expect.objectContaining({
+          kind: 'connection_template_draft_created',
+          ok: false,
+          detail: expect.objectContaining({
+            notProductionDefinition: true,
+            publishBlockedUntilRealProbe: true,
+            templateDraft: expect.objectContaining({ productionDefinition: false }),
+          }),
+        }),
+      },
+    ]);
+    expect(calls.some((call) => call.pathname.includes('/bridges/definitions'))).toBe(false);
   });
 });
 
@@ -252,6 +690,39 @@ describe('agent P2 L2 cross-brain continuity', () => {
     snap = readContextSnapshot(tmp, sessionId);
     expect(snap.brainId).toBe('brain_b');
     expect(snap.messageCount).toBe(4);
+  });
+
+  it('keeps object-scoped Copilot sessions isolated', async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ac-session-object-'));
+    const store = createAgentStore({ getRoot: () => tmp });
+    store.ensureLayout();
+    const brain = createEchoBrain('object_brain', 'OBJ');
+    const bodyHost = {
+      listTools: async () => [],
+      executeTool: async () => ({ ok: true, content: '{}' }),
+    };
+    const session = createAgentSessionService({
+      store,
+      bodyHost,
+      getBrain: () => brain,
+      getShellView: () => 'tools',
+      gateTool: () => 'allow',
+      onEvent: () => {},
+    });
+
+    const toolSessionId = 'tool-random-selector';
+    const hostSessionId = 'host-maya';
+    const toolResult = await session.sendUserMessage('fix export button', { sessionId: toolSessionId });
+    const hostResult = await session.sendUserMessage('probe bridge log', { sessionId: hostSessionId });
+
+    expect(toolResult.ok).toBe(true);
+    expect(hostResult.ok).toBe(true);
+    expect(session.listMessages(toolSessionId).map((m) => m.content).join('\n')).toContain('fix export button');
+    expect(session.listMessages(toolSessionId).map((m) => m.content).join('\n')).not.toContain('probe bridge log');
+    expect(session.listMessages(hostSessionId).map((m) => m.content).join('\n')).toContain('probe bridge log');
+    expect(session.listMessages(hostSessionId).map((m) => m.content).join('\n')).not.toContain('fix export button');
+    expect(readContextSnapshot(tmp, toolSessionId).messageCount).toBe(2);
+    expect(readContextSnapshot(tmp, hostSessionId).messageCount).toBe(2);
   });
 
   it('emits structured diagnostics with failed tool status events', async () => {

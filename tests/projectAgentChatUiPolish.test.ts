@@ -150,6 +150,35 @@ describe('quick compose action fallback copy (Phase 1)', () => {
     );
   });
 
+  it('includes runtime perception in action confirmation copy', () => {
+    expect(
+      quickComposeChatActionConfirmSummary({
+        kind: 'apply',
+        confirmLevel: 'cost',
+        perception: {
+          visibleSummary: 'Project: Launch | Selected 5 assets | Maya: disconnected',
+          targetSummary: 'Project: Launch | Surface: canvas | Selected 5 assets',
+          workflowSummary: 'Plan: maya-export | 1/2 steps done',
+          externalSummary: 'Maya: disconnected | selection unknown',
+          riskSummary: 'Maya is not connected',
+          stale: true,
+        },
+      })
+    ).toBe(
+      [
+        '准备执行：',
+        '范围：Project: Launch | Surface: canvas | Selected 5 assets',
+        '影响：会执行一次付费或批量处理动作',
+        '预计：以执行时实际计费为准',
+        '可恢复：默认保留原资产，失败后保留可恢复状态',
+        'Workflow：Plan: maya-export | 1/2 steps done',
+        '外部：Maya: disconnected | selection unknown',
+        '风险：Maya is not connected',
+        '新鲜度：上下文可能已过期，执行前需要重新确认范围',
+      ].join('\n')
+    );
+  });
+
   it('does not require confirmation for ordinary reply and open_panel actions', () => {
     expect(quickComposeChatActionNeedsConfirm({ kind: 'reply' })).toBe(false);
     expect(quickComposeChatActionConfirmCopy({ kind: 'reply' })).toBeUndefined();

@@ -153,7 +153,7 @@ function createAgentSessionService(deps) {
     }
   }
 
-  async function sendUserMessage(text) {
+  async function sendUserMessage(text, options) {
     const trimmed = String(text || '').trim();
     if (!trimmed) return { ok: false, error: 'empty_message' };
     if (turnBusy) return { ok: false, error: 'turn_in_progress' };
@@ -162,7 +162,9 @@ function createAgentSessionService(deps) {
       await deps.ensureBrainReady();
     }
 
-    const sessionId = deps.store.getOrCreateDefaultSessionId();
+    const requestedSessionId =
+      options && typeof options === 'object' && options.sessionId ? String(options.sessionId).trim() : '';
+    const sessionId = requestedSessionId || deps.store.getOrCreateDefaultSessionId();
     activeSessionId = sessionId;
     const userMsg = deps.store.newMessage('user', trimmed, { brainId: getBrain().id });
     deps.store.appendMessage(sessionId, userMsg);

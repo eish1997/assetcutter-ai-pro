@@ -1,6 +1,6 @@
 'use strict';
 
-const { app, contextBridge, ipcRenderer, clipboard } = require('electron');
+const { app, contextBridge, ipcRenderer, clipboard, webUtils } = require('electron');
 
 const DEFAULT_SHELL_SITE_DEV = 'http://localhost:3000';
 const DEFAULT_SHELL_SITE_PACKAGED = 'https://assetcutter-ai-pro.vercel.app/';
@@ -15,6 +15,7 @@ function defaultShellSiteUrl() {
 
 const IPC_MS_DEFAULT = 15000;
 const IPC_MS_MAX = 600000;
+let latestDroppedFilePaths = [];
 
 function timedInvoke(channel, ...args) {
   let timeoutMs = IPC_MS_DEFAULT;
@@ -37,15 +38,62 @@ function apiTimeoutMs(opts) {
   return Number.isFinite(n) ? Math.min(Math.max(Math.floor(n), 1000), IPC_MS_MAX) : IPC_MS_DEFAULT;
 }
 
+function pathsFromDroppedFiles(files) {
+  const list = Array.from(files || []);
+  return list
+    .map((file) => {
+      try {
+        if (webUtils && typeof webUtils.getPathForFile === 'function') {
+          return webUtils.getPathForFile(file);
+        }
+      } catch {
+        /* ignore */
+      }
+      return typeof file?.path === 'string' ? file.path : '';
+    })
+    .filter(Boolean);
+}
+
+function rememberDroppedFilePaths(event) {
+  try {
+    const files = event && event.dataTransfer && event.dataTransfer.files;
+    const paths = pathsFromDroppedFiles(files);
+    if (paths.length) latestDroppedFilePaths = paths;
+  } catch {
+    /* ignore */
+  }
+}
+
+try {
+  window.addEventListener('drop', rememberDroppedFilePaths, true);
+  window.addEventListener('dragover', rememberDroppedFilePaths, true);
+} catch {
+  /* ignore */
+}
+
 contextBridge.exposeInMainWorld('companionShell', {
   api: (method, pathname, body, opts) =>
     timedInvoke('companion-api', method, pathname, body, opts || {}, apiTimeoutMs(opts)),
   fetchHostBundleCatalog: () => timedInvoke('shell-fetch-host-bundle-catalog'),
   fetchShellToolCatalog: () => timedInvoke('shell-fetch-shell-tool-catalog'),
   pickPath: (opts) => timedInvoke('shell-pick-path', opts || {}),
+  savePath: (opts) => timedInvoke('shell-save-path', opts || {}),
+  saveTextFile: (opts) => timedInvoke('shell-save-text-file', opts || {}, 120000),
+  readTextFile: (opts) => timedInvoke('shell-read-text-file', opts || {}, 120000),
+  droppedFilePaths: (files) => {
+    const paths = pathsFromDroppedFiles(files);
+    return paths.length ? paths : latestDroppedFilePaths.slice();
+  },
+  resolveDroppedConnectionPath: (payload) => timedInvoke('shell-resolve-dropped-connection-path', payload || {}),
   openToolWindow: (toolId) => timedInvoke('shell-open-tool-window', toolId),
   closeToolWindow: (toolId) => timedInvoke('shell-close-tool-window', toolId),
   submitShellToolForReview: (toolId) => timedInvoke('shell-submit-shell-tool-review', toolId, 600000),
+  publishShellToolToCloud: (toolId) => timedInvoke('shell-publish-shell-tool-cloud', toolId, 600000),
+  syncHostBridgesFromCloud: () => timedInvoke('shell-sync-host-bridges-cloud', 120000),
+  publishHostBridgeToCloud: (payload) => timedInvoke('shell-publish-host-bridge-cloud', payload || {}, 600000),
+  activateHostBridgeCloudVersion: (payload) => timedInvoke('shell-activate-host-bridge-cloud-version', payload || {}, 120000),
+  resolveCompanionArtifactDownload: (artifactId) =>
+    timedInvoke('shell-resolve-companion-artifact-download', artifactId, 120000),
   builtinExampleAvailable: () => timedInvoke('shell-builtin-example-available'),
   samLocalDesktopState: () => timedInvoke('shell-sam-local-desktop-state'),
   samLocalBootstrapRun: () => timedInvoke('shell-sam-local-bootstrap-run'),
@@ -184,6 +232,16 @@ contextBridge.exposeInMainWorld('companionShell', {
       }
     });
   },
+  onOpenCopilotObjectSession: (handler) => {
+    if (typeof handler !== 'function') return;
+    ipcRenderer.on('shell-open-copilot-object-session', (_evt, payload) => {
+      try {
+        handler(payload || {});
+      } catch {
+        /* ignore */
+      }
+    });
+  },
   onCopilotRefreshOnboarding: (handler) => {
     if (typeof handler !== 'function') return;
     ipcRenderer.on('shell-copilot-refresh-onboarding', () => {
@@ -197,7 +255,7 @@ contextBridge.exposeInMainWorld('companionShell', {
   agentSession: {
     listMessages: (sessionId) => timedInvoke('agent-session-list-messages', sessionId),
     clearHistory: (sessionId) => timedInvoke('agent-session-clear-history', sessionId),
-    send: (text) => timedInvoke('agent-session-send', text, 600000),
+    send: (text, sessionId) => timedInvoke('agent-session-send', { text, sessionId }, 600000),
     abort: () => timedInvoke('agent-session-abort'),
     confirm: (confirmId, approved) => timedInvoke('agent-session-confirm', confirmId, approved),
     probeBrain: () => timedInvoke('agent-session-probe-brain'),

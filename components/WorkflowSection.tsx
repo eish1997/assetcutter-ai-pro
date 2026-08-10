@@ -525,6 +525,21 @@ import {
 import { buildProjectAgentIntent } from '../services/projectAgent/intent';
 import { planTools } from '../services/projectAgent/planTools';
 import { formatPlanTemplate } from '../services/projectAgent/planTemplate';
+import { createRuntimePerceptionContextBus } from '../services/runtimePerception/contextBus';
+import { buildProjectAgentPerceptionContext } from '../services/runtimePerception/visibleSummary';
+import {
+  buildRuntimeWorkspaceState,
+  buildWorkbenchPerceptionRisks,
+  buildWorkbenchSelectionCapabilities,
+} from '../services/runtimePerception/workbenchAdapter';
+import {
+  buildRuntimeWorkflowState,
+  buildWorkflowCapabilities,
+} from '../services/runtimePerception/workflowAdapter';
+import {
+  buildExternalAppCapabilities,
+} from '../services/runtimePerception/externalAppAdapter';
+import { readRuntimeExternalAppSnapshotFromCompanion } from '../services/runtimePerception/connectionPackageClient';
 import { resolveComposerMode } from '../services/projectAgent/autoMode';
 import {
   buildChildRunsFromPlan,
@@ -593,6 +608,11 @@ import type {
   ProjectAgentExecutePlanResult,
   ProjectAgentIntent,
 } from '../types/projectAgent';
+import type {
+  ProjectAgentPerceptionContext,
+  RuntimeExternalAppState,
+  RuntimePerceptionRisk,
+} from '../types/runtimePerception';
 import { buildWorkflowComposerSeedFromTwoPresets } from './workflow/buildWorkflowComposerSeed';
 import type { CapabilityAssetCandidate } from './CapabilitySetCanvas';
 import { BUILTIN_IMAGE_PROCESS_IDS } from '../services/capabilityPresetStore';
@@ -999,6 +1019,7 @@ export type QuickComposeChatDockHandlers = {
   isSendDisabled: boolean;
   selectionStatusLabel: string;
   selectionStatusTone: 'idle' | 'active' | 'preview';
+  perceptionContext?: ProjectAgentPerceptionContext;
   onResultPreview: (assetId: string, event: React.MouseEvent<HTMLElement>) => void;
   onSend: () => void;
   onRetry: (messageId: string) => void;
@@ -1542,6 +1563,8 @@ const WorkflowSection: React.FC<{
   const projectAgentRuntimeRef = useRef<ProjectAgentRuntime | null>(null);
   const [projectAgentMemoryRevision, setProjectAgentMemoryRevision] = useState(0);
   const [projectAgentSkillRevision, setProjectAgentSkillRevision] = useState(0);
+  const [runtimeExternalApps, setRuntimeExternalApps] = useState<RuntimeExternalAppState[]>([]);
+  const [runtimeExternalRisks, setRuntimeExternalRisks] = useState<RuntimePerceptionRisk[]>([]);
   const submitLightboxQuickComposeRef = useRef<() => string[]>([]);
   useEffect(() => {
     workspaceQuickComposeThreadRef.current = workspaceQuickComposeThread;
@@ -5219,6 +5242,108 @@ ${lineSvg}
     return { kind: 'none' };
   }, [lightboxOverlayDraft, selectedAssetIds]);
 
+  const buildQuickComposePerceptionContext = useCallback((): ProjectAgentPerceptionContext => {
+    const surface = buildQuickComposeAgentSurface();
+    const activeSurface =
+      surface.kind === 'lightbox'
+        ? 'lightbox'
+        : surface.kind === 'canvas'
+          ? 'canvas'
+          : 'workflow';
+    const workspace = buildRuntimeWorkspaceState({
+      projectId: activeWorkspaceProjectId || undefined,
+      projectName: workspaceProjectChrome?.activeProjectName || undefined,
+      activeSurface,
+      activeAssetId: surface.kind === 'lightbox' ? surface.assetId : undefined,
+      selectedAssetIds: surface.kind === 'canvas' ? surface.selectedAssetIds : [...selectedAssetIds],
+      activeStepId: surface.kind === 'canvas' ? surface.stepId : undefined,
+      draftDirty: Boolean(lightboxOverlayDraft?.localEdit),
+    });
+
+    const queueTasks = [
+      ...pendingRef.current.map((task) => {
+        const row = task as WorkflowPendingTask & {
+          actionId?: string;
+          error?: string;
+          label?: string;
+          presetName?: string;
+        };
+        return {
+          id: row.id,
+          title: row.label || row.presetName || row.actionId || row.id,
+          status: 'pending',
+          taskIds: [row.id],
+          errorMessage: row.error,
+        };
+      }),
+      ...((executingQueue?.tasks ?? []).map((task) => {
+        const row = task as WorkflowPendingTask & {
+          actionId?: string;
+          error?: string;
+          label?: string;
+          presetName?: string;
+        };
+        return {
+          id: row.id,
+          title: row.label || row.presetName || row.actionId || row.id,
+          status: 'running',
+          taskIds: [row.id],
+          errorMessage: row.error,
+        };
+      })),
+    ];
+    const workflow = buildRuntimeWorkflowState({
+      activePlanId: queueTasks.length ? 'workspace-queue' : undefined,
+      steps: queueTasks,
+      blockers: queueTasks
+        .filter((task) => String(task.errorMessage || '').trim())
+        .map((task) => String(task.errorMessage || '').trim()),
+    });
+
+    const capabilities = [
+      ...buildWorkbenchSelectionCapabilities(workspace),
+      ...buildWorkflowCapabilities(workflow),
+      ...buildExternalAppCapabilities(runtimeExternalApps),
+    ];
+    const risks = [
+      ...buildWorkbenchPerceptionRisks(workspace),
+      ...runtimeExternalRisks,
+    ];
+    const bus = createRuntimePerceptionContextBus();
+    bus.updatePartial({
+      workspace,
+      workflow,
+      externalApps: runtimeExternalApps,
+      capabilities,
+      risks,
+    });
+    if (workspace.selectedAssetIds.length > 0) {
+      bus.emitEvent({
+        source: 'user',
+        type: 'user.selection.changed',
+        summary: `Selected ${workspace.selectedAssetIds.length} asset${workspace.selectedAssetIds.length === 1 ? '' : 's'}`,
+      });
+    }
+    if (workflow.steps.some((step) => step.status === 'failed' || step.status === 'blocked')) {
+      bus.emitEvent({
+        source: 'workflow',
+        type: 'workflow.step.failed',
+        summary: 'Workflow has a failed or blocked step',
+        severity: 'warn',
+      });
+    }
+    return buildProjectAgentPerceptionContext(bus.getSnapshot());
+  }, [
+    activeWorkspaceProjectId,
+    buildQuickComposeAgentSurface,
+    executingQueue,
+    lightboxOverlayDraft,
+    runtimeExternalApps,
+    runtimeExternalRisks,
+    selectedAssetIds,
+    workspaceProjectChrome?.activeProjectName,
+  ]);
+
   type QuickComposeSubmitInvokeOptions = {
     overrideImageDataUrls?: string[];
     overrideUserText?: string;
@@ -6586,6 +6711,7 @@ ${lineSvg}
         actionModules.some((m) => m.category === 'generate_3d' && m.enabled !== false) ||
           capabilityPresets.some((m) => m.category === 'generate_3d' && m.enabled !== false)
       );
+      const perceptionContext = buildQuickComposePerceptionContext();
       const intent = buildProjectAgentIntent({
         text: currentUserText,
         mode: quickComposeMode,
@@ -6597,6 +6723,7 @@ ${lineSvg}
         hasInlineImageRefs: resolved.refs.length > 0,
         hasEnabled3dPreset,
         enabledSkills: enabledProjectAgentSkills,
+        perception: perceptionContext,
         textModel: quickComposeTextModel,
         imageSettings: {
           model: quickComposeImageModel,
@@ -6625,7 +6752,7 @@ ${lineSvg}
       const plannedPreview = planTools(intent);
       const previewPlan = plannedPreview.ok ? plannedPreview.plan : [];
       const previewPlanText = plannedPreview.ok
-        ? formatPlanTemplate(previewPlan)
+        ? formatPlanTemplate(previewPlan, perceptionContext)
         : '计划：处理中…';
       const userVisibleText = (() => {
         const base = currentUserText.trim();
@@ -6802,6 +6929,7 @@ ${lineSvg}
     [
       actionModules,
       buildQuickComposeAgentSurface,
+      buildQuickComposePerceptionContext,
       cancelProjectAgentTasks,
       capabilityPresets,
       enabledProjectAgentSkills,
@@ -6938,6 +7066,7 @@ ${lineSvg}
 
   const handleQuickComposeChatAction = useCallback(
     (messageId: string, action: AgentSuggestedAction) => {
+      const perceptionContext = buildQuickComposePerceptionContext();
       const confirmCopy = quickComposeChatActionConfirmCopy({
         kind: action.kind,
         requiresConfirmation:
@@ -6947,6 +7076,7 @@ ${lineSvg}
         requiresCost: action.confirmLevel === 'cost',
         destructive: action.confirmLevel === 'destructive',
         cost: action.costHint?.estimatedCredits,
+        perception: perceptionContext,
       });
       if (confirmCopy && typeof window !== 'undefined' && !window.confirm(confirmCopy)) {
         return;
@@ -6987,6 +7117,7 @@ ${lineSvg}
       onLog?.('info', `项目 Agent：动作「${action.label}」将在后续阶段接入`);
     },
     [
+      buildQuickComposePerceptionContext,
       handleQuickComposeChatRetry,
       onLog,
       setQuickComposeSegmentsTracked,
@@ -14316,6 +14447,25 @@ ${lineSvg}
     draftEmpty: !quickComposeHasSendableContent,
   });
 
+  useEffect(() => {
+    if (!quickComposeBarVisible) return;
+    let disposed = false;
+    const refresh = async () => {
+      const result = await readRuntimeExternalAppSnapshotFromCompanion();
+      if (disposed) return;
+      setRuntimeExternalApps(result.apps);
+      setRuntimeExternalRisks(result.risks);
+    };
+    void refresh();
+    const id = window.setInterval(() => {
+      void refresh();
+    }, 15_000);
+    return () => {
+      disposed = true;
+      window.clearInterval(id);
+    };
+  }, [quickComposeBarVisible]);
+
   const quickComposeChatDockHandlers = useMemo((): QuickComposeChatDockHandlers | null => {
     if (!quickComposeBarVisible) return null;
     const selectedIds = [...selectedAssetIds].map((id) => id.trim()).filter(Boolean);
@@ -14353,6 +14503,7 @@ ${lineSvg}
           selectedAssetIds: [...selectedAssetIds],
         })
       : [];
+    const perceptionContext = buildQuickComposePerceptionContext();
     return {
       messages,
       threadTitle,
@@ -14360,6 +14511,7 @@ ${lineSvg}
       isSendDisabled: quickComposeChatDockSubmitDisabled,
       selectionStatusLabel,
       selectionStatusTone,
+      perceptionContext,
       onResultPreview: handleQuickComposeResultPreview,
       onSend: handleQuickComposeChatSend,
       onRetry: handleQuickComposeChatRetry,
@@ -14377,6 +14529,7 @@ ${lineSvg}
     handleQuickComposeChatAction,
     handleQuickComposeChatCancel,
     handleQuickComposeResultPreview,
+    buildQuickComposePerceptionContext,
     quickComposeCreditsBypass,
     preferenceScope,
     creditBalance,
@@ -14483,6 +14636,7 @@ ${lineSvg}
             messages: quickComposeChatDockHandlers.messages,
             selectionStatusLabel: quickComposeChatDockHandlers.selectionStatusLabel,
             selectionStatusTone: quickComposeChatDockHandlers.selectionStatusTone,
+            perceptionContext: quickComposeChatDockHandlers.perceptionContext,
             onResultPreview: quickComposeChatDockHandlers.onResultPreview,
             onRetryMessage: quickComposeChatDockHandlers.onRetry,
             onMessageAction: quickComposeChatDockHandlers.onAction,
@@ -17632,4 +17786,3 @@ ${lineSvg}
 };
 
 export default WorkflowSection;
-

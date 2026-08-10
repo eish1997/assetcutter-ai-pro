@@ -1,0 +1,305 @@
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
+import { homedir } from 'node:os';
+import { basename, join, resolve } from 'node:path';
+import { getRepositoryRoot } from '../repositoryVolume.js';
+
+export const DEFAULT_OBS_STUDIO_BRIDGE_PORT = 7351;
+export const OBS_STUDIO_BRIDGE_SCRIPT_NAME = 'assetcutter_obs_bridge.lua';
+
+export type ObsStudioBridgeTarget = {
+  id: string;
+  label: string;
+  scriptsDir: string;
+  scriptPath: string;
+  hasScriptBridge: boolean;
+};
+
+export type ObsStudioBridgeInstallRecord = {
+  port: number;
+  installedAt: string;
+  scriptsDirs: string[];
+  targetIds: string[];
+};
+
+export type ObsStudioBridgeStatus = {
+  id: 'obs-studio';
+  name: string;
+  description: string;
+  defaultPort: number;
+  port: number;
+  roots: string[];
+  targets: ObsStudioBridgeTarget[];
+  install: ObsStudioBridgeInstallRecord | null;
+  installed: boolean;
+  probe: { ok: boolean; message: string; heartbeatPath: string };
+};
+
+export type ObsStudioBridgeInstallBody = {
+  targets?: string[];
+  scriptsDirs?: string[];
+  port?: number;
+  home?: string;
+};
+
+function bridgesStateDir(): string {
+  const sb = process.env.COMPANION_SANDBOX_ROOT?.trim();
+  if (sb) return resolve(join(sb, 'bridges'));
+  return resolve(join(getRepositoryRoot(), '..', 'bridges'));
+}
+
+function installRecordPath(): string {
+  return join(bridgesStateDir(), 'obs-studio-install.json');
+}
+
+function heartbeatPath(): string {
+  const base =
+    process.env.APPDATA ||
+    process.env.LOCALAPPDATA ||
+    process.env.TMP ||
+    process.env.TEMP ||
+    bridgesStateDir();
+  return resolve(join(base, 'AssetCutterCompanion', 'bridges', 'obs-studio-heartbeat.json'));
+}
+
+function normalizePort(raw: unknown): number {
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 && n <= 65535 ? Math.floor(n) : DEFAULT_OBS_STUDIO_BRIDGE_PORT;
+}
+
+function rootExists(path: string): boolean {
+  try {
+    return existsSync(path) && statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+export function discoverObsStudioRoots(home = homedir()): string[] {
+  const roots: string[] = [];
+  const fromEnv = process.env.OBS_STUDIO_SCRIPTS_DIR?.trim();
+  if (fromEnv) roots.push(resolve(fromEnv));
+  roots.push(resolve(join(home, 'Documents', 'OBS Scripts')));
+  roots.push(resolve(join(home, 'OneDrive', 'Documents', 'OBS Scripts')));
+  if (process.env.APPDATA) roots.push(resolve(join(process.env.APPDATA, 'obs-studio', 'scripts')));
+  return roots.filter((root, idx, arr) => (rootExists(root) || /OBS Scripts$/i.test(root)) && arr.indexOf(root) === idx);
+}
+
+function targetFromScriptsDir(scriptsDir: string): ObsStudioBridgeTarget {
+  const resolvedDir = resolve(scriptsDir);
+  const parent = basename(resolvedDir);
+  return {
+    id: `obs-studio::${resolvedDir}`,
+    label: parent ? `OBS Studio ${parent}` : 'OBS Studio scripts',
+    scriptsDir: resolvedDir,
+    scriptPath: join(resolvedDir, OBS_STUDIO_BRIDGE_SCRIPT_NAME),
+    hasScriptBridge: existsSync(join(resolvedDir, OBS_STUDIO_BRIDGE_SCRIPT_NAME)),
+  };
+}
+
+export function discoverObsStudioBridgeTargets(opts?: { home?: string; scriptsDirs?: string[] }): ObsStudioBridgeTarget[] {
+  const byDir = new Map<string, ObsStudioBridgeTarget>();
+  for (const root of discoverObsStudioRoots(opts?.home)) {
+    byDir.set(resolve(root), targetFromScriptsDir(root));
+  }
+  for (const dirRaw of opts?.scriptsDirs || []) {
+    const dir = resolve(String(dirRaw || '').trim());
+    if (dir) byDir.set(dir, targetFromScriptsDir(dir));
+  }
+  return Array.from(byDir.values()).sort((a, b) => a.scriptsDir.localeCompare(b.scriptsDir));
+}
+
+export function readObsStudioBridgeInstallRecord(): ObsStudioBridgeInstallRecord | null {
+  const p = installRecordPath();
+  if (!existsSync(p)) return null;
+  try {
+    const raw = JSON.parse(readFileSync(p, 'utf8')) as ObsStudioBridgeInstallRecord;
+    return {
+      port: normalizePort(raw.port),
+      installedAt: typeof raw.installedAt === 'string' ? raw.installedAt : '',
+      scriptsDirs: Array.isArray(raw.scriptsDirs) ? raw.scriptsDirs.map(String) : [],
+      targetIds: Array.isArray(raw.targetIds) ? raw.targetIds.map(String) : [],
+    };
+  } catch {
+    return null;
+  }
+}
+
+function writeObsStudioBridgeInstallRecord(rec: ObsStudioBridgeInstallRecord): void {
+  const dir = bridgesStateDir();
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+  const p = installRecordPath();
+  const tmp = p + '.tmp';
+  writeFileSync(tmp, JSON.stringify(rec, null, 2), 'utf8');
+  renameSync(tmp, p);
+}
+
+function clearObsStudioBridgeInstallRecord(): void {
+  const p = installRecordPath();
+  if (!existsSync(p)) return;
+  try {
+    unlinkSync(p);
+  } catch {
+    /* ignore */
+  }
+}
+
+function luaString(s: string): string {
+  return s.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+}
+
+function buildObsStudioBridgeScript(port: number): string {
+  const hb = heartbeatPath();
+  return `-- AssetCutter OBS Studio Bridge
+-- Auto-generated by AssetCutter local companion.
+obs = obslua
+
+local heartbeat_path = "${luaString(hb)}"
+local port = ${port}
+
+local function ensure_parent(path)
+  local parent = path:match("^(.*)[/\\\\][^/\\\\]+$")
+  if parent then
+    os.execute('mkdir "' .. parent .. '" 2>nul')
+  end
+end
+
+local function write_heartbeat()
+  ensure_parent(heartbeat_path)
+  local f = io.open(heartbeat_path, "w")
+  if f then
+    f:write('{"ok":true,"host":"obs-studio","name":"OBS Studio","port":' .. tostring(port) .. ',"at":"' .. os.date("!%Y-%m-%dT%H:%M:%SZ") .. '"}')
+    f:close()
+  end
+end
+
+function script_description()
+  return "AssetCutter OBS Studio bridge heartbeat."
+end
+
+function script_load(settings)
+  write_heartbeat()
+  obs.timer_add(write_heartbeat, 15000)
+end
+
+function script_unload()
+  obs.timer_remove(write_heartbeat)
+end
+`;
+}
+
+async function probeObsStudioBridge(): Promise<{ ok: boolean; message: string; heartbeatPath: string }> {
+  const p = heartbeatPath();
+  if (!existsSync(p)) {
+    return { ok: false, message: 'OBS Studio bridge heartbeat has not been seen yet. Add or reload the installed script in OBS Tools > Scripts.', heartbeatPath: p };
+  }
+  try {
+    const stat = statSync(p);
+    const ageMs = Date.now() - stat.mtimeMs;
+    const json = JSON.parse(readFileSync(p, 'utf8')) as { host?: string };
+    if (json.host !== 'obs-studio') return { ok: false, message: 'OBS Studio bridge heartbeat is invalid.', heartbeatPath: p };
+    const mins = Math.max(0, Math.round(ageMs / 60000));
+    return { ok: true, message: `OBS Studio bridge heartbeat detected ${mins} min ago.`, heartbeatPath: p };
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return { ok: false, message: `OBS Studio bridge heartbeat cannot be read: ${msg}`, heartbeatPath: p };
+  }
+}
+
+export async function getObsStudioBridgeStatus(opts?: { home?: string; scriptsDirs?: string[] }): Promise<ObsStudioBridgeStatus> {
+  const targets = discoverObsStudioBridgeTargets(opts);
+  const install = readObsStudioBridgeInstallRecord();
+  const port = install?.port || DEFAULT_OBS_STUDIO_BRIDGE_PORT;
+  return {
+    id: 'obs-studio',
+    name: 'OBS Studio',
+    description: 'One-click Lua script bridge using a local heartbeat probe.',
+    defaultPort: DEFAULT_OBS_STUDIO_BRIDGE_PORT,
+    port,
+    roots: discoverObsStudioRoots(opts?.home),
+    targets,
+    install,
+    installed: targets.some((v) => v.hasScriptBridge) || Boolean(install?.scriptsDirs.length),
+    probe: await probeObsStudioBridge(),
+  };
+}
+
+function resolveInstallTargets(
+  body: ObsStudioBridgeInstallBody,
+  discovered: ObsStudioBridgeTarget[],
+): { targets: ObsStudioBridgeTarget[]; error?: string } {
+  const byId = new Map(discovered.map((v) => [v.id, v]));
+  const targets: ObsStudioBridgeTarget[] = [];
+  for (const id of body.targets || []) {
+    const v = byId.get(String(id));
+    if (v) targets.push(v);
+  }
+  for (const dirRaw of body.scriptsDirs || []) {
+    const scriptsDir = resolve(String(dirRaw || '').trim());
+    if (scriptsDir) targets.push(targetFromScriptsDir(scriptsDir));
+  }
+  const unique = Array.from(new Map(targets.map((v) => [v.scriptsDir, v])).values());
+  if (!unique.length) return { targets: [], error: 'no_obs_studio_scripts_dir' };
+  return { targets: unique };
+}
+
+export function installObsStudioBridge(
+  body: ObsStudioBridgeInstallBody = {},
+):
+  | { ok: true; port: number; installed: Array<{ targetId: string; scriptsDir: string; scriptPath: string }>; message: string }
+  | { ok: false; error: string; message: string } {
+  const port = normalizePort(body.port);
+  const discovered = discoverObsStudioBridgeTargets({ home: body.home, scriptsDirs: body.scriptsDirs });
+  const resolved = resolveInstallTargets(body, discovered);
+  if (resolved.error || !resolved.targets.length) {
+    return {
+      ok: false,
+      error: resolved.error || 'no_obs_studio_scripts_dir',
+      message: 'No OBS Studio scripts folder was found. Choose or create one manually.',
+    };
+  }
+  const installed: Array<{ targetId: string; scriptsDir: string; scriptPath: string }> = [];
+  for (const target of resolved.targets) {
+    mkdirSync(target.scriptsDir, { recursive: true });
+    writeFileSync(target.scriptPath, buildObsStudioBridgeScript(port), 'utf8');
+    installed.push({ targetId: target.id, scriptsDir: target.scriptsDir, scriptPath: target.scriptPath });
+  }
+  writeObsStudioBridgeInstallRecord({
+    port,
+    installedAt: new Date().toISOString(),
+    scriptsDirs: installed.map((x) => x.scriptsDir),
+    targetIds: installed.map((x) => x.targetId),
+  });
+  return { ok: true, port, installed, message: 'OBS Studio bridge installed. Add or reload the Lua script in OBS Tools > Scripts, then probe connection.' };
+}
+
+export function uninstallObsStudioBridge(
+  body: { targets?: string[]; scriptsDirs?: string[] } = {},
+): { ok: true; removed: Array<{ scriptsDir: string; scriptPath: string }> } {
+  const discovered = discoverObsStudioBridgeTargets({ scriptsDirs: body.scriptsDirs });
+  const record = readObsStudioBridgeInstallRecord();
+  const targets = new Map<string, ObsStudioBridgeTarget>();
+  for (const v of discovered) {
+    if (!body.targets || body.targets.length === 0 || body.targets.includes(v.id)) targets.set(v.scriptsDir, v);
+  }
+  for (const dir of record?.scriptsDirs || []) targets.set(resolve(dir), targetFromScriptsDir(dir));
+  const removed: Array<{ scriptsDir: string; scriptPath: string }> = [];
+  for (const target of targets.values()) {
+    if (!existsSync(target.scriptPath)) continue;
+    try {
+      unlinkSync(target.scriptPath);
+      removed.push({ scriptsDir: target.scriptsDir, scriptPath: target.scriptPath });
+    } catch {
+      /* ignore */
+    }
+  }
+  clearObsStudioBridgeInstallRecord();
+  return { ok: true, removed };
+}

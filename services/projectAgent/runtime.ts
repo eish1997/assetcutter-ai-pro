@@ -189,14 +189,14 @@ export function createProjectAgentRuntime(host: ProjectAgentHostPort): ProjectAg
           ok: false,
           turnId: input.turnId,
           plan: planned.plan,
-          planText: formatPlanTemplate(planned.plan),
+          planText: formatPlanTemplate(planned.plan, input.intent.perception),
           taskIds: [],
           errorMessage: PROJECT_AGENT_CANCELLED_MESSAGE,
           trace,
         };
       }
 
-      const planText = formatPlanTemplate(planned.plan);
+      const planText = formatPlanTemplate(planned.plan, input.intent.perception);
       trace = applyPlanToTrace(trace, planned.plan);
       turnState = transitionTurn(turnState, { type: 'plan_ok' });
       trace = finalizeTurnTrace(trace, 'executing');

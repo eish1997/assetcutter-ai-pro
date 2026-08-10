@@ -96,6 +96,26 @@
     return byKey;
   }
 
+  function groupCatalogBundles(catalog) {
+    const bundles = (catalog || []).filter((a) => a && a.kind === 'shell_tool_bundle' && a.sha256);
+    const byKey = new Map();
+    for (const b of bundles) {
+      const key = catalogToolKey(b);
+      if (!key) continue;
+      const list = byKey.get(key) || [];
+      list.push(b);
+      byKey.set(key, list);
+    }
+    for (const list of byKey.values()) {
+      list.sort((a, b) => {
+        if (semverGreater(a.semver, b.semver)) return -1;
+        if (semverGreater(b.semver, a.semver)) return 1;
+        return String(b.publishedAt || '').localeCompare(String(a.publishedAt || ''));
+      });
+    }
+    return byKey;
+  }
+
   function mergeTags(...lists) {
     const out = [];
     for (const list of lists) {
@@ -107,7 +127,7 @@
     return out;
   }
 
-  function buildUnifiedEntries(installed, catalogByKey, exampleMeta) {
+  function buildUnifiedEntries(installed, catalogByKey, catalogVersionsByKey, exampleMeta) {
     /** @type {Map<string, object>} */
     const map = new Map();
 
@@ -120,6 +140,7 @@
         tags: Array.isArray(t.tags) ? [...t.tags] : [],
         local: t,
         cloud: null,
+        cloudVersions: [],
         builtin: false,
         origin: t.origin || null,
         reviewStatus: t.reviewStatus || null,
@@ -137,11 +158,13 @@
         tags: [],
         local: null,
         cloud: null,
+        cloudVersions: [],
         builtin: false,
         semverLocal: null,
         semverCloud: null,
       };
       cur.cloud = bundle;
+      cur.cloudVersions = catalogVersionsByKey.get(id) || [bundle];
       cur.semverCloud = bundle.semver;
       if (!cur.local) {
         cur.name = bundle.label || cur.name || id;
@@ -174,6 +197,7 @@
         tags: mergeTags(ex.tags, ['示例']),
         local: null,
         cloud: null,
+        cloudVersions: [],
         builtin: true,
         semverLocal: null,
         semverCloud: ex.semver || '1.0.0',
@@ -185,17 +209,80 @@
       const hasCloud = Boolean(e.cloud) || Boolean(e.builtin);
       const needsUpgrade = hasLocal && hasCloud && semverGreater(e.semverCloud, e.semverLocal);
       const canDownload = (!hasLocal && hasCloud) || needsUpgrade;
+      const hasCloudVersionMismatch = hasLocal && hasCloud && String(e.semverLocal || '') !== String(e.semverCloud || '');
       return {
         ...e,
         hasLocal,
         hasCloud,
         needsUpgrade,
         canDownload,
+        hasCloudVersionMismatch,
         displaySemver: e.semverLocal || e.semverCloud || '—',
         origin: e.origin || (e.local && e.local.origin) || null,
         reviewStatus: e.reviewStatus || (e.local && e.local.reviewStatus) || null,
       };
     });
+  }
+
+  function mergeCapabilityToolCloudEntries(entries, cloud) {
+    const out = Array.isArray(entries) ? entries.map((entry) => ({ ...entry })) : [];
+    const byId = new Map(out.map((entry) => [entry.id, entry]));
+    const packages = Array.isArray(cloud && cloud.packages) ? cloud.packages : [];
+    const versions = Array.isArray(cloud && cloud.versions) ? cloud.versions : [];
+    const versionsByPackage = new Map();
+    for (const version of versions) {
+      if (!version || version.type !== 'tool' || !version.packageId) continue;
+      const id = String(version.packageId);
+      if (!versionsByPackage.has(id)) versionsByPackage.set(id, []);
+      versionsByPackage.get(id).push({ ...version, capabilityPackageId: id, capabilityVersion: true });
+    }
+    for (const pkg of packages) {
+      if (!pkg || pkg.type !== 'tool') continue;
+      const manifest = pkg.manifest && typeof pkg.manifest === 'object' ? pkg.manifest : {};
+      const toolId = String(manifest.authoredToolId || manifest.toolId || pkg.id || '').trim();
+      if (!toolId) continue;
+      const capabilityVersions = versionsByPackage.get(pkg.id) || [];
+      const entry =
+        byId.get(toolId) ||
+        {
+          id: toolId,
+          name: pkg.name || toolId,
+          description: pkg.description || '',
+          tags: Array.isArray(pkg.tags) ? [...pkg.tags] : [],
+          local: null,
+          cloud: null,
+          cloudVersions: [],
+          builtin: false,
+          origin: 'capability_cloud',
+          reviewStatus: null,
+          semverLocal: null,
+          semverCloud: null,
+          hasLocal: false,
+          hasCloud: false,
+          needsUpgrade: false,
+          canDownload: false,
+          hasCloudVersionMismatch: false,
+          displaySemver: pkg.version || '—',
+        };
+      entry.hasCapabilityCloud = true;
+      entry.capabilityPackageId = pkg.id;
+      entry.capabilityCloudPackage = pkg;
+      entry.hasCloud = true;
+      entry.semverCloud = pkg.version || entry.semverCloud;
+      entry.displaySemver = entry.semverLocal || entry.semverCloud || entry.displaySemver || '—';
+      entry.cloudVersions = capabilityVersions.length
+        ? capabilityVersions.concat((entry.cloudVersions || []).filter((item) => !item.capabilityVersion))
+        : entry.cloudVersions || [];
+      entry.hasCloudVersionMismatch =
+        Boolean(entry.hasLocal && entry.semverCloud && String(entry.semverLocal || '') !== String(entry.semverCloud || '')) ||
+        Boolean(entry.hasCloudVersionMismatch);
+      entry.canDownload = Boolean(entry.canDownload && !entry.hasCapabilityCloud);
+      if (!byId.has(toolId)) {
+        byId.set(toolId, entry);
+        out.push(entry);
+      }
+    }
+    return out;
   }
 
   function countDownloadable(entries) {
@@ -209,6 +296,7 @@
     filterSource: 'all',
     filterTag: '',
     searchQuery: '',
+    isAdmin: false,
     pendingUpdateCount: 0,
     _busyIds: new Set(),
     _shell: null,
@@ -223,10 +311,28 @@
           semverCloud: e.semverCloud,
           hasLocal: e.hasLocal,
           hasCloud: e.hasCloud,
+          hasCapabilityCloud: e.hasCapabilityCloud,
+          capabilityPackageId: e.capabilityPackageId,
           canDownload: e.canDownload,
+          cloudVersions: (e.cloudVersions || []).map((v) => [v.id, v.semver, v.publishedAt]),
+          isAdmin: this.isAdmin,
           tags: e.tags,
         })),
       );
+    },
+
+    async refreshAdminState(shell) {
+      if (typeof shell.accountStatus !== 'function') {
+        this.isAdmin = false;
+        return;
+      }
+      try {
+        const status = await shell.accountStatus();
+        const user = status && status.user && typeof status.user === 'object' ? status.user : {};
+        this.isAdmin = Boolean(status && status.loggedIn && String(user.role || '') === 'admin');
+      } catch {
+        this.isAdmin = false;
+      }
     },
 
     async listInstalled(shell) {
@@ -298,6 +404,17 @@
       };
     },
 
+    async fetchCapabilityToolCloud(shell) {
+      if (!shell || typeof shell.api !== 'function') return { packages: [], versions: [] };
+      try {
+        const r = await shell.api('GET', '/v1/capability-packages/cloud', null);
+        if (r && r.ok && r.json) return r.json;
+      } catch {
+        /* capability cloud is optional while legacy catalog migration continues */
+      }
+      return { packages: [], versions: [] };
+    },
+
     updateNavBadge(count) {
       this.pendingUpdateCount = count;
       const badge = $('toolsNavBadge');
@@ -351,6 +468,12 @@
         const exampleMeta = await this.fetchExampleMeta(shell);
         if (gen !== this._reloadGen) return;
 
+        const capabilityCloud = await this.fetchCapabilityToolCloud(shell);
+        if (gen !== this._reloadGen) return;
+
+        await this.refreshAdminState(shell);
+        if (gen !== this._reloadGen) return;
+
         let installed = [];
         this.listError = null;
         if (Array.isArray(installedResult)) {
@@ -366,7 +489,11 @@
         }
         const catalogList = catalog && catalog.__catalogError ? [] : catalog;
         const catalogByKey = pickLatestCatalogBundles(catalogList);
-        const nextEntries = buildUnifiedEntries(installed, catalogByKey, exampleMeta);
+        const catalogVersionsByKey = groupCatalogBundles(catalogList);
+        const nextEntries = mergeCapabilityToolCloudEntries(
+          buildUnifiedEntries(installed, catalogByKey, catalogVersionsByKey, exampleMeta),
+          capabilityCloud,
+        );
         const nextSig = this.listSignature(nextEntries);
         const tagsChanged =
           JSON.stringify(this.collectAllTags(this.mergedEntries)) !== JSON.stringify(this.collectAllTags(nextEntries));
@@ -464,9 +591,32 @@
           subParts.push('v' + e.displaySemver);
         }
 
-        const tagsHtml = (e.tags || [])
+        const cloudVersions = Array.isArray(e.cloudVersions) ? e.cloudVersions : [];
+        const isMine = e.origin === 'authored' || e.origin === 'import';
+        const schema = window.ShellCapabilityCardSchema;
+        const packageLike = { ...e, type: 'tool', cloudVersions };
+        const view =
+          schema && typeof schema.view === 'function'
+            ? schema.view(packageLike, { isAdmin: this.isAdmin })
+            : {
+                title: e.name,
+                subtitle: subParts.join(' · '),
+                description: e.description,
+                tags: e.tags || [],
+                actions: ['open', 'export'].concat(cloudVersions.length > 0 ? ['version'] : []).concat(isMine ? ['publish'] : []),
+              };
+        subParts.length = 0;
+        if (view.subtitle) subParts.push(view.subtitle);
+        const tagsHtml = (Array.isArray(view.tags) ? view.tags : [])
           .map((t) => '<span class="tools-card-tag">' + esc(t) + '</span>')
           .join('');
+        const cardActions = Array.isArray(view.actions)
+          ? view.actions
+          : ['open', 'export'].concat(cloudVersions.length > 0 ? ['version'] : []).concat(isMine ? ['publish'] : []);
+        const hasCardAction = (name) => cardActions.includes(name);
+        const canPublishCloud = hasCardAction('publish');
+        const hasCloudVersions = hasCardAction('version');
+        const canSubmitReview = isMine && !canPublishCloud;
 
         const originBadge =
           e.origin === 'authored' || e.origin === 'import'
@@ -497,13 +647,13 @@
           '</span>' +
           '</div>' +
           '<div class="tools-card-title">' +
-          esc(e.name) +
+          esc(view.title) +
           '</div>' +
           '<div class="tools-card-sub">' +
           esc(subParts.join(' · ')) +
           '</div>' +
           '<div class="tools-card-desc">' +
-          esc(e.description) +
+          esc(view.description) +
           '</div>' +
           (tagsHtml ? '<div class="tools-card-tags">' + tagsHtml + '</div>' : '') +
           '<div class="tools-card-foot">' +
@@ -518,8 +668,14 @@
           '<button type="button" class="tools-card-action tools-card-export' +
           (e.origin === 'authored' || e.origin === 'import' ? '' : ' hidden') +
           '">导出</button>' +
+          '<button type="button" class="tools-card-action tools-card-version' +
+          (hasCloudVersions ? '' : ' hidden') +
+          '">\u7248\u672c</button>' +
+          '<button type="button" class="tools-card-action tools-card-publish' +
+          (canPublishCloud ? '' : ' hidden') +
+          '">\u63d0\u4ea4\u4e91\u7aef</button>' +
           '<button type="button" class="tools-card-action tools-card-submit' +
-          (e.origin === 'authored' || e.origin === 'import' ? '' : ' hidden') +
+          (canSubmitReview ? '' : ' hidden') +
           '">提交审批</button>' +
           '</div>';
 
@@ -557,6 +713,20 @@
             void this.submitAuthored(shell, e.id, e.name);
           });
         }
+        const versionBtn = card.querySelector('.tools-card-version');
+        if (versionBtn) {
+          versionBtn.addEventListener('click', (ev) => {
+            ev.stopPropagation();
+            void this.chooseCloudVersion(shell, e);
+          });
+        }
+        const publishBtn = card.querySelector('.tools-card-publish');
+        if (publishBtn) {
+          publishBtn.addEventListener('click', (ev) => {
+            ev.stopPropagation();
+            void this.publishToCloud(shell, e, e.name);
+          });
+        }
 
         if (e.hasLocal) {
           const uninstallBtn = document.createElement('button');
@@ -579,14 +749,81 @@
       }
     },
 
+    defaultExportFileName(toolId) {
+      const entry = (this.mergedEntries || []).find((e) => e && e.id === toolId) || {};
+      const semver = String(entry.semverLocal || entry.semver || entry.version || '0.1.0').trim() || '0.1.0';
+      return String(toolId || 'tool').replace(/[^a-zA-Z0-9_.-]/g, '-') + '-' + semver + '.zip';
+    },
+
+    fallbackToolCapabilityContext(toolId) {
+      const entry = (this.mergedEntries || []).find((e) => e && e.id === toolId) || {};
+      const capabilityId = entry.capabilityPackageId || toolId;
+      const lines = [
+        '\u5f53\u524d\u5bf9\u8bdd\u7ed1\u5b9a\u5230\u4e00\u4e2a\u5de5\u5177\u80fd\u529b\u5305\u5bf9\u8c61\u3002',
+        'CapabilityPackage ID: ' + capabilityId,
+        '\u5de5\u5177 ID: ' + toolId,
+        '\u5de5\u5177\u540d\u79f0: ' + (entry.name || toolId),
+        '\u672c\u5730\u7248\u672c: ' + (entry.semverLocal || entry.displaySemver || ''),
+        '\u4e91\u7aef\u7248\u672c: ' + (entry.semverCloud || ''),
+        '\u6765\u6e90: ' + (entry.origin || ''),
+        '\u5ba1\u6279\u72b6\u6001: ' + (entry.reviewStatus || ''),
+        '\u672c\u5730\u5df2\u5b89\u88c5: ' + (entry.hasLocal ? 'yes' : 'no'),
+        '\u4e91\u7aef\u53ef\u7528: ' + (entry.hasCloud ? 'yes' : 'no'),
+        '\u9700\u8981\u66f4\u65b0: ' + (entry.needsUpgrade ? 'yes' : 'no'),
+        '\u5982\u679c\u7528\u6237\u8981\u4fee\u590d\u3001\u8c03\u6574\u6216\u7ee7\u7eed\u4f18\u5316\u8fd9\u4e2a\u5de5\u5177\uff0c\u8bf7\u56f4\u7ed5\u8fd9\u4e2a CapabilityPackage \u7ee7\u7eed\u4fee\u6539\u3001\u8fd0\u884c\u3001\u8bb0\u5f55\u4e8b\u4ef6\u548c\u590d\u6d4b\u3002',
+        '\u4f18\u5148\u4f7f\u7528 ac.capability.lifecycle_run \u548c ac.capability.event_append\uff1b\u9700\u8981\u6539\u672c\u673a\u5de5\u5177\u8349\u7a3f\u65f6\u518d\u4f7f\u7528 ac.shell_tool.authored_upsert\u3002',
+      ];
+      const versions = Array.isArray(entry.cloudVersions) ? entry.cloudVersions : [];
+      if (versions.length) {
+        lines.push(
+          '\u4e91\u7aef\u5386\u53f2\u7248\u672c: ' +
+            versions
+              .slice(0, 8)
+              .map((v) => String(v.semver || v.id || '').trim())
+              .filter(Boolean)
+              .join(', '),
+        );
+      }
+      return lines.filter((x) => String(x || '').trim()).join('\n');
+    },
+
+    async fetchToolCapabilityContext(shell, entry, toolId) {
+      if (!shell || typeof shell.api !== 'function') return null;
+      const capabilityId = String((entry && entry.capabilityPackageId) || toolId || '').trim();
+      if (!capabilityId) return null;
+      const r = await shell.api('GET', '/v1/capability-packages/' + encodeURIComponent(capabilityId) + '/context', null);
+      if (!r || !r.ok || !r.json || !r.json.ok) return null;
+      return r.json;
+    },
+
     async exportAuthored(shell, toolId) {
-      const r = await shell.api('POST', '/v1/shell-tools/authored/' + encodeURIComponent(toolId) + '/pack', {});
+      let destZipPath = '';
+      if (typeof shell.savePath === 'function') {
+        const picked = await shell.savePath({
+          title: 'Export Tool ZIP',
+          defaultPath: this.defaultExportFileName(toolId),
+          filters: [{ name: 'ZIP', extensions: ['zip'] }],
+        });
+        if (!picked || picked.canceled) return;
+        if (!picked.ok || !picked.path) {
+          window.alert('No export location selected');
+          return;
+        }
+        destZipPath = String(picked.path || '').trim();
+        if (destZipPath && !/\.zip$/i.test(destZipPath)) destZipPath += '.zip';
+      }
+
+      const r = await shell.api(
+        'POST',
+        '/v1/shell-tools/authored/' + encodeURIComponent(toolId) + '/pack',
+        destZipPath ? { destZipPath } : {},
+      );
       if (!r.ok) {
-        window.alert('导出失败：' + formatShellToolError(r.json && r.json.error, r.json && r.json.message));
+        window.alert('Export failed: ' + formatShellToolError(r.json && r.json.error, r.json && r.json.message));
         return;
       }
       const zipPath = r.json && r.json.zipPath;
-      window.alert('已导出：\n' + (zipPath || ''));
+      window.alert('Exported:\n' + (zipPath || ''));
       if (zipPath && typeof shell.openFolderPath === 'function') {
         try {
           await shell.openFolderPath(zipPath);
@@ -609,6 +846,141 @@
       }
       window.alert('已提交审批' + (r.submissionId ? '：' + r.submissionId : ''));
       await this.reloadAll(shell);
+    },
+
+    async publishToCloud(shell, entryOrId, toolName) {
+      const entry = entryOrId && typeof entryOrId === 'object' ? entryOrId : { id: entryOrId, name: toolName };
+      const toolId = String(entry && entry.id ? entry.id : '').trim();
+      const ok = window.confirm(
+        '\u5c06\u300c' +
+          (toolName || toolId) +
+          '\u300d\u5f53\u524d\u672c\u5730\u7248\u672c\u63d0\u4ea4\u5230\u4e91\u7aef\uff1f\n\u4e91\u7aef\u4f1a\u4fdd\u7559\u5386\u53f2\u7248\u672c\u3002',
+      );
+      if (!ok) return;
+      const versionNote = window.prompt('填写本次云端版本说明', '');
+      if (versionNote == null) return;
+      if (!String(versionNote).trim()) {
+        window.alert('版本说明不能为空。');
+        return;
+      }
+      const semver = window.prompt('填写版本号', entry.semverLocal || entry.displaySemver || '1.0.0');
+      if (semver == null) return;
+      this._busyIds.add(toolId);
+      this.renderGrid();
+      try {
+        let r = null;
+        if (shell && typeof shell.api === 'function') {
+          r = await shell.api(
+            'POST',
+            '/v1/capability-packages/' + encodeURIComponent(entry.capabilityPackageId || toolId) + '/cloud-versions',
+            {
+              semver: String(semver || '').trim(),
+              versionNote: String(versionNote || '').trim(),
+              isAdmin: true,
+              actorRole: 'admin',
+            },
+            { timeoutMs: 60000 },
+          );
+          if (r && r.ok) {
+            const version = r.json && r.json.version;
+            window.alert('已提交到云端：v' + (version && version.semver ? version.semver : ''));
+            await this.reloadAll(shell);
+            return;
+          }
+          const capabilityErr = String((r && r.json && (r.json.error || r.json.code)) || '');
+          if (capabilityErr && capabilityErr !== 'capability_not_found') {
+            window.alert('提交云端失败：' + ((r && r.json && (r.json.message || r.json.error)) || (r && r.text) || '未知错误'));
+            return;
+          }
+        }
+        if (typeof shell.publishShellToolToCloud !== 'function') {
+          window.alert('\u5f53\u524d\u7248\u672c\u4e0d\u652f\u6301\u76f4\u63a5\u63d0\u4ea4\u4e91\u7aef');
+          return;
+        }
+        r = await shell.publishShellToolToCloud(toolId);
+        if (!r || !r.ok) {
+          const err = String((r && r.error) || '');
+          const msg = String((r && r.message) || '');
+          if (err === 'not_logged_in' || msg === '\u672a\u767b\u5f55') {
+            if (typeof shell.setShellView === 'function') {
+              try {
+                await shell.setShellView('workbench');
+              } catch {
+                /* ignore */
+              }
+            }
+            window.alert('\u8bf7\u5148\u5728\u5de5\u4f5c\u53f0\u767b\u5f55\u7ba1\u7406\u5458\u8d26\u53f7\uff0c\u7136\u540e\u56de\u5230\u5de5\u5177\u9875\u518d\u70b9\u63d0\u4ea4\u4e91\u7aef\u3002');
+            return;
+          }
+          if (err === 'admin_required') {
+            window.alert('\u5f53\u524d\u767b\u5f55\u8d26\u53f7\u4e0d\u662f\u7ba1\u7406\u5458\uff0c\u65e0\u6cd5\u63d0\u4ea4\u5230\u4e91\u7aef\u3002');
+            return;
+          }
+          window.alert(
+            '\u63d0\u4ea4\u4e91\u7aef\u5931\u8d25\uff1a' +
+              (r && (r.message || r.error) ? r.message || r.error : '\u672a\u77e5\u9519\u8bef'),
+          );
+          return;
+        }
+        const artifact = r.artifact || {};
+        window.alert('\u5df2\u63d0\u4ea4\u5230\u4e91\u7aef\uff1av' + (artifact.semver || ''));
+        await this.reloadAll(shell);
+      } finally {
+        this._busyIds.delete(toolId);
+        this.renderGrid();
+      }
+    },
+
+    showVersionPicker(entry, versions) {
+      if (window.ShellCapabilityVersionPicker && typeof window.ShellCapabilityVersionPicker.pick === 'function') {
+        return window.ShellCapabilityVersionPicker.pick({ ...entry, type: 'tool' }, versions, {
+          title: '选择云端版本 - ' + (entry.name || entry.id || ''),
+        });
+      }
+      window.alert('当前壳版本缺少能力包版本选择器，请重启或更新本地伴侣。');
+      return Promise.resolve(null);
+    },
+
+    async chooseCloudVersion(shell, entry) {
+      const versions = Array.isArray(entry && entry.cloudVersions) ? entry.cloudVersions : [];
+      if (!versions.length) {
+        window.alert('\u4e91\u7aef\u6682\u65e0\u53ef\u5207\u6362\u7248\u672c');
+        return;
+      }
+      const bundle = await this.showVersionPicker(entry, versions);
+      if (!bundle) return;
+      this._busyIds.add(entry.id);
+      this.renderGrid();
+      try {
+        if (bundle.capabilityVersion && bundle.capabilityPackageId) {
+          const r = await shell.api(
+            'POST',
+            '/v1/capability-packages/' +
+              encodeURIComponent(bundle.capabilityPackageId) +
+              '/cloud-versions/' +
+              encodeURIComponent(bundle.id) +
+              '/activate',
+            { isAdmin: true, actorRole: 'admin' },
+            { timeoutMs: 30000 },
+          );
+          if (!r || !r.ok) {
+            const body = (r && r.json) || {};
+            window.alert('切换失败：' + (body.message || body.error || (r && r.text) || '未知错误'));
+            return;
+          }
+          window.alert('已切换到云端版本 v' + (bundle.semver || ''));
+          await this.reloadAll(shell);
+          return;
+        }
+        const ok = await this.installBundle(shell, bundle, 'switch', entry.local);
+        if (ok) {
+          await this.reloadAll(shell);
+          await this.openToolWindow(shell, entry.id);
+        }
+      } finally {
+        this._busyIds.delete(entry.id);
+        this.renderGrid();
+      }
     },
 
     async importZip(shell) {
@@ -706,24 +1078,53 @@
         return;
       }
       const r = await shell.openToolWindow(toolId);
+      if (r && r.ok && typeof window.__acOpenCopilotObjectSession === 'function') {
+        const entry = (this.mergedEntries || []).find((e) => e && e.id === toolId) || {};
+        const context = await this.fetchToolCapabilityContext(shell, entry, toolId);
+        const session = context && context.session && typeof context.session === 'object' ? context.session : {};
+        const capabilityId = String(entry.capabilityPackageId || toolId || '').trim();
+        void window.__acOpenCopilotObjectSession({
+          type: 'capability',
+          id: session.id || capabilityId,
+          sessionId: session.sessionId || '',
+          label: session.label || entry.name || toolId,
+          contextPrompt:
+            context && typeof context.contextPrompt === 'string'
+              ? context.contextPrompt
+              : this.fallbackToolCapabilityContext(toolId),
+        });
+      }
       if (!r || !r.ok) window.alert('无法打开工具窗口：' + (r && r.error ? r.error : '未知错误'));
     },
 
     async installBundle(shell, bundle, kind, installed) {
-      if (!bundle.publicInstallUrl && !bundle.builtin) {
-        window.alert(
-          (bundle.label || bundle.fileName || '小工具包') +
-            ' 无 publicInstallUrl，请配置 COMPANION_DIST_PUBLIC_HTTP_BASE 或在主站设置中安装。',
-        );
-        return false;
+      let installUrl = bundle.publicInstallUrl || '';
+      if (!installUrl && !bundle.builtin) {
+        if (!bundle.id || typeof shell.resolveCompanionArtifactDownload !== 'function') {
+          window.alert((bundle.label || bundle.fileName || '小工具包') + ' 暂时无法获取下载地址，请更新本地伴侣后重试。');
+          return false;
+        }
+        this.setStatusHint('正在准备下载地址…');
+        const resolved = await shell.resolveCompanionArtifactDownload(bundle.id);
+        if (!resolved || !resolved.ok || !resolved.downloadUrl) {
+          this.composeStatusHints();
+          const err = resolved && (resolved.message || resolved.error) ? resolved.message || resolved.error : '未知错误';
+          if (resolved && resolved.error === 'not_logged_in') {
+            window.alert('请先在工作台登录后再下载云端工具。');
+          } else {
+            window.alert('获取下载地址失败：' + err);
+          }
+          return false;
+        }
+        installUrl = resolved.downloadUrl;
       }
-      if (!bundle.publicInstallUrl) return false;
+      if (!installUrl) return false;
       this.setStatusHint((kind === 'upgrade' ? '正在更新 ' : '正在下载 ') + (bundle.semver || '') + '…');
       const ir = await shell.api(
         'POST',
         '/v1/shell-tools/install-from-url',
         {
-          url: bundle.publicInstallUrl,
+          url: installUrl,
           semver: bundle.semver,
           sha256: bundle.sha256,
           bytes: bundle.bytes,
@@ -745,10 +1146,14 @@
 
     bind(shell) {
       this._shell = shell;
-      if (window.ShellToolsBridges) window.ShellToolsBridges.bind(shell);
       $('btnToolsRefresh')?.addEventListener('click', () => void this.reloadAll(shell));
       $('btnToolsImportZip')?.addEventListener('click', () => void this.importZip(shell));
       $('btnToolsScaffold')?.addEventListener('click', () => void this.scaffoldMine(shell));
+      window.addEventListener('assetcutter:capability-created', (ev) => {
+        const detail = ev && ev.detail && typeof ev.detail === 'object' ? ev.detail : {};
+        if (detail.type !== 'tool') return;
+        void this.reloadAll(this._shell || shell);
+      });
       $('toolsSearchInput')?.addEventListener('input', (ev) => {
         this.searchQuery = ev.target && ev.target.value != null ? String(ev.target.value) : '';
         this.renderGrid();
@@ -767,9 +1172,6 @@
 
     async onViewShown(shell) {
       this._shell = shell;
-      if (window.ShellToolsBridges) {
-        await window.ShellToolsBridges.onViewShown(shell);
-      }
       // Prefetch rack list in background so switching tabs is snappy.
       void this.reloadAll(shell);
     },

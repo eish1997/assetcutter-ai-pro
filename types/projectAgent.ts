@@ -6,6 +6,7 @@
 
 import type { WorkflowPendingTask } from '../types';
 import type { QuickComposeThreadMessage } from './quickComposeThread';
+import type { ProjectAgentPerceptionContext } from './runtimePerception';
 
 /** P0+P1 tool ids — P0 media ≤6; P1 adds invoke_expert (still one id for all experts). */
 export const PROJECT_AGENT_TOOL_IDS = [
@@ -120,6 +121,8 @@ export type ProjectAgentIntent = {
   hasEnabled3dPreset?: boolean;
   /** Enabled local Skill routing hints. Skills still resolve to existing whitelisted tool ids. */
   enabledSkills?: AgentSkill[];
+  /** Read-only runtime perception summary; no media bytes or secrets. */
+  perception?: ProjectAgentPerceptionContext;
 };
 
 /** Turn machine (§16.1): terminal is done | error (cancel → error + reason cancelled). */

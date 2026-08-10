@@ -5,6 +5,7 @@ import type {
   AgentSuggestedAction,
   QuickComposeChatMessageView,
 } from '../../../types/quickComposeThread';
+import type { ProjectAgentPerceptionContext } from '../../../types/runtimePerception';
 import type {
   ProjectAgentKnowledgeEntry,
   AgentSkill,
@@ -26,6 +27,7 @@ import {
   isRunningAssistantStatus,
 } from './chatUiCopy';
 import QuickComposeChatComposer, { type QuickComposeChatComposerProps } from './QuickComposeChatComposer';
+import QuickComposePerceptionBar from './QuickComposePerceptionBar';
 import QuickComposeChatThread from './QuickComposeChatThread';
 
 export type QuickComposeChatDockExpertStudioKey = {
@@ -61,6 +63,7 @@ export type QuickComposeChatDockProps = {
   onResultPreview?: (assetId: string, event: React.MouseEvent<HTMLElement>) => void;
   selectionStatusLabel?: string;
   selectionStatusTone?: 'idle' | 'active' | 'preview';
+  perceptionContext?: ProjectAgentPerceptionContext | null;
   threadEmptyTitle?: string;
   threadEmptyHint?: string;
   className?: string;
@@ -116,6 +119,7 @@ export default function QuickComposeChatDock({
   onResultPreview,
   selectionStatusLabel,
   selectionStatusTone = 'idle',
+  perceptionContext = null,
   threadEmptyTitle = PROJECT_AGENT_EMPTY_TITLE,
   threadEmptyHint = PROJECT_AGENT_EMPTY_HINT,
   className = '',
@@ -402,6 +406,8 @@ export default function QuickComposeChatDock({
       >
         <span className="block truncate">{selectionStatusLabel || '当前未选中资产'}</span>
       </div>
+
+      <QuickComposePerceptionBar perception={perceptionContext} />
 
       <QuickComposeChatComposer
         {...composerProps}

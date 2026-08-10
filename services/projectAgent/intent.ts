@@ -9,6 +9,7 @@ import type {
   AgentSurfaceContext,
   ProjectAgentIntent,
 } from '../../types/projectAgent';
+import type { ProjectAgentPerceptionContext } from '../../types/runtimePerception';
 
 export type BuildProjectAgentIntentInput = {
   text: string;
@@ -23,6 +24,7 @@ export type BuildProjectAgentIntentInput = {
   hasInlineImageRefs?: boolean;
   hasEnabled3dPreset?: boolean;
   enabledSkills?: ProjectAgentIntent['enabledSkills'];
+  perception?: ProjectAgentPerceptionContext;
 };
 
 export function buildProjectAgentIntent(input: BuildProjectAgentIntentInput): ProjectAgentIntent {
@@ -45,5 +47,6 @@ export function buildProjectAgentIntent(input: BuildProjectAgentIntentInput): Pr
       ? { hasEnabled3dPreset: input.hasEnabled3dPreset }
       : {}),
     ...(input.enabledSkills?.length ? { enabledSkills: input.enabledSkills } : {}),
+    ...(input.perception ? { perception: input.perception } : {}),
   };
 }

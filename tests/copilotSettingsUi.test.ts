@@ -90,6 +90,50 @@ describe('copilot settings UI', () => {
     expect(main).toContain('agentSessionService.clearHistory');
   });
 
+  it('supports object-scoped Copilot sessions for tools and hosts', () => {
+    const panel = fs.readFileSync(copilotPanelPath, 'utf8').replace(/\r\n/g, '\n');
+    const preload = fs.readFileSync(shellPreloadPath, 'utf8').replace(/\r\n/g, '\n');
+    const main = fs.readFileSync(shellMainPath, 'utf8').replace(/\r\n/g, '\n');
+    const toolsPage = fs.readFileSync(path.resolve(process.cwd(), 'companion-desktop/shell/tools-page.js'), 'utf8');
+    const bridges = fs.readFileSync(path.resolve(process.cwd(), 'companion-desktop/shell/tools-bridges.js'), 'utf8');
+
+    expect(panel).toContain('let activeObjectSessionId');
+    expect(panel).toContain('function buildObjectSessionId');
+    expect(panel).toContain('const explicitSessionId =');
+    expect(panel).toContain('window.__acOpenCopilotObjectSession = openObjectSession');
+    expect(panel).toContain('let activeObjectContextPrompt');
+    expect(panel).toContain('function buildObjectContextPrompt');
+    expect(panel).toContain('shell.onOpenCopilotObjectSession');
+    expect(panel).toContain('agent.listMessages(currentSessionId())');
+    expect(panel).toContain('agent.clearHistory(currentSessionId())');
+    expect(panel).toContain("activeObjectContextPrompt + '\\n\\n\\u7528\\u6237\\u8fd9\\u6b21\\u8bf4\\uff1a\\n' + text");
+    expect(panel).toContain('agent.send(outboundText, currentSessionId())');
+    expect(preload).toContain("send: (text, sessionId) => timedInvoke('agent-session-send', { text, sessionId }");
+    expect(preload).toContain('onOpenCopilotObjectSession');
+    expect(main).toContain('agentSessionService.sendUserMessage(text, { sessionId })');
+    expect(main).toContain("shell-open-copilot-object-session");
+    expect(main).toContain("type: 'capability'");
+    expect(main).toContain('fetchShellToolCapabilityContextForAutoFix(toolId)');
+    expect(main).toContain('sessionId: capabilitySessionId');
+    expect(main).toContain('sendUserMessage(outboundPrompt, { sessionId: capabilitySessionId })');
+    expect(main).not.toContain("sendUserMessage(prompt, { sessionId: `tool-${toolId}` })");
+    expect(toolsPage).toContain("type: 'capability'");
+    expect(toolsPage).toContain('sessionId: session.sessionId');
+    expect(toolsPage).toContain('__acOpenCopilotObjectSession');
+    expect(toolsPage).toContain('fetchToolCapabilityContext(shell, entry, toolId)');
+    expect(toolsPage).toContain("'/v1/capability-packages/' + encodeURIComponent(capabilityId) + '/context'");
+    expect(toolsPage).toContain('context.contextPrompt');
+    expect(toolsPage).toContain('fallbackToolCapabilityContext');
+    expect(toolsPage).toContain('\\u672c\\u5730\\u7248\\u672c');
+    expect(toolsPage).toContain('\\u4e91\\u7aef\\u5386\\u53f2\\u7248\\u672c');
+    expect(bridges).toContain('data-bridge-host-chat');
+    expect(bridges).toContain("type: 'host'");
+    expect(bridges).toContain('bridgeCopilotContext');
+    expect(bridges).toContain('contextPrompt: this.bridgeCopilotContext(hostId)');
+    expect(bridges).toContain('\\u63a2\\u6d4b\\u72b6\\u6001');
+    expect(bridges).toContain('\\u9a8c\\u6536\\u8bc1\\u636e');
+  });
+
   it('keeps assistant bubbles pre-wrap and mutes routine Codex activity cards', () => {
     const panel = fs.readFileSync(copilotPanelPath, 'utf8').replace(/\r\n/g, '\n');
     const html = fs.readFileSync(shellIndexPath, 'utf8').replace(/\r\n/g, '\n');
@@ -99,6 +143,16 @@ describe('copilot settings UI', () => {
     expect(panel).toContain("setBubbleText(bubble, 'assistant', streamingText)");
     expect(html).toContain('#shell-copilot .copilot-msg');
     expect(html).toMatch(/#shell-copilot \.copilot-msg \{[\s\S]*?white-space:\s*pre-wrap\s*!important/);
+  });
+
+  it('broadcasts capability creation results so pages can refresh after Copilot creates objects', () => {
+    const panel = fs.readFileSync(copilotPanelPath, 'utf8').replace(/\r\n/g, '\n');
+
+    expect(panel).toContain('function capabilityCreatedFromToolResult');
+    expect(panel).toContain("name !== 'ac.capability.create_draft' && name !== 'ac.capability.draft_create'");
+    expect(panel).toContain("ev.type === 'tool_result'");
+    expect(panel).toContain("new CustomEvent('assetcutter:capability-created'");
+    expect(panel).toContain("type !== 'software_connection' && type !== 'tool'");
   });
 
   it('uses Workbench as the first shell entry and moves home diagnostics into categorized settings', () => {
@@ -328,7 +382,7 @@ describe('copilot settings UI', () => {
     const sendStart = panel.indexOf('async function sendMessage()');
     const setupCall = panel.indexOf('const setupReady = await ensureCodexReadyBeforeSend()', sendStart);
     const failureReturn = panel.indexOf('return;', setupCall);
-    const sendCall = panel.indexOf('const r = await agent.send(text)', setupCall);
+    const sendCall = panel.indexOf('const r = await agent.send(outboundText, currentSessionId())', setupCall);
     expect(sendStart).toBeGreaterThanOrEqual(0);
     expect(setupCall).toBeGreaterThan(sendStart);
     expect(failureReturn).toBeGreaterThan(setupCall);

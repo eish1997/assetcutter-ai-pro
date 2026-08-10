@@ -223,6 +223,8 @@ export const AUDIT_ACTION_LABELS = {
   'admin.companion_artifact_presign_put': '伴侣预签名上传',
   'admin.companion_artifact_register': '伴侣发行登记',
   'admin.companion_artifact_delete': '伴侣删除',
+  'admin.host_bridge_version_publish': '宿主桥接版本发布',
+  'admin.host_bridge_version_activate': '宿主桥接版本切换',
   'admin.workspace_usage_reconcile': '用量同步',
   'admin.capability_preset_publish': '能力预设发布',
   'admin.alert_webhook_update': '告警 Webhook 配置',

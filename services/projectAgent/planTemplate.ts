@@ -1,34 +1,47 @@
 /**
- * Deterministic plan copy for assistant bubbles (P10 / §16.1).
- * No LLM.
+ * Deterministic plan copy for assistant bubbles (P10 / section 16.1).
+ * No LLM. Runtime perception can prefix the plan with the current target.
  */
 
 import type { AgentPlannedTool } from '../../types/projectAgent';
+import type { ProjectAgentPerceptionContext } from '../../types/runtimePerception';
+import { formatPerceptionForPlanPrefix } from '../runtimePerception/visibleSummary';
 import { getExpertProfile } from './experts/registry';
 
-export function formatPlanTemplate(plan: AgentPlannedTool[]): string {
-  if (!plan.length) return '计划：无可用步骤';
-  if (plan.length === 1) {
-    const p = plan[0]!;
-    if (p.toolId === 'run_preset') {
-      const name = typeof p.args?.presetId === 'string' ? p.args.presetId : '';
-      return name ? `计划：运行预设「${name}」` : `计划：${p.label}`;
-    }
-    if (p.toolId === 'invoke_expert') {
-      const expertId = typeof p.args?.expertId === 'string' ? p.args.expertId : '';
-      const profile = expertId ? getExpertProfile(expertId) : null;
-      return profile
-        ? `计划：调用专家「${profile.displayName}」`
-        : expertId
-          ? `计划：调用专家「${expertId}」`
-          : `计划：${p.label}`;
-    }
-    return `计划：${p.label}`;
-  }
-  const labels = plan.map((p) => p.label);
-  const allSame = labels.every((l) => l === labels[0]);
-  if (allSame) {
-    return `计划：${labels[0]}×${plan.length}`;
-  }
-  return `计划：${labels.join(' → ')}`;
+function prefixFromPerception(perception?: ProjectAgentPerceptionContext): string {
+  const prefix = formatPerceptionForPlanPrefix(perception);
+  return prefix ? `${prefix} -> ` : '';
+}
+
+function presetPlanLabel(step: AgentPlannedTool): string {
+  const name = typeof step.args?.presetId === 'string' ? step.args.presetId.trim() : '';
+  return name ? `run preset "${name}"` : step.label;
+}
+
+function expertPlanLabel(step: AgentPlannedTool): string {
+  const expertId = typeof step.args?.expertId === 'string' ? step.args.expertId.trim() : '';
+  const profile = expertId ? getExpertProfile(expertId) : null;
+  if (profile) return `ask expert "${profile.displayName}"`;
+  if (expertId) return `ask expert "${expertId}"`;
+  return step.label;
+}
+
+function stepLabel(step: AgentPlannedTool): string {
+  if (step.toolId === 'run_preset') return presetPlanLabel(step);
+  if (step.toolId === 'invoke_expert') return expertPlanLabel(step);
+  return step.label;
+}
+
+export function formatPlanTemplate(
+  plan: AgentPlannedTool[],
+  perception?: ProjectAgentPerceptionContext
+): string {
+  const prefix = prefixFromPerception(perception);
+  if (!plan.length) return `${prefix}Plan: no available step`;
+  if (plan.length === 1) return `${prefix}Plan: ${stepLabel(plan[0]!)}`;
+
+  const labels = plan.map(stepLabel);
+  const allSame = labels.every((label) => label === labels[0]);
+  if (allSame) return `${prefix}Plan: ${labels[0]} x${plan.length}`;
+  return `${prefix}Plan: ${labels.join(' -> ')}`;
 }

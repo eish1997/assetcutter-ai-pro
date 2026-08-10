@@ -40,6 +40,24 @@ async function openSkillPanel(container: HTMLElement) {
 }
 
 describe('QuickComposeChatDock Skill Registry', () => {
+  it('shows runtime perception context chips', () => {
+    renderDock({
+      perceptionContext: {
+        visibleSummary: 'Project: Launch | Selected 5 assets | Maya disconnected',
+        targetSummary: 'Selected 5 assets',
+        workflowSummary: 'Plan: maya-export | 1/2 steps done | Blocked: connector',
+        externalSummary: 'Maya: disconnected | selection unknown',
+        riskSummary: 'Context may be stale',
+        stale: true,
+      },
+    });
+
+    expect(screen.getByText('Selected 5 assets')).toBeTruthy();
+    expect(screen.getByText(/maya-export/)).toBeTruthy();
+    expect(screen.getByText(/Maya: disconnected/)).toBeTruthy();
+    expect(screen.getAllByText('Context may be stale').length).toBeGreaterThan(0);
+  });
+
   it('opens Skill management and supports sample install plus import preview', async () => {
     const { container } = renderDock();
     const user = await openSkillPanel(container);

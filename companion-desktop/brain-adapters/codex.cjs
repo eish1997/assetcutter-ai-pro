@@ -190,22 +190,28 @@ function buildToolContext(input) {
   const names = tools.map((t) => t && t.name).filter(Boolean);
   const workbenchTools = names.filter((name) => String(name).startsWith('ac.workbench.'));
   const shellTools = names.filter((name) => String(name).startsWith('ac.shell.'));
+  const shellToolTools = names.filter((name) => String(name).startsWith('ac.shell_tool.'));
   if (!names.length) return '';
   const lines = [
     'AssetCutter Copilot context:',
     '- You are running as the Copilot brain inside AssetCutter local companion.',
     '- Workbench actions MUST use the AssetCutter MCP server `assetcutter-body` (ac.* body tools). Do not invent PowerShell/curl/JSON-RPC scripts, and do not edit agent-store settings.',
     '- Codex may expose these tools with an MCP prefix such as `mcp__assetcutter-body__ac.workbench.create_text_asset`. Prefer that MCP tool over shell.',
+    '- If the user asks to create/build a tool, plugin, script tool, Maya plugin, or small utility, DO NOT call ac.workbench.create_text_asset. Prefer ac.capability.create_draft with a natural-language intent, then ac.shell_tool.authored_upsert for concrete files and ac.shell_tool.export if a ZIP/package is needed.',
+    '- If the user asks to add/create a software connection for Photoshop, Maya, Blender, Spine, Unity, Unreal, or another host app, prefer ac.capability.create_draft with type=software_connection and natural-language intent. Treat ac.companion.host_bridge.* as legacy recovery/debug tools, not the default creation path.',
+    '- For an existing software connection that needs ongoing repair, installation, launch, or verification, prefer ac.capability.connection_loop_run with explicit bounded permissions. First read that CapabilityPackage context/connectionState, keep all work scoped to that object session, do not switch back to the legacy 62-host catalog or ac.companion.host_bridge.*, and never mark the connection successful without a real probe signal.',
     '- For a new text note in the open workbench project, call ac.workbench.create_text_asset (or the mcp__assetcutter-body__ prefixed equivalent) with { text }. Never use Agent CLI aga_* / npm run agent:cli for workbench assets.',
     '- To import a local/Downloads image into the open workbench project, call ac.workbench.create_image_asset with { localPath } (absolute file path only). NEVER pass image base64 / imageDataUrl for real imports — that blows up tool args even for ~100KB files. Companion reads the file from disk.',
     `- Workbench standard flow: ${workbenchStandardFlowText()}.`,
+    '- Capability result flow: ac.workbench.run_capability -> ac.workbench.list_assets -> ac.workbench.get_asset.',
     '- If a tool reports AGENT_AUTH_REQUIRED or authRequired, ask the user to open the workbench and log in, then retry the same flow.',
     '- If a tool reports requiresFrontendAuthorization, keep Copilot open and wait for the user to approve in the frontend.',
     '- If MCP tools are missing, say Body MCP is not connected (need ASSETCUTTER_MCP_TOKEN + 127.0.0.1:19120). Do not fall back to shell hacks.',
   ];
   if (shellTools.length) lines.push(`- Shell tools available: ${shellTools.join(', ')}`);
+  if (shellToolTools.length) lines.push(`- Shell tool authoring tools available: ${shellToolTools.join(', ')}`);
   if (workbenchTools.length) lines.push(`- Workbench tools available: ${workbenchTools.join(', ')}`);
-  const other = names.filter((name) => !String(name).startsWith('ac.workbench.') && !String(name).startsWith('ac.shell.'));
+  const other = names.filter((name) => !String(name).startsWith('ac.workbench.') && !String(name).startsWith('ac.shell.') && !String(name).startsWith('ac.shell_tool.'));
   if (other.length) lines.push(`- Other body tools available: ${other.slice(0, 20).join(', ')}${other.length > 20 ? ', ...' : ''}`);
   return lines.join('\n');
 }

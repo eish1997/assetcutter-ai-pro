@@ -304,6 +304,77 @@ describe('agent workbench client', () => {
     expect(result.error.code).toBe('AGENT_TOOL_INVALID_ARGS');
   });
 
+  it('rejects plugin/tool code misrouted through createTextAsset', async () => {
+    let navigated = false;
+    let fetched = false;
+    let bridged = false;
+    const client = createClient({
+      navigateShell: async () => {
+        navigated = true;
+        return { ok: true };
+      },
+      fetchWithPartition: async () => {
+        fetched = true;
+        return { ok: true, status: 200, json: {}, text: '' };
+      },
+      invokeBridge: async () => {
+        bridged = true;
+        return { ok: true };
+      },
+    });
+
+    const result = await client.createTextAsset({
+      name: 'Maya plugin Random Selection Toolkit',
+      text: [
+        'Maya插件 RandomSelectionToolkit.py 说明与代码',
+        '```python',
+        'import maya.cmds as cmds',
+        'def randomSelectionToolkit():',
+        '    cmds.window("randomSelectionToolkit")',
+        '```',
+      ].join('\n'),
+      projectId: 'p1',
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.error.code).toBe('AGENT_TOOL_MISROUTED_TO_TEXT_ASSET');
+    expect(result.structured.recommendedTools).toEqual([
+      'ac.capability.create_draft',
+      'ac.shell_tool.authored_upsert',
+      'ac.shell_tool.export',
+    ]);
+    expect(result.structured.nextStep).toContain('ac.capability.create_draft');
+    expect(navigated).toBe(false);
+    expect(fetched).toBe(false);
+    expect(bridged).toBe(false);
+  });
+
+  it('rejects Chinese tool creation briefs misrouted through createTextAsset', async () => {
+    const client = createClient();
+    const result = await client.createTextAsset({
+      name: '随机选择插件',
+      text: '帮我创建一个 Maya 随机选择插件，可以按比例从当前选择里随机保留一部分对象。',
+      projectId: 'p1',
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.error.code).toBe('AGENT_TOOL_MISROUTED_TO_TEXT_ASSET');
+    expect(result.structured.recommendedTools).toContain('ac.capability.create_draft');
+  });
+
+  it('rejects real UTF-8 Chinese plugin creation requests misrouted through createTextAsset', async () => {
+    const client = createClient();
+    const result = await client.createTextAsset({
+      name: '随机选择插件',
+      text: '帮我创建一个 Maya 随机选择插件，可以按比例从当前选择里随机保留一部分对象。',
+      projectId: 'p1',
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.error.code).toBe('AGENT_TOOL_MISROUTED_TO_TEXT_ASSET');
+    expect(result.structured.nextStep).toContain('ac.capability.create_draft');
+  });
+
   it('creates a human-shaped image asset through server auth check and bridge', async () => {
     const client = createClient();
     const imageDataUrl = 'data:image/png;base64,iVBORw0KGgo=';

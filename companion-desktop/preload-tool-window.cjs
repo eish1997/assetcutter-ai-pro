@@ -33,8 +33,30 @@ contextBridge.exposeInMainWorld('companionToolWindow', {
   openFolderPath: (absPath) => timedInvoke('shell-open-folder-path', absPath),
   minimize: () => timedInvoke('shell-tool-window-minimize'),
   close: () => timedInvoke('shell-tool-window-close'),
+  setDetailsCollapsed: (collapsed) =>
+    timedInvoke('shell-tool-window-set-details-collapsed', Boolean(collapsed)),
   togglePin: (pinned) => timedInvoke('shell-tool-window-toggle-pin', pinned),
   getPin: () => timedInvoke('shell-tool-window-get-pin'),
   reportRunFailure: (payload) => timedInvoke('shell-tool-report-run-failure', payload || {}, 600000),
+  onOpenTool: (handler) => {
+    if (typeof handler !== 'function') return;
+    ipcRenderer.on('shell-tool-workspace-open-tool', (_evt, payload) => {
+      try {
+        handler(payload || {});
+      } catch {
+        /* ignore */
+      }
+    });
+  },
+  onCloseTool: (handler) => {
+    if (typeof handler !== 'function') return;
+    ipcRenderer.on('shell-tool-workspace-close-tool', (_evt, payload) => {
+      try {
+        handler(payload || {});
+      } catch {
+        /* ignore */
+      }
+    });
+  },
   platform: process.platform,
 });

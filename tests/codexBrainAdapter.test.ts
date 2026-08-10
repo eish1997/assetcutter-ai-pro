@@ -80,7 +80,16 @@ describe('Codex brain adapter', () => {
     for await (const ev of adapter.streamTurn({
       sessionId: 'session_1',
       messages: [{ role: 'user', content: 'run workbench task' }],
-      tools: [{ name: 'ac.workbench.ensure_ready' }, { name: 'ac.workbench.run_capability' }, { name: 'ac.workbench.create_text_asset' }, { name: 'ac.workbench.create_image_asset' }],
+      tools: [
+        { name: 'ac.workbench.ensure_ready' },
+        { name: 'ac.workbench.run_capability' },
+        { name: 'ac.workbench.create_text_asset' },
+        { name: 'ac.workbench.create_image_asset' },
+        { name: 'ac.capability.create_draft' },
+        { name: 'ac.companion.host_bridge.create_draft' },
+        { name: 'ac.shell_tool.scaffold' },
+        { name: 'ac.shell_tool.authored_upsert' },
+      ],
     })) {
       events.push(ev);
     }
@@ -106,6 +115,15 @@ describe('Codex brain adapter', () => {
     expect(prompts.join('\n')).toContain('AssetCutter Copilot context');
     expect(prompts.join('\n')).toContain('ac.workbench.create_text_asset');
     expect(prompts.join('\n')).toContain('ac.workbench.create_image_asset');
+    expect(prompts.join('\n')).toContain('DO NOT call ac.workbench.create_text_asset');
+    expect(prompts.join('\n')).toContain('ac.capability.create_draft');
+    expect(prompts.join('\n')).toContain('type=software_connection');
+    expect(prompts.join('\n')).toContain('ac.companion.host_bridge.* as legacy recovery/debug tools');
+    expect(prompts.join('\n')).toContain('ac.capability.connection_loop_run');
+    expect(prompts.join('\n')).toContain('context/connectionState');
+    expect(prompts.join('\n')).toContain('legacy 62-host catalog');
+    expect(prompts.join('\n')).toContain('real probe signal');
+    expect(prompts.join('\n')).toContain('Shell tool authoring tools available');
     expect(prompts.join('\n')).toContain('localPath');
     expect(prompts.join('\n')).toContain('mcp__assetcutter-body__');
     expect(prompts.join('\n')).toContain('Do not invent PowerShell');

@@ -52,6 +52,10 @@
   let codexWaitHintTimer = null;
   let codexWaitStartedAt = 0;
   let codexLastProgressLabel = '';
+  let activeObjectSessionId = '';
+  let activeObjectSessionLabel = '';
+  let activeObjectSessionType = '';
+  let activeObjectContextPrompt = '';
   const COPILOT_EXPANDED_MIN_WIDTH = 360;
   const COPILOT_EXPANDED_DEFAULT_WIDTH = 380;
   const COPILOT_EXPANDED_MAX_WIDTH = 720;
@@ -71,6 +75,90 @@
   function setStatus(text) {
     if (!statusEl) return;
     statusEl.textContent = text || '';
+  }
+
+  function normalizeObjectSessionPart(value) {
+    return String(value || '')
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9._-]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 80);
+  }
+
+  function buildObjectSessionId(type, id) {
+    const safeType = normalizeObjectSessionPart(type);
+    const safeId = normalizeObjectSessionPart(id);
+    return safeType && safeId ? safeType + '-' + safeId : '';
+  }
+
+  function currentSessionId() {
+    return activeObjectSessionId || undefined;
+  }
+
+  function buildObjectContextPrompt(type, id, label) {
+    const objectType = normalizeObjectSessionPart(type);
+    const objectId = String(id || '').trim();
+    const objectLabel = String(label || id || '').trim();
+    if (objectType === 'tool') {
+      return [
+        '\u5f53\u524d\u5bf9\u8bdd\u7ed1\u5b9a\u5230\u4e00\u4e2a\u672c\u5730\u5de5\u5177\u3002',
+        '\u5de5\u5177 ID: ' + objectId,
+        '\u5de5\u5177\u540d\u79f0: ' + objectLabel,
+        '\u5982\u679c\u7528\u6237\u8981\u4fee\u590d\u3001\u8c03\u6574\u6216\u7ee7\u7eed\u4f18\u5316\u8fd9\u4e2a\u5de5\u5177\uff0c\u4f18\u5148\u4f7f\u7528 ac.shell_tool.authored_upsert \u4fee\u6539\u5b83\u7684\u672c\u673a\u8349\u7a3f\uff0c\u5fc5\u8981\u65f6\u7528 ac.shell_tool.run \u590d\u6d4b\u3002',
+      ].join('\n');
+    }
+    if (objectType === 'host') {
+      return [
+        '\u5f53\u524d\u5bf9\u8bdd\u7ed1\u5b9a\u5230\u4e00\u4e2a\u5bbf\u4e3b\u8fde\u63a5\u3002',
+        '\u5bbf\u4e3b ID: ' + objectId,
+        '\u5bbf\u4e3b\u540d\u79f0: ' + objectLabel,
+        '\u5982\u679c\u7528\u6237\u8981\u5b89\u88c5\u3001\u542f\u52a8\u3001\u5173\u95ed\u3001\u63a2\u6d4b\u6216\u4fee\u590d\u8fd9\u4e2a\u5bbf\u4e3b\uff0c\u4f18\u5148\u4f7f\u7528 ac.companion.host_bridge.* \u5de5\u5177\uff0c\u6210\u529f\u9a8c\u6536\u5fc5\u987b\u6765\u81ea\u771f\u5b9e\u8f6f\u4ef6\u8fde\u63a5\u4fe1\u53f7\u3002',
+      ].join('\n');
+    }
+    return '';
+  }
+
+  function setObjectSessionUi() {
+    root.dataset.copilotSessionId = activeObjectSessionId || 'default';
+    root.dataset.copilotSessionType = activeObjectSessionType || 'default';
+    const suffix = activeObjectSessionLabel ? '\u5f53\u524d\uff1a' + activeObjectSessionLabel : '';
+    if (inputEl) {
+      inputEl.placeholder = activeObjectSessionLabel
+        ? '\u7ee7\u7eed\u4f18\u5316 ' + activeObjectSessionLabel
+        : '\u8bd5\u8bd5\uff1a\u6253\u5f00\u811a\u672c / \u4f34\u4fa3\u72b6\u6001\u600e\u4e48\u6837\uff1f';
+    }
+    if (suffix) setStatus(suffix);
+  }
+
+  async function openObjectSession(payload) {
+    const data = payload && typeof payload === 'object' ? payload : {};
+    const explicitSessionId = typeof data.sessionId === 'string' ? data.sessionId.trim() : '';
+    const sessionId = explicitSessionId || buildObjectSessionId(data.type, data.id);
+    if (!sessionId) return { ok: false, error: 'invalid_object_session' };
+    activeObjectSessionId = sessionId;
+    activeObjectSessionType = normalizeObjectSessionPart(data.type);
+    activeObjectSessionLabel = String(data.label || data.id || '').trim();
+    activeObjectContextPrompt =
+      typeof data.contextPrompt === 'string' && data.contextPrompt.trim()
+        ? data.contextPrompt.trim()
+        : buildObjectContextPrompt(data.type, data.id, activeObjectSessionLabel);
+    setObjectSessionUi();
+    await loadHistory();
+    if (data.focus !== false && typeof inputEl.focus === 'function') inputEl.focus();
+    if (data.prompt && typeof data.prompt === 'string') {
+      inputEl.value = data.prompt;
+      resizeComposer();
+    }
+    return { ok: true, sessionId };
+  }
+
+  window.__acOpenCopilotObjectSession = openObjectSession;
+
+  if (typeof shell.onOpenCopilotObjectSession === 'function') {
+    shell.onOpenCopilotObjectSession((payload) => {
+      void openObjectSession(payload || {});
+    });
   }
 
   function clearCodexWaitHintTimer() {
@@ -2037,7 +2125,7 @@
 
   async function loadHistory() {
     try {
-      const r = await agent.listMessages();
+      const r = await agent.listMessages(currentSessionId());
       if (!r || !r.ok || !Array.isArray(r.messages)) return;
       messagesEl.innerHTML = '';
       onboardEl = null;
@@ -2099,7 +2187,7 @@
       if (typeof agent.clearHistory !== 'function') {
         throw new Error('clear_history_unavailable');
       }
-      const r = await agent.clearHistory();
+      const r = await agent.clearHistory(currentSessionId());
       if (!r || r.ok === false) {
         throw new Error((r && r.error) || 'clear_failed');
       }
@@ -2175,6 +2263,48 @@
     });
   }
 
+  function parseToolResultContent(result) {
+    if (!result || typeof result !== 'object') return null;
+    if (result.structured && typeof result.structured === 'object') return result.structured;
+    const content = typeof result.content === 'string' ? result.content.trim() : '';
+    if (!content || content[0] !== '{') return null;
+    try {
+      const parsed = JSON.parse(content);
+      return parsed && typeof parsed === 'object' ? parsed : null;
+    } catch {
+      return null;
+    }
+  }
+
+  function capabilityCreatedFromToolResult(ev) {
+    const name = String((ev && ev.name) || '').trim();
+    if (name !== 'ac.capability.create_draft' && name !== 'ac.capability.draft_create') return null;
+    const result = ev && ev.result && typeof ev.result === 'object' ? ev.result : null;
+    if (!result || result.ok === false) return null;
+    const payload = parseToolResultContent(result);
+    if (!payload) return null;
+    const draft = payload.draft && typeof payload.draft === 'object' ? payload.draft : null;
+    const context = payload.context && typeof payload.context === 'object' ? payload.context : null;
+    const session = context && context.session && typeof context.session === 'object' ? context.session : null;
+    const type = String(payload.type || (draft && draft.type) || '').trim();
+    const id = String(payload.id || (draft && draft.id) || '').trim();
+    if (type !== 'software_connection' && type !== 'tool') return null;
+    if (!id) return null;
+    return {
+      type,
+      id,
+      name: String(payload.name || (draft && draft.name) || id).trim(),
+      sessionId: String((session && session.sessionId) || (draft && draft.conversation && draft.conversation.sessionId) || '').trim(),
+      sourceTool: name,
+    };
+  }
+
+  function notifyCapabilityCreated(ev) {
+    const detail = capabilityCreatedFromToolResult(ev);
+    if (!detail) return;
+    window.dispatchEvent(new CustomEvent('assetcutter:capability-created', { detail }));
+  }
+
   if (typeof agent.onEvent === 'function') {
     agent.onEvent((ev) => {
       if (!ev || typeof ev !== 'object') return;
@@ -2207,6 +2337,8 @@
         } else if (ev.phase) {
           updateActiveTaskThread('progress', (ev.name || 'tool') + ' ' + ev.phase);
         }
+      } else if (ev.type === 'tool_result') {
+        notifyCapabilityCreated(ev);
       } else if (ev.type === 'activity') {
         rememberCodexProgress(ev);
         noteActivityProgress(ev);
@@ -2280,7 +2412,10 @@
       }
       setStatus('Codex \u6b63\u5728\u601d\u8003...');
       startCodexWaitHintTimer();
-      const r = await agent.send(text);
+      const outboundText = activeObjectContextPrompt
+        ? activeObjectContextPrompt + '\n\n\u7528\u6237\u8fd9\u6b21\u8bf4\uff1a\n' + text
+        : text;
+      const r = await agent.send(outboundText, currentSessionId());
       if (r && !r.ok && r.error) {
         setStatus(String(r.error));
         updateActiveTaskThread('error', String(r.error));

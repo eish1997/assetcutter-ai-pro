@@ -36,11 +36,10 @@
       font-size: 12px;
       display: flex;
       flex-direction: column;
-      padding-top: 30px;
     }
     .app-titlebar {
       position: fixed;
-      top: 0; left: 0; right: 0;
+      top: 0; left: 52px; right: 0;
       height: 30px;
       display: flex;
       align-items: center;
@@ -52,6 +51,9 @@
       z-index: 150;
       -webkit-app-region: drag;
       user-select: none;
+    }
+    body.details-hidden .app-titlebar {
+      display: none;
     }
     .titlebar-title {
       flex: 1; min-width: 0;
@@ -90,6 +92,154 @@
     .tool-body {
       flex: 1; min-height: 0; overflow: auto;
       padding: 10px 12px 12px;
+      scrollbar-gutter: stable;
+    }
+    .tool-workspace {
+      flex: 1;
+      min-height: 0;
+      display: grid;
+      grid-template-columns: 52px minmax(0, 1fr);
+      background: var(--bg);
+    }
+    .tool-workspace.details-hidden {
+      grid-template-columns: 52px 0;
+    }
+    .tool-nav {
+      min-width: 0;
+      border-right: 1px solid rgba(255,255,255,0.07);
+      background: rgba(12, 14, 19, 0.95);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      z-index: 220;
+      -webkit-app-region: drag;
+    }
+    .tool-nav-list {
+      flex: 1;
+      min-height: 0;
+      overflow: auto;
+      padding: 8px 7px;
+      -webkit-app-region: drag;
+    }
+    .tool-nav-item {
+      width: 100%;
+      min-height: 38px;
+      display: grid;
+      grid-template-columns: 28px;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      border: 0;
+      border-radius: 6px;
+      padding: 5px;
+      background: transparent;
+      color: var(--text);
+      cursor: pointer;
+      text-align: left;
+      font-family: inherit;
+      margin-bottom: 4px;
+      -webkit-app-region: no-drag;
+    }
+    .tool-nav-item:hover {
+      background: rgba(255,255,255,0.07);
+    }
+    .tool-nav-item.active {
+      background: rgba(91, 141, 239, 0.16);
+      color: #dbe7ff;
+    }
+    .tool-nav-icon {
+      width: 28px;
+      height: 28px;
+      border-radius: 6px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      background: rgba(196, 163, 90, 0.14);
+      color: #f5e6c0;
+      font-size: 12px;
+      font-weight: 800;
+      text-transform: uppercase;
+    }
+    .tool-nav-name {
+      display: none;
+    }
+    .tool-content-shell {
+      min-width: 0;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      padding-top: 30px;
+    }
+    .tool-workspace.details-hidden .tool-content-shell {
+      display: none;
+    }
+    .tool-panels {
+      flex: 1;
+      min-height: 0;
+      position: relative;
+      overflow: hidden;
+    }
+    .tool-panel {
+      position: absolute;
+      inset: 0;
+      display: none;
+      flex-direction: column;
+      min-height: 0;
+    }
+    .tool-panel.active {
+      display: flex;
+    }
+
+    .tool-body,
+    .shell-tool-dd-list,
+    #toolModuleLog,
+    .tool-module-log {
+      scrollbar-width: thin;
+      scrollbar-color: #343946 #07080c;
+    }
+    .tool-body::-webkit-scrollbar,
+    .shell-tool-dd-list::-webkit-scrollbar,
+    #toolModuleLog::-webkit-scrollbar,
+    .tool-module-log::-webkit-scrollbar {
+      width: 10px;
+      height: 10px;
+    }
+    .tool-body::-webkit-scrollbar-button,
+    .shell-tool-dd-list::-webkit-scrollbar-button,
+    #toolModuleLog::-webkit-scrollbar-button,
+    .tool-module-log::-webkit-scrollbar-button {
+      width: 0;
+      height: 0;
+      display: none;
+    }
+    .tool-body::-webkit-scrollbar-track,
+    .shell-tool-dd-list::-webkit-scrollbar-track,
+    #toolModuleLog::-webkit-scrollbar-track,
+    .tool-module-log::-webkit-scrollbar-track {
+      background: #07080c;
+      border-left: 1px solid rgba(255, 255, 255, 0.04);
+    }
+    .tool-body::-webkit-scrollbar-thumb,
+    .shell-tool-dd-list::-webkit-scrollbar-thumb,
+    #toolModuleLog::-webkit-scrollbar-thumb,
+    .tool-module-log::-webkit-scrollbar-thumb {
+      min-height: 36px;
+      border-radius: 999px;
+      background: #343946;
+      border: 2px solid #07080c;
+    }
+    .tool-body::-webkit-scrollbar-thumb:hover,
+    .shell-tool-dd-list::-webkit-scrollbar-thumb:hover,
+    #toolModuleLog::-webkit-scrollbar-thumb:hover,
+    .tool-module-log::-webkit-scrollbar-thumb:hover {
+      background: #454b59;
+    }
+    .tool-body::-webkit-scrollbar-corner,
+    .shell-tool-dd-list::-webkit-scrollbar-corner,
+    #toolModuleLog::-webkit-scrollbar-corner,
+    .tool-module-log::-webkit-scrollbar-corner {
+      background: #07080c;
     }
 
     .shell-tool-form { display: flex; flex-direction: column; gap: 10px; }
@@ -293,7 +443,8 @@
       border-top: 1px solid rgba(255,255,255,0.06);
     }
 
-    #toolModuleLog {
+    #toolModuleLog,
+    .tool-module-log {
       margin-top: 10px;
       max-height: 160px;
       overflow: auto;
@@ -348,11 +499,13 @@
       </button>
     </div>
   </header>
-  <main class="tool-body">
-    <div id="toolLoadError" class="tool-load-error hidden"></div>
-    <div id="toolModuleBody"></div>
-    <div id="toolModuleActions"></div>
-    <pre id="toolModuleLog" class="hidden"></pre>
+  <main class="tool-workspace" id="toolWorkspace">
+    <aside class="tool-nav" aria-label="工具导航">
+      <div class="tool-nav-list" id="toolNavList"></div>
+    </aside>
+    <section class="tool-content-shell">
+      <div class="tool-panels" id="toolPanels"></div>
+    </section>
   </main>
   <script src="tools-module.js"></script>
   <script src="tool-window.js"></script>

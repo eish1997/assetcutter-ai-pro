@@ -175,6 +175,7 @@ export type WorkspaceQuickComposeBarProps = {
     | 'onResultPreview'
     | 'selectionStatusLabel'
     | 'selectionStatusTone'
+    | 'perceptionContext'
     | 'onOpenPanel'
     | 'onClearChat'
     | 'onLoadEarlier'
@@ -1707,6 +1708,7 @@ export default function WorkspaceQuickComposeBar({
                     onResultPreview={chatDockProps?.onResultPreview}
                     selectionStatusLabel={chatDockProps?.selectionStatusLabel}
                     selectionStatusTone={chatDockProps?.selectionStatusTone}
+                    perceptionContext={chatDockProps?.perceptionContext}
                     onClearChat={chatDockProps?.onClearChat}
                     onLoadEarlier={chatDockProps?.onLoadEarlier}
                     canLoadEarlier={chatDockProps?.canLoadEarlier}

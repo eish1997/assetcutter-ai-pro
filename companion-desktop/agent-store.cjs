@@ -369,7 +369,8 @@ function createAgentStore(deps) {
   }
 
   function sessionDir(sessionId) {
-    const id = String(sessionId || DEFAULT_SESSION_ID).trim() || DEFAULT_SESSION_ID;
+    const raw = String(sessionId || DEFAULT_SESSION_ID).trim() || DEFAULT_SESSION_ID;
+    const id = raw.replace(/[^a-zA-Z0-9._-]/g, '_').replace(/^\.+$/, '_').slice(0, 128) || DEFAULT_SESSION_ID;
     const dir = path.join(rootDir(), 'sessions', id);
     ensureDir(dir);
     return dir;

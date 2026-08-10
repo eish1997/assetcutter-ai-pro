@@ -205,7 +205,7 @@ async function loadUrlWithProxyFallback(webContents, target) {
 /** 开发：`npm start`；安装包：未保存过主站时的「打开网站」默认 */
 const DEFAULT_SHELL_SITE_DEV = 'http://localhost:3000';
 const DEFAULT_SHELL_SITE_PACKAGED = 'https://assetcutter-ai-pro.vercel.app/';
-const DEFAULT_AUTH_API_ORIGIN_DEV = 'http://127.0.0.1:9100';
+const DEFAULT_AUTH_API_ORIGIN_DEV = 'http://localhost:9100';
 const DEFAULT_AUTH_API_ORIGIN_PROD = 'https://assetcutter-auth-api.onrender.com';
 const DEFAULT_SCRIPT_HUB_DEV = 'http://localhost:5173/';
 const DEFAULT_SCRIPT_HUB_API_DEV = 'http://localhost:8787/';
@@ -272,6 +272,13 @@ let tray = null;
 let mainWindow = null;
 /** @type {Map<string, BrowserWindow>} */
 const shellToolWindows = new Map();
+const SHELL_TOOL_WORKSPACE_KEY = '__tool_workspace__';
+const SHELL_TOOL_WORKSPACE_COLLAPSED_WIDTH = 52;
+const SHELL_TOOL_WORKSPACE_EXPANDED_MIN_WIDTH = 620;
+const SHELL_TOOL_WORKSPACE_EXPANDED_MIN_HEIGHT = 400;
+const SHELL_TOOL_WORKSPACE_COLLAPSED_MIN_HEIGHT = 160;
+/** @type {WeakMap<BrowserWindow, Electron.Rectangle>} */
+const shellToolWorkspaceExpandedBounds = new WeakMap();
 /** @type {import('electron').BrowserView | null} */
 let workbenchBrowserView = null;
 /** @type {import('electron').BrowserView | null} */
@@ -282,7 +289,7 @@ const LEGACY_FIRST_PARTY_WEB_PARTITIONS = ['persist:assetcutter-workbench', 'per
 const workbenchPairingInjectHooked = new WeakSet();
 /** 避免给同一 BrowserView 重复注册下载接管 */
 const workbenchDownloadHooked = new WeakSet();
-/** @type {'workbench' | 'scripts' | 'tools' | 'settings'} */
+/** @type {'workbench' | 'workflow' | 'scripts' | 'tools' | 'connections' | 'settings'} */
 let shellMainProcessActiveView = 'workbench';
 
 /** 与 `shell/index.html` 侧栏展开宽度一致；收起时为 0（由渲染进程 IPC 同步） */
@@ -370,6 +377,50 @@ function anyDesktopBootstrapChildRunning() {
   const ocr =
     paddleOcrBootstrapChild && paddleOcrBootstrapChild.exitCode === null && !paddleOcrBootstrapChild.killed;
   return Boolean(sam || rem || ocr);
+}
+
+function localAuthOriginAlternates(origin) {
+  const out = [];
+  const add = (value) => {
+    try {
+      const o = new URL(String(value || '').trim()).origin;
+      if (o && !out.includes(o)) out.push(o);
+    } catch {
+      /* ignore */
+    }
+  };
+  add(origin);
+  try {
+    const u = new URL(String(origin || '').trim());
+    if ((u.hostname === 'localhost' || u.hostname === '127.0.0.1') && u.port === '9100') {
+      add(`${u.protocol}//localhost:${u.port}`);
+      add(`${u.protocol}//127.0.0.1:${u.port}`);
+    }
+  } catch {
+    /* ignore */
+  }
+  return out;
+}
+
+function shellSiteOriginForAuthWrite() {
+  try {
+    return new URL(readShellSettings().siteUrl || defaultShellSiteUrl()).origin;
+  } catch {
+    return '';
+  }
+}
+
+async function authCookieHeaderForOrigin(origin) {
+  try {
+    const ses = session.fromPartition(FIRST_PARTY_WEB_PARTITION);
+    const cookies = await ses.cookies.get({ url: origin });
+    return (cookies || [])
+      .filter((c) => c && c.name && c.value != null)
+      .map((c) => `${String(c.name)}=${String(c.value)}`)
+      .join('; ');
+  } catch {
+    return '';
+  }
 }
 
 function shellSettingsPath() {
@@ -1995,8 +2046,10 @@ function detachAllEmbeddedBrowserViews() {
 
 function normalizeShellViewName(view) {
   return view === 'workbench' ||
+    view === 'workflow' ||
     view === 'settings' ||
     view === 'tools' ||
+    view === 'connections' ||
     view === 'scripts'
     ? view
     : 'workbench';
@@ -2456,6 +2509,7 @@ async function readShellAccountStatus() {
     cookieNames: [],
     hasAuthCookie: false,
     statusCode: 0,
+    triedAuthOrigins: [],
     migration: null,
     error: null,
   };
@@ -2467,29 +2521,54 @@ async function readShellAccountStatus() {
   try {
     out.migration = await migrateLegacyFirstPartyCookies(authOrigin, siteOrigin);
     const ses = session.fromPartition(FIRST_PARTY_WEB_PARTITION);
-    const cookies = await ses.cookies.get({ url: authOrigin });
-    const names = Array.isArray(cookies)
-      ? cookies.map((c) => String(c && c.name ? c.name : '')).filter(Boolean)
-      : [];
-    out.cookieCount = names.length;
-    out.cookieNames = names.slice(0, 20);
-    out.hasAuthCookie = names.some((name) => isLikelyShellAuthCookieName(name));
-    const res = await ses.fetch(`${authOrigin}/api/auth/me`, {
-      method: 'GET',
-      credentials: 'include',
-      headers: { Accept: 'application/json' },
-    });
-    out.statusCode = res.status;
-    let json = null;
-    try {
-      const text = await res.text();
-      json = text ? JSON.parse(text) : null;
-    } catch {
-      json = null;
+    const origins = localAuthOriginAlternates(authOrigin);
+    let lastError = null;
+    for (const origin of origins) {
+      const attempt = { origin, statusCode: 0, cookieCount: 0, hasAuthCookie: false, error: null };
+      out.triedAuthOrigins.push(attempt);
+      try {
+        const cookies = await ses.cookies.get({ url: origin });
+        const names = Array.isArray(cookies)
+          ? cookies.map((c) => String(c && c.name ? c.name : '')).filter(Boolean)
+          : [];
+        attempt.cookieCount = names.length;
+        attempt.hasAuthCookie = names.some((name) => isLikelyShellAuthCookieName(name));
+        const res = await ses.fetch(`${origin}/api/auth/me`, {
+          method: 'GET',
+          credentials: 'include',
+          headers: { Accept: 'application/json' },
+        });
+        attempt.statusCode = res.status;
+        let json = null;
+        try {
+          const text = await res.text();
+          json = text ? JSON.parse(text) : null;
+        } catch {
+          json = null;
+        }
+        if (res.ok && json && (json.user || json.id || json.username)) {
+          out.authOrigin = origin;
+          out.statusCode = res.status;
+          out.cookieCount = names.length;
+          out.cookieNames = names.slice(0, 20);
+          out.hasAuthCookie = attempt.hasAuthCookie;
+          out.loggedIn = true;
+          out.user = json && json.user ? json.user : json;
+          out.error = null;
+          return out;
+        }
+        lastError = res.status === 401 ? 'not_logged_in' : `http_${res.status}`;
+        out.statusCode = res.status;
+        out.cookieCount = names.length;
+        out.cookieNames = names.slice(0, 20);
+        out.hasAuthCookie = attempt.hasAuthCookie;
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        attempt.error = msg;
+        lastError = msg;
+      }
     }
-    out.loggedIn = Boolean(res.ok && json && (json.user || json.id || json.username));
-    out.user = json && json.user ? json.user : out.loggedIn ? json : null;
-    if (!out.loggedIn && res.status === 401) out.error = 'not_logged_in';
+    out.error = lastError || 'not_logged_in';
   } catch (e) {
     out.ok = false;
     out.error = e instanceof Error ? e.message : String(e);
@@ -3251,7 +3330,7 @@ async function submitShellToolForReview(toolIdRaw) {
   if (!/^[a-z][a-z0-9-]{1,63}$/.test(toolId)) {
     return { ok: false, error: 'invalid_tool_id' };
   }
-  const origin = resolveAuthApiOriginForCompanionApi();
+  let origin = resolveAuthApiOriginForCompanionApi();
   if (!origin) return { ok: false, error: 'invalid_auth_api_origin' };
 
   const pack = await companionApiRequest('POST', `/v1/shell-tools/authored/${encodeURIComponent(toolId)}/pack`, {}, {
@@ -3277,9 +3356,19 @@ async function submitShellToolForReview(toolIdRaw) {
     return { ok: false, error: 'not_logged_in', message: '请先在工作台登录团队账号后再提交审批' };
   }
 
+  if (authMe.authOrigin) origin = authMe.authOrigin;
+  const writeOrigin = shellSiteOriginForAuthWrite();
+  const cookieHeader = await authCookieHeaderForOrigin(origin);
+  const authHeaders = {
+    'Content-Type': 'application/json',
+    Accept: 'application/json',
+    ...(writeOrigin ? { Origin: writeOrigin } : {}),
+    ...(cookieHeader ? { Cookie: cookieHeader } : {}),
+  };
   const presign = await fetchWithPartition(FIRST_PARTY_WEB_PARTITION, `${origin}/api/shell-tool-submissions/upload-url`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    credentials: 'include',
+    headers: authHeaders,
     body: JSON.stringify({ fileName, contentType: 'application/zip' }),
   });
   if (!presign.ok || !presign.json || !presign.json.uploadUrl) {
@@ -3311,7 +3400,8 @@ async function submitShellToolForReview(toolIdRaw) {
 
   const reg = await fetchWithPartition(FIRST_PARTY_WEB_PARTITION, `${origin}/api/shell-tool-submissions`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    credentials: 'include',
+    headers: authHeaders,
     body: JSON.stringify({
       toolId,
       semver,
@@ -3335,6 +3425,305 @@ async function submitShellToolForReview(toolIdRaw) {
   );
 
   return { ok: true, submissionId: reg.json.submission.id, submission: reg.json.submission };
+}
+
+async function publishShellToolToCloud(toolIdRaw) {
+  const toolId = String(toolIdRaw || '').trim();
+  if (!/^[a-z][a-z0-9-]{1,63}$/.test(toolId)) {
+    return { ok: false, error: 'invalid_tool_id' };
+  }
+  let origin = resolveAuthApiOriginForCompanionApi();
+  if (!origin) return { ok: false, error: 'invalid_auth_api_origin' };
+
+  const authMe = await readShellAccountStatus();
+  const user = authMe && authMe.user && typeof authMe.user === 'object' ? authMe.user : {};
+  if (!authMe || !authMe.loggedIn) {
+    return { ok: false, error: 'not_logged_in', message: 'Please log in before publishing tools.' };
+  }
+  if (String(user.role || '') !== 'admin') {
+    return { ok: false, error: 'admin_required', message: 'Only admins can publish tools to cloud.' };
+  }
+  if (authMe.authOrigin) origin = authMe.authOrigin;
+  const writeOrigin = shellSiteOriginForAuthWrite();
+  const cookieHeader = await authCookieHeaderForOrigin(origin);
+  const authHeaders = {
+    'Content-Type': 'application/json',
+    Accept: 'application/json',
+    ...(writeOrigin ? { Origin: writeOrigin } : {}),
+    ...(cookieHeader ? { Cookie: cookieHeader } : {}),
+  };
+
+  const pack = await companionApiRequest('POST', `/v1/shell-tools/authored/${encodeURIComponent(toolId)}/pack`, {}, {
+    timeoutMs: 120000,
+  });
+  if (!pack.ok || !pack.json || !pack.json.zipPath) {
+    return { ok: false, error: pack.json?.error || pack.text || 'pack_failed' };
+  }
+
+  const zipPath = String(pack.json.zipPath);
+  let buf;
+  try {
+    buf = await fsp.readFile(zipPath);
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+  const sha256 = require('node:crypto').createHash('sha256').update(buf).digest('hex');
+  const fileName = String(pack.json.fileName || path.basename(zipPath));
+  const semver = String(pack.json.semver || '0.1.0');
+  const safeBase = fileName.replace(/[^a-zA-Z0-9._-]+/g, '_').slice(0, 120) || `${toolId}.zip`;
+  const objectKey = `public/companion-distribution/shell-tools/${toolId}/${Date.now()}_${safeBase}`;
+
+  const { fetchWithPartition } = require('./agent-partition-fetch.cjs');
+  const presign = await fetchWithPartition(FIRST_PARTY_WEB_PARTITION, `${origin}/api/admin/companion-artifacts/upload-url`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: authHeaders,
+    body: JSON.stringify({ fileName, objectKey, contentType: 'application/zip' }),
+  });
+  if (!presign.ok || !presign.json || !presign.json.uploadUrl) {
+    return {
+      ok: false,
+      error: presign.json?.error || presign.text || 'presign_failed',
+      status: presign.status,
+    };
+  }
+
+  try {
+    const putRes = await fetch(presign.json.uploadUrl, {
+      method: 'PUT',
+      headers: { 'Content-Type': presign.json.contentType || 'application/zip' },
+      body: buf,
+    });
+    if (!putRes.ok) {
+      return { ok: false, error: `upload_failed_${putRes.status}` };
+    }
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+
+  const detail = await companionApiRequest('GET', `/v1/shell-tools/${encodeURIComponent(toolId)}`, null, {
+    timeoutMs: 15000,
+  });
+  const label = detail.json?.tool?.name || toolId;
+  const notesBase = detail.json?.tool?.description || '';
+  const notes = `${notesBase}\n#toolId:${toolId}`.trim();
+
+  const reg = await fetchWithPartition(FIRST_PARTY_WEB_PARTITION, `${origin}/api/admin/companion-artifacts`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: authHeaders,
+    body: JSON.stringify({
+      kind: 'shell_tool_bundle',
+      semver,
+      channel: 'stable',
+      platform: 'universal',
+      fileName,
+      r2Key: presign.json.objectKey || objectKey,
+      sha256,
+      bytes: buf.length,
+      notes,
+      label,
+    }),
+  });
+  if (!reg.ok || !reg.json || !reg.json.artifact) {
+    return { ok: false, error: reg.json?.error || reg.text || 'register_failed', status: reg.status };
+  }
+
+  await companionApiRequest(
+    'POST',
+    `/v1/shell-tools/${encodeURIComponent(toolId)}/review-status`,
+    { reviewStatus: 'approved', submissionId: reg.json.artifact.id },
+    { timeoutMs: 15000 },
+  );
+
+  return { ok: true, artifact: reg.json.artifact };
+}
+
+function stripHostBridgeRuntimeFields(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const {
+    source,
+    draftStatus,
+    createdBy,
+    createdAt,
+    updatedAt,
+    validation,
+    installs,
+    lastProbe,
+    cloudVersion,
+    cloudVersionId,
+    cloudVersions,
+    ...definition
+  } = raw;
+  return definition;
+}
+
+async function syncHostBridgesFromCloud() {
+  let origin = resolveAuthApiOriginForCompanionApi();
+  if (!origin) return { ok: false, error: 'invalid_auth_api_origin' };
+  const authMe = await readShellAccountStatus();
+  if (authMe && authMe.authOrigin) origin = authMe.authOrigin;
+  const { fetchWithPartition } = require('./agent-partition-fetch.cjs');
+  const catalog = await fetchWithPartition(FIRST_PARTY_WEB_PARTITION, `${origin}/api/host-bridges`, {
+    method: 'GET',
+    credentials: 'include',
+    headers: { Accept: 'application/json' },
+  });
+  if (!catalog.ok || !catalog.json) {
+    return { ok: false, error: catalog.json?.error || catalog.text || `http_${catalog.status}`, status: catalog.status };
+  }
+  const hosts = Array.isArray(catalog.json.hosts) ? catalog.json.hosts : [];
+  const versions = [];
+  for (const host of hosts) {
+    const hostId = String(host && host.hostId ? host.hostId : host && host.definition && host.definition.id ? host.definition.id : '').trim();
+    if (!hostId) continue;
+    const vr = await fetchWithPartition(FIRST_PARTY_WEB_PARTITION, `${origin}/api/host-bridges/${encodeURIComponent(hostId)}/versions`, {
+      method: 'GET',
+      credentials: 'include',
+      headers: { Accept: 'application/json' },
+    });
+    if (vr.ok && vr.json && Array.isArray(vr.json.versions)) {
+      for (const version of vr.json.versions) versions.push(version);
+    } else {
+      versions.push(host);
+    }
+  }
+  const synced = await companionApiRequest('POST', '/v1/bridges/cloud/sync', { versions }, { timeoutMs: 30000 });
+  if (!synced.ok) return { ok: false, error: synced.json?.error || synced.text || 'local_sync_failed' };
+  return {
+    ok: true,
+    synced: Number(synced.json?.synced) || 0,
+    skipped: Number(synced.json?.skipped) || 0,
+    remoteCount: versions.length,
+  };
+}
+
+async function publishHostBridgeToCloud(payload) {
+  const hostId = String(payload && payload.hostId ? payload.hostId : '').trim();
+  if (!/^[a-z][a-z0-9-]{1,63}$/.test(hostId)) return { ok: false, error: 'invalid_host_id' };
+  let origin = resolveAuthApiOriginForCompanionApi();
+  if (!origin) return { ok: false, error: 'invalid_auth_api_origin' };
+  const authMe = await readShellAccountStatus();
+  const user = authMe && authMe.user && typeof authMe.user === 'object' ? authMe.user : {};
+  if (!authMe || !authMe.loggedIn) return { ok: false, error: 'not_logged_in', message: '请先在工作台登录。' };
+  if (String(user.role || '') !== 'admin') return { ok: false, error: 'admin_required', message: '当前账号不是管理员。' };
+  if (authMe.authOrigin) origin = authMe.authOrigin;
+  const drafts = await companionApiRequest('GET', '/v1/bridges/drafts', null, { timeoutMs: 15000 });
+  const draft = drafts.json && Array.isArray(drafts.json.drafts) ? drafts.json.drafts.find((item) => item && item.id === hostId) : null;
+  const definition = stripHostBridgeRuntimeFields(draft);
+  if (!definition) return { ok: false, error: 'draft_not_found', message: '未找到本地宿主草稿。' };
+  if (draft.validation && draft.validation.ok === false) {
+    return { ok: false, error: 'draft_invalid', message: (draft.validation.messages || []).join('；') || '草稿校验未通过。' };
+  }
+  if (!Array.isArray(draft.installs) || !draft.installs.length) {
+    return { ok: false, error: 'acceptance_required', message: '请先安装并完成至少一次本地验收，再提交云端。' };
+  }
+  if (!draft.lastProbe || draft.lastProbe.ok !== true) {
+    return { ok: false, error: 'probe_required', message: '请先完成一次真实连接探测成功，再提交云端。' };
+  }
+
+  const writeOrigin = shellSiteOriginForAuthWrite();
+  const cookieHeader = await authCookieHeaderForOrigin(origin);
+  const headers = {
+    'Content-Type': 'application/json',
+    Accept: 'application/json',
+    ...(writeOrigin ? { Origin: writeOrigin } : {}),
+    ...(cookieHeader ? { Cookie: cookieHeader } : {}),
+  };
+  const { fetchWithPartition } = require('./agent-partition-fetch.cjs');
+  const r = await fetchWithPartition(FIRST_PARTY_WEB_PARTITION, `${origin}/api/admin/host-bridges/${encodeURIComponent(hostId)}/versions`, {
+    method: 'POST',
+    credentials: 'include',
+    headers,
+    body: JSON.stringify({
+      definition,
+      semver: payload && payload.semver,
+      note: payload && payload.note,
+    }),
+  });
+  if (!r.ok || !r.json || !r.json.version) {
+    return { ok: false, error: r.json?.error || r.text || `http_${r.status}`, message: r.json?.message, status: r.status };
+  }
+  await syncHostBridgesFromCloud();
+  return { ok: true, version: r.json.version };
+}
+
+async function activateHostBridgeCloudVersion(payload) {
+  const hostId = String(payload && payload.hostId ? payload.hostId : '').trim();
+  const versionId = String(payload && payload.versionId ? payload.versionId : '').trim();
+  if (!hostId || !versionId) return { ok: false, error: 'missing_version' };
+  let origin = resolveAuthApiOriginForCompanionApi();
+  if (!origin) return { ok: false, error: 'invalid_auth_api_origin' };
+  const authMe = await readShellAccountStatus();
+  const user = authMe && authMe.user && typeof authMe.user === 'object' ? authMe.user : {};
+  if (!authMe || !authMe.loggedIn) return { ok: false, error: 'not_logged_in', message: '请先在工作台登录。' };
+  if (String(user.role || '') !== 'admin') return { ok: false, error: 'admin_required', message: '当前账号不是管理员。' };
+  if (authMe.authOrigin) origin = authMe.authOrigin;
+  const writeOrigin = shellSiteOriginForAuthWrite();
+  const cookieHeader = await authCookieHeaderForOrigin(origin);
+  const headers = {
+    'Content-Type': 'application/json',
+    Accept: 'application/json',
+    ...(writeOrigin ? { Origin: writeOrigin } : {}),
+    ...(cookieHeader ? { Cookie: cookieHeader } : {}),
+  };
+  const { fetchWithPartition } = require('./agent-partition-fetch.cjs');
+  const r = await fetchWithPartition(
+    FIRST_PARTY_WEB_PARTITION,
+    `${origin}/api/admin/host-bridges/${encodeURIComponent(hostId)}/versions/${encodeURIComponent(versionId)}/activate`,
+    { method: 'POST', credentials: 'include', headers, body: '{}' },
+  );
+  if (!r.ok || !r.json || !r.json.version) {
+    return { ok: false, error: r.json?.error || r.text || `http_${r.status}`, message: r.json?.message, status: r.status };
+  }
+  await syncHostBridgesFromCloud();
+  return { ok: true, version: r.json.version };
+}
+
+async function resolveCompanionArtifactDownload(artifactIdRaw) {
+  const artifactId = String(artifactIdRaw || '').trim();
+  if (!artifactId) return { ok: false, error: 'missing_artifact_id' };
+
+  let origin = resolveAuthApiOriginForCompanionApi();
+  if (!origin) return { ok: false, error: 'invalid_auth_api_origin' };
+
+  const authMe = await readShellAccountStatus();
+  if (!authMe || !authMe.loggedIn) {
+    return { ok: false, error: 'not_logged_in', message: '请先在工作台登录后再下载云端工具。' };
+  }
+  if (authMe.authOrigin) origin = authMe.authOrigin;
+
+  const writeOrigin = shellSiteOriginForAuthWrite();
+  const cookieHeader = await authCookieHeaderForOrigin(origin);
+  const headers = {
+    'Content-Type': 'application/json',
+    Accept: 'application/json',
+    ...(writeOrigin ? { Origin: writeOrigin } : {}),
+    ...(cookieHeader ? { Cookie: cookieHeader } : {}),
+  };
+
+  const { fetchWithPartition } = require('./agent-partition-fetch.cjs');
+  const r = await fetchWithPartition(FIRST_PARTY_WEB_PARTITION, `${origin}/api/companion-artifacts/resolve-download`, {
+    method: 'POST',
+    credentials: 'include',
+    headers,
+    body: JSON.stringify({ id: artifactId }),
+  });
+  if (!r.ok || !r.json || !r.json.downloadUrl) {
+    return {
+      ok: false,
+      error: r.json?.error || r.text || `http_${r.status}`,
+      status: r.status,
+    };
+  }
+  return {
+    ok: true,
+    downloadUrl: r.json.downloadUrl,
+    expiresIn: r.json.expiresIn,
+    fileName: r.json.fileName,
+    semver: r.json.semver,
+    kind: r.json.kind,
+  };
 }
 
 async function fetchHostBundleCatalogFromSite() {
@@ -3363,6 +3752,74 @@ async function fetchHostBundleCatalogFromSite() {
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : String(e) };
   }
+}
+
+const CONNECTION_DROP_EXE_HOSTS = new Map(
+  [
+    ['photoshop.exe', { hostId: 'photoshop', name: 'Photoshop' }],
+    ['maya.exe', { hostId: 'maya', name: 'Maya' }],
+    ['blender.exe', { hostId: 'blender', name: 'Blender' }],
+    ['3dsmax.exe', { hostId: '3ds-max', name: '3ds Max' }],
+    ['unity.exe', { hostId: 'unity', name: 'Unity' }],
+    ['unrealeditor.exe', { hostId: 'unreal', name: 'Unreal Editor' }],
+    ['ue4editor.exe', { hostId: 'unreal', name: 'Unreal Editor' }],
+    ['illustrator.exe', { hostId: 'illustrator', name: 'Illustrator' }],
+    ['afterfx.exe', { hostId: 'after-effects', name: 'After Effects' }],
+    ['adobe premiere pro.exe', { hostId: 'premiere', name: 'Premiere Pro' }],
+    ['resolve.exe', { hostId: 'davinci-resolve', name: 'DaVinci Resolve' }],
+    ['houdini.exe', { hostId: 'houdini', name: 'Houdini' }],
+    ['nuke.exe', { hostId: 'nuke', name: 'Nuke' }],
+    ['cinema 4d.exe', { hostId: 'cinema-4d', name: 'Cinema 4D' }],
+    ['zbrush.exe', { hostId: 'zbrush', name: 'ZBrush' }],
+    ['rhino.exe', { hostId: 'rhino', name: 'Rhino' }],
+    ['sketchup.exe', { hostId: 'sketchup', name: 'SketchUp' }],
+  ].map(([exe, meta]) => [String(exe).toLowerCase(), meta]),
+);
+
+function resolveDroppedConnectionPath(payload) {
+  const inputPath = String(payload && payload.path ? payload.path : '').trim();
+  if (!inputPath) return { ok: false, error: 'missing_path', message: '没有读取到拖入文件路径。' };
+  const abs = path.resolve(path.normalize(inputPath));
+  if (!fs.existsSync(abs)) return { ok: false, error: 'path_not_found', message: '拖入的文件不存在。' };
+  const ext = path.extname(abs).toLowerCase();
+  let targetPath = abs;
+  let shortcutPath = '';
+  let targetKind = ext.replace(/^\./, '') || 'file';
+  if (ext === '.lnk') {
+    if (process.platform !== 'win32' || !shell || typeof shell.readShortcutLink !== 'function') {
+      return { ok: false, error: 'shortcut_unsupported', message: '当前环境不支持解析快捷方式。' };
+    }
+    let shortcut = null;
+    try {
+      shortcut = shell.readShortcutLink(abs);
+    } catch (e) {
+      return { ok: false, error: 'shortcut_resolve_failed', message: e instanceof Error ? e.message : String(e) };
+    }
+    targetPath = path.resolve(path.normalize(String(shortcut && shortcut.target ? shortcut.target : '')));
+    shortcutPath = abs;
+    targetKind = 'shortcut';
+    if (!targetPath || !fs.existsSync(targetPath)) {
+      return { ok: false, error: 'shortcut_target_not_found', message: '快捷方式指向的目标不存在。' };
+    }
+  }
+  const targetExt = path.extname(targetPath).toLowerCase();
+  if (targetExt !== '.exe') {
+    return { ok: false, error: 'unsupported_drop_target', message: '请拖入软件快捷方式或 exe 文件。' };
+  }
+  const exeName = path.basename(targetPath);
+  const inferred = CONNECTION_DROP_EXE_HOSTS.get(exeName.toLowerCase()) || null;
+  const shortcutName = shortcutPath ? path.basename(shortcutPath, path.extname(shortcutPath)) : '';
+  const fallbackName = path.basename(targetPath, targetExt);
+  return {
+    ok: true,
+    inputPath: abs,
+    shortcutPath,
+    targetPath,
+    targetKind,
+    exeName,
+    hostId: inferred && inferred.hostId,
+    name: (inferred && inferred.name) || shortcutName || fallbackName,
+  };
 }
 
 async function checkRemoteDesktopShellReleaseOnce() {
@@ -5065,18 +5522,19 @@ function openShellToolWindow(toolIdRaw) {
     return { ok: false, error: 'invalid_tool_id' };
   }
 
-  const existing = shellToolWindows.get(toolId);
+  const existing = shellToolWindows.get(SHELL_TOOL_WORKSPACE_KEY);
   if (existing && !existing.isDestroyed()) {
     if (existing.isMinimized()) existing.restore();
     existing.show();
     existing.focus();
+    existing.webContents.send('shell-tool-workspace-open-tool', { toolId });
     return { ok: true, reused: true, toolId };
   }
 
   const win = new BrowserWindow({
-    width: 420,
-    height: 540,
-    minWidth: 360,
+    width: 860,
+    height: 620,
+    minWidth: 620,
     minHeight: 400,
     frame: false,
     autoHideMenuBar: true,
@@ -5091,9 +5549,9 @@ function openShellToolWindow(toolIdRaw) {
     },
   });
 
-  shellToolWindows.set(toolId, win);
+  shellToolWindows.set(SHELL_TOOL_WORKSPACE_KEY, win);
   win.on('closed', () => {
-    if (shellToolWindows.get(toolId) === win) shellToolWindows.delete(toolId);
+    if (shellToolWindows.get(SHELL_TOOL_WORKSPACE_KEY) === win) shellToolWindows.delete(SHELL_TOOL_WORKSPACE_KEY);
   });
 
   const html = path.join(__dirname, 'shell', 'tool-window.html');
@@ -5109,12 +5567,55 @@ function closeShellToolWindow(toolIdRaw) {
   if (!/^[a-z][a-z0-9-]{1,63}$/.test(toolId)) {
     return { ok: false, error: 'invalid_tool_id' };
   }
-  const existing = shellToolWindows.get(toolId);
+  const existing = shellToolWindows.get(SHELL_TOOL_WORKSPACE_KEY);
   if (existing && !existing.isDestroyed()) {
-    existing.close();
+    existing.webContents.send('shell-tool-workspace-close-tool', { toolId });
     return { ok: true, closed: true, toolId };
   }
   return { ok: true, closed: false, toolId };
+}
+
+function setShellToolWorkspaceDetailsCollapsed(win, collapsedRaw) {
+  if (!win || win.isDestroyed()) return { ok: false, error: 'window_not_found' };
+  const collapsed = Boolean(collapsedRaw);
+  if (collapsed) {
+    try {
+      if (win.isMaximized()) win.unmaximize();
+    } catch {
+      /* ignore */
+    }
+    const bounds = win.getBounds();
+    if (bounds.width > SHELL_TOOL_WORKSPACE_COLLAPSED_WIDTH + 24) {
+      shellToolWorkspaceExpandedBounds.set(win, bounds);
+    }
+    win.setMinimumSize(SHELL_TOOL_WORKSPACE_COLLAPSED_WIDTH, SHELL_TOOL_WORKSPACE_COLLAPSED_MIN_HEIGHT);
+    win.setBounds({
+      x: bounds.x,
+      y: bounds.y,
+      width: SHELL_TOOL_WORKSPACE_COLLAPSED_WIDTH,
+      height: Math.max(bounds.height, SHELL_TOOL_WORKSPACE_COLLAPSED_MIN_HEIGHT),
+    });
+    return { ok: true, collapsed: true, bounds: win.getBounds() };
+  }
+
+  const current = win.getBounds();
+  const previous = shellToolWorkspaceExpandedBounds.get(win);
+  const next = previous && previous.width > SHELL_TOOL_WORKSPACE_COLLAPSED_WIDTH + 24
+    ? previous
+    : {
+        x: current.x,
+        y: current.y,
+        width: 860,
+        height: Math.max(current.height, 620),
+      };
+  win.setBounds({
+    x: current.x,
+    y: current.y,
+    width: Math.max(next.width, SHELL_TOOL_WORKSPACE_EXPANDED_MIN_WIDTH),
+    height: Math.max(next.height, SHELL_TOOL_WORKSPACE_EXPANDED_MIN_HEIGHT),
+  });
+  win.setMinimumSize(SHELL_TOOL_WORKSPACE_EXPANDED_MIN_WIDTH, SHELL_TOOL_WORKSPACE_EXPANDED_MIN_HEIGHT);
+  return { ok: true, collapsed: false, bounds: win.getBounds() };
 }
 
 function buildTray() {
@@ -5388,6 +5889,46 @@ if (!gotLock) {
     }
   });
 
+  ipcMain.handle('shell-publish-shell-tool-cloud', async (_e, toolId) => {
+    try {
+      return await publishShellToolToCloud(toolId);
+    } catch (e) {
+      return { ok: false, error: e instanceof Error ? e.message : String(e) };
+    }
+  });
+
+  ipcMain.handle('shell-sync-host-bridges-cloud', async () => {
+    try {
+      return await syncHostBridgesFromCloud();
+    } catch (e) {
+      return { ok: false, error: e instanceof Error ? e.message : String(e) };
+    }
+  });
+
+  ipcMain.handle('shell-publish-host-bridge-cloud', async (_e, payload) => {
+    try {
+      return await publishHostBridgeToCloud(payload);
+    } catch (e) {
+      return { ok: false, error: e instanceof Error ? e.message : String(e) };
+    }
+  });
+
+  ipcMain.handle('shell-activate-host-bridge-cloud-version', async (_e, payload) => {
+    try {
+      return await activateHostBridgeCloudVersion(payload);
+    } catch (e) {
+      return { ok: false, error: e instanceof Error ? e.message : String(e) };
+    }
+  });
+
+  ipcMain.handle('shell-resolve-companion-artifact-download', async (_e, artifactId) => {
+    try {
+      return await resolveCompanionArtifactDownload(artifactId);
+    } catch (e) {
+      return { ok: false, error: e instanceof Error ? e.message : String(e) };
+    }
+  });
+
   ipcMain.handle('shell-close-tool-window', async (_e, toolId) => {
     try {
       return closeShellToolWindow(toolId);
@@ -5454,6 +5995,11 @@ if (!gotLock) {
       return { ok: true };
     }
     return { ok: false, error: 'window_not_found' };
+  });
+
+  ipcMain.handle('shell-tool-window-set-details-collapsed', (event, collapsed) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    return setShellToolWorkspaceDetailsCollapsed(win, collapsed);
   });
 
   ipcMain.handle('shell-tool-window-toggle-pin', (event, pinned) => {
@@ -5528,12 +6074,25 @@ if (!gotLock) {
     return lines.join('\n\n');
   }
 
+  async function fetchShellToolCapabilityContextForAutoFix(toolId) {
+    try {
+      const r = await companionApiRequest('GET', `/v1/capability-packages/${encodeURIComponent(toolId)}/context`, null, {
+        timeoutMs: 8000,
+      });
+      if (r && r.ok && r.json && r.json.ok) return r.json;
+    } catch {
+      /* capability context is best-effort for auto-fix */
+    }
+    return null;
+  }
+
   async function sendShellToolAutoFixToCopilot(payload) {
     if (!agentSessionService) return { ok: false, error: 'agent_not_ready' };
     const toolId = String(payload && payload.toolId ? payload.toolId : '').trim();
     if (!/^[a-z][a-z0-9-]{1,63}$/.test(toolId)) {
       return { ok: false, error: 'invalid_tool_id' };
     }
+    const toolName = String(payload && payload.toolName ? payload.toolName : toolId).trim() || toolId;
     const prompt = buildShellToolAutoFixPrompt(payload || {});
     const fp = require('node:crypto')
       .createHash('sha256')
@@ -5557,8 +6116,38 @@ if (!gotLock) {
     shellToolAutoFixRecent.set(`${toolId}:${fp}`, now);
 
     expandCopilotPanelForAutoFix();
+    const context = await fetchShellToolCapabilityContextForAutoFix(toolId);
+    const session = context && context.session && typeof context.session === 'object' ? context.session : {};
+    const capabilitySessionId =
+      typeof session.sessionId === 'string' && session.sessionId.trim()
+        ? session.sessionId.trim()
+        : `capability:tool:${toolId}`;
+    const contextPrompt =
+      context && typeof context.contextPrompt === 'string' && context.contextPrompt.trim()
+        ? context.contextPrompt.trim()
+        : [
+            'Current conversation is bound to a tool CapabilityPackage.',
+            `CapabilityPackage ID: ${toolId}`,
+            `Tool name: ${toolName}`,
+            'Keep fixes, run results, and retests attached to this capability object.',
+          ].join('\n');
+    try {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('shell-open-copilot-object-session', {
+          type: 'capability',
+          id: (session && session.id) || toolId,
+          sessionId: capabilitySessionId,
+          label: (session && session.label) || toolName,
+          contextPrompt,
+          focus: false,
+        });
+      }
+    } catch {
+      /* ignore */
+    }
 
-    const trySend = async () => agentSessionService.sendUserMessage(prompt);
+    const outboundPrompt = `${contextPrompt}\n\n用户这次说：\n${prompt}`;
+    const trySend = async () => agentSessionService.sendUserMessage(outboundPrompt, { sessionId: capabilitySessionId });
     let result = await trySend();
     if (result && result.error === 'turn_in_progress') {
       for (let i = 0; i < 8; i++) {
@@ -5687,9 +6276,11 @@ if (!gotLock) {
     }
   });
 
-  ipcMain.handle('agent-session-send', async (_e, text) => {
+  ipcMain.handle('agent-session-send', async (_e, payload) => {
     if (!agentSessionService) return { ok: false, error: 'agent_not_ready' };
-    return agentSessionService.sendUserMessage(text);
+    const text = payload && typeof payload === 'object' ? payload.text : payload;
+    const sessionId = payload && typeof payload === 'object' ? payload.sessionId : undefined;
+    return agentSessionService.sendUserMessage(text, { sessionId });
   });
 
   ipcMain.handle('agent-session-abort', () => {
@@ -6096,6 +6687,62 @@ if (!gotLock) {
     });
     if (r.canceled || !r.filePaths[0]) return { ok: false, canceled: true };
     return { ok: true, path: r.filePaths[0] };
+  });
+
+  ipcMain.handle('shell-save-path', async (event, opts) => {
+    const o = opts && typeof opts === 'object' ? opts : {};
+    const win = BrowserWindow.fromWebContents(event.sender) || mainWindow;
+    const defaultPath = typeof o.defaultPath === 'string' ? o.defaultPath.trim() : '';
+    const title = typeof o.title === 'string' && o.title.trim() ? o.title.trim() : '保存文件';
+    const filters = Array.isArray(o.filters)
+      ? o.filters
+          .map((f) => ({
+            name: typeof f?.name === 'string' && f.name.trim() ? f.name.trim() : 'Files',
+            extensions: Array.isArray(f?.extensions)
+              ? f.extensions.map((x) => String(x || '').replace(/^\./, '').trim()).filter(Boolean)
+              : [],
+          }))
+          .filter((f) => f.extensions.length > 0)
+      : [];
+    const r = await dialog.showSaveDialog(win || undefined, {
+      title,
+      ...(defaultPath ? { defaultPath } : {}),
+      ...(filters.length ? { filters } : {}),
+    });
+    if (r.canceled || !r.filePath) return { ok: false, canceled: true };
+    return { ok: true, path: r.filePath };
+  });
+
+  ipcMain.handle('shell-save-text-file', async (event, opts) => {
+    const o = opts && typeof opts === 'object' ? opts : {};
+    const text = typeof o.text === 'string' ? o.text : '';
+    const win = BrowserWindow.fromWebContents(event.sender) || mainWindow;
+    const r = await dialog.showSaveDialog(win || undefined, {
+      title: typeof o.title === 'string' && o.title.trim() ? o.title.trim() : '保存文件',
+      ...(typeof o.defaultPath === 'string' && o.defaultPath.trim() ? { defaultPath: o.defaultPath.trim() } : {}),
+      filters: [{ name: 'JSON', extensions: ['json'] }],
+    });
+    if (r.canceled || !r.filePath) return { ok: false, canceled: true };
+    await fsp.writeFile(r.filePath, text, 'utf8');
+    return { ok: true, path: r.filePath };
+  });
+
+  ipcMain.handle('shell-read-text-file', async (_event, opts) => {
+    const filePath = String(opts && opts.path ? opts.path : '').trim();
+    if (!filePath) return { ok: false, error: 'missing_path' };
+    const abs = path.resolve(path.normalize(filePath));
+    if (!fs.existsSync(abs)) return { ok: false, error: 'path_not_found' };
+    if (path.extname(abs).toLowerCase() !== '.json') return { ok: false, error: 'unsupported_file_type' };
+    const text = await fsp.readFile(abs, 'utf8');
+    return { ok: true, path: abs, text };
+  });
+
+  ipcMain.handle('shell-resolve-dropped-connection-path', async (_event, payload) => {
+    try {
+      return resolveDroppedConnectionPath(payload || {});
+    } catch (e) {
+      return { ok: false, error: 'drop_resolve_failed', message: e instanceof Error ? e.message : String(e) };
+    }
   });
 
   ipcMain.handle('shell-sam-local-desktop-state', () => {

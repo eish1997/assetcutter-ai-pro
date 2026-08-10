@@ -9,6 +9,7 @@ import type {
   AgentSuggestedActionRiskLevel,
   AgentSuggestedActionTargetScope,
 } from '../../../types/quickComposeThread';
+import type { ProjectAgentPerceptionContext } from '../../../types/runtimePerception';
 
 export const PROJECT_AGENT_EMPTY_SUGGESTIONS = [
   '帮我看一下当前项目下一步最该做什么',
@@ -65,6 +66,7 @@ export type QuickComposeChatActionLike = {
   estimatedItems?: number;
   destructive?: boolean;
   isDestructive?: boolean;
+  perception?: ProjectAgentPerceptionContext | null;
 };
 
 export type QuickComposeFailureMessageLike = {
@@ -140,6 +142,7 @@ function actionHasCost(action: QuickComposeChatActionLike): boolean {
 
 function actionTargetScopeLabel(action: QuickComposeChatActionLike): string {
   if (action.confirmation?.scope?.trim()) return action.confirmation.scope.trim();
+  if (action.perception?.targetSummary?.trim()) return action.perception.targetSummary.trim();
   const count =
     typeof action.confirmation?.assetCount === 'number' && action.confirmation.assetCount > 0
       ? action.confirmation.assetCount
@@ -153,6 +156,17 @@ function actionTargetScopeLabel(action: QuickComposeChatActionLike): string {
   if (action.targetScope === 'group') return '当前资产组';
   if (action.targetScope === 'all') return '当前项目全部相关资产';
   return count ? `${count} 个资产` : '当前对话上下文';
+}
+
+function actionPerceptionLines(action: QuickComposeChatActionLike): string[] {
+  const perception = action.perception;
+  if (!perception) return [];
+  const lines = [];
+  if (perception.workflowSummary?.trim()) lines.push(`Workflow：${perception.workflowSummary.trim()}`);
+  if (perception.externalSummary?.trim()) lines.push(`外部：${perception.externalSummary.trim()}`);
+  if (perception.riskSummary?.trim()) lines.push(`风险：${perception.riskSummary.trim()}`);
+  lines.push(`新鲜度：${perception.stale ? '上下文可能已过期，执行前需要重新确认范围' : '使用当前最新上下文'}`);
+  return lines;
 }
 
 function actionImpactLabel(action: QuickComposeChatActionLike): string {
@@ -203,6 +217,7 @@ export function quickComposeChatActionConfirmSummary(
     `影响：${actionImpactLabel(action)}`,
     `预计：${actionCostLabel(action)}`,
     `可恢复：${actionRecoverabilityLabel(action)}`,
+    ...actionPerceptionLines(action),
   ];
   return lines.join('\n');
 }

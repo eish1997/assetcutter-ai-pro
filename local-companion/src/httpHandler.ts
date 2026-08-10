@@ -68,6 +68,34 @@ import {
 import { runShellTool } from './shellToolRun.js';
 import { openShellToolInHost } from './shellToolOpenInHost.js';
 import { validateShellToolPackageDir } from './shellToolSpec.js';
+import {
+  appendCapabilityPackageEvent,
+  createCapabilityPackageDraft,
+  deleteCapabilityPackageDraft,
+  readCapabilityPackageDrafts,
+} from './capabilities/capabilityPackageStore.js';
+import {
+  installCapabilityPackage,
+  probeCapabilityPackage,
+  runCapabilityLifecycle,
+  uninstallCapabilityPackage,
+} from './capabilities/capabilityLifecycle.js';
+import { buildCapabilityPackageContext } from './capabilities/capabilityContext.js';
+import { checkCapabilityPublishGate } from './capabilities/capabilityPublishGate.js';
+import {
+  listActiveCapabilityCloudPackages,
+  listCapabilityCloudVersions,
+  publishCapabilityDraftToCloud,
+  switchCapabilityCloudVersion,
+} from './capabilities/capabilityCloudVersions.js';
+import {
+  exportCapabilityPackageTransfer,
+  importCapabilityPackageTransfer,
+} from './capabilities/capabilityTransfer.js';
+import { summarizeWorkflowConnectors } from './capabilities/workflowConnectorSummary.js';
+import { listWorkflowRuns } from './workflows/runtime/workflowRunHistory.js';
+import { listWorkflowSkills } from './workflows/runtime/workflowSkills.js';
+import { preflightWorkflowCapability, runWorkflowCapability } from './workflows/runWorkflowCapability.js';
 import { probeSamSegmentBackendHealth } from './compute/samSegmentAdapter.js';
 import { probeRembgPythonHealth } from './compute/rembgAdapter.js';
 import { probePaddleOcrBackendHealth } from './compute/paddleOcrAdapter.js';
@@ -79,6 +107,286 @@ import {
   listBridgesCatalog,
   uninstallMayaBridge,
 } from './bridges/mayaBridgeInstall.js';
+import {
+  getBlenderBridgeStatus,
+  installBlenderBridge,
+  uninstallBlenderBridge,
+} from './bridges/blenderBridgeInstall.js';
+import {
+  getMaxBridgeStatus,
+  installMaxBridge,
+  uninstallMaxBridge,
+} from './bridges/maxBridgeInstall.js';
+import {
+  getSubstancePainterBridgeStatus,
+  installSubstancePainterBridge,
+  uninstallSubstancePainterBridge,
+} from './bridges/substancePainterBridgeInstall.js';
+import {
+  getSubstanceDesignerBridgeStatus,
+  installSubstanceDesignerBridge,
+  uninstallSubstanceDesignerBridge,
+} from './bridges/substanceDesignerBridgeInstall.js';
+import {
+  getHoudiniBridgeStatus,
+  installHoudiniBridge,
+  uninstallHoudiniBridge,
+} from './bridges/houdiniBridgeInstall.js';
+import {
+  getNukeBridgeStatus,
+  installNukeBridge,
+  uninstallNukeBridge,
+} from './bridges/nukeBridgeInstall.js';
+import {
+  getFoundryTimelineBridgeStatus,
+  installFoundryTimelineBridge,
+  uninstallFoundryTimelineBridge,
+  type FoundryTimelineBridgeId,
+} from './bridges/foundryTimelineBridgeInstall.js';
+import {
+  getCinema4DBridgeStatus,
+  installCinema4DBridge,
+  uninstallCinema4DBridge,
+} from './bridges/cinema4dBridgeInstall.js';
+import {
+  getDavinciResolveBridgeStatus,
+  installDavinciResolveBridge,
+  uninstallDavinciResolveBridge,
+} from './bridges/davinciResolveBridgeInstall.js';
+import {
+  getFusionStudioBridgeStatus,
+  installFusionStudioBridge,
+  uninstallFusionStudioBridge,
+} from './bridges/fusionStudioBridgeInstall.js';
+import {
+  getAdobeBridgeStatus,
+  installAdobeBridge,
+  uninstallAdobeBridge,
+  type AdobeBridgeId,
+} from './bridges/adobeExtendScriptBridgeInstall.js';
+import {
+  getUnityBridgeStatus,
+  installUnityBridge,
+  uninstallUnityBridge,
+} from './bridges/unityBridgeInstall.js';
+import {
+  getZBrushBridgeStatus,
+  installZBrushBridge,
+  uninstallZBrushBridge,
+} from './bridges/zbrushBridgeInstall.js';
+import {
+  getUnrealBridgeStatus,
+  installUnrealBridge,
+  uninstallUnrealBridge,
+} from './bridges/unrealBridgeInstall.js';
+import {
+  getRhinoBridgeStatus,
+  installRhinoBridge,
+  uninstallRhinoBridge,
+} from './bridges/rhinoBridgeInstall.js';
+import {
+  getSketchUpBridgeStatus,
+  installSketchUpBridge,
+  uninstallSketchUpBridge,
+} from './bridges/sketchupBridgeInstall.js';
+import {
+  getGodotBridgeStatus,
+  installGodotBridge,
+  uninstallGodotBridge,
+} from './bridges/godotBridgeInstall.js';
+import {
+  getMotionBuilderBridgeStatus,
+  installMotionBuilderBridge,
+  uninstallMotionBuilderBridge,
+} from './bridges/motionBuilderBridgeInstall.js';
+import {
+  getFusion360BridgeStatus,
+  installFusion360Bridge,
+  uninstallFusion360Bridge,
+} from './bridges/fusion360BridgeInstall.js';
+import {
+  getKeyShotBridgeStatus,
+  installKeyShotBridge,
+  uninstallKeyShotBridge,
+} from './bridges/keyshotBridgeInstall.js';
+import {
+  getMarmosetToolbagBridgeStatus,
+  installMarmosetToolbagBridge,
+  uninstallMarmosetToolbagBridge,
+} from './bridges/marmosetToolbagBridgeInstall.js';
+import {
+  getModoBridgeStatus,
+  installModoBridge,
+  uninstallModoBridge,
+} from './bridges/modoBridgeInstall.js';
+import {
+  getLightWaveBridgeStatus,
+  installLightWaveBridge,
+  uninstallLightWaveBridge,
+} from './bridges/lightwaveBridgeInstall.js';
+import {
+  getFreeCADBridgeStatus,
+  installFreeCADBridge,
+  uninstallFreeCADBridge,
+} from './bridges/freecadBridgeInstall.js';
+import {
+  getAutoCADBridgeStatus,
+  installAutoCADBridge,
+  uninstallAutoCADBridge,
+} from './bridges/autocadBridgeInstall.js';
+import {
+  getKritaBridgeStatus,
+  installKritaBridge,
+  uninstallKritaBridge,
+} from './bridges/kritaBridgeInstall.js';
+import {
+  getMariBridgeStatus,
+  installMariBridge,
+  uninstallMariBridge,
+} from './bridges/mariBridgeInstall.js';
+import {
+  getInkscapeBridgeStatus,
+  installInkscapeBridge,
+  uninstallInkscapeBridge,
+} from './bridges/inkscapeBridgeInstall.js';
+import {
+  getGimpBridgeStatus,
+  installGimpBridge,
+  uninstallGimpBridge,
+} from './bridges/gimpBridgeInstall.js';
+import {
+  getAsepriteBridgeStatus,
+  installAsepriteBridge,
+  uninstallAsepriteBridge,
+} from './bridges/asepriteBridgeInstall.js';
+import {
+  getMohoBridgeStatus,
+  installMohoBridge,
+  uninstallMohoBridge,
+} from './bridges/mohoBridgeInstall.js';
+import {
+  getToonBoomHarmonyBridgeStatus,
+  installToonBoomHarmonyBridge,
+  uninstallToonBoomHarmonyBridge,
+} from './bridges/toonBoomHarmonyBridgeInstall.js';
+import {
+  getOpenToonzBridgeStatus,
+  installOpenToonzBridge,
+  uninstallOpenToonzBridge,
+} from './bridges/openToonzBridgeInstall.js';
+import {
+  getCavalryBridgeStatus,
+  installCavalryBridge,
+  uninstallCavalryBridge,
+} from './bridges/cavalryBridgeInstall.js';
+import {
+  getCloMarvelousBridgeStatus,
+  installCloMarvelousBridge,
+  uninstallCloMarvelousBridge,
+  type CloMarvelousBridgeId,
+} from './bridges/cloMarvelousBridgeInstall.js';
+import {
+  getRizomUvBridgeStatus,
+  installRizomUvBridge,
+  uninstallRizomUvBridge,
+} from './bridges/rizomUvBridgeInstall.js';
+import {
+  getDazStudioBridgeStatus,
+  installDazStudioBridge,
+  uninstallDazStudioBridge,
+} from './bridges/dazStudioBridgeInstall.js';
+import {
+  getPoserBridgeStatus,
+  installPoserBridge,
+  uninstallPoserBridge,
+} from './bridges/poserBridgeInstall.js';
+import {
+  getReallusionBridgeStatus,
+  installReallusionBridge,
+  uninstallReallusionBridge,
+  type ReallusionBridgeId,
+} from './bridges/reallusionBridgeInstall.js';
+import {
+  getMetashapeBridgeStatus,
+  installMetashapeBridge,
+  uninstallMetashapeBridge,
+} from './bridges/metashapeBridgeInstall.js';
+import {
+  getThreeDequalizerBridgeStatus,
+  installThreeDequalizerBridge,
+  uninstallThreeDequalizerBridge,
+} from './bridges/threeDequalizerBridgeInstall.js';
+import {
+  getKatanaBridgeStatus,
+  installKatanaBridge,
+  uninstallKatanaBridge,
+} from './bridges/katanaBridgeInstall.js';
+import {
+  getLightroomBridgeStatus,
+  installLightroomBridge,
+  uninstallLightroomBridge,
+} from './bridges/lightroomBridgeInstall.js';
+import {
+  getDarktableBridgeStatus,
+  installDarktableBridge,
+  uninstallDarktableBridge,
+} from './bridges/darktableBridgeInstall.js';
+import {
+  getNatronBridgeStatus,
+  installNatronBridge,
+  uninstallNatronBridge,
+} from './bridges/natronBridgeInstall.js';
+import {
+  getObsStudioBridgeStatus,
+  installObsStudioBridge,
+  uninstallObsStudioBridge,
+} from './bridges/obsStudioBridgeInstall.js';
+import {
+  getReaperBridgeStatus,
+  installReaperBridge,
+  uninstallReaperBridge,
+} from './bridges/reaperBridgeInstall.js';
+import {
+  getVegasProBridgeStatus,
+  installVegasProBridge,
+  uninstallVegasProBridge,
+} from './bridges/vegasProBridgeInstall.js';
+import {
+  getTvPaintBridgeStatus,
+  installTvPaintBridge,
+  uninstallTvPaintBridge,
+} from './bridges/tvPaintBridgeInstall.js';
+import {
+  getSynfigBridgeStatus,
+  installSynfigBridge,
+  uninstallSynfigBridge,
+} from './bridges/synfigBridgeInstall.js';
+import {
+  buildHostBridgeAcceptanceSummary,
+  readHostBridgeAcceptance,
+  writeHostBridgeAcceptanceRecord,
+} from './bridges/hostBridgeAcceptance.js';
+import { closeHostApp, launchHostApp, saveRunningHostTarget } from './bridges/hostAppProcess.js';
+import {
+  activeHostBridgeCloudVersion,
+  installHostBridgeCloud,
+  listHostBridgeCloudVersions,
+  probeHostBridgeCloud,
+  publishHostBridgeDraftToCloud,
+  switchHostBridgeCloudVersion,
+  syncHostBridgeCloudVersionsFromRemote,
+  uninstallHostBridgeCloud,
+} from './bridges/hostBridgeCloud.js';
+import {
+  createHostBridgeDraft,
+  deleteHostBridgeDraft,
+  installHostBridgeDraft,
+  probeHostBridgeDraft,
+  readHostBridgeDraft,
+  readHostBridgeDrafts,
+  uninstallHostBridgeDraft,
+  validateHostBridgeDraft,
+} from './bridges/hostBridgeDrafts.js';
 
 let runtimeEngineProbesCache: {
   at: number;
@@ -107,6 +415,90 @@ async function getCachedEngineProbes(): Promise<{
 }
 
 let cachedIndexHtml: string | null = null;
+
+function withHostBridgeAcceptance<T extends { id: string }>(status: T): T & { acceptance: unknown } {
+  return { ...status, acceptance: readHostBridgeAcceptance()[status.id] || null };
+}
+
+async function getBuiltInHostBridgeStatus(id: string): Promise<any | null> {
+  const simple: Record<string, () => any | Promise<any>> = {
+    maya: getMayaBridgeStatus,
+    blender: getBlenderBridgeStatus,
+    '3ds-max': getMaxBridgeStatus,
+    'substance-painter': getSubstancePainterBridgeStatus,
+    'substance-designer': getSubstanceDesignerBridgeStatus,
+    krita: getKritaBridgeStatus,
+    mari: getMariBridgeStatus,
+    inkscape: getInkscapeBridgeStatus,
+    gimp: getGimpBridgeStatus,
+    aseprite: getAsepriteBridgeStatus,
+    moho: getMohoBridgeStatus,
+    'toon-boom-harmony': getToonBoomHarmonyBridgeStatus,
+    opentoonz: getOpenToonzBridgeStatus,
+    cavalry: getCavalryBridgeStatus,
+    tvpaint: getTvPaintBridgeStatus,
+    houdini: getHoudiniBridgeStatus,
+    nuke: getNukeBridgeStatus,
+    natron: getNatronBridgeStatus,
+    'obs-studio': getObsStudioBridgeStatus,
+    reaper: getReaperBridgeStatus,
+    'vegas-pro': getVegasProBridgeStatus,
+    synfig: getSynfigBridgeStatus,
+    'cinema-4d': getCinema4DBridgeStatus,
+    'davinci-resolve': getDavinciResolveBridgeStatus,
+    'fusion-studio': getFusionStudioBridgeStatus,
+    modo: getModoBridgeStatus,
+    lightwave: getLightWaveBridgeStatus,
+    freecad: getFreeCADBridgeStatus,
+    autocad: getAutoCADBridgeStatus,
+    'lightroom-classic': getLightroomBridgeStatus,
+    darktable: getDarktableBridgeStatus,
+    unity: getUnityBridgeStatus,
+    zbrush: getZBrushBridgeStatus,
+    unreal: getUnrealBridgeStatus,
+    rhino: getRhinoBridgeStatus,
+    sketchup: getSketchUpBridgeStatus,
+    rizomuv: getRizomUvBridgeStatus,
+    'daz-studio': getDazStudioBridgeStatus,
+    poser: getPoserBridgeStatus,
+    metashape: getMetashapeBridgeStatus,
+    '3dequalizer': getThreeDequalizerBridgeStatus,
+    katana: getKatanaBridgeStatus,
+    godot: getGodotBridgeStatus,
+    motionbuilder: getMotionBuilderBridgeStatus,
+    'fusion-360': getFusion360BridgeStatus,
+    keyshot: getKeyShotBridgeStatus,
+    'marmoset-toolbag': getMarmosetToolbagBridgeStatus,
+  };
+  if (simple[id]) return await simple[id]();
+  if (id === 'nuke-studio' || id === 'hiero') return await getFoundryTimelineBridgeStatus(id);
+  if (
+    id === 'photoshop' ||
+    id === 'illustrator' ||
+    id === 'after-effects' ||
+    id === 'premiere' ||
+    id === 'indesign' ||
+    id === 'audition' ||
+    id === 'media-encoder' ||
+    id === 'animate' ||
+    id === 'adobe-bridge'
+  ) {
+    return await getAdobeBridgeStatus(id as AdobeBridgeId);
+  }
+  if (id === 'marvelous-designer' || id === 'clo') return await getCloMarvelousBridgeStatus(id as CloMarvelousBridgeId);
+  if (id === 'iclone' || id === 'character-creator') return await getReallusionBridgeStatus(id as ReallusionBridgeId);
+  return null;
+}
+
+function probeResultFromBridgeStatus(status: any): { connected: boolean; message: string } {
+  const probe = status && typeof status === 'object' ? status.probe : null;
+  const connected = Boolean(probe && probe.ok === true);
+  const message =
+    (probe && typeof probe.message === 'string' && probe.message) ||
+    (typeof status?.message === 'string' && status.message) ||
+    (connected ? '真实连接探测成功。' : '真实连接尚未成功，请启动宿主并加载桥接后再探测。');
+  return { connected, message };
+}
 
 /** 桌面壳 spawn 的 cwd 恒为伴侣根目录；bundle 为 `<bundle>/public`，源码为 `local-companion/public` */
 function resolvePublicIndexHtmlPath(): string {
@@ -336,6 +728,311 @@ export async function handleRequest(
       return;
     }
 
+    if (path === '/v1/workflows/skills' && method === 'GET') {
+      sendJson(res, 200, {
+        ok: true,
+        workflows: listWorkflowSkills().map((workflow) => ({
+          ...workflow,
+          connectorSummaries: summarizeWorkflowConnectors(workflow),
+        })),
+      }, origin);
+      return;
+    }
+
+    if (path === '/v1/workflows/runs' && method === 'GET') {
+      sendJson(res, 200, { ok: true, runs: listWorkflowRuns() }, origin);
+      return;
+    }
+
+    const workflowPreflightMatch = path.match(/^\/v1\/workflows\/([^/]+)\/preflight$/);
+    if (workflowPreflightMatch && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(Buffer.from(raw).toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { ok: false, error: 'invalid_json' }, origin);
+          return;
+        }
+      }
+      const result = await preflightWorkflowCapability({
+        baseUrl: typeof body.baseUrl === 'string' ? body.baseUrl : undefined,
+        params: body.params,
+        workflowId: decodeURIComponent(workflowPreflightMatch[1]!),
+      });
+      sendJson(res, result.ok ? 200 : 400, result, origin);
+      return;
+    }
+
+    const workflowRunMatch = path.match(/^\/v1\/workflows\/([^/]+)\/run$/);
+    if (workflowRunMatch && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(Buffer.from(raw).toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { ok: false, error: 'invalid_json' }, origin);
+          return;
+        }
+      }
+      const result = await runWorkflowCapability({
+        baseUrl: typeof body.baseUrl === 'string' ? body.baseUrl : undefined,
+        params: body.params,
+        reusedFromRunId: typeof body.reusedFromRunId === 'string' ? body.reusedFromRunId : undefined,
+        workflowId: decodeURIComponent(workflowRunMatch[1]!),
+      });
+      sendJson(res, result.ok ? 200 : 424, result, origin);
+      return;
+    }
+
+    if (path === '/v1/capability-packages/drafts' && method === 'GET') {
+      sendJson(res, 200, { drafts: readCapabilityPackageDrafts() }, origin);
+      return;
+    }
+
+    if (path === '/v1/capability-packages/cloud' && method === 'GET') {
+      sendJson(res, 200, { packages: listActiveCapabilityCloudPackages(), versions: listCapabilityCloudVersions() }, origin);
+      return;
+    }
+
+    if (path === '/v1/capability-packages/import' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(Buffer.from(raw).toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json' }, origin);
+          return;
+        }
+      }
+      const result = importCapabilityPackageTransfer(body.bundle || body);
+      sendJson(res, result.ok ? 201 : 400, result, origin);
+      return;
+    }
+
+    if (path === '/v1/capability-packages/drafts' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(Buffer.from(raw).toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json' }, origin);
+          return;
+        }
+      }
+      const result = createCapabilityPackageDraft({
+        id: typeof body.id === 'string' ? body.id : undefined,
+        type: body.type === 'software_connection' || body.type === 'tool' || body.type === 'workflow' ? body.type : undefined,
+        name: typeof body.name === 'string' ? body.name : '',
+        appName: typeof body.appName === 'string' ? body.appName : undefined,
+        description: typeof body.description === 'string' ? body.description : undefined,
+        tags: Array.isArray(body.tags) ? body.tags.map(String).filter(Boolean) : undefined,
+        templateHint: typeof body.templateHint === 'string' ? body.templateHint : undefined,
+        semver: typeof body.semver === 'string' ? body.semver : undefined,
+        manifest: body.manifest && typeof body.manifest === 'object' && !Array.isArray(body.manifest) ? (body.manifest as Record<string, unknown>) : undefined,
+        createdBy: typeof body.createdBy === 'string' ? body.createdBy : 'copilot',
+      });
+      if (!result.ok) {
+        sendJson(res, 400, { ok: false, error: result.error, messages: result.messages }, origin);
+        return;
+      }
+      sendJson(res, 201, { ok: true, draft: result.draft }, origin);
+      return;
+    }
+
+    const capabilityTransferExportMatch = path.match(/^\/v1\/capability-packages\/([^/]+)\/export$/);
+    if (capabilityTransferExportMatch && method === 'GET') {
+      const result = exportCapabilityPackageTransfer(decodeURIComponent(capabilityTransferExportMatch[1]!));
+      sendJson(res, result.ok ? 200 : 404, result, origin);
+      return;
+    }
+
+    const capabilityDraftDeleteMatch = path.match(/^\/v1\/capability-packages\/drafts\/([^/]+)$/);
+    if (capabilityDraftDeleteMatch && method === 'DELETE') {
+      const deleted = deleteCapabilityPackageDraft(decodeURIComponent(capabilityDraftDeleteMatch[1]!));
+      sendJson(res, deleted ? 200 : 404, deleted ? { ok: true, deleted: true } : { error: 'draft_not_found' }, origin);
+      return;
+    }
+
+    const capabilityContextMatch = path.match(/^\/v1\/capability-packages\/([^/]+)\/context$/);
+    if (capabilityContextMatch && method === 'GET') {
+      const result = buildCapabilityPackageContext(decodeURIComponent(capabilityContextMatch[1]!));
+      sendJson(res, result.ok ? 200 : 404, result, origin);
+      return;
+    }
+
+    const capabilityPublishGateMatch = path.match(/^\/v1\/capability-packages\/([^/]+)\/publish-gate$/);
+    if (capabilityPublishGateMatch && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(Buffer.from(raw).toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json' }, origin);
+          return;
+        }
+      }
+      const result = checkCapabilityPublishGate(decodeURIComponent(capabilityPublishGateMatch[1]!), {
+        actorRole: typeof body.actorRole === 'string' ? body.actorRole : undefined,
+        isAdmin: body.isAdmin === true,
+        versionNote: typeof body.versionNote === 'string' ? body.versionNote : undefined,
+      });
+      sendJson(res, result.publishable ? 200 : result.code === 'capability_not_found' ? 404 : 422, result, origin);
+      return;
+    }
+
+    const capabilityCloudVersionsMatch = path.match(/^\/v1\/capability-packages\/([^/]+)\/cloud-versions$/);
+    if (capabilityCloudVersionsMatch && method === 'GET') {
+      sendJson(res, 200, { versions: listCapabilityCloudVersions(decodeURIComponent(capabilityCloudVersionsMatch[1]!)) }, origin);
+      return;
+    }
+
+    if (capabilityCloudVersionsMatch && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(Buffer.from(raw).toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json' }, origin);
+          return;
+        }
+      }
+      const result = publishCapabilityDraftToCloud(decodeURIComponent(capabilityCloudVersionsMatch[1]!), {
+        semver: typeof body.semver === 'string' ? body.semver : undefined,
+        versionNote: typeof body.versionNote === 'string' ? body.versionNote : typeof body.note === 'string' ? body.note : undefined,
+        actorRole: typeof body.actorRole === 'string' ? body.actorRole : undefined,
+        isAdmin: body.isAdmin === true,
+        publishedBy: typeof body.publishedBy === 'string' ? body.publishedBy : undefined,
+      });
+      sendJson(res, result.ok ? 201 : result.error === 'capability_not_found' ? 404 : 422, result, origin);
+      return;
+    }
+
+    const capabilityCloudSwitchMatch = path.match(/^\/v1\/capability-packages\/([^/]+)\/cloud-versions\/([^/]+)\/activate$/);
+    if (capabilityCloudSwitchMatch && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(Buffer.from(raw).toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json' }, origin);
+          return;
+        }
+      }
+      const result = switchCapabilityCloudVersion(
+        decodeURIComponent(capabilityCloudSwitchMatch[1]!),
+        decodeURIComponent(capabilityCloudSwitchMatch[2]!),
+        {
+          actorRole: typeof body.actorRole === 'string' ? body.actorRole : undefined,
+          isAdmin: body.isAdmin === true,
+        },
+      );
+      sendJson(res, result.ok ? 200 : result.error === 'cloud_version_not_found' ? 404 : 403, result, origin);
+      return;
+    }
+
+    const capabilityEventMatch = path.match(/^\/v1\/capability-packages\/([^/]+)\/events$/);
+    if (capabilityEventMatch && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(Buffer.from(raw).toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json' }, origin);
+          return;
+        }
+      }
+      const draft = appendCapabilityPackageEvent(decodeURIComponent(capabilityEventMatch[1]!), {
+        kind: typeof body.kind === 'string' ? body.kind : 'event',
+        ok: body.ok === true,
+        message: typeof body.message === 'string' ? body.message : '',
+        detail: body.detail,
+      });
+      if (!draft) {
+        sendJson(res, 404, { ok: false, error: 'capability_not_found' }, origin);
+        return;
+      }
+      sendJson(res, 200, { ok: true, draft }, origin);
+      return;
+    }
+
+    const capabilityLifecycleMatch = path.match(/^\/v1\/capability-packages\/([^/]+)\/(install|probe|uninstall)$/);
+    if (capabilityLifecycleMatch && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(Buffer.from(raw).toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json' }, origin);
+          return;
+        }
+      }
+      const input = {
+        targetDir: typeof body.targetDir === 'string' ? body.targetDir : undefined,
+        scriptsDirs: Array.isArray(body.scriptsDirs) ? body.scriptsDirs.map(String).filter(Boolean) : undefined,
+        port: Number.isFinite(Number(body.port)) ? Number(body.port) : undefined,
+      };
+      const id = decodeURIComponent(capabilityLifecycleMatch[1]!);
+      const action = capabilityLifecycleMatch[2]!;
+      const result =
+        action === 'install'
+          ? await installCapabilityPackage(id, input)
+          : action === 'probe'
+            ? await probeCapabilityPackage(id)
+            : await uninstallCapabilityPackage(id, input);
+      if (!result.ok) {
+        sendJson(res, action === 'probe' ? 424 : 422, result, origin);
+        return;
+      }
+      sendJson(res, 200, result, origin);
+      return;
+    }
+
+    const capabilityLifecycleRunMatch = path.match(/^\/v1\/capability-packages\/([^/]+)\/lifecycle$/);
+    if (capabilityLifecycleRunMatch && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(Buffer.from(raw).toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json' }, origin);
+          return;
+        }
+      }
+      const action = String(body.action || '').trim();
+      const result = await runCapabilityLifecycle(decodeURIComponent(capabilityLifecycleRunMatch[1]!), action as any, {
+        baseUrl: typeof body.baseUrl === 'string' ? body.baseUrl : undefined,
+        historyPath: typeof body.historyPath === 'string' ? body.historyPath : undefined,
+        targetDir: typeof body.targetDir === 'string' ? body.targetDir : undefined,
+        scriptsDirs: Array.isArray(body.scriptsDirs) ? body.scriptsDirs.map(String).filter(Boolean) : undefined,
+        port: Number.isFinite(Number(body.port)) ? Number(body.port) : undefined,
+        actionId: typeof body.actionId === 'string' ? body.actionId : undefined,
+        params: body.params,
+        actorRole: typeof body.actorRole === 'string' ? body.actorRole : undefined,
+        isAdmin: body.isAdmin === true,
+        semver: typeof body.semver === 'string' ? body.semver : undefined,
+        versionId: typeof body.versionId === 'string' ? body.versionId : undefined,
+        versionNote: typeof body.versionNote === 'string' ? body.versionNote : undefined,
+        publishedBy: typeof body.publishedBy === 'string' ? body.publishedBy : undefined,
+      });
+      if (!result.ok) {
+        sendJson(res, action === 'probe' || action === 'run' ? 424 : 422, result, origin);
+        return;
+      }
+      sendJson(res, 200, result, origin);
+      return;
+    }
+
     if (path === '/v1/debug/sam-segment-health' && method === 'GET') {
       const payload = await probeSamSegmentBackendHealth();
       sendJson(res, 200, payload, origin);
@@ -377,12 +1074,572 @@ export async function handleRequest(
     }
 
     if (path === '/v1/bridges' && method === 'GET') {
-      sendJson(res, 200, { bridges: listBridgesCatalog() }, origin);
+      const acceptance = readHostBridgeAcceptance();
+      sendJson(res, 200, { bridges: listBridgesCatalog(), acceptance, acceptanceSummary: buildHostBridgeAcceptanceSummary(acceptance) }, origin);
       return;
     }
 
+    if (path === '/v1/bridges/drafts' && method === 'GET') {
+      sendJson(res, 200, { drafts: readHostBridgeDrafts() }, origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/drafts' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+          return;
+        }
+      }
+      const existingIds = listBridgesCatalog().filter((entry) => entry.source !== 'draft').map((entry) => entry.id);
+      try {
+        const result = createHostBridgeDraft(
+          {
+            id: typeof body.id === 'string' ? body.id : undefined,
+            name: String(body.name || ''),
+            category: typeof body.category === 'string' ? (body.category as never) : undefined,
+            defaultPort: typeof body.defaultPort === 'number' ? body.defaultPort : undefined,
+            connectorLabel: typeof body.connectorLabel === 'string' ? body.connectorLabel : undefined,
+            templateId: typeof body.templateId === 'string' ? (body.templateId as never) : undefined,
+            entryFile: typeof body.entryFile === 'string' ? body.entryFile : undefined,
+            tags: Array.isArray(body.tags) ? body.tags.map(String) : undefined,
+            description: typeof body.description === 'string' ? body.description : undefined,
+            createdBy: typeof body.createdBy === 'string' ? body.createdBy : 'copilot',
+          },
+          existingIds,
+        );
+        if (!result.ok) {
+          sendJson(res, 400, { error: result.error, messages: result.messages }, origin);
+          return;
+        }
+        sendJson(res, 201, { ok: true, draft: result.draft }, origin);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        sendJson(res, 400, { error: msg }, origin);
+      }
+      return;
+    }
+
+    const bridgeDraftValidateMatch = path.match(/^\/v1\/bridges\/drafts\/([^/]+)\/validate$/);
+    if (bridgeDraftValidateMatch && method === 'POST') {
+      const id = decodeURIComponent(bridgeDraftValidateMatch[1]!);
+      const draft = readHostBridgeDrafts().find((item) => item.id === id);
+      if (!draft) {
+        sendJson(res, 404, { error: 'draft_not_found' }, origin);
+        return;
+      }
+      const existingIds = listBridgesCatalog().filter((entry) => entry.source !== 'draft').map((entry) => entry.id);
+      sendJson(res, 200, { ok: true, validation: validateHostBridgeDraft(draft, existingIds) }, origin);
+      return;
+    }
+
+    const bridgeDraftDeleteMatch = path.match(/^\/v1\/bridges\/drafts\/([^/]+)$/);
+    if (bridgeDraftDeleteMatch && method === 'DELETE') {
+      const deleted = deleteHostBridgeDraft(decodeURIComponent(bridgeDraftDeleteMatch[1]!));
+      sendJson(res, deleted ? 200 : 404, deleted ? { ok: true, deleted: true } : { error: 'draft_not_found' }, origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/cloud' && method === 'GET') {
+      sendJson(res, 200, { versions: listHostBridgeCloudVersions() }, origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/cloud/sync' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+          return;
+        }
+      }
+      const result = syncHostBridgeCloudVersionsFromRemote(Array.isArray(body.versions) ? (body.versions as never) : []);
+      sendJson(res, result.ok ? 200 : 400, result, origin);
+      return;
+    }
+
+    const bridgeCloudPublishMatch = path.match(/^\/v1\/bridges\/([^/]+)\/cloud\/publish$/);
+    if (bridgeCloudPublishMatch && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+          return;
+        }
+      }
+      const result = publishHostBridgeDraftToCloud(decodeURIComponent(bridgeCloudPublishMatch[1]!), {
+        semver: typeof body.semver === 'string' ? body.semver : undefined,
+        note: typeof body.note === 'string' ? body.note : undefined,
+        publishedBy: typeof body.publishedBy === 'string' ? body.publishedBy : undefined,
+      });
+      sendJson(res, result.ok ? 200 : 400, result, origin);
+      return;
+    }
+
+    const bridgeCloudVersionsMatch = path.match(/^\/v1\/bridges\/([^/]+)\/cloud\/versions$/);
+    if (bridgeCloudVersionsMatch && method === 'GET') {
+      sendJson(res, 200, { versions: listHostBridgeCloudVersions(decodeURIComponent(bridgeCloudVersionsMatch[1]!)) }, origin);
+      return;
+    }
+
+    const bridgeCloudSwitchMatch = path.match(/^\/v1\/bridges\/([^/]+)\/cloud\/versions\/([^/]+)\/activate$/);
+    if (bridgeCloudSwitchMatch && method === 'POST') {
+      const result = switchHostBridgeCloudVersion(
+        decodeURIComponent(bridgeCloudSwitchMatch[1]!),
+        decodeURIComponent(bridgeCloudSwitchMatch[2]!),
+      );
+      sendJson(res, result.ok ? 200 : 404, result, origin);
+      return;
+    }
+
+    const bridgeProcessMatch = path.match(/^\/v1\/bridges\/([^/]+)\/(launch|close|discover-running)$/);
+    if (bridgeProcessMatch && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+          return;
+        }
+      }
+      const hostId = decodeURIComponent(bridgeProcessMatch[1]!);
+      const action = bridgeProcessMatch[2]!;
+      const result =
+        action === 'launch'
+          ? launchHostApp(hostId, {
+              executablePath: typeof body.executablePath === 'string' ? body.executablePath : undefined,
+              versionId: typeof body.versionId === 'string' ? body.versionId : undefined,
+              targetId: typeof body.targetId === 'string' ? body.targetId : undefined,
+            })
+          : action === 'discover-running'
+            ? saveRunningHostTarget(hostId)
+            : closeHostApp(hostId);
+      sendJson(res, result.ok ? 200 : 400, result, origin);
+      return;
+    }
+
+    const bridgeDraftRuntimeMatch = path.match(/^\/v1\/bridges\/([^/]+)(?:\/(install|probe|uninstall))?$/);
+    if (bridgeDraftRuntimeMatch) {
+      const id = decodeURIComponent(bridgeDraftRuntimeMatch[1]!);
+      const action = bridgeDraftRuntimeMatch[2] || 'status';
+      const draft = readHostBridgeDraft(id);
+      if (draft) {
+        if (method === 'GET' && action === 'status') {
+          sendJson(res, 200, { ...draft, installed: Boolean(draft.installs && draft.installs.length), installs: draft.installs || [] }, origin);
+          return;
+        }
+        if (method === 'POST' && action === 'install') {
+          const raw = await readRequestBodyRaw(req);
+          let body: Record<string, unknown> = {};
+          if (raw.length > 0) {
+            try {
+              body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+            } catch {
+              sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+              return;
+            }
+          }
+          const result = installHostBridgeDraft(id, {
+            targetDir: typeof body.targetDir === 'string' ? body.targetDir : undefined,
+            scriptsDir: typeof body.scriptsDir === 'string' ? body.scriptsDir : undefined,
+            scriptsDirs: Array.isArray(body.scriptsDirs) ? body.scriptsDirs.map(String) : undefined,
+            port: typeof body.port === 'number' ? body.port : undefined,
+          });
+          sendJson(res, result.ok ? 200 : 400, result, origin);
+          return;
+        }
+        if (method === 'POST' && action === 'probe') {
+          const result = await probeHostBridgeDraft(id);
+          sendJson(res, result.ok ? 200 : 400, result, origin);
+          return;
+        }
+        if (method === 'POST' && action === 'uninstall') {
+          const result = uninstallHostBridgeDraft(id);
+          sendJson(res, result.ok ? 200 : 400, result, origin);
+          return;
+        }
+      }
+      const cloud = activeHostBridgeCloudVersion(id);
+      if (cloud) {
+        if (method === 'GET' && action === 'status') {
+          sendJson(res, 200, { ...cloud.definition, source: 'cloud', cloudVersion: cloud.semver, cloudVersionId: cloud.id }, origin);
+          return;
+        }
+        if (method === 'POST' && action === 'install') {
+          const raw = await readRequestBodyRaw(req);
+          let body: Record<string, unknown> = {};
+          if (raw.length > 0) {
+            try {
+              body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+            } catch {
+              sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+              return;
+            }
+          }
+          const result = installHostBridgeCloud(id, {
+            targetDir: typeof body.targetDir === 'string' ? body.targetDir : undefined,
+            scriptsDir: typeof body.scriptsDir === 'string' ? body.scriptsDir : undefined,
+            scriptsDirs: Array.isArray(body.scriptsDirs) ? body.scriptsDirs.map(String) : undefined,
+            port: typeof body.port === 'number' ? body.port : undefined,
+          });
+          sendJson(res, result.ok ? 200 : 400, result, origin);
+          return;
+        }
+        if (method === 'POST' && action === 'probe') {
+          const result = await probeHostBridgeCloud(id);
+          sendJson(res, result.ok ? 200 : 400, result, origin);
+          return;
+        }
+        if (method === 'POST' && action === 'uninstall') {
+          const result = uninstallHostBridgeCloud(id);
+          sendJson(res, result.ok ? 200 : 400, result, origin);
+          return;
+        }
+      }
+      if (method === 'POST' && action === 'probe') {
+        const status = await getBuiltInHostBridgeStatus(id);
+        if (status) {
+          const probe = probeResultFromBridgeStatus(status);
+          let acceptance: unknown = null;
+          try {
+            acceptance = writeHostBridgeAcceptanceRecord(id, {
+              ok: probe.connected,
+              message: probe.message,
+            });
+          } catch {
+            acceptance = readHostBridgeAcceptance()[id] || null;
+          }
+          sendJson(res, 200, {
+            ok: true,
+            id,
+            connected: probe.connected,
+            message: probe.message,
+            status,
+            acceptance,
+          }, origin);
+          return;
+        }
+      }
+    }
+
     if (path === '/v1/bridges/maya' && method === 'GET') {
-      sendJson(res, 200, getMayaBridgeStatus(), origin);
+      sendJson(res, 200, withHostBridgeAcceptance(getMayaBridgeStatus()), origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/blender' && method === 'GET') {
+      sendJson(res, 200, withHostBridgeAcceptance(await getBlenderBridgeStatus()), origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/3ds-max' && method === 'GET') {
+      sendJson(res, 200, withHostBridgeAcceptance(await getMaxBridgeStatus()), origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/substance-painter' && method === 'GET') {
+      sendJson(res, 200, withHostBridgeAcceptance(await getSubstancePainterBridgeStatus()), origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/substance-designer' && method === 'GET') {
+      sendJson(res, 200, withHostBridgeAcceptance(await getSubstanceDesignerBridgeStatus()), origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/krita' && method === 'GET') {
+      sendJson(res, 200, withHostBridgeAcceptance(await getKritaBridgeStatus()), origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/mari' && method === 'GET') {
+      sendJson(res, 200, withHostBridgeAcceptance(await getMariBridgeStatus()), origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/inkscape' && method === 'GET') {
+      sendJson(res, 200, withHostBridgeAcceptance(await getInkscapeBridgeStatus()), origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/gimp' && method === 'GET') {
+      sendJson(res, 200, withHostBridgeAcceptance(await getGimpBridgeStatus()), origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/aseprite' && method === 'GET') {
+      sendJson(res, 200, withHostBridgeAcceptance(await getAsepriteBridgeStatus()), origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/moho' && method === 'GET') {
+      sendJson(res, 200, withHostBridgeAcceptance(await getMohoBridgeStatus()), origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/toon-boom-harmony' && method === 'GET') {
+      sendJson(res, 200, withHostBridgeAcceptance(await getToonBoomHarmonyBridgeStatus()), origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/opentoonz' && method === 'GET') {
+      sendJson(res, 200, withHostBridgeAcceptance(await getOpenToonzBridgeStatus()), origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/cavalry' && method === 'GET') {
+      sendJson(res, 200, withHostBridgeAcceptance(await getCavalryBridgeStatus()), origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/tvpaint' && method === 'GET') {
+      sendJson(res, 200, withHostBridgeAcceptance(await getTvPaintBridgeStatus()), origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/houdini' && method === 'GET') {
+      sendJson(res, 200, withHostBridgeAcceptance(await getHoudiniBridgeStatus()), origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/nuke' && method === 'GET') {
+      sendJson(res, 200, withHostBridgeAcceptance(await getNukeBridgeStatus()), origin);
+      return;
+    }
+
+    if ((path === '/v1/bridges/nuke-studio' || path === '/v1/bridges/hiero') && method === 'GET') {
+      const id = path.endsWith('/hiero') ? 'hiero' : 'nuke-studio';
+      sendJson(res, 200, withHostBridgeAcceptance(await getFoundryTimelineBridgeStatus(id)), origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/natron' && method === 'GET') {
+      sendJson(res, 200, withHostBridgeAcceptance(await getNatronBridgeStatus()), origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/obs-studio' && method === 'GET') {
+      sendJson(res, 200, withHostBridgeAcceptance(await getObsStudioBridgeStatus()), origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/reaper' && method === 'GET') {
+      sendJson(res, 200, withHostBridgeAcceptance(await getReaperBridgeStatus()), origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/vegas-pro' && method === 'GET') {
+      sendJson(res, 200, withHostBridgeAcceptance(await getVegasProBridgeStatus()), origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/synfig' && method === 'GET') {
+      sendJson(res, 200, withHostBridgeAcceptance(await getSynfigBridgeStatus()), origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/cinema-4d' && method === 'GET') {
+      sendJson(res, 200, withHostBridgeAcceptance(await getCinema4DBridgeStatus()), origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/davinci-resolve' && method === 'GET') {
+      sendJson(res, 200, withHostBridgeAcceptance(await getDavinciResolveBridgeStatus()), origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/fusion-studio' && method === 'GET') {
+      sendJson(res, 200, withHostBridgeAcceptance(await getFusionStudioBridgeStatus()), origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/modo' && method === 'GET') {
+      sendJson(res, 200, withHostBridgeAcceptance(await getModoBridgeStatus()), origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/lightwave' && method === 'GET') {
+      sendJson(res, 200, withHostBridgeAcceptance(await getLightWaveBridgeStatus()), origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/freecad' && method === 'GET') {
+      sendJson(res, 200, withHostBridgeAcceptance(await getFreeCADBridgeStatus()), origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/autocad' && method === 'GET') {
+      sendJson(res, 200, withHostBridgeAcceptance(await getAutoCADBridgeStatus()), origin);
+      return;
+    }
+
+    if (
+      (path === '/v1/bridges/photoshop' ||
+        path === '/v1/bridges/illustrator' ||
+        path === '/v1/bridges/after-effects' ||
+        path === '/v1/bridges/premiere' ||
+        path === '/v1/bridges/indesign' ||
+        path === '/v1/bridges/audition' ||
+        path === '/v1/bridges/media-encoder' ||
+        path === '/v1/bridges/animate' ||
+        path === '/v1/bridges/adobe-bridge') &&
+      method === 'GET'
+    ) {
+      const id = path.split('/').pop() as AdobeBridgeId;
+      sendJson(res, 200, withHostBridgeAcceptance(await getAdobeBridgeStatus(id)), origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/lightroom-classic' && method === 'GET') {
+      sendJson(res, 200, withHostBridgeAcceptance(await getLightroomBridgeStatus()), origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/darktable' && method === 'GET') {
+      sendJson(res, 200, withHostBridgeAcceptance(await getDarktableBridgeStatus()), origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/unity' && method === 'GET') {
+      sendJson(res, 200, withHostBridgeAcceptance(await getUnityBridgeStatus()), origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/zbrush' && method === 'GET') {
+      sendJson(res, 200, withHostBridgeAcceptance(await getZBrushBridgeStatus()), origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/unreal' && method === 'GET') {
+      sendJson(res, 200, withHostBridgeAcceptance(await getUnrealBridgeStatus()), origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/rhino' && method === 'GET') {
+      sendJson(res, 200, withHostBridgeAcceptance(await getRhinoBridgeStatus()), origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/sketchup' && method === 'GET') {
+      sendJson(res, 200, withHostBridgeAcceptance(await getSketchUpBridgeStatus()), origin);
+      return;
+    }
+
+    if ((path === '/v1/bridges/marvelous-designer' || path === '/v1/bridges/clo') && method === 'GET') {
+      const id = path.endsWith('/clo') ? 'clo' : 'marvelous-designer';
+      sendJson(res, 200, withHostBridgeAcceptance(await getCloMarvelousBridgeStatus(id)), origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/rizomuv' && method === 'GET') {
+      sendJson(res, 200, withHostBridgeAcceptance(await getRizomUvBridgeStatus()), origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/daz-studio' && method === 'GET') {
+      sendJson(res, 200, withHostBridgeAcceptance(await getDazStudioBridgeStatus()), origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/poser' && method === 'GET') {
+      sendJson(res, 200, withHostBridgeAcceptance(await getPoserBridgeStatus()), origin);
+      return;
+    }
+
+    if ((path === '/v1/bridges/iclone' || path === '/v1/bridges/character-creator') && method === 'GET') {
+      const id = path.endsWith('/iclone') ? 'iclone' : 'character-creator';
+      sendJson(res, 200, withHostBridgeAcceptance(await getReallusionBridgeStatus(id)), origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/metashape' && method === 'GET') {
+      sendJson(res, 200, withHostBridgeAcceptance(await getMetashapeBridgeStatus()), origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/3dequalizer' && method === 'GET') {
+      sendJson(res, 200, withHostBridgeAcceptance(await getThreeDequalizerBridgeStatus()), origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/katana' && method === 'GET') {
+      sendJson(res, 200, withHostBridgeAcceptance(await getKatanaBridgeStatus()), origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/godot' && method === 'GET') {
+      sendJson(res, 200, withHostBridgeAcceptance(await getGodotBridgeStatus()), origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/motionbuilder' && method === 'GET') {
+      sendJson(res, 200, withHostBridgeAcceptance(await getMotionBuilderBridgeStatus()), origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/fusion-360' && method === 'GET') {
+      sendJson(res, 200, withHostBridgeAcceptance(await getFusion360BridgeStatus()), origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/keyshot' && method === 'GET') {
+      sendJson(res, 200, withHostBridgeAcceptance(await getKeyShotBridgeStatus()), origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/marmoset-toolbag' && method === 'GET') {
+      sendJson(res, 200, withHostBridgeAcceptance(await getMarmosetToolbagBridgeStatus()), origin);
+      return;
+    }
+
+    const bridgeAcceptanceMatch = path.match(/^\/v1\/bridges\/([^/]+)\/acceptance$/);
+    if (bridgeAcceptanceMatch && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+          return;
+        }
+      }
+      try {
+        const rec = writeHostBridgeAcceptanceRecord(bridgeAcceptanceMatch[1]!, {
+          ok: Boolean(body.ok),
+          message: typeof body.message === 'string' ? body.message : '',
+        });
+        sendJson(res, 200, { ok: true, acceptance: rec }, origin);
+      } catch (e) {
+        const code = e instanceof Error ? e.message : String(e || 'acceptance_record_failed');
+        sendJson(
+          res,
+          400,
+          {
+            ok: false,
+            error: code,
+            message:
+              code === 'acceptance_evidence_required'
+                ? '成功验收必须填写真实软件版本、路径或探测信号。'
+                : code === 'acceptance_host_not_in_required_groups'
+                  ? '该宿主不属于最终真实软件验收门禁，不能记录为成功验收。'
+                  : '验收记录保存失败。',
+          },
+          origin,
+        );
+      }
       return;
     }
 
@@ -437,6 +1694,2676 @@ export async function handleRequest(
         : undefined;
       const result = uninstallMayaBridge({ versions, scriptsDirs });
       sendJson(res, 200, result, origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/blender/install' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+          return;
+        }
+      }
+      const versions = Array.isArray(body.versions)
+        ? body.versions.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const startupDirs = Array.isArray(body.startupDirs)
+        ? body.startupDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const portRaw = body.port != null ? Number(body.port) : undefined;
+      const result = installBlenderBridge({
+        versions,
+        startupDirs,
+        ...(Number.isFinite(portRaw as number) ? { port: portRaw as number } : {}),
+      });
+      if (!result.ok) {
+        sendJson(res, 422, { error: result.error, message: result.message }, origin);
+        return;
+      }
+      sendJson(res, 200, result, origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/blender/uninstall' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+          return;
+        }
+      }
+      const versions = Array.isArray(body.versions)
+        ? body.versions.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const startupDirs = Array.isArray(body.startupDirs)
+        ? body.startupDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      sendJson(res, 200, uninstallBlenderBridge({ versions, startupDirs }), origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/3ds-max/install' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+          return;
+        }
+      }
+      const versions = Array.isArray(body.versions)
+        ? body.versions.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const startupDirs = Array.isArray(body.startupDirs)
+        ? body.startupDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const portRaw = body.port != null ? Number(body.port) : undefined;
+      const result = installMaxBridge({
+        versions,
+        startupDirs,
+        ...(Number.isFinite(portRaw as number) ? { port: portRaw as number } : {}),
+      });
+      if (!result.ok) {
+        sendJson(res, 422, { error: result.error, message: result.message }, origin);
+        return;
+      }
+      sendJson(res, 200, result, origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/3ds-max/uninstall' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+          return;
+        }
+      }
+      const versions = Array.isArray(body.versions)
+        ? body.versions.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const startupDirs = Array.isArray(body.startupDirs)
+        ? body.startupDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      sendJson(res, 200, uninstallMaxBridge({ versions, startupDirs }), origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/substance-painter/install' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+          return;
+        }
+      }
+      const targets = Array.isArray(body.targets)
+        ? body.targets.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const pluginDirs = Array.isArray(body.pluginDirs)
+        ? body.pluginDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const portRaw = body.port != null ? Number(body.port) : undefined;
+      const result = installSubstancePainterBridge({
+        targets,
+        pluginDirs,
+        ...(Number.isFinite(portRaw as number) ? { port: portRaw as number } : {}),
+      });
+      if (!result.ok) {
+        sendJson(res, 422, { error: result.error, message: result.message }, origin);
+        return;
+      }
+      sendJson(res, 200, result, origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/substance-painter/uninstall' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+          return;
+        }
+      }
+      const targets = Array.isArray(body.targets)
+        ? body.targets.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const pluginDirs = Array.isArray(body.pluginDirs)
+        ? body.pluginDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      sendJson(res, 200, uninstallSubstancePainterBridge({ targets, pluginDirs }), origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/substance-designer/install' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+          return;
+        }
+      }
+      const targets = Array.isArray(body.targets)
+        ? body.targets.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const scriptsDirs = Array.isArray(body.scriptsDirs)
+        ? body.scriptsDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const portRaw = body.port != null ? Number(body.port) : undefined;
+      const result = installSubstanceDesignerBridge({
+        targets,
+        scriptsDirs,
+        ...(Number.isFinite(portRaw as number) ? { port: portRaw as number } : {}),
+      });
+      if (!result.ok) {
+        sendJson(res, 422, { error: result.error, message: result.message }, origin);
+        return;
+      }
+      sendJson(res, 200, result, origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/substance-designer/uninstall' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+          return;
+        }
+      }
+      const targets = Array.isArray(body.targets)
+        ? body.targets.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const scriptsDirs = Array.isArray(body.scriptsDirs)
+        ? body.scriptsDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      sendJson(res, 200, uninstallSubstanceDesignerBridge({ targets, scriptsDirs }), origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/krita/install' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+          return;
+        }
+      }
+      const targets = Array.isArray(body.targets)
+        ? body.targets.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const pluginDirs = Array.isArray(body.pluginDirs)
+        ? body.pluginDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const scriptsDirs = Array.isArray(body.scriptsDirs)
+        ? body.scriptsDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const portRaw = body.port != null ? Number(body.port) : undefined;
+      const result = installKritaBridge({
+        targets,
+        pluginDirs,
+        scriptsDirs,
+        ...(Number.isFinite(portRaw as number) ? { port: portRaw as number } : {}),
+      });
+      if (!result.ok) {
+        sendJson(res, 422, { error: result.error, message: result.message }, origin);
+        return;
+      }
+      sendJson(res, 200, result, origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/krita/uninstall' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+          return;
+        }
+      }
+      const targets = Array.isArray(body.targets)
+        ? body.targets.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const pluginDirs = Array.isArray(body.pluginDirs)
+        ? body.pluginDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const scriptsDirs = Array.isArray(body.scriptsDirs)
+        ? body.scriptsDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      sendJson(res, 200, uninstallKritaBridge({ targets, pluginDirs, scriptsDirs }), origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/mari/install' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+          return;
+        }
+      }
+      const targets = Array.isArray(body.targets)
+        ? body.targets.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const scriptsDirs = Array.isArray(body.scriptsDirs)
+        ? body.scriptsDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const portRaw = body.port != null ? Number(body.port) : undefined;
+      const result = installMariBridge({
+        targets,
+        scriptsDirs,
+        ...(Number.isFinite(portRaw as number) ? { port: portRaw as number } : {}),
+      });
+      if (!result.ok) {
+        sendJson(res, 422, { error: result.error, message: result.message }, origin);
+        return;
+      }
+      sendJson(res, 200, result, origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/mari/uninstall' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+          return;
+        }
+      }
+      const targets = Array.isArray(body.targets)
+        ? body.targets.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const scriptsDirs = Array.isArray(body.scriptsDirs)
+        ? body.scriptsDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      sendJson(res, 200, uninstallMariBridge({ targets, scriptsDirs }), origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/inkscape/install' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+          return;
+        }
+      }
+      const targets = Array.isArray(body.targets)
+        ? body.targets.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const extensionsDirs = Array.isArray(body.extensionsDirs)
+        ? body.extensionsDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const scriptsDirs = Array.isArray(body.scriptsDirs)
+        ? body.scriptsDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const portRaw = body.port != null ? Number(body.port) : undefined;
+      const result = installInkscapeBridge({
+        targets,
+        extensionsDirs,
+        scriptsDirs,
+        ...(Number.isFinite(portRaw as number) ? { port: portRaw as number } : {}),
+      });
+      if (!result.ok) {
+        sendJson(res, 422, { error: result.error, message: result.message }, origin);
+        return;
+      }
+      sendJson(res, 200, result, origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/inkscape/uninstall' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+          return;
+        }
+      }
+      const targets = Array.isArray(body.targets)
+        ? body.targets.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const extensionsDirs = Array.isArray(body.extensionsDirs)
+        ? body.extensionsDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const scriptsDirs = Array.isArray(body.scriptsDirs)
+        ? body.scriptsDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      sendJson(res, 200, uninstallInkscapeBridge({ targets, extensionsDirs, scriptsDirs }), origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/gimp/install' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+          return;
+        }
+      }
+      const targets = Array.isArray(body.targets)
+        ? body.targets.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const pluginDirs = Array.isArray(body.pluginDirs)
+        ? body.pluginDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const scriptsDirs = Array.isArray(body.scriptsDirs)
+        ? body.scriptsDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const portRaw = body.port != null ? Number(body.port) : undefined;
+      const result = installGimpBridge({
+        targets,
+        pluginDirs,
+        scriptsDirs,
+        ...(Number.isFinite(portRaw as number) ? { port: portRaw as number } : {}),
+      });
+      if (!result.ok) {
+        sendJson(res, 422, { error: result.error, message: result.message }, origin);
+        return;
+      }
+      sendJson(res, 200, result, origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/gimp/uninstall' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+          return;
+        }
+      }
+      const targets = Array.isArray(body.targets)
+        ? body.targets.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const pluginDirs = Array.isArray(body.pluginDirs)
+        ? body.pluginDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const scriptsDirs = Array.isArray(body.scriptsDirs)
+        ? body.scriptsDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      sendJson(res, 200, uninstallGimpBridge({ targets, pluginDirs, scriptsDirs }), origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/aseprite/install' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+          return;
+        }
+      }
+      const targets = Array.isArray(body.targets)
+        ? body.targets.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const scriptsDirs = Array.isArray(body.scriptsDirs)
+        ? body.scriptsDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const portRaw = body.port != null ? Number(body.port) : undefined;
+      const result = installAsepriteBridge({
+        targets,
+        scriptsDirs,
+        ...(Number.isFinite(portRaw as number) ? { port: portRaw as number } : {}),
+      });
+      if (!result.ok) {
+        sendJson(res, 422, { error: result.error, message: result.message }, origin);
+        return;
+      }
+      sendJson(res, 200, result, origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/aseprite/uninstall' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+          return;
+        }
+      }
+      const targets = Array.isArray(body.targets)
+        ? body.targets.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const scriptsDirs = Array.isArray(body.scriptsDirs)
+        ? body.scriptsDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      sendJson(res, 200, uninstallAsepriteBridge({ targets, scriptsDirs }), origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/moho/install' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+          return;
+        }
+      }
+      const targets = Array.isArray(body.targets)
+        ? body.targets.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const scriptsDirs = Array.isArray(body.scriptsDirs)
+        ? body.scriptsDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const portRaw = body.port != null ? Number(body.port) : undefined;
+      const result = installMohoBridge({
+        targets,
+        scriptsDirs,
+        ...(Number.isFinite(portRaw as number) ? { port: portRaw as number } : {}),
+      });
+      if (!result.ok) {
+        sendJson(res, 422, { error: result.error, message: result.message }, origin);
+        return;
+      }
+      sendJson(res, 200, result, origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/moho/uninstall' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+          return;
+        }
+      }
+      const targets = Array.isArray(body.targets)
+        ? body.targets.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const scriptsDirs = Array.isArray(body.scriptsDirs)
+        ? body.scriptsDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      sendJson(res, 200, uninstallMohoBridge({ targets, scriptsDirs }), origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/toon-boom-harmony/install' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+          return;
+        }
+      }
+      const targets = Array.isArray(body.targets)
+        ? body.targets.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const scriptsDirs = Array.isArray(body.scriptsDirs)
+        ? body.scriptsDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const portRaw = body.port != null ? Number(body.port) : undefined;
+      const result = installToonBoomHarmonyBridge({
+        targets,
+        scriptsDirs,
+        ...(Number.isFinite(portRaw as number) ? { port: portRaw as number } : {}),
+      });
+      if (!result.ok) {
+        sendJson(res, 422, { error: result.error, message: result.message }, origin);
+        return;
+      }
+      sendJson(res, 200, result, origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/toon-boom-harmony/uninstall' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+          return;
+        }
+      }
+      const targets = Array.isArray(body.targets)
+        ? body.targets.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const scriptsDirs = Array.isArray(body.scriptsDirs)
+        ? body.scriptsDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      sendJson(res, 200, uninstallToonBoomHarmonyBridge({ targets, scriptsDirs }), origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/opentoonz/install' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+          return;
+        }
+      }
+      const targets = Array.isArray(body.targets)
+        ? body.targets.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const scriptsDirs = Array.isArray(body.scriptsDirs)
+        ? body.scriptsDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const portRaw = body.port != null ? Number(body.port) : undefined;
+      const result = installOpenToonzBridge({
+        targets,
+        scriptsDirs,
+        ...(Number.isFinite(portRaw as number) ? { port: portRaw as number } : {}),
+      });
+      if (!result.ok) {
+        sendJson(res, 422, { error: result.error, message: result.message }, origin);
+        return;
+      }
+      sendJson(res, 200, result, origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/opentoonz/uninstall' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+          return;
+        }
+      }
+      const targets = Array.isArray(body.targets)
+        ? body.targets.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const scriptsDirs = Array.isArray(body.scriptsDirs)
+        ? body.scriptsDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      sendJson(res, 200, uninstallOpenToonzBridge({ targets, scriptsDirs }), origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/cavalry/install' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+          return;
+        }
+      }
+      const targets = Array.isArray(body.targets)
+        ? body.targets.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const scriptsDirs = Array.isArray(body.scriptsDirs)
+        ? body.scriptsDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const portRaw = body.port != null ? Number(body.port) : undefined;
+      const result = installCavalryBridge({
+        targets,
+        scriptsDirs,
+        ...(Number.isFinite(portRaw as number) ? { port: portRaw as number } : {}),
+      });
+      if (!result.ok) {
+        sendJson(res, 422, { error: result.error, message: result.message }, origin);
+        return;
+      }
+      sendJson(res, 200, result, origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/cavalry/uninstall' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+          return;
+        }
+      }
+      const targets = Array.isArray(body.targets)
+        ? body.targets.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const scriptsDirs = Array.isArray(body.scriptsDirs)
+        ? body.scriptsDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      sendJson(res, 200, uninstallCavalryBridge({ targets, scriptsDirs }), origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/tvpaint/install' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+          return;
+        }
+      }
+      const targets = Array.isArray(body.targets)
+        ? body.targets.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const scriptsDirs = Array.isArray(body.scriptsDirs)
+        ? body.scriptsDirs.map((x) => String(x)).filter(Boolean)
+        : typeof body.targetDir === 'string' && body.targetDir.trim()
+          ? [body.targetDir.trim()]
+          : undefined;
+      const portRaw = body.port != null ? Number(body.port) : undefined;
+      const result = installTvPaintBridge({
+        targets,
+        scriptsDirs,
+        ...(Number.isFinite(portRaw as number) ? { port: portRaw as number } : {}),
+      });
+      if (!result.ok) {
+        sendJson(res, 422, { error: result.error, message: result.message }, origin);
+        return;
+      }
+      sendJson(res, 200, result, origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/tvpaint/uninstall' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+          return;
+        }
+      }
+      const targets = Array.isArray(body.targets)
+        ? body.targets.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const scriptsDirs = Array.isArray(body.scriptsDirs)
+        ? body.scriptsDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      sendJson(res, 200, uninstallTvPaintBridge({ targets, scriptsDirs }), origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/houdini/install' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+          return;
+        }
+      }
+      const targets = Array.isArray(body.targets)
+        ? body.targets.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const prefsDirs = Array.isArray(body.prefsDirs)
+        ? body.prefsDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const portRaw = body.port != null ? Number(body.port) : undefined;
+      const result = installHoudiniBridge({
+        targets,
+        prefsDirs,
+        ...(Number.isFinite(portRaw as number) ? { port: portRaw as number } : {}),
+      });
+      if (!result.ok) {
+        sendJson(res, 422, { error: result.error, message: result.message }, origin);
+        return;
+      }
+      sendJson(res, 200, result, origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/houdini/uninstall' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+          return;
+        }
+      }
+      const targets = Array.isArray(body.targets)
+        ? body.targets.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const prefsDirs = Array.isArray(body.prefsDirs)
+        ? body.prefsDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      sendJson(res, 200, uninstallHoudiniBridge({ targets, prefsDirs }), origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/nuke/install' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+          return;
+        }
+      }
+      const targets = Array.isArray(body.targets)
+        ? body.targets.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const userDirs = Array.isArray(body.userDirs)
+        ? body.userDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const portRaw = body.port != null ? Number(body.port) : undefined;
+      const result = installNukeBridge({
+        targets,
+        userDirs,
+        ...(Number.isFinite(portRaw as number) ? { port: portRaw as number } : {}),
+      });
+      if (!result.ok) {
+        sendJson(res, 422, { error: result.error, message: result.message }, origin);
+        return;
+      }
+      sendJson(res, 200, result, origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/nuke/uninstall' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+          return;
+        }
+      }
+      const targets = Array.isArray(body.targets)
+        ? body.targets.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const userDirs = Array.isArray(body.userDirs)
+        ? body.userDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      sendJson(res, 200, uninstallNukeBridge({ targets, userDirs }), origin);
+      return;
+    }
+
+    const foundryTimelineInstallMatch = path.match(/^\/v1\/bridges\/(nuke-studio|hiero)\/install$/);
+    if (foundryTimelineInstallMatch && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+          return;
+        }
+      }
+      const targets = Array.isArray(body.targets)
+        ? body.targets.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const userDirs = Array.isArray(body.userDirs)
+        ? body.userDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const scriptsDirs = Array.isArray(body.scriptsDirs)
+        ? body.scriptsDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const portRaw = body.port != null ? Number(body.port) : undefined;
+      const result = installFoundryTimelineBridge(foundryTimelineInstallMatch[1] as FoundryTimelineBridgeId, {
+        targets,
+        userDirs,
+        scriptsDirs,
+        ...(Number.isFinite(portRaw as number) ? { port: portRaw as number } : {}),
+      });
+      if (!result.ok) {
+        sendJson(res, 422, { error: result.error, message: result.message }, origin);
+        return;
+      }
+      sendJson(res, 200, result, origin);
+      return;
+    }
+
+    const foundryTimelineUninstallMatch = path.match(/^\/v1\/bridges\/(nuke-studio|hiero)\/uninstall$/);
+    if (foundryTimelineUninstallMatch && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+          return;
+        }
+      }
+      const targets = Array.isArray(body.targets)
+        ? body.targets.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const userDirs = Array.isArray(body.userDirs)
+        ? body.userDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const scriptsDirs = Array.isArray(body.scriptsDirs)
+        ? body.scriptsDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      sendJson(
+        res,
+        200,
+        uninstallFoundryTimelineBridge(foundryTimelineUninstallMatch[1] as FoundryTimelineBridgeId, {
+          targets,
+          userDirs,
+          scriptsDirs,
+        }),
+        origin,
+      );
+      return;
+    }
+
+    if (path === '/v1/bridges/natron/install' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+          return;
+        }
+      }
+      const targets = Array.isArray(body.targets)
+        ? body.targets.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const userDirs = Array.isArray(body.userDirs)
+        ? body.userDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const scriptsDirs = Array.isArray(body.scriptsDirs)
+        ? body.scriptsDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const portRaw = body.port != null ? Number(body.port) : undefined;
+      const result = installNatronBridge({
+        targets,
+        userDirs,
+        scriptsDirs,
+        ...(Number.isFinite(portRaw as number) ? { port: portRaw as number } : {}),
+      });
+      if (!result.ok) {
+        sendJson(res, 422, { error: result.error, message: result.message }, origin);
+        return;
+      }
+      sendJson(res, 200, result, origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/natron/uninstall' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+          return;
+        }
+      }
+      const targets = Array.isArray(body.targets)
+        ? body.targets.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const userDirs = Array.isArray(body.userDirs)
+        ? body.userDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const scriptsDirs = Array.isArray(body.scriptsDirs)
+        ? body.scriptsDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      sendJson(res, 200, uninstallNatronBridge({ targets, userDirs, scriptsDirs }), origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/obs-studio/install' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+          return;
+        }
+      }
+      const targets = Array.isArray(body.targets)
+        ? body.targets.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const scriptsDirs = Array.isArray(body.scriptsDirs)
+        ? body.scriptsDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const portRaw = body.port != null ? Number(body.port) : undefined;
+      const result = installObsStudioBridge({
+        targets,
+        scriptsDirs,
+        ...(Number.isFinite(portRaw as number) ? { port: portRaw as number } : {}),
+      });
+      if (!result.ok) {
+        sendJson(res, 422, { error: result.error, message: result.message }, origin);
+        return;
+      }
+      sendJson(res, 200, result, origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/obs-studio/uninstall' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+          return;
+        }
+      }
+      const targets = Array.isArray(body.targets)
+        ? body.targets.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const scriptsDirs = Array.isArray(body.scriptsDirs)
+        ? body.scriptsDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      sendJson(res, 200, uninstallObsStudioBridge({ targets, scriptsDirs }), origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/reaper/install' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+          return;
+        }
+      }
+      const targets = Array.isArray(body.targets)
+        ? body.targets.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const scriptsDirs = Array.isArray(body.scriptsDirs)
+        ? body.scriptsDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const portRaw = body.port != null ? Number(body.port) : undefined;
+      const result = installReaperBridge({
+        targets,
+        scriptsDirs,
+        ...(Number.isFinite(portRaw as number) ? { port: portRaw as number } : {}),
+      });
+      if (!result.ok) {
+        sendJson(res, 422, { error: result.error, message: result.message }, origin);
+        return;
+      }
+      sendJson(res, 200, result, origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/reaper/uninstall' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+          return;
+        }
+      }
+      const targets = Array.isArray(body.targets)
+        ? body.targets.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const scriptsDirs = Array.isArray(body.scriptsDirs)
+        ? body.scriptsDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      sendJson(res, 200, uninstallReaperBridge({ targets, scriptsDirs }), origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/vegas-pro/install' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+          return;
+        }
+      }
+      const targets = Array.isArray(body.targets)
+        ? body.targets.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const scriptsDirs = Array.isArray(body.scriptsDirs)
+        ? body.scriptsDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const portRaw = body.port != null ? Number(body.port) : undefined;
+      const result = installVegasProBridge({
+        targets,
+        scriptsDirs,
+        ...(Number.isFinite(portRaw as number) ? { port: portRaw as number } : {}),
+      });
+      if (!result.ok) {
+        sendJson(res, 422, { error: result.error, message: result.message }, origin);
+        return;
+      }
+      sendJson(res, 200, result, origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/vegas-pro/uninstall' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+          return;
+        }
+      }
+      const targets = Array.isArray(body.targets)
+        ? body.targets.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const scriptsDirs = Array.isArray(body.scriptsDirs)
+        ? body.scriptsDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      sendJson(res, 200, uninstallVegasProBridge({ targets, scriptsDirs }), origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/synfig/install' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+          return;
+        }
+      }
+      const targets = Array.isArray(body.targets)
+        ? body.targets.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const scriptsDirs = Array.isArray(body.scriptsDirs)
+        ? body.scriptsDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const portRaw = body.port != null ? Number(body.port) : undefined;
+      const result = installSynfigBridge({
+        targets,
+        scriptsDirs,
+        ...(Number.isFinite(portRaw as number) ? { port: portRaw as number } : {}),
+      });
+      if (!result.ok) {
+        sendJson(res, 422, { error: result.error, message: result.message }, origin);
+        return;
+      }
+      sendJson(res, 200, result, origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/synfig/uninstall' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+          return;
+        }
+      }
+      const targets = Array.isArray(body.targets)
+        ? body.targets.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const scriptsDirs = Array.isArray(body.scriptsDirs)
+        ? body.scriptsDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      sendJson(res, 200, uninstallSynfigBridge({ targets, scriptsDirs }), origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/cinema-4d/install' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+          return;
+        }
+      }
+      const targets = Array.isArray(body.targets)
+        ? body.targets.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const scriptsDirs = Array.isArray(body.scriptsDirs)
+        ? body.scriptsDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const portRaw = body.port != null ? Number(body.port) : undefined;
+      const result = installCinema4DBridge({
+        targets,
+        scriptsDirs,
+        ...(Number.isFinite(portRaw as number) ? { port: portRaw as number } : {}),
+      });
+      if (!result.ok) {
+        sendJson(res, 422, { error: result.error, message: result.message }, origin);
+        return;
+      }
+      sendJson(res, 200, result, origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/cinema-4d/uninstall' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+          return;
+        }
+      }
+      const targets = Array.isArray(body.targets)
+        ? body.targets.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const scriptsDirs = Array.isArray(body.scriptsDirs)
+        ? body.scriptsDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      sendJson(res, 200, uninstallCinema4DBridge({ targets, scriptsDirs }), origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/davinci-resolve/install' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+          return;
+        }
+      }
+      const targets = Array.isArray(body.targets)
+        ? body.targets.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const scriptsDirs = Array.isArray(body.scriptsDirs)
+        ? body.scriptsDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const portRaw = body.port != null ? Number(body.port) : undefined;
+      const result = installDavinciResolveBridge({
+        targets,
+        scriptsDirs,
+        ...(Number.isFinite(portRaw as number) ? { port: portRaw as number } : {}),
+      });
+      if (!result.ok) {
+        sendJson(res, 422, { error: result.error, message: result.message }, origin);
+        return;
+      }
+      sendJson(res, 200, result, origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/davinci-resolve/uninstall' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+          return;
+        }
+      }
+      const targets = Array.isArray(body.targets)
+        ? body.targets.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const scriptsDirs = Array.isArray(body.scriptsDirs)
+        ? body.scriptsDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      sendJson(res, 200, uninstallDavinciResolveBridge({ targets, scriptsDirs }), origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/fusion-studio/install' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+          return;
+        }
+      }
+      const targets = Array.isArray(body.targets)
+        ? body.targets.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const scriptsDirs = Array.isArray(body.scriptsDirs)
+        ? body.scriptsDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const portRaw = body.port != null ? Number(body.port) : undefined;
+      const result = installFusionStudioBridge({
+        targets,
+        scriptsDirs,
+        ...(Number.isFinite(portRaw as number) ? { port: portRaw as number } : {}),
+      });
+      if (!result.ok) {
+        sendJson(res, 422, { error: result.error, message: result.message }, origin);
+        return;
+      }
+      sendJson(res, 200, result, origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/fusion-studio/uninstall' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+          return;
+        }
+      }
+      const targets = Array.isArray(body.targets)
+        ? body.targets.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const scriptsDirs = Array.isArray(body.scriptsDirs)
+        ? body.scriptsDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      sendJson(res, 200, uninstallFusionStudioBridge({ targets, scriptsDirs }), origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/rhino/install' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+          return;
+        }
+      }
+      const targets = Array.isArray(body.targets)
+        ? body.targets.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const scriptsDirs = Array.isArray(body.scriptsDirs)
+        ? body.scriptsDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const portRaw = body.port != null ? Number(body.port) : undefined;
+      const result = installRhinoBridge({
+        targets,
+        scriptsDirs,
+        ...(Number.isFinite(portRaw as number) ? { port: portRaw as number } : {}),
+      });
+      if (!result.ok) {
+        sendJson(res, 422, { error: result.error, message: result.message }, origin);
+        return;
+      }
+      sendJson(res, 200, result, origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/rhino/uninstall' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+          return;
+        }
+      }
+      const targets = Array.isArray(body.targets)
+        ? body.targets.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const scriptsDirs = Array.isArray(body.scriptsDirs)
+        ? body.scriptsDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      sendJson(res, 200, uninstallRhinoBridge({ targets, scriptsDirs }), origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/sketchup/install' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+          return;
+        }
+      }
+      const targets = Array.isArray(body.targets)
+        ? body.targets.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const pluginDirs = Array.isArray(body.pluginDirs)
+        ? body.pluginDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const portRaw = body.port != null ? Number(body.port) : undefined;
+      const result = installSketchUpBridge({
+        targets,
+        pluginDirs,
+        ...(Number.isFinite(portRaw as number) ? { port: portRaw as number } : {}),
+      });
+      if (!result.ok) {
+        sendJson(res, 422, { error: result.error, message: result.message }, origin);
+        return;
+      }
+      sendJson(res, 200, result, origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/sketchup/uninstall' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+          return;
+        }
+      }
+      const targets = Array.isArray(body.targets)
+        ? body.targets.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const pluginDirs = Array.isArray(body.pluginDirs)
+        ? body.pluginDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      sendJson(res, 200, uninstallSketchUpBridge({ targets, pluginDirs }), origin);
+      return;
+    }
+
+    const cloMarvelousInstallMatch = path.match(/^\/v1\/bridges\/(marvelous-designer|clo)\/install$/);
+    if (cloMarvelousInstallMatch && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+          return;
+        }
+      }
+      const targets = Array.isArray(body.targets)
+        ? body.targets.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const scriptsDirs = Array.isArray(body.scriptsDirs)
+        ? body.scriptsDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const portRaw = body.port != null ? Number(body.port) : undefined;
+      const result = installCloMarvelousBridge(cloMarvelousInstallMatch[1] as CloMarvelousBridgeId, {
+        targets,
+        scriptsDirs,
+        ...(Number.isFinite(portRaw as number) ? { port: portRaw as number } : {}),
+      });
+      if (!result.ok) {
+        sendJson(res, 422, { error: result.error, message: result.message }, origin);
+        return;
+      }
+      sendJson(res, 200, result, origin);
+      return;
+    }
+
+    const cloMarvelousUninstallMatch = path.match(/^\/v1\/bridges\/(marvelous-designer|clo)\/uninstall$/);
+    if (cloMarvelousUninstallMatch && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+          return;
+        }
+      }
+      const targets = Array.isArray(body.targets)
+        ? body.targets.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const scriptsDirs = Array.isArray(body.scriptsDirs)
+        ? body.scriptsDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      sendJson(res, 200, uninstallCloMarvelousBridge(cloMarvelousUninstallMatch[1] as CloMarvelousBridgeId, { targets, scriptsDirs }), origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/rizomuv/install' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+          return;
+        }
+      }
+      const targets = Array.isArray(body.targets)
+        ? body.targets.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const scriptsDirs = Array.isArray(body.scriptsDirs)
+        ? body.scriptsDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const portRaw = body.port != null ? Number(body.port) : undefined;
+      const result = installRizomUvBridge({
+        targets,
+        scriptsDirs,
+        ...(Number.isFinite(portRaw as number) ? { port: portRaw as number } : {}),
+      });
+      if (!result.ok) {
+        sendJson(res, 422, { error: result.error, message: result.message }, origin);
+        return;
+      }
+      sendJson(res, 200, result, origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/rizomuv/uninstall' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+          return;
+        }
+      }
+      const targets = Array.isArray(body.targets)
+        ? body.targets.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const scriptsDirs = Array.isArray(body.scriptsDirs)
+        ? body.scriptsDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      sendJson(res, 200, uninstallRizomUvBridge({ targets, scriptsDirs }), origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/daz-studio/install' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+          return;
+        }
+      }
+      const targets = Array.isArray(body.targets)
+        ? body.targets.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const scriptsDirs = Array.isArray(body.scriptsDirs)
+        ? body.scriptsDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const portRaw = body.port != null ? Number(body.port) : undefined;
+      const result = installDazStudioBridge({
+        targets,
+        scriptsDirs,
+        ...(Number.isFinite(portRaw as number) ? { port: portRaw as number } : {}),
+      });
+      if (!result.ok) {
+        sendJson(res, 422, { error: result.error, message: result.message }, origin);
+        return;
+      }
+      sendJson(res, 200, result, origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/daz-studio/uninstall' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+          return;
+        }
+      }
+      const targets = Array.isArray(body.targets)
+        ? body.targets.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const scriptsDirs = Array.isArray(body.scriptsDirs)
+        ? body.scriptsDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      sendJson(res, 200, uninstallDazStudioBridge({ targets, scriptsDirs }), origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/poser/install' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+          return;
+        }
+      }
+      const targets = Array.isArray(body.targets)
+        ? body.targets.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const scriptsDirs = Array.isArray(body.scriptsDirs)
+        ? body.scriptsDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const portRaw = body.port != null ? Number(body.port) : undefined;
+      const result = installPoserBridge({
+        targets,
+        scriptsDirs,
+        ...(Number.isFinite(portRaw as number) ? { port: portRaw as number } : {}),
+      });
+      if (!result.ok) {
+        sendJson(res, 422, { error: result.error, message: result.message }, origin);
+        return;
+      }
+      sendJson(res, 200, result, origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/poser/uninstall' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+          return;
+        }
+      }
+      const targets = Array.isArray(body.targets)
+        ? body.targets.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const scriptsDirs = Array.isArray(body.scriptsDirs)
+        ? body.scriptsDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      sendJson(res, 200, uninstallPoserBridge({ targets, scriptsDirs }), origin);
+      return;
+    }
+
+    const reallusionInstallMatch = path.match(/^\/v1\/bridges\/(iclone|character-creator)\/install$/);
+    if (reallusionInstallMatch && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+          return;
+        }
+      }
+      const targets = Array.isArray(body.targets)
+        ? body.targets.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const scriptsDirs = Array.isArray(body.scriptsDirs)
+        ? body.scriptsDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const portRaw = body.port != null ? Number(body.port) : undefined;
+      const result = installReallusionBridge(reallusionInstallMatch[1] as ReallusionBridgeId, {
+        targets,
+        scriptsDirs,
+        ...(Number.isFinite(portRaw as number) ? { port: portRaw as number } : {}),
+      });
+      if (!result.ok) {
+        sendJson(res, 422, { error: result.error, message: result.message }, origin);
+        return;
+      }
+      sendJson(res, 200, result, origin);
+      return;
+    }
+
+    const reallusionUninstallMatch = path.match(/^\/v1\/bridges\/(iclone|character-creator)\/uninstall$/);
+    if (reallusionUninstallMatch && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+          return;
+        }
+      }
+      const targets = Array.isArray(body.targets)
+        ? body.targets.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const scriptsDirs = Array.isArray(body.scriptsDirs)
+        ? body.scriptsDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      sendJson(res, 200, uninstallReallusionBridge(reallusionUninstallMatch[1] as ReallusionBridgeId, { targets, scriptsDirs }), origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/metashape/install' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+          return;
+        }
+      }
+      const targets = Array.isArray(body.targets)
+        ? body.targets.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const scriptsDirs = Array.isArray(body.scriptsDirs)
+        ? body.scriptsDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const portRaw = body.port != null ? Number(body.port) : undefined;
+      const result = installMetashapeBridge({
+        targets,
+        scriptsDirs,
+        ...(Number.isFinite(portRaw as number) ? { port: portRaw as number } : {}),
+      });
+      if (!result.ok) {
+        sendJson(res, 422, { error: result.error, message: result.message }, origin);
+        return;
+      }
+      sendJson(res, 200, result, origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/metashape/uninstall' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+          return;
+        }
+      }
+      const targets = Array.isArray(body.targets)
+        ? body.targets.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const scriptsDirs = Array.isArray(body.scriptsDirs)
+        ? body.scriptsDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      sendJson(res, 200, uninstallMetashapeBridge({ targets, scriptsDirs }), origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/3dequalizer/install' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+          return;
+        }
+      }
+      const targets = Array.isArray(body.targets)
+        ? body.targets.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const scriptsDirs = Array.isArray(body.scriptsDirs)
+        ? body.scriptsDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const portRaw = body.port != null ? Number(body.port) : undefined;
+      const result = installThreeDequalizerBridge({
+        targets,
+        scriptsDirs,
+        ...(Number.isFinite(portRaw as number) ? { port: portRaw as number } : {}),
+      });
+      if (!result.ok) {
+        sendJson(res, 422, { error: result.error, message: result.message }, origin);
+        return;
+      }
+      sendJson(res, 200, result, origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/3dequalizer/uninstall' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+          return;
+        }
+      }
+      const targets = Array.isArray(body.targets)
+        ? body.targets.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const scriptsDirs = Array.isArray(body.scriptsDirs)
+        ? body.scriptsDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      sendJson(res, 200, uninstallThreeDequalizerBridge({ targets, scriptsDirs }), origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/katana/install' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+          return;
+        }
+      }
+      const targets = Array.isArray(body.targets)
+        ? body.targets.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const scriptsDirs = Array.isArray(body.scriptsDirs)
+        ? body.scriptsDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const portRaw = body.port != null ? Number(body.port) : undefined;
+      const result = installKatanaBridge({
+        targets,
+        scriptsDirs,
+        ...(Number.isFinite(portRaw as number) ? { port: portRaw as number } : {}),
+      });
+      if (!result.ok) {
+        sendJson(res, 422, { error: result.error, message: result.message }, origin);
+        return;
+      }
+      sendJson(res, 200, result, origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/katana/uninstall' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+          return;
+        }
+      }
+      const targets = Array.isArray(body.targets)
+        ? body.targets.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const scriptsDirs = Array.isArray(body.scriptsDirs)
+        ? body.scriptsDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      sendJson(res, 200, uninstallKatanaBridge({ targets, scriptsDirs }), origin);
+      return;
+    }
+
+    const adobeInstallMatch = path.match(/^\/v1\/bridges\/(photoshop|illustrator|after-effects|premiere|indesign|audition|media-encoder|animate|adobe-bridge)\/install$/);
+    if (adobeInstallMatch && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+          return;
+        }
+      }
+      const targets = Array.isArray(body.targets)
+        ? body.targets.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const scriptsDirs = Array.isArray(body.scriptsDirs)
+        ? body.scriptsDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const portRaw = body.port != null ? Number(body.port) : undefined;
+      const result = installAdobeBridge(adobeInstallMatch[1] as AdobeBridgeId, {
+        targets,
+        scriptsDirs,
+        ...(Number.isFinite(portRaw as number) ? { port: portRaw as number } : {}),
+      });
+      if (!result.ok) {
+        sendJson(res, 422, { error: result.error, message: result.message }, origin);
+        return;
+      }
+      sendJson(res, 200, result, origin);
+      return;
+    }
+
+    const adobeUninstallMatch = path.match(/^\/v1\/bridges\/(photoshop|illustrator|after-effects|premiere|indesign|audition|media-encoder|animate|adobe-bridge)\/uninstall$/);
+    if (adobeUninstallMatch && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+          return;
+        }
+      }
+      const targets = Array.isArray(body.targets)
+        ? body.targets.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const scriptsDirs = Array.isArray(body.scriptsDirs)
+        ? body.scriptsDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      sendJson(res, 200, uninstallAdobeBridge(adobeUninstallMatch[1] as AdobeBridgeId, { targets, scriptsDirs }), origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/lightroom-classic/install' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+          return;
+        }
+      }
+      const targets = Array.isArray(body.targets)
+        ? body.targets.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const scriptsDirs = Array.isArray(body.scriptsDirs)
+        ? body.scriptsDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const portRaw = body.port != null ? Number(body.port) : undefined;
+      const result = installLightroomBridge({
+        targets,
+        scriptsDirs,
+        ...(Number.isFinite(portRaw as number) ? { port: portRaw as number } : {}),
+      });
+      if (!result.ok) {
+        sendJson(res, 422, { error: result.error, message: result.message }, origin);
+        return;
+      }
+      sendJson(res, 200, result, origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/lightroom-classic/uninstall' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+          return;
+        }
+      }
+      const targets = Array.isArray(body.targets)
+        ? body.targets.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const scriptsDirs = Array.isArray(body.scriptsDirs)
+        ? body.scriptsDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      sendJson(res, 200, uninstallLightroomBridge({ targets, scriptsDirs }), origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/darktable/install' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+          return;
+        }
+      }
+      const targets = Array.isArray(body.targets)
+        ? body.targets.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const configDirs = Array.isArray(body.configDirs)
+        ? body.configDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const scriptsDirs = Array.isArray(body.scriptsDirs)
+        ? body.scriptsDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const portRaw = body.port != null ? Number(body.port) : undefined;
+      const result = installDarktableBridge({
+        targets,
+        configDirs,
+        scriptsDirs,
+        ...(Number.isFinite(portRaw as number) ? { port: portRaw as number } : {}),
+      });
+      if (!result.ok) {
+        sendJson(res, 422, { error: result.error, message: result.message }, origin);
+        return;
+      }
+      sendJson(res, 200, result, origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/darktable/uninstall' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+          return;
+        }
+      }
+      const targets = Array.isArray(body.targets)
+        ? body.targets.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const configDirs = Array.isArray(body.configDirs)
+        ? body.configDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const scriptsDirs = Array.isArray(body.scriptsDirs)
+        ? body.scriptsDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      sendJson(res, 200, uninstallDarktableBridge({ targets, configDirs, scriptsDirs }), origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/unity/install' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+          return;
+        }
+      }
+      const targets = Array.isArray(body.targets)
+        ? body.targets.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const projectDirs = Array.isArray(body.projectDirs)
+        ? body.projectDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const portRaw = body.port != null ? Number(body.port) : undefined;
+      const result = installUnityBridge({
+        targets,
+        projectDirs,
+        ...(Number.isFinite(portRaw as number) ? { port: portRaw as number } : {}),
+      });
+      if (!result.ok) {
+        sendJson(res, 422, { error: result.error, message: result.message }, origin);
+        return;
+      }
+      sendJson(res, 200, result, origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/unity/uninstall' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+          return;
+        }
+      }
+      const targets = Array.isArray(body.targets)
+        ? body.targets.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const projectDirs = Array.isArray(body.projectDirs)
+        ? body.projectDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      sendJson(res, 200, uninstallUnityBridge({ targets, projectDirs }), origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/godot/install' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+          return;
+        }
+      }
+      const targets = Array.isArray(body.targets)
+        ? body.targets.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const projectDirs = Array.isArray(body.projectDirs)
+        ? body.projectDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const portRaw = body.port != null ? Number(body.port) : undefined;
+      const result = installGodotBridge({
+        targets,
+        projectDirs,
+        ...(Number.isFinite(portRaw as number) ? { port: portRaw as number } : {}),
+      });
+      if (!result.ok) {
+        sendJson(res, 422, { error: result.error, message: result.message }, origin);
+        return;
+      }
+      sendJson(res, 200, result, origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/godot/uninstall' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+          return;
+        }
+      }
+      const targets = Array.isArray(body.targets)
+        ? body.targets.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const projectDirs = Array.isArray(body.projectDirs)
+        ? body.projectDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      sendJson(res, 200, uninstallGodotBridge({ targets, projectDirs }), origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/motionbuilder/install' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+          return;
+        }
+      }
+      const versions = Array.isArray(body.versions)
+        ? body.versions.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const startupDirs = Array.isArray(body.startupDirs)
+        ? body.startupDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const portRaw = body.port != null ? Number(body.port) : undefined;
+      const result = installMotionBuilderBridge({
+        versions,
+        startupDirs,
+        ...(Number.isFinite(portRaw as number) ? { port: portRaw as number } : {}),
+      });
+      if (!result.ok) {
+        sendJson(res, 422, { error: result.error, message: result.message }, origin);
+        return;
+      }
+      sendJson(res, 200, result, origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/motionbuilder/uninstall' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+          return;
+        }
+      }
+      const versions = Array.isArray(body.versions)
+        ? body.versions.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const startupDirs = Array.isArray(body.startupDirs)
+        ? body.startupDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      sendJson(res, 200, uninstallMotionBuilderBridge({ versions, startupDirs }), origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/fusion-360/install' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+          return;
+        }
+      }
+      const targets = Array.isArray(body.targets)
+        ? body.targets.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const addinsDirs = Array.isArray(body.addinsDirs)
+        ? body.addinsDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const portRaw = body.port != null ? Number(body.port) : undefined;
+      const result = installFusion360Bridge({
+        targets,
+        addinsDirs,
+        ...(Number.isFinite(portRaw as number) ? { port: portRaw as number } : {}),
+      });
+      if (!result.ok) {
+        sendJson(res, 422, { error: result.error, message: result.message }, origin);
+        return;
+      }
+      sendJson(res, 200, result, origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/fusion-360/uninstall' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+          return;
+        }
+      }
+      const targets = Array.isArray(body.targets)
+        ? body.targets.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const addinsDirs = Array.isArray(body.addinsDirs)
+        ? body.addinsDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      sendJson(res, 200, uninstallFusion360Bridge({ targets, addinsDirs }), origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/keyshot/install' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+          return;
+        }
+      }
+      const targets = Array.isArray(body.targets)
+        ? body.targets.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const scriptsDirs = Array.isArray(body.scriptsDirs)
+        ? body.scriptsDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const portRaw = body.port != null ? Number(body.port) : undefined;
+      const result = installKeyShotBridge({
+        targets,
+        scriptsDirs,
+        ...(Number.isFinite(portRaw as number) ? { port: portRaw as number } : {}),
+      });
+      if (!result.ok) {
+        sendJson(res, 422, { error: result.error, message: result.message }, origin);
+        return;
+      }
+      sendJson(res, 200, result, origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/keyshot/uninstall' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+          return;
+        }
+      }
+      const targets = Array.isArray(body.targets)
+        ? body.targets.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const scriptsDirs = Array.isArray(body.scriptsDirs)
+        ? body.scriptsDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      sendJson(res, 200, uninstallKeyShotBridge({ targets, scriptsDirs }), origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/marmoset-toolbag/install' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+          return;
+        }
+      }
+      const targets = Array.isArray(body.targets)
+        ? body.targets.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const scriptsDirs = Array.isArray(body.scriptsDirs)
+        ? body.scriptsDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const portRaw = body.port != null ? Number(body.port) : undefined;
+      const result = installMarmosetToolbagBridge({
+        targets,
+        scriptsDirs,
+        ...(Number.isFinite(portRaw as number) ? { port: portRaw as number } : {}),
+      });
+      if (!result.ok) {
+        sendJson(res, 422, { error: result.error, message: result.message }, origin);
+        return;
+      }
+      sendJson(res, 200, result, origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/marmoset-toolbag/uninstall' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+          return;
+        }
+      }
+      const targets = Array.isArray(body.targets)
+        ? body.targets.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const scriptsDirs = Array.isArray(body.scriptsDirs)
+        ? body.scriptsDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      sendJson(res, 200, uninstallMarmosetToolbagBridge({ targets, scriptsDirs }), origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/modo/install' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+          return;
+        }
+      }
+      const targets = Array.isArray(body.targets)
+        ? body.targets.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const scriptsDirs = Array.isArray(body.scriptsDirs)
+        ? body.scriptsDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const portRaw = body.port != null ? Number(body.port) : undefined;
+      const result = installModoBridge({
+        targets,
+        scriptsDirs,
+        ...(Number.isFinite(portRaw as number) ? { port: portRaw as number } : {}),
+      });
+      if (!result.ok) {
+        sendJson(res, 422, { error: result.error, message: result.message }, origin);
+        return;
+      }
+      sendJson(res, 200, result, origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/modo/uninstall' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+          return;
+        }
+      }
+      const targets = Array.isArray(body.targets)
+        ? body.targets.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const scriptsDirs = Array.isArray(body.scriptsDirs)
+        ? body.scriptsDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      sendJson(res, 200, uninstallModoBridge({ targets, scriptsDirs }), origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/lightwave/install' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+          return;
+        }
+      }
+      const targets = Array.isArray(body.targets)
+        ? body.targets.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const scriptsDirs = Array.isArray(body.scriptsDirs)
+        ? body.scriptsDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const portRaw = body.port != null ? Number(body.port) : undefined;
+      const result = installLightWaveBridge({
+        targets,
+        scriptsDirs,
+        ...(Number.isFinite(portRaw as number) ? { port: portRaw as number } : {}),
+      });
+      if (!result.ok) {
+        sendJson(res, 422, { error: result.error, message: result.message }, origin);
+        return;
+      }
+      sendJson(res, 200, result, origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/lightwave/uninstall' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+          return;
+        }
+      }
+      const targets = Array.isArray(body.targets)
+        ? body.targets.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const scriptsDirs = Array.isArray(body.scriptsDirs)
+        ? body.scriptsDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      sendJson(res, 200, uninstallLightWaveBridge({ targets, scriptsDirs }), origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/freecad/install' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+          return;
+        }
+      }
+      const targets = Array.isArray(body.targets)
+        ? body.targets.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const modDirs = Array.isArray(body.modDirs)
+        ? body.modDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const scriptsDirs = Array.isArray(body.scriptsDirs)
+        ? body.scriptsDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const portRaw = body.port != null ? Number(body.port) : undefined;
+      const result = installFreeCADBridge({
+        targets,
+        modDirs,
+        scriptsDirs,
+        ...(Number.isFinite(portRaw as number) ? { port: portRaw as number } : {}),
+      });
+      if (!result.ok) {
+        sendJson(res, 422, { error: result.error, message: result.message }, origin);
+        return;
+      }
+      sendJson(res, 200, result, origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/freecad/uninstall' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+          return;
+        }
+      }
+      const targets = Array.isArray(body.targets)
+        ? body.targets.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const modDirs = Array.isArray(body.modDirs)
+        ? body.modDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const scriptsDirs = Array.isArray(body.scriptsDirs)
+        ? body.scriptsDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      sendJson(res, 200, uninstallFreeCADBridge({ targets, modDirs, scriptsDirs }), origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/autocad/install' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+          return;
+        }
+      }
+      const targets = Array.isArray(body.targets)
+        ? body.targets.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const scriptsDirs = Array.isArray(body.scriptsDirs)
+        ? body.scriptsDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const portRaw = body.port != null ? Number(body.port) : undefined;
+      const result = installAutoCADBridge({
+        targets,
+        scriptsDirs,
+        ...(Number.isFinite(portRaw as number) ? { port: portRaw as number } : {}),
+      });
+      if (!result.ok) {
+        sendJson(res, 422, { error: result.error, message: result.message }, origin);
+        return;
+      }
+      sendJson(res, 200, result, origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/autocad/uninstall' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+          return;
+        }
+      }
+      const targets = Array.isArray(body.targets)
+        ? body.targets.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const scriptsDirs = Array.isArray(body.scriptsDirs)
+        ? body.scriptsDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      sendJson(res, 200, uninstallAutoCADBridge({ targets, scriptsDirs }), origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/zbrush/install' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+          return;
+        }
+      }
+      const targets = Array.isArray(body.targets)
+        ? body.targets.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const scriptsDirs = Array.isArray(body.scriptsDirs)
+        ? body.scriptsDirs.map((x) => String(x)).filter(Boolean)
+        : typeof body.targetDir === 'string' && body.targetDir.trim()
+          ? [body.targetDir.trim()]
+          : undefined;
+      const portRaw = body.port != null ? Number(body.port) : undefined;
+      const result = installZBrushBridge({
+        targets,
+        scriptsDirs,
+        ...(Number.isFinite(portRaw as number) ? { port: portRaw as number } : {}),
+      });
+      if (!result.ok) {
+        sendJson(res, 422, { error: result.error, message: result.message }, origin);
+        return;
+      }
+      sendJson(res, 200, result, origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/zbrush/uninstall' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+          return;
+        }
+      }
+      const targets = Array.isArray(body.targets)
+        ? body.targets.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const scriptsDirs = Array.isArray(body.scriptsDirs)
+        ? body.scriptsDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      sendJson(res, 200, uninstallZBrushBridge({ targets, scriptsDirs }), origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/unreal/install' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+          return;
+        }
+      }
+      const targets = Array.isArray(body.targets)
+        ? body.targets.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const projectDirs = Array.isArray(body.projectDirs)
+        ? body.projectDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const portRaw = body.port != null ? Number(body.port) : undefined;
+      const result = installUnrealBridge({
+        targets,
+        projectDirs,
+        ...(Number.isFinite(portRaw as number) ? { port: portRaw as number } : {}),
+      });
+      if (!result.ok) {
+        sendJson(res, 422, { error: result.error, message: result.message }, origin);
+        return;
+      }
+      sendJson(res, 200, result, origin);
+      return;
+    }
+
+    if (path === '/v1/bridges/unreal/uninstall' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+          return;
+        }
+      }
+      const targets = Array.isArray(body.targets)
+        ? body.targets.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      const projectDirs = Array.isArray(body.projectDirs)
+        ? body.projectDirs.map((x) => String(x)).filter(Boolean)
+        : undefined;
+      sendJson(res, 200, uninstallUnrealBridge({ targets, projectDirs }), origin);
       return;
     }
 

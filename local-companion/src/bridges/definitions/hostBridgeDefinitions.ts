@@ -1,0 +1,2271 @@
+import type { BridgeTemplateId } from '../templates/hostBridgeTemplates.js';
+
+export type HostBridgeCategory = '3d' | 'engine' | 'paint' | 'post' | 'compositing';
+
+export type HostDetectionRule =
+  | { kind: 'env_path'; env: string }
+  | { kind: 'known_user_dir'; paths: string[] }
+  | { kind: 'manual_target' };
+
+export type ManualTargetRule = {
+  accepts: Array<'install_dir' | 'user_config_dir' | 'script_dir' | 'plugin_dir' | 'project_dir'>;
+  resolver: string;
+  pickerTitle: string;
+};
+
+export type BridgeTemplateRef = {
+  id: BridgeTemplateId;
+  entryFile: string;
+};
+
+export type ProbeDefinition =
+  | { kind: 'http'; port: number; path: '/health' }
+  | { kind: 'heartbeat'; port: number; heartbeatFile: string }
+  | { kind: 'command_port'; port: number };
+
+export type UninstallDefinition = {
+  mode: 'recorded_targets_and_markers';
+  markerStart?: string;
+  generatedFiles: string[];
+};
+
+export type HostBridgeDefinition = {
+  id: string;
+  name: string;
+  category: HostBridgeCategory;
+  defaultPort: number;
+  connectorLabel: string;
+  installMode: 'one_click';
+  status: 'ready';
+  detection: HostDetectionRule[];
+  manualTarget: ManualTargetRule;
+  bridgeTemplate: BridgeTemplateRef;
+  probe: ProbeDefinition;
+  uninstall: UninstallDefinition;
+  ui: {
+    tags: string[];
+    description: string;
+    actions: string[];
+    restartHint: string;
+    priority: number;
+  };
+};
+
+export type HostBridgeCatalogLike = {
+  id: string;
+  name: string;
+  description: string;
+  category: HostBridgeCategory;
+  connector: string;
+  installMode: 'one_click';
+  status: 'ready';
+  tags: string[];
+  actions: string[];
+  priority: number;
+};
+
+export const HOST_BRIDGE_DEFINITIONS: HostBridgeDefinition[] = [
+  {
+    id: 'blender',
+    name: 'Blender',
+    category: '3d',
+    defaultPort: 7011,
+    connectorLabel: 'Python startup / local HTTP',
+    installMode: 'one_click',
+    status: 'ready',
+    detection: [
+      { kind: 'env_path', env: 'BLENDER_USER_SCRIPTS' },
+      { kind: 'known_user_dir', paths: ['%APPDATA%/Blender Foundation/Blender/*/scripts/startup'] },
+      { kind: 'manual_target' },
+    ],
+    manualTarget: {
+      accepts: ['install_dir', 'user_config_dir', 'script_dir'],
+      resolver: 'normalizeManualStartupTarget',
+      pickerTitle: '选择 Blender 安装目录或 scripts/startup 目录',
+    },
+    bridgeTemplate: {
+      id: 'python_http_startup',
+      entryFile: 'assetcutter_blender_bridge_startup.py',
+    },
+    probe: { kind: 'http', port: 7011, path: '/health' },
+    uninstall: {
+      mode: 'recorded_targets_and_markers',
+      generatedFiles: ['assetcutter_blender_bridge_startup.py'],
+    },
+    ui: {
+      tags: ['DCC', 'Python', 'Open Source'],
+      description: 'One-click startup bridge using a local Blender Python HTTP probe.',
+      actions: ['One-click install', 'Probe connection', 'Choose startup folder'],
+      restartHint: '重启 Blender 后再探测连接。',
+      priority: 20,
+    },
+  },
+  {
+    id: 'photoshop',
+    name: 'Photoshop',
+    category: 'post',
+    defaultPort: 7081,
+    connectorLabel: 'ExtendScript / heartbeat',
+    installMode: 'one_click',
+    status: 'ready',
+    detection: [
+      { kind: 'env_path', env: 'PHOTOSHOP_SCRIPTS_DIR' },
+      { kind: 'known_user_dir', paths: ['%APPDATA%/Adobe/Adobe Photoshop */Presets/Scripts'] },
+      { kind: 'manual_target' },
+    ],
+    manualTarget: {
+      accepts: ['install_dir', 'script_dir'],
+      resolver: 'normalizeManualScriptsTarget',
+      pickerTitle: '选择 Photoshop 安装目录或 Scripts 目录',
+    },
+    bridgeTemplate: {
+      id: 'extendscript_heartbeat',
+      entryFile: 'assetcutter_photoshop_bridge.jsx',
+    },
+    probe: { kind: 'heartbeat', port: 7081, heartbeatFile: 'photoshop-heartbeat.json' },
+    uninstall: {
+      mode: 'recorded_targets_and_markers',
+      generatedFiles: ['assetcutter_photoshop_bridge.jsx'],
+    },
+    ui: {
+      tags: ['Image', 'UXP', 'Batch'],
+      description: 'One-click ExtendScript bridge using a local heartbeat probe.',
+      actions: ['One-click install', 'Probe connection', 'Choose Scripts folder'],
+      restartHint: '重启 Photoshop 后再探测连接。',
+      priority: 100,
+    },
+  },
+  {
+    id: 'illustrator',
+    name: 'Illustrator',
+    category: 'post',
+    defaultPort: 7161,
+    connectorLabel: 'ExtendScript / heartbeat',
+    installMode: 'one_click',
+    status: 'ready',
+    detection: [
+      { kind: 'env_path', env: 'ILLUSTRATOR_SCRIPTS_DIR' },
+      { kind: 'known_user_dir', paths: ['%APPDATA%/Adobe/Adobe Illustrator */Presets/Scripts'] },
+      { kind: 'manual_target' },
+    ],
+    manualTarget: {
+      accepts: ['install_dir', 'script_dir'],
+      resolver: 'normalizeAdobeManualTarget',
+      pickerTitle: 'Choose Illustrator install folder or Scripts folder',
+    },
+    bridgeTemplate: {
+      id: 'extendscript_heartbeat',
+      entryFile: 'assetcutter_illustrator_bridge.jsx',
+    },
+    probe: { kind: 'heartbeat', port: 7161, heartbeatFile: 'illustrator-heartbeat.json' },
+    uninstall: {
+      mode: 'recorded_targets_and_markers',
+      generatedFiles: ['assetcutter_illustrator_bridge.jsx'],
+    },
+    ui: {
+      tags: ['Vector', 'ExtendScript', 'Batch'],
+      description: 'One-click ExtendScript bridge using a local heartbeat probe.',
+      actions: ['One-click install', 'Probe connection', 'Choose Scripts folder'],
+      restartHint: 'Restart Illustrator after installing the script, then probe connection.',
+      priority: 105,
+    },
+  },
+  {
+    id: 'after-effects',
+    name: 'After Effects',
+    category: 'post',
+    defaultPort: 7091,
+    connectorLabel: 'ExtendScript / heartbeat',
+    installMode: 'one_click',
+    status: 'ready',
+    detection: [
+      { kind: 'env_path', env: 'AFTER_EFFECTS_SCRIPTS_DIR' },
+      { kind: 'known_user_dir', paths: ['%APPDATA%/Adobe/After Effects/*/Scripts'] },
+      { kind: 'manual_target' },
+    ],
+    manualTarget: {
+      accepts: ['install_dir', 'script_dir'],
+      resolver: 'normalizeAdobeManualTarget',
+      pickerTitle: 'Choose After Effects install folder or Scripts folder',
+    },
+    bridgeTemplate: {
+      id: 'extendscript_heartbeat',
+      entryFile: 'assetcutter_after_effects_bridge.jsx',
+    },
+    probe: { kind: 'heartbeat', port: 7091, heartbeatFile: 'after-effects-heartbeat.json' },
+    uninstall: {
+      mode: 'recorded_targets_and_markers',
+      generatedFiles: ['assetcutter_after_effects_bridge.jsx'],
+    },
+    ui: {
+      tags: ['Motion', 'Comp', 'Render'],
+      description: 'One-click ExtendScript bridge using a local heartbeat probe.',
+      actions: ['One-click install', 'Probe connection', 'Choose Scripts folder'],
+      restartHint: 'Restart After Effects after installing the script, then probe connection.',
+      priority: 110,
+    },
+  },
+  {
+    id: 'premiere',
+    name: 'Premiere Pro',
+    category: 'post',
+    defaultPort: 7101,
+    connectorLabel: 'ExtendScript / heartbeat',
+    installMode: 'one_click',
+    status: 'ready',
+    detection: [
+      { kind: 'env_path', env: 'PREMIERE_SCRIPTS_DIR' },
+      { kind: 'known_user_dir', paths: ['%APPDATA%/Adobe/Premiere Pro/*/Scripts', '~/Documents/Adobe/Premiere Pro/*/Scripts'] },
+      { kind: 'manual_target' },
+    ],
+    manualTarget: {
+      accepts: ['install_dir', 'script_dir'],
+      resolver: 'normalizeAdobeManualTarget',
+      pickerTitle: 'Choose Premiere Pro install folder or Scripts folder',
+    },
+    bridgeTemplate: {
+      id: 'extendscript_heartbeat',
+      entryFile: 'assetcutter_premiere_bridge.jsx',
+    },
+    probe: { kind: 'heartbeat', port: 7101, heartbeatFile: 'premiere-heartbeat.json' },
+    uninstall: {
+      mode: 'recorded_targets_and_markers',
+      generatedFiles: ['assetcutter_premiere_bridge.jsx'],
+    },
+    ui: {
+      tags: ['Video', 'Timeline', 'Batch'],
+      description: 'One-click ExtendScript bridge using a local heartbeat probe.',
+      actions: ['One-click install', 'Probe connection', 'Choose Scripts folder'],
+      restartHint: 'Restart Premiere Pro after installing the script, then probe connection.',
+      priority: 120,
+    },
+  },
+  {
+    id: 'indesign',
+    name: 'InDesign',
+    category: 'post',
+    defaultPort: 7301,
+    connectorLabel: 'ExtendScript / heartbeat',
+    installMode: 'one_click',
+    status: 'ready',
+    detection: [
+      { kind: 'env_path', env: 'INDESIGN_SCRIPTS_DIR' },
+      { kind: 'known_user_dir', paths: ['%APPDATA%/Adobe/InDesign/*/*/Scripts'] },
+      { kind: 'manual_target' },
+    ],
+    manualTarget: {
+      accepts: ['install_dir', 'script_dir'],
+      resolver: 'normalizeAdobeManualTarget',
+      pickerTitle: 'Choose InDesign install folder or Scripts folder',
+    },
+    bridgeTemplate: {
+      id: 'extendscript_heartbeat',
+      entryFile: 'assetcutter_indesign_bridge.jsx',
+    },
+    probe: { kind: 'heartbeat', port: 7301, heartbeatFile: 'indesign-heartbeat.json' },
+    uninstall: {
+      mode: 'recorded_targets_and_markers',
+      generatedFiles: ['assetcutter_indesign_bridge.jsx'],
+    },
+    ui: {
+      tags: ['Layout', 'ExtendScript', 'Batch'],
+      description: 'One-click ExtendScript bridge using a local heartbeat probe.',
+      actions: ['One-click install', 'Probe connection', 'Choose Scripts folder'],
+      restartHint: 'Restart InDesign after installing the script, then probe connection.',
+      priority: 121,
+    },
+  },
+  {
+    id: 'audition',
+    name: 'Audition',
+    category: 'post',
+    defaultPort: 7311,
+    connectorLabel: 'ExtendScript / heartbeat',
+    installMode: 'one_click',
+    status: 'ready',
+    detection: [
+      { kind: 'env_path', env: 'AUDITION_SCRIPTS_DIR' },
+      { kind: 'known_user_dir', paths: ['%APPDATA%/Adobe/Audition/*/Scripts', '~/Documents/Adobe/Audition/*/Scripts'] },
+      { kind: 'manual_target' },
+    ],
+    manualTarget: {
+      accepts: ['install_dir', 'script_dir'],
+      resolver: 'normalizeAdobeManualTarget',
+      pickerTitle: 'Choose Audition install folder or Scripts folder',
+    },
+    bridgeTemplate: {
+      id: 'extendscript_heartbeat',
+      entryFile: 'assetcutter_audition_bridge.jsx',
+    },
+    probe: { kind: 'heartbeat', port: 7311, heartbeatFile: 'audition-heartbeat.json' },
+    uninstall: {
+      mode: 'recorded_targets_and_markers',
+      generatedFiles: ['assetcutter_audition_bridge.jsx'],
+    },
+    ui: {
+      tags: ['Audio', 'ExtendScript', 'Batch'],
+      description: 'One-click ExtendScript bridge using a local heartbeat probe.',
+      actions: ['One-click install', 'Probe connection', 'Choose Scripts folder'],
+      restartHint: 'Restart Audition after installing the script, then probe connection.',
+      priority: 122,
+    },
+  },
+  {
+    id: 'media-encoder',
+    name: 'Media Encoder',
+    category: 'post',
+    defaultPort: 7321,
+    connectorLabel: 'ExtendScript / heartbeat',
+    installMode: 'one_click',
+    status: 'ready',
+    detection: [
+      { kind: 'env_path', env: 'MEDIA_ENCODER_SCRIPTS_DIR' },
+      { kind: 'known_user_dir', paths: ['%APPDATA%/Adobe/Adobe Media Encoder/*/Scripts', '~/Documents/Adobe/Adobe Media Encoder/*/Scripts'] },
+      { kind: 'manual_target' },
+    ],
+    manualTarget: {
+      accepts: ['install_dir', 'script_dir'],
+      resolver: 'normalizeAdobeManualTarget',
+      pickerTitle: 'Choose Media Encoder install folder or Scripts folder',
+    },
+    bridgeTemplate: {
+      id: 'extendscript_heartbeat',
+      entryFile: 'assetcutter_media_encoder_bridge.jsx',
+    },
+    probe: { kind: 'heartbeat', port: 7321, heartbeatFile: 'media-encoder-heartbeat.json' },
+    uninstall: {
+      mode: 'recorded_targets_and_markers',
+      generatedFiles: ['assetcutter_media_encoder_bridge.jsx'],
+    },
+    ui: {
+      tags: ['Encode', 'ExtendScript', 'Batch'],
+      description: 'One-click ExtendScript bridge using a local heartbeat probe.',
+      actions: ['One-click install', 'Probe connection', 'Choose Scripts folder'],
+      restartHint: 'Restart Media Encoder after installing the script, then probe connection.',
+      priority: 123,
+    },
+  },
+  {
+    id: 'animate',
+    name: 'Animate',
+    category: 'post',
+    defaultPort: 7331,
+    connectorLabel: 'ExtendScript / heartbeat',
+    installMode: 'one_click',
+    status: 'ready',
+    detection: [
+      { kind: 'env_path', env: 'ANIMATE_SCRIPTS_DIR' },
+      { kind: 'known_user_dir', paths: ['%APPDATA%/Adobe/Animate/*/Scripts'] },
+      { kind: 'manual_target' },
+    ],
+    manualTarget: {
+      accepts: ['install_dir', 'script_dir'],
+      resolver: 'normalizeAdobeManualTarget',
+      pickerTitle: 'Choose Animate install folder or Scripts folder',
+    },
+    bridgeTemplate: {
+      id: 'extendscript_heartbeat',
+      entryFile: 'assetcutter_animate_bridge.jsx',
+    },
+    probe: { kind: 'heartbeat', port: 7331, heartbeatFile: 'animate-heartbeat.json' },
+    uninstall: {
+      mode: 'recorded_targets_and_markers',
+      generatedFiles: ['assetcutter_animate_bridge.jsx'],
+    },
+    ui: {
+      tags: ['Animation', 'ExtendScript', 'Batch'],
+      description: 'One-click ExtendScript bridge using a local heartbeat probe.',
+      actions: ['One-click install', 'Probe connection', 'Choose Scripts folder'],
+      restartHint: 'Restart Animate after installing the script, then probe connection.',
+      priority: 124,
+    },
+  },
+  {
+    id: 'adobe-bridge',
+    name: 'Adobe Bridge',
+    category: 'post',
+    defaultPort: 7601,
+    connectorLabel: 'ExtendScript Startup Scripts / heartbeat',
+    installMode: 'one_click',
+    status: 'ready',
+    detection: [
+      { kind: 'env_path', env: 'ADOBE_BRIDGE_SCRIPTS_DIR' },
+      { kind: 'known_user_dir', paths: ['%APPDATA%/Adobe/Bridge/*/Startup Scripts'] },
+      { kind: 'manual_target' },
+    ],
+    manualTarget: {
+      accepts: ['install_dir', 'script_dir'],
+      resolver: 'normalizeAdobeManualTarget',
+      pickerTitle: 'Choose Adobe Bridge Startup Scripts folder',
+    },
+    bridgeTemplate: {
+      id: 'extendscript_heartbeat',
+      entryFile: 'assetcutter_adobe_bridge_bridge.jsx',
+    },
+    probe: { kind: 'heartbeat', port: 7601, heartbeatFile: 'adobe-bridge-heartbeat.json' },
+    uninstall: {
+      mode: 'recorded_targets_and_markers',
+      generatedFiles: ['assetcutter_adobe_bridge_bridge.jsx'],
+    },
+    ui: {
+      tags: ['Asset Browser', 'ExtendScript', 'Batch'],
+      description: 'One-click ExtendScript Startup Scripts bridge using a local heartbeat probe.',
+      actions: ['One-click install', 'Probe connection', 'Choose Startup Scripts folder'],
+      restartHint: 'Restart Adobe Bridge after installing the startup script, then probe connection.',
+      priority: 124.5,
+    },
+  },
+  {
+    id: 'darktable',
+    name: 'darktable',
+    category: 'post',
+    defaultPort: 7611,
+    connectorLabel: 'luarc Lua / heartbeat',
+    installMode: 'one_click',
+    status: 'ready',
+    detection: [
+      { kind: 'env_path', env: 'DARKTABLE_CONFIG_DIR' },
+      { kind: 'known_user_dir', paths: ['%LOCALAPPDATA%/darktable', '~/.config/darktable'] },
+      { kind: 'manual_target' },
+    ],
+    manualTarget: {
+      accepts: ['user_config_dir', 'script_dir'],
+      resolver: 'normalizeManualConfigTarget',
+      pickerTitle: '选择 darktable 配置目录或脚本目录',
+    },
+    bridgeTemplate: {
+      id: 'lua_heartbeat',
+      entryFile: 'assetcutter_darktable_bridge.lua',
+    },
+    probe: { kind: 'heartbeat', port: 7611, heartbeatFile: 'darktable-heartbeat.json' },
+    uninstall: {
+      mode: 'recorded_targets_and_markers',
+      markerStart: '-- ========== AssetCutter darktable Bridge ==========',
+      generatedFiles: ['assetcutter_darktable_bridge.lua', 'luarc'],
+    },
+    ui: {
+      tags: ['Photo', 'Lua', 'Open Source'],
+      description: 'One-click luarc Lua bridge using a local heartbeat probe.',
+      actions: ['One-click install', 'Probe connection', 'Choose config folder'],
+      restartHint: '重启 darktable 后再探测连接。',
+      priority: 125.5,
+    },
+  },
+  {
+    id: 'unity',
+    name: 'Unity',
+    category: 'engine',
+    defaultPort: 7111,
+    connectorLabel: 'Editor script / local HTTP',
+    installMode: 'one_click',
+    status: 'ready',
+    detection: [
+      { kind: 'env_path', env: 'UNITY_PROJECTS_ROOT' },
+      { kind: 'known_user_dir', paths: ['~/Documents/*/Assets', '~/Unity Projects/*/Assets', '~/Unity/*/Assets'] },
+      { kind: 'manual_target' },
+    ],
+    manualTarget: {
+      accepts: ['project_dir'],
+      resolver: 'normalizeUnityManualTarget',
+      pickerTitle: 'Choose Unity project root containing Assets',
+    },
+    bridgeTemplate: {
+      id: 'project_plugin',
+      entryFile: 'assetcutter_unity_bridge',
+    },
+    probe: { kind: 'http', port: 7111, path: '/health' },
+    uninstall: {
+      mode: 'recorded_targets_and_markers',
+      generatedFiles: ['assetcutter_unity_bridge/assetcutter_bridge.py', 'assetcutter_unity_bridge/assetcutter-bridge.json', 'assetcutter_unity_bridge/README.md'],
+    },
+    ui: {
+      tags: ['Engine', 'C#', 'Import'],
+      description: 'One-click project Editor script bridge using a local HTTP probe.',
+      actions: ['One-click install', 'Probe connection', 'Choose Unity project'],
+      restartHint: 'Open or recompile the Unity project, then probe connection.',
+      priority: 90,
+    },
+  },
+  {
+    id: 'godot',
+    name: 'Godot',
+    category: 'engine',
+    defaultPort: 7171,
+    connectorLabel: 'EditorPlugin / local HTTP',
+    installMode: 'one_click',
+    status: 'ready',
+    detection: [
+      { kind: 'env_path', env: 'GODOT_PROJECT_DIRS' },
+      { kind: 'known_user_dir', paths: ['~/Documents/*/project.godot', '~/Projects/*/project.godot', '~/Godot/*/project.godot'] },
+      { kind: 'manual_target' },
+    ],
+    manualTarget: {
+      accepts: ['project_dir'],
+      resolver: 'normalizeGodotManualTarget',
+      pickerTitle: 'Choose Godot project root containing project.godot',
+    },
+    bridgeTemplate: {
+      id: 'project_plugin',
+      entryFile: 'assetcutter_godot_bridge',
+    },
+    probe: { kind: 'http', port: 7171, path: '/health' },
+    uninstall: {
+      mode: 'recorded_targets_and_markers',
+      generatedFiles: ['assetcutter_godot_bridge/assetcutter_bridge.py', 'assetcutter_godot_bridge/assetcutter-bridge.json', 'assetcutter_godot_bridge/README.md'],
+    },
+    ui: {
+      tags: ['Engine', 'GDScript', 'Open Source'],
+      description: 'One-click project EditorPlugin bridge using a local HTTP probe.',
+      actions: ['One-click install', 'Probe connection', 'Choose Godot project'],
+      restartHint: 'Enable the AssetCutter Bridge plugin, then probe connection.',
+      priority: 85,
+    },
+  },
+  {
+    id: 'unreal',
+    name: 'Unreal',
+    category: 'engine',
+    defaultPort: 7131,
+    connectorLabel: 'Project plugin / Python HTTP',
+    installMode: 'one_click',
+    status: 'ready',
+    detection: [
+      { kind: 'env_path', env: 'UNREAL_PROJECTS_ROOT' },
+      { kind: 'known_user_dir', paths: ['~/Documents/Unreal Projects/*/*.uproject', '~/Unreal Projects/*/*.uproject'] },
+      { kind: 'manual_target' },
+    ],
+    manualTarget: {
+      accepts: ['project_dir'],
+      resolver: 'normalizeUnrealManualTarget',
+      pickerTitle: 'Choose Unreal project root containing a .uproject file',
+    },
+    bridgeTemplate: {
+      id: 'project_plugin',
+      entryFile: 'assetcutter_unreal_bridge',
+    },
+    probe: { kind: 'http', port: 7131, path: '/health' },
+    uninstall: {
+      mode: 'recorded_targets_and_markers',
+      generatedFiles: ['assetcutter_unreal_bridge/assetcutter_bridge.py', 'assetcutter_unreal_bridge/assetcutter-bridge.json', 'assetcutter_unreal_bridge/README.md'],
+    },
+    ui: {
+      tags: ['Engine', 'Python', 'Import'],
+      description: 'One-click project plugin bridge using Unreal Python and a local HTTP probe.',
+      actions: ['One-click install', 'Probe connection', 'Choose Unreal project'],
+      restartHint: 'Enable Python/plugin support and restart the Unreal project, then probe connection.',
+      priority: 80,
+    },
+  },
+  {
+    id: 'zbrush',
+    name: 'ZBrush',
+    category: '3d',
+    defaultPort: 7121,
+    connectorLabel: 'ZScript / heartbeat',
+    installMode: 'one_click',
+    status: 'ready',
+    detection: [
+      { kind: 'env_path', env: 'ZBRUSH_ROOT' },
+      { kind: 'known_user_dir', paths: ['~/Documents/ZBrushData/ZStartup/ZScripts', '~/Public/Documents/ZBrushData/ZStartup/ZScripts'] },
+      { kind: 'manual_target' },
+    ],
+    manualTarget: {
+      accepts: ['script_dir', 'plugin_dir'],
+      resolver: 'normalizeZBrushManualTarget',
+      pickerTitle: 'Choose ZBrush ZScripts or ZPlugs64 folder',
+    },
+    bridgeTemplate: {
+      id: 'manual_script_dir',
+      entryFile: 'AssetCutter_ZBrush_Bridge.py',
+    },
+    probe: { kind: 'heartbeat', port: 7121, heartbeatFile: 'zbrush-heartbeat.json' },
+    uninstall: {
+      mode: 'recorded_targets_and_markers',
+      generatedFiles: ['AssetCutter_ZBrush_Bridge.py'],
+    },
+    ui: {
+      tags: ['Sculpt', 'ZScript', 'Heartbeat'],
+      description: 'One-click ZScript-style bridge using a local heartbeat probe.',
+      actions: ['One-click install', 'Probe connection', 'Choose ZScripts folder'],
+      restartHint: 'Run the installed bridge script in ZBrush, then probe connection.',
+      priority: 52,
+    },
+  },
+  {
+    id: 'cinema-4d',
+    name: 'Cinema 4D',
+    category: '3d',
+    defaultPort: 7061,
+    connectorLabel: 'Python script / local HTTP',
+    installMode: 'one_click',
+    status: 'ready',
+    detection: [
+      { kind: 'env_path', env: 'CINEMA4D_USER_ROOT' },
+      { kind: 'known_user_dir', paths: ['%APPDATA%/MAXON/*/library/scripts', '~/Library/Preferences/MAXON/*/library/scripts'] },
+      { kind: 'manual_target' },
+    ],
+    manualTarget: {
+      accepts: ['user_config_dir', 'script_dir'],
+      resolver: 'normalizeCinema4DScriptsTarget',
+      pickerTitle: 'Choose Cinema 4D library/scripts folder',
+    },
+    bridgeTemplate: {
+      id: 'python_http_startup',
+      entryFile: 'assetcutter_cinema4d_bridge.py',
+    },
+    probe: { kind: 'http', port: 7061, path: '/health' },
+    uninstall: {
+      mode: 'recorded_targets_and_markers',
+      generatedFiles: ['assetcutter_cinema4d_bridge.py'],
+    },
+    ui: {
+      tags: ['DCC', 'Python', 'Motion'],
+      description: 'One-click Python script bridge using a local HTTP probe.',
+      actions: ['One-click install', 'Probe connection', 'Choose Scripts folder'],
+      restartHint: 'Restart Cinema 4D or run the installed script, then probe connection.',
+      priority: 35,
+    },
+  },
+  {
+    id: 'houdini',
+    name: 'Houdini',
+    category: '3d',
+    defaultPort: 7041,
+    connectorLabel: 'pythonrc.py / local HTTP',
+    installMode: 'one_click',
+    status: 'ready',
+    detection: [
+      { kind: 'env_path', env: 'HOUDINI_USER_PREF_DIR' },
+      { kind: 'known_user_dir', paths: ['~/Documents/houdini*', '~/OneDrive/Documents/houdini*'] },
+      { kind: 'manual_target' },
+    ],
+    manualTarget: {
+      accepts: ['install_dir', 'user_config_dir'],
+      resolver: 'normalizeHoudiniPrefsDirTarget',
+      pickerTitle: 'Choose Houdini prefs folder or install folder',
+    },
+    bridgeTemplate: {
+      id: 'python_http_startup',
+      entryFile: 'assetcutter_houdini_bridge.py',
+    },
+    probe: { kind: 'http', port: 7041, path: '/health' },
+    uninstall: {
+      mode: 'recorded_targets_and_markers',
+      markerStart: '# ========== AssetCutter Houdini Bridge ==========',
+      generatedFiles: ['assetcutter_houdini_bridge.py', 'pythonrc.py'],
+    },
+    ui: {
+      tags: ['DCC', 'Procedural', 'Python'],
+      description: 'One-click pythonrc.py bridge using a local HTTP probe.',
+      actions: ['One-click install', 'Probe connection', 'Choose prefs folder'],
+      restartHint: 'Restart Houdini after install, then probe connection.',
+      priority: 45,
+    },
+  },
+  {
+    id: 'nuke',
+    name: 'Nuke',
+    category: 'compositing',
+    defaultPort: 7051,
+    connectorLabel: 'init.py / local HTTP',
+    installMode: 'one_click',
+    status: 'ready',
+    detection: [
+      { kind: 'env_path', env: 'NUKE_PATH' },
+      { kind: 'known_user_dir', paths: ['~/.nuke'] },
+      { kind: 'manual_target' },
+    ],
+    manualTarget: {
+      accepts: ['install_dir', 'user_config_dir', 'script_dir'],
+      resolver: 'normalizeNukeUserDirTarget',
+      pickerTitle: 'Choose Nuke user .nuke folder',
+    },
+    bridgeTemplate: {
+      id: 'python_http_startup',
+      entryFile: 'assetcutter_nuke_bridge.py',
+    },
+    probe: { kind: 'http', port: 7051, path: '/health' },
+    uninstall: {
+      mode: 'recorded_targets_and_markers',
+      markerStart: '# ========== AssetCutter Nuke Bridge ==========',
+      generatedFiles: ['assetcutter_nuke_bridge.py', 'init.py'],
+    },
+    ui: {
+      tags: ['Compositing', 'VFX', 'Python'],
+      description: 'One-click init.py bridge using a local HTTP probe.',
+      actions: ['One-click install', 'Probe connection', 'Choose .nuke folder'],
+      restartHint: 'Restart Nuke after install, then probe connection.',
+      priority: 140,
+    },
+  },
+  {
+    id: 'motionbuilder',
+    name: 'MotionBuilder',
+    category: '3d',
+    defaultPort: 7181,
+    connectorLabel: 'PythonStartup / local HTTP',
+    installMode: 'one_click',
+    status: 'ready',
+    detection: [
+      { kind: 'env_path', env: 'MOTIONBUILDER_PYTHONSTARTUP_DIR' },
+      { kind: 'known_user_dir', paths: ['~/Documents/MB/*/config/PythonStartup', '%APPDATA%/Autodesk/MB/*/config/PythonStartup'] },
+      { kind: 'manual_target' },
+    ],
+    manualTarget: {
+      accepts: ['user_config_dir', 'script_dir'],
+      resolver: 'normalizeMotionBuilderStartupTarget',
+      pickerTitle: 'Choose MotionBuilder PythonStartup folder',
+    },
+    bridgeTemplate: {
+      id: 'python_http_startup',
+      entryFile: 'assetcutter_motionbuilder_bridge.py',
+    },
+    probe: { kind: 'http', port: 7181, path: '/health' },
+    uninstall: {
+      mode: 'recorded_targets_and_markers',
+      generatedFiles: ['assetcutter_motionbuilder_bridge.py'],
+    },
+    ui: {
+      tags: ['DCC', 'Animation', 'Python'],
+      description: 'One-click Python startup bridge using a local HTTP probe.',
+      actions: ['One-click install', 'Probe connection', 'Choose PythonStartup folder'],
+      restartHint: 'Restart MotionBuilder after install, then probe connection.',
+      priority: 82,
+    },
+  },
+  {
+    id: 'fusion-360',
+    name: 'Fusion 360',
+    category: '3d',
+    defaultPort: 7191,
+    connectorLabel: 'API AddIn / local HTTP',
+    installMode: 'one_click',
+    status: 'ready',
+    detection: [
+      { kind: 'env_path', env: 'FUSION360_ADDINS_DIR' },
+      { kind: 'known_user_dir', paths: ['%APPDATA%/Autodesk/Autodesk Fusion 360/API/AddIns', '~/Library/Application Support/Autodesk/Autodesk Fusion 360/API/AddIns'] },
+      { kind: 'manual_target' },
+    ],
+    manualTarget: {
+      accepts: ['plugin_dir', 'script_dir'],
+      resolver: 'normalizeFusion360AddinsTarget',
+      pickerTitle: 'Choose Fusion 360 API/AddIns folder',
+    },
+    bridgeTemplate: {
+      id: 'project_plugin',
+      entryFile: 'AssetCutterBridge',
+    },
+    probe: { kind: 'http', port: 7191, path: '/health' },
+    uninstall: {
+      mode: 'recorded_targets_and_markers',
+      generatedFiles: ['AssetCutterBridge/assetcutter_bridge.py', 'AssetCutterBridge/assetcutter-bridge.json', 'AssetCutterBridge/README.md'],
+    },
+    ui: {
+      tags: ['CAD', 'Autodesk', 'Python'],
+      description: 'One-click API AddIn bridge using a local HTTP probe.',
+      actions: ['One-click install', 'Probe connection', 'Choose AddIns folder'],
+      restartHint: 'Restart Fusion 360 or load the AddIn, then probe connection.',
+      priority: 87,
+    },
+  },
+  {
+    id: 'keyshot',
+    name: 'KeyShot',
+    category: '3d',
+    defaultPort: 7201,
+    connectorLabel: 'Python script / local HTTP',
+    installMode: 'one_click',
+    status: 'ready',
+    detection: [
+      { kind: 'env_path', env: 'KEYSHOT_SCRIPTS_DIR' },
+      { kind: 'known_user_dir', paths: ['~/Documents/KeyShot*/Scripts', '~/OneDrive/Documents/KeyShot*/Scripts', '%APPDATA%/Luxion/*/Scripts'] },
+      { kind: 'manual_target' },
+    ],
+    manualTarget: {
+      accepts: ['script_dir'],
+      resolver: 'normalizeKeyShotScriptsTarget',
+      pickerTitle: 'Choose KeyShot Scripts folder',
+    },
+    bridgeTemplate: {
+      id: 'python_http_startup',
+      entryFile: 'assetcutter_keyshot_bridge.py',
+    },
+    probe: { kind: 'http', port: 7201, path: '/health' },
+    uninstall: {
+      mode: 'recorded_targets_and_markers',
+      generatedFiles: ['assetcutter_keyshot_bridge.py'],
+    },
+    ui: {
+      tags: ['Render', 'Python', 'Lookdev'],
+      description: 'One-click Python script bridge using a local HTTP probe.',
+      actions: ['One-click install', 'Probe connection', 'Choose Scripts folder'],
+      restartHint: 'Run the installed KeyShot script, then probe connection.',
+      priority: 88,
+    },
+  },
+  {
+    id: 'modo',
+    name: 'Modo',
+    category: '3d',
+    defaultPort: 7271,
+    connectorLabel: 'Python script / local HTTP',
+    installMode: 'one_click',
+    status: 'ready',
+    detection: [
+      { kind: 'env_path', env: 'MODO_SCRIPTS_DIR' },
+      { kind: 'known_user_dir', paths: ['%APPDATA%/Luxology/Scripts', '%APPDATA%/Luxology/*/Scripts', '~/.luxology/Scripts'] },
+      { kind: 'manual_target' },
+    ],
+    manualTarget: {
+      accepts: ['script_dir'],
+      resolver: 'normalizeModoScriptsTarget',
+      pickerTitle: 'Choose Modo Scripts folder',
+    },
+    bridgeTemplate: {
+      id: 'python_http_startup',
+      entryFile: 'assetcutter_modo_bridge.py',
+    },
+    probe: { kind: 'http', port: 7271, path: '/health' },
+    uninstall: {
+      mode: 'recorded_targets_and_markers',
+      generatedFiles: ['assetcutter_modo_bridge.py'],
+    },
+    ui: {
+      tags: ['DCC', 'Modeling', 'Python'],
+      description: 'One-click Python script bridge using a local HTTP probe.',
+      actions: ['One-click install', 'Probe connection', 'Choose Scripts folder'],
+      restartHint: 'Run the installed Modo script, then probe connection.',
+      priority: 91,
+    },
+  },
+  {
+    id: 'lightwave',
+    name: 'LightWave 3D',
+    category: '3d',
+    defaultPort: 7281,
+    connectorLabel: 'Python script / local HTTP',
+    installMode: 'one_click',
+    status: 'ready',
+    detection: [
+      { kind: 'env_path', env: 'LIGHTWAVE_SCRIPTS_DIR' },
+      { kind: 'known_user_dir', paths: ['~/Documents/LightWave*/Scripts', '%APPDATA%/NewTek/LightWave*/Scripts', '%APPDATA%/LightWave*/Scripts'] },
+      { kind: 'manual_target' },
+    ],
+    manualTarget: {
+      accepts: ['script_dir'],
+      resolver: 'normalizeLightWaveScriptsTarget',
+      pickerTitle: 'Choose LightWave Scripts or Python folder',
+    },
+    bridgeTemplate: {
+      id: 'python_http_startup',
+      entryFile: 'assetcutter_lightwave_bridge.py',
+    },
+    probe: { kind: 'http', port: 7281, path: '/health' },
+    uninstall: {
+      mode: 'recorded_targets_and_markers',
+      generatedFiles: ['assetcutter_lightwave_bridge.py'],
+    },
+    ui: {
+      tags: ['DCC', 'Modeling', 'Python'],
+      description: 'One-click Python script bridge using a local HTTP probe.',
+      actions: ['One-click install', 'Probe connection', 'Choose Scripts folder'],
+      restartHint: 'Run the installed LightWave script, then probe connection.',
+      priority: 92,
+    },
+  },
+  {
+    id: 'freecad',
+    name: 'FreeCAD',
+    category: '3d',
+    defaultPort: 7291,
+    connectorLabel: 'Workbench InitGui.py / local HTTP',
+    installMode: 'one_click',
+    status: 'ready',
+    detection: [
+      { kind: 'env_path', env: 'FREECAD_MOD_DIR' },
+      { kind: 'known_user_dir', paths: ['%APPDATA%/FreeCAD/Mod', '~/.local/share/FreeCAD/Mod', '~/.FreeCAD/Mod'] },
+      { kind: 'manual_target' },
+    ],
+    manualTarget: {
+      accepts: ['plugin_dir', 'script_dir'],
+      resolver: 'normalizeFreeCADModTarget',
+      pickerTitle: 'Choose FreeCAD Mod folder',
+    },
+    bridgeTemplate: {
+      id: 'project_plugin',
+      entryFile: 'AssetCutterBridge',
+    },
+    probe: { kind: 'http', port: 7291, path: '/health' },
+    uninstall: {
+      mode: 'recorded_targets_and_markers',
+      generatedFiles: ['AssetCutterBridge/assetcutter_bridge.py', 'AssetCutterBridge/assetcutter-bridge.json', 'AssetCutterBridge/README.md'],
+    },
+    ui: {
+      tags: ['CAD', 'Python', 'Open Source'],
+      description: 'One-click Workbench bridge using InitGui.py and a local HTTP probe.',
+      actions: ['One-click install', 'Probe connection', 'Choose Mod folder'],
+      restartHint: 'Restart FreeCAD, then probe connection.',
+      priority: 93,
+    },
+  },
+  {
+    id: '3dequalizer',
+    name: '3DEqualizer',
+    category: 'post',
+    defaultPort: 7551,
+    connectorLabel: 'py_scripts Python / heartbeat',
+    installMode: 'one_click',
+    status: 'ready',
+    detection: [
+      { kind: 'env_path', env: 'THREEDEQUALIZER_PY_SCRIPTS_DIR' },
+      { kind: 'known_user_dir', paths: ['%APPDATA%/3DEqualizer4/py_scripts', '~/.3dequalizer/py_scripts', '~/Documents/3DEqualizer4/py_scripts'] },
+      { kind: 'manual_target' },
+    ],
+    manualTarget: {
+      accepts: ['script_dir'],
+      resolver: 'normalizeThreeDequalizerScriptsTarget',
+      pickerTitle: 'Choose 3DEqualizer py_scripts folder',
+    },
+    bridgeTemplate: {
+      id: 'manual_script_dir',
+      entryFile: 'assetcutter_3dequalizer_bridge.py',
+    },
+    probe: { kind: 'heartbeat', port: 7551, heartbeatFile: '3dequalizer-heartbeat.json' },
+    uninstall: {
+      mode: 'recorded_targets_and_markers',
+      generatedFiles: ['assetcutter_3dequalizer_bridge.py'],
+    },
+    ui: {
+      tags: ['Matchmove', 'VFX', 'Python'],
+      description: 'One-click py_scripts Python bridge using a local heartbeat probe.',
+      actions: ['One-click install', 'Probe connection', 'Choose py_scripts folder'],
+      restartHint: 'Run AssetCutter Bridge from the 3DEqualizer script menu, then probe connection.',
+      priority: 79.9,
+    },
+  },
+  {
+    id: 'katana',
+    name: 'Katana',
+    category: 'compositing',
+    defaultPort: 7571,
+    connectorLabel: 'KATANA_RESOURCES Startup/init.py / heartbeat',
+    installMode: 'one_click',
+    status: 'ready',
+    detection: [
+      { kind: 'env_path', env: 'KATANA_RESOURCE_DIR' },
+      { kind: 'env_path', env: 'KATANA_RESOURCES' },
+      { kind: 'known_user_dir', paths: ['~/Documents/Katana/AssetCutterBridge'] },
+      { kind: 'manual_target' },
+    ],
+    manualTarget: {
+      accepts: ['script_dir', 'user_config_dir'],
+      resolver: 'normalizeKatanaResourceTarget',
+      pickerTitle: 'Choose Katana resource root',
+    },
+    bridgeTemplate: {
+      id: 'manual_script_dir',
+      entryFile: 'assetcutter_katana_bridge.py',
+    },
+    probe: { kind: 'heartbeat', port: 7571, heartbeatFile: 'katana-heartbeat.json' },
+    uninstall: {
+      mode: 'recorded_targets_and_markers',
+      markerStart: '# ========== AssetCutter Katana Bridge ==========',
+      generatedFiles: ['assetcutter_katana_bridge.py', 'Startup/init.py'],
+    },
+    ui: {
+      tags: ['Lookdev', 'Lighting', 'Python'],
+      description: 'One-click KATANA_RESOURCES startup bridge using a local heartbeat probe.',
+      actions: ['One-click install', 'Probe connection', 'Choose resource root'],
+      restartHint: 'Start Katana with the AssetCutter resource root enabled, then probe connection.',
+      priority: 79.95,
+    },
+  },
+  {
+    id: 'autocad',
+    name: 'AutoCAD',
+    category: '3d',
+    defaultPort: 7371,
+    connectorLabel: 'AutoLISP acaddoc.lsp / heartbeat',
+    installMode: 'one_click',
+    status: 'ready',
+    detection: [
+      { kind: 'env_path', env: 'AUTOCAD_SUPPORT_DIR' },
+      { kind: 'known_user_dir', paths: ['%APPDATA%/Autodesk/**/Support'] },
+      { kind: 'manual_target' },
+    ],
+    manualTarget: {
+      accepts: ['script_dir', 'user_config_dir'],
+      resolver: 'normalizeAutoCADSupportTarget',
+      pickerTitle: 'Choose AutoCAD Support folder',
+    },
+    bridgeTemplate: {
+      id: 'manual_script_dir',
+      entryFile: 'assetcutter_autocad_bridge.lsp',
+    },
+    probe: { kind: 'heartbeat', port: 7371, heartbeatFile: 'autocad-heartbeat.json' },
+    uninstall: {
+      mode: 'recorded_targets_and_markers',
+      markerStart: '; ========== AssetCutter AutoCAD Bridge ==========',
+      generatedFiles: ['assetcutter_autocad_bridge.lsp', 'acaddoc.lsp'],
+    },
+    ui: {
+      tags: ['CAD', 'AutoLISP', 'Drafting'],
+      description: 'One-click AutoLISP acaddoc.lsp bridge using a local heartbeat probe.',
+      actions: ['One-click install', 'Probe connection', 'Choose Support folder'],
+      restartHint: 'Restart AutoCAD or run ASSETCUTTERBRIDGE, then probe connection.',
+      priority: 94,
+    },
+  },
+  {
+    id: 'lightroom-classic',
+    name: 'Lightroom Classic',
+    category: 'post',
+    defaultPort: 7561,
+    connectorLabel: 'Lua .lrplugin / heartbeat',
+    installMode: 'one_click',
+    status: 'ready',
+    detection: [
+      { kind: 'env_path', env: 'LIGHTROOM_MODULES_DIR' },
+      { kind: 'known_user_dir', paths: ['%APPDATA%/Adobe/Lightroom/Modules/AssetCutterBridge.lrplugin'] },
+      { kind: 'manual_target' },
+    ],
+    manualTarget: {
+      accepts: ['plugin_dir', 'script_dir'],
+      resolver: 'normalizeLightroomModulesTarget',
+      pickerTitle: 'Choose Lightroom Modules folder',
+    },
+    bridgeTemplate: {
+      id: 'lua_heartbeat',
+      entryFile: 'AssetCutterBridge.lrplugin/Init.lua',
+    },
+    probe: { kind: 'heartbeat', port: 7561, heartbeatFile: 'lightroom-classic-heartbeat.json' },
+    uninstall: {
+      mode: 'recorded_targets_and_markers',
+      generatedFiles: ['AssetCutterBridge.lrplugin/Info.lua', 'AssetCutterBridge.lrplugin/Init.lua'],
+    },
+    ui: {
+      tags: ['Photo', 'Lua', 'Batch'],
+      description: 'One-click Lua .lrplugin bridge using a local heartbeat probe.',
+      actions: ['One-click install', 'Probe connection', 'Choose Modules folder'],
+      restartHint: 'Restart Lightroom Classic after installing the plugin, then probe connection.',
+      priority: 125,
+    },
+  },
+  {
+    id: 'obs-studio',
+    name: 'OBS Studio',
+    category: 'post',
+    defaultPort: 7351,
+    connectorLabel: 'Lua script / heartbeat',
+    installMode: 'one_click',
+    status: 'ready',
+    detection: [
+      { kind: 'env_path', env: 'OBS_STUDIO_SCRIPTS_DIR' },
+      { kind: 'known_user_dir', paths: ['%APPDATA%/obs-studio/scripts', '~/Documents/OBS Scripts'] },
+      { kind: 'manual_target' },
+    ],
+    manualTarget: {
+      accepts: ['script_dir'],
+      resolver: 'normalizeObsScriptsTarget',
+      pickerTitle: 'Choose OBS Studio scripts folder',
+    },
+    bridgeTemplate: {
+      id: 'lua_heartbeat',
+      entryFile: 'assetcutter_obs_bridge.lua',
+    },
+    probe: { kind: 'heartbeat', port: 7351, heartbeatFile: 'obs-studio-heartbeat.json' },
+    uninstall: {
+      mode: 'recorded_targets_and_markers',
+      generatedFiles: ['assetcutter_obs_bridge.lua'],
+    },
+    ui: {
+      tags: ['Capture', 'Streaming', 'Lua'],
+      description: 'One-click Lua script bridge using a local heartbeat probe.',
+      actions: ['One-click install', 'Probe connection', 'Choose scripts folder'],
+      restartHint: 'Add or reload the installed script in OBS Tools > Scripts, then probe connection.',
+      priority: 150,
+    },
+  },
+  {
+    id: 'reaper',
+    name: 'REAPER',
+    category: 'post',
+    defaultPort: 7361,
+    connectorLabel: 'ReaScript Lua / heartbeat',
+    installMode: 'one_click',
+    status: 'ready',
+    detection: [
+      { kind: 'env_path', env: 'REAPER_SCRIPTS_DIR' },
+      { kind: 'known_user_dir', paths: ['%APPDATA%/REAPER/Scripts', '~/Documents/REAPER Media/Scripts'] },
+      { kind: 'manual_target' },
+    ],
+    manualTarget: {
+      accepts: ['script_dir'],
+      resolver: 'normalizeReaperScriptsTarget',
+      pickerTitle: 'Choose REAPER Scripts folder',
+    },
+    bridgeTemplate: {
+      id: 'lua_heartbeat',
+      entryFile: 'assetcutter_reaper_bridge.lua',
+    },
+    probe: { kind: 'heartbeat', port: 7361, heartbeatFile: 'reaper-heartbeat.json' },
+    uninstall: {
+      mode: 'recorded_targets_and_markers',
+      generatedFiles: ['assetcutter_reaper_bridge.lua'],
+    },
+    ui: {
+      tags: ['Audio', 'DAW', 'Lua'],
+      description: 'One-click ReaScript Lua bridge using a local heartbeat probe.',
+      actions: ['One-click install', 'Probe connection', 'Choose scripts folder'],
+      restartHint: 'Load and run the installed ReaScript from the Actions window, then probe connection.',
+      priority: 155,
+    },
+  },
+  {
+    id: '3ds-max',
+    name: '3ds Max',
+    category: '3d',
+    defaultPort: 7021,
+    connectorLabel: 'MaxScript startup / Python HTTP',
+    installMode: 'one_click',
+    status: 'ready',
+    detection: [
+      { kind: 'env_path', env: 'ADSK_3DSMAX_USERTOOLS_DIR' },
+      { kind: 'known_user_dir', paths: ['%LOCALAPPDATA%/Autodesk/3dsMax/*/*/scripts/startup', '%APPDATA%/Autodesk/3dsMax/*/*/scripts/startup'] },
+      { kind: 'manual_target' },
+    ],
+    manualTarget: {
+      accepts: ['install_dir', 'user_config_dir', 'script_dir'],
+      resolver: 'normalizeMaxStartupTarget',
+      pickerTitle: '选择 3ds Max 安装目录或 scripts/startup 目录',
+    },
+    bridgeTemplate: {
+      id: 'python_http_startup',
+      entryFile: 'assetcutter_3dsmax_bridge.py',
+    },
+    probe: { kind: 'http', port: 7021, path: '/health' },
+    uninstall: {
+      mode: 'recorded_targets_and_markers',
+      generatedFiles: ['assetcutter_3dsmax_bridge_startup.ms', 'assetcutter_3dsmax_bridge.py'],
+    },
+    ui: {
+      tags: ['DCC', 'MaxScript', 'Export'],
+      description: 'One-click startup bridge using MaxScript plus a Python HTTP probe.',
+      actions: ['One-click install', 'Probe connection', 'Choose startup folder'],
+      restartHint: '重启 3ds Max 后再探测连接。',
+      priority: 30,
+    },
+  },
+  {
+    id: 'substance-painter',
+    name: 'Substance Painter',
+    category: 'paint',
+    defaultPort: 7031,
+    connectorLabel: 'Python plugin / local HTTP',
+    installMode: 'one_click',
+    status: 'ready',
+    detection: [
+      { kind: 'env_path', env: 'SUBSTANCE_PAINTER_PLUGINS_DIR' },
+      { kind: 'known_user_dir', paths: ['~/Documents/Adobe/Adobe Substance 3D Painter/python/plugins', '~/Documents/Allegorithmic/Substance Painter/python/plugins'] },
+      { kind: 'manual_target' },
+    ],
+    manualTarget: {
+      accepts: ['plugin_dir', 'script_dir'],
+      resolver: 'normalizeSubstancePainterPluginTarget',
+      pickerTitle: '选择 Substance Painter python/plugins 目录',
+    },
+    bridgeTemplate: {
+      id: 'python_http_startup',
+      entryFile: 'assetcutter_substance_painter_bridge.py',
+    },
+    probe: { kind: 'http', port: 7031, path: '/health' },
+    uninstall: {
+      mode: 'recorded_targets_and_markers',
+      generatedFiles: ['assetcutter_substance_painter_bridge.py'],
+    },
+    ui: {
+      tags: ['Texture', 'Material', 'Export'],
+      description: 'One-click Python plugin bridge using a local HTTP probe.',
+      actions: ['One-click install', 'Probe connection', 'Choose plugins folder'],
+      restartHint: '重启或重新启用 Substance Painter 插件后再探测连接。',
+      priority: 70,
+    },
+  },
+  {
+    id: 'substance-designer',
+    name: 'Substance Designer',
+    category: 'paint',
+    defaultPort: 7341,
+    connectorLabel: 'Python plugin / local HTTP',
+    installMode: 'one_click',
+    status: 'ready',
+    detection: [
+      { kind: 'env_path', env: 'SUBSTANCE_DESIGNER_SCRIPTS_DIR' },
+      { kind: 'known_user_dir', paths: ['~/Documents/Adobe/Adobe Substance 3D Designer/python/plugins', '~/Documents/Adobe/Adobe Substance 3D Designer/scripts', '%APPDATA%/Adobe/Adobe Substance 3D Designer/scripts'] },
+      { kind: 'manual_target' },
+    ],
+    manualTarget: {
+      accepts: ['plugin_dir', 'script_dir'],
+      resolver: 'normalizeSubstanceDesignerScriptsTarget',
+      pickerTitle: '选择 Substance Designer scripts 或 python/plugins 目录',
+    },
+    bridgeTemplate: {
+      id: 'python_http_startup',
+      entryFile: 'assetcutter_substance_designer_bridge.py',
+    },
+    probe: { kind: 'http', port: 7341, path: '/health' },
+    uninstall: {
+      mode: 'recorded_targets_and_markers',
+      generatedFiles: ['assetcutter_substance_designer_bridge.py'],
+    },
+    ui: {
+      tags: ['Material', 'Graph', 'Python'],
+      description: 'One-click Python plugin bridge using a local HTTP probe.',
+      actions: ['One-click install', 'Probe connection', 'Choose scripts folder'],
+      restartHint: '重启或重新启用 Substance Designer 插件后再探测连接。',
+      priority: 70.5,
+    },
+  },
+  {
+    id: 'mari',
+    name: 'Mari',
+    category: 'paint',
+    defaultPort: 7231,
+    connectorLabel: 'Python script / local HTTP',
+    installMode: 'one_click',
+    status: 'ready',
+    detection: [
+      { kind: 'env_path', env: 'MARI_SCRIPTS_DIR' },
+      { kind: 'known_user_dir', paths: ['~/Documents/Mari/Scripts', '~/OneDrive/Documents/Mari/Scripts', '%APPDATA%/Mari/Scripts'] },
+      { kind: 'manual_target' },
+    ],
+    manualTarget: {
+      accepts: ['script_dir'],
+      resolver: 'normalizeMariScriptsTarget',
+      pickerTitle: '选择 Mari Scripts 目录',
+    },
+    bridgeTemplate: {
+      id: 'python_http_startup',
+      entryFile: 'assetcutter_mari_bridge.py',
+    },
+    probe: { kind: 'http', port: 7231, path: '/health' },
+    uninstall: {
+      mode: 'recorded_targets_and_markers',
+      generatedFiles: ['assetcutter_mari_bridge.py'],
+    },
+    ui: {
+      tags: ['Texture', 'Lookdev', 'Python'],
+      description: 'One-click Python script bridge using a local HTTP probe.',
+      actions: ['One-click install', 'Probe connection', 'Choose Scripts folder'],
+      restartHint: '在 Mari 中运行安装的脚本后再探测连接。',
+      priority: 71,
+    },
+  },
+  {
+    id: 'krita',
+    name: 'Krita',
+    category: 'paint',
+    defaultPort: 7221,
+    connectorLabel: 'Python plugin / local HTTP',
+    installMode: 'one_click',
+    status: 'ready',
+    detection: [
+      { kind: 'env_path', env: 'KRITA_PYKrita_DIR' },
+      { kind: 'known_user_dir', paths: ['%APPDATA%/krita/pykrita', '~/.local/share/krita/pykrita', '~/Library/Application Support/krita/pykrita'] },
+      { kind: 'manual_target' },
+    ],
+    manualTarget: {
+      accepts: ['plugin_dir', 'script_dir'],
+      resolver: 'normalizeKritaPykritaTarget',
+      pickerTitle: '选择 Krita pykrita 目录',
+    },
+    bridgeTemplate: {
+      id: 'python_http_startup',
+      entryFile: 'assetcutter_krita_bridge/assetcutter_krita_bridge.py',
+    },
+    probe: { kind: 'http', port: 7221, path: '/health' },
+    uninstall: {
+      mode: 'recorded_targets_and_markers',
+      generatedFiles: ['assetcutter_krita_bridge.desktop', 'assetcutter_krita_bridge/assetcutter_krita_bridge.py', 'assetcutter_krita_bridge/__init__.py'],
+    },
+    ui: {
+      tags: ['Paint', 'Python', 'Open Source'],
+      description: 'One-click Python plugin bridge using a local HTTP probe.',
+      actions: ['One-click install', 'Probe connection', 'Choose pykrita folder'],
+      restartHint: '重启 Krita 并启用插件后再探测连接。',
+      priority: 72,
+    },
+  },
+  {
+    id: 'gimp',
+    name: 'GIMP',
+    category: 'paint',
+    defaultPort: 7251,
+    connectorLabel: 'Python-Fu plugin / local HTTP',
+    installMode: 'one_click',
+    status: 'ready',
+    detection: [
+      { kind: 'env_path', env: 'GIMP_PLUGINS_DIR' },
+      { kind: 'known_user_dir', paths: ['%APPDATA%/GIMP/*/plug-ins', '~/.config/GIMP/*/plug-ins', '~/Library/Application Support/GIMP/*/plug-ins'] },
+      { kind: 'manual_target' },
+    ],
+    manualTarget: {
+      accepts: ['plugin_dir', 'script_dir'],
+      resolver: 'normalizeGimpPluginsTarget',
+      pickerTitle: '选择 GIMP plug-ins 目录',
+    },
+    bridgeTemplate: {
+      id: 'python_http_startup',
+      entryFile: 'assetcutter_gimp_bridge.py',
+    },
+    probe: { kind: 'http', port: 7251, path: '/health' },
+    uninstall: {
+      mode: 'recorded_targets_and_markers',
+      generatedFiles: ['assetcutter_gimp_bridge.py'],
+    },
+    ui: {
+      tags: ['Image', 'Python-Fu', 'Open Source'],
+      description: 'One-click Python-Fu plugin bridge using a local HTTP probe.',
+      actions: ['One-click install', 'Probe connection', 'Choose plug-ins folder'],
+      restartHint: '重启 GIMP 并运行 AssetCutter Bridge 插件后再探测连接。',
+      priority: 73,
+    },
+  },
+  {
+    id: 'rhino',
+    name: 'Rhino',
+    category: '3d',
+    defaultPort: 7141,
+    connectorLabel: 'Rhino Python / local HTTP',
+    installMode: 'one_click',
+    status: 'ready',
+    detection: [
+      { kind: 'env_path', env: 'RHINO_SCRIPTS_DIR' },
+      { kind: 'known_user_dir', paths: ['~/Documents/Rhino/Scripts', '%APPDATA%/McNeel/Rhinoceros/*/scripts', '~/Library/Application Support/McNeel/Rhinoceros'] },
+      { kind: 'manual_target' },
+    ],
+    manualTarget: {
+      accepts: ['script_dir'],
+      resolver: 'normalizeRhinoScriptsTarget',
+      pickerTitle: '选择 Rhino scripts 目录',
+    },
+    bridgeTemplate: {
+      id: 'python_http_startup',
+      entryFile: 'assetcutter_rhino_bridge.py',
+    },
+    probe: { kind: 'http', port: 7141, path: '/health' },
+    uninstall: {
+      mode: 'recorded_targets_and_markers',
+      generatedFiles: ['assetcutter_rhino_bridge.py'],
+    },
+    ui: {
+      tags: ['DCC', 'NURBS', 'Python'],
+      description: 'One-click Rhino Python script bridge using a local HTTP probe.',
+      actions: ['One-click install', 'Probe connection', 'Choose scripts folder'],
+      restartHint: '在 Rhino 中运行安装的 Python 脚本后再探测连接。',
+      priority: 75,
+    },
+  },
+  {
+    id: 'sketchup',
+    name: 'SketchUp',
+    category: '3d',
+    defaultPort: 7151,
+    connectorLabel: 'Ruby plugin / local HTTP',
+    installMode: 'one_click',
+    status: 'ready',
+    detection: [
+      { kind: 'env_path', env: 'SKETCHUP_PLUGINS_DIR' },
+      { kind: 'known_user_dir', paths: ['%APPDATA%/SketchUp/*/SketchUp/Plugins', '~/Library/Application Support/SketchUp/*/SketchUp/Plugins'] },
+      { kind: 'manual_target' },
+    ],
+    manualTarget: {
+      accepts: ['plugin_dir'],
+      resolver: 'normalizeSketchUpPluginsTarget',
+      pickerTitle: '选择 SketchUp Plugins 目录',
+    },
+    bridgeTemplate: {
+      id: 'python_http_startup',
+      entryFile: 'assetcutter_sketchup_bridge.rb',
+    },
+    probe: { kind: 'http', port: 7151, path: '/health' },
+    uninstall: {
+      mode: 'recorded_targets_and_markers',
+      generatedFiles: ['assetcutter_sketchup_bridge.rb'],
+    },
+    ui: {
+      tags: ['DCC', 'Architecture', 'Ruby'],
+      description: 'One-click Ruby plugin bridge using a local HTTP probe.',
+      actions: ['One-click install', 'Probe connection', 'Choose Plugins folder'],
+      restartHint: '重启 SketchUp 或重新加载插件后再探测连接。',
+      priority: 76,
+    },
+  },
+  {
+    id: 'marmoset-toolbag',
+    name: 'Marmoset Toolbag',
+    category: '3d',
+    defaultPort: 7211,
+    connectorLabel: 'Python script / local HTTP',
+    installMode: 'one_click',
+    status: 'ready',
+    detection: [
+      { kind: 'env_path', env: 'MARMOSET_TOOLBAG_SCRIPTS_DIR' },
+      { kind: 'known_user_dir', paths: ['~/Documents/Marmoset Toolbag/scripts', '~/Documents/Marmoset Toolbag/plugins', '%APPDATA%/Marmoset Toolbag/scripts'] },
+      { kind: 'manual_target' },
+    ],
+    manualTarget: {
+      accepts: ['script_dir', 'plugin_dir'],
+      resolver: 'normalizeMarmosetToolbagScriptsTarget',
+      pickerTitle: '选择 Marmoset Toolbag scripts 或 plugins 目录',
+    },
+    bridgeTemplate: {
+      id: 'python_http_startup',
+      entryFile: 'assetcutter_marmoset_toolbag_bridge.py',
+    },
+    probe: { kind: 'http', port: 7211, path: '/health' },
+    uninstall: {
+      mode: 'recorded_targets_and_markers',
+      generatedFiles: ['assetcutter_marmoset_toolbag_bridge.py'],
+    },
+    ui: {
+      tags: ['Render', 'Baking', 'Lookdev'],
+      description: 'One-click Python script bridge using a local HTTP probe.',
+      actions: ['One-click install', 'Probe connection', 'Choose scripts/plugins folder'],
+      restartHint: '在 Marmoset Toolbag 中运行安装的脚本后再探测连接。',
+      priority: 89,
+    },
+  },
+  {
+    id: 'natron',
+    name: 'Natron',
+    category: 'compositing',
+    defaultPort: 7261,
+    connectorLabel: 'initGui.py / local HTTP',
+    installMode: 'one_click',
+    status: 'ready',
+    detection: [
+      { kind: 'env_path', env: 'NATRON_PLUGIN_PATH' },
+      { kind: 'known_user_dir', paths: ['%APPDATA%/Natron', '~/AppData/Roaming/Natron', '~/.Natron'] },
+      { kind: 'manual_target' },
+    ],
+    manualTarget: {
+      accepts: ['install_dir', 'user_config_dir', 'script_dir'],
+      resolver: 'normalizeNatronUserDirTarget',
+      pickerTitle: '选择 Natron 用户配置目录',
+    },
+    bridgeTemplate: {
+      id: 'python_http_startup',
+      entryFile: 'assetcutter_natron_bridge.py',
+    },
+    probe: { kind: 'http', port: 7261, path: '/health' },
+    uninstall: {
+      mode: 'recorded_targets_and_markers',
+      markerStart: '# ========== AssetCutter Natron Bridge ==========',
+      generatedFiles: ['assetcutter_natron_bridge.py', 'initGui.py'],
+    },
+    ui: {
+      tags: ['Compositing', 'Python', 'Open Source'],
+      description: 'One-click initGui.py bridge using a local HTTP probe.',
+      actions: ['One-click install', 'Probe connection', 'Choose Natron folder'],
+      restartHint: '重启 Natron 后再探测连接。',
+      priority: 145,
+    },
+  },
+  {
+    id: 'aseprite',
+    name: 'Aseprite',
+    category: 'paint',
+    defaultPort: 7381,
+    connectorLabel: 'Lua script / heartbeat',
+    installMode: 'one_click',
+    status: 'ready',
+    detection: [
+      { kind: 'env_path', env: 'ASEPRITE_SCRIPTS_DIR' },
+      { kind: 'known_user_dir', paths: ['%APPDATA%/Aseprite/scripts', '~/.config/aseprite/scripts', '~/Library/Application Support/Aseprite/scripts'] },
+      { kind: 'manual_target' },
+    ],
+    manualTarget: {
+      accepts: ['script_dir'],
+      resolver: 'normalizeAsepriteScriptsTarget',
+      pickerTitle: '选择 Aseprite scripts 目录',
+    },
+    bridgeTemplate: {
+      id: 'lua_heartbeat',
+      entryFile: 'assetcutter_aseprite_bridge.lua',
+    },
+    probe: { kind: 'heartbeat', port: 7381, heartbeatFile: 'aseprite-heartbeat.json' },
+    uninstall: {
+      mode: 'recorded_targets_and_markers',
+      generatedFiles: ['assetcutter_aseprite_bridge.lua'],
+    },
+    ui: {
+      tags: ['Pixel Art', 'Animation', 'Lua'],
+      description: 'One-click Lua script bridge using a local heartbeat probe.',
+      actions: ['One-click install', 'Probe connection', 'Choose scripts folder'],
+      restartHint: '在 Aseprite 中重新扫描脚本并运行 AssetCutter 脚本后再探测连接。',
+      priority: 74,
+    },
+  },
+  {
+    id: 'moho',
+    name: 'Moho',
+    category: 'paint',
+    defaultPort: 7401,
+    connectorLabel: 'Lua menu script / heartbeat',
+    installMode: 'one_click',
+    status: 'ready',
+    detection: [
+      { kind: 'env_path', env: 'MOHO_SCRIPTS_DIR' },
+      { kind: 'known_user_dir', paths: ['~/Documents/Moho Pro/Scripts/Menu', '%APPDATA%/Smith Micro/Moho*/Scripts/Menu'] },
+      { kind: 'manual_target' },
+    ],
+    manualTarget: {
+      accepts: ['script_dir'],
+      resolver: 'normalizeMohoScriptsTarget',
+      pickerTitle: '选择 Moho Scripts/Menu 目录',
+    },
+    bridgeTemplate: {
+      id: 'lua_heartbeat',
+      entryFile: 'assetcutter_moho_bridge.lua',
+    },
+    probe: { kind: 'heartbeat', port: 7401, heartbeatFile: 'moho-heartbeat.json' },
+    uninstall: {
+      mode: 'recorded_targets_and_markers',
+      generatedFiles: ['assetcutter_moho_bridge.lua'],
+    },
+    ui: {
+      tags: ['2D Animation', 'Rigging', 'Lua'],
+      description: 'One-click Lua menu script bridge using a local heartbeat probe.',
+      actions: ['One-click install', 'Probe connection', 'Choose Scripts/Menu folder'],
+      restartHint: '重启 Moho 并运行 Scripts > AssetCutter Bridge 后再探测连接。',
+      priority: 74.5,
+    },
+  },
+  {
+    id: 'toon-boom-harmony',
+    name: 'Toon Boom Harmony',
+    category: 'paint',
+    defaultPort: 7411,
+    connectorLabel: 'JavaScript script / heartbeat',
+    installMode: 'one_click',
+    status: 'ready',
+    detection: [
+      { kind: 'env_path', env: 'TOON_BOOM_HARMONY_SCRIPTS_DIR' },
+      { kind: 'known_user_dir', paths: ['~/Documents/Toon Boom Harmony/Scripts', '%APPDATA%/Toon Boom Animation/Toon Boom Harmony/Scripts'] },
+      { kind: 'manual_target' },
+    ],
+    manualTarget: {
+      accepts: ['script_dir'],
+      resolver: 'normalizeToonBoomHarmonyScriptsTarget',
+      pickerTitle: '选择 Toon Boom Harmony scripts 目录',
+    },
+    bridgeTemplate: {
+      id: 'manual_script_dir',
+      entryFile: 'assetcutter_harmony_bridge.js',
+    },
+    probe: { kind: 'heartbeat', port: 7411, heartbeatFile: 'toon-boom-harmony-heartbeat.json' },
+    uninstall: {
+      mode: 'recorded_targets_and_markers',
+      generatedFiles: ['assetcutter_harmony_bridge.js'],
+    },
+    ui: {
+      tags: ['2D Animation', 'Storyboard', 'JavaScript'],
+      description: 'One-click JavaScript bridge using a local heartbeat probe.',
+      actions: ['One-click install', 'Probe connection', 'Choose scripts folder'],
+      restartHint: '在 Harmony Scripts 中添加并运行 AssetCutter 脚本后再探测连接。',
+      priority: 74.7,
+    },
+  },
+  {
+    id: 'opentoonz',
+    name: 'OpenToonz',
+    category: 'paint',
+    defaultPort: 7421,
+    connectorLabel: 'ToonzScript JavaScript / heartbeat',
+    installMode: 'one_click',
+    status: 'ready',
+    detection: [
+      { kind: 'env_path', env: 'OPENTOONZ_SCRIPTS_DIR' },
+      { kind: 'known_user_dir', paths: ['%APPDATA%/OpenToonz/stuff/scripts', '~/.config/OpenToonz/stuff/scripts'] },
+      { kind: 'manual_target' },
+    ],
+    manualTarget: {
+      accepts: ['script_dir'],
+      resolver: 'normalizeOpenToonzScriptsTarget',
+      pickerTitle: '选择 OpenToonz script 目录',
+    },
+    bridgeTemplate: {
+      id: 'manual_script_dir',
+      entryFile: 'assetcutter_opentoonz_bridge.js',
+    },
+    probe: { kind: 'heartbeat', port: 7421, heartbeatFile: 'opentoonz-heartbeat.json' },
+    uninstall: {
+      mode: 'recorded_targets_and_markers',
+      generatedFiles: ['assetcutter_opentoonz_bridge.js'],
+    },
+    ui: {
+      tags: ['2D Animation', 'Open Source', 'JavaScript'],
+      description: 'One-click ToonzScript JavaScript bridge using a local heartbeat probe.',
+      actions: ['One-click install', 'Probe connection', 'Choose script folder'],
+      restartHint: '在 OpenToonz 中运行 AssetCutter 脚本后再探测连接。',
+      priority: 74.8,
+    },
+  },
+  {
+    id: 'cavalry',
+    name: 'Cavalry',
+    category: 'paint',
+    defaultPort: 7431,
+    connectorLabel: 'JavaScript UI Script / heartbeat',
+    installMode: 'one_click',
+    status: 'ready',
+    detection: [
+      { kind: 'env_path', env: 'CAVALRY_SCRIPTS_DIR' },
+      { kind: 'known_user_dir', paths: ['~/Documents/Cavalry/Scripts', '%APPDATA%/Cavalry/Scripts'] },
+      { kind: 'manual_target' },
+    ],
+    manualTarget: {
+      accepts: ['script_dir'],
+      resolver: 'normalizeCavalryScriptsTarget',
+      pickerTitle: '选择 Cavalry Scripts 目录',
+    },
+    bridgeTemplate: {
+      id: 'manual_script_dir',
+      entryFile: 'assetcutter_cavalry_bridge.js',
+    },
+    probe: { kind: 'heartbeat', port: 7431, heartbeatFile: 'cavalry-heartbeat.json' },
+    uninstall: {
+      mode: 'recorded_targets_and_markers',
+      generatedFiles: ['assetcutter_cavalry_bridge.js'],
+    },
+    ui: {
+      tags: ['2D Animation', 'Motion Design', 'JavaScript'],
+      description: 'One-click JavaScript UI Script bridge using a local heartbeat probe.',
+      actions: ['One-click install', 'Probe connection', 'Choose Scripts folder'],
+      restartHint: '在 Cavalry Window > Scripts 中运行 AssetCutter 脚本后再探测连接。',
+      priority: 74.9,
+    },
+  },
+  {
+    id: 'tvpaint',
+    name: 'TVPaint Animation',
+    category: 'paint',
+    defaultPort: 7481,
+    connectorLabel: 'George script / heartbeat',
+    installMode: 'one_click',
+    status: 'ready',
+    detection: [
+      { kind: 'env_path', env: 'TVPAINT_GEORGE_SCRIPTS_DIR' },
+      { kind: 'known_user_dir', paths: ['~/Documents/TVPaint Animation/Scripts', '%APPDATA%/TVPaint Animation/Scripts'] },
+      { kind: 'manual_target' },
+    ],
+    manualTarget: {
+      accepts: ['script_dir'],
+      resolver: 'normalizeTvPaintGeorgeScriptsTarget',
+      pickerTitle: '选择 TVPaint George Scripts 目录',
+    },
+    bridgeTemplate: {
+      id: 'manual_script_dir',
+      entryFile: 'assetcutter_tvpaint_bridge.grg',
+    },
+    probe: { kind: 'heartbeat', port: 7481, heartbeatFile: 'tvpaint-heartbeat.json' },
+    uninstall: {
+      mode: 'recorded_targets_and_markers',
+      generatedFiles: ['assetcutter_tvpaint_bridge.grg'],
+    },
+    ui: {
+      tags: ['2D Animation', 'George', 'Storyboard'],
+      description: 'One-click George script bridge using a local heartbeat probe.',
+      actions: ['One-click install', 'Probe connection', 'Choose George Scripts folder'],
+      restartHint: '在 TVPaint 中运行安装的 George 脚本后再探测连接。',
+      priority: 74.95,
+    },
+  },
+  {
+    id: 'inkscape',
+    name: 'Inkscape',
+    category: 'post',
+    defaultPort: 7241,
+    connectorLabel: 'Python extension / local HTTP',
+    installMode: 'one_click',
+    status: 'ready',
+    detection: [
+      { kind: 'env_path', env: 'INKSCAPE_EXTENSIONS_DIR' },
+      { kind: 'known_user_dir', paths: ['%APPDATA%/inkscape/extensions', '~/.config/inkscape/extensions'] },
+      { kind: 'manual_target' },
+    ],
+    manualTarget: {
+      accepts: ['plugin_dir', 'script_dir'],
+      resolver: 'normalizeInkscapeExtensionsTarget',
+      pickerTitle: '选择 Inkscape extensions 目录',
+    },
+    bridgeTemplate: {
+      id: 'python_http_startup',
+      entryFile: 'assetcutter_inkscape_bridge.py',
+    },
+    probe: { kind: 'http', port: 7241, path: '/health' },
+    uninstall: {
+      mode: 'recorded_targets_and_markers',
+      generatedFiles: ['assetcutter_inkscape_bridge.inx', 'assetcutter_inkscape_bridge.py'],
+    },
+    ui: {
+      tags: ['Vector', 'Extension', 'Open Source'],
+      description: 'One-click Python extension bridge using a local HTTP probe.',
+      actions: ['One-click install', 'Probe connection', 'Choose extensions folder'],
+      restartHint: '重启 Inkscape 并运行 Extensions > AssetCutter > AssetCutter Bridge 后再探测连接。',
+      priority: 106,
+    },
+  },
+  {
+    id: 'vegas-pro',
+    name: 'VEGAS Pro',
+    category: 'post',
+    defaultPort: 7471,
+    connectorLabel: 'C# Script Menu / heartbeat',
+    installMode: 'one_click',
+    status: 'ready',
+    detection: [
+      { kind: 'env_path', env: 'VEGAS_PRO_SCRIPT_MENU_DIR' },
+      { kind: 'known_user_dir', paths: ['~/Documents/VEGAS Script Menu', '%APPDATA%/VEGAS Pro/Script Menu'] },
+      { kind: 'manual_target' },
+    ],
+    manualTarget: {
+      accepts: ['script_dir'],
+      resolver: 'normalizeVegasProScriptMenuTarget',
+      pickerTitle: '选择 VEGAS Pro Script Menu 目录',
+    },
+    bridgeTemplate: {
+      id: 'manual_script_dir',
+      entryFile: 'AssetCutterVegasBridge.cs',
+    },
+    probe: { kind: 'heartbeat', port: 7471, heartbeatFile: 'vegas-pro-heartbeat.json' },
+    uninstall: {
+      mode: 'recorded_targets_and_markers',
+      generatedFiles: ['AssetCutterVegasBridge.cs'],
+    },
+    ui: {
+      tags: ['Video', 'Editing', 'C#'],
+      description: 'One-click C# Script Menu bridge using a local heartbeat probe.',
+      actions: ['One-click install', 'Probe connection', 'Choose Script Menu folder'],
+      restartHint: '在 VEGAS Tools > Scripting 中运行 AssetCutterVegasBridge 后再探测连接。',
+      priority: 156,
+    },
+  },
+  {
+    id: 'synfig',
+    name: 'Synfig Studio',
+    category: 'paint',
+    defaultPort: 7491,
+    connectorLabel: 'Python plug-in / heartbeat',
+    installMode: 'one_click',
+    status: 'ready',
+    detection: [
+      { kind: 'env_path', env: 'SYNFIG_PLUGINS_DIR' },
+      { kind: 'known_user_dir', paths: ['%APPDATA%/synfig/plugins', '~/.config/synfig/plugins'] },
+      { kind: 'manual_target' },
+    ],
+    manualTarget: {
+      accepts: ['plugin_dir', 'script_dir'],
+      resolver: 'normalizeSynfigPluginsTarget',
+      pickerTitle: '选择 Synfig plugins 目录',
+    },
+    bridgeTemplate: {
+      id: 'manual_script_dir',
+      entryFile: 'assetcutter_synfig_bridge/assetcutter_synfig_bridge.py',
+    },
+    probe: { kind: 'heartbeat', port: 7491, heartbeatFile: 'synfig-heartbeat.json' },
+    uninstall: {
+      mode: 'recorded_targets_and_markers',
+      generatedFiles: ['assetcutter_synfig_bridge/plugin.xml', 'assetcutter_synfig_bridge/assetcutter_synfig_bridge.py'],
+    },
+    ui: {
+      tags: ['2D Animation', 'Open Source', 'Python'],
+      description: 'One-click Python plug-in bridge using a local heartbeat probe.',
+      actions: ['One-click install', 'Probe connection', 'Choose plugins folder'],
+      restartHint: '在 Synfig Plug-ins 中运行 AssetCutter Bridge 后再探测连接。',
+      priority: 157,
+    },
+  },
+  {
+    id: 'maya',
+    name: 'Maya',
+    category: '3d',
+    defaultPort: 7001,
+    connectorLabel: 'Command Port / Python',
+    installMode: 'one_click',
+    status: 'ready',
+    detection: [
+      { kind: 'env_path', env: 'MAYA_APP_DIR' },
+      { kind: 'known_user_dir', paths: ['~/Documents/maya/*/scripts', '%USERPROFILE%/Documents/maya/*/scripts'] },
+      { kind: 'manual_target' },
+    ],
+    manualTarget: {
+      accepts: ['install_dir', 'user_config_dir', 'script_dir'],
+      resolver: 'normalizeMayaScriptsTarget',
+      pickerTitle: '选择 Maya scripts 目录',
+    },
+    bridgeTemplate: {
+      id: 'maya_command_port',
+      entryFile: 'userSetup.py',
+    },
+    probe: { kind: 'command_port', port: 7001 },
+    uninstall: {
+      mode: 'recorded_targets_and_markers',
+      markerStart: '# ========== AssetCutter Maya Bridge (commandPort) ==========',
+      generatedFiles: ['script_hub_bridge.py', 'assetcutter_maya_cmdport_boot.py', 'userSetup.py', 'userSetup.mel'],
+    },
+    ui: {
+      tags: ['DCC', 'Python', 'Command Port'],
+      description: 'One-click userSetup bridge using Maya Command Port and Python.',
+      actions: ['One-click install', 'Probe connection', 'Choose scripts folder'],
+      restartHint: '重启 Maya 后确认 Command Port 已打开，再探测连接。',
+      priority: 10,
+    },
+  },
+  {
+    id: 'marvelous-designer',
+    name: 'Marvelous Designer',
+    category: '3d',
+    defaultPort: 7441,
+    connectorLabel: 'Python Script / heartbeat',
+    installMode: 'one_click',
+    status: 'ready',
+    detection: [
+      { kind: 'env_path', env: 'MARVELOUS_DESIGNER_SCRIPTS_DIR' },
+      { kind: 'known_user_dir', paths: ['~/Documents/Marvelous Designer/Scripts', '~/Documents/MarvelousDesigner/Scripts'] },
+      { kind: 'manual_target' },
+    ],
+    manualTarget: {
+      accepts: ['script_dir'],
+      resolver: 'normalizeCloMarvelousScriptsTarget',
+      pickerTitle: '选择 Marvelous Designer Scripts 目录',
+    },
+    bridgeTemplate: {
+      id: 'manual_script_dir',
+      entryFile: 'assetcutter_marvelous_designer_bridge.py',
+    },
+    probe: { kind: 'heartbeat', port: 7441, heartbeatFile: 'marvelous-designer-heartbeat.json' },
+    uninstall: {
+      mode: 'recorded_targets_and_markers',
+      generatedFiles: ['assetcutter_marvelous_designer_bridge.py'],
+    },
+    ui: {
+      tags: ['Cloth', 'Garment', 'Python'],
+      description: 'One-click Python Script bridge using a local heartbeat probe.',
+      actions: ['One-click install', 'Probe connection', 'Choose Scripts folder'],
+      restartHint: '在 Marvelous Designer 中运行 AssetCutter 脚本后再探测连接。',
+      priority: 77,
+    },
+  },
+  {
+    id: 'clo',
+    name: 'CLO',
+    category: '3d',
+    defaultPort: 7451,
+    connectorLabel: 'Python Script / heartbeat',
+    installMode: 'one_click',
+    status: 'ready',
+    detection: [
+      { kind: 'env_path', env: 'CLO_SCRIPTS_DIR' },
+      { kind: 'known_user_dir', paths: ['~/Documents/CLO/Scripts', '~/Documents/CLO3D/Scripts'] },
+      { kind: 'manual_target' },
+    ],
+    manualTarget: {
+      accepts: ['script_dir'],
+      resolver: 'normalizeCloMarvelousScriptsTarget',
+      pickerTitle: '选择 CLO Scripts 目录',
+    },
+    bridgeTemplate: {
+      id: 'manual_script_dir',
+      entryFile: 'assetcutter_clo_bridge.py',
+    },
+    probe: { kind: 'heartbeat', port: 7451, heartbeatFile: 'clo-heartbeat.json' },
+    uninstall: {
+      mode: 'recorded_targets_and_markers',
+      generatedFiles: ['assetcutter_clo_bridge.py'],
+    },
+    ui: {
+      tags: ['Cloth', 'Fashion', 'Python'],
+      description: 'One-click Python Script bridge using a local heartbeat probe.',
+      actions: ['One-click install', 'Probe connection', 'Choose Scripts folder'],
+      restartHint: '在 CLO 中运行 AssetCutter 脚本后再探测连接。',
+      priority: 78,
+    },
+  },
+  {
+    id: 'rizomuv',
+    name: 'RizomUV',
+    category: '3d',
+    defaultPort: 7461,
+    connectorLabel: 'Lua script / heartbeat',
+    installMode: 'one_click',
+    status: 'ready',
+    detection: [
+      { kind: 'env_path', env: 'RIZOMUV_SCRIPTS_DIR' },
+      { kind: 'known_user_dir', paths: ['~/Documents/RizomUV/Scripts', '%APPDATA%/RizomUV/Scripts'] },
+      { kind: 'manual_target' },
+    ],
+    manualTarget: {
+      accepts: ['script_dir'],
+      resolver: 'normalizeRizomUvScriptsTarget',
+      pickerTitle: '选择 RizomUV Scripts 目录',
+    },
+    bridgeTemplate: {
+      id: 'lua_heartbeat',
+      entryFile: 'assetcutter_rizomuv_bridge.lua',
+    },
+    probe: { kind: 'heartbeat', port: 7461, heartbeatFile: 'rizomuv-heartbeat.json' },
+    uninstall: {
+      mode: 'recorded_targets_and_markers',
+      generatedFiles: ['assetcutter_rizomuv_bridge.lua'],
+    },
+    ui: {
+      tags: ['UV', 'Unwrap', 'Lua'],
+      description: 'One-click Lua script bridge using a local heartbeat probe.',
+      actions: ['One-click install', 'Probe connection', 'Choose Scripts folder'],
+      restartHint: '在 RizomUV 中运行 AssetCutter Lua 脚本后再探测连接。',
+      priority: 79,
+    },
+  },
+  {
+    id: 'daz-studio',
+    name: 'Daz Studio',
+    category: '3d',
+    defaultPort: 7501,
+    connectorLabel: 'DzScript / heartbeat',
+    installMode: 'one_click',
+    status: 'ready',
+    detection: [
+      { kind: 'env_path', env: 'DAZ_STUDIO_SCRIPTS_DIR' },
+      { kind: 'known_user_dir', paths: ['~/Documents/DAZ 3D/Studio/My Scripts', '~/Documents/DAZ 3D/Studio4/scripts'] },
+      { kind: 'manual_target' },
+    ],
+    manualTarget: {
+      accepts: ['script_dir'],
+      resolver: 'normalizeDazStudioScriptsTarget',
+      pickerTitle: '选择 Daz Studio Scripts 目录',
+    },
+    bridgeTemplate: {
+      id: 'manual_script_dir',
+      entryFile: 'assetcutter_daz_studio_bridge.dsa',
+    },
+    probe: { kind: 'heartbeat', port: 7501, heartbeatFile: 'daz-studio-heartbeat.json' },
+    uninstall: {
+      mode: 'recorded_targets_and_markers',
+      generatedFiles: ['assetcutter_daz_studio_bridge.dsa'],
+    },
+    ui: {
+      tags: ['Character', 'Render', 'DzScript'],
+      description: 'One-click DzScript bridge using a local heartbeat probe.',
+      actions: ['One-click install', 'Probe connection', 'Choose Scripts folder'],
+      restartHint: '在 Daz Studio 中运行 AssetCutter 脚本后再探测连接。',
+      priority: 79.2,
+    },
+  },
+  {
+    id: 'poser',
+    name: 'Poser',
+    category: '3d',
+    defaultPort: 7511,
+    connectorLabel: 'Python ScriptsMenu / heartbeat',
+    installMode: 'one_click',
+    status: 'ready',
+    detection: [
+      { kind: 'env_path', env: 'POSER_SCRIPTS_DIR' },
+      { kind: 'known_user_dir', paths: ['~/Documents/Poser*/ScriptsMenu', '%APPDATA%/Poser*/ScriptsMenu'] },
+      { kind: 'manual_target' },
+    ],
+    manualTarget: {
+      accepts: ['script_dir'],
+      resolver: 'normalizePoserScriptsMenuTarget',
+      pickerTitle: '选择 Poser ScriptsMenu 目录',
+    },
+    bridgeTemplate: {
+      id: 'manual_script_dir',
+      entryFile: 'assetcutter_poser_bridge.py',
+    },
+    probe: { kind: 'heartbeat', port: 7511, heartbeatFile: 'poser-heartbeat.json' },
+    uninstall: {
+      mode: 'recorded_targets_and_markers',
+      generatedFiles: ['assetcutter_poser_bridge.py'],
+    },
+    ui: {
+      tags: ['Character', 'Animation', 'Python'],
+      description: 'One-click Python ScriptsMenu bridge using a local heartbeat probe.',
+      actions: ['One-click install', 'Probe connection', 'Choose ScriptsMenu folder'],
+      restartHint: '从 Poser Scripts 菜单运行 AssetCutter Python 脚本后再探测连接。',
+      priority: 79.4,
+    },
+  },
+  {
+    id: 'iclone',
+    name: 'iClone',
+    category: '3d',
+    defaultPort: 7521,
+    connectorLabel: 'OpenPlugin Python / heartbeat',
+    installMode: 'one_click',
+    status: 'ready',
+    detection: [
+      { kind: 'env_path', env: 'ICLONE_OPENPLUGIN_DIR' },
+      { kind: 'known_user_dir', paths: ['C:/Program Files/Reallusion/iClone*/Bin64/OpenPlugin/AssetCutterBridge'] },
+      { kind: 'manual_target' },
+    ],
+    manualTarget: {
+      accepts: ['plugin_dir', 'script_dir'],
+      resolver: 'normalizeReallusionOpenPluginTarget',
+      pickerTitle: '选择 iClone OpenPlugin 目录',
+    },
+    bridgeTemplate: {
+      id: 'manual_script_dir',
+      entryFile: 'AssetCutterBridge/main.py',
+    },
+    probe: { kind: 'heartbeat', port: 7521, heartbeatFile: 'iclone-heartbeat.json' },
+    uninstall: {
+      mode: 'recorded_targets_and_markers',
+      generatedFiles: ['AssetCutterBridge/main.py'],
+    },
+    ui: {
+      tags: ['Character', 'Animation', 'Python'],
+      description: 'One-click OpenPlugin Python bridge using a local heartbeat probe.',
+      actions: ['One-click install', 'Probe connection', 'Choose OpenPlugin folder'],
+      restartHint: '在 iClone 插件菜单运行 AssetCutterBridge 后再探测连接。',
+      priority: 79.6,
+    },
+  },
+  {
+    id: 'character-creator',
+    name: 'Character Creator',
+    category: '3d',
+    defaultPort: 7531,
+    connectorLabel: 'OpenPlugin Python / heartbeat',
+    installMode: 'one_click',
+    status: 'ready',
+    detection: [
+      { kind: 'env_path', env: 'CHARACTER_CREATOR_OPENPLUGIN_DIR' },
+      { kind: 'known_user_dir', paths: ['C:/Program Files/Reallusion/Character Creator*/Bin64/OpenPlugin/AssetCutterBridge'] },
+      { kind: 'manual_target' },
+    ],
+    manualTarget: {
+      accepts: ['plugin_dir', 'script_dir'],
+      resolver: 'normalizeReallusionOpenPluginTarget',
+      pickerTitle: '选择 Character Creator OpenPlugin 目录',
+    },
+    bridgeTemplate: {
+      id: 'manual_script_dir',
+      entryFile: 'AssetCutterBridge/main.py',
+    },
+    probe: { kind: 'heartbeat', port: 7531, heartbeatFile: 'character-creator-heartbeat.json' },
+    uninstall: {
+      mode: 'recorded_targets_and_markers',
+      generatedFiles: ['AssetCutterBridge/main.py'],
+    },
+    ui: {
+      tags: ['Character', 'Rigging', 'Python'],
+      description: 'One-click OpenPlugin Python bridge using a local heartbeat probe.',
+      actions: ['One-click install', 'Probe connection', 'Choose OpenPlugin folder'],
+      restartHint: '在 Character Creator 插件菜单运行 AssetCutterBridge 后再探测连接。',
+      priority: 79.8,
+    },
+  },
+  {
+    id: 'metashape',
+    name: 'Metashape',
+    category: '3d',
+    defaultPort: 7541,
+    connectorLabel: 'Autorun Python scripts / heartbeat',
+    installMode: 'one_click',
+    status: 'ready',
+    detection: [
+      { kind: 'env_path', env: 'METASHAPE_SCRIPTS_DIR' },
+      { kind: 'known_user_dir', paths: ['%APPDATA%/Agisoft/Metashape Pro/scripts', '~/Documents/Metashape/scripts'] },
+      { kind: 'manual_target' },
+    ],
+    manualTarget: {
+      accepts: ['script_dir'],
+      resolver: 'normalizeMetashapeScriptsTarget',
+      pickerTitle: '选择 Metashape scripts 目录',
+    },
+    bridgeTemplate: {
+      id: 'manual_script_dir',
+      entryFile: 'assetcutter_metashape_bridge.py',
+    },
+    probe: { kind: 'heartbeat', port: 7541, heartbeatFile: 'metashape-heartbeat.json' },
+    uninstall: {
+      mode: 'recorded_targets_and_markers',
+      generatedFiles: ['assetcutter_metashape_bridge.py'],
+    },
+    ui: {
+      tags: ['Photogrammetry', 'Python', 'Scan'],
+      description: 'One-click autorun Python bridge using a local heartbeat probe.',
+      actions: ['One-click install', 'Probe connection', 'Choose scripts folder'],
+      restartHint: '重启 Metashape 或运行 AssetCutter/Refresh Bridge 后再探测连接。',
+      priority: 79.85,
+    },
+  },
+  {
+    id: 'davinci-resolve',
+    name: 'DaVinci Resolve',
+    category: 'post',
+    defaultPort: 7071,
+    connectorLabel: 'Resolve script / local HTTP',
+    installMode: 'one_click',
+    status: 'ready',
+    detection: [
+      { kind: 'env_path', env: 'DAVINCI_RESOLVE_SCRIPTS_DIR' },
+      { kind: 'known_user_dir', paths: ['%APPDATA%/Blackmagic Design/DaVinci Resolve/Fusion/Scripts/Comp', '~/Library/Application Support/Blackmagic Design/DaVinci Resolve/Fusion/Scripts/Comp'] },
+      { kind: 'manual_target' },
+    ],
+    manualTarget: {
+      accepts: ['script_dir'],
+      resolver: 'normalizeDavinciResolveScriptsTarget',
+      pickerTitle: '选择 DaVinci Resolve Scripts 目录',
+    },
+    bridgeTemplate: {
+      id: 'python_http_startup',
+      entryFile: 'assetcutter_resolve_bridge.py',
+    },
+    probe: { kind: 'http', port: 7071, path: '/health' },
+    uninstall: {
+      mode: 'recorded_targets_and_markers',
+      generatedFiles: ['assetcutter_resolve_bridge.py'],
+    },
+    ui: {
+      tags: ['Video', 'Color', 'Render'],
+      description: 'One-click Resolve/Fusion Python script bridge using a local HTTP probe.',
+      actions: ['One-click install', 'Probe connection', 'Choose Scripts folder'],
+      restartHint: '在 DaVinci Resolve/Fusion 中运行 AssetCutter 脚本后再探测连接。',
+      priority: 130,
+    },
+  },
+  {
+    id: 'fusion-studio',
+    name: 'Fusion Studio',
+    category: 'compositing',
+    defaultPort: 7391,
+    connectorLabel: 'Fusion script / local HTTP',
+    installMode: 'one_click',
+    status: 'ready',
+    detection: [
+      { kind: 'env_path', env: 'FUSION_STUDIO_SCRIPTS_DIR' },
+      { kind: 'known_user_dir', paths: ['%APPDATA%/Blackmagic Design/Fusion/Scripts/Comp', '~/Library/Application Support/Blackmagic Design/Fusion/Scripts/Comp'] },
+      { kind: 'manual_target' },
+    ],
+    manualTarget: {
+      accepts: ['script_dir'],
+      resolver: 'normalizeFusionStudioScriptsTarget',
+      pickerTitle: '选择 Fusion Studio Scripts 目录',
+    },
+    bridgeTemplate: {
+      id: 'python_http_startup',
+      entryFile: 'assetcutter_fusion_studio_bridge.py',
+    },
+    probe: { kind: 'http', port: 7391, path: '/health' },
+    uninstall: {
+      mode: 'recorded_targets_and_markers',
+      generatedFiles: ['assetcutter_fusion_studio_bridge.py'],
+    },
+    ui: {
+      tags: ['Compositing', 'VFX', 'Python'],
+      description: 'One-click Fusion Python script bridge using a local HTTP probe.',
+      actions: ['One-click install', 'Probe connection', 'Choose Scripts folder'],
+      restartHint: '在 Fusion Studio 中运行 AssetCutter 脚本后再探测连接。',
+      priority: 135,
+    },
+  },
+  {
+    id: 'nuke-studio',
+    name: 'Nuke Studio',
+    category: 'compositing',
+    defaultPort: 7581,
+    connectorLabel: 'Foundry init.py / local HTTP',
+    installMode: 'one_click',
+    status: 'ready',
+    detection: [
+      { kind: 'env_path', env: 'NUKE_PATH' },
+      { kind: 'known_user_dir', paths: ['~/.nuke', '%USERPROFILE%/.nuke'] },
+      { kind: 'manual_target' },
+    ],
+    manualTarget: {
+      accepts: ['user_config_dir', 'script_dir'],
+      resolver: 'normalizeFoundryTimelineUserDirTarget',
+      pickerTitle: '选择 Nuke Studio .nuke 目录',
+    },
+    bridgeTemplate: {
+      id: 'python_http_startup',
+      entryFile: 'assetcutter_nuke_studio_bridge.py',
+    },
+    probe: { kind: 'http', port: 7581, path: '/health' },
+    uninstall: {
+      mode: 'recorded_targets_and_markers',
+      markerStart: '# ========== AssetCutter Nuke Studio Bridge ==========',
+      generatedFiles: ['assetcutter_nuke_studio_bridge.py', 'init.py'],
+    },
+    ui: {
+      tags: ['Timeline', 'VFX', 'Python'],
+      description: 'One-click Foundry init.py bridge using a local HTTP probe.',
+      actions: ['One-click install', 'Probe connection', 'Choose .nuke folder'],
+      restartHint: '重启 Nuke Studio 后再探测连接。',
+      priority: 141,
+    },
+  },
+  {
+    id: 'hiero',
+    name: 'Hiero',
+    category: 'compositing',
+    defaultPort: 7591,
+    connectorLabel: 'Foundry init.py / local HTTP',
+    installMode: 'one_click',
+    status: 'ready',
+    detection: [
+      { kind: 'env_path', env: 'HIERO_PLUGIN_PATH' },
+      { kind: 'known_user_dir', paths: ['~/.nuke', '%USERPROFILE%/.nuke'] },
+      { kind: 'manual_target' },
+    ],
+    manualTarget: {
+      accepts: ['user_config_dir', 'script_dir'],
+      resolver: 'normalizeFoundryTimelineUserDirTarget',
+      pickerTitle: '选择 Hiero .nuke 目录',
+    },
+    bridgeTemplate: {
+      id: 'python_http_startup',
+      entryFile: 'assetcutter_hiero_bridge.py',
+    },
+    probe: { kind: 'http', port: 7591, path: '/health' },
+    uninstall: {
+      mode: 'recorded_targets_and_markers',
+      markerStart: '# ========== AssetCutter Hiero Bridge ==========',
+      generatedFiles: ['assetcutter_hiero_bridge.py', 'init.py'],
+    },
+    ui: {
+      tags: ['Timeline', 'Review', 'Python'],
+      description: 'One-click Foundry init.py bridge using a local HTTP probe.',
+      actions: ['One-click install', 'Probe connection', 'Choose .nuke folder'],
+      restartHint: '重启 Hiero 后再探测连接。',
+      priority: 142,
+    },
+  },
+];
+
+export function hostBridgeDefinitionToCatalogEntry(def: HostBridgeDefinition): HostBridgeCatalogLike {
+  return {
+    id: def.id,
+    name: def.name,
+    description: def.ui.description,
+    category: def.category,
+    connector: def.connectorLabel,
+    installMode: def.installMode,
+    status: def.status,
+    tags: [...def.ui.tags],
+    actions: [...def.ui.actions],
+    priority: def.ui.priority,
+  };
+}
+
+export function applyHostBridgeDefinitionsToCatalog<T extends HostBridgeCatalogLike>(catalog: T[]): T[] {
+  const byId = new Map(HOST_BRIDGE_DEFINITIONS.map((def) => [def.id, def]));
+  return catalog.map((entry) => {
+    const def = byId.get(entry.id);
+    return def ? ({ ...entry, ...hostBridgeDefinitionToCatalogEntry(def) } as T) : entry;
+  });
+}

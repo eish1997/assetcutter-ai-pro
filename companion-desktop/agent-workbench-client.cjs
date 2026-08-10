@@ -17,6 +17,47 @@ const MAX_CREATE_IMAGE_FILE_BYTES = 100 * 1024 * 1024;
 /** Above this, avoid stuffing base64 through BrowserView executeJavaScript. */
 const INLINE_BRIDGE_MAX_IMAGE_BYTES = 3 * 1024 * 1024;
 
+function classifyTextAssetMisroute(args) {
+  const raw = args && typeof args === 'object' ? args : {};
+  const text = String(raw.text || '').trim();
+  const name = String(raw.name || '').trim();
+  const head = `${name}\n${text.slice(0, 5000)}`;
+  const lower = head.toLowerCase();
+  const chineseCreationWords =
+    '(?:\\u521b\\u5efa|\\u65b0\\u5efa|\\u751f\\u6210|\\u5f00\\u53d1|\\u5236\\u4f5c|\\u505a\\u4e00\\u4e2a|\\u5199\\u4e00\\u4e2a|\\u642d\\u5efa|\\u6253\\u5305|\\u5b89\\u88c5|\\u4e0a\\u67b6)';
+  const chineseToolWords =
+    '(?:\\u63d2\\u4ef6|\\u5c0f\\u5de5\\u5177|\\u5de5\\u5177|\\u5de5\\u5177\\u5305|\\u811a\\u672c\\u5de5\\u5177|\\u811a\\u672c|\\u6269\\u5c55)';
+  const realChineseCreationDirective = new RegExp(
+    `${chineseCreationWords}[\\s\\S]{0,40}${chineseToolWords}|${chineseToolWords}[\\s\\S]{0,40}${chineseCreationWords}`,
+    'i',
+  ).test(head);
+  const realChineseToolIntent = new RegExp(
+    `${chineseToolWords}|\\u521b\\u5efa\\u5de5\\u5177|\\u751f\\u6210\\u5de5\\u5177|\\u5f00\\u53d1\\u5de5\\u5177|\\u6253\\u5305\\u5de5\\u5177|maya\\s*(?:\\u63d2\\u4ef6|python|\\u811a\\u672c)`,
+    'i',
+  ).test(head);
+  const hasCreationDirective =
+    realChineseCreationDirective ||
+    /(创建|新建|生成|开发|制作|做一个|写一个|搭建|打包|安装|上架).{0,40}(插件|小工具|工具|工具包|脚本工具|脚本|扩展|utility|plugin|tool|toolkit|extension|script)/i.test(head) ||
+    /(插件|小工具|工具|工具包|脚本工具|脚本|扩展|utility|plugin|tool|toolkit|extension|script).{0,40}(创建|新建|生成|开发|制作|打包|安装|上架)/i.test(head) ||
+    /\b(create|build|make|scaffold|author|package|develop|install)\b.{0,60}\b(tool|plugin|script|extension|toolkit|utility)\b/i.test(lower);
+  const hasToolIntent =
+    realChineseToolIntent ||
+    /(插件|小工具|工具包|脚本工具|脚本资产|工具架|创建工具|生成工具|开发工具|打包工具|安装方式|maya插件|maya python)/i.test(head) ||
+    /\b(create|build|make|scaffold|author|package)\b.{0,40}\b(tool|plugin|script|extension|toolkit)\b/i.test(head) ||
+    /\b(maya|blender|photoshop|houdini|after effects|ae)\b.{0,40}\b(tool|plugin|script|extension|toolkit)\b/i.test(lower);
+  const hasCodePayload =
+    /```/.test(head) ||
+    /\b(import\s+maya\.cmds|maya\.cmds|cmds\.|def\s+[a-zA-Z_]\w*\s*\(|class\s+[a-zA-Z_]\w*|tool\.json|panel\.json|scriptManifest|\.py\b|\.mel\b|\.jsx\b)/.test(head);
+  if (!hasCreationDirective && (!hasToolIntent || !hasCodePayload)) return null;
+  return {
+    error: 'tool_creation_requires_shell_tool',
+    detectedIntent: 'tool_or_plugin_creation',
+    recommendedTools: ['ac.capability.create_draft', 'ac.shell_tool.authored_upsert', 'ac.shell_tool.export'],
+    nextStep:
+      'Do not save plugin/tool code as a Workbench text asset. Use ac.capability.create_draft to create the local tool capability, then ac.shell_tool.authored_upsert to write tool.json/panel.json/scripts. Export with ac.shell_tool.export if the user needs a ZIP.',
+  };
+}
+
 function mimeFromImageExt(ext) {
   const e = String(ext || '')
     .replace(/^\./, '')
@@ -689,6 +730,24 @@ function createAgentWorkbenchClient(deps) {
         error: { code: 'AGENT_TOOL_INVALID_ARGS', message: 'missing text' },
       };
     }
+    const misroute = classifyTextAssetMisroute(args);
+    if (misroute) {
+      const structured = {
+        action: 'createTextAsset',
+        ok: false,
+        rejected: true,
+        ...misroute,
+      };
+      return {
+        ok: false,
+        content: JSON.stringify(structured, null, 2),
+        structured,
+        error: {
+          code: 'AGENT_TOOL_MISROUTED_TO_TEXT_ASSET',
+          message: 'tool/plugin creation must use shell tool authoring, not workbench text assets',
+        },
+      };
+    }
     await deps.navigateShell('workbench');
     const body = {
       text,
@@ -1037,4 +1096,5 @@ module.exports = {
   TEAM_WEB_PARTITION,
   MAX_CREATE_IMAGE_FILE_BYTES,
   INLINE_BRIDGE_MAX_IMAGE_BYTES,
+  classifyTextAssetMisroute,
 };

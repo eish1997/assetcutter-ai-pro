@@ -3666,8 +3666,7 @@
     .settings-shell {
       height: 100%;
       min-height: 0;
-      display: grid;
-      grid-template-columns: 156px minmax(0, 1fr);
+      display: block;
       background: var(--bg);
     }
     .settings-section-nav {
@@ -3853,52 +3852,141 @@
       text-transform: none;
       color: rgba(228, 228, 231, 0.5);
     }
-    #view-tools { padding: 0; overflow: hidden; }
+    #view-tools,
+    #view-connections { padding: 0; overflow: hidden; }
     .tools-shell {
       height: 100%;
       min-height: 0;
       display: grid;
-      grid-template-columns: 156px minmax(0, 1fr);
       background: var(--bg);
     }
-    .tools-section-nav {
-      min-height: 0;
-      padding: 16px 10px;
-      border-right: 1px solid rgba(255, 255, 255, 0.08);
-      background: rgba(18, 18, 20, 0.72);
-      overflow-y: auto;
-    }
-    .tools-section-nav-title {
-      padding: 0 8px 10px;
-      font-size: 13px;
-      font-weight: 700;
-      color: rgba(228, 228, 231, 0.92);
-    }
-    .tools-section-nav a {
-      display: block;
-      padding: 8px 9px;
-      border-radius: 8px;
-      color: rgba(161, 161, 170, 0.92);
-      text-decoration: none;
-      font-size: 11px;
-      font-weight: 600;
-    }
-    .tools-section-nav a:hover,
-    .tools-section-nav a.active {
-      background: rgba(255, 255, 255, 0.07);
-      color: rgba(244, 244, 245, 0.98);
-    }
-    .tools-section-nav a.active {
-      box-shadow: inset 2px 0 0 #f4f4f5;
-    }
     .tools-content {
+      height: 100%;
       min-height: 0;
       padding: 14px 16px 20px;
       overflow: auto;
     }
     .tools-section-panel[hidden] { display: none !important; }
-    @media (max-width: 980px) {
-      .tools-shell { grid-template-columns: 132px minmax(0, 1fr); }
+    .connections-shell {
+      height: 100%;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      background: var(--bg);
+      overflow: auto;
+      padding: 18px;
+    }
+    .connections-page-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 14px;
+    }
+    .connections-page-header h1 { margin: 0; font-size: 16px; flex: 1; min-width: 0; }
+    .connections-toolbar {
+      display: grid;
+      grid-template-columns: minmax(180px, 1fr) auto;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 12px;
+    }
+    .connections-search {
+      width: 100%;
+      height: 32px;
+      border: 1px solid rgba(148, 163, 184, 0.2);
+      border-radius: 7px;
+      background: rgba(255, 255, 255, 0.045);
+      color: rgba(244, 244, 245, 0.95);
+      padding: 0 10px;
+      font-size: 12px;
+      outline: none;
+    }
+    .connections-search:focus {
+      border-color: rgba(96, 165, 250, 0.55);
+      background: rgba(59, 130, 246, 0.08);
+    }
+    .connections-summary {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      min-width: 0;
+    }
+    .connections-summary-pill {
+      border: 1px solid rgba(148, 163, 184, 0.18);
+      border-radius: 999px;
+      padding: 4px 8px;
+      color: rgba(212, 212, 216, 0.82);
+      background: rgba(255, 255, 255, 0.035);
+      font-size: 11px;
+      font-weight: 650;
+      white-space: nowrap;
+    }
+    .connections-summary-pill.good { color: #bbf7d0; border-color: rgba(34, 197, 94, 0.24); background: rgba(34, 197, 94, 0.08); }
+    .connections-summary-pill.warn { color: #fde68a; border-color: rgba(234, 179, 8, 0.24); background: rgba(234, 179, 8, 0.08); }
+    .connections-inline-status {
+      min-height: 24px;
+      margin-bottom: 10px;
+      color: rgba(191, 219, 254, 0.9);
+      font-size: 12px;
+    }
+    .connections-empty {
+      min-height: 260px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      border: 1px dashed rgba(148, 163, 184, 0.28);
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.035);
+      text-align: center;
+      padding: 24px;
+    }
+    .connections-empty-title {
+      font-size: 15px;
+      font-weight: 700;
+      color: rgba(244, 244, 245, 0.96);
+    }
+    .connections-empty-sub {
+      max-width: 420px;
+      font-size: 12px;
+      line-height: 1.55;
+      color: var(--muted);
+    }
+    .connections-empty-drop {
+      font-size: 11px;
+      color: rgba(191, 219, 254, 0.82);
+    }
+    .connections-primary-btn {
+      border: 1px solid rgba(59, 130, 246, 0.45);
+      border-radius: 7px;
+      background: rgba(37, 99, 235, 0.2);
+      color: #dbeafe;
+      padding: 8px 12px;
+      font-size: 12px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .connections-primary-btn:hover {
+      border-color: rgba(96, 165, 250, 0.72);
+      background: rgba(37, 99, 235, 0.28);
+    }
+    .connections-secondary-btn {
+      border: 1px solid rgba(148, 163, 184, 0.24);
+      border-radius: 7px;
+      background: rgba(255, 255, 255, 0.045);
+      color: rgba(244, 244, 245, 0.9);
+      padding: 7px 10px;
+      font-size: 12px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .connections-secondary-btn:hover {
+      border-color: rgba(96, 165, 250, 0.52);
+      background: rgba(59, 130, 246, 0.12);
     }
     .bridges-page-header {
       display: flex;
@@ -3909,16 +3997,224 @@
     }
     .bridges-page-header h1 { margin: 0; font-size: 16px; flex: 1; min-width: 0; }
     .bridges-hint {
+      display: none;
       margin: 0 0 14px;
       font-size: 11px;
       line-height: 1.45;
       color: var(--muted);
     }
-    .bridges-list {
+    .bridges-filterbar {
+      max-width: 980px;
+      margin: 0 0 10px;
       display: flex;
+      align-items: stretch;
+      justify-content: flex-start;
       flex-direction: column;
+      gap: 10px;
+    }
+    .bridges-search-row {
+      max-width: 420px;
+      min-width: min(100%, 280px);
+    }
+    .bridges-search-input {
+      width: 100%;
+      height: 30px;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.045);
+      color: var(--text);
+      padding: 0 10px;
+      font-size: 12px;
+      outline: none;
+    }
+    .bridges-search-input:focus {
+      border-color: rgba(59, 130, 246, 0.58);
+      box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.18);
+    }
+    .bridges-search-input::placeholder {
+      color: rgba(161, 161, 170, 0.72);
+    }
+    .bridges-filter-row {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 10px;
+      min-width: 0;
+    }
+    .bridges-filter-row.software {
+      padding-top: 8px;
+      border-top: 1px solid rgba(255, 255, 255, 0.06);
+    }
+    .bridges-filter-tabs {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-wrap: wrap;
+      min-width: 0;
+    }
+    .bridges-filter-tabs.software {
+      max-height: 74px;
+      overflow: auto;
+      padding-right: 2px;
+    }
+    .bridges-filter-tab {
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.035);
+      color: rgba(228, 228, 231, 0.86);
+      padding: 5px 9px;
+      font-size: 11px;
+      line-height: 1;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    .bridges-filter-tab:hover {
+      border-color: rgba(59, 130, 246, 0.42);
+      background: rgba(59, 130, 246, 0.08);
+    }
+    .bridges-filter-tab.is-active {
+      border-color: rgba(59, 130, 246, 0.64);
+      background: rgba(59, 130, 246, 0.18);
+      color: #bfdbfe;
+      font-weight: 700;
+    }
+    .bridges-filter-count {
+      flex: none;
+      font-size: 10px;
+      color: var(--muted);
+    }
+    .bridges-acceptance {
+      max-width: 980px;
+      margin: 0 0 12px;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: #111113;
+      padding: 10px 12px;
+    }
+    .bridges-acceptance-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 8px;
+    }
+    .bridges-acceptance-title {
+      font-size: 12px;
+      font-weight: 700;
+      color: rgba(244, 244, 245, 0.94);
+    }
+    .bridges-acceptance-meter {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      flex-wrap: wrap;
+      font-size: 10px;
+      color: var(--muted);
+    }
+    .bridges-acceptance-actions {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+    .bridges-acceptance-stat {
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 999px;
+      padding: 3px 7px;
+      background: rgba(255, 255, 255, 0.04);
+      font-weight: 700;
+    }
+    .bridges-acceptance-stat.ok { color: #86efac; border-color: rgba(34, 197, 94, 0.35); }
+    .bridges-acceptance-stat.fail { color: #fca5a5; border-color: rgba(239, 68, 68, 0.35); }
+    .bridges-acceptance-stat.todo { color: #fde68a; border-color: rgba(234, 179, 8, 0.32); }
+    .bridges-acceptance-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+    .bridges-acceptance-item {
+      max-width: 100%;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 8px;
+      padding: 5px 7px;
+      background: rgba(255, 255, 255, 0.03);
+      font-size: 10px;
+      color: rgba(212, 212, 216, 0.88);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      cursor: pointer;
+    }
+    .bridges-acceptance-item:hover {
+      border-color: rgba(59, 130, 246, 0.45);
+      background: rgba(59, 130, 246, 0.08);
+    }
+    .bridges-acceptance-item.ok { color: #bbf7d0; }
+    .bridges-acceptance-item.fail { color: #fecaca; }
+    .bridges-acceptance-item.todo { color: #fef3c7; }
+    .bridges-acceptance-gate {
+      margin-top: 8px;
+      padding-top: 8px;
+      border-top: 1px solid rgba(255, 255, 255, 0.06);
+    }
+    .bridges-acceptance-gate-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 7px;
+      font-size: 11px;
+      color: rgba(226, 232, 240, 0.92);
+    }
+    .bridges-acceptance-gate-head span {
+      color: rgba(148, 163, 184, 0.9);
+      font-size: 10px;
+    }
+    .bridges-acceptance-gate-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+    .bridges-acceptance-gate-item {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      max-width: 100%;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 8px;
+      padding: 5px 7px;
+      background: rgba(255, 255, 255, 0.035);
+      color: rgba(226, 232, 240, 0.9);
+      cursor: pointer;
+      font: inherit;
+      font-size: 10px;
+      line-height: 1.2;
+      text-align: left;
+    }
+    .bridges-acceptance-gate-item small {
+      color: rgba(148, 163, 184, 0.86);
+      font-size: 9px;
+    }
+    .bridges-acceptance-gate-item.ok {
+      border-color: rgba(34, 197, 94, 0.32);
+      color: #bbf7d0;
+    }
+    .bridges-acceptance-gate-item.todo {
+      border-color: rgba(234, 179, 8, 0.26);
+      color: #fef3c7;
+    }
+    .bridges-acceptance-progress {
+      margin-top: 8px;
+      border-top: 1px solid rgba(255, 255, 255, 0.06);
+      padding-top: 8px;
+      font-size: 10px;
+      color: #bfdbfe;
+    }
+    .bridges-list {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
       gap: 12px;
-      max-width: 720px;
+      max-width: 980px;
     }
     .bridge-card {
       border: 1px solid var(--border);
@@ -3928,6 +4224,11 @@
       display: flex;
       flex-direction: column;
       gap: 10px;
+    }
+    .bridge-card[hidden] { display: none !important; }
+    .bridge-card.is-jump-focus {
+      border-color: rgba(59, 130, 246, 0.7);
+      box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.35);
     }
     .bridge-card.is-disabled { opacity: 0.55; }
     .bridge-card-head {
@@ -3942,6 +4243,20 @@
       font-size: 11px;
       line-height: 1.4;
       color: var(--muted);
+    }
+    .bridge-tags {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 5px;
+    }
+    .bridge-tag {
+      padding: 3px 7px;
+      border-radius: 999px;
+      border: 1px solid rgba(255,255,255,0.08);
+      background: rgba(255,255,255,0.04);
+      color: rgba(212, 212, 216, 0.84);
+      font-size: 10px;
+      font-weight: 600;
     }
     .bridge-status-pill {
       flex-shrink: 0;
@@ -4389,7 +4704,25 @@
           <path d="M2.5 9h19M8 22h8" />
         </svg>
       </button>
-      <button type="button" role="tab" data-view="scripts" aria-selected="false" aria-label="&#33050;&#26412;" title="Script Hub">
+      <button type="button" role="tab" data-view="workflow" aria-selected="false" aria-label="Workflow" title="Workflow">
+        <svg
+          class="sidebar-nav-icon"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.75"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          aria-hidden="true"
+        >
+          <path d="M4 6h6" />
+          <path d="M14 6h6" />
+          <path d="M10 6a2 2 0 1 0 4 0 2 2 0 0 0-4 0" />
+          <path d="M6 8v4a4 4 0 0 0 4 4h4" />
+          <path d="M14 16a2 2 0 1 0 4 0 2 2 0 0 0-4 0" />
+        </svg>
+      </button>
+      <button type="button" role="tab" data-view="scripts" aria-selected="false" aria-label="&#33050;&#26412;" title="旧脚本入口">
         <svg
           class="sidebar-nav-icon"
           viewBox="0 0 24 24"
@@ -4419,6 +4752,18 @@
         </svg>
         <span id="toolsNavBadge" class="shell-nav-badge hidden" aria-hidden="true"></span>
       </button>
+      <button type="button" role="tab" data-view="connections" aria-selected="false" aria-label="连接" title="连接">
+        <svg
+          class="sidebar-nav-icon"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          aria-hidden="true"
+        ><path d="M10 13a5 5 0 0 0 7.07 0l2.12-2.12a5 5 0 0 0-7.07-7.07L11 4.93"/><path d="M14 11a5 5 0 0 0-7.07 0L4.81 13.12a5 5 0 0 0 7.07 7.07L13 19.07"/></svg>
+      </button>
       <button type="button" role="tab" data-view="settings" aria-selected="false" aria-label="&#35774;&#32622;" title="&#35774;&#32622;">
         <svg
           class="sidebar-nav-icon"
@@ -4438,32 +4783,42 @@
       </button>
     </nav>
     <div class="shell-main" id="shell-main">
+  <div id="view-workflow" class="view hidden">
+    <div class="workflow-shell">
+      <div class="workflow-page-header">
+        <h1>Workflow</h1>
+        <button type="button" class="workflow-icon-btn" id="btnWorkflowRefresh" title="刷新" aria-label="刷新">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+            <path d="M21 12a9 9 0 1 1-3-6.7" />
+            <path d="M21 3v6h-6" />
+          </svg>
+        </button>
+      </div>
+      <div class="workflow-toolbar">
+        <input id="workflowSearch" class="workflow-search" type="search" placeholder="搜索 Workflow、能力或版本" autocomplete="off" />
+        <div id="workflowSummary" class="workflow-summary" aria-live="polite"></div>
+      </div>
+      <div id="workflowInlineStatus" class="workflow-inline-status"></div>
+      <div id="workflowEmpty" class="workflow-empty">
+        <div class="workflow-empty-title">还没有可运行 Workflow</div>
+        <div class="workflow-empty-sub">本地 Workflow Runtime 会在这里显示已验证的工作流。</div>
+      </div>
+      <div id="workflowList" class="hidden"></div>
+      <section id="workflowHistory" class="workflow-history" aria-label="最近运行">
+        <div class="workflow-history-head">
+          <div class="workflow-history-title">最近运行</div>
+          <div id="workflowHistoryMeta" class="workflow-history-meta"></div>
+        </div>
+        <div id="workflowHistoryEmpty" class="workflow-history-empty">还没有运行记录。</div>
+        <div id="workflowHistoryList" class="workflow-history-list"></div>
+      </section>
+    </div>
+  </div>
+
   <div id="view-tools" class="view hidden">
     <div class="tools-shell">
-      <aside class="tools-section-nav" aria-label="工具分类">
-        <div class="tools-section-nav-title">工具</div>
-        <a href="#tools-bridges" class="active" data-tools-section="bridges" aria-current="page">桥接管理</a>
-        <a href="#tools-rack" data-tools-section="rack">工具架</a>
-      </aside>
       <div class="tools-content">
-        <section class="tools-section-panel is-active" id="tools-bridges" data-tools-section-panel="bridges">
-          <div class="bridges-page-header">
-            <h1>桥接管理</h1>
-            <div class="tools-header-actions">
-              <button type="button" class="tools-icon-btn" id="btnBridgesRefresh" title="刷新桥接状态" aria-label="刷新桥接">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-                  <path d="M21 12a9 9 0 1 1-3-6.7" />
-                  <path d="M21 3v6h-6" />
-                </svg>
-              </button>
-            </div>
-          </div>
-          <p class="bridges-hint">
-            桥接负责本机 DCC 与伴侣通信。Maya 一键安装会写入 userSetup（启动时开 Command Port），不会自动启动 Maya；装完请重启或打开 Maya 后再探测。
-          </p>
-          <div id="bridgesList" class="bridges-list"></div>
-        </section>
-        <section class="tools-section-panel" id="tools-rack" data-tools-section-panel="rack" hidden>
+        <section class="tools-section-panel is-active" id="tools-rack" data-tools-section-panel="rack">
           <div class="tools-page-header">
             <h1>工具架</h1>
             <div class="tools-header-actions">
@@ -4494,6 +4849,27 @@
           <div id="toolsGrid"></div>
         </section>
       </div>
+    </div>
+  </div>
+
+  <div id="view-connections" class="view hidden">
+    <div class="connections-shell">
+      <div class="connections-page-header">
+        <h1>连接</h1>
+        <button type="button" class="connections-secondary-btn" id="btnConnectionImportTransfer">导入连接</button>
+      </div>
+      <div class="connections-toolbar" id="connectionsToolbar">
+        <input id="connectionsSearch" class="connections-search" type="search" placeholder="搜索连接、软件、路径或标签" />
+        <div id="connectionsSummary" class="connections-summary" aria-live="polite"></div>
+      </div>
+      <div id="connectionsInlineStatus" class="connections-inline-status"></div>
+      <div id="connectionsEmpty" class="connections-empty">
+        <div class="connections-empty-title">还没有连接</div>
+        <div class="connections-empty-sub">通过对话添加本机软件连接。连接会从能力包草稿开始，安装、探测、修复和发布都围绕同一个对象持续进行。</div>
+        <div class="connections-empty-drop">也可以把桌面软件快捷方式或 exe 拖到这里。</div>
+        <button type="button" class="connections-primary-btn" id="btnConnectionCreateWithCopilot">对话添加连接</button>
+      </div>
+      <div id="connectionsList" class="hidden"></div>
     </div>
   </div>
 
@@ -4694,8 +5070,8 @@
           <div class="settings-group-head"><h2>&#20837;&#21475;</h2></div>
     <div class="set-section">
       <h3 title="Script Hub 页面地址">Script Hub 地址</h3>
-      <label for="inpScriptHubUrl" title="本地壳内打开的 Script Hub 页面地址">地址</label>
-      <input type="url" id="inpScriptHubUrl" placeholder="http://localhost:5173/" autocomplete="off" title="Script Hub 页面地址" />
+      <label for="inpScriptHubUrl" title="本地壳内打开的 Workflow 页面地址">地址</label>
+      <input type="url" id="inpScriptHubUrl" placeholder="http://localhost:5173/" autocomplete="off" title="Workflow 页面地址" />
       <div class="btn-row">
         <button type="button" class="btn btn-primary" id="btnSaveScriptHub">保存</button>
       </div>
@@ -4707,7 +5083,7 @@
       <div class="btn-row">
         <button type="button" class="btn btn-primary" id="btnSaveScriptHubApi">保存 API</button>
       </div>
-      <label for="inpScriptHubApiToken" class="pair-label-gap" title="与 SCRIPTHUB_TOOL_BRIDGE_TOKEN 保持一致">API Token（可选）</label>
+      <label for="inpScriptHubApiToken" class="pair-label-gap" title="与 ASSETCUTTER_WORKFLOW_TOOL_BRIDGE_TOKEN 保持一致；兼容旧 SCRIPTHUB_TOOL_BRIDGE_TOKEN">API Token（可选）</label>
       <input type="password" id="inpScriptHubApiToken" placeholder="Tool Bridge Bearer Token" autocomplete="off" title="用于 Copilot 调用时携带 Authorization: Bearer" />
       <div class="btn-row">
         <button type="button" class="btn btn-primary" id="btnSaveScriptHubApiToken">保存 Token</button>
@@ -4849,7 +5225,7 @@
           <div class="agent-mcp-actions">
             <button type="button" class="btn" id="btnFillLatestWorkflowDraft" title="Fill the newest existing workflow draft id">填入最新草稿</button>
             <button type="button" class="btn" id="btnPromoteWorkbenchPresetPreflight" title="管理员确认后预检发布为工作台预设">预检工作台预设</button>
-            <button type="button" class="btn" id="btnPromoteScriptHubToolPreflight" title="管理员确认后预检发布为 Script Hub 工具">预检 Script Hub 工具</button>
+            <button type="button" class="btn" id="btnPromoteScriptHubToolPreflight" title="管理员确认后预检发布为 Workflow 工具">预检 Workflow 工具</button>
           </div>
           <div class="agent-mcp-detail" id="agentWorkflowPromotionDetail" hidden></div>
         </div>
@@ -5033,8 +5409,11 @@
   -->
   <script src="copilot-panel.js"></script>
   <script src="tools-module.js"></script>
-  <script src="tools-bridges.js"></script>
+    <script src="capability-card-schema.js"></script>
+    <script src="capability-version-picker.js"></script>
+  <script src="workflow-page.js"></script>
   <script src="tools-page.js"></script>
+  <script src="connection-page.js"></script>
   <script>
     (function () {
       const $ = (id) => document.getElementById(id);
@@ -5083,7 +5462,7 @@
           ? shell.defaultScriptHubApiUrl.trim()
           : 'http://localhost:8787/';
 
-      const views = { tools: $('view-tools'), settings: $('view-settings') };
+      const views = { workflow: $('view-workflow'), tools: $('view-tools'), connections: $('view-connections'), settings: $('view-settings') };
       let activeView = 'workbench';
       let activeSettingsSection = 'overview';
 
@@ -5326,9 +5705,11 @@
         const syncOnly = Boolean(opts && opts.syncOnly);
         const viewKey =
           v === 'workbench' ||
+          v === 'workflow' ||
           v === 'scripts' ||
           v === 'settings' ||
-          v === 'tools'
+          v === 'tools' ||
+          v === 'connections'
             ? v
             : 'workbench';
         activeView = viewKey;
@@ -5338,7 +5719,9 @@
           b.setAttribute('aria-selected', on ? 'true' : 'false');
         });
         if (viewKey === 'workbench' || viewKey === 'scripts') {
+          views.workflow.classList.add('hidden');
           views.tools.classList.add('hidden');
+          views.connections.classList.add('hidden');
           views.settings.classList.add('hidden');
         } else {
           Object.keys(views).forEach((k) => {
@@ -5370,6 +5753,16 @@
         if (viewKey === 'tools') {
           if (window.ShellToolsPage) {
             await window.ShellToolsPage.onViewShown(shell);
+          }
+        }
+        if (viewKey === 'workflow') {
+          if (window.ShellWorkflowPage) {
+            await window.ShellWorkflowPage.onViewShown(shell);
+          }
+        }
+        if (viewKey === 'connections') {
+          if (window.ShellConnectionPage) {
+            await window.ShellConnectionPage.onViewShown(shell);
           }
         }
         if (viewKey === 'settings') {
@@ -8024,6 +8417,12 @@
 
       if (window.ShellToolsPage) {
         window.ShellToolsPage.bind(shell);
+      }
+      if (window.ShellWorkflowPage) {
+        window.ShellWorkflowPage.bind(shell);
+      }
+      if (window.ShellConnectionPage) {
+        window.ShellConnectionPage.bind(shell);
       }
 
       async function init() {

@@ -22,7 +22,7 @@ const {
   appendProjectMemoryNote,
 } = require('./agent-memory.cjs');
 
-const VALID_SHELL_VIEWS = new Set(['home', 'workbench', 'scripts', 'tools', 'settings']);
+const VALID_SHELL_VIEWS = new Set(['home', 'workbench', 'scripts', 'tools', 'connections', 'settings']);
 
 function toolAborted(ctx) {
   return Boolean(ctx && ctx.signal && ctx.signal.aborted);
@@ -47,6 +47,93 @@ function httpOpts(ctx, extra) {
   return base;
 }
 
+function hostBridgeAcceptanceInstruction(groupId, hostId) {
+  const id = String(hostId || '').trim();
+  const host = id || 'this host';
+  const commonRule = '只在真实软件启动并产生 HTTP health、heartbeat、command port 或插件回调后记录通过。';
+  const byGroup = {
+    maya: {
+      instruction: `打开 ${host}，一键安装桥接后重启宿主，再探测 Command Port。`,
+      steps: ['确认 scripts 目录或已保存版本目录', '点击一键安装', '打开或重启宿主', '点击探测连接', '探测成功后记录真实版本、路径和端口证据'],
+      evidence: 'Command Port 可连接，并能返回真实宿主响应。',
+    },
+    adobe: {
+      instruction: `打开 ${host}，安装 ExtendScript 桥接，重启或在宿主内运行脚本，再探测 heartbeat。`,
+      steps: ['确认 Adobe 宿主版本和脚本目录', '点击一键安装', '重启宿主或运行已安装 JSX', '点击探测连接', 'heartbeat 新鲜且 host id 匹配后记录证据'],
+      evidence: 'heartbeat 文件新鲜、内容有效，并且 host id 与当前 Adobe 宿主匹配。',
+    },
+    python_dcc: {
+      instruction: `打开 ${host}，安装 Python HTTP 桥接，重启宿主或加载启动脚本，再探测 /health。`,
+      steps: ['确认宿主版本或启动脚本目录', '点击一键安装', '打开或重启宿主', '确认 Python 桥接脚本已加载', '点击探测连接并记录 /health 成功证据'],
+      evidence: '本机 HTTP /health 返回真实宿主名称或版本信息。',
+    },
+    lua_heartbeat: {
+      instruction: `打开 ${host}，安装 Lua/脚本桥接，在宿主内运行脚本后探测 heartbeat。`,
+      steps: ['确认脚本目录属于当前宿主', '点击一键安装', '在宿主内运行安装的脚本或菜单项', '点击探测连接', 'heartbeat 新鲜且 host id 匹配后记录证据'],
+      evidence: 'heartbeat 文件由当前宿主刚刚写入，时间新鲜且内容有效。',
+    },
+    project_plugin: {
+      instruction: `选择真实 ${host} 项目，安装项目插件，打开项目并加载插件后探测连接。`,
+      steps: ['选择包含真实项目文件的项目根目录', '点击一键安装', '打开项目并允许插件加载或重新编译', '必要时在项目设置中启用插件', '点击探测连接并记录插件回调证据'],
+      evidence: '项目内插件已加载，并返回真实 HTTP health 或插件回调。',
+    },
+    manual_script_dir: {
+      instruction: `为 ${host} 选择真实脚本目录，安装脚本，在宿主内运行后探测 heartbeat。`,
+      steps: ['手动选择该宿主真实脚本目录', '确认不是上级目录、缓存目录或其它软件目录', '点击一键安装', '在宿主内运行安装脚本', '点击探测连接并记录 heartbeat 证据'],
+      evidence: '脚本由当前宿主执行并产生新鲜 heartbeat。',
+    },
+    paired_software: {
+      instruction: `打开 ${host}，确认成对软件安装、探测、卸载都只影响自己，不覆盖另一款软件。`,
+      steps: ['确认当前选择的是目标软件自己的目录', '点击一键安装', '打开当前宿主并运行桥接', '点击探测连接', '检查成对软件的脚本文件未被覆盖后记录证据'],
+      evidence: '当前宿主连接成功，且成对软件文件没有被当前操作覆盖。',
+    },
+  };
+  const guide = byGroup[String(groupId || '').trim()] || {
+    instruction: `打开 ${host}，安装并探测桥接，只用真实连接信号记录验收。`,
+    steps: ['点击一键安装', '打开或重启宿主', '点击探测连接', '记录真实连接证据'],
+    evidence: '真实宿主连接信号。',
+  };
+  return { ...guide, rule: commonRule };
+}
+
+const HOST_BRIDGE_INSTALL_TARGET_FIELDS = {
+  maya: ['scriptsDirs'],
+  blender: ['startupDirs'],
+  '3ds-max': ['startupDirs'],
+  motionbuilder: ['startupDirs'],
+  'substance-painter': ['pluginDirs'],
+  krita: ['pluginDirs'],
+  gimp: ['pluginDirs'],
+  inkscape: ['extensionsDirs'],
+  houdini: ['prefsDirs'],
+  nuke: ['userDirs'],
+  'nuke-studio': ['userDirs'],
+  hiero: ['userDirs'],
+  natron: ['userDirs'],
+  unity: ['projectDirs'],
+  unreal: ['projectDirs'],
+  godot: ['projectDirs'],
+  'fusion-360': ['addinDirs'],
+  freecad: ['modDirs'],
+  autocad: ['supportDirs'],
+  'lightroom-classic': ['modulesDirs'],
+  darktable: ['configDirs'],
+};
+
+function buildHostBridgeInstallBody(hostId, args) {
+  const id = String(hostId || '').trim();
+  const targetDir = String((args && args.targetDir) || '').trim();
+  const body = {
+    targetDir,
+    port: args && typeof args.port === 'number' ? args.port : undefined,
+  };
+  if (targetDir) {
+    const fields = HOST_BRIDGE_INSTALL_TARGET_FIELDS[id] || ['scriptsDirs'];
+    for (const field of fields) body[field] = [targetDir];
+  }
+  return body;
+}
+
 function validateArgs(schema, args) {
   if (!schema || typeof schema !== 'object') return { ok: true, value: args || {} };
   const a = args && typeof args === 'object' ? args : {};
@@ -61,6 +148,17 @@ function validateArgs(schema, args) {
       if (a[k] === undefined || a[k] === null || a[k] === '') {
         return { ok: false, error: `missing required: ${k}` };
       }
+    }
+  }
+  for (const [key, prop] of Object.entries(schema.properties || {})) {
+    if (
+      a[key] != null &&
+      prop &&
+      typeof prop === 'object' &&
+      Array.isArray(prop.enum) &&
+      !prop.enum.includes(a[key])
+    ) {
+      return { ok: false, error: `invalid ${key}` };
     }
   }
   const view = a.view;
@@ -98,6 +196,95 @@ const WORKBENCH_ASSET_CONTEXT_MODES = new Set(['none', 'current_project', 'curre
 function isSafeRelativePath(value) {
   const s = String(value || '').replace(/\\/g, '/').trim();
   return Boolean(s) && !s.startsWith('/') && !/^[a-zA-Z]:\//.test(s) && !s.split('/').includes('..');
+}
+
+function normalizeCapabilityDraftId(seed, fallbackPrefix) {
+  const normalized = String(seed || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 63);
+  if (/^[a-z][a-z0-9._-]{1,62}$/.test(normalized)) return normalized;
+  const prefix = /^[a-z][a-z0-9-]{1,24}$/.test(String(fallbackPrefix || 'capability'))
+    ? String(fallbackPrefix)
+    : 'capability';
+  return `${prefix}-${Date.now().toString(36).slice(-6)}`;
+}
+
+function inferCapabilityDraftType(args) {
+  const explicit = String(args && args.type ? args.type : '').trim();
+  if (explicit === 'tool' || explicit === 'software_connection' || explicit === 'workflow') return explicit;
+  const text = `${String(args?.name || '')} ${String(args?.intent || '')} ${String(args?.description || '')}`.toLowerCase();
+  if (/工具流|工作流|流程|自动化|workflow|flow|pipeline|automation/.test(text)) return 'workflow';
+  if (/连接|宿主|软件|打开|启动|photoshop|maya|blender|unity|unreal|spine|connect|connection|host|software/.test(text)) {
+    return 'software_connection';
+  }
+  if (/工具|插件|脚本|小工具|tool|plugin|script|utility/.test(text)) return 'tool';
+  return 'software_connection';
+}
+
+function buildConnectionTemplateDraft(args) {
+  const hostId = normalizeCapabilityDraftId(String((args && (args.hostId || args.appName)) || 'unknown-host'), 'host');
+  const list = (value) => (Array.isArray(value) ? value.map(String).map((item) => item.trim()).filter(Boolean).slice(0, 12) : []);
+  const allowedKind = new Set(['executable', 'script_dcc', 'project_plugin', 'command_port', 'heartbeat', 'unknown']);
+  const kind = allowedKind.has(String(args && args.kind)) ? String(args.kind) : 'unknown';
+  const appName = String((args && args.appName) || (args && args.hostId) || hostId).trim() || hostId;
+  const defaultsByKind = {
+    executable: {
+      files: [`local-companion/src/bridges/${hostId}BridgeInstall.ts`],
+      requiredUserDirs: ['软件安装目录或可执行文件路径'],
+      probeSignal: '目标软件真实进程存在，且可由白名单 hostId 匹配到可执行文件路径',
+      safetyBoundaries: ['只能启动用户确认过的可执行文件路径', '不能把进程存在当作桥接已连通', '未真实 probe 前不能发布云端正式版本'],
+    },
+    script_dcc: {
+      files: [`local-companion/src/bridges/${hostId}BridgeInstall.ts`, `local-companion/src/bridges/templates/${hostId}-heartbeat.js`],
+      requiredUserDirs: ['宿主脚本目录或用户插件目录'],
+      probeSignal: `${appName} 内运行脚本后写入的新鲜 heartbeat 文件`,
+      safetyBoundaries: ['只写入用户选择的脚本目录', 'heartbeat 必须由真实宿主脚本生成', '未真实验收前不能写入生产 bridge definition'],
+    },
+    project_plugin: {
+      files: [`local-companion/src/bridges/${hostId}BridgeInstall.ts`, `local-companion/src/bridges/templates/${hostId}-project-plugin/`],
+      requiredUserDirs: ['真实项目根目录'],
+      probeSignal: `${appName} 项目插件加载后返回的 HTTP health 或插件回调`,
+      safetyBoundaries: ['只修改用户选择的项目目录', '不能跨项目安装', '插件未加载前不能标记 connected'],
+    },
+    command_port: {
+      files: [`local-companion/src/bridges/${hostId}BridgeInstall.ts`, `local-companion/src/bridges/templates/${hostId}-command-port.js`],
+      requiredUserDirs: ['宿主脚本目录或启动脚本目录'],
+      probeSignal: `${appName} command port 返回真实宿主响应`,
+      safetyBoundaries: ['端口必须绑定本机', '命令必须走白名单', '不能用端口打开但无宿主响应冒充成功'],
+    },
+    heartbeat: {
+      files: [`local-companion/src/bridges/${hostId}BridgeInstall.ts`, `local-companion/src/bridges/templates/${hostId}-heartbeat.js`],
+      requiredUserDirs: ['宿主脚本目录'],
+      probeSignal: `${appName} 写入的新鲜 heartbeat 文件，内容包含 hostId 和时间戳`,
+      safetyBoundaries: ['heartbeat 必须新鲜且 hostId 匹配', '不能用历史 heartbeat 冒充成功', '未真实运行宿主前不能发布'],
+    },
+    unknown: {
+      files: [`local-companion/src/bridges/${hostId}BridgeInstall.ts`],
+      requiredUserDirs: ['待 Copilot 与用户确认的软件目录或脚本目录'],
+      probeSignal: '真实软件进程、HTTP health、command port 或 heartbeat 信号',
+      safetyBoundaries: ['先识别软件形态再生成正式模板', '不能把文件存在或安装记录当作连接成功', '未真实验收前不能发布云端正式版本'],
+    },
+  };
+  const defaults = defaultsByKind[kind] || defaultsByKind.unknown;
+  const safetyBoundaries = list(args && args.safetyBoundaries);
+  return {
+    schemaVersion: 1,
+    status: 'draft',
+    hostId,
+    appName,
+    kind,
+    files: list(args && args.files).length ? list(args && args.files) : defaults.files,
+    requiredUserDirs: list(args && args.requiredUserDirs).length ? list(args && args.requiredUserDirs) : defaults.requiredUserDirs,
+    probeSignal: String((args && args.probeSignal) || '').trim() || defaults.probeSignal,
+    safetyBoundaries: safetyBoundaries.length
+      ? safetyBoundaries
+      : defaults.safetyBoundaries,
+    notes: String((args && args.notes) || '').trim(),
+    productionDefinition: false,
+  };
 }
 
 function validateScriptHubManifest(raw) {
@@ -736,6 +923,30 @@ function createAgentBodyHost(deps) {
           };
         }
         const toolId = r.json?.toolId;
+        if (toolId) {
+          try {
+            await deps.companionApiRequest(
+              'POST',
+              '/v1/capability-packages/drafts',
+              {
+                id: String(toolId),
+                type: 'tool',
+                name: body.name || String(toolId),
+                description: body.description || '',
+                tags: body.tags,
+                semver: '0.1.0',
+                manifest: {
+                  authoredToolId: String(toolId),
+                  authoredPath: r.json?.path || '',
+                },
+                createdBy: 'copilot',
+              },
+              httpOpts(ctx, { timeoutMs: 30000 }),
+            );
+          } catch {
+            /* Tool scaffold remains valid; capability draft sync can be retried. */
+          }
+        }
         if (safeArgs.open !== false && toolId && typeof deps.runShellTool === 'function') {
           await deps.runShellTool(String(toolId));
         }
@@ -768,6 +979,917 @@ function createAgentBodyHost(deps) {
             ok: false,
             content: r.text || '',
             error: { code: 'AGENT_SHELL_TOOL_UPSERT_FAILED', message: r.text || 'upsert failed' },
+          };
+        }
+        return { ok: true, content: JSON.stringify(r.json, null, 2), structured: r.json };
+      }
+
+      if (name === 'ac.capability.draft_create') {
+        if (typeof deps.companionApiRequest !== 'function') {
+          return toolUnavailable('companion');
+        }
+        let aborted = abortIfNeeded(ctx);
+        if (aborted) return aborted;
+        const body = {
+          id: safeArgs.id ? String(safeArgs.id).trim() : undefined,
+          type: safeArgs.type ? String(safeArgs.type).trim() : 'software_connection',
+          name: String(safeArgs.name || '').trim(),
+          appName: safeArgs.appName ? String(safeArgs.appName).trim() : undefined,
+          description: safeArgs.description ? String(safeArgs.description).trim() : undefined,
+          tags: Array.isArray(safeArgs.tags) ? safeArgs.tags.map(String).filter(Boolean) : undefined,
+          templateHint: safeArgs.templateHint ? String(safeArgs.templateHint).trim() : undefined,
+          semver: safeArgs.semver ? String(safeArgs.semver).trim() : undefined,
+          createdBy: 'copilot',
+        };
+        const r = await deps.companionApiRequest(
+          'POST',
+          '/v1/capability-packages/drafts',
+          body,
+          httpOpts(ctx, { timeoutMs: 30000 }),
+        );
+        aborted = abortIfNeeded(ctx);
+        if (aborted) return aborted;
+        if (r.error === 'aborted') return abortedToolResult();
+        if (!r.ok) {
+          return {
+            ok: false,
+            content: r.text || '',
+            error: { code: 'AGENT_CAPABILITY_DRAFT_CREATE_FAILED', message: r.text || 'capability draft create failed' },
+          };
+        }
+        return { ok: true, content: JSON.stringify(r.json, null, 2), structured: r.json };
+      }
+
+      if (name === 'ac.capability.create_draft') {
+        if (typeof deps.companionApiRequest !== 'function') {
+          return toolUnavailable('companion');
+        }
+        let aborted = abortIfNeeded(ctx);
+        if (aborted) return aborted;
+        const inferredType = inferCapabilityDraftType(safeArgs);
+        const baseName = String(safeArgs.name || '').trim();
+        const intent = String(safeArgs.intent || '').trim();
+        const idSeed =
+          inferredType === 'software_connection'
+            ? String(safeArgs.appName || baseName || intent).trim()
+            : `${baseName} ${intent}`;
+        const id = safeArgs.id
+          ? normalizeCapabilityDraftId(safeArgs.id, inferredType === 'tool' ? 'tool' : inferredType === 'workflow' ? 'workflow' : 'connection')
+          : normalizeCapabilityDraftId(idSeed, inferredType === 'tool' ? 'tool' : inferredType === 'workflow' ? 'workflow' : 'connection');
+        if (inferredType === 'tool') {
+          const body = {
+            id,
+            name: baseName || id,
+            description: safeArgs.description ? String(safeArgs.description).trim() : intent || 'Copilot 创建的本机工具',
+            tags: Array.isArray(safeArgs.tags) ? safeArgs.tags.map(String).filter(Boolean) : undefined,
+            overwrite: false,
+            install: true,
+          };
+          const scaffold = await deps.companionApiRequest(
+            'POST',
+            '/v1/shell-tools/authored/scaffold',
+            body,
+            httpOpts(ctx, { timeoutMs: 60000 }),
+          );
+          aborted = abortIfNeeded(ctx);
+          if (aborted) return aborted;
+          if (scaffold.error === 'aborted') return abortedToolResult();
+          if (!scaffold.ok) {
+            return {
+              ok: false,
+              content: scaffold.text || '',
+              error: { code: 'AGENT_CAPABILITY_CREATE_TOOL_FAILED', message: scaffold.text || 'capability tool create failed' },
+            };
+          }
+          const toolId = String(scaffold.json?.toolId || id);
+          let context = null;
+          try {
+            const contextResult = await deps.companionApiRequest(
+              'GET',
+              `/v1/capability-packages/${encodeURIComponent(toolId)}/context`,
+              null,
+              httpOpts(ctx, { timeoutMs: 30000 }),
+            );
+            if (contextResult.ok) context = contextResult.json;
+          } catch {
+            /* The created tool is still valid; context can be fetched later. */
+          }
+          if (safeArgs.open !== false && toolId && typeof deps.runShellTool === 'function') {
+            await deps.runShellTool(toolId);
+          }
+          const structured = { ok: true, type: 'tool', id: toolId, tool: scaffold.json, context };
+          return { ok: true, content: JSON.stringify(structured, null, 2), structured };
+        }
+
+        if (inferredType === 'workflow') {
+          const body = {
+            id,
+            type: 'workflow',
+            name: baseName || id,
+            description: safeArgs.description ? String(safeArgs.description).trim() : intent || undefined,
+            tags: Array.isArray(safeArgs.tags) ? safeArgs.tags.map(String).filter(Boolean) : undefined,
+            semver: safeArgs.semver ? String(safeArgs.semver).trim() : undefined,
+            manifest: { intent },
+            createdBy: 'copilot',
+          };
+          const draft = await deps.companionApiRequest(
+            'POST',
+            '/v1/capability-packages/drafts',
+            body,
+            httpOpts(ctx, { timeoutMs: 30000 }),
+          );
+          aborted = abortIfNeeded(ctx);
+          if (aborted) return aborted;
+          if (draft.error === 'aborted') return abortedToolResult();
+          if (!draft.ok) {
+            return {
+              ok: false,
+              content: draft.text || '',
+              error: { code: 'AGENT_CAPABILITY_CREATE_WORKFLOW_FAILED', message: draft.text || 'capability workflow create failed' },
+            };
+          }
+          let context = null;
+          try {
+            const contextResult = await deps.companionApiRequest(
+              'GET',
+              `/v1/capability-packages/${encodeURIComponent(id)}/context`,
+              null,
+              httpOpts(ctx, { timeoutMs: 30000 }),
+            );
+            if (contextResult.ok) context = contextResult.json;
+          } catch {
+            /* The created workflow is still valid; context can be fetched later. */
+          }
+          const structured = { ok: true, type: 'workflow', id, draft: draft.json, context };
+          return { ok: true, content: JSON.stringify(structured, null, 2), structured };
+        }
+
+        const body = {
+          id,
+          type: 'software_connection',
+          name: baseName || String(safeArgs.appName || id).trim() || id,
+          appName: safeArgs.appName ? String(safeArgs.appName).trim() : baseName || undefined,
+          description: safeArgs.description ? String(safeArgs.description).trim() : intent || undefined,
+          tags: Array.isArray(safeArgs.tags) ? safeArgs.tags.map(String).filter(Boolean) : undefined,
+          templateHint: safeArgs.templateHint ? String(safeArgs.templateHint).trim() : undefined,
+          createdBy: 'copilot',
+        };
+        const draft = await deps.companionApiRequest(
+          'POST',
+          '/v1/capability-packages/drafts',
+          body,
+          httpOpts(ctx, { timeoutMs: 30000 }),
+        );
+        aborted = abortIfNeeded(ctx);
+        if (aborted) return aborted;
+        if (draft.error === 'aborted') return abortedToolResult();
+        if (!draft.ok) {
+          return {
+            ok: false,
+            content: draft.text || '',
+            error: { code: 'AGENT_CAPABILITY_CREATE_CONNECTION_FAILED', message: draft.text || 'capability connection create failed' },
+          };
+        }
+        let context = null;
+        try {
+          const contextResult = await deps.companionApiRequest(
+            'GET',
+            `/v1/capability-packages/${encodeURIComponent(id)}/context`,
+            null,
+            httpOpts(ctx, { timeoutMs: 30000 }),
+          );
+          if (contextResult.ok) context = contextResult.json;
+        } catch {
+          /* The created connection is still valid; context can be fetched later. */
+        }
+        const structured = { ok: true, type: 'software_connection', id, draft: draft.json, context };
+        return { ok: true, content: JSON.stringify(structured, null, 2), structured };
+      }
+
+      if (name === 'ac.capability.draft_list') {
+        if (typeof deps.companionApiRequest !== 'function') {
+          return toolUnavailable('companion');
+        }
+        const r = await deps.companionApiRequest(
+          'GET',
+          '/v1/capability-packages/drafts',
+          null,
+          httpOpts(ctx, { timeoutMs: 30000 }),
+        );
+        if (r.error === 'aborted') return abortedToolResult();
+        if (!r.ok) {
+          return {
+            ok: false,
+            content: r.text || '',
+            error: { code: 'AGENT_CAPABILITY_DRAFT_LIST_FAILED', message: r.text || 'capability draft list failed' },
+          };
+        }
+        return { ok: true, content: JSON.stringify(r.json, null, 2), structured: r.json };
+      }
+
+      if (name === 'ac.capability.validate_draft') {
+        if (typeof deps.companionApiRequest !== 'function') {
+          return toolUnavailable('companion');
+        }
+        const id = String(safeArgs.id || '').trim();
+        const r = await deps.companionApiRequest(
+          'POST',
+          `/v1/capability-packages/${encodeURIComponent(id)}/lifecycle`,
+          { action: 'validate' },
+          httpOpts(ctx, { timeoutMs: 30000 }),
+        );
+        if (r.error === 'aborted') return abortedToolResult();
+        if (!r.ok) {
+          return {
+            ok: false,
+            content: r.text || '',
+            error: { code: 'AGENT_CAPABILITY_VALIDATE_FAILED', message: r.text || 'capability validation failed' },
+          };
+        }
+        return { ok: true, content: JSON.stringify(r.json, null, 2), structured: r.json };
+      }
+
+      if (name === 'ac.capability.context_get') {
+        if (typeof deps.companionApiRequest !== 'function') {
+          return toolUnavailable('companion');
+        }
+        const id = String(safeArgs.id || '').trim();
+        const r = await deps.companionApiRequest(
+          'GET',
+          `/v1/capability-packages/${encodeURIComponent(id)}/context`,
+          null,
+          httpOpts(ctx, { timeoutMs: 30000 }),
+        );
+        if (r.error === 'aborted') return abortedToolResult();
+        if (!r.ok) {
+          return {
+            ok: false,
+            content: r.text || '',
+            error: { code: 'AGENT_CAPABILITY_CONTEXT_FAILED', message: r.text || 'capability context failed' },
+          };
+        }
+        return { ok: true, content: JSON.stringify(r.json, null, 2), structured: r.json };
+      }
+
+      if (name === 'ac.capability.event_append') {
+        if (typeof deps.companionApiRequest !== 'function') {
+          return toolUnavailable('companion');
+        }
+        const id = String(safeArgs.id || '').trim();
+        const r = await deps.companionApiRequest(
+          'POST',
+          `/v1/capability-packages/${encodeURIComponent(id)}/events`,
+          {
+            kind: String(safeArgs.kind || '').trim(),
+            ok: safeArgs.ok === true,
+            message: safeArgs.message ? String(safeArgs.message) : '',
+            detail: safeArgs.detail && typeof safeArgs.detail === 'object' ? safeArgs.detail : undefined,
+          },
+          httpOpts(ctx, { timeoutMs: 30000 }),
+        );
+        if (r.error === 'aborted') return abortedToolResult();
+        if (!r.ok) {
+          return {
+            ok: false,
+            content: r.text || '',
+            error: { code: 'AGENT_CAPABILITY_EVENT_APPEND_FAILED', message: r.text || 'capability event append failed' },
+          };
+        }
+        return { ok: true, content: JSON.stringify(r.json, null, 2), structured: r.json };
+      }
+
+      if (name === 'ac.capability.template_draft_create') {
+        if (typeof deps.companionApiRequest !== 'function') {
+          return toolUnavailable('companion');
+        }
+        const id = String(safeArgs.id || '').trim();
+        const templateDraft = buildConnectionTemplateDraft(safeArgs);
+        const r = await deps.companionApiRequest(
+          'POST',
+          `/v1/capability-packages/${encodeURIComponent(id)}/events`,
+          {
+            kind: 'connection_template_draft_created',
+            ok: false,
+            message: `已为 ${templateDraft.appName} 生成连接模板草稿，等待真实软件验收。`,
+            detail: {
+              templateDraft,
+              notProductionDefinition: true,
+              publishBlockedUntilRealProbe: true,
+            },
+          },
+          httpOpts(ctx, { timeoutMs: 30000 }),
+        );
+        if (r.error === 'aborted') return abortedToolResult();
+        if (!r.ok) {
+          return {
+            ok: false,
+            content: r.text || '',
+            error: { code: 'AGENT_CAPABILITY_TEMPLATE_DRAFT_CREATE_FAILED', message: r.text || 'template draft create failed' },
+          };
+        }
+        const structured = { ok: true, id, templateDraft, event: r.json };
+        return { ok: true, content: JSON.stringify(structured, null, 2), structured };
+      }
+
+      if (name === 'ac.capability.lifecycle_run') {
+        if (typeof deps.companionApiRequest !== 'function') {
+          return toolUnavailable('companion');
+        }
+        const id = String(safeArgs.id || '').trim();
+        const body = {
+          action: String(safeArgs.action || '').trim(),
+          targetDir: safeArgs.targetDir ? String(safeArgs.targetDir).trim() : undefined,
+          executablePath: safeArgs.executablePath ? String(safeArgs.executablePath).trim() : undefined,
+          targetId: safeArgs.targetId ? String(safeArgs.targetId).trim() : undefined,
+          actionId: safeArgs.actionId ? String(safeArgs.actionId).trim() : undefined,
+          params: safeArgs.params && typeof safeArgs.params === 'object' ? safeArgs.params : undefined,
+          actorRole: safeArgs.actorRole ? String(safeArgs.actorRole).trim() : undefined,
+          isAdmin: safeArgs.isAdmin === true,
+          semver: safeArgs.semver ? String(safeArgs.semver).trim() : undefined,
+          versionId: safeArgs.versionId ? String(safeArgs.versionId).trim() : undefined,
+          versionNote: safeArgs.versionNote ? String(safeArgs.versionNote).trim() : undefined,
+          publishedBy: safeArgs.publishedBy ? String(safeArgs.publishedBy).trim() : undefined,
+        };
+        const r = await deps.companionApiRequest(
+          'POST',
+          `/v1/capability-packages/${encodeURIComponent(id)}/lifecycle`,
+          body,
+          httpOpts(ctx, { timeoutMs: body.action === 'run' || body.action === 'install' || body.action === 'launch' ? 60000 : 30000 }),
+        );
+        if (r.error === 'aborted') return abortedToolResult();
+        if (!r.ok) {
+          return {
+            ok: false,
+            content: r.text || '',
+            error: { code: 'AGENT_CAPABILITY_LIFECYCLE_FAILED', message: r.text || 'capability lifecycle failed' },
+          };
+        }
+        return { ok: true, content: JSON.stringify(r.json, null, 2), structured: r.json };
+      }
+
+      if (name === 'ac.capability.connection_loop_run') {
+        if (typeof deps.companionApiRequest !== 'function') {
+          return toolUnavailable('companion');
+        }
+        const id = String(safeArgs.id || '').trim();
+        const goal = String(safeArgs.goal || '').trim();
+        const permissions = Array.isArray(safeArgs.permissions) ? safeArgs.permissions.map(String) : [];
+        const permissionSet = new Set(permissions);
+        const maxStepsRaw = Number(safeArgs.maxSteps || 6);
+        const maxSteps = Math.max(1, Math.min(Number.isFinite(maxStepsRaw) ? Math.floor(maxStepsRaw) : 6, 8));
+        const steps = [];
+        const runStep = async (label, request) => {
+          if (steps.length >= maxSteps) return null;
+          let response;
+          try {
+            response = await request();
+          } catch (error) {
+            response = { ok: false, text: error instanceof Error ? error.message : String(error) };
+          }
+          const body = response && response.json ? response.json : null;
+          const message =
+            (body && (body.message || body.error || (body.result && body.result.message))) ||
+            (response && response.text) ||
+            '';
+          const step = {
+            label,
+            ok: Boolean(response && response.ok && (!body || body.ok !== false)),
+            status: response && response.status,
+            message,
+            body,
+          };
+          steps.push(step);
+          return step;
+        };
+        const lifecycle = (action, payload = {}, timeoutMs = 30000) =>
+          deps.companionApiRequest(
+            'POST',
+            `/v1/capability-packages/${encodeURIComponent(id)}/lifecycle`,
+            { action, ...payload },
+            httpOpts(ctx, { timeoutMs }),
+          );
+        const readContext = () =>
+          deps.companionApiRequest(
+            'GET',
+            `/v1/capability-packages/${encodeURIComponent(id)}/context`,
+            null,
+            httpOpts(ctx, { timeoutMs: 30000 }),
+          );
+        const lifecycleActionForStep = {
+          'process.discover': 'discover_running',
+          'process.launch': 'launch',
+          'bridge.install': 'install',
+          'connection.probe': 'probe',
+          'conversation.open': 'open_conversation',
+        };
+        const plannedStepsForMaturity = (maturity) => {
+          if (maturity === 'connected') return ['event.write.loop_summary'];
+          if (maturity === 'template_missing') return ['event.write.loop_summary', 'conversation.open'];
+          if (maturity === 'probe_failed') return ['event.write.loop_summary', 'conversation.open'];
+          if (maturity === 'bridge_installed') return ['connection.probe', 'event.write.loop_summary'];
+          if (maturity === 'bridge_supported') return ['bridge.install', 'event.write.loop_summary'];
+          if (maturity === 'path_ready' || maturity === 'process_ready') return ['process.discover', 'process.launch', 'event.write.loop_summary'];
+          return ['event.write.loop_summary', 'conversation.open'];
+        };
+        const stepPermission = (label) => {
+          if (label === 'event.write.loop_summary') return 'event.write';
+          return label;
+        };
+
+        let aborted = abortIfNeeded(ctx);
+        if (aborted) return aborted;
+        await runStep('validate', () => lifecycle('validate'));
+        const initialContextStep = permissionSet.has('context.read') ? await runStep('context.read.initial', readContext) : null;
+        const initialContext = initialContextStep && initialContextStep.body;
+        const connectionState = initialContext && initialContext.connectionState && typeof initialContext.connectionState === 'object'
+          ? initialContext.connectionState
+          : null;
+        const maturity = String((connectionState && connectionState.maturity) || 'unknown');
+        const plannedSteps = plannedStepsForMaturity(maturity).filter((label) => permissionSet.has(stepPermission(label)));
+        for (const label of plannedSteps) {
+          if (label === 'event.write.loop_summary') {
+            const actionSteps = steps.filter((step) => step && !/^context\.read/.test(step.label) && step.label !== 'validate');
+            const loopOk =
+              maturity === 'connected' ||
+              (actionSteps.length > 0 && actionSteps.every((step) => step.ok) && maturity !== 'template_missing' && maturity !== 'probe_failed');
+            const eventKind =
+              maturity === 'template_missing'
+                ? 'connection_loop_template_missing'
+                : loopOk
+                  ? 'connection_loop_passed'
+                  : 'connection_loop_failed';
+            await runStep('event.write.loop_summary', () =>
+              deps.companionApiRequest(
+                'POST',
+                `/v1/capability-packages/${encodeURIComponent(id)}/events`,
+                {
+                  kind: eventKind,
+                  ok: loopOk,
+                  message: goal || (connectionState && connectionState.nextAction) || 'Connection loop run completed.',
+                  detail: {
+                    maturity,
+                    permissions,
+                    plannedSteps,
+                    steps: steps.map((step) => ({ label: step.label, ok: step.ok, message: step.message })),
+                  },
+                },
+                httpOpts(ctx, { timeoutMs: 30000 }),
+              ),
+            );
+          } else if (label === 'process.launch') {
+            await runStep('process.launch', () =>
+              lifecycle('launch', { executablePath: safeArgs.executablePath ? String(safeArgs.executablePath).trim() : undefined }, 60000),
+            );
+          } else if (label === 'bridge.install') {
+            await runStep('bridge.install', () =>
+              lifecycle('install', { targetDir: safeArgs.targetDir ? String(safeArgs.targetDir).trim() : undefined }, 60000),
+            );
+          } else {
+            await runStep(label, () => lifecycle(lifecycleActionForStep[label] || label));
+          }
+        }
+        let finalContext = null;
+        if (permissionSet.has('context.read')) {
+          const finalStep = await runStep('context.read.final', readContext);
+          finalContext = finalStep && finalStep.body;
+        }
+        const probeStep = steps.find((step) => step && step.label === 'connection.probe');
+        const missingPermissions = plannedStepsForMaturity(maturity)
+          .map((label) => stepPermission(label))
+          .filter((permission) => !permissionSet.has(permission));
+        const structured = {
+          ok: steps.length > 0 && steps.every((step) => step.ok || step.label !== 'validate'),
+          id,
+          goal,
+          permissions,
+          maturity,
+          plannedSteps,
+          missingPermissions: Array.from(new Set(missingPermissions)),
+          steps,
+          finalContext,
+          nextAction:
+            probeStep && probeStep.ok
+              ? 'connected'
+              : maturity === 'template_missing'
+                ? 'create_bridge_template_plan'
+                : permissionSet.has('conversation.open')
+                ? 'open_object_conversation_for_repair'
+                : 'grant_conversation_or_probe_permission_for_next_loop',
+        };
+        return { ok: true, content: JSON.stringify(structured, null, 2), structured };
+      }
+
+      if (name === 'ac.capability.publish_gate_check') {
+        if (typeof deps.companionApiRequest !== 'function') {
+          return toolUnavailable('companion');
+        }
+        const id = String(safeArgs.id || '').trim();
+        const r = await deps.companionApiRequest(
+          'POST',
+          `/v1/capability-packages/${encodeURIComponent(id)}/publish-gate`,
+          {
+            actorRole: safeArgs.actorRole ? String(safeArgs.actorRole).trim() : undefined,
+            isAdmin: safeArgs.isAdmin === true,
+            versionNote: safeArgs.versionNote ? String(safeArgs.versionNote).trim() : '',
+          },
+          httpOpts(ctx, { timeoutMs: 30000 }),
+        );
+        if (r.error === 'aborted') return abortedToolResult();
+        const structured = r.json || {};
+        return {
+          ok: Boolean(structured.publishable),
+          content: JSON.stringify(structured, null, 2),
+          structured,
+          ...(structured.publishable
+            ? {}
+            : {
+                error: {
+                  code: structured.code ? String(structured.code) : 'AGENT_CAPABILITY_PUBLISH_GATE_BLOCKED',
+                  message: structured.message ? String(structured.message) : r.text || 'capability publish gate blocked',
+                },
+              }),
+        };
+      }
+
+      if (name === 'ac.capability.publish_cloud') {
+        if (typeof deps.companionApiRequest !== 'function') {
+          return toolUnavailable('companion');
+        }
+        const id = String(safeArgs.id || '').trim();
+        const body = {
+          action: 'publish',
+          actorRole: safeArgs.actorRole ? String(safeArgs.actorRole).trim() : undefined,
+          isAdmin: safeArgs.isAdmin === true,
+          semver: safeArgs.semver ? String(safeArgs.semver).trim() : undefined,
+          versionNote: safeArgs.versionNote ? String(safeArgs.versionNote).trim() : '',
+          publishedBy: safeArgs.publishedBy ? String(safeArgs.publishedBy).trim() : undefined,
+        };
+        const r = await deps.companionApiRequest(
+          'POST',
+          `/v1/capability-packages/${encodeURIComponent(id)}/lifecycle`,
+          body,
+          httpOpts(ctx, { timeoutMs: 30000 }),
+        );
+        if (r.error === 'aborted') return abortedToolResult();
+        if (!r.ok) {
+          return {
+            ok: false,
+            content: r.text || '',
+            error: { code: 'AGENT_CAPABILITY_PUBLISH_FAILED', message: r.text || 'capability publish failed' },
+          };
+        }
+        return { ok: true, content: JSON.stringify(r.json, null, 2), structured: r.json };
+      }
+
+      if (name === 'ac.capability.install' || name === 'ac.capability.probe' || name === 'ac.capability.uninstall') {
+        if (typeof deps.companionApiRequest !== 'function') {
+          return toolUnavailable('companion');
+        }
+        let aborted = abortIfNeeded(ctx);
+        if (aborted) return aborted;
+        const action =
+          name === 'ac.capability.install' ? 'install' : name === 'ac.capability.probe' ? 'probe' : 'uninstall';
+        const id = String(safeArgs.id || '').trim();
+        const body = {
+          targetDir: safeArgs.targetDir ? String(safeArgs.targetDir).trim() : undefined,
+          port: safeArgs.port,
+        };
+        const r = await deps.companionApiRequest(
+          'POST',
+          `/v1/capability-packages/${encodeURIComponent(id)}/${action}`,
+          body,
+          httpOpts(ctx, { timeoutMs: action === 'probe' ? 30000 : 60000 }),
+        );
+        aborted = abortIfNeeded(ctx);
+        if (aborted) return aborted;
+        if (r.error === 'aborted') return abortedToolResult();
+        if (!r.ok) {
+          return {
+            ok: false,
+            content: r.text || '',
+            error: {
+              code:
+                action === 'install'
+                  ? 'AGENT_CAPABILITY_INSTALL_FAILED'
+                  : action === 'probe'
+                    ? 'AGENT_CAPABILITY_PROBE_FAILED'
+                    : 'AGENT_CAPABILITY_UNINSTALL_FAILED',
+              message: r.text || `${action} failed`,
+            },
+          };
+        }
+        return { ok: true, content: JSON.stringify(r.json, null, 2), structured: r.json };
+      }
+
+      if (name === 'ac.companion.host_bridge.create_draft') {
+        if (typeof deps.companionApiRequest !== 'function') {
+          return toolUnavailable('companion');
+        }
+        let aborted = abortIfNeeded(ctx);
+        if (aborted) return aborted;
+        const body = {
+          id: safeArgs.id != null ? String(safeArgs.id).trim() : undefined,
+          name: String(safeArgs.name || '').trim(),
+          category: safeArgs.category != null ? String(safeArgs.category) : undefined,
+          defaultPort: typeof safeArgs.defaultPort === 'number' ? safeArgs.defaultPort : undefined,
+          connectorLabel: safeArgs.connectorLabel != null ? String(safeArgs.connectorLabel) : undefined,
+          entryFile: safeArgs.entryFile != null ? String(safeArgs.entryFile) : undefined,
+          tags: Array.isArray(safeArgs.tags) ? safeArgs.tags.map(String) : undefined,
+          description: safeArgs.description != null ? String(safeArgs.description) : undefined,
+          createdBy: 'copilot',
+        };
+        const r = await deps.companionApiRequest(
+          'POST',
+          '/v1/bridges/drafts',
+          body,
+          httpOpts(ctx, { timeoutMs: 60000 }),
+        );
+        aborted = abortIfNeeded(ctx);
+        if (aborted) return aborted;
+        if (r.error === 'aborted') return abortedToolResult();
+        if (!r.ok) {
+          return {
+            ok: false,
+            content: r.text || '',
+            error: { code: 'AGENT_HOST_BRIDGE_DRAFT_FAILED', message: r.text || 'host bridge draft failed' },
+          };
+        }
+        return { ok: true, content: JSON.stringify(r.json, null, 2), structured: r.json };
+      }
+
+      if (name === 'ac.companion.host_bridge.validate_draft') {
+        if (typeof deps.companionApiRequest !== 'function') {
+          return toolUnavailable('companion');
+        }
+        const id = String(safeArgs.id || '').trim();
+        const r = await deps.companionApiRequest(
+          'POST',
+          `/v1/bridges/drafts/${encodeURIComponent(id)}/validate`,
+          {},
+          httpOpts(ctx, { timeoutMs: 30000 }),
+        );
+        if (r.error === 'aborted') return abortedToolResult();
+        if (!r.ok) {
+          return {
+            ok: false,
+            content: r.text || '',
+            error: { code: 'AGENT_HOST_BRIDGE_VALIDATE_FAILED', message: r.text || 'host bridge validate failed' },
+          };
+        }
+        return { ok: true, content: JSON.stringify(r.json, null, 2), structured: r.json };
+      }
+
+      if (name === 'ac.companion.host_bridge.acceptance_status') {
+        if (typeof deps.companionApiRequest !== 'function') {
+          return toolUnavailable('companion');
+        }
+        let aborted = abortIfNeeded(ctx);
+        if (aborted) return aborted;
+        const r = await deps.companionApiRequest('GET', '/v1/bridges', null, httpOpts(ctx, { timeoutMs: 30000 }));
+        aborted = abortIfNeeded(ctx);
+        if (aborted) return aborted;
+        if (r.error === 'aborted') return abortedToolResult();
+        if (!r.ok) {
+          return {
+            ok: false,
+            content: r.text || '',
+            error: { code: 'AGENT_HOST_BRIDGE_ACCEPTANCE_STATUS_FAILED', message: r.text || 'host bridge acceptance status failed' },
+          };
+        }
+        const bridges = Array.isArray(r.json && r.json.bridges) ? r.json.bridges : [];
+        const summary = r.json && r.json.acceptanceSummary && typeof r.json.acceptanceSummary === 'object' ? r.json.acceptanceSummary : {};
+        const groups = Array.isArray(summary.groups) ? summary.groups : [];
+        const missingGroups = groups
+          .filter((group) => !group.ok)
+          .map((group) => {
+            const recommendedHosts = (Array.isArray(group.missingHosts) ? group.missingHosts : []).slice(0, 3);
+            const guide = hostBridgeAcceptanceInstruction(group.id, recommendedHosts[0] || '');
+            return {
+              id: group.id,
+              label: group.label || group.id,
+              missingHosts: Array.isArray(group.missingHosts) ? group.missingHosts : [],
+              recommendedHosts,
+              instruction: guide.instruction,
+              steps: guide.steps,
+              evidence: guide.evidence,
+              rule: guide.rule,
+            };
+          });
+        const structured = {
+          ok: Boolean(summary.ok),
+          hostCount: bridges.length,
+          readyCount: bridges.filter((item) => item && item.status === 'ready').length,
+          oneClickCount: bridges.filter((item) => item && item.installMode === 'one_click').length,
+          plannedCount: bridges.filter((item) => item && (item.status === 'planned' || item.installMode !== 'one_click')).length,
+          acceptedGroups: Number(summary.acceptedGroups) || 0,
+          requiredGroups: Number(summary.requiredGroups) || groups.length || 0,
+          groups,
+          missingGroups,
+          nextActions: missingGroups.map((group) => ({
+            groupId: group.id,
+            label: group.label,
+            hostId: group.recommendedHosts[0] || '',
+            instruction:
+              group.recommendedHosts[0]
+                ? group.instruction
+                : '该门禁组暂时没有推荐宿主，请先检查验收记录和宿主 catalog。',
+            steps: group.steps || [],
+            evidence: group.evidence || '',
+            rule: group.rule || '',
+          })),
+          rule: 'Only real software signals such as HTTP health, heartbeat, command port, or plugin callback may pass acceptance.',
+        };
+        return { ok: true, content: JSON.stringify(structured, null, 2), structured };
+      }
+
+      if (name === 'ac.companion.host_bridge.install') {
+        if (typeof deps.companionApiRequest !== 'function') {
+          return toolUnavailable('companion');
+        }
+        let aborted = abortIfNeeded(ctx);
+        if (aborted) return aborted;
+        const id = String(safeArgs.id || '').trim();
+        const body = buildHostBridgeInstallBody(id, safeArgs);
+        const r = await deps.companionApiRequest(
+          'POST',
+          `/v1/bridges/${encodeURIComponent(id)}/install`,
+          body,
+          httpOpts(ctx, { timeoutMs: 60000 }),
+        );
+        aborted = abortIfNeeded(ctx);
+        if (aborted) return aborted;
+        if (r.error === 'aborted') return abortedToolResult();
+        if (!r.ok) {
+          return {
+            ok: false,
+            content: r.text || '',
+            error: { code: 'AGENT_HOST_BRIDGE_INSTALL_FAILED', message: r.text || 'host bridge install failed' },
+          };
+        }
+        return { ok: true, content: JSON.stringify(r.json, null, 2), structured: r.json };
+      }
+
+      if (name === 'ac.companion.host_bridge.probe') {
+        if (typeof deps.companionApiRequest !== 'function') {
+          return toolUnavailable('companion');
+        }
+        let aborted = abortIfNeeded(ctx);
+        if (aborted) return aborted;
+        const id = String(safeArgs.id || '').trim();
+        const r = await deps.companionApiRequest(
+          'POST',
+          `/v1/bridges/${encodeURIComponent(id)}/probe`,
+          {},
+          httpOpts(ctx, { timeoutMs: 30000 }),
+        );
+        aborted = abortIfNeeded(ctx);
+        if (aborted) return aborted;
+        if (r.error === 'aborted') return abortedToolResult();
+        if (!r.ok) {
+          return {
+            ok: false,
+            content: r.text || '',
+            error: { code: 'AGENT_HOST_BRIDGE_PROBE_FAILED', message: r.text || 'host bridge probe failed' },
+          };
+        }
+        if (r.json && r.json.acceptance) {
+          return {
+            ok: true,
+            content: JSON.stringify(r.json, null, 2),
+            structured: {
+              ...r.json,
+              acceptanceRecorded: true,
+            },
+          };
+        }
+        return { ok: true, content: JSON.stringify(r.json, null, 2), structured: r.json };
+      }
+
+      if (name === 'ac.companion.host_bridge.launch_host') {
+        if (typeof deps.companionApiRequest !== 'function') {
+          return toolUnavailable('companion');
+        }
+        let aborted = abortIfNeeded(ctx);
+        if (aborted) return aborted;
+        const id = String(safeArgs.id || '').trim();
+        const body = {};
+        if (safeArgs.executablePath) body.executablePath = String(safeArgs.executablePath).trim();
+        if (safeArgs.versionId) body.versionId = String(safeArgs.versionId).trim();
+        if (safeArgs.targetId) body.targetId = String(safeArgs.targetId).trim();
+        const r = await deps.companionApiRequest(
+          'POST',
+          `/v1/bridges/${encodeURIComponent(id)}/launch`,
+          body,
+          httpOpts(ctx, { timeoutMs: 30000 }),
+        );
+        aborted = abortIfNeeded(ctx);
+        if (aborted) return aborted;
+        if (r.error === 'aborted') return abortedToolResult();
+        if (!r.ok) {
+          return {
+            ok: false,
+            content: r.text || '',
+            error: { code: 'AGENT_HOST_LAUNCH_FAILED', message: r.text || 'host launch failed' },
+          };
+        }
+        return { ok: true, content: JSON.stringify(r.json, null, 2), structured: r.json };
+      }
+
+      if (name === 'ac.companion.host_bridge.close_host') {
+        if (typeof deps.companionApiRequest !== 'function') {
+          return toolUnavailable('companion');
+        }
+        let aborted = abortIfNeeded(ctx);
+        if (aborted) return aborted;
+        const id = String(safeArgs.id || '').trim();
+        const r = await deps.companionApiRequest(
+          'POST',
+          `/v1/bridges/${encodeURIComponent(id)}/close`,
+          {},
+          httpOpts(ctx, { timeoutMs: 30000 }),
+        );
+        aborted = abortIfNeeded(ctx);
+        if (aborted) return aborted;
+        if (r.error === 'aborted') return abortedToolResult();
+        if (!r.ok) {
+          return {
+            ok: false,
+            content: r.text || '',
+            error: { code: 'AGENT_HOST_CLOSE_FAILED', message: r.text || 'host close failed' },
+          };
+        }
+        return { ok: true, content: JSON.stringify(r.json, null, 2), structured: r.json };
+      }
+
+      if (name === 'ac.companion.host_bridge.discover_running_host') {
+        if (typeof deps.companionApiRequest !== 'function') {
+          return toolUnavailable('companion');
+        }
+        let aborted = abortIfNeeded(ctx);
+        if (aborted) return aborted;
+        const id = String(safeArgs.id || '').trim();
+        const r = await deps.companionApiRequest(
+          'POST',
+          `/v1/bridges/${encodeURIComponent(id)}/discover-running`,
+          {},
+          httpOpts(ctx, { timeoutMs: 30000 }),
+        );
+        aborted = abortIfNeeded(ctx);
+        if (aborted) return aborted;
+        if (r.error === 'aborted') return abortedToolResult();
+        if (!r.ok) {
+          return {
+            ok: false,
+            content: r.text || '',
+            error: { code: 'AGENT_HOST_DISCOVER_RUNNING_FAILED', message: r.text || 'host running discovery failed' },
+          };
+        }
+        return { ok: true, content: JSON.stringify(r.json, null, 2), structured: r.json };
+      }
+
+      if (name === 'ac.companion.host_bridge.uninstall') {
+        if (typeof deps.companionApiRequest !== 'function') {
+          return toolUnavailable('companion');
+        }
+        let aborted = abortIfNeeded(ctx);
+        if (aborted) return aborted;
+        const id = String(safeArgs.id || '').trim();
+        const r = await deps.companionApiRequest(
+          'POST',
+          `/v1/bridges/${encodeURIComponent(id)}/uninstall`,
+          {},
+          httpOpts(ctx, { timeoutMs: 60000 }),
+        );
+        aborted = abortIfNeeded(ctx);
+        if (aborted) return aborted;
+        if (r.error === 'aborted') return abortedToolResult();
+        if (!r.ok) {
+          return {
+            ok: false,
+            content: r.text || '',
+            error: { code: 'AGENT_HOST_BRIDGE_UNINSTALL_FAILED', message: r.text || 'host bridge uninstall failed' },
+          };
+        }
+        return { ok: true, content: JSON.stringify(r.json, null, 2), structured: r.json };
+      }
+
+      if (name === 'ac.companion.host_bridge.delete_draft') {
+        if (typeof deps.companionApiRequest !== 'function') {
+          return toolUnavailable('companion');
+        }
+        const id = String(safeArgs.id || '').trim();
+        const r = await deps.companionApiRequest(
+          'DELETE',
+          `/v1/bridges/drafts/${encodeURIComponent(id)}`,
+          null,
+          httpOpts(ctx, { timeoutMs: 30000 }),
+        );
+        if (r.error === 'aborted') return abortedToolResult();
+        if (!r.ok) {
+          return {
+            ok: false,
+            content: r.text || '',
+            error: { code: 'AGENT_HOST_BRIDGE_DELETE_FAILED', message: r.text || 'host bridge delete failed' },
           };
         }
         return { ok: true, content: JSON.stringify(r.json, null, 2), structured: r.json };

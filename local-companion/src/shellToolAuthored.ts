@@ -21,6 +21,11 @@ import {
   type ShellToolSpecV1,
 } from './shellToolSpec.js';
 import { collectDirFiles, writeStoreZipFile } from './shellToolZip.js';
+import {
+  createCapabilityPackageDraft,
+  readCapabilityPackageDraft,
+  updateCapabilityPackageDraft,
+} from './capabilities/capabilityPackageStore.js';
 
 export type ShellToolOrigin = 'authored' | 'catalog' | 'example' | 'import';
 export type ShellToolReviewStatus = 'local' | 'pending' | 'approved' | 'rejected';
@@ -222,6 +227,49 @@ if (process.env.SHELL_TOOL_PARAM_NOTE) {
   return { tool, panel, script };
 }
 
+function syncToolCapabilityDraft(input: {
+  id: string;
+  name: string;
+  description: string;
+  semver: string;
+  tags?: string[];
+  origin?: ShellToolOrigin;
+}): void {
+  const toolId = assertSafeToolId(input.id);
+  if (!toolId) return;
+  const manifest = {
+    authoredToolId: toolId,
+    authoredPath: authoredToolDir(toolId),
+    origin: input.origin || 'authored',
+  };
+  const existing = readCapabilityPackageDraft(toolId);
+  if (!existing) {
+    createCapabilityPackageDraft({
+      id: toolId,
+      type: 'tool',
+      name: input.name || toolId,
+      description: input.description || '',
+      tags: Array.isArray(input.tags) ? input.tags : undefined,
+      semver: input.semver || '0.1.0',
+      manifest,
+      createdBy: 'local-shell',
+    });
+    return;
+  }
+  if (existing.type !== 'tool') return;
+  updateCapabilityPackageDraft(toolId, (current) => ({
+    ...current,
+    name: input.name || current.name || toolId,
+    description: input.description || current.description || '',
+    tags: Array.isArray(input.tags) ? input.tags : current.tags,
+    version: input.semver || current.version,
+    manifest: {
+      ...(current.manifest && typeof current.manifest === 'object' ? current.manifest : {}),
+      ...manifest,
+    },
+  }));
+}
+
 export async function scaffoldAuthoredTool(input: {
   id: string;
   name?: string;
@@ -248,6 +296,14 @@ export async function scaffoldAuthoredTool(input: {
   await writeFile(join(dir, 'tool.json'), `${JSON.stringify(tool, null, 2)}\n`, 'utf8');
   await writeFile(join(dir, 'module', 'panel.json'), `${JSON.stringify(panel, null, 2)}\n`, 'utf8');
   await writeFile(join(dir, 'scripts', 'main.mjs'), script, 'utf8');
+  syncToolCapabilityDraft({
+    id: tool.id,
+    name: tool.name,
+    description: tool.description,
+    semver: tool.semver,
+    tags: tool.tags,
+    origin: 'authored',
+  });
   return { toolId, path: dir };
 }
 
@@ -293,6 +349,14 @@ export async function listAuthoredTools(): Promise<AuthoredToolSummary[]> {
     if (!existsSync(join(dir, 'tool.json'))) continue;
     const v = validateShellToolPackageDir(dir);
     if (v.ok) {
+      syncToolCapabilityDraft({
+        id: v.tool.id,
+        name: v.tool.name,
+        description: v.tool.description,
+        semver: v.tool.semver,
+        tags: v.tool.tags,
+        origin: 'authored',
+      });
       out.push({
         id: v.tool.id,
         name: v.tool.name,
@@ -338,6 +402,14 @@ export async function installAuthoredTool(
   const validation = validateShellToolPackageDir(dir);
   if (!validation.ok) throw new Error(validation.error);
   const result = await installShellToolFromLocalDir(dir);
+  syncToolCapabilityDraft({
+    id: validation.tool.id,
+    name: validation.tool.name,
+    description: validation.tool.description,
+    semver: validation.tool.semver,
+    tags: validation.tool.tags,
+    origin: 'authored',
+  });
   const rev = (watchers.get(toolId)?.rev ?? 0) + 1;
   await patchInstalledManifest(toolId, {
     origin: 'authored',
@@ -434,6 +506,14 @@ export async function importAuthoredFromZip(zipPathRaw: string): Promise<{
     } catch {
       /* ignore */
     }
+    syncToolCapabilityDraft({
+      id: v.tool.id,
+      name: v.tool.name,
+      description: v.tool.description,
+      semver: v.tool.semver,
+      tags: v.tool.tags,
+      origin: 'import',
+    });
     return result;
   } finally {
     await rm(staging, { recursive: true, force: true }).catch(() => {});
@@ -460,6 +540,14 @@ async function syncAuthoredToInstalled(toolId: string): Promise<{ ok: boolean; e
   }
 
   if (!existsSync(installedManifestPath(toolId))) {
+    syncToolCapabilityDraft({
+      id: v.tool.id,
+      name: v.tool.name,
+      description: v.tool.description,
+      semver: v.tool.semver,
+      tags: v.tool.tags,
+      origin: 'authored',
+    });
     // Not installed yet — just update watch state
     if (entry) {
       entry.rev = nextRev;
@@ -493,7 +581,7 @@ async function syncAuthoredToInstalled(toolId: string): Promise<{ ok: boolean; e
       const p = installedManifestPath(toolId);
       const cur = JSON.parse(await readFile(p, 'utf8')) as Record<string, unknown>;
       cur.origin = cur.origin || 'authored';
-      cur.reviewStatus = cur.reviewStatus || 'local';
+      cur.reviewStatus = 'local';
       cur.contentRev = nextRev;
       cur.draftError = null;
       cur.sourceUrlHost = 'authored';
@@ -505,6 +593,14 @@ async function syncAuthoredToInstalled(toolId: string): Promise<{ ok: boolean; e
       entry.rev = nextRev;
       entry.draftError = null;
     }
+    syncToolCapabilityDraft({
+      id: v.tool.id,
+      name: v.tool.name,
+      description: v.tool.description,
+      semver: v.tool.semver,
+      tags: v.tool.tags,
+      origin: 'authored',
+    });
     emitHot(getAuthoredHotState(toolId)!);
     return { ok: true, rev: nextRev };
   } finally {

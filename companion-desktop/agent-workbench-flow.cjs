@@ -54,6 +54,7 @@ const WORKBENCH_CANONICAL_FLOW = [
     required: true,
     constraints: [
       'For a plain text note in the open project, prefer ac.workbench.create_text_asset with { text }.',
+      'If the user asks to create/build a tool, plugin, Maya plugin, script tool, or installable utility, do not use create_text_asset; prefer ac.capability.create_draft -> ac.shell_tool.authored_upsert instead.',
       'To import a local image into the open project, prefer ac.workbench.create_image_asset with { localPath } (absolute path). Do not convert the file to base64 for the tool call.',
       'For capability presets, choose a preset with directRunSupported=true.',
       'Use inputText for text-capable presets.',
@@ -103,7 +104,7 @@ const WORKBENCH_E2E_GATES = {
 };
 
 function workbenchStandardFlowText() {
-  return 'ac.workbench.ensure_ready -> ac.workbench.get_context/create_project/open_project -> (ac.workbench.create_text_asset | ac.workbench.create_image_asset | ac.workbench.run_capability) -> ac.workbench.list_assets -> ac.workbench.get_asset';
+  return 'ac.workbench.ensure_ready -> ac.workbench.get_context/create_project/open_project -> (plain workbench assets: ac.workbench.create_text_asset | ac.workbench.create_image_asset | ac.workbench.run_capability; tool/plugin creation: ac.capability.create_draft -> ac.shell_tool.authored_upsert) -> ac.workbench.list_assets -> ac.workbench.get_asset';
 }
 
 function buildWorkbenchFlowDocument() {

@@ -287,6 +287,8 @@ function createAgentBodyMcpServer(deps) {
     return [
       'AssetCutter MCP is the local body for the AssetCutter workbench.',
       'Start with ac.shell.get_state, then ac.workbench.ensure_ready before operating projects or capabilities; create a project with ac.workbench.create_project when no project is active, use ac.workbench.list_assets to inspect outputs, and ac.workbench.get_asset for details.',
+      'For tool/plugin/script-tool creation requests, prefer ac.capability.create_draft with type=tool or inferred intent, then use ac.shell_tool.authored_upsert for concrete files; do not put generated tool code into ac.workbench.create_text_asset.',
+      'For software connection creation requests, prefer ac.capability.create_draft with type=software_connection and natural-language intent; ac.companion.host_bridge.* is legacy recovery/debug, not the default user-facing creation path.',
       'Use tools/list for schemas and assetcutter://mcp/tool-catalog for grouped guidance, example arguments, and success signals.',
       'Confirm-risk tools may require Copilot frontend authorization; keep Copilot open when calling workbench or Script Hub actions.',
       'For long-running calls, send notifications/cancelled with the original JSON-RPC request id if the task should stop.',
@@ -1620,6 +1622,8 @@ function createAgentBodyMcpServer(deps) {
           '2. Call `ac.shell.get_state` to inspect the current shell, team account, pairing, brain, and workbench state.',
           '3. Call `ac.workbench.ensure_ready` before opening projects or running workbench capabilities; it navigates to the workbench, checks login/project/capability readiness, and can create a project when `requireProject=true` and `createIfMissing=true`.',
           '4. If you need an explicit project creation step, call `ac.workbench.create_project`; after generation, call `ac.workbench.list_assets` and `ac.workbench.get_asset` to verify outputs.',
+          '4a. If the user asks to create/build a tool, plugin, Maya plugin, script tool, or installable utility, prefer `ac.capability.create_draft` with a natural-language intent, then use `ac.shell_tool.authored_upsert` for concrete files; use `ac.shell_tool.export` only when a ZIP/package is needed. Do not use `ac.workbench.create_text_asset` for tool code.',
+          '4b. If the user asks to add/create a software connection for a host app, prefer `ac.capability.create_draft` with `type=software_connection`; treat `ac.companion.host_bridge.*` as legacy recovery/debug tools only.',
           '5. Read `assetcutter://mcp/policy` before confirm-risk tools to know whether they will run, prompt, or be denied.',
           '6. Use safe tools freely for inspection. Use confirm-risk tools only when user intent is clear and policy allows it.',
           '7. Read `assetcutter://mcp/tool-catalog` for grouped tool guidance and example arguments.',
