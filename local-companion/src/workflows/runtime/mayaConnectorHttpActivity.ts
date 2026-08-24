@@ -41,9 +41,18 @@ export type ExternalMayaConnectorExportResult =
       ok: false;
     };
 
-const defaultBaseUrl = 'http://localhost:8795';
+import {
+  checkMayaCommandPortConnector,
+  exportMayaCommandPortFbx,
+  type MayaCommandPortTarget,
+} from './mayaCommandPortConnector.js';
 
-export async function checkExternalMayaConnector(baseUrl = defaultBaseUrl): Promise<ExternalMayaConnectorSyncStatus> {
+export async function checkExternalMayaConnector(
+  baseUrl?: string,
+  target?: Partial<MayaCommandPortTarget>,
+): Promise<ExternalMayaConnectorSyncStatus> {
+  if (!baseUrl) return checkMayaCommandPortConnector(target);
+
   const checkedAt = new Date().toISOString();
   const normalizedBaseUrl = baseUrl.replace(/\/+$/, '');
   try {
@@ -87,10 +96,13 @@ export async function exportExternalMayaFbx(
   input: {
     output_path: string;
     overwrite: boolean;
+    target?: Partial<MayaCommandPortTarget>;
     trace_id?: string;
   },
-  baseUrl = defaultBaseUrl,
+  baseUrl?: string,
 ): Promise<ExternalMayaConnectorExportResult> {
+  if (!baseUrl) return exportMayaCommandPortFbx(input);
+
   const normalizedBaseUrl = baseUrl.replace(/\/+$/, '');
   const route = await postRoute(`${normalizedBaseUrl}/export/fbx`, input);
   if (!route.ok) {

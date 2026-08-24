@@ -34,7 +34,8 @@ describe('agent P0 tool schemas', () => {
     for (const v of enumValues) {
       expect(VALID_SHELL_VIEWS.has(v)).toBe(true);
     }
-    expect(enumValues).toContain('scripts');
+    expect(enumValues).toContain('workflow');
+    expect(enumValues).not.toContain('scripts');
     expect(enumValues).toContain('connections');
   });
 
@@ -44,11 +45,11 @@ describe('agent P0 tool schemas', () => {
     expect(r.ok).toBe(false);
   });
 
-  it('validateArgs accepts scripts navigate', () => {
+  it('validateArgs accepts workflow navigate', () => {
     const nav = P0_TOOL_SCHEMAS.find((t: { name: string }) => t.name === 'ac.shell.navigate');
-    const r = validateArgs(nav.inputSchema, { view: 'scripts' });
+    const r = validateArgs(nav.inputSchema, { view: 'workflow' });
     expect(r.ok).toBe(true);
-    expect(r.value.view).toBe('scripts');
+    expect(r.value.view).toBe('workflow');
   });
 });
 
@@ -115,7 +116,13 @@ describe('agent P1 tool schemas', () => {
     expect(createCapabilityDraft?.risk).toBe('confirm');
     expect(createCapabilityDraft?.input.required).toEqual(['name']);
     expect(createCapabilityDraft?.whenToUse).toContain('CapabilityPackage(type=software_connection)');
+    expect(createCapabilityDraft?.whenToUse).toContain('Treat every app as unknown first');
+    expect(createCapabilityDraft?.whenToUse).toContain('connectionFacts');
+    expect(createCapabilityDraft?.whenToUse).toContain('StrategyDraft/candidateStrategies');
     expect(createCapabilityDraft?.whenToUse).toContain('do not restore the old 62-host default catalog');
+    expect(createCapabilityDraft?.whenToUse).toContain('softwareBridgeRegistry');
+    expect(createCapabilityDraft?.whenToUse).toContain('Known drivers are only verified strategy shortcuts');
+    expect(createCapabilityDraft?.whenToUse).toContain('do not suggest editing capabilityLifecycle.ts');
     expect(createCapabilityDraft?.inputSchema.properties.type.enum).toEqual(['software_connection', 'tool', 'workflow']);
     expect(validateArgs(createCapabilityDraft?.inputSchema, { name: 'Photoshop', type: 'host' }).ok).toBe(false);
     expect(validateArgs(createCapabilityDraft?.inputSchema, { name: '随机选择', type: 'tool' }).ok).toBe(true);
@@ -123,6 +130,12 @@ describe('agent P1 tool schemas', () => {
     expect(createUnifiedCapability?.risk).toBe('confirm');
     expect(createUnifiedCapability?.input.required).toEqual(['name', 'intent']);
     expect(createUnifiedCapability?.whenToUse).toContain('do not create Workbench text assets');
+    expect(createUnifiedCapability?.whenToUse).toContain('treat the target as unknown first');
+    expect(createUnifiedCapability?.whenToUse).toContain('collect connectionFacts');
+    expect(createUnifiedCapability?.whenToUse).toContain('produce StrategyDraft/candidateStrategies');
+    expect(createUnifiedCapability?.whenToUse).toContain('without making the user choose a template');
+    expect(createUnifiedCapability?.whenToUse).toContain('softwareBridgeRegistry bridge drivers');
+    expect(createUnifiedCapability?.whenToUse).toContain('not capabilityLifecycle.ts branches');
     expect(createUnifiedCapability?.inputSchema.properties.type.enum).toEqual(['software_connection', 'tool', 'workflow']);
     expect(validateArgs(createUnifiedCapability?.inputSchema, { name: '随机选择工具', intent: '做一个随机选择工具', type: 'tool' }).ok).toBe(true);
     expect(validateArgs(createUnifiedCapability?.inputSchema, { name: '随机选择工具', type: 'tool' }).ok).toBe(false);
@@ -149,11 +162,22 @@ describe('agent P1 tool schemas', () => {
     );
     expect(runCapabilityLifecycle?.inputSchema.properties.executablePath).toBeTruthy();
     expect(runCapabilityLifecycle?.inputSchema.properties.targetId).toBeTruthy();
+    expect(runCapabilityLifecycle?.inputSchema.properties.currentStrategyId).toBeTruthy();
     expect(runCapabilityLifecycle?.inputSchema.properties.versionNote).toBeTruthy();
     const connectionLoop = companion?.tools.find((t: { name: string }) => t.name === 'ac.capability.connection_loop_run');
     expect(connectionLoop?.risk).toBe('confirm');
     expect(connectionLoop?.input.required).toEqual(['id', 'goal', 'permissions']);
     expect(connectionLoop?.whenToUse).toContain('PI-style');
+    expect(connectionLoop?.whenToUse).toContain('strategy_draft');
+    expect(connectionLoop?.whenToUse).toContain('failedStrategyId');
+    expect(connectionLoop?.whenToUse).toContain('softwareBridgeRegistry');
+    expect(connectionLoop?.whenToUse).toContain('without editing capabilityLifecycle.ts');
+    const templateDraftCreate = companion?.tools.find((t: { name: string }) => t.name === 'ac.capability.template_draft_create');
+    expect(templateDraftCreate?.whenToUse).toContain('Legacy-compatible draft tool');
+    expect(templateDraftCreate?.whenToUse).toContain('Prefer the unknown-first strategy flow');
+    expect(templateDraftCreate?.whenToUse).toContain('connectionFacts');
+    expect(templateDraftCreate?.whenToUse).toContain('StrategyDraft/candidateStrategies');
+    expect(templateDraftCreate?.whenToUse).toContain('Do not ask the user to choose a technical template');
     expect(connectionLoop?.inputSchema.properties.permissions.items.enum).toEqual(
       expect.arrayContaining(['context.read', 'process.discover', 'process.launch', 'bridge.install', 'connection.probe', 'event.write']),
     );

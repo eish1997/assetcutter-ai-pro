@@ -1,0 +1,755 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AssetCutter Copilot Redesign Prototype</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #08090d;
+      --shell: #0f1016;
+      --panel: #11131a;
+      --panel-2: #171a23;
+      --card: #1a1d27;
+      --card-soft: #151821;
+      --line: rgba(255, 255, 255, 0.09);
+      --line-soft: rgba(255, 255, 255, 0.055);
+      --text: rgba(248, 250, 252, 0.96);
+      --muted: rgba(148, 163, 184, 0.92);
+      --dim: rgba(100, 116, 139, 0.9);
+      --accent: #8fb3ff;
+      --accent-soft: rgba(143, 179, 255, 0.11);
+      --ok: #9cc7aa;
+      --wait: #d8b56a;
+      --radius: 10px;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background:
+        linear-gradient(180deg, #0b0d12, #06070a);
+      color: var(--text);
+    }
+
+    .page {
+      display: grid;
+      grid-template-columns: minmax(360px, 1fr) 430px;
+      gap: 28px;
+      min-height: 100vh;
+      padding: 28px;
+    }
+
+    .brief {
+      max-width: 760px;
+      align-self: start;
+      padding: 26px;
+      border-radius: 16px;
+      background: rgba(15, 16, 22, 0.64);
+      box-shadow: 0 24px 70px rgba(0, 0, 0, 0.28);
+    }
+
+    h1 {
+      margin: 0 0 10px;
+      font-size: 24px;
+      letter-spacing: 0;
+    }
+
+    .brief p {
+      margin: 0;
+      max-width: 620px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.7;
+    }
+
+    .principles {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 24px;
+    }
+
+    .principle {
+      min-height: 92px;
+      padding: 14px;
+      border-radius: 10px;
+      background: rgba(255, 255, 255, 0.028);
+    }
+
+    .principle strong {
+      display: block;
+      margin-bottom: 7px;
+      font-size: 13px;
+    }
+
+    .principle span {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.55;
+    }
+
+    .state-switcher {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 24px;
+    }
+
+    .state-switcher button {
+      min-height: 32px;
+      padding: 0 12px;
+      border: 0;
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.04);
+      color: var(--muted);
+      font: inherit;
+      font-size: 12px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    .state-switcher button.is-active {
+      background: var(--accent-soft);
+      color: #dbeafe;
+    }
+
+    .stage {
+      display: grid;
+      justify-items: center;
+      align-content: center;
+      min-width: 0;
+    }
+
+    .copilot {
+      width: 390px;
+      height: 760px;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      background: var(--shell);
+      box-shadow: -18px 0 70px rgba(0, 0, 0, 0.36), 0 24px 80px rgba(0, 0, 0, 0.34);
+    }
+
+    .topbar {
+      flex: 0 0 auto;
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 10px;
+      min-height: 44px;
+      padding: 7px 12px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.045);
+      background: #101116;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+      font-size: 14px;
+      font-weight: 800;
+    }
+
+    .brain {
+      padding: 2px 7px;
+      border-radius: 7px;
+      background: rgba(255, 255, 255, 0.045);
+      color: var(--muted);
+      font-size: 10px;
+      font-weight: 700;
+    }
+
+    .top-state {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      min-width: 0;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 700;
+      justify-self: start;
+    }
+
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 999px;
+      background: var(--ok);
+    }
+
+    .dot.blue { background: var(--accent); }
+    .dot.amber { background: var(--wait); }
+
+    .icon-actions {
+      display: flex;
+      gap: 6px;
+    }
+
+    .icon-btn {
+      width: 28px;
+      height: 28px;
+      display: grid;
+      place-items: center;
+      border: 0;
+      border-radius: 8px;
+      background: transparent;
+      color: var(--muted);
+      cursor: pointer;
+    }
+
+    .icon-btn svg {
+      width: 15px;
+      height: 15px;
+      fill: none;
+      stroke: currentColor;
+      stroke-width: 1.8;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+
+    .context-card {
+      flex: 0 0 auto;
+      margin: 0;
+      padding: 10px 14px 9px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.045);
+      background: rgba(255, 255, 255, 0.018);
+    }
+
+    .context-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      align-items: flex-start;
+    }
+
+    .eyebrow {
+      margin-bottom: 2px;
+      color: var(--muted);
+      font-size: 9px;
+      font-weight: 800;
+    }
+
+    .context-title {
+      margin: 0;
+      font-size: 13px;
+      line-height: 1.25;
+    }
+
+    .badge {
+      flex: 0 0 auto;
+      padding: 3px 7px;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.045);
+      color: rgba(210, 216, 226, 0.9);
+      font-size: 9px;
+      font-weight: 800;
+    }
+
+    .context-lines {
+      display: block;
+      margin-top: 6px;
+      color: rgba(173, 181, 195, 0.86);
+      font-size: 10px;
+      line-height: 1.35;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .context-lines span {
+      display: none;
+    }
+
+    .context-lines span:first-child {
+      display: inline;
+    }
+
+    .context-detail {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      margin-top: 4px;
+      padding-top: 0;
+      border-top: 0;
+      color: var(--dim);
+      font-size: 9px;
+      font-weight: 700;
+    }
+
+    .conversation {
+      flex: 1 1 auto;
+      min-height: 0;
+      padding: 14px;
+      overflow: auto;
+      background:
+        linear-gradient(180deg, rgba(11, 12, 17, 0.98), rgba(8, 9, 13, 1));
+    }
+
+    .section-label {
+      margin: 2px 0 12px 2px;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 800;
+    }
+
+    .messages {
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+
+    .msg {
+      max-width: 92%;
+      padding: 0;
+      border: 0;
+      border-radius: 0;
+      background: transparent;
+      color: var(--text);
+      font-size: 12px;
+      line-height: 1.55;
+      overflow-wrap: anywhere;
+    }
+
+    .msg.user {
+      align-self: flex-end;
+      padding: 8px 11px;
+      border-radius: 10px;
+      background: rgba(255, 255, 255, 0.07);
+      color: #eff6ff;
+    }
+
+    .run-card {
+      align-self: stretch;
+      padding: 11px 0 11px 12px;
+      border: 0;
+      border-left: 2px solid rgba(143, 179, 255, 0.72);
+      border-radius: 0;
+      background: rgba(255, 255, 255, 0.025);
+    }
+
+    .run-card.amber {
+      border-left-color: rgba(216, 181, 106, 0.86);
+      background: rgba(255, 255, 255, 0.025);
+    }
+
+    .run-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 9px;
+    }
+
+    .run-title {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    .run-meta {
+      color: var(--muted);
+      font-size: 10px;
+      font-weight: 700;
+    }
+
+    .run-body {
+      color: rgba(203, 213, 225, 0.9);
+      font-size: 11px;
+      line-height: 1.55;
+    }
+
+    .detail-btn {
+      display: inline-flex;
+      align-items: center;
+      min-height: 24px;
+      margin-top: 10px;
+      padding: 0 9px;
+      border: 0;
+      border-radius: 7px;
+      background: rgba(255, 255, 255, 0.045);
+      color: var(--muted);
+      font-size: 10px;
+      font-weight: 800;
+    }
+
+    .markdown h3 {
+      margin: 0 0 8px;
+      font-size: 13px;
+    }
+
+    .markdown p {
+      margin: 0 0 8px;
+    }
+
+    .markdown code {
+      padding: 1px 5px;
+      border-radius: 5px;
+      background: rgba(255, 255, 255, 0.06);
+      color: rgba(220, 228, 240, 0.96);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 11px;
+    }
+
+    .code-block {
+      margin-top: 9px;
+      overflow: hidden;
+      border-radius: 8px;
+      background: rgba(0, 0, 0, 0.32);
+    }
+
+    .code-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 6px 8px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.055);
+      color: var(--muted);
+      font-size: 10px;
+      font-weight: 800;
+    }
+
+    pre {
+      margin: 0;
+      padding: 9px;
+      overflow: auto;
+      color: rgba(226, 232, 240, 0.96);
+      font-size: 11px;
+      line-height: 1.5;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+
+    .approval {
+      padding: 12px;
+      border: 0;
+      border-left: 2px solid rgba(216, 181, 106, 0.86);
+      border-radius: 0;
+      background: rgba(255, 255, 255, 0.028);
+    }
+
+    .approval strong {
+      display: block;
+      margin-bottom: 8px;
+      color: rgba(244, 236, 216, 0.96);
+      font-size: 13px;
+    }
+
+    .approval p {
+      margin: 0;
+      color: rgba(213, 202, 178, 0.92);
+      font-size: 11px;
+      line-height: 1.55;
+    }
+
+    .approval-actions {
+      display: flex;
+      gap: 8px;
+      margin-top: 12px;
+    }
+
+    .primary-action,
+    .secondary-action {
+      min-height: 30px;
+      padding: 0 12px;
+      border-radius: 8px;
+      border: 0;
+      color: var(--text);
+      font-size: 11px;
+      font-weight: 800;
+    }
+
+    .primary-action { background: rgba(143, 179, 255, 0.22); color: #dbeafe; }
+    .secondary-action { background: rgba(255, 255, 255, 0.06); color: var(--muted); }
+
+    .composer {
+      flex: 0 0 auto;
+      padding: 10px 12px 12px;
+      border-top: 1px solid rgba(255, 255, 255, 0.045);
+      background: #101116;
+    }
+
+    .composer-context {
+      margin: 0 0 8px 2px;
+      color: var(--dim);
+      font-size: 10px;
+      font-weight: 800;
+    }
+
+    .input-shell {
+      position: relative;
+      min-height: 64px;
+      padding: 12px 54px 12px 12px;
+      border: 0;
+      border-radius: 12px;
+      background: rgba(255, 255, 255, 0.04);
+      box-shadow: none;
+    }
+
+    .placeholder {
+      color: var(--dim);
+      font-size: 12px;
+    }
+
+    .send {
+      position: absolute;
+      right: 10px;
+      bottom: 10px;
+      width: 34px;
+      height: 34px;
+      border: 0;
+      border-radius: 999px;
+      background: rgba(248, 250, 252, 0.92);
+      color: #08090d;
+      font-size: 17px;
+      font-weight: 900;
+    }
+
+    .suggestions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 9px;
+    }
+
+    .suggestions span {
+      padding: 5px 8px;
+      border: 0;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.035);
+      color: var(--muted);
+      font-size: 10px;
+      font-weight: 800;
+    }
+
+    .state { display: none; }
+    .state.is-active { display: contents; }
+
+    @media (max-width: 900px) {
+      .page {
+        grid-template-columns: 1fr;
+        padding: 16px;
+      }
+
+      .stage {
+        justify-items: start;
+        overflow-x: auto;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <section class="brief">
+      <h1>Shell Copilot 体验重设计原型</h1>
+      <p>目标是把右侧面板从“调试日志 + 聊天框”重构为桌面级 Copilot 控制塔。顶部回答当前上下文，中间承载对话和运行状态，底部作为明确的工作入口。这个原型只用于评审，不改生产壳层。</p>
+
+      <div class="principles">
+        <div class="principle">
+          <strong>顶部少展示</strong>
+          <span>只保留当前对象、状态、观察范围。长 ID、权限、命令进入详情。</span>
+        </div>
+        <div class="principle">
+          <strong>聊天区不刷日志</strong>
+          <span>回答给用户读，过程用运行状态卡表达，细节可展开。</span>
+        </div>
+        <div class="principle">
+          <strong>执行状态产品化</strong>
+          <span>观察、规划、执行、等待确认都有统一卡片，而不是散落文本。</span>
+        </div>
+        <div class="principle">
+          <strong>底部像控制台</strong>
+          <span>显示当前上下文、快捷建议、发送与停止，输入区固定且安静。</span>
+        </div>
+      </div>
+
+      <div class="state-switcher" aria-label="切换 Copilot 状态">
+        <button type="button" class="is-active" data-state="ready">默认待命</button>
+        <button type="button" data-state="observing">观察 Maya</button>
+        <button type="button" data-state="approval">等待确认</button>
+      </div>
+    </section>
+
+    <section class="stage" aria-label="Copilot 原型预览">
+      <aside class="copilot">
+        <div class="state is-active" data-view="ready">
+          <header class="topbar">
+            <div class="brand">Copilot <span class="brain">codex</span></div>
+            <div class="top-state"><span>空闲</span><span class="dot"></span></div>
+            <div class="icon-actions">
+              <button class="icon-btn" title="清空对话" aria-label="清空对话">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18" /><path d="M8 6V4h8v2" /><path d="M19 6l-1 14H6L5 6" /><path d="M10 11v6" /><path d="M14 11v6" /></svg>
+              </button>
+              <button class="icon-btn" title="打开设置页" aria-label="打开设置页" data-open-settings>
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z" /><path d="M19.4 15a1.8 1.8 0 0 0 .36 1.98l.04.04a2 2 0 0 1-2.83 2.83l-.04-.04A1.8 1.8 0 0 0 15 19.45a1.8 1.8 0 0 0-1 .55l-.1.1a2 2 0 0 1-3.41-1.41v-.06A1.8 1.8 0 0 0 9.4 17a1.8 1.8 0 0 0-1.98.36l-.04.04a2 2 0 1 1-2.83-2.83l.04-.04A1.8 1.8 0 0 0 4.95 12a1.8 1.8 0 0 0-.55-1l-.1-.1A2 2 0 0 1 5.7 7.49h.06A1.8 1.8 0 0 0 7.4 6.4a1.8 1.8 0 0 0-.36-1.98L7 4.38a2 2 0 0 1 2.83-2.83l.04.04A1.8 1.8 0 0 0 12 2.05a1.8 1.8 0 0 0 1-.55l.1-.1a2 2 0 0 1 3.41 1.41v.06A1.8 1.8 0 0 0 17.6 4.5a1.8 1.8 0 0 0 1.98-.36l.04-.04a2 2 0 0 1 2.83 2.83l-.04.04A1.8 1.8 0 0 0 19.05 12c0 .7.4 1.3.95 1.6Z" /></svg>
+              </button>
+            </div>
+          </header>
+          <section class="context-card">
+            <div class="context-head">
+              <div>
+                <div class="eyebrow">当前上下文</div>
+                <h2 class="context-title">准备接管当前工作</h2>
+              </div>
+              <span class="badge">工作台已打开</span>
+            </div>
+            <div class="context-lines">
+              <span>当前对象：默认对话</span>
+              <span>任务：选择对象后可继续优化。</span>
+            </div>
+            <div class="context-detail"><span>屏幕观察未开启</span><span>刷新：刚刚</span></div>
+          </section>
+          <section class="conversation">
+            <div class="section-label">对话</div>
+            <div class="messages">
+              <div class="msg">我已经知道你在 AssetCutter 工作台里。可以直接说“继续优化 Maya”，我会先检查连接和当前对象。</div>
+              <div class="run-card">
+                <div class="run-head"><div class="run-title"><span class="dot blue"></span>建议动作</div><span class="run-meta">可开始</span></div>
+                <div class="run-body">继续优化 Maya、查看连接状态、生成执行方案。</div>
+                <div class="detail-btn">查看上下文</div>
+              </div>
+            </div>
+          </section>
+          <footer class="composer">
+            <div class="composer-context">当前：工作台 · 默认对话</div>
+            <div class="input-shell"><span class="placeholder">让 Copilot 接着做什么...</span><button class="send">↗</button></div>
+            <div class="suggestions"><span>继续优化 Maya</span><span>查看连接状态</span><span>生成方案</span></div>
+          </footer>
+        </div>
+
+        <div class="state" data-view="observing">
+          <header class="topbar">
+            <div class="brand">Copilot <span class="brain">codex</span></div>
+            <div class="top-state"><span>观察中</span><span class="dot blue"></span></div>
+            <div class="icon-actions">
+              <button class="icon-btn" title="清空对话" aria-label="清空对话">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18" /><path d="M8 6V4h8v2" /><path d="M19 6l-1 14H6L5 6" /><path d="M10 11v6" /><path d="M14 11v6" /></svg>
+              </button>
+              <button class="icon-btn" title="打开设置页" aria-label="打开设置页" data-open-settings>
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z" /><path d="M19.4 15a1.8 1.8 0 0 0 .36 1.98l.04.04a2 2 0 0 1-2.83 2.83l-.04-.04A1.8 1.8 0 0 0 15 19.45a1.8 1.8 0 0 0-1 .55l-.1.1a2 2 0 0 1-3.41-1.41v-.06A1.8 1.8 0 0 0 9.4 17a1.8 1.8 0 0 0-1.98.36l-.04.04a2 2 0 1 1-2.83-2.83l.04-.04A1.8 1.8 0 0 0 4.95 12a1.8 1.8 0 0 0-.55-1l-.1-.1A2 2 0 0 1 5.7 7.49h.06A1.8 1.8 0 0 0 7.4 6.4a1.8 1.8 0 0 0-.36-1.98L7 4.38a2 2 0 0 1 2.83-2.83l.04.04A1.8 1.8 0 0 0 12 2.05a1.8 1.8 0 0 0 1-.55l.1-.1a2 2 0 0 1 3.41 1.41v.06A1.8 1.8 0 0 0 17.6 4.5a1.8 1.8 0 0 0 1.98-.36l.04-.04a2 2 0 0 1 2.83 2.83l-.04.04A1.8 1.8 0 0 0 19.05 12c0 .7.4 1.3.95 1.6Z" /></svg>
+              </button>
+            </div>
+          </header>
+          <section class="context-card">
+            <div class="context-head">
+              <div>
+                <div class="eyebrow">当前上下文</div>
+                <h2 class="context-title">正在观察 Maya</h2>
+              </div>
+              <span class="badge">Maya 已连接</span>
+            </div>
+            <div class="context-lines">
+              <span>当前窗口：Maya Command Port · 对象 connected。</span>
+              <span>任务：确认状态后继续优化连接体验。</span>
+            </div>
+            <div class="context-detail"><span>屏幕观察：当前窗口</span><span>刷新：刚刚</span></div>
+          </section>
+          <section class="conversation">
+            <div class="section-label">对话</div>
+            <div class="messages">
+              <div class="msg user">继续优化 Maya</div>
+              <div class="run-card">
+                <div class="run-head"><div class="run-title"><span class="dot blue"></span>正在检查 Maya 连接</div><span class="run-meta">刚刚</span></div>
+                <div class="run-body">已读取当前对象状态、最近探测结果和可发布策略。下一步会给出可执行方案。</div>
+                <div class="detail-btn">查看运行详情</div>
+              </div>
+              <div class="msg markdown">
+                <h3>Maya 已连接</h3>
+                <p>当前对象状态可信。下一步建议优化 <code>连接可见性</code> 和失败恢复，而不是重复安装。</p>
+                <div class="code-block">
+                  <div class="code-head"><span>plan.md</span><span>复制</span></div>
+                  <pre>1. 收敛顶部状态摘要
+2. 失败时显示恢复动作
+3. 详情里保留原始探测结果</pre>
+                </div>
+              </div>
+            </div>
+          </section>
+          <footer class="composer">
+            <div class="composer-context">当前：Maya · 已连接</div>
+            <div class="input-shell"><span class="placeholder">继续优化 Maya 连接体验...</span><button class="send">↗</button></div>
+            <div class="suggestions"><span>继续执行</span><span>打开详情</span><span>保存流程</span></div>
+          </footer>
+        </div>
+
+        <div class="state" data-view="approval">
+          <header class="topbar">
+            <div class="brand">Copilot <span class="brain">codex</span></div>
+            <div class="top-state"><span>等待确认</span><span class="dot amber"></span></div>
+            <div class="icon-actions">
+              <button class="icon-btn" title="清空对话" aria-label="清空对话">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18" /><path d="M8 6V4h8v2" /><path d="M19 6l-1 14H6L5 6" /><path d="M10 11v6" /><path d="M14 11v6" /></svg>
+              </button>
+              <button class="icon-btn" title="打开设置页" aria-label="打开设置页" data-open-settings>
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z" /><path d="M19.4 15a1.8 1.8 0 0 0 .36 1.98l.04.04a2 2 0 0 1-2.83 2.83l-.04-.04A1.8 1.8 0 0 0 15 19.45a1.8 1.8 0 0 0-1 .55l-.1.1a2 2 0 0 1-3.41-1.41v-.06A1.8 1.8 0 0 0 9.4 17a1.8 1.8 0 0 0-1.98.36l-.04.04a2 2 0 1 1-2.83-2.83l.04-.04A1.8 1.8 0 0 0 4.95 12a1.8 1.8 0 0 0-.55-1l-.1-.1A2 2 0 0 1 5.7 7.49h.06A1.8 1.8 0 0 0 7.4 6.4a1.8 1.8 0 0 0-.36-1.98L7 4.38a2 2 0 0 1 2.83-2.83l.04.04A1.8 1.8 0 0 0 12 2.05a1.8 1.8 0 0 0 1-.55l.1-.1a2 2 0 0 1 3.41 1.41v.06A1.8 1.8 0 0 0 17.6 4.5a1.8 1.8 0 0 0 1.98-.36l.04-.04a2 2 0 0 1 2.83 2.83l-.04.04A1.8 1.8 0 0 0 19.05 12c0 .7.4 1.3.95 1.6Z" /></svg>
+              </button>
+            </div>
+          </header>
+          <section class="context-card">
+            <div class="context-head">
+              <div>
+                <div class="eyebrow">当前上下文</div>
+                <h2 class="context-title">需要你确认下一步</h2>
+              </div>
+              <span class="badge">Maya 已连接</span>
+            </div>
+            <div class="context-lines">
+              <span>准备执行一个会修改本地策略的动作。</span>
+              <span>确认前显示影响范围，不展示冗长命令。</span>
+            </div>
+            <div class="context-detail"><span>风险：低</span><span>可撤销</span></div>
+          </section>
+          <section class="conversation">
+            <div class="section-label">对话</div>
+            <div class="messages">
+              <div class="msg user">把这个流程保存下来</div>
+              <div class="run-card amber">
+                <div class="run-head"><div class="run-title"><span class="dot amber"></span>等待授权</div><span class="run-meta">需要确认</span></div>
+                <div class="run-body">将保存低风险连接策略，并把当前 Maya 优化流程写入工作流草稿。</div>
+                <div class="detail-btn">查看影响范围</div>
+              </div>
+              <div class="approval">
+                <strong>允许 Copilot 保存这条策略？</strong>
+                <p>范围：Maya 连接检查<br />影响：下次同类低风险动作可自动继续<br />可随时在权限面板撤销</p>
+                <div class="approval-actions">
+                  <button class="primary-action">允许并记住</button>
+                  <button class="secondary-action">拒绝</button>
+                </div>
+              </div>
+            </div>
+          </section>
+          <footer class="composer">
+            <div class="composer-context">当前：Maya · 等待确认</div>
+            <div class="input-shell"><span class="placeholder">也可以补充限制条件...</span><button class="send">↗</button></div>
+          </footer>
+        </div>
+      </aside>
+    </section>
+  </main>
+
+  <script>
+    const buttons = Array.from(document.querySelectorAll('[data-state]'));
+    const states = Array.from(document.querySelectorAll('[data-view]'));
+    buttons.forEach((button) => {
+      button.addEventListener('click', () => {
+        const target = button.getAttribute('data-state');
+        buttons.forEach((b) => b.classList.toggle('is-active', b === button));
+        states.forEach((state) => state.classList.toggle('is-active', state.getAttribute('data-view') === target));
+      });
+    });
+    document.querySelectorAll('[data-open-settings]').forEach((button) => {
+      button.addEventListener('click', () => {
+        window.location.hash = 'settings';
+        button.blur();
+      });
+    });
+  </script>
+</body>
+</html>

@@ -2,7 +2,7 @@
 
 /**
  * 单槽 BrowserView 布局与 detach 辅助（P0）。
- * 工作台 / Script Hub 各自 BrowserView 实例，同一时刻仅挂载一个。
+ * 工作台 BrowserView 与壳内页面布局辅助，同一时刻仅挂载一个 BrowserView。
  */
 
 function computeEmbeddedBrowserBounds(contentBounds, insets) {

@@ -659,11 +659,34 @@ npx vitest run tests/agentP2.test.ts tests/agentP2L2.test.ts
 
 #### P1-003 命令事件链路
 
-目标：所有宿主命令进入统一事件流和 trace。  
+目标：所有宿主命令进入统一事件流和 trace。
 验收：
 
 - request / started / succeeded / failed / refreshed 五类事件可追溯。
 - failure 能生成 RepairAction 或恢复建议。
+
+#### P1-004 本地壳级 Copilot 感知条
+
+目标：感知条必须挂在本地伴侣右侧 `Copilot codex` 面板本身，而不是只挂在工作台项目 Agent、QuickCompose 或内部 Dock。
+
+验收：
+
+- `#shell-copilot` 标题下方常驻显示当前工作台、对象会话、外部宿主连接和最近执行摘要。
+- 本地壳启动时刷新一次，之后按固定间隔刷新；发送消息和切换对象会话时立即刷新。
+- 断开、未知、过期状态用明确提示，不伪装成已知。
+- 测试必须锚定 `data-shell-copilot-perception-bar`，防止误挂回网页内部 Dock。
+
+#### P1-005 全桌面录屏监控原型
+
+目标：在用户显式开启后，提供全桌面观察能力，作为结构化 API 不足时的兜底感知来源。
+
+验收：
+
+- 必须有显式开关、录制中状态、暂停/停止入口和作用范围提示。
+- 默认不采集；未授权时 Copilot 明确显示“屏幕监控未开启”。
+- 采集结果先转成结构化摘要：前台应用、窗口标题、粗粒度 UI 区域、最近动作，不把原始截图长期进入模型上下文。
+- 原始帧只短期环形缓存，默认本地保存，上传或进入模型前必须脱敏并二次确认。
+- 与 `Runtime Context Bus` 对齐，输出 `desktop.observe.frame`、`desktop.window.changed`、`desktop.input.activity` 等摘要事件。
 
 ### P2：跨应用计划与恢复
 
@@ -780,4 +803,24 @@ P0 完成时，用户应该能看到：
   - P0 已完成结构化只读感知；真实 Maya/Blender/Photoshop 深度选区仍属于 P1 `HostConnector.getSnapshot()` 范围，需要各宿主桥接器继续提供更细的结构化 selection/document/tool。
   - 仓库全量 `npm run typecheck` 仍受既有无关错误影响，本次记录使用 focused checks 和 local companion typecheck 作为证据。
 - 下一任务：
-  - P1-001 标准化 Host Connector Snapshot API。
+  - P1-004 本地壳级 Copilot 感知条。
+
+### 2026-08-11 P1-004 壳级 Copilot 感知条补齐
+- 文件：
+  - `companion-desktop/shell/index.html`
+  - `companion-desktop/shell/copilot-panel.js`
+  - `tests/copilotSettingsUi.test.ts`
+  - `docs/Copilot运行时感知系统开发文档.md`
+- 命令：
+  - `node --check companion-desktop/shell/copilot-panel.js`
+  - `npx vitest run tests/copilotSettingsUi.test.ts`
+  - `npm run restart:local-companion`
+- 结果：
+  - 通过：壳层 JS 语法检查、Copilot 设置/壳层 UI 测试、本地伴侣重启。
+- 人工证据：
+  - `#shell-copilot` 标题下方新增 `data-shell-copilot-perception-bar`，展示工作台、对象、外部宿主连接、最近执行四类感知 chip。
+  - 感知条启动时刷新，之后每 15 秒刷新；发送消息前、对象会话切换时也会刷新。
+- 剩余风险：
+  - 当前仍是结构化摘要感知；全桌面录屏监控已列为 P1-005，需要单独实现权限、采样、脱敏、短期环形缓存和可见开关。
+- 下一任务：
+  - P1-005 全桌面录屏监控原型。

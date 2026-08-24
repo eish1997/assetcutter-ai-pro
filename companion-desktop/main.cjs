@@ -207,28 +207,7 @@ const DEFAULT_SHELL_SITE_DEV = 'http://localhost:3000';
 const DEFAULT_SHELL_SITE_PACKAGED = 'https://assetcutter-ai-pro.vercel.app/';
 const DEFAULT_AUTH_API_ORIGIN_DEV = 'http://localhost:9100';
 const DEFAULT_AUTH_API_ORIGIN_PROD = 'https://assetcutter-auth-api.onrender.com';
-const DEFAULT_SCRIPT_HUB_DEV = 'http://localhost:5173/';
 const DEFAULT_SCRIPT_HUB_API_DEV = 'http://localhost:8787/';
-const DEFAULT_SCRIPT_HUB_PACKAGED = 'https://scripts.adrazzo.com/';
-const LEGACY_SCRIPT_HUB_DEV = 'http://localhost:5174/';
-
-function migrateScriptHubUrl(url) {
-  const u = String(url || '').trim();
-  if (!u) return defaultScriptHubUrl();
-  try {
-    const parsed = new URL(u);
-    const host = parsed.hostname;
-    if ((host === 'localhost' || host === '127.0.0.1') && parsed.port === '5174') {
-      return DEFAULT_SCRIPT_HUB_DEV;
-    }
-  } catch {
-    /* ignore */
-  }
-  if (u === LEGACY_SCRIPT_HUB_DEV || u === 'http://127.0.0.1:5174/') {
-    return DEFAULT_SCRIPT_HUB_DEV;
-  }
-  return u;
-}
 
 function defaultShellSiteUrl() {
   try {
@@ -238,16 +217,8 @@ function defaultShellSiteUrl() {
   }
 }
 
-function defaultScriptHubUrl() {
-  try {
-    return app.isPackaged ? DEFAULT_SCRIPT_HUB_PACKAGED : DEFAULT_SCRIPT_HUB_DEV;
-  } catch {
-    return DEFAULT_SCRIPT_HUB_DEV;
-  }
-}
-
 function defaultScriptHubApiUrl() {
-  // Tool Bridge 为本机服务（:8787），与 Script Hub SPA 域名无关；打包版亦默认连本机 Bridge
+  // Tool Bridge 为本机服务（:8787），与 Workflow 壳页面无关；打包版亦默认连本机 Bridge
   try {
     return DEFAULT_SCRIPT_HUB_API_DEV;
   } catch {
@@ -281,15 +252,13 @@ const SHELL_TOOL_WORKSPACE_COLLAPSED_MIN_HEIGHT = 160;
 const shellToolWorkspaceExpandedBounds = new WeakMap();
 /** @type {import('electron').BrowserView | null} */
 let workbenchBrowserView = null;
-/** @type {import('electron').BrowserView | null} */
-let scriptsBrowserView = null;
 const FIRST_PARTY_WEB_PARTITION = TEAM_WEB_PARTITION || 'persist:assetcutter-team';
 const LEGACY_FIRST_PARTY_WEB_PARTITIONS = ['persist:assetcutter-workbench', 'persist:assetcutter-script-hub'];
 /** 避免给同一 BrowserView 重复注册 `did-finish-load` */
 const workbenchPairingInjectHooked = new WeakSet();
 /** 避免给同一 BrowserView 重复注册下载接管 */
 const workbenchDownloadHooked = new WeakSet();
-/** @type {'workbench' | 'workflow' | 'scripts' | 'tools' | 'connections' | 'settings'} */
+/** @type {'workbench' | 'workflow' | 'tools' | 'connections' | 'settings'} */
 let shellMainProcessActiveView = 'workbench';
 
 /** 与 `shell/index.html` 侧栏展开宽度一致；收起时为 0（由渲染进程 IPC 同步） */
@@ -305,6 +274,16 @@ const SHELL_COPILOT_WIDTH_COLLAPSED = 0;
 let shellCopilotCollapsed = false;
 /** @type {number} */
 let shellCopilotWidthPx = SHELL_COPILOT_WIDTH_DEFAULT;
+const DESKTOP_OBSERVATION_FRAME_LIMIT = 30;
+let desktopObservationRuntimeState = {
+  enabled: false,
+  paused: false,
+  permissionGranted: false,
+  scope: 'current_window',
+  startedAt: 0,
+  updatedAt: 0,
+};
+let desktopObservationFrames = [];
 let codexLaunchSetupInFlight = false;
 const AUTO_CODEX_SETUP_ARG = '--assetcutter-codex-one-click-setup';
 const SHELL_TITLEBAR_HEIGHT = 30;
@@ -370,6 +349,99 @@ let samBootstrapChild = null;
 let rembgBootstrapChild = null;
 /** @type {import('child_process').ChildProcess | null} */
 let paddleOcrBootstrapChild = null;
+
+function sanitizeDesktopObservationText(value, maxLength = 180) {
+  const text = String(value == null ? '' : value).replace(/\s+/g, ' ').trim();
+  if (!text) return '';
+  return text
+    .replace(/(token|cookie|secret|password|authorization)\s*[:=]\s*[^,\s;]+/gi, '$1=[redacted]')
+    .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, 'Bearer [redacted]')
+    .replace(/[A-Za-z0-9+/]{160,}={0,2}/g, '[base64 redacted]')
+    .slice(0, maxLength);
+}
+
+function normalizeDesktopObservationScope(scope) {
+  const s = String(scope || '').trim();
+  if (s === 'app' || s === 'desktop') return s;
+  return 'current_window';
+}
+
+function buildDesktopObservationStatus() {
+  const frames = desktopObservationFrames.slice(-DESKTOP_OBSERVATION_FRAME_LIMIT);
+  return {
+    ok: true,
+    state: { ...desktopObservationRuntimeState },
+    frameLimit: DESKTOP_OBSERVATION_FRAME_LIMIT,
+    frameCount: frames.length,
+    latestFrame: frames.length ? { ...frames[frames.length - 1] } : null,
+    events: frames.map((frame) => ({
+      type: 'desktop.observe.frame',
+      id: frame.id,
+      ts: frame.ts,
+      summary: frame.summary,
+      scope: frame.scope,
+      foregroundApp: frame.foregroundApp,
+      foregroundWindowTitle: frame.foregroundWindowTitle,
+    })),
+  };
+}
+
+function startDesktopObservationRuntime(payload) {
+  const body = payload && typeof payload === 'object' ? payload : {};
+  const now = Date.now();
+  desktopObservationRuntimeState = {
+    ...desktopObservationRuntimeState,
+    enabled: true,
+    paused: Boolean(body.paused),
+    permissionGranted: Boolean(body.permissionGranted),
+    scope: normalizeDesktopObservationScope(body.scope),
+    startedAt: desktopObservationRuntimeState.startedAt || now,
+    updatedAt: now,
+  };
+  return buildDesktopObservationStatus();
+}
+
+function appendDesktopObservationFrame(payload) {
+  if (
+    !desktopObservationRuntimeState.enabled ||
+    !desktopObservationRuntimeState.permissionGranted ||
+    desktopObservationRuntimeState.paused
+  ) {
+    return { ok: false, error: 'desktop_observation_not_authorized', ...buildDesktopObservationStatus() };
+  }
+  const body = payload && typeof payload === 'object' ? payload : {};
+  const now = Date.now();
+  const frame = {
+    id: `desktop_frame_${randomBytes(8).toString('hex')}`,
+    type: 'desktop.observe.frame',
+    ts: new Date(now).toISOString(),
+    scope: normalizeDesktopObservationScope(body.scope || desktopObservationRuntimeState.scope),
+    foregroundApp: sanitizeDesktopObservationText(body.foregroundApp, 80),
+    foregroundWindowTitle: sanitizeDesktopObservationText(body.foregroundWindowTitle, 120),
+    summary: sanitizeDesktopObservationText(body.summary || 'desktop observation frame', 220),
+  };
+  desktopObservationFrames.push(frame);
+  desktopObservationFrames = desktopObservationFrames.slice(-DESKTOP_OBSERVATION_FRAME_LIMIT);
+  desktopObservationRuntimeState = {
+    ...desktopObservationRuntimeState,
+    scope: frame.scope,
+    updatedAt: now,
+  };
+  return buildDesktopObservationStatus();
+}
+
+function stopDesktopObservationRuntime() {
+  desktopObservationFrames = [];
+  desktopObservationRuntimeState = {
+    enabled: false,
+    paused: false,
+    permissionGranted: false,
+    scope: desktopObservationRuntimeState.scope || 'current_window',
+    startedAt: 0,
+    updatedAt: Date.now(),
+  };
+  return buildDesktopObservationStatus();
+}
 
 function anyDesktopBootstrapChildRunning() {
   const sam = samBootstrapChild && samBootstrapChild.exitCode === null && !samBootstrapChild.killed;
@@ -437,7 +509,6 @@ function readShellSettings() {
         authApiOrigin: '',
         volumeRoot: '',
         downloadDir: '',
-        scriptHubUrl: defaultScriptHubUrl(),
         scriptHubApiUrl: defaultScriptHubApiUrl(),
         scriptHubApiToken: '',
       };
@@ -449,11 +520,6 @@ function readShellSettings() {
       typeof j.authApiOrigin === 'string' ? j.authApiOrigin.trim().replace(/\/+$/, '') : '';
     const volumeRoot = typeof j.volumeRoot === 'string' ? j.volumeRoot.trim() : '';
     const downloadDir = typeof j.downloadDir === 'string' ? j.downloadDir.trim() : '';
-    const rawScriptHub =
-      typeof j.scriptHubUrl === 'string' && j.scriptHubUrl.trim()
-        ? j.scriptHubUrl.trim()
-        : defaultScriptHubUrl();
-    const scriptHubUrl = migrateScriptHubUrl(rawScriptHub);
     const rawScriptHubApi =
       typeof j.scriptHubApiUrl === 'string' && j.scriptHubApiUrl.trim()
         ? j.scriptHubApiUrl.trim()
@@ -462,10 +528,6 @@ function readShellSettings() {
     const scriptHubApiToken =
       typeof j.scriptHubApiToken === 'string' ? j.scriptHubApiToken.trim() : '';
     let settingsDirty = false;
-    if (scriptHubUrl !== rawScriptHub) {
-      j.scriptHubUrl = scriptHubUrl;
-      settingsDirty = true;
-    }
     if (scriptHubApiUrl !== rawScriptHubApi) {
       j.scriptHubApiUrl = scriptHubApiUrl;
       settingsDirty = true;
@@ -477,14 +539,13 @@ function readShellSettings() {
         /* ignore */
       }
     }
-    return { siteUrl, authApiOrigin, volumeRoot, downloadDir, scriptHubUrl, scriptHubApiUrl, scriptHubApiToken };
+    return { siteUrl, authApiOrigin, volumeRoot, downloadDir, scriptHubApiUrl, scriptHubApiToken };
   } catch {
     return {
       siteUrl: fallbackSite,
       authApiOrigin: '',
       volumeRoot: '',
       downloadDir: '',
-      scriptHubUrl: defaultScriptHubUrl(),
       scriptHubApiUrl: defaultScriptHubApiUrl(),
       scriptHubApiToken: '',
     };
@@ -519,10 +580,6 @@ function saveShellSettings(patch) {
     }
     cur.downloadDir = d;
     workbenchDownloadDirPromptState = 'pending';
-  }
-  if (patch && typeof patch.scriptHubUrl === 'string') {
-    const t = patch.scriptHubUrl.trim();
-    cur.scriptHubUrl = t || defaultScriptHubUrl();
   }
   if (patch && typeof patch.scriptHubApiUrl === 'string') {
     const t = patch.scriptHubApiUrl.trim();
@@ -1997,17 +2054,6 @@ async function maybeRunCodexOneClickSetupFromLaunch(argv) {
   }
 }
 
-function normalizeScriptHubUrl(raw) {
-  const t = String(raw || '').trim();
-  if (!t) return defaultScriptHubUrl();
-  if (!/^https?:\/\//i.test(t)) return '';
-  try {
-    return new URL(t).href;
-  } catch {
-    return '';
-  }
-}
-
 function normalizeScriptHubApiUrl(raw) {
   const t = String(raw || '').trim();
   if (!t) return defaultScriptHubApiUrl();
@@ -2019,38 +2065,18 @@ function normalizeScriptHubApiUrl(raw) {
   }
 }
 
-function getScriptHubAllowedOrigins() {
-  const href = normalizeScriptHubUrl(readShellSettings().scriptHubUrl);
-  const origins = new Set([
-    'http://localhost:5173',
-    'http://127.0.0.1:5173',
-    'http://localhost:5174',
-    'http://127.0.0.1:5174',
-    'http://localhost:8787',
-    'http://127.0.0.1:8787',
-  ]);
-  if (href) {
-    try {
-      origins.add(new URL(href).origin);
-    } catch {
-      /* ignore */
-    }
-  }
-  return origins;
-}
-
 function detachAllEmbeddedBrowserViews() {
   if (!mainWindow || mainWindow.isDestroyed()) return;
-  detachBrowserViews(mainWindow, [workbenchBrowserView, scriptsBrowserView]);
+  detachBrowserViews(mainWindow, [workbenchBrowserView]);
 }
 
 function normalizeShellViewName(view) {
+  if (view === 'scripts') return 'workflow';
   return view === 'workbench' ||
     view === 'workflow' ||
     view === 'settings' ||
     view === 'tools' ||
-    view === 'connections' ||
-    view === 'scripts'
+    view === 'connections'
     ? view
     : 'workbench';
 }
@@ -2059,9 +2085,6 @@ async function restoreEmbeddedViewForShellState(view) {
   const v = normalizeShellViewName(view);
   if (v === 'workbench') {
     return attachWorkbenchBrowserView();
-  }
-  if (v === 'scripts') {
-    return attachScriptsBrowserView();
   }
   detachAllEmbeddedBrowserViews();
   return { ok: true };
@@ -2086,8 +2109,6 @@ async function transitionMainProcessShellView(nextView, opts) {
   let r = { ok: true };
   if (v === 'workbench') {
     r = await attachWorkbenchBrowserView();
-  } else if (v === 'scripts') {
-    r = await attachScriptsBrowserView();
   } else {
     detachAllEmbeddedBrowserViews();
   }
@@ -3776,6 +3797,21 @@ const CONNECTION_DROP_EXE_HOSTS = new Map(
   ].map(([exe, meta]) => [String(exe).toLowerCase(), meta]),
 );
 
+function inferDroppedSoftwareVersion(targetPath, shortcutPath, name) {
+  const text = [targetPath, shortcutPath, name].filter(Boolean).join(' ');
+  const normalized = text.replace(/\\/g, '/');
+  const patterns = [
+    /(?:Photoshop|Illustrator|After Effects|Premiere Pro|Blender|Maya|Unity|Unreal|UE)[^\d]*(20\d{2}|\d+\.\d+(?:\.\d+)?)/i,
+    /\/(?:Maya|Blender|Unity|UE_?)(20\d{2}|\d+\.\d+(?:\.\d+)?)\//i,
+    /\/UE[_-](\d+\.\d+(?:\.\d+)?)\//i,
+  ];
+  for (const pattern of patterns) {
+    const match = normalized.match(pattern);
+    if (match && match[1]) return match[1];
+  }
+  return '';
+}
+
 function resolveDroppedConnectionPath(payload) {
   const inputPath = String(payload && payload.path ? payload.path : '').trim();
   if (!inputPath) return { ok: false, error: 'missing_path', message: '没有读取到拖入文件路径。' };
@@ -3810,6 +3846,8 @@ function resolveDroppedConnectionPath(payload) {
   const inferred = CONNECTION_DROP_EXE_HOSTS.get(exeName.toLowerCase()) || null;
   const shortcutName = shortcutPath ? path.basename(shortcutPath, path.extname(shortcutPath)) : '';
   const fallbackName = path.basename(targetPath, targetExt);
+  const name = (inferred && inferred.name) || shortcutName || fallbackName;
+  const versionHint = inferDroppedSoftwareVersion(targetPath, shortcutPath, name);
   return {
     ok: true,
     inputPath: abs,
@@ -3818,7 +3856,8 @@ function resolveDroppedConnectionPath(payload) {
     targetKind,
     exeName,
     hostId: inferred && inferred.hostId,
-    name: (inferred && inferred.name) || shortcutName || fallbackName,
+    name,
+    versionHint,
   };
 }
 
@@ -4665,7 +4704,7 @@ async function startLocalCompanion() {
   env.NO_PROXY = !curNo ? loopNoProxy : curNo.includes('127.0.0.1') ? curNo : `${curNo},${loopNoProxy}`;
   env.no_proxy = env.NO_PROXY;
   const pair = readPairingConfig();
-  /** 配对文件为「用户在壳里保存的真值」；父进程若误带旧 COMPANION_* 环境变量，不得盖过 pairing（否则网站与 Script Hub 会 bearer_invalid） */
+  /** 配对文件为「用户在壳里保存的真值」；父进程若误带旧 COMPANION_* 环境变量，不得盖过 pairing（否则网站与 Workflow 会 bearer_invalid） */
   const pairTok = String(pair.sharedToken ?? '').trim();
   if (pairTok) {
     env.COMPANION_SHARED_TOKEN = pairTok;
@@ -4927,8 +4966,6 @@ function layoutShellChrome() {
   });
   if (shellMainProcessActiveView === 'workbench' && workbenchBrowserView) {
     workbenchBrowserView.setBounds(bounds);
-  } else if (shellMainProcessActiveView === 'scripts' && scriptsBrowserView) {
-    scriptsBrowserView.setBounds(bounds);
   }
 }
 
@@ -5239,86 +5276,6 @@ async function attachWorkbenchBrowserView() {
   return { ok: true };
 }
 
-function ensureScriptsBrowserView() {
-  if (scriptsBrowserView) return scriptsBrowserView;
-
-  const view = new BrowserView({
-    webPreferences: {
-      partition: FIRST_PARTY_WEB_PARTITION,
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: true,
-    },
-  });
-
-  const wc = view.webContents;
-  try {
-    wc.setUserAgent(workbenchChromeLikeUserAgent());
-  } catch (e) {
-    console.warn('[companion-desktop] scripts setUserAgent', e);
-  }
-
-  wc.setWindowOpenHandler(({ url }) => {
-    void shell.openExternal(url);
-    return { action: 'deny' };
-  });
-
-  wc.on('will-navigate', (event, url) => {
-    if (/^(blob|data):/i.test(String(url || ''))) {
-      event.preventDefault();
-      return;
-    }
-    let origin;
-    try {
-      origin = new URL(url).origin;
-    } catch {
-      event.preventDefault();
-      return;
-    }
-    if (!getScriptHubAllowedOrigins().has(origin)) {
-      event.preventDefault();
-      void shell.openExternal(url);
-    }
-  });
-
-  scriptsBrowserView = view;
-  return view;
-}
-
-async function attachScriptsBrowserView() {
-  if (!mainWindow || mainWindow.isDestroyed()) return { ok: false, error: 'no_window' };
-  const target = normalizeScriptHubUrl(readShellSettings().scriptHubUrl);
-  if (!target) return { ok: false, error: 'invalid_script_hub_url' };
-
-  detachAllEmbeddedBrowserViews();
-  const view = ensureScriptsBrowserView();
-  const wc = view.webContents;
-
-  if (mainWindow.getBrowserViews().indexOf(view) < 0) mainWindow.addBrowserView(view);
-  layoutShellChrome();
-
-  let needLoad = true;
-  try {
-    const cur = wc.getURL();
-    if (cur && cur !== 'about:blank' && /^https?:\/\//i.test(cur)) {
-      needLoad = new URL(cur).href !== new URL(target).href;
-    }
-  } catch {
-    needLoad = true;
-  }
-
-  if (needLoad) {
-    try {
-      await loadUrlWithProxyFallback(wc, target);
-    } catch (e) {
-      detachAllEmbeddedBrowserViews();
-      return { ok: false, error: e instanceof Error ? e.message : String(e) };
-    }
-  }
-
-  return { ok: true };
-}
-
 async function navigateShellFromAgent(view) {
   return transitionMainProcessShellView(view, { notifyRenderer: true });
 }
@@ -5495,7 +5452,6 @@ function openMainWindow() {
 
   mainWindow.on('closed', () => {
     workbenchBrowserView = null;
-    scriptsBrowserView = null;
     shellMainProcessActiveView = 'workbench';
     mainWindow = null;
   });
@@ -6462,6 +6418,22 @@ if (!gotLock) {
   ipcMain.handle('agent-tool-executions', async (_e, options) => {
     if (!agentStore) return { ok: false, error: 'agent_not_ready' };
     return { ok: true, executions: agentStore.listToolExecutions(options && typeof options === 'object' ? options : {}) };
+  });
+
+  ipcMain.handle('shell-desktop-observation-start', async (_event, payload) => {
+    return startDesktopObservationRuntime(payload);
+  });
+
+  ipcMain.handle('shell-desktop-observation-frame', async (_event, payload) => {
+    return appendDesktopObservationFrame(payload);
+  });
+
+  ipcMain.handle('shell-desktop-observation-status', async () => {
+    return buildDesktopObservationStatus();
+  });
+
+  ipcMain.handle('shell-desktop-observation-stop', async () => {
+    return stopDesktopObservationRuntime();
   });
 
   ipcMain.handle('agent-workbench-context', async () => {

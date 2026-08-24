@@ -964,7 +964,7 @@
         key: 'not_installed',
         label: '未安装',
         pill: '',
-        detail: '一键安装会复制 Script Hub Bridge 并写入 userSetup（启动时开端口）。',
+        detail: '一键安装会复制 Workflow Bridge 并写入 userSetup（启动时开端口）。',
       };
     },
 

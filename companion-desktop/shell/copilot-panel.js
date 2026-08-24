@@ -24,6 +24,34 @@
   const tokenOutputEl = document.getElementById('copilot-token-output');
   const tokenReasoningEl = document.getElementById('copilot-token-reasoning');
   const tokenPopoverEl = document.getElementById('copilot-token-popover');
+  const perceptionBarEl = document.getElementById('copilot-perception-bar');
+  const perceptionWorkspaceEl = document.getElementById('copilot-perception-workspace');
+  const perceptionObjectEl = document.getElementById('copilot-perception-object');
+  const perceptionExternalEl = document.getElementById('copilot-perception-external');
+  const perceptionDesktopEl = document.getElementById('copilot-perception-desktop');
+  const perceptionRecentEl = document.getElementById('copilot-perception-recent');
+  const perceptionRefreshEl = document.getElementById('copilot-perception-refresh');
+  const timelineEl = document.getElementById('copilot-timeline');
+  const timelineSummaryEl = document.getElementById('copilot-timeline-summary');
+  const timelineCountEl = document.getElementById('copilot-timeline-count');
+  const timelineListEl = document.getElementById('copilot-timeline-list');
+  const desktopObservationEl = document.getElementById('copilot-desktop-observation');
+  const desktopObservationSummaryEl = document.getElementById('copilot-desktop-observation-summary');
+  const desktopObservationScopeEl = document.getElementById('copilot-desktop-observation-scope');
+  const desktopObservationStatusEl = document.getElementById('copilot-desktop-observation-status');
+  const desktopObservationEnableBtn = document.getElementById('copilot-desktop-observation-enable');
+  const desktopObservationPauseBtn = document.getElementById('copilot-desktop-observation-pause');
+  const desktopObservationStopBtn = document.getElementById('copilot-desktop-observation-stop');
+  const desktopObservationScopeBtns = Array.from(document.querySelectorAll('[data-desktop-observation-scope]'));
+  const topStateEl = document.getElementById('copilot-top-state');
+  const topStateTextEl = document.getElementById('copilot-top-state-text');
+  const contextTitleEl = document.getElementById('copilot-context-title');
+  const contextBadgeEl = document.getElementById('copilot-context-badge');
+  const currentRunEl = document.getElementById('copilot-current-run');
+  const currentRunStateEl = document.getElementById('copilot-current-run-state');
+  const currentRunGoalEl = document.getElementById('copilot-current-run-goal');
+  const currentRunProgressEl = document.getElementById('copilot-current-run-progress');
+  const currentRunActivityEl = document.getElementById('copilot-current-run-activity');
 
   if (!root || !messagesEl || !inputEl || !sendBtn) return;
 
@@ -41,12 +69,34 @@
   let lastTeamEntranceSnapshot = null;
   let lastWorkbenchContextSnapshot = null;
   let lastToolExecutionsSnapshot = [];
+  let lastExternalConnectionSnapshot = null;
+  let lastPerceptionRefreshedAt = 0;
+  let lastPerceptionRefreshFailed = false;
   let lastProjectMemorySnapshot = null;
   let lastUsageSnapshot = null;
+  let lastAgentPolicySnapshot = { confirmTools: true, autoConfirmTools: [], forbiddenTools: [] };
+  let copilotTimelineEvents = [];
+  let desktopObservationState = {
+    enabled: false,
+    paused: false,
+    permissionGranted: false,
+    scope: 'current_window',
+    foregroundApp: '',
+    foregroundWindowTitle: '',
+    lastFrameAt: 0,
+    lastSummary: '',
+    privacyMode: 'strict',
+    recordingIndicatorVisible: false,
+    cacheFrameCount: 0,
+    cacheFrameLimit: 30,
+  };
+  let lastDesktopObservationFrameId = '';
   let lastUserPrompt = '';
   let activeCodexSetupRunId = '';
   let activeTaskThreadCard = null;
   let activeTaskThreadEls = null;
+  let activeTaskThreadKey = '';
+  let activeTaskThreadAttempt = 0;
   let pendingTaskThreadPrompt = '';
   let permissionPolicySyncedForMode = '';
   let codexWaitHintTimer = null;
@@ -59,6 +109,7 @@
   const COPILOT_EXPANDED_MIN_WIDTH = 360;
   const COPILOT_EXPANDED_DEFAULT_WIDTH = 380;
   const COPILOT_EXPANDED_MAX_WIDTH = 720;
+  const COPILOT_TIMELINE_LIMIT = 50;
   /** Collapsed: fully hidden (no residual rail). Toggle lives in the titlebar. */
   const COPILOT_COLLAPSED_WIDTH = 0;
   const COPILOT_TOGGLE_ICON_EXPANDED =
@@ -129,6 +180,7 @@
         : '\u8bd5\u8bd5\uff1a\u6253\u5f00\u811a\u672c / \u4f34\u4fa3\u72b6\u6001\u600e\u4e48\u6837\uff1f';
     }
     if (suffix) setStatus(suffix);
+    updateShellCopilotPerceptionBar(lastWorkbenchContextSnapshot, lastToolExecutionsSnapshot, lastExternalConnectionSnapshot);
   }
 
   async function openObjectSession(payload) {
@@ -143,6 +195,11 @@
       typeof data.contextPrompt === 'string' && data.contextPrompt.trim()
         ? data.contextPrompt.trim()
         : buildObjectContextPrompt(data.type, data.id, activeObjectSessionLabel);
+    emitCopilotTimelineEvent({
+      source: 'user',
+      title: '切换对象：' + (activeObjectSessionLabel || activeObjectSessionId),
+      status: 'done',
+    });
     setObjectSessionUi();
     await loadHistory();
     if (data.focus !== false && typeof inputEl.focus === 'function') inputEl.focus();
@@ -236,6 +293,7 @@
     if (!text) return;
     pendingTaskThreadPrompt = text;
     appendTaskThreadCard(text, { source: 'quick_task' });
+    emitCopilotTimelineEvent({ source: 'user', title: '启动任务：' + text, status: 'running' });
     fillAndSend(text);
   }
 
@@ -243,6 +301,13 @@
     if (typeof shell.setShellView === 'function') void shell.setShellView('workbench');
     if (typeof window.__acApplyShellViewFromMain === 'function') {
       void window.__acApplyShellViewFromMain('workbench');
+    }
+  }
+
+  function switchToConnections() {
+    if (typeof shell.setShellView === 'function') void shell.setShellView('connections');
+    if (typeof window.__acApplyShellViewFromMain === 'function') {
+      void window.__acApplyShellViewFromMain('connections');
     }
   }
 
@@ -334,6 +399,7 @@
       const structured = r && r.structured && typeof r.structured === 'object' ? r.structured : null;
       if (structured) lastWorkbenchContextSnapshot = structured;
       if (r && Array.isArray(r.executions)) lastToolExecutionsSnapshot = r.executions;
+      updateShellCopilotPerceptionBar(lastWorkbenchContextSnapshot, lastToolExecutionsSnapshot, lastExternalConnectionSnapshot);
       return { context: structured, executions: Array.isArray(r && r.executions) ? r.executions : [] };
     } catch {
       return null;
@@ -453,11 +519,584 @@
     };
   }
 
+  function setPerceptionChip(el, text, tone) {
+    if (!el) return;
+    const value = String(text || '').trim();
+    el.textContent = value;
+    el.title = value;
+    el.className =
+      'copilot-perception-chip' +
+      (tone === 'active' ? ' is-active' : tone === 'warn' ? ' is-warn' : tone === 'hidden' ? ' is-hidden' : '');
+  }
+
+  function summarizeCopilotProductState(runtimeState) {
+    const activeTask = runtimeState && runtimeState.activeTask ? runtimeState.activeTask : null;
+    const desktop = runtimeState && runtimeState.desktopObservation ? runtimeState.desktopObservation : null;
+    const tones = (runtimeState && runtimeState.perceptionTones) || {};
+    if (activeTask && activeTask.status === 'failed') {
+      return { title: '\u9700\u8981\u4f60\u5904\u7406\u5f53\u524d\u4efb\u52a1', badge: '\u9700\u5904\u7406', top: '\u9700\u5904\u7406', tone: 'warn' };
+    }
+    if (activeTask && activeTask.status === 'running') {
+      return { title: '\u6b63\u5728\u6267\u884c\u5f53\u524d\u4efb\u52a1', badge: '\u8fd0\u884c\u4e2d', top: '\u8fd0\u884c\u4e2d', tone: 'active' };
+    }
+    if (desktop && desktop.enabled && desktop.permissionGranted && !desktop.paused) {
+      return { title: '\u6b63\u5728\u89c2\u5bdf\u5f53\u524d\u5de5\u4f5c', badge: '\u89c2\u5bdf\u4e2d', top: '\u89c2\u5bdf\u4e2d', tone: 'active' };
+    }
+    if (tones.external === 'warn') {
+      return { title: '\u8fde\u63a5\u72b6\u6001\u9700\u8981\u68c0\u67e5', badge: '\u5f85\u8fde\u63a5', top: '\u5f85\u8fde\u63a5', tone: 'warn' };
+    }
+    return { title: '\u51c6\u5907\u63a5\u7ba1\u5f53\u524d\u5de5\u4f5c', badge: '\u53ef\u5f00\u59cb', top: '\u5f85\u547d', tone: '' };
+  }
+
+  function renderCopilotProductState(runtimeState) {
+    const state = summarizeCopilotProductState(runtimeState);
+    if (contextTitleEl) contextTitleEl.textContent = state.title;
+    if (contextBadgeEl) {
+      contextBadgeEl.textContent = state.badge;
+      contextBadgeEl.className = 'copilot-context-badge' + (state.tone === 'active' ? ' is-active' : state.tone === 'warn' ? ' is-warn' : '');
+    }
+    if (topStateEl) {
+      topStateEl.className = 'copilot-top-state' + (state.tone === 'active' ? ' is-active' : state.tone === 'warn' ? ' is-warn' : '');
+    }
+    if (topStateTextEl) topStateTextEl.textContent = state.top;
+  }
+
+  function formatPerceptionRefreshAge(ts) {
+    const value = Number(ts || 0);
+    if (!value) return '\u5237\u65b0\uff1a\u7b49\u5f85\u4e2d';
+    const ageSeconds = Math.max(0, Math.round((Date.now() - value) / 1000));
+    if (ageSeconds < 3) return '\u5237\u65b0\uff1a\u521a\u521a';
+    if (ageSeconds < 60) return `\u5237\u65b0\uff1a${ageSeconds}s\u524d`;
+    return `\u5237\u65b0\uff1a${Math.round(ageSeconds / 60)}m\u524d`;
+  }
+
+  function summarizeDesktopObservationState() {
+    if (desktopObservationState.enabled && desktopObservationState.permissionGranted && !desktopObservationState.paused) {
+      const scope = desktopObservationScopeLabel(desktopObservationState.scope);
+      const foreground =
+        desktopObservationState.foregroundApp || desktopObservationState.foregroundWindowTitle
+          ? ' / ' + [desktopObservationState.foregroundApp, desktopObservationState.foregroundWindowTitle].filter(Boolean).join('：')
+          : '';
+      const recent = desktopObservationState.lastSummary ? ' / ' + desktopObservationState.lastSummary : '';
+      return {
+        label: '\u89c2\u5bdf\u4e2d\uff1a' + scope + foreground + recent,
+        tone: 'active',
+      };
+    }
+    if (desktopObservationState.enabled && !desktopObservationState.permissionGranted) {
+      return {
+        label: '\u5c4f\u5e55\u76d1\u63a7\u5f85\u6388\u6743',
+        tone: 'warn',
+      };
+    }
+    if (desktopObservationState.paused) {
+      return {
+        label: '\u5c4f\u5e55\u76d1\u63a7\u5df2\u6682\u505c',
+        tone: 'warn',
+      };
+    }
+    return {
+      label: '\u5c4f\u5e55\u76d1\u63a7\u672a\u5f00\u542f',
+      tone: 'warn',
+    };
+  }
+
+  function buildDesktopObservationRuntimeSummary() {
+    const summary = summarizeDesktopObservationState();
+    return {
+      enabled: Boolean(desktopObservationState.enabled),
+      paused: Boolean(desktopObservationState.paused),
+      permissionGranted: Boolean(desktopObservationState.permissionGranted),
+      scope: desktopObservationState.scope,
+      foregroundApp: desktopObservationState.foregroundApp || '',
+      foregroundWindowTitle: desktopObservationState.foregroundWindowTitle || '',
+      lastFrameAt: desktopObservationState.lastFrameAt || 0,
+      lastSummary: desktopObservationState.lastSummary || '',
+      cacheFrameCount: desktopObservationState.cacheFrameCount || 0,
+      cacheFrameLimit: desktopObservationState.cacheFrameLimit || 30,
+      summaryText: summary.label,
+      tone: summary.tone,
+      rawFrameRequiresConfirmation: true,
+    };
+  }
+
+  function desktopObservationScopeLabel(scope) {
+    if (scope === 'app') return '\u6307\u5b9a\u5e94\u7528';
+    if (scope === 'desktop') return '\u5168\u684c\u9762';
+    return '\u5f53\u524d\u7a97\u53e3';
+  }
+
+  function updateDesktopObservationUi() {
+    const state = desktopObservationState;
+    const scopeLabel = desktopObservationScopeLabel(state.scope);
+    if (desktopObservationSummaryEl) {
+      desktopObservationSummaryEl.textContent = state.enabled
+        ? state.permissionGranted
+          ? state.paused
+            ? '\u5c4f\u5e55\u89c2\u5bdf\uff1a\u5df2\u6682\u505c'
+            : '\u5c4f\u5e55\u89c2\u5bdf\uff1a\u89c2\u5bdf\u4e2d'
+          : '\u5c4f\u5e55\u89c2\u5bdf\uff1a\u5f85\u6388\u6743'
+        : '\u5c4f\u5e55\u89c2\u5bdf\uff1a\u672a\u5f00\u542f';
+    }
+    if (desktopObservationScopeEl) desktopObservationScopeEl.textContent = scopeLabel;
+    if (desktopObservationStatusEl) {
+      const cacheText =
+        state.cacheFrameCount > 0
+          ? '\u77ed\u671f\u7f13\u5b58\uff1a' + state.cacheFrameCount + '/' + state.cacheFrameLimit + '\uff1b' + (state.lastSummary || '\u5df2\u8bb0\u5f55\u6700\u8fd1\u6458\u8981')
+          : '\u77ed\u671f\u7f13\u5b58\uff1a\u6682\u65e0\u5e27\u6458\u8981';
+      desktopObservationStatusEl.textContent = state.enabled
+        ? state.permissionGranted
+          ? state.paused
+            ? '\u5df2\u6682\u505c\u89c2\u5bdf\uff0c\u672c\u5730\u4e0d\u91c7\u96c6\u65b0\u753b\u9762\u3002'
+            : '\u89c2\u5bdf\u72b6\u6001\u53ef\u89c1\uff1b\u5f53\u524d\u9636\u6bb5\u53ea\u4ea7\u751f\u7ed3\u6784\u5316\u6458\u8981\u3002' + cacheText
+          : '\u5df2\u9009\u62e9\u8303\u56f4\uff0c\u4f46\u672a\u6388\u6743\uff1b\u672a\u6388\u6743\u65f6\u4e0d\u91c7\u96c6\u3002'
+        : '\u672a\u6388\u6743\u65f6\u4e0d\u91c7\u96c6\u3002\u5f00\u542f\u540e\u4f1a\u5148\u7b49\u5f85\u7cfb\u7edf\u6388\u6743\u3002';
+    }
+    if (desktopObservationEnableBtn) {
+      desktopObservationEnableBtn.textContent = state.enabled && state.permissionGranted && state.paused ? '\u7ee7\u7eed\u89c2\u5bdf' : '\u5f00\u542f\u89c2\u5bdf';
+      desktopObservationEnableBtn.disabled = state.enabled && state.permissionGranted && !state.paused;
+    }
+    if (desktopObservationPauseBtn) desktopObservationPauseBtn.disabled = !state.enabled || !state.permissionGranted || state.paused;
+    if (desktopObservationStopBtn) desktopObservationStopBtn.disabled = !state.enabled;
+    desktopObservationScopeBtns.forEach((btn) => {
+      const scope = btn && btn.getAttribute('data-desktop-observation-scope');
+      btn.classList.toggle('is-active', scope === state.scope);
+    });
+    updateShellCopilotPerceptionBar(lastWorkbenchContextSnapshot, lastToolExecutionsSnapshot, lastExternalConnectionSnapshot);
+  }
+
+  function setDesktopObservationState(patch, title) {
+    desktopObservationState = { ...desktopObservationState, ...(patch || {}) };
+    updateDesktopObservationUi();
+    emitCopilotTimelineEvent({
+      source: 'desktop',
+      title: title || '桌面观察状态更新',
+      detail: desktopObservationScopeLabel(desktopObservationState.scope),
+      status: desktopObservationState.enabled && desktopObservationState.permissionGranted && !desktopObservationState.paused ? 'running' : 'queued',
+    });
+  }
+
+  function applyDesktopObservationStatus(status, options) {
+    if (!status || status.ok === false) return;
+    const state = status.state && typeof status.state === 'object' ? status.state : {};
+    const latestFrame = status.latestFrame && typeof status.latestFrame === 'object' ? status.latestFrame : null;
+    desktopObservationState = {
+      ...desktopObservationState,
+      enabled: Boolean(state.enabled),
+      paused: Boolean(state.paused),
+      permissionGranted: Boolean(state.permissionGranted),
+      scope: state.scope || desktopObservationState.scope,
+      cacheFrameCount: Number(status.frameCount) || 0,
+      cacheFrameLimit: Number(status.frameLimit) || desktopObservationState.cacheFrameLimit,
+      foregroundApp: latestFrame && latestFrame.foregroundApp ? latestFrame.foregroundApp : desktopObservationState.foregroundApp,
+      foregroundWindowTitle:
+        latestFrame && latestFrame.foregroundWindowTitle
+          ? latestFrame.foregroundWindowTitle
+          : desktopObservationState.foregroundWindowTitle,
+      lastFrameAt: latestFrame && latestFrame.ts ? Date.parse(latestFrame.ts) || desktopObservationState.lastFrameAt : desktopObservationState.lastFrameAt,
+      lastSummary: latestFrame && latestFrame.summary ? latestFrame.summary : desktopObservationState.lastSummary,
+    };
+    updateDesktopObservationUi();
+    if (options && options.emitLatestFrame && latestFrame && latestFrame.id && latestFrame.id !== lastDesktopObservationFrameId) {
+      lastDesktopObservationFrameId = latestFrame.id;
+      emitCopilotTimelineEvent({
+        source: 'desktop',
+        title: 'desktop.observe.frame',
+        detail: latestFrame.summary || desktopObservationScopeLabel(desktopObservationState.scope),
+        status: 'running',
+      });
+    }
+  }
+
+  async function refreshDesktopObservationStatus(options) {
+    if (!shell || typeof shell.desktopObservationStatus !== 'function') return null;
+    try {
+      const status = await shell.desktopObservationStatus();
+      applyDesktopObservationStatus(status, options || {});
+      return status;
+    } catch {
+      return null;
+    }
+  }
+
+  async function startDesktopObservationRuntime(patch, title) {
+    const nextState = { ...desktopObservationState, ...(patch || {}) };
+    setDesktopObservationState(patch, title);
+    if (!shell || typeof shell.desktopObservationStart !== 'function') return null;
+    try {
+      const status = await shell.desktopObservationStart({
+        enabled: nextState.enabled,
+        paused: nextState.paused,
+        permissionGranted: nextState.permissionGranted,
+        scope: nextState.scope,
+      });
+      applyDesktopObservationStatus(status, { emitLatestFrame: true });
+      return status;
+    } catch {
+      return null;
+    }
+  }
+
+  function sanitizeTimelineText(value) {
+    let text = String(value == null ? '' : value).replace(/\s+/g, ' ').trim();
+    if (!text) return '';
+    text = text.replace(/(token|cookie|secret|password|authorization)\s*[:=]\s*[^,\s;]+/gi, '$1=[redacted]');
+    text = text.replace(/[A-Za-z0-9+/]{160,}={0,2}/g, '[base64 redacted]');
+    text = text.replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, 'Bearer [redacted]');
+    return text.slice(0, 180);
+  }
+
+  function timelineSourceLabel(source) {
+    const s = String(source || '');
+    if (s === 'user') return '用户';
+    if (s === 'tool') return '工具';
+    if (s === 'workflow') return '流程';
+    if (s === 'external') return '外部';
+    if (s === 'desktop') return '桌面';
+    if (s === 'system') return '系统';
+    return 'Copilot';
+  }
+
+  function formatTimelineTime(ts) {
+    const ageSeconds = Math.max(0, Math.round((Date.now() - Number(ts || Date.now())) / 1000));
+    if (ageSeconds < 3) return '刚刚';
+    if (ageSeconds < 60) return ageSeconds + 's';
+    return Math.round(ageSeconds / 60) + 'm';
+  }
+
+  function renderCopilotTimeline(openOnFailure) {
+    if (!timelineEl || !timelineSummaryEl || !timelineCountEl || !timelineListEl) return;
+    const events = copilotTimelineEvents.slice(-COPILOT_TIMELINE_LIMIT);
+    const latest = events[events.length - 1];
+    timelineSummaryEl.textContent = latest ? '刚才发生：' + latest.title : '刚才发生：暂无记录';
+    timelineCountEl.textContent = String(events.length);
+    timelineListEl.innerHTML = '';
+    events.slice().reverse().forEach((event) => {
+      const row = document.createElement('div');
+      row.className = 'copilot-timeline-event' + (event.status === 'failed' ? ' is-failed' : '');
+      const source = makeCopilotText('copilot-timeline-source', timelineSourceLabel(event.source));
+      const title = makeCopilotText('copilot-timeline-title', event.title);
+      const time = makeCopilotText('copilot-timeline-time', formatTimelineTime(event.ts));
+      row.title = event.detail || event.title;
+      row.appendChild(source);
+      row.appendChild(title);
+      row.appendChild(time);
+      timelineListEl.appendChild(row);
+    });
+    if (openOnFailure && timelineEl.open) timelineEl.open = true;
+  }
+
+  function emitCopilotTimelineEvent(event) {
+    const input = event && typeof event === 'object' ? event : {};
+    const title = sanitizeTimelineText(input.title || input.detail || input.type || '事件');
+    if (!title) return null;
+    const item = {
+      id: String(input.id || 'tl-' + Date.now() + '-' + Math.random().toString(16).slice(2)),
+      ts: Number(input.ts || Date.now()),
+      source: input.source || 'system',
+      title,
+      detail: sanitizeTimelineText(input.detail || ''),
+      status: input.status || undefined,
+      risk: input.risk || undefined,
+    };
+    copilotTimelineEvents.push(item);
+    if (copilotTimelineEvents.length > COPILOT_TIMELINE_LIMIT) {
+      copilotTimelineEvents = copilotTimelineEvents.slice(-COPILOT_TIMELINE_LIMIT);
+    }
+    renderCopilotTimeline(item.status === 'failed');
+    return item;
+  }
+
+  function summarizeShellExternalConnections(snapshot) {
+    const list = Array.isArray(snapshot) ? snapshot : [];
+    const software = list.filter((item) => String(item && (item.type || item.capabilityType || '')).trim() === 'software_connection');
+    if (!software.length) return { label: '\u5916\u90e8\uff1a\u672a\u8bfb\u5230\u5bbf\u4e3b\u8fde\u63a5', tone: 'warn' };
+    const connected = software.filter((item) => {
+      const status = String((item && (item.status || item.health || item.connectionStatus)) || '').toLowerCase();
+      return item && (item.connected === true || status === 'connected' || status === 'ok' || status === 'ready');
+    });
+    const first = connected[0] || software[0] || {};
+    const name = String(first.name || first.label || first.id || '').trim() || '\u5bbf\u4e3b';
+    const unknownSelection =
+      first.selectionUnknown === true ||
+      String((first.selection && first.selection.kind) || first.selectionKind || '').toLowerCase() === 'unknown';
+    if (connected.length) {
+      return {
+        label: `\u5916\u90e8\uff1a${name}\u5df2\u8fde\u63a5${unknownSelection ? '\uff0c\u9009\u533a\u672a\u77e5' : ''}`,
+        tone: unknownSelection ? 'warn' : 'active',
+      };
+    }
+    return { label: `\u5916\u90e8\uff1a${name}\u672a\u8fde\u63a5`, tone: 'warn' };
+  }
+
+  async function loadShellExternalConnectionSnapshot() {
+    if (!shell || typeof shell.api !== 'function') return null;
+    try {
+      const responses = await Promise.allSettled([
+        shell.api('GET', '/v1/capability-packages/drafts', null),
+        shell.api('GET', '/v1/capability-packages/cloud', null),
+      ]);
+      const rows = [];
+      responses.forEach((result) => {
+        const json = result && result.status === 'fulfilled' && result.value ? result.value.json : null;
+        const candidates = [
+          json && json.items,
+          json && json.packages,
+          json && json.drafts,
+          json && json.capabilityPackages,
+          Array.isArray(json) ? json : null,
+        ];
+        candidates.forEach((candidate) => {
+          if (Array.isArray(candidate)) rows.push(...candidate);
+        });
+      });
+      lastExternalConnectionSnapshot = rows;
+      return rows;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * @typedef {Object} CopilotRuntimeState
+   * @property {1} version
+   * @property {number} capturedAt
+   * @property {number} freshnessMs
+   * @property {{id:string,label:string,ready:boolean,mode:'ask'|'sandbox'|'full'}} brain
+   * @property {{workspace:string,object:string,external:string,desktop:string,recent:string,refresh:string,stale:boolean,risks:string[]}} perception
+   * @property {{workspace:string,object:string,external:string,desktop:string,recent:string,refresh:string}} perceptionTones
+   * @property {{enabled:boolean,paused:boolean,permissionGranted:boolean,scope:string,foregroundApp:string,foregroundWindowTitle:string,lastFrameAt:number,lastSummary:string,cacheFrameCount:number,cacheFrameLimit:number,summaryText:string,tone:string,rawFrameRequiresConfirmation:boolean}} desktopObservation
+   * @property {{id:string,goal:string,status:string,currentStep?:string,blocker?:string,recoveryActions:Array<{id:string,label:string}>,updatedAt:number,attempt:number}=} activeTask
+   * @property {Array<unknown>} timeline
+   */
+
+  function buildActiveTaskState() {
+    if (!activeTaskThreadCard || !activeTaskThreadCard.isConnected || !activeTaskThreadEls) return undefined;
+    const goalText = activeTaskThreadEls.goal ? String(activeTaskThreadEls.goal.textContent || '') : '';
+    const progressText = activeTaskThreadEls.progress ? String(activeTaskThreadEls.progress.textContent || '') : '';
+    const recoveryText = activeTaskThreadEls.recovery ? String(activeTaskThreadEls.recovery.textContent || '') : '';
+    return {
+      id: activeTaskThreadCard.dataset.taskId || activeTaskThreadKey || 'current-task',
+      goal: goalText.replace(/^\u76ee\u6807\uff1a/, '') || '\u5f53\u524d\u4efb\u52a1',
+      status: activeTaskThreadCard.dataset.taskStatus || 'unknown',
+      currentStep: progressText.replace(/^\u8fdb\u5ea6\uff1a/, '') || undefined,
+      blocker: activeTaskThreadCard.classList.contains('is-error') ? recoveryText.replace(/^\u6062\u590d\uff1a/, '') : undefined,
+      recoveryActions: activeTaskThreadCard.classList.contains('is-error')
+        ? [{ id: 'retry', label: '\u91cd\u8bd5' }, { id: 'details', label: '\u67e5\u770b\u8be6\u60c5' }]
+        : [],
+      updatedAt: Date.now(),
+      attempt: Number(activeTaskThreadCard.dataset.taskAttempt || activeTaskThreadAttempt || 1),
+    };
+  }
+
+  function stripCopilotRowPrefix(value) {
+    return String(value || '').replace(/^[^:：]{1,12}[:：]\s*/, '').trim();
+  }
+
+  function setCurrentRunDock(phase, detail) {
+    if (!currentRunEl) return;
+    const safePhase = phase === 'done' || phase === 'error' || phase === 'activity' ? phase : 'running';
+    const statusText =
+      safePhase === 'done'
+        ? '\u5df2\u5b8c\u6210'
+        : safePhase === 'error'
+          ? '\u9700\u8981\u5904\u7406'
+          : safePhase === 'activity'
+            ? '\u6d3b\u52a8\u66f4\u65b0'
+            : '\u8fd0\u884c\u4e2d';
+    const goalText = activeTaskThreadEls && activeTaskThreadEls.goal
+      ? stripCopilotRowPrefix(activeTaskThreadEls.goal.textContent)
+      : stripCopilotRowPrefix(lastUserPrompt) || '\u5f53\u524d\u4efb\u52a1';
+    const progressText = detail
+      ? String(detail).trim()
+      : activeTaskThreadEls && activeTaskThreadEls.progress
+        ? stripCopilotRowPrefix(activeTaskThreadEls.progress.textContent)
+        : '\u7b49\u5f85\u6700\u65b0\u8fdb\u5c55';
+
+    currentRunEl.hidden = false;
+    currentRunEl.className = 'copilot-current-run is-' + safePhase;
+    if (currentRunStateEl) currentRunStateEl.textContent = statusText;
+    if (currentRunGoalEl) currentRunGoalEl.textContent = goalText || '\u5f53\u524d\u4efb\u52a1';
+    if (currentRunProgressEl) currentRunProgressEl.textContent = progressText || '\u7b49\u5f85\u6700\u65b0\u8fdb\u5c55';
+    renderCopilotProductState(buildCopilotRuntimeState(lastWorkbenchContextSnapshot, lastToolExecutionsSnapshot, lastExternalConnectionSnapshot));
+  }
+
+  function noteCurrentRunActivity(label, detail, phase) {
+    const text = [label, detail].filter(Boolean).join('\uff1a').slice(0, 180);
+    if (currentRunActivityEl) currentRunActivityEl.textContent = text ? '\u6700\u8fd1\u6d3b\u52a8\uff1a' + text : '';
+    if (!activeTaskThreadEls && text) setCurrentRunDock(phase === 'error' ? 'error' : 'activity', text);
+  }
+
+  function clearCurrentRunDock() {
+    if (!currentRunEl) return;
+    currentRunEl.hidden = true;
+    currentRunEl.className = 'copilot-current-run';
+    if (currentRunStateEl) currentRunStateEl.textContent = '\u5f85\u547d';
+    if (currentRunGoalEl) currentRunGoalEl.textContent = '';
+    if (currentRunProgressEl) currentRunProgressEl.textContent = '';
+    if (currentRunActivityEl) currentRunActivityEl.textContent = '';
+    renderCopilotProductState(buildCopilotRuntimeState(lastWorkbenchContextSnapshot, lastToolExecutionsSnapshot, lastExternalConnectionSnapshot));
+  }
+
+  function buildCopilotRuntimeState(context, executions, externalSnapshot) {
+    const capturedAt = Date.now();
+    const contextSummary = summarizeWorkbenchContext(context, executions);
+    const externalSummary = summarizeShellExternalConnections(
+      Array.isArray(externalSnapshot) ? externalSnapshot : lastExternalConnectionSnapshot,
+    );
+    const desktopObservation = buildDesktopObservationRuntimeSummary();
+    const desktopSummary = { label: desktopObservation.summaryText, tone: desktopObservation.tone };
+    const objectLabel = activeObjectSessionLabel
+      ? `\u5bf9\u8c61\uff1a${activeObjectSessionLabel}`
+      : '\u5bf9\u8c61\uff1a\u9ed8\u8ba4\u5bf9\u8bdd';
+    const stale =
+      lastPerceptionRefreshFailed ||
+      !lastPerceptionRefreshedAt ||
+      capturedAt - lastPerceptionRefreshedAt > 30000;
+    const refreshLabel = lastPerceptionRefreshFailed
+      ? '\u5237\u65b0\uff1a\u8bfb\u53d6\u5931\u8d25'
+      : formatPerceptionRefreshAge(lastPerceptionRefreshedAt);
+    const mode = String((lastSettingsSnapshot && lastSettingsSnapshot.codexPermissionMode) || 'ask');
+    const safeMode = mode === 'sandbox' || mode === 'full' ? mode : 'ask';
+    return {
+      version: 1,
+      capturedAt,
+      freshnessMs: lastPerceptionRefreshedAt ? capturedAt - lastPerceptionRefreshedAt : Number.POSITIVE_INFINITY,
+      brain: {
+        id: String((lastSettingsSnapshot && lastSettingsSnapshot.defaultBrainId) || (brainLabel && brainLabel.textContent) || 'codex'),
+        label: String((brainLabel && brainLabel.textContent) || 'codex'),
+        ready: Boolean(brainReady),
+        mode: safeMode,
+      },
+      perception: {
+        workspace: `\u5de5\u4f5c\u53f0\uff1a${contextSummary.projectLabel} / ${contextSummary.assetLabel}`,
+        object: objectLabel,
+        external: externalSummary.label,
+        desktop: desktopSummary.label,
+        recent: `\u6700\u8fd1\uff1a${contextSummary.taskLabel}`,
+        refresh: refreshLabel,
+        stale,
+        risks: [
+          ...(lastWorkbenchContextSnapshot ? [] : ['workspace_unknown']),
+          ...(externalSummary.tone === 'warn' ? ['external_attention'] : []),
+          ...(desktopSummary.tone === 'warn' ? ['desktop_observation_off'] : []),
+          ...(stale ? ['stale'] : []),
+        ],
+      },
+      perceptionTones: {
+        workspace: lastWorkbenchContextSnapshot ? 'active' : 'warn',
+        object: activeObjectSessionLabel ? 'active' : '',
+        external: externalSummary.tone,
+        desktop: desktopSummary.tone,
+        recent: lastToolExecutionsSnapshot.length ? 'active' : '',
+        refresh: stale ? 'warn' : '',
+      },
+      desktopObservation,
+      activeTask: buildActiveTaskState(),
+      timeline: copilotTimelineEvents.slice(-COPILOT_TIMELINE_LIMIT),
+    };
+  }
+
+  function renderShellCopilotPerceptionBar(runtimeState) {
+    if (!runtimeState || !runtimeState.perception) return;
+    const p = runtimeState.perception;
+    const tones = runtimeState.perceptionTones || {};
+    setPerceptionChip(perceptionWorkspaceEl, p.workspace, tones.workspace);
+    setPerceptionChip(perceptionObjectEl, p.object, tones.object || 'hidden');
+    setPerceptionChip(perceptionExternalEl, p.external, tones.external);
+    setPerceptionChip(perceptionDesktopEl, p.desktop, tones.desktop);
+    setPerceptionChip(perceptionRecentEl, p.recent, tones.recent || 'hidden');
+    setPerceptionChip(perceptionRefreshEl, p.refresh, tones.refresh || 'hidden');
+    renderCopilotProductState(runtimeState);
+  }
+
+  function buildConfirmPerceptionSummary(runtimeState) {
+    const state = runtimeState && runtimeState.perception ? runtimeState : buildCopilotRuntimeState(
+      lastWorkbenchContextSnapshot,
+      lastToolExecutionsSnapshot,
+      lastExternalConnectionSnapshot,
+    );
+    const p = state.perception || {};
+    const lines = [
+      p.workspace,
+      p.object,
+      p.external,
+      p.desktop,
+      p.refresh,
+    ].filter(Boolean);
+    if (Array.isArray(p.risks) && p.risks.length) {
+      lines.push('风险：' + p.risks.join(' / '));
+    }
+    if (p.stale) {
+      lines.push('上下文可能过期，请先确认范围仍然正确。');
+    }
+    return {
+      text: lines.map(sanitizeTimelineText).filter(Boolean).join('\n'),
+      stale: Boolean(p.stale),
+    };
+  }
+
+  function updateShellCopilotPerceptionBar(context, executions, externalSnapshot) {
+    if (!perceptionBarEl) return;
+    const runtimeState = buildCopilotRuntimeState(context, executions, externalSnapshot);
+    renderShellCopilotPerceptionBar(runtimeState);
+  }
+
+  async function refreshShellCopilotPerceptionBar() {
+    const [workbenchResult, externalResult, desktopResult] = await Promise.allSettled([
+      loadWorkbenchContextSnapshot(),
+      loadShellExternalConnectionSnapshot(),
+      refreshDesktopObservationStatus({ emitLatestFrame: true }),
+    ]);
+    const workbench = workbenchResult.status === 'fulfilled' ? workbenchResult.value : null;
+    const external = externalResult.status === 'fulfilled' ? externalResult.value : null;
+    if (desktopResult.status === 'fulfilled' && desktopResult.value) {
+      applyDesktopObservationStatus(desktopResult.value, { emitLatestFrame: true });
+    }
+    lastPerceptionRefreshFailed =
+      workbenchResult.status === 'rejected' ||
+      externalResult.status === 'rejected' ||
+      (!workbench && !external);
+    lastPerceptionRefreshedAt = Date.now();
+    updateShellCopilotPerceptionBar(
+      workbench && workbench.context ? workbench.context : lastWorkbenchContextSnapshot,
+      workbench && Array.isArray(workbench.executions) ? workbench.executions : lastToolExecutionsSnapshot,
+      Array.isArray(external) ? external : lastExternalConnectionSnapshot,
+    );
+  }
+
+  async function refreshCopilotObservationAfterAction(reason, status) {
+    try {
+      await refreshShellCopilotPerceptionBar();
+      emitCopilotTimelineEvent({
+        source: 'system',
+        title: '观察已刷新：' + (reason || '动作后'),
+        status: status || 'done',
+      });
+    } catch {
+      lastPerceptionRefreshFailed = true;
+      updateShellCopilotPerceptionBar(lastWorkbenchContextSnapshot, lastToolExecutionsSnapshot, lastExternalConnectionSnapshot);
+      emitCopilotTimelineEvent({
+        source: 'system',
+        title: '观察刷新失败：' + (reason || '动作后'),
+        status: 'failed',
+      });
+    }
+  }
+
   function makeCopilotText(className, text) {
     const el = document.createElement('div');
     el.className = className;
     el.textContent = text || '';
     return el;
+  }
+
+  function buildTaskThreadKey(prompt) {
+    return String(prompt || '')
+      .trim()
+      .toLowerCase()
+      .replace(/\s+/g, ' ')
+      .slice(0, 180);
   }
 
   function makeCopilotButton(label, className, onClick) {
@@ -487,9 +1126,39 @@
     if (!messagesEl) return null;
     const text = String(prompt || '').trim();
     const source = meta && meta.source ? String(meta.source) : 'composer';
-    const card = document.createElement('div');
+    const nextKey = buildTaskThreadKey(text);
+    const canReuse = activeTaskThreadCard && activeTaskThreadCard.isConnected && activeTaskThreadEls;
+    const sameTask = canReuse && activeTaskThreadKey && activeTaskThreadKey === nextKey;
+    const card = canReuse ? activeTaskThreadCard : document.createElement('div');
     card.className = 'copilot-task-thread-card';
+    card.classList.remove('is-done', 'is-error');
     card.dataset.taskSource = source;
+    card.dataset.taskId = nextKey || 'current-task';
+    card.dataset.taskAttempt = String(sameTask ? activeTaskThreadAttempt + 1 : 1);
+    card.dataset.taskStatus = 'running';
+
+    activeTaskThreadKey = nextKey;
+    activeTaskThreadAttempt = Number(card.dataset.taskAttempt || 1);
+
+    if (canReuse) {
+      if (activeTaskThreadEls.goal) {
+        activeTaskThreadEls.goal.textContent = '\u76ee\u6807\uff1a' + (text || '\u7b49\u5f85\u8f93\u5165');
+      }
+      if (activeTaskThreadEls.attempt) {
+        activeTaskThreadEls.attempt.textContent = '\u5c1d\u8bd5\uff1a' + activeTaskThreadAttempt;
+      }
+      if (activeTaskThreadEls.state) activeTaskThreadEls.state.textContent = '\u8fdb\u884c\u4e2d';
+      if (activeTaskThreadEls.progress) activeTaskThreadEls.progress.textContent = '\u8fdb\u5ea6\uff1a\u5df2\u63a5\u5165 Copilot \u6267\u884c';
+      if (activeTaskThreadEls.result) activeTaskThreadEls.result.textContent = '\u7ed3\u679c\uff1a\u7b49\u5f85 Agent \u8fd4\u56de';
+      if (activeTaskThreadEls.recovery) {
+        activeTaskThreadEls.recovery.textContent =
+          '\u6062\u590d\uff1a\u5931\u8d25\u65f6\u4f1a\u7ed9\u51fa\u91cd\u8bd5\u3001\u767b\u5f55\u6216\u8bfb\u53d6\u4e0a\u4e0b\u6587\u52a8\u4f5c';
+      }
+      messagesEl.appendChild(card);
+      setCurrentRunDock('running', '\u5df2\u63a5\u5165 Copilot \u6267\u884c');
+      scrollMessagesToBottom();
+      return card;
+    }
 
     const head = document.createElement('div');
     head.className = 'copilot-task-thread-head';
@@ -500,17 +1169,19 @@
     const grid = document.createElement('div');
     grid.className = 'copilot-task-thread-grid';
     const goal = makeCopilotText('copilot-task-thread-row is-goal', '\u76ee\u6807\uff1a' + (text || '\u7b49\u5f85\u8f93\u5165'));
+    const attempt = makeCopilotText('copilot-task-thread-row is-attempt', '\u5c1d\u8bd5\uff1a' + activeTaskThreadAttempt);
     const plan = makeCopilotText('copilot-task-thread-row is-plan', '\u8ba1\u5212\uff1a\u8bfb\u53d6\u4e0a\u4e0b\u6587 \u2192 \u6267\u884c\u5fc5\u8981\u52a8\u4f5c \u2192 \u56de\u4f20\u7ed3\u679c');
     const progress = makeCopilotText('copilot-task-thread-row is-progress', '\u8fdb\u5ea6\uff1a\u5df2\u63a5\u5165 Copilot \u6267\u884c');
     const result = makeCopilotText('copilot-task-thread-row is-result', '\u7ed3\u679c\uff1a\u7b49\u5f85 Agent \u8fd4\u56de');
     const recovery = makeCopilotText('copilot-task-thread-row is-recovery', '\u6062\u590d\uff1a\u5931\u8d25\u65f6\u4f1a\u7ed9\u51fa\u91cd\u8bd5\u3001\u767b\u5f55\u6216\u8bfb\u53d6\u4e0a\u4e0b\u6587\u52a8\u4f5c');
     const save = makeCopilotText('copilot-task-thread-row is-save-outlet', '\u4fdd\u5b58\u51fa\u53e3\uff1a\u7ed3\u679c\u5165\u8d44\u4ea7\u5e93\uff0c\u6210\u529f\u6d41\u7a0b\u53ef\u4fdd\u5b58\u4e3a\u5de5\u4f5c\u6d41\u8349\u7a3f');
-    [goal, plan, progress, result, recovery, save].forEach((row) => grid.appendChild(row));
+    [goal, attempt, plan, progress, result, recovery, save].forEach((row) => grid.appendChild(row));
     card.appendChild(grid);
 
     messagesEl.appendChild(card);
     activeTaskThreadCard = card;
-    activeTaskThreadEls = { state: head.querySelector('.copilot-task-thread-state'), progress, result, recovery };
+    activeTaskThreadEls = { state: head.querySelector('.copilot-task-thread-state'), goal, attempt, progress, result, recovery };
+    setCurrentRunDock('running', '\u5df2\u63a5\u5165 Copilot \u6267\u884c');
     scrollMessagesToBottom();
     return card;
   }
@@ -521,14 +1192,23 @@
     if (phase === 'progress') {
       activeTaskThreadEls.progress.textContent = '\u8fdb\u5ea6\uff1a' + (text || '\u6b63\u5728\u6267\u884c');
       activeTaskThreadEls.state.textContent = '\u8fdb\u884c\u4e2d';
+      activeTaskThreadCard.dataset.taskStatus = 'running';
+      setCurrentRunDock('running', text || '\u6b63\u5728\u6267\u884c');
+      emitCopilotTimelineEvent({ source: 'copilot', title: text || '任务进行中', status: 'running' });
     } else if (phase === 'done') {
       activeTaskThreadEls.result.textContent = '\u7ed3\u679c\uff1a' + (text || '\u5df2\u5b8c\u6210\uff0c\u8bf7\u67e5\u770b\u4e0a\u65b9\u8f93\u51fa');
       activeTaskThreadEls.state.textContent = '\u5df2\u5b8c\u6210';
+      activeTaskThreadCard.dataset.taskStatus = 'succeeded';
       activeTaskThreadCard.classList.add('is-done');
+      setCurrentRunDock('done', text || '\u5df2\u5b8c\u6210\uff0c\u7ed3\u679c\u5df2\u5199\u5165\u5bf9\u8bdd');
+      emitCopilotTimelineEvent({ source: 'copilot', title: text || '任务已完成', status: 'done' });
     } else if (phase === 'error') {
       activeTaskThreadEls.recovery.textContent = '\u6062\u590d\uff1a' + (text || '\u5df2\u751f\u6210\u6062\u590d\u52a8\u4f5c');
       activeTaskThreadEls.state.textContent = '\u9700\u6062\u590d';
+      activeTaskThreadCard.dataset.taskStatus = 'failed';
       activeTaskThreadCard.classList.add('is-error');
+      setCurrentRunDock('error', text || '\u9700\u8981\u6062\u590d\u52a8\u4f5c');
+      emitCopilotTimelineEvent({ source: 'copilot', title: text || '任务需要恢复', status: 'failed' });
     }
   }
 
@@ -877,6 +1557,125 @@
     return 'Ask';
   }
 
+  function normalizePolicyToolList(value) {
+    const seen = new Set();
+    const out = [];
+    (Array.isArray(value) ? value : []).forEach((item) => {
+      const name = String(item || '').trim();
+      if (!name || seen.has(name)) return;
+      seen.add(name);
+      out.push(name);
+    });
+    return out.sort();
+  }
+
+  function canRememberLowRiskConfirm(ev) {
+    if (!ev || ev.name === 'codex.full_access_turn' || ev.clientId === 'mcp') return false;
+    if (ev.risk && ev.risk !== 'confirm') return false;
+    return ev.autoConfirmEligible === true || ev.name === 'ac.workbench.run_capability';
+  }
+
+  function renderRememberedLowRiskPolicy(policy) {
+    const els = ensureBrainStateCard();
+    if (!els || !els.rememberedPolicy) return;
+    const snapshot = policy && typeof policy === 'object' ? policy : lastAgentPolicySnapshot;
+    const remembered = normalizePolicyToolList(snapshot.autoConfirmTools);
+    els.rememberedPolicy.innerHTML = '';
+    const title = document.createElement('div');
+    title.className = 'copilot-policy-title';
+    title.textContent = '已记住的低风险授权';
+    els.rememberedPolicy.appendChild(title);
+    if (!remembered.length) {
+      const empty = document.createElement('div');
+      empty.className = 'copilot-policy-empty';
+      empty.textContent = '暂无。低风险确认卡可单独记住，高风险仍会确认。';
+      els.rememberedPolicy.appendChild(empty);
+      return;
+    }
+    remembered.forEach((toolName) => {
+      const row = document.createElement('div');
+      row.className = 'copilot-policy-row';
+      const label = document.createElement('span');
+      label.textContent = toolName;
+      const revoke = document.createElement('button');
+      revoke.type = 'button';
+      revoke.className = 'copilot-mini-btn';
+      revoke.textContent = '撤销';
+      revoke.addEventListener('click', () => void revokeRememberedLowRiskTool(toolName));
+      row.appendChild(label);
+      row.appendChild(revoke);
+      els.rememberedPolicy.appendChild(row);
+    });
+  }
+
+  async function loadAgentPolicySnapshot() {
+    if (!agent || typeof agent.loadPolicy !== 'function') {
+      renderRememberedLowRiskPolicy(lastAgentPolicySnapshot);
+      return lastAgentPolicySnapshot;
+    }
+    try {
+      const r = await agent.loadPolicy();
+      if (r && r.ok && r.agentPolicy) {
+        lastAgentPolicySnapshot = {
+          ...lastAgentPolicySnapshot,
+          ...r.agentPolicy,
+          autoConfirmTools: normalizePolicyToolList(r.agentPolicy.autoConfirmTools),
+          forbiddenTools: normalizePolicyToolList(r.agentPolicy.forbiddenTools),
+        };
+      }
+    } catch {
+      /* ignore */
+    }
+    renderRememberedLowRiskPolicy(lastAgentPolicySnapshot);
+    return lastAgentPolicySnapshot;
+  }
+
+  async function saveRememberedLowRiskTool(toolName) {
+    const name = String(toolName || '').trim();
+    if (!name || !agent || typeof agent.savePolicy !== 'function') return false;
+    const current = await loadAgentPolicySnapshot();
+    const nextAuto = new Set(normalizePolicyToolList(current.autoConfirmTools));
+    nextAuto.add(name);
+    const r = await agent.savePolicy({
+      autoConfirmTools: [...nextAuto].sort(),
+    });
+    if (r && r.ok && r.agentPolicy) {
+      lastAgentPolicySnapshot = {
+        ...lastAgentPolicySnapshot,
+        ...r.agentPolicy,
+        autoConfirmTools: normalizePolicyToolList(r.agentPolicy.autoConfirmTools),
+        forbiddenTools: normalizePolicyToolList(r.agentPolicy.forbiddenTools),
+      };
+      renderRememberedLowRiskPolicy(lastAgentPolicySnapshot);
+      return true;
+    }
+    return false;
+  }
+
+  async function revokeRememberedLowRiskTool(toolName) {
+    const name = String(toolName || '').trim();
+    if (!name || !agent || typeof agent.savePolicy !== 'function') return false;
+    const current = await loadAgentPolicySnapshot();
+    const nextAuto = normalizePolicyToolList(current.autoConfirmTools).filter((item) => item !== name);
+    const r = await agent.savePolicy({
+      autoConfirmTools: nextAuto,
+    });
+    if (r && r.ok && r.agentPolicy) {
+      lastAgentPolicySnapshot = {
+        ...lastAgentPolicySnapshot,
+        ...r.agentPolicy,
+        autoConfirmTools: normalizePolicyToolList(r.agentPolicy.autoConfirmTools),
+        forbiddenTools: normalizePolicyToolList(r.agentPolicy.forbiddenTools),
+      };
+      renderRememberedLowRiskPolicy(lastAgentPolicySnapshot);
+      emitCopilotTimelineEvent({ source: 'user', title: '已撤销低风险授权：' + name, status: 'done' });
+      setStatus('已撤销：' + name);
+      setTimeout(() => setStatus(''), 1600);
+      return true;
+    }
+    return false;
+  }
+
   function ensureBrainStateCard() {
     if (brainStateCard && brainStateEls) return brainStateEls;
     const body = root.querySelector('.copilot-body');
@@ -945,10 +1744,14 @@
     modes.appendChild(sandboxBtn);
     modes.appendChild(fullBtn);
 
+    const rememberedPolicy = document.createElement('div');
+    rememberedPolicy.className = 'copilot-policy-memory';
+
     card.appendChild(top);
     card.appendChild(sub);
     card.appendChild(actions);
     card.appendChild(modes);
+    card.appendChild(rememberedPolicy);
     body.insertBefore(card, body.firstChild);
 
     useCodex.addEventListener('click', () => void refreshTeamCodexAndTest(useCodex));
@@ -964,7 +1767,8 @@
     fullBtn.addEventListener('click', () => void setPermissionMode('full'));
 
     brainStateCard = card;
-    brainStateEls = { dot, title, mode, sub, useCodex, testCodex, askBtn, sandboxBtn, fullBtn };
+    brainStateEls = { dot, title, mode, sub, useCodex, testCodex, askBtn, sandboxBtn, fullBtn, rememberedPolicy };
+    renderRememberedLowRiskPolicy(lastAgentPolicySnapshot);
     return brainStateEls;
   }
 
@@ -1179,6 +1983,7 @@
       els.title.textContent = desired === active ? desired : desired + ' -> ' + active;
       const permissionMode = (s.settings && s.settings.codexPermissionMode) || 'ask';
       void syncPolicyForPermissionMode(permissionMode);
+      void loadAgentPolicySnapshot();
       els.mode.textContent = permissionModeLabel(permissionMode);
       const cwd = s.settings && s.settings.codexCwd ? s.settings.codexCwd : '';
       const detail = probe && probe.detail ? probe.detail : 'not detected';
@@ -1703,10 +2508,201 @@
     return t.trimEnd();
   }
 
+  function appendInlineMarkdown(parent, text) {
+    const source = String(text || '');
+    const pattern = /(`[^`\n]+`|\*\*[^*\n]+\*\*|\[[^\]\n]+\]\((?:https?:\/\/|mailto:)[^) \n]+\))/g;
+    let cursor = 0;
+    let match = null;
+    while ((match = pattern.exec(source))) {
+      if (match.index > cursor) parent.appendChild(document.createTextNode(source.slice(cursor, match.index)));
+      const token = match[0];
+      if (token.startsWith('`')) {
+        const code = document.createElement('code');
+        code.className = 'copilot-inline-code';
+        code.textContent = token.slice(1, -1);
+        parent.appendChild(code);
+      } else if (token.startsWith('**')) {
+        const strong = document.createElement('strong');
+        strong.textContent = token.slice(2, -2);
+        parent.appendChild(strong);
+      } else {
+        const link = token.match(/^\[([^\]]+)\]\(([^)]+)\)$/);
+        if (link) {
+          const a = document.createElement('a');
+          a.textContent = link[1];
+          a.href = link[2];
+          a.target = '_blank';
+          a.rel = 'noreferrer noopener';
+          parent.appendChild(a);
+        } else {
+          parent.appendChild(document.createTextNode(token));
+        }
+      }
+      cursor = match.index + token.length;
+    }
+    if (cursor < source.length) parent.appendChild(document.createTextNode(source.slice(cursor)));
+  }
+
+  function appendInlineMarkdownWithBreaks(parent, text) {
+    String(text || '').split('\n').forEach((line, index) => {
+      if (index > 0) parent.appendChild(document.createElement('br'));
+      appendInlineMarkdown(parent, line);
+    });
+  }
+
+  function appendCodeBlockMarkdown(parent, lang, codeText) {
+    const block = document.createElement('div');
+    block.className = 'copilot-code-block';
+    const head = document.createElement('div');
+    head.className = 'copilot-code-head';
+    const label = document.createElement('span');
+    label.textContent = String(lang || '').trim() || 'code';
+    const copy = document.createElement('button');
+    copy.type = 'button';
+    copy.className = 'copilot-code-copy';
+    copy.textContent = '复制';
+    copy.addEventListener('click', async () => {
+      try {
+        if (shell && typeof shell.copyText === 'function') {
+          shell.copyText(codeText);
+        } else if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+          await navigator.clipboard.writeText(codeText);
+        }
+        copy.textContent = '已复制';
+        setTimeout(() => {
+          copy.textContent = '复制';
+        }, 1400);
+      } catch {
+        copy.textContent = '复制失败';
+        setTimeout(() => {
+          copy.textContent = '复制';
+        }, 1600);
+      }
+    });
+    head.appendChild(label);
+    head.appendChild(copy);
+    const pre = document.createElement('pre');
+    const code = document.createElement('code');
+    code.textContent = String(codeText || '').replace(/\n$/, '');
+    pre.appendChild(code);
+    block.appendChild(head);
+    block.appendChild(pre);
+    parent.appendChild(block);
+  }
+
+  function appendMarkdownFlow(parent, text) {
+    const lines = String(text || '').split('\n');
+    let i = 0;
+    while (i < lines.length) {
+      const line = lines[i];
+      if (!line.trim()) {
+        i += 1;
+        continue;
+      }
+      const heading = line.match(/^(#{1,3})\s+(.+)$/);
+      if (heading) {
+        const level = heading[1].length + 2;
+        const h = document.createElement('h' + level);
+        appendInlineMarkdown(h, heading[2]);
+        parent.appendChild(h);
+        i += 1;
+        continue;
+      }
+      if (/^\s*[-*_]{3,}\s*$/.test(line)) {
+        parent.appendChild(document.createElement('hr'));
+        i += 1;
+        continue;
+      }
+      if (/^\s*>\s?/.test(line)) {
+        const quoteLines = [];
+        while (i < lines.length && /^\s*>\s?/.test(lines[i])) {
+          quoteLines.push(lines[i].replace(/^\s*>\s?/, ''));
+          i += 1;
+        }
+        const quote = document.createElement('blockquote');
+        appendInlineMarkdownWithBreaks(quote, quoteLines.join('\n'));
+        parent.appendChild(quote);
+        continue;
+      }
+      if (/^\s*[-*]\s+/.test(line)) {
+        const ul = document.createElement('ul');
+        while (i < lines.length && /^\s*[-*]\s+/.test(lines[i])) {
+          const li = document.createElement('li');
+          appendInlineMarkdown(li, lines[i].replace(/^\s*[-*]\s+/, ''));
+          ul.appendChild(li);
+          i += 1;
+        }
+        parent.appendChild(ul);
+        continue;
+      }
+      if (/^\s*\d+\.\s+/.test(line)) {
+        const ol = document.createElement('ol');
+        while (i < lines.length && /^\s*\d+\.\s+/.test(lines[i])) {
+          const li = document.createElement('li');
+          appendInlineMarkdown(li, lines[i].replace(/^\s*\d+\.\s+/, ''));
+          ol.appendChild(li);
+          i += 1;
+        }
+        parent.appendChild(ol);
+        continue;
+      }
+      const paragraph = [];
+      while (
+        i < lines.length &&
+        lines[i].trim() &&
+        !/^```/.test(lines[i]) &&
+        !/^(#{1,3})\s+/.test(lines[i]) &&
+        !/^\s*[-*_]{3,}\s*$/.test(lines[i]) &&
+        !/^\s*>\s?/.test(lines[i]) &&
+        !/^\s*[-*]\s+/.test(lines[i]) &&
+        !/^\s*\d+\.\s+/.test(lines[i])
+      ) {
+        paragraph.push(lines[i]);
+        i += 1;
+      }
+      const p = document.createElement('p');
+      appendInlineMarkdownWithBreaks(p, paragraph.join('\n'));
+      parent.appendChild(p);
+    }
+  }
+
+  function renderCopilotMarkdown(el, text) {
+    el.textContent = '';
+    el.classList.add('copilot-markdown');
+    const formatted = formatCopilotAssistantText(text);
+    const lines = formatted.split('\n');
+    let flow = [];
+    for (let i = 0; i < lines.length; i += 1) {
+      const fence = lines[i].match(/^```\s*([A-Za-z0-9_+.-]*)\s*$/);
+      if (!fence) {
+        flow.push(lines[i]);
+        continue;
+      }
+      if (flow.length) {
+        appendMarkdownFlow(el, flow.join('\n'));
+        flow = [];
+      }
+      const codeLines = [];
+      i += 1;
+      while (i < lines.length && !/^```\s*$/.test(lines[i])) {
+        codeLines.push(lines[i]);
+        i += 1;
+      }
+      appendCodeBlockMarkdown(el, fence[1], codeLines.join('\n'));
+    }
+    if (flow.length) appendMarkdownFlow(el, flow.join('\n'));
+    if (!el.childNodes.length) el.textContent = formatted;
+  }
+
   function setBubbleText(el, role, text) {
     if (!el) return;
     const raw = text == null ? '' : String(text);
-    el.textContent = role === 'assistant' ? formatCopilotAssistantText(raw) : raw;
+    el.classList.toggle('copilot-markdown', role === 'assistant');
+    if (role === 'assistant') {
+      renderCopilotMarkdown(el, raw);
+    } else {
+      el.textContent = raw;
+    }
   }
 
   function appendBubble(role, text, extraClass) {
@@ -1752,6 +2748,10 @@
     if (isCodexFullAccess) {
       argsEl.textContent = '\u6279\u51c6\u540e\uff0c\u672c\u8f6e Codex \u53ef\u8bfb\u5199\u5de5\u4f5c\u533a\u5e76\u8fd0\u884c\u672c\u673a\u547d\u4ee4\u3002';
     }
+    const perceptionSummary = buildConfirmPerceptionSummary();
+    const perceptionEl = document.createElement('div');
+    perceptionEl.className = 'copilot-confirm-perception' + (perceptionSummary.stale ? ' is-stale' : '');
+    perceptionEl.textContent = '当前范围\n' + perceptionSummary.text;
     const actions = document.createElement('div');
     actions.className = 'copilot-confirm-actions';
     const approveBtn = document.createElement('button');
@@ -1762,12 +2762,19 @@
     rejectBtn.type = 'button';
     rejectBtn.className = 'copilot-confirm-reject';
     rejectBtn.textContent = '\u62d2\u7edd';
+    const rememberBtn = document.createElement('button');
+    rememberBtn.type = 'button';
+    rememberBtn.className = 'copilot-confirm-remember';
+    rememberBtn.textContent = '允许并记住';
+    const rememberEligible = canRememberLowRiskConfirm(ev);
     actions.appendChild(approveBtn);
+    if (rememberEligible) actions.appendChild(rememberBtn);
     actions.appendChild(rejectBtn);
     const status = document.createElement('div');
     status.className = 'copilot-confirm-status';
-    status.textContent = '\u7b49\u5f85\u4f60\u7684\u786e\u8ba4';
+    status.textContent = perceptionSummary.stale ? '上下文可能过期，请确认范围后再继续' : '\u7b49\u5f85\u4f60\u7684\u786e\u8ba4';
     card.appendChild(title);
+    card.appendChild(perceptionEl);
     card.appendChild(argsEl);
     card.appendChild(actions);
     card.appendChild(status);
@@ -1775,33 +2782,56 @@
     scrollMessagesToBottom();
 
     let settled = false;
-    const settle = async (approved) => {
+    const settle = async (approved, rememberLowRisk) => {
       if (settled) return;
       settled = true;
       card.classList.remove('is-error');
       card.classList.add('is-submitting');
-      status.textContent = approved ? '\u6b63\u5728\u63d0\u4ea4\u6279\u51c6\u2026' : '\u6b63\u5728\u63d0\u4ea4\u62d2\u7edd\u2026';
+      status.textContent = approved
+        ? rememberLowRisk
+          ? '\u6b63\u5728\u63d0\u4ea4\u6279\u51c6\u5e76\u8bb0\u4f4f\u2026'
+          : '\u6b63\u5728\u63d0\u4ea4\u6279\u51c6\u2026'
+        : '\u6b63\u5728\u63d0\u4ea4\u62d2\u7edd\u2026';
       approveBtn.disabled = true;
+      rememberBtn.disabled = true;
       rejectBtn.disabled = true;
       try {
         if (typeof agent.confirm === 'function') {
           const r = await agent.confirm(ev.confirmId, approved);
           if (!r || r.ok === false) throw new Error((r && r.error) || 'confirm_failed');
         }
+        if (approved && rememberLowRisk) {
+          const saved = await saveRememberedLowRiskTool(ev.name);
+          if (!saved) throw new Error('remember_low_risk_failed');
+        }
         card.classList.remove('is-submitting');
-        setStatus(approved ? '\u5df2\u6279\u51c6\uff0c\u7ee7\u7eed\u4e2d\u2026' : '\u5df2\u62d2\u7edd');
+        emitCopilotTimelineEvent({
+          source: 'user',
+          title: approved ? (rememberLowRisk ? '已批准并记住低风险授权' : '已批准确认') : '已拒绝确认',
+          detail: rememberLowRisk ? ev.name || '' : '',
+          status: approved ? 'done' : 'cancelled',
+        });
+        setStatus(approved ? (rememberLowRisk ? '\u5df2\u6279\u51c6\u5e76\u8bb0\u4f4f' : '\u5df2\u6279\u51c6\uff0c\u7ee7\u7eed\u4e2d\u2026') : '\u5df2\u62d2\u7edd');
         if (card.parentNode) card.parentNode.removeChild(card);
       } catch (e) {
         settled = false;
         approveBtn.disabled = false;
+        rememberBtn.disabled = false;
         rejectBtn.disabled = false;
         card.classList.remove('is-submitting');
         card.classList.add('is-error');
+        emitCopilotTimelineEvent({
+          source: 'system',
+          title: '确认提交失败',
+          detail: e && e.message ? e.message : String(e),
+          status: 'failed',
+        });
         status.textContent = '\u63d0\u4ea4\u5931\u8d25\uff1a' + (e && e.message ? e.message : String(e));
         setStatus(status.textContent);
       }
     };
     approveBtn.addEventListener('click', () => void settle(true));
+    rememberBtn.addEventListener('click', () => void settle(true, true));
     rejectBtn.addEventListener('click', () => void settle(false));
     setTimeout(() => setStatus(isCodexFullAccess ? '\u7b49\u5f85\u6388\u6743\u2026' : '\u7b49\u5f85\u786e\u8ba4\u2026'), 0);
     setStatus('\u7b49\u5f85\u786e\u8ba4\u2026');
@@ -1847,6 +2877,7 @@
     const phaseText =
       ev.phase === 'start' ? '\u5f00\u59cb' : ev.phase === 'done' ? '\u5b8c\u6210' : '\u5931\u8d25';
     const nameText = activityDisplayName(ev);
+    noteCurrentRunActivity(phaseText + ' · ' + nameText, ev.detail || '', ev.phase);
     const summary = document.createElement('div');
     summary.className = 'copilot-activity-summary';
     const title = document.createElement('span');
@@ -1890,6 +2921,34 @@
     updateTokenUsageBar(usage);
   }
 
+  function formatRecoveryDetail(message, meta, info) {
+    const lines = [];
+    const safePush = (label, value) => {
+      const text = String(value || '').trim();
+      if (text) lines.push(label + ': ' + text.slice(0, 800));
+    };
+    safePush('原因类型', info && info.kind);
+    safePush('用户提示', message);
+    if (meta && typeof meta === 'object') {
+      safePush('工具', meta.tool);
+      safePush('错误码', meta.errorCode || meta.code);
+      safePush('下一步', meta.nextStep);
+      const server = meta.server && typeof meta.server === 'object' ? meta.server : null;
+      if (server) safePush('服务状态', server.status || server.code);
+      try {
+        const compact = JSON.stringify(meta, (key, value) => {
+          if (/token|cookie|secret|password|authorization/i.test(key)) return '[redacted]';
+          if (typeof value === 'string' && value.length > 500) return value.slice(0, 500) + '...';
+          return value;
+        });
+        safePush('底层摘要', compact);
+      } catch {
+        /* ignore */
+      }
+    }
+    return lines.join('\n') || '没有更多底层详情。';
+  }
+
   function normalizeRecoveryInfo(message, meta) {
     const m = meta && typeof meta === 'object' ? meta : {};
     const server = m.server && typeof m.server === 'object' ? m.server : {};
@@ -1900,6 +2959,19 @@
     const msg = String(message || m.nextStep || '').trim();
     const code = String(m.errorCode || m.code || '').trim();
     const isWorkbench = m.view === 'workbench' || /^ac\.workbench\./.test(String(m.tool || ''));
+    const connectionText = [msg, code, m.tool, m.kind, m.type, m.connectionStatus, m.host, m.appId]
+      .map((item) => String(item || '').toLowerCase())
+      .join(' ');
+    const hostDisconnected =
+      /maya|blender|photoshop|connector|host|software_connection|external/.test(connectionText) &&
+      /not connected|disconnected|disconnect|unavailable|missing|未连接|断开|宿主/.test(connectionText);
+    if (hostDisconnected) {
+      return {
+        kind: 'host-disconnected',
+        title: '宿主软件未连接',
+        description: msg || '当前任务需要连接外部软件。先打开连接页修复连接，或让 Copilot 只生成操作方案。',
+      };
+    }
     if (code === 'AGENT_CREDITS_REQUIRED') {
       return {
         kind: 'credits-required',
@@ -1988,6 +3060,12 @@
   function appendRecoveryCard(message, meta) {
     if (!messagesEl) return;
     const info = normalizeRecoveryInfo(message, meta);
+    emitCopilotTimelineEvent({
+      source: 'system',
+      title: '生成恢复动作：' + info.title,
+      detail: message,
+      status: 'failed',
+    });
     const card = document.createElement('div');
     card.className = 'copilot-onboard copilot-recovery-card';
     const title = document.createElement('div');
@@ -2007,7 +3085,21 @@
     retryBtn.textContent = '重试';
     retryBtn.addEventListener('click', () => fillAndSend(lastUserPrompt || 'Retry the last Workbench action.'));
 
-    if (info.kind === 'workbench-auth' || info.kind === 'workbench-retry') {
+    if (info.kind === 'host-disconnected') {
+      fixBtn.className = 'copilot-onboard-btn is-primary';
+      fixBtn.textContent = '打开连接页';
+      fixBtn.addEventListener('click', switchToConnections);
+      const planOnlyBtn = document.createElement('button');
+      planOnlyBtn.type = 'button';
+      planOnlyBtn.className = 'copilot-onboard-btn';
+      planOnlyBtn.textContent = '只生成方案';
+      planOnlyBtn.addEventListener('click', () =>
+        fillAndSend('The external host is not connected. Do not execute host commands; generate a step-by-step operation plan and note what connection is required.'),
+      );
+      actions.appendChild(fixBtn);
+      actions.appendChild(planOnlyBtn);
+      actions.appendChild(retryBtn);
+    } else if (info.kind === 'workbench-auth' || info.kind === 'workbench-retry') {
       fixBtn.className = 'copilot-onboard-btn is-primary';
       fixBtn.textContent = info.kind === 'workbench-auth' ? 'Open Workbench login' : 'Open Workbench';
       fixBtn.addEventListener('click', () => {
@@ -2091,6 +3183,23 @@
       actions.appendChild(authBtn);
     }
 
+    const detailText = formatRecoveryDetail(message, meta, info);
+    const detailEl = document.createElement('pre');
+    detailEl.className = 'copilot-recovery-detail';
+    detailEl.hidden = true;
+    detailEl.textContent = detailText;
+    const detailBtn = document.createElement('button');
+    detailBtn.type = 'button';
+    detailBtn.className = 'copilot-onboard-btn';
+    detailBtn.textContent = '查看详情';
+    detailBtn.addEventListener('click', () => {
+      detailEl.hidden = !detailEl.hidden;
+      detailBtn.textContent = detailEl.hidden ? '查看详情' : '收起详情';
+      scrollMessagesToBottom();
+    });
+    if (!actions.contains(retryBtn)) actions.appendChild(retryBtn);
+    actions.appendChild(detailBtn);
+
     const settingsBtn = document.createElement('button');
     settingsBtn.type = 'button';
     settingsBtn.className = 'copilot-onboard-btn';
@@ -2100,6 +3209,7 @@
     card.appendChild(title);
     card.appendChild(desc);
     card.appendChild(actions);
+    card.appendChild(detailEl);
     messagesEl.appendChild(card);
     scrollMessagesToBottom();
   }
@@ -2169,9 +3279,62 @@
   }
 
   if (brainSettingsBtn) {
-    brainSettingsBtn.setAttribute('aria-label', '大脑状态和权限');
-    brainSettingsBtn.title = '大脑状态和权限';
-    brainSettingsBtn.addEventListener('click', () => toggleBrainStateCard());
+    brainSettingsBtn.setAttribute('aria-label', '打开设置');
+    brainSettingsBtn.title = '打开设置';
+    brainSettingsBtn.addEventListener('click', openCopilotSettings);
+  }
+
+  desktopObservationScopeBtns.forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const scope = btn.getAttribute('data-desktop-observation-scope') || 'current_window';
+      void startDesktopObservationRuntime({ scope }, '桌面观察范围：' + desktopObservationScopeLabel(scope));
+    });
+  });
+  if (desktopObservationEnableBtn) {
+    desktopObservationEnableBtn.addEventListener('click', () => {
+      if (desktopObservationState.enabled && desktopObservationState.permissionGranted && desktopObservationState.paused) {
+        void startDesktopObservationRuntime({ paused: false, recordingIndicatorVisible: true }, '继续桌面观察');
+        return;
+      }
+      if (desktopObservationEl) desktopObservationEl.open = true;
+      void startDesktopObservationRuntime(
+        {
+          enabled: true,
+          paused: false,
+          permissionGranted: false,
+          recordingIndicatorVisible: false,
+          lastFrameAt: 0,
+          lastSummary: '',
+        },
+        '请求桌面观察授权',
+      );
+    });
+  }
+  if (desktopObservationPauseBtn) {
+    desktopObservationPauseBtn.addEventListener('click', () => {
+      void startDesktopObservationRuntime({ paused: true, recordingIndicatorVisible: false }, '暂停桌面观察');
+    });
+  }
+  if (desktopObservationStopBtn) {
+    desktopObservationStopBtn.addEventListener('click', async () => {
+      if (shell && typeof shell.desktopObservationStop === 'function') {
+        try {
+          const status = await shell.desktopObservationStop();
+          applyDesktopObservationStatus(status);
+        } catch {
+          /* ignore */
+        }
+      }
+      setDesktopObservationState({
+        enabled: false,
+        paused: false,
+        permissionGranted: false,
+        recordingIndicatorVisible: false,
+        lastFrameAt: 0,
+        lastSummary: '',
+        cacheFrameCount: 0,
+      }, '停止桌面观察');
+    });
   }
 
   async function clearCopilotHistory() {
@@ -2200,6 +3363,11 @@
       pendingTaskThreadPrompt = '';
       activeTaskThreadCard = null;
       activeTaskThreadEls = null;
+      activeTaskThreadKey = '';
+      activeTaskThreadAttempt = 0;
+      clearCurrentRunDock();
+      copilotTimelineEvents = [];
+      renderCopilotTimeline(false);
       lastUsageSnapshot = null;
       updateTokenUsageBar({});
       if (tokenPopoverEl) tokenPopoverEl.hidden = true;
@@ -2318,9 +3486,22 @@
         // L1: progress on task-thread only; do not dump "> tool" bubbles into the chat.
         updateActiveTaskThread('progress', (ev.name || 'tool') + ' \u5df2\u5f00\u59cb');
       } else if (ev.type === 'confirm_required') {
+        const confirmPerception = buildConfirmPerceptionSummary();
+        emitCopilotTimelineEvent({
+          source: 'system',
+          title: '等待确认：' + (ev.title || ev.tool || ev.confirmId || '高风险动作'),
+          detail: confirmPerception.text,
+          status: 'queued',
+          risk: ev.risk,
+        });
         showConfirmCard(ev);
       } else if (ev.type === 'confirm_cancelled') {
         dismissPendingConfirmCards(ev.confirmId);
+        emitCopilotTimelineEvent({
+          source: 'system',
+          title: ev.reason === 'timeout' ? '确认超时' : '确认已取消',
+          status: 'cancelled',
+        });
         if (ev.reason === 'timeout') {
           setStatus('\u786e\u8ba4\u5df2\u8d85\u65f6');
           setTimeout(() => setStatus(''), 2500);
@@ -2337,16 +3518,35 @@
         } else if (ev.phase) {
           updateActiveTaskThread('progress', (ev.name || 'tool') + ' ' + ev.phase);
         }
+        emitCopilotTimelineEvent({
+          source: 'tool',
+          title: (ev.name || 'tool') + ' ' + (ev.phase || 'status'),
+          detail: ev.detail || ev.errorCode || '',
+          status: ev.phase === 'error' ? 'failed' : ev.phase === 'done' ? 'done' : 'running',
+        });
+        if (ev.phase === 'error' || ev.phase === 'done') {
+          void refreshCopilotObservationAfterAction(ev.name || 'tool_status', ev.phase === 'error' ? 'failed' : 'done');
+        }
       } else if (ev.type === 'tool_result') {
         notifyCapabilityCreated(ev);
+        emitCopilotTimelineEvent({ source: 'tool', title: (ev.name || 'tool') + ' 已返回', status: 'done' });
+        void refreshCopilotObservationAfterAction(ev.name || 'tool_result', 'done');
       } else if (ev.type === 'activity') {
         rememberCodexProgress(ev);
         noteActivityProgress(ev);
+        noteCurrentRunActivity(activityDisplayName(ev) + ' ' + (ev.phase || 'activity'), ev.detail || '', ev.phase);
+        emitCopilotTimelineEvent({
+          source: 'copilot',
+          title: activityDisplayName(ev) + ' ' + (ev.phase || 'activity'),
+          detail: ev.detail || '',
+          status: ev.phase === 'error' ? 'failed' : ev.phase === 'done' ? 'done' : 'running',
+        });
         if (!shouldMuteActivityInChat(ev)) {
           appendActivityCard(ev);
         }
       } else if (ev.type === 'usage') {
         appendUsageCard(ev.usage);
+        emitCopilotTimelineEvent({ source: 'system', title: '更新用量', status: 'done' });
         void refreshBrainStateCard();
       } else if (ev.type === 'done') {
         clearCodexWaitHintTimer();
@@ -2354,23 +3554,28 @@
         dismissPendingConfirmCards();
         if (ev.stopReason === 'aborted') {
           updateActiveTaskThread('error', '\u5df2\u505c\u6b62\uff0c\u53ef\u4ece\u539f\u76ee\u6807\u91cd\u8bd5');
+          emitCopilotTimelineEvent({ source: 'copilot', title: '任务已停止', status: 'cancelled' });
           setStatus('\u5df2\u505c\u6b62');
+          void refreshCopilotObservationAfterAction('任务停止', 'cancelled');
         } else {
           const doneText = '\u5df2\u5b8c\u6210\uff0c\u7ed3\u679c\u53ef\u7ee7\u7eed\u5199\u56de\u8d44\u4ea7\u5e93\u6216\u4fdd\u5b58\u4e3a\u6d41\u7a0b\u8349\u7a3f';
           updateActiveTaskThread('done', doneText);
+          emitCopilotTimelineEvent({ source: 'copilot', title: '本轮已完成', status: 'done' });
           // Result card only for explicit work tasks (active task-thread), not casual chat.
           if (activeTaskThreadEls) {
             appendResultCard(doneText);
           }
-          void loadWorkbenchContextSnapshot();
+          void refreshCopilotObservationAfterAction('任务完成', 'done');
           setStatus('');
         }
       } else if (ev.type === 'error') {
         clearCodexWaitHintTimer();
         finishStream();
+        emitCopilotTimelineEvent({ source: 'copilot', title: ev.message || '任务失败', status: 'failed' });
         updateActiveTaskThread('error', ev.message || '\u4efb\u52a1\u5931\u8d25\uff0c\u5df2\u751f\u6210\u6062\u590d\u52a8\u4f5c');
         appendRecoveryCard(ev.message || 'Task failed. Refresh credentials, open settings, or ask Copilot to inspect it.');
         setStatus(ev.message || '出错');
+        void refreshCopilotObservationAfterAction('任务失败', 'failed');
       }
     });
   }
@@ -2395,6 +3600,7 @@
     if (pendingTaskThreadPrompt === text) {
       pendingTaskThreadPrompt = '';
     }
+    emitCopilotTimelineEvent({ source: 'user', title: '发送消息：' + text, status: 'queued' });
     appendBubble('user', text);
     inputEl.value = '';
     resizeComposer();
@@ -2402,6 +3608,7 @@
     setStatus('Codex \u6b63\u5728\u601d\u8003...');
     finishStream();
     try {
+      await refreshShellCopilotPerceptionBar();
       const setupReady = await ensureCodexReadyBeforeSend();
       if (!setupReady.ok) {
         const message = setupReady.error || 'Codex \u4ecd\u672a\u5c31\u7eea\u3002';
@@ -2482,8 +3689,12 @@
     updateTokenUsageBar();
     resizeComposer();
     await loadHistory();
+    await refreshDesktopObservationStatus({ emitLatestFrame: true });
+    updateDesktopObservationUi();
+    await refreshShellCopilotPerceptionBar();
     ensureBrainStateCard();
     await refreshBrainStateCard({ forceProbe: true });
     await refreshOnboardingState();
+    setInterval(() => void refreshShellCopilotPerceptionBar(), 15000);
   })();
 })();

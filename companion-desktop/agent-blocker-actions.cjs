@@ -80,7 +80,7 @@ function workflowPromotionActions() {
     },
     {
       id: 'promote_script_hub_tool_preflight',
-      label: 'Preflight a Script Hub tool promotion',
+      label: 'Preflight a Workflow tool promotion',
       command: '',
       tool: 'ac.workflow.promote_script_hub_tool',
       args: { skillId: '<workflow-draft-skill-id>', requireAdminConfirmation: true },

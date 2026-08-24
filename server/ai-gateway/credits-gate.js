@@ -3,7 +3,13 @@ import {
   estimatedCreditsFromProxyBody,
   isAiWorkerProxyCreditsGateEnabled,
 } from '../ai-worker-proxy-credits-gate.js';
-import { CREDITS_EXCEEDED_CODE, CreditsExceededError, isCreditsBillingEnabled, reserveCredits } from '../credit-store.js';
+import {
+  CREDITS_EXCEEDED_CODE,
+  CreditsExceededError,
+  isCreditsBillingEnabled,
+  reserveCredits,
+  validateActiveCreditReserve,
+} from '../credit-store.js';
 import { withAiGatewayPostgresRetry } from './postgres-transient-retry.js';
 
 const CHECK_MODES = new Set(['check', 'precheck', 'on', 'true', '1']);
@@ -112,7 +118,27 @@ export async function evaluateAiGatewayCreditsGate(req, input, options = {}) {
       };
     }
     try {
-      const key = reserveKey || `aijob:${input?.id || input?.correlationId || cryptoSafeRandomId()}`.slice(0, 200);
+      if (reserveKey) {
+        const valid = await withAiGatewayPostgresRetry('aiGatewayCredits.validateReserve', () =>
+          validateActiveCreditReserve(userId, reserveKey, estimatedCredits)
+        );
+        if (!valid.ok) {
+          return {
+            ok: false,
+            status: 403,
+            body: {
+              error: '积分预扣无效或已过期，请重试',
+              code: 'CREDITS_RESERVE_INVALID',
+            },
+            metadata,
+          };
+        }
+        metadata.creditsGate.checked = true;
+        metadata.creditsGate.reserved = true;
+        metadata.creditsGate.reserveAmount = valid.amount;
+        return { ok: true, metadata };
+      }
+      const key = `aijob:${input?.id || input?.correlationId || cryptoSafeRandomId()}`.slice(0, 200);
       const reserve = await withAiGatewayPostgresRetry('aiGatewayCredits.reserveCredits', () =>
         reserveCredits(userId, estimatedCredits, { idempotencyKey: key })
       );

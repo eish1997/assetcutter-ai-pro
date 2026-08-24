@@ -89,6 +89,17 @@ describe('credit reserve', () => {
     await reserveCredits(userId, 10, { idempotencyKey: 'mismatch-key' });
     await expect(reserveCredits(userId, 20, { idempotencyKey: 'mismatch-key' })).rejects.toThrow(/幂等键冲突/);
   });
+
+  it('reuses a larger bundle reserve for a smaller step on the same key', async () => {
+    await adjustCredits(userId, 200, { note: 'seed', createdBy: 'admin' });
+    const bundle = await reserveCredits(userId, 149, { idempotencyKey: 'preset:lineart' });
+    const step = await reserveCredits(userId, 134, { idempotencyKey: 'preset:lineart' });
+    expect(bundle.duplicate).toBe(false);
+    expect(step.duplicate).toBe(true);
+    expect(step.amount).toBe(149);
+    const bal = await getCreditBalance(userId);
+    expect(bal.reserved).toBe(149);
+  });
 });
 
 describe('credits-gate-hmac', () => {

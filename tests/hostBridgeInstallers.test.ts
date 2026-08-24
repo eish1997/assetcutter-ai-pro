@@ -1089,7 +1089,7 @@ describe('host bridge installers', () => {
     expect(existsSync(pythonPath)).toBe(false);
   });
 
-  it('persists a manually selected Unreal project and rejects engine folders', () => {
+  it('persists manually selected Unreal projects and engine folders', () => {
     useSandbox();
     const projectDir = tempDir('unreal-manual-project-');
     writeFileSync(join(projectDir, 'Demo.uproject'), '{}', 'utf8');
@@ -1102,10 +1102,32 @@ describe('host bridge installers', () => {
     expect(discoverUnrealBridgeTargets().some((item) => item.projectDir === projectDir)).toBe(true);
 
     const engineDir = tempDir('unreal-engine-install-');
-    const bad = installUnrealBridge({ projectDirs: [engineDir], port: 7134 });
+    mkdirSync(join(engineDir, 'Engine', 'Binaries', 'Win64'), { recursive: true });
+    writeFileSync(join(engineDir, 'Engine', 'Binaries', 'Win64', 'UnrealEditor.exe'), '', 'utf8');
+    const engineInst = installUnrealBridge({ projectDirs: [engineDir], port: 7134 });
+    expect(engineInst.ok).toBe(true);
+    if (!engineInst.ok) throw new Error(engineInst.error);
+    expect(engineInst.installed[0]).toMatchObject({ targetKind: 'engine_dir', engineDir });
+    const enginePluginDir = join(engineDir, 'Engine', 'Plugins', 'Marketplace', UNREAL_PLUGIN_NAME);
+    expect(readFileSync(join(enginePluginDir, `${UNREAL_PLUGIN_NAME}.uplugin`), 'utf8')).toContain('PythonScriptPlugin');
+    expect(readFileSync(join(enginePluginDir, 'Content', 'Python', 'init_unreal.py'), 'utf8')).toContain('PORT = 7134');
+    const customAfterEngine = readCustomHostTargetsForHost('unreal');
+    expect(customAfterEngine.some((item) => item.resolvedPath === engineDir && item.targetKind === 'engine_dir')).toBe(true);
+    expect(discoverUnrealBridgeTargets().some((item) => item.engineDir === engineDir)).toBe(true);
+
+    const un = uninstallUnrealBridge({ projectDirs: [engineDir] });
+    expect(un.removed[0]).toMatchObject({ targetKind: 'engine_dir', engineDir });
+    expect(existsSync(join(enginePluginDir, `${UNREAL_PLUGIN_NAME}.uplugin`))).toBe(false);
+    expect(existsSync(join(enginePluginDir, 'Content', 'Python', 'init_unreal.py'))).toBe(false);
+  });
+
+  it('rejects invalid Unreal folders that are neither projects nor engine installs', () => {
+    useSandbox();
+    const badDir = tempDir('unreal-invalid-install-');
+    const bad = installUnrealBridge({ projectDirs: [badDir], port: 7134 });
     expect(bad.ok).toBe(false);
-    expect(bad.error).toBe('invalid_unreal_project_dir');
-    expect(existsSync(join(engineDir, 'Plugins', UNREAL_PLUGIN_NAME))).toBe(false);
+    expect(bad.error).toBe('invalid_unreal_install_target');
+    expect(existsSync(join(badDir, 'Plugins', UNREAL_PLUGIN_NAME))).toBe(false);
   });
 
   it('corrects Unreal manual selections from project files and subfolders to the project root', () => {

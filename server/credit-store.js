@@ -33,6 +33,14 @@ function nowIso() {
   return new Date().toISOString();
 }
 
+/** 整包预扣 ≥ 单步请求时复用同一幂等键（例如线稿 149 覆盖生图步 134） */
+function existingReserveCoversRequest(existingAmount, requestedAmount, remaining = existingAmount) {
+  const existing = Math.max(0, Math.floor(Number(existingAmount) || 0));
+  const requested = Math.max(1, Math.floor(Number(requestedAmount) || 1));
+  const left = Math.max(0, Math.floor(Number(remaining) || 0));
+  return existing >= requested && left >= requested;
+}
+
 function emptyBalance() {
   return { balance: 0, reserved: 0, available: 0, lifetimeGranted: 0, lifetimeSpent: 0, updatedAt: nowIso() };
 }
@@ -1326,7 +1334,7 @@ export async function reserveCredits(userId, amount, opts = {}) {
       const dup = await client.query(`SELECT * FROM credit_reserves WHERE idempotency_key = $1`, [idempotencyKey]);
       if (dup.rows[0]) {
         const existingAmount = Number(dup.rows[0].amount);
-        if (existingAmount !== amt) {
+        if (!existingReserveCoversRequest(existingAmount, amt)) {
           throw new Error(`幂等键冲突：已有预扣 ${existingAmount} 积分，本次请求 ${amt} 积分`);
         }
         await client.query('COMMIT');
@@ -1373,7 +1381,7 @@ export async function reserveCredits(userId, amount, opts = {}) {
   const existing = db.creditReserves.find((r) => r.idempotencyKey === idempotencyKey);
   if (existing) {
     const existingAmount = Number(existing.amount);
-    if (existingAmount !== amt) {
+    if (!existingReserveCoversRequest(existingAmount, amt)) {
       throw new Error(`幂等键冲突：已有预扣 ${existingAmount} 积分，本次请求 ${amt} 积分`);
     }
     return {
@@ -1447,29 +1455,30 @@ export async function prechargeCredits(userId, amount, opts = {}) {
         const row = dup.rows[0];
         const existingAmount = Number(row.amount);
         const allocated = Math.max(0, Math.floor(Number(row.allocated) || 0));
-        if (existingAmount !== amt) {
-          if (
-            !opts._retryAfterAmountMismatch &&
-            allocated === 0 &&
-            String(row.status) === 'precharged'
-          ) {
-            await client.query('ROLLBACK');
-            client.release();
-            await releaseCreditReserve(uid, idempotencyKey, { fullVoid: true });
-            return prechargeCredits(userId, amount, { ...opts, _retryAfterAmountMismatch: true });
-          }
-          throw new Error(`幂等键冲突：已有预扣 ${existingAmount} 积分，本次请求 ${amt} 积分`);
+        const remaining = Math.max(0, existingAmount - allocated);
+        if (existingReserveCoversRequest(existingAmount, amt, remaining)) {
+          await client.query('COMMIT');
+          return {
+            prechargeKey: row.idempotency_key,
+            reserveKey: row.idempotency_key,
+            amount: existingAmount,
+            allocated,
+            remaining,
+            status: row.status,
+            duplicate: true,
+          };
         }
-        await client.query('COMMIT');
-        return {
-          prechargeKey: row.idempotency_key,
-          reserveKey: row.idempotency_key,
-          amount: Number(row.amount),
-          allocated,
-          remaining: Math.max(0, Number(row.amount) - allocated),
-          status: row.status,
-          duplicate: true,
-        };
+        if (
+          !opts._retryAfterAmountMismatch &&
+          allocated === 0 &&
+          String(row.status) === 'precharged'
+        ) {
+          await client.query('ROLLBACK');
+          client.release();
+          await releaseCreditReserve(uid, idempotencyKey, { fullVoid: true });
+          return prechargeCredits(userId, amount, { ...opts, _retryAfterAmountMismatch: true });
+        }
+        throw new Error(`幂等键冲突：已有预扣 ${existingAmount} 积分，本次请求 ${amt} 积分`);
       }
       await ensureBalanceRowPg(client, uid);
       const lock = await client.query(
@@ -1527,27 +1536,28 @@ export async function prechargeCredits(userId, amount, opts = {}) {
   if (existing) {
     const existingAmount = Number(existing.amount);
     const allocated = Math.max(0, Math.floor(Number(existing.allocated) || 0));
-    if (existingAmount !== amt) {
-      if (
-        !opts._retryAfterAmountMismatch &&
-        allocated === 0 &&
-        String(existing.status) === 'precharged'
-      ) {
-        releaseReserveRowJson(db, existing, { fullVoid: true });
-        writeDb(db);
-        return prechargeCredits(userId, amount, { ...opts, _retryAfterAmountMismatch: true });
-      }
-      throw new Error(`幂等键冲突：已有预扣 ${existingAmount} 积分，本次请求 ${amt} 积分`);
+    const remaining = Math.max(0, existingAmount - allocated);
+    if (existingReserveCoversRequest(existingAmount, amt, remaining)) {
+      return {
+        prechargeKey: existing.idempotencyKey,
+        reserveKey: existing.idempotencyKey,
+        amount: existingAmount,
+        allocated,
+        remaining,
+        status: existing.status,
+        duplicate: true,
+      };
     }
-    return {
-      prechargeKey: existing.idempotencyKey,
-      reserveKey: existing.idempotencyKey,
-      amount: existingAmount,
-      allocated,
-      remaining: Math.max(0, existingAmount - allocated),
-      status: existing.status,
-      duplicate: true,
-    };
+    if (
+      !opts._retryAfterAmountMismatch &&
+      allocated === 0 &&
+      String(existing.status) === 'precharged'
+    ) {
+      releaseReserveRowJson(db, existing, { fullVoid: true });
+      writeDb(db);
+      return prechargeCredits(userId, amount, { ...opts, _retryAfterAmountMismatch: true });
+    }
+    throw new Error(`幂等键冲突：已有预扣 ${existingAmount} 积分，本次请求 ${amt} 积分`);
   }
   const prev = normalizeBalanceRow(ensureBalanceRowJson(db, uid));
   if (prev.balance < amt) {

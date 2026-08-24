@@ -4,7 +4,7 @@
 const P0_TOOL_SCHEMAS = [
   {
     name: 'ac.shell.navigate',
-    description: '切换桌面壳中间内容页：home、workbench、scripts、tools、connections、settings',
+    description: '切换桌面壳中间内容页：home、workbench、workflow、tools、connections、settings',
     risk: 'safe',
     surfaces: ['shell'],
     inputSchema: {
@@ -12,7 +12,7 @@ const P0_TOOL_SCHEMAS = [
       properties: {
         view: {
           type: 'string',
-          enum: ['home', 'workbench', 'scripts', 'tools', 'connections', 'settings'],
+          enum: ['home', 'workbench', 'workflow', 'tools', 'connections', 'settings'],
         },
       },
       required: ['view'],
@@ -28,7 +28,7 @@ const P0_TOOL_SCHEMAS = [
   },
   {
     name: 'ac.shell.login',
-    description: 'Sign in the local shell first-party web session so Workbench, Script Hub, and Copilot share one team account partition.',
+    description: 'Sign in the local shell first-party web session so Workbench, Workflow, and Copilot share one team account partition.',
     risk: 'safe',
     surfaces: ['shell'],
     inputSchema: {
@@ -143,6 +143,7 @@ const P1_TOOL_SCHEMAS = [
     name: 'ac.workbench.run_capability',
     description: '在当前工作区项目执行能力预设（gen_text 等轻量能力）',
     risk: 'confirm',
+    autoConfirmEligible: true,
     surfaces: ['workbench'],
     inputSchema: {
       type: 'object',
@@ -395,7 +396,7 @@ const P1_TOOL_SCHEMAS = [
     description: '通过统一能力包主线创建本地草稿；支持 software_connection 连接草稿、tool 工具草稿和 workflow 工作流草稿。',
     risk: 'confirm',
     whenToUse:
-      'Use when the user asks Copilot to add/create/connect a local software application from the Connection page. Create a CapabilityPackage(type=software_connection) draft; do not restore the old 62-host default catalog and do not ask the user to choose a technical template.',
+      'Use when the user asks Copilot to add/create/connect a local software application from the Connection page. Treat every app as unknown first, create a CapabilityPackage(type=software_connection) draft, collect connectionFacts, and let StrategyDraft/candidateStrategies drive the next step. do not restore the old 62-host default catalog, do not ask the user to choose a technical template, and do not suggest editing capabilityLifecycle.ts. Known drivers are only verified strategy shortcuts; new app support must be added through softwareBridgeRegistry by registering a bridge driver.',
     surfaces: ['companion', 'shell'],
     inputSchema: {
       type: 'object',
@@ -415,10 +416,10 @@ const P1_TOOL_SCHEMAS = [
   },
   {
     name: 'ac.capability.create_draft',
-    description: '通过自然语言意图创建能力包草稿；自动判断本机软件连接或工具，避免让用户选择技术模板。',
+    description: '通过自然语言意图创建能力包草稿；自动判断本机软件连接或工具，避免把技术模板决策交给用户。',
     risk: 'confirm',
     whenToUse:
-      'Preferred unified creation entry for Copilot. Use when the user says they want to create a tool, add a software connection, create a workflow, or start a capability from conversation. It should infer tool vs software_connection vs workflow from intent/name; do not create Workbench text assets for tools and do not ask users to choose templates.',
+      'Preferred unified creation entry for Copilot. Use when the user says they want to create a tool, add a software connection, create a workflow, or start a capability from conversation. It should infer tool vs software_connection vs workflow from intent/name; for software_connection, treat the target as unknown first, collect connectionFacts, and produce StrategyDraft/candidateStrategies without making the user choose a template. do not create Workbench text assets for tools. Known drivers are only verified strategy shortcuts; unsupported software must stay as a local strategy/template draft and route future implementation through softwareBridgeRegistry bridge drivers, not capabilityLifecycle.ts branches.',
     surfaces: ['companion', 'shell'],
     inputSchema: {
       type: 'object',
@@ -502,7 +503,7 @@ const P1_TOOL_SCHEMAS = [
     description: '为模板待接入的软件连接生成连接模板草稿，并作为该 CapabilityPackage 的对象事件保存；会按软件类型补齐接入计划，不会写入生产 bridge definitions。',
     risk: 'confirm',
     whenToUse:
-      'Use when connectionState.maturity is template_missing and Copilot needs to propose how to connect an unsupported host. Save a draft plan on the current capability object only; do not mark the host supported, do not write local-companion/src/bridges/definitions, and do not publish cloud versions.',
+      'Legacy-compatible draft tool for older template_missing recovery. Prefer the unknown-first strategy flow: read connectionFacts and StrategyDraft/candidateStrategies, then save any proposed bridge plan on the current capability object only. Do not ask the user to choose a technical template, do not mark the host supported, do not write local-companion/src/bridges/definitions, and do not publish cloud versions.',
     surfaces: ['companion', 'shell'],
     inputSchema: {
       type: 'object',
@@ -542,6 +543,7 @@ const P1_TOOL_SCHEMAS = [
         targetDir: { type: 'string' },
         executablePath: { type: 'string', description: 'Optional executable path for action=launch; must match the target host executable.' },
         targetId: { type: 'string', description: 'Optional saved host target id for action=launch.' },
+        currentStrategyId: { type: 'string', description: 'Optional verified/candidate strategy id currently being attempted.' },
         actionId: { type: 'string' },
         params: { type: 'object' },
         actorRole: { type: 'string', description: 'Optional caller role for publish gate checks, e.g. admin.' },
@@ -560,7 +562,7 @@ const P1_TOOL_SCHEMAS = [
     description: 'Run a bounded, object-scoped software connection loop for Copilot: refresh context, optionally discover/launch/install/probe, record evidence, and return the next object state.',
     risk: 'confirm',
     whenToUse:
-      'Use when the user wants Copilot to independently fix or complete a software connection. This is the PI-style path: the connection is a long-lived object, Copilot gets bounded permissions, every action goes through ac.capability.lifecycle_run/context/events, and real connection success still requires a real probe signal.',
+      'Use when the user wants Copilot to independently fix or complete a software connection. This is the PI-style path: the connection is a long-lived object, Copilot gets bounded permissions, every action goes through ac.capability.lifecycle_run/context/events, and real connection success still requires a real probe signal. If connectionState.maturity is strategy_draft, read connectionFacts and candidateStrategies, record failedStrategyId/failureClass when a strategy fails, then select the next candidate strategy through softwareBridgeRegistry strategy flow, without editing capabilityLifecycle.ts. If no candidate remains, return needs_user_action.',
     surfaces: ['companion', 'shell'],
     inputSchema: {
       type: 'object',
@@ -585,6 +587,15 @@ const P1_TOOL_SCHEMAS = [
         },
         targetDir: { type: 'string', description: 'Optional install target folder for bridge.install.' },
         executablePath: { type: 'string', description: 'Optional executable path for process.launch; lifecycle validation still applies.' },
+        currentStrategyId: { type: 'string', description: 'Optional current candidate strategy id being attempted.' },
+        failedStrategyId: { type: 'string', description: 'Optional strategy id that just failed and should be recorded.' },
+        failedStrategyIds: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Strategy ids already attempted and failed in this connection loop.',
+        },
+        failureClass: { type: 'string', description: 'Structured failure class, for example missing_path, permission_denied, probe_failed, host_not_running, or unknown.' },
+        failureMessage: { type: 'string', description: 'Human-readable failure evidence for failedStrategyId.' },
         maxSteps: { type: 'number', description: 'Bounded step limit. Default 6, max 8.' },
       },
       required: ['id', 'goal', 'permissions'],
@@ -923,7 +934,7 @@ const P2_TOOL_SCHEMAS = [
         scriptManifest: {
           type: 'object',
           description:
-            'Optional Script Hub tool.json-style manifest for later ac.workflow.promote_script_hub_tool preflight validation.',
+            'Optional Workflow tool.json-style manifest for later ac.workflow.promote_script_hub_tool preflight validation.',
           additionalProperties: true,
         },
       },
@@ -991,14 +1002,14 @@ const P2_TOOL_SCHEMAS = [
   },
   {
     name: 'ac.workflow.promote_script_hub_tool',
-    description: 'Governed preflight entrance for promoting an agent skill/workflow draft into a Script Hub tool. The current implementation only reports missing gates and does not publish.',
+    description: 'Governed preflight entrance for promoting an agent skill/workflow draft into a Workflow tool. The current implementation only reports missing gates and does not publish.',
     risk: 'confirm',
     surfaces: ['script_hub', 'shell'],
     inputSchema: {
       type: 'object',
       properties: {
         skillId: { type: 'string', description: 'Skill/workflow id to promote' },
-        toolName: { type: 'string', description: 'Target Script Hub tool name' },
+        toolName: { type: 'string', description: 'Target Workflow tool name' },
       },
       required: ['skillId'],
       additionalProperties: false,
@@ -1074,7 +1085,7 @@ const ALL_TOOL_SCHEMAS = [...P0_TOOL_SCHEMAS, ...P1_TOOL_SCHEMAS, ...P2_TOOL_SCH
 const SURFACE_LABELS = {
   shell: 'Shell',
   workbench: 'Workbench',
-  script_hub: 'Script Hub',
+  script_hub: 'Workflow',
   companion: 'Companion',
   os: 'OS',
   other: 'Other',
@@ -1109,7 +1120,7 @@ const TOOL_GUIDANCE = {
     title: '对话创建能力包',
     whenToUse: '首选统一创建入口。用户说创建工具、添加连接、创建工作流或通过对话长出能力时使用；自动判断 tool/software_connection/workflow。',
     exampleArguments: { name: '随机选择工具', intent: '做一个可配置候选项并随机抽取的小工具' },
-    successSignals: ['工具请求会创建本机工具草稿和 tool 能力包；软件请求会创建 software_connection 能力包；工作流请求会创建 workflow 能力包；且不要求用户选择技术模板。'],
+    successSignals: ['工具请求会创建本机工具草稿和 tool 能力包；软件请求会创建 software_connection 能力包；工作流请求会创建 workflow 能力包；且不把技术模板决策交给用户。'],
   },
   'ac.capability.draft_list': {
     title: '列出能力包草稿',
@@ -1143,13 +1154,13 @@ const TOOL_GUIDANCE = {
   },
   'ac.capability.connection_loop_run': {
     title: 'Connection Agent loop',
-    whenToUse: 'Use for PI-style connection work: Copilot can keep working on one software connection object with explicit bounded permissions.',
+    whenToUse: 'Use for PI-style connection work: Copilot can keep working on one software connection object with explicit bounded permissions. For strategy_draft, read connectionFacts/candidateStrategies and switch strategies after failure.',
     exampleArguments: {
       id: 'photoshop',
       goal: 'Install and verify the connection',
       permissions: ['context.read', 'process.discover', 'bridge.install', 'connection.probe', 'event.write'],
     },
-    successSignals: ['Returns ordered steps, finalContext, and nextAction; probe success still requires a real host signal. If nextAction=create_bridge_template_plan, use ac.capability.template_draft_create on the same object.'],
+    successSignals: ['Returns ordered steps, finalContext, and nextAction; probe success still requires a real host signal. If nextAction=run_next_connection_strategy, continue with the selected candidate. If nextAction=needs_user_action, all candidates are exhausted or external confirmation is required.'],
   },
   'ac.capability.template_draft_create': {
     title: '创建连接模板草稿',
@@ -1390,9 +1401,9 @@ const TOOL_GUIDANCE = {
     successSignals: ['Returns publishable=false plus required, passed, and missing gates until governed promotion is enabled.'],
   },
   'ac.workflow.promote_script_hub_tool': {
-    title: 'Script Hub tool promotion preflight',
+    title: 'Workflow tool promotion preflight',
     whenToUse:
-      'Use after a reusable skill/workflow draft is saved and an admin wants to check whether it can become a governed Script Hub tool.',
+      'Use after a reusable skill/workflow draft is saved and an admin wants to check whether it can become a governed Workflow tool.',
     exampleArguments: { skillId: 'cinematic-scene-character', toolName: 'Cinematic scene kit' },
     successSignals: ['Returns publishable=false plus required, passed, and missing gates until governed promotion is enabled.'],
   },

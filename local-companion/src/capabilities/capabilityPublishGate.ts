@@ -1,4 +1,5 @@
 import { readCapabilityPackageDraft, type CapabilityPackageDraft } from './capabilityPackageStore.js';
+import { resolveSoftwareBridgeStrategies } from './softwareBridgeRegistry.js';
 
 export type CapabilityPublishGateInput = {
   actorRole?: string;
@@ -31,6 +32,7 @@ export type CapabilityPublishGateResult = {
     conversation: CapabilityPackageDraft['conversation'];
     governance: CapabilityPackageDraft['governance'];
     versionNote: string;
+    verifiedStrategyId?: string;
   };
 };
 
@@ -47,6 +49,36 @@ function hasSuccessfulRealProbe(draft: CapabilityPackageDraft): boolean {
   if (!result) return true;
   if (result.mock === true || result.synthetic === true || result.source === 'mock') return false;
   return true;
+}
+
+function text(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function record(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+}
+
+function verifiedStrategyIdForPublish(draft: CapabilityPackageDraft): string {
+  if (draft.type !== 'software_connection') return '';
+  const probe = record(draft.lastProbe);
+  if (probe.ok !== true) return '';
+  const result = record(probe.result);
+  const candidates = [
+    text(probe.verifiedStrategyId),
+    text(probe.strategyId),
+    text(probe.connectionStrategyId),
+    text(result.verifiedStrategyId),
+    text(result.strategyId),
+    text(result.connectionStrategyId),
+  ].filter(Boolean);
+  if (!candidates.length) return '';
+  const verifiedIds = new Set(
+    resolveSoftwareBridgeStrategies(draft)
+      .filter((strategy) => strategy.verified === true && strategy.status === 'verified')
+      .map((strategy) => strategy.id),
+  );
+  return candidates.find((id) => verifiedIds.has(id)) || '';
 }
 
 export function checkCapabilityPublishGate(
@@ -72,15 +104,18 @@ export function checkCapabilityPublishGate(
   const requiredGates = ['package_exists', 'cloud_versioned', 'version_note'];
   if (draft.governance.requiresAdminToPublish) requiredGates.push('admin_actor');
   if (draft.governance.requiresRealProbeToPublish) requiredGates.push('real_probe_passed');
+  if (draft.type === 'software_connection') requiredGates.push('verified_strategy_recorded');
   requiredGates.push('local_cloud_history_isolated');
 
   const passedGates = ['package_exists'];
+  const verifiedStrategyId = verifiedStrategyIdForPublish(draft);
   if (draft.governance.cloudVersioned === true) passedGates.push('cloud_versioned');
   if (String(input.versionNote || '').trim()) passedGates.push('version_note');
   if (!draft.governance.requiresAdminToPublish || isAdminActor(input)) passedGates.push('admin_actor');
   if (!draft.governance.requiresRealProbeToPublish || hasSuccessfulRealProbe(draft)) {
     passedGates.push('real_probe_passed');
   }
+  if (draft.type !== 'software_connection' || verifiedStrategyId) passedGates.push('verified_strategy_recorded');
   passedGates.push('local_cloud_history_isolated');
 
   const missingGates = requiredGates.filter((gate) => !passedGates.includes(gate));
@@ -109,11 +144,15 @@ export function checkCapabilityPublishGate(
             description: draft.description,
             tags: draft.tags,
             ...(draft.version ? { version: draft.version } : {}),
-            manifest: draft.manifest,
+            manifest:
+              draft.type === 'software_connection' && verifiedStrategyId
+                ? { ...draft.manifest, verifiedStrategyId }
+                : draft.manifest,
             lifecycle: draft.lifecycle,
             conversation: draft.conversation,
             governance: draft.governance,
             versionNote: String(input.versionNote || '').trim(),
+            ...(verifiedStrategyId ? { verifiedStrategyId } : {}),
           },
         }
       : {}),

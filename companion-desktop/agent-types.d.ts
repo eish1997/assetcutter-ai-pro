@@ -8,6 +8,7 @@ export type AgentToolSchema = {
   risk: AgentToolRisk;
   surfaces?: ('shell' | 'workbench' | 'script_hub' | 'companion' | 'os')[];
   deprecated?: boolean;
+  autoConfirmEligible?: boolean;
   whenToUse?: string;
   exampleArguments?: object;
   successSignals?: string[];

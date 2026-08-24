@@ -16,10 +16,15 @@ import { readCustomHostTargetsForHost, upsertCustomHostTarget, type ManualTarget
 export const DEFAULT_UNREAL_BRIDGE_PORT = 7131;
 export const UNREAL_PLUGIN_NAME = 'AssetCutterBridge';
 
+type UnrealTargetKind = 'project_dir' | 'engine_dir';
+
 export type UnrealBridgeTarget = {
   id: string;
   label: string;
-  projectDir: string;
+  targetDir: string;
+  targetKind: UnrealTargetKind;
+  projectDir?: string;
+  engineDir?: string;
   pluginDir: string;
   upluginPath: string;
   pythonPath: string;
@@ -30,6 +35,7 @@ export type UnrealBridgeInstallRecord = {
   port: number;
   installedAt: string;
   projectDirs: string[];
+  engineDirs?: string[];
   targetIds: string[];
 };
 
@@ -51,6 +57,12 @@ export type UnrealBridgeInstallBody = {
   projectDirs?: string[];
   port?: number;
   home?: string;
+};
+
+type NormalizedUnrealTarget = ManualTargetResolveResult & {
+  ok: boolean;
+  resolvedPath?: string;
+  targetKind?: UnrealTargetKind;
 };
 
 function bridgesStateDir(): string {
@@ -84,6 +96,15 @@ function hasUproject(dir: string): boolean {
   }
 }
 
+function hasUnrealEditorExecutable(dir: string): boolean {
+  return (
+    existsSync(join(dir, 'Engine', 'Binaries', 'Win64', 'UnrealEditor.exe')) ||
+    existsSync(join(dir, 'Engine', 'Binaries', 'Win64', 'UE4Editor.exe')) ||
+    existsSync(join(dir, 'Binaries', 'Win64', 'UnrealEditor.exe')) ||
+    existsSync(join(dir, 'Binaries', 'Win64', 'UE4Editor.exe'))
+  );
+}
+
 function findUnrealProjectDir(input: string): string | null {
   let current = resolve(String(input || '').trim());
   if (/\.uproject$/i.test(current)) current = dirname(current);
@@ -96,18 +117,35 @@ function findUnrealProjectDir(input: string): string | null {
   return null;
 }
 
-function normalizeUnrealManualTarget(input: string): ManualTargetResolveResult & { ok: boolean; resolvedPath?: string } {
+function findUnrealEngineDir(input: string): string | null {
+  let current = resolve(String(input || '').trim());
+  if (/UnrealEditor\.exe$/i.test(current) || /UE4Editor\.exe$/i.test(current)) current = dirname(current);
+  for (let i = 0; i < 8; i += 1) {
+    if (hasUnrealEditorExecutable(current)) return current;
+    const parent = dirname(current);
+    if (!parent || parent === current) break;
+    current = parent;
+  }
+  return null;
+}
+
+function normalizeUnrealManualTarget(input: string): NormalizedUnrealTarget {
   const selected = resolve(String(input || '').trim());
   const projectDir = findUnrealProjectDir(selected);
   if (projectDir) {
     const warnings = projectDir === selected ? [] : ['已自动从所选文件或子目录定位到 Unreal 项目根目录。'];
     return { ok: true, inputPath: selected, resolvedPath: projectDir, targetKind: 'project_dir', warnings };
   }
+  const engineDir = findUnrealEngineDir(selected);
+  if (engineDir) {
+    const warnings = engineDir === selected ? [] : ['已自动从所选文件或子目录定位到 Unreal Engine 安装目录。'];
+    return { ok: true, inputPath: selected, resolvedPath: engineDir, targetKind: 'engine_dir', warnings };
+  }
   return {
     ok: false,
     inputPath: selected,
-    error: 'invalid_unreal_project_dir',
-    message: '请选择 Unreal 项目根目录、.uproject 文件或项目内 Content / Plugins 子目录；不要选择 Unreal Engine 安装目录。',
+    error: 'invalid_unreal_install_target',
+    message: '请选择 Unreal 项目根目录、.uproject 文件、项目内 Content / Plugins 子目录、Unreal Engine 安装目录、Engine 目录或 UnrealEditor.exe。',
   };
 }
 
@@ -127,12 +165,36 @@ function targetFromProjectDir(projectDir: string): UnrealBridgeTarget {
   return {
     id: `unreal::${resolvedDir}`,
     label: `Unreal ${basename(resolvedDir) || 'project'}`,
+    targetDir: resolvedDir,
+    targetKind: 'project_dir',
     projectDir: resolvedDir,
     pluginDir,
     upluginPath: join(pluginDir, `${UNREAL_PLUGIN_NAME}.uplugin`),
     pythonPath: join(pluginDir, 'Content', 'Python', 'init_unreal.py'),
     hasPluginBridge: existsSync(join(pluginDir, `${UNREAL_PLUGIN_NAME}.uplugin`)) || existsSync(join(pluginDir, 'Content', 'Python', 'init_unreal.py')),
   };
+}
+
+function targetFromEngineDir(engineDir: string): UnrealBridgeTarget {
+  const resolvedDir = resolve(engineDir);
+  const engineRoot = basename(resolvedDir).toLowerCase() === 'engine' ? resolvedDir : join(resolvedDir, 'Engine');
+  const pluginDir = join(engineRoot, 'Plugins', 'Marketplace', UNREAL_PLUGIN_NAME);
+  return {
+    id: `unreal-engine::${resolvedDir}`,
+    label: `Unreal Engine ${basename(resolvedDir) || 'install'}`,
+    targetDir: resolvedDir,
+    targetKind: 'engine_dir',
+    engineDir: resolvedDir,
+    pluginDir,
+    upluginPath: join(pluginDir, `${UNREAL_PLUGIN_NAME}.uplugin`),
+    pythonPath: join(pluginDir, 'Content', 'Python', 'init_unreal.py'),
+    hasPluginBridge: existsSync(join(pluginDir, `${UNREAL_PLUGIN_NAME}.uplugin`)) || existsSync(join(pluginDir, 'Content', 'Python', 'init_unreal.py')),
+  };
+}
+
+function targetFromNormalizedTarget(target: NormalizedUnrealTarget): UnrealBridgeTarget | null {
+  if (!target.ok || !target.resolvedPath) return null;
+  return target.targetKind === 'engine_dir' ? targetFromEngineDir(target.resolvedPath) : targetFromProjectDir(target.resolvedPath);
 }
 
 export function discoverUnrealBridgeTargets(opts?: { home?: string; projectDirs?: string[] }): UnrealBridgeTarget[] {
@@ -151,12 +213,12 @@ export function discoverUnrealBridgeTargets(opts?: { home?: string; projectDirs?
     }
   }
   for (const dirRaw of opts?.projectDirs || []) {
-    const manual = normalizeUnrealManualTarget(String(dirRaw || '').trim());
-    if (manual.ok && manual.resolvedPath) byDir.set(manual.resolvedPath, targetFromProjectDir(manual.resolvedPath));
+    const target = targetFromNormalizedTarget(normalizeUnrealManualTarget(String(dirRaw || '').trim()));
+    if (target) byDir.set(target.targetDir, target);
   }
   for (const custom of readCustomHostTargetsForHost('unreal')) {
-    const manual = normalizeUnrealManualTarget(custom.resolvedPath);
-    if (manual.ok && manual.resolvedPath) byDir.set(manual.resolvedPath, targetFromProjectDir(manual.resolvedPath));
+    const target = targetFromNormalizedTarget(normalizeUnrealManualTarget(custom.resolvedPath));
+    if (target) byDir.set(target.targetDir, target);
   }
   return Array.from(byDir.values()).sort((a, b) => a.label.localeCompare(b.label));
 }
@@ -170,6 +232,7 @@ export function readUnrealBridgeInstallRecord(): UnrealBridgeInstallRecord | nul
       port: normalizePort(raw.port),
       installedAt: typeof raw.installedAt === 'string' ? raw.installedAt : '',
       projectDirs: Array.isArray(raw.projectDirs) ? raw.projectDirs.map(String) : [],
+      engineDirs: Array.isArray(raw.engineDirs) ? raw.engineDirs.map(String) : [],
       targetIds: Array.isArray(raw.targetIds) ? raw.targetIds.map(String) : [],
     };
   } catch {
@@ -250,7 +313,8 @@ def _serve():
         HTTPServer(("127.0.0.1", PORT), Handler).serve_forever()
         print("[AssetCutter Unreal Bridge] ready on 127.0.0.1:%s" % PORT)
     except OSError as e:
-        print("[AssetCutter Unreal Bridge] failed: %s" % e)
+        print("[AssetCutter Unreal Bridge] failed: %s" % PORT)
+        print(e)
 
 threading.Thread(target=_serve, daemon=True).start()
 `;
@@ -281,13 +345,13 @@ export async function getUnrealBridgeStatus(opts?: { home?: string; projectDirs?
   return {
     id: 'unreal',
     name: 'Unreal',
-    description: 'One-click project plugin bridge using Unreal Python and a local HTTP probe.',
+    description: 'One-click project or engine plugin bridge using Unreal Python and a local HTTP probe.',
     defaultPort: DEFAULT_UNREAL_BRIDGE_PORT,
     port,
     roots: discoverUnrealRoots(opts?.home),
     targets,
     install,
-    installed: targets.some((v) => v.hasPluginBridge) || Boolean(install?.projectDirs.length),
+    installed: targets.some((v) => v.hasPluginBridge) || Boolean(install?.projectDirs.length || install?.engineDirs?.length),
     probe: await probeUnrealBridge(port),
   };
 }
@@ -304,88 +368,128 @@ function resolveInstallTargets(
   }
   for (const dirRaw of body.projectDirs || []) {
     const manual = normalizeUnrealManualTarget(String(dirRaw || '').trim());
-    if (!manual.ok) return { targets: [], error: manual.error || 'invalid_unreal_project_dir' };
-    if (manual.resolvedPath) targets.push(targetFromProjectDir(manual.resolvedPath));
+    if (!manual.ok) return { targets: [], error: manual.error || 'invalid_unreal_install_target' };
+    const target = targetFromNormalizedTarget(manual);
+    if (target) targets.push(target);
   }
-  const unique = Array.from(new Map(targets.map((v) => [v.projectDir, v])).values());
-  if (!unique.length) return { targets: [], error: 'no_unreal_project_dir' };
+  const unique = Array.from(new Map(targets.map((v) => [v.targetDir, v])).values());
+  if (!unique.length) return { targets: [], error: 'no_unreal_install_target' };
   return { targets: unique };
 }
 
 export function installUnrealBridge(
   body: UnrealBridgeInstallBody = {},
 ):
-  | { ok: true; port: number; installed: Array<{ targetId: string; projectDir: string; upluginPath: string; pythonPath: string }>; message: string }
+  | {
+      ok: true;
+      port: number;
+      installed: Array<{
+        targetId: string;
+        targetDir: string;
+        targetKind: UnrealTargetKind;
+        projectDir?: string;
+        engineDir?: string;
+        upluginPath: string;
+        pythonPath: string;
+      }>;
+      message: string;
+    }
   | { ok: false; error: string; message: string } {
   const port = normalizePort(body.port);
   const discovered = discoverUnrealBridgeTargets({ home: body.home, projectDirs: body.projectDirs });
   const resolved = resolveInstallTargets(body, discovered);
   if (resolved.error || !resolved.targets.length) {
-    const invalid = resolved.error === 'invalid_unreal_project_dir';
+    const invalid = resolved.error === 'invalid_unreal_install_target';
     return {
       ok: false,
-      error: resolved.error || 'no_unreal_project_dir',
+      error: resolved.error || 'no_unreal_install_target',
       message: invalid
-        ? '请选择 Unreal 项目根目录，需要包含 .uproject 文件。不要选择 Unreal Engine 安装目录。'
-        : 'No Unreal project folder was found. Choose a folder containing a .uproject file manually.',
+        ? '请选择 Unreal 项目目录或 Unreal Engine 安装目录。项目目录需要包含 .uproject；引擎目录需要包含 UnrealEditor.exe 或 UE4Editor.exe。'
+        : 'No Unreal project or engine install folder was found. Choose a .uproject project folder or an Unreal Engine install folder manually.',
     };
   }
-  const installed: Array<{ targetId: string; projectDir: string; upluginPath: string; pythonPath: string }> = [];
+  const installed: Array<{
+    targetId: string;
+    targetDir: string;
+    targetKind: UnrealTargetKind;
+    projectDir?: string;
+    engineDir?: string;
+    upluginPath: string;
+    pythonPath: string;
+  }> = [];
   for (const target of resolved.targets) {
     try {
       mkdirSync(join(target.pluginDir, 'Content', 'Python'), { recursive: true });
       writeFileSync(target.upluginPath, buildUplugin(), 'utf8');
       writeFileSync(target.pythonPath, buildUnrealPython(port), 'utf8');
-      installed.push({ targetId: target.id, projectDir: target.projectDir, upluginPath: target.upluginPath, pythonPath: target.pythonPath });
+      installed.push({
+        targetId: target.id,
+        targetDir: target.targetDir,
+        targetKind: target.targetKind,
+        ...(target.projectDir ? { projectDir: target.projectDir } : {}),
+        ...(target.engineDir ? { engineDir: target.engineDir } : {}),
+        upluginPath: target.upluginPath,
+        pythonPath: target.pythonPath,
+      });
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       const locked = /eperm|eacces|permission|operation not permitted/i.test(msg);
       return {
         ok: false,
         error: locked ? 'permission_denied' : 'install_failed',
-        message: locked ? `无法写入 Unreal 项目桥接插件：${target.pluginDir}。请确认项目目录可写。` : `Unreal 桥接安装失败：${msg}`,
+        message: locked ? `无法写入 Unreal 桥接插件：${target.pluginDir}。请确认目录可写，或改选项目目录安装。` : `Unreal 桥接安装失败：${msg}`,
       };
     }
   }
   for (const dirRaw of body.projectDirs || []) {
     const manual = normalizeUnrealManualTarget(String(dirRaw || '').trim());
     if (!manual.ok || !manual.resolvedPath) continue;
-    const found = installed.find((item) => resolve(item.projectDir) === resolve(manual.resolvedPath as string));
+    const found = installed.find((item) => resolve(item.targetDir) === resolve(manual.resolvedPath as string));
     if (!found) continue;
     upsertCustomHostTarget('unreal', {
-      label: `Unreal ${basename(manual.resolvedPath) || '项目'}（手动添加）`,
+      label:
+        manual.targetKind === 'engine_dir'
+          ? `Unreal Engine ${basename(manual.resolvedPath) || 'install'} (manual)`
+          : `Unreal ${basename(manual.resolvedPath) || 'project'} (manual)`,
       inputPath: String(dirRaw || '').trim(),
       resolvedPath: manual.resolvedPath,
-      targetKind: 'project_dir',
+      targetKind: manual.targetKind || 'project_dir',
     });
   }
   writeUnrealBridgeInstallRecord({
     port,
     installedAt: new Date().toISOString(),
-    projectDirs: installed.map((x) => x.projectDir),
+    projectDirs: installed.filter((x) => x.targetKind === 'project_dir' && x.projectDir).map((x) => x.projectDir as string),
+    engineDirs: installed.filter((x) => x.targetKind === 'engine_dir' && x.engineDir).map((x) => x.engineDir as string),
     targetIds: installed.map((x) => x.targetId),
   });
-  return { ok: true, port, installed, message: 'Unreal bridge installed. Enable the AssetCutterBridge plugin/Python plugin and restart the Unreal project, then probe connection.' };
+  return {
+    ok: true,
+    port,
+    installed,
+    message: 'Unreal bridge installed. Enable the AssetCutterBridge/Python plugin as needed, restart Unreal, then probe connection.',
+  };
 }
 
 export function uninstallUnrealBridge(
   body: { targets?: string[]; projectDirs?: string[] } = {},
-): { ok: true; removed: Array<{ projectDir: string; upluginPath: string; pythonPath: string }> } {
+): { ok: true; removed: Array<{ targetDir: string; targetKind: UnrealTargetKind; projectDir?: string; engineDir?: string; upluginPath: string; pythonPath: string }> } {
   const hasExplicitDirs = Array.isArray(body.projectDirs) && body.projectDirs.length > 0;
   const discovered = hasExplicitDirs ? [] : discoverUnrealBridgeTargets();
   const explicit = hasExplicitDirs
     ? (body.projectDirs || [])
         .map((dir) => normalizeUnrealManualTarget(dir))
-        .filter((item): item is ManualTargetResolveResult & { ok: true; resolvedPath: string } => Boolean(item.ok && item.resolvedPath))
-        .map((item) => targetFromProjectDir(item.resolvedPath))
+        .map((item) => targetFromNormalizedTarget(item))
+        .filter((item): item is UnrealBridgeTarget => Boolean(item))
     : [];
   const record = readUnrealBridgeInstallRecord();
   const targets = new Map<string, UnrealBridgeTarget>();
   for (const v of explicit.concat(discovered)) {
-    if (!body.targets || body.targets.length === 0 || body.targets.includes(v.id)) targets.set(v.projectDir, v);
+    if (!body.targets || body.targets.length === 0 || body.targets.includes(v.id)) targets.set(v.targetDir, v);
   }
   for (const dir of record?.projectDirs || []) targets.set(resolve(dir), targetFromProjectDir(dir));
-  const removed: Array<{ projectDir: string; upluginPath: string; pythonPath: string }> = [];
+  for (const dir of record?.engineDirs || []) targets.set(resolve(dir), targetFromEngineDir(dir));
+  const removed: Array<{ targetDir: string; targetKind: UnrealTargetKind; projectDir?: string; engineDir?: string; upluginPath: string; pythonPath: string }> = [];
   for (const target of targets.values()) {
     let didRemove = false;
     for (const p of [target.upluginPath, target.pythonPath]) {
@@ -397,7 +501,16 @@ export function uninstallUnrealBridge(
         /* ignore */
       }
     }
-    if (didRemove) removed.push({ projectDir: target.projectDir, upluginPath: target.upluginPath, pythonPath: target.pythonPath });
+    if (didRemove) {
+      removed.push({
+        targetDir: target.targetDir,
+        targetKind: target.targetKind,
+        ...(target.projectDir ? { projectDir: target.projectDir } : {}),
+        ...(target.engineDir ? { engineDir: target.engineDir } : {}),
+        upluginPath: target.upluginPath,
+        pythonPath: target.pythonPath,
+      });
+    }
   }
   clearUnrealBridgeInstallRecord();
   return { ok: true, removed };

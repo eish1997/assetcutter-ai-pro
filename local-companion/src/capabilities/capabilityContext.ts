@@ -1,5 +1,10 @@
 import { readCapabilityPackageDraft } from './capabilityPackageStore.js';
-import { deriveSoftwareConnectionState, type ConnectionState } from './softwareConnectionState.js';
+import {
+  buildConnectionCardView,
+  deriveSoftwareConnectionState,
+  type ConnectionCardView,
+  type ConnectionState,
+} from './softwareConnectionState.js';
 
 function stringifyCompact(value: unknown): string {
   if (value == null) return '';
@@ -84,6 +89,8 @@ export function buildCapabilityPackageContext(idRaw: string):
       session: { type: 'capability'; id: string; sessionId: string; label: string };
       recentEvents: Array<{ kind: string; ok: boolean; at: string; message: string }>;
       connectionState?: ConnectionState;
+      connectionCardView?: ConnectionCardView;
+      strategyDraft?: unknown;
       contextPrompt: string;
     }
   | { ok: false; error: string; message: string } {
@@ -95,11 +102,16 @@ export function buildCapabilityPackageContext(idRaw: string):
   const lastInstall = draft.lastInstall;
   const lastProbe = draft.lastProbe;
   const recordedEvents = Array.isArray(draft.events) ? draft.events.map(eventFromDraftEvent).filter(Boolean) : [];
+  const strategyDraftEvent = Array.isArray(draft.events)
+    ? [...draft.events].reverse().find((event) => event.kind === 'connection_strategy_draft_created')
+    : null;
+  const strategyDraft = strategyDraftEvent && typeof strategyDraftEvent.detail === 'object' ? strategyDraftEvent.detail : null;
   const recentEvents = [eventFromRecord('install', lastInstall), eventFromRecord('probe', lastProbe), ...recordedEvents]
     .filter(Boolean)
     .slice(-20) as Array<{ kind: string; ok: boolean; at: string; message: string }>;
   const latestFailure = latestFailedEvent(recentEvents);
   const connectionState = draft.type === 'software_connection' ? deriveSoftwareConnectionState(draft) : undefined;
+  const connectionCardView = draft.type === 'software_connection' ? buildConnectionCardView(draft) : undefined;
   const nextStepHints = nextStepHintsForDraft(
     { type: draft.type, name: draft.name, manifest: manifest as Record<string, unknown> },
     latestFailure,
@@ -121,6 +133,9 @@ export function buildCapabilityPackageContext(idRaw: string):
     `recentEvents: ${stringifyCompact(recentEvents)}`,
     `latestFailure: ${stringifyCompact(latestFailure)}`,
     connectionState ? `connectionState: ${stringifyCompact(connectionState)}` : '',
+    connectionCardView ? `connectionCardView: ${stringifyCompact(connectionCardView)}` : '',
+    connectionState?.facts ? `connectionFacts: ${stringifyCompact(connectionState.facts)}` : '',
+    strategyDraft ? `strategyDraft: ${stringifyCompact(strategyDraft)}` : '',
     `nextStepHints: ${stringifyCompact(nextStepHints)}`,
     '生命周期工具: ac.capability.install, ac.capability.probe, ac.capability.uninstall。',
     '真实连接门禁: 文件存在、卡片存在、安装记录存在都不算连接成功；必须 ac.capability.probe 收到真实 heartbeat/host signal。',
@@ -137,8 +152,8 @@ export function buildCapabilityPackageContext(idRaw: string):
       connectionState
         ? `Connection maturity: ${connectionState.maturity} / ${connectionState.label}. Available actions: ${connectionState.availableActions.join(', ')}. Blocked reason: ${connectionState.blockedReason || 'none'}. Next action: ${connectionState.nextAction}`
         : '',
-      connectionState && connectionState.maturity === 'template_missing'
-        ? 'Template missing: this connection can still use launch, close, discover_running, export, and object conversation now; real bridge install/probe/uninstall is not connected yet. Copilot should call ac.capability.template_draft_create on this same CapabilityPackage to create a draft bridge-template plan. Infer kind as executable, script_dcc, project_plugin, command_port, heartbeat, or unknown. Do not write production bridge definitions until real software acceptance passes.'
+      connectionState && connectionState.maturity === 'strategy_draft'
+        ? 'Strategy draft: this connection can still use launch, close, discover_running, export, and object conversation now; real bridge install/probe/uninstall is not connected yet. Copilot should use connectionFacts to create candidate strategies on this same CapabilityPackage. Infer kind as existing_process_probe, executable, script_dcc, project_plugin, command_port, heartbeat, or unknown. Do not write production bridge definitions until real software acceptance passes.'
         : '',
     );
   }
@@ -158,6 +173,8 @@ export function buildCapabilityPackageContext(idRaw: string):
     },
     recentEvents,
     ...(connectionState ? { connectionState } : {}),
+    ...(connectionCardView ? { connectionCardView } : {}),
+    ...(strategyDraft ? { strategyDraft } : {}),
     contextPrompt: contextLines.filter((line) => String(line || '').trim()).join('\n'),
   };
 }

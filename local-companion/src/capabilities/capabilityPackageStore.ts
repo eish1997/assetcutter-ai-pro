@@ -8,6 +8,7 @@ import {
   type CapabilityPackageType,
 } from './capabilityPackages.js';
 import { softwareConnectionDraftToCapabilityPackage } from './softwareConnectionAdapter.js';
+import { buildConnectionStrategyDraft } from './connectionStrategyDrafts.js';
 import { toolManifestToCapabilityPackage } from './toolPackageAdapter.js';
 import { workflowDraftToCapabilityPackage } from './workflowPackageAdapter.js';
 
@@ -182,6 +183,19 @@ export function createCapabilityPackageDraft(
       createdBy: input.createdBy,
       createdAt: now,
       updatedAt: now,
+      ...(type === 'software_connection'
+        ? {
+            events: [
+              {
+                kind: 'connection_strategy_draft_created',
+                ok: true,
+                message: 'Connection strategy draft created from collected facts.',
+                at: now,
+                detail: buildConnectionStrategyDraft(pkg),
+              },
+            ],
+          }
+        : {}),
     };
     writeDraft(draft);
     return { ok: true, draft };

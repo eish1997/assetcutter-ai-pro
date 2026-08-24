@@ -2,6 +2,7 @@ import {
   checkExternalMayaConnector,
   type ExternalMayaConnectorSyncStatus,
 } from './mayaConnectorHttpActivity.js';
+import type { MayaCommandPortTarget } from './mayaCommandPortConnector.js';
 import {
   normalizeWorkflowInput,
   type WorkflowPreflightResult,
@@ -11,6 +12,7 @@ import {
 export type MayaWorkflowPreflightOptions = {
   baseUrl?: string;
   checkOutputExists?: (outputPath: string) => boolean | Promise<boolean>;
+  commandPortTarget?: Partial<MayaCommandPortTarget>;
   connectorStatus?: ExternalMayaConnectorSyncStatus;
 };
 
@@ -19,7 +21,7 @@ export async function runMayaExportPreflight(
   options: MayaWorkflowPreflightOptions = {},
 ): Promise<WorkflowPreflightResult[]> {
   const normalizedInput = normalizeWorkflowInput(input);
-  const connectorStatus = options.connectorStatus ?? await checkExternalMayaConnector(options.baseUrl);
+  const connectorStatus = options.connectorStatus ?? await checkExternalMayaConnector(options.baseUrl, options.commandPortTarget);
   const outputExists = options.checkOutputExists
     ? await options.checkOutputExists(normalizedInput.output_path)
     : false;

@@ -11,6 +11,8 @@ const DEFAULT_POLICY = {
   directoryAllowlist: [],
 };
 
+const AUTO_CONFIRM_ELIGIBLE_TOOLS = ['ac.workbench.run_capability'];
+
 const ADMIN_POLICY_TEMPLATES = [
   {
     id: 'member_safe',
@@ -110,6 +112,12 @@ function createAgentPolicy(deps) {
     };
   }
 
+  function isAutoConfirmEligible(tool) {
+    if (!tool || tool.risk !== 'confirm') return false;
+    if (tool.autoConfirmEligible === true) return true;
+    return AUTO_CONFIRM_ELIGIBLE_TOOLS.includes(tool.name);
+  }
+
   function writePolicy(patch) {
     ensurePolicyFile();
     const next = normalizePolicy({ ...readPolicy(), ...(patch && typeof patch === 'object' ? patch : {}) });
@@ -145,13 +153,13 @@ function createAgentPolicy(deps) {
     if (tool.risk === 'safe') return 'allow';
     if (tool.risk === 'confirm') {
       if (!policy.confirmTools) return 'allow';
-      if (policy.autoConfirmTools.includes(tool.name)) return 'allow';
+      if (policy.autoConfirmTools.includes(tool.name) && isAutoConfirmEligible(tool)) return 'allow';
       return 'confirm';
     }
     return 'confirm';
   }
 
-  return { readPolicy, writePolicy, listPolicyTemplates, applyPolicyTemplate, gateTool, DEFAULT_POLICY };
+  return { readPolicy, writePolicy, listPolicyTemplates, applyPolicyTemplate, gateTool, isAutoConfirmEligible, DEFAULT_POLICY };
 }
 
-module.exports = { createAgentPolicy, DEFAULT_POLICY, ADMIN_POLICY_TEMPLATES };
+module.exports = { createAgentPolicy, DEFAULT_POLICY, ADMIN_POLICY_TEMPLATES, AUTO_CONFIRM_ELIGIBLE_TOOLS };

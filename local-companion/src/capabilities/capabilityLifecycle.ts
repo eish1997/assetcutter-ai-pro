@@ -1,15 +1,4 @@
-import {
-  getAdobeBridgeStatus,
-  installAdobeBridge,
-  uninstallAdobeBridge,
-  type AdobeBridgeId,
-} from '../bridges/adobeExtendScriptBridgeInstall.js';
-import {
-  getBlenderBridgeStatus,
-  installBlenderBridge,
-  uninstallBlenderBridge,
-} from '../bridges/blenderBridgeInstall.js';
-import { closeHostApp, launchHostApp, saveRunningHostTarget } from '../bridges/hostAppProcess.js';
+﻿import { closeHostApp, launchHostApp, saveRunningHostTarget } from '../bridges/hostAppProcess.js';
 import { runShellTool } from '../shellToolRun.js';
 import {
   appendCapabilityPackageEvent,
@@ -19,6 +8,12 @@ import {
 import { buildCapabilityPackageContext } from './capabilityContext.js';
 import { publishCapabilityDraftToCloud, switchCapabilityCloudVersion } from './capabilityCloudVersions.js';
 import { runWorkflowCapability } from '../workflows/runWorkflowCapability.js';
+import {
+  mergeConnectionLocalVersionManifest,
+  normalizeConnectionLocalVersions,
+  type LocalSoftwareVersion,
+} from './connectionLocalVersions.js';
+import { resolveSoftwareBridgeDriver, resolveSoftwareBridgeStrategies } from './softwareBridgeRegistry.js';
 
 type TemplateMissingLifecycleResult = {
   ok: false;
@@ -44,6 +39,9 @@ export type CapabilityLifecycleInput = {
   publishedBy?: string;
   baseUrl?: string;
   historyPath?: string;
+  currentStrategyId?: string;
+  localVersionId?: string;
+  localVersion?: LocalSoftwareVersion;
 };
 
 export type CapabilityLifecycleAction =
@@ -59,27 +57,18 @@ export type CapabilityLifecycleAction =
   | 'switch_version'
   | 'open_conversation';
 
-type SupportedSoftwareBridge =
-  | { kind: 'adobe'; softwareId: AdobeBridgeId }
-  | { kind: 'blender'; softwareId: 'blender' };
-
-function supportedBridgeForDraft(id: string): SupportedSoftwareBridge | null {
+function softwareBridgeForDraft(id: string) {
   const draft = readCapabilityPackageDraft(id);
-  if (!draft || draft.type !== 'software_connection') return null;
-  const manifest = draft.manifest && typeof draft.manifest === 'object' ? draft.manifest : {};
-  const text = [
-    draft.id,
-    draft.name,
-    String((manifest as Record<string, unknown>).appName || ''),
-    String((manifest as Record<string, unknown>).hostId || ''),
-    String((manifest as Record<string, unknown>).softwareId || ''),
-    String((manifest as Record<string, unknown>).templateHint || ''),
-  ]
-    .join(' ')
-    .toLowerCase();
-  if (/\bphotoshop\b|adobe photoshop|extendscript_heartbeat/.test(text)) return { kind: 'adobe', softwareId: 'photoshop' };
-  if (/\bblender\b|blender_http|blender_startup|python_http/.test(text)) return { kind: 'blender', softwareId: 'blender' };
-  return null;
+  return resolveSoftwareBridgeDriver(draft);
+}
+
+function verifiedStrategyIdForDraft(id: string, input: CapabilityLifecycleInput = {}): string {
+  const draft = readCapabilityPackageDraft(id);
+  if (!draft) return '';
+  const verified = resolveSoftwareBridgeStrategies(draft).filter((strategy) => strategy.verified === true && strategy.status === 'verified');
+  const requested = String(input.currentStrategyId || '').trim();
+  if (requested && verified.some((strategy) => strategy.id === requested)) return requested;
+  return verified[0]?.id || '';
 }
 
 function softwareHostIdForDraft(id: string): string | null {
@@ -87,10 +76,31 @@ function softwareHostIdForDraft(id: string): string | null {
   if (!draft || draft.type !== 'software_connection') return null;
   const manifest = draft.manifest && typeof draft.manifest === 'object' ? draft.manifest : {};
   const explicit = String((manifest as Record<string, unknown>).hostId || (manifest as Record<string, unknown>).softwareId || '').trim();
-  if (explicit) return explicit.toLowerCase();
-  const text = `${draft.id} ${draft.name} ${String((manifest as Record<string, unknown>).appName || '')}`.toLowerCase();
-  if (/\bphotoshop\b|adobe photoshop/.test(text)) return 'photoshop';
-  return null;
+  return explicit ? explicit.toLowerCase() : null;
+}
+
+function lifecycleInputWithLocalVersion(id: string, input: CapabilityLifecycleInput = {}): CapabilityLifecycleInput {
+  const draft = readCapabilityPackageDraft(id);
+  if (!draft || draft.type !== 'software_connection') return input;
+  const manifest = draft.manifest && typeof draft.manifest === 'object' ? draft.manifest : {};
+  const normalized = normalizeConnectionLocalVersions({
+    name: draft.name,
+    appName: manifest.appName,
+    manifest,
+  });
+  const requestedId = String(input.localVersionId || '').trim();
+  const selected =
+    (requestedId ? normalized.localVersions.find((item) => item.id === requestedId) : null) ||
+    normalized.currentLocalVersion ||
+    null;
+  if (!selected) return input;
+  return {
+    ...input,
+    localVersionId: selected.id,
+    localVersion: selected,
+    executablePath: selected.executablePath || input.executablePath,
+    targetDir: input.targetDir || selected.installRoot,
+  };
 }
 
 function appendLifecycleEvent(
@@ -106,6 +116,35 @@ function appendLifecycleEvent(
     message,
     detail,
   });
+}
+
+function mergeRunningTargetLocalVersion(id: string, result: unknown): unknown {
+  if (!result || typeof result !== 'object') return null;
+  const row = result as Record<string, unknown>;
+  if (row.ok !== true) return null;
+  const target = row.target && typeof row.target === 'object' ? (row.target as Record<string, unknown>) : {};
+  const executablePath = String(row.executablePath || target.inputPath || '').trim();
+  const installRoot = String(target.resolvedPath || '').trim();
+  const softwareVersion = String(target.versionHint || '').trim();
+  const localVersionId = String(target.id || '').trim();
+  if (!executablePath && !installRoot && !softwareVersion) return null;
+  return updateCapabilityPackageDraft(id, (current) => ({
+    ...current,
+    manifest: mergeConnectionLocalVersionManifest(
+      current.manifest,
+      {
+        id: localVersionId,
+        label: String(target.label || '').trim() || [current.name, softwareVersion].filter(Boolean).join(' '),
+        softwareVersion,
+        executablePath,
+        installRoot,
+        source: 'process',
+        status: executablePath ? 'launchable' : 'detected',
+        lastSeenAt: new Date().toISOString(),
+      },
+      { makeCurrent: false, makeDefault: false },
+    ),
+  }));
 }
 
 function templateMissingLifecycleResult(id: string, action: 'install' | 'probe' | 'uninstall'): TemplateMissingLifecycleResult {
@@ -138,19 +177,12 @@ export async function installCapabilityPackage(
 ): Promise<
   { ok: true; result: unknown; draft: unknown } | { ok: false; error: string; message: string; nextAction?: string; supportedActions?: string[] }
 > {
-  const bridge = supportedBridgeForDraft(id);
+  const bridge = softwareBridgeForDraft(id);
   if (!bridge) {
     return templateMissingLifecycleResult(id, 'install');
   }
-  const targetDirs = Array.isArray(input.scriptsDirs)
-    ? input.scriptsDirs
-    : input.targetDir
-      ? [input.targetDir]
-      : undefined;
-  const result =
-    bridge.kind === 'blender'
-      ? installBlenderBridge({ startupDirs: targetDirs, port: input.port })
-      : installAdobeBridge(bridge.softwareId, { scriptsDirs: targetDirs, port: input.port });
+  const resolvedInput = lifecycleInputWithLocalVersion(id, input);
+  const result = await bridge.install(resolvedInput);
   if (!result.ok) {
     appendLifecycleEvent(id, 'install', false, result.message, result);
     return result;
@@ -161,7 +193,7 @@ export async function installCapabilityPackage(
     lastInstall: {
       ok: true,
       at: new Date().toISOString(),
-      softwareId: bridge.softwareId,
+      softwareId: bridge.id,
       result,
     },
   }));
@@ -171,35 +203,38 @@ export async function installCapabilityPackage(
 
 export async function probeCapabilityPackage(
   id: string,
+  input: CapabilityLifecycleInput = {},
 ): Promise<
   { ok: true; result: unknown; draft: unknown } | { ok: false; error: string; message: string; result?: unknown; nextAction?: string; supportedActions?: string[] }
 > {
-  const bridge = supportedBridgeForDraft(id);
+  const bridge = softwareBridgeForDraft(id);
   if (!bridge) {
     return templateMissingLifecycleResult(id, 'probe');
   }
-  const status = bridge.kind === 'blender' ? await getBlenderBridgeStatus() : await getAdobeBridgeStatus(bridge.softwareId);
-  const probe = status.probe || { ok: false, message: 'Photoshop 探测失败。' };
+  const resolvedInput = lifecycleInputWithLocalVersion(id, input);
+  const probe = await bridge.probe(resolvedInput);
+  const verifiedStrategyId = probe.ok ? verifiedStrategyIdForDraft(id, input) : '';
   const draft = updateCapabilityPackageDraft(id, (current) => ({
     ...current,
     draftStatus: probe.ok ? 'validated' : current.draftStatus,
     lastProbe: {
       ok: Boolean(probe.ok),
       at: new Date().toISOString(),
-      softwareId: bridge.softwareId,
+      softwareId: bridge.id,
+      ...(verifiedStrategyId ? { verifiedStrategyId } : {}),
       result: probe,
     },
   }));
   if (!probe.ok) {
-    appendLifecycleEvent(id, 'probe', false, String(probe.message || 'Photoshop 探测失败。'), probe);
+    appendLifecycleEvent(id, 'probe', false, String(probe.message || 'Software connection probe failed.'), probe);
     return {
       ok: false,
       error: 'capability_probe_failed',
-      message: String(probe.message || 'Photoshop 探测失败。'),
+      message: String(probe.message || 'Software connection probe failed.'),
       result: probe,
     };
   }
-  const next = appendLifecycleEvent(id, 'probe', true, String(probe.message || 'Photoshop 探测成功。'), probe);
+  const next = appendLifecycleEvent(id, 'probe', true, String(probe.message || 'Software connection probe passed.'), probe);
   return { ok: true, result: probe, draft: next || draft };
 }
 
@@ -209,25 +244,18 @@ export async function uninstallCapabilityPackage(
 ): Promise<
   { ok: true; result: unknown; draft: unknown } | { ok: false; error: string; message: string; nextAction?: string; supportedActions?: string[] }
 > {
-  const bridge = supportedBridgeForDraft(id);
+  const bridge = softwareBridgeForDraft(id);
   if (!bridge) {
     return templateMissingLifecycleResult(id, 'uninstall');
   }
-  const targetDirs = Array.isArray(input.scriptsDirs)
-    ? input.scriptsDirs
-    : input.targetDir
-      ? [input.targetDir]
-      : undefined;
-  const result =
-    bridge.kind === 'blender'
-      ? uninstallBlenderBridge({ startupDirs: targetDirs })
-      : uninstallAdobeBridge(bridge.softwareId, { scriptsDirs: targetDirs });
+  const resolvedInput = lifecycleInputWithLocalVersion(id, input);
+  const result = await bridge.uninstall(resolvedInput);
   updateCapabilityPackageDraft(id, (current) => ({
     ...current,
     lastInstall: {
       ok: false,
       at: new Date().toISOString(),
-      softwareId: bridge.softwareId,
+      softwareId: bridge.id,
       result,
     },
   }));
@@ -252,13 +280,14 @@ async function runSoftwareConnectionProcessLifecycle(
   }
   const draft = readCapabilityPackageDraft(id);
   const manifest = draft && draft.manifest && typeof draft.manifest === 'object' ? draft.manifest : {};
+  const resolvedInput = lifecycleInputWithLocalVersion(id, input);
   const manifestExecutablePath = String((manifest as Record<string, unknown>).executablePath || '').trim();
   const result =
     action === 'launch'
       ? launchHostApp(hostId, {
-          executablePath: input.executablePath || manifestExecutablePath,
-          versionId: input.versionId,
-          targetId: input.targetId,
+          executablePath: resolvedInput.executablePath || manifestExecutablePath,
+          versionId: resolvedInput.versionId || resolvedInput.localVersionId,
+          targetId: resolvedInput.targetId,
         })
       : action === 'discover_running'
         ? saveRunningHostTarget(hostId)
@@ -272,7 +301,8 @@ async function runSoftwareConnectionProcessLifecycle(
   if (!result.ok) {
     return { ok: false, error: result.error || `capability_${action}_failed`, message: result.message, result };
   }
-  return { ok: true, result, draft: next };
+  const updatedDraft = action === 'discover_running' ? mergeRunningTargetLocalVersion(id, result) || next : next;
+  return { ok: true, result, draft: updatedDraft };
 }
 
 async function runToolCapabilityPackage(
@@ -366,7 +396,7 @@ export async function runCapabilityLifecycle(
     return result.ok ? { ok: true, action, result: result.result, draft: result.draft } : { ...result, action };
   }
   if (action === 'probe') {
-    const result = await probeCapabilityPackage(id);
+    const result = await probeCapabilityPackage(id, input);
     return result.ok ? { ok: true, action, result: result.result, draft: result.draft } : { ...result, action };
   }
   if (action === 'uninstall') {
@@ -410,3 +440,6 @@ export async function runCapabilityLifecycle(
     message: `${action} 生命周期已登记，但当前阶段尚未启用。`,
   };
 }
+
+
+

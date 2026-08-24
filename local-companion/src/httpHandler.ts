@@ -72,7 +72,9 @@ import {
   appendCapabilityPackageEvent,
   createCapabilityPackageDraft,
   deleteCapabilityPackageDraft,
+  readCapabilityPackageDraft,
   readCapabilityPackageDrafts,
+  updateCapabilityPackageDraft,
 } from './capabilities/capabilityPackageStore.js';
 import {
   installCapabilityPackage,
@@ -80,6 +82,7 @@ import {
   runCapabilityLifecycle,
   uninstallCapabilityPackage,
 } from './capabilities/capabilityLifecycle.js';
+import { attachSoftwareConnectionState } from './capabilities/softwareConnectionState.js';
 import { buildCapabilityPackageContext } from './capabilities/capabilityContext.js';
 import { checkCapabilityPublishGate } from './capabilities/capabilityPublishGate.js';
 import {
@@ -96,6 +99,28 @@ import { summarizeWorkflowConnectors } from './capabilities/workflowConnectorSum
 import { listWorkflowRuns } from './workflows/runtime/workflowRunHistory.js';
 import { listWorkflowSkills } from './workflows/runtime/workflowSkills.js';
 import { preflightWorkflowCapability, runWorkflowCapability } from './workflows/runWorkflowCapability.js';
+import {
+  archiveWorkflowDraft,
+  createWorkflowDraft,
+  getWorkflowDraft,
+  listWorkflowDrafts,
+  publishWorkflowDraftVersion,
+  rollbackWorkflowDefaultVersion,
+  saveWorkflowRunAsDraft,
+  testRunWorkflowDraft,
+  updateWorkflowDraft,
+} from './workflows/workflowDrafts.js';
+import {
+  createWorkflowRepairSession,
+  getWorkflowRepairSession,
+  listWorkflowRepairSessions,
+  selectWorkflowRepairScope,
+} from './workflows/workflowRepairSessions.js';
+import {
+  createWorkflowPin,
+  deleteWorkflowPin,
+  listWorkflowPins,
+} from './workflows/workflowPins.js';
 import { probeSamSegmentBackendHealth } from './compute/samSegmentAdapter.js';
 import { probeRembgPythonHealth } from './compute/rembgAdapter.js';
 import { probePaddleOcrBackendHealth } from './compute/paddleOcrAdapter.js';
@@ -744,6 +769,292 @@ export async function handleRequest(
       return;
     }
 
+    if (path === '/v1/workflows/repair-sessions' && method === 'GET') {
+      sendJson(res, 200, { ok: true, repairSessions: listWorkflowRepairSessions() }, origin);
+      return;
+    }
+
+    if (path === '/v1/workflows/pins' && method === 'GET') {
+      const scope = u.searchParams.get('scope') || undefined;
+      sendJson(res, 200, {
+        ok: true,
+        pins: listWorkflowPins({
+          scope: scope === 'home' ||
+            scope === 'project' ||
+            scope === 'connection' ||
+            scope === 'object' ||
+            scope === 'workspace'
+            ? scope
+            : undefined,
+        }),
+      }, origin);
+      return;
+    }
+
+    if (path === '/v1/workflows/pins' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(Buffer.from(raw).toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { ok: false, error: 'invalid_json' }, origin);
+          return;
+        }
+      }
+      const scope = body.scope && typeof body.scope === 'object' && !Array.isArray(body.scope)
+        ? body.scope as Parameters<typeof createWorkflowPin>[0]['scope']
+        : null;
+      const versionPolicy = body.versionPolicy && typeof body.versionPolicy === 'object' && !Array.isArray(body.versionPolicy)
+        ? body.versionPolicy as Parameters<typeof createWorkflowPin>[0]['versionPolicy']
+        : undefined;
+      if (!scope || typeof body.workflowId !== 'string') {
+        sendJson(res, 400, { ok: false, error: 'workflow_pin_invalid_body' }, origin);
+        return;
+      }
+      const result = createWorkflowPin({
+        pinId: typeof body.pinId === 'string' ? body.pinId : undefined,
+        scope,
+        sortOrder: typeof body.sortOrder === 'number' ? body.sortOrder : undefined,
+        versionPolicy,
+        workflowId: body.workflowId,
+      });
+      sendJson(res, result.ok ? 201 : 400, result, origin);
+      return;
+    }
+
+    const workflowPinMatch = path.match(/^\/v1\/workflows\/pins\/([^/]+)$/);
+    if (workflowPinMatch && method === 'DELETE') {
+      const result = deleteWorkflowPin({
+        pinId: decodeURIComponent(workflowPinMatch[1]!),
+      });
+      sendJson(res, result.ok ? 200 : 404, result, origin);
+      return;
+    }
+
+    const workflowRepairSessionMatch = path.match(/^\/v1\/workflows\/repair-sessions\/([^/]+)$/);
+    if (workflowRepairSessionMatch && method === 'GET') {
+      const result = getWorkflowRepairSession(decodeURIComponent(workflowRepairSessionMatch[1]!));
+      sendJson(res, result.ok ? 200 : 404, result, origin);
+      return;
+    }
+
+    if (workflowRepairSessionMatch && method === 'PATCH') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(Buffer.from(raw).toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { ok: false, error: 'invalid_json' }, origin);
+          return;
+        }
+      }
+      const scope = body.scope === 'run_only' ||
+        body.scope === 'update_draft' ||
+        body.scope === 'new_version' ||
+        body.scope === 'rollback_default_version'
+        ? body.scope
+        : null;
+      if (!scope) {
+        sendJson(res, 400, { ok: false, error: 'workflow_repair_scope_invalid' }, origin);
+        return;
+      }
+      const result = selectWorkflowRepairScope({
+        scope,
+        sessionId: decodeURIComponent(workflowRepairSessionMatch[1]!),
+      });
+      sendJson(res, result.ok ? 200 : 404, result, origin);
+      return;
+    }
+
+    if (path === '/v1/workflows/drafts' && method === 'GET') {
+      sendJson(res, 200, { ok: true, drafts: listWorkflowDrafts() }, origin);
+      return;
+    }
+
+    if (path === '/v1/workflows/drafts' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(Buffer.from(raw).toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { ok: false, error: 'invalid_json' }, origin);
+          return;
+        }
+      }
+      const source = body.source && typeof body.source === 'object' && !Array.isArray(body.source)
+        ? body.source as Parameters<typeof createWorkflowDraft>[0]['source']
+        : undefined;
+      const result = createWorkflowDraft({
+        description: typeof body.description === 'string' ? body.description : undefined,
+        draftId: typeof body.draftId === 'string' ? body.draftId : undefined,
+        name: typeof body.name === 'string' ? body.name : undefined,
+        source,
+        workflowId: typeof body.workflowId === 'string' ? body.workflowId : undefined,
+      });
+      sendJson(res, result.ok ? 201 : 400, result, origin);
+      return;
+    }
+
+    const workflowDraftTestRunMatch = path.match(/^\/v1\/workflows\/drafts\/([^/]+)\/test-run$/);
+    if (workflowDraftTestRunMatch && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(Buffer.from(raw).toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { ok: false, error: 'invalid_json' }, origin);
+          return;
+        }
+      }
+      const result = await testRunWorkflowDraft({
+        baseUrl: typeof body.baseUrl === 'string' ? body.baseUrl : undefined,
+        draftId: decodeURIComponent(workflowDraftTestRunMatch[1]!),
+        params: body.params && typeof body.params === 'object' && !Array.isArray(body.params)
+          ? body.params as Record<string, unknown>
+          : undefined,
+      });
+      sendJson(res, result.ok ? 200 : 400, result, origin);
+      return;
+    }
+
+    const workflowDraftPublishMatch = path.match(/^\/v1\/workflows\/drafts\/([^/]+)\/publish$/);
+    if (workflowDraftPublishMatch && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(Buffer.from(raw).toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { ok: false, error: 'invalid_json' }, origin);
+          return;
+        }
+      }
+      const result = publishWorkflowDraftVersion({
+        changeSummary: typeof body.changeSummary === 'string' ? body.changeSummary : undefined,
+        draftId: decodeURIComponent(workflowDraftPublishMatch[1]!),
+        semver: typeof body.semver === 'string' ? body.semver : undefined,
+      });
+      sendJson(res, result.ok ? 201 : 400, result, origin);
+      return;
+    }
+
+    const workflowDraftMatch = path.match(/^\/v1\/workflows\/drafts\/([^/]+)$/);
+    if (workflowDraftMatch && method === 'GET') {
+      const result = getWorkflowDraft(decodeURIComponent(workflowDraftMatch[1]!));
+      sendJson(res, result.ok ? 200 : 404, result, origin);
+      return;
+    }
+
+    if (workflowDraftMatch && method === 'PATCH') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(Buffer.from(raw).toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { ok: false, error: 'invalid_json' }, origin);
+          return;
+        }
+      }
+      const result = updateWorkflowDraft({
+        defaultInput: body.defaultInput && typeof body.defaultInput === 'object' && !Array.isArray(body.defaultInput)
+          ? body.defaultInput as Record<string, unknown>
+          : undefined,
+        description: typeof body.description === 'string' ? body.description : undefined,
+        draftId: decodeURIComponent(workflowDraftMatch[1]!),
+        inputSchema: body.inputSchema && typeof body.inputSchema === 'object' && !Array.isArray(body.inputSchema)
+          ? body.inputSchema as Parameters<typeof updateWorkflowDraft>[0]['inputSchema']
+          : undefined,
+        name: typeof body.name === 'string' ? body.name : undefined,
+        requiredConnectors: Array.isArray(body.requiredConnectors)
+          ? body.requiredConnectors as Parameters<typeof updateWorkflowDraft>[0]['requiredConnectors']
+          : undefined,
+        status:
+          body.status === 'draft' ||
+          body.status === 'ready_for_validation' ||
+          body.status === 'validated' ||
+          body.status === 'blocked'
+            ? body.status
+            : undefined,
+      });
+      sendJson(res, result.ok ? 200 : 404, result, origin);
+      return;
+    }
+
+    if (workflowDraftMatch && method === 'DELETE') {
+      const result = archiveWorkflowDraft({
+        draftId: decodeURIComponent(workflowDraftMatch[1]!),
+      });
+      sendJson(res, result.ok ? 200 : 404, result, origin);
+      return;
+    }
+
+    const workflowRollbackMatch = path.match(/^\/v1\/workflows\/([^/]+)\/rollback$/);
+    if (workflowRollbackMatch && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(Buffer.from(raw).toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { ok: false, error: 'invalid_json' }, origin);
+          return;
+        }
+      }
+      const versionId = typeof body.versionId === 'string' ? body.versionId : '';
+      const result = rollbackWorkflowDefaultVersion({
+        versionId,
+        workflowId: decodeURIComponent(workflowRollbackMatch[1]!),
+      });
+      sendJson(res, result.ok ? 200 : 400, result, origin);
+      return;
+    }
+
+    const workflowRunSaveDraftMatch = path.match(/^\/v1\/workflows\/runs\/([^/]+)\/save-draft$/);
+    if (workflowRunSaveDraftMatch && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(Buffer.from(raw).toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { ok: false, error: 'invalid_json' }, origin);
+          return;
+        }
+      }
+      const result = saveWorkflowRunAsDraft({
+        draftId: typeof body.draftId === 'string' ? body.draftId : undefined,
+        name: typeof body.name === 'string' ? body.name : undefined,
+        runId: decodeURIComponent(workflowRunSaveDraftMatch[1]!),
+      });
+      sendJson(res, result.ok ? 201 : 400, result, origin);
+      return;
+    }
+
+    const workflowRunRepairSessionMatch = path.match(/^\/v1\/workflows\/runs\/([^/]+)\/repair-session$/);
+    if (workflowRunRepairSessionMatch && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(Buffer.from(raw).toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { ok: false, error: 'invalid_json' }, origin);
+          return;
+        }
+      }
+      const result = createWorkflowRepairSession({
+        runId: decodeURIComponent(workflowRunRepairSessionMatch[1]!),
+        sessionId: typeof body.sessionId === 'string' ? body.sessionId : undefined,
+      });
+      sendJson(res, result.ok ? 201 : 400, result, origin);
+      return;
+    }
+
     const workflowPreflightMatch = path.match(/^\/v1\/workflows\/([^/]+)\/preflight$/);
     if (workflowPreflightMatch && method === 'POST') {
       const raw = await readRequestBodyRaw(req);
@@ -788,7 +1099,7 @@ export async function handleRequest(
     }
 
     if (path === '/v1/capability-packages/drafts' && method === 'GET') {
-      sendJson(res, 200, { drafts: readCapabilityPackageDrafts() }, origin);
+      sendJson(res, 200, { drafts: readCapabilityPackageDrafts().map((draft) => attachSoftwareConnectionState(draft)) }, origin);
       return;
     }
 
@@ -855,6 +1166,59 @@ export async function handleRequest(
     if (capabilityDraftDeleteMatch && method === 'DELETE') {
       const deleted = deleteCapabilityPackageDraft(decodeURIComponent(capabilityDraftDeleteMatch[1]!));
       sendJson(res, deleted ? 200 : 404, deleted ? { ok: true, deleted: true } : { error: 'draft_not_found' }, origin);
+      return;
+    }
+
+    const capabilityLocalVersionMatch = path.match(/^\/v1\/capability-packages\/drafts\/([^/]+)\/local-version$/);
+    if (capabilityLocalVersionMatch && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(Buffer.from(raw).toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { ok: false, error: 'invalid_json' }, origin);
+          return;
+        }
+      }
+      const localVersionId = typeof body.localVersionId === 'string' ? body.localVersionId.trim() : '';
+      if (!localVersionId) {
+        sendJson(res, 400, { ok: false, error: 'local_version_id_required' }, origin);
+        return;
+      }
+      const packageId = decodeURIComponent(capabilityLocalVersionMatch[1]!);
+      const currentDraft = readCapabilityPackageDraft(packageId);
+      if (!currentDraft) {
+        sendJson(res, 404, { ok: false, error: 'draft_not_found' }, origin);
+        return;
+      }
+      if (currentDraft.type !== 'software_connection') {
+        sendJson(res, 400, { ok: false, error: 'not_software_connection' }, origin);
+        return;
+      }
+      const currentManifest = currentDraft.manifest && typeof currentDraft.manifest === 'object' ? currentDraft.manifest : {};
+      const versions = Array.isArray(currentManifest.localVersions) ? currentManifest.localVersions : [];
+      const matched = versions.some((item) => item && typeof item === 'object' && String((item as Record<string, unknown>).id || '') === localVersionId);
+      if (!matched) {
+        sendJson(res, 400, { ok: false, error: 'local_version_not_found' }, origin);
+        return;
+      }
+      const updated = updateCapabilityPackageDraft(packageId, (current) => {
+        const manifest = current.manifest && typeof current.manifest === 'object' ? current.manifest : {};
+        return {
+          ...current,
+          manifest: {
+            ...manifest,
+            currentLocalVersionId: localVersionId,
+            ...(body.makeDefault === false ? {} : { defaultLocalVersionId: localVersionId }),
+          },
+        };
+      });
+      if (!updated) {
+        sendJson(res, 404, { ok: false, error: 'draft_not_found' }, origin);
+        return;
+      }
+      sendJson(res, 200, { ok: true, draft: attachSoftwareConnectionState(updated) }, origin);
       return;
     }
 
@@ -980,6 +1344,10 @@ export async function handleRequest(
         targetDir: typeof body.targetDir === 'string' ? body.targetDir : undefined,
         scriptsDirs: Array.isArray(body.scriptsDirs) ? body.scriptsDirs.map(String).filter(Boolean) : undefined,
         port: Number.isFinite(Number(body.port)) ? Number(body.port) : undefined,
+        executablePath: typeof body.executablePath === 'string' ? body.executablePath : undefined,
+        targetId: typeof body.targetId === 'string' ? body.targetId : undefined,
+        versionId: typeof body.versionId === 'string' ? body.versionId : undefined,
+        localVersionId: typeof body.localVersionId === 'string' ? body.localVersionId : undefined,
       };
       const id = decodeURIComponent(capabilityLifecycleMatch[1]!);
       const action = capabilityLifecycleMatch[2]!;
@@ -987,7 +1355,7 @@ export async function handleRequest(
         action === 'install'
           ? await installCapabilityPackage(id, input)
           : action === 'probe'
-            ? await probeCapabilityPackage(id)
+            ? await probeCapabilityPackage(id, input)
             : await uninstallCapabilityPackage(id, input);
       if (!result.ok) {
         sendJson(res, action === 'probe' ? 424 : 422, result, origin);
@@ -1022,8 +1390,10 @@ export async function handleRequest(
         isAdmin: body.isAdmin === true,
         semver: typeof body.semver === 'string' ? body.semver : undefined,
         versionId: typeof body.versionId === 'string' ? body.versionId : undefined,
+        localVersionId: typeof body.localVersionId === 'string' ? body.localVersionId : undefined,
         versionNote: typeof body.versionNote === 'string' ? body.versionNote : undefined,
         publishedBy: typeof body.publishedBy === 'string' ? body.publishedBy : undefined,
+        currentStrategyId: typeof body.currentStrategyId === 'string' ? body.currentStrategyId : undefined,
       });
       if (!result.ok) {
         sendJson(res, action === 'probe' || action === 'run' ? 424 : 422, result, origin);

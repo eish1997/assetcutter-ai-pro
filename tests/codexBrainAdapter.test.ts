@@ -118,6 +118,14 @@ describe('Codex brain adapter', () => {
     expect(prompts.join('\n')).toContain('DO NOT call ac.workbench.create_text_asset');
     expect(prompts.join('\n')).toContain('ac.capability.create_draft');
     expect(prompts.join('\n')).toContain('type=software_connection');
+    expect(prompts.join('\n')).toContain('treat every target app as unknown first');
+    expect(prompts.join('\n')).toContain('do not ask the user to choose a technical template');
+    expect(prompts.join('\n')).toContain('connectionFacts');
+    expect(prompts.join('\n')).toContain('StrategyDraft');
+    expect(prompts.join('\n')).toContain('candidateStrategies');
+    expect(prompts.join('\n')).toContain('verified strategy shortcuts');
+    expect(prompts.join('\n')).toContain('softwareBridgeRegistry/bridge driver model');
+    expect(prompts.join('\n')).toContain('do not suggest editing capabilityLifecycle.ts');
     expect(prompts.join('\n')).toContain('ac.companion.host_bridge.* as legacy recovery/debug tools');
     expect(prompts.join('\n')).toContain('ac.capability.connection_loop_run');
     expect(prompts.join('\n')).toContain('context/connectionState');

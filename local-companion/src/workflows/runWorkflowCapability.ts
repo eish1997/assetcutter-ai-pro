@@ -1,3 +1,4 @@
+import { resolveMayaCommandPortTarget } from '../capabilities/mayaWorkflowConnection.js';
 import { createMayaConnectorToolBridgeClient, createWorkflowOutputExistsChecker } from './runtime/workflowToolBridgeHttpClient.js';
 import { runMayaExportWorkflow } from './runtime/workflowExecution.js';
 import { saveWorkflowRun } from './runtime/workflowRunHistory.js';
@@ -38,15 +39,13 @@ export async function runWorkflowCapability(input: RunWorkflowCapabilityInput) {
   const runInput = parseMayaRunInput(input.params);
   if (!runInput.ok) return runInput;
 
-  const mayaConnectorUrl =
-    input.baseUrl ||
-    process.env.ASSETCUTTER_WORKFLOW_MAYA_CONNECTOR_URL ||
-    process.env.ASSETCUTTER_MAYA_CONNECTOR_URL ||
-    process.env.SCRIPTHUB_MAYA_CONNECTOR_URL;
+  const mayaConnectorUrl = resolveMayaConnectorUrl(input.baseUrl);
+  const commandPortTarget = mayaConnectorUrl ? undefined : resolveMayaCommandPortTarget(workflow.systemContract.requiredConnectors[0]?.capabilityPackageId);
   const run = await runMayaExportWorkflow(runInput.input, {
     baseUrl: mayaConnectorUrl,
     checkOutputExists: input.checkOutputExists || createWorkflowOutputExistsChecker(),
-    client: createMayaConnectorToolBridgeClient(mayaConnectorUrl),
+    client: createMayaConnectorToolBridgeClient(mayaConnectorUrl, commandPortTarget),
+    commandPortTarget,
     connectorStatus: input.connectorStatus,
     runId: input.runId,
     traceId: input.traceId,
@@ -91,11 +90,8 @@ export async function preflightWorkflowCapability(input: RunWorkflowCapabilityIn
   const runInput = parseMayaRunInput(input.params);
   if (!runInput.ok) return runInput;
 
-  const mayaConnectorUrl =
-    input.baseUrl ||
-    process.env.ASSETCUTTER_WORKFLOW_MAYA_CONNECTOR_URL ||
-    process.env.ASSETCUTTER_MAYA_CONNECTOR_URL ||
-    process.env.SCRIPTHUB_MAYA_CONNECTOR_URL;
+  const mayaConnectorUrl = resolveMayaConnectorUrl(input.baseUrl);
+  const commandPortTarget = mayaConnectorUrl ? undefined : resolveMayaCommandPortTarget(workflow.systemContract.requiredConnectors[0]?.capabilityPackageId);
   const run = createWorkflowRun({
     id: input.runId,
     input: runInput.input,
@@ -105,6 +101,7 @@ export async function preflightWorkflowCapability(input: RunWorkflowCapabilityIn
   const results = await runMayaExportPreflight(runInput.input, {
     baseUrl: mayaConnectorUrl,
     checkOutputExists: input.checkOutputExists || createWorkflowOutputExistsChecker(),
+    commandPortTarget,
     connectorStatus: input.connectorStatus,
   });
   const preflightRun = applyWorkflowPreflightResults({
@@ -125,6 +122,13 @@ export async function preflightWorkflowCapability(input: RunWorkflowCapabilityIn
       workflow_id: preflightRun.workflow_id,
     },
   };
+}
+
+function resolveMayaConnectorUrl(baseUrl?: string) {
+  return baseUrl
+    || process.env.ASSETCUTTER_WORKFLOW_MAYA_CONNECTOR_URL
+    || process.env.ASSETCUTTER_MAYA_CONNECTOR_URL
+    || process.env.SCRIPTHUB_MAYA_CONNECTOR_URL;
 }
 
 function parseMayaRunInput(params: unknown):

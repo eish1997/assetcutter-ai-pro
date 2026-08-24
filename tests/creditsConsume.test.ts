@@ -126,6 +126,18 @@ describe('credits consume integration (ADR §16)', () => {
     expect(bal.lifetimeSpent).toBe(134);
   });
 
+  it('precharge reuses a larger unused bundle for a smaller image step', async () => {
+    await adjustCredits(userId, 500, { note: 'seed', createdBy: 'admin-1' });
+    const bundle = await prechargeCredits(userId, 149, { idempotencyKey: 'workflow:lineart-1' });
+    const step = await prechargeCredits(userId, 134, { idempotencyKey: 'workflow:lineart-1' });
+    expect(bundle.amount).toBe(149);
+    expect(step.duplicate).toBe(true);
+    expect(step.amount).toBe(149);
+    expect(step.remaining).toBe(149);
+    const bal = await getCreditBalance(userId);
+    expect(bal.balance).toBe(351);
+  });
+
   it('precharge replaces stale same-key reserve when amount mismatches and unused', async () => {
     await adjustCredits(userId, 500, { note: 'seed', createdBy: 'admin-1' });
     await prechargeCredits(userId, 10, { idempotencyKey: 'workflow:task-1' });

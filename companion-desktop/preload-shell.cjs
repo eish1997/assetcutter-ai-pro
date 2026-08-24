@@ -123,6 +123,10 @@ contextBridge.exposeInMainWorld('companionShell', {
   workbenchReload: () => timedInvoke('shell-workbench-reload'),
   workbenchReloadHard: () => timedInvoke('shell-workbench-reload-hard'),
   workbenchOpenExternal: () => timedInvoke('shell-workbench-open-external'),
+  desktopObservationStart: (payload) => timedInvoke('shell-desktop-observation-start', payload || {}),
+  desktopObservationFrame: (payload) => timedInvoke('shell-desktop-observation-frame', payload || {}),
+  desktopObservationStatus: () => timedInvoke('shell-desktop-observation-status'),
+  desktopObservationStop: () => timedInvoke('shell-desktop-observation-stop'),
   // Pass object so numeric 0 is not eaten by timedInvoke's trailing-timeout heuristic.
   setWorkbenchSidebarInsetPx: (px) =>
     timedInvoke('shell-workbench-sidebar-inset', { px: Math.max(0, Math.round(Number(px) || 0)) }),
@@ -186,13 +190,6 @@ contextBridge.exposeInMainWorld('companionShell', {
   platform: process.platform,
   /** 与 main.cjs `defaultShellSiteUrl` 一致，供壳首帧与「打开网站」回退 */
   defaultSiteUrl: defaultShellSiteUrl(),
-  defaultScriptHubUrl: (() => {
-    try {
-      return app.isPackaged ? 'https://scripts.adrazzo.com/' : 'http://localhost:5173/';
-    } catch {
-      return 'http://localhost:5173/';
-    }
-  })(),
   defaultScriptHubApiUrl: (() => {
     try {
       return 'http://localhost:8787/';

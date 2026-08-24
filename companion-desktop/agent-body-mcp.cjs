@@ -290,7 +290,7 @@ function createAgentBodyMcpServer(deps) {
       'For tool/plugin/script-tool creation requests, prefer ac.capability.create_draft with type=tool or inferred intent, then use ac.shell_tool.authored_upsert for concrete files; do not put generated tool code into ac.workbench.create_text_asset.',
       'For software connection creation requests, prefer ac.capability.create_draft with type=software_connection and natural-language intent; ac.companion.host_bridge.* is legacy recovery/debug, not the default user-facing creation path.',
       'Use tools/list for schemas and assetcutter://mcp/tool-catalog for grouped guidance, example arguments, and success signals.',
-      'Confirm-risk tools may require Copilot frontend authorization; keep Copilot open when calling workbench or Script Hub actions.',
+      'Confirm-risk tools may require Copilot frontend authorization; keep Copilot open when calling workbench or Workflow actions.',
       'For long-running calls, send notifications/cancelled with the original JSON-RPC request id if the task should stop.',
     ].join('\n');
   }
@@ -675,7 +675,7 @@ function createAgentBodyMcpServer(deps) {
       publishableNow: false,
       draftInventory: draftInventory && typeof draftInventory === 'object' ? draftInventory : summarizeWorkflowDraftInventory(),
       reason:
-        'Workflow drafts are discoverable team assets, but promotion to executable workbench presets or Script Hub tools is not open until governed promotion tools and E2E gates exist.',
+        'Workflow drafts are discoverable team assets, but promotion to executable workbench presets or Workflow tools is not open until governed promotion tools and E2E gates exist.',
       targets: [
         target('workbench_preset', 'ac.workflow.promote_workbench_preset', [
           'skill_draft_exists',
@@ -976,7 +976,7 @@ function createAgentBodyMcpServer(deps) {
       return '指定资产不存在；请调用 ac.workbench.list_assets 查看可用 assetId 后重试。';
     }
     if (code === 'AGENT_WORKBENCH_HTTP' || code === 'AGENT_COMPANION_HTTP' || code === 'AGENT_SCRIPT_HUB_HTTP') {
-      return '下游服务请求失败；请检查工作台/伴侣/Script Hub 状态后重试。';
+      return '下游服务请求失败；请检查工作台/伴侣/Workflow 状态后重试。';
     }
     if (code === 'AGENT_CONFIRM_REQUIRED') {
       return '需要在 Copilot 或管理员策略里允许这个高风险工具后再执行。';
@@ -1590,7 +1590,7 @@ function createAgentBodyMcpServer(deps) {
             extensionGuidance: {
               addTool: 'Register the tool schema in agent-tool-schemas.cjs and dispatch it in agent-body-host.cjs.',
               addPrompt: 'Add a skill under agent-store/skills with skill.json or SKILL.md.',
-              publishWorkflow: 'Read assetcutter://mcp/workflow-publication, then save reusable drafts through ac.skills.save before any governed Script Hub or workbench preset promotion.',
+              publishWorkflow: 'Read assetcutter://mcp/workflow-publication, then save reusable drafts through ac.skills.save before any governed Workflow or workbench preset promotion.',
               policy: 'High-risk tools should use risk=confirm and can be managed through policy.json.',
             },
           },
@@ -1696,7 +1696,7 @@ function createAgentBodyMcpServer(deps) {
                 status: toolNames.has('ac.workflow.promote_script_hub_tool') ? 'preflight_registered_gated' : 'planned',
                 plannedTool: 'ac.workflow.promote_script_hub_tool',
                 boundary:
-                  'Promotion to Script Hub must go through the Script Hub tool asset, revision, permission, run, and audit chain; external Agents should not bypass this by executing arbitrary scripts.',
+                  'Promotion to Workflow must go through the Workflow tool asset, revision, permission, run, and audit chain; external Agents should not bypass this by executing arbitrary scripts.',
               },
             ],
             promotionReadiness: buildWorkflowPromotionReadiness(tools),
@@ -1714,10 +1714,10 @@ function createAgentBodyMcpServer(deps) {
               'Call ac.skills.save with a concise prompt and toolHints for the ac.* tools it needs.',
               'Verify it appears in prompts/list, resources/list, and skill://{skillId}.',
               'Use ac.skills.revisions before replacing a published draft.',
-              'Treat workbench preset or Script Hub promotion as a separate governed release step until the promotion tools are implemented.',
+              'Treat workbench preset or Workflow promotion as a separate governed release step until the promotion tools are implemented.',
             ],
             notAllowed: [
-              'Do not claim a skill draft is a published Script Hub tool.',
+              'Do not claim a skill draft is a published Workflow tool.',
               'Do not bypass ac.* tools to operate the workbench or local shell directly.',
               'Do not embed secrets in skill prompts or descriptions.',
             ],
@@ -2122,7 +2122,7 @@ function createAgentBodyMcpServer(deps) {
             name: MCP_SERVER_NAME,
             title: MCP_SERVER_TITLE,
             version: MCP_SERVER_VERSION,
-            description: 'Local MCP body for AssetCutter workbench, Script Hub, companion runtime, skills, and memory.',
+            description: 'Local MCP body for AssetCutter workbench, Workflow, companion runtime, skills, and memory.',
           },
           instructions: serverInstructions(),
         },

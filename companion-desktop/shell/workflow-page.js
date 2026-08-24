@@ -285,6 +285,70 @@
         opacity: 0.5;
         cursor: wait;
       }
+      .workflow-detail {
+        display: grid;
+        gap: 8px;
+        border: 1px solid rgba(148, 163, 184, 0.14);
+        border-radius: 7px;
+        background: rgba(0, 0, 0, 0.12);
+        padding: 9px;
+      }
+      .workflow-detail-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 7px;
+      }
+      .workflow-detail-row {
+        min-width: 0;
+        display: grid;
+        gap: 2px;
+      }
+      .workflow-detail-label {
+        color: rgba(161, 161, 170, 0.9);
+        font-size: 10px;
+        font-weight: 820;
+      }
+      .workflow-detail-value {
+        min-width: 0;
+        color: rgba(244, 244, 245, 0.92);
+        font-size: 11px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .workflow-detail-section {
+        display: grid;
+        gap: 5px;
+      }
+      .workflow-detail-section-title {
+        color: rgba(228, 228, 231, 0.9);
+        font-size: 11px;
+        font-weight: 850;
+      }
+      .workflow-detail-chip-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 5px;
+      }
+      .workflow-detail-chip {
+        border: 1px solid rgba(148, 163, 184, 0.16);
+        border-radius: 999px;
+        color: rgba(228, 228, 231, 0.88);
+        background: rgba(255, 255, 255, 0.04);
+        padding: 3px 7px;
+        font-size: 10px;
+        font-weight: 820;
+      }
+      .workflow-detail-chip.good {
+        border-color: rgba(34, 197, 94, 0.32);
+        color: #bbf7d0;
+        background: rgba(22, 101, 52, 0.16);
+      }
+      .workflow-detail-chip.blocked {
+        border-color: rgba(239, 68, 68, 0.32);
+        color: #fecaca;
+        background: rgba(127, 29, 29, 0.16);
+      }
       .workflow-run-result {
         display: grid;
         gap: 5px;
@@ -651,6 +715,7 @@
       @media (max-width: 720px) {
         .workflow-toolbar,
         .workflow-run-form,
+        .workflow-detail-grid,
         .workflow-history-row {
           grid-template-columns: 1fr;
         }
@@ -665,6 +730,8 @@
   window.ShellWorkflowPage = {
     _shell: null,
     workflows: [],
+    drafts: [],
+    pins: [],
     historyRuns: [],
     runsByWorkflowId: new Map(),
     preflightByWorkflowId: new Map(),
@@ -674,6 +741,7 @@
     listError: '',
     searchQuery: '',
     inlineStatus: '',
+    selectedWorkflowId: '',
     _reloadGen: 0,
 
     async fetchSkills(shell) {
@@ -690,6 +758,22 @@
         throw new Error((r && r.json && (r.json.message || r.json.error)) || (r && r.text) || '读取 Workflow 运行历史失败');
       }
       return r.json.runs;
+    },
+
+    async fetchDrafts(shell) {
+      const r = await shell.api('GET', '/v1/workflows/drafts', null);
+      if (!r || !r.ok || !r.json || !Array.isArray(r.json.drafts)) {
+        throw new Error((r && r.json && (r.json.message || r.json.error)) || (r && r.text) || '读取 Workflow 草稿失败');
+      }
+      return r.json.drafts;
+    },
+
+    async fetchPins(shell) {
+      const r = await shell.api('GET', '/v1/workflows/pins', null);
+      if (!r || !r.ok || !r.json || !Array.isArray(r.json.pins)) {
+        throw new Error((r && r.json && (r.json.message || r.json.error)) || (r && r.text) || '读取 Workflow 固定项失败');
+      }
+      return r.json.pins;
     },
 
     rebuildLatestRuns() {
@@ -740,6 +824,8 @@
           return validation.status === 'validated';
         }).length;
         const succeeded = asArray(this.historyRuns).filter((run) => run && run.status === 'succeeded').length;
+        const activeDrafts = asArray(this.drafts).filter((draft) => draft && draft.status !== 'archived').length;
+        const pinned = asArray(this.pins).length;
         summary.innerHTML =
           '<span class="workflow-summary-pill">全部 ' +
           items.length +
@@ -752,9 +838,144 @@
           '</span>' +
           '<span class="workflow-summary-pill">历史成功 ' +
           succeeded +
+          '</span>' +
+          '<span class="workflow-summary-pill">草稿 ' +
+          activeDrafts +
+          '</span>' +
+          '<span class="workflow-summary-pill">固定 ' +
+          pinned +
           '</span>';
       }
       if (status) status.textContent = this.inlineStatus;
+    },
+
+    draftsForWorkflow(workflow) {
+      return asArray(this.drafts).filter((draft) => {
+        if (!draft || draft.status === 'archived') return false;
+        const source = draft.source && typeof draft.source === 'object' ? draft.source : {};
+        const definition = draft.definition && typeof draft.definition === 'object' ? draft.definition : {};
+        const executor = definition.executor_ref && typeof definition.executor_ref === 'object' ? definition.executor_ref : {};
+        return source.workflow_id === workflow.id || executor.id === workflow.id;
+      });
+    },
+
+    pinsForWorkflow(workflow) {
+      return asArray(this.pins).filter((pin) => pin && pin.workflow_id === workflow.id);
+    },
+
+    pinForScope(workflow, scopeKind, scopeId) {
+      return this.pinsForWorkflow(workflow).find((pin) => {
+        const scope = pin.scope && typeof pin.scope === 'object' ? pin.scope : {};
+        if (scope.kind !== scopeKind) return false;
+        if (!scopeId) return true;
+        return scope.connection_id === scopeId || scope.project_id === scopeId || scope.object_id === scopeId || scope.workspace_id === scopeId;
+      }) || null;
+    },
+
+    pinScopeLabel(pin) {
+      const scope = pin && pin.scope && typeof pin.scope === 'object' ? pin.scope : {};
+      if (scope.kind === 'home') return '首页';
+      if (scope.kind === 'connection') return '连接:' + compact(scope.connection_id, 'unknown');
+      if (scope.kind === 'project') return '项目:' + compact(scope.project_id, 'unknown');
+      if (scope.kind === 'object') return '对象:' + compact(scope.object_id, 'unknown');
+      if (scope.kind === 'workspace') return '工作区:' + compact(scope.workspace_id, 'unknown');
+      return '固定';
+    },
+
+    pinVersionPolicyLabel(pin) {
+      const policy = pin && pin.version_policy && typeof pin.version_policy === 'object' ? pin.version_policy : {};
+      if (policy.kind === 'locked') return 'locked ' + compact(policy.version_id, '');
+      return 'follow default';
+    },
+
+    pinsHtml(workflow) {
+      const pins = this.pinsForWorkflow(workflow);
+      if (!pins.length) return '';
+      const run = this.runsByWorkflowId.get(workflow.id);
+      const runStatus = run ? this.statusLabel(run.status) : '未运行';
+      const connector = asArray(workflow.connectorSummaries)[0] || null;
+      const connectorStatus = connector ? this.connectorStatusLabel(connector.status) : '未知';
+      return (
+        '<div class="workflow-detail-chip-row">' +
+        pins.map((pin) =>
+          '<span class="workflow-detail-chip good">固定: ' +
+          esc(this.pinScopeLabel(pin)) +
+          ' · ' +
+          esc(this.pinVersionPolicyLabel(pin)) +
+          ' · 最近 ' +
+          esc(runStatus) +
+          ' · 连接 ' +
+          esc(connectorStatus) +
+          '</span>',
+        ).join('') +
+        '</div>'
+      );
+    },
+
+    detailStatusChip(label, value) {
+      const state = value === 'validated' || value === 'available' || value === 'succeeded'
+        ? ' good'
+        : value === 'blocked' || value === 'failed' || value === 'preflight_failed'
+          ? ' blocked'
+          : '';
+      return '<span class="workflow-detail-chip' + state + '">' + esc(label + ': ' + (value || '未知')) + '</span>';
+    },
+
+    detailHtml(workflow) {
+      if (!workflow || this.selectedWorkflowId !== workflow.id) return '';
+      const system = workflow.systemContract && typeof workflow.systemContract === 'object' ? workflow.systemContract : {};
+      const validation = system.validation && typeof system.validation === 'object' ? system.validation : {};
+      const lastRun = this.runsByWorkflowId.get(workflow.id);
+      const drafts = this.draftsForWorkflow(workflow);
+      const connectors = asArray(workflow.connectorSummaries);
+      const connectorText = connectors.length
+        ? connectors.map((item) => compact(item.title || item.id, '连接') + ' · ' + compact(item.label || this.connectorStatusLabel(item.status), '')).join(' / ')
+        : '无连接摘要';
+      const draftChips = drafts.length
+        ? drafts.map((draft) => this.detailStatusChip(draft.name || draft.id, draft.status)).join('')
+        : '<span class="workflow-detail-chip">草稿: none</span>';
+      return (
+        '<div class="workflow-detail">' +
+        '<div class="workflow-detail-grid">' +
+        this.detailRow('状态', workflow.status || 'unknown') +
+        this.detailRow('验证', validation.status || 'unvalidated') +
+        this.detailRow('当前版本', workflow.version || '') +
+        this.detailRow('最近运行', lastRun ? this.statusLabel(lastRun.status) + ' / ' + lastRun.id : 'none') +
+        this.detailRow('连接摘要', connectorText) +
+        this.detailRow('参数', this.inputSummary(workflow)) +
+        '</div>' +
+        '<div class="workflow-detail-section">' +
+        '<div class="workflow-detail-section-title">草稿与状态</div>' +
+        '<div class="workflow-detail-chip-row">' +
+        this.detailStatusChip('稳定', validation.status === 'validated' ? 'validated' : workflow.status) +
+        draftChips +
+        '</div>' +
+        '</div>' +
+        '</div>'
+      );
+    },
+
+    detailRow(label, value) {
+      return (
+        '<div class="workflow-detail-row">' +
+        '<div class="workflow-detail-label">' +
+        esc(label) +
+        '</div>' +
+        '<div class="workflow-detail-value" title="' +
+        esc(value) +
+        '">' +
+        esc(value) +
+        '</div>' +
+        '</div>'
+      );
+    },
+
+    inputSummary(workflow) {
+      const schema = workflow && workflow.aiContract && workflow.aiContract.inputSchema && typeof workflow.aiContract.inputSchema === 'object'
+        ? workflow.aiContract.inputSchema
+        : {};
+      const properties = schema.properties && typeof schema.properties === 'object' ? Object.keys(schema.properties) : [];
+      return properties.length ? properties.join(', ') : '未声明';
     },
 
     tagsFor(workflow) {
@@ -796,6 +1017,9 @@
               '</span></div>',
           )
           .join('') +
+        (run.status === 'failed' || run.status === 'preflight_failed'
+          ? '<div class="workflow-artifact-actions"><button type="button" class="workflow-artifact-action" data-run-action="repair-session">修复会话</button></div>'
+          : '') +
         '</div>'
       );
     },
@@ -912,6 +1136,9 @@
         (this.canOpenArtifact(artifact) ? '' : 'disabled') +
         '>打开位置</button>' +
         '<button type="button" class="workflow-artifact-action" data-artifact-action="copy">复制路径</button>' +
+        (run.saved_as_draft_id
+          ? '<button type="button" class="workflow-artifact-action" disabled>已保存草稿</button>'
+          : '<button type="button" class="workflow-artifact-action" data-artifact-action="save-draft">保存为工作流</button>') +
         '<button type="button" class="workflow-artifact-action" data-artifact-action="reuse">复用参数</button>' +
         '<button type="button" class="workflow-artifact-action" data-artifact-action="rerun">再次运行</button>' +
         '</div>' +
@@ -988,10 +1215,20 @@
       return '';
     },
 
+    runFailureMessage(body, run, fallback) {
+      return this.failureSummary(run) || (body && (body.message || body.error)) || fallback || '';
+    },
+
+    versionSummary(run) {
+      return compact(run && (run.workflow_version_id || run.workflow_version), '');
+    },
+
     historyDetail(run) {
       if (!run) return '';
-      if (run.status === 'succeeded') return this.artifactSummary(run) || '成功完成';
-      return this.failureSummary(run) || '未完成';
+      const version = this.versionSummary(run);
+      const suffix = version ? ' · ' + version : '';
+      if (run.status === 'succeeded') return (this.artifactSummary(run) || '成功完成') + suffix;
+      return (this.failureSummary(run) || '未完成') + suffix;
     },
 
     preflightHtml(preflight) {
@@ -1188,6 +1425,7 @@
         '<div class="workflow-card-tags">' +
         tags.map((tag) => '<span class="workflow-card-tag">' + esc(tag) + '</span>').join('') +
         '</div>' +
+        this.pinsHtml(workflow) +
         this.connectorsHtml(workflow) +
         '<div class="workflow-run-form">' +
         '<input class="workflow-run-input" data-field="output_dir" placeholder="project://exports" value="' +
@@ -1213,7 +1451,20 @@
         (busy ? ' disabled' : '') +
         '>运行</button>' +
         '<button type="button" class="workflow-card-action" data-action="conversation">对话</button>' +
+        '<button type="button" class="workflow-card-action" data-action="detail">' +
+        (this.selectedWorkflowId === workflow.id ? '收起详情' : '详情') +
+        '</button>' +
+        '<button type="button" class="workflow-card-action" data-action="pin-home">' +
+        (this.pinForScope(workflow, 'home') ? '取消首页固定' : '固定到首页') +
+        '</button>' +
+        '<button type="button" class="workflow-card-action" data-action="pin-connection">' +
+        (this.pinForScope(workflow, 'connection', this.connectorTargetForWorkflow(workflow)) ? '取消连接固定' : '固定到连接') +
+        '</button>' +
+        (this.pinsForWorkflow(workflow).length
+          ? '<button type="button" class="workflow-card-action primary" data-action="run-pinned">运行固定项</button>'
+          : '') +
         '</div>' +
+        this.detailHtml(workflow) +
         this.preflightHtml(preflight) +
         this.artifactHtml(run) +
         this.resultHtml(run);
@@ -1239,6 +1490,24 @@
       });
       card.querySelector('[data-action="conversation"]')?.addEventListener('click', () => {
         this.openWorkflowConversation(workflow);
+      });
+      card.querySelector('[data-action="detail"]')?.addEventListener('click', () => {
+        this.selectedWorkflowId = this.selectedWorkflowId === workflow.id ? '' : workflow.id;
+        this.render();
+      });
+      card.querySelector('[data-run-action="repair-session"]')?.addEventListener('click', () => {
+        const latestRun = this.runsByWorkflowId.get(workflow.id);
+        void this.createRepairSession(workflow, latestRun);
+      });
+      card.querySelector('[data-action="pin-home"]')?.addEventListener('click', () => {
+        void this.togglePin(workflow, { kind: 'home' });
+      });
+      card.querySelector('[data-action="pin-connection"]')?.addEventListener('click', () => {
+        const connectionId = this.connectorTargetForWorkflow(workflow);
+        void this.togglePin(workflow, { kind: 'connection', connection_id: connectionId || 'unknown' });
+      });
+      card.querySelector('[data-action="run-pinned"]')?.addEventListener('click', () => {
+        void this.runWorkflow(workflow, card);
       });
       return card;
     },
@@ -1285,17 +1554,23 @@
       const btn = $('btnWorkflowRefresh');
       if (btn) btn.disabled = true;
       try {
-        const [workflows, runs] = await Promise.all([
+        const [workflows, runs, drafts, pins] = await Promise.all([
           this.fetchSkills(activeShell),
           this.fetchRuns(activeShell),
+          this.fetchDrafts(activeShell),
+          this.fetchPins(activeShell),
         ]);
         this.workflows = workflows;
         this.historyRuns = runs;
+        this.drafts = drafts;
+        this.pins = pins;
         this.listError = '';
       } catch (e) {
         if (gen !== this._reloadGen) return;
         this.workflows = [];
         this.historyRuns = [];
+        this.drafts = [];
+        this.pins = [];
         this.listError = e instanceof Error ? e.message : String(e);
       } finally {
         if (btn) btn.disabled = false;
@@ -1353,7 +1628,7 @@
         this.inlineStatus =
           r && r.ok
             ? '运行完成：' + (run && run.output && run.output.fbx_path ? run.output.fbx_path : workflow.id)
-            : '运行未完成：' + (body.message || body.error || (r && r.text) || workflow.id);
+            : '运行未完成：' + this.runFailureMessage(body, run, (r && r.text) || workflow.id);
         this.render();
         if (!r || !r.ok) this.openWorkflowConversation(workflow);
       } catch (e) {
@@ -1506,6 +1781,26 @@
         this.render();
         return;
       }
+      if (action === 'save-draft') {
+        const shell = this._shell;
+        const run = this.runsByWorkflowId.get(workflow.id);
+        if (!shell || typeof shell.api !== 'function' || !run || run.status !== 'succeeded') return;
+        const r = await shell.api(
+          'POST',
+          '/v1/workflows/runs/' + encodeURIComponent(run.id) + '/save-draft',
+          { name: (workflow.name || workflow.id || 'Workflow') + ' 草稿' },
+          { timeoutMs: 30000 },
+        );
+        const body = (r && r.json) || {};
+        if (r && r.ok && body.run && body.run.id) {
+          this.historyRuns = asArray(this.historyRuns).map((item) => item && item.id === body.run.id ? body.run : item);
+          this.inlineStatus = '已保存为工作流草稿：' + ((body.draft && (body.draft.name || body.draft.id)) || body.run.saved_as_draft_id || run.id);
+        } else {
+          this.inlineStatus = '保存草稿失败：' + (body.message || body.error || (r && r.text) || run.id);
+        }
+        this.render();
+        return;
+      }
       if (action === 'rerun') {
         await this.runWorkflow(workflow, card);
         return;
@@ -1514,6 +1809,61 @@
         const run = this.runsByWorkflowId.get(workflow.id);
         await this.reuseRun(run);
       }
+    },
+
+    async createRepairSession(workflow, run) {
+      const shell = this._shell;
+      if (!shell || typeof shell.api !== 'function' || !run || !run.id) return;
+      const r = await shell.api(
+        'POST',
+        '/v1/workflows/runs/' + encodeURIComponent(run.id) + '/repair-session',
+        {},
+        { timeoutMs: 30000 },
+      );
+      const body = (r && r.json) || {};
+      if (r && r.ok && body.repairSession) {
+        this.inlineStatus = '已创建修复会话：' + (body.repairSession.id || run.id);
+        this.openWorkflowConversation(workflow);
+      } else {
+        this.inlineStatus = '创建修复会话失败：' + (body.message || body.error || (r && r.text) || run.id);
+      }
+      this.render();
+    },
+
+    async togglePin(workflow, scope) {
+      const shell = this._shell;
+      if (!shell || typeof shell.api !== 'function' || !workflow || !workflow.id || !scope || !scope.kind) return;
+      const existing = this.pinForScope(workflow, scope.kind, scope.connection_id || scope.project_id || scope.object_id || scope.workspace_id);
+      if (existing) {
+        const r = await shell.api('DELETE', '/v1/workflows/pins/' + encodeURIComponent(existing.id), null, { timeoutMs: 30000 });
+        if (r && r.ok) {
+          this.pins = asArray(this.pins).filter((pin) => pin && pin.id !== existing.id);
+          this.inlineStatus = '已取消固定：' + this.pinScopeLabel(existing);
+        } else {
+          const body = (r && r.json) || {};
+          this.inlineStatus = '取消固定失败：' + (body.message || body.error || (r && r.text) || existing.id);
+        }
+        this.render();
+        return;
+      }
+      const r = await shell.api(
+        'POST',
+        '/v1/workflows/pins',
+        {
+          scope,
+          versionPolicy: { kind: 'follow_default' },
+          workflowId: workflow.id,
+        },
+        { timeoutMs: 30000 },
+      );
+      const body = (r && r.json) || {};
+      if (r && r.ok && body.pin) {
+        this.pins = [body.pin, ...asArray(this.pins).filter((pin) => pin && pin.id !== body.pin.id)];
+        this.inlineStatus = '已固定：' + this.pinScopeLabel(body.pin);
+      } else {
+        this.inlineStatus = '固定失败：' + (body.message || body.error || (r && r.text) || workflow.id);
+      }
+      this.render();
     },
 
     replayParamsFromRun(run) {

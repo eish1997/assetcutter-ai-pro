@@ -22,7 +22,7 @@ const {
   appendProjectMemoryNote,
 } = require('./agent-memory.cjs');
 
-const VALID_SHELL_VIEWS = new Set(['home', 'workbench', 'scripts', 'tools', 'connections', 'settings']);
+const VALID_SHELL_VIEWS = new Set(['home', 'workbench', 'workflow', 'tools', 'connections', 'settings']);
 
 function toolAborted(ctx) {
   return Boolean(ctx && ctx.signal && ctx.signal.aborted);
@@ -1301,6 +1301,7 @@ function createAgentBodyHost(deps) {
           targetDir: safeArgs.targetDir ? String(safeArgs.targetDir).trim() : undefined,
           executablePath: safeArgs.executablePath ? String(safeArgs.executablePath).trim() : undefined,
           targetId: safeArgs.targetId ? String(safeArgs.targetId).trim() : undefined,
+          currentStrategyId: safeArgs.currentStrategyId ? String(safeArgs.currentStrategyId).trim() : undefined,
           actionId: safeArgs.actionId ? String(safeArgs.actionId).trim() : undefined,
           params: safeArgs.params && typeof safeArgs.params === 'object' ? safeArgs.params : undefined,
           actorRole: safeArgs.actorRole ? String(safeArgs.actorRole).trim() : undefined,
@@ -1385,6 +1386,7 @@ function createAgentBodyHost(deps) {
         const plannedStepsForMaturity = (maturity) => {
           if (maturity === 'connected') return ['event.write.loop_summary'];
           if (maturity === 'template_missing') return ['event.write.loop_summary', 'conversation.open'];
+          if (maturity === 'strategy_draft') return ['event.write.strategy_failed', 'event.write.strategy_next_selected', 'conversation.open'];
           if (maturity === 'probe_failed') return ['event.write.loop_summary', 'conversation.open'];
           if (maturity === 'bridge_installed') return ['connection.probe', 'event.write.loop_summary'];
           if (maturity === 'bridge_supported') return ['bridge.install', 'event.write.loop_summary'];
@@ -1393,6 +1395,8 @@ function createAgentBodyHost(deps) {
         };
         const stepPermission = (label) => {
           if (label === 'event.write.loop_summary') return 'event.write';
+          if (label === 'event.write.strategy_failed') return 'event.write';
+          if (label === 'event.write.strategy_next_selected') return 'event.write';
           return label;
         };
 
@@ -1405,6 +1409,29 @@ function createAgentBodyHost(deps) {
           ? initialContext.connectionState
           : null;
         const maturity = String((connectionState && connectionState.maturity) || 'unknown');
+        const strategyDraft = initialContext && initialContext.strategyDraft && typeof initialContext.strategyDraft === 'object'
+          ? initialContext.strategyDraft
+          : null;
+        const candidateStrategies = strategyDraft && Array.isArray(strategyDraft.candidateStrategies)
+          ? strategyDraft.candidateStrategies
+          : [];
+        const failedStrategyIds = new Set(
+          [
+            ...(Array.isArray(safeArgs.failedStrategyIds) ? safeArgs.failedStrategyIds.map(String) : []),
+            safeArgs.failedStrategyId ? String(safeArgs.failedStrategyId) : '',
+          ].filter(Boolean),
+        );
+        const currentStrategy =
+          (safeArgs.currentStrategyId
+            ? candidateStrategies.find((strategy) => strategy && strategy.id === String(safeArgs.currentStrategyId))
+            : null) ||
+          (safeArgs.failedStrategyId
+            ? candidateStrategies.find((strategy) => strategy && strategy.id === String(safeArgs.failedStrategyId))
+            : null) ||
+          (strategyDraft && strategyDraft.recommendedNextStrategy) ||
+          null;
+        const nextCandidateStrategy =
+          candidateStrategies.find((strategy) => strategy && strategy.id && !failedStrategyIds.has(String(strategy.id))) || null;
         const plannedSteps = plannedStepsForMaturity(maturity).filter((label) => permissionSet.has(stepPermission(label)));
         for (const label of plannedSteps) {
           if (label === 'event.write.loop_summary') {
@@ -1430,7 +1457,53 @@ function createAgentBodyHost(deps) {
                     maturity,
                     permissions,
                     plannedSteps,
+                    architecture:
+                      maturity === 'template_missing'
+                        ? 'softwareBridgeRegistry bridge driver required; do not edit capabilityLifecycle.ts.'
+                        : 'softwareBridgeRegistry lifecycle dispatch',
                     steps: steps.map((step) => ({ label: step.label, ok: step.ok, message: step.message })),
+                  },
+                },
+                httpOpts(ctx, { timeoutMs: 30000 }),
+              ),
+            );
+          } else if (label === 'event.write.strategy_failed') {
+            if (safeArgs.failedStrategyId) {
+              await runStep('event.write.strategy_failed', () =>
+                deps.companionApiRequest(
+                  'POST',
+                  `/v1/capability-packages/${encodeURIComponent(id)}/events`,
+                  {
+                    kind: 'connection_strategy_failed',
+                    ok: false,
+                    message: String(safeArgs.failureMessage || goal || 'Connection strategy failed.'),
+                    detail: {
+                      strategyId: String(safeArgs.failedStrategyId),
+                      failureClass: String(safeArgs.failureClass || 'unknown'),
+                      nextCandidateStrategy,
+                    },
+                  },
+                  httpOpts(ctx, { timeoutMs: 30000 }),
+                ),
+              );
+            }
+          } else if (label === 'event.write.strategy_next_selected') {
+            await runStep('event.write.strategy_next_selected', () =>
+              deps.companionApiRequest(
+                'POST',
+                `/v1/capability-packages/${encodeURIComponent(id)}/events`,
+                {
+                  kind: 'connection_strategy_next_selected',
+                  ok: Boolean(nextCandidateStrategy),
+                  message: nextCandidateStrategy
+                    ? `Next connection strategy selected: ${nextCandidateStrategy.label || nextCandidateStrategy.id}`
+                    : 'All candidate connection strategies failed. User action is required.',
+                  detail: {
+                    currentStrategy,
+                    failedStrategyIds: Array.from(failedStrategyIds),
+                    failureClass: safeArgs.failureClass ? String(safeArgs.failureClass) : undefined,
+                    nextCandidateStrategy,
+                    candidateStrategies,
                   },
                 },
                 httpOpts(ctx, { timeoutMs: 30000 }),
@@ -1442,10 +1515,21 @@ function createAgentBodyHost(deps) {
             );
           } else if (label === 'bridge.install') {
             await runStep('bridge.install', () =>
-              lifecycle('install', { targetDir: safeArgs.targetDir ? String(safeArgs.targetDir).trim() : undefined }, 60000),
+              lifecycle(
+                'install',
+                {
+                  targetDir: safeArgs.targetDir ? String(safeArgs.targetDir).trim() : undefined,
+                  currentStrategyId: currentStrategy && currentStrategy.id ? String(currentStrategy.id) : undefined,
+                },
+                60000,
+              ),
             );
           } else {
-            await runStep(label, () => lifecycle(lifecycleActionForStep[label] || label));
+            await runStep(label, () =>
+              lifecycle(lifecycleActionForStep[label] || label, {
+                currentStrategyId: currentStrategy && currentStrategy.id ? String(currentStrategy.id) : undefined,
+              }),
+            );
           }
         }
         let finalContext = null;
@@ -1470,8 +1554,12 @@ function createAgentBodyHost(deps) {
           nextAction:
             probeStep && probeStep.ok
               ? 'connected'
+              : maturity === 'strategy_draft' && !nextCandidateStrategy
+                ? 'needs_user_action'
+                : maturity === 'strategy_draft' && nextCandidateStrategy
+                  ? 'run_next_connection_strategy'
               : maturity === 'template_missing'
-                ? 'create_bridge_template_plan'
+                ? 'create_software_bridge_driver_plan'
                 : permissionSet.has('conversation.open')
                 ? 'open_object_conversation_for_repair'
                 : 'grant_conversation_or_probe_permission_for_next_loop',

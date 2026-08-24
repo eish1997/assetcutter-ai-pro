@@ -26,6 +26,17 @@
       .slice(0, 64) || 'software-connection';
   }
 
+  function normalizeLocalVersionId(value) {
+    return String(value || 'local-version')
+      .trim()
+      .toLowerCase()
+      .replace(/\\/g, '/')
+      .replace(/[^a-z0-9._/-]+/g, '-')
+      .replace(/[/\\]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 72) || 'local-version';
+  }
+
   function asArray(value) {
     return Array.isArray(value) ? value : [];
   }
@@ -33,6 +44,11 @@
   function compactText(value, fallback) {
     const text = String(value == null ? '' : value).trim();
     return text || fallback || '';
+  }
+
+  function cardInitial(value) {
+    const text = compactText(value, '连');
+    return text.slice(0, 1).toUpperCase();
   }
 
   function cssEscape(value) {
@@ -61,8 +77,61 @@
       export: '导出',
       publish: '发布',
       version: '版本',
+      local_versions: '切换本机版本',
+      set_local_version: '设为当前版本',
+      delete: '删除草稿',
     };
     return labels[String(action || '')] || String(action || '');
+  }
+
+  function actionIcon(action) {
+    const icons = {
+      agent_loop: '<path d="M12 3l7 4v5c0 4.4-3 7.4-7 9-4-1.6-7-4.6-7-9V7l7-4z"/><path d="M12 8v8"/><path d="M8 12h8"/>',
+      conversation: '<path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z"/>',
+      discover_running: '<circle cx="12" cy="12" r="7"/><path d="M12 9v3l2 2"/><path d="M4 12h2"/><path d="M18 12h2"/>',
+      launch: '<path d="M7 17L17 7"/><path d="M8 7h9v9"/>',
+      close: '<rect x="5" y="5" width="14" height="14" rx="2"/><path d="M9 9l6 6"/><path d="M15 9l-6 6"/>',
+      install: '<path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M5 21h14"/>',
+      probe: '<circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="2"/><path d="M12 3v3"/><path d="M12 18v3"/><path d="M3 12h3"/><path d="M18 12h3"/>',
+      uninstall: '<path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M5 6l1 14h12l1-14"/>',
+      export: '<path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M5 21h14"/>',
+      publish: '<path d="M16 16l-4-4-4 4"/><path d="M12 12v9"/><path d="M20 16.6A5 5 0 0 0 18 7h-1.3A7 7 0 1 0 5 14.6"/>',
+      version: '<path d="M4 7h16"/><path d="M4 12h16"/><path d="M4 17h10"/>',
+      local_versions: '<path d="M4 7h16"/><path d="M4 12h12"/><path d="M4 17h8"/><path d="M17 16l2 2 3-4"/>',
+      set_local_version: '<path d="M20 6L9 17l-5-5"/>',
+      delete: '<path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M5 6l1 14h12l1-14"/>',
+    };
+    return (
+      '<svg class="connection-card-action-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+      (icons[String(action || '')] || '<circle cx="12" cy="12" r="7"/>') +
+      '</svg>'
+    );
+  }
+
+  function connectionCardViewFor(pkg) {
+    if (pkg && pkg.connectionCardView && typeof pkg.connectionCardView === 'object') return pkg.connectionCardView;
+    const manifest = pkg && pkg.manifest && typeof pkg.manifest === 'object' ? pkg.manifest : {};
+    const connectionState = connectionStateFor(pkg);
+    const localVersions = asArray(manifest.localVersions);
+    const currentId = compactText(manifest.currentLocalVersionId || manifest.defaultLocalVersionId, '');
+    const currentLocalVersion =
+      localVersions.find((item) => item && typeof item === 'object' && String(item.id || '') === currentId) ||
+      localVersions[0] ||
+      null;
+    const primaryActions = ['agent_loop'];
+    if (asArray(connectionState.availableActions).includes('launch')) primaryActions.push('launch');
+    if (asArray(connectionState.availableActions).includes('probe')) primaryActions.push('probe');
+    if (connectionState.publishEligible === true) primaryActions.push('publish');
+    return {
+      id: pkg && pkg.id,
+      name: pkg && pkg.name,
+      statusLabel: connectionState.label || connectionState.maturity || '草稿',
+      currentLocalVersion,
+      localVersions,
+      nextActionLabel: connectionState.nextAction || '',
+      maintenanceChips: [{ label: connectionState.label || connectionState.maturity || '草稿', tone: 'neutral' }],
+      primaryActions,
+    };
   }
 
   function connectionStateFor(pkg) {
@@ -70,8 +139,6 @@
     const manifest = pkg && pkg.manifest && typeof pkg.manifest === 'object' ? pkg.manifest : {};
     const hostId = compactText(manifest.hostId || manifest.softwareId, '');
     const hasPath = Boolean(compactText(manifest.executablePath || manifest.shortcutPath || manifest.inputPath, ''));
-    const text = [pkg && pkg.id, pkg && pkg.name, manifest.appName, manifest.hostId, manifest.templateHint].join(' ').toLowerCase();
-    const bridgeSupported = /\bphotoshop\b|extendscript_heartbeat|\bblender\b|blender_http|blender_startup|python_http/.test(text);
     const make = (maturity, label, availableActions, blockedReason, nextAction, publishEligible) => ({
       maturity,
       label,
@@ -82,26 +149,22 @@
     });
     const base = ['agent_loop', 'conversation', 'export'];
     const process = ['discover_running', 'launch', 'close'];
-    const bridge = ['install', 'probe', 'uninstall'];
     if (recordOk(pkg && pkg.lastProbe)) {
-      return make('connected', '已连接', base.concat(process, bridge), '', '已收到真实软件信号，可继续对话优化或由管理员提交云端版本。', true);
+      return make('connected', '已连接', base.concat(process), '', '已收到真实软件信号，可继续对话优化或由管理员提交云端版本。', true);
     }
     if (recordFailed(pkg && pkg.lastProbe)) {
-      return make('probe_failed', '探测失败', base.concat(process, bridgeSupported ? bridge : []), '未收到真实软件连接信号。', '交给 Copilot 读取失败证据并继续修复。');
+      return make('probe_failed', '探测失败', base.concat(process), '未收到真实软件连接信号。', '交给 Copilot 读取失败证据并继续修复。');
     }
     if (recordOk(pkg && pkg.lastInstall)) {
-      return make('bridge_installed', '已安装待探测', base.concat(process, bridge), '连接脚本或插件已安装，但还没有真实探测成功。', '打开或重启目标软件，运行连接入口，然后执行真实探测。');
-    }
-    if (bridgeSupported) {
-      return make('bridge_supported', '可安装连接', base.concat(process, bridge), '', '安装连接脚本或插件，然后在软件内加载并探测真实信号。');
+      return make('bridge_installed', '已安装待探测', base.concat(process), '连接脚本或插件已安装，但还没有真实探测成功。', '刷新连接列表获取后端状态，或交给 Copilot 继续探测真实信号。');
     }
     if (hostId) {
-      return make('template_missing', '模板待接入', base.concat(process), '当前软件还没有接入真实安装/探测模板。', '可先启动或识别运行中的软件；真实连接需要 Copilot 或开发者补齐模板。');
+      return make('strategy_draft', '策略草稿', base.concat(process), '当前还没有已验证连接策略。', '让 Copilot 基于事实选择候选策略。');
     }
     if (hasPath) {
-      return make('path_ready', '已找到位置', base, '已记录软件位置，但尚未确认软件类型和真实连接方式。', '交给 Copilot 识别软件、补齐 hostId 和真实探测方式。');
+      return make('exploring', '正在探索连接方式', base, '已记录软件位置，但尚未确认真实连接方式。', '让 Copilot 读取 facts，生成候选策略草稿。');
     }
-    return make('draft', '草稿', base, '尚未记录可启动路径、hostId 或真实连接模板。', '通过对话或拖入快捷方式补齐连接目标。');
+    return make('discovery_pending', '等待探索', base, '尚未记录可探索的软件事实。', '通过对话、拖入快捷方式、选择 exe 或识别运行中进程来收集 facts。');
   }
 
   function ensureStyles() {
@@ -119,11 +182,11 @@
         min-width: 0;
         border: 1px solid rgba(148, 163, 184, 0.18);
         border-radius: 8px;
-        background: rgba(255, 255, 255, 0.035);
-        padding: 12px;
+        background: linear-gradient(180deg, rgba(255, 255, 255, 0.048), rgba(255, 255, 255, 0.025));
+        padding: 13px;
         display: flex;
         flex-direction: column;
-        gap: 10px;
+        gap: 12px;
       }
       .connection-card.is-focused {
         border-color: rgba(59, 130, 246, 0.62);
@@ -131,14 +194,40 @@
       }
       .connection-card-head {
         display: flex;
-        justify-content: space-between;
-        gap: 10px;
+        align-items: flex-start;
+        gap: 9px;
+      }
+      .connection-card-appmark {
+        flex: 0 0 auto;
+        width: 32px;
+        height: 32px;
+        border-radius: 8px;
+        display: grid;
+        place-items: center;
+        color: rgba(244, 244, 245, 0.96);
+        background: rgba(59, 130, 246, 0.18);
+        border: 1px solid rgba(96, 165, 250, 0.26);
+        font-size: 14px;
+        font-weight: 800;
+      }
+      .connection-card-identity {
+        min-width: 0;
+        flex: 1 1 auto;
       }
       .connection-card-title {
         min-width: 0;
         font-size: 14px;
         font-weight: 700;
         color: rgba(244, 244, 245, 0.96);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .connection-card-desc {
+        margin-top: 3px;
+        color: var(--muted);
+        font-size: 11px;
+        line-height: 1.4;
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
@@ -153,39 +242,122 @@
         font-size: 10px;
         font-weight: 700;
       }
-      .connection-card-desc {
-        min-height: 34px;
-        color: var(--muted);
-        font-size: 12px;
-        line-height: 1.45;
-      }
-      .connection-card-submeta {
+      .connection-card-facts {
         display: grid;
-        gap: 5px;
-        border: 1px solid rgba(255, 255, 255, 0.06);
-        border-radius: 7px;
-        padding: 8px;
-        background: rgba(0, 0, 0, 0.12);
+        grid-template-columns: minmax(82px, 0.9fr) minmax(0, 1.8fr);
+        gap: 8px;
       }
-      .connection-card-submeta-row {
+      .connection-card-fact {
         min-width: 0;
-        display: flex;
-        gap: 6px;
-        align-items: baseline;
-        color: rgba(212, 212, 216, 0.78);
-        font-size: 11px;
-        line-height: 1.35;
+        border: 1px solid rgba(255, 255, 255, 0.07);
+        border-radius: 7px;
+        padding: 7px 8px;
+        background: rgba(0, 0, 0, 0.11);
       }
-      .connection-card-submeta-label {
-        flex: 0 0 auto;
-        color: rgba(161, 161, 170, 0.8);
+      .connection-card-fact-label {
+        color: rgba(161, 161, 170, 0.78);
+        font-size: 11px;
         font-weight: 700;
       }
-      .connection-card-submeta-value {
+      .connection-card-fact-value {
+        margin-top: 3px;
         min-width: 0;
+        color: rgba(244, 244, 245, 0.9);
+        font-size: 12px;
+        font-weight: 650;
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
+      }
+      .connection-card-fact-row {
+        margin-top: 3px;
+        min-width: 0;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .connection-card-fact-row .connection-card-fact-value {
+        margin-top: 0;
+        flex: 1 1 auto;
+      }
+      .connection-card-version-trigger {
+        flex: none;
+        width: 24px;
+        height: 24px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 7px;
+        background: rgba(255, 255, 255, 0.04);
+        color: rgba(212, 212, 216, 0.9);
+        cursor: pointer;
+      }
+      .connection-card-version-trigger:hover {
+        border-color: rgba(59, 130, 246, 0.44);
+        background: rgba(59, 130, 246, 0.1);
+      }
+      .connection-card-version-drawer {
+        display: grid;
+        gap: 7px;
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 8px;
+        padding: 8px;
+        background: rgba(0, 0, 0, 0.14);
+      }
+      .connection-card-version-row {
+        min-width: 0;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 8px;
+        align-items: center;
+        border: 1px solid rgba(255, 255, 255, 0.07);
+        border-radius: 7px;
+        padding: 7px;
+        background: rgba(255, 255, 255, 0.025);
+      }
+      .connection-card-version-row.is-current {
+        border-color: rgba(59, 130, 246, 0.36);
+        background: rgba(59, 130, 246, 0.08);
+      }
+      .connection-card-version-name {
+        min-width: 0;
+        color: rgba(244, 244, 245, 0.92);
+        font-size: 12px;
+        font-weight: 750;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .connection-card-version-meta {
+        margin-top: 2px;
+        min-width: 0;
+        color: rgba(161, 161, 170, 0.82);
+        font-size: 10px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .connection-card-version-actions {
+        display: flex;
+        gap: 5px;
+      }
+      .connection-card-next {
+        border: 1px solid rgba(96, 165, 250, 0.22);
+        border-radius: 7px;
+        padding: 8px 9px;
+        background: rgba(37, 99, 235, 0.08);
+        color: rgba(219, 234, 254, 0.94);
+      }
+      .connection-card-next-label {
+        color: rgba(147, 197, 253, 0.88);
+        font-size: 11px;
+        font-weight: 800;
+      }
+      .connection-card-next-value {
+        margin-top: 3px;
+        font-size: 12px;
+        line-height: 1.42;
       }
       .connection-card-meta {
         display: flex;
@@ -238,33 +410,45 @@
         border-radius: 7px;
         background: rgba(0, 0, 0, 0.1);
       }
-      .connection-card-template-draft {
-        display: grid;
-        gap: 5px;
-        border: 1px solid rgba(250, 204, 21, 0.22);
+      .connection-card-support {
+        border: 1px solid rgba(255, 255, 255, 0.07);
         border-radius: 7px;
+        background: rgba(255, 255, 255, 0.025);
         padding: 8px;
-        color: rgba(254, 249, 195, 0.92);
-        background: rgba(202, 138, 4, 0.08);
-        font-size: 11px;
-        line-height: 1.35;
       }
-      .connection-card-template-title {
-        color: rgba(254, 240, 138, 0.96);
+      .connection-card-support-head {
+        display: flex;
+        justify-content: space-between;
+        gap: 8px;
+        color: rgba(212, 212, 216, 0.86);
+        font-size: 11px;
         font-weight: 800;
       }
-      .connection-card-template-row {
+      .connection-card-support-note {
         min-width: 0;
+        color: rgba(161, 161, 170, 0.78);
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
       }
-      .connection-card-events summary {
-        cursor: pointer;
-        padding: 7px 8px;
-        color: rgba(212, 212, 216, 0.84);
-        font-size: 11px;
+      .connection-card-support-chips {
+        margin-top: 7px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 5px;
+      }
+      .connection-card-support-chip {
+        max-width: 100%;
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 999px;
+        padding: 3px 7px;
+        color: rgba(212, 212, 216, 0.82);
+        background: rgba(255, 255, 255, 0.035);
+        font-size: 10px;
         font-weight: 700;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
       }
       .connection-card-event-list {
         display: grid;
@@ -290,15 +474,30 @@
         flex-wrap: wrap;
         gap: 7px;
       }
+      .connection-card-utility-actions {
+        width: 100%;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        padding-top: 2px;
+      }
       .connection-card-action {
+        width: 32px;
+        height: 32px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
         border: 1px solid rgba(255, 255, 255, 0.1);
         border-radius: 7px;
         background: rgba(255, 255, 255, 0.045);
         color: rgba(244, 244, 245, 0.92);
-        padding: 6px 9px;
-        font-size: 11px;
-        font-weight: 700;
+        padding: 0;
         cursor: pointer;
+      }
+      .connection-card-action-icon {
+        width: 15px;
+        height: 15px;
+        display: block;
       }
       .connection-card-action:hover {
         border-color: rgba(59, 130, 246, 0.48);
@@ -358,6 +557,8 @@
     inlineStatus: '',
     busyId: '',
     cardResults: {},
+    selectedLocalVersionIds: {},
+    localVersionDrawerId: '',
     _reloadGen: 0,
     _dropBound: false,
     _dropDepth: 0,
@@ -604,6 +805,61 @@
       return null;
     },
 
+    latestStrategyDraft(pkg) {
+      const events = asArray(pkg && pkg.events);
+      for (let i = events.length - 1; i >= 0; i -= 1) {
+        const event = events[i];
+        if (!event || typeof event !== 'object' || event.kind !== 'connection_strategy_draft_created') continue;
+        const detail = event.detail && typeof event.detail === 'object' ? event.detail : null;
+        if (detail) return detail;
+      }
+      return null;
+    },
+
+    latestStrategyFailure(pkg) {
+      const events = asArray(pkg && pkg.events);
+      for (let i = events.length - 1; i >= 0; i -= 1) {
+        const event = events[i];
+        if (!event || typeof event !== 'object' || event.kind !== 'connection_strategy_failed') continue;
+        const detail = event.detail && typeof event.detail === 'object' ? event.detail : {};
+        return {
+          failureClass: compactText(detail.failureClass, 'unknown'),
+          strategyId: compactText(detail.strategyId, ''),
+          nextCandidateStrategy: detail.nextCandidateStrategy && typeof detail.nextCandidateStrategy === 'object' ? detail.nextCandidateStrategy : null,
+        };
+      }
+      return null;
+    },
+
+    factsSummary(facts) {
+      if (!facts || typeof facts !== 'object') return '等待收集';
+      const parts = [];
+      if (facts.executablePath) parts.push('exe');
+      if (facts.shortcutPath) parts.push('快捷方式');
+      if (facts.processName) parts.push('进程');
+      if (asArray(facts.candidateProjectDirs).length) parts.push('项目目录 ' + asArray(facts.candidateProjectDirs).length);
+      if (asArray(facts.candidateScriptDirs).length) parts.push('脚本目录 ' + asArray(facts.candidateScriptDirs).length);
+      if (asArray(facts.candidatePluginDirs).length) parts.push('插件目录 ' + asArray(facts.candidatePluginDirs).length);
+      return parts.length ? parts.join(' / ') : '等待收集';
+    },
+
+    strategySummary(strategyDraft) {
+      if (!strategyDraft || typeof strategyDraft !== 'object') return '等待候选策略';
+      const candidates = asArray(strategyDraft.candidateStrategies);
+      const current = strategyDraft.recommendedNextStrategy && typeof strategyDraft.recommendedNextStrategy === 'object'
+        ? strategyDraft.recommendedNextStrategy
+        : null;
+      return (current ? compactText(current.label || current.id, '候选策略') + ' / ' : '') + candidates.length + ' 个候选';
+    },
+
+    softwareVersionLabel(pkg, facts) {
+      const manifest = pkg && pkg.manifest && typeof pkg.manifest === 'object' ? pkg.manifest : {};
+      return compactText(
+        manifest.softwareVersion || manifest.version || manifest.versionHint || (facts && facts.version),
+        '未识别',
+      );
+    },
+
     connectionTargetLabel(pkg) {
       const manifest = pkg && pkg.manifest && typeof pkg.manifest === 'object' ? pkg.manifest : {};
       return compactText(manifest.executablePath || manifest.shortcutPath || manifest.inputPath || manifest.targetDir || '', '未记录启动位置');
@@ -718,31 +974,55 @@
               tags: [pkg.type || 'software_connection'].concat(Array.isArray(pkg.tags) ? pkg.tags : []),
               actions: ['conversation', 'discover_running', 'launch', 'install', 'probe', 'close', 'uninstall', 'export'],
             };
-      const tags = Array.isArray(view.tags) ? view.tags : [];
-      const actions = Array.isArray(view.actions) ? view.actions : [];
-      const hasAction = (name) => actions.includes(name);
       const latest = this.latestEvent(pkg);
-      const target = this.connectionTargetLabel(pkg);
+      const cardView = connectionCardViewFor(pkg);
+      const hasBackendCardView = Boolean(pkg && pkg.connectionCardView && typeof pkg.connectionCardView === 'object');
+      const localVersions = asArray(cardView && cardView.localVersions);
+      const selectedLocalVersionId = compactText(this.selectedLocalVersionIds[String(pkg.id || '')], '');
+      const selectedLocalVersion =
+        localVersions.find((item) => item && typeof item === 'object' && String(item.id || '') === selectedLocalVersionId) ||
+        null;
+      const tags = Array.isArray(view.tags) ? view.tags : [];
+      const actions = Array.from(new Set(
+        (Array.isArray(view.actions) ? view.actions : []).concat(asArray(cardView && cardView.primaryActions)),
+      ));
+      const currentLocalVersion =
+        selectedLocalVersion ||
+        (cardView && cardView.currentLocalVersion && typeof cardView.currentLocalVersion === 'object'
+          ? cardView.currentLocalVersion
+          : null);
+      const target = compactText(
+        currentLocalVersion && (currentLocalVersion.executablePath || currentLocalVersion.shortcutPath || currentLocalVersion.installRoot),
+        this.connectionTargetLabel(pkg),
+      );
       const connectionState = connectionStateFor(pkg);
-      const stateLabel = connectionState.label || connectionState.maturity || view.status || '草稿';
+      const stateLabel = compactText(cardView && cardView.statusLabel, connectionState.label || connectionState.maturity || view.status || '草稿');
       const blockedReason = connectionState.blockedReason || '暂无阻塞';
       const availableActions = Array.isArray(connectionState.availableActions) ? connectionState.availableActions : [];
       const capabilitySummary = availableActions.length
         ? availableActions.map(actionLabel).join(' / ')
         : '等待补齐';
-      const next = this.nextActionLabel(pkg, latest);
+      const next = compactText(cardView && cardView.nextActionLabel, this.nextActionLabel(pkg, latest));
       const busy = this.busyId === String(pkg.id || '');
       const cardResult = this.cardResults[String(pkg.id || '')] || null;
       const recentEvents = this.recentEvents(pkg);
       const templateDraft = this.latestTemplateDraft(pkg);
-      const availabilityHtml = availableActions.length
-        ? '<div class="connection-card-availability">' +
-          availableActions
-            .filter((action) => ['discover_running', 'launch', 'install', 'probe', 'publish', 'agent_loop'].includes(action))
-            .map((action) => '<span class="connection-card-availability-chip">' + esc(actionLabel(action)) + '</span>')
-            .join('') +
-          '</div>'
-        : '';
+      const strategyDraft = this.latestStrategyDraft(pkg);
+      const strategyFailure = this.latestStrategyFailure(pkg);
+      const facts = (connectionState && connectionState.facts) || (strategyDraft && strategyDraft.facts) || null;
+      const softwareVersion = compactText(
+        currentLocalVersion && (currentLocalVersion.softwareVersion || currentLocalVersion.label),
+        this.softwareVersionLabel(pkg, facts),
+      );
+      const strategyFailureText = strategyFailure
+        ? strategyFailure.failureClass +
+          (strategyFailure.nextCandidateStrategy
+            ? ' / 下一个：' + compactText(strategyFailure.nextCandidateStrategy.label || strategyFailure.nextCandidateStrategy.id, '')
+            : '')
+        : '暂无策略失败';
+      const modelPrimaryActions = asArray(cardView && cardView.primaryActions).filter((action) => actions.includes(action));
+      const primaryActions = (modelPrimaryActions.length ? modelPrimaryActions : actions.filter((action) => ['agent_loop', 'launch', 'probe', 'publish'].includes(action))).slice(0, 4);
+      const secondaryActions = actions.filter((action) => !primaryActions.includes(action));
       const resultHtml = cardResult
         ? '<div class="connection-card-result ' +
           (cardResult.ok ? 'ok' : 'fail') +
@@ -752,48 +1032,93 @@
           esc(cardResult.message) +
           '</div>'
         : '';
-      const eventsHtml =
-        '<details class="connection-card-events">' +
-        '<summary>最近事件 ' +
-        recentEvents.length +
-        '</summary>' +
-        '<div class="connection-card-event-list">' +
-        (recentEvents.length
-          ? recentEvents
-              .map(
-                (event) =>
-                  '<div class="connection-card-event ' +
-                  (event.ok ? 'ok' : 'fail') +
-                  '"><span class="connection-card-event-kind">' +
-                  esc(event.kind) +
-                  '</span><span>' +
-                  esc(event.message) +
-                  '</span></div>',
-              )
-              .join('')
-          : '<div class="connection-card-event"><span>还没有运行记录</span></div>') +
-        '</div></details>';
-      const templateDraftHtml = templateDraft
-        ? '<div class="connection-card-template-draft">' +
-          '<div class="connection-card-template-title">模板草稿</div>' +
-          '<div class="connection-card-template-row">类型：' +
-          esc(templateDraft.kind || 'unknown') +
-          '</div>' +
-          '<div class="connection-card-template-row" title="' +
-          esc(templateDraft.probeSignal || '') +
-          '">真实信号：' +
-          esc(templateDraft.probeSignal || '待补齐') +
-          '</div>' +
-          '<div class="connection-card-template-row" title="' +
-          esc(asArray(templateDraft.requiredUserDirs).join(' / ')) +
-          '">需要目录：' +
-          esc(asArray(templateDraft.requiredUserDirs).join(' / ') || '待确认') +
-          '</div>' +
-          '<div class="connection-card-template-row" title="' +
-          esc(asArray(templateDraft.safetyBoundaries).join(' / ')) +
-          '">安全边界：' +
-          esc(asArray(templateDraft.safetyBoundaries).join(' / ') || '未真实验收前不能发布') +
-          '</div>' +
+      const modelSupportChips = asArray(cardView && cardView.maintenanceChips)
+        .map((chip) => (chip && typeof chip === 'object' ? compactText(chip.label, '') : compactText(chip, '')))
+        .filter(Boolean)
+        .slice(0, 3);
+      const supportChips = hasBackendCardView && modelSupportChips.length
+        ? modelSupportChips
+        : [
+            '状态：' + stateLabel,
+            '事实：' + this.factsSummary(facts),
+            strategyDraft ? '策略：' + this.strategySummary(strategyDraft) : '',
+            strategyFailure ? '失败：' + strategyFailureText : '',
+            blockedReason && blockedReason !== '暂无阻塞' ? '阻塞：' + blockedReason : '',
+            templateDraft ? '模板：' + compactText(templateDraft.kind, '草稿') : '',
+            recentEvents.length ? '记录：' + recentEvents.length : '',
+            capabilitySummary && capabilitySummary !== '等待补齐' ? '能力：' + capabilitySummary : '',
+          ].filter(Boolean).slice(0, 3);
+      const supportHtml =
+        '<div class="connection-card-support" aria-label="连接维护信息">' +
+        '<div class="connection-card-support-head"><span>维护摘要</span><span class="connection-card-support-note">' +
+        esc(latest ? latest.message || latest.kind || '' : '等待真实信号') +
+        '</span></div>' +
+        '<div class="connection-card-support-chips">' +
+        supportChips.map((chip) => '<span class="connection-card-support-chip" title="' + esc(chip) + '">' + esc(chip) + '</span>').join('') +
+        '</div>' +
+        '</div>';
+      const buttonHtml = (action) =>
+        '<button type="button" class="connection-card-action' +
+        (action === 'agent_loop' ? ' primary' : action === 'delete' ? ' danger' : '') +
+        '" data-action="' +
+        esc(action) +
+        '" title="' +
+        esc(action === 'publish' ? '提交云端' : actionLabel(action)) +
+        '" aria-label="' +
+        esc(action === 'publish' ? '提交云端' : actionLabel(action)) +
+        '">' +
+        actionIcon(action) +
+        '</button>';
+      const versionDrawerOpen = this.localVersionDrawerId === String(pkg.id || '');
+      const versionTriggerHtml =
+        '<button type="button" class="connection-card-version-trigger" data-action="local_versions" title="切换本机版本" aria-label="切换本机版本">' +
+        actionIcon('local_versions') +
+        '</button>';
+      const versionDrawerHtml = versionDrawerOpen
+        ? '<div class="connection-card-version-drawer" aria-label="本机软件版本">' +
+          (localVersions.length
+            ? localVersions
+                .map((item) => {
+                  const versionId = compactText(item && item.id, '');
+                  const isCurrent = currentLocalVersion && String(currentLocalVersion.id || '') === versionId;
+                  const itemTarget = compactText(item && (item.executablePath || item.shortcutPath || item.installRoot), '未记录启动位置');
+                  const status = compactText(item && item.status, 'detected');
+                  return (
+                    '<div class="connection-card-version-row' +
+                    (isCurrent ? ' is-current' : '') +
+                    '" data-local-version-id="' +
+                    esc(versionId) +
+                    '">' +
+                    '<div><div class="connection-card-version-name">' +
+                    esc(compactText(item && item.label, compactText(item && item.softwareVersion, '未识别版本'))) +
+                    '</div><div class="connection-card-version-meta" title="' +
+                    esc(itemTarget) +
+                    '">' +
+                    esc(status === 'verified' ? '已验证' : status === 'launchable' ? '可启动' : status === 'failed' ? '失败' : '未验证') +
+                    ' · ' +
+                    esc(itemTarget) +
+                    '</div></div>' +
+                    '<div class="connection-card-version-actions">' +
+                    '<button type="button" class="connection-card-action" data-action="set_local_version" data-local-version-id="' +
+                    esc(versionId) +
+                    '" title="设为当前版本" aria-label="设为当前版本">' +
+                    actionIcon('set_local_version') +
+                    '</button>' +
+                    '<button type="button" class="connection-card-action" data-action="launch" data-local-version-id="' +
+                    esc(versionId) +
+                    '" title="启动此版本" aria-label="启动此版本">' +
+                    actionIcon('launch') +
+                    '</button>' +
+                    '<button type="button" class="connection-card-action" data-action="probe" data-local-version-id="' +
+                    esc(versionId) +
+                    '" title="探测此版本" aria-label="探测此版本">' +
+                    actionIcon('probe') +
+                    '</button>' +
+                    '</div></div>'
+                  );
+                })
+                .join('')
+            : '<div class="connection-card-version-row"><div><div class="connection-card-version-name">未识别本机版本</div><div class="connection-card-version-meta">拖入 exe 或快捷方式后会出现在这里</div></div></div>') +
           '</div>'
         : '';
       const card = document.createElement('article');
@@ -801,100 +1126,113 @@
       card.dataset.connectionId = String(pkg.id || '');
       card.innerHTML =
         '<div class="connection-card-head">' +
+        '<div class="connection-card-appmark">' +
+        esc(cardInitial(view.title)) +
+        '</div>' +
+        '<div class="connection-card-identity">' +
         '<div class="connection-card-title">' +
         esc(view.title) +
+        '</div>' +
+        '<div class="connection-card-desc">' +
+        esc(view.description) +
+        '</div>' +
         '</div>' +
         '<span class="connection-card-status">' +
         esc(view.status) +
         '</span>' +
         '</div>' +
-        '<div class="connection-card-desc">' +
-        esc(view.description) +
+        '<div class="connection-card-facts">' +
+        '<div class="connection-card-fact"><div class="connection-card-fact-label">软件版本</div><div class="connection-card-fact-row"><div class="connection-card-fact-value">' +
+        esc(softwareVersion) +
         '</div>' +
-        '<div class="connection-card-submeta">' +
-        '<div class="connection-card-submeta-row"><span class="connection-card-submeta-label">位置</span><span class="connection-card-submeta-value" title="' +
+        versionTriggerHtml +
+        '</div></div>' +
+        '<div class="connection-card-fact"><div class="connection-card-fact-label">启动位置</div><div class="connection-card-fact-value" title="' +
         esc(target) +
         '">' +
         esc(target) +
-        '</span></div>' +
-        '<div class="connection-card-submeta-row"><span class="connection-card-submeta-label">最近</span><span class="connection-card-submeta-value">' +
-        esc(latest ? `${latest.kind}${latest.message ? '：' + latest.message : ''}` : '还没有运行记录') +
-        '</span></div>' +
-        '<div class="connection-card-submeta-row"><span class="connection-card-submeta-label">状态</span><span class="connection-card-submeta-value">' +
-        esc(stateLabel) +
-        '</span></div>' +
-        '<div class="connection-card-submeta-row"><span class="connection-card-submeta-label">阻塞</span><span class="connection-card-submeta-value" title="' +
-        esc(blockedReason) +
-        '">' +
-        esc(blockedReason) +
-        '</span></div>' +
-        '<div class="connection-card-submeta-row"><span class="connection-card-submeta-label">能力</span><span class="connection-card-submeta-value" title="' +
-        esc(capabilitySummary) +
-        '">' +
-        esc(capabilitySummary) +
-        '</span></div>' +
-        '<div class="connection-card-submeta-row"><span class="connection-card-submeta-label">下一步</span><span class="connection-card-submeta-value">' +
+        '</div></div>' +
+        '</div>' +
+        '<div class="connection-card-next">' +
+        '<div class="connection-card-next-label">下一步</div>' +
+        '<div class="connection-card-next-value">' +
         esc(next) +
-        '</span></div>' +
+        '</div>' +
         '</div>' +
         '<div class="connection-card-meta">' +
         tags.map((tag) => '<span class="connection-card-tag">' + esc(tag) + '</span>').join('') +
         '</div>' +
-        availabilityHtml +
         resultHtml +
-        templateDraftHtml +
-        eventsHtml +
+        versionDrawerHtml +
+        supportHtml +
         '<div class="connection-card-actions">' +
-        (hasAction('agent_loop') ? '<button type="button" class="connection-card-action primary" data-action="agent_loop">Copilot 处理</button>' : '') +
-        (hasAction('conversation') ? '<button type="button" class="connection-card-action" data-action="conversation">对话</button>' : '') +
-        (hasAction('discover_running') ? '<button type="button" class="connection-card-action" data-action="discover_running">识别运行中</button>' : '') +
-        (hasAction('launch') ? '<button type="button" class="connection-card-action" data-action="launch">启动</button>' : '') +
-        (hasAction('install') ? '<button type="button" class="connection-card-action" data-action="install">安装</button>' : '') +
-        (hasAction('probe') ? '<button type="button" class="connection-card-action" data-action="probe">探测</button>' : '') +
-        (hasAction('close') ? '<button type="button" class="connection-card-action" data-action="close">关闭</button>' : '') +
-        (hasAction('uninstall') ? '<button type="button" class="connection-card-action" data-action="uninstall">卸载</button>' : '') +
-        (hasAction('export') ? '<button type="button" class="connection-card-action" data-action="export">导出</button>' : '') +
-        (hasAction('version') ? '<button type="button" class="connection-card-action" data-action="version">版本</button>' : '') +
-        (hasAction('publish') ? '<button type="button" class="connection-card-action" data-action="publish">提交云端</button>' : '') +
-        (hasAction('delete') ? '<button type="button" class="connection-card-action danger" data-action="delete">删除草稿</button>' : '') +
+        primaryActions.map(buttonHtml).join('') +
+        (secondaryActions.length
+          ? '<div class="connection-card-utility-actions" aria-label="更多操作">' +
+            secondaryActions.map(buttonHtml).join('') +
+            '</div>'
+          : '') +
         '</div>';
       if (busy) {
         for (const button of card.querySelectorAll('button')) button.disabled = true;
       }
-      card.querySelector('[data-action="agent_loop"]')?.addEventListener('click', () => {
+      card.querySelector('.connection-card-actions > [data-action="agent_loop"]')?.addEventListener('click', () => {
         void this.runConnectionAgentLoop(pkg);
       });
-      card.querySelector('[data-action="conversation"]')?.addEventListener('click', () => {
+      card.querySelector('.connection-card-actions [data-action="conversation"]')?.addEventListener('click', () => {
         void this.openCapabilityConversation(pkg);
       });
-      card.querySelector('[data-action="discover_running"]')?.addEventListener('click', () => {
+      card.querySelector('.connection-card-actions [data-action="discover_running"]')?.addEventListener('click', () => {
         void this.runLifecycleAction(pkg, 'discover_running');
       });
-      card.querySelector('[data-action="launch"]')?.addEventListener('click', () => {
+      card.querySelector('.connection-card-actions > [data-action="launch"]')?.addEventListener('click', () => {
         void this.runLifecycleAction(pkg, 'launch');
       });
-      card.querySelector('[data-action="install"]')?.addEventListener('click', () => {
+      card.querySelector('.connection-card-actions [data-action="install"]')?.addEventListener('click', () => {
         void this.installDraft(pkg);
       });
-      card.querySelector('[data-action="probe"]')?.addEventListener('click', () => {
+      card.querySelector('.connection-card-actions > [data-action="probe"]')?.addEventListener('click', () => {
         void this.probeDraft(pkg);
       });
-      card.querySelector('[data-action="close"]')?.addEventListener('click', () => {
+      card.querySelector('.connection-card-actions [data-action="close"]')?.addEventListener('click', () => {
         void this.runLifecycleAction(pkg, 'close');
       });
-      card.querySelector('[data-action="uninstall"]')?.addEventListener('click', () => {
+      card.querySelector('.connection-card-actions [data-action="uninstall"]')?.addEventListener('click', () => {
         void this.uninstallDraft(pkg);
       });
-      card.querySelector('[data-action="export"]')?.addEventListener('click', () => {
+      card.querySelector('.connection-card-actions [data-action="export"]')?.addEventListener('click', () => {
         void this.exportCapabilityTransfer(pkg);
       });
-      card.querySelector('[data-action="version"]')?.addEventListener('click', () => {
+      card.querySelector('.connection-card-actions [data-action="version"]')?.addEventListener('click', () => {
         void this.chooseCloudVersion(pkg);
       });
-      card.querySelector('[data-action="publish"]')?.addEventListener('click', () => {
+      card.querySelector('[data-action="local_versions"]')?.addEventListener('click', () => {
+        const id = String(pkg.id || '');
+        this.localVersionDrawerId = this.localVersionDrawerId === id ? '' : id;
+        this.render();
+      });
+      for (const button of card.querySelectorAll('[data-action="set_local_version"]')) {
+        button.addEventListener('click', () => {
+          const versionId = String(button.getAttribute('data-local-version-id') || '').trim();
+          void this.setLocalVersion(pkg, versionId);
+        });
+      }
+      for (const button of card.querySelectorAll('.connection-card-version-drawer [data-action="launch"]')) {
+        button.addEventListener('click', () => {
+          const versionId = String(button.getAttribute('data-local-version-id') || '').trim();
+          void this.runLifecycleAction(pkg, 'launch', versionId ? { localVersionId: versionId } : undefined);
+        });
+      }
+      for (const button of card.querySelectorAll('.connection-card-version-drawer [data-action="probe"]')) {
+        button.addEventListener('click', () => {
+          const versionId = String(button.getAttribute('data-local-version-id') || '').trim();
+          void this.runLifecycleAction(pkg, 'probe', versionId ? { localVersionId: versionId } : undefined);
+        });
+      }
+      card.querySelector('.connection-card-actions > [data-action="publish"]')?.addEventListener('click', () => {
         void this.publishToCloud(pkg);
       });
-      card.querySelector('[data-action="delete"]')?.addEventListener('click', () => {
+      card.querySelector('.connection-card-actions [data-action="delete"]')?.addEventListener('click', () => {
         void this.deleteDraft(pkg);
       });
       return card;
@@ -1061,6 +1399,19 @@
       const name = String(resolved.name || '').trim() || String(resolved.exeName || '').replace(/\.exe$/i, '') || '本机软件';
       const hostId = String(resolved.hostId || '').trim();
       const id = normalizeCapabilityId(hostId || name);
+      const localVersionId = normalizeLocalVersionId(
+        ['drag_drop', resolved.versionHint || '', resolved.targetPath || '', resolved.shortcutPath || ''].filter(Boolean).join('|'),
+      );
+      const localVersion = {
+        id: localVersionId,
+        label: (resolved.versionHint ? name + ' ' + resolved.versionHint : name),
+        softwareVersion: resolved.versionHint || '',
+        executablePath: resolved.targetPath || '',
+        shortcutPath: resolved.shortcutPath || '',
+        installRoot: '',
+        source: 'drag_drop',
+        status: resolved.targetPath ? 'launchable' : 'detected',
+      };
       const manifest = {
         droppedFrom: 'connection_page',
         inputPath: resolved.inputPath || rawPath,
@@ -1068,6 +1419,11 @@
         executablePath: resolved.targetPath || '',
         exeName: resolved.exeName || '',
         targetKind: resolved.targetKind || '',
+        softwareVersion: resolved.versionHint || '',
+        versionHint: resolved.versionHint || '',
+        currentLocalVersionId: localVersionId,
+        defaultLocalVersionId: localVersionId,
+        localVersions: [localVersion],
         ...(hostId ? { hostId } : {}),
       };
       const r = await shell.api(
@@ -1142,7 +1498,7 @@
       });
     },
 
-    async runLifecycleAction(pkg, action) {
+    async runLifecycleAction(pkg, action, extraBody) {
       const shell = this._shell;
       if (!shell || typeof shell.api !== 'function' || !pkg || !pkg.id) return;
       this.busyId = String(pkg.id || '');
@@ -1152,7 +1508,7 @@
       const r = await shell.api(
         'POST',
         '/v1/capability-packages/' + encodeURIComponent(pkg.id) + '/lifecycle',
-        { action },
+        { action, ...(extraBody && typeof extraBody === 'object' ? extraBody : {}) },
         { timeoutMs: 60000 },
       );
       const body = (r && r.json) || {};
@@ -1168,6 +1524,64 @@
       this.setCardResult(pkg, actionLabel(action), message || '执行完成', true);
       this.setInlineStatus(`${actionLabel(action)}已完成。`);
       this.busyId = '';
+      await this.reload(shell);
+    },
+
+    async setLocalVersion(pkg, localVersionId) {
+      const shell = this._shell;
+      const id = String(pkg && pkg.id ? pkg.id : '');
+      const versionId = String(localVersionId || '').trim();
+      if (!id || !versionId) return;
+      this.selectedLocalVersionIds = { ...this.selectedLocalVersionIds, [id]: versionId };
+      this.setCardResult(pkg, '本机版本', '已设为当前启动版本。', true);
+      this.render();
+      if (!shell || typeof shell.api !== 'function') return;
+      const r = await shell.api(
+        'POST',
+        '/v1/capability-packages/drafts/' + encodeURIComponent(id) + '/local-version',
+        { localVersionId: versionId, makeDefault: true },
+      );
+      if (!r || !r.ok) {
+        this.setCardResult(pkg, '本机版本', ((r && r.json && (r.json.message || r.json.error)) || (r && r.text) || '保存失败'), false);
+        this.setInlineStatus('本机版本保存失败，可继续使用当前页面选择。');
+        this.render();
+        return;
+      }
+      this.setInlineStatus('已保存当前本机版本。');
+    },
+
+    async discoverRunningConnections() {
+      const shell = this._shell;
+      if (!shell || typeof shell.api !== 'function') return;
+      const candidates = this.packages.filter((pkg) => {
+        const state = connectionStateFor(pkg);
+        return asArray(state && state.availableActions).includes('discover_running');
+      });
+      if (!candidates.length) {
+        this.setInlineStatus('暂无可识别的连接对象。');
+        return;
+      }
+      this.setInlineStatus('正在识别本机已打开软件...');
+      let okCount = 0;
+      let failCount = 0;
+      for (const pkg of candidates) {
+        const r = await shell.api(
+          'POST',
+          '/v1/capability-packages/' + encodeURIComponent(pkg.id) + '/lifecycle',
+          { action: 'discover_running' },
+          { timeoutMs: 60000 },
+        );
+        const body = (r && r.json) || {};
+        const message = this.lifecycleMessage('discover_running', body, r && r.text);
+        if (r && r.ok) {
+          okCount += 1;
+          this.setCardResult(pkg, '识别运行', message || '已识别', true);
+        } else {
+          failCount += 1;
+          this.setCardResult(pkg, '识别运行', message || '未识别到运行中软件', false);
+        }
+      }
+      this.setInlineStatus(`识别完成：${okCount} 个成功，${failCount} 个待处理。`);
       await this.reload(shell);
     },
 
@@ -1410,6 +1824,9 @@
       });
       $('btnConnectionImportTransfer')?.addEventListener('click', () => {
         void this.importCapabilityTransfer();
+      });
+      $('btnConnectionsDiscoverRunning')?.addEventListener('click', () => {
+        void this.discoverRunningConnections();
       });
       $('connectionsSearch')?.addEventListener('input', (ev) => {
         this.searchQuery = String((ev && ev.target && ev.target.value) || '');

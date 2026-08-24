@@ -71,7 +71,7 @@ describe('agent P2 body host concurrency', () => {
       schemaVersion: 1,
       id: 'cinematic-scene-kit',
       name: 'Cinematic scene kit',
-      description: 'Reusable Script Hub wrapper for the workflow draft.',
+      description: 'Reusable Workflow wrapper for the workflow draft.',
       semver: '0.1.0',
       launch: { kind: 'shell_module', module: 'module/panel.json' },
       run: { command: ['node', 'scripts/run.mjs'], paramsMode: 'env' },
@@ -534,7 +534,7 @@ describe('agent capability unified creation tools', () => {
     expect(missing.structured).toMatchObject({
       maturity: 'template_missing',
       plannedSteps: ['event.write.loop_summary', 'conversation.open'],
-      nextAction: 'create_bridge_template_plan',
+      nextAction: 'create_software_bridge_driver_plan',
     });
     expect(calls.filter((call) => call.pathname === '/v1/capability-packages/spine/lifecycle').map((call) => call.body?.action)).toEqual([
       'validate',
@@ -545,6 +545,9 @@ describe('agent capability unified creation tools', () => {
     expect(calls.find((call) => call.pathname === '/v1/capability-packages/spine/events')?.body?.kind).toBe(
       'connection_loop_template_missing',
     );
+    expect(calls.find((call) => call.pathname === '/v1/capability-packages/spine/events')?.body?.detail).toMatchObject({
+      architecture: 'softwareBridgeRegistry bridge driver required; do not edit capabilityLifecycle.ts.',
+    });
 
     calls.length = 0;
     const installed = await host.executeTool(
@@ -571,6 +574,78 @@ describe('agent capability unified creation tools', () => {
     expect(calls.some((call) => call.pathname === '/v1/capability-packages/photoshop/lifecycle' && call.body?.action === 'install')).toBe(
       false,
     );
+  });
+
+  it('records failed connection strategies and selects the next candidate', async () => {
+    const { createAgentBodyHost } = require('../companion-desktop/agent-body-host.cjs');
+    const calls: Array<{ method: string; pathname: string; body: Record<string, unknown> | null }> = [];
+    const host = createAgentBodyHost({
+      getShellView: () => 'connections',
+      navigateShell: async () => ({ ok: true }),
+      getStateSummary: async () => ({}),
+      companionApiRequest: async (method: string, pathname: string, body: Record<string, unknown> | null) => {
+        calls.push({ method, pathname, body });
+        if (pathname.endsWith('/context')) {
+          return {
+            ok: true,
+            json: {
+              ok: true,
+              connectionState: {
+                maturity: 'strategy_draft',
+                label: '策略草稿',
+                availableActions: ['agent_loop', 'conversation'],
+                nextAction: '选择下一候选策略',
+              },
+              strategyDraft: {
+                candidateStrategies: [
+                  { id: 'script-folder', label: '脚本目录', kind: 'script_folder' },
+                  { id: 'manual-bridge-script', label: '手动桥接脚本', kind: 'manual_bridge_script' },
+                ],
+                recommendedNextStrategy: { id: 'script-folder', label: '脚本目录', kind: 'script_folder' },
+              },
+            },
+          };
+        }
+        if (pathname.endsWith('/events')) return { ok: true, json: { ok: true, event: body } };
+        if (pathname.endsWith('/lifecycle')) return { ok: true, json: { ok: true, action: body?.action } };
+        return { ok: false, text: `unexpected ${method} ${pathname}` };
+      },
+    });
+
+    const result = await host.executeTool(
+      'ac.capability.connection_loop_run',
+      {
+        id: 'unknown-app',
+        goal: '继续连接未知软件',
+        permissions: ['context.read', 'event.write', 'conversation.open'],
+        failedStrategyId: 'script-folder',
+        failureClass: 'missing_path',
+        failureMessage: '脚本目录不存在',
+      },
+      {},
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.structured).toMatchObject({
+      maturity: 'strategy_draft',
+      plannedSteps: ['event.write.strategy_failed', 'event.write.strategy_next_selected', 'conversation.open'],
+      nextAction: 'run_next_connection_strategy',
+    });
+    expect(calls.find((call) => call.pathname === '/v1/capability-packages/unknown-app/events' && call.body?.kind === 'connection_strategy_failed')?.body).toMatchObject({
+      ok: false,
+      detail: {
+        strategyId: 'script-folder',
+        failureClass: 'missing_path',
+        nextCandidateStrategy: expect.objectContaining({ id: 'manual-bridge-script' }),
+      },
+    });
+    expect(calls.find((call) => call.pathname === '/v1/capability-packages/unknown-app/events' && call.body?.kind === 'connection_strategy_next_selected')?.body).toMatchObject({
+      ok: true,
+      detail: {
+        failedStrategyIds: ['script-folder'],
+        nextCandidateStrategy: expect.objectContaining({ id: 'manual-bridge-script' }),
+      },
+    });
   });
 
   it('creates connection template drafts as object events without writing production definitions', async () => {
@@ -780,7 +855,7 @@ describe('agent P2 L2 cross-brain continuity', () => {
     const store = createAgentStore({ getRoot: () => tmp });
     store.ensureLayout();
     const prompt = store.readProfileSystemPrompt();
-    expect(prompt).toContain('navigate-scripts');
+    expect(prompt).toContain('navigate-workflow');
   });
 
   it('adds AssetCutter workbench MCP guidance to Codex CLI prompts', () => {

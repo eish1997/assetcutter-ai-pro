@@ -2,7 +2,14 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from '
 import { basename, join, resolve } from 'node:path';
 import { getRepositoryRoot } from '../repositoryVolume.js';
 
-export type CustomHostTargetKind = 'install_dir' | 'user_config_dir' | 'script_dir' | 'plugin_dir' | 'project_dir' | 'unknown';
+export type CustomHostTargetKind =
+  | 'install_dir'
+  | 'user_config_dir'
+  | 'script_dir'
+  | 'plugin_dir'
+  | 'project_dir'
+  | 'engine_dir'
+  | 'unknown';
 
 export type ManualTargetResolveResult = {
   ok: boolean;

@@ -8,6 +8,7 @@ import type {
 import { validateToolBridgeCallRequest } from './toolBridgeInvocation.js';
 import type { WorkflowToolBridgeClient } from './workflowExecution.js';
 import { exportExternalMayaFbx } from './mayaConnectorHttpActivity.js';
+import type { MayaCommandPortTarget } from './mayaCommandPortConnector.js';
 
 type ToolBridgeRouteResponse<T> = {
   data?: T;
@@ -52,7 +53,10 @@ export function createWorkflowToolBridgeHttpClient(baseUrl = defaultBridgeBaseUr
   };
 }
 
-export function createMayaConnectorToolBridgeClient(baseUrl?: string): WorkflowToolBridgeClient {
+export function createMayaConnectorToolBridgeClient(
+  baseUrl?: string,
+  target?: Partial<MayaCommandPortTarget>,
+): WorkflowToolBridgeClient {
   return {
     async callTool(request: ToolBridgeCallRequest) {
       const now = new Date().toISOString();
@@ -94,10 +98,12 @@ export function createMayaConnectorToolBridgeClient(baseUrl?: string): WorkflowT
       const exportResult = await exportExternalMayaFbx({
         output_path: outputPath,
         overwrite: Boolean(request.input.overwrite),
+        target,
         trace_id: traceId,
       }, baseUrl);
 
       if (!exportResult.ok) {
+        const code = classifyMayaExportError(exportResult.error.message);
         return buildToolResult({
           now,
           request,
@@ -105,7 +111,7 @@ export function createMayaConnectorToolBridgeClient(baseUrl?: string): WorkflowT
           toolCallId,
           traceId,
           error: {
-            code: 'maya_export_failed',
+            code,
             message: exportResult.error.message,
             recoverable: true,
           },
@@ -207,4 +213,12 @@ async function exists(filePath: string) {
   } catch {
     return false;
   }
+}
+
+function classifyMayaExportError(message: string) {
+  const normalized = message.toLowerCase();
+  if (normalized.includes('output already exists') || normalized.includes('already exists')) {
+    return 'output_exists';
+  }
+  return 'maya_export_failed';
 }

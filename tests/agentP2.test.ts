@@ -197,6 +197,22 @@ describe('agent policy', () => {
     expect(policy.gateTool({ name: 'ac.shell.get_state', risk: 'safe' })).toBe('allow');
   });
 
+  it('only auto-confirms remembered low-risk eligible tools', () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ac-policy-low-risk-'));
+    const policyPath = path.join(tmp, 'policy.json');
+    const policy = createAgentPolicy({ getPolicyPath: () => policyPath });
+
+    policy.writePolicy({
+      confirmTools: true,
+      autoConfirmTools: ['ac.workbench.run_capability', 'ac.usage.upload_cloud_draft'],
+    });
+
+    expect(
+      policy.gateTool({ name: 'ac.workbench.run_capability', risk: 'confirm', autoConfirmEligible: true }),
+    ).toBe('allow');
+    expect(policy.gateTool({ name: 'ac.usage.upload_cloud_draft', risk: 'confirm' })).toBe('confirm');
+  });
+
   it('exposes admin permission templates and applies them', () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ac-policy-template-'));
     const policyPath = path.join(tmp, 'policy.json');
@@ -353,7 +369,7 @@ describe('agent tool execution audit', () => {
 describe('agent P2 tool schemas', () => {
   it('registers P2 tools including governed workflow promotion preflights', () => {
     expect(P2_TOOL_SCHEMAS).toHaveLength(12);
-    expect(ALL_TOOL_SCHEMAS).toHaveLength(59);
+    expect(ALL_TOOL_SCHEMAS).toHaveLength(61);
     expect(P2_TOOL_SCHEMAS.map((tool: { name: string }) => tool.name)).toContain(
       'ac.workflow.promote_workbench_preset',
     );

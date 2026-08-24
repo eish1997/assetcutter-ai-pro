@@ -20,6 +20,7 @@
 | 连接页状态 | 未完成，不阻塞 P0 |
 | ScriptHub 命名 | 用户侧正式收敛为 Workflow；旧 ScriptHub 只保留兼容层 |
 | 真实软件验收 | Maya2022 端到端验收已完成 |
+| 下一阶段文档 | `docs/本地伴侣-Workflow对象系统开发文档.md`：一次性操作、长期复用、版本、固定、修复会话 |
 | 文档更新规则 | 每完成一个任务，必须更新本文档“执行记录”；若影响架构或交接，也更新 `docs/交接文档.md` |
 
 ## 2. 目标
@@ -903,3 +904,47 @@ MVP 完成时必须额外满足：
 下一步：
 
 - 进入真实用户试用与回归；如后续要求 UI 手工选择对象，再追加手工验收记录。
+
+### 2026-08-11：P1-004 真实 Maya UI 选择对象验收
+状态：done
+
+变更：
+- `scripts/workflow-maya-ui-selection-smoke.mjs`：新增真实 Maya UI 选择验收脚本。脚本连接已打开的 Maya Command Port，只读取当前 UI 选择；如果没有选中对象则失败，不自动创建或选择测试物体。脚本启动临时 Workflow Connector 兼容服务，并通过本地伴侣 Workflow API 执行 `workflow.maya.export_selection_fbx`。
+- `package.json`：新增 `npm run workflow:maya-ui-selection-smoke`。
+- `local-companion/src/workflows/runtime/workflowSkills.ts`：补充真实 Maya UI 选择导出的 validation evidence。
+- `docs/宿主中心-真实软件验收记录.md`：补充本次 Maya2022 UI 选择验收记录。
+
+验证：
+- `node --check scripts/workflow-maya-ui-selection-smoke.mjs`：pass。
+- `npm run workflow:maya-ui-selection-smoke`：pass。
+- Maya 版本：2022。
+- Maya 连接：`127.0.0.1:7001` Command Port。
+- UI 当前选择：3 个对象，`|pCube1`、`|pCube3`、`|pCube2`。
+- Workflow run id：`run_workflow_maya_export_selection_fbx_1786438706080`。
+- 输出路径：`C:/Users/ZYF/AppData/Local/Temp/ac-workflow-maya-ui-selection-jIQ3V2/exports/workflow_ui_selection_1786438706054.fbx`。
+- FBX 字节数：30256。
+- 运行结果：`succeeded`。
+
+残余风险：
+- 该脚本验证的是“已打开 Maya UI + 用户/当前 UI 已选中对象 + Workflow API 执行导出”的用户场景闭环；它不自动点击桌面壳按钮。页面按钮使用同一条 `/v1/workflows/:id/run` 路由，后续若要做像素级页面验收，可再补浏览器/桌面壳点击记录。
+
+下一步：
+- 进入真实用户试用与回归；继续把连接页最终生命周期和 Workflow 页面连接摘要对齐。
+
+### 2026-08-24：Workflow 消费连接页已连通 Maya
+
+状态：done
+
+变更：
+- Workflow 运行/预检在没有显式 HTTP Connector URL 时，读取连接页已连通的 Maya `software_connection`（不要求草稿 id 必须是 `maya`），使用 `lastProbe.host/port` 走 Command Port。
+- 连接摘要会归并到该真实连接卡，修复动作可定位同一张卡。
+- 仓库根目录 smoke 脚本只保留为回归，不再是产品路径。
+
+验证：
+- `npx vitest run tests/localCompanionWorkflowRuntime.test.ts tests/capabilityPackages.test.ts tests/shellWorkflowPageUi.test.ts`：pass，78 条测试。
+
+残余风险：
+- 仍需 Maya UI 有选中对象；空选区会失败并提示先在 Maya 里选物体。
+
+下一步：
+- 在本地伴侣 Workflow 页面对已连通 Maya 点运行，确认不再需要仓库根目录脚本。

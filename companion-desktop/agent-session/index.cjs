@@ -338,12 +338,16 @@ function createAgentSessionService(deps) {
                 confirmId,
                 name: tc.name,
                 arguments: parsedArgs,
+                risk: schema.risk,
+                autoConfirmEligible: Boolean(schema.autoConfirmEligible),
                 sessionId,
               });
               const confirmResult = normalizeConfirmResult(
                 await deps.waitForConfirm(confirmId, {
                   name: tc.name,
                   arguments: parsedArgs,
+                  risk: schema.risk,
+                  autoConfirmEligible: Boolean(schema.autoConfirmEligible),
                   broadcast: false,
                 }),
               );

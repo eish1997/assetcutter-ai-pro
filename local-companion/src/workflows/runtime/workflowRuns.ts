@@ -85,6 +85,7 @@ export type WorkflowRun = {
   artifact_ids: string[];
   artifacts: WorkflowArtifact[];
   created_at: string;
+  draft_id?: string;
   error?: WorkflowRunError;
   finished_at?: string;
   id: string;
@@ -97,12 +98,14 @@ export type WorkflowRun = {
   replay_snapshot?: WorkflowReplaySnapshot;
   replay_snapshot_id?: string;
   reused_from_run_id?: string;
+  saved_as_draft_id?: string;
   started_at?: string;
   status: WorkflowRunStatus;
   step_runs: WorkflowStepRun[];
   trace_id: string;
   workflow_id: string;
   workflow_version: string;
+  workflow_version_id?: string;
 };
 
 export function createWorkflowRun(input: {
@@ -137,6 +140,7 @@ export function createWorkflowRun(input: {
     trace_id: traceId,
     workflow_id: input.workflow.id,
     workflow_version: input.workflow.version,
+    workflow_version_id: `${input.workflow.id}@${input.workflow.version}`,
   };
 }
 

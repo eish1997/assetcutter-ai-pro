@@ -85,7 +85,7 @@ export type WorkflowSkill = {
       records: Array<{
         evidence: string;
         id: string;
-        mode: 'fixture' | 'real_maya';
+        mode: 'fixture' | 'real_maya' | 'real_maya_ui_selection';
         passed: boolean;
       }>;
       status: 'unvalidated' | 'validated';
@@ -331,6 +331,12 @@ export const mayaExportSelectionFbxWorkflowSkill = {
           evidence: 'npm run workflow:maya-real-smoke wrote a real FBX with 21792 bytes via Maya2022 mayapy.',
           id: 'validation_real_maya_2026_08_10',
           mode: 'real_maya',
+          passed: true,
+        },
+        {
+          evidence: 'npm run workflow:maya-ui-selection-smoke exported the current Maya 2022 UI selection (3 objects: |pCube1, |pCube3, |pCube2) to a 30256-byte FBX.',
+          id: 'validation_real_maya_ui_selection_2026_08_11',
+          mode: 'real_maya_ui_selection',
           passed: true,
         },
       ],

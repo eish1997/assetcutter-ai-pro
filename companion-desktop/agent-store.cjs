@@ -136,17 +136,17 @@ function createAgentStore(deps) {
     const dir = skillsDir();
     const entries = fs.readdirSync(dir, { withFileTypes: true }).filter((d) => d.isDirectory());
     if (entries.length > 0) return;
-    const sampleDir = path.join(dir, 'navigate-scripts');
+    const sampleDir = path.join(dir, 'navigate-workflow');
     ensureDir(sampleDir);
     fs.writeFileSync(
       path.join(sampleDir, 'skill.json'),
       `${JSON.stringify(
         {
-          id: 'navigate-scripts',
+          id: 'navigate-workflow',
           name: '打开脚本页',
-          description: '需要 Script Hub 时切换到 scripts 视图',
+          description: '需要 Workflow 时切换到 workflow 视图',
           toolHints: ['ac.shell.navigate'],
-          prompt: '当用户要查看或运行脚本库时，先 ac.shell.navigate {"view":"scripts"}。',
+          prompt: '当用户要查看或运行工作流时，先 ac.shell.navigate {"view":"workflow"}。',
         },
         null,
         2,

@@ -29,6 +29,9 @@ companion-desktop/local-companion-bundle/
 companion-desktop/build-constants.json
 companion-desktop/sam-local-bundled/
 
+# local-companion 运行时导出 / Workflow 对象落盘（勿入库）
+local-companion/.assetcutter/
+
 # auth-api 运行时登记（首条上传时创建，含环境与用户相关元数据）
 server/data/companion-artifacts.json
 server/data/ai-gateway-provider-keys.json
