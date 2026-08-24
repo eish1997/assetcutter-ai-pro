@@ -11,8 +11,6 @@ import type { ChannelId } from './modelRegistry/types';
 import { pickBinding } from './modelRegistry/pickBinding';
 import * as settingsStore from './settingsStore';
 
-const { getTencentCreds, getUserApiKey } = settingsStore;
-
 function platformSiteProxyConfigured(): boolean {
   try {
     const env = import.meta.env as Record<string, string | undefined>;
@@ -27,7 +25,7 @@ function platformSiteProxyConfigured(): boolean {
 }
 
 export function hasTencentSessionCredentials(): boolean {
-  const { secretId, secretKey } = getTencentCreds();
+  const { secretId, secretKey } = settingsStore.getTencentCreds();
   return Boolean(String(secretId || '').trim() && String(secretKey || '').trim());
 }
 
@@ -45,6 +43,15 @@ export function isByokChannel(channel: ChannelId): boolean {
   return isByokBindingChannel(channel);
 }
 
+/** 用户已启用并填好自备 Key 的输出口：计费与执行均视为 explicit BYOK */
+export function isExplicitByokPath(registryId: string, role: 'text' | 'image' = 'text'): boolean {
+  const id = String(registryId || '').trim();
+  if (!id) return false;
+  const picked = pickBinding(id, role);
+  if (!picked) return false;
+  return isByokBindingChannel(picked.channel) && settingsStore.hasUserCredentialsForChannel(picked.channel);
+}
+
 /** Gemini 文本/生图：当前 binding 是否需平台积分 */
 export function isPlatformMeteredGeminiPath(registryId: string, role: 'text' | 'image' = 'text'): boolean {
   const id = String(registryId || '').trim();
@@ -53,8 +60,9 @@ export function isPlatformMeteredGeminiPath(registryId: string, role: 'text' | '
     registryId: id,
     role,
     bindingChannel: picked?.channel,
-    hasUserApiKey: Boolean(getUserApiKey()?.trim()),
+    hasUserApiKey: Boolean(settingsStore.getUserApiKey()?.trim()),
     platformSiteProxyConfigured: platformSiteProxyConfigured(),
+    explicitByok: isExplicitByokPath(id, role),
   });
 }
 

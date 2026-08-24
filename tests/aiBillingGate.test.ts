@@ -20,6 +20,7 @@ vi.mock('../services/settingsStore', () => ({
   getTencentCreds: vi.fn(() => ({ secretId: '', secretKey: '' })),
   getUserApiKey: vi.fn(() => null),
   getTripoApiKey: vi.fn(() => null),
+  hasUserCredentialsForChannel: vi.fn(() => false),
 }));
 
 vi.mock('../services/platformAiPath', async (importOriginal) => {

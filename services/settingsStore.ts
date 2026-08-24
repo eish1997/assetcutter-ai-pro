@@ -174,6 +174,13 @@ export function isChannelReady(channel: ChannelId): boolean {
   return false;
 }
 
+/** 用户是否填写了该通道自己的密钥（不含站点 Vertex 代理） */
+export function hasUserCredentialsForChannel(channel: ChannelId): boolean {
+  if (channel === 'vertex-proxy') return false;
+  if (channel === 'gemini-aistudio') return Boolean(getUserApiKey()?.trim());
+  return isChannelReady(channel);
+}
+
 export function setChannelEnabled(channel: ChannelId, enabled: boolean): void {
   if (!isChannelId(channel)) return;
   const current = getEnabledChannels();

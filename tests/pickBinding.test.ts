@@ -25,8 +25,25 @@ describe("pickBinding", () => {
   it("falls through to toapis-gemini when vertex not ready", () => {
     vi.spyOn(settingsStore, "getEnabledChannels").mockReturnValue(["vertex-proxy", "toapis-gemini"]);
     vi.spyOn(settingsStore, "isChannelReady").mockImplementation((ch) => ch === "toapis-gemini");
+    vi.spyOn(settingsStore, "hasUserCredentialsForChannel").mockImplementation((ch) => ch === "toapis-gemini");
     const picked = pickBinding("gemini-3.1-flash-image-preview", "image");
     expect(picked?.channel).toBe("toapis-gemini");
+  });
+
+  it("prefers an enabled BYOK outlet with user credentials over vertex-proxy", () => {
+    vi.spyOn(settingsStore, "getEnabledChannels").mockReturnValue(["vertex-proxy", "gemini-aistudio"]);
+    vi.spyOn(settingsStore, "isChannelReady").mockReturnValue(true);
+    vi.spyOn(settingsStore, "hasUserCredentialsForChannel").mockImplementation((ch) => ch === "gemini-aistudio");
+    const picked = pickBinding("gemini-3.1-flash-image-preview", "image");
+    expect(picked?.channel).toBe("gemini-aistudio");
+  });
+
+  it("does not prefer gemini-aistudio over vertex when the user has not saved a key", () => {
+    vi.spyOn(settingsStore, "getEnabledChannels").mockReturnValue(["vertex-proxy", "gemini-aistudio"]);
+    vi.spyOn(settingsStore, "isChannelReady").mockReturnValue(true);
+    vi.spyOn(settingsStore, "hasUserCredentialsForChannel").mockReturnValue(false);
+    const picked = pickBinding("gemini-3.1-flash-image-preview", "image");
+    expect(picked?.channel).toBe("vertex-proxy");
   });
 
   it("uses ops priority to choose the first ready Gemini channel", () => {
@@ -34,6 +51,7 @@ describe("pickBinding", () => {
     vi.spyOn(settingsStore, "isChannelReady").mockImplementation(
       (ch) => ch === "vertex-proxy" || ch === "gemini-aistudio"
     );
+    vi.spyOn(settingsStore, "hasUserCredentialsForChannel").mockImplementation((ch) => ch === "gemini-aistudio");
     _setModelOpsConfigForTests({
       version: 1,
       imageRegistryAllowlist: null,
@@ -56,16 +74,15 @@ describe("pickBinding", () => {
   });
 
   it("text and image may pick different channels for the same registry family", () => {
-    vi.spyOn(settingsStore, "getEnabledChannels").mockReturnValue(["vertex-proxy", "toapis-gemini"]);
-    vi.spyOn(settingsStore, "isChannelReady").mockImplementation((ch) => {
-      if (ch === "vertex-proxy") return true;
-      if (ch === "toapis-gemini") return true;
-      return false;
-    });
+    vi.spyOn(settingsStore, "getEnabledChannels").mockReturnValue(["vertex-proxy"]);
+    vi.spyOn(settingsStore, "isChannelReady").mockImplementation((ch) => ch === "vertex-proxy");
+    vi.spyOn(settingsStore, "hasUserCredentialsForChannel").mockReturnValue(false);
     const textId = "gemini-3-flash-preview";
     const imageId = "gemini-3.1-flash-image-preview";
     expect(pickBinding(textId, "text")?.channel).toBe("vertex-proxy");
+    vi.spyOn(settingsStore, "getEnabledChannels").mockReturnValue(["toapis-gemini"]);
     vi.spyOn(settingsStore, "isChannelReady").mockImplementation((ch) => ch === "toapis-gemini");
+    vi.spyOn(settingsStore, "hasUserCredentialsForChannel").mockImplementation((ch) => ch === "toapis-gemini");
     expect(pickBinding(imageId, "image")?.channel).toBe("toapis-gemini");
   });
 

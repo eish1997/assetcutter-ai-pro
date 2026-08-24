@@ -11,6 +11,12 @@ import {
   dataUrlPayloadBytes,
   normalizeDataUrlForVisionApi,
 } from '../workflowImageDataUrlCompress';
+import {
+  dialogGenerateImage,
+  dialogGenerateImageMulti,
+  getDialogTextResponse,
+} from '../geminiService';
+import { isExplicitByokPath } from '../platformAiPath';
 
 export type UnifiedGenerationModality = AiJobModality;
 
@@ -332,7 +338,120 @@ function inferGatewayProviderId(
   return GATEWAY_CHANNEL_PROVIDER[picked.channel];
 }
 
+function generationRole(modality: UnifiedGenerationModality): 'text' | 'image' | null {
+  return gatewayRoleForModality(modality);
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' ? (value as Record<string, unknown>) : {};
+}
+
+function localByokSucceededJob(params: {
+  modality: UnifiedGenerationModality;
+  capability: string;
+  model: string;
+  output: Record<string, unknown>;
+  artifacts: Array<Record<string, unknown>>;
+}): AiJobDetail {
+  const now = new Date().toISOString();
+  return {
+    job: {
+      id: `byok_local_${Date.now()}`,
+      status: 'succeeded',
+      modality: params.modality,
+      capability: params.capability,
+      provider: 'byok-local',
+      model: params.model,
+      userId: null,
+      correlationId: '',
+      createdAt: now,
+      updatedAt: now,
+      startedAt: now,
+      finishedAt: now,
+      route: null,
+      traceOnly: false,
+      proxyPath: null,
+      proxyJobId: null,
+      creditsGate: { mode: 'byok', enabled: false, estimatedCredits: 0, checked: true },
+      error: null,
+      metadata: { byok: true, source: 'local-key' },
+      output: params.output,
+      artifacts: params.artifacts,
+    },
+    route: null,
+    adapterRequest: null,
+  };
+}
+
+async function tryRunLocalByokGeneration(request: UnifiedGenerationRequest): Promise<AiJobDetail | null> {
+  const role = generationRole(request.modality);
+  if (!role) return null;
+  const registryId = String(request.registryId || request.canonicalModelId || '').trim();
+  if (!registryId || !isExplicitByokPath(registryId, role)) return null;
+
+  const input = asRecord(request.input);
+  const config = asRecord(input.config);
+  const model = String(request.canonicalModelId || registryId).trim();
+  const prompt = String(input.prompt || '').trim();
+  const systemInstruction = String(config.systemInstruction || request.metadata?.systemInstruction || '').trim() || undefined;
+  const abortSignal = request.abortSignal;
+
+  if (request.modality === 'image') {
+    const refs = Array.isArray(input.referenceImages)
+      ? input.referenceImages.map((item) => String(item || '').trim()).filter(Boolean)
+      : [];
+    const imageConfig = asRecord(config.imageConfig);
+    const imageOptions = {
+      aspectRatio: String(imageConfig.aspectRatio || '').trim() || undefined,
+      imageSize: String(imageConfig.imageSize || imageConfig.size || '').trim() || undefined,
+    };
+    const imageUrl =
+      refs.length > 1
+        ? await dialogGenerateImageMulti(refs, prompt, model, imageOptions, abortSignal)
+        : await dialogGenerateImage(
+            refs[0] || null,
+            prompt,
+            model,
+            imageOptions,
+            systemInstruction,
+            abortSignal
+          );
+    return localByokSucceededJob({
+      modality: 'image',
+      capability: request.capability,
+      model,
+      output: { imageUrl },
+      artifacts: [{ kind: 'image', url: imageUrl }],
+    });
+  }
+
+  if (request.modality === 'text') {
+    const rawContents = Array.isArray(input.contents) ? input.contents : null;
+    const contents =
+      rawContents && rawContents.length > 0
+        ? (rawContents as Parameters<typeof getDialogTextResponse>[0])
+        : [{ role: 'user' as const, parts: [{ text: prompt || '(empty)' }] }];
+    const mime = String(config.responseMimeType || '').trim();
+    const text = await getDialogTextResponse(contents, model, {
+      abortSignal,
+      responseMimeType: mime || undefined,
+      systemInstruction,
+    });
+    return localByokSucceededJob({
+      modality: 'text',
+      capability: request.capability,
+      model,
+      output: { text },
+      artifacts: [{ kind: 'text', text }],
+    });
+  }
+
+  return null;
+}
+
 export async function runUnifiedGeneration(request: UnifiedGenerationRequest): Promise<AiJobDetail> {
+  const local = await tryRunLocalByokGeneration(request);
+  if (local) return local;
   const rawModel = String(request.canonicalModelId || request.registryId || '').trim();
   if (!rawModel) throw new Error('缺少生成模型');
   const canonicalModelId = resolveCanonicalModelId(rawModel) || rawModel;

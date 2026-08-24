@@ -1503,6 +1503,8 @@ export interface GeminiRequestOptions {
   requestPhase?: string;
   /** 结构化 JSON 输出（如分镜解析/优化） */
   responseMimeType?: string;
+  /** 可选系统说明（BYOK 直连文本） */
+  systemInstruction?: string;
 }
 
 const GEMINI_REQUEST_TIMEOUT_MS = Number(process.env.GEMINI_REQUEST_TIMEOUT_MS) || 45_000;
@@ -2786,6 +2788,9 @@ export async function getDialogTextResponse(
     const genConfig: Record<string, unknown> = {};
     if (options?.responseMimeType) {
       genConfig.responseMimeType = options.responseMimeType;
+    }
+    if (options?.systemInstruction) {
+      genConfig.systemInstruction = options.systemInstruction;
     }
     const response = await ai.models.generateContent({
       model: resolvedModel,

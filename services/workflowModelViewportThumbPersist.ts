@@ -1,6 +1,8 @@
 import type { WorkflowAsset } from '../types';
 import {
+  parseCanonicalCompanionObjectKey,
   resolveWorkflowImageSlotIndex,
+  workflowImageCompanionStorageKey,
   workflowImagePreviewCompanionStorageKey,
 } from './workflowCompanionAssets';
 import { resolveWorkflowStepModelCompanionKeys, resolveWorkflowStepModelUrls } from './workflowStepModels';
@@ -26,8 +28,8 @@ export function workflowAssetHasModelAtStep(asset: WorkflowAsset, stepKeyRaw: st
 }
 
 /**
- * Apply a 3D viewport screenshot as a card poster for a result/model step.
- * Never writes into companion full-image keys.
+ * Apply a 3D viewport screenshot as an in-memory poster for a result/model step.
+ * Companion full/thumb writes happen in persist (same capture, paired keys).
  * Never replaces a photo-only `original` raster; model-at-original stores poster in `results.original`.
  */
 export function patchAssetWithModelViewportThumb(
@@ -113,7 +115,70 @@ export function patchAssetWithModelViewportThumb(
   };
 }
 
-/** Preview/thumb companion object only — never originalCompanionKey / resultsCompanionKeys. */
+function posterSlotCollidesWithOriginal(
+  originalCompanionKey: string,
+  assetId: string,
+  slot: number
+): boolean {
+  const orig = clean(originalCompanionKey);
+  if (!orig) return false;
+  const parsed = parseCanonicalCompanionObjectKey(orig);
+  if (parsed) {
+    return parsed.assetId === assetId && parsed.mediaKind === 'image' && parsed.role === 'full' && parsed.slot === slot;
+  }
+  if (orig.startsWith(`${assetId}/image-full-${slot}-`)) return true;
+  if (slot === 0 && /\/original(-image|-video)?/i.test(orig)) return true;
+  return orig === workflowImageCompanionStorageKey(assetId, slot, 'png');
+}
+
+/**
+ * Slot for the 3D viewport poster pair (image-full + image-thumb).
+ * Reuses an existing step poster slot; never the source-photo `originalCompanionKey` slot.
+ */
+export function resolveModelViewportPosterSlot(
+  asset: WorkflowAsset | null | undefined,
+  assetId: string,
+  variantIdRaw: string
+): number | null {
+  const assetIdClean = clean(assetId);
+  const variantId = clean(variantIdRaw) || 'original';
+  if (!assetIdClean) return null;
+  if (variantId === 'original' && (!asset || !workflowAssetHasModelAtStep(asset, 'original'))) return null;
+
+  const orig = clean(asset?.originalCompanionKey);
+  const existingFull = clean(asset?.resultsCompanionKeys?.[variantId]);
+  if (existingFull && existingFull !== orig) {
+    const parsed = parseCanonicalCompanionObjectKey(existingFull);
+    if (parsed?.mediaKind === 'image') return parsed.slot;
+  }
+  const existingThumb = clean(asset?.resultsPreviewCompanionKeys?.[variantId]);
+  if (existingThumb) {
+    const parsed = parseCanonicalCompanionObjectKey(existingThumb);
+    if (parsed?.mediaKind === 'image') return parsed.slot;
+  }
+
+  let slot = resolveWorkflowImageSlotIndex(asset?.resultOrder, variantId);
+  if (posterSlotCollidesWithOriginal(orig, assetIdClean, slot)) slot += 1;
+  return slot;
+}
+
+export function resolveModelViewportPosterFullCompanionKey(
+  asset: WorkflowAsset | null | undefined,
+  assetId: string,
+  variantIdRaw: string,
+  ext = 'png'
+): string | null {
+  const slot = resolveModelViewportPosterSlot(asset, assetId, variantIdRaw);
+  if (slot == null) return null;
+  const orig = clean(asset?.originalCompanionKey);
+  const existing = clean(asset?.resultsCompanionKeys?.[clean(variantIdRaw) || 'original']);
+  if (existing && existing !== orig) return existing;
+  const key = workflowImageCompanionStorageKey(assetId, slot, ext);
+  if (key === orig || posterSlotCollidesWithOriginal(orig, clean(assetId), slot)) return null;
+  return key;
+}
+
+/** Preview/thumb companion object — paired with poster full; never `originalCompanionKey`. */
 export function resolveModelViewportThumbPreviewCompanionKey(
   asset: WorkflowAsset | null | undefined,
   assetId: string,
@@ -122,14 +187,27 @@ export function resolveModelViewportThumbPreviewCompanionKey(
   const assetIdClean = clean(assetId);
   const variantId = clean(variantIdRaw) || 'original';
   if (!assetIdClean) return null;
-  // Allow original only when that step hosts a model (poster, not source photo).
   if (variantId === 'original') {
     if (!asset || !workflowAssetHasModelAtStep(asset, 'original')) return null;
   }
   const existing = clean(asset?.resultsPreviewCompanionKeys?.[variantId]);
   if (existing) return existing;
-  const slotIndex = resolveWorkflowImageSlotIndex(asset?.resultOrder, variantId);
+  const slotIndex = resolveModelViewportPosterSlot(asset, assetIdClean, variantId);
+  if (slotIndex == null) return null;
   return workflowImagePreviewCompanionStorageKey(assetIdClean, slotIndex, 'jpg');
+}
+
+export function planModelViewportPosterPersist(
+  asset: WorkflowAsset | null | undefined,
+  assetId: string,
+  variantIdRaw: string,
+  ext = 'png'
+): { slot: number; fullKey: string | null; previewKey: string; writeFull: boolean } | null {
+  const slot = resolveModelViewportPosterSlot(asset, assetId, variantIdRaw);
+  const previewKey = resolveModelViewportThumbPreviewCompanionKey(asset, assetId, variantIdRaw);
+  if (slot == null || !previewKey) return null;
+  const fullKey = resolveModelViewportPosterFullCompanionKey(asset, assetId, variantIdRaw, ext);
+  return { slot, fullKey, previewKey, writeFull: Boolean(fullKey) };
 }
 
 /**

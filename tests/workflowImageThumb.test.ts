@@ -16,7 +16,7 @@ describe('shouldUsePreviewThumbnail', () => {
     expect(shouldUsePreviewThumbnail('data:image/png;base64,aaa')).toBe(false);
   });
 
-  it('exports size gates for oversized atlas sources', () => {
+  it('exports size gates for Image() / no-resize fallbacks', () => {
     expect(PREVIEW_THUMB_MAX_DATA_URL_CHARS).toBeGreaterThan(100_000);
     expect(PREVIEW_THUMB_MAX_BLOB_BYTES).toBeLessThanOrEqual(1_000_000);
     expect(PREVIEW_THUMB_MAX_PIXELS).toBeLessThanOrEqual(2048 * 2048);

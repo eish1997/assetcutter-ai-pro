@@ -1,8 +1,37 @@
-import { fetchCompanionAssetForDownload, putCompanionAsset } from './companionClient/storage';
+import { fetchCompanionAssetBlob, fetchCompanionAssetForDownload, putCompanionAsset } from './companionClient/storage';
 import { normalizeCompanionBaseUrl } from './companionLocalPrefs';
 import { parseDataUrlToBlob, sanitizeCompanionPathSegment } from './workflowCompanionAssets';
 
 export type WorkflowPreviewThumbKind = 'thumb' | 'micro';
+
+export function parseCompanionAssetHttpUrl(src: string): { projectId: string; key: string } | null {
+  try {
+    const u = new URL(String(src || '').trim());
+    const m = u.pathname.match(/^\/v1\/projects\/([^/]+)\/assets\/(.+)$/);
+    if (!m?.[1] || !m[2]) return null;
+    return {
+      projectId: decodeURIComponent(m[1]),
+      key: decodeURIComponent(m[2]),
+    };
+  } catch {
+    return null;
+  }
+}
+
+export async function fetchCompanionHttpSrcAsObjectUrl(
+  src: string,
+  companionBaseUrl?: string,
+  companionProjectId?: string
+): Promise<string | null> {
+  const parsed = parseCompanionAssetHttpUrl(src);
+  if (!parsed) return null;
+  const base = normalizeCompanionBaseUrl(String(companionBaseUrl || '').trim());
+  const pid = String(parsed.projectId || companionProjectId || '').trim();
+  if (!base || !pid) return null;
+  const got = await fetchCompanionAssetBlob(base, pid, parsed.key);
+  if (got.ok === false) return null;
+  return URL.createObjectURL(new Blob([got.data]));
+}
 
 function hashString(value: string): string {
   let h = 2166136261 >>> 0;

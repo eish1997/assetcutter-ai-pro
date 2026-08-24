@@ -19,6 +19,7 @@ import { fetchMediaUrlViaAuthApi } from './mediaUrlAuthFetch';
 import { workflowModelSlotMayNeedCompanionHydrate, isWorkflowModelUrlReadable } from './workflowModelBlob';
 import { normalizeDataUrlForVisionApi } from './workflowImageDataUrlCompress';
 import { createPreviewThumbnail } from './workflowImageThumb';
+import { WORKFLOW_IMG_EMPTY_PLACEHOLDER } from './workflowImageDisplay';
 import { stripInlineDataUrlsFromAssetPbrFields } from './workflowModelPbrEdits';
 
 /** 与 `storyboardNamedAssetImage.StoryboardNamedAssetImageFields` 同形；内联避免 companion 模块环 */
@@ -117,6 +118,102 @@ export function workflowCompanionObjectKey(input: {
   return workflowAssetDirectoryKey(input.assetId, `${kind}-${role}-${slot}-${id8}.${ext}`);
 }
 
+export type CanonicalCompanionObjectKey = {
+  assetId: string;
+  mediaKind: CompanionMediaKind;
+  role: CompanionObjectRole;
+  slot: number;
+  id8: string;
+  ext: string;
+};
+
+/** `{assetId}/{image|model|video}-{full|thumb}-{slot}-{id8}.{ext}` */
+export function parseCanonicalCompanionObjectKey(key: string): CanonicalCompanionObjectKey | null {
+  const k = String(key || '').trim().replace(/\\/g, '/');
+  const m = /^([^/]+)\/(image|model|video)-(full|thumb)-(\d+)-([a-z0-9]{8})\.([A-Za-z0-9]+)$/i.exec(k);
+  if (!m) return null;
+  return {
+    assetId: m[1]!,
+    mediaKind: m[2]!.toLowerCase() as CompanionMediaKind,
+    role: m[3]!.toLowerCase() as CompanionObjectRole,
+    slot: Math.max(0, Number.parseInt(m[4]!, 10) || 0),
+    id8: m[5]!.toLowerCase(),
+    ext: m[6]!.toLowerCase(),
+  };
+}
+
+export function isCanonicalWorkflowCompanionObjectKey(key: string): boolean {
+  return parseCanonicalCompanionObjectKey(key) != null;
+}
+
+export function isHashedWorkflowGridThumbCacheKey(key: string): boolean {
+  const file = String(key || '').split(/[\\/]/).pop() || '';
+  return /^thumb-(mi|th)-[a-z0-9]+-[a-z0-9]+\.(webp|jpe?g)$/i.test(file);
+}
+
+function isCompanionSamAltObjectKey(key: string): boolean {
+  const file = String(key || '').split(/[\\/]/).pop() || '';
+  return /_m\d+$/i.test(file);
+}
+
+export function extFromCompanionObjectKey(key: string, fallback = 'jpg'): string {
+  const file = String(key || '').split(/[\\/]/).pop() || '';
+  const ext = file.includes('.') ? file.split('.').pop() || '' : '';
+  return sanitizeCompanionPathSegment(ext).slice(0, 12) || fallback;
+}
+
+export function mediaKindFromCompanionObjectKey(
+  key: string,
+  fallback: CompanionMediaKind = 'image'
+): CompanionMediaKind {
+  const parsed = parseCanonicalCompanionObjectKey(key);
+  if (parsed) return parsed.mediaKind;
+  const k = String(key || '').toLowerCase();
+  if (
+    k.includes('original-model') ||
+    k.includes('wf-mdl-') ||
+    /\/model-\d+/.test(k) ||
+    /\.(glb|gltf|fbx|obj|stl)(\?|#|$)/.test(k)
+  ) {
+    return 'model';
+  }
+  if (
+    k.includes('original-video') ||
+    /\/video-/.test(k) ||
+    /\.(mp4|webm|mov|m4v)(\?|#|$)/.test(k)
+  ) {
+    return 'video';
+  }
+  return fallback;
+}
+
+export function canonicalizeWorkflowCompanionObjectKey(
+  storedKey: string,
+  ctx: {
+    assetId: string;
+    mediaKind: CompanionMediaKind;
+    role: CompanionObjectRole;
+    slot: number;
+    ext?: string;
+  }
+): string {
+  const fallbackExt =
+    ctx.role === 'thumb' ? 'jpg' : ctx.mediaKind === 'video' ? 'mp4' : ctx.mediaKind === 'model' ? 'glb' : 'jpg';
+  const ext =
+    ctx.role === 'thumb'
+      ? 'jpg'
+      : ctx.ext
+        ? sanitizeCompanionPathSegment(ctx.ext).slice(0, 12) || fallbackExt
+        : extFromCompanionObjectKey(storedKey, fallbackExt);
+  return workflowCompanionObjectKey({
+    assetId: ctx.assetId,
+    mediaKind: ctx.mediaKind,
+    role: ctx.role,
+    slot: ctx.slot,
+    ext,
+  });
+}
+
 /**
  * 出生原图/原视频键（新写）。
  * image/video → `image|video-full-0-{id8}`；model → `model-full-0-{id8}`。
@@ -181,6 +278,14 @@ export function workflowImagePreviewCompanionStorageKey(
     slot: slotIndex,
     ext,
   });
+}
+
+/** `image-full-{slot}-{id8}.{ext}` → `image-thumb-{slot}-{id8}.jpg`；无法识别时返回空串 */
+export function workflowImageThumbKeyFromFullKey(fullKey: string): string {
+  const k = String(fullKey || '').trim().replace(/\\/g, '/');
+  const m = k.match(/^(.*)\/image-full-(\d+)-([A-Za-z0-9]+)\.[^.]+$/);
+  if (!m) return '';
+  return `${m[1]}/image-thumb-${m[2]}-${m[3]}.jpg`;
 }
 
 /**
@@ -512,6 +617,186 @@ async function fetchCompanionAssetBlobWithProjectFallback(
   return first;
 }
 
+async function copyCompanionBytesToCanonicalKey(
+  baseUrl: string,
+  projectId: string,
+  fromKey: string,
+  toKey: string
+): Promise<boolean> {
+  const from = String(fromKey || '').trim();
+  const to = String(toKey || '').trim();
+  if (!from || !to) return false;
+  const base = normalizeCompanionBaseUrl(baseUrl);
+  const pid = String(projectId || '').trim();
+  if (!base || !pid) return false;
+  if (from === to) return true;
+  const dest = await fetchCompanionAssetBlobWithProjectFallbackExact(base, pid, to);
+  if (dest.ok) return true;
+  const src = await fetchCompanionAssetBlobWithProjectFallback(base, pid, from);
+  if (src.ok === false) return false;
+  const mime = sniffOriginalMediaMimeFromBytes(new Uint8Array(src.data));
+  const put = await putCompanionAsset(base, pid, to, new Blob([src.data], { type: mime }), mime);
+  return put.ok !== false;
+}
+
+async function migrateOneCompanionKey(
+  baseUrl: string,
+  projectId: string,
+  storedKey: string,
+  canonicalKey: string
+): Promise<string | null> {
+  const stored = String(storedKey || '').trim();
+  const canonical = String(canonicalKey || '').trim();
+  if (!stored || !canonical) return null;
+  if (isCompanionSamAltObjectKey(stored)) return stored;
+  if (stored === canonical) return stored;
+  if (await copyCompanionBytesToCanonicalKey(baseUrl, projectId, stored, canonical)) return canonical;
+  return null;
+}
+
+export async function migrateWorkflowAssetCompanionKeysToCanonical(
+  asset: WorkflowAsset,
+  baseUrl: string,
+  projectId: string
+): Promise<{ asset: WorkflowAsset; changed: boolean }> {
+  const id = String(asset.id || '').trim();
+  if (!id) return { asset, changed: false };
+  let next = asset;
+  let changed = false;
+
+  const orig = String(next.originalCompanionKey || '').trim();
+  if (orig && !isHashedWorkflowGridThumbCacheKey(orig) && !isCompanionSamAltObjectKey(orig)) {
+    const kind = mediaKindFromCompanionObjectKey(orig, 'image');
+    const canonical = canonicalizeWorkflowCompanionObjectKey(orig, {
+      assetId: id,
+      mediaKind: kind,
+      role: 'full',
+      slot: 0,
+      ext: extFromCompanionObjectKey(orig, kind === 'model' ? 'glb' : kind === 'video' ? 'mp4' : 'jpg'),
+    });
+    const migrated = await migrateOneCompanionKey(baseUrl, projectId, orig, canonical);
+    if (migrated && migrated !== orig) {
+      next = { ...next, originalCompanionKey: migrated };
+      changed = true;
+    }
+  }
+
+  const rck = { ...(next.resultsCompanionKeys || {}) };
+  let rckChanged = false;
+  for (const step of Object.keys(rck)) {
+    const stored = String(rck[step] || '').trim();
+    if (!stored || isHashedWorkflowGridThumbCacheKey(stored) || isCompanionSamAltObjectKey(stored)) continue;
+    const metaKind = next.resultMeta?.[step]?.mediaKind;
+    const kind: CompanionMediaKind =
+      metaKind === 'video' || mediaKindFromCompanionObjectKey(stored, 'image') === 'video' ? 'video' : 'image';
+    const slot = resolveWorkflowImageSlotIndex(next.resultOrder, step);
+    const canonical = canonicalizeWorkflowCompanionObjectKey(stored, {
+      assetId: id,
+      mediaKind: kind,
+      role: 'full',
+      slot,
+      ext: extFromCompanionObjectKey(stored, kind === 'video' ? 'mp4' : 'png'),
+    });
+    const migrated = await migrateOneCompanionKey(baseUrl, projectId, stored, canonical);
+    if (migrated && migrated !== stored) {
+      rck[step] = migrated;
+      rckChanged = true;
+    }
+  }
+  if (rckChanged) {
+    next = { ...next, resultsCompanionKeys: rck };
+    changed = true;
+  }
+
+  const rpck = { ...(next.resultsPreviewCompanionKeys || {}) };
+  let rpckChanged = false;
+  const previewSteps = new Set([...Object.keys(rpck), ...Object.keys(next.resultsCompanionKeys || {}), 'original']);
+  for (const step of previewSteps) {
+    const stored = String(rpck[step] || '').trim();
+    const slot = step === 'original' ? 0 : resolveWorkflowImageSlotIndex(next.resultOrder, step);
+    const canonical = workflowImagePreviewCompanionStorageKey(id, slot, 'jpg');
+    if (stored === canonical) continue;
+    if (stored) {
+      if (isCompanionSamAltObjectKey(stored)) continue;
+      const migrated = await migrateOneCompanionKey(baseUrl, projectId, stored, canonical);
+      if (migrated && migrated !== stored) {
+        rpck[step] = migrated;
+        rpckChanged = true;
+      }
+      continue;
+    }
+    const dest = await fetchCompanionAssetBlobWithProjectFallbackExact(
+      normalizeCompanionBaseUrl(baseUrl),
+      projectId,
+      canonical
+    );
+    if (dest.ok) {
+      rpck[step] = canonical;
+      rpckChanged = true;
+    }
+  }
+  if (rpckChanged) {
+    next = { ...next, resultsPreviewCompanionKeys: rpck };
+    changed = true;
+  }
+
+  const mck = [...(next.modelCompanionKeys || [])];
+  let mckChanged = false;
+  for (let i = 0; i < mck.length; i += 1) {
+    const stored = String(mck[i] || '').trim();
+    if (!stored || isCompanionSamAltObjectKey(stored)) continue;
+    const canonical = canonicalizeWorkflowCompanionObjectKey(stored, {
+      assetId: id,
+      mediaKind: 'model',
+      role: 'full',
+      slot: i,
+      ext: extFromCompanionObjectKey(stored, 'glb'),
+    });
+    const migrated = await migrateOneCompanionKey(baseUrl, projectId, stored, canonical);
+    if (migrated && migrated !== stored) {
+      mck[i] = migrated;
+      mckChanged = true;
+    }
+  }
+  if (mckChanged) {
+    next = { ...next, modelCompanionKeys: mck };
+    changed = true;
+  }
+
+  const smck = { ...(next.stepModelCompanionKeys || {}) };
+  let smckChanged = false;
+  for (const step of Object.keys(smck)) {
+    const keys = [...(smck[step] || [])];
+    let rowChanged = false;
+    for (let i = 0; i < keys.length; i += 1) {
+      const stored = String(keys[i] || '').trim();
+      if (!stored || isCompanionSamAltObjectKey(stored)) continue;
+      const canonical = canonicalizeWorkflowCompanionObjectKey(stored, {
+        assetId: id,
+        mediaKind: 'model',
+        role: 'full',
+        slot: i,
+        ext: extFromCompanionObjectKey(stored, 'glb'),
+      });
+      const migrated = await migrateOneCompanionKey(baseUrl, projectId, stored, canonical);
+      if (migrated && migrated !== stored) {
+        keys[i] = migrated;
+        rowChanged = true;
+      }
+    }
+    if (rowChanged) {
+      smck[step] = keys;
+      smckChanged = true;
+    }
+  }
+  if (smckChanged) {
+    next = { ...next, stepModelCompanionKeys: smck };
+    changed = true;
+  }
+
+  return { asset: next, changed };
+}
+
 /** 将本地 3D 文件写入伴侣；`slotIndex` 与 `modelUrls` 下标一致 */
 export async function putWorkflowModelFileToCompanion(
   baseUrl: string,
@@ -803,6 +1088,7 @@ async function putWorkflowImagePreviewSidecar(
 ): Promise<string | undefined> {
   try {
     const thumb = await createPreviewThumbnail(sourceDataUrl, 512, 0.82, 'low');
+    if (!thumb || thumb === WORKFLOW_IMG_EMPTY_PLACEHOLDER) return undefined;
     const parsed = parseDataUrlToBlob(thumb);
     if (!parsed) return undefined;
     const previewKey = workflowImagePreviewCompanionStorageKey(assetId, slotIndex, 'jpg');
@@ -875,7 +1161,7 @@ export async function putWorkflowOriginalImageFromAnyUrl(
   assetId: string,
   imageSrc: string,
   opts?: { providerId?: string }
-): Promise<{ ok: true; key: string } | { ok: false; error: string }> {
+): Promise<{ ok: true; key: string; previewKey?: string } | { ok: false; error: string }> {
   const source = String(imageSrc || '').trim();
   if (!source) return { ok: false, error: 'empty_image_src' };
   const base = normalizeCompanionBaseUrl(baseUrl);
@@ -885,7 +1171,12 @@ export async function putWorkflowOriginalImageFromAnyUrl(
     const key = workflowOriginalCompanionStorageKey(assetId, sniffImageExtFromUrl(source), 'image');
     const imported = await importCompanionAssetFromUrl(base, projectId, key, source);
     if (imported.ok !== false) {
-      return { ok: true, key };
+      let previewKey: string | undefined;
+      const dataUrl = await imageSrcToDataUrlForCompanion(source);
+      if (dataUrl) {
+        previewKey = await putWorkflowImagePreviewSidecar(baseUrl, projectId, assetId, 0, dataUrl);
+      }
+      return { ok: true, key, previewKey };
     }
     importNote = imported.error || `import_http_${imported.status ?? '?'}`;
   }
@@ -943,17 +1234,22 @@ export async function putWorkflowOriginalImageToCompanion(
   projectId: string,
   assetId: string,
   imageBase64OrDataUrl: string
-): Promise<{ ok: true; key: string } | { ok: false; error: string }> {
+): Promise<{ ok: true; key: string; previewKey?: string } | { ok: false; error: string }> {
   const parsed = parseDataUrlToBlob(imageBase64OrDataUrl);
   if (!parsed) return { ok: false, error: 'not_data_url' };
   const ext = mediaExtFromMime(parsed.mime);
-  const key = workflowOriginalCompanionStorageKey(assetId, ext, originalAssetTypeFromMimeOrExt(parsed.mime, ext));
+  const assetType = originalAssetTypeFromMimeOrExt(parsed.mime, ext);
+  const key = workflowOriginalCompanionStorageKey(assetId, ext, assetType);
   const base = normalizeCompanionBaseUrl(baseUrl);
   const res = await putCompanionAsset(base, projectId, key, parsed.blob, parsed.mime);
   if (res.ok === false) {
     return { ok: false, error: `${res.error}${res.status != null ? ` (HTTP ${res.status})` : ''}` };
   }
-  return { ok: true, key };
+  let previewKey: string | undefined;
+  if (assetType === 'image') {
+    previewKey = await putWorkflowImagePreviewSidecar(baseUrl, projectId, assetId, 0, imageBase64OrDataUrl);
+  }
+  return { ok: true, key, previewKey };
 }
 
 export async function putWorkflowOriginalBlobToCompanion(
@@ -961,16 +1257,26 @@ export async function putWorkflowOriginalBlobToCompanion(
   projectId: string,
   assetId: string,
   blob: Blob
-): Promise<{ ok: true; key: string } | { ok: false; error: string }> {
+): Promise<{ ok: true; key: string; previewKey?: string } | { ok: false; error: string }> {
   const base = normalizeCompanionBaseUrl(baseUrl);
   const mime = (blob.type && blob.type.split(';')[0].trim()) || 'application/octet-stream';
   const ext = mediaExtFromMime(mime);
-  const key = workflowOriginalCompanionStorageKey(assetId, ext, originalAssetTypeFromMimeOrExt(mime, ext));
+  const assetType = originalAssetTypeFromMimeOrExt(mime, ext);
+  const key = workflowOriginalCompanionStorageKey(assetId, ext, assetType);
   const res = await putCompanionAsset(base, projectId, key, blob, mime);
   if (res.ok === false) {
     return { ok: false, error: `${res.error}${res.status != null ? ` (HTTP ${res.status})` : ''}` };
   }
-  return { ok: true, key };
+  let previewKey: string | undefined;
+  if (assetType === 'image') {
+    const objectUrl = URL.createObjectURL(blob);
+    try {
+      previewKey = await putWorkflowImagePreviewSidecar(baseUrl, projectId, assetId, 0, objectUrl);
+    } finally {
+      URL.revokeObjectURL(objectUrl);
+    }
+  }
+  return { ok: true, key, previewKey };
 }
 
 export async function putWorkflowResultImageToCompanion(

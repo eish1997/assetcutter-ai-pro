@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import type { WorkflowAsset } from '../types';
 import {
   patchAssetWithModelViewportThumb,
+  planModelViewportPosterPersist,
+  resolveModelViewportPosterSlot,
   resolveModelViewportThumbPreviewCompanionKey,
   resolveWorkflowModelStepPosterSrc,
   workflowAssetHasModelAtStep,
@@ -30,7 +32,7 @@ describe('workflowModelViewportThumbPersist', () => {
     expect(patched.shouldPersistPreviewCompanion).toBe(false);
   });
 
-  it('writes result-step poster for model versions and requests preview companion only', () => {
+  it('writes result-step poster for model versions without touching companion keys in memory', () => {
     const asset = baseAsset({
       results: { generate_3d__v__a: 'data:image/png;base64,OLD_POSTER' },
       resultsCompanionKeys: { generate_3d__v__a: 'asset-1/image-full-0-abcdef01.png' },
@@ -120,5 +122,65 @@ describe('workflowModelViewportThumbPersist', () => {
         `companion://${k}`
       )
     ).toBe('');
+  });
+});
+
+describe('planModelViewportPosterPersist', () => {
+  it('writes generate_3d full+thumb onto the result slot when it does not collide with the source photo', () => {
+    const asset = baseAsset({
+      originalCompanionKey: 'asset-1/image-full-0-asset100.png',
+      resultOrder: ['text_to_image', 'generate_3d__v__a'],
+    });
+    const plan = planModelViewportPosterPersist(asset, 'asset-1', 'generate_3d__v__a', 'png');
+    expect(plan).toEqual({
+      slot: 1,
+      writeFull: true,
+      fullKey: 'asset-1/image-full-1-asset100.png',
+      previewKey: 'asset-1/image-thumb-1-asset100.jpg',
+    });
+  });
+
+  it('bumps off slot 0 when the first 3D result would overwrite the source photo', () => {
+    const asset = baseAsset({
+      originalCompanionKey: 'asset-1/image-full-0-asset100.png',
+    });
+    expect(resolveModelViewportPosterSlot(asset, 'asset-1', 'generate_3d__v__a')).toBe(1);
+    const plan = planModelViewportPosterPersist(asset, 'asset-1', 'generate_3d__v__a', 'png');
+    expect(plan?.writeFull).toBe(true);
+    expect(plan?.fullKey).toBe('asset-1/image-full-1-asset100.png');
+    expect(plan?.previewKey).toBe('asset-1/image-thumb-1-asset100.jpg');
+  });
+
+  it('reuses an existing dedicated result full key and keeps the pair on that slot', () => {
+    const asset = baseAsset({
+      originalCompanionKey: 'asset-1/image-full-0-asset100.png',
+      resultsCompanionKeys: { generate_3d__v__a: 'asset-1/image-full-2-asset100.png' },
+    });
+    const plan = planModelViewportPosterPersist(asset, 'asset-1', 'generate_3d__v__a', 'png');
+    expect(plan).toMatchObject({
+      slot: 2,
+      writeFull: true,
+      fullKey: 'asset-1/image-full-2-asset100.png',
+      previewKey: 'asset-1/image-thumb-2-asset100.jpg',
+    });
+  });
+
+  it('for model-at-original, plans a poster pair that does not replace originalCompanionKey', () => {
+    const asset = baseAsset({
+      original: 'data:image/svg+xml;base64,x',
+      displayKey: 'original',
+      resultOrder: [],
+      originalCompanionKey: 'asset-1/original-image-asset-1.png',
+      stepModelUrls: { original: ['blob:http://x/m'] },
+    });
+    const plan = planModelViewportPosterPersist(asset, 'asset-1', 'original', 'png');
+    expect(plan?.writeFull).toBe(true);
+    expect(plan?.fullKey).not.toBe(asset.originalCompanionKey);
+    expect(plan?.fullKey).toBe('asset-1/image-full-1-asset100.png');
+    expect(plan?.previewKey).toBe('asset-1/image-thumb-1-asset100.jpg');
+  });
+
+  it('does not plan a poster persist for photo-only original', () => {
+    expect(planModelViewportPosterPersist(baseAsset(), 'asset-1', 'original', 'png')).toBeNull();
   });
 });

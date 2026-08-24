@@ -20,6 +20,7 @@ vi.mock("../services/settingsStore", () => ({
   getTencentCreds: vi.fn(() => ({ secretId: "", secretKey: "" })),
   getTripoApiKey: vi.fn(() => null),
   getUserApiKey: vi.fn(() => null),
+  hasUserCredentialsForChannel: vi.fn(() => false),
 }));
 
 import { getGeminiFairnessUserId } from "../services/geminiFairnessBridge";

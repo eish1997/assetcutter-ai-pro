@@ -151,8 +151,8 @@ function OverviewBar({ compact }: { compact: boolean }) {
           </p>
           <p className="text-[9px] text-gray-500 leading-relaxed max-w-md">
             <strong className="font-semibold text-gray-400">输入口</strong>：工作流里选具体模型型号（registryId）。{' '}
-            <strong className="font-semibold text-gray-400">输出口</strong>：下方启用供应商线路并填凭证。{' '}
-            <strong className="font-semibold text-gray-400">接线</strong>：各型号走哪条输出口由平台 binding 表决定（见下方预览）；启用多条时按优先级自动切换。文本与生图可接不同输出口。
+            <strong className="font-semibold text-gray-400">输出口</strong>：下方启用供应商线路并填凭证。启用自备 Key 输出口并保存密钥后，工作区出图/理解走该密钥、不扣站点积分；只开「Vertex · 站点代理」则走站点额度。{' '}
+            <strong className="font-semibold text-gray-400">接线</strong>：各型号走哪条输出口由平台 binding 表决定（见下方预览）；同时启用自备 Key 与站点代理时优先自备 Key。文本与生图可接不同输出口。
           </p>
         </div>
       </div>

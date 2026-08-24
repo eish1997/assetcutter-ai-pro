@@ -1,4 +1,5 @@
-import { getEnabledChannels, isChannelReady } from "../settingsStore";
+import { isByokBindingChannel } from "../../shared/billingRoute";
+import { getEnabledChannels, hasUserCredentialsForChannel, isChannelReady } from "../settingsStore";
 import { resolveUpstreamForBinding } from "./channelCredentials";
 import { wiringEdgesToProviderBindings } from "./hubGraph/compile";
 import { buildHubInPorts } from "./hubGraph/hubPorts";
@@ -69,23 +70,27 @@ export function pickBinding(registryId: string, role: ModelResolveRole): PickedB
   if (!id) return null;
   const enabled = new Set(getEnabledChannels());
   const bindings = resolvedBindingsForRegistry(id, role);
+  const candidates: PickedBinding[] = [];
   for (const binding of bindings) {
     if (!enabled.has(binding.channel)) continue;
     if (!isChannelReady(binding.channel)) continue;
-    const picked: PickedBinding = {
+    candidates.push({
       ...binding,
       upstreamModelId: resolveUpstreamForBinding(id, role, binding, resolveUpstreamModelIdForProvider),
-    };
-    if (shouldLogPickBinding()) {
-      modelRegistryLog(
-        "info",
-        "picked binding",
-        `${id} role=${role} channel=${binding.channel} upstream=${picked.upstreamModelId}`
-      );
-    }
-    return picked;
+    });
   }
-  return null;
+  const picked =
+    candidates.find((row) => isByokBindingChannel(row.channel) && hasUserCredentialsForChannel(row.channel)) ||
+    candidates[0] ||
+    null;
+  if (picked && shouldLogPickBinding()) {
+    modelRegistryLog(
+      "info",
+      "picked binding",
+      `${id} role=${role} channel=${picked.channel} upstream=${picked.upstreamModelId}`
+    );
+  }
+  return picked;
 }
 
 export function hasReadyBinding(registryId: string, role: ModelResolveRole): boolean {

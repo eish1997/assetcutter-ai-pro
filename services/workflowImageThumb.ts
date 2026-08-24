@@ -97,11 +97,6 @@ export const PREVIEW_THUMB_MAX_BLOB_BYTES = 750_000; // ~0.75MB — UV atlases o
 export const PREVIEW_THUMB_MAX_PIXELS = 2048 * 2048;
 
 function drawSrcToCanvas(safeSrc: string, maxEdge: number): Promise<HTMLCanvasElement | null> {
-  // Giant inline data URLs: never decode full atlas for a grid thumb.
-  if (safeSrc.startsWith('data:') && safeSrc.length > PREVIEW_THUMB_MAX_DATA_URL_CHARS) {
-    return Promise.resolve(null);
-  }
-
   const paintBitmap = (bitmap: ImageBitmap): HTMLCanvasElement | null => {
     try {
       const w = bitmap.width;
@@ -140,7 +135,6 @@ function drawSrcToCanvas(safeSrc: string, maxEdge: number): Promise<HTMLCanvasEl
         } else {
           return null;
         }
-        if (blob.size > PREVIEW_THUMB_MAX_BLOB_BYTES) return null;
         const opts: ImageBitmapOptions = { resizeQuality: 'low' };
         // Hint downscale before full decode when the engine supports it.
         (opts as ImageBitmapOptions & { resizeWidth?: number }).resizeWidth = Math.max(1, Math.floor(maxEdge));
@@ -148,6 +142,9 @@ function drawSrcToCanvas(safeSrc: string, maxEdge: number): Promise<HTMLCanvasEl
         try {
           bitmap = await createImageBitmap(blob, opts);
         } catch {
+          // ImageBitmap resize unsupported: only full-decode modest blobs (UV atlas protection).
+          if (blob.size > PREVIEW_THUMB_MAX_BLOB_BYTES) return null;
+          if (safeSrc.startsWith('data:') && safeSrc.length > PREVIEW_THUMB_MAX_DATA_URL_CHARS) return null;
           bitmap = await createImageBitmap(blob);
         }
         // Still too huge after decode — refuse to upload to GPU canvas at full size.
@@ -167,6 +164,11 @@ function drawSrcToCanvas(safeSrc: string, maxEdge: number): Promise<HTMLCanvasEl
   }
 
   return new Promise((resolve) => {
+    // Image() always full-decodes — keep atlas size gates here only.
+    if (safeSrc.startsWith('data:') && safeSrc.length > PREVIEW_THUMB_MAX_DATA_URL_CHARS) {
+      resolve(null);
+      return;
+    }
     const img = new Image();
     if (/^https?:/i.test(safeSrc)) {
       try {

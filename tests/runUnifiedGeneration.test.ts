@@ -16,7 +16,14 @@ vi.mock('../services/aiJobsClient', () => ({
   getMyAiJob: vi.fn(),
 }));
 
+vi.mock('../services/geminiService', () => ({
+  dialogGenerateImage: vi.fn(),
+  dialogGenerateImageMulti: vi.fn(),
+  getDialogTextResponse: vi.fn(),
+}));
+
 import { createAiJob, getMyAiJob } from '../services/aiJobsClient';
+import { dialogGenerateImage } from '../services/geminiService';
 import { clearLastCreditsReserveKey } from '../services/creditsProxyBridge';
 import * as settingsStore from '../services/settingsStore';
 import {
@@ -39,6 +46,7 @@ describe('runUnifiedGeneration', () => {
     vi.useRealTimers();
     vi.mocked(createAiJob).mockReset();
     vi.mocked(getMyAiJob).mockReset();
+    vi.mocked(dialogGenerateImage).mockReset();
     vi.mocked(clearLastCreditsReserveKey).mockReset();
     clearAiGatewayImageResultRegistryForTest();
     vi.restoreAllMocks();
@@ -406,15 +414,35 @@ describe('runUnifiedGeneration', () => {
     expect((createArgs.metadata as Record<string, unknown> | undefined)?.providerId).toBeUndefined();
   });
 
-  it('pins BYOK Gemini channels only when explicitByok is set', async () => {
-    vi.spyOn(settingsStore, 'getEnabledChannels').mockReturnValue(['toapis-gemini']);
-    vi.spyOn(settingsStore, 'isChannelReady').mockImplementation((channel) => channel === 'toapis-gemini');
+  it('uses the local user key and skips createAiJob when a BYOK outlet is enabled', async () => {
+    vi.spyOn(settingsStore, 'getEnabledChannels').mockReturnValue(['gemini-aistudio']);
+    vi.spyOn(settingsStore, 'isChannelReady').mockImplementation((channel) => channel === 'gemini-aistudio');
+    vi.spyOn(settingsStore, 'hasUserCredentialsForChannel').mockImplementation((channel) => channel === 'gemini-aistudio');
+    vi.mocked(dialogGenerateImage).mockResolvedValue('data:image/png;base64,BYOK');
+
+    await expect(
+      runUnifiedImageGeneration({
+        prompt: 'a cat',
+        registryId: 'gemini-3.1-flash-image-preview',
+        model: 'gemini-3.1-flash-image-preview',
+        uiSource: 'test',
+      })
+    ).resolves.toBe('data:image/png;base64,BYOK');
+
+    expect(createAiJob).not.toHaveBeenCalled();
+    expect(dialogGenerateImage).toHaveBeenCalled();
+  });
+
+  it('request.explicitByok still pins the Gateway provider when no local BYOK outlet is selected', async () => {
+    vi.spyOn(settingsStore, 'getEnabledChannels').mockReturnValue(['vertex-proxy']);
+    vi.spyOn(settingsStore, 'isChannelReady').mockImplementation((channel) => channel === 'vertex-proxy');
+    vi.spyOn(settingsStore, 'hasUserCredentialsForChannel').mockReturnValue(false);
     vi.mocked(createAiJob).mockResolvedValue({
       job: {
-        id: 'aijob_image_toapis_gemini',
+        id: 'aijob_image_vertex_pin',
         status: 'succeeded',
         output: null,
-        artifacts: [{ kind: 'image', url: 'data:image/png;base64,TOAPIS' }],
+        artifacts: [{ kind: 'image', url: 'data:image/png;base64,VX' }],
       },
     } as unknown as Awaited<ReturnType<typeof createAiJob>>);
 
@@ -423,22 +451,16 @@ describe('runUnifiedGeneration', () => {
       capability: 'text_to_image',
       canonicalModelId: 'gemini-3.1-flash-image-preview',
       registryId: 'gemini-3.1-flash-image-preview',
-      upstreamModelId: 'gemini-3.1-flash-image',
       explicitByok: true,
-      input: {
-        prompt: 'clean package',
-        model: 'gemini-3.1-flash-image',
-        upstreamModelId: 'gemini-3.1-flash-image',
-        registryId: 'gemini-3.1-flash-image-preview',
-      },
+      input: { prompt: 'clean package' },
       uiSource: 'test',
     });
 
     expect(createAiJob).toHaveBeenCalledWith(
       expect.objectContaining({
-        provider: 'toapis',
+        provider: 'vertex-site',
         metadata: expect.objectContaining({
-          providerId: 'toapis',
+          providerId: 'vertex-site',
         }),
       }),
       expect.any(Object)

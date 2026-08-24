@@ -285,7 +285,7 @@ export const WORKFLOW_AI_EXECUTION_ENTRY_ROWS: readonly WorkflowAiExecutionEntry
     routeStatus: 'gateway',
     modelContract: 'canonical_model',
     contextContract: 'partial',
-    nextAction: '已走 runUnifiedGeneration(workflow_text_to_image / workflow_image_edit)；后续补局部重绘、分镜和 route schema。',
+    nextAction: '已走 runUnifiedGeneration(workflow_text_to_image / workflow_image_edit)；启用自备 Key 输出口时浏览器直连用户密钥且不扣站点积分。',
   },
   {
     id: 'capability_preset_execute',
@@ -296,7 +296,7 @@ export const WORKFLOW_AI_EXECUTION_ENTRY_ROWS: readonly WorkflowAiExecutionEntry
     modelContract: 'mixed',
     contextContract: 'partial',
     nextAction:
-      '文/图/视频/检测已走 Gateway Job；3D 预设引导至工作流拖图。后续统一 resolve 组覆盖与 route schema。',
+      '文/图已走 Gateway Job，启用自备 Key 输出口时改走本机密钥且不扣站点积分；视频/检测仍 Gateway；3D 预设引导至工作流拖图。',
   },
   {
     id: 'storyboard_ai',

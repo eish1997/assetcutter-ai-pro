@@ -8,6 +8,7 @@ import { isWorkflowTextAsset } from './workflowTextAsset';
 import {
   companionRasterSlotNeedsHydrate,
   fetchWorkflowOriginalFromCompanionAsObjectUrl,
+  migrateWorkflowAssetCompanionKeysToCanonical,
   shouldKeepExistingCompanionRasterUrl,
 } from './workflowCompanionAssets';
 import {
@@ -21,7 +22,16 @@ export const WORKFLOW_COMPANION_LAZY_HYDRATE_BATCH_MS = 48;
 
 export type WorkflowCompanionHydratePatch =
   | { assetId: string; kind: 'original'; objectUrl: string }
-  | { assetId: string; kind: 'result'; stepId: string; objectUrl: string };
+  | { assetId: string; kind: 'result'; stepId: string; objectUrl: string }
+  | {
+      assetId: string;
+      kind: 'keys';
+      originalCompanionKey?: string;
+      resultsCompanionKeys?: Record<string, string>;
+      resultsPreviewCompanionKeys?: Record<string, string>;
+      modelCompanionKeys?: string[];
+      stepModelCompanionKeys?: Record<string, string[]>;
+    };
 
 export type WorkflowCompanionLazyHydrateTask = {
   assetId: string;
@@ -87,6 +97,19 @@ function applyCompanionHydratePatches(
     if (!ps?.length) return x;
     let next = x;
     for (const p of ps) {
+      if (p.kind === 'keys') {
+        next = {
+          ...next,
+          ...(p.originalCompanionKey != null ? { originalCompanionKey: p.originalCompanionKey } : {}),
+          ...(p.resultsCompanionKeys ? { resultsCompanionKeys: p.resultsCompanionKeys } : {}),
+          ...(p.resultsPreviewCompanionKeys
+            ? { resultsPreviewCompanionKeys: p.resultsPreviewCompanionKeys }
+            : {}),
+          ...(p.modelCompanionKeys ? { modelCompanionKeys: p.modelCompanionKeys } : {}),
+          ...(p.stepModelCompanionKeys ? { stepModelCompanionKeys: p.stepModelCompanionKeys } : {}),
+        };
+        continue;
+      }
       if (p.kind === 'original') {
         const prevO = String(next.original || '').trim();
         if (/^blob:/i.test(prevO)) {
@@ -246,6 +269,26 @@ export async function runWorkflowCompanionEagerRasterHydrate(opts: {
   onFailure?: (task: WorkflowCompanionLazyHydrateTask, error: string) => void;
   isCancelled?: () => boolean;
 }): Promise<void> {
+  const base = String(opts.companionBaseUrl || '').trim();
+  const pid = String(opts.projectId || '').trim();
+  if (base && pid) {
+    const keyPatches: WorkflowCompanionHydratePatch[] = [];
+    for (const asset of opts.getAssets()) {
+      if (opts.isCancelled?.()) return;
+      const { asset: next, changed } = await migrateWorkflowAssetCompanionKeysToCanonical(asset, base, pid);
+      if (!changed) continue;
+      keyPatches.push({
+        assetId: asset.id,
+        kind: 'keys',
+        originalCompanionKey: next.originalCompanionKey,
+        resultsCompanionKeys: next.resultsCompanionKeys,
+        resultsPreviewCompanionKeys: next.resultsPreviewCompanionKeys,
+        modelCompanionKeys: next.modelCompanionKeys,
+        stepModelCompanionKeys: next.stepModelCompanionKeys,
+      });
+    }
+    if (keyPatches.length) opts.onPatch(keyPatches);
+  }
   const allIds = new Set(opts.getAssets().map((a) => a.id));
   await runWorkflowCompanionLazyHydrate({
     ...opts,

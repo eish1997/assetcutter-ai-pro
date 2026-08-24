@@ -680,7 +680,8 @@ export type WorkflowAsset = {
   /** 各步骤结果图在本地伴侣下的对象键（与 `results` 中对应 step 的 data/blob 配对；持久化时可清空该步内联串） */
   resultsCompanionKeys?: Record<string, string>;
   /**
-   * 各步骤结果缩略图伴侣键（`preview-{slot}.jpg`，与 `image-{slot}` 同目录）。
+   * 各步骤结果缩略图伴侣键（规范 `image-thumb-{slot}-{id8}.jpg`，与 `image-full-*` 同目录）。
+   * 旧盘上的 `preview-{slot}.*` / `thumb-mi|th-*` 打开项目时 copy 到规范键并改本指针。
    * 对齐 3D 的 model + preview 双文件；打开资产文件夹时应能看到。
    */
   resultsPreviewCompanionKeys?: Record<string, string>;

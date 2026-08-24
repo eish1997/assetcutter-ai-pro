@@ -26,8 +26,8 @@ import { adoptCreditsPrechargeSession } from './creditsPrechargeSession';
 import { getGeminiFairnessUserId } from './geminiFairnessBridge';
 import { HttpRequestError } from './httpClient';
 import { pickBinding } from './modelRegistry/pickBinding';
-import { hasTencentSessionCredentials } from './platformAiPath';
-import { getTripoApiKey } from './settingsStore';
+import { hasTencentSessionCredentials, isExplicitByokPath } from './platformAiPath';
+import { getTripoApiKey, getUserApiKey } from './settingsStore';
 
 function hasTripoApiKeyFromSettings(): boolean {
   return Boolean(String(getTripoApiKey() || '').trim());
@@ -120,8 +120,11 @@ export async function gateBeforeUpstream(params: GateBeforeUpstreamParams): Prom
   const hasTencentCreds = params.hasTencentCreds ?? hasTencentSessionCredentials();
 
   let channel: string | undefined;
+  let explicitByok = false;
   if (params.registryId?.trim()) {
-    channel = pickBinding(params.registryId.trim(), role)?.channel;
+    const picked = pickBinding(params.registryId.trim(), role);
+    channel = picked?.channel;
+    explicitByok = isExplicitByokPath(params.registryId.trim(), role);
   }
 
   const route = resolveBillingRoute({
@@ -132,6 +135,8 @@ export async function gateBeforeUpstream(params: GateBeforeUpstreamParams): Prom
     generate3dProvider: params.generate3dProvider,
     hasTripoApiKey: params.hasTripoApiKey ?? hasTripoApiKeyFromSettings(),
     hasTencentCreds,
+    hasUserApiKey: Boolean(getUserApiKey()?.trim()),
+    explicitByok,
   });
 
   const decision: BillingDecision = {

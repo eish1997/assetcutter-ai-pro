@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  parseCompanionAssetHttpUrl,
   stableWorkflowPreviewThumbCacheKey,
   workflowPreviewThumbCompanionStorageKey,
 } from '../services/workflowPreviewThumbCompanion';
@@ -39,5 +40,18 @@ describe('workflowPreviewThumbCompanionStorageKey', () => {
     expect(workflowPreviewThumbCompanionStorageKey(stripA, 'micro', 128)).toBe(
       workflowPreviewThumbCompanionStorageKey(stripB, 'micro', 128)
     );
+  });
+});
+
+describe('parseCompanionAssetHttpUrl', () => {
+  it('decodes project id and asset object key', () => {
+    expect(
+      parseCompanionAssetHttpUrl(
+        'http://127.0.0.1:18765/v1/projects/proj%201/assets/asset-1%2Fimage-full-0-abc.png'
+      )
+    ).toEqual({
+      projectId: 'proj 1',
+      key: 'asset-1/image-full-0-abc.png',
+    });
   });
 });

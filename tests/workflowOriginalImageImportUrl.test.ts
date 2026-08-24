@@ -25,8 +25,14 @@ describe('putWorkflowOriginalImageFromAnyUrl', () => {
   it('https 优先走伴侣 import-url（避开浏览器 CORS）', async () => {
     mocks.importCompanionAssetFromUrl.mockResolvedValue({
       ok: true,
-      data: { key: 'asset-a/original-image-asset-a.png' },
+      data: { key: 'asset-a/image-full-0-asset-a0.png' },
     });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        throw new Error('no browser fetch');
+      })
+    );
 
     const result = await putWorkflowOriginalImageFromAnyUrl(
       'http://127.0.0.1:18765',
@@ -37,13 +43,14 @@ describe('putWorkflowOriginalImageFromAnyUrl', () => {
 
     expect(result.ok).toBe(true);
     if (result.ok !== true) return;
-    expect(result.key).toContain('asset-a');
+    expect(result.key).toBe('asset-a/image-full-0-asseta00.png');
     expect(mocks.importCompanionAssetFromUrl).toHaveBeenCalledWith(
       'http://127.0.0.1:18765',
       'project-a',
-      expect.stringContaining('asset-a'),
+      'asset-a/image-full-0-asseta00.png',
       'https://cdn.example.com/out.png'
     );
+    // sidecar 依赖再拉一次源图；fetch 失败时仍保留 import-url 主文件
     expect(mocks.putCompanionAsset).not.toHaveBeenCalled();
   });
 });

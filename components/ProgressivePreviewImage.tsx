@@ -8,9 +8,8 @@ import {
   type PreviewThumbDecodePriority,
 } from '../services/workflowImageThumb';
 import {
-  fetchWorkflowPreviewThumbFromCompanion,
-  putWorkflowPreviewThumbToCompanion,
-  workflowPreviewThumbCompanionStorageKey,
+  fetchCompanionHttpSrcAsObjectUrl,
+  parseCompanionAssetHttpUrl,
 } from '../services/workflowPreviewThumbCompanion';
 
 /**
@@ -224,28 +223,22 @@ export const ProgressivePreviewImage = forwardRef<HTMLImageElement, ProgressiveP
       const microHit = cacheGet(mKey);
       const companionBase = String(companionBaseUrl || '').trim();
       const companionProject = String(companionProjectId || '').trim();
-      const canUseCompanionThumbs = Boolean(companionBase && companionProject);
-      const companionThumbKey = canUseCompanionThumbs
-        ? workflowPreviewThumbCompanionStorageKey(cacheKey, 'thumb', thumbMaxEdge)
-        : '';
-      const companionMicroKey = canUseCompanionThumbs
-        ? workflowPreviewThumbCompanionStorageKey(cacheKey, 'micro', microEdge)
-        : '';
       // Fresh data URLs (e.g. 3D lightbox capture) must regenerate — do not serve a
-      // stale memory/companion thumb that shares a stable cacheKey (strip / VGP tree).
+      // stale memory thumb that shares a stable cacheKey (strip / VGP tree).
       const sourceIsInlineData = /^data:image\//i.test(s);
-      const directFallbackSource = canDirectLoadAfterThumbMiss(s) ? s : '';
+      const companionHttp = Boolean(parseCompanionAssetHttpUrl(s) && companionBase);
 
       let cancelled = false;
-      const showDirectFallback = (): boolean => {
-        if (!directFallbackSource) return false;
-        setDirectFallbackSrc(directFallbackSource);
+      let revokeResolvedSrc: (() => void) | undefined;
+      const showDirectFallback = (src = s): boolean => {
+        if (!canDirectLoadAfterThumbMiss(src)) return false;
+        setDirectFallbackSrc(src);
         return true;
       };
 
       // Only reuse LRU / companion thumbs for non-inline sources. Same cacheKey + new
       // viewport JPEG would otherwise keep showing the previous / previous-previous thumb.
-      if (thumbHit && !sourceIsInlineData) {
+      if (thumbHit && !sourceIsInlineData && !(companionHttp && isEmptyPreviewThumb(thumbHit))) {
         if (isEmptyPreviewThumb(thumbHit) && showDirectFallback()) {
           return () => {
             cancelled = true;
@@ -273,9 +266,6 @@ export const ProgressivePreviewImage = forwardRef<HTMLImageElement, ProgressiveP
           void createPreviewMicroThumbnail(s, microEdge, 0.62, 0.72, decodePri).then((m) => {
             if (cancelled) return;
             cacheSet(mKey, m);
-            if (companionMicroKey) {
-              void putWorkflowPreviewThumbToCompanion(companionBase, companionProject, companionMicroKey, m);
-            }
           });
         }
         return () => {
@@ -289,23 +279,21 @@ export const ProgressivePreviewImage = forwardRef<HTMLImageElement, ProgressiveP
       }
 
       const thumbDoneRef = { current: false };
+      let decodeSrc = s;
 
       const runThumb = () => {
         if (thumbDoneRef.current) return;
-        void createPreviewThumbnail(s, thumbMaxEdge, 0.82, decodePri).then(async (t) => {
+        void createPreviewThumbnail(decodeSrc, thumbMaxEdge, 0.82, decodePri).then(async (t) => {
           if (cancelled || thumbDoneRef.current) return;
           thumbDoneRef.current = true;
           if (isEmptyPreviewThumb(t)) {
-            if (!showDirectFallback()) {
+            if (!showDirectFallback(decodeSrc)) {
               setThumbSrc(t);
               setThumbReady(true);
             }
             return;
           }
           cacheSet(tKey, t);
-          if (companionThumbKey) {
-            void putWorkflowPreviewThumbToCompanion(companionBase, companionProject, companionThumbKey, t);
-          }
           thumbRevealSkipTransitionRef.current = !microPaintedRef.current;
 
           if (microPaintedRef.current) {
@@ -324,73 +312,40 @@ export const ProgressivePreviewImage = forwardRef<HTMLImageElement, ProgressiveP
       };
 
       const runMicro = () => {
-        void createPreviewMicroThumbnail(s, microEdge, 0.62, 0.72, decodePri).then((m) => {
+        void createPreviewMicroThumbnail(decodeSrc, microEdge, 0.62, 0.72, decodePri).then((m) => {
           if (cancelled) return;
           if (isEmptyPreviewThumb(m)) return;
           cacheSet(mKey, m);
-          if (companionMicroKey) {
-            void putWorkflowPreviewThumbToCompanion(companionBase, companionProject, companionMicroKey, m);
-          }
           if (thumbDoneRef.current) return;
           microPaintedRef.current = true;
           setMicroSrc(m);
         });
       };
 
-      if (!microHit) {
-        if (companionMicroKey && !sourceIsInlineData) {
-          void fetchWorkflowPreviewThumbFromCompanion(companionBase, companionProject, companionMicroKey).then((m) => {
-            if (cancelled) return;
-            if (m) {
-              if (isEmptyPreviewThumb(m)) return;
-              cacheSet(mKey, m);
-              if (thumbDoneRef.current) return;
-              microPaintedRef.current = true;
-              setMicroSrc(m);
-              return;
-            }
-            runMicro();
-          });
-        } else {
-          runMicro();
-        }
-      }
+      const startDecode = () => {
+        if (!microHit) runMicro();
+        runThumb();
+      };
 
-      if (companionThumbKey && !sourceIsInlineData) {
-        void fetchWorkflowPreviewThumbFromCompanion(companionBase, companionProject, companionThumbKey).then(async (t) => {
-          if (cancelled) return;
-          if (!t) {
-            runThumb();
+      if (companionHttp) {
+        void fetchCompanionHttpSrcAsObjectUrl(s, companionBase, companionProject).then((objectUrl) => {
+          if (cancelled) {
+            if (objectUrl) URL.revokeObjectURL(objectUrl);
             return;
           }
-          if (thumbDoneRef.current) return;
-          thumbDoneRef.current = true;
-          if (isEmptyPreviewThumb(t)) {
-            if (!showDirectFallback()) {
-              setThumbSrc(t);
-              setThumbReady(true);
-            }
-            return;
+          if (objectUrl) {
+            revokeResolvedSrc = () => URL.revokeObjectURL(objectUrl);
+            decodeSrc = objectUrl;
           }
-          cacheSet(tKey, t);
-          thumbRevealSkipTransitionRef.current = !microPaintedRef.current;
-          if (microPaintedRef.current) {
-            setThumbSrc(t);
-            await preloadImageDataUrl(t);
-            if (!cancelled) setThumbReady(true);
-            return;
-          }
-          await preloadImageDataUrl(t);
-          if (cancelled) return;
-          setThumbSrc(t);
-          setThumbReady(true);
+          startDecode();
         });
       } else {
-        runThumb();
+        startDecode();
       }
 
       return () => {
         cancelled = true;
+        revokeResolvedSrc?.();
       };
     }, [deferThumbnail, fullSrc, cacheKey, thumbMaxEdge, microEdge, safe, decodePri, companionBaseUrl, companionProjectId]);
 

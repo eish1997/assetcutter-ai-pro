@@ -279,6 +279,11 @@ import {
 import WorkflowPixelBusyOverlay from './WorkflowPixelBusyOverlay';
 import { workflowResultUsesVideoPreview, workflowSafeImgSrc } from '../services/workflowImageDisplay';
 import { previewSrcCacheFingerprint } from '../services/workflowImageThumb';
+import {
+  mergeWorkflowOriginalCompanionPersist,
+  pickWorkflowGridCardPreviewSrc,
+  resolveWorkflowAssetGridPreviewCompanionKey,
+} from '../services/workflowGridCardPreview';
 import { safeSvgDataUrl } from '../services/svgDataUrl';
 import { humanMessageForSamSegmentFailure, isSamInstallHelpCode } from '../services/companionSamSegmentMessages';
 import { humanMessageForRembgFailure, isRembgInstallHelpCode } from '../services/companionRembgMessages';
@@ -627,7 +632,7 @@ import { captureWorkflowModelThumbnailDataUrl } from '../services/workflowModelP
 import { normalizeWorkflowModel3dViewState } from '../services/workflowModelThreeShared';
 import {
   patchAssetWithModelViewportThumb,
-  resolveModelViewportThumbPreviewCompanionKey,
+  planModelViewportPosterPersist,
   resolveWorkflowModelStepPosterSrc,
   workflowAssetHasModelAtStep,
 } from '../services/workflowModelViewportThumbPersist';
@@ -2658,6 +2663,21 @@ const WorkflowSection: React.FC<{
     );
   }, [resolveAssetCompanionKeyDisplayImage, resolveAssetObjectKeyDisplayImage]);
 
+  const getAssetGridDisplayImage = useCallback((a: WorkflowAsset): string => {
+    const display = getAssetDisplayImage(a);
+    const projectId = String(workspaceProjectChrome?.activeProjectId || '').trim();
+    const base = normalizeCompanionBaseUrl(String(getCompanionLocalBaseUrl() || '').trim());
+    const previewKey = resolveWorkflowAssetGridPreviewCompanionKey(a);
+    const previewUrl =
+      previewKey && projectId && base
+        ? `${base}/v1/projects/${encodeURIComponent(projectId)}/assets/${encodeURIComponent(previewKey)}`
+        : '';
+    return pickWorkflowGridCardPreviewSrc({
+      displaySrc: display,
+      previewCompanionUrl: previewUrl,
+    });
+  }, [getAssetDisplayImage, workspaceProjectChrome?.activeProjectId]);
+
   const scheduleWorkflowLightboxPrefetch = useCallback((asset: WorkflowAsset) => {
     if (isWorkflowStoryboardTableAsset(asset) || isWorkflowAssetSetAsset(asset)) return;
     const src = getAssetDisplayImage(asset).trim();
@@ -3054,7 +3074,7 @@ const WorkflowSection: React.FC<{
         }
         setAssets((prev) =>
           prev.some((x) => x.id === assetId)
-            ? prev.map((x) => (x.id === assetId ? { ...x, originalCompanionKey: put.key } : x))
+            ? prev.map((x) => (x.id === assetId ? mergeWorkflowOriginalCompanionPersist(x, put) : x))
             : prev
         );
       })();
@@ -3082,7 +3102,7 @@ const WorkflowSection: React.FC<{
         }
         setAssets((prev) =>
           prev.some((x) => x.id === assetId)
-            ? prev.map((x) => (x.id === assetId ? { ...x, originalCompanionKey: put.key } : x))
+            ? prev.map((x) => (x.id === assetId ? mergeWorkflowOriginalCompanionPersist(x, put) : x))
             : prev
         );
       })();
@@ -3170,11 +3190,39 @@ const WorkflowSection: React.FC<{
       if (!base || !pid) return;
       void (async () => {
         const asset = assetsRef.current.find((x) => x.id === id);
-        const previewKey = resolveModelViewportThumbPreviewCompanionKey(asset, id, variantId);
-        if (!previewKey) return;
+        const ext = /^data:image\/jpe?g/i.test(thumb) ? 'jpg' : 'png';
+        const plan = planModelViewportPosterPersist(asset, id, variantId, ext);
+        if (!plan) return;
+        if (plan.writeFull) {
+          const put = await putWorkflowResultImageToCompanion(base, pid, id, variantId, thumb, {
+            slotIndex: plan.slot,
+            writePreview: true,
+          });
+          if (put.ok === false) {
+            onLog?.('warn', '3D 预览海报落盘失败', put.error);
+            return;
+          }
+          setAssets((prev) =>
+            prev.map((x) => {
+              if (x.id !== id) return x;
+              return {
+                ...x,
+                resultsCompanionKeys: {
+                  ...(x.resultsCompanionKeys || {}),
+                  [variantId]: put.key,
+                },
+                resultsPreviewCompanionKeys: {
+                  ...(x.resultsPreviewCompanionKeys || {}),
+                  [variantId]: put.previewKey || plan.previewKey,
+                },
+              };
+            })
+          );
+          return;
+        }
         const parsed = parseDataUrlToBlob(thumb);
         if (!parsed) return;
-        const res = await putCompanionAsset(base, pid, previewKey, parsed.blob, parsed.mime);
+        const res = await putCompanionAsset(base, pid, plan.previewKey, parsed.blob, parsed.mime);
         if (res.ok === false) {
           onLog?.('warn', '3D 预览缩略图落盘失败', res.error);
           return;
@@ -3186,7 +3234,7 @@ const WorkflowSection: React.FC<{
               ...x,
               resultsPreviewCompanionKeys: {
                 ...(x.resultsPreviewCompanionKeys || {}),
-                [variantId]: previewKey,
+                [variantId]: plan.previewKey,
               },
             };
           })
@@ -9743,7 +9791,7 @@ ${lineSvg}
         }
         setAssets((prev) =>
           prev.some((x) => x.id === id)
-            ? prev.map((x) => (x.id === id ? { ...x, originalCompanionKey: put.key } : x))
+            ? prev.map((x) => (x.id === id ? mergeWorkflowOriginalCompanionPersist(x, put) : x))
             : prev
         );
         completePromotePbrTextureAsset(requestId, { ok: true, assetId: id, previewSrc: dataUrl });
@@ -10761,7 +10809,7 @@ ${lineSvg}
           if (isGroupAsset(child)) {
             out.push(...flattenGroupImages(child, visited));
           } else {
-            const img = getAssetDisplayImage(child);
+            const img = getAssetGridDisplayImage(child);
             if (img)
               out.push({
                 src: img,
@@ -10787,7 +10835,7 @@ ${lineSvg}
           if (isGroupAsset(child)) {
             out.push(...flattenGroupImages(child, visited));
           } else {
-            const img = getAssetDisplayImage(child);
+            const img = getAssetGridDisplayImage(child);
             if (img)
               out.push({
                 src: img,
@@ -10798,7 +10846,7 @@ ${lineSvg}
       }
       return out;
     },
-    [assets, getAssetDisplayImage]
+    [assets, getAssetGridDisplayImage]
   );
   const showAllImages = useMemo(() => {
     if (!currentGroupAsset || !showAllInGroup) return null;
@@ -15101,6 +15149,8 @@ ${lineSvg}
                               deferThumbnail={!thumbUnlockKeys.has(gallKey)}
                               thumbDecodePriority={thumbHotKeys.has(gallKey) ? 'high' : 'low'}
                               imageFetchPriority={thumbHotKeys.has(gallKey) ? 'high' : 'auto'}
+                              companionBaseUrl={String(getCompanionLocalBaseUrl() || '')}
+                              companionProjectId={String(workspaceProjectChrome?.activeProjectId || '')}
                               className="relative z-0 block w-full h-full min-h-[5rem]"
                               imgClassName="relative z-0 block w-full h-full object-cover"
                               draggable={false}
@@ -15121,7 +15171,7 @@ ${lineSvg}
                       const childAsset = isAssetRef ? assets.find((x) => x.id === (item as { assetId: string }).assetId) : null;
                       const img =
                         isAssetRef && childAsset
-                          ? getAssetDisplayImage(childAsset)
+                          ? getAssetGridDisplayImage(childAsset)
                           : typeof item === 'string'
                             ? item
                             : currentGroupAsset?.original ?? '';
@@ -15183,7 +15233,7 @@ ${lineSvg}
                               <WorkflowGroupCardStackPreviews
                                 groupAsset={childAsset}
                                 allAssets={assets}
-                                getDisplayImage={getAssetDisplayImage}
+                                getDisplayImage={getAssetGridDisplayImage}
                                 deferThumbnail={!thumbUnlockKeys.has(groupKey)}
                                 thumbDecodePriority={thumbHotKeys.has(groupKey) ? 'high' : 'low'}
                               />
@@ -15203,7 +15253,7 @@ ${lineSvg}
                                 ? (() => {
                                     const nestedId = childAsset.assetIds?.[cSafe] ?? childAsset.assetIds?.[0];
                                     const nestedChild = nestedId ? assets.find((x) => x.id === nestedId) : undefined;
-                                    return nestedChild ? getAssetDisplayImage(nestedChild) : img;
+                                    return nestedChild ? getAssetGridDisplayImage(nestedChild) : img;
                                   })()
                                 : img;
                               const childTextDisplay = getAssetDisplayText(childAsset);
@@ -15644,6 +15694,8 @@ ${lineSvg}
                                 deferThumbnail={!thumbUnlockKeys.has(groupKey)}
                                 thumbDecodePriority={thumbHotKeys.has(groupKey) ? 'high' : 'low'}
                                 imageFetchPriority={thumbHotKeys.has(groupKey) ? 'high' : 'auto'}
+                                companionBaseUrl={String(getCompanionLocalBaseUrl() || '')}
+                                companionProjectId={String(workspaceProjectChrome?.activeProjectId || '')}
                                 className="relative z-0 block w-full h-full min-h-[5rem]"
                                 imgClassName="relative z-0 block w-full h-full object-cover"
                                 draggable={false}
@@ -15861,9 +15913,9 @@ ${lineSvg}
                     ? (() => {
                         const childId = a.assetIds?.[gSafe] ?? a.assetIds?.[0];
                         const child = childId ? assetsById.get(childId) : null;
-                        return child ? getAssetDisplayImage(child) : baseDisplayImage;
+                        return child ? getAssetGridDisplayImage(child) : getAssetGridDisplayImage(a);
                       })()
-                    : baseDisplayImage;
+                    : getAssetGridDisplayImage(a);
                   const gridPreviewCacheKeyBase = isGroupCard
                     ? `${a.id}:${a.displayKey}:g${gSafe}`
                     : `${a.id}:${a.displayKey}`;
@@ -15924,7 +15976,7 @@ ${lineSvg}
                         <WorkflowGroupCardStackPreviews
                           groupAsset={a}
                           allAssets={assets}
-                          getDisplayImage={getAssetDisplayImage}
+                          getDisplayImage={getAssetGridDisplayImage}
                           deferThumbnail={!thumbUnlockKeys.has(a.id)}
                           thumbDecodePriority={thumbHotKeys.has(a.id) ? 'high' : 'low'}
                           companionBaseUrl={String(getCompanionLocalBaseUrl() || '')}
