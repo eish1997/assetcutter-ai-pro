@@ -95,6 +95,10 @@ function plainFromSubject(subject) {
     [/credit|积分|reserve_invalid|precharge/i, '积分扣费更稳了，少出现莫名失败'],
     [/429|rate limit|too many requests/i, '高峰时生图少一点立刻失败，会多等一会儿再试'],
     [/chunk|lazy|equirect|preview/i, '大图预览切换全景、3D 时更不容易打不开'],
+    [
+      /companion keys|canonical companion|live 3[dD] posters|workspace BYOK/i,
+      '工作区资产命名统一了：缩略图和原图成对保存；填了自己的 API Key 生图不再扣站点积分；转 3D 视角后卡片和大图海报一起更新',
+    ],
     [/workspace|小盒子|justified/i, '工作区布局和切换更顺手了'],
     [/ai\s*gateway|provider\s*key|worker|tripo|model3d|3d/i, 'AI Gateway、供应商 Key 池和多模态 worker 又往生产化推进了一步'],
   ];
@@ -163,6 +167,23 @@ function buildWorkSummaryBullets(nameStats, commits, _stats) {
   const isAssetPreviewPack = has(
     /workflowAssetVariants|AssetCardPreviewRenderer|AssetMediaPreviewCenter|AssetPreviewOverlay|WorkflowLightboxAssetThumbStrip|WorkflowTextLightboxCenter/
   );
+  const isCompanionKeyPack = has(
+    /workflowCompanionAssets|workflowGridCardPreview|workflowCompanionKeyMigrate|workflowModelViewportThumbPersist|workflowCompanionLazyHydrate/
+  );
+  const isByokPack = has(/pickBinding|runUnifiedGeneration|aiDispatchGate|platformAiPath/);
+
+  if (isCompanionKeyPack) {
+    pushUnique('资产文件名统一了：原图和缩略图成对保存，打开旧项目会自动改成新名字');
+    if (has(/workflowGridCardPreview|ProgressivePreviewImage|workflowImageThumb/)) {
+      pushUnique('资产列表卡片优先显示小缩略图，少再出现点开有图、卡片却是黑的');
+    }
+    if (has(/workflowModelViewportThumbPersist/)) {
+      pushUnique('转 3D 视角或改效果后，卡片和大图海报会一起更新，模型文件和源照片不会被盖掉');
+    }
+  }
+  if (isByokPack) {
+    pushUnique('在设置里启用并填好自己的 API Key 后，工作区生图走你的密钥，不再扣站点积分');
+  }
 
   // 大包功能按文件拆条，避免一条 commit 压成一句旧文案
   if (isCodexCopilotMcpPack) {
