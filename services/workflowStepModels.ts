@@ -70,8 +70,9 @@ export function resolveWorkflowStepModelFormats(
   const fromStep = asset.stepModelFormats?.[resultKey];
   if (fromStep?.length) return fromStep;
   const urls = resolveWorkflowStepModelUrls(asset, resultKey);
+  const sourceName = String(asset.modelSourceName || '').toLowerCase();
   return urls.map((u, i) => {
-    const s = String(u || '').toLowerCase();
+    const s = `${u || ''} ${sourceName}`.toLowerCase();
     const key = resolveWorkflowStepModelCompanionKeys(asset, resultKey)[i]?.toLowerCase() || '';
     if (s.includes('.gltf') || key.includes('.gltf') || key.includes('_gltf')) return 'gltf';
     if (s.includes('.fbx') || key.includes('.fbx') || key.includes('_fbx')) return 'fbx';

@@ -31,6 +31,8 @@ type Props = {
   onModel3dViewDirty?: () => void;
   model3dViewState?: WorkflowModel3dViewState | null;
   onModel3dViewStateChange?: (state: WorkflowModel3dViewState, assetId?: string) => void;
+  /** blob / ac-workshop 令牌 URL 无扩展名时，用真实文件名推断 FBX/OBJ/GLB */
+  modelFileName?: string;
 };
 
 function clean(value: unknown): string {
@@ -54,7 +56,7 @@ function inferFileName(variant: WorkflowAssetVariant): string {
         : variant.kind === 'video'
           ? 'mp4'
           : 'asset';
-  if (fromUrl && /\.[a-z0-9]{2,8}$/i.test(fromUrl)) return fromUrl;
+  if (fromUrl && /\.(glb|gltf|fbx|obj)$/i.test(fromUrl)) return fromUrl;
   return `${label}.${ext}`;
 }
 
@@ -159,6 +161,7 @@ function Model3DAssetViewer({
   assetId,
   model3dPbrEditDoc,
   url,
+  modelFileName,
   model3dDisplayMode,
   model3dResetViewNonce,
   model3dShowGrid,
@@ -175,6 +178,7 @@ function Model3DAssetViewer({
   assetId?: string;
   model3dPbrEditDoc?: WorkflowModelPbrEditDoc | null;
   url: string;
+  modelFileName?: string;
   model3dDisplayMode: Model3DDisplayMode;
   model3dResetViewNonce?: number;
   model3dShowGrid?: boolean;
@@ -233,7 +237,7 @@ function Model3DAssetViewer({
               model3dVariantId={variant.id}
               model3dModelKey={variant.modelCompanionKeys?.[0] || variant.id || url}
               model3dPbrEditDoc={model3dPbrEditDoc}
-              modelFileName={inferFileName(variant)}
+              modelFileName={modelFileName || inferFileName(variant)}
               model3dDisplayMode={model3dDisplayMode}
               model3dResetViewNonce={model3dResetViewNonce}
               model3dShowGrid={model3dShowGrid}
@@ -285,6 +289,7 @@ export const AssetMediaPreviewCenter: React.FC<Props> = ({
   onModel3dViewDirty,
   model3dViewState,
   onModel3dViewStateChange,
+  modelFileName,
 }) => {
   const url = clean(variant.url);
   const modelUrl = variant.kind === 'model3d' ? pickModelUrl(variant) : '';
@@ -308,6 +313,7 @@ export const AssetMediaPreviewCenter: React.FC<Props> = ({
           assetId={assetId}
           model3dPbrEditDoc={model3dPbrEditDoc}
           url={usableUrl}
+          modelFileName={modelFileName}
           model3dDisplayMode={resolvedModel3dDisplayMode}
           model3dResetViewNonce={model3dResetViewNonce}
           model3dShowGrid={model3dShowGrid}

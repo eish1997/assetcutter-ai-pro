@@ -90,7 +90,7 @@ export function resolveWorkflowDisplaySlot(asset: WorkflowAsset): WorkflowDispla
       const text = String(asset.textBody || '').trim();
       return {
         displayKey,
-        modality: text || String(asset.textTitle || '').trim() ? 'text' : 'empty',
+        modality: 'text',
         ...(text ? { text } : {}),
       };
     }

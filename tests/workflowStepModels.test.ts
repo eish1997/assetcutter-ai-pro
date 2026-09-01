@@ -3,6 +3,7 @@ import type { WorkflowAsset } from '../types';
 import {
   inferLegacyWorkflowStepModelOwnerKey,
   resolveWorkflowStepModelUrls,
+  resolveWorkflowStepModelFormats,
   getWorkflowStepModelPersistStatus,
   workflowModelPersistStatusLabel,
 } from '../services/workflowStepModels';
@@ -27,6 +28,22 @@ describe('workflowStepModels', () => {
     } as WorkflowAsset;
     expect(resolveWorkflowStepModelUrls(asset, 'step_a')).toEqual([]);
     expect(resolveWorkflowStepModelUrls(asset, 'tripo_test')).toEqual(['blob:model']);
+  });
+
+  it('infers FBX from modelSourceName when the media URL has no extension', () => {
+    const asset = {
+      id: 'ws1',
+      original: '',
+      displayKey: 'original',
+      results: {},
+      resultOrder: [],
+      archived: false,
+      hiddenInGrid: false,
+      createdAt: 1,
+      modelSourceName: 'prop.fbx',
+      stepModelUrls: { original: ['ac-workshop://v1/ab12cd'] },
+    } as WorkflowAsset;
+    expect(resolveWorkflowStepModelFormats(asset, 'original')).toEqual(['fbx']);
   });
 
   it('遗留资产级 modelUrls 仅归属含 tripoTaskId 的步骤', () => {

@@ -17,12 +17,51 @@ const {
   session,
   ipcMain,
   dialog,
+  protocol,
 } = require('electron');
 const { spawn, execSync } = require('child_process');
 const { createHash, randomBytes } = require('node:crypto');
 const companionSandboxPaths = require('./companion-sandbox-paths.cjs');
 const { createCompanionAutoUpdate } = require('./companion-auto-update.cjs');
-const { computeEmbeddedBrowserBounds, detachBrowserViews } = require('./embedded-browser-manager.cjs');
+const { computeWorkbenchAndDshBounds, detachBrowserViews } = require('./embedded-browser-manager.cjs');
+const { createDshHost, DEFAULT_VERSION: DSH_PINNED_VERSION, resolveDshCliEntry } = require('./dsh-host.cjs');
+const { viewsForShellView, DSH_SESSION_PARTITION, isDshPartitionAllowed, shellViewShowsDsh, sameDshOrigin, fingerSurfaceForShellView } = require('./dsh-workbench-views.cjs');
+const { isLeasedRoomView, normalizeResidentShellView } = require('./shell-rooms.cjs');
+const { createLeasedRoomStore } = require('./shell-leased-rooms.cjs');
+const {
+  readDshPaneWidthFromSettings,
+  withDshPaneWidth,
+  readDshPaneCollapsedFromSettings,
+  withDshPaneCollapsed,
+  clampDshPaneWidth,
+  DSH_PANE_WIDTH_DEFAULT,
+} = require('./dsh-pane-width.cjs');
+const {
+    writeDshContextInject,
+    writeDshPatchFile,
+    writeDshHandoff,
+    clearDshHandoff,
+    writeComposerSuggested,
+    clearComposerSuggested,
+    formatWorkspaceDocumentForDsh,
+    dshPluginEnv,
+  } = require('./dsh-context-inject.cjs');
+const { buildFillDshComposerScript } = require('./dsh-composer-fill.cjs');
+const { createWorkspaceDocumentStore, workspaceEventsForCompartment, pickHostForSend } = require('./workspace-document-store.cjs');
+const { createWorkshopFileTreeHost, uniqueRoots, isPathInside } = require('./workshop-file-tree.cjs');
+const {
+  registerWorkshopMediaScheme,
+  attachWorkshopMediaProtocol,
+} = require('./workshop-media-protocol.cjs');
+registerWorkshopMediaScheme(protocol);
+const {
+  workshopFolderSourceOfTruthFromState,
+  filterWorkbenchDocumentEvents,
+} = require('./workshop-folder-source.cjs');
+const { createConnectionPackageBridge } = require('./connectionPackageBridge.cjs');
+const { createHostPrimitiveBridge } = require('./host-primitive-bridge.cjs');
+const { createDshWorkspaceTools, createDshWorkspaceHttp } = require('./dsh-workspace-tool.cjs');
+const { connectedHostsFromDrafts, sendHostErrorSuggestSurface } = require('./workspace-finger-hosts.cjs');
 const { createAgentStore } = require('./agent-store.cjs');
 const { createAgentBodyHost } = require('./agent-body-host.cjs');
 const { listSkillEntries } = require('./agent-skills.cjs');
@@ -252,13 +291,127 @@ const SHELL_TOOL_WORKSPACE_COLLAPSED_MIN_HEIGHT = 160;
 const shellToolWorkspaceExpandedBounds = new WeakMap();
 /** @type {import('electron').BrowserView | null} */
 let workbenchBrowserView = null;
+/** @type {import('electron').BrowserView | null} */
+let dshBrowserView = null;
+/** @type {{ start: Function, stop: Function } | null} */
+let dshHostController = null;
+/** @type {string | null} */
+let dshHostUrl = null;
+let dshScriptHubClient = null;
+const workspaceDocumentStore = createWorkspaceDocumentStore();
+const leasedRoomStore = createLeasedRoomStore({
+  getPath: () => path.join(app.getPath('userData'), 'shell-leased-rooms.json'),
+});
+const dshWorkspaceTools = createDshWorkspaceTools({
+  store: workspaceDocumentStore,
+  writeMode: 'document',
+  getFinger: () => workspaceDocumentStore.getSnapshot().finger,
+  isWorkshopFolderSourceOfTruth: () => {
+    try {
+      return workshopFolderSourceOfTruthFromState(workshopFileTreeHost.state());
+    } catch {
+      return false;
+    }
+  },
+  getConnectionBridge: () =>
+    createConnectionPackageBridge({
+      companionApiRequest: (method, pathname, body, opts) => companionApiRequest(method, pathname, body, opts),
+    }),
+  getHostPrimitiveBridge: () =>
+    createHostPrimitiveBridge({
+      companionApiRequest: (method, pathname, body, opts) => companionApiRequest(method, pathname, body, opts),
+    }),
+  openSurface: async (view) => openShellSurfaceFromDsh(view),
+  getShellView: () => shellMainProcessActiveView,
+  syncConnectedHosts: () => syncConnectedHostsFromCompanion(),
+  companionApiRequest: (method, pathname, body, opts) => companionApiRequest(method, pathname, body, opts),
+  runGenerate: async (command) => {
+    try {
+      const r = await invokeWorkbenchBridge(
+        'generateOnCurrent',
+        { presetId: command && command.presetId },
+        { timeoutMs: 180000 },
+      );
+      if (!r || r.ok === false) return { ok: false, error: (r && r.error) || 'generate_failed' };
+      return { ok: true, resultKey: r.resultKey, companionKey: r.companionKey };
+    } catch (e) {
+      return { ok: false, error: e instanceof Error ? e.message : String(e) };
+    }
+  },
+  sendToHost: async (host, command) => {
+    const finger = workspaceDocumentStore.getSnapshot().finger;
+    const resolved = await workshopFileTreeHost.resolveSendFile(finger);
+    if (!resolved || !resolved.ok) {
+      return { ok: false, error: (resolved && resolved.error) || 'no_selection' };
+    }
+    const bridge = createHostPrimitiveBridge({
+      companionApiRequest: (method, pathname, body, opts) => companionApiRequest(method, pathname, body, opts),
+    });
+    const invoked = await bridge.invokeHostPrimitive(
+      host && host.id,
+      'host.import_file',
+      {
+        filePath: resolved.fileAbs,
+        rel: resolved.fileRel,
+        assetId: command && command.assetId,
+      },
+      { localVersionId: host && host.localVersionId },
+    );
+    if (!invoked || !invoked.ok) {
+      return { ok: false, error: (invoked && invoked.error) || 'host_import_failed' };
+    }
+    const invokeBody = invoked.result && typeof invoked.result === 'object' ? invoked.result : {};
+    const inner = invokeBody.result && typeof invokeBody.result === 'object' ? invokeBody.result : invokeBody;
+    if (inner.ok === false) {
+      return { ok: false, error: inner.error || inner.message || 'host_import_failed' };
+    }
+    return {
+      ok: true,
+      hostId: host && host.id,
+      filePath: resolved.fileAbs,
+      message: inner.message,
+    };
+  },
+});
+workspaceDocumentStore.subscribe((events) => {
+  try {
+    refreshDshFingerInject(workspaceDocumentStore.getSnapshot());
+    const fingerChanged = Array.isArray(events) && events.some((e) => e && e.type === 'finger.changed');
+    if (fingerChanged && mainWindow && !mainWindow.isDestroyed()) {
+      const finger = workspaceDocumentStore.getSnapshot().finger || {};
+      mainWindow.webContents.send('shell-workspace-finger-changed', finger);
+    }
+    let folderSource = false;
+    try {
+      folderSource = workshopFolderSourceOfTruthFromState(workshopFileTreeHost.state());
+    } catch {
+      folderSource = false;
+    }
+    const toWorkbench = filterWorkbenchDocumentEvents(
+      folderSource ? events : workspaceEventsForCompartment(events, 'workshop'),
+      folderSource,
+    );
+    if (!toWorkbench.length) return;
+    if (workbenchBrowserView && workbenchBrowserView.webContents && !workbenchBrowserView.webContents.isDestroyed()) {
+      workbenchBrowserView.webContents.send('workspace-document-event', toWorkbench);
+    }
+  } catch {
+    /* ignore */
+  }
+});
+let dshWorkspaceHttp = null;
+function ensureDshWorkspaceHttp() {
+  if (dshWorkspaceHttp) return dshWorkspaceHttp;
+  dshWorkspaceHttp = createDshWorkspaceHttp(dshWorkspaceTools, { port: 3081 });
+  return dshWorkspaceHttp;
+}
 const FIRST_PARTY_WEB_PARTITION = TEAM_WEB_PARTITION || 'persist:assetcutter-team';
 const LEGACY_FIRST_PARTY_WEB_PARTITIONS = ['persist:assetcutter-workbench', 'persist:assetcutter-script-hub'];
 /** 避免给同一 BrowserView 重复注册 `did-finish-load` */
 const workbenchPairingInjectHooked = new WeakSet();
 /** 避免给同一 BrowserView 重复注册下载接管 */
 const workbenchDownloadHooked = new WeakSet();
-/** @type {'workbench' | 'workflow' | 'tools' | 'connections' | 'settings'} */
+/** @type {string} */
 let shellMainProcessActiveView = 'workbench';
 
 /** 与 `shell/index.html` 侧栏展开宽度一致；收起时为 0（由渲染进程 IPC 同步） */
@@ -274,6 +427,10 @@ const SHELL_COPILOT_WIDTH_COLLAPSED = 0;
 let shellCopilotCollapsed = false;
 /** @type {number} */
 let shellCopilotWidthPx = SHELL_COPILOT_WIDTH_DEFAULT;
+/** @type {number} */
+let shellDshPaneWidthPx = DSH_PANE_WIDTH_DEFAULT;
+/** @type {boolean} */
+let shellDshPaneCollapsed = false;
 const DESKTOP_OBSERVATION_FRAME_LIMIT = 30;
 let desktopObservationRuntimeState = {
   enabled: false,
@@ -511,6 +668,11 @@ function readShellSettings() {
         downloadDir: '',
         scriptHubApiUrl: defaultScriptHubApiUrl(),
         scriptHubApiToken: '',
+        dshPaneWidth: DSH_PANE_WIDTH_DEFAULT,
+        dshPaneCollapsed: false,
+        workshopTreeRoot: '',
+        workshopTreeRoots: [],
+        workshopWorkspaceDir: '',
       };
     }
     const j = JSON.parse(fs.readFileSync(p, 'utf8'));
@@ -519,7 +681,13 @@ function readShellSettings() {
     const authApiOrigin =
       typeof j.authApiOrigin === 'string' ? j.authApiOrigin.trim().replace(/\/+$/, '') : '';
     const volumeRoot = typeof j.volumeRoot === 'string' ? j.volumeRoot.trim() : '';
+    const workshopTreeRoot = typeof j.workshopTreeRoot === 'string' ? j.workshopTreeRoot.trim() : '';
+    const workshopTreeRoots = uniqueRoots([
+      ...(Array.isArray(j.workshopTreeRoots) ? j.workshopTreeRoots : []),
+      workshopTreeRoot,
+    ]);
     const downloadDir = typeof j.downloadDir === 'string' ? j.downloadDir.trim() : '';
+    const workshopWorkspaceDir = typeof j.workshopWorkspaceDir === 'string' ? j.workshopWorkspaceDir.trim() : '';
     const rawScriptHubApi =
       typeof j.scriptHubApiUrl === 'string' && j.scriptHubApiUrl.trim()
         ? j.scriptHubApiUrl.trim()
@@ -539,15 +707,32 @@ function readShellSettings() {
         /* ignore */
       }
     }
-    return { siteUrl, authApiOrigin, volumeRoot, downloadDir, scriptHubApiUrl, scriptHubApiToken };
+    return {
+      siteUrl,
+      authApiOrigin,
+      volumeRoot,
+      workshopTreeRoot: workshopTreeRoots[0] || '',
+      workshopTreeRoots,
+      workshopWorkspaceDir,
+      downloadDir,
+      scriptHubApiUrl,
+      scriptHubApiToken,
+      dshPaneWidth: readDshPaneWidthFromSettings(j),
+      dshPaneCollapsed: readDshPaneCollapsedFromSettings(j),
+    };
   } catch {
     return {
       siteUrl: fallbackSite,
       authApiOrigin: '',
       volumeRoot: '',
+      workshopTreeRoot: '',
+      workshopTreeRoots: [],
+      workshopWorkspaceDir: '',
       downloadDir: '',
       scriptHubApiUrl: defaultScriptHubApiUrl(),
       scriptHubApiToken: '',
+      dshPaneWidth: DSH_PANE_WIDTH_DEFAULT,
+      dshPaneCollapsed: false,
     };
   }
 }
@@ -569,6 +754,39 @@ function saveShellSettings(patch) {
     }
     cur.volumeRoot = v;
   }
+  if (patch && Array.isArray(patch.workshopTreeRoots)) {
+    cur.workshopTreeRoots = uniqueRoots(patch.workshopTreeRoots);
+    cur.workshopTreeRoot = cur.workshopTreeRoots[0] || '';
+  }
+  if (patch && typeof patch.workshopTreeRoot === 'string' && !Array.isArray(patch.workshopTreeRoots)) {
+    let v = patch.workshopTreeRoot.trim();
+    if (v) {
+      try {
+        v = path.resolve(path.normalize(v));
+      } catch {
+        /* ignore */
+      }
+    }
+    cur.workshopTreeRoots = uniqueRoots([...(cur.workshopTreeRoots || []), v]);
+    cur.workshopTreeRoot = cur.workshopTreeRoots[0] || '';
+  }
+  if (patch && typeof patch.workshopWorkspaceDir === 'string') {
+    let w = patch.workshopWorkspaceDir.trim();
+    if (w) {
+      try {
+        w = path.resolve(path.normalize(w));
+      } catch {
+        /* ignore */
+      }
+      for (const root of cur.workshopTreeRoots || []) {
+        if (root && isPathInside(root, w)) {
+          w = cur.workshopWorkspaceDir || '';
+          break;
+        }
+      }
+    }
+    cur.workshopWorkspaceDir = w;
+  }
   if (patch && typeof patch.downloadDir === 'string') {
     let d = patch.downloadDir.trim();
     if (d) {
@@ -588,10 +806,33 @@ function saveShellSettings(patch) {
   if (patch && typeof patch.scriptHubApiToken === 'string') {
     cur.scriptHubApiToken = patch.scriptHubApiToken.trim();
   }
+  if (patch && patch.dshPaneWidth != null) {
+    Object.assign(cur, withDshPaneWidth(cur, patch.dshPaneWidth));
+    shellDshPaneWidthPx = cur.dshPaneWidth;
+  }
+  if (patch && patch.dshPaneCollapsed != null) {
+    Object.assign(cur, withDshPaneCollapsed(cur, patch.dshPaneCollapsed));
+    shellDshPaneCollapsed = cur.dshPaneCollapsed;
+  }
   fs.mkdirSync(path.dirname(shellSettingsPath()), { recursive: true });
   fs.writeFileSync(shellSettingsPath(), `${JSON.stringify(cur, null, 2)}\n`, 'utf8');
   return cur;
 }
+
+const workshopFileTreeHost = createWorkshopFileTreeHost({
+  getRoots: () => readShellSettings().workshopTreeRoots || [],
+  setRoots: (roots) => saveShellSettings({ workshopTreeRoots: roots }),
+  getWorkspaceDir: () => readShellSettings().workshopWorkspaceDir || '',
+  setWorkspaceDir: (dir) => saveShellSettings({ workshopWorkspaceDir: dir || '' }),
+  nativeImage,
+  pickDirectory: async (opts) => {
+    const win = mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined;
+    return dialog.showOpenDialog(win || undefined, {
+      title: String(opts && opts.title ? opts.title : '添加文件夹'),
+      properties: ['openDirectory'],
+    });
+  },
+});
 
 function getAgentStoreRoot() {
   const sandboxRoot = companionSandboxPaths.getCompanionSandboxRoot();
@@ -681,7 +922,7 @@ function resolveAgentConfirm(confirmId, approved) {
   return { ok: true };
 }
 
-async function invokeWorkbenchBridge(method, args) {
+async function invokeWorkbenchBridge(method, args, opts) {
   if (!workbenchBrowserView || workbenchBrowserView.webContents.isDestroyed()) {
     throw new Error('workbench_unavailable');
   }
@@ -694,7 +935,8 @@ async function invokeWorkbenchBridge(method, args) {
     if (!window.__acAgentWorkbench) return { __bridgeMissing: true };
     return window.__acAgentWorkbench.dispatch(${payload});
   })()`;
-  const deadline = Date.now() + 20000;
+  const timeoutMs = Number(opts && opts.timeoutMs);
+  const deadline = Date.now() + (Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 20000);
   let lastErr = 'bridge_not_registered';
   while (Date.now() < deadline) {
     try {
@@ -2067,18 +2309,72 @@ function normalizeScriptHubApiUrl(raw) {
 
 function detachAllEmbeddedBrowserViews() {
   if (!mainWindow || mainWindow.isDestroyed()) return;
-  detachBrowserViews(mainWindow, [workbenchBrowserView]);
+  detachBrowserViews(mainWindow, [workbenchBrowserView, dshBrowserView].filter(Boolean));
+}
+
+function syncEmbeddedBrowserViews(nextView) {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  const wanted = viewsForShellView(nextView, { workbench: workbenchBrowserView, dsh: dshBrowserView });
+  const known = [workbenchBrowserView, dshBrowserView].filter(Boolean);
+  layoutShellChrome();
+  const attached = mainWindow.getBrowserViews();
+  for (const view of known) {
+    const should = wanted.indexOf(view) >= 0;
+    const isOn = attached.indexOf(view) >= 0;
+    if (should && !isOn) {
+      try {
+        mainWindow.addBrowserView(view);
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+  layoutShellChrome();
+  const attachedAfter = mainWindow.getBrowserViews();
+  for (const view of known) {
+    const should = wanted.indexOf(view) >= 0;
+    const isOn = attachedAfter.indexOf(view) >= 0;
+    if (!should && isOn) {
+      try {
+        mainWindow.removeBrowserView(view);
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+}
+
+function notifyWorkbenchShellView(view) {
+  try {
+    if (workbenchBrowserView && workbenchBrowserView.webContents && !workbenchBrowserView.webContents.isDestroyed()) {
+      workbenchBrowserView.webContents.send('workspace-shell-view', view);
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
+function applyShellRoomFinger(view) {
+  notifyWorkbenchShellView(view);
+  if (view === 'workbench') return;
+  if (!shellViewShowsDsh(view)) return;
+  workspaceDocumentStore.dispatch({ type: 'set_finger', finger: { surface: fingerSurfaceForShellView(view) } });
 }
 
 function normalizeShellViewName(view) {
-  if (view === 'scripts') return 'workflow';
-  return view === 'workbench' ||
-    view === 'workflow' ||
-    view === 'settings' ||
-    view === 'tools' ||
-    view === 'connections'
-    ? view
-    : 'workbench';
+  const known = normalizeResidentShellView(view);
+  if (!known) return 'workbench';
+  if (isLeasedRoomView(known) && !leasedRoomStore.has(known)) return 'workbench';
+  return known;
+}
+
+async function openShellSurfaceFromDsh(view) {
+  const requested = String(view || '');
+  const v = normalizeShellViewName(requested);
+  if (isLeasedRoomView(requested) && v !== requested) {
+    return { ok: false, error: 'unknown_surface' };
+  }
+  return transitionMainProcessShellView(v, { notifyRenderer: true });
 }
 
 async function restoreEmbeddedViewForShellState(view) {
@@ -2086,8 +2382,8 @@ async function restoreEmbeddedViewForShellState(view) {
   if (v === 'workbench') {
     return attachWorkbenchBrowserView();
   }
-  detachAllEmbeddedBrowserViews();
-  return { ok: true };
+  syncEmbeddedBrowserViews(v);
+  return attachDshForCurrentShellView();
 }
 
 /**
@@ -2110,7 +2406,8 @@ async function transitionMainProcessShellView(nextView, opts) {
   if (v === 'workbench') {
     r = await attachWorkbenchBrowserView();
   } else {
-    detachAllEmbeddedBrowserViews();
+    syncEmbeddedBrowserViews(v);
+    r = await attachDshForCurrentShellView();
   }
 
   if (!r.ok) {
@@ -4299,20 +4596,24 @@ async function waitUntilCompanionStopped(timeoutMs) {
   return !(await probeCompanionHealth());
 }
 
-/**
- * Windows：结束占用伴侣 HTTP 端口的监听进程（用于切换存储目录等需强制换进程的场景）。
- * 可能结束用户在其它终端启动的 local-companion。
- */
-function killProcessListeningOnCompanionPort(port) {
+function killLoopbackPortListeners(port) {
   if (process.platform !== 'win32') return;
   try {
     execSync(
-      `powershell -NoProfile -Command "$c = Get-NetTCPConnection -LocalPort ${port} -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty OwningProcess; if ($c) { Stop-Process -Id $c -Force -ErrorAction SilentlyContinue }"`,
+      `powershell -NoProfile -Command "Get-NetTCPConnection -LocalPort ${port} -State Listen -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique | ForEach-Object { if ($_ -gt 0) { Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue } }"`,
       { stdio: 'ignore', windowsHide: true },
     );
   } catch {
     /* ignore */
   }
+}
+
+/**
+ * Windows：结束占用伴侣 HTTP 端口的监听进程（用于切换存储目录等需强制换进程的场景）。
+ * 可能结束用户在其它终端启动的 local-companion。
+ */
+function killProcessListeningOnCompanionPort(port) {
+  killLoopbackPortListeners(port);
 }
 
 /**
@@ -4956,16 +5257,35 @@ function getWorkbenchAllowedOrigin() {
   }
 }
 
+function notifyShellChromeLayout() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  try {
+    mainWindow.webContents.send('shell-copilot-layout', {
+      collapsed: shellCopilotCollapsed,
+      widthPx: shellCopilotWidthPx,
+      effectiveWidthPx: getCopilotEffectiveWidthPx(),
+      dshPaneCollapsed: shellDshPaneCollapsed,
+      dshPaneWidth: shellDshPaneWidthPx,
+    });
+  } catch {
+    /* ignore */
+  }
+}
+
 function layoutShellChrome() {
   if (!mainWindow || mainWindow.isDestroyed()) return;
-  const bounds = computeEmbeddedBrowserBounds(mainWindow.getContentBounds(), {
+  const showDsh = shellViewShowsDsh(shellMainProcessActiveView);
+  const dual = computeWorkbenchAndDshBounds(mainWindow.getContentBounds(), {
     sidebarInsetPx: shellWorkbenchSidebarInsetPx,
     titlebarHeightPx: SHELL_TITLEBAR_HEIGHT,
     toolbarHeightPx: SHELL_WORKBENCH_TOOLBAR_HEIGHT,
-    copilotEffectiveWidthPx: getCopilotEffectiveWidthPx(),
+    dshPaneWidthPx: showDsh && !shellDshPaneCollapsed ? shellDshPaneWidthPx : 0,
   });
   if (shellMainProcessActiveView === 'workbench' && workbenchBrowserView) {
-    workbenchBrowserView.setBounds(bounds);
+    workbenchBrowserView.setBounds(dual.workbench);
+  }
+  if (showDsh && dshBrowserView) {
+    dshBrowserView.setBounds(dual.dsh);
   }
 }
 
@@ -5231,6 +5551,268 @@ function ensureWorkbenchBrowserView() {
   return view;
 }
 
+function ensureDshBrowserView() {
+  if (dshBrowserView) return dshBrowserView;
+  if (!isDshPartitionAllowed(DSH_SESSION_PARTITION)) {
+    throw new Error('dsh partition must not be team');
+  }
+  const view = new BrowserView({
+    webPreferences: {
+      partition: DSH_SESSION_PARTITION,
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  });
+  dshBrowserView = view;
+  return view;
+}
+
+function dshInjectDir() {
+  return path.join(app.getPath('userData'), 'dsh-inject');
+}
+
+function dshPluginDirOpts() {
+  return {
+    dir: dshInjectDir(),
+    packaged: Boolean(app.isPackaged),
+    resourcesPath: process.resourcesPath,
+  };
+}
+
+function refreshDshFingerInject(snapshot) {
+  try {
+    const snap =
+      snapshot && snapshot.finger
+        ? snapshot
+        : { finger: snapshot || {}, assets: {}, assetIds: [], projectId: '' };
+    let folderSource = false;
+    try {
+      folderSource = workshopFolderSourceOfTruthFromState(workshopFileTreeHost.state());
+    } catch {
+      folderSource = false;
+    }
+    const text = formatWorkspaceDocumentForDsh(snap, { workshopFolderSource: folderSource });
+    return writeDshContextInject({ dir: dshInjectDir(), text, finger: snap.finger });
+  } catch (e) {
+    console.warn('[dsh-inject]', e instanceof Error ? e.message : e);
+    return null;
+  }
+}
+
+async function fillDshComposerText(text) {
+  const composerText = String(text || '').trim();
+  if (!composerText) return { ok: false, error: 'empty' };
+  try {
+    writeComposerSuggested({ dir: dshInjectDir(), text: composerText });
+  } catch (e) {
+    console.warn('[dsh-composer-suggested]', e instanceof Error ? e.message : e);
+  }
+  const script = buildFillDshComposerScript(composerText);
+  for (let attempt = 0; attempt < 16; attempt += 1) {
+    if (!isDshBrowserViewLive()) {
+      await sleep(120);
+      continue;
+    }
+    try {
+      const filled = await dshBrowserView.webContents.executeJavaScript(script, true);
+      if (filled) return { ok: true, target: 'dsh' };
+    } catch (e) {
+      if (attempt === 15) {
+        console.warn('[dsh-composer-fill]', e instanceof Error ? e.message : e);
+      }
+    }
+    await sleep(200);
+  }
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    try {
+      mainWindow.webContents.send('shell-fill-copilot-composer', { text: composerText });
+      return { ok: true, target: 'legacy_copilot' };
+    } catch {
+      /* ignore */
+    }
+  }
+  return { ok: false, error: 'fill_failed' };
+}
+
+async function applyDshHandoff(payload) {
+  const body = payload && typeof payload === 'object' ? payload : {};
+  const domain = String(body.domain || body.kind || 'connection').trim() || 'connection';
+  const composerText = String(body.composerText || body.suggestedMessage || '').trim();
+  try {
+    clearDshHandoff({ dir: dshInjectDir() });
+    clearComposerSuggested({ dir: dshInjectDir() });
+    writeDshHandoff({ dir: dshInjectDir(), payload: body });
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+  refreshDshFingerInject(workspaceDocumentStore.getSnapshot());
+  saveShellSettings({ dshPaneCollapsed: false });
+  notifyShellChromeLayout();
+  try {
+    await attachDshForCurrentShellView();
+  } catch (e) {
+    console.warn('[dsh-handoff]', e instanceof Error ? e.message : e);
+  }
+  layoutShellChrome();
+  notifyShellChromeLayout();
+  const fill = composerText ? await fillDshComposerText(composerText) : { ok: true, skipped: true };
+  return { ok: true, domain, composerText, fill };
+}
+
+function overlayConnectedHosts(drafts, opts) {
+  const o = opts && typeof opts === 'object' ? opts : { hasSelectedCard: opts !== false };
+  const finger = workspaceDocumentStore.getSnapshot().finger || {};
+  const hosts = connectedHostsFromDrafts(drafts, {
+    hasSelectedCard: o.hasSelectedCard !== false,
+    selectedRelPath: o.selectedRelPath != null ? o.selectedRelPath : finger.selectedRelPath,
+  });
+  workspaceDocumentStore.applyEvents([{ type: 'finger.changed', finger: { connectedHosts: hosts } }]);
+  refreshDshFingerInject(workspaceDocumentStore.getSnapshot());
+  return hosts;
+}
+
+async function syncConnectedHostsFromCompanion() {
+  try {
+    const r = await companionApiRequest('GET', '/v1/capability-packages/drafts', null, { timeoutMs: 8000 });
+    const drafts = r && r.ok && r.json && Array.isArray(r.json.drafts) ? r.json.drafts : [];
+    const finger = workspaceDocumentStore.getSnapshot().finger || {};
+    return overlayConnectedHosts(drafts, {
+      hasSelectedCard: Boolean(finger.selectedAssetId),
+      selectedRelPath: finger.selectedRelPath,
+    });
+  } catch (e) {
+    console.warn('[dsh-hosts]', e instanceof Error ? e.message : e);
+    return [];
+  }
+}
+
+function dshBundledRoot() {
+  try {
+    if (app.isPackaged) return path.join(process.resourcesPath, 'dsh-bundled');
+  } catch {
+    /* app not ready */
+  }
+  return path.join(__dirname, 'dsh-bundled');
+}
+
+function dshSpawnRuntime() {
+  const root = dshBundledRoot();
+  const cliFile = resolveDshCliEntry(root);
+  if (!cliFile) {
+    if (app.isPackaged) console.warn('[dsh] bundled runtime missing', root);
+    return {};
+  }
+  const { cmd, envExtra } = getNodeLauncherForLocalCompanion();
+  return { cliFile, command: cmd, cwd: root, envExtra };
+}
+
+async function ensureDshHostUrl() {
+  if (!dshHostController) {
+    dshHostController = createDshHost({ spawn, killPortListeners: killLoopbackPortListeners });
+  }
+  ensureDshWorkspaceHttp();
+  await syncConnectedHostsFromCompanion();
+  refreshDshFingerInject(workspaceDocumentStore.getSnapshot());
+  let patch = null;
+  try {
+    patch = writeDshPatchFile(dshPluginDirOpts());
+  } catch (e) {
+    console.warn('[dsh-patch]', e instanceof Error ? e.message : e);
+  }
+  const runtime = dshSpawnRuntime();
+  const started = await dshHostController.start({
+    version: DSH_PINNED_VERSION,
+    host: '127.0.0.1',
+    port: 3080,
+    patchFile: patch && patch.patchPath,
+    cliFile: runtime.cliFile,
+    command: runtime.command,
+    cwd: runtime.cwd,
+    env: { ...dshPluginEnv({ injectDir: dshInjectDir() }), ...(runtime.envExtra || {}) },
+    reclaimExternal: true,
+  });
+  dshHostUrl = started.url;
+  companionLog('log', '[companion-desktop] dsh ready', started.url, started.reused ? '(reused child)' : '(spawned)');
+  return dshHostUrl;
+}
+
+function isDshBrowserViewLive() {
+  if (!dshBrowserView || !dshHostUrl) return false;
+  try {
+    const wc = dshBrowserView.webContents;
+    if (!wc || wc.isDestroyed()) return false;
+    return sameDshOrigin(wc.getURL(), dshHostUrl);
+  } catch {
+    return false;
+  }
+}
+
+async function attachDshBrowserView() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (isDshBrowserViewLive()) {
+    const view = dshBrowserView;
+    if (mainWindow.getBrowserViews().indexOf(view) < 0) mainWindow.addBrowserView(view);
+    layoutShellChrome();
+    return;
+  }
+  let lastErr = null;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      if (attempt > 1) {
+        if (dshHostController) dshHostController.stop();
+        dshHostUrl = null;
+        killLoopbackPortListeners(3080);
+        await sleep(400 * attempt);
+      }
+      const url = await ensureDshHostUrl();
+      if (!url || !/^https?:\/\/127\.0\.0\.1(?::|\/|$)/i.test(url)) {
+        throw new Error('dsh url must be loopback');
+      }
+      const view = ensureDshBrowserView();
+      const alreadyAttached = mainWindow.getBrowserViews().indexOf(view) >= 0;
+      if (!alreadyAttached) mainWindow.addBrowserView(view);
+      layoutShellChrome();
+      const wc = view.webContents;
+      let needLoad = true;
+      try {
+        const cur = wc.getURL();
+        if (cur && cur !== 'about:blank') needLoad = !sameDshOrigin(cur, url);
+      } catch {
+        needLoad = true;
+      }
+      if (needLoad) await wc.loadURL(url);
+      companionLog('log', '[companion-desktop] dsh BrowserView attached');
+      return;
+    } catch (e) {
+      lastErr = e;
+      companionLog(
+        'warn',
+        `[companion-desktop] dsh attach attempt ${attempt}/3 failed:`,
+        e instanceof Error ? e.message : e,
+      );
+      if (attempt < 3) await sleep(500 * attempt);
+    }
+  }
+  throw lastErr || new Error('dsh attach failed');
+}
+
+async function attachDshForCurrentShellView() {
+  if (!shellViewShowsDsh(shellMainProcessActiveView)) {
+    layoutShellChrome();
+    return { ok: true };
+  }
+  try {
+    await attachDshBrowserView();
+    layoutShellChrome();
+    applyShellRoomFinger(shellMainProcessActiveView);
+    return { ok: true };
+  } catch (e) {
+    companionLog('warn', '[companion-desktop] dsh attach failed:', e instanceof Error ? e.message : e);
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
 async function attachWorkbenchBrowserView() {
   if (!mainWindow || mainWindow.isDestroyed()) return { ok: false, error: 'no_window' };
   const target = normalizeWorkbenchSiteUrl(readShellSettings().siteUrl);
@@ -5242,7 +5824,7 @@ async function attachWorkbenchBrowserView() {
     console.warn('[companion-desktop] workbench auto-pair prepare:', e instanceof Error ? e.message : e);
   }
 
-  detachAllEmbeddedBrowserViews();
+  syncEmbeddedBrowserViews('workbench');
   const view = ensureWorkbenchBrowserView();
   const wc = view.webContents;
 
@@ -5273,6 +5855,13 @@ async function attachWorkbenchBrowserView() {
     });
   }
 
+  try {
+    await attachDshBrowserView();
+  } catch (e) {
+    companionLog('warn', '[companion-desktop] dsh attach failed:', e instanceof Error ? e.message : e);
+  }
+
+  applyShellRoomFinger('workbench');
   return { ok: true };
 }
 
@@ -5316,6 +5905,9 @@ function initAgentPlatform() {
   shellCopilotWidthPx = Number.isFinite(Number(agentSettings.copilotWidth))
     ? Math.min(SHELL_COPILOT_WIDTH_MAX, Math.max(SHELL_COPILOT_WIDTH_MIN, Number(agentSettings.copilotWidth)))
     : SHELL_COPILOT_WIDTH_DEFAULT;
+  const shellSettings = readShellSettings();
+  shellDshPaneWidthPx = readDshPaneWidthFromSettings(shellSettings);
+  shellDshPaneCollapsed = readDshPaneCollapsedFromSettings(shellSettings);
 
   agentPolicy = createAgentPolicy({
     getPolicyPath: () => path.join(getAgentStoreRoot(), 'policy.json'),
@@ -5339,6 +5931,7 @@ function initAgentPlatform() {
     normalizeScriptHubApiUrl,
     navigateShell: navigateShellFromAgent,
   });
+  dshScriptHubClient = scriptHubClient;
 
   agentBodyHost = createAgentBodyHost({
     getShellView: () => shellMainProcessActiveView,
@@ -5452,6 +6045,7 @@ function openMainWindow() {
 
   mainWindow.on('closed', () => {
     workbenchBrowserView = null;
+    dshBrowserView = null;
     shellMainProcessActiveView = 'workbench';
     mainWindow = null;
   });
@@ -5986,15 +6580,7 @@ if (!gotLock) {
       agentStore.writeSettings({ copilotCollapsed: false });
     }
     layoutShellChrome();
-    try {
-      mainWindow.webContents.send('shell-copilot-layout', {
-        collapsed: false,
-        widthPx: shellCopilotWidthPx,
-        effectiveWidthPx: getCopilotEffectiveWidthPx(),
-      });
-    } catch {
-      /* ignore */
-    }
+    notifyShellChromeLayout();
   }
 
   function buildShellToolAutoFixPrompt(payload) {
@@ -6131,6 +6717,47 @@ if (!gotLock) {
   });
 
   ipcMain.handle('shell-set-view', async (_e, view) => transitionMainProcessShellView(view));
+  ipcMain.handle('shell-leased-rooms-list', () => ({ ok: true, rooms: leasedRoomStore.list() }));
+  ipcMain.handle('shell-leased-rooms-create', () => {
+    const room = leasedRoomStore.create();
+    return { ok: true, room, rooms: leasedRoomStore.list() };
+  });
+  ipcMain.handle('shell-leased-rooms-remove', async (_e, payload) => {
+    const id = String((payload && payload.id) || '');
+    const rooms = leasedRoomStore.remove(id);
+    if (!rooms) return { ok: false, error: 'not_found' };
+    const switched = shellMainProcessActiveView === id;
+    if (switched) {
+      await transitionMainProcessShellView('workbench', { notifyRenderer: true });
+    }
+    return { ok: true, rooms, removedId: id, switchedToWorkbench: switched };
+  });
+  ipcMain.handle('shell-leased-room-context-menu', (event, payload) => {
+    const id = String((payload && payload.id) || '');
+    const room = leasedRoomStore.list().find((row) => row.id === id);
+    if (!room) return { ok: false, error: 'not_found' };
+    const win = BrowserWindow.fromWebContents(event.sender);
+    if (!win) return { ok: false, error: 'no_window' };
+    const menu = Menu.buildFromTemplate([
+      {
+        label: `删除「${room.title}」`,
+        click: () => {
+          void (async () => {
+            const rooms = leasedRoomStore.remove(id);
+            if (!rooms) return;
+            if (shellMainProcessActiveView === id) {
+              await transitionMainProcessShellView('workbench', { notifyRenderer: true });
+            }
+            if (mainWindow && !mainWindow.isDestroyed()) {
+              mainWindow.webContents.send('shell-leased-rooms-changed', { rooms, removedId: id });
+            }
+          })();
+        },
+      },
+    ]);
+    menu.popup({ window: win });
+    return { ok: true };
+  });
 
   ipcMain.handle('shell-sidebar-context-menu-popup', (event) => {
     if (!mainWindow || mainWindow.isDestroyed()) return { ok: false, error: 'no_window' };
@@ -6185,6 +6812,83 @@ if (!gotLock) {
     shellWorkbenchSidebarInsetPx = inset;
     layoutShellChrome();
     return { ok: true, inset };
+  });
+
+  ipcMain.handle('shell-set-dsh-pane-width', (_e, payload) => {
+    const w = payload && typeof payload === 'object' ? payload.widthPx : payload;
+    const persist = !(payload && typeof payload === 'object' && payload.persist === false);
+    const clamped = clampDshPaneWidth(w);
+    shellDshPaneWidthPx = clamped;
+    if (persist) saveShellSettings({ dshPaneWidth: clamped });
+    layoutShellChrome();
+    return { ok: true, dshPaneWidth: clamped };
+  });
+  ipcMain.handle('shell-set-dsh-pane-collapsed', (_e, payload) => {
+    const collapsed = Boolean(payload && payload.collapsed);
+    const next = saveShellSettings({ dshPaneCollapsed: collapsed });
+    layoutShellChrome();
+    return {
+      ok: true,
+      dshPaneCollapsed: next.dshPaneCollapsed,
+      dshPaneWidth: next.dshPaneWidth,
+    };
+  });
+  ipcMain.handle('shell-dsh-handoff', async (_e, payload) => applyDshHandoff(payload));
+  ipcMain.handle('shell-get-workspace-finger', () => {
+    const snap = workspaceDocumentStore.getSnapshot();
+    return { ok: true, finger: snap.finger || {} };
+  });
+  ipcMain.handle('shell-send-to-current-host', async (_e, payload) => {
+    const body = payload && typeof payload === 'object' ? payload : {};
+    const hostId = body.hostId;
+    const localVersionId = typeof body.localVersionId === 'string' ? body.localVersionId.trim() : '';
+    if (localVersionId && hostId) {
+      try {
+        await companionApiRequest(
+          'POST',
+          '/v1/capability-packages/drafts/' + encodeURIComponent(String(hostId)) + '/local-version',
+          { localVersionId, makeDefault: true },
+          { timeoutMs: 12000 },
+        );
+      } catch (e) {
+        console.warn('[shell-send]', e instanceof Error ? e.message : e);
+      }
+    }
+    const picked = pickHostForSend(workspaceDocumentStore.getSnapshot().finger, hostId, localVersionId);
+    if (!picked.ok) {
+      const out = { ok: false, error: picked.error };
+      const suggestSurface = sendHostErrorSuggestSurface(picked.error);
+      if (suggestSurface) out.suggestSurface = suggestSurface;
+      return out;
+    }
+    const finger = workspaceDocumentStore.getSnapshot().finger;
+    const resolved = await workshopFileTreeHost.resolveSendFile(finger);
+    if (!resolved || !resolved.ok) {
+      return { ok: false, error: (resolved && resolved.error) || 'no_selection' };
+    }
+    const bridge = createHostPrimitiveBridge({
+      companionApiRequest: (method, pathname, body, opts) => companionApiRequest(method, pathname, body, opts),
+    });
+    const invoked = await bridge.invokeHostPrimitive(
+      picked.host.id,
+      'host.import_file',
+      { filePath: resolved.fileAbs, rel: resolved.fileRel },
+      { localVersionId: picked.host.localVersionId || localVersionId },
+    );
+    if (!invoked || !invoked.ok) {
+      return { ok: false, error: (invoked && invoked.error) || 'host_import_failed' };
+    }
+    const invokeBody = invoked.result && typeof invoked.result === 'object' ? invoked.result : {};
+    const inner = invokeBody.result && typeof invokeBody.result === 'object' ? invokeBody.result : invokeBody;
+    if (inner.ok === false) {
+      return { ok: false, error: inner.error || inner.message || 'host_import_failed' };
+    }
+    return {
+      ok: true,
+      hostId: picked.host.id,
+      filePath: resolved.fileAbs,
+      message: inner.message,
+    };
   });
 
   ipcMain.handle('shell-set-copilot-layout', (_e, layout) => {
@@ -6441,6 +7145,7 @@ if (!gotLock) {
       return { ok: false, error: 'agent_not_ready' };
     }
     const context = await agentWorkbenchClient.getContext();
+    await syncConnectedHostsFromCompanion();
     const executions = agentStore ? agentStore.listToolExecutions({ limit: 5 }) : [];
     return {
       ok: Boolean(context && context.ok),
@@ -6449,6 +7154,87 @@ if (!gotLock) {
       executions,
     };
   });
+
+  ipcMain.handle('workspace-dispatch', async (_event, command) => {
+    return dshWorkspaceTools.workspace_dispatch(command);
+  });
+
+  ipcMain.handle('workspace-hydrate-document', async (_event, payload) => {
+    let folderSource = false;
+    try {
+      folderSource = workshopFolderSourceOfTruthFromState(workshopFileTreeHost.state());
+    } catch {
+      folderSource = false;
+    }
+    if (folderSource) {
+      refreshDshFingerInject(workspaceDocumentStore.getSnapshot());
+      return { ok: true, snapshot: workspaceDocumentStore.getSnapshot(), skippedAssets: true };
+    }
+    const snapshot = workspaceDocumentStore.hydrate(payload && typeof payload === 'object' ? payload : {});
+    refreshDshFingerInject(workspaceDocumentStore.getSnapshot());
+    return { ok: true, snapshot };
+  });
+
+  ipcMain.handle('workspace-read-finger', async () => {
+    return dshWorkspaceTools.workspace_read_finger();
+  });
+
+  ipcMain.handle('workspace-read-document', async () => {
+    return dshWorkspaceTools.workspace_read_document();
+  });
+
+  ipcMain.handle('workspace-read-compartment', async (_event, payload) => {
+    const compartment = String((payload && payload.compartment) || 'workshop').trim();
+    const doc = dshWorkspaceTools.workspace_read_document();
+    if (!doc || doc.ok === false) return doc || { ok: false, error: 'read_failed' };
+    const { compartmentAssetIdsFromSnapshot } = require('./workshop-folder-source.cjs');
+    const assetIds = compartmentAssetIdsFromSnapshot(doc, compartment);
+    const assets = {};
+    if (doc.assets && typeof doc.assets === 'object') {
+      for (const id of assetIds) {
+        if (doc.assets[id]) assets[id] = doc.assets[id];
+      }
+    }
+    return { ok: true, compartment, assetIds, assets };
+  });
+
+  ipcMain.handle('workspace-open-surface', async (_event, surface) => {
+    return dshWorkspaceTools.workspace_open_surface(surface);
+  });
+
+  ipcMain.handle('workspace-sync-connection-drafts', async (_event, drafts) => {
+    const finger = workspaceDocumentStore.getSnapshot().finger || {};
+    const hosts = overlayConnectedHosts(Array.isArray(drafts) ? drafts : [], {
+      hasSelectedCard: Boolean(finger.selectedAssetId),
+      selectedRelPath: finger.selectedRelPath,
+    });
+    return { ok: true, hosts };
+  });
+
+  ipcMain.handle('workshop-file-state', async () => workshopFileTreeHost.state());
+  ipcMain.handle('workshop-file-pick-root', async () => workshopFileTreeHost.pickRoot());
+  ipcMain.handle('workshop-file-remove-root', async (_event, payload) => workshopFileTreeHost.removeRoot(payload || {}));
+  ipcMain.handle('workshop-file-list', async (_event, payload) => workshopFileTreeHost.list(payload || {}));
+  ipcMain.handle('workshop-file-thumb', async (_event, payload) => workshopFileTreeHost.thumb(payload || {}));
+  ipcMain.handle('workshop-file-read', async (_event, payload) => workshopFileTreeHost.readFile(payload || {}));
+  ipcMain.handle('workshop-file-media', async (_event, payload) => workshopFileTreeHost.getMedia(payload || {}));
+  ipcMain.handle('workshop-file-write-result', async (_event, payload) => workshopFileTreeHost.writeResult(payload || {}));
+  ipcMain.handle('workshop-file-create-package', async (_event, payload) => workshopFileTreeHost.createPackage(payload || {}));
+  ipcMain.handle('workshop-file-create-checkout', async (_event, payload) => workshopFileTreeHost.createCheckoutFile(payload || {}));
+  ipcMain.handle('workshop-file-write-checkout', async (_event, payload) => workshopFileTreeHost.writeCheckoutFile(payload || {}));
+  ipcMain.handle('workshop-file-import', async (_event, payload) => workshopFileTreeHost.importFiles(payload || {}));
+  ipcMain.handle('workshop-file-mkdir', async (_event, payload) => workshopFileTreeHost.mkdir(payload || {}));
+  ipcMain.handle('workshop-file-move', async (_event, payload) => workshopFileTreeHost.moveEntries(payload || {}));
+  ipcMain.handle('workshop-file-copy', async (_event, payload) => workshopFileTreeHost.copyEntries(payload || {}));
+  ipcMain.handle('workshop-file-trash', async (_event, payload) => workshopFileTreeHost.trashEntries(payload || {}));
+  ipcMain.handle('workshop-file-group', async (_event, payload) => workshopFileTreeHost.groupEntries(payload || {}));
+  ipcMain.handle('workshop-file-upgrade-loose', async (_event, payload) => workshopFileTreeHost.upgradeLoose(payload || {}));
+  ipcMain.handle('workshop-file-apply-checkout', async (_event, payload) => workshopFileTreeHost.applyCheckout(payload || {}));
+  ipcMain.handle('workshop-file-set-face', async (_event, payload) => workshopFileTreeHost.setFace(payload || {}));
+  ipcMain.handle('workshop-file-pick-workspace', async () => workshopFileTreeHost.pickWorkspaceDir());
+  ipcMain.handle('workshop-file-set-library-open', async (_event, payload) =>
+    workshopFileTreeHost.setLibraryOpen(payload || {}),
+  );
 
   ipcMain.handle('agent-project-memory-list', async (_event, options) => {
     return listCopilotProjectMemory(options && typeof options === 'object' ? options : {});
@@ -7066,6 +7852,10 @@ if (!gotLock) {
     ensureCompanionSandboxLayout();
     initAgentPlatform();
     registerCompanionProtocol();
+    attachWorkshopMediaProtocol(protocol, null, {
+      isAllowedAbs: (abs) => workshopFileTreeHost.isAllowedMediaAbs(abs),
+      session: session.fromPartition(FIRST_PARTY_WEB_PARTITION),
+    });
     if (process.platform === 'darwin' && app.dock) {
       app.dock.hide();
     }
@@ -7101,6 +7891,16 @@ if (!gotLock) {
 
   app.on('before-quit', () => {
     isQuitting = true;
+    try {
+      if (dshHostController) dshHostController.stop();
+    } catch {
+      /* ignore */
+    }
+    try {
+      killLoopbackPortListeners(3080);
+    } catch {
+      /* ignore */
+    }
     // Drop AssetCutter MCP from shared ~/.codex so ChatGPT desktop is not left
     // requiring ASSETCUTTER_MCP_TOKEN after the companion exits.
     try {

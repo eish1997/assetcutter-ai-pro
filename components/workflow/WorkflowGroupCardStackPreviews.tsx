@@ -29,6 +29,10 @@ type Props = {
   groupAsset: WorkflowAsset;
   allAssets: WorkflowAsset[];
   getDisplayImage: (a: WorkflowAsset) => string;
+  /** 磁盘文件夹没有组成员资产时，仍画出两层空卡，对齐原来的成组堆叠 */
+  forceStack?: boolean;
+  /** 直接给封面层用的 src（作坊文件夹预览），优先于组成员查找 */
+  memberSrcs?: string[];
   deferThumbnail?: boolean;
   thumbDecodePriority?: 'high' | 'low';
   companionBaseUrl?: string;
@@ -39,41 +43,48 @@ function WorkflowGroupCardStackPreviewsInner({
   groupAsset,
   allAssets,
   getDisplayImage,
+  forceStack = false,
+  memberSrcs,
   deferThumbnail = false,
   thumbDecodePriority = 'low',
   companionBaseUrl,
   companionProjectId,
 }: Props) {
-  const memberCount = resolveGroupMemberCount(groupAsset);
-  if (memberCount <= 1) return null;
+  const memberCount = Math.max(
+    resolveGroupMemberCount(groupAsset),
+    Array.isArray(memberSrcs) ? memberSrcs.filter((s) => String(s || '').trim()).length : 0,
+  );
+  if (memberCount <= 1 && !forceStack) return null;
 
   return (
     <>
       {STACK_LAYERS.map(({ memberIndex, offsetClass, opacityClass }) => {
-        if (memberIndex >= memberCount) return null;
-        const src = resolveGroupMemberPreviewSrc(groupAsset, memberIndex, allAssets, getDisplayImage);
-        if (!src.trim()) return null;
-        const cacheKey = `${groupAsset.id}:stack:${memberIndex}:fp${previewSrcCacheFingerprint(src)}`;
+        if (!forceStack && memberIndex >= memberCount) return null;
+        const fromList = Array.isArray(memberSrcs) ? String(memberSrcs[memberIndex] || '').trim() : '';
+        const src =
+          fromList || resolveGroupMemberPreviewSrc(groupAsset, memberIndex, allAssets, getDisplayImage);
         return (
           <div
             key={memberIndex}
             aria-hidden
-            className={`pointer-events-none absolute left-0 top-0 overflow-hidden rounded-2xl bg-[#121214] shadow-lg shadow-black/35 ${WORKFLOW_GROUP_CARD_FACE_CLASS} ${offsetClass} ${opacityClass}`}
+            className={`pointer-events-none absolute left-0 top-0 overflow-hidden rounded-2xl bg-[#121214] shadow-lg shadow-black/35 ring-1 ring-white/[0.06] ${WORKFLOW_GROUP_CARD_FACE_CLASS} ${offsetClass} ${opacityClass}`}
           >
-            <WorkflowGridImage
-              fullSrc={src}
-              cacheKey={cacheKey}
-              deferThumbnail={deferThumbnail}
-              thumbDecodePriority={thumbDecodePriority}
-              imageFetchPriority="low"
-              thumbMaxEdge={320}
-              companionBaseUrl={companionBaseUrl}
-              companionProjectId={companionProjectId}
-              className="relative h-full w-full"
-              imgClassName="block h-full w-full scale-110 object-cover blur-2xl brightness-[0.72] saturate-[0.85]"
-              draggable={false}
-              onDragStart={(e) => e.preventDefault()}
-            />
+            {src.trim() ? (
+              <WorkflowGridImage
+                fullSrc={src}
+                cacheKey={`${groupAsset.id}:stack:${memberIndex}:fp${previewSrcCacheFingerprint(src)}`}
+                deferThumbnail={deferThumbnail}
+                thumbDecodePriority={thumbDecodePriority}
+                imageFetchPriority="low"
+                thumbMaxEdge={320}
+                companionBaseUrl={companionBaseUrl}
+                companionProjectId={companionProjectId}
+                className="relative h-full w-full"
+                imgClassName="block h-full w-full scale-110 object-cover blur-2xl brightness-[0.72] saturate-[0.85]"
+                draggable={false}
+                onDragStart={(e) => e.preventDefault()}
+              />
+            ) : null}
           </div>
         );
       })}

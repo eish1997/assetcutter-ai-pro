@@ -150,7 +150,7 @@ function buildModelVariant(asset: WorkflowAsset, key: string): WorkflowAssetVari
   const modelFormats = modelUrls.map((url, index) => {
     const fromStep = formatsFromStep[index];
     if (fromStep) return fromStep;
-    return modelFormatFromUrlOrKey(url, modelCompanionKeys[index] || '');
+    return modelFormatFromUrlOrKey(url, modelCompanionKeys[index] || asset.modelSourceName || '');
   });
   const posterUrl = cleanString((asset.results || {})[key]);
   const posterPreviewKey = cleanString(asset.resultsPreviewCompanionKeys?.[key]);

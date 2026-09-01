@@ -115,6 +115,7 @@ import {
 import { detectCutImageBoxes, FALLBACK_CUT_IMAGE_PRESET, FULL_IMAGE_BOX } from '../services/cutImageExecution';
 import {
   isCutImageCapabilityPreset,
+  presetUsesHostBundleProcessor,
   readCutImageParams,
 } from '../services/capabilityProcessors/imageProcessProcessors';
 import {
@@ -228,6 +229,15 @@ import {
   normalizeWorkflowTagMapToChinese,
   refineWorkflowImageTagsLowCost,
 } from '../services/workflowImageTags';
+import { dispatchWorkspaceSetFinger, publishAgentWorkbenchFinger } from '../services/agentWorkbenchBridge';
+import { connectedHostsFromDrafts, readPublishedConnectionDrafts } from '../services/workspaceFingerHosts';
+import {
+  canvasFingerKey,
+  nextSelectedAssetIdsFromFinger,
+  omitConnectedHostsFromFinger,
+  workspaceFingerFromUi,
+  type WorkspaceFinger,
+} from '../services/workspaceDocumentProtocol';
 import AppIcon from './ui/AppIcon';
 import { AssetPreviewOverlay } from './workflow/AssetPreviewOverlay';
 import { AssetMediaPreviewCenter } from './workflow/AssetMediaPreviewCenter';
@@ -479,6 +489,63 @@ import {
 } from '../services/workflowAssetVariants';
 import { groupCapabilityPresetsByCategory } from './workflow/workflowCapabilityGroups';
 import { WorkflowSidebarColumn, type WorkflowSidebarFavoriteEntry } from './workflow/WorkflowSidebarColumn';
+import { WorkshopFileTreeColumn } from './workshop/WorkshopFileSource';
+import { WorkshopCanvasNavBar } from './workshop/WorkshopCanvasNavBar';
+import {
+  applyWorkshopFileState,
+  hasWorkbenchFileSourceApi,
+  isWorkshopBrowserLibraryRoot,
+  isWorkshopRecycleRoot,
+  workshopRootAllowsCreate,
+  parseWorkshopFileAssetId,
+  selectedRelFromAssetIds,
+  workshopCardDiskRel,
+  workshopFileAssetId,
+  workshopFileSourceApi,
+  workshopMoveToParentDestRel,
+  type WorkshopRootInfo,
+  WORKSHOP_BROWSER_LIBRARY_ROOT,
+  WORKSHOP_FOLDERS_PANE_WIDTH_PX,
+  WORKSHOP_THUMB_IPC_PARALLEL,
+} from '../services/workshopFileTree';
+import {
+  parseWorkshopCardId,
+  utf8FromDataUrl,
+  workshopCanvasItemsToWorkflowAssets,
+  workshopHostFilePayload,
+  workshopPackageCardId,
+  type WorkshopCanvasItem,
+  type WorkshopMediaHit,
+} from '../services/workshopAssetPackage';
+import {
+  isWorkshopBatchEligible,
+  mergeWorkshopCanvasItems,
+  optimisticWorkshopPackageItem,
+  remapGenerationBatchToWorkshop,
+  workshopTitleFromAsset,
+  type WorkshopCreatedPackage,
+} from '../services/workshopGenerationRemap';
+import { workshopDisplayNeedsApply } from '../services/workshopCheckoutDebounce';
+import {
+  countWorkshopCanvasKinds,
+  emptyWorkshopNavHistory,
+  filterWorkshopCanvasByKind,
+  normalizeWorkshopNavLoc,
+  pushWorkshopNav,
+  workshopBreadcrumbSegments,
+  workshopCanvasKindMatches,
+  workshopNavBack,
+  workshopNavCanBack,
+  workshopNavCanForward,
+  workshopNavCanUp,
+  workshopNavForward,
+  workshopNavRootLabel,
+  workshopNavUpLoc,
+  type WorkshopCanvasKindFilter,
+  type WorkshopNavLoc,
+} from '../services/workshopCanvasNav';
+import { isWorkshopPlayableMediaUrl, isWorkshopSpecialRasterName, isWorkshopTextPreviewName } from '../services/workshopPreviewKind';
+import { decodeWorkshopSpecialRasterToJpeg } from '../services/workshopSpecialRaster';
 import WorkflowSpaceMarqueeChrome from './workflow/WorkflowSpaceMarqueeChrome';
 import WorkflowMarqueeOverlay from './workflow/WorkflowMarqueeOverlay';
 import WorkflowLightboxDetailEdgePanel from './workflow/WorkflowLightboxDetailEdgePanel';
@@ -1140,6 +1207,9 @@ const WorkflowSection: React.FC<{
   const persistedModelThumbnailSlotsRef = useRef<Set<string>>(new Set());
   const onLogRef = React.useRef(onLog);
   onLogRef.current = onLog;
+  const [fileSourceApi, setFileSourceApi] = useState(() => hasWorkbenchFileSourceApi());
+  const [workshopActiveRoot, setWorkshopActiveRoot] = useState(WORKSHOP_BROWSER_LIBRARY_ROOT);
+  const workshopDiskOpen = Boolean(fileSourceApi && !isWorkshopBrowserLibraryRoot(workshopActiveRoot));
 
   useEffect(() => {
     setWorkflowMirrorPreferenceScope(preferenceScope);
@@ -1570,16 +1640,23 @@ const WorkflowSection: React.FC<{
   const [projectAgentSkillRevision, setProjectAgentSkillRevision] = useState(0);
   const [runtimeExternalApps, setRuntimeExternalApps] = useState<RuntimeExternalAppState[]>([]);
   const [runtimeExternalRisks, setRuntimeExternalRisks] = useState<RuntimePerceptionRisk[]>([]);
-  const submitLightboxQuickComposeRef = useRef<() => string[]>([]);
+  const submitLightboxQuickComposeRef = useRef<() => Promise<string[]>>(() => Promise.resolve([]));
   useEffect(() => {
     workspaceQuickComposeThreadRef.current = workspaceQuickComposeThread;
   }, [workspaceQuickComposeThread]);
 
   const activeWorkspaceProjectId = String(workspaceProjectChrome?.activeProjectId || '').trim();
   const getProjectAgentThreadKey = useCallback((): ProjectAgentThreadStoreKey | null => {
+    if (workshopDiskOpen) {
+      const root = workshopActiveRoot.trim();
+      return {
+        userId: preferenceScope,
+        workspaceProjectId: root ? `workshop:${root}` : 'workshop:folder',
+      };
+    }
     if (!activeWorkspaceProjectId) return null;
     return { userId: preferenceScope, workspaceProjectId: activeWorkspaceProjectId };
-  }, [activeWorkspaceProjectId, preferenceScope]);
+  }, [workshopDiskOpen, workshopActiveRoot, activeWorkspaceProjectId, preferenceScope]);
 
   const projectAgentMemoryEntries = useMemo(() => {
     const key = getProjectAgentThreadKey();
@@ -1688,14 +1765,11 @@ const WorkflowSection: React.FC<{
   }, [onLog]);
 
   useEffect(() => {
-    if (!activeWorkspaceProjectId) {
+    const key = getProjectAgentThreadKey();
+    if (!key) {
       setWorkspaceQuickComposeThread(null);
       return;
     }
-    const key: ProjectAgentThreadStoreKey = {
-      userId: preferenceScope,
-      workspaceProjectId: activeWorkspaceProjectId,
-    };
     const localRaw = loadOrCreateProjectAgentThread(key);
     const localFinalized = finalizeStaleInFlightProjectAgentThread(localRaw);
     const local = localFinalized.thread;
@@ -1712,7 +1786,7 @@ const WorkflowSection: React.FC<{
     void (async () => {
       try {
         const hydrated = await hydrateProjectAgentThreadFromCloud(
-          { userId: preferenceScope, workspaceProjectId: activeWorkspaceProjectId },
+          { userId: preferenceScope, workspaceProjectId: key.workspaceProjectId },
           local,
           { getFreshLocal: () => workspaceQuickComposeThreadRef.current }
         );
@@ -1744,7 +1818,7 @@ const WorkflowSection: React.FC<{
     return () => {
       cancelled = true;
     };
-  }, [activeWorkspaceProjectId, preferenceScope]);
+  }, [getProjectAgentThreadKey, preferenceScope]);
 
   const [archivedDetailAssetId, setArchivedDetailAssetId] = useState<string | null>(null);
   const [executing, setExecuting] = useState(false);
@@ -1899,6 +1973,12 @@ const WorkflowSection: React.FC<{
   const [groupFilterId, setGroupFilterId] = useState<string | null>(null);
   const groupFilterIdRef = useRef(groupFilterId);
   groupFilterIdRef.current = groupFilterId;
+  const [workshopCanvasKindFilter, setWorkshopCanvasKindFilter] = useState<WorkshopCanvasKindFilter>('all');
+  const [workshopNavHistory, setWorkshopNavHistory] = useState(() =>
+    emptyWorkshopNavHistory({ root: WORKSHOP_BROWSER_LIBRARY_ROOT, rel: '', groupId: null }),
+  );
+  const workshopNavHistoryRef = useRef(workshopNavHistory);
+  workshopNavHistoryRef.current = workshopNavHistory;
   const [groupStringLightboxIndex, setGroupStringLightboxIndex] = useState<number | null>(null);
   const [draggingGroupItems, setDraggingGroupItems] = useState<{ groupAssetId: string; itemIndexes: number[] } | null>(null);
   const draggingGroupItemsRef = useRef<{ groupAssetId: string; itemIndexes: number[] } | null>(null);
@@ -1924,6 +2004,74 @@ const WorkflowSection: React.FC<{
     clearWorkflowCardDragDropSession();
   }, []);
   const [selectedAssetIds, setSelectedAssetIds] = useState<Set<string>>(new Set());
+  const [workshopRoots, setWorkshopRoots] = useState<WorkshopRootInfo[]>([]);
+  const [workshopWorkspaceDir, setWorkshopWorkspaceDir] = useState('');
+  const [workshopCurrentRel, setWorkshopCurrentRel] = useState('');
+  const [workshopSelectedRel, setWorkshopSelectedRel] = useState<string | null>(null);
+  const [workshopCanvasItems, setWorkshopCanvasItems] = useState<WorkshopCanvasItem[]>([]);
+  const [workshopOptimisticItems, setWorkshopOptimisticItems] = useState<WorkshopCanvasItem[]>([]);
+  const [workshopListEpoch, setWorkshopListEpoch] = useState(0);
+  const [workshopThumbById, setWorkshopThumbById] = useState<Record<string, string>>({});
+  const [workshopSourceById, setWorkshopSourceById] = useState<Record<string, string>>({});
+  const [workshopMediaById, setWorkshopMediaById] = useState<Record<string, WorkshopMediaHit>>({});
+  const [workshopTextById, setWorkshopTextById] = useState<Record<string, string>>({});
+  const [workshopFaceById, setWorkshopFaceById] = useState<Record<string, string>>({});
+  const workshopThumbRequestedRef = useRef<Set<string>>(new Set());
+  const workshopMediaRequestedRef = useRef<Set<string>>(new Set());
+  const workshopSpecialRasterRequestedRef = useRef<Set<string>>(new Set());
+  const workshopThumbByIdRef = useRef(workshopThumbById);
+  workshopThumbByIdRef.current = workshopThumbById;
+  const workshopThumbPendingRef = useRef<Map<string, string>>(new Map());
+  const workshopThumbRafRef = useRef(0);
+  const flushWorkshopThumbs = useCallback(() => {
+    workshopThumbRafRef.current = 0;
+    const batch = workshopThumbPendingRef.current;
+    if (!batch.size) return;
+    workshopThumbPendingRef.current = new Map();
+    setWorkshopThumbById((prev) => {
+      const next = { ...prev };
+      let changed = false;
+      batch.forEach((url, id) => {
+        if (next[id] === url) return;
+        next[id] = url;
+        changed = true;
+      });
+      return changed ? next : prev;
+    });
+  }, []);
+  const workshopCanvasItemsRef = useRef<WorkshopCanvasItem[]>([]);
+  const workshopActiveRootRef = useRef('');
+  const workshopCurrentRelRef = useRef('');
+  const workshopMergedCanvasItems = useMemo(
+    () => mergeWorkshopCanvasItems(workshopCanvasItems, workshopOptimisticItems),
+    [workshopCanvasItems, workshopOptimisticItems],
+  );
+  workshopCanvasItemsRef.current = workshopMergedCanvasItems;
+  workshopActiveRootRef.current = workshopActiveRoot;
+  workshopCurrentRelRef.current = workshopCurrentRel;
+  const workshopFaceFileId = useCallback((cardId: string, key: string) => {
+    const parsed = parseWorkshopFileAssetId(cardId);
+    const item = workshopCanvasItemsRef.current.find(
+      (row) => parsed && row.root === parsed.root && row.rel === parsed.rel,
+    );
+    const raw = String(key || '').trim() || 'original';
+    if (raw !== 'original') return raw;
+    const files = item?.files || {};
+    const original = Object.entries(files).find(([, rec]) => rec && rec.role === 'original');
+    return original?.[0] || item?.checkoutFileId || item?.displayFileId || '';
+  }, []);
+  const workshopFileAssets = useMemo(
+    () =>
+      workshopCanvasItemsToWorkflowAssets(workshopMergedCanvasItems, {
+        originalById: { ...workshopThumbById, ...workshopSourceById },
+        faceById: workshopFaceById,
+        mediaById: workshopMediaById,
+        textBodyById: workshopTextById,
+      }),
+    [workshopMergedCanvasItems, workshopThumbById, workshopSourceById, workshopFaceById, workshopMediaById, workshopTextById]
+  );
+  const lastDispatchedCanvasFingerKeyRef = useRef('');
+  const shellRoomRef = useRef('workbench');
   const [selectedGroupItemKeys, setSelectedGroupItemKeys] = useState<Set<string>>(new Set());
   const [capabilityPresetViewMode, setCapabilityPresetViewMode] = useState<'presets' | 'image_process' | 'sets'>('presets');
   const [capabilityPresetTypeFilter, setCapabilityPresetTypeFilter] = useState<CapabilityPresetTypeFilter>('all');
@@ -2146,6 +2294,464 @@ const WorkflowSection: React.FC<{
     registerPaneWheelHandler,
     enableSpaceMarquee: quickComposeShellActive && !showArchived,
   });
+  useEffect(() => {
+    const selected = [...selectedAssetIds][0] || '';
+    const parsed = parseWorkshopCardId(selected);
+    const item =
+      parsed?.kind === 'package'
+        ? workshopFileAssets.find((a) => a.id === selected)
+        : null;
+    const finger = workspaceFingerFromUi({
+      selectedAssetIds,
+      selectedRoot: workshopDiskOpen ? workshopActiveRoot : null,
+      selectedRelPath: workshopSelectedRel,
+      selectedFileId: parsed?.kind === 'package' ? String(item?.displayKey || '') : null,
+      assets: workshopDiskOpen ? workshopFileAssets : assets,
+      lightboxAssetId,
+      surface: Math.round(workspacePane) === 1 ? 'presets' : 'canvas',
+      connectedHosts: connectedHostsFromDrafts(readPublishedConnectionDrafts(), {
+        hasSelectedCard: selectedAssetIds.size > 0 || Boolean(workshopSelectedRel),
+      }),
+    });
+    publishAgentWorkbenchFinger(finger);
+    if (shellRoomRef.current !== 'workbench') return;
+    const key = canvasFingerKey(finger);
+    if (key === lastDispatchedCanvasFingerKeyRef.current) return;
+    lastDispatchedCanvasFingerKeyRef.current = key;
+    dispatchWorkspaceSetFinger(finger);
+  }, [selectedAssetIds, workshopSelectedRel, workshopActiveRoot, workshopDiskOpen, workshopFileAssets, assets, lightboxAssetId, workspacePane]);
+  useEffect(() => {
+    const api = window.assetCutterWorkbench;
+    if (!api || typeof api.onWorkspaceShellView !== 'function') return undefined;
+    return api.onWorkspaceShellView((view) => {
+      const next = String(view || 'workbench');
+      shellRoomRef.current = next;
+      if (next !== 'workbench') return;
+      lastDispatchedCanvasFingerKeyRef.current = '';
+      const selected = [...selectedAssetIds][0] || '';
+      const parsed = parseWorkshopCardId(selected);
+      const item =
+        parsed?.kind === 'package'
+          ? workshopFileAssets.find((a) => a.id === selected)
+          : null;
+      const finger = workspaceFingerFromUi({
+        selectedAssetIds,
+        selectedRoot: workshopDiskOpen ? workshopActiveRoot : null,
+        selectedRelPath: workshopSelectedRel,
+        selectedFileId: parsed?.kind === 'package' ? String(item?.displayKey || '') : null,
+        assets: workshopDiskOpen ? workshopFileAssets : assets,
+        lightboxAssetId,
+        surface: Math.round(workspacePane) === 1 ? 'presets' : 'canvas',
+        connectedHosts: connectedHostsFromDrafts(readPublishedConnectionDrafts(), {
+          hasSelectedCard: selectedAssetIds.size > 0 || Boolean(workshopSelectedRel),
+        }),
+      });
+      publishAgentWorkbenchFinger(finger);
+      dispatchWorkspaceSetFinger(finger);
+    });
+  }, [selectedAssetIds, workshopSelectedRel, workshopActiveRoot, workshopDiskOpen, workshopFileAssets, assets, lightboxAssetId, workspacePane]);
+  useEffect(() => {
+    const on = hasWorkbenchFileSourceApi();
+    setFileSourceApi(on);
+    if (!on) return;
+    const api = workshopFileSourceApi();
+    if (!api?.getWorkshopFileState) return;
+    void api.getWorkshopFileState().then((st) => {
+      if (!st?.ok) return;
+      const next = applyWorkshopFileState(st);
+      setWorkshopRoots(next.roots);
+      setWorkshopActiveRoot((cur) => {
+        if (isWorkshopBrowserLibraryRoot(cur) || !cur) return WORKSHOP_BROWSER_LIBRARY_ROOT;
+        if (isWorkshopRecycleRoot(cur) && String(st.workspaceDir || '').trim()) return cur;
+        if (next.roots.some((r) => r.root === cur)) return cur;
+        return WORKSHOP_BROWSER_LIBRARY_ROOT;
+      });
+      setWorkshopWorkspaceDir(String(st.workspaceDir || '').trim());
+      const apiOpen = workshopFileSourceApi();
+      if (apiOpen?.setWorkshopLibraryOpen) {
+        void apiOpen.setWorkshopLibraryOpen({ root: '', rel: '' });
+      }
+    });
+  }, []);
+  const pickWorkshopWorkspace = useCallback(async () => {
+    const api = workshopFileSourceApi();
+    if (!api?.pickWorkshopWorkspace) return;
+    const st = await api.pickWorkshopWorkspace();
+    if (!st?.ok || st.canceled) {
+      if (st && !st.canceled && st.error === 'workspace_inside_library') {
+        onLog?.('warn', '库目录不能建在已挂上的素材文件夹里面');
+      }
+      return;
+    }
+    setWorkshopWorkspaceDir(String(st.workspaceDir || '').trim());
+    const next = applyWorkshopFileState(st);
+    setWorkshopRoots(next.roots);
+    setWorkshopActiveRoot((cur) => {
+      if (isWorkshopBrowserLibraryRoot(cur) || isWorkshopRecycleRoot(cur) || next.roots.some((r) => r.root === cur)) return cur;
+      return WORKSHOP_BROWSER_LIBRARY_ROOT;
+    });
+    setWorkshopCurrentRel('');
+  }, [onLog]);
+  const pickWorkshopRoot = useCallback(async () => {
+    const api = workshopFileSourceApi();
+    if (!api?.pickWorkshopRoot) return;
+    if (!String(workshopWorkspaceDir || '').trim()) {
+      if (!api.pickWorkshopWorkspace) {
+        onLog?.('warn', '请先指定库目录再挂素材文件夹');
+        return;
+      }
+      const picked = await api.pickWorkshopWorkspace();
+      if (!picked?.ok || picked.canceled) {
+        if (picked && !picked.canceled && picked.error === 'workspace_inside_library') {
+          onLog?.('warn', '库目录不能建在已挂上的素材文件夹里面');
+        } else {
+          onLog?.('warn', '请先指定库目录再挂素材文件夹');
+        }
+        return;
+      }
+      setWorkshopWorkspaceDir(String(picked.workspaceDir || '').trim());
+      const migrated = applyWorkshopFileState(picked);
+      setWorkshopRoots(migrated.roots);
+    }
+    const st = await api.pickWorkshopRoot();
+    if (st && !st.canceled && st.error === 'no_workspace') {
+      onLog?.('warn', '请先指定库目录再挂素材文件夹');
+      return;
+    }
+    if (!st?.ok || st.canceled) return;
+    const next = applyWorkshopFileState(st);
+    setWorkshopRoots(next.roots);
+    const added = String(st.root || '').trim();
+    setWorkshopActiveRoot(added || next.activeRoot);
+    setWorkshopCurrentRel('');
+    setWorkshopSelectedRel(null);
+    setSelectedAssetIds(new Set());
+  }, [onLog, workshopWorkspaceDir]);
+  const removeWorkshopRoot = useCallback(async (root: string) => {
+    const api = workshopFileSourceApi();
+    if (!api?.removeWorkshopRoot) return;
+    const st = await api.removeWorkshopRoot({ root });
+    if (!st?.ok) return;
+    const next = applyWorkshopFileState(st);
+    setWorkshopRoots(next.roots);
+    setWorkshopActiveRoot((cur) => (cur === root ? WORKSHOP_BROWSER_LIBRARY_ROOT : cur));
+    setWorkshopCurrentRel('');
+    setWorkshopSelectedRel(null);
+    setSelectedAssetIds(new Set());
+  }, []);
+  const findLiveAsset = useCallback(
+    (id: string | null | undefined): WorkflowAsset | null => {
+      const t = String(id || '').trim();
+      if (!t) return null;
+      const found = workshopFileAssets.find((a) => a.id === t) || assets.find((a) => a.id === t) || null;
+      return found;
+    },
+    [workshopFileAssets, assets]
+  );
+  useEffect(() => {
+    if (!fileSourceApi || isWorkshopBrowserLibraryRoot(workshopActiveRoot) || !workshopActiveRoot) {
+      setWorkshopCanvasItems([]);
+      return;
+    }
+    const api = workshopFileSourceApi();
+    if (!api?.listWorkshopDir) return;
+    let cancelled = false;
+    workshopThumbRequestedRef.current = new Set();
+    workshopSpecialRasterRequestedRef.current = new Set();
+    void api
+      .listWorkshopDir({
+        root: workshopActiveRoot,
+        rel: workshopCurrentRel,
+        assetsOnly: true,
+        includeSubfolders: false,
+      })
+      .then((out) => {
+        if (cancelled) return;
+        const items = out.ok && Array.isArray(out.items) ? out.items : [];
+        setWorkshopCanvasItems(items);
+        setWorkshopOptimisticItems((prev) =>
+          prev.filter((row) => {
+            if (row.kind === 'package' && row.assetId) {
+              return !items.some(
+                (disk) =>
+                  disk.kind === 'package' &&
+                  disk.assetId === row.assetId &&
+                  disk.root === row.root,
+              );
+            }
+            if ((row.kind === 'loose' || row.kind === 'folder') && row.rel) {
+              return !items.some(
+                (disk) => disk.kind === row.kind && disk.rel === row.rel && disk.root === row.root,
+              );
+            }
+            return true;
+          }),
+        );
+        const liveCardIds = new Set<string>();
+        for (const item of items) {
+          if (item.kind === 'package' && item.assetId) {
+            liveCardIds.add(workshopPackageCardId(item.root, item.assetId));
+          } else if (item.kind === 'loose' || item.kind === 'folder') {
+            liveCardIds.add(workshopFileAssetId(item.root, item.rel));
+          }
+        }
+        setWorkshopThumbById((prev) => {
+          const next: Record<string, string> = {};
+          for (const [key, val] of Object.entries(prev)) {
+            const baseId = key.split('::')[0] || key;
+            if (liveCardIds.has(baseId) || liveCardIds.has(key)) next[key] = val;
+          }
+          return next;
+        });
+        setWorkshopSourceById((prev) => {
+          const next: Record<string, string> = {};
+          for (const [key, val] of Object.entries(prev)) {
+            const baseId = key.split('::')[0] || key;
+            if (liveCardIds.has(baseId) || liveCardIds.has(key)) next[key] = val;
+          }
+          return next;
+        });
+        setWorkshopMediaById((prev) => {
+          const next: Record<string, WorkshopMediaHit> = {};
+          for (const [key, val] of Object.entries(prev)) {
+            if (liveCardIds.has(key)) next[key] = val;
+          }
+          return next;
+        });
+        setWorkshopTextById((prev) => {
+          const next: Record<string, string> = {};
+          for (const [key, val] of Object.entries(prev)) {
+            if (liveCardIds.has(key)) next[key] = val;
+          }
+          return next;
+        });
+        workshopMediaRequestedRef.current = new Set(
+          [...workshopMediaRequestedRef.current].filter((id) => liveCardIds.has(id)),
+        );
+        workshopSpecialRasterRequestedRef.current = new Set(
+          [...workshopSpecialRasterRequestedRef.current].filter((key) => {
+            const id = key.split('::')[0] || key;
+            return liveCardIds.has(id);
+          }),
+        );
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [fileSourceApi, workshopActiveRoot, workshopCurrentRel, workshopListEpoch]);
+  useEffect(() => {
+    if (!fileSourceApi || isWorkshopBrowserLibraryRoot(workshopActiveRoot)) {
+      setWorkshopSelectedRel(null);
+      return;
+    }
+    const selected = [...selectedAssetIds][0] || '';
+    const parsed = parseWorkshopCardId(selected);
+    if (parsed?.kind === 'package') {
+      const item = workshopMergedCanvasItems.find(
+        (row) => row.kind === 'package' && row.assetId === parsed.assetId && row.root === parsed.root,
+      );
+      setWorkshopSelectedRel(item?.displayRel || item?.rel || null);
+      return;
+    }
+    setWorkshopSelectedRel(selectedRelFromAssetIds(selectedAssetIds, workshopActiveRoot, workshopMergedCanvasItems));
+  }, [fileSourceApi, selectedAssetIds, workshopActiveRoot, workshopMergedCanvasItems]);
+  useEffect(() => {
+    if (!fileSourceApi) return;
+    const api = workshopFileSourceApi();
+    if (!api?.readWorkshopFile) return;
+    let cancelled = false;
+    const want = new Set<string>();
+    if (lightboxAssetId) want.add(lightboxAssetId);
+    for (const id of selectedAssetIds) want.add(id);
+    for (const slot of quickComposeMainDropSlotsRef.current) {
+      if (slot.assetId) want.add(slot.assetId);
+    }
+    for (const slot of quickComposeReferenceDropSlotsRef.current) {
+      if (slot.assetId) want.add(slot.assetId);
+    }
+    for (const id of want) {
+      const asset = workshopFileAssets.find((row) => row.id === id);
+      const kind = String(asset?.assetKind || '');
+      if (kind === 'video' || kind === 'model3d') continue;
+      if (isWorkshopSpecialRasterName(String(asset?.textTitle || ''))) continue;
+      const textFile = kind === 'text' || isWorkshopTextPreviewName(String(asset?.textTitle || ''));
+      if (textFile) {
+        if (id !== lightboxAssetId && !selectedAssetIds.has(id)) continue;
+        if (workshopTextById[id]) continue;
+      } else if (workshopSourceById[id]) {
+        continue;
+      }
+      const parsed = parseWorkshopCardId(id);
+      if (!parsed) continue;
+      const faceKey = workshopFaceById[id] || asset?.displayKey || 'original';
+      const payload = workshopHostFilePayload(parsed, {
+        items: workshopMergedCanvasItems,
+        fileId: workshopFaceFileId(id, faceKey),
+      });
+      void api.readWorkshopFile(payload).then((out) => {
+        if (cancelled || !out?.ok || !out.dataUrl) return;
+        if (textFile) {
+          const body = utf8FromDataUrl(out.dataUrl as string);
+          if (body) setWorkshopTextById((prev) => (prev[id] ? prev : { ...prev, [id]: body }));
+          return;
+        }
+        if (kind && kind !== 'image') return;
+        setWorkshopSourceById((prev) => (prev[id] ? prev : { ...prev, [id]: out.dataUrl as string }));
+      });
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [fileSourceApi, lightboxAssetId, selectedAssetIds, workshopMergedCanvasItems, workshopSourceById, workshopTextById, workshopFaceById, workshopFaceFileId, workshopFileAssets]);
+  useEffect(() => {
+    if (!workshopDiskOpen || !workshopActiveRoot) return;
+    const api = workshopFileSourceApi();
+    if (!api?.getWorkshopMedia) return;
+    let cancelled = false;
+    const want: Array<{ id: string; displayKey: string }> = [];
+    const seen = new Set<string>();
+    const pushMedia = (id: string, displayKey = 'original') => {
+      const key = String(id || '').trim();
+      if (!key || seen.has(key)) return;
+      if (workshopMediaRequestedRef.current.has(key)) return;
+      if (!parseWorkshopCardId(key)) return;
+      seen.add(key);
+      want.push({ id: key, displayKey });
+    };
+    for (const a of workshopFileAssets) {
+      const unlocked =
+        thumbUnlockKeys.has(a.id) ||
+        selectedAssetIds.has(a.id) ||
+        a.id === lightboxAssetId;
+      if (!unlocked) continue;
+      const specialRaster = a.assetKind === 'image' && isWorkshopSpecialRasterName(a.textTitle || '');
+      const textFile = a.assetKind === 'text' || isWorkshopTextPreviewName(a.textTitle || '');
+      if (a.assetKind === 'video' || a.assetKind === 'model3d' || textFile || specialRaster) {
+        if (textFile && workshopTextById[a.id]) continue;
+        if ((a.assetKind === 'video' || a.assetKind === 'model3d' || specialRaster) && workshopMediaById[a.id]?.url) continue;
+        pushMedia(a.id, a.displayKey || 'original');
+      }
+    }
+    let cursor = 0;
+    const workerCount = Math.min(WORKSHOP_THUMB_IPC_PARALLEL, want.length);
+    const runOne = async (row: (typeof want)[number]) => {
+      workshopMediaRequestedRef.current.add(row.id);
+      const parsed = parseWorkshopCardId(row.id);
+      if (!parsed) return;
+      const payload = workshopHostFilePayload(parsed, {
+        items: workshopMergedCanvasItems,
+        fileId: workshopFaceFileId(row.id, row.displayKey),
+      });
+      try {
+        const out = await api.getWorkshopMedia(payload);
+        if (!out?.ok) {
+          workshopMediaRequestedRef.current.delete(row.id);
+          return;
+        }
+        if (cancelled) return;
+        const asset = workshopFileAssets.find((item) => item.id === row.id);
+        const textFile =
+          String(out.kind || '') === 'text' ||
+          asset?.assetKind === 'text' ||
+          isWorkshopTextPreviewName(String(asset?.textTitle || ''));
+        let body = String(out.textPreview || '');
+        if (textFile && !body.trim() && out.url && isWorkshopPlayableMediaUrl(String(out.url))) {
+          try {
+            const res = await fetch(String(out.url));
+            if (res.ok) body = await res.text();
+          } catch {
+            body = '';
+          }
+        }
+        if (textFile && body) {
+          setWorkshopTextById((prev) => (prev[row.id] ? prev : { ...prev, [row.id]: body }));
+        }
+        if (out.url) {
+          setWorkshopMediaById((prev) =>
+            prev[row.id]?.url
+              ? prev
+              : { ...prev, [row.id]: { url: String(out.url), kind: String(out.kind || ''), textPreview: body || out.textPreview } },
+          );
+        }
+      } catch {
+        workshopMediaRequestedRef.current.delete(row.id);
+      }
+    };
+    const pump = async () => {
+      while (cursor < want.length && !cancelled) {
+        const item = want[cursor];
+        cursor += 1;
+        if (item) await runOne(item);
+      }
+    };
+    void Promise.all(Array.from({ length: workerCount }, () => pump()));
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    workshopDiskOpen,
+    workshopActiveRoot,
+    workshopFileAssets,
+    workshopMergedCanvasItems,
+    thumbUnlockKeys,
+    selectedAssetIds,
+    lightboxAssetId,
+    workshopMediaById,
+    workshopTextById,
+    workshopFaceFileId,
+  ]);
+  useEffect(() => {
+    if (!workshopDiskOpen || !workshopActiveRoot) return;
+    let cancelled = false;
+    const jobs: Array<{ id: string; url: string; fileName: string; lightbox: boolean }> = [];
+    for (const a of workshopFileAssets) {
+      if (a.assetKind !== 'image' || !isWorkshopSpecialRasterName(a.textTitle || '')) continue;
+      const unlocked =
+        thumbUnlockKeys.has(a.id) ||
+        selectedAssetIds.has(a.id) ||
+        a.id === lightboxAssetId;
+      if (!unlocked) continue;
+      const url = String(workshopMediaById[a.id]?.url || '').trim();
+      if (!url) continue;
+      const needThumb = !workshopThumbById[a.id];
+      const needSource = a.id === lightboxAssetId && !workshopSourceById[a.id];
+      if (!needThumb && !needSource) continue;
+      const reqKey = needSource ? `${a.id}::lb` : `${a.id}::card`;
+      if (workshopSpecialRasterRequestedRef.current.has(reqKey)) continue;
+      jobs.push({ id: a.id, url, fileName: a.textTitle || '', lightbox: needSource });
+    }
+    for (const job of jobs) {
+      const reqKey = job.lightbox ? `${job.id}::lb` : `${job.id}::card`;
+      workshopSpecialRasterRequestedRef.current.add(reqKey);
+      void decodeWorkshopSpecialRasterToJpeg({
+        url: job.url,
+        fileName: job.fileName,
+        lightbox: job.lightbox,
+      }).then((jpeg) => {
+        if (cancelled || !jpeg) {
+          if (cancelled) workshopSpecialRasterRequestedRef.current.delete(reqKey);
+          return;
+        }
+        if (job.lightbox) {
+          setWorkshopSourceById((prev) => (prev[job.id] ? prev : { ...prev, [job.id]: jpeg }));
+        }
+        setWorkshopThumbById((prev) => (prev[job.id] ? prev : { ...prev, [job.id]: jpeg }));
+      });
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    workshopDiskOpen,
+    workshopActiveRoot,
+    workshopFileAssets,
+    workshopMediaById,
+    workshopThumbById,
+    workshopSourceById,
+    thumbUnlockKeys,
+    selectedAssetIds,
+    lightboxAssetId,
+  ]);
   const assetListMarqueeActive =
     quickComposeShellActive && !showArchived && Math.round(workspacePane) === 0;
   /** 供 document wheel capture 读取：按住空格时不拦截滚轮，以便滚动资产列表 */
@@ -2346,6 +2952,14 @@ const WorkflowSection: React.FC<{
         const backdrop = el ? captureWorkflowListScrollSnapshot(el) : null;
         if (backdrop) setLightboxListBackdropUrl(backdrop);
         setLightboxAssetId(assetId);
+        if (fileSourceApi && parseWorkshopCardId(assetId)) {
+          setThumbUnlockKeys((prev) => {
+            if (prev.has(assetId)) return prev;
+            const next = new Set(prev);
+            next.add(assetId);
+            return next;
+          });
+        }
         beginLightboxBoot();
         window.requestAnimationFrame(() => {
           if (lightboxOpenGenRef.current !== openGen) return;
@@ -2353,7 +2967,7 @@ const WorkflowSection: React.FC<{
         });
       });
     },
-    [beginLightboxBoot]
+    [beginLightboxBoot, fileSourceApi]
   );
 
   const handleAssetSetAssetPatch = useCallback(
@@ -2622,6 +3236,15 @@ const WorkflowSection: React.FC<{
     _assetsList?: WorkflowAsset[],
     _visited?: Set<string>
   ): string => {
+    if (fileSourceApi) {
+      const parsed = parseWorkshopCardId(a.id);
+      if (parsed) {
+        if (a.assetKind === 'text' || isWorkshopTextPreviewName(a.textTitle || '')) return '';
+        const full = workshopSourceById[a.id];
+        if (full) return full;
+        return '';
+      }
+    }
     if (isWorkflowStoryboardTableAsset(a)) {
       return storyboardTableCoverImage(a);
     }
@@ -2661,9 +3284,12 @@ const WorkflowSection: React.FC<{
       resolveAssetCompanionKeyDisplayImage({ ...healed, displayKey: 'original' }) ||
       ''
     );
-  }, [resolveAssetCompanionKeyDisplayImage, resolveAssetObjectKeyDisplayImage]);
+  }, [fileSourceApi, workshopSourceById, resolveAssetCompanionKeyDisplayImage, resolveAssetObjectKeyDisplayImage]);
 
   const getAssetGridDisplayImage = useCallback((a: WorkflowAsset): string => {
+    if (fileSourceApi && parseWorkshopCardId(a.id)) {
+      return workshopThumbById[a.id] || '';
+    }
     const display = getAssetDisplayImage(a);
     const projectId = String(workspaceProjectChrome?.activeProjectId || '').trim();
     const base = normalizeCompanionBaseUrl(String(getCompanionLocalBaseUrl() || '').trim());
@@ -2676,7 +3302,44 @@ const WorkflowSection: React.FC<{
       displaySrc: display,
       previewCompanionUrl: previewUrl,
     });
-  }, [getAssetDisplayImage, workspaceProjectChrome?.activeProjectId]);
+  }, [fileSourceApi, workshopThumbById, getAssetDisplayImage, workspaceProjectChrome?.activeProjectId]);
+
+  /** 送模/拖入预设：作坊卡优先原文件，未加载时用缩略图兜底 */
+  const getAssetComposeInputImage = useCallback((a: WorkflowAsset): string => {
+    if (fileSourceApi && parseWorkshopCardId(a.id)) {
+      const full = getAssetDisplayImage(a).trim();
+      if (full) return full;
+      return getAssetGridDisplayImage(a).trim();
+    }
+    return getAssetDisplayImage(a).trim();
+  }, [fileSourceApi, getAssetDisplayImage, getAssetGridDisplayImage]);
+
+  const getComposeAssets = useCallback((): WorkflowAsset[] => {
+    return workshopDiskOpen ? workshopFileAssets : assetsRef.current;
+  }, [workshopDiskOpen, workshopFileAssets]);
+
+  const assetAllowedForCapabilityDrop = useCallback(
+    (asset: WorkflowAsset, mod: CustomAppModule): boolean => {
+      if (fileSourceApi && parseWorkshopCardId(asset.id)) {
+        if (asset.assetKind === 'image') {
+          if (mod.category === 'text_to_text' || mod.category === 'text_to_image') return false;
+          return (
+            mod.category === 'image_process' ||
+            mod.category === 'image_to_image' ||
+            mod.category === 'image_to_text' ||
+            mod.category === 'generate_3d' ||
+            mod.category === 'generate_video' ||
+            presetUsesHostBundleProcessor(mod)
+          );
+        }
+        if (asset.assetKind === 'text') {
+          return mod.category === 'text_to_text' || mod.category === 'text_to_image';
+        }
+      }
+      return workflowAssetAllowedForCapabilityDrop(asset, mod);
+    },
+    [fileSourceApi]
+  );
 
   const scheduleWorkflowLightboxPrefetch = useCallback((asset: WorkflowAsset) => {
     if (isWorkflowStoryboardTableAsset(asset) || isWorkflowAssetSetAsset(asset)) return;
@@ -2696,9 +3359,10 @@ const WorkflowSection: React.FC<{
   const assetLightboxRasterEligible = useCallback(
     (a: WorkflowAsset | null | undefined): boolean => {
       if (!a || isGroupAsset(a) || isWorkflowStoryboardTableAsset(a)) return false;
+      if (fileSourceApi && parseWorkshopCardId(a.id) && a.assetKind === 'image') return true;
       return workflowAssetLightboxRasterEligible(a, getAssetDisplayImage(a));
     },
-    [getAssetDisplayImage]
+    [fileSourceApi, getAssetDisplayImage]
   );
 
   const handleQuickComposeResultPreview = useCallback(
@@ -3085,6 +3749,7 @@ const WorkflowSection: React.FC<{
   /** data / blob / http / 旧版裸 base64 → 伴侣原图键；data: 走同步路径 */
   const scheduleCompanionPersistOriginalAny = useCallback(
     (assetId: string, imageSrc: string) => {
+      if (fileSourceApi && parseWorkshopCardId(assetId)) return;
       const s = String(imageSrc || '').trim();
       if (!s) return;
       const base = String(getCompanionLocalBaseUrl() || '').trim();
@@ -3107,7 +3772,101 @@ const WorkflowSection: React.FC<{
         );
       })();
     },
-    [onLog, scheduleCompanionPersistOriginal, setAssets, workspaceProjectChrome?.activeProjectId]
+    [onLog, scheduleCompanionPersistOriginal, setAssets, workspaceProjectChrome?.activeProjectId, fileSourceApi]
+  );
+
+  const previewWorkshopAssetImage = useCallback(
+    (assetId: string, dataUrl: string) => {
+      const id = String(assetId || '').trim();
+      const src = String(dataUrl || '').trim();
+      if (!id || !src || !fileSourceApi || !parseWorkshopCardId(id)) return;
+      setWorkshopSourceById((prev) => (prev[id] === src ? prev : { ...prev, [id]: src }));
+      setWorkshopThumbById((prev) => {
+        if (!prev[id]) return prev;
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
+      workshopThumbRequestedRef.current.delete(id);
+    },
+    [fileSourceApi],
+  );
+
+  const applyWorkshopRemapPackages = useCallback((created: WorkshopCreatedPackage[]) => {
+    if (!created.length) return;
+    setWorkshopOptimisticItems((prev) => {
+      const keys = new Set(prev.map((row) => `${row.root}::${row.assetId}`));
+      const next = [...prev];
+      for (const pkg of created) {
+        const key = `${pkg.root}::${pkg.assetId}`;
+        if (keys.has(key)) continue;
+        keys.add(key);
+        next.push(
+          optimisticWorkshopPackageItem({
+            root: pkg.root,
+            assetId: pkg.assetId,
+            packageRel: pkg.packageRel,
+            checkoutRel: pkg.checkoutRel,
+            title: pkg.title,
+          }),
+        );
+      }
+      return next;
+    });
+    setWorkshopListEpoch((epoch) => epoch + 1);
+  }, []);
+
+  const enqueueWorkshopGenerationBatch = useCallback(
+    async (
+      newAssets: WorkflowAsset[],
+      newTasks: WorkflowPendingTask[],
+    ): Promise<{ ok: boolean; tasks: WorkflowPendingTask[] }> => {
+      const api = workshopFileSourceApi();
+      const root = String(workshopActiveRootRef.current || '').trim();
+      const parentRel = workshopCurrentRelRef.current || '';
+      if (isWorkshopRecycleRoot(root)) {
+        onLog?.('warn', '作坊：回收站不能生成，请先选素材文件夹');
+        return { ok: false, tasks: [] };
+      }
+      if (isWorkshopBrowserLibraryRoot(root)) {
+        return { ok: true, tasks: newTasks };
+      }
+      if (!api?.createWorkshopPackage || !root) {
+        onLog?.('warn', '作坊：请先挂上素材文件夹后再生成');
+        return { ok: false, tasks: [] };
+      }
+      const st = await api.getWorkshopFileState?.();
+      if (!String(st?.workspaceDir || '').trim()) {
+        const picked = api.pickWorkshopWorkspace ? await api.pickWorkshopWorkspace() : null;
+        if (!picked?.ok || !String(picked.workspaceDir || '').trim()) {
+          onLog?.('warn', '作坊：请先指定库目录后再生成（不要用 C 盘默认目录）');
+          return { ok: false, tasks: [] };
+        }
+        setWorkshopWorkspaceDir(String(picked.workspaceDir || '').trim());
+      }
+      const modules = [...actionModules, ...capabilityPresets];
+      if (newAssets.length > 0 && !isWorkshopBatchEligible(newAssets, newTasks, modules)) {
+        return { ok: true, tasks: newTasks };
+      }
+      if (newAssets.length === 0) {
+        return { ok: true, tasks: newTasks };
+      }
+      const remapped = await remapGenerationBatchToWorkshop({
+        api,
+        root,
+        parentRel,
+        newAssets,
+        newTasks,
+        titleFromAsset: workshopTitleFromAsset,
+      });
+      if (!remapped.ok) {
+        onLog?.('warn', remapped.error === 'no_workspace' ? '作坊：请先指定库目录' : '作坊：创建检出文件失败', remapped.error || 'create_failed');
+        return { ok: false, tasks: [] };
+      }
+      applyWorkshopRemapPackages(remapped.createdPackages);
+      return { ok: true, tasks: remapped.tasks };
+    },
+    [actionModules, capabilityPresets, applyWorkshopRemapPackages, onLog],
   );
 
   const scheduleCompanionPersistResult = useCallback(
@@ -3115,6 +3874,48 @@ const WorkflowSection: React.FC<{
       const source = String(imageSrc || '').trim();
       const rk = String(resultKey || '').trim();
       if (!source || !rk) return;
+      if (parseWorkshopCardId(assetId)) {
+        const parsed = parseWorkshopCardId(assetId);
+        if (!parsed) return;
+        previewWorkshopAssetImage(assetId, source);
+        const api = workshopFileSourceApi();
+        if (!api) return;
+        void (async () => {
+          if (parsed.kind === 'loose') {
+            if (!api.upgradeWorkshopLoose) return;
+            const out = await api.upgradeWorkshopLoose({
+              root: parsed.root,
+              rel: parsed.rel,
+              dataUrl: source,
+              step: rk,
+            });
+            if (!out?.ok) {
+              onLog?.('warn', '作坊散文件写入工作区失败', out?.error || 'upgrade_failed');
+              return;
+            }
+          } else if (api.writeWorkshopResult) {
+            const item = workshopCanvasItemsRef.current.find(
+              (row) =>
+                row.kind === 'package' &&
+                row.assetId === parsed.assetId &&
+                row.root === parsed.root,
+            );
+            const out = await api.writeWorkshopResult({
+              root: parsed.root,
+              assetId: parsed.assetId,
+              packageRel: item?.rel,
+              dataUrl: source,
+              step: rk,
+            });
+            if (!out?.ok) {
+              onLog?.('warn', '作坊出图落盘失败', out?.error || 'write_failed');
+              return;
+            }
+          }
+          setWorkshopListEpoch((epoch) => epoch + 1);
+        })();
+        return;
+      }
       const base = String(getCompanionLocalBaseUrl() || '').trim();
       const pid = String(workspaceProjectChrome?.activeProjectId || '').trim();
       if (!base || !pid) {
@@ -3157,7 +3958,202 @@ const WorkflowSection: React.FC<{
         );
       })();
     },
-    [onLog, setAssets, workspaceProjectChrome?.activeProjectId]
+    [fileSourceApi, onLog, previewWorkshopAssetImage, setAssets, setSelectedAssetIds, workspaceProjectChrome?.activeProjectId]
+  );
+
+  const clearWorkshopPreviewCache = useCallback((cardId: string) => {
+    const id = String(cardId || '').trim();
+    if (!id) return;
+    workshopThumbRequestedRef.current.delete(id);
+    setWorkshopThumbById((prev) => {
+      if (!prev[id]) return prev;
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
+    setWorkshopSourceById((prev) => {
+      if (!prev[id]) return prev;
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
+  }, []);
+
+  const setWorkshopDisplayKey = useCallback(
+    (cardId: string, displayKey: string) => {
+      const key = String(displayKey || '').trim() || 'original';
+      setWorkshopFaceById((prev) => (prev[cardId] === key ? prev : { ...prev, [cardId]: key }));
+      clearWorkshopPreviewCache(cardId);
+    },
+    [clearWorkshopPreviewCache],
+  );
+
+  const workshopCardNeedsApply = useCallback(
+    (cardId: string, displayKey: string) => {
+      const face = workshopFaceFileId(cardId, displayKey);
+      const parsed = parseWorkshopFileAssetId(cardId);
+      const item = workshopCanvasItemsRef.current.find(
+        (row) => parsed && row.root === parsed.root && row.rel === parsed.rel,
+      );
+      return workshopDisplayNeedsApply(face, String(item?.checkoutFileId || '').trim());
+    },
+    [workshopFaceFileId],
+  );
+
+  const applyWorkshopDisplayToCheckout = useCallback(
+    async (cardId: string, displayKey: string) => {
+      const fileId = workshopFaceFileId(cardId, displayKey);
+      const parsed = parseWorkshopFileAssetId(cardId);
+      if (!fileId || !parsed) return;
+      const api = workshopFileSourceApi();
+      if (!api?.applyWorkshopCheckout) return;
+      const item = workshopCanvasItemsRef.current.find(
+        (row) => row.root === parsed.root && row.rel === parsed.rel,
+      );
+      const out = await api.applyWorkshopCheckout({
+        root: parsed.root,
+        rel: parsed.rel,
+        assetId: item?.assetId,
+        fileId,
+      });
+      if (!out?.ok) {
+        onLog?.('warn', '作坊：覆盖本地文件失败（可能被占用）', out?.error || 'apply_failed');
+        return;
+      }
+      const nextRel = String(out.checkoutRel || parsed.rel || '').trim();
+      if (nextRel && nextRel !== parsed.rel) {
+        const nextId = workshopFileAssetId(parsed.root, nextRel);
+        setSelectedAssetIds((prev) => {
+          if (!prev.has(cardId) && lightboxAssetId !== cardId) return prev;
+          const next = new Set(prev);
+          if (next.has(cardId)) {
+            next.delete(cardId);
+            next.add(nextId);
+          }
+          return next;
+        });
+        if (lightboxAssetId === cardId) setLightboxAssetId(nextId);
+      }
+      setWorkshopListEpoch((epoch) => epoch + 1);
+    },
+    [lightboxAssetId, onLog, workshopFaceFileId],
+  );
+
+  const applyWorkshopNavLoc = useCallback((loc: WorkshopNavLoc, opts?: { fromHistory?: boolean }) => {
+    const next = normalizeWorkshopNavLoc(loc);
+    setWorkshopActiveRoot(next.root);
+    setWorkshopCurrentRel(next.rel);
+    setWorkshopSelectedRel(null);
+    setSelectedAssetIds(new Set());
+    setLightboxAssetId(null);
+    setGroupFilterId(next.groupId);
+    const api = workshopFileSourceApi();
+    if (api?.setWorkshopLibraryOpen && workshopRootAllowsCreate(next.root)) {
+      void api.setWorkshopLibraryOpen({ root: next.root, rel: next.rel });
+    } else if (api?.setWorkshopLibraryOpen) {
+      void api.setWorkshopLibraryOpen({ root: '', rel: '' });
+    }
+    if (!opts?.fromHistory) {
+      setWorkshopNavHistory((prev) => pushWorkshopNav(prev, next));
+    }
+  }, []);
+
+  const openWorkshopDiskFolder = useCallback((root: string, rel: string) => {
+    applyWorkshopNavLoc({ root, rel, groupId: null });
+  }, [applyWorkshopNavLoc]);
+
+  const goWorkshopNavBack = useCallback(() => {
+    const prev = workshopNavHistoryRef.current;
+    if (!workshopNavCanBack(prev)) return;
+    const next = workshopNavBack(prev);
+    setWorkshopNavHistory(next);
+    const loc = next.entries[next.index];
+    if (loc) applyWorkshopNavLoc(loc, { fromHistory: true });
+  }, [applyWorkshopNavLoc]);
+
+  const goWorkshopNavForward = useCallback(() => {
+    const prev = workshopNavHistoryRef.current;
+    if (!workshopNavCanForward(prev)) return;
+    const next = workshopNavForward(prev);
+    setWorkshopNavHistory(next);
+    const loc = next.entries[next.index];
+    if (loc) applyWorkshopNavLoc(loc, { fromHistory: true });
+  }, [applyWorkshopNavLoc]);
+
+  const createWorkshopTextOnDisk = useCallback(
+    async (body?: string): Promise<string | null> => {
+      const api = workshopFileSourceApi();
+      const root = String(workshopActiveRoot || '').trim();
+      if (!api?.createWorkshopCheckoutFile || !workshopRootAllowsCreate(root)) {
+        onLog?.('warn', '作坊：无法在当前文件夹新建文本');
+        return null;
+      }
+      const out = await api.createWorkshopCheckoutFile({
+        root,
+        parentRel: workshopCurrentRel,
+        title: '文本',
+        ext: '.md',
+        body: body || '',
+      });
+      if (!out?.ok || !out.rel) {
+        onLog?.('warn', '作坊：新建文本失败', out?.error || 'create_failed');
+        return null;
+      }
+      setWorkshopOptimisticItems((prev) => [
+        ...prev,
+        {
+          kind: 'loose',
+          root,
+          rel: out.rel,
+          name: out.name || '文本.md',
+          assetKind: 'text',
+          size: 0,
+          mtimeMs: Date.now(),
+        },
+      ]);
+      setWorkshopListEpoch((epoch) => epoch + 1);
+      onLog?.('info', body ? '已粘贴为文字资产' : '已新建文本');
+      return workshopFileAssetId(root, out.rel);
+    },
+    [onLog, workshopActiveRoot, workshopCurrentRel],
+  );
+
+  const importWorkshopLocalFiles = useCallback(
+    async (files: File[]) => {
+      const api = workshopFileSourceApi();
+      const root = String(workshopActiveRoot || '').trim();
+      if (!api?.importWorkshopFiles || !workshopRootAllowsCreate(root)) {
+        onLog?.('warn', '作坊：无法导入到当前文件夹');
+        return;
+      }
+      const items: Array<{ name: string; dataUrl?: string; absPath?: string }> = [];
+      for (const file of files) {
+        const absPath = String((file as File & { path?: string }).path || '').trim();
+        if (absPath) {
+          items.push({ name: file.name || 'file', absPath });
+          continue;
+        }
+        const dataUrl = await new Promise<string | null>((resolve) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : null);
+          reader.onerror = () => resolve(null);
+          reader.readAsDataURL(file);
+        });
+        if (dataUrl) items.push({ name: file.name || 'file', dataUrl });
+      }
+      if (!items.length) return;
+      const out = await api.importWorkshopFiles({
+        root,
+        parentRel: workshopCurrentRel,
+        items,
+      });
+      if (!out?.ok) {
+        onLog?.('warn', '作坊：导入失败', out?.error || 'import_failed');
+        return;
+      }
+      setWorkshopListEpoch((epoch) => epoch + 1);
+    },
+    [onLog, workshopActiveRoot, workshopCurrentRel],
   );
 
   const persistCapturedWorkflowModelThumbnail = useCallback(
@@ -3172,6 +4168,12 @@ const WorkflowSection: React.FC<{
       persistedModelThumbnailSlotsRef.current.add(slotKey);
       const thumbRatio = clampWorkflowCardAspectRatio(1280, 800);
       rememberAssetCardModelThumbnail(id, variantId, thumb);
+
+      if (fileSourceApi && parseWorkshopCardId(id)) {
+        setWorkshopThumbById((prev) => (prev[id] ? prev : { ...prev, [id]: thumb }));
+        setCardAspectByAssetId((prev) => ({ ...prev, [id]: thumbRatio }));
+        return;
+      }
 
       const currentAsset = assetsRef.current.find((x) => x.id === id);
       if (!currentAsset) return;
@@ -3241,7 +4243,7 @@ const WorkflowSection: React.FC<{
         );
       })();
     },
-    [onLog, setAssets, workspaceProjectChrome?.activeProjectId]
+    [fileSourceApi, onLog, setAssets, workspaceProjectChrome?.activeProjectId]
   );
 
   const persistCompanionResultMedia = useCallback(
@@ -3381,11 +4383,25 @@ ${lineSvg}
 </svg>`;
     return safeSvgDataUrl(svg);
   }, []);
-  const getLightboxPreviewImageSrc = useCallback((asset: WorkflowAsset): string => {
+  const getLightboxStripPreviewSrc = useCallback((asset: WorkflowAsset): string => {
+    if (fileSourceApi && parseWorkshopCardId(asset.id)) {
+      const thumb = getAssetGridDisplayImage(asset).trim();
+      if (thumb) return workflowSafeImgSrc(thumb);
+    }
     const display = getAssetDisplayImage(asset).trim();
     if (display) return workflowSafeImgSrc(display);
     return buildTextLightboxPreviewDataUrl(asset.textTitle || '', getAssetDisplayText(asset));
-  }, [buildTextLightboxPreviewDataUrl, getAssetDisplayImage, getAssetDisplayText]);
+  }, [fileSourceApi, buildTextLightboxPreviewDataUrl, getAssetDisplayImage, getAssetDisplayText, getAssetGridDisplayImage]);
+
+  const getLightboxPreviewImageSrc = useCallback((asset: WorkflowAsset): string => {
+    const display = getAssetDisplayImage(asset).trim();
+    if (display) return workflowSafeImgSrc(display);
+    if (fileSourceApi && parseWorkshopCardId(asset.id)) {
+      const thumb = getAssetGridDisplayImage(asset).trim();
+      if (thumb) return workflowSafeImgSrc(thumb);
+    }
+    return buildTextLightboxPreviewDataUrl(asset.textTitle || '', getAssetDisplayText(asset));
+  }, [fileSourceApi, buildTextLightboxPreviewDataUrl, getAssetDisplayImage, getAssetDisplayText, getAssetGridDisplayImage]);
   const workflowAssetIdSig = useMemo(
     () => assets.map((a) => String(a.id || '').trim()).join('\0'),
     [assets]
@@ -3424,7 +4440,7 @@ ${lineSvg}
         actionModules.find((m) => m.id === actionType) ??
         capabilityPresets.find((p) => p.id === actionType) ??
         getQuickComposePlainModule(actionType);
-      let inputImage = getAssetDisplayImage(asset);
+      let inputImage = getAssetComposeInputImage(asset);
       let inputSourceDisplayKey = asset.displayKey;
       // 同卡再生成 3D：当前若停在模型版本上，父节点与输入仍回到该模型的输入图（默认原图），避免 0→1→2 串联
       if (mod?.category === 'generate_3d') {
@@ -3433,12 +4449,12 @@ ${lineSvg}
           const snap = String(asset.resultMeta?.[asset.displayKey]?.inputSourceDisplayKeySnapshot || '').trim();
           inputSourceDisplayKey = snap || 'original';
           inputImage =
-            getAssetDisplayImage({ ...asset, displayKey: inputSourceDisplayKey }) ||
+            getAssetComposeInputImage({ ...asset, displayKey: inputSourceDisplayKey }) ||
             asWorkflowImageString(asset.original) ||
             inputImage;
         }
       }
-      if (mod && !workflowAssetAllowedForCapabilityDrop(asset, mod)) {
+      if (mod && !assetAllowedForCapabilityDrop(asset, mod)) {
         onLog?.('warn', '当前显示内容与该能力不匹配（请切换到对应版本，或选用匹配能力）');
         return null;
       }
@@ -3503,16 +4519,16 @@ ${lineSvg}
       };
       return task;
     },
-    [getAssetDisplayImage, onLog, actionModules, capabilityPresets]
+    [getAssetComposeInputImage, assetAllowedForCapabilityDrop, onLog, actionModules, capabilityPresets]
   );
 
   const makePendingTaskForAsset = useCallback(
     (assetId: string, actionType: string, options?: WorkflowPendingTaskOptions): WorkflowPendingTask | null => {
-      const asset = assets.find((x) => x.id === assetId);
+      const asset = findLiveAsset(assetId);
       if (!asset) return null;
       return buildPendingTaskFromAssetSnapshot(asset, assetId, actionType, options);
     },
-    [assets, buildPendingTaskFromAssetSnapshot]
+    [findLiveAsset, buildPendingTaskFromAssetSnapshot]
   );
 
   const addToPending = useCallback(
@@ -3554,6 +4570,10 @@ ${lineSvg}
 
   const addWorkflowTextAsset = useCallback((initialText?: string): string => {
     const raw = (initialText || '').trim();
+    if (workshopDiskOpen) {
+      void createWorkshopTextOnDisk(raw);
+      return '';
+    }
     const id = uuid();
     setAssets((prev) => {
       const parentGroup = groupFilterId ? prev.find((a) => a.id === groupFilterId) : null;
@@ -3585,14 +4605,23 @@ ${lineSvg}
     });
     onLog?.('info', raw ? '已粘贴为文字资产' : '已新建文本');
     return id;
-  }, [groupFilterId, onLog, setAssets]);
+  }, [createWorkshopTextOnDisk, groupFilterId, onLog, setAssets, workshopDiskOpen]);
 
   const createWorkflowTextAssetAndOpen = useCallback(() => {
+    if (workshopDiskOpen) {
+      void createWorkshopTextOnDisk('').then((id) => {
+        if (!id) return;
+        setStoryboardPanelAssetId(null);
+        setAssetSetPanelAssetId(null);
+        openWorkflowLightbox(id);
+      });
+      return;
+    }
     const id = addWorkflowTextAsset();
     setStoryboardPanelAssetId(null);
     setAssetSetPanelAssetId(null);
     openWorkflowLightbox(id);
-  }, [addWorkflowTextAsset, openWorkflowLightbox]);
+  }, [addWorkflowTextAsset, createWorkshopTextOnDisk, openWorkflowLightbox, workshopDiskOpen]);
 
   const handleWorkflowFeatureClick = useCallback(
     (featureId: string) => {
@@ -4286,8 +5315,15 @@ ${lineSvg}
             })
           );
         });
-        if (persistedResultKey) {
-          scheduleCompanionPersistResult(task.assetId, persistedResultKey, result);
+        if (result) {
+          let rk = persistedResultKey;
+          if (!rk) {
+            rk = allocateWorkflowResultVersionKey(
+              assetsRef.current.find((a) => a.id === task.assetId) || { resultOrder: [], results: {} },
+              task.actionType,
+            );
+          }
+          scheduleCompanionPersistResult(task.assetId, rk, result);
         }
         void loadImageIntrinsicSize(result).then((dim) => {
           if (dim) applyIntrinsicAspectToAsset(task.assetId, dim.w, dim.h);
@@ -4377,6 +5413,33 @@ ${lineSvg}
       });
     },
     [setAssets, setGroupFilterId]
+  );
+
+  const moveRootAssetsToUpperLevel = useCallback(
+    (assetIds: string[]) => {
+      const destRel = workshopMoveToParentDestRel(workshopCurrentRel);
+      if (destRel == null || !workshopDiskOpen) return;
+      const rels = Array.from(
+        new Set(
+          assetIds
+            .map((id) => workshopCardDiskRel(id, workshopCanvasItemsRef.current))
+            .filter((rel): rel is string => Boolean(rel)),
+        ),
+      );
+      if (rels.length === 0) return;
+      const api = workshopFileSourceApi();
+      if (!api?.moveWorkshopEntries) return;
+      void api.moveWorkshopEntries({ root: workshopActiveRoot, destRel, rels }).then((out) => {
+        if (!out?.ok) {
+          onLog?.('warn', '作坊：移出组失败', out?.error || 'move_failed');
+          return;
+        }
+        setSelectedAssetIds(new Set());
+        setWorkshopListEpoch((epoch) => epoch + 1);
+        applyWorkshopNavLoc({ root: workshopActiveRoot, rel: destRel, groupId: null });
+      });
+    },
+    [applyWorkshopNavLoc, onLog, workshopActiveRoot, workshopCurrentRel, workshopDiskOpen],
   );
 
   const moveGroupItemToUpperLevel = useCallback(
@@ -5008,8 +6071,15 @@ ${lineSvg}
                 );
               });
               }
-              if (result && persistedResultKey) {
-                scheduleCompanionPersistResult(task.assetId, persistedResultKey, result);
+              if (result) {
+                let rk = persistedResultKey;
+                if (!rk) {
+                  rk = allocateWorkflowResultVersionKey(
+                    findLiveAsset(task.assetId) || { resultOrder: [], results: {} },
+                    task.actionType,
+                  );
+                }
+                scheduleCompanionPersistResult(task.assetId, rk, result);
                 void loadImageIntrinsicSize(result).then((dim) => {
                   if (dim) applyIntrinsicAspectToAsset(task.assetId, dim.w, dim.h);
                 });
@@ -5130,6 +6200,7 @@ ${lineSvg}
       preferenceScope,
       creditBalance,
       creditBalanceLoading,
+      findLiveAsset,
     ]
   );
 
@@ -5220,7 +6291,7 @@ ${lineSvg}
         const mod =
           actionModules.find((m) => m.id === trimmed) ??
           capabilityPresets.find((p) => p.id === trimmed);
-        if (mod && !workflowAssetAllowedForCapabilityDrop(targetAsset, mod)) {
+        if (mod && !assetAllowedForCapabilityDrop(targetAsset, mod)) {
           onLog?.('warn', '当前显示内容与该能力不匹配');
           return;
         }
@@ -5236,6 +6307,7 @@ ${lineSvg}
     [
       actionModules,
       capabilityPresets,
+      assetAllowedForCapabilityDrop,
       executing,
       executePending,
       getAssetDisplayImage,
@@ -5423,7 +6495,7 @@ ${lineSvg}
     presetCardsOverride?: WorkspaceQuickComposePromptCard[];
   };
 
-  const submitQuickComposeImpl = useCallback((invoke?: QuickComposeSubmitInvokeOptions): string[] => {
+  const submitQuickComposeImpl = useCallback(async (invoke?: QuickComposeSubmitInvokeOptions): Promise<string[]> => {
     if (isAiTaskBusy()) {
       onLog?.('warn', '当前有 AI 任务执行中，请等待完成后再发送');
       return [];
@@ -5435,20 +6507,54 @@ ${lineSvg}
       }
       lastQuickComposeTaskAssetByIdRef.current = map;
     };
+    const enqueueQuickComposeBatch = async (
+      newAssets: WorkflowAsset[],
+      newTasks: WorkflowPendingTask[],
+    ): Promise<string[]> => {
+      if (newTasks.length === 0) {
+        onLog?.('warn', '底部快捷栏：无法创建任务');
+        lastQuickComposeTaskAssetByIdRef.current = {};
+        return [];
+      }
+      let tasks = newTasks;
+      if (workshopDiskOpen && newAssets.length > 0) {
+        const remapped = await enqueueWorkshopGenerationBatch(newAssets, newTasks);
+        if (!remapped.ok) {
+          lastQuickComposeTaskAssetByIdRef.current = {};
+          return [];
+        }
+        tasks = remapped.tasks;
+      } else if (newAssets.length > 0) {
+        setAssets((prev) => [...prev, ...newAssets]);
+      }
+      rememberTaskAssetById(tasks);
+      setPending((prev) => [...prev, ...tasks]);
+      if (!executing) {
+        void executePending([...tasks, ...pendingRef.current]);
+      }
+      if (!invoke?.preserveBottomBarDraft) {
+        setQuickComposeSegmentsTracked([newQuickComposeTextSegment('')]);
+        setQuickComposeMainDropSlots([]);
+        setQuickComposeReferenceDropSlots([]);
+      }
+      setQuickComposePromptCards([]);
+      onLog?.('info', '底部快捷栏：已加入执行队列');
+      return tasks.map((t) => t.id);
+    };
     const maxRefs = getQuickComposeMaxRefs();
     const resolved = resolveQuickComposeReferences({
       segments: quickComposeSegmentsRef.current,
       mainDropSlots: quickComposeMainDropSlotsRef.current,
       referenceDropSlots: quickComposeReferenceDropSlotsRef.current,
-      assets: assetsRef.current,
-      getAssetDisplayImage,
+      assets: getComposeAssets(),
+      getAssetDisplayImage: getAssetComposeInputImage,
       maxRefs,
     });
     const queues = resolveQuickComposeImageQueues({
       mainDropSlots: quickComposeMainDropSlotsRef.current,
       referenceDropSlots: quickComposeReferenceDropSlotsRef.current,
-      assets: assetsRef.current,
-      getAssetDisplayImage,
+      assets: getComposeAssets(),
+      getAssetDisplayImage: getAssetComposeInputImage,
       maxRefs,
     });
     for (const w of [...resolved.warnings, ...queues.warnings]) {
@@ -5459,8 +6565,8 @@ ${lineSvg}
     let mainUrls = overrideImgs.length > 0 ? overrideImgs : queues.mainUrls;
     let referenceUrls = overrideImgs.length > 0 ? [] : queues.referenceUrls;
     const assetImageById = (assetId: string): string => {
-      const asset = assetsRef.current.find((a) => a.id === assetId.trim());
-      return asset ? getAssetDisplayImage(asset).trim() : '';
+      const asset = findLiveAsset(assetId);
+      return asset ? getAssetComposeInputImage(asset).trim() : '';
     };
     const reuseIdsForInput = [
       ...(invoke?.reuseAssetIds ?? []),
@@ -5738,21 +6844,7 @@ ${lineSvg}
         lastQuickComposeTaskAssetByIdRef.current = {};
         return [];
       }
-      rememberTaskAssetById(newTasks);
-      setAssets((prev) => [...prev, ...newAssets]);
-      // 闲时也先入 pending：挡住 executePending 积分闸门 await 窗口内的 orphan 误报
-      setPending((prev) => [...prev, ...newTasks]);
-      if (!executing) {
-        void executePending([...newTasks, ...pendingRef.current]);
-      }
-      if (!invoke?.preserveBottomBarDraft) {
-        setQuickComposeSegmentsTracked([newQuickComposeTextSegment('')]);
-        setQuickComposeMainDropSlots([]);
-        setQuickComposeReferenceDropSlots([]);
-      }
-      setQuickComposePromptCards([]);
-      onLog?.('info', `底部快捷栏：已加入 ${newTasks.length} 条执行队列`);
-      return newTasks.map((t) => t.id);
+      return await enqueueQuickComposeBatch(newAssets, newTasks);
     }
 
     /** 无拖入预设：按快捷条「文 / 图 / 3D」内置逻辑，不读侧栏默认能力或「上次预设」 */
@@ -5766,28 +6858,8 @@ ${lineSvg}
       )?.modelPbrTextureRewriteTarget;
     };
 
-    const runPlainBatch = (newAssets: WorkflowAsset[], newTasks: WorkflowPendingTask[]): string[] => {
-      if (newTasks.length === 0) {
-        onLog?.('warn', '底部快捷栏：无法创建任务');
-        lastQuickComposeTaskAssetByIdRef.current = {};
-        return [];
-      }
-      rememberTaskAssetById(newTasks);
-      setAssets((prev) => [...prev, ...newAssets]);
-      // 闲时也先入 pending：挡住 executePending 积分闸门 await 窗口内的 orphan 误报
-      setPending((prev) => [...prev, ...newTasks]);
-      if (!executing) {
-        void executePending([...newTasks, ...pendingRef.current]);
-      }
-      if (!invoke?.preserveBottomBarDraft) {
-        setQuickComposeSegmentsTracked([newQuickComposeTextSegment('')]);
-        setQuickComposeMainDropSlots([]);
-        setQuickComposeReferenceDropSlots([]);
-      }
-      setQuickComposePromptCards([]);
-      onLog?.('info', '底部快捷栏：已加入执行队列');
-      return newTasks.map((t) => t.id);
-    };
+    const runPlainBatch = (newAssets: WorkflowAsset[], newTasks: WorkflowPendingTask[]): Promise<string[]> =>
+      enqueueQuickComposeBatch(newAssets, newTasks);
 
     if (composeMode === 'text') {
       if (invoke?.allowVisionText && imgsAll.length > 0) {
@@ -5829,7 +6901,7 @@ ${lineSvg}
         task.inputText = body;
         if (invoke?.inputContext) task.inputContext = invoke.inputContext;
         if (imgsAll.length > 1) task.inputImages = imgsAll.slice(1);
-        return runPlainBatch([asset], [task]);
+        return await runPlainBatch([asset], [task]);
       }
       if (imgsAll.length > 0) {
         onLog?.('warn', '底部快捷栏：「文」模式请以 @ 引用文字资产，或切换到「图」');
@@ -5883,7 +6955,7 @@ ${lineSvg}
         });
         if (task) newTasks.push(task);
       }
-      return runPlainBatch(newAssets, newTasks);
+      return await runPlainBatch(newAssets, newTasks);
     }
 
     if (composeMode === '3d') {
@@ -5923,7 +6995,7 @@ ${lineSvg}
         ...taskOverrides,
         logContext: plainLog,
       };
-      return runPlainBatch([newAsset], [newTask]);
+      return await runPlainBatch([newAsset], [newTask]);
     }
 
     if (composeMode === 'video') {
@@ -5958,7 +7030,7 @@ ${lineSvg}
         ...taskOverrides,
         logContext: plainLog,
       };
-      return runPlainBatch([newAsset], [newTask]);
+      return await runPlainBatch([newAsset], [newTask]);
     }
 
     /* composeMode === 'image' */
@@ -6004,7 +7076,7 @@ ${lineSvg}
         });
         if (task) newTasks.push(task);
       }
-      return runPlainBatch(newAssets, newTasks);
+      return await runPlainBatch(newAssets, newTasks);
     }
 
     const maxRef = maxReferenceImagesForImageModel(plainImgMod.imageModelRegistryId ?? plainImgMod.imageGear);
@@ -6028,7 +7100,7 @@ ${lineSvg}
       .filter((id, index, arr) => arr.indexOf(id) === index);
     if (reuseIds.length > 0) {
       const targets = reuseIds
-        .map((id) => assetsRef.current.find((a) => a.id === id) ?? null)
+        .map((id) => findLiveAsset(id))
         .filter((a): a is WorkflowAsset => Boolean(a));
       if (targets.length !== reuseIds.length || targets.some((a) => !assetLightboxRasterEligible(a))) {
         onLog?.('warn', '底部快捷栏：无法将任务挂到指定资产');
@@ -6036,7 +7108,7 @@ ${lineSvg}
       }
       const newTasks: WorkflowPendingTask[] = [];
       for (const target of targets) {
-        const targetMainUrl = getAssetDisplayImage(target).trim();
+        const targetMainUrl = getAssetComposeInputImage(target).trim();
         if (!targetMainUrl) continue;
         const built = buildQuickComposeTaskPromptOverride(effectiveUserText, targetMainUrl, plainRefUrls, maxRef);
         const { primary, references, promptOverride } = built;
@@ -6107,11 +7179,14 @@ ${lineSvg}
         });
       }
     }
-    return runPlainBatch(newAssets, newTasks);
+    return await runPlainBatch(newAssets, newTasks);
   }, [
     quickComposeMode,
     quickComposePromptCards,
     getQuickComposeMaxRefs,
+    getComposeAssets,
+    getAssetComposeInputImage,
+    findLiveAsset,
     getAssetDisplayImage,
     quickComposeImageModel,
     quickComposeTextModel,
@@ -6142,6 +7217,8 @@ ${lineSvg}
     executePending,
     buildPendingTaskFromAssetSnapshot,
     buildQuickComposeAgentSurface,
+    fileSourceApi,
+    enqueueWorkshopGenerationBatch,
   ]);
 
   const resolveQuickComposeMod = useCallback(
@@ -6163,9 +7240,8 @@ ${lineSvg}
       assetErrors,
       cancelledTaskIds: cancelledTaskIdsRef.current,
       resolveModule: resolveQuickComposeMod,
-      resolveAssetById: (assetId: string) =>
-        assetsRef.current.find((a) => a.id === assetId) ?? null,
-      assetCatalogEmpty: assets.length === 0,
+      resolveAssetById: (assetId: string) => findLiveAsset(assetId) ?? null,
+      assetCatalogEmpty: workshopDiskOpen ? workshopFileAssets.length === 0 : assets.length === 0,
     };
     const statusPatched = patchQuickComposeThreadMessageStatuses(thread, statusCtx);
     let childRunsChanged = false;
@@ -6303,7 +7379,7 @@ ${lineSvg}
   });
 
   const submitQuickCompose = useCallback(
-    (invoke?: QuickComposeSubmitInvokeOptions): string[] => {
+    async (invoke?: QuickComposeSubmitInvokeOptions): Promise<string[]> => {
       if (quickComposeSubmitDisabled) {
         onLog?.('warn', quickComposeSubmitDisabledReason ?? creditsExceededUserMessage());
         return [];
@@ -6505,7 +7581,7 @@ ${lineSvg}
         return { taskIds: [], errorMessage: mapped.errorMessage };
       }
       if (mapped.useLightboxLocalEdit) {
-        const ids = submitLightboxQuickComposeRef.current() || [];
+        const ids = (await submitLightboxQuickComposeRef.current()) || [];
         const taskAssetById = Object.fromEntries(
           ids
             .map((id) => [id, lastQuickComposeTaskAssetByIdRef.current[id]] as const)
@@ -6540,7 +7616,7 @@ ${lineSvg}
         ...(mapped.referenceAssetIds?.length ? { referenceAssetIds: mapped.referenceAssetIds } : {}),
       };
 
-      const taskIds = submitQuickCompose(invoke);
+      const taskIds = await submitQuickCompose(invoke);
       const taskAssetById = Object.fromEntries(
         taskIds
           .map((id) => [id, lastQuickComposeTaskAssetByIdRef.current[id]] as const)
@@ -6608,10 +7684,10 @@ ${lineSvg}
           assetErrors: Object.fromEntries(assetErrors.entries()),
         }),
         resolveAssetDisplay: (assetId) => {
-          const asset = assetsRef.current.find((a) => a.id === assetId);
+          const asset = findLiveAsset(assetId);
           if (!asset) return {};
           return {
-            previewSrc: getAssetDisplayImage(asset) || undefined,
+            previewSrc: getAssetComposeInputImage(asset) || undefined,
             label: workflowAssetMentionLabel(asset),
           };
         },
@@ -6670,8 +7746,8 @@ ${lineSvg}
           /* fall back to the active asset preview */
         }
         const id = lightboxAssetIdRef.current;
-        const asset = id ? assetsRef.current.find((a) => a.id === id) : null;
-        return asset ? getAssetDisplayImage(asset).trim() : '';
+        const asset = id ? findLiveAsset(id) : null;
+        return asset ? getAssetComposeInputImage(asset).trim() : '';
       })();
       projectAgentInlineImageContextRef.current =
         hasCurrentViewMention && currentViewDataUrlForAgent
@@ -6693,16 +7769,16 @@ ${lineSvg}
         segments: quickComposeSegmentsRef.current,
         mainDropSlots: quickComposeMainDropSlotsRef.current,
         referenceDropSlots: quickComposeReferenceDropSlotsRef.current,
-        assets: assetsRef.current,
-        getAssetDisplayImage,
+        assets: getComposeAssets(),
+        getAssetDisplayImage: getAssetComposeInputImage,
         maxRefs: getQuickComposeMaxRefs(),
         currentViewDataUrl: currentViewDataUrlForAgent || undefined,
       });
       const queues = resolveQuickComposeImageQueues({
         mainDropSlots: quickComposeMainDropSlotsRef.current,
         referenceDropSlots: quickComposeReferenceDropSlotsRef.current,
-        assets: assetsRef.current,
-        getAssetDisplayImage,
+        assets: getComposeAssets(),
+        getAssetDisplayImage: getAssetComposeInputImage,
         maxRefs: getQuickComposeMaxRefs(),
       });
       const promptText = buildQuickComposePromptOverride(
@@ -7006,15 +8082,15 @@ ${lineSvg}
       segments: quickComposeSegmentsRef.current,
       mainDropSlots: quickComposeMainDropSlotsRef.current,
       referenceDropSlots: quickComposeReferenceDropSlotsRef.current,
-      assets: assetsRef.current,
-      getAssetDisplayImage,
+      assets: getComposeAssets(),
+      getAssetDisplayImage: getAssetComposeInputImage,
       maxRefs,
     });
     const queues = resolveQuickComposeImageQueues({
       mainDropSlots: quickComposeMainDropSlotsRef.current,
       referenceDropSlots: quickComposeReferenceDropSlotsRef.current,
-      assets: assetsRef.current,
-      getAssetDisplayImage,
+      assets: getComposeAssets(),
+      getAssetDisplayImage: getAssetComposeInputImage,
       maxRefs,
     });
     const hasUrl = (s: string) => String(s || '').trim().length > 0;
@@ -7023,7 +8099,7 @@ ${lineSvg}
       queues.referenceUrls.some(hasUrl) ||
       resolved.refs.some(hasUrl)
     );
-  }, [getAssetDisplayImage, getQuickComposeMaxRefs]);
+  }, [getAssetComposeInputImage, getComposeAssets, getQuickComposeMaxRefs]);
 
   const handleQuickComposeChatSend = useCallback(() => {
     if (quickComposeChatSendGuardRef.current) return;
@@ -7058,6 +8134,7 @@ ${lineSvg}
     quickComposeThreadHasInFlightAssistant,
     onLog,
     submitQuickComposeWithThread,
+    getProjectAgentThreadKey,
   ]);
 
   const handleQuickComposeChatRetry = useCallback(
@@ -7303,7 +8380,7 @@ ${lineSvg}
     onLog?.('info', '项目 Agent：已导出对话 JSON');
   }, [onLog]);
 
-  const submitLightboxQuickCompose = useCallback((): string[] => {
+  const submitLightboxQuickCompose = useCallback(async (): Promise<string[]> => {
     const id = lightboxAssetIdRef.current;
     const asset = assetsRef.current.find((a) => a.id === id);
     if (!asset || !assetLightboxRasterEligible(asset)) {
@@ -7329,14 +8406,14 @@ ${lineSvg}
     const partialResolved = resolveQuickComposeReferences({
       segments: segmentsSnap,
       referenceDropSlots: quickComposeReferenceDropSlotsRef.current,
-      assets: assetsRef.current,
-      getAssetDisplayImage,
+      assets: getComposeAssets(),
+      getAssetDisplayImage: getAssetComposeInputImage,
       maxRefs: getQuickComposeMaxRefs(),
     });
     const refQueues = resolveQuickComposeImageQueues({
       referenceDropSlots: quickComposeReferenceDropSlotsRef.current,
-      assets: assetsRef.current,
-      getAssetDisplayImage,
+      assets: getComposeAssets(),
+      getAssetDisplayImage: getAssetComposeInputImage,
       maxRefs: getQuickComposeMaxRefs(),
     });
     for (const w of [...partialResolved.warnings, ...refQueues.warnings]) {
@@ -7358,7 +8435,7 @@ ${lineSvg}
       !needsPanoLocalCapture &&
       !localEditSnapshot
     ) {
-      return submitQuickCompose({
+      return await submitQuickCompose({
         reuseAssetId: asset.id,
         overrideUserText: promptOverride,
         skipPromptCards: true,
@@ -7635,15 +8712,15 @@ ${lineSvg}
         const fullResolved = resolveQuickComposeReferences({
           segments: segmentsSnap,
           referenceDropSlots: quickComposeReferenceDropSlotsRef.current,
-          assets: assetsRef.current,
-          getAssetDisplayImage,
+          assets: getComposeAssets(),
+          getAssetDisplayImage: getAssetComposeInputImage,
           maxRefs: getQuickComposeMaxRefs(),
           currentViewDataUrl: composite,
         });
         const captureRefQueues = resolveQuickComposeImageQueues({
           referenceDropSlots: quickComposeReferenceDropSlotsRef.current,
-          assets: assetsRef.current,
-          getAssetDisplayImage,
+          assets: getComposeAssets(),
+          getAssetDisplayImage: getAssetComposeInputImage,
           maxRefs: getQuickComposeMaxRefs(),
         });
         const extraRefs = [
@@ -7692,6 +8769,10 @@ ${lineSvg}
 
   const addImagesFromFiles = useCallback((files: File[]) => {
     const imageFiles = files.filter((f) => f.type.startsWith('image/')).slice(0, 50);
+    if (workshopDiskOpen) {
+      if (imageFiles.length) void importWorkshopLocalFiles(imageFiles);
+      return;
+    }
     const batchBase = Date.now();
     const n = imageFiles.length;
     imageFiles.forEach((file, fileIdx) => {
@@ -7767,11 +8848,15 @@ ${lineSvg}
       };
       reader.readAsDataURL(file);
     });
-  }, [groupFilterId, setAssets, scheduleCompanionPersistOriginalAny]);
+  }, [groupFilterId, importWorkshopLocalFiles, setAssets, scheduleCompanionPersistOriginalAny, workshopDiskOpen]);
 
   const addVideosFromFiles = useCallback(
     (files: File[]) => {
       const videoFiles = files.filter((f) => isWorkflowVideoFile(f)).slice(0, 50);
+      if (workshopDiskOpen) {
+        if (videoFiles.length) void importWorkshopLocalFiles(videoFiles);
+        return;
+      }
       const batchBase = Date.now();
       const n = videoFiles.length;
       const fallbackRatio = clampWorkflowCardAspectRatio(1600, 900);
@@ -7880,11 +8965,16 @@ ${lineSvg}
         })();
       });
     },
-    [groupFilterId, onLog, setAssets, workspaceProjectChrome?.activeProjectId]
+    [groupFilterId, importWorkshopLocalFiles, onLog, setAssets, workspaceProjectChrome?.activeProjectId, workshopDiskOpen]
   );
 
   const addModelsFromFiles = useCallback(
     (files: File[]) => {
+      if (workshopDiskOpen) {
+        const modelFiles = files.filter((f) => isWorkflowModelFile(f)).slice(0, 50);
+        if (modelFiles.length) void importWorkshopLocalFiles(modelFiles);
+        return;
+      }
       const skippedOversized: string[] = [];
       const modelFiles = files
         .filter((f) => isWorkflowModelFile(f))
@@ -8064,7 +9154,7 @@ ${lineSvg}
         })();
       });
     },
-    [buildWorkflowModelPlaceholderDataUrl, groupFilterId, onLog, setAssets, workspaceProjectChrome?.activeProjectId]
+    [buildWorkflowModelPlaceholderDataUrl, groupFilterId, importWorkshopLocalFiles, onLog, setAssets, workspaceProjectChrome?.activeProjectId, workshopDiskOpen]
   );
 
   const hasWorkflowDropTransfer = useCallback((dt?: DataTransfer | null) => {
@@ -8318,7 +9408,8 @@ ${lineSvg}
     setAssets(gridAssets);
   }, [assets, gridAssets, setAssets]);
 
-  const visibleAssets = useMemo(() => {
+  const workshopCanvasLayerAssets = useMemo(() => {
+    if (workshopDiskOpen) return workshopFileAssets;
     const hideOpts = pbrGridHideContext;
     const base = gridAssets.filter(
       (a) => !a.archived && !a.inRepository && !isWorkflowAssetHiddenFromAssetGrid(a, hideOpts)
@@ -8346,9 +9437,17 @@ ${lineSvg}
     return sortRootWorkflowAssetsNewestFirst(
       base.filter((a) => !a.groupId)
     );
-  }, [gridAssets, groupFilterId, pbrGridHideContext]);
+  }, [workshopDiskOpen, workshopFileAssets, gridAssets, groupFilterId, pbrGridHideContext, assets]);
+  const visibleAssets = useMemo(
+    () => filterWorkshopCanvasByKind(workshopCanvasLayerAssets, workshopCanvasKindFilter),
+    [workshopCanvasLayerAssets, workshopCanvasKindFilter],
+  );
+  const workshopCanvasKindCounts = useMemo(
+    () => countWorkshopCanvasKinds(workshopCanvasLayerAssets),
+    [workshopCanvasLayerAssets],
+  );
   const rootCanvasAssets = useMemo(() => {
-    if (!showAllInGroup) return visibleAssets;
+    if (workshopDiskOpen || !showAllInGroup) return visibleAssets;
     return sortRootWorkflowAssetsNewestFirst(
       gridAssets.filter((a) => {
         if (a.archived || a.inRepository) return false;
@@ -8359,7 +9458,7 @@ ${lineSvg}
         return true;
       })
     );
-  }, [gridAssets, showAllInGroup, visibleAssets, pbrGridHideContext]);
+  }, [workshopDiskOpen, gridAssets, showAllInGroup, visibleAssets, pbrGridHideContext]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -8483,7 +9582,7 @@ ${lineSvg}
     return resolveActiveExecutionForAsset(lightboxAssetId);
   }, [lightboxAssetId, resolveActiveExecutionForAsset]);
 
-  const lightboxAsset = lightboxAssetId ? assets.find((a) => a.id === lightboxAssetId) : null;
+  const lightboxAsset = lightboxAssetId ? findLiveAsset(lightboxAssetId) : null;
   const showLightboxInstantShell = Boolean(
     lightboxInstantShellAssetId && !(lightboxOverlayMounted && lightboxBootPhase)
   );
@@ -8519,7 +9618,15 @@ ${lineSvg}
     // URL" made version switches keep showing the previous model's mesh + textures.
     return lightboxActiveVariant;
   }, [lightboxActiveVariant]);
-  const lightboxShowsImage = Boolean(lightboxAsset && getAssetDisplayImage(lightboxAsset).trim());
+  const lightboxShowsImage = Boolean(
+    lightboxAsset &&
+      (
+        getAssetDisplayImage(lightboxAsset).trim() ||
+        (fileSourceApi &&
+          parseWorkshopCardId(lightboxAsset.id) &&
+          getAssetGridDisplayImage(lightboxAsset).trim())
+      )
+  );
   const lightboxTexturePreviewSrc =
     lightboxTexturePreview && lightboxAsset && lightboxTexturePreview.assetId === lightboxAsset.id
       ? lightboxTexturePreview.src
@@ -8538,8 +9645,10 @@ ${lineSvg}
   /** 文字资产当前版本按文本通道展示（非 results 中的位图版本） */
   const lightboxTextAssetOnTextChannel = Boolean(
     lightboxAsset &&
-      isWorkflowTextAsset(lightboxAsset) &&
-      workflowAssetCurrentDisplayIsTextChannel(lightboxAsset)
+      (isWorkflowTextAsset(lightboxAsset) || isWorkshopTextPreviewName(lightboxAsset.textTitle || '')) &&
+      (workflowAssetCurrentDisplayIsTextChannel(lightboxAsset) ||
+        lightboxAsset.displayKey === 'original' ||
+        isWorkshopTextPreviewName(lightboxAsset.textTitle || ''))
   );
 
   useEffect(() => {
@@ -8551,6 +9660,24 @@ ${lineSvg}
     lightboxBootPhase,
     lightboxTextAssetOnTextChannel,
     lightboxShowsImage,
+    notifyLightboxPrimaryReady,
+  ]);
+
+  useEffect(() => {
+    if (!fileSourceApi || !lightboxAssetId || !lightboxAsset) return;
+    if (!parseWorkshopCardId(lightboxAsset.id)) return;
+    if (lightboxBootPhase === 't3') return;
+    const preview = getLightboxPreviewImageSrc(lightboxAsset).trim();
+    if (!preview) return;
+    notifyLightboxPrimaryReady();
+  }, [
+    fileSourceApi,
+    lightboxAssetId,
+    lightboxAsset,
+    lightboxBootPhase,
+    workshopSourceById,
+    workshopThumbById,
+    getLightboxPreviewImageSrc,
     notifyLightboxPrimaryReady,
   ]);
 
@@ -9103,7 +10230,7 @@ ${lineSvg}
   const lightboxList = useMemo(
     () =>
       sortRootWorkflowAssetsNewestFirst(
-        gridAssets.filter(
+        (workshopDiskOpen ? workshopFileAssets : gridAssets).filter(
           (a) =>
             !a.archived &&
             !isWorkflowAssetHiddenFromAssetGrid(a, pbrGridHideContext) &&
@@ -9112,11 +10239,97 @@ ${lineSvg}
             !isGroupAsset(a)
         )
       ),
-    [gridAssets, pbrGridHideContext]
+    [workshopDiskOpen, workshopFileAssets, gridAssets, pbrGridHideContext]
   );
   const lightboxListRef = useRef(lightboxList);
   lightboxListRef.current = lightboxList;
   const lightboxIndex = lightboxAssetId ? lightboxList.findIndex((a) => a.id === lightboxAssetId) : -1;
+  useEffect(() => {
+    if (!workshopDiskOpen || !workshopActiveRoot) return;
+    const api = workshopFileSourceApi();
+    if (!api?.getWorkshopThumb) return;
+    let cancelled = false;
+    const lightboxWant =
+      lightboxAssetId
+        ? new Set(
+            lightboxList
+              .filter((a) => a.assetKind === 'image' && parseWorkshopCardId(a.id))
+              .map((a) => a.id),
+          )
+        : null;
+    const missing: Array<{ id: string; displayKey: string }> = [];
+    const seen = new Set<string>();
+    const pushThumb = (id: string, displayKey = 'original') => {
+      const key = String(id || '').trim();
+      if (!key || seen.has(key)) return;
+      if (workshopThumbByIdRef.current[key]) return;
+      if (workshopThumbRequestedRef.current.has(key)) return;
+      if (!parseWorkshopCardId(key)) return;
+      seen.add(key);
+      missing.push({ id: key, displayKey });
+    };
+    for (const a of workshopFileAssets) {
+      const unlocked = thumbUnlockKeys.has(a.id) || Boolean(lightboxWant?.has(a.id));
+      if (!unlocked) continue;
+      if (a.assetKind === 'image' && !isWorkshopSpecialRasterName(a.textTitle || '')) {
+        pushThumb(a.id, a.displayKey || 'original');
+      }
+      if (isGroupAsset(a)) {
+        for (const id of a.assetIds || []) pushThumb(id);
+      }
+    }
+    let cursor = 0;
+    const workerCount = Math.min(WORKSHOP_THUMB_IPC_PARALLEL, missing.length);
+    const runOne = async (a: (typeof missing)[number]) => {
+      workshopThumbRequestedRef.current.add(a.id);
+      const parsed = parseWorkshopCardId(a.id);
+      if (!parsed) return;
+      const payload = workshopHostFilePayload(parsed, {
+        items: workshopMergedCanvasItems,
+        fileId: workshopFaceFileId(a.id, a.displayKey),
+      });
+      try {
+        const out = await api.getWorkshopThumb(payload);
+        if (out.ok && out.status === 'ready' && out.dataUrl) {
+          workshopThumbPendingRef.current.set(a.id, out.dataUrl as string);
+          if (!workshopThumbRafRef.current) {
+            workshopThumbRafRef.current = window.requestAnimationFrame(flushWorkshopThumbs);
+          }
+          return;
+        }
+      } catch {
+        workshopThumbRequestedRef.current.delete(a.id);
+        return;
+      }
+      if (cancelled) workshopThumbRequestedRef.current.delete(a.id);
+    };
+    const pump = async () => {
+      while (cursor < missing.length && !cancelled) {
+        const item = missing[cursor];
+        cursor += 1;
+        await runOne(item);
+      }
+    };
+    void Promise.all(Array.from({ length: workerCount }, () => pump()));
+    return () => {
+      cancelled = true;
+      if (workshopThumbRafRef.current) {
+        window.cancelAnimationFrame(workshopThumbRafRef.current);
+        workshopThumbRafRef.current = 0;
+      }
+      if (workshopThumbPendingRef.current.size) flushWorkshopThumbs();
+    };
+  }, [
+    workshopDiskOpen,
+    workshopActiveRoot,
+    workshopMergedCanvasItems,
+    workshopFileAssets,
+    thumbUnlockKeys,
+    lightboxAssetId,
+    lightboxList,
+    workshopFaceFileId,
+    flushWorkshopThumbs,
+  ]);
   useEffect(() => {
     if (!lightboxAsset) {
       setLightboxMetaText('');
@@ -9458,6 +10671,17 @@ ${lineSvg}
   );
 
   const handleLightboxWheelCycleDisplay = useCallback((deltaSteps: number) => {
+    if (workshopDiskOpen && lightboxAssetId) {
+      const a = workshopFileAssets.find((x) => x.id === lightboxAssetId);
+      if (!a) return;
+      const keys = getDisplayKeysForAsset(a);
+      if (keys.length <= 1) return;
+      const current = a.displayKey;
+      const idx = Math.max(0, keys.indexOf(current));
+      const nextIdx = ((idx + deltaSteps) % keys.length + keys.length) % keys.length;
+      setWorkshopDisplayKey(lightboxAssetId, keys[nextIdx]);
+      return;
+    }
     setAssets((prev) => {
       const id = lightboxAssetId;
       if (!id) return prev;
@@ -9469,7 +10693,7 @@ ${lineSvg}
       const nextIdx = ((idx + deltaSteps) % keys.length + keys.length) % keys.length;
       return prev.map((x) => (x.id === id ? { ...x, displayKey: keys[nextIdx] } : x));
     });
-  }, [lightboxAssetId, setAssets]);
+  }, [workshopDiskOpen, lightboxAssetId, setAssets, setWorkshopDisplayKey, workshopFileAssets]);
 
   const persistLightboxOverlayAnnotations = useCallback(() => {
     const id = lightboxAssetId;
@@ -10011,6 +11235,44 @@ ${lineSvg}
     completeLightboxClose({ flush: true, auditDiscard: false });
   }, [assetLightboxRasterEligible, completeLightboxClose]);
 
+  useEffect(() => {
+    const api = window.assetCutterWorkbench;
+    if (!api || typeof api.onWorkspaceDocumentEvent !== 'function') return undefined;
+    return api.onWorkspaceDocumentEvent((events) => {
+      const list = Array.isArray(events) ? events : [];
+      for (const event of list) {
+        const item = event as { type?: string; finger?: Partial<WorkspaceFinger> } | null;
+        if (!item || item.type !== 'finger.changed' || !item.finger || typeof item.finger !== 'object') continue;
+        const patch = omitConnectedHostsFromFinger(item.finger);
+        if (Object.prototype.hasOwnProperty.call(patch, 'selectedAssetId')) {
+          setSelectedAssetIds((prev) => {
+            const computed = nextSelectedAssetIdsFromFinger(prev, patch.selectedAssetId ?? null);
+            const prevList = [...prev];
+            if (computed.length === prevList.length && computed.every((id, i) => id === prevList[i])) return prev;
+            return new Set(computed);
+          });
+        }
+        if (
+          Object.prototype.hasOwnProperty.call(patch, 'previewOpen') ||
+          Object.prototype.hasOwnProperty.call(patch, 'previewAssetId')
+        ) {
+          const open = patch.previewOpen !== undefined ? Boolean(patch.previewOpen) : Boolean(lightboxAssetIdRef.current);
+          const pid =
+            patch.previewAssetId !== undefined
+              ? String(patch.previewAssetId || '').trim()
+              : String(lightboxAssetIdRef.current || '').trim();
+          if (!open || !pid) {
+            if (lightboxAssetIdRef.current) completeLightboxClose({ flush: true, auditDiscard: false });
+          } else if (lightboxAssetIdRef.current !== pid) {
+            openWorkflowLightbox(pid);
+          }
+        }
+        if (patch.surface === 'presets') snapWorkspacePaneToNode(1);
+        else if (patch.surface === 'canvas') snapWorkspacePaneToNode(0);
+      }
+    });
+  }, [completeLightboxClose, openWorkflowLightbox, snapWorkspacePaneToNode]);
+
   /** 大图 overlay 编辑：debounce 写入 session 环 `reason: periodic`（仅当草稿与资产已持久化 **dirty** 时），与关窗 `close` 合并规则见 `workflowOverlaySnapshots` */
   useEffect(() => {
     if (!lightboxAssetId || !lightboxShowsImage) return;
@@ -10329,6 +11591,10 @@ ${lineSvg}
   ]);
 
   const setDisplayKey = (assetId: string, key: string) => {
+    if (workshopDiskOpen || parseWorkshopCardId(assetId)) {
+      setWorkshopDisplayKey(assetId, key);
+      return;
+    }
     setAssets((prev) => prev.map((a) => (a.id === assetId ? { ...a, displayKey: key } : a)));
   };
 
@@ -10346,6 +11612,15 @@ ${lineSvg}
 
   const cycleDisplayKey = useCallback(
     (assetId: string, delta: number) => {
+      if (workshopDiskOpen) {
+        const a = workshopFileAssets.find((x) => x.id === assetId);
+        if (!a) return;
+        const keys = getDisplayKeysForAsset(a);
+        const nextKey = stepDisplayKeyInOrder(keys, a.displayKey, delta);
+        if (!nextKey) return;
+        setWorkshopDisplayKey(assetId, nextKey);
+        return;
+      }
       setAssets((prev) => {
         const a = prev.find((x) => x.id === assetId);
         if (!a) return prev;
@@ -10355,7 +11630,7 @@ ${lineSvg}
         return prev.map((x) => (x.id === assetId ? { ...x, displayKey: nextKey } : x));
       });
     },
-    [setAssets]
+    [workshopDiskOpen, setWorkshopDisplayKey, setAssets, workshopFileAssets]
   );
 
   const triggerCardPreviewBounce = useCallback((assetId: string, direction: 'up' | 'down') => {
@@ -10412,7 +11687,9 @@ ${lineSvg}
         previewAssetId = asset.id;
       }
 
-      const zoomEligible = workflowAssetCardZoomEligible(asset, getAssetDisplayImage(asset));
+      const zoomEligible =
+        (fileSourceApi && parseWorkshopCardId(asset.id) && asset.assetKind === 'image') ||
+        workflowAssetCardZoomEligible(asset, getAssetDisplayImage(asset));
 
       if (!previewKind && !zoomEligible) return null;
       return {
@@ -10423,7 +11700,7 @@ ${lineSvg}
         zoomEligible,
       };
     },
-    [showArchived, lightboxAssetId, getAssetDisplayImage]
+    [showArchived, lightboxAssetId, fileSourceApi, getAssetDisplayImage]
   );
 
   const { setHoveredCard, clearHoveredCard, registerCardZoomHost } = useWorkflowAssetCardHoverKeys({
@@ -10433,6 +11710,18 @@ ${lineSvg}
 
   const duplicateAssetInPlace = useCallback(
     (sourceIds: string[], parentGroupId: string | null) => {
+      if (workshopDiskOpen) {
+        const rels = sourceIds
+          .map((id) => workshopCardDiskRel(id, workshopCanvasItemsRef.current))
+          .filter((rel): rel is string => Boolean(rel));
+        if (!rels.length) return;
+        const api = workshopFileSourceApi();
+        void api?.copyWorkshopEntries?.({ root: workshopActiveRoot, rels }).then((out) => {
+          if (!out?.ok) onLog?.('warn', '作坊：复制失败', out?.error || 'copy_failed');
+          setWorkshopListEpoch((epoch) => epoch + 1);
+        });
+        return;
+      }
       const base = String(getCompanionLocalBaseUrl() || '').trim();
       const pid = String(workspaceProjectChrome?.activeProjectId || '').trim();
       const plans: Array<{ src: WorkflowAsset; newId: string }> = [];
@@ -10490,7 +11779,7 @@ ${lineSvg}
         });
       }
     },
-    [assets, setAssets, workspaceProjectChrome?.activeProjectId]
+    [assets, onLog, setAssets, workshopActiveRoot, workshopDiskOpen, workspaceProjectChrome?.activeProjectId]
   );
 
   useEffect(() => {
@@ -10700,6 +11989,26 @@ ${lineSvg}
   };
 
   const removeAsset = useCallback((assetId: string) => {
+    if (workshopDiskOpen) {
+      const parsed = parseWorkshopFileAssetId(assetId);
+      const rel = parsed?.rel || workshopCardDiskRel(assetId, workshopCanvasItemsRef.current);
+      const root = parsed?.root || workshopActiveRoot;
+      if (!rel || !root) {
+        onLog?.('warn', '作坊：删除失败', 'no_rel');
+      } else {
+        const api = workshopFileSourceApi();
+        void api
+          ?.trashWorkshopEntries?.({ root, rels: [rel] })
+          .then((out) => {
+            if (!out?.ok) onLog?.('warn', '作坊：删除失败', out?.error || 'trash_failed');
+            else if (!(out.rels && out.rels.length)) onLog?.('warn', '作坊：删除失败', 'not_moved');
+            setWorkshopListEpoch((epoch) => epoch + 1);
+          })
+          .catch((err: unknown) => {
+            onLog?.('warn', '作坊：删除失败', err instanceof Error ? err.message : String(err || 'trash_failed'));
+          });
+      }
+    }
     setAssets((prev) => {
       const removed = prev.find((a) => a.id === assetId);
       if (!removed) return prev;
@@ -10770,9 +12079,12 @@ ${lineSvg}
     storyboardPanelAssetId,
     assetSetPanelAssetId,
     onStoryboardTableAssetRemoved,
+    onLog,
     resetLightboxBoot,
     setAssets,
     setPending,
+    workshopActiveRoot,
+    workshopDiskOpen,
   ]);
 
   const archivedDetailAsset = archivedDetailAssetId ? assets.find((a) => a.id === archivedDetailAssetId) : null;
@@ -10862,7 +12174,12 @@ ${lineSvg}
           !!(a.textTitle || '').trim() ||
           Object.values(a.textResults || {}).some((v) => String(v || '').trim() !== '');
         const displayImg = getAssetDisplayImage(a).trim();
-        const hasDisplayImage = displayImg !== '' && !isWorkflowModelSvgPlaceholderSrc(displayImg);
+        const folderCover =
+          workshopDiskOpen && isGroupAsset(a)
+            ? (a.assetIds || []).map((id) => workshopThumbById[id] || '').find((s) => String(s).trim()) || ''
+            : '';
+        const hasDisplayImage =
+          (displayImg !== '' && !isWorkflowModelSvgPlaceholderSrc(displayImg)) || Boolean(folderCover.trim());
         return {
           id: a.id,
           aspectRatio: resolveWorkflowCanvasCardAspect(a, cardAspectByAssetId, {
@@ -10871,14 +12188,14 @@ ${lineSvg}
           }),
         };
       }),
-    [rootCanvasAssets, cardAspectByAssetId, getAssetDisplayText, getAssetDisplayImage]
+    [rootCanvasAssets, cardAspectByAssetId, getAssetDisplayText, getAssetDisplayImage, workshopDiskOpen, workshopThumbById]
   );
 
   const rootJustifiedLayout = useWorkflowJustifiedLayout(rootCanvasLayoutItems, gridRef, {
     gap: WORKFLOW_ASSET_GRID_GAP_PX,
     targetRowHeight: justifiedTargetRowHeight,
     /** 小盒子切回资产页时须重绑 ResizeObserver（grid 曾被 hidden，宽度可能未更新） */
-    remeasureKey: `${lightboxAssetId ?? 'list'}:${Math.round(workspacePane)}`,
+    remeasureKey: Math.round(workspacePane),
   });
 
   const groupCanvasLayoutItems = useMemo(() => {
@@ -10892,32 +12209,34 @@ ${lineSvg}
         };
       });
     }
-    return currentGroupItems.map((item, idx) => {
+    return currentGroupItems.flatMap((item, idx) => {
       const groupKey = `${currentGroupAsset.id}::${idx}`;
       const isAssetRef = typeof item === 'object' && item && 'assetId' in item;
       const childAsset = isAssetRef
         ? assets.find((x) => x.id === (item as { assetId: string }).assetId) ?? null
         : null;
       if (childAsset) {
+        if (!workshopCanvasKindMatches(childAsset, workshopCanvasKindFilter)) return [];
         const childTextDisplay = getAssetDisplayText(childAsset);
         const hasChildTextPayload =
           !!childTextDisplay ||
           !!(childAsset.textTitle || '').trim() ||
           Object.values(childAsset.textResults || {}).some((v) => String(v || '').trim() !== '');
         const hasChildDisplayImage = getAssetDisplayImage(childAsset).trim() !== '';
-        return {
+        return [{
           id: groupKey,
           aspectRatio: resolveWorkflowCanvasCardAspect(childAsset, cardAspectByAssetId, {
             hasDisplayImage: hasChildDisplayImage,
             hasTextPayload: hasChildTextPayload,
             syntheticKey: groupKey,
           }),
-        };
+        }];
       }
-      return {
+      if (workshopCanvasKindFilter !== 'all' && workshopCanvasKindFilter !== 'image') return [];
+      return [{
         id: groupKey,
         aspectRatio: resolveWorkflowGridCardAspect(undefined, cardAspectByAssetId, groupKey, 1),
-      };
+      }];
     });
   }, [
     groupFilterId,
@@ -10928,12 +12247,13 @@ ${lineSvg}
     cardAspectByAssetId,
     getAssetDisplayText,
     getAssetDisplayImage,
+    workshopCanvasKindFilter,
   ]);
 
   const groupJustifiedLayout = useWorkflowJustifiedLayout(groupCanvasLayoutItems, groupGridRef, {
     gap: WORKFLOW_ASSET_GRID_GAP_PX,
     targetRowHeight: justifiedTargetRowHeight,
-    remeasureKey: `${lightboxAssetId ?? 'list'}:${Math.round(workspacePane)}`,
+    remeasureKey: Math.round(workspacePane),
   });
 
   const mergeThumbUnlockKeys = useCallback((prev: Set<string>, keys: Iterable<string>) => {
@@ -10993,7 +12313,7 @@ ${lineSvg}
 
   useEffect(() => {
     const root = centerScrollRef.current;
-    if (!root) return;
+    if (!root || lightboxAssetId) return;
     let cancelled = false;
     const io = new IntersectionObserver(
       (entries) => {
@@ -11038,7 +12358,7 @@ ${lineSvg}
 
   useEffect(() => {
     const root = centerScrollRef.current;
-    if (!root) return;
+    if (!root || lightboxAssetId) return;
     let cancelled = false;
     let hotRaf = 0;
     const pendingHotAdd = new Set<string>();
@@ -11134,6 +12454,30 @@ ${lineSvg}
     return path;
   }, [groupFilterId, assets]);
 
+  const workshopNavCrumbs = useMemo(
+    () =>
+      workshopBreadcrumbSegments({
+        loc: {
+          root: workshopActiveRoot,
+          rel: workshopCurrentRel,
+          groupId: groupFilterId,
+        },
+        rootLabel: workshopNavRootLabel(workshopActiveRoot, workshopRoots),
+        groupPath: groupBreadcrumb.map((b) => ({ id: b.id, label: b.label })),
+      }),
+    [workshopActiveRoot, workshopCurrentRel, groupFilterId, workshopRoots, groupBreadcrumb],
+  );
+
+  const workshopNavLoc = useMemo(
+    () =>
+      normalizeWorkshopNavLoc({
+        root: workshopActiveRoot,
+        rel: workshopCurrentRel,
+        groupId: groupFilterId,
+      }),
+    [workshopActiveRoot, workshopCurrentRel, groupFilterId],
+  );
+
   /** 将组内项解析为资产 id 列表 */
   const ensureGroupItemsAsAssets = useCallback(
     (prev: WorkflowAsset[], groupAssetId: string, itemIndexes: number[]): { nextAssets: WorkflowAsset[]; assetIds: string[] } => {
@@ -11194,6 +12538,58 @@ ${lineSvg}
         tripoMultiviewImages?: WorkflowPendingTask['tripoMultiviewImages'];
       }
     ) => {
+      const fromGroup = opts?.sourceGroupAssetId != null && opts.sourceItemIndex != null;
+      const taskBase: Omit<WorkflowPendingTask, 'id' | 'assetId' | 'addedAt'> = {
+        actionType,
+        inputImage: imageBase64,
+        inputSourceDisplayKey: 'original',
+        ...(opts?.promptOverride != null ? { promptOverride: opts.promptOverride } : {}),
+        ...(opts?.overrideImageModelRegistryId || opts?.overrideImageGear
+          ? {
+              overrideImageModelRegistryId: coerceImageModelRegistryId(
+                opts.overrideImageModelRegistryId ?? opts.overrideImageGear
+              ),
+            }
+          : {}),
+        ...(opts?.overrideTextModelRegistryId
+          ? { overrideTextModelRegistryId: coerceTextModelRegistryId(opts.overrideTextModelRegistryId) }
+          : {}),
+        ...(opts?.overrideImageAspectRatio ? { overrideImageAspectRatio: opts.overrideImageAspectRatio } : {}),
+        ...(opts?.overrideImageSize ? { overrideImageSize: opts.overrideImageSize } : {}),
+        ...(typeof opts?.overrideSkipUnderstand === 'boolean'
+          ? { overrideSkipUnderstand: opts.overrideSkipUnderstand }
+          : {}),
+        ...(opts?.tripoMultiviewImages ? { tripoMultiviewImages: opts.tripoMultiviewImages } : {}),
+        ...(fromGroup
+          ? { sourceGroupAssetId: opts!.sourceGroupAssetId, sourceItemIndex: opts!.sourceItemIndex }
+          : {}),
+      };
+      if (workshopDiskOpen) {
+        void (async () => {
+          const tempId = uuid();
+          const newAsset: WorkflowAsset = attachInitialVgpToNewAsset({
+            id: tempId,
+            original: imageBase64,
+            displayKey: 'original',
+            results: {},
+            resultOrder: [],
+            archived: false,
+            hiddenInGrid: true,
+            createdAt: Date.now(),
+            ...(opts?.parentAssetId ? { parentAssetId: opts.parentAssetId } : {}),
+          });
+          const task: WorkflowPendingTask = {
+            id: uuid(),
+            assetId: tempId,
+            addedAt: Date.now(),
+            ...taskBase,
+          };
+          const remapped = await enqueueWorkshopGenerationBatch([newAsset], [task]);
+          if (!remapped.ok) return;
+          setPending((prev) => [...prev, ...remapped.tasks]);
+        })();
+        return;
+      }
       const newAsset: WorkflowAsset = attachInitialVgpToNewAsset({
         id: uuid(),
         original: imageBase64,
@@ -11205,7 +12601,6 @@ ${lineSvg}
         createdAt: Date.now(),
         ...(opts?.parentAssetId ? { parentAssetId: opts.parentAssetId } : {}),
       });
-      const fromGroup = opts?.sourceGroupAssetId != null && opts.sourceItemIndex != null;
       setAssets((prev) => {
         const next = [...prev, newAsset];
         if (fromGroup) {
@@ -11232,35 +12627,13 @@ ${lineSvg}
         {
           id: uuid(),
           assetId: newAsset.id,
-          actionType,
-          inputImage: imageBase64,
           addedAt: Date.now(),
-          inputSourceDisplayKey: 'original',
-          ...(opts?.promptOverride != null ? { promptOverride: opts.promptOverride } : {}),
-          ...(opts?.overrideImageModelRegistryId || opts?.overrideImageGear
-            ? {
-                overrideImageModelRegistryId: coerceImageModelRegistryId(
-                  opts.overrideImageModelRegistryId ?? opts.overrideImageGear
-                ),
-              }
-            : {}),
-          ...(opts?.overrideTextModelRegistryId
-            ? { overrideTextModelRegistryId: coerceTextModelRegistryId(opts.overrideTextModelRegistryId) }
-            : {}),
-          ...(opts?.overrideImageAspectRatio ? { overrideImageAspectRatio: opts.overrideImageAspectRatio } : {}),
-          ...(opts?.overrideImageSize ? { overrideImageSize: opts.overrideImageSize } : {}),
-          ...(typeof opts?.overrideSkipUnderstand === 'boolean'
-            ? { overrideSkipUnderstand: opts.overrideSkipUnderstand }
-            : {}),
-          ...(opts?.tripoMultiviewImages ? { tripoMultiviewImages: opts.tripoMultiviewImages } : {}),
-          ...(fromGroup
-            ? { sourceGroupAssetId: opts!.sourceGroupAssetId, sourceItemIndex: opts!.sourceItemIndex }
-            : {}),
+          ...taskBase,
         },
       ]);
       scheduleCompanionPersistOriginalAny(newAsset.id, imageBase64);
     },
-    [setAssets, setPending, onLog, scheduleCompanionPersistOriginalAny]
+    [setAssets, setPending, onLog, scheduleCompanionPersistOriginalAny, fileSourceApi, enqueueWorkshopGenerationBatch]
   );
 
   /** 在给定 `prev` 上插入手动组（供「建组」与组内拖入非组卡一次 setAssets 复用） */
@@ -11331,31 +12704,33 @@ ${lineSvg}
         }
       }
       if (clonePlans.length === 0) return { rootIds, cloneTaskSeeds };
-      setAssets((prev) => {
-        const next = [...prev];
-        for (const plan of clonePlans) {
-          const src = next.find((a) => a.id === plan.sourceId);
-          if (!src) continue;
-          const clone: WorkflowAsset = {
-            ...src,
-            id: plan.cloneId,
-            parentAssetId: undefined,
-            groupId: undefined,
-            groupLabel: undefined,
-            groupOrder: undefined,
-            archived: false,
-            hiddenInGrid: false,
-            createdAt: Date.now(),
-          };
-          next.push(clone);
-          const o = String(clone.original || '').trim();
-          if (o) queueMicrotask(() => scheduleCompanionPersistOriginalAny(plan.cloneId, o));
-        }
-        return next;
-      });
+      if (!workshopDiskOpen) {
+        setAssets((prev) => {
+          const next = [...prev];
+          for (const plan of clonePlans) {
+            const src = next.find((a) => a.id === plan.sourceId);
+            if (!src) continue;
+            const clone: WorkflowAsset = {
+              ...src,
+              id: plan.cloneId,
+              parentAssetId: undefined,
+              groupId: undefined,
+              groupLabel: undefined,
+              groupOrder: undefined,
+              archived: false,
+              hiddenInGrid: false,
+              createdAt: Date.now(),
+            };
+            next.push(clone);
+            const o = String(clone.original || '').trim();
+            if (o) queueMicrotask(() => scheduleCompanionPersistOriginalAny(plan.cloneId, o));
+          }
+          return next;
+        });
+      }
       return { rootIds, cloneTaskSeeds };
     },
-    [assets, setAssets, scheduleCompanionPersistOriginalAny]
+    [assets, setAssets, scheduleCompanionPersistOriginalAny, workshopDiskOpen]
   );
 
   /** 将资产添加到组的 assetIds 中 */
@@ -11384,6 +12759,25 @@ ${lineSvg}
 
   const createGroupFromAssets = useCallback(
     (assetIds: string[]) => {
+      if (workshopDiskOpen) {
+        const rels = assetIds
+          .map((id) => workshopCardDiskRel(id, workshopCanvasItemsRef.current))
+          .filter((rel): rel is string => Boolean(rel));
+        if (rels.length < 2) return;
+        const api = workshopFileSourceApi();
+        void api
+          ?.groupWorkshopEntries?.({
+            root: workshopActiveRoot,
+            parentRel: workshopCurrentRel,
+            rels,
+          })
+          .then((out) => {
+            if (!out?.ok) onLog?.('warn', '作坊：成组失败', out?.error || 'group_failed');
+            setWorkshopListEpoch((epoch) => epoch + 1);
+          });
+        setSelectedAssetIds(new Set());
+        return;
+      }
       const members = assetIds.filter((id) => assets.find((x) => x.id === id) != null);
       if (members.length < 2) return;
       setAssets((prev) => {
@@ -11396,7 +12790,7 @@ ${lineSvg}
       });
       setSelectedAssetIds(new Set());
     },
-    [assets, insertManualGroupForAssetIds, scheduleCompanionPersistOriginalAny, setAssets, setSelectedAssetIds]
+    [assets, insertManualGroupForAssetIds, onLog, scheduleCompanionPersistOriginalAny, setAssets, setSelectedAssetIds, workshopActiveRoot, workshopCurrentRel, workshopDiskOpen]
   );
 
   const handleWorkflowAssetDropHostDragOver = useCallback(
@@ -11452,6 +12846,10 @@ ${lineSvg}
         session.intent !== 'group' &&
         src.kind === 'root'
       ) {
+        if (workshopDiskOpen) {
+          finish();
+          return;
+        }
         const dragIds = Array.from(new Set(src.assetIds)).filter((id) => id !== targetId);
         if (dragIds.length > 0) {
           setAssets((prev) =>
@@ -11473,11 +12871,27 @@ ${lineSvg}
         src.kind === 'root'
       ) {
         const dragIds = Array.from(new Set(src.assetIds.filter((id) => id !== targetId))).filter((id) => {
+          if (workshopDiskOpen) return Boolean(findLiveAsset(id));
           const ast = assets.find((x) => x.id === id);
           return ast != null && !isWorkflowTextAsset(ast);
         });
         if (dragIds.length > 0) {
-          if (isGroupAsset(targetAsset)) {
+          if (workshopDiskOpen) {
+            const destRel = workshopCardDiskRel(targetId, workshopCanvasItemsRef.current);
+            const srcRels = dragIds
+              .map((id) => workshopCardDiskRel(id, workshopCanvasItemsRef.current))
+              .filter((rel): rel is string => Boolean(rel));
+            const api = workshopFileSourceApi();
+            if (isGroupAsset(targetAsset) && destRel && api?.moveWorkshopEntries) {
+              void api.moveWorkshopEntries({ root: workshopActiveRoot, destRel, rels: srcRels }).then((out) => {
+                if (!out?.ok) onLog?.('warn', '作坊：移入文件夹失败', out?.error || 'move_failed');
+                setWorkshopListEpoch((epoch) => epoch + 1);
+              });
+            } else {
+              const members = Array.from(new Set([...dragIds, targetId]));
+              if (members.length > 1) createGroupFromAssets(members);
+            }
+          } else if (isGroupAsset(targetAsset)) {
             setAssets((prev) => mergeAssetIdsIntoGroupCardAssets(prev, targetId, dragIds));
           } else {
             const members = Array.from(new Set([...dragIds, targetId]));
@@ -11488,7 +12902,7 @@ ${lineSvg}
         return;
       }
 
-      if (isWorkflowTextAsset(targetAsset)) {
+      if (workshopDiskOpen || isWorkflowTextAsset(targetAsset)) {
         finish();
         return;
       }
@@ -11529,11 +12943,15 @@ ${lineSvg}
       busyAssetIds,
       clearWorkflowDragSession,
       createGroupFromAssets,
+      findLiveAsset,
       insertManualGroupForAssetIds,
       mergeAssetIdsIntoGroupCardAssets,
+      onLog,
       scheduleCompanionPersistOriginalAny,
       setAssets,
       setGroupFilterId,
+      workshopActiveRoot,
+      workshopDiskOpen,
     ]
   );
 
@@ -11699,7 +13117,7 @@ ${lineSvg}
     (ids: string[]): string[] => {
       const out = new Set<string>();
       ids.forEach((id) => {
-        const asset = assets.find((a) => a.id === id);
+        const asset = findLiveAsset(id);
         if (!asset) return;
         // 优先使用新版 isGroup 结构
         if (isGroupAsset(asset) && asset.assetIds?.length) {
@@ -11721,7 +13139,7 @@ ${lineSvg}
       });
       return Array.from(out);
     },
-    [assets]
+    [findLiveAsset]
   );
   const _favoriteActionSet = useMemo(() => new Set(favoriteActionIds), [favoriteActionIds]);
   // 常用功能只做“置顶快捷入口”，不从原列表移除，避免用户误以为模块丢失
@@ -11818,9 +13236,9 @@ ${lineSvg}
       for (const rawId of assetIds) {
         const id = rawId.trim();
         if (!id) continue;
-        const a = assetsRef.current.find((x) => x.id === id);
+        const a = findLiveAsset(id);
         if (!a || isGroupAsset(a) || !assetLightboxRasterEligible(a)) continue;
-        const previewSrc = getAssetDisplayImage(a).trim();
+        const previewSrc = getAssetComposeInputImage(a).trim();
         if (!previewSrc) continue;
         if (targetSlots.some((s) => s.assetId === id)) continue;
         if (otherSlots.some((s) => s.assetId === id)) removeFromOther.push(id);
@@ -11857,7 +13275,7 @@ ${lineSvg}
       if (removeFromOther.length > 0) parts.push(`${removeFromOther.length} 张已从另一区移入`);
       onLog?.('info', `底部快捷栏：${parts.join('，')}（按拖入顺序送模，拖出虚线区可移除）`);
     },
-    [getAssetDisplayImage, onLog]
+    [findLiveAsset, getAssetComposeInputImage, onLog]
   );
   appendQuickComposeDropSlotsForAssetIdsRef.current = appendQuickComposeDropSlotsForAssetIds;
 
@@ -13403,15 +14821,15 @@ ${lineSvg}
       for (const source of incoming) {
         if (source.kind === 'root') {
           const effectiveIds = getEffectiveAssetIdsForAction(source.assetIds).filter((id) => {
-            const x = assets.find((a) => a.id === id);
-            return x != null && workflowAssetAllowedForCapabilityDrop(x, mod);
+            const x = findLiveAsset(id);
+            return x != null && assetAllowedForCapabilityDrop(x, mod);
           });
           effectiveIds.forEach((id) => {
-            const a = assets.find((x) => x.id === id);
+            const a = findLiveAsset(id);
             if (a) {
               targets.push({
                 assetId: id,
-                inputImage: getAssetDisplayImage(a),
+                inputImage: getAssetComposeInputImage(a),
                 inputSourceDisplayKey: a.displayKey,
                 ...(isWorkflowTextAsset(a) &&
                 (workflowAssetCurrentDisplayIsTextChannel(a) || workflowPresetAcceptsTextCardDrag(mod))
@@ -13477,7 +14895,7 @@ ${lineSvg}
       }
       return targets;
     },
-    [assets, getAssetDisplayImage, getEffectiveAssetIdsForAction]
+    [assets, findLiveAsset, getAssetComposeInputImage, assetAllowedForCapabilityDrop, getEffectiveAssetIdsForAction]
   );
 
   const handleDropToModuleAction = useCallback(
@@ -13492,27 +14910,29 @@ ${lineSvg}
         explicitSources !== undefined
           ? explicitSources
           : resolveCapabilityDropDragSources(
-              draggingAssetIds,
-              draggingGroupItems,
+              draggingAssetIdsRef.current ?? draggingAssetIds,
+              draggingGroupItemsRef.current ?? draggingGroupItems,
               dropEvent?.dataTransfer ?? null
             );
-      if (sources.length === 0) return;
+      if (sources.length === 0) {
+        return;
+      }
 
       const collectPromptTargets = (incoming: WorkflowDragSource[]): PromptTweakTarget[] => {
         const targets: PromptTweakTarget[] = [];
         for (const source of incoming) {
           if (source.kind === 'root') {
             const effectiveIds = getEffectiveAssetIdsForAction(source.assetIds).filter((id) => {
-              const x = assets.find((a) => a.id === id);
-              if (x == null || !workflowAssetAllowedForCapabilityDrop(x, mod)) return false;
+              const x = findLiveAsset(id);
+              if (x == null || !assetAllowedForCapabilityDrop(x, mod)) return false;
               return true;
             });
             effectiveIds.forEach((id) => {
-              const a = assets.find((x) => x.id === id);
+              const a = findLiveAsset(id);
               if (a) {
                 targets.push({
                   assetId: id,
-                  inputImage: getAssetDisplayImage(a),
+                  inputImage: getAssetComposeInputImage(a),
                   inputSourceDisplayKey: a.displayKey,
                   ...(isWorkflowTextAsset(a) &&
                   (workflowAssetCurrentDisplayIsTextChannel(a) ||
@@ -13685,8 +15105,8 @@ ${lineSvg}
         if (source.kind === 'root') {
           const rootCandidateIds = getEffectiveAssetIdsForAction(source.assetIds);
           const effectiveIds = rootCandidateIds.filter((id) => {
-            const x = assets.find((a) => a.id === id);
-            return x != null && workflowAssetAllowedForCapabilityDrop(x, mod);
+            const x = findLiveAsset(id);
+            return x != null && assetAllowedForCapabilityDrop(x, mod);
           });
           if (rootCandidateIds.length > 0 && effectiveIds.length === 0) {
             onLog?.('warn', '当前显示内容与该能力不匹配（请切换到对应版本）');
@@ -13713,7 +15133,27 @@ ${lineSvg}
             );
             if (task) rootTasks.push(task);
           }
-          if (rootTasks.length > 0) setPending((prev) => [...prev, ...rootTasks]);
+          if (rootTasks.length > 0) {
+            if (workshopDiskOpen && cloneTaskSeeds.length > 0) {
+              void (async () => {
+                const newAssets = cloneTaskSeeds.map((seed) => ({
+                  ...seed.sourceAsset,
+                  id: seed.targetAssetId,
+                }));
+                const cloneAssetIds = new Set(newAssets.map((a) => a.id));
+                const cloneTasks = rootTasks.filter((t) => cloneAssetIds.has(t.assetId));
+                const keepTasks = rootTasks.filter((t) => !cloneAssetIds.has(t.assetId));
+                const remapped = await enqueueWorkshopGenerationBatch(newAssets, cloneTasks);
+                if (!remapped.ok) return;
+                setPending((prev) => [...prev, ...keepTasks, ...remapped.tasks]);
+              })();
+            } else {
+              setPending((prev) => [...prev, ...rootTasks]);
+            }
+          }
+          else if (rootCandidateIds.length > 0) {
+            onLog?.('warn', `拖入「${mod.label}」失败：选中的资产无法作为输入（请确认图片已加载预览）`);
+          }
           continue;
         }
         const groupAssetForSrc = assets.find((x) => x.id === source.groupAssetId);
@@ -13757,6 +15197,10 @@ ${lineSvg}
       draggingAssetIds,
       draggingGroupItems,
       getEffectiveAssetIdsForAction,
+      findLiveAsset,
+      assetAllowedForCapabilityDrop,
+      getAssetComposeInputImage,
+      fileSourceApi,
       assets,
       getAssetDisplayImage,
       collectPromptTargetsForModule,
@@ -13767,6 +15211,8 @@ ${lineSvg}
       expandRootAssetsForGenerateCount,
       setPending,
       setPromptTweakModal,
+      onLog,
+      enqueueWorkshopGenerationBatch,
     ]
   );
 
@@ -14517,11 +15963,9 @@ ${lineSvg}
   const quickComposeChatDockHandlers = useMemo((): QuickComposeChatDockHandlers | null => {
     if (!quickComposeBarVisible) return null;
     const selectedIds = [...selectedAssetIds].map((id) => id.trim()).filter(Boolean);
-    const lightboxAsset = lightboxAssetId
-      ? assets.find((a) => a.id === lightboxAssetId)
-      : null;
+    const lightboxAsset = lightboxAssetId ? findLiveAsset(lightboxAssetId) : null;
     const selectedAssetList = selectedIds
-      .map((id) => assets.find((a) => a.id === id))
+      .map((id) => findLiveAsset(id))
       .filter((a): a is WorkflowAsset => Boolean(a));
     const selectionStatusTone: QuickComposeChatDockHandlers['selectionStatusTone'] =
       lightboxAsset ? 'preview' : selectedIds.length > 0 || selectedGroupItemKeys.size > 0 ? 'active' : 'idle';
@@ -14536,9 +15980,7 @@ ${lineSvg}
             : '\u5f53\u524d\u672a\u9009\u4e2d\u8d44\u4ea7';
     const threadTitle = quickComposeInLightbox
       ? (() => {
-          const asset = lightboxAssetId
-            ? assets.find((a) => a.id === lightboxAssetId)
-            : null;
+          const asset = lightboxAssetId ? findLiveAsset(lightboxAssetId) : null;
           return asset ? workflowAssetMentionLabel(asset) : '\u5927\u56fe\u9884\u89c8';
         })()
       : workspaceProjectChrome?.activeProjectName || '\u5de5\u4f5c\u533a';    const messages: QuickComposeChatMessageView[] = activeQuickComposeThread
@@ -14583,6 +16025,7 @@ ${lineSvg}
     creditBalance,
     lightboxAssetId,
     assets,
+    findLiveAsset,
     pending,
     executingQueue,
     getAssetDisplayImage,
@@ -14621,7 +16064,7 @@ ${lineSvg}
         ? quickComposeChatDockHandlers.onSend
         : quickComposeInRasterLightbox
           ? () => void submitLightboxQuickCompose()
-          : submitQuickCompose,
+          : (invoke?: QuickComposeSubmitInvokeOptions) => void submitQuickCompose(invoke),
       inputDisabled: quickComposeChatDockHandlers?.isInputDisabled ?? quickComposeSubmitDisabled,
       submitDisabled: quickComposeChatDockHandlers?.isSendDisabled ?? quickComposeSubmitDisabled,
       submitDisabledReason: quickComposeChatDockHandlers
@@ -14806,6 +16249,81 @@ ${lineSvg}
     ]
   );
 
+  const renderWorkflowFunctionSidebar = () => (
+        <div
+          className="flex h-full min-h-0 max-h-full shrink-0 self-stretch min-w-0 flex-col overflow-hidden"
+          style={{ width: `${functionSidebarWidth}px`, minWidth: `${functionSidebarWidth}px` }}
+          data-workflow-function-sidebar
+        >
+          <div className="flex h-full min-h-0 w-full flex-1 flex-col overflow-hidden">
+          <WorkflowSidebarColumn
+            actionModules={actionModules}
+            capabilitySets={capabilitySets}
+            draggingAssetIds={draggingAssetIds}
+            draggingAssetIdsRef={draggingAssetIdsRef}
+            syncDraggingAssetIds={syncDraggingAssetIds}
+            draggingGroupItems={draggingGroupItems}
+            draggingGroupItemsRef={draggingGroupItemsRef}
+            syncDraggingGroupItems={syncDraggingGroupItems}
+            workflowAssetDragActive={workflowAssetDragActive}
+            clearWorkflowDragSession={clearWorkflowDragSession}
+            createGroupFromAssets={createGroupFromAssets}
+            createNestedGroupFromGroupItem={createNestedGroupFromGroupItem}
+            ensureGroupItemsAsAssets={ensureGroupItemsAsAssets}
+            assets={assets}
+            getAssetDisplayImage={getAssetDisplayImage}
+            setAssets={setAssets}
+            selectedGroupItemKeys={selectedGroupItemKeys}
+            setSelectedGroupItemKeys={setSelectedGroupItemKeys}
+            moveGroupItemsToUpperLevel={moveGroupItemsToUpperLevel}
+            moveRootAssetsToUpperLevel={moveRootAssetsToUpperLevel}
+            canMoveRootToUpperLevel={
+              workshopDiskOpen && workshopMoveToParentDestRel(workshopCurrentRel) != null
+            }
+            sidebarOpsAllowed={sidebarOpsAllowed}
+            groupAssetForDrag={groupAssetForDrag}
+            currentGroupAsset={currentGroupAsset}
+            duplicateAssetInPlace={duplicateAssetInPlace}
+            removeAsset={removeAsset}
+            removeGroupItems={removeGroupItems}
+            setGroupFilterId={setGroupFilterId}
+            onDownloadWorkflowAssets={(sources) => void downloadWorkflowAssetsFromSources(sources)}
+            onDownloadSelectedWorkflowAssets={downloadSelectedWorkflowAssets}
+            visiblePresets={visiblePresets}
+            visibleCapabilitySets={visibleCapabilitySets}
+            visibleByCategory={visibleByCategory}
+            favoriteEntries={favoriteEntries}
+            draggingActionIdRef={draggingActionIdRef}
+            favoriteDropActive={favoriteDropActive}
+            setFavoriteDropActive={setFavoriteDropActive}
+            setFavoriteActionIds={setFavoriteActionIds}
+            collapsedSectionIds={collapsedSectionIds}
+            toggleSectionCollapsed={toggleSectionCollapsed}
+            updateDraggingActionId={updateDraggingActionId}
+            draggingActionFromFavorite={draggingActionFromFavorite}
+            actionDroppedInFavorite={actionDroppedInFavorite}
+            setDraggingActionFromFavorite={setDraggingActionFromFavorite}
+            setActionDroppedInFavorite={setActionDroppedInFavorite}
+            removeActionFromFavorite={removeActionFromFavorite}
+            onFavoriteDragLifecycle={onFavoriteDragLifecycle}
+            setHoverPreview={setHoverPreview}
+            handleDropToModuleAction={handleDropToModuleAction}
+            handleDropToSetAction={handleDropToSetAction}
+            jumpToCapabilityPreset={jumpToCapabilityPreset}
+            jumpToCapabilitySet={jumpToCapabilitySet}
+            onDropPresetFromEditor={handleActivatePresetFromEditorDrop}
+            onDropPresetAction={handlePresetActionDrop}
+            topActionMode={activePaneNode === 1 ? 'capabilityPreset' : 'asset'}
+            onComposeCapabilities={handleComposeCapabilities}
+            linkedComposeSearchQuery={quickComposeDraft}
+            onLinkHoverPresetIds={setSidebarLinkHoverPresetIds}
+            cloudPresetIds={cloudPresetIds}
+            onWorkflowFeatureClick={handleWorkflowFeatureClick}
+          />
+          </div>
+        </div>
+  );
+
   return (
     <>
     <WorkflowSpaceMarqueeChrome
@@ -14824,7 +16342,7 @@ ${lineSvg}
       <div className={`flex flex-col items-stretch gap-1.5 shrink-0 ${WORKFLOW_EDGE_GUTTER}`}>
         <div className="py-0.5" onWheelCapture={handlePaneWheel} data-workflow-topbar>
           <div className="flex min-h-7 items-center gap-1.5">
-            {workspaceProjectChrome ? (
+            {workspaceProjectChrome && !fileSourceApi ? (
               <div className="mr-1 flex shrink-0 items-center gap-1 pr-1">
                 <button
                   type="button"
@@ -14887,6 +16405,24 @@ ${lineSvg}
                   />
                 </div>
               </div>
+            ) : null}
+            {fileSourceApi ? (
+              <button
+                type="button"
+                title={
+                  workshopWorkspaceDir
+                    ? `库目录：${workshopWorkspaceDir}`
+                    : '指定库目录：已挂文件夹、版本、预览和链接都放这里'
+                }
+                onClick={() => void pickWorkshopWorkspace()}
+                className={`h-7 shrink-0 rounded-[0.2rem] px-1.5 text-[8px] font-black tracking-wide transition-colors ${
+                  workshopWorkspaceDir
+                    ? 'bg-white/[0.08] text-gray-200 ring-1 ring-inset ring-white/10 hover:bg-white/[0.12]'
+                    : 'text-gray-400 hover:bg-white/[0.07] hover:text-gray-200'
+                }`}
+              >
+                指定库目录
+              </button>
             ) : null}
             <div
               className="flex shrink-0 items-center gap-0.5"
@@ -14954,77 +16490,27 @@ ${lineSvg}
           ref={workspaceViewportRef}
           className="flex-1 min-h-0 overflow-hidden"
         >
-          {/* 大盒子：功能区 + 小盒子（资产列表 ↔ 预设） */}
+          {/* 大盒子：文件夹树 / 功能区 + 小盒子 +（壳内）右侧预设功能区 */}
           <div className="flex h-full min-h-0 w-full items-stretch overflow-hidden">
-        {showFunctionSidebar ? (
+        {fileSourceApi ? (
         <div
           className="flex h-full min-h-0 max-h-full shrink-0 self-stretch min-w-0 flex-col overflow-hidden"
-          style={{ width: `${functionSidebarWidth}px`, minWidth: `${functionSidebarWidth}px` }}
-          data-workflow-function-sidebar
+          style={{ width: `${WORKSHOP_FOLDERS_PANE_WIDTH_PX}px`, minWidth: `${WORKSHOP_FOLDERS_PANE_WIDTH_PX}px` }}
         >
-          <div className="flex h-full min-h-0 w-full flex-1 flex-col overflow-hidden">
-          <WorkflowSidebarColumn
-            actionModules={actionModules}
-            capabilitySets={capabilitySets}
-            draggingAssetIds={draggingAssetIds}
-            draggingAssetIdsRef={draggingAssetIdsRef}
-            syncDraggingAssetIds={syncDraggingAssetIds}
-            draggingGroupItems={draggingGroupItems}
-            draggingGroupItemsRef={draggingGroupItemsRef}
-            syncDraggingGroupItems={syncDraggingGroupItems}
-            workflowAssetDragActive={workflowAssetDragActive}
-            clearWorkflowDragSession={clearWorkflowDragSession}
-            createGroupFromAssets={createGroupFromAssets}
-            createNestedGroupFromGroupItem={createNestedGroupFromGroupItem}
-            ensureGroupItemsAsAssets={ensureGroupItemsAsAssets}
-            assets={assets}
-            getAssetDisplayImage={getAssetDisplayImage}
-            setAssets={setAssets}
-            selectedGroupItemKeys={selectedGroupItemKeys}
-            setSelectedGroupItemKeys={setSelectedGroupItemKeys}
-            moveGroupItemsToUpperLevel={moveGroupItemsToUpperLevel}
-            sidebarOpsAllowed={sidebarOpsAllowed}
-            groupAssetForDrag={groupAssetForDrag}
-            currentGroupAsset={currentGroupAsset}
-            duplicateAssetInPlace={duplicateAssetInPlace}
-            removeAsset={removeAsset}
-            removeGroupItems={removeGroupItems}
-            setGroupFilterId={setGroupFilterId}
-            onDownloadWorkflowAssets={(sources) => void downloadWorkflowAssetsFromSources(sources)}
-            onDownloadSelectedWorkflowAssets={downloadSelectedWorkflowAssets}
-            visiblePresets={visiblePresets}
-            visibleCapabilitySets={visibleCapabilitySets}
-            visibleByCategory={visibleByCategory}
-            favoriteEntries={favoriteEntries}
-            draggingActionIdRef={draggingActionIdRef}
-            favoriteDropActive={favoriteDropActive}
-            setFavoriteDropActive={setFavoriteDropActive}
-            setFavoriteActionIds={setFavoriteActionIds}
-            collapsedSectionIds={collapsedSectionIds}
-            toggleSectionCollapsed={toggleSectionCollapsed}
-            updateDraggingActionId={updateDraggingActionId}
-            draggingActionFromFavorite={draggingActionFromFavorite}
-            actionDroppedInFavorite={actionDroppedInFavorite}
-            setDraggingActionFromFavorite={setDraggingActionFromFavorite}
-            setActionDroppedInFavorite={setActionDroppedInFavorite}
-            removeActionFromFavorite={removeActionFromFavorite}
-            onFavoriteDragLifecycle={onFavoriteDragLifecycle}
-            setHoverPreview={setHoverPreview}
-            handleDropToModuleAction={handleDropToModuleAction}
-            handleDropToSetAction={handleDropToSetAction}
-            jumpToCapabilityPreset={jumpToCapabilityPreset}
-            jumpToCapabilitySet={jumpToCapabilitySet}
-            onDropPresetFromEditor={handleActivatePresetFromEditorDrop}
-            onDropPresetAction={handlePresetActionDrop}
-            topActionMode={activePaneNode === 1 ? 'capabilityPreset' : 'asset'}
-            onComposeCapabilities={handleComposeCapabilities}
-            linkedComposeSearchQuery={quickComposeDraft}
-            onLinkHoverPresetIds={setSidebarLinkHoverPresetIds}
-            cloudPresetIds={cloudPresetIds}
-            onWorkflowFeatureClick={handleWorkflowFeatureClick}
-          />
-          </div>
+            <WorkshopFileTreeColumn
+              roots={workshopRoots}
+              activeRoot={workshopActiveRoot}
+              currentRel={workshopCurrentRel}
+              workspaceDir={workshopWorkspaceDir}
+              onSelectFolder={(root, rel) => {
+                applyWorkshopNavLoc({ root, rel, groupId: null });
+              }}
+              onAddFolder={() => void pickWorkshopRoot()}
+              onRemoveRoot={(root) => void removeWorkshopRoot(root)}
+            />
         </div>
+        ) : showFunctionSidebar ? (
+          renderWorkflowFunctionSidebar()
         ) : null}
         {/* 小盒子：资产列表 ↔ 能力预设 */}
         <div
@@ -15050,6 +16536,32 @@ ${lineSvg}
             />
           </div>
         ) : null}
+        {fileSourceApi ? (
+          <div
+            className={lightboxAssetId ? 'pointer-events-none opacity-0' : undefined}
+            aria-hidden={Boolean(lightboxAssetId)}
+          >
+            <WorkshopCanvasNavBar
+              kindFilter={workshopCanvasKindFilter}
+              kindCounts={workshopCanvasKindCounts}
+              onKindFilter={setWorkshopCanvasKindFilter}
+              canBack={workshopNavCanBack(workshopNavHistory)}
+              canForward={workshopNavCanForward(workshopNavHistory)}
+              canUp={workshopNavCanUp(workshopNavLoc)}
+              onBack={goWorkshopNavBack}
+              onForward={goWorkshopNavForward}
+              onUp={() => {
+                const up = workshopNavUpLoc(
+                  workshopNavLoc,
+                  groupBreadcrumb[groupBreadcrumb.length - 1]?.parentId ?? null,
+                );
+                if (up) applyWorkshopNavLoc(up);
+              }}
+              crumbs={workshopNavCrumbs}
+              onCrumb={(loc) => applyWorkshopNavLoc(loc)}
+            />
+          </div>
+        ) : null}
         <div
           ref={centerScrollRef}
           data-workflow-scroll-port="asset"
@@ -15062,10 +16574,13 @@ ${lineSvg}
           }}
           tabIndex={0}
         >
-          {!lightboxAssetId ? (
-          <>
+          <div
+            className={lightboxAssetId ? 'pointer-events-none opacity-0' : undefined}
+            aria-hidden={Boolean(lightboxAssetId)}
+          >
           {groupFilterId ? (
             <>
+              {!fileSourceApi ? (
               <div className={`flex items-center gap-2 shrink-0 ${WORKFLOW_EDGE_GUTTER}`}>
                 <button
                   type="button"
@@ -15102,6 +16617,7 @@ ${lineSvg}
                   </>
                 )}
               </div>
+              ) : null}
               <div
                 ref={groupGridRef}
                 className={`relative pt-4 w-full ${WORKFLOW_EDGE_GUTTER} ${
@@ -15169,6 +16685,8 @@ ${lineSvg}
                       const groupKey = currentGroupAsset ? `${currentGroupAsset.id}::${idx}` : `${idx}`;
                       const isAssetRef = typeof item === 'object' && item && 'assetId' in item;
                       const childAsset = isAssetRef ? assets.find((x) => x.id === (item as { assetId: string }).assetId) : null;
+                      if (childAsset && !workshopCanvasKindMatches(childAsset, workshopCanvasKindFilter)) return null;
+                      if (!childAsset && workshopCanvasKindFilter !== 'all' && workshopCanvasKindFilter !== 'image') return null;
                       const img =
                         isAssetRef && childAsset
                           ? getAssetGridDisplayImage(childAsset)
@@ -15397,7 +16915,11 @@ ${lineSvg}
                                     onClick={() => {
                                       // 使用 isGroupAsset 兼容新旧结构
                                       if (isGroupAsset(childAsset)) {
-                                        setGroupFilterId(childAsset.id);
+                                        applyWorkshopNavLoc({
+                                          root: workshopActiveRoot,
+                                          rel: workshopDiskOpen ? workshopCurrentRel : '',
+                                          groupId: childAsset.id,
+                                        });
                                       } else if (currentGroupAsset) {
                                         openWorkflowLightbox(childAsset.id, {
                                           sourceGroupAssetId: currentGroupAsset.id,
@@ -15522,15 +17044,6 @@ ${lineSvg}
                                         total={childStepBadge.total}
                                       />
                                     ) : null}
-                                    {isGroupAsset(childAsset) ? (
-                                      <span className="absolute top-2 right-2 px-2 py-0.5 rounded-lg text-[8px] font-black bg-[#1d4ed8] text-white">
-                                        {childAsset.groupLabel ?? '组'}
-                                      </span>
-                                    ) : hasChildTextPayload && !isWorkflowStoryboardTableAsset(childAsset) ? (
-                                      <span className="absolute top-2 right-2 px-2 py-0.5 rounded-lg text-[8px] font-black bg-[#1d4ed8] text-white">
-                                        文本
-                                      </span>
-                                    ) : null}
                                   </div>
                                   {!isGroupAsset(childAsset) && !hasChildTextPayload && (
                                     <div className="p-2 flex flex-col gap-1.5 border-t border-white/[0.06] bg-[#08080b]/80">
@@ -15540,6 +17053,19 @@ ${lineSvg}
                                           <span className="text-gray-500">·</span>
                                           <span className="text-gray-400">{getAssetDisplayTypeLabel(childAsset)}</span>
                                         </span>
+                                        {fileSourceApi && workshopCardNeedsApply(childAsset.id, childAsset.displayKey) ? (
+                                          <button
+                                            type="button"
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              void applyWorkshopDisplayToCheckout(childAsset.id, childAsset.displayKey);
+                                            }}
+                                            className="px-1.5 py-0.5 rounded text-[7px] text-blue-300 hover:bg-white/[0.08]"
+                                            title="把当前显示覆盖到本地文件"
+                                          >
+                                            应用
+                                          </button>
+                                        ) : null}
                                         {childAsset.displayKey !== 'original' && (
                                           <button
                                             onClick={() => discardResult(childAsset.id, childAsset.displayKey)}
@@ -15819,7 +17345,27 @@ ${lineSvg}
             <div className="mx-auto flex min-h-[min(70vh,560px)] max-w-md flex-col items-center justify-center px-6 py-12">
               <div className="flex w-full flex-col items-center rounded-2xl bg-white/[0.03] px-8 py-10 text-center ring-1 ring-white/[0.07]">
                 <AppIcon name="camera" className="mb-3 h-11 w-11 text-gray-500" />
-                <p className="text-[11px] font-black uppercase tracking-wide text-gray-300">画布为空</p>
+                {fileSourceApi && workshopDiskOpen ? (
+                  <>
+                    <p className="text-[11px] font-black uppercase tracking-wide text-gray-300">
+                      此文件夹没有文件
+                    </p>
+                    <p className="mt-2 text-[9px] leading-relaxed text-gray-500">
+                      拖入文件，或在此新建文本。
+                    </p>
+                    <button
+                      type="button"
+                      onClick={createWorkflowTextAssetAndOpen}
+                      className="mt-4 rounded-xl border border-emerald-500/35 bg-emerald-500/10 px-4 py-2 text-[10px] font-bold text-emerald-200 hover:bg-emerald-500/20"
+                    >
+                      新建文本
+                    </button>
+                  </>
+                ) : (
+                  <>
+                <p className="text-[11px] font-black uppercase tracking-wide text-gray-300">
+                  {fileSourceApi ? '浏览器里还没有资产' : '画布为空'}
+                </p>
                 <p className="mt-2 text-[9px] leading-relaxed text-gray-500">
                   将图片或模型<strong className="text-gray-400">拖入画布</strong>，在左侧「仓库」拖入条目，或使用<strong className="text-gray-400">粘贴</strong>、功能区能力生成内容
                 </p>
@@ -15850,6 +17396,8 @@ ${lineSvg}
                 >
                   新建资产集
                 </button>
+                  </>
+                )}
               </div>
             </div>
           ) : (
@@ -15907,15 +17455,19 @@ ${lineSvg}
                   const isGroupCard = isGroupAsset(a);
                   const gLen = isGroupCard ? (a.assetIds?.length ?? 0) : 0;
                   const gSafe = gLen ? ((rawG % gLen) + gLen) % gLen : 0;
-                  const gridPreviewSrc = !hasDisplayImage
-                    ? ''
-                    : isGroupCard
+                  const gridPreviewSrc = isGroupCard
                     ? (() => {
                         const childId = a.assetIds?.[gSafe] ?? a.assetIds?.[0];
+                        if (workshopDiskOpen && childId) {
+                          const fromThumb = workshopThumbById[childId] || '';
+                          if (fromThumb) return fromThumb;
+                        }
                         const child = childId ? assetsById.get(childId) : null;
                         return child ? getAssetGridDisplayImage(child) : getAssetGridDisplayImage(a);
                       })()
-                    : getAssetGridDisplayImage(a);
+                    : !hasDisplayImage
+                      ? ''
+                      : getAssetGridDisplayImage(a);
                   const gridPreviewCacheKeyBase = isGroupCard
                     ? `${a.id}:${a.displayKey}:g${gSafe}`
                     : `${a.id}:${a.displayKey}`;
@@ -15958,7 +17510,7 @@ ${lineSvg}
                       }}
                       onDragOver={(e) => {
                         handleWorkflowAssetDropHostDragOver(e, a.id, {
-                          allowGroup: !isWorkflowTextAsset(a),
+                          allowGroup: workshopDiskOpen || !isWorkflowTextAsset(a),
                           isBusy,
                         });
                       }}
@@ -15972,10 +17524,16 @@ ${lineSvg}
                       }}
                     >
                       <div className="relative h-full w-full min-h-0">
-                      {isGroupCard && gLen > 1 ? (
+                      {isGroupCard && (workshopDiskOpen || gLen > 1) ? (
                         <WorkflowGroupCardStackPreviews
                           groupAsset={a}
-                          allAssets={assets}
+                          allAssets={workshopDiskOpen ? workshopFileAssets : assets}
+                          memberSrcs={
+                            workshopDiskOpen
+                              ? (a.assetIds || []).map((id) => workshopThumbById[id] || '')
+                              : undefined
+                          }
+                          forceStack={workshopDiskOpen}
                           getDisplayImage={getAssetGridDisplayImage}
                           deferThumbnail={!thumbUnlockKeys.has(a.id)}
                           thumbDecodePriority={thumbHotKeys.has(a.id) ? 'high' : 'low'}
@@ -16005,7 +17563,9 @@ ${lineSvg}
                           syncDraggingAssetIds(ids);
                           try {
                             const payload: AcWorkflowExportPayload = { mode: 'roots', assetIds: ids };
-                            e.dataTransfer.setData(DT_AC_WORKFLOW_EXPORT, JSON.stringify(payload));
+                            const raw = JSON.stringify(payload);
+                            e.dataTransfer.setData(DT_AC_WORKFLOW_EXPORT, raw);
+                            e.dataTransfer.setData('text/plain', raw);
                             e.dataTransfer.effectAllowed = 'copyMove';
                           } catch {
                             /* ignore */
@@ -16100,7 +17660,7 @@ ${lineSvg}
                           onContextMenu={(e) => {
                             if (showArchived) return;
                             let target: WorkflowAsset | null = a;
-                            if (isGroupCard) {
+                            if (isGroupCard && !workshopDiskOpen) {
                               const childId = a.assetIds?.[gSafe] ?? a.assetIds?.[0];
                               target = childId ? assets.find((x) => x.id === childId) ?? null : null;
                             }
@@ -16108,7 +17668,7 @@ ${lineSvg}
                               !target ||
                               isWorkflowStoryboardTableAsset(target) ||
                               isWorkflowAssetSetAsset(target) ||
-                              (!hasDisplayImage && isWorkflowTextAsset(target))
+                              (!workshopDiskOpen && !hasDisplayImage && isWorkflowTextAsset(target))
                             ) {
                               return;
                             }
@@ -16118,7 +17678,16 @@ ${lineSvg}
                             if (showArchived) {
                               setArchivedDetailAssetId(a.id);
                             } else if (isGroupCard) {
-                              setGroupFilterId(a.id);
+                              const parsed = parseWorkshopFileAssetId(a.id);
+                              if (workshopDiskOpen && parsed) {
+                                openWorkshopDiskFolder(parsed.root, parsed.rel);
+                              } else {
+                                applyWorkshopNavLoc({
+                                  root: workshopActiveRoot,
+                                  rel: workshopDiskOpen ? workshopCurrentRel : '',
+                                  groupId: a.id,
+                                });
+                              }
                             } else if (isWorkflowStoryboardTableAsset(a)) {
                               openStoryboardTablePanel(a.id);
                             } else if (isWorkflowAssetSetAsset(a)) {
@@ -16151,6 +17720,8 @@ ${lineSvg}
                                 {textDisplay || '（空白，点击编辑）'}
                               </p>
                             </div>
+                          ) : isGroupCard && !gridPreviewSrcEffective.trim() ? (
+                            <div className="relative h-full w-full bg-[#16161a]" />
                           ) : (
                             <AssetCardPreviewRenderer
                               asset={a}
@@ -16245,15 +17816,6 @@ ${lineSvg}
                               total={stepBadge.total}
                             />
                           ) : null}
-                          {isGroupAsset(a) ? (
-                            <span className="absolute top-2 right-2 px-2 py-0.5 rounded-lg text-[8px] font-black bg-[#1d4ed8] text-white">
-                              {a.groupLabel ?? '组'}
-                            </span>
-                          ) : hasTextPayload && !isWorkflowTextAsset(a) && !isWorkflowStoryboardTableAsset(a) ? (
-                            <span className="absolute top-2 right-2 px-2 py-0.5 rounded-lg text-[8px] font-black bg-[#1d4ed8] text-white">
-                              文本
-                            </span>
-                          ) : null}
                         </div>
                         {!showArchived &&
                           !isGroupAsset(a) &&
@@ -16265,6 +17827,19 @@ ${lineSvg}
                                 <span className="text-gray-500">·</span>
                                 <span className="text-gray-400">{getAssetDisplayTypeLabel(a)}</span>
                               </span>
+                              {fileSourceApi && workshopCardNeedsApply(a.id, a.displayKey) ? (
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    void applyWorkshopDisplayToCheckout(a.id, a.displayKey);
+                                  }}
+                                  className="px-1.5 py-0.5 rounded text-[7px] text-blue-300 hover:bg-white/[0.08]"
+                                  title="把当前显示覆盖到本地文件"
+                                >
+                                  应用
+                                </button>
+                              ) : null}
                               {a.displayKey !== 'original' && (
                                 <button
                                   onClick={() => discardResult(a.id, a.displayKey)}
@@ -16293,8 +17868,7 @@ ${lineSvg}
               </div>
             </div>
           )}
-          </>
-          ) : null}
+          </div>
         </div>
         </div>
         {activePaneNode === 1 ? (
@@ -16322,6 +17896,7 @@ ${lineSvg}
           </div>
         ) : null}
         </div>
+        {fileSourceApi && showFunctionSidebar ? renderWorkflowFunctionSidebar() : null}
           </div>
         </div>
       </div>
@@ -16415,6 +17990,18 @@ ${lineSvg}
                 onPersist={(next) => {
                   const id = lightboxAsset.id;
                   const currentKey = lightboxAsset.displayKey;
+                  if (workshopDiskOpen) {
+                    const parsed = parseWorkshopFileAssetId(id);
+                    if (parsed && currentKey === 'original') {
+                      void workshopFileSourceApi()?.writeWorkshopCheckoutFile?.({
+                        root: parsed.root,
+                        rel: parsed.rel,
+                        body: next.textBody,
+                      });
+                      setWorkshopTextById((prev) => ({ ...prev, [id]: next.textBody }));
+                    }
+                    return;
+                  }
                   setAssets((prev) =>
                     prev.map((x) => {
                       if (x.id !== id) return x;
@@ -16434,6 +18021,7 @@ ${lineSvg}
                 <AssetMediaPreviewCenter
                   variant={lightboxMediaCenterVariant}
                   assetId={lightboxAsset.id}
+                  modelFileName={lightboxModelFileNameHint}
                   model3dPbrEditDoc={resolveWorkflowAssetPbrEditDoc(lightboxAsset, {
                     stepKey: lightboxAsset.displayKey,
                     variantId: lightboxMediaCenterVariant?.id,
@@ -16509,7 +18097,7 @@ ${lineSvg}
                 assets={lightboxList}
                 activeAssetId={lightboxAsset.id}
                 onSelectAsset={handleLightboxStripSelect}
-                getPreviewSrc={getLightboxPreviewImageSrc}
+                getPreviewSrc={getLightboxStripPreviewSrc}
                 canCopyImage={canWorkflowAssetCopyImage}
                 onCopyImage={handleWorkflowAssetCopyImage}
                 onCopyId={handleWorkflowAssetCopyId}
@@ -16673,6 +18261,18 @@ ${lineSvg}
           topRightExtra={
             lightboxChromeReady && !lightboxMediaCenterVariant && lightboxPreviewLayout !== 'model3d' ? (
             <>
+              {fileSourceApi && workshopCardNeedsApply(lightboxAsset.id, lightboxAsset.displayKey) ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    void applyWorkshopDisplayToCheckout(lightboxAsset.id, lightboxAsset.displayKey);
+                  }}
+                  className="inline-flex h-7 shrink-0 items-center rounded-md bg-blue-600 px-1.5 text-[8px] font-black tracking-wide text-white ring-1 ring-blue-400/40 hover:bg-blue-500 outline-none"
+                  title="把当前显示覆盖到本地文件"
+                >
+                  应用
+                </button>
+              ) : null}
               <button
                 type="button"
                 onClick={() => {
@@ -17724,7 +19324,7 @@ ${lineSvg}
                 }
               }
             }
-            if (clonePlans.length > 0) {
+            if (clonePlans.length > 0 && !workshopDiskOpen) {
               setAssets((prev) => {
                 const next = [...prev];
                 for (const plan of clonePlans) {
@@ -17748,7 +19348,26 @@ ${lineSvg}
                 return next;
               });
             }
-            if (tasks.length > 0) addTasksToPending(tasks);
+            if (tasks.length > 0) {
+              if (workshopDiskOpen && clonePlans.length > 0) {
+                void (async () => {
+                  const newAssets: WorkflowAsset[] = [];
+                  for (const plan of clonePlans) {
+                    const src = findLiveAsset(plan.sourceId) ?? assets.find((a) => a.id === plan.sourceId);
+                    if (!src) continue;
+                    newAssets.push({ ...src, id: plan.cloneId });
+                  }
+                  const cloneIds = new Set(newAssets.map((a) => a.id));
+                  const cloneTasks = tasks.filter((t) => cloneIds.has(t.assetId));
+                  const keepTasks = tasks.filter((t) => !cloneIds.has(t.assetId));
+                  const remapped = await enqueueWorkshopGenerationBatch(newAssets, cloneTasks);
+                  if (!remapped.ok) return;
+                  addTasksToPending([...keepTasks, ...remapped.tasks]);
+                })();
+              } else {
+                addTasksToPending(tasks);
+              }
+            }
             setPromptTweakModal(null);
             clearWorkflowDragSession();
           }}

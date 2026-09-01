@@ -12,6 +12,12 @@ describe('inferModelFormat', () => {
   it('uses the file-name hint to identify OBJ blob previews', () => {
     expect(inferModelFormat('blob:http://x/y', 'uploaded-model.obj')).toBe('obj');
   });
+
+  it('reads FBX from ac-workshop URL filename and does not guess glTF', () => {
+    expect(inferModelFormat('ac-workshop://v1/ab12cd/prop.fbx')).toBe('fbx');
+    expect(inferModelFormat('ac-workshop://v1/ab12cd', 'hero.fbx')).toBe('fbx');
+    expect(inferModelFormat('ac-workshop://v1/ab12cd')).toBe('unknown');
+  });
 });
 
 describe('resolveWorkflowPbrTextureFlipY', () => {

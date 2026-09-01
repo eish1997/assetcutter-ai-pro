@@ -9,8 +9,8 @@ import type { WorkflowAssetVariant } from '../types';
 
 vi.mock('../components/preview', () => ({
   getLazyImagePreviewViewer: () =>
-    function MockModel3DViewer() {
-      return <canvas data-testid="model3d-canvas" />;
+    function MockModel3DViewer(props: { modelFileName?: string }) {
+      return <canvas data-testid="model3d-canvas" data-filename={props.modelFileName || ''} />;
     },
   PreviewViewerErrorBoundary: ({ children }: { children: ReactNode }) => <>{children}</>,
   PreviewViewerFallback: ({ label }: { label: string }) => <div>{label}</div>,
@@ -102,5 +102,20 @@ describe('AssetMediaPreviewCenter', () => {
     expect(screen.getByTestId('model3d-canvas')).toBeTruthy();
     expect(toDataUrl).toHaveBeenCalledWith('image/png');
     expect(click).toHaveBeenCalled();
+  });
+
+  it('passes modelFileName into the 3D viewer without throwing', () => {
+    render(
+      <AssetMediaPreviewCenter
+        modelFileName="prop.fbx"
+        variant={makeVariant({
+          kind: 'model3d',
+          url: 'ac-workshop://v1/tok/prop.fbx',
+          modelUrls: ['ac-workshop://v1/tok/prop.fbx'],
+        })}
+      />
+    );
+
+    expect(screen.getByTestId('model3d-canvas').getAttribute('data-filename')).toBe('prop.fbx');
   });
 });

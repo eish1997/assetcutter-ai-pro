@@ -23,6 +23,8 @@ export function inferModelFormat(url: string, fileName?: string): ModelFormat {
   /** `blob:` 与部分伴侣回读 URL 不含扩展名；工作流 Tripo/混元首槽几乎恒为 GLB */
   const u = String(url || '').trim();
   if (/^blob:/i.test(u)) return 'gltf';
+  /** `ac-workshop://v1/<token>/name.fbx` 已由 fromPath 识别；无文件名时不要猜成 glTF */
+  if (/^ac-workshop:/i.test(u)) return 'unknown';
   return 'unknown';
 }
 

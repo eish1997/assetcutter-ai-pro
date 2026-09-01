@@ -11,7 +11,8 @@
     "clean": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/clean-build-artifacts.ps1",
     "pack": "npm run write-build-constants && npm run bundle:local-companion && node ./scripts/electron-build-with-suffix.cjs dir",
     "copy:sam-local-bundled": "node ./scripts/copy-sam-local-for-desktop.cjs",
-    "bundle:local-companion": "node ./scripts/copy-sam-local-for-desktop.cjs && node ./scripts/bundle-local-companion-runtime.cjs",
+    "copy:dsh-bundled": "node ./scripts/copy-dsh-bundled.cjs",
+    "bundle:local-companion": "node ./scripts/copy-sam-local-for-desktop.cjs && node ./scripts/copy-dsh-bundled.cjs && node ./scripts/bundle-local-companion-runtime.cjs",
     "dist:win": "npm run write-build-constants && npm run bundle:local-companion && node ./scripts/electron-build-with-suffix.cjs nsis",
     "dist:portable": "npm run write-build-constants && npm run bundle:local-companion && node ./scripts/electron-build-with-suffix.cjs portable"
   },
@@ -39,6 +40,22 @@
       "preload-workbench.cjs",
       "companion-sandbox-paths.cjs",
       "embedded-browser-manager.cjs",
+      "dsh-host.cjs",
+      "dsh-workbench-views.cjs",
+      "dsh-pane-width.cjs",
+      "dsh-context-inject.cjs",
+      "dsh-workspace-tool.cjs",
+      "dsh-module-entries.cjs",
+      "dsh-composer-fill.cjs",
+      "connectionPackageBridge.cjs",
+      "host-primitive-bridge.cjs",
+      "shell-rooms.cjs",
+      "shell-leased-rooms.cjs",
+      "workspace-document-store.cjs",
+      "workshop-file-tree.cjs",
+      "workshop-media-protocol.cjs",
+      "workshop-folder-source.cjs",
+      "workspace-finger-hosts.cjs",
       "agent-store.cjs",
       "agent-body-host.cjs",
       "agent-tool-schemas.cjs",
@@ -72,6 +89,21 @@
       {
         "from": "local-companion-bundle",
         "to": "local-companion-bundle",
+        "filter": ["**/*"]
+      },
+      {
+        "from": "dsh-plugins",
+        "to": "dsh-plugins",
+        "filter": ["**/*"]
+      },
+      {
+        "from": "dsh-skills",
+        "to": "dsh-skills",
+        "filter": ["**/*"]
+      },
+      {
+        "from": "dsh-bundled",
+        "to": "dsh-bundled",
         "filter": ["**/*"]
       },
       {

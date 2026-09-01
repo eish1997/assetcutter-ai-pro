@@ -42,7 +42,7 @@ describe('AssetCardPreviewRenderer', () => {
         asset={makeAsset({
           assetKind: 'text',
           original: '',
-          textTitle: 'Prompt brief',
+          textTitle: '文本.md',
           textBody: 'A compact product shot prompt.',
         })}
         previewSrc=""
@@ -50,27 +50,31 @@ describe('AssetCardPreviewRenderer', () => {
       />
     );
 
-    expect(screen.getByText('Prompt brief')).toBeTruthy();
+    expect(screen.getByText('文本.md')).toBeTruthy();
     expect(screen.getByText('A compact product shot prompt.')).toBeTruthy();
+    expect(screen.getByText('MD')).toBeTruthy();
+    expect(screen.queryByText('Text')).toBeNull();
   });
 
-  it('renders video variants with a video badge', () => {
+  it('renders video variants with a format badge', () => {
     render(
       <AssetCardPreviewRenderer
         asset={makeAsset({
           displayKey: 'video_step',
-          results: { video_step: 'blob:video' },
+          textTitle: 'shot.mp4',
+          results: { video_step: 'https://cdn.example.com/shot.mp4' },
           resultOrder: ['video_step'],
           resultMeta: { video_step: { executedAt: 2, mediaKind: 'video' } },
         })}
-        previewSrc="blob:video"
+        previewSrc="https://cdn.example.com/shot.mp4"
         cacheKey="video"
       />
     );
 
-    expect(screen.getByText('Video')).toBeTruthy();
+    expect(screen.getByText('MP4')).toBeTruthy();
+    expect(screen.queryByText('Video')).toBeNull();
     const video = document.querySelector('video');
-    expect(video?.getAttribute('src')).toBe('blob:video');
+    expect(video?.getAttribute('src')).toBe('https://cdn.example.com/shot.mp4');
     expect(video?.autoplay).toBe(false);
     expect(video?.loop).toBe(false);
     expect(video?.getAttribute('preload')).toBe('metadata');
@@ -113,7 +117,8 @@ describe('AssetCardPreviewRenderer', () => {
       />
     );
 
-    expect(screen.getByText('glb + fbx')).toBeTruthy();
+    expect(screen.getByText('GLB')).toBeTruthy();
+    expect(screen.queryByText('glb + fbx')).toBeNull();
     expect(document.querySelector('img')?.getAttribute('src')).toBe('data:image/png;base64,POSTER');
   });
 
@@ -135,7 +140,7 @@ describe('AssetCardPreviewRenderer', () => {
 
     expect(captureWorkflowModelThumbnailDataUrl).not.toHaveBeenCalled();
     expect(document.querySelector('img')?.getAttribute('src')).toBe('data:image/jpeg;base64,THUMB');
-    expect(screen.getByText('fbx')).toBeTruthy();
+    expect(screen.getByText('FBX')).toBeTruthy();
   });
 
   it('shows a static placeholder (no live 3D) while thumbnail capture is pending', () => {
@@ -159,7 +164,7 @@ describe('AssetCardPreviewRenderer', () => {
     );
 
     expect(screen.queryByTestId('asset-card-model3d')).toBeNull();
-    expect(screen.getAllByText('fbx').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('FBX').length).toBeGreaterThan(0);
     // SVG "本地预览" placeholder must not be painted as the card image.
     expect(screen.queryByRole('img')).toBeNull();
   });
@@ -200,12 +205,14 @@ describe('AssetCardPreviewRenderer', () => {
         asset={makeAsset({
           assetKind: 'audio',
           original: 'blob:audio',
+          textTitle: 'take.wav',
         })}
         previewSrc=""
         cacheKey="audio"
       />
     );
 
-    expect(screen.getByText('Original audio')).toBeTruthy();
+    expect(screen.getByText('WAV')).toBeTruthy();
+    expect(screen.queryByText('Original audio')).toBeNull();
   });
 });

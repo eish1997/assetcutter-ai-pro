@@ -131,6 +131,17 @@ describe('workflowAssetCurrentDisplayIsTextChannel', () => {
     expect(workflowAssetCurrentDisplayIsTextChannel(makeTextAsset())).toBe(true);
   });
 
+  it('正文尚未 hydrate 时 original 仍是文本通道', () => {
+    expect(
+      workflowAssetCurrentDisplayIsTextChannel(
+        makeTextAsset({ textTitle: '文本.md', textBody: '' })
+      )
+    ).toBe(true);
+    expect(resolveWorkflowDisplaySlot(makeTextAsset({ textTitle: '文本.md', textBody: '' })).modality).toBe(
+      'text'
+    );
+  });
+
   it('仅有文本结果版本为文本通道', () => {
     expect(
       workflowAssetCurrentDisplayIsTextChannel(

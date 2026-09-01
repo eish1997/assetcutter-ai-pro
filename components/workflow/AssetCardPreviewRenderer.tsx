@@ -3,6 +3,7 @@ import React from 'react';
 import type { WorkflowAsset } from '../../types';
 import { resolveWorkflowStepModelUrls } from '../../services/workflowStepModels';
 import { resolveWorkflowAssetActiveVariant, resolveWorkflowAssetKind } from '../../services/workflowAssetVariants';
+import { workflowAssetFormatBadgeLabel } from '../../services/workflowAssetFormatBadge';
 import { captureWorkflowModelThumbnailDataUrl } from '../../services/workflowModelPreviewCapture';
 import { previewSrcCacheFingerprint } from '../../services/workflowImageThumb';
 import { WorkflowGridImage } from '../ProgressivePreviewImage';
@@ -122,7 +123,7 @@ function Badge({
   return (
     <div className="absolute left-2 top-2 z-[2] inline-flex max-w-[calc(100%-1rem)] items-center gap-1 rounded-md border border-white/12 bg-black/55 px-1.5 py-1 text-[9px] font-black uppercase leading-none text-white/85 shadow-sm backdrop-blur">
       <AppIcon name={icon} className="h-3 w-3 shrink-0" />
-      <span className="truncate">{label}</span>
+      {label ? <span className="truncate">{label}</span> : null}
     </div>
   );
 }
@@ -277,12 +278,13 @@ export const AssetCardPreviewRenderer: React.FC<AssetCardPreviewRendererProps> =
   const displaySrc = hasModelPreview
     ? rasterPreview
     : previewSrc || activeVariant?.posterUrl || activeVariant?.url || '';
+  const formatBadge = workflowAssetFormatBadgeLabel(asset, activeVariant);
 
   if (activeKind === 'text' && !displaySrc.trim()) {
     const { title, body } = readableText(asset, textDisplay);
     return (
       <div className="relative flex h-full w-full flex-col justify-start bg-[#141416] p-3 text-left">
-        <Badge icon="chat" label="Text" />
+        <Badge icon="chat" label={formatBadge} />
         <div className="h-5 shrink-0" aria-hidden />
         {title ? (
           <p className="mb-1.5 line-clamp-2 text-[11px] font-bold leading-snug text-gray-100">{title}</p>
@@ -299,11 +301,11 @@ export const AssetCardPreviewRenderer: React.FC<AssetCardPreviewRendererProps> =
   }
 
   if (activeKind === 'audio') {
-    return <AudioWavePlaceholder label={activeVariant?.label || 'Audio'} />;
+    return <AudioWavePlaceholder label={formatBadge} />;
   }
 
   if (activeKind === 'file') {
-    return <FilePlaceholder label={activeVariant?.label || 'File'} />;
+    return <FilePlaceholder label={formatBadge || '无预览'} />;
   }
 
   // Bust ProgressivePreview LRU when viewport poster bytes change but parent cacheKey is stable.
@@ -331,14 +333,12 @@ export const AssetCardPreviewRenderer: React.FC<AssetCardPreviewRendererProps> =
           onIntrinsicSize={onIntrinsicSize}
         />
       ) : hasModelPreview ? (
-        <FilePlaceholder label={activeVariant?.modelFormats?.filter(Boolean).join(' + ') || '3D'} />
+        <FilePlaceholder label={formatBadge || '无预览'} />
       ) : (
         <FilePlaceholder label="无预览" />
       )}
-      {activeKind === 'video' ? <Badge icon="video" label="Video" compact={compactBadges} /> : null}
-      {hasModelPreview ? (
-        <Badge icon="cube" label={activeVariant?.modelFormats?.filter(Boolean).join(' + ') || '3D'} compact={compactBadges} />
-      ) : null}
+      {activeKind === 'video' ? <Badge icon="video" label={formatBadge} compact={compactBadges} /> : null}
+      {hasModelPreview ? <Badge icon="cube" label={formatBadge} compact={compactBadges} /> : null}
       <div
         aria-hidden
         className="absolute inset-0 z-[1]"
