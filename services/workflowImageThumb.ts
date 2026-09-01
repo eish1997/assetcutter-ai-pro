@@ -1,7 +1,7 @@
 import { WORKFLOW_IMG_EMPTY_PLACEHOLDER, workflowSafeImgSrc } from './workflowImageDisplay';
 
-/** 缩略解码并发上限：避免首屏大量 `drawImage` 与大图 decode 抢主线程，拖慢当前视口内卡片 */
-const PREVIEW_THUMB_DECODE_MAX_PARALLEL = 1;
+/** 缩略解码并发上限：视口内几张可并行；过高会抢主线程，过低（1）会一张张跳 */
+const PREVIEW_THUMB_DECODE_MAX_PARALLEL = 4;
 
 let previewThumbDecodeRunning = 0;
 const previewThumbDecodeHighQueue: Array<() => void> = [];
@@ -46,19 +46,36 @@ export function runPreviewThumbDecode<T>(priority: PreviewThumbDecodePriority, f
 
 /**
  * 超过该长度的 data URL 走「微图 → 小图」渐进预览，**DOM 的 img 不直接绑原图**；原图仅在独立预览/灯箱使用。
- * 画布侧会解码一次原 data 用于生成缩略（客户端无法不读像素就缩放）。
+ * 已是网格 JPEG/WebP（见 `isReadyGridThumbDataUrl`）以及极短占位 data URL 直接绑 img。
  */
-/** 短于该长度的 data URL 视为极简内联图，可直接作 img src；其余一律渐进缩略、不在列表里挂原图 */
+/** 短于该长度的 data URL 视为极简内联图，可直接作 img src */
 export const PREVIEW_THUMB_MIN_DATA_URL_CHARS = 80;
+
+/**
+ * 宿主 256 JPEG / 已是网格缩略的 JPEG·WebP：直接绑 img，不要再进微图→小图串行队列。
+ * 约 120KB 二进制（data URL ~16 万字符）；更大的内联原图仍走渐进缩略。
+ */
+export const PREVIEW_THUMB_READY_JPEG_DATA_URL_MAX_CHARS = 160_000;
 
 /** @deprecated 使用 PREVIEW_THUMB_MIN_DATA_URL_CHARS */
 export const WORKFLOW_GRID_THUMB_DATA_URL_MIN_CHARS = PREVIEW_THUMB_MIN_DATA_URL_CHARS;
 
+/** 已是可直接上屏的网格 JPEG/WebP data URL（作坊 `getWorkshopThumb` 的 256 图） */
+export function isReadyGridThumbDataUrl(src: string): boolean {
+  const s = workflowSafeImgSrc(src);
+  if (!s.startsWith('data:')) return false;
+  if (s.length > PREVIEW_THUMB_READY_JPEG_DATA_URL_MAX_CHARS) return false;
+  return /^data:image\/(jpe?g|webp)/i.test(s);
+}
+
 export function shouldUsePreviewThumbnail(src: string): boolean {
   const s = workflowSafeImgSrc(src);
   if (!s || s === WORKFLOW_IMG_EMPTY_PLACEHOLDER) return false;
-  // data: short placeholders can bind directly; large data URLs need progressive thumbs.
-  if (s.startsWith('data:')) return s.length >= PREVIEW_THUMB_MIN_DATA_URL_CHARS;
+  if (s.startsWith('data:')) {
+    if (s.length < PREVIEW_THUMB_MIN_DATA_URL_CHARS) return false;
+    if (isReadyGridThumbDataUrl(s)) return false;
+    return true;
+  }
   // http(s)/blob: never bind full-res into grid cards (UV atlases black-screen GPUs).
   if (/^(https?:|blob:)/i.test(s)) return true;
   return false;

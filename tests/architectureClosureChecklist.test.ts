@@ -3,8 +3,7 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 const checklistPath = path.resolve(process.cwd(), 'docs/架构未收口清单.md');
-const agentSpecPath = path.resolve(process.cwd(), 'docs/本地伴侣-全局Agent规格.md');
-const copilotInfraPath = path.resolve(process.cwd(), 'docs/本地伴侣-Copilot基础设施改造文档.md');
+const shellCharterPath = path.resolve(process.cwd(), 'docs/架构宪章-本地壳大楼租户.md');
 
 describe('architecture closure checklist', () => {
   it('keeps only unfinished closure items in the active checklist', () => {
@@ -18,20 +17,17 @@ describe('architecture closure checklist', () => {
     expect(text).not.toContain('**已完成首版**');
   });
 
-  it('keeps the Copilot agent spec aligned to the shared first-party web session', () => {
-    const text = fs.readFileSync(agentSpecPath, 'utf8');
+  it('keeps first-party web session on a shared partition', () => {
+    const text = fs.readFileSync(shellCharterPath, 'utf8');
 
     expect(text).toContain('persist:assetcutter-team');
     expect(text).toContain('壳内登录一次');
-    expect(text).not.toContain('分 partition Cookie');
-    expect(text).not.toContain('双域登录');
-  });
-
-  it('keeps the Copilot infrastructure P0 validation account-gated', () => {
-    const text = fs.readFileSync(copilotInfraPath, 'utf8');
-
-    expect(text).toContain('persist:assetcutter-team');
     expect(text).toContain('共享登录态门槛');
     expect(text).toContain('壳内工作台登录后');
+    expect(text).not.toContain('分 partition Cookie');
+    expect(text).not.toContain('双域登录');
+    expect(text).toContain('技能');
+    expect(text).toContain('代码房间仍叫 `workflow`');
+    expect(text).not.toContain('左栏仍写 Workflow');
   });
 });

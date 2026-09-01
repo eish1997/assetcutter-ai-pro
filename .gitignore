@@ -28,6 +28,10 @@ dist-out-shell-tools/
 companion-desktop/local-companion-bundle/
 companion-desktop/build-constants.json
 companion-desktop/sam-local-bundled/
+companion-desktop/dsh-bundled/
+
+# Nested third-party clones (each is its own git repo; do not commit gitlinks)
+示例项目/gnm-photo-fitting-references/
 
 # local-companion 运行时导出 / Workflow 对象落盘（勿入库）
 local-companion/.assetcutter/

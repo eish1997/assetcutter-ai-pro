@@ -1,5 +1,5 @@
 /**
- * ParamSchema v1 服务端校验（与 docs/Script-Hub-开发规格.md 对齐）
+ * ParamSchema v1 服务端校验（历史规格见 docs/archived/Script-Hub-开发规格.md）
  */
 const KEY_RE = /^[a-zA-Z_][a-zA-Z0-9_]{0,63}$/;
 const ALLOWED_TYPES = new Set(['string', 'text', 'int', 'float', 'bool', 'enum', 'path']);
@@ -34,4 +34,21 @@ export function validateParamSchemaV1(schema) {
     }
   }
   return schema;
+}
+
+export function normalizeHostPrimitiveToolManifest(input) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) {
+    return { tier: 'composed', dependsOn: [], probeKind: 'bridge_connected' };
+  }
+  const tier = String(input.tier || input.hostPrimitiveTier || 'composed').trim() === 'primitive' ? 'primitive' : 'composed';
+  const dependsOn = Array.isArray(input.dependsOn) ? input.dependsOn.map(String).filter(Boolean) : [];
+  const probeKind = String(input.probeKind || 'bridge_connected').trim() || 'bridge_connected';
+  return {
+    tier,
+    dependsOn,
+    probeKind,
+    hostId: String(input.hostId || input.softwareId || '').trim(),
+    hostPrimitiveId: String(input.hostPrimitiveId || input.id || '').trim(),
+    hostPrimitiveLabel: String(input.hostPrimitiveLabel || input.label || input.name || '').trim(),
+  };
 }

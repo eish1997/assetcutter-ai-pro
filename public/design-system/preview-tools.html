@@ -1,0 +1,408 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AssetCutter · 工具架预览</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Plus+Jakarta+Sans:wght@400;500;600;800&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --ink: #0b0b0d;
+      --slate: #121214;
+      --graphite: #0f0f12;
+      --paper: #e8e6e1;
+      --quiet: #8b8b93;
+      --tungsten: #c9a36a;
+      --accent: var(--tungsten);
+      --accent-ink: #1a140c;
+      --metal: #1c1c20;
+      --metal-hi: #2a2a30;
+      --ok: #22c55e;
+      --warn: #eab308;
+      --titlebar: 30px;
+      --aisle: 132px;
+      --dsh: 260px;
+    }
+    html[data-accent="blue"] { --accent: #3b82f6; --accent-ink: #071018; }
+    * { box-sizing: border-box; }
+    html, body {
+      height: 100%;
+      margin: 0;
+      overflow: hidden;
+      background: var(--ink);
+      color: var(--paper);
+      font-family: "Plus Jakarta Sans", "PingFang SC", "Microsoft YaHei", sans-serif;
+      font-size: 12px;
+      -webkit-font-smoothing: antialiased;
+      color-scheme: dark;
+    }
+    button, input { font-family: inherit; }
+    .mono { font-family: "JetBrains Mono", ui-monospace, monospace; }
+    a { color: inherit; }
+
+    .app { height: 100%; display: flex; flex-direction: column; }
+    .titlebar {
+      height: var(--titlebar);
+      flex: 0 0 var(--titlebar);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 0 8px 0 10px;
+      background: var(--slate);
+      border-bottom: 1px solid rgba(255,255,255,0.06);
+      user-select: none;
+    }
+    .traffic { display: flex; gap: 6px; margin-right: 6px; }
+    .traffic i { width: 10px; height: 10px; border-radius: 50%; background: rgba(255,255,255,0.12); }
+    .rooms { display: flex; height: 100%; }
+    .room {
+      display: inline-flex;
+      align-items: center;
+      padding: 0 10px;
+      color: var(--quiet);
+      font-size: 11px;
+      text-decoration: none;
+      border: 0;
+      background: none;
+      cursor: pointer;
+    }
+    .room.is-current { color: var(--paper); font-weight: 600; position: relative; }
+    .room.is-current::after {
+      content: "";
+      position: absolute;
+      left: 10px; right: 10px; bottom: 0;
+      height: 1.5px;
+      background: var(--accent);
+    }
+    .spacer { flex: 1; }
+    .ghost, .solid {
+      border: 0;
+      cursor: pointer;
+      border-radius: 8px;
+      height: 22px;
+      font-size: 11px;
+      padding: 0 10px;
+    }
+    .ghost { background: rgba(255,255,255,0.05); color: var(--paper); box-shadow: inset 0 0 0 1px rgba(255,255,255,0.08); }
+    .solid { background: var(--accent); color: var(--accent-ink); font-weight: 600; }
+    .win { color: var(--quiet); font-size: 11px; margin-left: 6px; }
+
+    .body {
+      flex: 1;
+      min-height: 0;
+      display: grid;
+      grid-template-columns: var(--aisle) 1fr var(--dsh);
+    }
+
+    .aisle {
+      background: var(--slate);
+      border-right: 1px solid rgba(255,255,255,0.06);
+      padding: 16px 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+    .aisle-label {
+      font-size: 9px;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      color: var(--quiet);
+      padding: 0 8px 8px;
+    }
+    .bay {
+      display: block;
+      width: 100%;
+      text-align: left;
+      border: 0;
+      background: none;
+      color: var(--quiet);
+      font-size: 12px;
+      padding: 8px 8px;
+      cursor: pointer;
+      border-radius: 6px;
+    }
+    .bay:hover { color: var(--paper); background: rgba(255,255,255,0.04); }
+    .bay.is-on {
+      color: var(--paper);
+      font-weight: 600;
+      background: rgba(255,255,255,0.06);
+    }
+
+    .board {
+      position: relative;
+      min-width: 0;
+      overflow: auto;
+      background-color: #141416;
+      background-image: radial-gradient(circle at 50% 50%, rgba(0,0,0,0.55) 1.1px, transparent 1.4px);
+      background-size: 18px 18px;
+      background-position: 9px 9px;
+    }
+    .board::before {
+      content: "";
+      position: sticky;
+      top: 0;
+      display: block;
+      height: 48px;
+      background: linear-gradient(to bottom, rgba(20,20,22,0.94), rgba(20,20,22,0.55) 70%, transparent);
+      pointer-events: none;
+      z-index: 1;
+    }
+    .find {
+      position: absolute;
+      top: 12px;
+      left: 16px;
+      right: 16px;
+      z-index: 2;
+      height: 28px;
+      border: 0;
+      border-radius: 8px;
+      padding: 0 10px;
+      background: rgba(11,11,13,0.72);
+      color: var(--paper);
+      font-size: 11px;
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,0.08);
+    }
+    .find::placeholder { color: var(--quiet); }
+
+    .plates {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+      gap: 22px 18px;
+      padding: 20px 18px 28px;
+    }
+
+    .plate {
+      position: relative;
+      border: 0;
+      padding: 18px 14px 12px;
+      text-align: left;
+      cursor: pointer;
+      color: inherit;
+      background:
+        linear-gradient(180deg, var(--metal-hi) 0%, var(--metal) 38%, #151518 100%);
+      border-radius: 3px;
+      box-shadow:
+        inset 0 1px 0 rgba(255,255,255,0.08),
+        0 10px 18px rgba(0,0,0,0.35);
+      min-height: 148px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .plate::before,
+    .plate::after {
+      content: "";
+      position: absolute;
+      top: 7px;
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      background: #0b0b0d;
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,0.08);
+    }
+    .plate::before { left: 14px; }
+    .plate::after { right: 14px; }
+    .plate.ghost {
+      background: transparent;
+      box-shadow: none;
+      outline: 1px dashed rgba(255,255,255,0.16);
+      outline-offset: -1px;
+      color: var(--quiet);
+    }
+    .plate.ghost::before,
+    .plate.ghost::after { opacity: 0.35; }
+    .plate.is-on {
+      box-shadow:
+        inset 3px 0 0 var(--accent),
+        inset 0 1px 0 rgba(255,255,255,0.1),
+        0 12px 22px rgba(0,0,0,0.4);
+    }
+    .plate:focus-visible {
+      outline: none;
+      box-shadow:
+        inset 3px 0 0 var(--accent),
+        0 0 0 2px color-mix(in srgb, var(--accent) 40%, transparent);
+    }
+
+    .stamp {
+      font-size: 10px;
+      letter-spacing: 0.08em;
+      color: var(--quiet);
+      text-transform: uppercase;
+    }
+    .name { font-size: 15px; font-weight: 600; line-height: 1.25; padding-right: 8px; }
+    .desc {
+      font-size: 11px;
+      color: var(--quiet);
+      line-height: 1.45;
+      flex: 1;
+    }
+    .row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-top: 4px;
+    }
+    .mark {
+      font-size: 10px;
+      font-weight: 600;
+      color: var(--quiet);
+    }
+    .mark.warn { color: var(--warn); }
+    .mark.ok { color: var(--ok); }
+    .go {
+      border: 0;
+      background: none;
+      color: var(--paper);
+      font-size: 11px;
+      font-weight: 600;
+      padding: 0;
+      cursor: pointer;
+      letter-spacing: 0.04em;
+    }
+    .plate.is-on .go { color: var(--accent); }
+
+    .dsh {
+      background: var(--slate);
+      border-left: 1px solid rgba(255,255,255,0.06);
+      padding: 16px 16px 20px;
+      color: var(--quiet);
+      line-height: 1.55;
+    }
+    .dsh h2 {
+      margin: 0 0 10px;
+      font-size: 11px;
+      font-weight: 500;
+      color: var(--quiet);
+    }
+    .dsh strong { color: var(--paper); font-weight: 600; font-size: 16px; display: block; margin-bottom: 6px; }
+
+    @media (prefers-reduced-motion: reduce) {
+      * { transition: none !important; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header class="titlebar">
+      <div class="traffic" aria-hidden="true"><i></i><i></i><i></i></div>
+      <nav class="rooms">
+        <a class="room" href="preview.html">作坊</a>
+        <span class="room">复现</span>
+        <span class="room is-current">工具</span>
+        <span class="room">地图</span>
+      </nav>
+      <div class="spacer"></div>
+      <button class="ghost" type="button" data-accent-toggle>钨丝 / 蓝</button>
+      <button class="ghost" type="button">导入</button>
+      <button class="solid" type="button">找管家</button>
+    </header>
+
+    <div class="body">
+      <aside class="aisle" id="aisle">
+        <div class="aisle-label">货道</div>
+        <button class="bay is-on" type="button" data-src="all">全部</button>
+        <button class="bay" type="button" data-src="mine">我的</button>
+        <button class="bay" type="button" data-src="local">已上架</button>
+        <button class="bay" type="button" data-src="cloud">目录</button>
+        <div class="aisle-label" style="padding-top:16px">宿主</div>
+        <button class="bay" type="button" data-tag="maya">Maya</button>
+        <button class="bay" type="button" data-tag="image">图像</button>
+      </aside>
+
+      <section class="board">
+        <input class="find" id="q" type="search" placeholder="找一块牌…" autocomplete="off" />
+        <div class="plates" id="plates"></div>
+      </section>
+
+      <aside class="dsh">
+        <h2>这块牌</h2>
+        <strong id="selName">批量传递贴图</strong>
+        <div class="mono" id="selId" style="font-size:10px;margin-bottom:12px">transfer-maps-batch · v1.2.0</div>
+        <p id="selDesc" style="margin:0;font-size:12px">Maya 里一次排多组低模到高模贴图传递。</p>
+      </aside>
+    </div>
+  </div>
+
+  <script>
+    const tools = [
+      { id: "transfer-maps-batch", name: "批量传递贴图", ver: "1.2.0", desc: "Maya 里一次排多组低模到高模贴图传递。", tag: "maya", local: true, mine: false, mark: "", action: "打开" },
+      { id: "image-format-converter", name: "图片格式转换", ver: "1.0.3", desc: "本机批量转 png / jpg / webp。", tag: "image", local: true, mine: false, mark: "", action: "打开" },
+      { id: "uv-layout-pack", name: "UV 打包", ver: "0.9.1", desc: "按岛面积重排 UV，交给下一段烘焙。", tag: "maya", local: true, mine: false, mark: "可更新", action: "更新" },
+      { id: "seam-repair", name: "接缝修补", ver: "2.1.0", desc: "修平接缝色差，写回作坊文件。", tag: "image", local: false, mine: false, mark: "未上架", action: "下载" },
+      { id: "my-shelf-button", name: "我的货架按钮", ver: "0.1.0", desc: "自建空壳，还没有调用面。", tag: "authored", local: true, mine: true, mark: "自建", action: "打开" },
+      { id: "fbx-quick-export", name: "FBX 快出", ver: "1.4.0", desc: "按当前选择导出一档 FBX。", tag: "maya", local: false, mine: false, mark: "未上架", action: "下载" }
+    ];
+
+    let src = "all";
+    let tag = "";
+    let q = "";
+    let selected = tools[0].id;
+
+    const plates = document.getElementById("plates");
+    function list() {
+      const query = q.trim().toLowerCase();
+      return tools.filter((t) => {
+        if (src === "mine" && !t.mine) return false;
+        if (src === "local" && !t.local) return false;
+        if (src === "cloud" && t.local) return false;
+        if (tag && t.tag !== tag) return false;
+        if (!query) return true;
+        return (t.name + t.id + t.desc + t.tag).toLowerCase().includes(query);
+      });
+    }
+
+    function render() {
+      plates.innerHTML = "";
+      list().forEach((t) => {
+        const el = document.createElement("button");
+        el.type = "button";
+        el.className = "plate" + (t.local ? "" : " ghost") + (t.id === selected ? " is-on" : "");
+        el.innerHTML =
+          '<div class="stamp mono">' + t.id + "</div>" +
+          '<div class="name">' + t.name + "</div>" +
+          '<div class="desc">' + t.desc + "</div>" +
+          '<div class="row">' +
+            '<span class="mark' + (t.mark === "可更新" ? " warn" : t.mark === "未上架" ? "" : " ok") + '">' + (t.mark || "v" + t.ver) + "</span>" +
+            '<span class="go">' + t.action + " →</span>" +
+          "</div>";
+        el.addEventListener("click", () => {
+          selected = t.id;
+          document.getElementById("selName").textContent = t.name;
+          document.getElementById("selId").textContent = t.id + " · v" + t.ver;
+          document.getElementById("selDesc").textContent = t.desc;
+          render();
+        });
+        plates.appendChild(el);
+      });
+    }
+
+    document.getElementById("aisle").addEventListener("click", (ev) => {
+      const btn = ev.target.closest(".bay");
+      if (!btn) return;
+      document.querySelectorAll(".bay").forEach((b) => b.classList.remove("is-on"));
+      btn.classList.add("is-on");
+      src = btn.dataset.src || "all";
+      tag = btn.dataset.tag || "";
+      if (btn.dataset.tag) src = "all";
+      render();
+    });
+    document.getElementById("q").addEventListener("input", (ev) => {
+      q = ev.target.value;
+      render();
+    });
+    document.querySelector("[data-accent-toggle]").addEventListener("click", () => {
+      if (document.documentElement.getAttribute("data-accent") === "blue") {
+        document.documentElement.removeAttribute("data-accent");
+      } else {
+        document.documentElement.setAttribute("data-accent", "blue");
+      }
+    });
+
+    render();
+  </script>
+</body>
+</html>

@@ -3,15 +3,19 @@ import React, {
   useCallback,
   useEffect,
   useImperativeHandle,
-  useMemo,
   useRef,
   useState,
 } from 'react';
+import { CustomDropdown } from '../ui/CustomDropdown';
 import { clampWorkflowTextBody } from '../../services/workflowTextAsset';
 import {
   WORKFLOW_TEXT_ASSET_BODY_MAX_CHARS,
   workflowTextLengthTier,
 } from '../../services/workflowTextLimits';
+import { LIGHTBOX_FLAT_WELL_INSET } from '../../services/imagePreviewFitViewport';
+import {
+  WORKFLOW_IMAGE_PREVIEW_RAIL_DIVIDER,
+} from './workflowSectionUiConstants';
 
 export type WorkflowTextLightboxCenterHandle = {
   flush: () => void;
@@ -25,7 +29,36 @@ type Props = {
   onAddToComposeInput?: (text: string) => void;
 };
 
-type TextViewMode = 'read' | 'edit' | 'structure';
+type TextViewMode = 'read' | 'edit';
+
+const COMPOSE_FOCUS =
+  'outline-none focus-visible:ring-2 focus-visible:ring-white/20 focus-visible:ring-offset-2 focus-visible:ring-offset-[#0f0f12]';
+
+/** 与右上角预览栏同族，实色底 + 实色描边（不用 white/10 透边）。 */
+const TEXT_CHROME_RAIL =
+  'flex w-full min-w-0 flex-wrap items-center gap-1 rounded-xl border border-[#2e2e32] bg-[#0f0f12] px-1.5 py-1 shadow-xl';
+
+const TEXT_BTN = [
+  'inline-flex h-7 shrink-0 items-center justify-center gap-1 rounded-md px-2.5',
+  'text-[10px] font-semibold whitespace-nowrap transition-colors',
+  'bg-white/[0.04] text-gray-400 ring-1 ring-white/[0.07] hover:bg-white/[0.08] hover:text-gray-200',
+  COMPOSE_FOCUS,
+].join(' ');
+
+const TEXT_BTN_ACTIVE = [
+  'inline-flex h-7 shrink-0 items-center justify-center gap-1 rounded-md px-2.5',
+  'text-[10px] font-semibold whitespace-nowrap transition-colors',
+  'bg-white/[0.16] text-white ring-1 ring-white/[0.22]',
+  COMPOSE_FOCUS,
+].join(' ');
+
+const PAPER =
+  'w-full rounded-xl border border-[#2e2e32] bg-[#121214] px-8 py-10 text-[#e8e6e1]';
+
+const EXPORT_OPTIONS = [
+  { value: 'txt', label: 'TXT' },
+  { value: 'md', label: 'MD' },
+] as const;
 
 function normalizeTitle(title: string): string {
   return title.trim() || '文本资产';
@@ -80,24 +113,7 @@ const WorkflowTextLightboxCenter = forwardRef<WorkflowTextLightboxCenterHandle, 
 
     const lengthTier = workflowTextLengthTier(draftBody.length);
     const titleText = normalizeTitle(title);
-    const stats = useMemo(() => {
-      const trimmed = draftBody.trim();
-      const paragraphs = trimmed ? trimmed.split(/\n\s*\n/g).filter((part) => part.trim()).length : 0;
-      const lines = draftBody ? draftBody.split(/\r?\n/).length : 0;
-      const cjkChars = (draftBody.match(/[\u3400-\u9fff]/g) || []).length;
-      const words = (draftBody.match(/[A-Za-z0-9_'-]+/g) || []).length + cjkChars;
-      return { chars: draftBody.length, lines, paragraphs, words };
-    }, [draftBody]);
-    const structureRows = useMemo(
-      () => [
-        ['标题', titleText],
-        ['字符', stats.chars.toLocaleString()],
-        ['词数', stats.words.toLocaleString()],
-        ['段落', stats.paragraphs.toLocaleString()],
-        ['行数', stats.lines.toLocaleString()],
-      ],
-      [stats.chars, stats.lines, stats.paragraphs, stats.words, titleText]
-    );
+    const isEmpty = !draftBody.trim();
 
     const copyFullText = useCallback(() => {
       const text = `${titleText}\n\n${draftBody}`.trim();
@@ -118,136 +134,121 @@ const WorkflowTextLightboxCenter = forwardRef<WorkflowTextLightboxCenterHandle, 
 
     return (
       <div
-        className="pointer-events-auto relative flex h-full w-full min-h-0 min-w-0 flex-col overflow-hidden"
+        className="pointer-events-auto relative h-full w-full min-h-0 min-w-0"
         onMouseDownCapture={(e) => e.stopPropagation()}
         onPointerDownCapture={(e) => e.stopPropagation()}
       >
-        <div className="absolute left-1/2 top-4 z-10 flex w-[min(calc(100%-2rem),56rem)] -translate-x-1/2 shrink-0 flex-wrap items-center gap-2 rounded-xl border border-white/10 bg-[#0f0f12]/95 px-2.5 py-2 shadow-xl ring-1 ring-white/[0.05]">
-          <div className="min-w-0 flex-1">
-            <p className="truncate text-[13px] font-bold text-gray-100">{titleText}</p>
-            <p
-              className={`mt-0.5 text-[10px] tabular-nums ${
-                lengthTier === 'confirm'
-                  ? 'text-amber-300'
-                  : lengthTier === 'warn'
-                    ? 'text-amber-500/90'
-                    : 'text-gray-500'
-              }`}
-            >
-              {draftBody.length.toLocaleString()} / {WORKFLOW_TEXT_ASSET_BODY_MAX_CHARS.toLocaleString()}
-              {lengthTier === 'warn' ? ' / Long' : null}
-              {lengthTier === 'confirm' ? ' / Confirm before queue' : null}
-            </p>
-          </div>
-          <div className="flex shrink-0 items-center gap-1 rounded-lg bg-white/[0.04] p-1">
-            {(['read', 'edit', 'structure'] as const).map((key) => (
-              <button
-                key={key}
-                type="button"
-                onClick={() => setMode(key)}
-                className={[
-                  'h-7 rounded-md px-2 text-[10px] font-bold transition-colors outline-none focus-visible:ring-2 focus-visible:ring-blue-500/60',
-                  mode === key ? 'bg-blue-600 text-white' : 'text-gray-400 hover:bg-white/[0.08] hover:text-gray-200',
-                ].join(' ')}
-              >
-                {key === 'read' ? '阅读' : key === 'edit' ? '编辑' : '结构'}
-              </button>
-            ))}
-          </div>
-          <div className="flex shrink-0 items-center gap-1">
-            <button
-              type="button"
-              onClick={copyFullText}
-              className="h-8 rounded-lg border border-white/10 bg-white/[0.04] px-2 text-[10px] font-bold text-gray-300 hover:bg-white/[0.08] hover:text-white"
-            >
-              复制全文
-            </button>
-            {onAddToComposeInput ? (
-              <button
-                type="button"
-                onClick={addToComposeInput}
-                className="h-8 rounded-lg border border-white/10 bg-white/[0.04] px-2 text-[10px] font-bold text-gray-300 hover:bg-white/[0.08] hover:text-white"
-              >
-                加入输入框
-              </button>
-            ) : null}
-            <button
-              type="button"
-              onClick={downloadTxt}
-              className="h-8 rounded-lg border border-white/10 bg-white/[0.04] px-2 text-[10px] font-bold text-gray-300 hover:bg-white/[0.08] hover:text-white"
-            >
-              TXT
-            </button>
-            <button
-              type="button"
-              onClick={downloadMd}
-              className="h-8 rounded-lg border border-white/10 bg-white/[0.04] px-2 text-[10px] font-bold text-gray-300 hover:bg-white/[0.08] hover:text-white"
-            >
-              MD
-            </button>
-          </div>
-        </div>
-
-        {mode !== 'structure' ? (
-          <div
-            className="absolute left-1/2 top-[5.5rem] z-10 grid w-[min(calc(100%-2rem),56rem)] -translate-x-1/2 shrink-0 grid-cols-4 gap-px overflow-hidden rounded-lg border border-white/10 bg-white/[0.04] text-center text-[10px] text-gray-400 shadow-lg"
-            aria-label="文本统计"
-          >
-            <div className="bg-[#101114]/95 px-2 py-2">
-              <strong className="text-gray-200">{stats.chars.toLocaleString()}</strong> 字符
-            </div>
-            <div className="bg-[#101114]/95 px-2 py-2">
-              <strong className="text-gray-200">{stats.words.toLocaleString()}</strong> 词数
-            </div>
-            <div className="bg-[#101114]/95 px-2 py-2">
-              <strong className="text-gray-200">{stats.paragraphs.toLocaleString()}</strong> 段落
-            </div>
-            <div className="bg-[#101114]/95 px-2 py-2">
-              <strong className="text-gray-200">{stats.lines.toLocaleString()}</strong> 行数
-            </div>
-          </div>
-        ) : null}
-
-        {mode === 'edit' ? (
-          <div className="min-h-0 flex-1 overflow-auto px-6 py-36" data-image-preview-scroll>
-            <textarea
-              value={draftBody}
-              onChange={(e) => setDraftBody(clampWorkflowTextBody(e.target.value))}
-              className="mx-auto block min-h-full w-full max-w-4xl resize-none rounded-xl border border-white/10 bg-[#101114]/70 px-6 py-5 font-mono text-[13px] leading-relaxed text-gray-100 outline-none focus:border-blue-400/50 focus:ring-1 focus:ring-blue-500"
-              placeholder="在此输入文字内容..."
-              spellCheck={false}
-            />
-          </div>
-        ) : mode === 'structure' ? (
-          <div className="min-h-0 flex-1 overflow-auto px-6 py-36" data-image-preview-scroll>
-            <div className="flex min-h-full items-center justify-center">
-              <div className="w-full max-w-3xl">
-                <div className="overflow-hidden rounded-xl border border-white/10">
-                  {structureRows.map(([label, value]) => (
-                    <div key={label} className="grid grid-cols-[5rem_1fr] border-b border-white/10 last:border-b-0">
-                      <div className="bg-white/[0.04] px-3 py-2 text-[11px] font-bold text-gray-400">{label}</div>
-                      <div className="min-w-0 px-3 py-2 text-[11px] text-gray-200">{value}</div>
-                    </div>
-                  ))}
-                </div>
-                <div className="mt-3 rounded-xl border border-white/10 bg-white/[0.03] p-3">
-                  <p className="text-[10px] font-bold uppercase text-gray-500">预览</p>
-                  <p className="mt-2 whitespace-pre-wrap break-words text-[12px] leading-relaxed text-gray-300">
-                    {draftBody.trim() || '空白文本'}
+        {/*
+          与 WorkspaceQuickComposeBar.resetToDefaultPosition 同一中轴：
+          left = floor((vw - w) / 2)。禁止 left:50% + translateX(-50%)：
+          transform 一旦被吃掉，左缘会钉在中线，整块趴在右半屏。
+        */}
+        <div
+          className="pointer-events-auto fixed z-[5] flex w-[min(65ch,calc(100vw-8rem))] flex-col gap-2 overflow-auto"
+          data-image-preview-scroll
+          style={{
+            left: 0,
+            right: 0,
+            marginLeft: 'auto',
+            marginRight: 'auto',
+            transform: 'none',
+            top: LIGHTBOX_FLAT_WELL_INSET.top,
+            bottom: LIGHTBOX_FLAT_WELL_INSET.bottom,
+          }}
+        >
+              <div className={TEXT_CHROME_RAIL} role="toolbar" aria-label="文本预览">
+                <div className="flex min-w-0 flex-1 items-baseline gap-2 px-1.5">
+                  <p className="truncate text-[12px] font-semibold text-[#e8e6e1]">{titleText}</p>
+                  <p
+                    className={`shrink-0 font-mono text-[10px] tabular-nums ${
+                      lengthTier === 'confirm'
+                        ? 'text-amber-300'
+                        : lengthTier === 'warn'
+                          ? 'text-amber-500/90'
+                          : 'text-gray-500'
+                    }`}
+                  >
+                    {draftBody.length.toLocaleString()} / {WORKFLOW_TEXT_ASSET_BODY_MAX_CHARS.toLocaleString()}
+                    {lengthTier === 'warn' ? ' / Long' : null}
+                    {lengthTier === 'confirm' ? ' / Confirm before queue' : null}
                   </p>
                 </div>
+                <div className={WORKFLOW_IMAGE_PREVIEW_RAIL_DIVIDER} aria-hidden />
+                <div className="flex shrink-0 items-center gap-1">
+                  {(['read', 'edit'] as const).map((key) => (
+                    <button
+                      key={key}
+                      type="button"
+                      onClick={() => setMode(key)}
+                      className={mode === key ? TEXT_BTN_ACTIVE : TEXT_BTN}
+                    >
+                      {key === 'read' ? '阅读' : '编辑'}
+                    </button>
+                  ))}
+                </div>
+                <div className={WORKFLOW_IMAGE_PREVIEW_RAIL_DIVIDER} aria-hidden />
+                <div className="flex shrink-0 items-center gap-1">
+                  <button type="button" onClick={copyFullText} className={TEXT_BTN}>
+                    复制全文
+                  </button>
+                  {onAddToComposeInput ? (
+                    <button type="button" onClick={addToComposeInput} className={TEXT_BTN}>
+                      加入输入框
+                    </button>
+                  ) : null}
+                  <CustomDropdown
+                    value=""
+                    placeholder="导出"
+                    triggerAriaLabel="导出"
+                    options={[...EXPORT_OPTIONS]}
+                    onChange={(fmt) => {
+                      if (fmt === 'txt') downloadTxt();
+                      if (fmt === 'md') downloadMd();
+                    }}
+                    triggerClassName={`${TEXT_BTN} min-w-[3.75rem] justify-between`}
+                    listDensity="compact"
+                    listClassName="border border-[#2e2e32] bg-[#0f0f12] shadow-xl"
+                    portalZIndex={{ backdrop: 2700, list: 2701 }}
+                  />
+                </div>
               </div>
-            </div>
-          </div>
-        ) : (
-          <div className="min-h-0 flex-1 overflow-auto px-6 py-36" data-image-preview-scroll>
-            <div className="flex min-h-full items-center justify-center">
-              <article className="w-full max-w-3xl whitespace-pre-wrap break-words text-[14px] leading-7 text-gray-100">
-                {draftBody.trim() || '空白文本'}
-              </article>
-            </div>
-          </div>
-        )}
+
+              {mode === 'edit' ? (
+                <textarea
+                  value={draftBody}
+                  onChange={(e) => setDraftBody(clampWorkflowTextBody(e.target.value))}
+                  className={[
+                    PAPER,
+                    'min-h-[20rem] resize-none font-mono text-[15px] leading-[1.65]',
+                    'caret-white selection:bg-white/20 selection:text-[#e8e6e1]',
+                    'placeholder:text-gray-500',
+                    COMPOSE_FOCUS,
+                  ].join(' ')}
+                  placeholder="在此输入文字内容..."
+                  spellCheck={false}
+                />
+              ) : (
+                <article
+                  className={[
+                    PAPER,
+                    'whitespace-pre-wrap break-words text-[16px] leading-[1.7]',
+                    'selection:bg-white/20 selection:text-[#e8e6e1]',
+                  ].join(' ')}
+                >
+                  {isEmpty ? (
+                    <button
+                      type="button"
+                      onClick={() => setMode('edit')}
+                      className={`text-[16px] font-medium text-gray-500 hover:text-gray-300 ${COMPOSE_FOCUS}`}
+                    >
+                      点这里开始写
+                    </button>
+                  ) : (
+                    draftBody
+                  )}
+                </article>
+              )}
+        </div>
       </div>
     );
   }

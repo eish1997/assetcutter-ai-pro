@@ -163,6 +163,7 @@ function createAgentStore(deps) {
       copilotCollapsed: false,
       defaultSessionId: DEFAULT_SESSION_ID,
       mcpEnabled: false,
+      legacyCopilotDebug: false,
       mcpPort: 19120,
       mcpToken: null,
       codexCommand: process.platform === 'win32' ? 'codex.cmd' : 'codex',
@@ -191,6 +192,7 @@ function createAgentStore(deps) {
           : defaults.copilotWidth,
         copilotCollapsed: Boolean(j.copilotCollapsed),
         mcpEnabled: Boolean(j.mcpEnabled),
+        legacyCopilotDebug: Boolean(j.legacyCopilotDebug),
         mcpPort: Number.isFinite(Number(j.mcpPort))
           ? Math.min(65535, Math.max(1024, Number(j.mcpPort)))
           : defaults.mcpPort,

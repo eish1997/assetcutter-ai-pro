@@ -70,6 +70,9 @@ export function classifyAiGatewayFallbackError(error) {
   if (code === 'AI_GATEWAY_PROVIDER_KEY_MISSING' || /no enabled .* api key/i.test(message)) {
     return { reason: 'provider_key_missing', retryable: true, status, policyKind: 'on_error' };
   }
+  if (code === 'AI_GATEWAY_UPSTREAM_EMPTY_IMAGE') {
+    return { reason: 'upstream_empty_image', retryable: true, status: status || 502, policyKind: 'on_error' };
+  }
   // 客户端/契约校验错误不可重试（勿被下方 network unavailable 文本规则误伤）
   if (error?.name === 'AiGatewayValidationError') {
     return { reason: 'validation_error', retryable: false, status, policyKind: 'none' };

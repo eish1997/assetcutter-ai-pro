@@ -41,11 +41,15 @@ AI-assisted asset workflow workbench (workspace, capability presets, experimenta
 - [x] Companion connection cards: software treated as unknown by default; `softwareBridgeRegistry` + verified strategies; local versions on the card
 - [x] Companion Workflow objects (draft / version / pin / repair); Maya run uses the connected Command Port from the connection page (no repo-root smoke as the product path)
 - [x] Companion Copilot product UI: runtime awareness bar, task cards, desktop observe
+- [x] Companion desktop shell: dsh concierge, map, tools shelf, skill wall, blank rooms, workshop library folder source
+- [x] Unified lightbox center routing (image / text / media) plus workshop multi-format preview
+- [x] Design tokens in `design-system/` (page overrides for workshop / shell / tools)
 - [ ] Removed: standalone dialog page, texture pattern extract page, prompt-effect analysis page
 
 ## Sidebar / pages
 
 - **Workspace**: main asset canvas + function sidebar; content slot switches assets ??presets; Project Agent dock (right)
+- **Companion shell**: workshop, skills, tools, map, blank rooms; dsh on the right
 - **Settings**: API keys, sync, companion
 - **Admin** (staff): opens `/admin`
 - **Dev log** (staff, below Admin): R2 push summaries in plain Chinese; day thermal receipt PNG; `npm run dev-log:post-push` / `dev-log:rewrite`

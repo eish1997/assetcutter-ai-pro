@@ -4,6 +4,7 @@ import {
   applyAiGatewayAdapterResult,
   jobPatchFromAdapterResult,
   normalizeAiGatewayAdapterResult,
+  throwIfAdapterPlanTerminalFailed,
   validateAiGatewayAdapterResult,
   validateJobAgainstAdapterContract,
 } from '../server/ai-gateway/adapter-result.js';
@@ -60,7 +61,7 @@ describe('AiGatewayAdapterResult contract', () => {
     );
     expect(result.status).toBe('failed');
     expect(patch.status).toBe('failed');
-    expect(patch.error?.code).toBe('AI_GATEWAY_ADAPTER_RESULT_INVALID');
+    expect(patch.error?.code).toBe('AI_GATEWAY_UPSTREAM_EMPTY_IMAGE');
     expect(patch.error?.failureReason || patch.metadata?.gatewayFailure).toBeTruthy();
   });
 
@@ -73,7 +74,29 @@ describe('AiGatewayAdapterResult contract', () => {
     });
     const finalized = await finalizeAiGatewayTerminalPlan(bad, store);
     expect(finalized.job.status).toBe('failed');
-    expect(finalized.job.error?.code || finalized.job.metadata?.gatewayFailure?.code).toMatch(/ADAPTER_RESULT_INVALID|ARTIFACT/);
+    expect(finalized.job.error?.code || finalized.job.metadata?.gatewayFailure?.code).toMatch(
+      /ADAPTER_RESULT_INVALID|ARTIFACT|UPSTREAM_EMPTY/
+    );
+  });
+
+  it('throwIfAdapterPlanTerminalFailed throws so executor can retry', () => {
+    const plan = {
+      job: {
+        status: 'failed',
+        provider: '302ai',
+        error: {
+          code: 'AI_GATEWAY_UPSTREAM_EMPTY_IMAGE',
+          message: 'empty',
+          failureReason: {
+            code: 'AI_GATEWAY_UPSTREAM_EMPTY_IMAGE',
+            retryable: true,
+            userMessage: '生图服务返回了空结果，请重试一次',
+          },
+        },
+      },
+      route: { providerId: '302ai', adapterId: '302ai-openai' },
+    };
+    expect(() => throwIfAdapterPlanTerminalFailed(plan, { providerId: '302ai' })).toThrow(/empty|空结果/i);
   });
 
   it('applyAiGatewayAdapterResult writes contract-shaped succeeded jobs', async () => {

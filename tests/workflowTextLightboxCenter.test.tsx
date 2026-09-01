@@ -64,7 +64,7 @@ describe('WorkflowTextLightboxCenter', () => {
     expect(onPersist).toHaveBeenCalledWith({ textTitle: 'Brief', textBody: 'After' });
   });
 
-  it('shows structure statistics and triggers downloads', () => {
+  it('exports via dropdown and has no structure mode', () => {
     render(
       <WorkflowTextLightboxCenter
         resetKey="a:original"
@@ -74,13 +74,29 @@ describe('WorkflowTextLightboxCenter', () => {
       />
     );
 
-    fireEvent.click(screen.getByText('结构'));
-    expect(screen.getByText('段落')).toBeTruthy();
-    expect(screen.getAllByText('2').length).toBeGreaterThan(0);
+    expect(screen.queryByText('结构')).toBeNull();
+    expect(screen.queryByLabelText('文本统计')).toBeNull();
 
-    fireEvent.click(screen.getByText('TXT'));
-    fireEvent.click(screen.getByText('MD'));
+    fireEvent.click(screen.getByRole('button', { name: '导出' }));
+    fireEvent.click(screen.getByRole('button', { name: 'TXT' }));
+    fireEvent.click(screen.getByRole('button', { name: '导出' }));
+    fireEvent.click(screen.getByRole('button', { name: 'MD' }));
     expect(URL.createObjectURL).toHaveBeenCalledTimes(2);
     expect(URL.revokeObjectURL).toHaveBeenCalledTimes(2);
+  });
+
+  it('empty read mode offers a write prompt that enters edit', () => {
+    render(
+      <WorkflowTextLightboxCenter
+        resetKey="a:original"
+        title="Brief"
+        body="   "
+        onPersist={vi.fn()}
+      />
+    );
+
+    expect(screen.queryByText('空白文本')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: '点这里开始写' }));
+    expect(screen.getByRole('textbox')).toBeTruthy();
   });
 });

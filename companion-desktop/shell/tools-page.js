@@ -267,6 +267,20 @@
       entry.hasCapabilityCloud = true;
       entry.capabilityPackageId = pkg.id;
       entry.capabilityCloudPackage = pkg;
+      const hostId = String(manifest.hostId || manifest.softwareId || '').trim();
+      if (hostId) {
+        const hostTag = 'host:' + hostId;
+        entry.tags = Array.isArray(entry.tags) ? entry.tags.slice() : [];
+        if (!entry.tags.includes(hostTag)) entry.tags.push(hostTag);
+      }
+      const dependsOn = Array.isArray(manifest.dependsOn) ? manifest.dependsOn.map(String).filter(Boolean) : [];
+      if (dependsOn.length) {
+        const hint = '依赖：' + dependsOn.join('、');
+        if (!String(entry.description || '').includes(hint)) {
+          entry.description = String(entry.description || '').trim();
+          entry.description = entry.description ? entry.description + ' · ' + hint : hint;
+        }
+      }
       entry.hasCloud = true;
       entry.semverCloud = pkg.version || entry.semverCloud;
       entry.displaySemver = entry.semverLocal || entry.semverCloud || entry.displaySemver || '—';
@@ -543,12 +557,14 @@
         }
       }
       tags.sort((a, b) => a.localeCompare(b, 'zh-CN'));
+      const hostTags = tags.filter((tag) => String(tag).startsWith('host:'));
+      const otherTags = tags.filter((tag) => !String(tag).startsWith('host:'));
       host.innerHTML = '';
-      for (const tag of tags) {
+      const renderChip = (tag) => {
         const btn = document.createElement('button');
         btn.type = 'button';
         btn.className = 'tools-filter-chip' + (this.filterTag === tag ? ' active' : '');
-        btn.textContent = tag;
+        btn.textContent = String(tag).startsWith('host:') ? String(tag).slice(5) : tag;
         btn.setAttribute('data-filter-tag', tag);
         btn.addEventListener('click', () => {
           this.filterTag = this.filterTag === tag ? '' : tag;
@@ -556,7 +572,15 @@
           this.renderGrid();
         });
         host.appendChild(btn);
+      };
+      for (const tag of hostTags) renderChip(tag);
+      if (hostTags.length && otherTags.length) {
+        const sep = document.createElement('span');
+        sep.className = 'tools-filter-sep';
+        sep.setAttribute('aria-hidden', 'true');
+        host.appendChild(sep);
       }
+      for (const tag of otherTags) renderChip(tag);
     },
 
     renderGrid() {
@@ -570,9 +594,18 @@
         grid.appendChild(
           Object.assign(document.createElement('p'), {
             className: 'tools-empty',
-            textContent: this.mergedEntries.length ? '无匹配工具' : '暂无工具，请检查发行目录或安装示例',
+            textContent: this.mergedEntries.length ? '无匹配工具' : '暂无工具。可以找管家看货架并按需要安装。',
           }),
         );
+        if (!this.mergedEntries.length) {
+          const ask = document.createElement('button');
+          ask.type = 'button';
+          ask.className = 'connections-primary-btn';
+          ask.id = 'btnToolsAskButlerEmpty';
+          ask.textContent = '找管家';
+          ask.addEventListener('click', () => void this.openToolsWithButler());
+          grid.appendChild(ask);
+        }
         return;
       }
 
@@ -1078,22 +1111,6 @@
         return;
       }
       const r = await shell.openToolWindow(toolId);
-      if (r && r.ok && typeof window.__acOpenCopilotObjectSession === 'function') {
-        const entry = (this.mergedEntries || []).find((e) => e && e.id === toolId) || {};
-        const context = await this.fetchToolCapabilityContext(shell, entry, toolId);
-        const session = context && context.session && typeof context.session === 'object' ? context.session : {};
-        const capabilityId = String(entry.capabilityPackageId || toolId || '').trim();
-        void window.__acOpenCopilotObjectSession({
-          type: 'capability',
-          id: session.id || capabilityId,
-          sessionId: session.sessionId || '',
-          label: session.label || entry.name || toolId,
-          contextPrompt:
-            context && typeof context.contextPrompt === 'string'
-              ? context.contextPrompt
-              : this.fallbackToolCapabilityContext(toolId),
-        });
-      }
       if (!r || !r.ok) window.alert('无法打开工具窗口：' + (r && r.error ? r.error : '未知错误'));
     },
 
@@ -1144,11 +1161,26 @@
       return true;
     },
 
+    openToolsWithButler() {
+      const shell = this._shell;
+      if (!shell || typeof shell.openDshHandoff !== 'function') {
+        this.setStatusHint('当前壳版本还不支持管家办事入口。');
+        return Promise.resolve({ ok: false });
+      }
+      return shell.openDshHandoff({
+        domain: 'tools',
+        surface: 'tools',
+        label: '工具架',
+        composerText: '请看货架并按需要安装。',
+      });
+    },
+
     bind(shell) {
       this._shell = shell;
       $('btnToolsRefresh')?.addEventListener('click', () => void this.reloadAll(shell));
       $('btnToolsImportZip')?.addEventListener('click', () => void this.importZip(shell));
       $('btnToolsScaffold')?.addEventListener('click', () => void this.scaffoldMine(shell));
+      $('btnToolsAskButler')?.addEventListener('click', () => void this.openToolsWithButler());
       window.addEventListener('assetcutter:capability-created', (ev) => {
         const detail = ev && ev.detail && typeof ev.detail === 'object' ? ev.detail : {};
         if (detail.type !== 'tool') return;

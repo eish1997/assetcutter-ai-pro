@@ -29,6 +29,17 @@ const { viewsForShellView, DSH_SESSION_PARTITION, isDshPartitionAllowed, shellVi
 const { isLeasedRoomView, normalizeResidentShellView } = require('./shell-rooms.cjs');
 const { createLeasedRoomStore } = require('./shell-leased-rooms.cjs');
 const {
+  ROOM_SESSION_PARTITION,
+  ensureEmptyRoom,
+  removeRoomDir,
+  exportRoomZip,
+  unpackRoomZip,
+  validateRoomZip,
+  roomDir,
+  parseRoomUrl,
+  attachRoomCompartmentProtocol,
+} = require('./shell-room-compartment.cjs');
+const {
   readDshPaneWidthFromSettings,
   withDshPaneWidth,
   readDshPaneCollapsedFromSettings,
@@ -293,6 +304,10 @@ const shellToolWorkspaceExpandedBounds = new WeakMap();
 let workbenchBrowserView = null;
 /** @type {import('electron').BrowserView | null} */
 let dshBrowserView = null;
+/** @type {import('electron').BrowserView | null} */
+let roomBrowserView = null;
+/** @type {string | null} */
+let roomBrowserViewRoomId = null;
 /** @type {{ start: Function, stop: Function } | null} */
 let dshHostController = null;
 /** @type {string | null} */
@@ -325,6 +340,13 @@ const dshWorkspaceTools = createDshWorkspaceTools({
   getShellView: () => shellMainProcessActiveView,
   syncConnectedHosts: () => syncConnectedHostsFromCompanion(),
   companionApiRequest: (method, pathname, body, opts) => companionApiRequest(method, pathname, body, opts),
+  pickDirectory: async () => {
+    const win = mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined;
+    return dialog.showOpenDialog(win || undefined, {
+      title: '选择工作区',
+      properties: ['openDirectory'],
+    });
+  },
   runGenerate: async (command) => {
     try {
       const r = await invokeWorkbenchBridge(
@@ -446,6 +468,8 @@ const AUTO_CODEX_SETUP_ARG = '--assetcutter-codex-one-click-setup';
 const SHELL_TITLEBAR_HEIGHT = 30;
 /** 与 `shell/index.html` 一致：工作台顶栏已移除，BrowserView 从标题栏下缘起算 */
 const SHELL_WORKBENCH_TOOLBAR_HEIGHT = 0;
+/** 空房地板工具条高度，只内缩房间 BrowserView，不抬右栏管家 */
+const SHELL_ROOM_TOOLBAR_HEIGHT = 48;
 /** @type {string} */
 let companionStatusNote = '伴侣运行中';
 /** @type {string | null} */
@@ -2309,13 +2333,17 @@ function normalizeScriptHubApiUrl(raw) {
 
 function detachAllEmbeddedBrowserViews() {
   if (!mainWindow || mainWindow.isDestroyed()) return;
-  detachBrowserViews(mainWindow, [workbenchBrowserView, dshBrowserView].filter(Boolean));
+  detachBrowserViews(mainWindow, [workbenchBrowserView, dshBrowserView, roomBrowserView].filter(Boolean));
 }
 
 function syncEmbeddedBrowserViews(nextView) {
   if (!mainWindow || mainWindow.isDestroyed()) return;
-  const wanted = viewsForShellView(nextView, { workbench: workbenchBrowserView, dsh: dshBrowserView });
-  const known = [workbenchBrowserView, dshBrowserView].filter(Boolean);
+  const wanted = viewsForShellView(nextView, {
+    workbench: workbenchBrowserView,
+    dsh: dshBrowserView,
+    room: roomBrowserView,
+  });
+  const known = [workbenchBrowserView, dshBrowserView, roomBrowserView].filter(Boolean);
   layoutShellChrome();
   const attached = mainWindow.getBrowserViews();
   for (const view of known) {
@@ -2359,6 +2387,25 @@ function applyShellRoomFinger(view) {
   if (view === 'workbench') return;
   if (!shellViewShowsDsh(view)) return;
   workspaceDocumentStore.dispatch({ type: 'set_finger', finger: { surface: fingerSurfaceForShellView(view) } });
+  if (!isLeasedRoomView(view)) return;
+  try {
+    const room = leasedRoomStore.list().find((row) => row.id === view);
+    const title = (room && room.title) || view;
+    writeDshHandoff({
+      dir: dshInjectDir(),
+      payload: {
+        domain: 'room',
+        kind: 'blank_room',
+        surface: view,
+        roomId: view,
+        label: title,
+        lastDefaults: { roomId: view, title },
+      },
+    });
+    refreshDshFingerInject(workspaceDocumentStore.getSnapshot());
+  } catch (e) {
+    console.warn('[dsh-handoff-room]', e instanceof Error ? e.message : e);
+  }
 }
 
 function normalizeShellViewName(view) {
@@ -2383,6 +2430,10 @@ async function restoreEmbeddedViewForShellState(view) {
     return attachWorkbenchBrowserView();
   }
   syncEmbeddedBrowserViews(v);
+  if (isLeasedRoomView(v)) {
+    const room = await attachRoomBrowserView(v);
+    if (!room.ok) return room;
+  }
   return attachDshForCurrentShellView();
 }
 
@@ -2402,9 +2453,21 @@ async function transitionMainProcessShellView(nextView, opts) {
     return { ok: true, view: v };
   }
 
+  if (isLeasedRoomView(prev) && !isLeasedRoomView(v)) {
+    try {
+      clearDshHandoff({ dir: dshInjectDir() });
+    } catch {
+      /* ignore */
+    }
+  }
+
   let r = { ok: true };
   if (v === 'workbench') {
     r = await attachWorkbenchBrowserView();
+  } else if (isLeasedRoomView(v)) {
+    syncEmbeddedBrowserViews(v);
+    r = await attachRoomBrowserView(v);
+    if (r.ok) r = await attachDshForCurrentShellView();
   } else {
     syncEmbeddedBrowserViews(v);
     r = await attachDshForCurrentShellView();
@@ -5284,6 +5347,19 @@ function layoutShellChrome() {
   if (shellMainProcessActiveView === 'workbench' && workbenchBrowserView) {
     workbenchBrowserView.setBounds(dual.workbench);
   }
+  if (roomBrowserView) {
+    if (isLeasedRoomView(shellMainProcessActiveView)) {
+      const inset = SHELL_ROOM_TOOLBAR_HEIGHT;
+      roomBrowserView.setBounds({
+        x: dual.workbench.x,
+        y: dual.workbench.y + inset,
+        width: dual.workbench.width,
+        height: Math.max(80, dual.workbench.height - inset),
+      });
+    } else {
+      roomBrowserView.setBounds({ x: 0, y: 0, width: 0, height: 0 });
+    }
+  }
   if (showDsh && dshBrowserView) {
     dshBrowserView.setBounds(dual.dsh);
   }
@@ -5568,6 +5644,108 @@ function ensureDshBrowserView() {
   return view;
 }
 
+function isRoomBrowserNavigationAllowed(url) {
+  const u = String(url || '');
+  if (!u || u === 'about:blank') return true;
+  const id = String(roomBrowserViewRoomId || '');
+  if (!isLeasedRoomView(id)) return false;
+  if (u.startsWith('file:')) {
+    try {
+      const { fileURLToPath } = require('node:url');
+      return isPathInside(roomDir(app.getPath('userData'), id), fileURLToPath(u));
+    } catch {
+      return false;
+    }
+  }
+  if (u.startsWith('ac-room:')) {
+    const hit = parseRoomUrl(u);
+    return Boolean(hit && hit.roomId === id);
+  }
+  return false;
+}
+
+function ensureRoomBrowserView() {
+  if (roomBrowserView) return roomBrowserView;
+  const view = new BrowserView({
+    webPreferences: {
+      partition: ROOM_SESSION_PARTITION,
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  });
+  try {
+    view.setBounds({ x: 0, y: 0, width: 0, height: 0 });
+  } catch {
+    /* ignore */
+  }
+  try {
+    if (typeof view.setAutoResize === 'function') {
+      view.setAutoResize({ width: false, height: false, horizontal: false, vertical: false });
+    }
+  } catch {
+    /* ignore */
+  }
+  try {
+    view.setBackgroundColor('#0b0b0d');
+  } catch {
+    /* ignore */
+  }
+  const wc = view.webContents;
+  wc.setWindowOpenHandler(() => ({ action: 'deny' }));
+  wc.on('will-navigate', (event, url) => {
+    if (!isRoomBrowserNavigationAllowed(url)) event.preventDefault();
+  });
+  wc.on('will-redirect', (event, url) => {
+    if (!isRoomBrowserNavigationAllowed(url)) event.preventDefault();
+  });
+  roomBrowserView = view;
+  return view;
+}
+
+async function attachRoomBrowserView(roomId) {
+  const id = String(roomId || '');
+  if (!isLeasedRoomView(id)) return { ok: false, error: 'invalid_room_id' };
+  if (!mainWindow || mainWindow.isDestroyed()) return { ok: false, error: 'no_window' };
+  let made;
+  try {
+    made = ensureEmptyRoom({ userData: app.getPath('userData'), roomId: id });
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+  const view = ensureRoomBrowserView();
+  roomBrowserViewRoomId = id;
+  layoutShellChrome();
+  const alreadyAttached = mainWindow.getBrowserViews().indexOf(view) >= 0;
+  if (!alreadyAttached) mainWindow.addBrowserView(view);
+  layoutShellChrome();
+  const wc = view.webContents;
+  const entry = made && made.entry;
+  if (!entry) return { ok: false, error: 'room_entry_missing' };
+  let needLoad = true;
+  try {
+    const cur = wc.getURL();
+    if (cur && cur.startsWith('file:') && isRoomBrowserNavigationAllowed(cur) && roomBrowserViewRoomId === id) {
+      try {
+        const { fileURLToPath } = require('node:url');
+        if (path.normalize(fileURLToPath(cur)) === path.normalize(entry)) needLoad = false;
+      } catch {
+        needLoad = true;
+      }
+    }
+  } catch {
+    needLoad = true;
+  }
+  if (needLoad) {
+    try {
+      await wc.loadFile(entry);
+    } catch (e) {
+      return { ok: false, error: e instanceof Error ? e.message : String(e) };
+    }
+  }
+  return { ok: true, view: id };
+}
+
 function dshInjectDir() {
   return path.join(app.getPath('userData'), 'dsh-inject');
 }
@@ -5600,7 +5778,7 @@ function refreshDshFingerInject(snapshot) {
   }
 }
 
-async function fillDshComposerText(text) {
+async function fillDshComposerText(text, opts) {
   const composerText = String(text || '').trim();
   if (!composerText) return { ok: false, error: 'empty' };
   try {
@@ -5608,7 +5786,7 @@ async function fillDshComposerText(text) {
   } catch (e) {
     console.warn('[dsh-composer-suggested]', e instanceof Error ? e.message : e);
   }
-  const script = buildFillDshComposerScript(composerText);
+  const script = buildFillDshComposerScript(composerText, { submit: Boolean(opts && opts.submit) });
   for (let attempt = 0; attempt < 16; attempt += 1) {
     if (!isDshBrowserViewLive()) {
       await sleep(120);
@@ -5639,25 +5817,30 @@ async function applyDshHandoff(payload) {
   const body = payload && typeof payload === 'object' ? payload : {};
   const domain = String(body.domain || body.kind || 'connection').trim() || 'connection';
   const composerText = String(body.composerText || body.suggestedMessage || '').trim();
-  try {
-    clearDshHandoff({ dir: dshInjectDir() });
-    clearComposerSuggested({ dir: dshInjectDir() });
-    writeDshHandoff({ dir: dshInjectDir(), payload: body });
-  } catch (e) {
-    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  const submitOnly = Boolean(body.submitOnly);
+  if (!submitOnly) {
+    try {
+      clearDshHandoff({ dir: dshInjectDir() });
+      clearComposerSuggested({ dir: dshInjectDir() });
+      writeDshHandoff({ dir: dshInjectDir(), payload: body });
+    } catch (e) {
+      return { ok: false, error: e instanceof Error ? e.message : String(e) };
+    }
+    refreshDshFingerInject(workspaceDocumentStore.getSnapshot());
+    saveShellSettings({ dshPaneCollapsed: false });
+    notifyShellChromeLayout();
+    try {
+      await attachDshForCurrentShellView();
+    } catch (e) {
+      console.warn('[dsh-handoff]', e instanceof Error ? e.message : e);
+    }
+    layoutShellChrome();
+    notifyShellChromeLayout();
   }
-  refreshDshFingerInject(workspaceDocumentStore.getSnapshot());
-  saveShellSettings({ dshPaneCollapsed: false });
-  notifyShellChromeLayout();
-  try {
-    await attachDshForCurrentShellView();
-  } catch (e) {
-    console.warn('[dsh-handoff]', e instanceof Error ? e.message : e);
-  }
-  layoutShellChrome();
-  notifyShellChromeLayout();
-  const fill = composerText ? await fillDshComposerText(composerText) : { ok: true, skipped: true };
-  return { ok: true, domain, composerText, fill };
+  const fill = composerText
+    ? await fillDshComposerText(composerText, { submit: submitOnly || Boolean(body.submit) })
+    : { ok: true, skipped: true };
+  return { ok: true, domain, composerText, fill, submitOnly };
 }
 
 function overlayConnectedHosts(drafts, opts) {
@@ -6046,6 +6229,8 @@ function openMainWindow() {
   mainWindow.on('closed', () => {
     workbenchBrowserView = null;
     dshBrowserView = null;
+    roomBrowserView = null;
+    roomBrowserViewRoomId = null;
     shellMainProcessActiveView = 'workbench';
     mainWindow = null;
   });
@@ -6720,17 +6905,69 @@ if (!gotLock) {
   ipcMain.handle('shell-leased-rooms-list', () => ({ ok: true, rooms: leasedRoomStore.list() }));
   ipcMain.handle('shell-leased-rooms-create', () => {
     const room = leasedRoomStore.create();
+    try {
+      ensureEmptyRoom({ userData: app.getPath('userData'), roomId: room.id, title: room.title });
+    } catch (e) {
+      leasedRoomStore.remove(room.id);
+      return { ok: false, error: e instanceof Error ? e.message : String(e) };
+    }
     return { ok: true, room, rooms: leasedRoomStore.list() };
   });
   ipcMain.handle('shell-leased-rooms-remove', async (_e, payload) => {
     const id = String((payload && payload.id) || '');
     const rooms = leasedRoomStore.remove(id);
     if (!rooms) return { ok: false, error: 'not_found' };
+    try {
+      removeRoomDir({ userData: app.getPath('userData'), roomId: id });
+    } catch {
+      /* ignore */
+    }
     const switched = shellMainProcessActiveView === id;
     if (switched) {
       await transitionMainProcessShellView('workbench', { notifyRenderer: true });
     }
     return { ok: true, rooms, removedId: id, switchedToWorkbench: switched };
+  });
+  ipcMain.handle('shell-room-export-zip', async (_e, payload) => {
+    const roomId = String((payload && payload.roomId) || '');
+    const destPath = String((payload && payload.destPath) || '').trim();
+    if (!isLeasedRoomView(roomId)) return { ok: false, error: 'invalid_room_id' };
+    if (!destPath) return { ok: false, error: 'missing_path' };
+    const room = leasedRoomStore.list().find((row) => row.id === roomId);
+    if (!room) return { ok: false, error: 'not_found' };
+    try {
+      const buf = exportRoomZip({
+        userData: app.getPath('userData'),
+        roomId,
+        title: room.title,
+      });
+      await fsp.writeFile(destPath, buf);
+      return { ok: true, path: destPath };
+    } catch (e) {
+      return { ok: false, error: e instanceof Error ? e.message : String(e) };
+    }
+  });
+  ipcMain.handle('shell-room-import-zip', async (_e, payload) => {
+    const zipPath = String((payload && payload.zipPath) || '').trim();
+    if (!zipPath) return { ok: false, error: 'missing_path' };
+    let room = null;
+    try {
+      const buf = await fsp.readFile(zipPath);
+      const { manifest } = validateRoomZip(buf);
+      room = leasedRoomStore.create({ title: manifest.title });
+      unpackRoomZip(buf, roomDir(app.getPath('userData'), room.id));
+      return { ok: true, room, rooms: leasedRoomStore.list() };
+    } catch (e) {
+      if (room && room.id) {
+        leasedRoomStore.remove(room.id);
+        try {
+          removeRoomDir({ userData: app.getPath('userData'), roomId: room.id });
+        } catch {
+          /* ignore */
+        }
+      }
+      return { ok: false, error: e instanceof Error ? e.message : String(e) };
+    }
   });
   ipcMain.handle('shell-leased-room-context-menu', (event, payload) => {
     const id = String((payload && payload.id) || '');
@@ -6745,6 +6982,11 @@ if (!gotLock) {
           void (async () => {
             const rooms = leasedRoomStore.remove(id);
             if (!rooms) return;
+            try {
+              removeRoomDir({ userData: app.getPath('userData'), roomId: id });
+            } catch {
+              /* ignore */
+            }
             if (shellMainProcessActiveView === id) {
               await transitionMainProcessShellView('workbench', { notifyRenderer: true });
             }
@@ -7379,6 +7621,25 @@ if (!gotLock) {
     return { ok: true, brains: out, activeBrainId: agentSessionService ? agentSessionService.getBrainId() : 'stub' };
   });
 
+  ipcMain.handle('shell-room-reload', async () => {
+    const id = shellMainProcessActiveView;
+    if (!isLeasedRoomView(id)) return { ok: false, error: 'not_in_room' };
+    if (
+      roomBrowserView &&
+      roomBrowserView.webContents &&
+      !roomBrowserView.webContents.isDestroyed() &&
+      roomBrowserViewRoomId === id
+    ) {
+      try {
+        roomBrowserView.webContents.reload();
+        return { ok: true };
+      } catch (e) {
+        return { ok: false, error: e instanceof Error ? e.message : String(e) };
+      }
+    }
+    return attachRoomBrowserView(id);
+  });
+
   ipcMain.handle('shell-workbench-reload', () => {
     if (!workbenchBrowserView || shellMainProcessActiveView !== 'workbench') {
       return { ok: false, error: 'not_visible' };
@@ -7435,13 +7696,31 @@ if (!gotLock) {
   });
 
   ipcMain.handle('shell-pick-path', async (event, opts) => {
-    const pick = opts && opts.pick === 'file' ? 'file' : 'directory';
+    const o = opts && typeof opts === 'object' ? opts : {};
+    const pick = o.pick === 'file' ? 'file' : 'directory';
     const win = BrowserWindow.fromWebContents(event.sender) || mainWindow;
     const properties =
       pick === 'file' ? ['openFile'] : ['openDirectory', 'createDirectory'];
+    const title =
+      typeof o.title === 'string' && o.title.trim()
+        ? o.title.trim()
+        : pick === 'file'
+          ? '选择文件'
+          : '选择文件夹';
+    const filters = Array.isArray(o.filters)
+      ? o.filters
+          .map((f) => ({
+            name: typeof f?.name === 'string' && f.name.trim() ? f.name.trim() : 'Files',
+            extensions: Array.isArray(f?.extensions)
+              ? f.extensions.map((x) => String(x || '').replace(/^\./, '').trim()).filter(Boolean)
+              : [],
+          }))
+          .filter((f) => f.extensions.length > 0)
+      : [];
     const r = await dialog.showOpenDialog(win || undefined, {
-      title: pick === 'file' ? '选择文件' : '选择文件夹',
+      title,
       properties,
+      ...(filters.length ? { filters } : {}),
     });
     if (r.canceled || !r.filePaths[0]) return { ok: false, canceled: true };
     return { ok: true, path: r.filePaths[0] };
@@ -7855,6 +8134,10 @@ if (!gotLock) {
     attachWorkshopMediaProtocol(protocol, null, {
       isAllowedAbs: (abs) => workshopFileTreeHost.isAllowedMediaAbs(abs),
       session: session.fromPartition(FIRST_PARTY_WEB_PARTITION),
+    });
+    attachRoomCompartmentProtocol(null, {
+      getUserDataPath: () => app.getPath('userData'),
+      session: session.fromPartition(ROOM_SESSION_PARTITION),
     });
     if (process.platform === 'darwin' && app.dock) {
       app.dock.hide();

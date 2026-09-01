@@ -1,0 +1,522 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AssetCutter · 视觉预览</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Plus+Jakarta+Sans:wght@400;500;600;800&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --ink: #0b0b0d;
+      --slate: #121214;
+      --graphite: #0f0f12;
+      --paper: #e8e6e1;
+      --quiet: #8b8b93;
+      --tungsten: #c9a36a;
+      --accent: var(--tungsten);
+      --accent-ink: #1a140c;
+      --ok: #22c55e;
+      --warn: #eab308;
+      --bad: #f87171;
+      --titlebar: 30px;
+      --tree: 232px;
+      --dsh: 280px;
+    }
+    html[data-accent="blue"] {
+      --accent: #3b82f6;
+      --accent-ink: #071018;
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      height: 100%;
+      margin: 0;
+      overflow: hidden;
+      background: var(--ink);
+      color: var(--paper);
+      font-family: "Plus Jakarta Sans", "PingFang SC", "Microsoft YaHei", sans-serif;
+      font-size: 12px;
+      -webkit-font-smoothing: antialiased;
+      color-scheme: dark;
+    }
+    button { font-family: inherit; }
+    .mono { font-family: "JetBrains Mono", ui-monospace, monospace; }
+
+    .app {
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .titlebar {
+      height: var(--titlebar);
+      flex: 0 0 var(--titlebar);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 0 8px 0 10px;
+      background: var(--slate);
+      border-bottom: 1px solid rgba(255,255,255,0.06);
+      user-select: none;
+    }
+    .traffic {
+      display: flex;
+      gap: 6px;
+      margin-right: 6px;
+    }
+    .traffic i {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: rgba(255,255,255,0.12);
+    }
+    .rooms {
+      display: flex;
+      height: 100%;
+      gap: 2px;
+    }
+    .room {
+      position: relative;
+      border: 0;
+      background: transparent;
+      color: var(--quiet);
+      font-size: 11px;
+      padding: 0 10px;
+      cursor: pointer;
+      text-decoration: none;
+      display: inline-flex;
+      align-items: center;
+      transition: color 160ms ease;
+    }
+    .room:hover { color: var(--paper); }
+    .room.is-current { color: var(--paper); font-weight: 600; }
+    .room.is-current::after {
+      content: "";
+      position: absolute;
+      left: 8px;
+      right: 8px;
+      bottom: 0;
+      height: 1.5px;
+      background: var(--accent);
+    }
+    .room:focus-visible {
+      outline: none;
+      box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--accent) 45%, transparent);
+    }
+    .spacer { flex: 1; }
+    .ghost, .solid, .chip {
+      border: 0;
+      cursor: pointer;
+      border-radius: 12px;
+      transition: background 160ms ease, box-shadow 160ms ease, color 160ms ease;
+    }
+    .ghost {
+      background: rgba(255,255,255,0.05);
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,0.08);
+      color: var(--paper);
+      font-size: 11px;
+      padding: 3px 10px;
+      height: 22px;
+    }
+    .ghost:hover { background: rgba(255,255,255,0.1); }
+    .ghost:focus-visible, .solid:focus-visible, .chip:focus-visible, .card:focus-visible, .tree-item:focus-visible {
+      outline: none;
+      box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 45%, transparent);
+    }
+    .solid {
+      background: var(--accent);
+      color: var(--accent-ink);
+      font-size: 11px;
+      font-weight: 600;
+      padding: 3px 12px;
+      height: 22px;
+    }
+    .solid:hover { filter: brightness(1.06); }
+    .win {
+      display: flex;
+      gap: 2px;
+      margin-left: 4px;
+      color: var(--quiet);
+    }
+    .win span {
+      width: 36px;
+      text-align: center;
+      font-size: 11px;
+    }
+
+    .body {
+      flex: 1;
+      min-height: 0;
+      display: grid;
+      grid-template-columns: var(--tree) 1fr var(--dsh);
+    }
+
+    .tree {
+      background: var(--slate);
+      border-right: 1px solid rgba(255,255,255,0.06);
+      padding: 8px 6px;
+      overflow: auto;
+    }
+    .tree-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 4px 8px 8px;
+      color: var(--quiet);
+      font-size: 10px;
+      letter-spacing: 0.04em;
+    }
+    .tree-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      width: 100%;
+      border: 0;
+      background: transparent;
+      color: var(--paper);
+      font-size: 11.5px;
+      padding: 6px 8px 6px 10px;
+      border-radius: 8px;
+      cursor: pointer;
+      text-align: left;
+      position: relative;
+      transition: background 160ms ease;
+    }
+    .tree-item:hover { background: rgba(255,255,255,0.05); }
+    .tree-item.is-active { font-weight: 600; }
+    .tree-item.is-active::before {
+      content: "";
+      position: absolute;
+      left: 2px;
+      top: 7px;
+      bottom: 7px;
+      width: 2px;
+      border-radius: 2px;
+      background: var(--accent);
+    }
+    .tree-item svg { width: 13px; height: 13px; color: var(--quiet); flex: 0 0 auto; }
+    .tree-item.child { padding-left: 26px; color: var(--quiet); }
+    .count {
+      margin-left: auto;
+      font-size: 10px;
+      color: var(--quiet);
+      font-family: "JetBrains Mono", ui-monospace, monospace;
+    }
+
+    .wall-wrap {
+      background: var(--graphite);
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+    }
+    .wall-bar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 10px;
+      border-bottom: 1px solid rgba(255,255,255,0.05);
+    }
+    .path {
+      color: var(--quiet);
+      font-size: 11px;
+    }
+    .dd { position: relative; }
+    .dd-list {
+      display: none;
+      position: absolute;
+      right: 0;
+      top: calc(100% + 6px);
+      min-width: 148px;
+      padding: 6px;
+      border-radius: 12px;
+      background: var(--graphite);
+      border: 1px solid rgba(255,255,255,0.1);
+      box-shadow: 0 18px 40px rgba(0,0,0,0.45), inset 0 0 0 1px rgba(255,255,255,0.05);
+      z-index: 20;
+    }
+    .dd.open .dd-list { display: flex; flex-direction: column; gap: 4px; }
+    .dd-opt {
+      width: 100%;
+      border: 0;
+      cursor: pointer;
+      text-align: left;
+      border-radius: 6px;
+      padding: 6px 8px;
+      font-size: 9px;
+      font-weight: 600;
+      background: rgba(255,255,255,0.04);
+      color: #d1d5db;
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,0.07);
+    }
+    .dd-opt:hover { background: rgba(255,255,255,0.08); }
+    .dd-opt.is-on {
+      background: rgba(255,255,255,0.16);
+      color: #fff;
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,0.22);
+    }
+
+    .wall {
+      flex: 1;
+      overflow: auto;
+      padding: 10px;
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(148px, 1fr));
+      gap: 8px;
+      align-content: start;
+    }
+    .card {
+      border: 0;
+      padding: 0;
+      background: transparent;
+      cursor: pointer;
+      text-align: left;
+      border-radius: 12px;
+      color: inherit;
+    }
+    .thumb {
+      aspect-ratio: 1;
+      border-radius: 12px;
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,0.08);
+      overflow: hidden;
+      position: relative;
+    }
+    .card.is-on .thumb {
+      box-shadow:
+        0 0 0 1.5px var(--accent),
+        0 0 18px color-mix(in srgb, var(--accent) 28%, transparent);
+    }
+    .meta {
+      padding: 7px 4px 2px;
+    }
+    .name {
+      font-size: 11px;
+      font-weight: 500;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .ext {
+      margin-top: 2px;
+      font-size: 10px;
+      color: var(--quiet);
+    }
+
+    .dsh {
+      background: var(--slate);
+      border-left: 1px solid rgba(255,255,255,0.06);
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+    }
+    .dsh-head {
+      height: 36px;
+      display: flex;
+      align-items: center;
+      padding: 0 12px;
+      color: var(--quiet);
+      font-size: 11px;
+      border-bottom: 1px solid rgba(255,255,255,0.05);
+    }
+    .dsh-body {
+      flex: 1;
+      padding: 14px 14px 18px;
+      color: var(--quiet);
+      line-height: 1.55;
+    }
+    .dsh-body strong { color: var(--paper); font-weight: 600; }
+    .swatches {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 8px;
+      margin-top: 16px;
+    }
+    .swatch {
+      border-radius: 10px;
+      overflow: hidden;
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,0.08);
+    }
+    .swatch b {
+      display: block;
+      height: 28px;
+    }
+    .swatch span {
+      display: block;
+      padding: 6px 7px 7px;
+      font-size: 9px;
+      color: var(--quiet);
+    }
+
+    /* studio-like material posters — the goods carry the color */
+    .m-copper { background:
+      radial-gradient(120% 80% at 20% 10%, #ffd7a8 0%, transparent 42%),
+      radial-gradient(90% 70% at 80% 90%, #5a2410 0%, transparent 50%),
+      linear-gradient(145deg, #c47a3a, #6b2e16 55%, #1a0c08); }
+    .m-cloth { background:
+      repeating-linear-gradient(90deg, #2a3344 0 6px, #334056 6px 12px),
+      linear-gradient(#4a5d78, #1c2430); }
+    .m-marble { background:
+      radial-gradient(40% 30% at 70% 20%, rgba(255,255,255,0.35), transparent 50%),
+      linear-gradient(120deg, #d9d4cc, #9a948c 40%, #ece8e1 70%, #6f6a64); }
+    .m-plastic { background:
+      radial-gradient(circle at 30% 25%, #8ec5ff, #1d4e89 42%, #071525); }
+    .m-gold { background:
+      radial-gradient(80% 50% at 30% 20%, #fff1c2, transparent 45%),
+      linear-gradient(160deg, #e6c36a, #8a5a12 60%, #2a1806); }
+    .m-wood { background:
+      repeating-linear-gradient(92deg, #5c3418 0 3px, #7a4a24 3px 7px);
+      filter: saturate(0.9); }
+    .m-rubber { background:
+      radial-gradient(circle at 40% 30%, #3a3a40, #111114 62%); }
+    .m-emissive { background:
+      radial-gradient(circle at 50% 60%, #ffe08a, #c45a12 38%, #140804 72%); }
+    .m-chrome { background:
+      linear-gradient(135deg, #f5f5f5, #8d8d92 35%, #fafafa 50%, #4a4a50 70%, #d0d0d4); }
+    .m-oxide { background:
+      radial-gradient(60% 50% at 70% 80%, #2f6b4a, transparent 55%),
+      linear-gradient(#6a7b4a, #1f2a18); }
+    .m-silk { background:
+      linear-gradient(120deg, #5b1d3a, #c47aa0 40%, #2a1020 80%); }
+    .m-navy { background:
+      radial-gradient(circle at 20% 20%, #4b6ea8, #0b1220 55%); }
+
+    @media (prefers-reduced-motion: reduce) {
+      * { transition: none !important; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header class="titlebar">
+      <div class="traffic" aria-hidden="true"><i></i><i></i><i></i></div>
+      <nav class="rooms" aria-label="房间">
+        <button class="room is-current" type="button">作坊</button>
+        <button class="room" type="button">工作流</button>
+        <a class="room" href="preview-tools.html">工具</a>
+        <button class="room" type="button">地图</button>
+      </nav>
+      <div class="spacer"></div>
+      <button class="ghost" type="button" data-accent-toggle>钨丝 / 蓝</button>
+      <button class="ghost" type="button">指定库目录</button>
+      <button class="solid" type="button">送出</button>
+      <div class="win" aria-hidden="true"><span>—</span><span>□</span><span>×</span></div>
+    </header>
+
+    <div class="body">
+      <aside class="tree">
+        <div class="tree-head">本机文件夹</div>
+        <button class="tree-item" type="button">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 7h6l2 2h10v10H3z"/></svg>
+          浏览器资产
+          <span class="count">12</span>
+        </button>
+        <button class="tree-item is-active" type="button">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 7h6l2 2h10v10H3z"/></svg>
+          Props
+          <span class="count">86</span>
+        </button>
+        <button class="tree-item child" type="button">Weapons</button>
+        <button class="tree-item child" type="button">Furniture</button>
+        <button class="tree-item child" type="button">Vehicles</button>
+        <button class="tree-item" type="button">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 7h6l2 2h10v10H3z"/></svg>
+          Materials
+          <span class="count">204</span>
+        </button>
+        <button class="tree-item" type="button">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 7h6l2 2h10v10H3z"/></svg>
+          HDRI
+          <span class="count">31</span>
+        </button>
+      </aside>
+
+      <section class="wall-wrap">
+        <div class="wall-bar">
+          <span class="path mono">F:\Libs\Props</span>
+          <div class="spacer"></div>
+          <div class="dd" id="sortDd">
+            <button class="ghost" type="button" id="sortBtn" aria-haspopup="listbox">名称 ▲</button>
+            <div class="dd-list" role="listbox">
+              <button class="dd-opt is-on" type="button">名称</button>
+              <button class="dd-opt" type="button">修改时间</button>
+              <button class="dd-opt" type="button">类型</button>
+            </div>
+          </div>
+        </div>
+        <div class="wall" id="wall"></div>
+      </section>
+
+      <aside class="dsh">
+        <div class="dsh-head">管家</div>
+        <div class="dsh-body">
+          选中 <strong id="selName">brass_handle</strong>
+          <div class="mono" style="margin-top:6px;font-size:10px">brass_handle.fbx</div>
+          <p style="margin:14px 0 0;font-size:11px">货在墙上发光。壳保持石墨。</p>
+          <div class="swatches">
+            <div class="swatch"><b style="background:#0b0b0d"></b><span>ink</span></div>
+            <div class="swatch"><b style="background:#121214"></b><span>slate</span></div>
+            <div class="swatch"><b style="background:#0f0f12"></b><span>graphite</span></div>
+            <div class="swatch"><b style="background:#e8e6e1"></b><span>paper</span></div>
+            <div class="swatch"><b style="background:#8b8b93"></b><span>quiet</span></div>
+            <div class="swatch"><b id="accentSwatch" style="background:#c9a36a"></b><span>accent</span></div>
+          </div>
+        </div>
+      </aside>
+    </div>
+  </div>
+
+  <script>
+    const items = [
+      ["brass_handle", "fbx", "m-copper"],
+      ["wool_throw", "png", "m-cloth"],
+      ["statue_plinth", "glb", "m-marble"],
+      ["bottle_clear", "glb", "m-plastic"],
+      ["coin_stack", "fbx", "m-gold"],
+      ["oak_plank", "jpg", "m-wood"],
+      ["tire_wet", "fbx", "m-rubber"],
+      ["lantern_oil", "glb", "m-emissive"],
+      ["kettle_steel", "fbx", "m-chrome"],
+      ["ivy_cluster", "glb", "m-oxide"],
+      ["curtain_red", "png", "m-silk"],
+      ["helmet_navy", "fbx", "m-navy"]
+    ];
+    const wall = document.getElementById("wall");
+    const selName = document.getElementById("selName");
+    items.forEach(([name, ext, skin], i) => {
+      const btn = document.createElement("button");
+      btn.className = "card" + (i === 0 ? " is-on" : "");
+      btn.type = "button";
+      btn.innerHTML = `<div class="thumb ${skin}"></div><div class="meta"><div class="name">${name}</div><div class="ext mono">.${ext}</div></div>`;
+      btn.addEventListener("click", () => {
+        wall.querySelectorAll(".card").forEach((c) => c.classList.remove("is-on"));
+        btn.classList.add("is-on");
+        selName.textContent = name;
+        document.querySelector(".dsh-body .mono").textContent = `${name}.${ext}`;
+      });
+      wall.appendChild(btn);
+    });
+
+    const dd = document.getElementById("sortDd");
+    document.getElementById("sortBtn").addEventListener("click", () => dd.classList.toggle("open"));
+    dd.querySelectorAll(".dd-opt").forEach((opt) => {
+      opt.addEventListener("click", () => {
+        dd.querySelectorAll(".dd-opt").forEach((o) => o.classList.remove("is-on"));
+        opt.classList.add("is-on");
+        document.getElementById("sortBtn").textContent = opt.textContent + " ▲";
+        dd.classList.remove("open");
+      });
+    });
+    document.addEventListener("click", (e) => {
+      if (!dd.contains(e.target)) dd.classList.remove("open");
+    });
+
+    document.querySelector("[data-accent-toggle]").addEventListener("click", () => {
+      const next = document.documentElement.getAttribute("data-accent") === "blue" ? "" : "blue";
+      if (next) document.documentElement.setAttribute("data-accent", "blue");
+      else document.documentElement.removeAttribute("data-accent");
+      document.getElementById("accentSwatch").style.background =
+        next ? "#3b82f6" : "#c9a36a";
+    });
+  </script>
+</body>
+</html>

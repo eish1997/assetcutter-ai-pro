@@ -6,6 +6,7 @@ const path = require('path');
 const { randomBytes } = require('node:crypto');
 
 const SCHEME = 'ac-workshop';
+const ROOM_SCHEME = 'ac-room';
 const HOST = 'v1';
 
 /** @type {Map<string, { abs: string, mime: string, kind: string, issuedAt: number }>} */
@@ -14,17 +15,16 @@ const TOKEN_CAP = 400;
 
 function registerWorkshopMediaScheme(protocol) {
   if (!protocol || typeof protocol.registerSchemesAsPrivileged !== 'function') return;
+  const workshopPrivileges = {
+    standard: true,
+    secure: true,
+    supportFetchAPI: true,
+    stream: true,
+    corsEnabled: true,
+  };
   protocol.registerSchemesAsPrivileged([
-    {
-      scheme: SCHEME,
-      privileges: {
-        standard: true,
-        secure: true,
-        supportFetchAPI: true,
-        stream: true,
-        corsEnabled: true,
-      },
-    },
+    { scheme: SCHEME, privileges: workshopPrivileges },
+    { scheme: ROOM_SCHEME, privileges: { ...workshopPrivileges } },
   ]);
 }
 
@@ -155,6 +155,7 @@ function attachWorkshopMediaProtocol(protocol, _net, opts) {
 
 module.exports = {
   SCHEME,
+  ROOM_SCHEME,
   HOST,
   registerWorkshopMediaScheme,
   issueWorkshopMediaUrl,

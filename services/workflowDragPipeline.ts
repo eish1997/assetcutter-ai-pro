@@ -62,7 +62,14 @@ export function parseAcWorkflowExportDragSources(dataTransfer: DataTransfer | nu
   try {
     raw = dataTransfer.getData(DT_AC_WORKFLOW_EXPORT);
   } catch {
-    return [];
+    raw = '';
+  }
+  if (!raw?.trim()) {
+    try {
+      raw = dataTransfer.getData('text/plain');
+    } catch {
+      return [];
+    }
   }
   if (!raw?.trim()) return [];
   return parseAcWorkflowExportPayload(raw);

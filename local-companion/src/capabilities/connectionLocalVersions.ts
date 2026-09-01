@@ -47,6 +47,24 @@ export type MergeConnectionLocalVersionOptions = {
   makeDefault?: boolean;
 };
 
+export type VersionRouteTone = 'open' | 'repair' | 'pending';
+
+export type VersionRouteView = {
+  id: string;
+  label: string;
+  softwareVersion: string;
+  targetLabel: string;
+  routeTone: VersionRouteTone;
+  routeLabel: string;
+  isCurrent: boolean;
+};
+
+export type PlaceVersionSummary = {
+  versionCount: number;
+  openCount: number;
+  summaryLabel: string;
+};
+
 const SOURCES = new Set<LocalSoftwareVersionSource>([
   'drag_drop',
   'process',
@@ -118,6 +136,46 @@ function labelForVersion(appName: string, softwareVersion: string, executablePat
   const basename = executablePath ? pathWin32.basename(executablePath, pathWin32.extname(executablePath)) : '';
   const base = appName || basename || '本机软件';
   return softwareVersion ? `${base} ${softwareVersion}` : base;
+}
+
+const PATH_LABEL_NOISE = new Set(['bin', 'win64', 'win32', 'x64', 'engine', 'binaries', 'binary']);
+
+export function displayVersionLabel(
+  item: Pick<LocalSoftwareVersion, 'softwareVersion' | 'label' | 'executablePath' | 'installRoot' | 'shortcutPath'>,
+): string {
+  const softwareVersion = cleanString(item.softwareVersion);
+  if (softwareVersion) return softwareVersion;
+  const paths = [item.executablePath, item.installRoot, item.shortcutPath].map(cleanPath).filter(Boolean);
+  for (const rawPath of paths) {
+    const maya = rawPath.match(/Maya(\d{4})/i);
+    if (maya?.[1]) return maya[1];
+    const ue = rawPath.match(/UE[_\s-]?(\d+(?:\.\d+)?)/i);
+    if (ue?.[1]) return ue[1];
+    const segments = rawPath.split(/[/\\]/).filter(Boolean);
+    for (const segment of segments) {
+      const lower = segment.toLowerCase();
+      if (PATH_LABEL_NOISE.has(lower)) continue;
+      const plainVersion = segment.match(/^v?(\d+(?:\.\d+){0,2})$/i);
+      if (plainVersion?.[1]) return plainVersion[1];
+      const productYear = segment.match(/^[A-Za-z]+(\d{4})$/);
+      if (productYear?.[1]) return productYear[1];
+    }
+  }
+  const label = cleanString(item.label);
+  if (label) {
+    const lower = label.toLowerCase();
+    if (!PATH_LABEL_NOISE.has(lower)) {
+      const tail = label.split(/\s+/).pop() || '';
+      if (/^\d/.test(tail)) return tail;
+      if (label.length <= 16) return label;
+    }
+  }
+  const executablePath = cleanPath(item.executablePath);
+  if (executablePath) {
+    const base = pathWin32.basename(executablePath, pathWin32.extname(executablePath));
+    if (base && !PATH_LABEL_NOISE.has(base.toLowerCase())) return base;
+  }
+  return '未识别版本';
 }
 
 function versionKey(item: LocalSoftwareVersion): string {
@@ -235,6 +293,57 @@ export function normalizeConnectionLocalVersions(input?: ConnectionLocalVersions
     currentLocalVersionId: currentLocalVersion?.id || '',
     defaultLocalVersionId: defaultLocalVersion?.id || '',
   };
+}
+
+export function versionRouteViewFor(
+  item: LocalSoftwareVersion,
+  opts: { isCurrent?: boolean } = {},
+): VersionRouteView {
+  const targetLabel = firstString(item.executablePath, item.shortcutPath, item.installRoot, '未指定位置');
+  const softwareVersion = firstString(item.softwareVersion);
+  const label = displayVersionLabel(item);
+  let routeTone: VersionRouteTone = 'pending';
+  let routeLabel = '未开通';
+  switch (item.status) {
+    case 'verified':
+      routeTone = 'open';
+      routeLabel = '已开通';
+      break;
+    case 'launchable':
+    case 'installed':
+      routeTone = 'pending';
+      routeLabel = '未验证';
+      break;
+    case 'detected':
+      routeTone = 'pending';
+      routeLabel = '未开通';
+      break;
+    case 'failed':
+      routeTone = 'repair';
+      routeLabel = '需修复';
+      break;
+    default:
+      break;
+  }
+  return {
+    id: item.id,
+    label,
+    softwareVersion,
+    targetLabel,
+    routeTone,
+    routeLabel,
+    isCurrent: opts.isCurrent === true,
+  };
+}
+
+export function placeSummaryFromVersionRows(rows: VersionRouteView[]): PlaceVersionSummary {
+  const versionCount = rows.length;
+  const openCount = rows.filter((row) => row.routeTone === 'open').length;
+  const summaryLabel =
+    versionCount > 0
+      ? `${versionCount} 个版本${openCount > 0 ? ` · ${openCount} 条已开通` : ''}`
+      : '尚无本机版本';
+  return { versionCount, openCount, summaryLabel };
 }
 
 export function mergeConnectionLocalVersionManifest(

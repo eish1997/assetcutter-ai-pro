@@ -46,6 +46,53 @@
     return text || fallback || '';
   }
 
+  var PATH_LABEL_NOISE = { bin: 1, win64: 1, win32: 1, x64: 1, engine: 1, binaries: 1, binary: 1 };
+
+  function displayVersionLabel(item) {
+    if (!item || typeof item !== 'object') return '未识别版本';
+    const softwareVersion = compactText(item.softwareVersion, '');
+    if (softwareVersion) return softwareVersion;
+    const paths = [item.executablePath, item.installRoot, item.shortcutPath, item.targetLabel]
+      .map(function (p) {
+        return compactText(p, '').replace(/\//g, '\\');
+      })
+      .filter(Boolean);
+    for (var pi = 0; pi < paths.length; pi += 1) {
+      var rawPath = paths[pi];
+      var maya = rawPath.match(/Maya(\d{4})/i);
+      if (maya && maya[1]) return maya[1];
+      var ue = rawPath.match(/UE[_\s-]?(\d+(?:\.\d+)?)/i);
+      if (ue && ue[1]) return ue[1];
+      var segments = rawPath.split(/[/\\]/).filter(Boolean);
+      for (var si = 0; si < segments.length; si += 1) {
+        var segment = segments[si];
+        var lower = segment.toLowerCase();
+        if (PATH_LABEL_NOISE[lower]) continue;
+        var plainVersion = segment.match(/^v?(\d+(?:\.\d+){0,2})$/i);
+        if (plainVersion && plainVersion[1]) return plainVersion[1];
+        var productYear = segment.match(/^[A-Za-z]+(\d{4})$/);
+        if (productYear && productYear[1]) return productYear[1];
+      }
+    }
+    var label = compactText(item.label, '');
+    if (label) {
+      var labelLower = label.toLowerCase();
+      if (!PATH_LABEL_NOISE[labelLower]) {
+        var parts = label.split(/\s+/);
+        var tail = parts[parts.length - 1] || '';
+        if (/^\d/.test(tail)) return tail;
+        if (label.length <= 16) return label;
+      }
+    }
+    var executablePath = compactText(item.executablePath || item.targetLabel, '').replace(/\//g, '\\');
+    if (executablePath) {
+      var base = executablePath.split('\\').pop() || '';
+      base = base.replace(/\.exe$/i, '');
+      if (base && !PATH_LABEL_NOISE[base.toLowerCase()]) return base;
+    }
+    return '未识别版本';
+  }
+
   function cardInitial(value) {
     const text = compactText(value, '连');
     return text.slice(0, 1).toUpperCase();
@@ -66,7 +113,7 @@
 
   function actionLabel(action) {
     const labels = {
-      agent_loop: 'Copilot',
+      agent_loop: '管家',
       conversation: '对话',
       discover_running: '识别运行',
       launch: '启动',
@@ -108,11 +155,134 @@
     );
   }
 
+  function versionRouteViewForItem(item, isCurrent) {
+    const status = compactText(item && item.status, 'detected');
+    let routeTone = 'pending';
+    let routeLabel = '未开通';
+    if (status === 'verified') {
+      routeTone = 'open';
+      routeLabel = '已开通';
+    } else if (status === 'launchable' || status === 'installed') {
+      routeLabel = '未验证';
+    } else if (status === 'failed') {
+      routeTone = 'repair';
+      routeLabel = '需修复';
+    }
+    const targetLabel = compactText(item && (item.executablePath || item.shortcutPath || item.installRoot || item.targetLabel), '未指定位置');
+    const label = displayVersionLabel(item || {});
+    return {
+      id: compactText(item && item.id, ''),
+      label: label,
+      softwareVersion: compactText(item && item.softwareVersion, ''),
+      targetLabel,
+      routeTone,
+      routeLabel,
+      isCurrent: isCurrent === true,
+    };
+  }
+
+  function versionRowsForCardView(cardView, currentLocalVersion) {
+    const currentId = compactText(
+      currentLocalVersion && currentLocalVersion.id,
+      compactText(cardView && cardView.currentLocalVersion && cardView.currentLocalVersion.id, ''),
+    );
+    if (cardView && Array.isArray(cardView.versionRows) && cardView.versionRows.length) {
+      return cardView.versionRows.map((row) => ({
+        ...row,
+        label: displayVersionLabel({
+          softwareVersion: row && row.softwareVersion,
+          label: row && row.label,
+          executablePath: row && row.targetLabel,
+          targetLabel: row && row.targetLabel,
+        }),
+        isCurrent: String((row && row.id) || '') === currentId,
+      }));
+    }
+    let localVersions = asArray(cardView && cardView.localVersions);
+    if (!localVersions.length && currentLocalVersion && typeof currentLocalVersion === 'object') {
+      localVersions = [currentLocalVersion];
+    }
+    return localVersions.map((item) => versionRouteViewForItem(item, String((item && item.id) || '') === currentId));
+  }
+
+  function placeSummaryForCardView(cardView, versionRows) {
+    if (cardView && cardView.routeSummary && typeof cardView.routeSummary === 'object') {
+      return {
+        versionCount: Number(cardView.placeSummary && cardView.placeSummary.versionCount) || (versionRows || []).length,
+        openCount: Number(cardView.placeSummary && cardView.placeSummary.openCount) || 0,
+        summaryLabel: compactText(cardView.routeSummary.summaryLabel, ''),
+      };
+    }
+    if (cardView && cardView.placeSummary && typeof cardView.placeSummary === 'object') return cardView.placeSummary;
+    const rows = versionRows || [];
+    const versionCount = rows.length;
+    const openCount = rows.filter((row) => row.routeTone === 'open').length;
+    return {
+      versionCount,
+      openCount,
+      summaryLabel:
+        versionCount > 0
+          ? versionCount + ' 个版本' + (openCount > 0 ? ' · ' + openCount + ' 条已开通' : '')
+          : '尚无本机版本',
+    };
+  }
+
+  function versionRowPrimaryAction(row) {
+    if (!row || row.routeTone === 'open') return null;
+    if (row.routeTone === 'repair') return { action: 'repair_route', label: '让管家修复' };
+    const routeLabel = compactText(row.routeLabel, '');
+    if (routeLabel === '未验证') return { action: 'open_route', label: '让管家验证' };
+    return { action: 'open_route', label: '让管家开通' };
+  }
+
+  function internalRouteRowsForCardView(cardView) {
+    return asArray(cardView && cardView.internalRouteRows);
+  }
+
+  function internalRowPrimaryAction(row) {
+    if (!row || row.routeTone === 'open') return null;
+    if (row.routeTone === 'repair') return { action: 'repair_internal_route', label: '让管家修复此线' };
+    return { action: 'verify_internal_route', label: '让管家验证此线' };
+  }
+
+  function formatRelativeProbeAge(iso) {
+    const at = Date.parse(String(iso || ''));
+    if (!Number.isFinite(at)) return '未知';
+    const days = Math.max(0, Math.floor((Date.now() - at) / (24 * 60 * 60 * 1000)));
+    if (days <= 0) return '今天';
+    return days + ' 天前';
+  }
+
+  function legacyLocalVersionsFromManifest(manifest, appName) {
+    const existing = asArray(manifest && manifest.localVersions);
+    if (existing.length) return existing;
+    const m = manifest && typeof manifest === 'object' ? manifest : {};
+    const executablePath = compactText(m.executablePath || m.inputPath, '');
+    const shortcutPath = compactText(m.shortcutPath, '');
+    const softwareVersion = compactText(m.softwareVersion || m.versionHint || m.version, '');
+    if (!softwareVersion && !executablePath && !shortcutPath) return [];
+    const id = normalizeLocalVersionId(
+      compactText(m.currentLocalVersionId || m.defaultLocalVersionId, [softwareVersion, executablePath, shortcutPath].filter(Boolean).join('|')),
+    );
+    return [
+      {
+        id,
+        label: softwareVersion ? compactText(appName, '本机软件') + ' ' + softwareVersion : compactText(appName, '本机软件'),
+        softwareVersion,
+        executablePath: executablePath.toLowerCase().endsWith('.exe') ? executablePath : compactText(m.executablePath, ''),
+        shortcutPath,
+        source: compactText(m.droppedFrom, '') === 'connection_page' ? 'drag_drop' : 'manual',
+        status: executablePath || shortcutPath ? 'launchable' : 'detected',
+      },
+    ];
+  }
+
   function connectionCardViewFor(pkg) {
     if (pkg && pkg.connectionCardView && typeof pkg.connectionCardView === 'object') return pkg.connectionCardView;
     const manifest = pkg && pkg.manifest && typeof pkg.manifest === 'object' ? pkg.manifest : {};
     const connectionState = connectionStateFor(pkg);
-    const localVersions = asArray(manifest.localVersions);
+    const appName = compactText(manifest.appName || (pkg && pkg.name), '本机软件');
+    const localVersions = legacyLocalVersionsFromManifest(manifest, appName);
     const currentId = compactText(manifest.currentLocalVersionId || manifest.defaultLocalVersionId, '');
     const currentLocalVersion =
       localVersions.find((item) => item && typeof item === 'object' && String(item.id || '') === currentId) ||
@@ -122,16 +292,65 @@
     if (asArray(connectionState.availableActions).includes('launch')) primaryActions.push('launch');
     if (asArray(connectionState.availableActions).includes('probe')) primaryActions.push('probe');
     if (connectionState.publishEligible === true) primaryActions.push('publish');
+    const versionRows = localVersions.map((item) =>
+      versionRouteViewForItem(item, String((item && item.id) || '') === currentId),
+    );
+    const placeSummary = placeSummaryForCardView(null, versionRows);
     return {
       id: pkg && pkg.id,
       name: pkg && pkg.name,
       statusLabel: connectionState.label || connectionState.maturity || '草稿',
       currentLocalVersion,
       localVersions,
+      versionRows,
+      placeSummary,
       nextActionLabel: connectionState.nextAction || '',
       maintenanceChips: [{ label: connectionState.label || connectionState.maturity || '草稿', tone: 'neutral' }],
       primaryActions,
     };
+  }
+
+  function routeStatusFor(connectionState) {
+    const maturity = compactText(connectionState && connectionState.maturity, '');
+    if (maturity === 'connected') return { label: '已开通', tone: 'open', maturity };
+    if (maturity === 'probe_failed' || maturity === 'bridge_installed') return { label: '需修复', tone: 'repair', maturity };
+    return { label: '未开通', tone: 'pending', maturity };
+  }
+
+  function shortPathLabel(value, maxLen) {
+    const text = compactText(value, '');
+    if (!text) return '未指定位置';
+    const limit = maxLen || 48;
+    if (text.length <= limit) return text;
+    const head = Math.max(8, Math.floor(limit * 0.35));
+    const tail = Math.max(8, limit - head - 1);
+    return text.slice(0, head) + '…' + text.slice(-tail);
+  }
+
+  function primaryRowActionFor(connectionState) {
+    const maturity = compactText(connectionState && connectionState.maturity, '');
+    if (maturity === 'connected') return null;
+    if (maturity === 'probe_failed' || maturity === 'bridge_installed') return { action: 'repair_route', label: '修复路线' };
+    return { action: 'open_route', label: '开通路线' };
+  }
+
+  function overflowMenuLabel(action) {
+    const labels = {
+      agent_loop: '让管家处理',
+      conversation: '继续对话',
+      discover_running: '识别运行',
+      launch: '启动软件',
+      close: '关闭软件',
+      install: '安装桥接',
+      probe: '探测路线',
+      uninstall: '卸载桥接',
+      export: '导出路线',
+      publish: '提交云端',
+      version: '切换云端版本',
+      local_versions: '切换本机版本',
+      delete: '删除地点',
+    };
+    return labels[String(action || '')] || actionLabel(action);
   }
 
   function connectionStateFor(pkg) {
@@ -150,43 +369,323 @@
     const base = ['agent_loop', 'conversation', 'export'];
     const process = ['discover_running', 'launch', 'close'];
     if (recordOk(pkg && pkg.lastProbe)) {
-      return make('connected', '已连接', base.concat(process), '', '已收到真实软件信号，可继续对话优化或由管理员提交云端版本。', true);
+      return make('connected', '已开通', base.concat(process), '', '路线已通。选中文件后，点窗口顶部「发送到」。', true);
     }
     if (recordFailed(pkg && pkg.lastProbe)) {
-      return make('probe_failed', '探测失败', base.concat(process), '未收到真实软件连接信号。', '交给 Copilot 读取失败证据并继续修复。');
+      return make('probe_failed', '需修复', base.concat(process), '路线尚未收到软件信号。', '告诉管家修复这条路线。');
     }
     if (recordOk(pkg && pkg.lastInstall)) {
-      return make('bridge_installed', '已安装待探测', base.concat(process), '连接脚本或插件已安装，但还没有真实探测成功。', '刷新连接列表获取后端状态，或交给 Copilot 继续探测真实信号。');
+      return make('bridge_installed', '需修复', base.concat(process), '桥接已装，仍需验证路线。', '点「修复路线」或交给管家继续探测。');
     }
     if (hostId) {
-      return make('strategy_draft', '策略草稿', base.concat(process), '当前还没有已验证连接策略。', '让 Copilot 基于事实选择候选策略。');
+      return make('strategy_draft', '未开通', base.concat(process), '还没有可用的配送路线。', '告诉管家开通这条路线。');
     }
     if (hasPath) {
-      return make('exploring', '正在探索连接方式', base, '已记录软件位置，但尚未确认真实连接方式。', '让 Copilot 读取 facts，生成候选策略草稿。');
+      return make('exploring', '未开通', base, '已记录软件位置，路线尚未确认。', '告诉管家确认并开通路线。');
     }
-    return make('discovery_pending', '等待探索', base, '尚未记录可探索的软件事实。', '通过对话、拖入快捷方式、选择 exe 或识别运行中进程来收集 facts。');
+    return make('discovery_pending', '未开通', base, '还没有可用的软件信息。', '添加地点、拖入快捷方式或识别运行中的软件。');
   }
 
   function ensureStyles() {
-    if (document.getElementById('connection-page-style')) return;
+    const styleId = 'connection-page-style-v2';
+    if (document.getElementById(styleId)) return;
+    const legacy = document.getElementById('connection-page-style');
+    if (legacy) legacy.remove();
     const style = document.createElement('style');
-    style.id = 'connection-page-style';
+    style.id = styleId;
     style.textContent = `
       .connections-list {
         display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+        grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
         gap: 12px;
-        max-width: 980px;
+        width: 100%;
       }
-      .connection-card {
-        min-width: 0;
+      .connection-row {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 12px;
+        min-height: 68px;
+        padding: 10px 12px;
+        border: 1px solid rgba(148, 163, 184, 0.16);
+        border-radius: 10px;
+        background: rgba(255, 255, 255, 0.028);
+      }
+      .connection-row:hover { background: rgba(255, 255, 255, 0.045); }
+      .connection-row.is-focused {
+        border-color: rgba(59, 130, 246, 0.45);
+        background: rgba(37, 99, 235, 0.08);
+      }
+      .connection-row-mark {
+        flex: 0 0 auto;
+        width: 36px;
+        height: 36px;
+        border-radius: 9px;
+        display: grid;
+        place-items: center;
+        color: rgba(244, 244, 245, 0.96);
+        background: rgba(255, 255, 255, 0.06);
         border: 1px solid rgba(148, 163, 184, 0.18);
+        font-size: 14px;
+        font-weight: 700;
+      }
+      .connection-row-body { min-width: 0; flex: 1 1 auto; }
+      .connection-row-head {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        min-width: 0;
+      }
+      .connection-row-title {
+        font-size: 13px;
+        font-weight: 650;
+        color: rgba(244, 244, 245, 0.96);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .connection-row-status {
+        flex: 0 0 auto;
+        font-size: 10px;
+        font-weight: 650;
+        padding: 2px 7px;
+        border-radius: 999px;
+        border: 1px solid rgba(148, 163, 184, 0.2);
+        color: rgba(212, 212, 216, 0.86);
+        background: rgba(255, 255, 255, 0.04);
+      }
+      .connection-row-status.is-open { color: rgba(212, 212, 216, 0.92); }
+      .connection-row-status.is-repair {
+        color: rgba(252, 165, 165, 0.92);
+        border-color: rgba(239, 68, 68, 0.22);
+      }
+      .connection-row-sub {
+        margin-top: 3px;
+        font-size: 11px;
+        color: rgba(161, 161, 170, 0.92);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .connection-row-actions {
+        flex: 0 0 auto;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-left: auto;
+      }
+      .connection-row-primary {
+        height: 30px;
+        padding: 0 12px;
+        border-radius: 7px;
+        border: 1px solid rgba(59, 130, 246, 0.45);
+        background: rgba(37, 99, 235, 0.18);
+        color: rgba(239, 246, 255, 0.98);
+        font-size: 11px;
+        font-weight: 650;
+        cursor: pointer;
+      }
+      .connection-row-primary:hover { background: rgba(37, 99, 235, 0.28); }
+      .connection-row-primary:disabled { opacity: 0.45; cursor: not-allowed; }
+      .connection-row-menu { position: relative; }
+      .connection-row-menu > summary {
+        list-style: none;
+        cursor: pointer;
+        width: 30px;
+        height: 30px;
+        border: 1px solid rgba(148, 163, 184, 0.2);
+        border-radius: 7px;
+        background: rgba(255, 255, 255, 0.04);
+        color: rgba(212, 212, 216, 0.9);
+        font-size: 16px;
+        line-height: 1;
+        display: grid;
+        place-items: center;
+      }
+      .connection-row-menu > summary::-webkit-details-marker { display: none; }
+      .connection-row-menu-panel {
+        position: absolute;
+        right: 0;
+        top: calc(100% + 6px);
+        z-index: 50;
+        min-width: 168px;
+        padding: 6px;
+        border: 1px solid rgba(148, 163, 184, 0.2);
         border-radius: 8px;
-        background: linear-gradient(180deg, rgba(255, 255, 255, 0.048), rgba(255, 255, 255, 0.025));
-        padding: 13px;
+        background: #0f0f12;
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+      }
+      .connection-row-menu-panel button {
+        display: block;
+        width: 100%;
+        text-align: left;
+        border: none;
+        border-radius: 6px;
+        padding: 7px 9px;
+        background: transparent;
+        color: rgba(244, 244, 245, 0.92);
+        font-size: 11px;
+        cursor: pointer;
+      }
+      .connection-row-menu-panel button:hover { background: rgba(255, 255, 255, 0.08); }
+      .connection-row-menu-panel button.danger { color: rgba(252, 165, 165, 0.95); }
+      .connection-row-extra { flex: 1 1 100%; margin-left: 48px; }
+      .connection-row-result { margin-top: 6px; font-size: 11px; color: rgba(191, 219, 254, 0.88); }
+      .connection-row-result.fail { color: rgba(252, 165, 165, 0.92); }
+      .connection-place-group {
         display: flex;
         flex-direction: column;
-        gap: 12px;
+        gap: 0;
+        border: 1px solid rgba(148, 163, 184, 0.16);
+        border-radius: 12px;
+        background: rgba(255, 255, 255, 0.028);
+        overflow: visible;
+        box-shadow: 0 1px 0 rgba(255, 255, 255, 0.03);
+      }
+      .connection-place-group:has(.connection-row-menu[open]) {
+        position: relative;
+        z-index: 40;
+      }
+      .connection-place-group:hover {
+        background: rgba(255, 255, 255, 0.045);
+        box-shadow: 0 6px 18px rgba(0, 0, 0, 0.18);
+      }
+      .connection-place-group.is-focused {
+        border-color: rgba(59, 130, 246, 0.45);
+        background: rgba(37, 99, 235, 0.08);
+      }
+      .connection-place-group.is-drop-target {
+        border-color: rgba(59, 130, 246, 0.55);
+        background: rgba(37, 99, 235, 0.12);
+      }
+      .connection-place-head {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 10px;
+        min-height: 52px;
+        padding: 8px 12px;
+      }
+      .connection-place-summary {
+        flex: 0 0 auto;
+        font-size: 10px;
+        font-weight: 650;
+        padding: 2px 7px;
+        border-radius: 999px;
+        border: 1px solid rgba(148, 163, 184, 0.2);
+        color: rgba(212, 212, 216, 0.86);
+        background: rgba(255, 255, 255, 0.04);
+      }
+      .connection-version-rows {
+        border-top: 1px solid rgba(148, 163, 184, 0.12);
+        padding: 6px 12px 10px;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      .connection-place-group.is-expanded .connection-place-head { cursor: pointer; }
+      .connection-internal-routes {
+        border-top: 1px solid rgba(148, 163, 184, 0.1);
+        padding: 4px 12px 10px;
+      }
+      .connection-internal-head {
+        font-size: 10px;
+        color: rgba(161, 161, 170, 0.92);
+        margin: 0 0 6px;
+        letter-spacing: 0.02em;
+      }
+      .connection-internal-last-check {
+        font-size: 10px;
+        color: rgba(161, 161, 170, 0.75);
+        padding: 0 8px 2px 10px;
+      }
+      .connection-internal-more {
+        margin-top: 6px;
+        padding-left: 2px;
+      }
+      .connection-version-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        min-width: 0;
+        padding: 6px 8px 6px 10px;
+        border-radius: 8px;
+        border: 1px solid transparent;
+        border-left: 2px solid transparent;
+      }
+      .connection-version-row:hover { background: rgba(255, 255, 255, 0.04); }
+      .connection-version-row.is-current {
+        border-left-color: rgba(59, 130, 246, 0.55);
+        background: rgba(37, 99, 235, 0.08);
+      }
+      .connection-version-row[data-can-set-current="true"] { cursor: pointer; }
+      .connection-version-top {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        min-width: 0;
+        flex: 1 1 auto;
+      }
+      .connection-version-label {
+        flex: 0 0 auto;
+        min-width: 40px;
+        font-size: 12px;
+        font-weight: 650;
+        color: rgba(244, 244, 245, 0.94);
+      }
+      .connection-version-status {
+        flex: 0 0 auto;
+        font-size: 10px;
+        font-weight: 650;
+        padding: 2px 7px;
+        border-radius: 999px;
+        border: 1px solid rgba(148, 163, 184, 0.2);
+        color: rgba(212, 212, 216, 0.86);
+        background: rgba(255, 255, 255, 0.04);
+      }
+      .connection-version-status.is-open { color: rgba(134, 239, 172, 0.92); border-color: rgba(34, 197, 94, 0.25); }
+      .connection-version-status.is-repair { color: rgba(252, 165, 165, 0.92); border-color: rgba(239, 68, 68, 0.22); }
+      .connection-version-current-badge {
+        flex: 0 0 auto;
+        font-size: 10px;
+        font-weight: 650;
+        color: rgba(191, 219, 254, 0.92);
+      }
+      .connection-version-actions {
+        flex: 0 0 auto;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        margin-left: auto;
+      }
+      .connection-version-link {
+        border: none;
+        background: transparent;
+        color: rgba(191, 219, 254, 0.95);
+        font-size: 10px;
+        font-weight: 650;
+        cursor: pointer;
+        padding: 0;
+        text-decoration: underline;
+        text-underline-offset: 2px;
+      }
+      .connection-version-link:hover { color: rgba(219, 234, 254, 0.98); }
+      .connection-place-add-version {
+        margin: 0 12px 8px;
+        font-size: 11px;
+        color: rgba(161, 161, 170, 0.92);
+      }
+      .connections-dock-link {
+        border: none;
+        background: transparent;
+        color: rgba(191, 219, 254, 0.88);
+        font-size: 11px;
+        cursor: pointer;
+        padding: 0;
+      }
+      .connections-dock-link:hover { text-decoration: underline; }
+      .connection-card {
+        display: none;
       }
       .connection-card.is-focused {
         border-color: rgba(59, 130, 246, 0.62);
@@ -558,33 +1057,66 @@
     busyId: '',
     cardResults: {},
     selectedLocalVersionIds: {},
-    localVersionDrawerId: '',
     _reloadGen: 0,
     _dropBound: false,
     _dropDepth: 0,
     focusedConnectionId: '',
+    expandedConnectionIds: {},
+    _healthPromptAtByDraft: {},
+
+    buildConnectionComposerMessage(kind, pkg, row) {
+      const name = compactText(pkg && (pkg.name || pkg.id), '这个软件');
+      if (kind === 'create') {
+        return '我想在地图添加一个本机软件地点，请帮我创建连接并探测路线。';
+      }
+      if (kind === 'health_check') {
+        const hostName = compactText(row && row.hostName, name);
+        const count = Number(row && row.count) || 0;
+        return '请检查一下 ' + hostName + ' 城内' + (count > 0 ? ' ' + count + ' 条' : '') + '基础路线是否正常。';
+      }
+      if (row && typeof row === 'object' && row.internalRoute === true) {
+        const routeName = compactText(row.label, '这条内线');
+        if (row.routeTone === 'repair') return '请帮我修复 ' + name + ' 的「' + routeName + '」内线。';
+        return '请帮我验证 ' + name + ' 的「' + routeName + '」内线。';
+      }
+      if (row && typeof row === 'object') {
+        const ver = compactText(row.label || row.softwareVersion, '');
+        const verText = ver ? ' ' + ver : '';
+        if (row.routeTone === 'repair') return '请帮我修复 ' + name + verText + ' 的连接。';
+        if (compactText(row.routeLabel, '') === '未验证') return '请帮我验证 ' + name + verText + ' 的连接。';
+        return '请帮我开通 ' + name + verText + ' 的连接。';
+      }
+      return '请继续处理 ' + name + ' 的连接。';
+    },
+
+    async openDshHandoff(payload) {
+      const shell = this._shell;
+      if (!shell || typeof shell.openDshHandoff !== 'function') {
+        this.setInlineStatus('当前壳版本还不支持管家办事入口。');
+        return { ok: false };
+      }
+      const body = payload && typeof payload === 'object' ? payload : {};
+      const composerText = compactText(body.composerText || body.suggestedMessage, '');
+      const r = await shell.openDshHandoff({ ...body, composerText });
+      if (!r || r.ok === false) {
+        this.setInlineStatus('管家入口打开失败：' + ((r && r.error) || '未知错误'));
+        return r || { ok: false };
+      }
+      this.setInlineStatus(composerText ? '已填入管家输入框，确认后点发送即可。' : '已打开管家面板。');
+      return r;
+    },
+
+    openCreateConnectionWithButler() {
+      void this.openDshHandoff({
+        domain: 'connection',
+        label: '新地点',
+        surface: 'connections',
+        composerText: this.buildConnectionComposerMessage('create'),
+      });
+    },
 
     openCreateConnectionCopilot() {
-      const prompt = [
-        '用户正在“连接”页面通过对话添加一个本机软件连接。',
-        '请按 CapabilityPackage 主线创建 software_connection 草稿。',
-        '优先调用 ac.capability.draft_create；不要把连接创建成 Workbench 文本资产。',
-        '不要要求用户选择技术模板；根据软件名称自动推断连接方式。',
-        '不要恢复旧 62 宿主默认列表；旧 host bridge 只能作为 legacy 参考。',
-        '创建后应围绕同一个连接对象继续安装、探测、修复和发布。',
-      ].join('\n');
-      if (typeof window.__acOpenCopilotObjectSession === 'function') {
-        void window.__acOpenCopilotObjectSession({
-          type: 'capability',
-          id: 'connection-draft',
-          label: '新建连接',
-          contextPrompt: prompt,
-        });
-        return;
-      }
-      if (typeof window.__acOpenCopilotPanel === 'function') {
-        window.__acOpenCopilotPanel();
-      }
+      this.openCreateConnectionWithButler();
     },
 
     capabilityContext(pkg) {
@@ -613,23 +1145,15 @@
       return r.json;
     },
 
-    async openCapabilityConversation(pkg) {
-      const context = await this.fetchCapabilityContext(pkg);
-      const session = context && context.session && typeof context.session === 'object' ? context.session : {};
-      const contextPrompt = context && typeof context.contextPrompt === 'string' ? context.contextPrompt : this.capabilityContext(pkg);
-      if (typeof window.__acOpenCopilotObjectSession === 'function') {
-        void window.__acOpenCopilotObjectSession({
-          type: 'capability',
-          id: session.id || pkg.id,
-          sessionId: session.sessionId || '',
-          label: session.label || pkg.name || pkg.id,
-          contextPrompt,
-        });
-        return;
-      }
-      if (typeof window.__acOpenCopilotPanel === 'function') {
-        window.__acOpenCopilotPanel();
-      }
+    async openCapabilityConversation(pkg, composerText) {
+      const message = compactText(composerText, '') || this.buildConnectionComposerMessage('continue', pkg);
+      await this.openDshHandoff({
+        domain: 'connection',
+        capabilityPackageId: pkg.id,
+        label: pkg.name || pkg.id,
+        surface: 'connections',
+        composerText: message,
+      });
     },
 
     async fetchDrafts(shell) {
@@ -872,7 +1396,7 @@
       const connectionState = connectionStateFor(pkg);
       if (connectionState && connectionState.nextAction) return connectionState.nextAction;
       if (lastProbe && lastProbe.ok) return '已连接，可继续对话优化这个连接';
-      if (latest && latest.ok === false) return '交给 Copilot 读取失败并继续修复';
+      if (latest && latest.ok === false) return '交给管家读取失败并继续修复';
       if (!hostId) return '补齐连接方式和真实探测信号';
       return '启动、安装或探测，直到收到真实信号';
     },
@@ -927,314 +1451,431 @@
       );
     },
 
+    overflowActionsFor(pkg, viewActions, connectionState, localVersions) {
+      void viewActions;
+      void connectionState;
+      void localVersions;
+      const actions = ['agent_loop'];
+      if (this.isAdmin && this.canPublishPackage(pkg)) actions.push('publish');
+      if (this.isAdmin && asArray(pkg && pkg.cloudVersions).length) actions.push('version');
+      if (pkg && pkg.source === 'draft') actions.push('delete');
+      return actions.filter((action, index, list) => list.indexOf(action) === index);
+    },
+
+    renderInternalRouteRowsHtml(pkg, internalRows) {
+      void pkg;
+      if (!internalRows.length) {
+        return (
+          '<div class="connection-internal-routes">' +
+          '<div class="connection-internal-head">城内路线</div>' +
+          '<div class="connection-place-add-version">外线路开通后会自动登记基础内线</div>' +
+          '</div>'
+        );
+      }
+      return (
+        '<div class="connection-internal-routes">' +
+        '<div class="connection-internal-head">城内路线</div>' +
+        '<div class="connection-version-rows">' +
+        internalRows
+          .map((row) => {
+            const primary = internalRowPrimaryAction(row);
+            const primaryHtml = primary
+              ? '<div class="connection-version-actions">' +
+                '<button type="button" class="connection-version-link" data-internal-action="' +
+                esc(primary.action) +
+                '" data-primitive-id="' +
+                esc(row.id) +
+                '" data-route-tone="' +
+                esc(row.routeTone || '') +
+                '" data-route-label="' +
+                esc(row.routeLabel || '') +
+                '" data-route-label-text="' +
+                esc(row.label || '') +
+                '">' +
+                esc(primary.label) +
+                '</button></div>'
+              : '';
+            const staleHint = row.lastProbeAt
+              ? '<div class="connection-internal-last-check">上次检查：' + esc(formatRelativeProbeAge(row.lastProbeAt)) + '</div>'
+              : '';
+            return (
+              '<div class="connection-version-row connection-internal-row" data-primitive-id="' +
+              esc(row.id) +
+              '">' +
+              '<div class="connection-version-top">' +
+              '<span class="connection-version-label">' +
+              esc(row.label) +
+              '</span>' +
+              '<span class="connection-version-status' +
+              (row.routeTone === 'open' ? ' is-open' : row.routeTone === 'repair' ? ' is-repair' : '') +
+              '">' +
+              esc(row.routeLabel) +
+              '</span>' +
+              primaryHtml +
+              '</div>' +
+              staleHint +
+              '</div>'
+            );
+          })
+          .join('') +
+        '</div>' +
+        '<div class="connection-internal-more"><button type="button" class="connection-version-link" data-action="open_tools_shelf">更多组合能力 → 五金铺</button></div>' +
+        '</div>'
+      );
+    },
+
+    renderVersionRowsHtml(pkg, versionRows, connectionState) {
+      void pkg;
+      void connectionState;
+      if (!versionRows.length) {
+        return '<div class="connection-place-add-version">拖入 exe 或快捷方式到此处，可添加本机版本</div>';
+      }
+      return (
+        '<div class="connection-version-rows">' +
+        versionRows
+          .map((row) => {
+            const primary = versionRowPrimaryAction(row);
+            const canSetCurrent = !row.isCurrent;
+            const currentBadge = row.isCurrent
+              ? '<span class="connection-version-current-badge">当前</span>'
+              : '';
+            const primaryHtml = primary
+              ? '<div class="connection-version-actions">' +
+                '<button type="button" class="connection-version-link" data-version-action="' +
+                esc(primary.action) +
+                '" data-local-version-id="' +
+                esc(row.id) +
+                '" data-route-tone="' +
+                esc(row.routeTone || '') +
+                '" data-route-label="' +
+                esc(row.routeLabel || '') +
+                '" data-version-label="' +
+                esc(row.label || '') +
+                '">' +
+                esc(primary.label) +
+                '</button></div>'
+              : '';
+            return (
+              '<div class="connection-version-row' +
+              (row.isCurrent ? ' is-current' : '') +
+              '" data-local-version-id="' +
+              esc(row.id) +
+              '" data-can-set-current="' +
+              (canSetCurrent ? 'true' : 'false') +
+              '"' +
+              (canSetCurrent ? ' title="点击设为当前"' : '') +
+              '>' +
+              '<div class="connection-version-top">' +
+              '<span class="connection-version-label">' +
+              esc(row.label) +
+              '</span>' +
+              '<span class="connection-version-status' +
+              (row.routeTone === 'open' ? ' is-open' : row.routeTone === 'repair' ? ' is-repair' : '') +
+              '">' +
+              esc(row.routeLabel) +
+              '</span>' +
+              currentBadge +
+              primaryHtml +
+              '</div></div>'
+            );
+          })
+          .join('') +
+        '</div>'
+      );
+    },
+
+    wireConnectionRow(card, pkg) {
+      if (!card || !pkg) return;
+      const closeMenus = () => {
+        for (const node of document.querySelectorAll('.connection-row-menu[open]')) node.removeAttribute('open');
+        const pageMenu = $('connectionsPageMenu');
+        if (pageMenu) pageMenu.removeAttribute('open');
+      };
+      card.querySelector('.connection-row-menu-panel [data-action="agent_loop"]')?.addEventListener('click', () => {
+        closeMenus();
+        void this.runConnectionAgentLoop(pkg);
+      });
+      card.querySelector('.connection-row-menu-panel [data-action="version"]')?.addEventListener('click', () => {
+        closeMenus();
+        void this.chooseCloudVersion(pkg);
+      });
+      card.querySelector('.connection-row-menu-panel [data-action="publish"]')?.addEventListener('click', () => {
+        closeMenus();
+        void this.publishToCloud(pkg);
+      });
+      card.querySelector('.connection-row-menu-panel [data-action="delete"]')?.addEventListener('click', () => {
+        closeMenus();
+        void this.deleteDraft(pkg);
+      });
+      card.querySelector('.connection-place-head')?.addEventListener('dragover', (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        if (ev.dataTransfer) ev.dataTransfer.dropEffect = 'copy';
+        card.classList.add('is-drop-target');
+      });
+      card.querySelector('.connection-place-head')?.addEventListener('dragleave', () => {
+        card.classList.remove('is-drop-target');
+      });
+      card.querySelector('.connection-place-head')?.addEventListener('drop', (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        card.classList.remove('is-drop-target');
+        const files = ev.dataTransfer && ev.dataTransfer.files;
+        if (!files || !files.length) return;
+        void this.handleDroppedConnectionFiles(files, pkg);
+      });
+      for (const row of card.querySelectorAll('.connection-version-row[data-can-set-current="true"]')) {
+        row.addEventListener('click', () => {
+          const versionId = String(row.getAttribute('data-local-version-id') || '').trim();
+          void this.setLocalVersion(pkg, versionId);
+        });
+      }
+      for (const button of card.querySelectorAll('[data-version-action="repair_route"]')) {
+        button.addEventListener('click', (ev) => {
+          ev.stopPropagation();
+          const versionId = String(button.getAttribute('data-local-version-id') || '').trim();
+          const state = connectionStateFor(pkg);
+          if (asArray(state.availableActions).includes('probe')) {
+            void this.runLifecycleAction(pkg, 'probe', versionId ? { localVersionId: versionId } : undefined);
+          } else {
+            void this.openCapabilityConversation(
+              pkg,
+              this.buildConnectionComposerMessage('version', pkg, {
+                id: versionId,
+                label: button.getAttribute('data-version-label'),
+                routeTone: button.getAttribute('data-route-tone'),
+                routeLabel: button.getAttribute('data-route-label'),
+              }),
+            );
+          }
+        });
+      }
+      for (const button of card.querySelectorAll('[data-version-action="open_route"]')) {
+        button.addEventListener('click', (ev) => {
+          ev.stopPropagation();
+          const versionId = String(button.getAttribute('data-local-version-id') || '').trim();
+          if (versionId) void this.setLocalVersion(pkg, versionId);
+          void this.openCapabilityConversation(
+            pkg,
+            this.buildConnectionComposerMessage('version', pkg, {
+              id: versionId,
+              label: button.getAttribute('data-version-label'),
+              routeTone: button.getAttribute('data-route-tone'),
+              routeLabel: button.getAttribute('data-route-label'),
+            }),
+          );
+        });
+      }
+      card.querySelector('.connection-place-head')?.addEventListener('click', (ev) => {
+        if (ev.target && ev.target.closest && ev.target.closest('.connection-row-menu, button, summary')) return;
+        const id = String(pkg.id || '').trim();
+        if (!id) return;
+        this.expandedConnectionIds[id] = !this.expandedConnectionIds[id];
+        this.render();
+      });
+      for (const button of card.querySelectorAll('[data-internal-action]')) {
+        button.addEventListener('click', (ev) => {
+          ev.stopPropagation();
+          const primitiveId = String(button.getAttribute('data-primitive-id') || '').trim();
+          void this.probeInternalRoute(pkg, primitiveId, {
+            label: button.getAttribute('data-route-label-text'),
+            routeTone: button.getAttribute('data-route-tone'),
+            routeLabel: button.getAttribute('data-route-label'),
+          });
+        });
+      }
+      card.querySelector('[data-action="open_tools_shelf"]')?.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        const shell = this._shell;
+        if (shell && typeof shell.setActiveView === 'function') void shell.setActiveView('tools');
+      });
+    },
+
+    async probeInternalRoute(pkg, primitiveId, rowMeta) {
+      const id = String((pkg && pkg.id) || '').trim();
+      const primitive = String(primitiveId || '').trim();
+      if (!id || !primitive) return;
+      const shell = this._shell;
+      if (!shell || typeof shell.api !== 'function') {
+        void this.openDshHandoff({
+          domain: 'connection',
+          label: compactText(pkg && pkg.name, id),
+          surface: 'connections',
+          composerText: this.buildConnectionComposerMessage('internal', pkg, {
+            internalRoute: true,
+            label: rowMeta && rowMeta.label,
+            routeTone: rowMeta && rowMeta.routeTone,
+            routeLabel: rowMeta && rowMeta.routeLabel,
+          }),
+        });
+        return;
+      }
+      this.busyId = id;
+      this.render();
+      try {
+        const r = await shell.api(
+          'POST',
+          '/v1/capability-packages/' + encodeURIComponent(id) + '/host-primitives/' + encodeURIComponent(primitive) + '/probe',
+          { confirmed: true },
+        );
+        if (!r.ok) {
+          this.cardResults[id] = { ok: false, kind: '内线', message: (r.json && (r.json.message || r.json.error)) || r.error || '验证失败' };
+        } else {
+          this.cardResults[id] = { ok: true, kind: '内线', message: '已更新内线状态' };
+        }
+      } catch (e) {
+        this.cardResults[id] = { ok: false, kind: '内线', message: e instanceof Error ? e.message : String(e) };
+      } finally {
+        this.busyId = '';
+        await this.reload(shell);
+      }
+    },
+
+    maybePromptHealthCheck() {
+      const pendingByDraft = new Map();
+      for (const pkg of this.packages) {
+        const manifest = pkg && pkg.manifest && typeof pkg.manifest === 'object' ? pkg.manifest : {};
+        const pending = asArray(manifest.healthCheckPending);
+        if (!pending.length) continue;
+        pendingByDraft.set(String(pkg.id || ''), { pkg, count: pending.length });
+      }
+      if (!pendingByDraft.size) return;
+      const first = pendingByDraft.values().next().value;
+      if (!first || !first.pkg) return;
+      const draftId = String(first.pkg.id || '');
+      const last = Number(this._healthPromptAtByDraft[draftId] || 0);
+      if (Number.isFinite(last) && Date.now() - last < 24 * 60 * 60 * 1000) return;
+      this._healthPromptAtByDraft[draftId] = Date.now();
+      void this.openDshHandoff({
+        domain: 'connection',
+        label: compactText(first.pkg.name, draftId),
+        surface: 'connections',
+        composerText: this.buildConnectionComposerMessage('health_check', first.pkg, {
+          hostName: first.pkg.name,
+          count: first.count,
+        }),
+      });
+    },
+
     renderSummary(items, visibleItems) {
       const summary = $('connectionsSummary');
       const status = $('connectionsInlineStatus');
       if (!summary) return;
       const visible = Array.isArray(visibleItems) ? visibleItems.length : items.length;
-      const connected = items.filter((pkg) => connectionStateFor(pkg).maturity === 'connected').length;
-      const failed = items.filter((pkg) => {
-        const latest = this.latestEvent(pkg);
-        return latest && latest.ok === false;
-      }).length;
-      const cloud = items.filter((pkg) => pkg && pkg.hasCloud).length;
-      summary.innerHTML =
-        '<span class="connections-summary-pill">全部 ' +
-        items.length +
-        '</span>' +
-        '<span class="connections-summary-pill good">已连接 ' +
-        connected +
-        '</span>' +
-        '<span class="connections-summary-pill warn">待处理 ' +
-        Math.max(0, items.length - connected) +
-        '</span>' +
-        '<span class="connections-summary-pill">云端 ' +
-        cloud +
-        '</span>' +
-        (String(this.searchQuery || '').trim()
-          ? '<span class="connections-summary-pill">筛选 ' + visible + '</span>'
-          : '');
-      if (status) {
-        status.textContent = this.inlineStatus || (failed ? `${failed} 个连接有最近失败记录，可交给 Copilot 继续处理。` : '');
+      const openCount = items.filter((pkg) => connectionStateFor(pkg).maturity === 'connected').length;
+      const q = String(this.searchQuery || '').trim();
+      summary.textContent = q
+        ? '共 ' + items.length + ' 个地点，筛选出 ' + visible + ' 个'
+        : items.length
+          ? '共 ' + items.length + ' 个地点，' + openCount + ' 条路线已开通'
+          : '';
+      if (status && !this.inlineStatus) {
+        const repairCount = items.filter((pkg) => {
+          const m = connectionStateFor(pkg).maturity;
+          return m === 'probe_failed' || m === 'bridge_installed';
+        }).length;
+        status.textContent = repairCount ? repairCount + ' 个地点的路线需修复，可交给管家处理。' : '';
+      } else if (status) {
+        status.textContent = this.inlineStatus;
       }
     },
 
     renderCard(pkg) {
       const manifest = pkg && pkg.manifest && typeof pkg.manifest === 'object' ? pkg.manifest : {};
-      const lastProbe = pkg.lastProbe && typeof pkg.lastProbe === 'object' ? pkg.lastProbe : null;
-      const probeOk = Boolean(lastProbe && lastProbe.ok);
       const schema = window.ShellCapabilityCardSchema;
       const view =
         schema && typeof schema.view === 'function'
           ? schema.view(pkg, { isAdmin: this.isAdmin, templateHint: manifest.templateHint })
           : {
-              title: pkg.name || pkg.id || '未命名连接',
-              description: pkg.description || `${manifest.appName || pkg.name || '本机软件'} 连接草稿`,
-              status: probeOk ? '已连接' : pkg.draftStatus || pkg.source || '草稿',
-              tags: [pkg.type || 'software_connection'].concat(Array.isArray(pkg.tags) ? pkg.tags : []),
+              title: pkg.name || pkg.id || '未命名地点',
+              description: pkg.description || `${manifest.appName || pkg.name || '本机软件'} 路线`,
+              status: connectionStateFor(pkg).label,
+              tags: [],
               actions: ['conversation', 'discover_running', 'launch', 'install', 'probe', 'close', 'uninstall', 'export'],
             };
-      const latest = this.latestEvent(pkg);
       const cardView = connectionCardViewFor(pkg);
-      const hasBackendCardView = Boolean(pkg && pkg.connectionCardView && typeof pkg.connectionCardView === 'object');
       const localVersions = asArray(cardView && cardView.localVersions);
       const selectedLocalVersionId = compactText(this.selectedLocalVersionIds[String(pkg.id || '')], '');
       const selectedLocalVersion =
         localVersions.find((item) => item && typeof item === 'object' && String(item.id || '') === selectedLocalVersionId) ||
         null;
-      const tags = Array.isArray(view.tags) ? view.tags : [];
-      const actions = Array.from(new Set(
-        (Array.isArray(view.actions) ? view.actions : []).concat(asArray(cardView && cardView.primaryActions)),
-      ));
+      const actions = Array.from(new Set((Array.isArray(view.actions) ? view.actions : []).concat(asArray(cardView && cardView.primaryActions))));
       const currentLocalVersion =
         selectedLocalVersion ||
         (cardView && cardView.currentLocalVersion && typeof cardView.currentLocalVersion === 'object'
           ? cardView.currentLocalVersion
           : null);
-      const target = compactText(
-        currentLocalVersion && (currentLocalVersion.executablePath || currentLocalVersion.shortcutPath || currentLocalVersion.installRoot),
-        this.connectionTargetLabel(pkg),
-      );
+      const versionRows = versionRowsForCardView(cardView, currentLocalVersion);
+      const placeSummary = placeSummaryForCardView(cardView, versionRows);
       const connectionState = connectionStateFor(pkg);
-      const stateLabel = compactText(cardView && cardView.statusLabel, connectionState.label || connectionState.maturity || view.status || '草稿');
-      const blockedReason = connectionState.blockedReason || '暂无阻塞';
-      const availableActions = Array.isArray(connectionState.availableActions) ? connectionState.availableActions : [];
-      const capabilitySummary = availableActions.length
-        ? availableActions.map(actionLabel).join(' / ')
-        : '等待补齐';
-      const next = compactText(cardView && cardView.nextActionLabel, this.nextActionLabel(pkg, latest));
+      const overflowActions = this.overflowActionsFor(pkg, actions, connectionState, localVersions);
       const busy = this.busyId === String(pkg.id || '');
       const cardResult = this.cardResults[String(pkg.id || '')] || null;
-      const recentEvents = this.recentEvents(pkg);
-      const templateDraft = this.latestTemplateDraft(pkg);
-      const strategyDraft = this.latestStrategyDraft(pkg);
-      const strategyFailure = this.latestStrategyFailure(pkg);
-      const facts = (connectionState && connectionState.facts) || (strategyDraft && strategyDraft.facts) || null;
-      const softwareVersion = compactText(
-        currentLocalVersion && (currentLocalVersion.softwareVersion || currentLocalVersion.label),
-        this.softwareVersionLabel(pkg, facts),
-      );
-      const strategyFailureText = strategyFailure
-        ? strategyFailure.failureClass +
-          (strategyFailure.nextCandidateStrategy
-            ? ' / 下一个：' + compactText(strategyFailure.nextCandidateStrategy.label || strategyFailure.nextCandidateStrategy.id, '')
-            : '')
-        : '暂无策略失败';
-      const modelPrimaryActions = asArray(cardView && cardView.primaryActions).filter((action) => actions.includes(action));
-      const primaryActions = (modelPrimaryActions.length ? modelPrimaryActions : actions.filter((action) => ['agent_loop', 'launch', 'probe', 'publish'].includes(action))).slice(0, 4);
-      const secondaryActions = actions.filter((action) => !primaryActions.includes(action));
+      const overflowHtml = overflowActions.length
+        ? '<details class="connection-row-menu">' +
+          '<summary aria-label="更多">⋯</summary>' +
+          '<div class="connection-row-menu-panel">' +
+          overflowActions
+            .map((action) => {
+              const danger = action === 'delete';
+              return (
+                '<button type="button" class="' +
+                (danger ? 'danger' : '') +
+                '" data-action="' +
+                esc(action) +
+                '">' +
+                esc(overflowMenuLabel(action)) +
+                '</button>'
+              );
+            })
+            .join('') +
+          '</div></details>'
+        : '';
       const resultHtml = cardResult
-        ? '<div class="connection-card-result ' +
-          (cardResult.ok ? 'ok' : 'fail') +
-          '"><strong>' +
+        ? '<div class="connection-row-result' +
+          (cardResult.ok ? '' : ' fail') +
+          '">' +
           esc(cardResult.kind) +
-          '</strong>：' +
+          '：' +
           esc(cardResult.message) +
           '</div>'
         : '';
-      const modelSupportChips = asArray(cardView && cardView.maintenanceChips)
-        .map((chip) => (chip && typeof chip === 'object' ? compactText(chip.label, '') : compactText(chip, '')))
-        .filter(Boolean)
-        .slice(0, 3);
-      const supportChips = hasBackendCardView && modelSupportChips.length
-        ? modelSupportChips
-        : [
-            '状态：' + stateLabel,
-            '事实：' + this.factsSummary(facts),
-            strategyDraft ? '策略：' + this.strategySummary(strategyDraft) : '',
-            strategyFailure ? '失败：' + strategyFailureText : '',
-            blockedReason && blockedReason !== '暂无阻塞' ? '阻塞：' + blockedReason : '',
-            templateDraft ? '模板：' + compactText(templateDraft.kind, '草稿') : '',
-            recentEvents.length ? '记录：' + recentEvents.length : '',
-            capabilitySummary && capabilitySummary !== '等待补齐' ? '能力：' + capabilitySummary : '',
-          ].filter(Boolean).slice(0, 3);
-      const supportHtml =
-        '<div class="connection-card-support" aria-label="连接维护信息">' +
-        '<div class="connection-card-support-head"><span>维护摘要</span><span class="connection-card-support-note">' +
-        esc(latest ? latest.message || latest.kind || '' : '等待真实信号') +
-        '</span></div>' +
-        '<div class="connection-card-support-chips">' +
-        supportChips.map((chip) => '<span class="connection-card-support-chip" title="' + esc(chip) + '">' + esc(chip) + '</span>').join('') +
-        '</div>' +
-        '</div>';
-      const buttonHtml = (action) =>
-        '<button type="button" class="connection-card-action' +
-        (action === 'agent_loop' ? ' primary' : action === 'delete' ? ' danger' : '') +
-        '" data-action="' +
-        esc(action) +
-        '" title="' +
-        esc(action === 'publish' ? '提交云端' : actionLabel(action)) +
-        '" aria-label="' +
-        esc(action === 'publish' ? '提交云端' : actionLabel(action)) +
-        '">' +
-        actionIcon(action) +
-        '</button>';
-      const versionDrawerOpen = this.localVersionDrawerId === String(pkg.id || '');
-      const versionTriggerHtml =
-        '<button type="button" class="connection-card-version-trigger" data-action="local_versions" title="切换本机版本" aria-label="切换本机版本">' +
-        actionIcon('local_versions') +
-        '</button>';
-      const versionDrawerHtml = versionDrawerOpen
-        ? '<div class="connection-card-version-drawer" aria-label="本机软件版本">' +
-          (localVersions.length
-            ? localVersions
-                .map((item) => {
-                  const versionId = compactText(item && item.id, '');
-                  const isCurrent = currentLocalVersion && String(currentLocalVersion.id || '') === versionId;
-                  const itemTarget = compactText(item && (item.executablePath || item.shortcutPath || item.installRoot), '未记录启动位置');
-                  const status = compactText(item && item.status, 'detected');
-                  return (
-                    '<div class="connection-card-version-row' +
-                    (isCurrent ? ' is-current' : '') +
-                    '" data-local-version-id="' +
-                    esc(versionId) +
-                    '">' +
-                    '<div><div class="connection-card-version-name">' +
-                    esc(compactText(item && item.label, compactText(item && item.softwareVersion, '未识别版本'))) +
-                    '</div><div class="connection-card-version-meta" title="' +
-                    esc(itemTarget) +
-                    '">' +
-                    esc(status === 'verified' ? '已验证' : status === 'launchable' ? '可启动' : status === 'failed' ? '失败' : '未验证') +
-                    ' · ' +
-                    esc(itemTarget) +
-                    '</div></div>' +
-                    '<div class="connection-card-version-actions">' +
-                    '<button type="button" class="connection-card-action" data-action="set_local_version" data-local-version-id="' +
-                    esc(versionId) +
-                    '" title="设为当前版本" aria-label="设为当前版本">' +
-                    actionIcon('set_local_version') +
-                    '</button>' +
-                    '<button type="button" class="connection-card-action" data-action="launch" data-local-version-id="' +
-                    esc(versionId) +
-                    '" title="启动此版本" aria-label="启动此版本">' +
-                    actionIcon('launch') +
-                    '</button>' +
-                    '<button type="button" class="connection-card-action" data-action="probe" data-local-version-id="' +
-                    esc(versionId) +
-                    '" title="探测此版本" aria-label="探测此版本">' +
-                    actionIcon('probe') +
-                    '</button>' +
-                    '</div></div>'
-                  );
-                })
-                .join('')
-            : '<div class="connection-card-version-row"><div><div class="connection-card-version-name">未识别本机版本</div><div class="connection-card-version-meta">拖入 exe 或快捷方式后会出现在这里</div></div></div>') +
-          '</div>'
-        : '';
+      const versionRowsHtml = this.renderVersionRowsHtml(pkg, versionRows, connectionState);
+      const connectionId = String(pkg.id || '');
+      const expanded = this.expandedConnectionIds[connectionId] === true;
+      const internalRows = internalRouteRowsForCardView(cardView);
+      const internalRowsHtml = expanded ? this.renderInternalRouteRowsHtml(pkg, internalRows) : '';
       const card = document.createElement('article');
-      card.className = 'connection-card' + (this.focusedConnectionId === String(pkg.id || '') ? ' is-focused' : '');
-      card.dataset.connectionId = String(pkg.id || '');
+      card.className =
+        'connection-place-group' +
+        (this.focusedConnectionId === connectionId ? ' is-focused' : '') +
+        (expanded ? ' is-expanded' : '');
+      card.dataset.connectionId = connectionId;
       card.innerHTML =
-        '<div class="connection-card-head">' +
-        '<div class="connection-card-appmark">' +
+        '<div class="connection-place-head" data-drop-target="place">' +
+        '<div class="connection-row-mark">' +
         esc(cardInitial(view.title)) +
         '</div>' +
-        '<div class="connection-card-identity">' +
-        '<div class="connection-card-title">' +
+        '<div class="connection-row-body">' +
+        '<div class="connection-row-head">' +
+        '<div class="connection-row-title">' +
         esc(view.title) +
         '</div>' +
-        '<div class="connection-card-desc">' +
-        esc(view.description) +
-        '</div>' +
-        '</div>' +
-        '<span class="connection-card-status">' +
-        esc(view.status) +
+        '<span class="connection-place-summary">' +
+        esc(placeSummary.summaryLabel) +
         '</span>' +
         '</div>' +
-        '<div class="connection-card-facts">' +
-        '<div class="connection-card-fact"><div class="connection-card-fact-label">软件版本</div><div class="connection-card-fact-row"><div class="connection-card-fact-value">' +
-        esc(softwareVersion) +
+        (resultHtml ? '<div class="connection-row-extra">' + resultHtml + '</div>' : '') +
         '</div>' +
-        versionTriggerHtml +
+        '<div class="connection-row-actions">' +
+        overflowHtml +
         '</div></div>' +
-        '<div class="connection-card-fact"><div class="connection-card-fact-label">启动位置</div><div class="connection-card-fact-value" title="' +
-        esc(target) +
-        '">' +
-        esc(target) +
-        '</div></div>' +
-        '</div>' +
-        '<div class="connection-card-next">' +
-        '<div class="connection-card-next-label">下一步</div>' +
-        '<div class="connection-card-next-value">' +
-        esc(next) +
-        '</div>' +
-        '</div>' +
-        '<div class="connection-card-meta">' +
-        tags.map((tag) => '<span class="connection-card-tag">' + esc(tag) + '</span>').join('') +
-        '</div>' +
-        resultHtml +
-        versionDrawerHtml +
-        supportHtml +
-        '<div class="connection-card-actions">' +
-        primaryActions.map(buttonHtml).join('') +
-        (secondaryActions.length
-          ? '<div class="connection-card-utility-actions" aria-label="更多操作">' +
-            secondaryActions.map(buttonHtml).join('') +
-            '</div>'
-          : '') +
-        '</div>';
+        versionRowsHtml +
+        internalRowsHtml;
       if (busy) {
         for (const button of card.querySelectorAll('button')) button.disabled = true;
       }
-      card.querySelector('.connection-card-actions > [data-action="agent_loop"]')?.addEventListener('click', () => {
-        void this.runConnectionAgentLoop(pkg);
-      });
-      card.querySelector('.connection-card-actions [data-action="conversation"]')?.addEventListener('click', () => {
-        void this.openCapabilityConversation(pkg);
-      });
-      card.querySelector('.connection-card-actions [data-action="discover_running"]')?.addEventListener('click', () => {
-        void this.runLifecycleAction(pkg, 'discover_running');
-      });
-      card.querySelector('.connection-card-actions > [data-action="launch"]')?.addEventListener('click', () => {
-        void this.runLifecycleAction(pkg, 'launch');
-      });
-      card.querySelector('.connection-card-actions [data-action="install"]')?.addEventListener('click', () => {
-        void this.installDraft(pkg);
-      });
-      card.querySelector('.connection-card-actions > [data-action="probe"]')?.addEventListener('click', () => {
-        void this.probeDraft(pkg);
-      });
-      card.querySelector('.connection-card-actions [data-action="close"]')?.addEventListener('click', () => {
-        void this.runLifecycleAction(pkg, 'close');
-      });
-      card.querySelector('.connection-card-actions [data-action="uninstall"]')?.addEventListener('click', () => {
-        void this.uninstallDraft(pkg);
-      });
-      card.querySelector('.connection-card-actions [data-action="export"]')?.addEventListener('click', () => {
-        void this.exportCapabilityTransfer(pkg);
-      });
-      card.querySelector('.connection-card-actions [data-action="version"]')?.addEventListener('click', () => {
-        void this.chooseCloudVersion(pkg);
-      });
-      card.querySelector('[data-action="local_versions"]')?.addEventListener('click', () => {
-        const id = String(pkg.id || '');
-        this.localVersionDrawerId = this.localVersionDrawerId === id ? '' : id;
-        this.render();
-      });
-      for (const button of card.querySelectorAll('[data-action="set_local_version"]')) {
-        button.addEventListener('click', () => {
-          const versionId = String(button.getAttribute('data-local-version-id') || '').trim();
-          void this.setLocalVersion(pkg, versionId);
-        });
-      }
-      for (const button of card.querySelectorAll('.connection-card-version-drawer [data-action="launch"]')) {
-        button.addEventListener('click', () => {
-          const versionId = String(button.getAttribute('data-local-version-id') || '').trim();
-          void this.runLifecycleAction(pkg, 'launch', versionId ? { localVersionId: versionId } : undefined);
-        });
-      }
-      for (const button of card.querySelectorAll('.connection-card-version-drawer [data-action="probe"]')) {
-        button.addEventListener('click', () => {
-          const versionId = String(button.getAttribute('data-local-version-id') || '').trim();
-          void this.runLifecycleAction(pkg, 'probe', versionId ? { localVersionId: versionId } : undefined);
-        });
-      }
-      card.querySelector('.connection-card-actions > [data-action="publish"]')?.addEventListener('click', () => {
-        void this.publishToCloud(pkg);
-      });
-      card.querySelector('.connection-card-actions [data-action="delete"]')?.addEventListener('click', () => {
-        void this.deleteDraft(pkg);
-      });
+      this.wireConnectionRow(card, pkg);
       return card;
     },
 
@@ -1265,7 +1906,7 @@
         list.className = 'connections-list';
         const emptySearch = document.createElement('div');
         emptySearch.className = 'connections-empty-result';
-        emptySearch.textContent = '没有匹配的连接，换个关键词试试。';
+        emptySearch.textContent = '没有匹配的地点，换个关键词试试。';
         list.appendChild(emptySearch);
         return;
       }
@@ -1288,28 +1929,34 @@
       if (!this.focusedConnectionId) return false;
       const card = document.querySelector('[data-connection-id="' + cssEscape(this.focusedConnectionId) + '"]');
       if (!card) {
-        this.setInlineStatus('未找到连接草稿：' + this.focusedConnectionId);
+        this.setInlineStatus('未找到地点：' + this.focusedConnectionId);
         return false;
       }
-      this.setInlineStatus('已定位连接：' + this.focusedConnectionId);
+      this.setInlineStatus('已定位地点：' + this.focusedConnectionId);
       return true;
     },
 
     async reload(shell) {
       const gen = ++this._reloadGen;
+      const activeShell = shell || this._shell;
       try {
-        const activeShell = shell || this._shell;
         await this.refreshAdminState(activeShell);
         const [drafts, cloud] = await Promise.all([this.fetchDrafts(activeShell), this.fetchCloudPackages(activeShell)]);
         if (gen !== this._reloadGen) return;
         this.drafts = drafts;
         this.packages = this.mergePackages(drafts, cloud);
         this.listError = null;
+        if (activeShell && typeof activeShell.publishWorkspaceConnectionDrafts === 'function') {
+          void activeShell.publishWorkspaceConnectionDrafts(this.packages);
+        }
       } catch (e) {
         if (gen !== this._reloadGen) return;
         this.drafts = [];
         this.packages = [];
         this.listError = e instanceof Error ? e.message : String(e);
+        if (activeShell && typeof activeShell.publishWorkspaceConnectionDrafts === 'function') {
+          void activeShell.publishWorkspaceConnectionDrafts([]);
+        }
       }
       this.render();
     },
@@ -1324,47 +1971,18 @@
       const shell = this._shell;
       if (!shell || !pkg || !pkg.id) return;
       this.busyId = String(pkg.id || '');
-      this.setInlineStatus(`Copilot 正在接管“${pkg.name || pkg.id}”这个连接对象。`);
+      this.setInlineStatus(`正在打开管家输入框：${pkg.name || pkg.id}`);
       this.render();
       try {
-        const context = await this.fetchCapabilityContext(pkg);
-        const session = context && context.session && typeof context.session === 'object' ? context.session : {};
-        const connectionState = context && context.connectionState && typeof context.connectionState === 'object'
-          ? context.connectionState
-          : connectionStateFor(pkg);
-        const sessionId = String(session.sessionId || (pkg.conversation && pkg.conversation.sessionId) || `capability:software_connection:${pkg.id}`);
-        const prompt = [
-          `继续处理连接：${pkg.name || pkg.id}`,
-          `连接 ID: ${pkg.id}`,
-          `当前成熟度: ${connectionState.maturity || 'unknown'} / ${connectionState.label || ''}`,
-          `阻塞原因: ${connectionState.blockedReason || 'none'}`,
-          `下一步: ${connectionState.nextAction || ''}`,
-          '请优先调用 ac.capability.connection_loop_run。',
-          '授权权限: context.read, process.discover, process.launch, bridge.install, connection.probe, event.write, conversation.open。',
-          '目标：识别当前运行状态，必要时启动或安装，然后探测真实连接信号；失败时把失败证据写回这个连接对象，并给出下一步。',
-          '不要使用旧 62 宿主 catalog，不要把文件存在或安装记录当作连接成功，不要 mock probe 成功。',
-        ].join('\n');
-        if (typeof window.__acOpenCopilotObjectSession === 'function') {
-          void window.__acOpenCopilotObjectSession({
-            type: 'capability',
-            id: session.id || pkg.id,
-            sessionId,
-            label: session.label || pkg.name || pkg.id,
-            contextPrompt: (context && context.contextPrompt) || this.capabilityContext(pkg),
-          });
-        }
-        if (shell.agentSession && typeof shell.agentSession.send === 'function') {
-          const sent = await shell.agentSession.send(prompt, sessionId);
-          if (!sent || sent.ok === false) {
-            this.setInlineStatus('已打开对象对话，但自动发送失败，请在右侧继续对话处理。');
-          } else {
-            this.setInlineStatus('Copilot 已开始处理连接，完成后会把事件写回这个连接对象。');
-          }
-        } else {
-          this.setInlineStatus('已打开对象对话，请在右侧让 Copilot 继续处理这个连接。');
-        }
+        await this.openDshHandoff({
+          domain: 'connection',
+          capabilityPackageId: pkg.id,
+          label: pkg.name || pkg.id,
+          surface: 'connections',
+          composerText: this.buildConnectionComposerMessage('continue', pkg),
+        });
       } catch (e) {
-        this.setInlineStatus('Copilot 处理入口打开失败：' + (e instanceof Error ? e.message : String(e)));
+        this.setInlineStatus('管家入口打开失败：' + (e instanceof Error ? e.message : String(e)));
       } finally {
         this.busyId = '';
         await this.reload(shell);
@@ -1452,7 +2070,47 @@
       void this.openCapabilityConversation(draft);
     },
 
-    async handleDroppedConnectionFiles(files) {
+    async mergeLocalVersionFromDroppedPath(pkg, rawPath) {
+      const shell = this._shell;
+      if (!shell || typeof shell.api !== 'function' || !pkg || !pkg.id) return;
+      if (typeof shell.resolveDroppedConnectionPath !== 'function') {
+        window.alert('当前版本还不支持拖拽添加版本。');
+        return;
+      }
+      const resolved = await shell.resolveDroppedConnectionPath({ path: rawPath });
+      if (!resolved || !resolved.ok) {
+        window.alert('无法识别版本：' + ((resolved && (resolved.message || resolved.error)) || '请拖入软件快捷方式或 exe 文件'));
+        return;
+      }
+      const name = String(pkg.name || resolved.name || '').trim() || '本机软件';
+      const localVersionId = normalizeLocalVersionId(
+        ['drag_drop', resolved.versionHint || '', resolved.targetPath || '', resolved.shortcutPath || ''].filter(Boolean).join('|'),
+      );
+      const localVersion = {
+        id: localVersionId,
+        label: resolved.versionHint ? name + ' ' + resolved.versionHint : name,
+        softwareVersion: resolved.versionHint || '',
+        executablePath: resolved.targetPath || '',
+        shortcutPath: resolved.shortcutPath || '',
+        installRoot: '',
+        source: 'drag_drop',
+        status: resolved.targetPath ? 'launchable' : 'detected',
+      };
+      const r = await shell.api(
+        'POST',
+        '/v1/capability-packages/drafts/' + encodeURIComponent(pkg.id) + '/merge-local-version',
+        { localVersion, makeCurrent: true, makeDefault: false },
+        { timeoutMs: 30000 },
+      );
+      if (!r || !r.ok || !r.json || !r.json.ok) {
+        window.alert('添加版本失败：' + ((r && r.json && (r.json.message || r.json.error)) || (r && r.text) || '未知错误'));
+        return;
+      }
+      await this.reload(shell);
+      this.setInlineStatus('已添加本机版本：' + (localVersion.softwareVersion || localVersion.label));
+    },
+
+    async handleDroppedConnectionFiles(files, targetPkg) {
       const shell = this._shell;
       if (!shell) return;
       const paths =
@@ -1462,6 +2120,10 @@
       const first = Array.isArray(paths) ? paths.find(Boolean) : '';
       if (!first) {
         window.alert('没有读取到拖入文件路径。');
+        return;
+      }
+      if (targetPkg && targetPkg.id) {
+        await this.mergeLocalVersionFromDroppedPath(targetPkg, first);
         return;
       }
       await this.createConnectionFromDroppedPath(first);
@@ -1515,7 +2177,7 @@
       const message = this.lifecycleMessage(action, body, r && r.text);
       if (!r || !r.ok) {
         this.setCardResult(pkg, actionLabel(action), message || '执行失败', false);
-        this.setInlineStatus(`${actionLabel(action)}未完成，可交给 Copilot 继续处理。`);
+        this.setInlineStatus(`${actionLabel(action)}未完成，可交给管家继续处理。`);
         this.busyId = '';
         await this.reload(shell);
         void this.openCapabilityConversation(pkg);
@@ -1548,6 +2210,7 @@
         return;
       }
       this.setInlineStatus('已保存当前本机版本。');
+      await this.reload(shell);
     },
 
     async discoverRunningConnections() {
@@ -1612,7 +2275,7 @@
       const message = this.lifecycleMessage('install', body, r && r.text);
       if (!r || !r.ok) {
         this.setCardResult(pkg, '安装桥接', message || '安装失败', false);
-        this.setInlineStatus('安装未完成，可交给 Copilot 读取失败证据继续处理。');
+        this.setInlineStatus('安装未完成，可交给管家读取失败证据继续处理。');
         this.busyId = '';
         await this.reload(shell);
         void this.openCapabilityConversation(pkg);
@@ -1642,7 +2305,7 @@
       const message = this.lifecycleMessage('probe', body, r && r.text);
       if (!r || !r.ok) {
         this.setCardResult(pkg, '探测', message || '未收到真实连接信号', false);
-        this.setInlineStatus('探测未收到真实信号，可交给 Copilot 继续修复。');
+        this.setInlineStatus('探测未收到真实信号，可交给管家继续修复。');
         this.busyId = '';
         await this.reload(shell);
         return;
@@ -1819,13 +2482,15 @@
     bind(shell) {
       this._shell = shell;
       this.bindDropCreate(shell);
-      $('btnConnectionCreateWithCopilot')?.addEventListener('click', () => {
-        this.openCreateConnectionCopilot();
-      });
+      const openCreate = () => this.openCreateConnectionCopilot();
+      $('btnConnectionCreateWithCopilot')?.addEventListener('click', openCreate);
+      $('btnConnectionCreateWithCopilotEmpty')?.addEventListener('click', openCreate);
       $('btnConnectionImportTransfer')?.addEventListener('click', () => {
+        $('connectionsPageMenu')?.removeAttribute('open');
         void this.importCapabilityTransfer();
       });
       $('btnConnectionsDiscoverRunning')?.addEventListener('click', () => {
+        $('connectionsPageMenu')?.removeAttribute('open');
         void this.discoverRunningConnections();
       });
       $('connectionsSearch')?.addEventListener('input', (ev) => {
@@ -1842,6 +2507,7 @@
     async onViewShown(shell) {
       this._shell = shell;
       await this.reload(shell);
+      this.maybePromptHealthCheck();
     },
   };
 })();

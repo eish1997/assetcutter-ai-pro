@@ -36,6 +36,7 @@ export type CreateWorkflowDraftInput = {
   name?: string;
   now?: string;
   source?: WorkflowDraft['source'];
+  status?: Exclude<WorkflowDraftStatus, 'archived'>;
   storePath?: string;
   workflowId?: string;
 };
@@ -110,6 +111,7 @@ export function createWorkflowDraft(input: CreateWorkflowDraftInput): WorkflowDr
       name: input.name,
       skill,
       source: input.source ?? { kind: 'conversation' },
+      status: input.status,
     }),
     description: input.description,
   };

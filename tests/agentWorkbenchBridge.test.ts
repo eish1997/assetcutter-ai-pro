@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { AGENT_WORKBENCH_SMOKE_PRESET_ID, buildAgentCapabilityOutputAsset, buildAgentCreatedImageAsset, buildAgentCreatedTextAsset, getAgentWorkbenchSmokePresetSummary, normalizeAgentCreatedImageDataUrl, summarizeAgentCapabilityPreset, summarizeAgentWorkflowAsset, summarizeAgentWorkflowAssetDetail } from '../services/agentWorkbenchBridge';
+import { AGENT_WORKBENCH_SMOKE_PRESET_ID, applyAppendTextResultToAssets, applyGenerateOnCurrentToAssets, buildAgentCapabilityOutputAsset, buildAgentCreatedImageAsset, buildAgentCreatedTextAsset, getAgentWorkbenchSmokePresetSummary, normalizeAgentCreatedImageDataUrl, pickGenerateOnCurrentPreset, publishAgentWorkbenchFinger, readAgentWorkbenchFinger, summarizeAgentCapabilityPreset, summarizeAgentWorkflowAsset, summarizeAgentWorkflowAssetDetail } from '../services/agentWorkbenchBridge';
 import type { CustomAppModule, WorkflowAsset } from '../types';
 
 function preset(patch: Partial<CustomAppModule>): CustomAppModule {
@@ -228,5 +228,73 @@ describe('agent workbench bridge', () => {
       paramsSnapshot: { inputAssetId: 'asset-source', inputAssetDisplayKey: 'mask' },
     });
     expect(JSON.stringify(detail)).not.toContain('data:image/png;base64');
+  });
+
+  it('publishes canvas finger with empty connectedHosts for getContext', () => {
+    publishAgentWorkbenchFinger({
+      selectedAssetId: 'asset-a',
+      selectedDisplayKey: 'original',
+      previewOpen: true,
+      previewAssetId: 'asset-a',
+      surface: 'canvas',
+      connectedHosts: [{ id: 'maya', title: 'Maya', ready: true, canAcceptCurrentCard: true }],
+    });
+    const finger = readAgentWorkbenchFinger();
+    expect(finger.selectedAssetId).toBe('asset-a');
+    expect(finger.previewOpen).toBe(true);
+    publishAgentWorkbenchFinger({
+      ...finger,
+      connectedHosts: [],
+    });
+    expect(readAgentWorkbenchFinger().connectedHosts).toEqual([]);
+  });
+
+  it('append_text_result writes text onto the selected card or creates one', () => {
+    const created = applyAppendTextResultToAssets([], { text: 'hello from dsh', now: 1 });
+    expect(created.created).toBe(true);
+    expect(created.assets[0].textBody).toContain('hello from dsh');
+    const appended = applyAppendTextResultToAssets(created.assets, {
+      selectedAssetId: created.assetId,
+      text: 'second',
+      now: 2,
+    });
+    expect(appended.created).toBe(false);
+    expect(appended.assets[0].textResults?.append_2).toBe('second');
+  });
+
+  it('generate_on_current mock success points displayKey at the new result', () => {
+    const seeded = applyAppendTextResultToAssets([], { text: 'seed', now: 1 });
+    const ok = applyGenerateOnCurrentToAssets(seeded.assets, {
+      selectedAssetId: seeded.assetId,
+      ok: true,
+      resultKey: 'img_1',
+      companionKey: 'ck-1',
+      image: 'data:image/png;base64,aaa',
+    });
+    expect(ok.ok).toBe(true);
+    expect(ok.assets[0].displayKey).toBe('img_1');
+    expect(ok.assets[0].resultsCompanionKeys?.img_1).toBe('ck-1');
+    expect(ok.assets[0].results?.img_1).toContain('data:image/png');
+  });
+
+  it('picks an existing direct-run image preset for generate_on_current', () => {
+    const text = preset({ id: 'txt', category: 'text_to_text' });
+    const image = preset({ id: 'img', category: 'text_to_image' });
+    expect(pickGenerateOnCurrentPreset([text, image]).ok).toBe(true);
+    expect(pickGenerateOnCurrentPreset([text, image]).ok && pickGenerateOnCurrentPreset([text, image]).preset.id).toBe('img');
+    expect(pickGenerateOnCurrentPreset([text]).ok).toBe(false);
+    expect(pickGenerateOnCurrentPreset([text, image], 'txt').error).toBe('preset_not_image_generate');
+  });
+
+  it('generate_on_current mock missing key does not blank-succeed', () => {
+    const seeded = applyAppendTextResultToAssets([], { text: 'seed', now: 1 });
+    const failed = applyGenerateOnCurrentToAssets(seeded.assets, {
+      selectedAssetId: seeded.assetId,
+      ok: false,
+      error: 'missing_api_key',
+    });
+    expect(failed.ok).toBe(false);
+    expect(failed.error).toBe('missing_api_key');
+    expect(failed.assets[0].displayKey).toBe('original');
   });
 });

@@ -189,6 +189,37 @@ class Handler(BaseHTTPRequestHandler):
 ${versionBlock}            self._send(200, {"ok": True, "host": HOST_ID, "name": HOST_NAME, "version": version})
         else:
             self._send(404, {"ok": False, "error": "not_found"})
+    def do_POST(self):
+        route = self.path.split("?", 1)[0]
+        if route != "/import_file":
+            self._send(404, {"ok": False, "error": "not_found"})
+            return
+        length = int(self.headers.get("Content-Length", "0") or "0")
+        raw = self.rfile.read(length) if length > 0 else b"{}"
+        try:
+            payload = json.loads(raw.decode("utf-8") or "{}")
+        except Exception:
+            payload = {}
+        file_path = str(payload.get("filePath") or payload.get("path") or "").strip()
+        if not file_path:
+            self._send(400, {"ok": False, "error": "missing_file_path"})
+            return
+        try:
+            import os
+            if HOST_ID == "blender":
+                import bpy
+                ext = os.path.splitext(file_path)[1].lower()
+                if ext in (".fbx",):
+                    bpy.ops.import_scene.fbx(filepath=file_path)
+                elif ext in (".obj",):
+                    bpy.ops.wm.obj_import(filepath=file_path)
+                elif ext in (".gltf", ".glb"):
+                    bpy.ops.import_scene.gltf(filepath=file_path)
+                else:
+                    bpy.ops.wm.open_mainfile(filepath=file_path)
+            self._send(200, {"ok": True, "message": "imported", "filePath": file_path})
+        except Exception as e:
+            self._send(500, {"ok": False, "error": "import_failed", "message": str(e)})
 
 def _ensure_server():
     global _server, _thread

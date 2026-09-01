@@ -1,5 +1,6 @@
 import React, { Suspense } from 'react';
 import type { WorkspacePersistUserId, WorkspaceProject } from '../services/workspaceProjectStore';
+import { hasWorkbenchFileSourceApi } from '../services/workshopFileTree';
 import WorkspaceProjectShell from './WorkspaceProjectShell';
 import WorkflowErrorBoundary from './workflow/WorkflowErrorBoundary';
 import LazySectionFallback from './ui/LazySectionFallback';
@@ -41,8 +42,11 @@ const WorkflowModeShell: React.FC<WorkflowModeShellProps> = ({
   onWorkflowSectionLoadRetry,
   workflowSectionSuspenseKey = 0,
   renderWorkflowSection,
-}) => (
-  <div className={activeWorkspaceProjectId ? 'relative flex h-full min-h-0 w-full flex-col' : 'relative w-full'}>
+}) => {
+  const workbenchFolderMode = hasWorkbenchFileSourceApi();
+  const showWorkflowCanvas = Boolean(activeWorkspaceProjectId) || workbenchFolderMode;
+  return (
+  <div className={showWorkflowCanvas ? 'relative flex h-full min-h-0 w-full flex-col' : 'relative w-full'}>
     {showWorkspaceIdbHydrateOverlay && (
       <div
         className="absolute inset-0 z-30 flex flex-col items-center justify-center gap-2 rounded-xl bg-[#050505]/90 backdrop-blur-[2px] border border-white/[0.06]"
@@ -56,13 +60,13 @@ const WorkflowModeShell: React.FC<WorkflowModeShellProps> = ({
     )}
     <div
       className={[
-        activeWorkspaceProjectId ? 'flex min-h-0 flex-1 flex-col' : '',
+        showWorkflowCanvas ? 'flex min-h-0 flex-1 flex-col' : '',
         showWorkspaceIdbHydrateOverlay ? 'pointer-events-none select-none opacity-[0.72]' : '',
       ]
         .filter(Boolean)
         .join(' ') || undefined}
     >
-      {!activeWorkspaceProjectId && (
+      {!showWorkflowCanvas && (
           <WorkspaceProjectShell
             projects={workspaceProjects}
             persistUserId={persistUserId}
@@ -75,7 +79,7 @@ const WorkflowModeShell: React.FC<WorkflowModeShellProps> = ({
             onOpenTrash={onOpenWorkspaceTrash}
           />
       )}
-      {activeWorkspaceProjectId && (
+      {showWorkflowCanvas && (
         <WorkflowErrorBoundary onRetry={onWorkflowSectionLoadRetry}>
           <div className="flex min-h-0 min-w-0 flex-1 flex-col">
             <Suspense
@@ -89,6 +93,7 @@ const WorkflowModeShell: React.FC<WorkflowModeShellProps> = ({
       )}
     </div>
   </div>
-);
+  );
+};
 
 export default WorkflowModeShell;

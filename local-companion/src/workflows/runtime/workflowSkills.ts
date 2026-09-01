@@ -353,6 +353,70 @@ export function listWorkflowSkills() {
   return workflowSkills;
 }
 
+export const MANUAL_TRACE_WORKFLOW_ID = 'workflow.manual.from_trace';
+
+export const manualTraceReplayWorkflowSkill = {
+  id: MANUAL_TRACE_WORKFLOW_ID,
+  name: '手册复现',
+  version: '0.1.0',
+  status: 'available',
+  userSummary: {
+    title: '手册复现',
+    inputSummary: '按整理好的步骤由管家代办。',
+    outputSummary: '没有本机自动执行器，不假装已跑通。',
+  },
+  aiContract: {
+    whenToUse:
+      'Use when the user compiled a host procedure (for example Unreal connection + fog holdout) that has no registered local executor yet. The butler follows the written steps. Do not call replay_run.',
+    inputSchema: objectSchema({}, []),
+    outputSchema: objectSchema({}, []),
+    preflightChecks: [],
+    steps: [
+      {
+        id: 'follow_documented_steps',
+        title: '按手册步骤办事',
+        toolName: 'butler',
+        inputTemplate: {},
+        successCriteria: ['管家按步骤做完并回报'],
+        failureModes: ['没有对应本机执行器'],
+      },
+    ],
+    successCriteria: [{ id: 'steps_followed', description: '管家按手册步骤办完。' }],
+    failureModes: [
+      {
+        code: 'no_local_executor',
+        description: '本机没有自动执行器。',
+        repairActionId: 'follow_manually',
+      },
+    ],
+    repairActions: [
+      {
+        id: 'follow_manually',
+        actionLayer: 'user_confirmation',
+        title: '按手册代办',
+        message: '没有自动执行器时，管家按卡片描述逐步办理。',
+        actionType: 'manual_repair',
+        recoverable: true,
+        requiresConfirmation: false,
+      },
+    ],
+  },
+  systemContract: {
+    requiredCapabilities: [],
+    requiredConnectors: [],
+    riskLevel: 'confirm',
+    auditPolicy: { recordToolCalls: true },
+    artifactPolicy: { registerOnSuccess: false },
+    replayPolicy: { saveInput: true, rerunPreflight: false },
+    validation: {
+      lastValidatedAt: '',
+      records: [],
+      status: 'unvalidated',
+    },
+  },
+} satisfies WorkflowSkill;
+
 export function getWorkflowSkill(id: string) {
-  return workflowSkills.find((workflow) => workflow.id === id || (workflow.legacyIds ?? []).includes(id));
+  const all: WorkflowSkill[] = [...workflowSkills, manualTraceReplayWorkflowSkill];
+  return all.find((workflow) => workflow.id === id || (workflow.legacyIds ?? []).includes(id));
 }

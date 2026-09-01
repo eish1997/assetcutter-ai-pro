@@ -11,6 +11,15 @@ type WorkbenchDownloadBridge = {
   onDownloadSaved?: (
     handler: (payload: { path?: string; filename?: string; title?: string }) => void
   ) => () => void;
+  onWorkspaceDocumentEvent?: (handler: (events: unknown[]) => void) => () => void;
+  dispatchWorkspaceCommand?: (command: unknown) => Promise<unknown>;
+  hydrateWorkspaceDocument?: (payload: unknown) => Promise<unknown>;
+  getWorkshopFileState?: () => Promise<unknown>;
+  pickWorkshopRoot?: () => Promise<unknown>;
+  listWorkshopDir?: (payload?: { rel?: string }) => Promise<unknown>;
+  getWorkshopThumb?: (payload: { rel: string; root?: string }) => Promise<unknown>;
+  removeWorkshopRoot?: (payload: { root: string }) => Promise<unknown>;
+  onWorkspaceShellView?: (handler: (view: string) => void) => () => void;
 };
 
 declare global {

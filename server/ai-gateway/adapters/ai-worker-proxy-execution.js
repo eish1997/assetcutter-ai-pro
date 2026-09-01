@@ -8,7 +8,7 @@ import {
   signFairnessKeyHeader,
 } from '../../credits-gate-hmac.js';
 import { AI_GATEWAY_HANDOFF_HEADER, signAiGatewayHandoffToken } from '../handoff-token.js';
-import { applyAiGatewayAdapterResult } from '../adapter-result.js';
+import { applyAiGatewayAdapterResult, throwIfAdapterPlanTerminalFailed } from '../adapter-result.js';
 import { settleAiGatewayJobCredits, settlementMetadataPatch } from '../settlement.js';
 import { maybeAutoPauseAiGatewayProvider } from '../ops-control.js';
 import {
@@ -261,16 +261,48 @@ export async function pollAiWorkerProxyJob(plan, proxyJobId, options = {}) {
       const status = String(body.status || '').trim();
       if (status === 'completed') {
         const result = body.result ?? null;
+        const artifacts = extractAiGatewayArtifactsFromProxyResult(result);
+        if (!artifacts.length) {
+          const { plan: failed } = await applyAiGatewayAdapterResult(
+            plan,
+            {
+              status: 'failed',
+              upstreamTaskId: proxyJobId,
+              output: { raw: { proxyResult: sanitizeProxyResultForAiGatewayJob(result) } },
+              failureReason: {
+                code: 'AI_GATEWAY_UPSTREAM_EMPTY_IMAGE',
+                message: 'AI Worker Proxy completed without image artifacts',
+              },
+            },
+            store,
+            {
+              modality: plan.job?.modality,
+              metadata: {
+                proxyJobId,
+                proxyStatus: 'completed_empty',
+                gatewayExecution: { failedAt: new Date().toISOString() },
+              },
+            }
+          );
+          current = await settleIfNeeded(failed, store);
+          throwIfAdapterPlanTerminalFailed(current, {
+            providerId: plan.route?.providerId || plan.job?.provider,
+            adapterId: plan.route?.adapterId,
+            workerId: plan.route?.workerId,
+          });
+          return;
+        }
         const { plan: succeeded } = await applyAiGatewayAdapterResult(
           plan,
           {
             status: 'succeeded',
             upstreamTaskId: proxyJobId,
-            artifacts: extractAiGatewayArtifactsFromProxyResult(result),
+            artifacts,
             output: sanitizeProxyResultForAiGatewayJob(result),
           },
           store,
           {
+            modality: plan.job?.modality,
             metadata: {
               proxyJobId,
               proxyStatus: 'completed',
@@ -279,6 +311,11 @@ export async function pollAiWorkerProxyJob(plan, proxyJobId, options = {}) {
           }
         );
         current = await settleIfNeeded(succeeded, store);
+        throwIfAdapterPlanTerminalFailed(current, {
+          providerId: plan.route?.providerId || plan.job?.provider,
+          adapterId: plan.route?.adapterId,
+          workerId: plan.route?.workerId,
+        });
         return;
       }
       if (status === 'failed') {

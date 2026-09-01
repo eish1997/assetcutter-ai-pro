@@ -70,6 +70,8 @@ describe('local companion workflow runtime', () => {
     expect(skills.map((skill) => skill.id)).toContain('workflow.maya.export_selection_fbx');
     expect(skills.map((skill) => skill.id)).not.toContain('scriptHub.maya.export_selection_fbx');
     expect(getWorkflowSkill('workflow.maya.export_selection_fbx')).toBe(getWorkflowSkill('scriptHub.maya.export_selection_fbx'));
+    expect(getWorkflowSkill('workflow.manual.from_trace')?.id).toBe('workflow.manual.from_trace');
+    expect(skills.map((skill) => skill.id)).not.toContain('workflow.manual.from_trace');
     expect(getWorkflowSkill('workflow.maya.export_selection_fbx')).toMatchObject({
       legacyIds: ['scriptHub.maya.export_selection_fbx'],
       systemContract: {

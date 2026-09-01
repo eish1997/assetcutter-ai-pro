@@ -816,6 +816,44 @@ describe('OpenAI official AI Gateway adapter', () => {
     expect(stored?.job.status).not.toBe('succeeded');
   });
 
+  it('accepts scheme-less 302 file url on Gemini native parts', async () => {
+    useTempStore();
+    await saveProviderKeys([
+      { id: 'key_302_schemeless', provider: '302ai', label: '302', secret: 'sk-302', enabled: true },
+    ]);
+    const store = createInMemoryAiJobStore();
+    const plan = await store.put(
+      createAiGatewayJobPlan({
+        id: 'aijob_gemini_schemeless_url',
+        modality: 'image',
+        provider: '302ai',
+        model: 'gemini-2.5-flash-image',
+        input: {
+          contents: [{ role: 'user', parts: [{ text: 'line art' }] }],
+        },
+      })
+    );
+    const fetchImpl = async () =>
+      new Response(
+        JSON.stringify({
+          candidates: [
+            {
+              content: {
+                parts: [{ url: 'file.302.ai/gpt/imgs/demo.png' }],
+              },
+              finishReason: 'STOP',
+            },
+          ],
+        }),
+        { status: 200 }
+      );
+
+    await startOpenAiOfficialExecution(plan, { store, fetchImpl });
+    const stored = await store.get('aijob_gemini_schemeless_url');
+    expect(stored?.job.status).toBe('succeeded');
+    expect(stored?.job.artifacts?.[0]?.url).toBe('https://file.302.ai/gpt/imgs/demo.png');
+  });
+
   it('prefers https url artifact when Gemini native returns both url and inlineData', async () => {
     useTempStore();
     await saveProviderKeys([

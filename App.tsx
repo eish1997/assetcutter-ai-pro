@@ -25,7 +25,10 @@ import { loadSnippets } from './services/snippetStore';
 import { AppMode, LibraryItem, SystemConfig, AppTask, AssetCategory, type CustomAppModule, type CapabilitySet, type WorkflowAsset, type WorkflowPendingTask, type ArenaCurrentStep, type ArenaStepEntry, type ArenaTimelineBlock } from './types';
 import { runCapabilityTest } from './services/capabilityTestRunner';
 import { executeCapability } from './services/capabilityExecutor';
-import { AGENT_WORKBENCH_SMOKE_PRESET_ID, buildAgentCapabilityOutputAsset, buildAgentCreatedImageAsset, buildAgentCreatedTextAsset, getAgentWorkbenchSmokePresetSummary, initAgentWorkbenchBridge, normalizeAgentCreatedImageDataUrl, summarizeAgentCapabilityPreset, summarizeAgentWorkflowAsset, summarizeAgentWorkflowAssetDetail } from './services/agentWorkbenchBridge';
+import { AGENT_WORKBENCH_SMOKE_PRESET_ID, applyAppendTextResultToAssets, applyGenerateOnCurrentToAssets, buildAgentCapabilityOutputAsset, buildAgentCreatedImageAsset, buildAgentCreatedTextAsset, getAgentWorkbenchSmokePresetSummary, initAgentWorkbenchBridge, normalizeAgentCreatedImageDataUrl, pickGenerateOnCurrentPreset, readAgentWorkbenchFinger, summarizeAgentCapabilityPreset, summarizeAgentWorkflowAsset, summarizeAgentWorkflowAssetDetail } from './services/agentWorkbenchBridge';
+import { connectedHostsFromDrafts, readPublishedConnectionDrafts } from './services/workspaceFingerHosts';
+import { mergeAssetUpsert, removeAssetById } from './services/workspaceAssetUpsertMerge';
+import { diffDocumentAssets, documentAssetsKey, patchesFromAssets } from './services/workspaceDocumentAssets';
 import {
   fetchAgentCliPlatformAssets,
   fetchAgentCliPlatformProjects,
@@ -43,6 +46,7 @@ import { CustomDropdown } from './components/ui/CustomDropdown';
 import { SidebarAccountAvatar } from './components/SidebarAccountAvatar';
 import LazySectionFallback from './components/ui/LazySectionFallback';
 import WorkflowModeShell from './components/WorkflowModeShell';
+import { hasWorkbenchFileSourceApi } from './services/workshopFileTree';
 import WorkspaceSidebarFooter from './components/WorkspaceSidebarFooter';
 import { useUserUiPrefs } from './hooks/useUserUiPrefs';
 import { useCreditBalance } from './hooks/useCreditBalance';
@@ -588,6 +592,8 @@ const MainApp: React.FC = () => {
   const [activeWorkspaceProjectId, setActiveWorkspaceProjectId] = useState<string | null>(() =>
     typeof indexedDB !== 'undefined' ? null : getLastOpenedWorkspaceProjectId(null)
   );
+  const workbenchFolderMode = hasWorkbenchFileSourceApi();
+  const showWorkflowCanvas = Boolean(activeWorkspaceProjectId) || workbenchFolderMode;
   const [workflowAssets, setWorkflowAssets] = useState<WorkflowAsset[]>(() => {
     if (typeof indexedDB !== 'undefined') return [];
     const id = getLastOpenedWorkspaceProjectId(null);
@@ -762,8 +768,9 @@ const MainApp: React.FC = () => {
     return () => window.removeEventListener('focus', onFocus);
   }, [user?.id, refreshAuthUser]);
 
-  /** 画布变更后标记未同步（云端拉取过程中不标脏；伴侣目录为真源时不标索引脏） */
+  /** 画布变更后标记未同步（云端拉取过程中不标脏；伴侣目录为真源时不标索引脏；文件夹真源时不标项目脏） */
   useEffect(() => {
+    if (workbenchFolderMode) return;
     if (isWorkspaceCompanionDirectorySourceOfTruth()) return;
     if (authLoading || !user?.id || !user?.username || !isWorkspaceCloudEnabled() || !activeWorkspaceProjectId) return;
     if (!canSyncWorkspaceProjectToCloud(activeWorkspaceProjectId)) return;
@@ -773,14 +780,15 @@ const MainApp: React.FC = () => {
     }
     if (workspaceCloudHydratingProjectId === activeWorkspaceProjectId) return;
     workspaceCloudDirtyRef.current = true;
-  }, [authLoading, user?.id, user?.username, workflowAssets, workflowPending, activeWorkspaceProjectId, workspaceCloudHydratingProjectId]);
+  }, [authLoading, user?.id, user?.username, workflowAssets, workflowPending, activeWorkspaceProjectId, workspaceCloudHydratingProjectId, workbenchFolderMode]);
 
   useEffect(() => {
+    if (workbenchFolderMode) return;
     if (!workspaceCloudQuotaSuspended) return;
     if (!user?.id || !user?.username || !isWorkspaceCloudEnabled() || !activeWorkspaceProjectId) return;
     if (!canSyncWorkspaceProjectToCloud(activeWorkspaceProjectId)) return;
     editedWhileQuotaSuspendedRef.current = true;
-  }, [workflowAssets, workflowPending, workspaceCloudQuotaSuspended, user?.id, user?.username, activeWorkspaceProjectId]);
+  }, [workflowAssets, workflowPending, workspaceCloudQuotaSuspended, user?.id, user?.username, activeWorkspaceProjectId, workbenchFolderMode]);
 
   useEffect(() => {
     if (authLoading || !user?.id || !user?.username || !isWorkspaceCloudEnabled()) return;
@@ -1683,6 +1691,7 @@ const MainApp: React.FC = () => {
 
   /** 画布变更（且具备轻量上云前置条件）时递增序号，由下游 effect 单独防抖 PUT */
   useEffect(() => {
+    if (workbenchFolderMode) return;
     if (isWorkspaceCompanionDirectorySourceOfTruth()) return;
     if (!activeWorkspaceProjectId || !workspaceLocalIdbHydrateReady) return;
     if (authLoading) return;
@@ -1700,10 +1709,12 @@ const MainApp: React.FC = () => {
     user?.id,
     user?.username,
     workspaceCloudQuotaSuspended,
+    workbenchFolderMode,
   ]);
 
   /** 已绑定 + 云可用：仅在画布调度序号变化时启动防抖；指纹未变则不调 PUT */
   useEffect(() => {
+    if (workbenchFolderMode) return;
     if (isWorkspaceCompanionDirectorySourceOfTruth()) return;
     if (liteStructureSyncScheduleSeq === 0) return;
     if (!activeWorkspaceProjectId || !workspaceLocalIdbHydrateReady) return;
@@ -2272,6 +2283,14 @@ const MainApp: React.FC = () => {
       getContext: async () => {
         const activeProject =
           workspaceProjects.find((p) => p.id === activeWorkspaceProjectId) ?? null;
+        const published = readAgentWorkbenchFinger();
+        const finger = {
+          ...published,
+          connectedHosts: connectedHostsFromDrafts(readPublishedConnectionDrafts(), {
+            hasSelectedCard: Boolean(published.selectedAssetId),
+          }),
+          ...(mode !== AppMode.WORKFLOW ? { surface: 'other' as const } : {}),
+        };
         return {
           ok: true,
           action: 'getContext',
@@ -2287,6 +2306,7 @@ const MainApp: React.FC = () => {
             getAgentWorkbenchSmokePresetSummary(),
             ...capabilityPresets.map(summarizeAgentCapabilityPreset),
           ],
+          finger,
           counts: {
             projects: workspaceProjects.length,
             capabilityPresets: capabilityPresets.length + 1,
@@ -2781,6 +2801,129 @@ const MainApp: React.FC = () => {
           nextStep: 'done',
         };
       },
+      appendTextResult: async ({ text, assetId }) => {
+        const body = String(text || '').trim();
+        if (!body) {
+          return {
+            ok: false,
+            error: 'missing_text',
+            nextStep: '请传入 text（非空字符串）。',
+          };
+        }
+        const selectedId = String(assetId || readAgentWorkbenchFinger().selectedAssetId || '').trim();
+        const applied = applyAppendTextResultToAssets(workflowAssetsRef.current, {
+          selectedAssetId: selectedId || null,
+          text: body,
+        });
+        const targetProjectId = activeWorkspaceProjectId;
+        setWorkflowAssets(() => {
+          const next = applied.assets;
+          workflowAssetsRef.current = next;
+          workflowSessionHadNonEmptyAssetsRef.current = true;
+          if (
+            targetProjectId &&
+            isWorkflowProjectAutosaveAllowed({
+              idbHydrateReady: workspaceLocalIdbHydrateReadyRef.current,
+              projectLoadComplete: workflowProjectLoadCompleteRef.current,
+              companionBootReady: workflowCompanionBootReadyRef.current,
+            })
+          ) {
+            trySaveWorkflowBundle(
+              targetProjectId,
+              { assets: next, pending: workflowPendingRef.current },
+              userIdRef.current ?? null,
+              workflowBundleSaveOpts()
+            );
+          }
+          return next;
+        });
+        addGlobalLog('Copilot', 'info', `dsh 已写入文本结果：${applied.assetId}`, applied.assetId);
+        return {
+          ok: true,
+          action: 'appendTextResult',
+          assetId: applied.assetId,
+          created: applied.created,
+          kind: 'text',
+          nextStep: 'done',
+        };
+      },
+      generateOnCurrent: async ({ presetId }) => {
+        const selectedId = String(readAgentWorkbenchFinger().selectedAssetId || '').trim();
+        if (!selectedId) {
+          return { ok: false, error: 'no_selected_asset', nextStep: '请先在画布选中一张卡。' };
+        }
+        const picked = pickGenerateOnCurrentPreset(capabilityPresets, presetId);
+        if (!picked.ok) {
+          return { ok: false, error: picked.error, nextStep: '请在工作台准备一条可直接运行的出图能力。' };
+        }
+        const sourceAsset = workflowAssetsRef.current.find((a) => a.id === selectedId);
+        if (!sourceAsset) {
+          return { ok: false, error: 'asset_not_found', assetId: selectedId };
+        }
+        const displayKey = String(sourceAsset.displayKey || 'original').trim() || 'original';
+        const imageInput =
+          displayKey === 'original'
+            ? String(sourceAsset.original || '').trim()
+            : String((sourceAsset.results || {})[displayKey] || sourceAsset.original || '').trim();
+        const targetProjectId = activeWorkspaceProjectId;
+        const result = await executeCapability(
+          picked.preset,
+          imageInput,
+          {
+            companionProjectId: targetProjectId || 'default',
+            workflowAssetId: selectedId,
+            workflowSourceDisplayKey: displayKey,
+          },
+          { inputText: String(sourceAsset.textBody || '').trim() || undefined }
+        );
+        if (!result.ok) {
+          const error = result.kind === 'none' ? result.error : 'generate_failed';
+          return { ok: false, error, action: 'generateOnCurrent', assetId: selectedId };
+        }
+        if (result.kind !== 'image') {
+          return { ok: false, error: 'not_image_result', action: 'generateOnCurrent', assetId: selectedId };
+        }
+        const applied = applyGenerateOnCurrentToAssets(workflowAssetsRef.current, {
+          selectedAssetId: selectedId,
+          ok: true,
+          resultKey: `${picked.preset.id}_current`,
+          image: result.image,
+        });
+        if (!applied.ok) {
+          return { ok: false, error: applied.error || 'generate_failed', assetId: selectedId };
+        }
+        const projectId = activeWorkspaceProjectId;
+        setWorkflowAssets(() => {
+          const next = applied.assets;
+          workflowAssetsRef.current = next;
+          workflowSessionHadNonEmptyAssetsRef.current = true;
+          if (
+            projectId &&
+            isWorkflowProjectAutosaveAllowed({
+              idbHydrateReady: workspaceLocalIdbHydrateReadyRef.current,
+              projectLoadComplete: workflowProjectLoadCompleteRef.current,
+              companionBootReady: workflowCompanionBootReadyRef.current,
+            })
+          ) {
+            trySaveWorkflowBundle(
+              projectId,
+              { assets: next, pending: workflowPendingRef.current },
+              userIdRef.current ?? null,
+              workflowBundleSaveOpts()
+            );
+          }
+          return next;
+        });
+        addGlobalLog('Copilot', 'info', `dsh 已写回当前卡出图：${applied.assetId}`, applied.assetId);
+        return {
+          ok: true,
+          action: 'generateOnCurrent',
+          assetId: applied.assetId,
+          resultKey: applied.resultKey,
+          kind: 'image',
+          nextStep: 'done',
+        };
+      },
     });
   }, [
     addGlobalLog,
@@ -2791,7 +2934,62 @@ const MainApp: React.FC = () => {
     createWorkspaceProjectForAgent,
     openWorkspaceProject,
     workflowBundleSaveOpts,
+    mode,
+    user?.id,
   ]);
+
+  useEffect(() => {
+    const api = window.assetCutterWorkbench;
+    if (!api || typeof api.onWorkspaceDocumentEvent !== 'function') return undefined;
+    return api.onWorkspaceDocumentEvent((events) => {
+      const list = Array.isArray(events) ? events : [];
+      for (const event of list) {
+        const item = event as { type?: string; payload?: { id: string }; assetId?: string };
+        if (item && item.type === 'asset.upsert' && item.payload && item.payload.id) {
+          setWorkflowAssets((prev) => {
+            const next = mergeAssetUpsert(prev, item.payload as { id: string });
+            workflowAssetsRef.current = next;
+            workflowSessionHadNonEmptyAssetsRef.current = true;
+            return next;
+          });
+        }
+        if (item && item.type === 'asset.removed' && item.assetId) {
+          setWorkflowAssets((prev) => {
+            const next = removeAssetById(prev, item.assetId);
+            workflowAssetsRef.current = next;
+            return next;
+          });
+        }
+      }
+    });
+  }, []);
+
+  const lastDocumentAssetsKeyRef = useRef('');
+  const lastDocumentPatchesRef = useRef(patchesFromAssets([]));
+  const lastDocumentProjectIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (workbenchFolderMode) return;
+    const api = window.assetCutterWorkbench;
+    if (!api) return;
+    const patches = patchesFromAssets(workflowAssets);
+    const key = documentAssetsKey(patches);
+    if (key === lastDocumentAssetsKeyRef.current && activeWorkspaceProjectId === lastDocumentProjectIdRef.current) {
+      return;
+    }
+    const prevPatches = lastDocumentPatchesRef.current;
+    const projectChanged = activeWorkspaceProjectId !== lastDocumentProjectIdRef.current;
+    lastDocumentAssetsKeyRef.current = key;
+    lastDocumentPatchesRef.current = patches;
+    lastDocumentProjectIdRef.current = activeWorkspaceProjectId;
+    if (typeof api.hydrateWorkspaceDocument === 'function' && (projectChanged || !prevPatches.length)) {
+      void api.hydrateWorkspaceDocument({ projectId: activeWorkspaceProjectId || '', assets: patches });
+      return;
+    }
+    if (typeof api.dispatchWorkspaceCommand !== 'function') return;
+    const { upserts, removedIds } = diffDocumentAssets(prevPatches, patches);
+    for (const payload of upserts) void api.dispatchWorkspaceCommand({ type: 'upsert_asset', payload });
+    for (const assetId of removedIds) void api.dispatchWorkspaceCommand({ type: 'remove_asset', assetId });
+  }, [workflowAssets, activeWorkspaceProjectId, workbenchFolderMode]);
 
   const backToWorkspaceProjectShell = useCallback(
     async (opts?: { skipQuotaBackConfirm?: boolean }) => {
@@ -4489,7 +4687,7 @@ const MainApp: React.FC = () => {
         <div
           ref={mainScrollRef}
           className={`flex-1 min-h-0 no-scrollbar touch-pan-y ${
-            mode === AppMode.WORKFLOW && activeWorkspaceProjectId
+            mode === AppMode.WORKFLOW && showWorkflowCanvas
               ? 'flex flex-col overflow-hidden pt-3 pb-3 pl-[calc(0.75rem+3.5rem+0.5rem)] pr-4 lg:pt-4 lg:pb-6 lg:pl-[calc(1rem+3.5rem+0.75rem)] lg:pr-6'
               : 'overflow-y-auto pt-6 pb-4 pl-[calc(0.75rem+3.5rem+0.5rem)] pr-4 lg:py-10 lg:pl-[calc(1rem+3.5rem+0.75rem)] lg:pr-10'
           }`}
@@ -4501,7 +4699,7 @@ const MainApp: React.FC = () => {
           <div
             ref={workflowMainContentRef}
             className={
-              mode === AppMode.WORKFLOW && activeWorkspaceProjectId
+              mode === AppMode.WORKFLOW && showWorkflowCanvas
                 ? 'flex h-full min-h-0 min-w-0 w-full flex-1 flex-col'
                 : 'h-full w-full'
             }
@@ -4534,7 +4732,7 @@ const MainApp: React.FC = () => {
                 className={
                   mode !== AppMode.WORKFLOW
                     ? 'hidden'
-                    : activeWorkspaceProjectId
+                    : showWorkflowCanvas
                       ? 'flex min-h-0 min-w-0 w-full flex-1 flex-col'
                       : undefined
                 }
@@ -4817,7 +5015,7 @@ const MainApp: React.FC = () => {
           </div>
         </div>
         </div>
-        {mode === AppMode.WORKFLOW && activeWorkspaceProjectId ? (
+        {mode === AppMode.WORKFLOW && showWorkflowCanvas ? (
           <div
             ref={quickComposeWorkspaceDockHostRef}
             className={`relative z-[2600] flex h-full min-h-0 shrink-0 self-stretch flex-col pointer-events-auto ${

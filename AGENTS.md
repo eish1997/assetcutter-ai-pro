@@ -10,6 +10,8 @@ read the linked Cursor rule for detail.
 - Cursor originals: `.cursor/rules/*.mdc`
 - Main Cursor index: `.cursor/rules/index.mdc`
 - Architecture notes may be referenced from `docs/`
+- `docs/` root is only 错题本 / 交接 / the shell charter / ADRs / closure list.
+  Historical plans are in `docs/archived/` and are not default reading.
 - If a task touches an area below, read the corresponding source before editing.
 
 ## General Engineering
@@ -27,6 +29,7 @@ read the linked Cursor rule for detail.
 - Use `components/ui/CustomDropdown.tsx` or an existing custom dropdown pattern.
 - For UI work, preserve the current product style and density.
 - Avoid visible instructional copy unless the feature specifically needs it.
+- Visual tokens: `design-system/MASTER.md` (page overrides in `design-system/pages/`). Do not replace with a generic landing-page palette. Aesthetic pass uses skill `frontend-design`; post-change audit uses `web-design-guidelines`.
 
 Source: `.cursor/rules/dropdown-ui-style.mdc`
 
@@ -65,7 +68,7 @@ selection, or new AI capability classes:
 - Run relevant tests:
   - `npx vitest run tests/workflowRunTaskBranch.test.ts`
   - `npx vitest run tests/workflowAiPickIndex.test.ts`
-- Check `docs/架构宪章-店仓菜单.md` and `docs/多模型可运营改造计划.md`
+- Check `docs/多模型可运营改造计划.md` §1.4
   when adding suppliers, modalities, or provider bypasses.
 
 Source: `.cursor/rules/workflow-ai-pick-index.mdc`
@@ -100,6 +103,11 @@ npm run restart:local-companion
 ```
 
 - Pure documentation changes in those directories do not require restart.
+- Product shape of the local shell (building / tenants / concierge):
+  `docs/架构宪章-本地壳大楼租户.md`. Do not reopen that metaphor in implementation tasks.
+  dsh plugin vs shell: charter §3.11 — only Cordis keys; do not Cordis-ize the lobby,
+  fork harness, or treat floor/store hard-fit as plugins. Pack the shell (asar files +
+  extraResources) before expanding keys.
 
 Sources:
 - `.cursor/rules/auto-restart-services.mdc`
@@ -157,6 +165,12 @@ If the user starts with `虾米`, interpret the following text as a plain-langua
 implementation request: clarify only when necessary, then implement directly.
 
 Source: `.cursor/rules/xiami-plain-language.mdc`
+
+## Executable agent plans
+
+When writing or revising a long implementation plan for another agent to loop on,
+read `.cursor/skills/agent-executable-dev-plan/SKILL.md`. The plan must pass
+goal-fit, agent-loop fit, and minimal-human-verification before execution.
 
 ## 3D and Rendering
 

@@ -71,6 +71,21 @@ while (queue.length) {
   }
 }
 
+const extraResources = Array.isArray(pkg.build?.extraResources) ? pkg.build.extraResources : [];
+const extraFrom = extraResources.map((row) => (typeof row === 'string' ? row : String(row?.from || '')));
+const blankRoomSkill = existsSync(join(desktopDir, 'dsh-skills', 'blank-room.md'));
+const fingerPlugin = existsSync(join(desktopDir, 'dsh-plugins', 'workspace-finger-plugin.mjs'));
+const toolsPlugin = existsSync(join(desktopDir, 'dsh-plugins', 'workspace-tools-plugin.mjs'));
+const replayListed = isListed('replay-trace-ring.cjs');
+const roomCompartmentListed = isListed('shell-room-compartment.cjs');
+
+await Promise.all([
+  // #region agent log
+  fetch('http://127.0.0.1:7909/ingest/d8d3abba-20d5-423d-b535-1cdbb700adde',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'61ab0c'},body:JSON.stringify({sessionId:'61ab0c',runId:'asar-gate',hypothesisId:'A',location:'scripts/check-companion-desktop-asar-files.mjs:missing',message:'asar require graph vs build.files',data:{missing,visitedSize:visited.size,replayListed,roomCompartmentListed,hasReplayVisited:visited.has('replay-trace-ring.cjs'),hasRoomVisited:visited.has('shell-room-compartment.cjs')},timestamp:Date.now()})}).catch(()=>{}),
+  fetch('http://127.0.0.1:7909/ingest/d8d3abba-20d5-423d-b535-1cdbb700adde',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'61ab0c'},body:JSON.stringify({sessionId:'61ab0c',runId:'asar-gate',hypothesisId:'C',location:'scripts/check-companion-desktop-asar-files.mjs:extra',message:'extraResources for rooms and dsh',data:{extraFrom,blankRoomSkill,fingerPlugin,toolsPlugin,hasDshSkills:extraFrom.includes('dsh-skills'),hasDshPlugins:extraFrom.includes('dsh-plugins'),hasDshBundled:extraFrom.includes('dsh-bundled')},timestamp:Date.now()})}).catch(()=>{}),
+  // #endregion
+]);
+
 if (missing.length) {
   console.error('[check-companion-desktop-asar-files] FAIL — modules required at runtime but not packaged:');
   for (const row of missing) {

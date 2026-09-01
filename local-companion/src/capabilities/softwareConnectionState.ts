@@ -3,8 +3,19 @@ import { collectConnectionFacts } from './connectionDiscovery.js';
 import type { ConnectionFacts } from './connectionFacts.js';
 import {
   normalizeConnectionLocalVersions,
+  placeSummaryFromVersionRows,
   type LocalSoftwareVersion,
+  type PlaceVersionSummary,
+  type VersionRouteView,
+  versionRouteViewFor,
 } from './connectionLocalVersions.js';
+import {
+  internalRouteRowsForManifest,
+  placeRouteSummaryFromCounts,
+  type InternalRouteView,
+  type PlaceRouteSummary,
+} from './hostPrimitives.js';
+import { hostIdFromPackage } from './hostPrimitives.js';
 import { resolveSoftwareBridgeDriver } from './softwareBridgeRegistry.js';
 
 export type ConnectionMaturity =
@@ -42,6 +53,10 @@ export type ConnectionCardView = {
   statusLabel: string;
   currentLocalVersion: LocalSoftwareVersion | null;
   localVersions: LocalSoftwareVersion[];
+  versionRows: VersionRouteView[];
+  internalRouteRows: InternalRouteView[];
+  placeSummary: PlaceVersionSummary;
+  routeSummary: PlaceRouteSummary;
   cloudVersionLabel?: string;
   nextActionLabel: string;
   maintenanceChips: ConnectionCardMaintenanceChip[];
@@ -277,12 +292,31 @@ export function buildConnectionCardView(pkg: SoftwareConnectionPackageLike): Con
     manifest: pkg.manifest,
   });
   const cloudLabel = cloudVersionLabel(pkg);
+  const currentId = localVersionState.currentLocalVersionId;
+  const versionRows = localVersionState.localVersions.map((item) =>
+    versionRouteViewFor(item, { isCurrent: item.id === currentId }),
+  );
+  const placeSummary = placeSummaryFromVersionRows(versionRows);
+  const manifest = pkg.manifest && typeof pkg.manifest === 'object' ? (pkg.manifest as Record<string, unknown>) : {};
+  const hostId = hostIdFromPackage(pkg) || pkg.id;
+  const internalRouteRows = internalRouteRowsForManifest(manifest, hostId, currentId);
+  const internalOpenCount = internalRouteRows.filter((row) => row.routeTone === 'open').length;
+  const routeSummary = placeRouteSummaryFromCounts(
+    placeSummary.openCount,
+    internalOpenCount,
+    internalRouteRows.length,
+    versionRows.length,
+  );
   return {
     id: pkg.id,
     name: pkg.name,
     statusLabel: connectionState.label,
     currentLocalVersion: localVersionState.currentLocalVersion,
     localVersions: localVersionState.localVersions,
+    versionRows,
+    internalRouteRows,
+    placeSummary,
+    routeSummary,
     ...(cloudLabel ? { cloudVersionLabel: cloudLabel } : {}),
     nextActionLabel: connectionState.nextAction,
     maintenanceChips: maintenanceChipsForState(connectionState),

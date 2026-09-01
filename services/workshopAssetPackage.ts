@@ -166,6 +166,45 @@ export type WorkshopMediaHit = {
   textPreview?: string;
 };
 
+function playableFieldsForCanvasItem(opts: {
+  name: string;
+  title: string;
+  assetKind: WorkshopCanvasItem['assetKind'];
+  stored: string;
+  media: WorkshopMediaHit | undefined;
+  textBodyFallback: string;
+}): Pick<WorkflowAsset, 'original' | 'textBody' | 'modelSourceName' | 'stepModelUrls' | 'stepModelFormats'> {
+  const mediaUrl = String(opts.media?.url || '').trim();
+  const isText = opts.assetKind === 'text' || isWorkshopTextPreviewName(opts.title) || isWorkshopTextPreviewName(opts.name);
+  const isVideo = opts.assetKind === 'video';
+  const isModel = opts.assetKind === 'model3d';
+  const textBody =
+    opts.textBodyFallback ||
+    String(opts.media?.textPreview || '').trim() ||
+    (opts.stored.startsWith('data:') ? utf8FromDataUrl(opts.stored) : '');
+  const playable = isWorkshopPlayableMediaUrl(mediaUrl)
+    ? mediaUrl
+    : isWorkshopPlayableMediaUrl(opts.stored)
+      ? opts.stored
+      : '';
+  const modelFmt = isModel ? workshopModelFormatFromName(opts.name) || workshopModelFormatFromName(opts.title) : undefined;
+  return {
+    original: isText || isModel ? '' : isVideo ? playable : opts.stored,
+    ...(isText ? { textBody } : {}),
+    ...(isModel
+      ? {
+          modelSourceName: opts.name || opts.title,
+          ...(playable
+            ? {
+                stepModelUrls: { original: [playable] },
+                ...(modelFmt ? { stepModelFormats: { original: [modelFmt] } } : {}),
+              }
+            : {}),
+        }
+      : {}),
+  };
+}
+
 export function workshopCanvasItemsToWorkflowAssets(
   items: WorkshopCanvasItem[] | null | undefined,
   args: {
@@ -191,16 +230,19 @@ export function workshopCanvasItemsToWorkflowAssets(
         if (originalById[key]) results[fid] = originalById[key];
       }
       const pkgTitle = String(item.title || item.name || item.assetId);
-      const pkgText =
-        item.assetKind === 'text' || isWorkshopTextPreviewName(pkgTitle);
-      const pkgBody =
-        textBodyById[id] ||
-        String(mediaById[id]?.textPreview || '').trim() ||
-        '';
+      const stored = originalById[id] || originalById[`${id}::${displayKey}`] || '';
+      const playable = playableFieldsForCanvasItem({
+        name: item.name,
+        title: pkgTitle,
+        assetKind: item.assetKind,
+        stored,
+        media: mediaById[id],
+        textBodyFallback: textBodyById[id] || '',
+      });
       out.push({
         id,
         assetKind: item.assetKind,
-        original: originalById[id] || originalById[`${id}::${displayKey}`] || '',
+        original: playable.original,
         displayKey,
         results,
         resultOrder,
@@ -208,7 +250,10 @@ export function workshopCanvasItemsToWorkflowAssets(
         hiddenInGrid: false,
         createdAt: Math.floor(Number(item.mtimeMs) || 0),
         textTitle: pkgTitle,
-        ...(pkgText ? { textBody: pkgBody } : {}),
+        ...(playable.textBody !== undefined ? { textBody: playable.textBody } : {}),
+        ...(playable.modelSourceName ? { modelSourceName: playable.modelSourceName } : {}),
+        ...(playable.stepModelUrls ? { stepModelUrls: playable.stepModelUrls } : {}),
+        ...(playable.stepModelFormats ? { stepModelFormats: playable.stepModelFormats } : {}),
       });
       continue;
     }
@@ -241,25 +286,18 @@ export function workshopCanvasItemsToWorkflowAssets(
         if (originalById[key]) results[fid] = originalById[key];
       }
       const stored = originalById[id] || originalById[`${id}::${faceKey}`] || '';
-      const media = mediaById[id];
-      const mediaUrl = String(media?.url || '').trim();
-      const isText = item.assetKind === 'text' || isWorkshopTextPreviewName(item.name);
-      const isVideo = item.assetKind === 'video';
-      const isModel = item.assetKind === 'model3d';
-      const textBody =
-        textBodyById[id] ||
-        String(media?.textPreview || '').trim() ||
-        (stored.startsWith('data:') ? utf8FromDataUrl(stored) : '');
-      const playable = isWorkshopPlayableMediaUrl(mediaUrl)
-        ? mediaUrl
-        : isWorkshopPlayableMediaUrl(stored)
-          ? stored
-          : '';
-      const modelFmt = isModel ? workshopModelFormatFromName(item.name) : undefined;
+      const playable = playableFieldsForCanvasItem({
+        name: item.name,
+        title: String(item.title || item.name || item.rel),
+        assetKind: item.assetKind,
+        stored,
+        media: mediaById[id],
+        textBodyFallback: textBodyById[id] || '',
+      });
       out.push({
         id,
         assetKind: item.assetKind,
-        original: isText || isModel ? '' : isVideo ? playable : stored,
+        original: playable.original,
         displayKey: faceKey,
         results,
         resultOrder,
@@ -267,18 +305,10 @@ export function workshopCanvasItemsToWorkflowAssets(
         hiddenInGrid: false,
         createdAt: Math.floor(Number(item.mtimeMs) || 0),
         textTitle: String(item.title || item.name || item.rel),
-        ...(isText ? { textBody } : {}),
-        ...(isModel
-          ? {
-              modelSourceName: item.name,
-              ...(playable
-                ? {
-                    stepModelUrls: { original: [playable] },
-                    ...(modelFmt ? { stepModelFormats: { original: [modelFmt] } } : {}),
-                  }
-                : {}),
-            }
-          : {}),
+        ...(playable.textBody !== undefined ? { textBody: playable.textBody } : {}),
+        ...(playable.modelSourceName ? { modelSourceName: playable.modelSourceName } : {}),
+        ...(playable.stepModelUrls ? { stepModelUrls: playable.stepModelUrls } : {}),
+        ...(playable.stepModelFormats ? { stepModelFormats: playable.stepModelFormats } : {}),
       });
     }
   }

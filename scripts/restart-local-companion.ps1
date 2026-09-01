@@ -15,7 +15,7 @@ Get-CimInstance Win32_Process -Filter "Name='python.exe'" -ErrorAction SilentlyC
     Write-Host "[restart-local-companion] Stopped OCR server PID $($_.ProcessId)"
   }
 
-foreach ($port in @(18765, 18082)) {
+foreach ($port in @(18765, 18082, 3080, 3081)) {
   $pids = @(
     Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue |
       Select-Object -ExpandProperty OwningProcess -Unique

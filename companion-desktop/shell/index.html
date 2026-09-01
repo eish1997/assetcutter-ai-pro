@@ -69,7 +69,7 @@
       align-items: center;
       justify-content: flex-end;
       gap: 2px;
-      min-width: 170px;
+      min-width: 202px;
       -webkit-app-region: no-drag;
     }
     .titlebar-sidebar-toggle {
@@ -108,6 +108,7 @@
       letter-spacing: 0.04em;
       pointer-events: none;
     }
+    #shellSendGate { pointer-events: auto; }
     .traffic {
       width: 46px;
       height: 30px;
@@ -301,6 +302,58 @@
       flex: 1 1 auto;
       min-height: 4px;
     }
+    nav.shell-sidebar .shell-leased-room-tabs {
+      display: flex;
+      flex-direction: column;
+      align-items: stretch;
+      gap: 6px;
+    }
+    nav.shell-sidebar button.shell-lease-room {
+      color: rgba(255, 255, 255, 0.55);
+    }
+    #view-blank-room {
+      padding: 0;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+    .blank-room-bar {
+      flex: 0 0 48px;
+      height: 48px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 0 14px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+      background: #101014;
+    }
+    .blank-room-bar-copy {
+      flex: 1 1 auto;
+      min-width: 0;
+    }
+    .blank-room-bar .workflow-empty-title {
+      font-size: 13px;
+      margin: 0;
+      line-height: 1.2;
+    }
+    .blank-room-bar .workflow-empty-sub {
+      font-size: 11px;
+      margin: 2px 0 0;
+      line-height: 1.2;
+      color: rgba(255, 255, 255, 0.45);
+    }
+    .blank-room-bar .connections-primary-btn,
+    .blank-room-bar .connections-secondary-btn {
+      flex: 0 0 auto;
+      height: 32px;
+      padding: 0 12px;
+      white-space: nowrap;
+    }
+    .blank-room-floor {
+      flex: 1 1 auto;
+      min-height: 0;
+      background: #0b0b0d;
+    }
     nav.shell-sidebar button {
       flex: 0 0 auto;
       height: 44px;
@@ -355,6 +408,12 @@
       flex-direction: column;
       position: relative;
     }
+    body.shell-has-dsh .shell-main {
+      padding-right: var(--dsh-pane-width, 480px);
+    }
+    body.shell-has-dsh.shell-dsh-collapsed .shell-main {
+      padding-right: 0;
+    }
     aside.shell-copilot {
       flex: 0 0 var(--copilot-width, 360px);
       width: var(--copilot-width, 360px);
@@ -386,6 +445,48 @@
         min-width 0.18s ease,
         opacity 0.16s ease,
         border-color 0.18s ease;
+    }
+    #dsh-resize-handle {
+      display: none;
+      position: fixed;
+      top: 30px;
+      right: 480px;
+      width: 6px;
+      bottom: 0;
+      z-index: 400;
+      cursor: col-resize;
+      background: transparent;
+    }
+    body.shell-has-dsh #dsh-resize-handle {
+      display: block;
+    }
+    body.shell-dsh-collapsed #dsh-resize-handle {
+      display: none !important;
+    }
+    #dsh-resize-handle:hover,
+    #dsh-resize-handle.is-dragging {
+      background: rgba(255, 255, 255, 0.18);
+    }
+    body.shell-has-dsh aside.shell-copilot,
+    body.shell-has-dsh #shell-copilot {
+      display: none !important;
+      flex: 0 0 0 !important;
+      width: 0 !important;
+      min-width: 0 !important;
+      max-width: 0 !important;
+      border-left-width: 0 !important;
+    }
+    body:not(.legacy-copilot-on) #copilot-toggle {
+      display: none !important;
+    }
+    body:not(.legacy-copilot-on) aside.shell-copilot,
+    body:not(.legacy-copilot-on) #shell-copilot {
+      display: none !important;
+      flex: 0 0 0 !important;
+      width: 0 !important;
+      min-width: 0 !important;
+      max-width: 0 !important;
+      pointer-events: none !important;
     }
     body.shell-copilot-collapsed #shell-copilot .copilot-body,
     body.shell-copilot-collapsed #shell-copilot .copilot-footer,
@@ -4085,18 +4186,78 @@
       align-items: center;
       justify-content: space-between;
       gap: 12px;
-      margin-bottom: 14px;
+      margin-bottom: 10px;
     }
-    .connections-page-header h1 { margin: 0; font-size: 16px; flex: 1; min-width: 0; }
-    .connections-toolbar {
+    .connections-page-header h1 { margin: 0; font-size: 16px; flex: 0 0 auto; min-width: 0; }
+    .connections-header-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+    .connections-page-menu {
+      position: relative;
+    }
+    .connections-page-menu > summary {
+      list-style: none;
+      cursor: pointer;
+      width: 32px;
+      height: 32px;
+      border: 1px solid rgba(148, 163, 184, 0.22);
+      border-radius: 7px;
+      background: rgba(255, 255, 255, 0.04);
+      color: rgba(212, 212, 216, 0.9);
+      font-size: 18px;
+      line-height: 1;
       display: grid;
-      grid-template-columns: minmax(180px, 1fr) auto;
+      place-items: center;
+    }
+    .connections-page-menu > summary::-webkit-details-marker { display: none; }
+    .connections-page-menu-panel {
+      position: absolute;
+      right: 0;
+      top: calc(100% + 6px);
+      z-index: 20;
+      min-width: 160px;
+      padding: 6px;
+      border: 1px solid rgba(148, 163, 184, 0.2);
+      border-radius: 8px;
+      background: #0f0f12;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+    }
+    .connections-page-menu-panel button {
+      display: block;
+      width: 100%;
+      text-align: left;
+      border: none;
+      border-radius: 6px;
+      padding: 8px 10px;
+      background: transparent;
+      color: rgba(244, 244, 245, 0.92);
+      font-size: 12px;
+      cursor: pointer;
+    }
+    .connections-page-menu-panel button:hover {
+      background: rgba(255, 255, 255, 0.08);
+    }
+    .connections-place-count {
+      margin: 0;
+      margin-left: auto;
+      font-size: 11px;
+      color: rgba(161, 161, 170, 0.88);
+    }
+    .connections-toolbar {
+      display: flex;
       align-items: center;
       gap: 10px;
+      flex-wrap: wrap;
       margin-bottom: 12px;
     }
     .connections-search {
-      width: 100%;
+      flex: 1 1 240px;
+      max-width: 360px;
+      width: auto;
       height: 32px;
       border: 1px solid rgba(148, 163, 184, 0.2);
       border-radius: 7px;
@@ -4823,7 +4984,7 @@
     .tools-example-title { font-size: 13px; font-weight: 700; color: #bfdbfe; }
     .tools-example-desc { font-size: 11px; color: var(--muted); margin: 6px 0 12px; line-height: 1.45; }
     #view-tools #tools-module { margin-top: 0; }
-    /* copilot-design-alignment: real shell follows docs/copilot-redesign-prototype.html. */
+    /* copilot-design-alignment: historical; concierge UI is dsh, not archived copilot-redesign-prototype.html. */
     #shell-copilot {
       background: #0f1016 !important;
       border-left-color: rgba(255, 255, 255, 0.055) !important;
@@ -5192,7 +5353,8 @@
     }
   </style>
 </head>
-<body>
+<body class="shell-view-workbench shell-has-dsh">
+  <div id="dsh-resize-handle" title="Resize assistant"></div>
   <header class="app-titlebar">
     <div class="titlebar-leading">
       <button
@@ -5221,16 +5383,16 @@
         </svg>
       </button>
     </div>
-    <div class="app-titlebar-title" aria-hidden="true"></div>
+    <div class="app-titlebar-title" id="shellSendGate" aria-live="polite"></div>
     <div class="titlebar-trailing">
       <button
         type="button"
         class="titlebar-sidebar-toggle"
-        id="copilot-toggle"
-        aria-label="&#25910;&#36215; Copilot"
-        title="&#25910;&#36215; Copilot"
+        id="btnDshPaneToggle"
+        aria-label="收起管家"
+        title="收起管家"
+        aria-pressed="false"
         aria-expanded="true"
-        aria-controls="shell-copilot"
       >
         <svg
           width="16"
@@ -5275,7 +5437,7 @@
           <path d="M2.5 9h19M8 22h8" />
         </svg>
       </button>
-      <button type="button" role="tab" data-view="workflow" aria-selected="false" aria-label="Workflow" title="Workflow">
+      <button type="button" role="tab" data-view="workflow" aria-selected="false" aria-label="技能" title="技能">
         <svg
           class="sidebar-nav-icon"
           viewBox="0 0 24 24"
@@ -5308,7 +5470,8 @@
         </svg>
         <span id="toolsNavBadge" class="shell-nav-badge hidden" aria-hidden="true"></span>
       </button>
-      <button type="button" role="tab" data-view="connections" aria-selected="false" aria-label="连接" title="连接">
+      <div id="leased-room-tabs" class="shell-leased-room-tabs"></div>
+      <button type="button" role="tab" data-view="connections" aria-selected="false" aria-label="地图" title="地图">
         <svg
           class="sidebar-nav-icon"
           viewBox="0 0 24 24"
@@ -5337,37 +5500,63 @@
           />
         </svg>
       </button>
+      <button type="button" id="btnLeaseRoom" class="shell-lease-room" aria-label="开新房间" title="开新房间">
+        <svg
+          class="sidebar-nav-icon"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.75"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          aria-hidden="true"
+        >
+          <path d="M12 5v14M5 12h14" />
+        </svg>
+      </button>
     </nav>
     <div class="shell-main" id="shell-main">
+  <div id="view-blank-room" class="view hidden">
+    <div class="blank-room-bar">
+      <div class="blank-room-bar-copy">
+        <div class="workflow-empty-title" id="blankRoomTitle">空房</div>
+        <div class="workflow-empty-sub">跟管家从头规划这间房</div>
+      </div>
+      <button type="button" class="connections-primary-btn" id="btnBlankRoomAskButler">找管家</button>
+      <button type="button" class="connections-secondary-btn" id="btnBlankRoomReload" title="刷新" aria-label="刷新">刷新</button>
+      <button type="button" class="connections-secondary-btn" id="btnBlankRoomImport">导入</button>
+      <button type="button" class="connections-secondary-btn" id="btnBlankRoomExport">导出</button>
+    </div>
+    <div class="blank-room-floor"></div>
+  </div>
   <div id="view-workflow" class="view hidden">
     <div class="workflow-shell">
       <div class="workflow-page-header">
-        <h1>Workflow</h1>
+        <h1>技能</h1>
         <button type="button" class="workflow-icon-btn" id="btnWorkflowRefresh" title="刷新" aria-label="刷新">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
             <path d="M21 12a9 9 0 1 1-3-6.7" />
             <path d="M21 3v6h-6" />
           </svg>
         </button>
+        <button type="button" class="connections-primary-btn" id="btnReplayCompileWithButler">整理成技能</button>
       </div>
-      <div class="workflow-toolbar">
-        <input id="workflowSearch" class="workflow-search" type="search" placeholder="搜索 Workflow、能力或版本" autocomplete="off" />
-        <div id="workflowSummary" class="workflow-summary" aria-live="polite"></div>
+      <div class="tools-toolbar" id="workflowToolbar">
+        <input type="search" class="tools-search" id="skillSearchInput" placeholder="搜索名称、ID…" autocomplete="off" />
+        <div class="tools-filters" id="skillFilterRow">
+          <button type="button" class="tools-filter-chip active" data-skill-filter-source="all">全部</button>
+          <button type="button" class="tools-filter-chip" data-skill-filter-source="mine">我的</button>
+          <button type="button" class="tools-filter-chip" data-skill-filter-source="local">本地</button>
+          <button type="button" class="tools-filter-chip" data-skill-filter-source="cloud">云端</button>
+        </div>
       </div>
-      <div id="workflowInlineStatus" class="workflow-inline-status"></div>
+      <div id="workflowInlineStatus" class="workflow-inline-status" aria-live="polite"></div>
       <div id="workflowEmpty" class="workflow-empty">
-        <div class="workflow-empty-title">还没有可运行 Workflow</div>
-        <div class="workflow-empty-sub">本地 Workflow Runtime 会在这里显示已验证的工作流。</div>
+        <div class="workflow-empty-title">还没有技能</div>
+        <div class="workflow-empty-sub">把刚才那套整理成技能</div>
+        <button type="button" class="connections-primary-btn" id="btnReplayCompileWithButlerEmpty">整理成技能</button>
       </div>
       <div id="workflowList" class="hidden"></div>
-      <section id="workflowHistory" class="workflow-history" aria-label="最近运行">
-        <div class="workflow-history-head">
-          <div class="workflow-history-title">最近运行</div>
-          <div id="workflowHistoryMeta" class="workflow-history-meta"></div>
-        </div>
-        <div id="workflowHistoryEmpty" class="workflow-history-empty">还没有运行记录。</div>
-        <div id="workflowHistoryList" class="workflow-history-list"></div>
-      </section>
     </div>
   </div>
 
@@ -5398,6 +5587,7 @@
               <span class="tools-filter-sep" aria-hidden="true"></span>
               <button type="button" class="tools-filter-chip" id="btnToolsImportZip" title="从 ZIP 导入为我的工具">导入</button>
               <button type="button" class="tools-filter-chip" id="btnToolsScaffold" title="创建空壳小工具">新建</button>
+              <button type="button" class="tools-filter-chip" id="btnToolsAskButler" title="找管家看货架">找管家</button>
               <span id="toolsTagFilters"></span>
             </div>
           </div>
@@ -5411,20 +5601,28 @@
   <div id="view-connections" class="view hidden">
     <div class="connections-shell">
       <div class="connections-page-header">
-        <h1>连接</h1>
-        <button type="button" class="connections-secondary-btn" id="btnConnectionsDiscoverRunning">识别本机软件</button>
-        <button type="button" class="connections-secondary-btn" id="btnConnectionImportTransfer">导入连接</button>
+        <h1>地图</h1>
+        <div class="connections-header-actions">
+          <button type="button" class="connections-primary-btn" id="btnConnectionCreateWithCopilot">添加地点</button>
+          <details class="connections-page-menu" id="connectionsPageMenu">
+            <summary aria-label="更多">⋯</summary>
+            <div class="connections-page-menu-panel">
+              <button type="button" id="btnConnectionsDiscoverRunning">识别本机软件</button>
+              <button type="button" id="btnConnectionImportTransfer">导入路线</button>
+            </div>
+          </details>
+        </div>
       </div>
       <div class="connections-toolbar" id="connectionsToolbar">
-        <input id="connectionsSearch" class="connections-search" type="search" placeholder="搜索连接、软件、路径或标签" />
-        <div id="connectionsSummary" class="connections-summary" aria-live="polite"></div>
+        <input id="connectionsSearch" class="connections-search" type="search" placeholder="搜索地点" />
+        <div id="connectionsSummary" class="connections-place-count" aria-live="polite"></div>
       </div>
       <div id="connectionsInlineStatus" class="connections-inline-status"></div>
       <div id="connectionsEmpty" class="connections-empty">
-        <div class="connections-empty-title">还没有连接</div>
-        <div class="connections-empty-sub">通过对话添加本机软件连接。连接会从能力包草稿开始，安装、探测、修复和发布都围绕同一个对象持续进行。</div>
+        <div class="connections-empty-title">地图上还没有地点</div>
+        <div class="connections-empty-sub">登记你想送到的本机软件，或把快捷方式拖到这里开通路线。</div>
         <div class="connections-empty-drop">也可以把桌面软件快捷方式或 exe 拖到这里。</div>
-        <button type="button" class="connections-primary-btn" id="btnConnectionCreateWithCopilot">对话添加连接</button>
+        <button type="button" class="connections-primary-btn" id="btnConnectionCreateWithCopilotEmpty">添加地点</button>
       </div>
       <div id="connectionsList" class="hidden"></div>
     </div>
@@ -5435,11 +5633,7 @@
       <aside class="settings-section-nav" aria-label="&#35774;&#32622;&#20998;&#31867;">
         <div class="settings-section-nav-title">&#35774;&#32622;</div>
         <a href="#settings-overview" class="active" data-settings-section="overview" aria-current="page">&#27010;&#35272;</a>
-        <a href="#settings-entrances" data-settings-section="entrances">&#20837;&#21475;</a>
-        <a href="#settings-account" data-settings-section="account">&#36134;&#21495;</a>
-        <a href="#settings-agent" data-settings-section="agent">Agent</a>
         <a href="#settings-storage" data-settings-section="storage">&#23384;&#20648;</a>
-        <a href="#settings-service" data-settings-section="service">&#26381;&#21153;</a>
       </aside>
       <main class="settings-content">
         <section class="settings-group settings-overview is-active" id="settings-overview" data-settings-section-panel="overview">
@@ -5604,255 +5798,9 @@
         </div>
       </details>
     </div>
-    <h2 class="section-title">核心模块</h2>
-    <div class="status-card" style="padding:0;overflow:hidden;">
-      <table>
-        <thead>
-          <tr>
-            <th>模块</th>
-            <th>类型</th>
-            <th>状态</th>
-          </tr>
-        </thead>
-        <tbody id="pluginRows"></tbody>
-      </table>
-      <p id="pluginsEmpty" class="empty hidden">暂无</p>
-    </div>
-    <h2 class="section-title">扩展包（可选）</h2>
-    <div class="status-card" style="padding: 12px 14px">
-      <p id="hostBundleEmptyHint" class="empty" style="margin: 0; padding: 4px 0">暂无扩展包</p>
-    </div>
-        </section>
-        <section class="settings-group" id="settings-entrances" data-settings-section-panel="entrances" hidden>
-          <div class="settings-group-head"><h2>&#20837;&#21475;</h2></div>
-    <div class="set-section">
-      <h3 title="Copilot ac.script_hub.* 使用的 Tool Bridge API">Workflow Tool Bridge</h3>
-      <label for="inpScriptHubApiUrl" title="默认本机地址为 http://localhost:8787/">API 地址</label>
-      <input type="url" id="inpScriptHubApiUrl" placeholder="http://localhost:8787/" autocomplete="off" title="Tool Bridge 服务地址" />
-      <div class="btn-row">
-        <button type="button" class="btn btn-primary" id="btnSaveScriptHubApi">保存 API</button>
-      </div>
-      <label for="inpScriptHubApiToken" class="pair-label-gap" title="与 ASSETCUTTER_WORKFLOW_TOOL_BRIDGE_TOKEN 保持一致；兼容旧 SCRIPTHUB_TOOL_BRIDGE_TOKEN">API Token（可选）</label>
-      <input type="password" id="inpScriptHubApiToken" placeholder="Tool Bridge Bearer Token" autocomplete="off" title="用于 Copilot 调用时携带 Authorization: Bearer" />
-      <div class="btn-row">
-        <button type="button" class="btn btn-primary" id="btnSaveScriptHubApiToken">保存 Token</button>
-      </div>
-    </div>
-    <div class="set-section">
-      <h3 title="工作台主站地址，线上环境建议使用 https://">主站地址</h3>
-      <label for="inpSiteUrl" title="工作台主站地址，线上环境建议使用 https://">地址</label>
-      <input type="url" id="inpSiteUrl" placeholder="https://" autocomplete="off" title="工作台主站地址，线上环境建议使用 https://" />
-      <div class="btn-row">
-        <button type="button" class="btn btn-primary" id="btnSaveSite">保存</button>
-      </div>
-    </div>
-
-        </section>
-        <section class="settings-group" id="settings-account" data-settings-section-panel="account" hidden>
-          <div class="settings-group-head"><h2>&#36134;&#21495;</h2></div>
-    <div class="set-section">
-      <h3 title="本地壳、工作台、Workflow 和 Copilot 共享的一方网页登录状态">&#22242;&#38431;&#36134;&#21495;</h3>
-      <div class="shell-account-card" id="shellAccountCard">
-        <div class="shell-account-head">
-          <div class="shell-account-title">
-            <span class="shell-account-dot" id="shellAccountDot"></span>
-            <span id="shellAccountTitle">&#26410;&#26816;&#27979;</span>
-          <span class="agent-mcp-endpoint" id="shellAccountPartition">-</span>
-        </div>
-        <div class="shell-account-detail" id="shellAccountDetail">工作台、Workflow 和 Copilot 将复用同一个本地壳一方网页登录会话。</div>
-        <div class="shell-account-grid">
-          <div><span id="shellAccountOrigin">-</span><small>Auth Origin</small></div>
-          <div><span id="shellAccountCookies">0</span><small>Cookies</small></div>
-        </div>
-        <div class="btn-row">
-          <button type="button" class="btn btn-primary" id="btnOpenWorkbenchLogin">&#25171;&#24320;&#24037;&#20316;&#21488;&#30331;&#24405;</button>
-          <button type="button" class="btn" id="btnShellAccountWaitLoginE2e">&#25171;&#24320;&#24182;&#31561;&#24453;&#39564;&#25910;</button>
-          <button type="button" class="btn" id="btnRefreshShellAccount">&#21047;&#26032;&#29366;&#24577;</button>
-        </div>
-      </div>
-    </div>
-    <div class="set-section">
-      <h3 title="&#36890;&#20449;&#23494;&#30721;&#38656;&#19982;&#32593;&#31449;&#37324;&#30340;&#35774;&#32622;&#19968;&#33268;&#65307;&#20801;&#35768;&#31449;&#28857;&#21487;&#22635;&#20889;&#32593;&#31449;&#26681;&#22320;&#22336;&#25110;&#30041;&#31354;">&#19982;&#32593;&#31449;&#37197;&#23545;</h3>
-      <label for="inpPairToken" title="&#38656;&#19982;&#27983;&#35272;&#22120;&#12300;&#35774;&#32622; / &#26412;&#22320;&#20276;&#20387;&#12301;&#20013;&#30340;&#36890;&#20449;&#23494;&#30721;&#19968;&#33268;&#65292;&#33267;&#23569; 8 &#20301;&#65307;&#21487;&#19981;&#22635;">&#36890;&#20449;&#23494;&#30721;</label>
-      <input type="password" id="inpPairToken" placeholder="&#33267;&#23569; 8 &#20301;&#65292;&#21487;&#19981;&#22635;" autocomplete="off" title="&#38656;&#19982;&#27983;&#35272;&#22120;&#12300;&#35774;&#32622; / &#26412;&#22320;&#20276;&#20387;&#12301;&#20013;&#30340;&#36890;&#20449;&#23494;&#30721;&#19968;&#33268;" />
-      <label for="inpPairOrigins" class="pair-label-gap" title="&#22810;&#20010;&#31449;&#28857;&#29992;&#33521;&#25991;&#36887;&#21495;&#20998;&#38548;&#65307;&#30041;&#31354;&#21017;&#20165;&#25353;&#20027;&#31449;&#22320;&#22336;&#37197;&#23545;">&#20801;&#35768;&#30340;&#32593;&#31449;&#22320;&#22336;</label>
-      <input type="text" id="inpPairOrigins" placeholder="http://localhost:3000, &#22810;&#20010;&#29992;&#36887;&#21495;" autocomplete="off" title="&#22810;&#20010;&#31449;&#28857;&#29992;&#33521;&#25991;&#36887;&#21495;&#20998;&#38548;&#65307;&#30041;&#31354;&#21017;&#20165;&#25353;&#20027;&#31449;&#22320;&#22336;&#37197;&#23545;" />
-      <div class="btn-row">
-        <button type="button" class="btn btn-primary" id="btnSavePairing">&#20445;&#23384;&#37197;&#23545;</button>
-      </div>
-      <p id="pairingHint" class="mono set-feedback" hidden></p>
-    </div>
-
-        </section>
-        <section class="settings-group" id="settings-agent" data-settings-section-panel="agent" hidden>
-          <div class="settings-group-head"><h2>Agent</h2></div>
-    <div class="set-section">
-      <h3 title="Copilot currently uses Codex only">Codex</h3>
-      <label class="pair-label-gap">
-        <input type="checkbox" id="inpMcpEnabled" disabled title="Codex configures the local tool channel automatically" />
-        &#26412;&#22320;&#24037;&#20855;&#36890;&#36947;&#30001; Codex &#33258;&#21160;&#37197;&#32622;
-      </label>
-      <label class="pair-label-gap" title="Copilot &#24403;&#21069;&#21482;&#20351;&#29992; Codex">Copilot</label>
-      <div class="shell-brain-picker" id="shellBrainPicker" role="listbox" aria-label="Copilot &#40664;&#35748;&#22823;&#33041;"></div>
-      <div class="codex-runtime-grid" aria-label="Codex CLI &#36816;&#34892;&#35774;&#32622;">
-        <div>
-          <label for="inpCodexCommand" title="Codex CLI &#21551;&#21160;&#21629;&#20196;&#65292;Windows &#36890;&#24120;&#26159; codex.cmd">Codex &#21629;&#20196;</label>
-          <input type="text" id="inpCodexCommand" placeholder="codex.cmd" autocomplete="off" class="mono" />
-        </div>
-        <div>
-          <label for="inpCodexCwd" title="Codex &#21551;&#21160;&#21518;&#30340;&#40664;&#35748;&#24037;&#20316;&#30446;&#24405;">&#24037;&#20316;&#30446;&#24405;</label>
-          <input type="text" id="inpCodexCwd" placeholder="F:\AI\assetcutter-ai-pro" autocomplete="off" class="mono" />
-        </div>
-        <div>
-          <label for="inpCodexModel" title="&#21487;&#36873;&#65307;&#30041;&#31354;&#20351;&#29992; Codex CLI &#40664;&#35748;&#27169;&#22411;">Codex &#27169;&#22411;</label>
-          <input type="text" id="inpCodexModel" placeholder="&#30041;&#31354;&#20351;&#29992;&#40664;&#35748;" autocomplete="off" class="mono" />
-        </div>
-        <div>
-          <label class="pair-label-gap" title="&#25511;&#21046; Codex CLI &#30340;&#26412;&#26426;&#25191;&#34892;&#26435;&#38480;">&#25191;&#34892;&#26435;&#38480;</label>
-          <div class="codex-sandbox-picker" id="codexSandboxPicker" role="listbox" aria-label="Codex &#25191;&#34892;&#26435;&#38480;"></div>
-        </div>
-      </div>
-      <div class="agent-mcp-detail" id="codexRuntimeStatusDetail" hidden></div>
-      <div class="btn-row">
-        <button type="button" class="btn btn-primary" id="btnSetupCodexRuntime">一键配置 Codex</button>
-        <button type="button" class="btn" id="btnProbeCodexRuntime">&#25506;&#27979; Codex</button>
-        <button type="button" class="btn" id="btnCopyCodexSetupReport" title="Copy the last Codex setup diagnostics">&#22797;&#21046;&#25253;&#21578;</button>
-      </div>
-      <label class="pair-label-gap">
-        <input type="checkbox" id="inpCodexSharedAuthEnabled" title="&#20020;&#26102;&#26041;&#26696;&#65306;&#20174;&#20113;&#31471;&#25289;&#21462;&#22242;&#38431;&#20849;&#20139; Codex CLI auth.json &#21040;&#26412;&#26426; ~/.codex/auth.json" />
-        &#21551;&#29992;&#22242;&#38431; Codex &#20973;&#25454;&#21516;&#27493;
-      </label>
-      <label class="pair-label-gap">
-        <input type="checkbox" id="inpCodexSharedAuthAutoUpdate" title="&#25171;&#24320;&#26412;&#22320;&#20276;&#20387;&#26102;&#33258;&#21160;&#25289;&#21462;&#26368;&#26032; auth.json" />
-        &#21551;&#21160;&#26102;&#33258;&#21160;&#26356;&#26032; Codex &#20973;&#25454;
-      </label>
-      <label for="inpCodexSharedAuthUrl" class="pair-label-gap" title="&#20113;&#31471;&#25509;&#21475;&#21487;&#30452;&#25509;&#36820;&#22238; auth.json&#65292;&#20063;&#21487;&#36820;&#22238; { authJson } &#25110; { authJsonBase64 }">Codex &#20973;&#25454;&#20113;&#31471; URL</label>
-      <input type="text" id="inpCodexSharedAuthUrl" placeholder="https://your-api.example.com/api/team/codex/auth" autocomplete="off" class="mono" />
-      <label for="inpCodexSharedAuthToken" class="pair-label-gap" title="&#21487;&#36873;&#65306;&#20316;&#20026; Bearer Token &#35843;&#29992;&#20113;&#31471;&#25509;&#21475;">Codex &#20973;&#25454;&#21516;&#27493; Token</label>
-      <input type="password" id="inpCodexSharedAuthToken" placeholder="&#21487;&#36873;&#65292;&#19981;&#20250;&#26174;&#31034;&#22312;&#26085;&#24535;&#20013;" autocomplete="off" class="mono" />
-      <div class="btn-row">
-        <button type="button" class="btn" id="btnSyncCodexAuth">&#31435;&#21363;&#21047;&#26032; Codex &#20973;&#25454;</button>
-      </div>
-      <p id="codexAuthStatus" class="mono set-feedback"></p>
-      <p id="agentMcpStatus" class="mono set-feedback"></p>
-      <div class="agent-mcp-card" id="agentMcpProbeCard">
-        <div class="agent-mcp-head">
-          <div class="agent-mcp-title">
-            <span class="agent-mcp-dot" id="agentMcpProbeDot"></span>
-            <span id="agentMcpProbeTitle">MCP &#26410;&#33258;&#26816;</span>
-          </div>
-          <span class="agent-mcp-endpoint" id="agentMcpEndpoint">-</span>
-        </div>
-        <div class="agent-mcp-detail" id="agentMcpProbeDetail">&#24320;&#21551;&#21518;&#21487;&#33258;&#26816;&#22806;&#37096; Agent &#26159;&#21542;&#33021;&#25569;&#25163;&#24182;&#35835;&#21462; ac.* &#24037;&#20855;&#12290;</div>
-        <div class="agent-mcp-metrics">
-          <div class="agent-mcp-metric"><span id="agentMcpProtocol">-</span><small>&#21327;&#35758;</small></div>
-          <div class="agent-mcp-metric"><span id="agentMcpTools">0</span><small>&#24037;&#20855;</small></div>
-          <div class="agent-mcp-metric"><span id="agentMcpCheckedAt">-</span><small>&#26368;&#36817;&#26816;&#26597;</small></div>
-        </div>
-        <div class="agent-mcp-actions">
-          <button type="button" class="btn" id="btnUsageUploadDryRun" title="Validate sanitized Copilot usage upload without posting">&#29992;&#37327;&#19978;&#20256;&#39044;&#26816;</button>
-          <button type="button" class="btn" id="btnUsageQuotaPolicyProbe" title="Probe cloud team usage billing/quota policy through the shell team session">&#29992;&#37327;&#31574;&#30053;&#25506;&#27979;</button>
-          <button type="button" class="btn" id="btnUsageUploadCloudDraft" title="Upload sanitized Copilot usage through the shell team session">&#19978;&#20256;&#29992;&#37327;</button>
-          <button type="button" class="btn" id="btnProbeMcp" title="&#29992;&#24403;&#21069; Token &#36830;&#25509;&#26412;&#26426; MCP &#24182;&#25191;&#34892; initialize/tools.list">&#33258;&#26816;</button>
-          <button type="button" class="btn btn-primary" id="btnRunMcpWorkbenchE2e" title="&#25353;&#30495;&#23454; MCP &#38142;&#36335;&#25191;&#34892; ensure_ready / run_capability / list_assets / get_asset">&#24037;&#20316;&#21488;&#39564;&#25910;</button>
-          <button type="button" class="btn" id="btnCopyMcpEndpoint" title="&#22797;&#21046; MCP Endpoint">&#22797;&#21046;&#22320;&#22336;</button>
-          <button type="button" class="btn" id="btnCopyMcpConfig" title="复制 MCP 客户端配置 JSON">复制配置</button>
-        </div>
-        <div class="agent-mcp-detail" id="agentMcpWorkbenchEntranceDetail" hidden></div>
-        <div class="agent-mcp-detail" id="agentMcpBlockerActionDetail" hidden></div>
-        <div class="agent-mcp-detail" id="agentUsageUploadDetail" hidden></div>
-        <div class="agent-mcp-tools" id="agentWorkflowPromotionCard">
-          <div class="agent-mcp-tools-head">
-            <div class="agent-mcp-tools-title">
-              <span class="agent-mcp-dot is-warn"></span>
-              <span>Workflow 发布预检</span>
-            </div>
-            <span class="agent-mcp-endpoint">Copilot UI approval</span>
-          </div>
-          <label for="inpWorkflowPromotionSkillId" class="pair-label-gap" title="要预检发布的 workflow/skill 草稿 id">草稿 ID</label>
-          <input type="text" id="inpWorkflowPromotionSkillId" placeholder="skill id" autocomplete="off" class="mono" />
-          <div class="agent-mcp-actions">
-            <button type="button" class="btn" id="btnFillLatestWorkflowDraft" title="Fill the newest existing workflow draft id">填入最新草稿</button>
-            <button type="button" class="btn" id="btnPromoteWorkbenchPresetPreflight" title="管理员确认后预检发布为工作台预设">预检工作台预设</button>
-            <button type="button" class="btn" id="btnPromoteScriptHubToolPreflight" title="管理员确认后预检发布为 Workflow 工具">预检 Workflow 工具</button>
-          </div>
-          <div class="agent-mcp-detail" id="agentWorkflowPromotionDetail" hidden></div>
-        </div>
-        <div class="agent-mcp-detail" id="agentMcpE2eDetail" hidden></div>
-        <div class="agent-mcp-actions" id="agentMcpE2eActions" hidden>
-          <button type="button" class="btn btn-primary" id="btnOpenWorkbenchForMcpE2e">打开工作台登录</button>
-          <button type="button" class="btn btn-primary" id="btnWaitLoginMcpWorkbenchE2e">等待登录后验收</button>
-          <button type="button" class="btn" id="btnRetryMcpWorkbenchE2e">重新验收</button>
-        </div>
-        <div class="agent-mcp-tools">
-          <div class="agent-mcp-tools-head">
-            <span class="agent-mcp-tools-title">MCP 工具目录</span>
-            <span class="agent-mcp-tools-summary" id="agentMcpToolsSummary">0 tools</span>
-          </div>
-          <div class="agent-mcp-tool-groups" id="agentMcpToolGroups"></div>
-        </div>
-        <div class="agent-policy-card">
-          <div class="agent-policy-head">
-            <span class="agent-policy-title">权限策略</span>
-            <span class="agent-policy-summary" id="agentPolicySummary">自动 0 · 禁止 0</span>
-          </div>
-          <label class="agent-policy-toggle">
-            <input type="checkbox" id="agentPolicyConfirmTools" />
-            高风险工具执行前需要确认
-          </label>
-          <div class="agent-policy-templates" id="agentPolicyTemplates"></div>
-          <div class="agent-policy-list" id="agentPolicyList"></div>
-          <div class="agent-mcp-actions">
-            <button type="button" class="btn btn-primary" id="btnSaveAgentPolicy" title="保存 MCP 工具权限策略">保存权限策略</button>
-          </div>
-        </div>
-      </div>
-      <div class="copilot-usage-admin" id="agentUsageSummary">
-        <div class="copilot-usage-admin-title">Copilot 用量 · 近 7 天</div>
-        <div class="copilot-usage-admin-grid">
-          <div><span id="agentUsageTurns">0</span><small>轮次</small></div>
-          <div><span id="agentUsageFresh">0</span><small>新增输入</small></div>
-          <div><span id="agentUsageCached">0</span><small>缓存命中</small></div>
-          <div><span id="agentUsageOutput">0</span><small>输出</small></div>
-        </div>
-      </div>
-      <div class="agent-exec-card">
-        <div class="agent-exec-head">
-          <span class="agent-exec-title">最近工具执行</span>
-          <button type="button" class="btn" id="btnRefreshAgentExecutions" title="刷新最近工具执行记录">刷新</button>
-        </div>
-        <div class="agent-exec-list" id="agentExecutionList"></div>
-      </div>
-      <label for="inpMcpToken" class="pair-label-gap" title="Bearer Token；请勿泄露">MCP Token</label>
-      <input type="text" id="inpMcpToken" readonly placeholder="开启 MCP 后生成" autocomplete="off" />
-      <label for="inpMcpConfig" class="pair-label-gap" title="Codex 本地工具通道配置">MCP 客户端配置片段</label>
-      <textarea id="inpMcpConfig" class="mono" rows="6" readonly placeholder="开启 MCP 后显示 JSON 配置"></textarea>
-      <div class="btn-row">
-        <button type="button" class="btn btn-primary" id="btnSaveAgentSettings">保存 Agent 设置</button>
-        <button type="button" class="btn" id="btnRegenerateMcpToken" title="重新生成 MCP Token">重新生成 Token</button>
-      </div>
-      <p id="agentSettingsHint" class="mono set-feedback" hidden></p>
-    </div>
-
         </section>
         <section class="settings-group" id="settings-storage" data-settings-section-panel="storage" hidden>
           <div class="settings-group-head"><h2>&#23384;&#20648;</h2></div>
-    <div class="set-section">
-      <h3 title="留空使用系统默认目录。应用或恢复默认时可选择迁移数据或仅切换配置">本机存储</h3>
-      <label for="inpVolumeRoot" title="Windows 默认：LOCALAPPDATA%\AssetCutterCompanion\sandbox\volume">目录</label>
-      <div style="display:flex;gap:8px;align-items:stretch;">
-        <input type="text" id="inpVolumeRoot" placeholder="留空为默认" autocomplete="off" style="flex:1;" title="留空使用系统默认目录；改路径时可迁移已有数据" />
-        <button type="button" class="btn" id="btnBrowseVolume" title="选择本机存储目录">浏览</button>
-      </div>
-      <div class="btn-row">
-        <button type="button" class="btn btn-primary" id="btnSaveVolume" title="应用目录；若与当前数据路径不同，可选择迁移或仅切换配置">应用</button>
-        <button type="button" class="btn" id="btnClearVolume" title="恢复为系统默认存储目录">恢复默认</button>
-      </div>
-      <p id="volumeEffective" class="mono set-feedback" hidden></p>
-      <div class="btn-row" style="margin-top:6px;">
-        <button type="button" class="btn" id="btnOpenVolumeFolder" title="在资源管理器中打开当前存储目录">打开存储文件夹</button>
-      </div>
-    </div>
     <div class="set-section">
       <h3 title="工作台内下载图片、模型等的保存位置；首次下载也会询问">下载保存</h3>
       <label for="inpDownloadDir" title="留空则首次下载时选择；默认回退到「下载\AssetCutter」">目录</label>
@@ -5869,17 +5817,18 @@
         <button type="button" class="btn" id="btnOpenDownloadFolder" title="在资源管理器中打开下载文件夹">打开下载文件夹</button>
       </div>
     </div>
-
-        </section>
-        <section class="settings-group" id="settings-service" data-settings-section-panel="service" hidden>
-          <div class="settings-group-head"><h2>&#26381;&#21153;</h2></div>
     <div class="set-section">
-      <h3 title="本机伴侣 HTTP 服务根地址，供复制或在浏览器打开管理页">本机服务地址</h3>
-      <input type="text" id="localBase" class="mono set-readonly-url" readonly value="-" title="本机伴侣 HTTP 服务地址" />
-      <div class="btn-row">
-        <button type="button" class="btn" id="btnCopyBase" title="复制本机服务地址">复制</button>
-        <button type="button" class="btn" id="btnOpenMgmt" title="在系统浏览器打开本机管理页">浏览器管理页</button>
+      <h3 title="库目录：已挂文件夹名单、版本、清单、预览和链接；不是素材盘，也不会写到 C 盘 AppData">库目录</h3>
+      <label for="inpWorkshopWorkspaceDir" title="软件数据都在这里；素材仍在你挂上的那些文件夹里。不能建在已挂的素材根里面">目录</label>
+      <div style="display:flex;gap:8px;align-items:stretch;">
+        <input type="text" id="inpWorkshopWorkspaceDir" placeholder="生成或挂文件夹前必须选择" autocomplete="off" style="flex:1;" title="作坊库目录" />
+        <button type="button" class="btn" id="btnBrowseWorkshopWorkspaceDir" title="指定库目录">浏览</button>
       </div>
+      <div class="btn-row">
+        <button type="button" class="btn btn-primary" id="btnSaveWorkshopWorkspaceDir" title="保存库目录">保存</button>
+        <button type="button" class="btn" id="btnClearWorkshopWorkspaceDir" title="清除库目录">清除</button>
+      </div>
+      <p id="workshopWorkspaceDirHint" class="mono set-feedback" hidden></p>
     </div>
 
         </section>
@@ -5887,130 +5836,14 @@
     </div>
   </div>
   </div>
-  <aside class="shell-copilot" id="shell-copilot" aria-label="Copilot">
-    <div class="copilot-head">
-      <div class="copilot-head-title">Copilot <span class="copilot-brain" id="copilot-brain-label">stub</span></div>
-      <div class="copilot-top-state" id="copilot-top-state">
-        <span class="copilot-top-state-dot" aria-hidden="true"></span>
-        <span id="copilot-top-state-text">&#x5F85;&#x547D;</span>
-      </div>
-      <div class="copilot-head-actions">
-        <button type="button" class="copilot-head-btn" id="copilot-clear-history" aria-label="清空对话" title="清空对话历史，开始新对话">
-          <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M3 6h18" />
-            <path d="M8 6V4h8v2" />
-            <path d="M19 6l-1 14H6L5 6" />
-            <path d="M10 11v6" />
-            <path d="M14 11v6" />
-          </svg>
-        </button>
-        <button type="button" class="copilot-head-btn" id="copilot-brain-settings" aria-label="大脑状态和权限" title="大脑状态和权限">
-        <svg viewBox="0 0 24 24" aria-hidden="true">
-          <path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z" />
-          <path d="M19.4 15a1.8 1.8 0 0 0 .36 1.98l.04.04a2 2 0 0 1-2.83 2.83l-.04-.04A1.8 1.8 0 0 0 15 19.45a1.8 1.8 0 0 0-1 .55l-.1.1a2 2 0 0 1-3.41-1.41v-.06A1.8 1.8 0 0 0 9.4 17a1.8 1.8 0 0 0-1.98.36l-.04.04a2 2 0 1 1-2.83-2.83l.04-.04A1.8 1.8 0 0 0 4.95 12a1.8 1.8 0 0 0-.55-1l-.1-.1A2 2 0 0 1 5.7 7.49h.06A1.8 1.8 0 0 0 7.4 6.4a1.8 1.8 0 0 0-.36-1.98L7 4.38a2 2 0 0 1 2.83-2.83l.04.04A1.8 1.8 0 0 0 12 2.05a1.8 1.8 0 0 0 1-.55l.1-.1a2 2 0 0 1 3.41 1.41v.06A1.8 1.8 0 0 0 17.6 4.5a1.8 1.8 0 0 0 1.98-.36l.04-.04a2 2 0 0 1 2.83 2.83l-.04.04A1.8 1.8 0 0 0 19.05 12c0 .7.4 1.3.95 1.6Z" />
-        </svg>
-        </button>
-      </div>
-    </div>
-    <div class="copilot-body">
-      <div class="copilot-perception-bar" id="copilot-perception-bar" data-shell-copilot-perception-bar>
-        <div class="copilot-context-head">
-          <div class="copilot-context-title-wrap">
-            <div class="copilot-context-eyebrow">&#x5F53;&#x524D;&#x4E0A;&#x4E0B;&#x6587;</div>
-            <h2 class="copilot-context-title" id="copilot-context-title">&#x51C6;&#x5907;&#x63A5;&#x7BA1;&#x5F53;&#x524D;&#x5DE5;&#x4F5C;</h2>
-          </div>
-          <span class="copilot-context-badge" id="copilot-context-badge">&#x53EF;&#x5F00;&#x59CB;</span>
-        </div>
-        <span class="copilot-perception-chip" id="copilot-perception-workspace">工作区：待刷新</span>
-        <span class="copilot-perception-chip" id="copilot-perception-object">对象：未选择</span>
-        <span class="copilot-perception-chip" id="copilot-perception-external">外部连接：待检查</span>
-        <span class="copilot-perception-chip is-warn" id="copilot-perception-desktop">屏幕监控未开启</span>
-        <span class="copilot-perception-chip" id="copilot-perception-recent">最近活动：无</span>
-        <button type="button" class="copilot-perception-refresh" id="copilot-perception-refresh" aria-label="刷新感知" title="刷新感知">↻</button>
-      </div>
-      <details class="copilot-timeline" id="copilot-timeline" data-shell-copilot-timeline>
-        <summary><span id="copilot-timeline-summary">最近活动</span> <span id="copilot-timeline-count">0</span></summary>
-        <div class="copilot-timeline-list" id="copilot-timeline-list"></div>
-      </details>
-      <details class="copilot-desktop-observation" id="copilot-desktop-observation" data-shell-copilot-desktop-observation>
-        <summary><span id="copilot-desktop-observation-summary">屏幕观察：未开启</span></summary>
-        <div class="copilot-desktop-observation-body">
-          <div>范围：<span id="copilot-desktop-observation-scope">当前窗口</span></div>
-          <div id="copilot-desktop-observation-status">未授权时不采集。开启后会先等待系统授权。</div>
-          <div class="copilot-desktop-scope-row">
-            <button type="button" class="copilot-desktop-scope-btn is-active" data-desktop-observation-scope="current_window">当前窗口</button>
-            <button type="button" class="copilot-desktop-scope-btn" data-desktop-observation-scope="app">应用</button>
-            <button type="button" class="copilot-desktop-scope-btn" data-desktop-observation-scope="desktop">全桌面</button>
-          </div>
-          <div class="copilot-desktop-scope-row">
-            <button type="button" class="copilot-desktop-scope-btn" id="copilot-desktop-observation-enable">开启观察</button>
-            <button type="button" class="copilot-desktop-scope-btn" id="copilot-desktop-observation-pause">暂停观察</button>
-            <button type="button" class="copilot-desktop-scope-btn" id="copilot-desktop-observation-stop">停止观察</button>
-          </div>
-        </div>
-      </details>
-      <div class="copilot-current-run" id="copilot-current-run" hidden aria-live="polite">
-        <div class="copilot-current-run-main">
-          <span class="copilot-current-run-state" id="copilot-current-run-state">&#x5F85;&#x547D;</span>
-          <span class="copilot-current-run-goal" id="copilot-current-run-goal"></span>
-        </div>
-        <div class="copilot-current-run-progress" id="copilot-current-run-progress"></div>
-        <div class="copilot-current-run-activity" id="copilot-current-run-activity"></div>
-      </div>
-      <div class="copilot-examples" id="copilot-examples" hidden></div>
-      <div class="copilot-messages" id="copilot-messages"></div>
-    </div>
-    <div class="copilot-footer">
-      <div class="copilot-status" id="copilot-status"></div>
-      <div class="copilot-input-row">
-        <textarea class="copilot-input" id="copilot-input" rows="2" placeholder="试试：打开脚本 / 伴侣状态"></textarea>
-        <button type="button" class="copilot-send" id="copilot-send" aria-label="发送" title="发送">
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path d="m22 2-7 20-4-9-9-4 20-7Z" />
-            <path d="M22 2 11 13" />
-          </svg>
-        </button>
-        <button type="button" class="copilot-abort" id="copilot-abort" aria-label="停止" title="停止">
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <rect x="7" y="7" width="10" height="10" rx="1.5" />
-          </svg>
-        </button>
-      </div>
-      <div class="copilot-token-bar" id="copilot-token-bar" title="点击展开上下文用量">
-        <div class="copilot-token-line">
-          <span id="copilot-token-label">上下文用量</span>
-          <span id="copilot-token-total">0 / 256k Tokens</span>
-        </div>
-        <div class="copilot-token-track" aria-hidden="true">
-          <span class="copilot-token-seg is-new" id="copilot-token-new"></span>
-          <span class="copilot-token-seg is-cached" id="copilot-token-cached"></span>
-          <span class="copilot-token-seg is-output" id="copilot-token-output"></span>
-          <span class="copilot-token-seg is-reasoning" id="copilot-token-reasoning"></span>
-        </div>
-        <div class="copilot-token-popover" id="copilot-token-popover" hidden></div>
-      </div>
-    </div>
-  </aside>
 </div>
-  <!-- copilot-settings-ui-compat
-  工作台待登录
-  工作台登录未完成
-  Workflow 仍是草稿阶段
-  发布工具
-  本地用量审计
-  if (result && result.shellAccount) renderShellAccountStatus(result.shellAccount);
-  Migrated ${Number(migration.copiedCount)} cookies from legacy partitions
-  工作台登录未完成
-  Workflow 仍是草稿阶段
-  本地用量审计
-  -->
-  <script src="copilot-panel.js"></script>
   <script src="tools-module.js"></script>
     <script src="capability-card-schema.js"></script>
     <script src="capability-version-picker.js"></script>
   <script src="workflow-page.js"></script>
   <script src="tools-page.js"></script>
   <script src="connection-page.js"></script>
+  <script src="shell-send-gate.js"></script>
   <script>
     (function () {
       const $ = (id) => document.getElementById(id);
@@ -6044,23 +5877,18 @@
         document.body.classList.add('shell-sidebar-collapsed');
       }
 
-      const defaultSiteUrl =
-        typeof shell.defaultSiteUrl === 'string' && shell.defaultSiteUrl.trim()
-          ? shell.defaultSiteUrl.trim()
-          : 'http://localhost:3000';
-
-      const defaultScriptHubApiUrl =
-        typeof shell.defaultScriptHubApiUrl === 'string' && shell.defaultScriptHubApiUrl.trim()
-          ? shell.defaultScriptHubApiUrl.trim()
-          : 'http://localhost:8787/';
-
-      const views = { workflow: $('view-workflow'), tools: $('view-tools'), connections: $('view-connections'), settings: $('view-settings') };
+      const views = { workflow: $('view-workflow'), tools: $('view-tools'), connections: $('view-connections'), settings: $('view-settings'), blankRoom: $('view-blank-room') };
       let activeView = 'workbench';
+      let leasedRooms = [];
+      const BLANK_ROOM_PLAN_TEXT =
+        '/plan 这间空房要从头布置。先问清楚要做什么，再交一份计划。盖站施工还没接通，不要假装已经改了文件。';
+      let dshPaneWidthPx = 480;
+      let dshPaneCollapsed = false;
       let activeSettingsSection = 'overview';
 
       function normalizeSettingsSection(sectionId) {
         const normalized = String(sectionId || '').replace(/^settings-/, '').trim();
-        return ['overview', 'entrances', 'account', 'agent', 'storage', 'service'].includes(normalized)
+        return ['overview', 'storage'].includes(normalized)
           ? normalized
           : 'overview';
       }
@@ -6093,6 +5921,54 @@
         btn.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
         btn.setAttribute('aria-label', collapsed ? '\u5c55\u5f00\u4fa7\u680f' : '\u6536\u8d77\u4fa7\u680f');
         btn.title = collapsed ? '\u5c55\u5f00\u4fa7\u680f' : '\u6536\u8d77\u4fa7\u680f';
+      }
+
+      function updateDshPaneToggleUi() {
+        const btn = $('btnDshPaneToggle');
+        if (!btn) return;
+        btn.setAttribute('aria-pressed', dshPaneCollapsed ? 'true' : 'false');
+        btn.setAttribute('aria-expanded', dshPaneCollapsed ? 'false' : 'true');
+        btn.setAttribute('aria-label', dshPaneCollapsed ? '\u5c55\u5f00\u7ba1\u5bb6' : '\u6536\u8d77\u7ba1\u5bb6');
+        btn.title = dshPaneCollapsed ? '\u5c55\u5f00\u7ba1\u5bb6' : '\u6536\u8d77\u7ba1\u5bb6';
+      }
+
+      function applyDshPaneChrome() {
+        const visible = dshPaneCollapsed ? 0 : dshPaneWidthPx;
+        document.body.classList.toggle('shell-dsh-collapsed', Boolean(dshPaneCollapsed));
+        document.documentElement.style.setProperty('--dsh-pane-width', String(visible) + 'px');
+        const handle = $('dsh-resize-handle');
+        if (handle) handle.style.right = String(visible) + 'px';
+        updateDshPaneToggleUi();
+      }
+
+      function applyDshPaneLayoutFromHost(payload) {
+        if (!payload || typeof payload !== 'object') return;
+        if (payload.dshPaneWidth != null && payload.dshPaneWidth !== '') {
+          dshPaneWidthPx = Number(payload.dshPaneWidth) || dshPaneWidthPx;
+        }
+        if (payload.dshPaneCollapsed != null) {
+          dshPaneCollapsed = Boolean(payload.dshPaneCollapsed);
+        }
+        applyDshPaneChrome();
+      }
+
+      if (typeof shell.onCopilotLayout === 'function') {
+        shell.onCopilotLayout(applyDshPaneLayoutFromHost);
+      }
+
+      async function persistAndSyncDshPaneCollapsed(collapsed) {
+        dshPaneCollapsed = Boolean(collapsed);
+        applyDshPaneChrome();
+        if (typeof shell.setDshPaneCollapsed === 'function') {
+          try {
+            const r = await shell.setDshPaneCollapsed(dshPaneCollapsed);
+            if (r && r.dshPaneWidth) dshPaneWidthPx = r.dshPaneWidth;
+            if (r && r.dshPaneCollapsed != null) dshPaneCollapsed = Boolean(r.dshPaneCollapsed);
+            applyDshPaneChrome();
+          } catch {
+            /* ignore */
+          }
+        }
       }
 
       async function persistAndSyncShellSidebar(collapsed) {
@@ -6293,31 +6169,204 @@
         }
       }
 
+      function renderLeasedRoomTabs() {
+        const host = $('leased-room-tabs');
+        if (!host) return;
+        host.replaceChildren();
+        leasedRooms.forEach((room) => {
+          const btn = document.createElement('button');
+          btn.type = 'button';
+          btn.setAttribute('role', 'tab');
+          btn.setAttribute('data-view', room.id);
+          btn.setAttribute('aria-selected', 'false');
+          btn.setAttribute('aria-label', room.title);
+          btn.title = room.title + '（右键删除）';
+          btn.innerHTML =
+            '<svg class="sidebar-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M9 21V8h6v13"/></svg>';
+          host.appendChild(btn);
+        });
+      }
+
+      async function refreshLeasedRoomTabs() {
+        if (typeof shell.listLeasedRooms !== 'function') return;
+        try {
+          const r = await shell.listLeasedRooms();
+          leasedRooms = r && Array.isArray(r.rooms) ? r.rooms : [];
+        } catch {
+          leasedRooms = [];
+        }
+        renderLeasedRoomTabs();
+      }
+
+      async function applyLeasedRoomsPayload(payload, removedId) {
+        leasedRooms = payload && Array.isArray(payload.rooms) ? payload.rooms : leasedRooms;
+        const gone = String(removedId || (payload && payload.removedId) || '');
+        renderLeasedRoomTabs();
+        if (gone && activeView === gone) {
+          await applyShellView('workbench');
+        } else {
+          document.querySelectorAll('nav.shell-sidebar button[role="tab"]').forEach((b) => {
+            const on = b.getAttribute('data-view') === activeView;
+            b.classList.toggle('active', on);
+            b.setAttribute('aria-selected', on ? 'true' : 'false');
+          });
+        }
+      }
+
+      async function leaseNewRoom() {
+        if (typeof shell.createLeasedRoom !== 'function') return;
+        try {
+          const r = await shell.createLeasedRoom();
+          if (!r || !r.ok || !r.room) return;
+          leasedRooms = Array.isArray(r.rooms) ? r.rooms : [r.room];
+          renderLeasedRoomTabs();
+          await applyShellView(r.room.id);
+          await openBlankRoomButler(r.room);
+        } catch {
+          /* ignore */
+        }
+      }
+
+      function isLeasedRoomViewId(view) {
+        return typeof view === 'string' && view.indexOf('room-') === 0;
+      }
+
+      function leasedRoomById(id) {
+        return leasedRooms.find((room) => room.id === id) || null;
+      }
+
+      function blankRoomHandoffPayload(room) {
+        const id = (room && room.id) || activeView;
+        const title = (room && room.title) || (leasedRoomById(id) && leasedRoomById(id).title) || '空房';
+        return {
+          domain: 'room',
+          kind: 'blank_room',
+          surface: id,
+          roomId: id,
+          label: title,
+          lastDefaults: { roomId: id, title: title },
+          composerText: BLANK_ROOM_PLAN_TEXT,
+          submit: true,
+        };
+      }
+
+      async function openDshHandoff(payload) {
+        if (typeof shell.openDshHandoff !== 'function') return;
+        try {
+          await shell.openDshHandoff(payload);
+        } catch {
+          /* ignore */
+        }
+      }
+
+      async function openBlankRoomButler(room) {
+        await openDshHandoff(blankRoomHandoffPayload(room));
+      }
+
+      async function leaveBlankRoomPlanMode() {
+        await openDshHandoff({
+          submitOnly: true,
+          composerText: '/plan off',
+        });
+      }
+
+      function syncBlankRoomTitle(viewKey) {
+        const titleEl = $('blankRoomTitle');
+        if (!titleEl) return;
+        const room = leasedRoomById(viewKey);
+        titleEl.textContent = (room && room.title) || '空房';
+      }
+
+      async function reloadActiveBlankRoom() {
+        if (!isLeasedRoomViewId(activeView) || typeof shell.reloadRoom !== 'function') return;
+        try {
+          const r = await shell.reloadRoom();
+          if (r && !r.ok) window.alert(r.error || '刷新失败');
+        } catch (e) {
+          window.alert(e && e.message ? e.message : String(e));
+        }
+      }
+
+      async function exportActiveBlankRoom() {
+        if (!isLeasedRoomViewId(activeView) || typeof shell.savePath !== 'function' || typeof shell.exportRoomZip !== 'function') {
+          return;
+        }
+        const room = leasedRoomById(activeView);
+        const defaultName = ((room && room.title) || '空房') + '.zip';
+        try {
+          const picked = await shell.savePath({
+            title: '导出空房',
+            defaultPath: defaultName,
+            filters: [{ name: 'ZIP', extensions: ['zip'] }],
+          });
+          if (!picked || !picked.ok || !picked.path) return;
+          const r = await shell.exportRoomZip({ roomId: activeView, destPath: picked.path });
+          if (r && !r.ok) window.alert(r.error || '导出失败');
+        } catch (e) {
+          window.alert(e && e.message ? e.message : String(e));
+        }
+      }
+
+      async function importBlankRoomZip() {
+        if (typeof shell.pickPath !== 'function' || typeof shell.importRoomZip !== 'function') return;
+        try {
+          const picked = await shell.pickPath({
+            pick: 'file',
+            title: '导入空房 ZIP',
+            filters: [{ name: 'ZIP', extensions: ['zip'] }],
+          });
+          if (!picked || !picked.ok || !picked.path) return;
+          const r = await shell.importRoomZip({ zipPath: picked.path });
+          if (!r || !r.ok || !r.room) {
+            window.alert((r && r.error) || '导入失败');
+            return;
+          }
+          leasedRooms = Array.isArray(r.rooms) ? r.rooms : [r.room];
+          renderLeasedRoomTabs();
+          await applyShellView(r.room.id);
+        } catch (e) {
+          window.alert(e && e.message ? e.message : String(e));
+        }
+      }
+
       async function applyShellView(v, opts) {
         const syncOnly = Boolean(opts && opts.syncOnly);
+        const prevView = activeView;
         const requestedView = v === 'scripts' ? 'workflow' : v;
+        if (typeof requestedView === 'string' && requestedView.indexOf('room-') === 0) {
+          if (!leasedRooms.some((room) => room.id === requestedView)) {
+            await refreshLeasedRoomTabs();
+          }
+        }
         const viewKey =
           requestedView === 'workbench' ||
           requestedView === 'workflow' ||
           requestedView === 'settings' ||
           requestedView === 'tools' ||
-          requestedView === 'connections'
+          requestedView === 'connections' ||
+          leasedRooms.some((room) => room.id === requestedView)
             ? requestedView
             : 'workbench';
         activeView = viewKey;
+        syncBlankRoomTitle(viewKey);
+        if (!syncOnly && isLeasedRoomViewId(prevView) && !isLeasedRoomViewId(viewKey)) {
+          void leaveBlankRoomPlanMode();
+        }
+        document.body.classList.toggle('shell-view-workbench', viewKey === 'workbench');
+        document.body.classList.add('shell-has-dsh');
         document.querySelectorAll('nav.shell-sidebar button[role="tab"]').forEach((b) => {
           const on = b.getAttribute('data-view') === viewKey;
           b.classList.toggle('active', on);
           b.setAttribute('aria-selected', on ? 'true' : 'false');
         });
+        const htmlViewKey = viewKey.indexOf('room-') === 0 ? 'blankRoom' : viewKey;
         if (viewKey === 'workbench') {
-          views.workflow.classList.add('hidden');
-          views.tools.classList.add('hidden');
-          views.connections.classList.add('hidden');
-          views.settings.classList.add('hidden');
+          Object.keys(views).forEach((k) => {
+            if (views[k]) views[k].classList.add('hidden');
+          });
         } else {
           Object.keys(views).forEach((k) => {
-            views[k].classList.toggle('hidden', k !== viewKey);
+            if (views[k]) views[k].classList.toggle('hidden', k !== htmlViewKey);
           });
         }
         if (!syncOnly && typeof shell.setShellView === 'function') {
@@ -6327,7 +6376,7 @@
               const label = 'Workbench';
               const msg =
                 r.error === 'invalid_site_url'
-                  ? 'Set the main site URL in Settings first.'
+                  ? 'The bundled workbench site URL is invalid.'
                   : r.error || 'Unknown error';
               window.alert(label + ' failed to load: ' + msg);
               await applyShellView(r.view || 'settings', { syncOnly: true });
@@ -6357,17 +6406,21 @@
         }
         if (viewKey === 'settings') {
           showSettingsSection(activeSettingsSection, { preserveScroll: true });
-          await loadPlugins();
           void refreshSamLocalWinPanel();
           void refreshRembgWinPanel();
           void refreshPaddleOcrWinPanel();
-          void refreshVolumeEffectiveHint();
-          void loadPairingFields();
-          void loadAgentSettingsUi();
         }
       }
 
       window.__acApplyShellViewFromMain = applyShellView;
+
+      if (typeof shell.onShellViewSync === 'function') {
+        shell.onShellViewSync((payload) => {
+          const v = payload && payload.view;
+          if (!v) return;
+          void applyShellView(v, { syncOnly: true });
+        });
+      }
 
       function focusSamLocalSetupSection() {
         void (async () => {
@@ -6549,6 +6602,13 @@
           }
         });
       }
+      const btnDshPaneToggle = $('btnDshPaneToggle');
+      if (btnDshPaneToggle) {
+        btnDshPaneToggle.addEventListener('click', () => {
+          void persistAndSyncDshPaneCollapsed(!dshPaneCollapsed);
+        });
+      }
+
       $('btnTrafficClose').addEventListener('click', () => void shell.closeWindow());
       $('btnTrafficMin').addEventListener('click', () => void shell.minimizeWindow());
       $('btnTrafficZoom').addEventListener('click', () => void shell.toggleMaximize());
@@ -6563,16 +6623,96 @@
       updateShellSidebarToggleUi();
       void syncShellWorkbenchSidebarInsetOnly();
 
-      document.querySelectorAll('nav.shell-sidebar button[role="tab"]').forEach((btn) => {
-        btn.addEventListener('click', () => {
-          const v = btn.getAttribute('data-view');
-          void applyShellView(v || 'workbench');
+      document.querySelectorAll('nav.shell-sidebar').forEach((nav) => {
+        nav.addEventListener('click', (event) => {
+          const btn = event.target && event.target.closest ? event.target.closest('button') : null;
+          if (!btn || !nav.contains(btn)) return;
+          if (btn.id === 'btnLeaseRoom') {
+            void leaseNewRoom();
+            return;
+          }
+          if (btn.getAttribute('role') !== 'tab') return;
+          const nextView = btn.getAttribute('data-view');
+          if (!nextView) return;
+          void applyShellView(nextView);
         });
       });
+
+      const btnBlankRoomAskButler = $('btnBlankRoomAskButler');
+      if (btnBlankRoomAskButler) {
+        btnBlankRoomAskButler.addEventListener('click', () => {
+          void openBlankRoomButler(leasedRoomById(activeView));
+        });
+      }
+      const btnBlankRoomReload = $('btnBlankRoomReload');
+      if (btnBlankRoomReload) {
+        btnBlankRoomReload.addEventListener('click', () => {
+          void reloadActiveBlankRoom();
+        });
+      }
+      const btnBlankRoomImport = $('btnBlankRoomImport');
+      if (btnBlankRoomImport) {
+        btnBlankRoomImport.addEventListener('click', () => {
+          void importBlankRoomZip();
+        });
+      }
+      const btnBlankRoomExport = $('btnBlankRoomExport');
+      if (btnBlankRoomExport) {
+        btnBlankRoomExport.addEventListener('click', () => {
+          void exportActiveBlankRoom();
+        });
+      }
+      void refreshLeasedRoomTabs();
+
+      (function bindDshResizeHandle() {
+        const handle = $('dsh-resize-handle');
+        if (!handle || typeof shell.setDshPaneWidth !== 'function') return;
+        let dragging = false;
+        applyDshPaneChrome();
+        if (typeof shell.loadSettings === 'function') {
+          void shell.loadSettings().then((s) => {
+            if (s && s.dshPaneWidth) dshPaneWidthPx = s.dshPaneWidth;
+            if (s && s.dshPaneCollapsed != null) dshPaneCollapsed = Boolean(s.dshPaneCollapsed);
+            applyDshPaneChrome();
+          });
+        }
+        handle.addEventListener('mousedown', (e) => {
+          if (!document.body.classList.contains('shell-has-dsh') || dshPaneCollapsed) return;
+          dragging = true;
+          handle.classList.add('is-dragging');
+          e.preventDefault();
+        });
+        window.addEventListener('mousemove', (e) => {
+          if (!dragging) return;
+          const width = Math.round(window.innerWidth - e.clientX);
+          void shell.setDshPaneWidth(width, { persist: false }).then((r) => {
+            if (r && r.ok && r.dshPaneWidth) {
+              dshPaneWidthPx = r.dshPaneWidth;
+              applyDshPaneChrome();
+            }
+          });
+        });
+        window.addEventListener('mouseup', () => {
+          if (!dragging) return;
+          dragging = false;
+          handle.classList.remove('is-dragging');
+          void shell.setDshPaneWidth(dshPaneWidthPx);
+        });
+      })();
 
       const sidebarNav = document.querySelector('nav.shell-sidebar');
       if (sidebarNav) {
         sidebarNav.addEventListener('contextmenu', (e) => {
+          const btn = e.target && e.target.closest ? e.target.closest('button[role="tab"]') : null;
+          const view = btn ? btn.getAttribute('data-view') : '';
+          if (view && view.indexOf('room-') === 0) {
+            e.preventDefault();
+            e.stopPropagation();
+            if (typeof shell.popupLeasedRoomMenu === 'function') {
+              void shell.popupLeasedRoomMenu(view);
+            }
+            return;
+          }
           if (activeView !== 'workbench') return;
           e.preventDefault();
           if (typeof shell.popupSidebarContextMenu === 'function') {
@@ -6580,34 +6720,24 @@
           }
         });
       }
+      if (typeof shell.onLeasedRoomsChanged === 'function') {
+        shell.onLeasedRoomsChanged((payload) => {
+          void applyLeasedRoomsPayload(payload);
+        });
+      }
 
       let settingsCache = {
-        siteUrl: defaultSiteUrl,
-        scriptHubApiUrl: defaultScriptHubApiUrl,
-        scriptHubApiToken: '',
-        volumeRoot: '',
         downloadDir: '',
+        workshopWorkspaceDir: '',
       };
-      let pluginListSignature = '';
-      let pluginLoading = false;
       async function loadSettingsUi() {
         const s = await shell.loadSettings();
-        if (s && typeof s.siteUrl === 'string' && s.siteUrl.trim()) settingsCache.siteUrl = s.siteUrl.trim();
-        if (s && typeof s.scriptHubApiUrl === 'string' && s.scriptHubApiUrl.trim()) {
-          settingsCache.scriptHubApiUrl = s.scriptHubApiUrl.trim();
-        }
-        if (s && typeof s.scriptHubApiToken === 'string') {
-          settingsCache.scriptHubApiToken = s.scriptHubApiToken.trim();
-        }
-        settingsCache.volumeRoot = s && typeof s.volumeRoot === 'string' ? s.volumeRoot.trim() : '';
         settingsCache.downloadDir = s && typeof s.downloadDir === 'string' ? s.downloadDir.trim() : '';
-        $('inpSiteUrl').value = settingsCache.siteUrl;
-        if ($('inpScriptHubApiUrl')) $('inpScriptHubApiUrl').value = settingsCache.scriptHubApiUrl;
-        if ($('inpScriptHubApiToken')) $('inpScriptHubApiToken').value = settingsCache.scriptHubApiToken;
-        $('inpVolumeRoot').value = settingsCache.volumeRoot;
-        $('inpDownloadDir').value = settingsCache.downloadDir;
+        settingsCache.workshopWorkspaceDir = s && typeof s.workshopWorkspaceDir === 'string' ? s.workshopWorkspaceDir.trim() : '';
+        if ($('inpDownloadDir')) $('inpDownloadDir').value = settingsCache.downloadDir;
+        if ($('inpWorkshopWorkspaceDir')) $('inpWorkshopWorkspaceDir').value = settingsCache.workshopWorkspaceDir;
         refreshDownloadDirHint();
-        void loadShellAccountStatusUi();
+        refreshWorkshopWorkspaceHint();
       }
 
       function renderShellAccountStatus(r) {
@@ -6712,60 +6842,6 @@
           await shellUiDelay(intervalMs);
         }
         return { ok: false, timeout: true, account: last };
-      }
-
-      async function setupCodexWithLoginRecoveryUi(agent, options, hintEl) {
-        const opts = options && typeof options === 'object' ? options : {};
-        const first = await agent.setupCodex(opts);
-        if (!first || !first.cloudAuthLoginRequired) return first;
-        setSetFeedback(hintEl, '\u9700\u8981\u767b\u5f55\u5de5\u4f5c\u53f0\uff0c\u5df2\u4e3a\u4f60\u6253\u5f00\u3002');
-        await openWorkbenchLoginUi();
-        const login = await waitForShellAccountLoginUi({ timeoutMs: 120000, intervalMs: 2000 });
-        if (!login || !login.ok) return first;
-        setSetFeedback(hintEl, '\u767b\u5f55\u5b8c\u6210\uff0c\u7ee7\u7eed\u914d\u7f6e Codex...');
-        return agent.setupCodex({ ...opts, retryAfterLogin: true });
-      }
-
-      function formatCodexSetupChecks(result) {
-        const checks = Array.isArray(result && result.setupChecks) ? result.setupChecks : [];
-        if (!checks.length) return '';
-        return checks
-          .map((check) => {
-            const mark = check && check.ok ? '\u5df2\u901a\u8fc7' : '\u672a\u901a\u8fc7';
-            const label = String((check && check.label) || (check && check.id) || '').trim();
-            const detail = String((check && check.detail) || '').trim();
-            const next = String((check && check.nextAction) || '').trim();
-            return [mark, label, detail, next ? '\u5efa\u8bae\uff1a' + next : ''].filter(Boolean).join(' \u00b7 ');
-          })
-          .join('\n');
-      }
-
-      function formatCodexLastSetupReport(settings) {
-        const report = settings && settings.codexLastSetupReport && typeof settings.codexLastSetupReport === 'object'
-          ? settings.codexLastSetupReport
-          : null;
-        const checks = Array.isArray(report && report.checks) ? report.checks : [];
-        if (!report || !checks.length) return '';
-        const head = (report.ok ? '\u4e0a\u6b21\u4e00\u952e\u914d\u7f6e\uff1a\u5df2\u901a\u8fc7' : '\u4e0a\u6b21\u4e00\u952e\u914d\u7f6e\uff1a\u672a\u901a\u8fc7') + (report.at ? ' \u00b7 ' + report.at : '');
-        const lines = checks.map((check) => {
-          const mark = check && check.ok ? '\u5df2\u901a\u8fc7' : '\u672a\u901a\u8fc7';
-          const label = String((check && check.label) || (check && check.id) || '').trim();
-          const detail = String((check && check.detail) || '').trim();
-          const next = String((check && check.nextAction) || '').trim();
-          return [mark, label, detail, next ? '\u5efa\u8bae\uff1a' + next : ''].filter(Boolean).join(' \u00b7 ');
-        });
-        return [head, ...lines].join('\n');
-      }
-
-      async function requestShellUpdateCheckForCodexSetupUi(result, hintEl) {
-        if (!result || !result.cloudAuthRouteMissing) return;
-        if (!shell || typeof shell.checkShellUpdate !== 'function') return;
-        try {
-          setSetFeedback(hintEl, '\u4e91\u7aef\u914d\u7f6e\u8fd8\u672a\u5c31\u7eea\uff0c\u6b63\u5728\u68c0\u67e5\u684c\u9762\u7aef\u66f4\u65b0...');
-          await shell.checkShellUpdate();
-        } catch {
-          /* Update checks are best-effort; keep the Codex setup result visible. */
-        }
       }
 
       async function loadPairingFields() {
@@ -6896,131 +6972,6 @@
         }
       }
 
-      async function loadPlugins() {
-        if (pluginLoading) return;
-        pluginLoading = true;
-        const tbody = $('pluginRows');
-        const empty = $('pluginsEmpty');
-        let r;
-        try {
-          r = await shell.api('GET', '/v1/capabilities', null);
-        } catch (e) {
-          empty.textContent = 'Load failed';
-          empty.classList.remove('hidden');
-          pluginLoading = false;
-          return;
-        }
-        if (!r.ok || !r.json || !Array.isArray(r.json.plugins)) {
-          if (r && r.status === 401) empty.textContent = '验证失败';
-          else if (r && r.status != null) empty.textContent = 'Load failed / ' + r.status;
-          else empty.textContent = 'Load failed';
-          empty.classList.remove('hidden');
-          pluginLoading = false;
-          return;
-        }
-        const corePlugins = r.json.plugins.filter(function (p) {
-          return !String(p.id || '').startsWith('plugin.host_bundle.');
-        });
-        const normalizedPlugins = corePlugins.map((p) => ({
-          displayName: p.displayName || p.id || '-',
-          sub: [p.id, p.semver].filter(Boolean).join(' 路 '),
-          role: p.role || '-',
-          health: p.health || '-',
-        }));
-        const nextSignature = JSON.stringify(normalizedPlugins);
-        if (nextSignature === pluginListSignature && empty.classList.contains('hidden')) {
-          pluginLoading = false;
-          return;
-        }
-        pluginListSignature = nextSignature;
-        empty.classList.add('hidden');
-        tbody.innerHTML = '';
-        const fragment = document.createDocumentFragment();
-        for (const p of normalizedPlugins) {
-          const tr = document.createElement('tr');
-          const h = p.health === 'ok' ? 'health-ok' : p.health === 'degraded' ? 'health-degraded' : 'health-disabled';
-          tr.innerHTML =
-            '<td><div style="font-weight:700;">' +
-            p.displayName +
-            '</div><div style="font-size:10px;color:#71717a;margin-top:4px;">' +
-            p.sub.replace(/</g, '&lt;') +
-            '</div></td>' +
-            '<td><span class="role">' +
-            p.role +
-            '</span></td>' +
-            '<td class="' +
-            h +
-            '">' +
-            p.health +
-            '</td>';
-          fragment.appendChild(tr);
-        }
-        tbody.appendChild(fragment);
-        pluginLoading = false;
-      }
-
-      $('btnSaveSite').addEventListener('click', async () => {
-        const u = $('inpSiteUrl').value.trim();
-        const res = await shell.saveSettings({ siteUrl: u });
-        if (res && res.ok) {
-          settingsCache.siteUrl = u || settingsCache.siteUrl;
-          void loadShellAccountStatusUi();
-        }
-      });
-
-      const btnOpenWorkbenchLogin = $('btnOpenWorkbenchLogin');
-      if (btnOpenWorkbenchLogin) {
-        btnOpenWorkbenchLogin.addEventListener('click', async () => {
-          try {
-            await openWorkbenchLoginUi();
-          } finally {
-            setTimeout(() => void loadShellAccountStatusUi(), 1500);
-          }
-        });
-      }
-
-      const btnRefreshShellAccount = $('btnRefreshShellAccount');
-      if (btnRefreshShellAccount) {
-        btnRefreshShellAccount.addEventListener('click', () => {
-          void loadShellAccountStatusUi();
-        });
-      }
-
-      const btnShellAccountWaitLoginE2e = $('btnShellAccountWaitLoginE2e');
-      if (btnShellAccountWaitLoginE2e) {
-        btnShellAccountWaitLoginE2e.addEventListener('click', () => {
-          void (async () => {
-            await loadShellAccountStatusUi();
-            await openWorkbenchLoginUi();
-            const login = await waitForShellAccountLoginUi({ timeoutMs: 120000, intervalMs: 2000 });
-            await runAgentMcpWorkbenchE2eUi(login && login.ok ? {} : { recoveryWaitMs: 30000 });
-            await loadShellAccountStatusUi();
-          })();
-        });
-      }
-
-      const btnSaveScriptHubApi = $('btnSaveScriptHubApi');
-      if (btnSaveScriptHubApi) {
-        btnSaveScriptHubApi.addEventListener('click', async () => {
-          const u = $('inpScriptHubApiUrl').value.trim();
-          const res = await shell.saveSettings({ scriptHubApiUrl: u });
-          if (res && res.ok) {
-            settingsCache.scriptHubApiUrl = u || settingsCache.scriptHubApiUrl;
-          }
-        });
-      }
-
-      const btnSaveScriptHubApiToken = $('btnSaveScriptHubApiToken');
-      if (btnSaveScriptHubApiToken) {
-        btnSaveScriptHubApiToken.addEventListener('click', async () => {
-          const t = $('inpScriptHubApiToken').value.trim();
-          const res = await shell.saveSettings({ scriptHubApiToken: t });
-          if (res && res.ok) {
-            settingsCache.scriptHubApiToken = t;
-          }
-        });
-      }
-
       function refreshDownloadDirHint() {
         const v = settingsCache.downloadDir || $('inpDownloadDir').value.trim();
         if (v) {
@@ -7041,6 +6992,52 @@
         } else {
           setSetFeedback(downloadDirHint, 'Not set: the first download will ask you to choose a folder.');
         }
+      }
+
+      function refreshWorkshopWorkspaceHint() {
+        const hint = $('workshopWorkspaceDirHint');
+        if (!hint) return;
+        const v = settingsCache.workshopWorkspaceDir || ($('inpWorkshopWorkspaceDir') && $('inpWorkshopWorkspaceDir').value.trim());
+        if (v) setSetFeedback(hint, 'Current: ' + v);
+        else setSetFeedback(hint, 'Not set: pick a library folder first. It stores roots, versions, thumbs and links — not your source files.');
+      }
+
+      const btnBrowseWorkshopWorkspaceDir = $('btnBrowseWorkshopWorkspaceDir');
+      if (btnBrowseWorkshopWorkspaceDir) {
+        btnBrowseWorkshopWorkspaceDir.addEventListener('click', async () => {
+          try {
+            const r = shell.pickPath
+              ? await shell.pickPath({ pick: 'directory', title: '指定库目录' })
+              : shell.pickDownloadDir
+                ? await shell.pickDownloadDir()
+                : null;
+            if (r && r.ok && r.path && $('inpWorkshopWorkspaceDir')) $('inpWorkshopWorkspaceDir').value = r.path;
+          } catch {
+            refreshWorkshopWorkspaceHint();
+          }
+        });
+      }
+      const btnSaveWorkshopWorkspaceDir = $('btnSaveWorkshopWorkspaceDir');
+      if (btnSaveWorkshopWorkspaceDir) {
+        btnSaveWorkshopWorkspaceDir.addEventListener('click', async () => {
+          const v = $('inpWorkshopWorkspaceDir') ? $('inpWorkshopWorkspaceDir').value.trim() : '';
+          const res = await shell.saveSettings({ workshopWorkspaceDir: v });
+          if (res && res.ok) {
+            settingsCache.workshopWorkspaceDir = v;
+            refreshWorkshopWorkspaceHint();
+          }
+        });
+      }
+      const btnClearWorkshopWorkspaceDir = $('btnClearWorkshopWorkspaceDir');
+      if (btnClearWorkshopWorkspaceDir) {
+        btnClearWorkshopWorkspaceDir.addEventListener('click', async () => {
+          const res = await shell.saveSettings({ workshopWorkspaceDir: '' });
+          if (res && res.ok) {
+            settingsCache.workshopWorkspaceDir = '';
+            if ($('inpWorkshopWorkspaceDir')) $('inpWorkshopWorkspaceDir').value = '';
+            refreshWorkshopWorkspaceHint();
+          }
+        });
       }
 
       $('btnBrowseDownloadDir').addEventListener('click', async () => {
@@ -7090,1883 +7087,10 @@
         }
       });
 
-      $('btnBrowseVolume').addEventListener('click', async () => {
-        try {
-          const r = await shell.pickVolumeRoot();
-          if (r && r.ok && r.path) $('inpVolumeRoot').value = r.path;
-        } catch {
-          setSetFeedback($('volumeEffective'), '');
-        }
-      });
-
-      $('btnSaveVolume').addEventListener('click', async () => {
-        const v = $('inpVolumeRoot').value.trim();
-        let oldRoot = '';
-        try {
-          const r = await shell.api('GET', '/v1/runtime-status', null);
-          if (r.ok && r.json && r.json.repository && r.json.repository.rootAbsolutePath) {
-            oldRoot = String(r.json.repository.rootAbsolutePath);
-          }
-        } catch {
-          /* ignore */
-        }
-        try {
-          const res = await shell.applyVolumeChange({ newVolumeRoot: v, oldVolumeRoot: oldRoot });
-          if (res && res.canceled) return;
-          if (!res || !res.ok) return;
-          settingsCache.volumeRoot = v;
-          if (res.noChange) {
-            setTimeout(() => void refreshVolumeEffectiveHint(), 800);
-            return;
-          }
-          setSetFeedback($('volumeEffective'), '');
-          setTimeout(() => void refreshVolumeEffectiveHint(), 800);
-        } catch (e) {
-          setSetFeedback($('volumeEffective'), e instanceof Error ? e.message : String(e));
-        }
-      });
-
-      $('btnClearVolume').addEventListener('click', async () => {
-        let oldRoot = '';
-        try {
-          const r = await shell.api('GET', '/v1/runtime-status', null);
-          if (r.ok && r.json && r.json.repository && r.json.repository.rootAbsolutePath) {
-            oldRoot = String(r.json.repository.rootAbsolutePath);
-          }
-        } catch {
-          /* ignore */
-        }
-        try {
-          const res = await shell.applyVolumeChange({ newVolumeRoot: '', oldVolumeRoot: oldRoot });
-          if (res && res.canceled) return;
-          if (!res || !res.ok) return;
-          settingsCache.volumeRoot = '';
-          $('inpVolumeRoot').value = '';
-          if (res.noChange) {
-            setTimeout(() => void refreshVolumeEffectiveHint(), 800);
-            return;
-          }
-          setSetFeedback($('volumeEffective'), '');
-          setTimeout(() => void refreshVolumeEffectiveHint(), 800);
-        } catch (e) {
-          setSetFeedback($('volumeEffective'), e instanceof Error ? e.message : String(e));
-        }
-      });
-
-      $('btnOpenVolumeFolder').addEventListener('click', async () => {
-        let p = '';
-        try {
-          const r = await shell.api('GET', '/v1/runtime-status', null);
-          if (r.ok && r.json && r.json.repository && r.json.repository.rootAbsolutePath) {
-            p = String(r.json.repository.rootAbsolutePath);
-          }
-        } catch {
-          /* ignore */
-        }
-        if (!p.trim()) {
-          const manual = $('inpVolumeRoot').value.trim();
-          if (manual) p = manual;
-        }
-        if (!p.trim()) return;
-        try {
-          await shell.openFolderPath(p);
-        } catch {
-          /* ignore */
-        }
-      });
-
-      $('btnCopyBase').addEventListener('click', async () => {
-        const sum = await shell.traySummary();
-        const port = sum && sum.port ? sum.port : 18765;
-        shell.copyText('http://127.0.0.1:' + port + '/');
-      });
-
-      $('btnOpenMgmt').addEventListener('click', () => shell.openManagementBrowser());
-
-      $('btnSavePairing').addEventListener('click', async () => {
-        const hintEl = $('pairingHint');
-        const btn = $('btnSavePairing');
-        if (!shell.savePairing) return;
-        btn.disabled = true;
-        setSetFeedback(hintEl, 'Saving...');
-        try {
-          const r = await shell.savePairing({
-            sharedToken: $('inpPairToken').value || '',
-            allowedOrigins: $('inpPairOrigins').value || '',
-          });
-          setSetFeedback(
-            hintEl,
-            r && r.ok ? 'Saved' : 'Save failed: ' + ((r && r.error) || 'try again'),
-          );
-        } catch {
-          setSetFeedback(hintEl, 'Save failed');
-        } finally {
-          btn.disabled = false;
-        }
-      });
-
-      let agentSettingsCache = { mcpEnabled: false, defaultBrainId: 'codex', mcpToken: null, mcpPort: 19120 };
-      let agentBrainCatalog = [];
-      let agentMcpConfigCache = null;
-      let agentMcpEndpointCache = '';
-      let agentMcpToolCatalogCache = null;
-      let agentPolicyCache = { confirmTools: true, autoConfirmTools: [], forbiddenTools: [] };
-      let agentPolicyTemplatesCache = [];
-      let codexRuntimeStatusCache = null;
-
-      function renderBrainPicker(activeId) {
-        const host = $('shellBrainPicker');
-        if (!host) return;
-        host.innerHTML = '';
-        const btn = document.createElement('button');
-        btn.type = 'button';
-        btn.className = 'shell-brain-option is-active';
-        btn.textContent = 'Codex CLI';
-        btn.dataset.brainId = 'codex';
-        btn.disabled = true;
-        host.appendChild(btn);
-      }
-
-      function renderCodexSandboxPicker(activeValue) {
-        const host = $('codexSandboxPicker');
-        if (!host) return;
-        const modes = [
-          { id: 'read-only', label: 'Read only' },
-          { id: 'workspace-write', label: 'Workspace write' },
-          { id: 'danger-full-access', label: 'Full access' },
-        ];
-        const active = modes.some((m) => m.id === activeValue) ? activeValue : 'workspace-write';
-        host.innerHTML = '';
-        for (const mode of modes) {
-          const btn = document.createElement('button');
-          btn.type = 'button';
-          btn.className = 'codex-sandbox-option' + (mode.id === active ? ' is-active' : '');
-          btn.textContent = mode.label;
-          btn.dataset.sandbox = mode.id;
-          btn.addEventListener('click', () => {
-            for (const el of host.querySelectorAll('.codex-sandbox-option')) {
-              el.classList.toggle('is-active', el.dataset.sandbox === mode.id);
-            }
-            agentSettingsCache.codexSandbox = mode.id;
-          });
-          host.appendChild(btn);
-        }
-        agentSettingsCache.codexSandbox = active;
-      }
-
-      function renderCodexRuntimeStatus(status, probe) {
-        const el = $('codexRuntimeStatusDetail');
-        if (!el) return;
-        const s = status && typeof status === 'object' ? status : null;
-        if (!s) {
-          el.hidden = true;
-          el.textContent = '';
-          return;
-        }
-        codexRuntimeStatusCache = s;
-        const auth = s.auth && typeof s.auth === 'object' ? s.auth : {};
-        const rows = [
-          ['Command', s.command || 'unset'],
-          ['Working directory', s.cwdExists ? s.cwd : `${s.cwd || 'unset'} (missing)`],
-          ['Model', s.model || 'Codex default'],
-          ['Sandbox', s.sandbox || 'workspace-write'],
-          ['Default brain', s.isDefaultBrain ? 'Codex' : s.defaultBrain || 'unset'],
-          ['Auth', auth.exists ? 'present' : 'missing'],
-        ];
-        if (probe && typeof probe === 'object') {
-          rows.push(['Probe', probe.ok ? passed  : ailed ]);
-        }
-        el.hidden = false;
-        el.innerHTML =
-          '<dl class="agent-mcp-e2e-diag">' +
-          rows
-            .map(([key, value]) => `<div><dt>${escapeAgentMcpHtml(key)}</dt><dd>${escapeAgentMcpHtml(value)}</dd></div>`)
-            .join('') +
-          '</dl>';
-      }
-
-      function compactAgentUsageNumber(value) {
-        const n = Number(value) || 0;
-        if (n >= 1000000) return (n / 1000000).toFixed(n >= 10000000 ? 0 : 1) + 'm';
-        if (n >= 1000) return (n / 1000).toFixed(n >= 10000 ? 0 : 1) + 'k';
-        return String(Math.round(n));
-      }
-
-      async function loadAgentUsageSummaryUi() {
-        const agent = shell.agentSession;
-        if (!agent || typeof agent.usageSummary !== 'function') return;
-        try {
-          const r = await agent.usageSummary({ days: 7 });
-          if (!r || !r.ok || !r.summary || !r.summary.totals) return;
-          const t = r.summary.totals;
-          if ($('agentUsageTurns')) $('agentUsageTurns').textContent = compactAgentUsageNumber(t.turns);
-          if ($('agentUsageFresh')) $('agentUsageFresh').textContent = compactAgentUsageNumber(t.freshInputTokens);
-          if ($('agentUsageCached')) $('agentUsageCached').textContent = compactAgentUsageNumber(t.cachedInputTokens);
-          if ($('agentUsageOutput')) $('agentUsageOutput').textContent = compactAgentUsageNumber(t.outputTokens);
-        } catch {
-          /* ignore */
-        }
-      }
-
-      function formatShortTime(value) {
-        if (!value) return '-';
-        const d = new Date(value);
-        if (!Number.isFinite(d.getTime())) return '-';
-        const pad = (n) => String(n).padStart(2, '0');
-        return pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
-      }
-
-      function renderAgentExecutions(items) {
-        const host = $('agentExecutionList');
-        if (!host) return;
-        host.innerHTML = '';
-        const list = Array.isArray(items) ? items : [];
-        if (!list.length) {
-          const empty = document.createElement('div');
-          empty.className = 'agent-mcp-detail';
-          empty.textContent = 'No tool execution records yet.';
-          host.appendChild(empty);
-          return;
-        }
-        for (const item of list.slice(0, 20)) {
-          const row = document.createElement('div');
-          row.className = 'agent-exec-row';
-
-          const main = document.createElement('div');
-          const name = document.createElement('div');
-          name.className = 'agent-exec-name';
-          name.textContent = item.tool || '';
-          const meta = document.createElement('div');
-          meta.className = 'agent-exec-meta';
-          const ms = item.durationMs == null ? '-' : String(item.durationMs) + 'ms';
-          const decision = item.policyDecision ? ' 路 ' + item.policyDecision : '';
-          const trace = item.traceId ? ' 路 trace ' + String(item.traceId).slice(0, 12) : '';
-          const callId = item.toolCallId ? ' 路 call ' + String(item.toolCallId).slice(-8) : '';
-          meta.textContent =
-            formatShortTime(item.ts) + ' 路 ' + (item.clientId || 'unknown') + ' 路 ' + ms + decision +
-            trace + callId + (item.errorCode ? ' 路 ' + item.errorCode : '');
-          main.appendChild(name);
-          main.appendChild(meta);
-
-          const badge = document.createElement('span');
-          badge.className = 'agent-exec-badge ' + (item.ok ? 'is-ok' : 'is-error');
-          badge.textContent = item.ok ? '成功' : '失败';
-
-          row.appendChild(main);
-          row.appendChild(badge);
-          host.appendChild(row);
-        }
-      }
-
-      async function loadAgentExecutionsUi() {
-        const agent = shell.agentSession;
-        if (!agent || typeof agent.toolExecutions !== 'function') return;
-        try {
-          const r = await agent.toolExecutions({ days: 7, limit: 40 });
-          if (r && r.ok) renderAgentExecutions(r.executions);
-        } catch {
-          /* ignore */
-        }
-      }
-
-      function formatMcpCheckedAt(value) {
-        if (!value) return '-';
-        const d = new Date(value);
-        if (!Number.isFinite(d.getTime())) return '-';
-        const pad = (n) => String(n).padStart(2, '0');
-        return pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
-      }
-
-      function mcpEndpointFromStatus(mcp) {
-        if (!mcp) return '';
-        return 'http://127.0.0.1:' + (mcp.port || 19120) + '/mcp';
-      }
-
-      function renderAgentMcpProbe(result) {
-        const probe = result && result.probe ? result.probe : null;
-        const mcp = (result && result.mcp) || (probe && probe.state) || null;
-        const endpoint = (probe && probe.endpoint) || mcpEndpointFromStatus(mcp);
-        agentMcpEndpointCache = endpoint || agentMcpEndpointCache || '';
-        if (result && result.mcpConfig) agentMcpConfigCache = result.mcpConfig;
-        if (result && result.mcpToolCatalog) renderAgentMcpToolCatalog(result.mcpToolCatalog);
-        renderAgentMcpWorkbenchEntrance(result && result.mcpEntranceStatus);
-        if ($('agentMcpEndpoint')) $('agentMcpEndpoint').textContent = agentMcpEndpointCache || '-';
-        if ($('agentMcpProtocol')) $('agentMcpProtocol').textContent = (probe && probe.protocolVersion) || '-';
-        if ($('agentMcpTools')) $('agentMcpTools').textContent = String((probe && probe.toolCount) || 0);
-        if ($('agentMcpCheckedAt')) $('agentMcpCheckedAt').textContent = formatMcpCheckedAt(probe && probe.checkedAt);
-
-        const dot = $('agentMcpProbeDot');
-        if (dot) {
-          dot.classList.remove('is-ok', 'is-warn', 'is-bad');
-          dot.classList.add(probe && probe.ok ? 'is-ok' : mcp && mcp.enabled ? 'is-warn' : 'is-bad');
-        }
-        if ($('agentMcpProbeTitle')) {
-          $('agentMcpProbeTitle').textContent =
-            probe && probe.ok ? 'MCP callable by external Agents' : mcp && mcp.enabled ? 'MCP waiting for self-check' : 'MCP disabled';
-        }
-        if ($('agentMcpProbeDetail')) {
-          if (probe && probe.ok) {
-            const sample = Array.isArray(probe.toolsSample) && probe.toolsSample.length ? ' 路 ' + probe.toolsSample.join(', ') : '';
-            $('agentMcpProbeDetail').textContent =
-              'Handshake ok; external agents can read ' + probe.toolCount + ' ac.* tools' + sample;
-          } else if (probe && probe.error) {
-            $('agentMcpProbeDetail').textContent = 'Self-check failed: ' + probe.error;
-          } else if (probe && probe.step) {
-            $('agentMcpProbeDetail').textContent = 'Self-check stopped at ' + probe.step + '; check port, token, or client config.';
-          } else {
-            $('agentMcpProbeDetail').textContent = mcp && mcp.enabled
-              ? 'Enabled. Run self-check to confirm initialize and tools/list.'
-              : 'After enabling, self-check verifies external agents can handshake and read ac.* tools.';
-          }
-        }
-      }
-
-      function renderAgentMcpWorkbenchEntrance(status) {
-        const el = $('agentMcpWorkbenchEntranceDetail');
-        if (!el) return;
-        const entrance =
-          status && status.workbenchEntrance && typeof status.workbenchEntrance === 'object'
-            ? status.workbenchEntrance
-            : null;
-        const acceptance =
-          status && status.workbenchE2eAcceptance && typeof status.workbenchE2eAcceptance === 'object'
-            ? status.workbenchE2eAcceptance
-            : null;
-        if (!entrance) {
-          el.hidden = true;
-          el.textContent = '';
-          return;
-        }
-        const labels = {
-          ready: 'Workbench entrance ready',
-          login_required: 'Workbench login required',
-          e2e_missing: 'Workbench E2E missing',
-          e2e_stale: 'Workbench E2E stale',
-          e2e_failed: 'Workbench E2E failed',
-          e2e_invalid: 'Workbench E2E invalid',
-          mcp_unavailable: 'MCP unavailable',
-        };
-        const label = labels[entrance.status] || 'Workbench entrance needs confirmation';
-        const chain =
-          Array.isArray(entrance.requiredChain) && entrance.requiredChain.length
-            ? `Required chain: ${entrance.requiredChain.join(' -> ')}`
-            : '';
-        const next = entrance.nextStep ? String(entrance.nextStep) : '';
-        const teamReady =
-          status && Object.prototype.hasOwnProperty.call(status, 'teamEntranceReady')
-            ? Boolean(status.teamEntranceReady)
-            : false;
-        const teamPhase = status && status.teamEntrancePhase ? String(status.teamEntrancePhase) : '';
-        const teamBlockers = status && Array.isArray(status.teamEntranceBlockers) ? status.teamEntranceBlockers.length : 0;
-        const teamLine = teamPhase
-          ? `Team entrance: ${teamReady ? 'ready' : 'blocked'} / ${teamPhase}${teamBlockers ? ` / blockers=${teamBlockers}` : ''}`
-          : '';
-        const account =
-          status && status.account && typeof status.account === 'object'
-            ? status.account
-            : status && status.shellAccount && typeof status.shellAccount === 'object'
-              ? status.shellAccount
-              : null;
-        const accountDiagnosticLine = account ? `Account: ${formatShellAccountDiagnosticLine(account)}` : '';
-        const checked = entrance.checkedAt ? `Checked at: ${entrance.checkedAt}` : '';
-        el.hidden = false;
-        el.innerHTML =
-          '<div class="agent-mcp-e2e-freshness">' +
-          `<strong>${escapeAgentMcpHtml(label)}</strong>` +
-          `<div>${escapeAgentMcpHtml(next || chain || 'Run MCP self-check first.')}</div>` +
-          (chain ? `<div>${escapeAgentMcpHtml(chain)}</div>` : '') +
-          (checked ? `<div>${escapeAgentMcpHtml(checked)}</div>` : '') +
-          (acceptance
-            ? `<div>${escapeAgentMcpHtml(`Workbench E2E acceptance: ${acceptance.passed ? 'accepted' : 'not accepted'}${acceptance.blockingReason ? ` / ${acceptance.blockingReason}` : ''}`)}</div>`
-            : '') +
-          (acceptance && acceptance.proofSource
-            ? `<div>${escapeAgentMcpHtml(`Proof: ${acceptance.proofSource}`)}</div>`
-            : '') +
-          (teamLine ? `<div>${escapeAgentMcpHtml(teamLine)}</div>` : '') +
-          (accountDiagnosticLine ? `<div>${escapeAgentMcpHtml(accountDiagnosticLine)}</div>` : '') +
-          '</div>';
-        const blockers = Array.isArray(status.blockers) ? status.blockers : [];
-        if (blockers.length) {
-          const blockerLabels = {
-            workbench_login_required: '工作台登录未完成',
-            workflow_promotion_draft_only: 'Workflow 仍是草稿阶段',
-            usage_governance_local_only: '用量治理仍是本地信号',
-            codex_runtime_not_ready: 'Codex runtime needs confirmation',
-            mcp_unavailable: 'MCP unavailable',
-          };
-          const blockerLines = blockers.slice(0, 4).map((blocker) => {
-            const id = String((blocker && blocker.id) || 'unknown');
-            const title = blockerLabels[id] || id;
-            const owner = blocker && blocker.owner ? `owner=${blocker.owner}` : '';
-            const command = blocker && blocker.command ? `command=${blocker.command}` : '';
-            const step = blocker && blocker.nextStep ? String(blocker.nextStep) : '';
-            const actions = Array.isArray(blocker && blocker.actions)
-              ? blocker.actions
-                  .map((action) => String((action && (action.tool || action.command || action.id)) || '').trim())
-                  .filter(Boolean)
-                  .slice(0, 3)
-              : [];
-            const actionLine = actions.length ? `Actions: ${actions.join(', ')}` : '';
-            return [title, owner, command, actionLine, step].filter(Boolean).join(' / ');
-          });
-          el.innerHTML +=
-            '<div class="agent-mcp-e2e-freshness">' +
-            '<strong>Remaining blockers</strong>' +
-            blockerLines.map((line) => `<div>${escapeAgentMcpHtml(line)}</div>`).join('') +
-            '</div>';
-          renderAgentMcpBlockerActionButtons(el, blockers);
-        }
-        const workflow =
-          status && status.workflowPublication && typeof status.workflowPublication === 'object'
-            ? status.workflowPublication
-            : null;
-        if (workflow) {
-          const workflowLabels = {
-            ready: 'Workflow draft registry ready',
-            confirmation_required: 'Workflow draft registry needs approval',
-            policy_denied: 'Workflow draft registry blocked by policy',
-            tools_missing: 'Workflow draft registry tools missing',
-          };
-          const workflowLabel = workflowLabels[workflow.status] || 'Workflow draft registry pending';
-          const draftTool = workflow.draftTool ? `entry=${workflow.draftTool}` : '';
-          const phase = workflow.phase ? `phase=${workflow.phase}` : '';
-          const workflowNext = workflow.nextStep ? String(workflow.nextStep) : '';
-          const promotion =
-            workflow.promotionReadiness && typeof workflow.promotionReadiness === 'object'
-              ? workflow.promotionReadiness
-              : null;
-          const promotionPhase = promotion && promotion.currentPhase ? String(promotion.currentPhase) : '';
-          const promotionReady =
-            promotion && Object.prototype.hasOwnProperty.call(promotion, 'publishableNow')
-              ? Boolean(promotion.publishableNow)
-              : null;
-          const promotionTargets =
-            promotion && Array.isArray(promotion.targets)
-              ? promotion.targets
-                  .map((target) => String((target && (target.plannedTool || target.id)) || '').trim())
-                  .filter(Boolean)
-                  .slice(0, 3)
-              : [];
-          const promotionGateLabels = {
-            workbench_login_e2e_ready: '\u5de5\u4f5c\u53f0 E2E \u9a8c\u6536',
-            admin_confirmation: '\u7ba1\u7406\u5458\u524d\u7aef\u6279\u51c6',
-            capability_route_schema_valid: '\u80fd\u529b\u8def\u7531 schema',
-            model_provider_readiness_checked: '\u6a21\u578b/\u4f9b\u5e94\u5546\u53ef\u7528\u6027',
-            script_manifest_valid: 'Script manifest',
-            script_hub_permission_checked: 'Workflow \u6743\u9650',
-            sandbox_policy_checked: '\u6c99\u7bb1\u7b56\u7565',
-            skill_draft_exists: 'Workflow \u8349\u7a3f',
-          };
-          const formatPromotionGateList = (items) =>
-            (Array.isArray(items) ? items : [])
-              .map((item) => String(item || '').trim())
-              .filter(Boolean)
-              .slice(0, 3)
-              .map((item) => promotionGateLabels[item] || item);
-          const promotionTargetLines =
-            promotion && Array.isArray(promotion.targets)
-              ? promotion.targets
-                  .slice(0, 2)
-                  .map((target) => {
-                    const tool = String((target && (target.plannedTool || target.id)) || '').trim();
-                    const statusText = String((target && target.status) || '').trim();
-                    const missing = Array.isArray(target && target.missing)
-                      ? target.missing.map((item) => String(item || '').trim()).filter(Boolean).slice(0, 2)
-                      : [];
-                    return [tool, statusText, missing.length ? '\u7f3a\u53e3: ' + missing.join(', ') : '']
-                      .filter(Boolean)
-                      .join(' 路 ');
-                  })
-                  .filter(Boolean)
-              : [];
-          const promotionTargetDetailLines =
-            promotion && Array.isArray(promotion.targets)
-              ? promotion.targets
-                  .slice(0, 2)
-                  .map((target) => {
-                    const tool = String((target && (target.plannedTool || target.id)) || '').trim();
-                    const missing = formatPromotionGateList(target && target.missing);
-                    const unevaluated = formatPromotionGateList(target && target.unevaluatedGates);
-                    const adminGate =
-                      target && target.adminConfirmation && typeof target.adminConfirmation === 'object'
-                        ? target.adminConfirmation
-                        : null;
-                    const adminText =
-                      adminGate && adminGate.required
-                        ? '\u7ba1\u7406\u5458\u6279\u51c6: ' +
-                          (adminGate.passed ? '\u5df2\u901a\u8fc7' : '\u5f85 Copilot \u524d\u7aef\u786e\u8ba4')
-                        : '';
-                    return [
-                      tool,
-                      missing.length ? '\u7f3a\u53e3: ' + missing.join(', ') : '',
-                      unevaluated.length ? '\u8349\u7a3f\u9884\u68c0: ' + unevaluated.join(', ') : '',
-                      adminText,
-                    ]
-                      .filter(Boolean)
-                      .join(' / ');
-                  })
-                  .filter(Boolean)
-              : [];
-          const promotionLine = promotionPhase
-            ? `Promotion phase: ${promotionPhase} / ${promotionReady ? 'publishable' : 'not publishable'}`
-            : '';
-          el.innerHTML +=
-            '<div class="agent-mcp-e2e-freshness">' +
-            `<strong>${escapeAgentMcpHtml(workflowLabel)}</strong>` +
-            `<div>${escapeAgentMcpHtml(workflowNext || 'Codex can save a skill draft first, then use governed publication.')}</div>` +
-            (phase ? `<div>${escapeAgentMcpHtml(phase)}</div>` : '') +
-            (draftTool ? `<div>${escapeAgentMcpHtml(draftTool)}</div>` : '') +
-            (promotionLine ? `<div>${escapeAgentMcpHtml(promotionLine)}</div>` : '') +
-            (promotionTargets.length
-              ? `<div>${escapeAgentMcpHtml(`发布工具?${promotionTargets.join(' / ')}`)}</div>`
-              : '') +
-            '</div>';
-          if (promotionTargetLines.length) {
-            el.innerHTML +=
-              '<div class="agent-mcp-e2e-freshness">' +
-              '<strong>Workflow promotion preflight</strong>' +
-              promotionTargetLines.map((line) => `<div>${escapeAgentMcpHtml(line)}</div>`).join('') +
-              '</div>';
-          }
-          if (promotionTargetDetailLines.length) {
-            el.innerHTML +=
-              '<div class="agent-mcp-e2e-freshness">' +
-              '<strong>Workflow promotion gates</strong>' +
-              promotionTargetDetailLines.map((line) => `<div>${escapeAgentMcpHtml(line)}</div>`).join('') +
-              '</div>';
-          }
-          const promotionEvidence =
-            workflow.promotionPreflightEvidence && typeof workflow.promotionPreflightEvidence === 'object'
-              ? workflow.promotionPreflightEvidence
-              : null;
-          const latestPromotionEvidence =
-            promotionEvidence && promotionEvidence.latest && typeof promotionEvidence.latest === 'object'
-              ? promotionEvidence.latest
-              : null;
-          if (latestPromotionEvidence) {
-            const passed = Array.isArray(latestPromotionEvidence.passedGates)
-              ? latestPromotionEvidence.passedGates.map((item) => String(item || '').trim()).filter(Boolean).slice(0, 4)
-              : [];
-            const missing = Array.isArray(latestPromotionEvidence.missingGates)
-              ? latestPromotionEvidence.missingGates.map((item) => String(item || '').trim()).filter(Boolean).slice(0, 4)
-              : [];
-            const admin =
-              latestPromotionEvidence.adminConfirmation && typeof latestPromotionEvidence.adminConfirmation === 'object'
-                ? latestPromotionEvidence.adminConfirmation
-                : {};
-            el.innerHTML +=
-              '<div class="agent-mcp-e2e-freshness">' +
-              '<strong>Workflow promotion evidence</strong>' +
-              `<div>${escapeAgentMcpHtml(`Source: ${promotionEvidence.resource || 'assetcutter://mcp/tool-executions'}`)}</div>` +
-              `<div>${escapeAgentMcpHtml(`Latest: ${latestPromotionEvidence.target || 'unknown'} / ${latestPromotionEvidence.skillId || 'unknown'}`)}</div>` +
-              `<div>${escapeAgentMcpHtml(`Skill exists: ${Boolean(latestPromotionEvidence.skillExists)}`)}</div>` +
-              `<div>${escapeAgentMcpHtml(`Evidence current: ${Boolean(latestPromotionEvidence.evidenceCurrent)}${latestPromotionEvidence.staleReason ? ` / ${latestPromotionEvidence.staleReason}` : ''}`)}</div>` +
-              `<div>${escapeAgentMcpHtml(`Admin: ${admin.passed ? 'passed' : 'missing'} / ${admin.sourceRequired || 'copilot_ui'}`)}</div>` +
-              (passed.length ? `<div>${escapeAgentMcpHtml(`Passed: ${passed.join(', ')}`)}</div>` : '') +
-              (missing.length ? `<div>${escapeAgentMcpHtml(`Missing: ${missing.join(', ')}`)}</div>` : '') +
-              '</div>';
-          }
-        }
-        const usage =
-          status && status.usageAudit && typeof status.usageAudit === 'object'
-            ? status.usageAudit
-            : null;
-        if (usage) {
-          const totals = usage.totals && typeof usage.totals === 'object' ? usage.totals : {};
-          const windowDays = Number(usage.windowDays) || 0;
-          const turns = compactAgentUsageNumber(totals.turns);
-          const totalTokens = compactAgentUsageNumber(totals.totalTokens);
-          const freshInputTokens = compactAgentUsageNumber(totals.freshInputTokens);
-          const cachedInputTokens = compactAgentUsageNumber(totals.cachedInputTokens);
-          const outputTokens = compactAgentUsageNumber(totals.outputTokens);
-          const usageGeneratedAt = usage.generatedAt ? String(usage.generatedAt) : '';
-          const usageCloudDraft = usage.cloudDraft && typeof usage.cloudDraft === 'object' ? usage.cloudDraft : null;
-          const usageUploadPlan =
-            usageCloudDraft && usageCloudDraft.uploadPlan && typeof usageCloudDraft.uploadPlan === 'object'
-              ? usageCloudDraft.uploadPlan
-              : null;
-          const usageUploadTool =
-            usageUploadPlan && usageUploadPlan.tool ? String(usageUploadPlan.tool) : 'ac.usage.upload_cloud_draft';
-          const usageUploadReady = usageCloudDraft ? Boolean(usageCloudDraft.uploadReady) : false;
-          const usageEventCount = usageCloudDraft ? Number(usageCloudDraft.eventCount) || 0 : 0;
-          const usageBlockedBy =
-            usageCloudDraft && Array.isArray(usageCloudDraft.blockedBy)
-              ? usageCloudDraft.blockedBy.map((item) => String(item || '').trim()).filter(Boolean).slice(0, 4)
-              : [];
-          const usageQuotaPolicy =
-            usageCloudDraft && usageCloudDraft.quotaPolicy && typeof usageCloudDraft.quotaPolicy === 'object'
-              ? usageCloudDraft.quotaPolicy
-              : null;
-          const usageQuotaSource =
-            usageQuotaPolicy && usageQuotaPolicy.enforcementSource ? String(usageQuotaPolicy.enforcementSource) : '';
-          const usageQuotaPolicyId =
-            usageQuotaPolicy && usageQuotaPolicy.policyId ? String(usageQuotaPolicy.policyId) : '';
-          const usageQuotaProbeTool =
-            usageQuotaPolicy && usageQuotaPolicy.probeTool ? String(usageQuotaPolicy.probeTool) : '';
-          const usageQuotaExit =
-            usageQuotaPolicy && Array.isArray(usageQuotaPolicy.requiredToExitBlocker)
-              ? usageQuotaPolicy.requiredToExitBlocker.map((item) => String(item || '').trim()).filter(Boolean).slice(0, 3)
-              : [];
-          const usageEvidence =
-            usage.governanceEvidence && typeof usage.governanceEvidence === 'object'
-              ? usage.governanceEvidence
-              : null;
-          const latestUsageEvidence =
-            usageEvidence && usageEvidence.latest && typeof usageEvidence.latest === 'object'
-              ? usageEvidence.latest
-              : null;
-          el.innerHTML +=
-            '<div class="agent-mcp-e2e-freshness">' +
-            '<strong>本地用量审计</strong>' +
-            `<div>${escapeAgentMcpHtml(`窗口：${windowDays} 天`)}</div>` +
-            `<div>${escapeAgentMcpHtml(`轮次：${turns} 次 / Tokens：${totalTokens}`)}</div>` +
-            `<div>${escapeAgentMcpHtml(`输入：${freshInputTokens} / ${cachedInputTokens} 缓存 / 输出：${outputTokens}`)}</div>` +
-            '<div>资源：assetcutter://mcp/usage-audit</div>' +
-            '<div>隐私：不上传 prompt 原文、Cookie 或 MCP Token</div>' +
-            (usageGeneratedAt ? `<div>${escapeAgentMcpHtml(`生成时间：${usageGeneratedAt}`)}</div>` : '') +
-            (usageUploadTool ? `<div>${escapeAgentMcpHtml(`Upload tool: ${usageUploadTool}`)}</div>` : '') +
-            `<div>${escapeAgentMcpHtml(`Upload ready: ${usageUploadReady} / events: ${usageEventCount}`)}</div>` +
-            (usageBlockedBy.length
-              ? `<div>${escapeAgentMcpHtml(`Upload blockers: ${usageBlockedBy.join(', ')}`)}</div>`
-              : '') +
-            (usageQuotaPolicy
-              ? `<div>${escapeAgentMcpHtml(`Quota enforced: ${Boolean(usageQuotaPolicy.cloudQuotaEnforced)}`)}</div>`
-              : '') +
-            (usageQuotaSource ? `<div>${escapeAgentMcpHtml(`Quota source: ${usageQuotaSource}`)}</div>` : '') +
-            (usageQuotaPolicyId ? `<div>${escapeAgentMcpHtml(`Quota policy: ${usageQuotaPolicyId}`)}</div>` : '') +
-            (usageQuotaProbeTool ? `<div>${escapeAgentMcpHtml(`Quota probe: ${usageQuotaProbeTool}`)}</div>` : '') +
-            (usageQuotaExit.length
-              ? `<div>${escapeAgentMcpHtml(`Required to exit blocker: ${usageQuotaExit.join(', ')}`)}</div>`
-              : '') +
-            '</div>';
-          if (latestUsageEvidence) {
-            const usageRemainingGates = Array.isArray(latestUsageEvidence.remainingGates)
-              ? latestUsageEvidence.remainingGates.map((item) => String(item || '').trim()).filter(Boolean).slice(0, 4)
-              : [];
-            el.innerHTML +=
-              '<div class="agent-mcp-e2e-freshness">' +
-              '<strong>Usage governance evidence</strong>' +
-              `<div>${escapeAgentMcpHtml(`Source: ${usageEvidence.resource || 'assetcutter://mcp/tool-executions'}`)}</div>` +
-              `<div>${escapeAgentMcpHtml(`Latest: ${latestUsageEvidence.action || 'usage'} / ${latestUsageEvidence.code || (latestUsageEvidence.ok ? 'ok' : 'not_ok')}`)}</div>` +
-              `<div>${escapeAgentMcpHtml(`Endpoint: ${latestUsageEvidence.endpoint || ''}`)}</div>` +
-              `<div>${escapeAgentMcpHtml(`Partition: ${latestUsageEvidence.partition || ''}`)}</div>` +
-              `<div>${escapeAgentMcpHtml(`Dry run: ${Boolean(latestUsageEvidence.dryRun)} / events: ${Number(latestUsageEvidence.eventCount) || 0}`)}</div>` +
-              `<div>${escapeAgentMcpHtml(`Exit ready: ${Boolean(latestUsageEvidence.exitReady)}`)}</div>` +
-              (usageRemainingGates.length
-                ? `<div>${escapeAgentMcpHtml(`Remaining: ${usageRemainingGates.join(', ')}`)}</div>`
-                : '') +
-              '</div>';
-          }
-        }
-      }
-
-      function riskLabel(risk) {
-        if (risk === 'confirm') return 'Confirm';
-        if (risk === 'forbidden') return 'Forbidden';
-        return 'Safe';
-      }
-
-      function normalizePolicyList(value) {
-        const seen = new Set();
-        const out = [];
-        for (const raw of Array.isArray(value) ? value : []) {
-          const name = String(raw || '').trim();
-          if (!name || seen.has(name)) continue;
-          seen.add(name);
-          out.push(name);
-        }
-        return out.sort();
-      }
-
-      function setToolPolicyChoice(toolName, choice) {
-        const name = String(toolName || '').trim();
-        if (!name) return;
-        const auto = new Set(normalizePolicyList(agentPolicyCache.autoConfirmTools));
-        const deny = new Set(normalizePolicyList(agentPolicyCache.forbiddenTools));
-        auto.delete(name);
-        deny.delete(name);
-        if (choice === 'allow') auto.add(name);
-        if (choice === 'deny') deny.add(name);
-        agentPolicyCache = {
-          ...agentPolicyCache,
-          autoConfirmTools: [...auto].sort(),
-          forbiddenTools: [...deny].sort(),
-        };
-        renderAgentPolicy();
-      }
-
-      function flattenedMcpTools() {
-        const groups = Array.isArray(agentMcpToolCatalogCache && agentMcpToolCatalogCache.surfaces)
-          ? agentMcpToolCatalogCache.surfaces
-          : [];
-        const out = [];
-        for (const group of groups) {
-          for (const tool of Array.isArray(group.tools) ? group.tools : []) {
-            out.push({ ...tool, surfaceLabel: group.label || group.id || 'Other' });
-          }
-        }
-        return out.sort((a, b) => {
-          const ar = a.risk === 'confirm' ? 0 : a.risk === 'forbidden' ? 1 : 2;
-          const br = b.risk === 'confirm' ? 0 : b.risk === 'forbidden' ? 1 : 2;
-          if (ar !== br) return ar - br;
-          return String(a.name || '').localeCompare(String(b.name || ''));
-        });
-      }
-
-      function renderAgentPolicyTemplates(templates) {
-        if (Array.isArray(templates)) agentPolicyTemplatesCache = templates;
-        const host = $('agentPolicyTemplates');
-        if (!host) return;
-        host.innerHTML = '';
-        for (const template of agentPolicyTemplatesCache) {
-          const id = String(template && template.id ? template.id : '');
-          if (!id) continue;
-          const btn = document.createElement('button');
-          btn.type = 'button';
-          btn.className = 'btn';
-          btn.textContent = String(template.name || id);
-          btn.title = String(template.description || '');
-          btn.addEventListener('click', async () => {
-            if (!agent || typeof agent.savePolicy !== 'function') return;
-            btn.disabled = true;
-            setSetFeedback($('agentSettingsHint'), 'Applying permission template...');
-            try {
-              const r = await agent.savePolicy({ templateId: id });
-              if (r && r.ok) {
-                renderAgentPolicyTemplates(r.policyTemplates);
-                renderAgentPolicy(r.agentPolicy);
-                setSetFeedback($('agentSettingsHint'), 'Permission template applied');
-              } else {
-                setSetFeedback($('agentSettingsHint'), 'Permission template failed');
-              }
-            } catch {
-              setSetFeedback($('agentSettingsHint'), 'Permission template failed');
-            } finally {
-              btn.disabled = false;
-            }
-          });
-          host.appendChild(btn);
-        }
-      }
-
-      function renderAgentPolicy(policy) {
-        if (policy) {
-          agentPolicyCache = {
-            ...agentPolicyCache,
-            ...policy,
-            confirmTools: policy.confirmTools != null ? Boolean(policy.confirmTools) : true,
-            autoConfirmTools: normalizePolicyList(policy.autoConfirmTools),
-            forbiddenTools: normalizePolicyList(policy.forbiddenTools),
-          };
-        }
-        const auto = new Set(normalizePolicyList(agentPolicyCache.autoConfirmTools));
-        const deny = new Set(normalizePolicyList(agentPolicyCache.forbiddenTools));
-        if ($('agentPolicyConfirmTools')) $('agentPolicyConfirmTools').checked = Boolean(agentPolicyCache.confirmTools);
-        if ($('agentPolicySummary')) {
-          $('agentPolicySummary').textContent = 'Auto ' + auto.size + ' / Deny ' + deny.size;
-        }
-        const host = $('agentPolicyList');
-        if (!host) return;
-        host.innerHTML = '';
-        const tools = flattenedMcpTools().filter((tool) => tool.risk !== 'safe' || deny.has(tool.name));
-        if (!tools.length) {
-          const empty = document.createElement('div');
-          empty.className = 'agent-mcp-detail';
-          empty.textContent = 'No high-risk tools need separate management right now.';
-          host.appendChild(empty);
-          return;
-        }
-        for (const tool of tools) {
-          const name = String(tool.name || '');
-          const choice = deny.has(name) ? 'deny' : auto.has(name) ? 'allow' : 'default';
-          const row = document.createElement('div');
-          row.className = 'agent-policy-row';
-
-          const main = document.createElement('div');
-          main.className = 'agent-policy-row-main';
-          const title = document.createElement('div');
-          title.className = 'agent-policy-tool-name';
-          title.textContent = name;
-          const meta = document.createElement('div');
-          meta.className = 'agent-policy-tool-meta';
-          const defaultLabel = tool.risk === 'confirm' && agentPolicyCache.confirmTools ? 'Ask by default' : 'Allow by default';
-          meta.textContent = (tool.surfaceLabel || '') + ' / ' + riskLabel(tool.risk) + ' / ' + defaultLabel;
-          main.appendChild(title);
-          main.appendChild(meta);
-
-          const actions = document.createElement('div');
-          actions.className = 'agent-policy-actions';
-          const choices = [
-            ['default', tool.risk === 'confirm' && agentPolicyCache.confirmTools ? 'Ask' : 'Default'],
-            ['allow', 'Auto'],
-            ['deny', 'Deny'],
-          ];
-          for (const pair of choices) {
-            const btn = document.createElement('button');
-            btn.type = 'button';
-            btn.className = 'agent-policy-choice' + (pair[0] === 'deny' ? ' is-deny' : '') + (choice === pair[0] ? ' is-active' : '');
-            btn.textContent = pair[1];
-            btn.addEventListener('click', () => setToolPolicyChoice(name, pair[0]));
-            actions.appendChild(btn);
-          }
-
-          row.appendChild(main);
-          row.appendChild(actions);
-          host.appendChild(row);
-        }
-      }
-
-      function renderAgentMcpToolCatalog(catalog) {
-        const host = $('agentMcpToolGroups');
-        if (!host) return;
-        host.innerHTML = '';
-        agentMcpToolCatalogCache = catalog || null;
-        renderAgentPolicy();
-        const total = Number(catalog && catalog.total) || 0;
-        const risk = (catalog && catalog.riskCounts) || {};
-        if ($('agentMcpToolsSummary')) {
-          $('agentMcpToolsSummary').textContent =
-            total + ' tools / safe ' + (risk.safe || 0) + ' / confirm ' + (risk.confirm || 0);
-        }
-        const groups = Array.isArray(catalog && catalog.surfaces) ? catalog.surfaces : [];
-        if (!groups.length) {
-          const empty = document.createElement('div');
-          empty.className = 'agent-mcp-detail';
-          empty.textContent = 'No exposed tools yet.';
-          host.appendChild(empty);
-          return;
-        }
-        for (const group of groups) {
-          const groupEl = document.createElement('details');
-          groupEl.className = 'agent-mcp-tool-group';
-          groupEl.open = group.id === 'shell' || group.id === 'workbench';
-
-          const summary = document.createElement('summary');
-          const label = document.createElement('span');
-          label.textContent = group.label || group.id || 'Other';
-          const count = document.createElement('span');
-          count.className = 'agent-mcp-tool-count';
-          count.textContent = String(group.count || 0);
-          summary.appendChild(label);
-          summary.appendChild(count);
-          groupEl.appendChild(summary);
-
-          const list = document.createElement('div');
-          list.className = 'agent-mcp-tool-list';
-          const tools = Array.isArray(group.tools) ? group.tools : [];
-          for (const tool of tools) {
-            const item = document.createElement('details');
-            item.className = 'agent-mcp-tool';
-
-            const itemSummary = document.createElement('summary');
-            const name = document.createElement('span');
-            name.className = 'agent-mcp-tool-name';
-            name.textContent = tool.name || '';
-            const badge = document.createElement('span');
-            badge.className = 'agent-mcp-risk ' + (tool.risk || 'safe');
-            badge.textContent = riskLabel(tool.risk);
-            itemSummary.appendChild(name);
-            itemSummary.appendChild(badge);
-            item.appendChild(itemSummary);
-
-            const desc = document.createElement('div');
-            desc.className = 'agent-mcp-tool-desc';
-            const input = tool.input || {};
-            const required = Array.isArray(input.required) && input.required.length ? ' 路 蹇呭～ ' + input.required.join(', ') : '';
-            desc.textContent = (tool.description || '') + ' / params ' + (input.propertyCount || 0) + required;
-            item.appendChild(desc);
-
-            const schema = document.createElement('pre');
-            schema.className = 'agent-mcp-tool-schema';
-            try {
-              schema.textContent = JSON.stringify(tool.inputSchema || {}, null, 2);
-            } catch {
-              schema.textContent = '{}';
-            }
-            item.appendChild(schema);
-            list.appendChild(item);
-          }
-          groupEl.appendChild(list);
-          host.appendChild(groupEl);
-        }
-      }
-
-      async function probeAgentMcpUi() {
-        const agent = shell.agentSession;
-        const btn = $('btnProbeMcp');
-        if (!agent || typeof agent.mcpProbe !== 'function') return;
-        if (btn) btn.disabled = true;
-        if (agentMcpProbeTitle) agentMcpProbeTitle.textContent = 'MCP self-check running...';
-        try {
-          const r = await agent.mcpProbe();
-          if (r && r.ok) {
-            renderAgentMcpProbe(r);
-          } else if ($('agentMcpProbeDetail')) {
-            $('agentMcpProbeDetail').textContent = 'Self-check failed: ' + ((r && r.error) || 'unknown error');
-          }
-          return r;
-        } catch (e) {
-          if ($('agentMcpProbeDetail')) $('agentMcpProbeDetail').textContent = e && e.message ? e.message : String(e);
-          return { ok: false, error: e && e.message ? e.message : String(e) };
-        } finally {
-          if (btn) btn.disabled = false;
-        }
-      }
-
-      function escapeAgentMcpHtml(value) {
-        return String(value == null ? '' : value)
-          .replace(/&/g, '&amp;')
-          .replace(/</g, '&lt;')
-          .replace(/>/g, '&gt;')
-          .replace(/"/g, '&quot;')
-          .replace(/'/g, '&#39;');
-      }
-
-      function renderAgentMcpBlockerActionButtons(host, blockers) {
-        if (!host || !Array.isArray(blockers) || !blockers.length) return;
-        const seen = new Set();
-        const actions = [];
-        for (const blocker of blockers) {
-          for (const action of Array.isArray(blocker && blocker.actions) ? blocker.actions : []) {
-            const key = String((action && (action.tool || action.command || action.id)) || '').trim();
-            if (!key || seen.has(key)) continue;
-            seen.add(key);
-            actions.push(action);
-          }
-        }
-        if (!actions.length) return;
-        const wrap = document.createElement('div');
-        wrap.className = 'agent-mcp-e2e-freshness';
-        const title = document.createElement('strong');
-        title.textContent = 'Blocker actions';
-        wrap.appendChild(title);
-        const row = document.createElement('div');
-        row.className = 'set-actions';
-        for (const action of actions.slice(0, 6)) {
-          const btn = document.createElement('button');
-          btn.type = 'button';
-          btn.className = 'btn';
-          btn.textContent = String(action.label || action.tool || action.command || action.id || 'Action');
-          btn.title = String(action.tool || action.command || action.id || '');
-          btn.addEventListener('click', () => {
-            void runAgentMcpBlockerAction(action);
-          });
-          row.appendChild(btn);
-        }
-        wrap.appendChild(row);
-        host.appendChild(wrap);
-      }
-
-      function renderAgentMcpBlockerActionResult(label, state, result) {
-        const detail = $('agentMcpBlockerActionDetail');
-        if (!detail) return;
-        detail.hidden = false;
-        const r = result && typeof result === 'object' ? result : {};
-        const parts = [
-          `action=${label || 'Action'}`,
-          `state=${state || 'unknown'}`,
-          Object.prototype.hasOwnProperty.call(r, 'ok') ? `ok=${Boolean(r.ok)}` : '',
-          Object.prototype.hasOwnProperty.call(r, 'loggedIn') ? `loggedIn=${Boolean(r.loggedIn)}` : '',
-          Object.prototype.hasOwnProperty.call(r, 'uploaded') ? `uploaded=${Boolean(r.uploaded)}` : '',
-          Object.prototype.hasOwnProperty.call(r, 'eventCount') ? `events=${Number(r.eventCount) || 0}` : '',
-          r.code ? `code=${r.code}` : '',
-          r.error ? `error=${r.error}` : '',
-          r.endpoint ? `endpoint=${r.endpoint}` : '',
-          r.partition ? `partition=${r.partition}` : '',
-          r.target ? `target=${r.target}` : '',
-          r.skillId ? `skill=${r.skillId}` : '',
-          Array.isArray(r.requiredInputs) && r.requiredInputs.length
-            ? `inputs=${r.requiredInputs.map((input) => input && input.name ? String(input.name) : '').filter(Boolean).join(',')}`
-            : '',
-        ].filter(Boolean);
-        detail.textContent = parts.join(' / ') + (r.nextStep ? `\n${r.nextStep}` : r.message ? `\n${r.message}` : '');
-      }
-
-      async function runAgentMcpBlockerAction(action) {
-        const tool = String(action && action.tool || '');
-        const command = String(action && action.command || '');
-        const label = String(action && (action.label || action.tool || action.command || action.id) || 'Action');
-        renderAgentMcpBlockerActionResult(label, 'started', {});
-        try {
-          if (tool === 'ac.usage.probe_quota_policy') {
-            const r = await runAgentUsageQuotaPolicyProbeUi();
-            renderAgentMcpBlockerActionResult(label, r && r.ok ? 'finished' : 'needs_input', r);
-            return;
-          }
-          if (tool === 'ac.usage.upload_cloud_draft') {
-            const r = await runAgentUsageUploadUi({ dryRun: true });
-            renderAgentMcpBlockerActionResult(label, r && r.ok ? 'finished' : 'needs_input', r);
-            return;
-          }
-          if (tool === 'ac.workflow.promote_workbench_preset') {
-            const r = await runWorkflowPromotionPreflightUi('workbench_preset');
-            renderAgentMcpBlockerActionResult(label, r && r.ok ? 'finished' : 'needs_input', {
-              ...(r || {}),
-              target: 'workbench_preset',
-              requiredInputs: Array.isArray(action.requiredInputs) ? action.requiredInputs : [],
-            });
-            return;
-          }
-          if (tool === 'ac.workflow.promote_script_hub_tool') {
-            const r = await runWorkflowPromotionPreflightUi('script_hub_tool');
-            renderAgentMcpBlockerActionResult(label, r && r.ok ? 'finished' : 'needs_input', {
-              ...(r || {}),
-              target: 'script_hub_tool',
-              requiredInputs: Array.isArray(action.requiredInputs) ? action.requiredInputs : [],
-            });
-            return;
-          }
-          if (command.includes('smoke:agent-mcp:e2e:open-login-wait')) {
-            await openWorkbenchLoginUi();
-            const login = await waitForShellAccountLoginUi({ timeoutMs: 120000, intervalMs: 2000 });
-            const e2e = await runAgentMcpWorkbenchE2eUi(login && login.ok ? {} : { recoveryWaitMs: 30000 });
-            renderAgentMcpBlockerActionResult(label, e2e && e2e.ok ? 'finished' : 'needs_input', {
-              ...(e2e || {}),
-              loggedIn: Boolean(login && login.ok),
-              nextStep: e2e && e2e.error ? e2e.error : '',
-            });
-            return;
-          }
-          if (command.includes('smoke:agent-mcp:e2e:wait-login')) {
-            const e2e = await runAgentMcpWorkbenchE2eUi({ recoveryWaitMs: 120000 });
-            renderAgentMcpBlockerActionResult(label, e2e && e2e.ok ? 'finished' : 'needs_input', e2e);
-            return;
-          }
-          if (command.includes('smoke:agent-mcp:status')) {
-            const r = await probeAgentMcpUi();
-            renderAgentMcpBlockerActionResult(label, r && r.ok ? 'finished' : 'needs_input', r);
-            return;
-          }
-          if (command && shell.copyText) {
-            shell.copyText(command);
-            setSetFeedback($('agentSettingsHint'), 'Copied: ' + command);
-            renderAgentMcpBlockerActionResult(label, 'finished', { ok: true, message: 'Copied command' });
-            return;
-          }
-          renderAgentMcpBlockerActionResult(label, 'needs_input', { ok: false, error: 'unsupported_action' });
-        } catch (e) {
-          renderAgentMcpBlockerActionResult(label, 'failed', { ok: false, error: e && e.message ? e.message : String(e) });
-        }
-      }
-
-      function formatAgentMcpE2eAuthDiagnostics(e2e) {
-        const response = e2e && e2e.response && e2e.response.json ? e2e.response.json : null;
-        const result = response && response.result ? response.result : {};
-        const structured = result.structuredContent && typeof result.structuredContent === 'object' ? result.structuredContent : {};
-        const details = structured.details && typeof structured.details === 'object' ? structured.details : {};
-        const auth = structured.authDiagnostics && typeof structured.authDiagnostics === 'object'
-          ? structured.authDiagnostics
-          : details.authDiagnostics && typeof details.authDiagnostics === 'object'
-            ? details.authDiagnostics
-            : null;
-        const server = details.server && typeof details.server === 'object' ? details.server : {};
-        const session = auth && auth.session && typeof auth.session === 'object' ? auth.session : null;
-        const account = e2e && e2e.account && typeof e2e.account === 'object' ? e2e.account : null;
-        const rows = [];
-        const origin = (auth && auth.apiOrigin) || server.requestOrigin || (account && account.authOrigin) || '';
-        if (origin) rows.push(['Origin', origin]);
-        const cookieCount =
-          session && Number.isFinite(Number(session.cookieCount))
-            ? Number(session.cookieCount)
-            : account && Number.isFinite(Number(account.cookieCount))
-              ? Number(account.cookieCount)
-              : null;
-        if (cookieCount != null) rows.push(['Cookies', String(cookieCount)]);
-        const hasAuthCookie =
-          session && typeof session.hasLikelyAuthCookie === 'boolean'
-            ? session.hasLikelyAuthCookie
-            : account && typeof account.hasAuthCookie === 'boolean'
-              ? account.hasAuthCookie
-              : null;
-        if (hasAuthCookie === false) rows.push(['Auth Cookie', 'missing']);
-        const partition = (auth && auth.partition) || (account && account.partition) || '';
-        if (partition) rows.push(['Partition', partition]);
-        if (!rows.length) return '';
-        return (
-          '<dl class="agent-mcp-e2e-diag">' +
-          rows
-            .map(([key, value]) => `<div><dt>${escapeAgentMcpHtml(key)}</dt><dd>${escapeAgentMcpHtml(value)}</dd></div>`)
-            .join('') +
-          '</dl>'
-        );
-      }
-
-      function formatAgentMcpE2eFreshness(e2e) {
-        const freshness = e2e && e2e.freshness && typeof e2e.freshness === 'object' ? e2e.freshness : null;
-        const checkedAt = freshness && freshness.checkedAt ? freshness.checkedAt : e2e && e2e.checkedAt ? e2e.checkedAt : '';
-        const checkedMs = checkedAt ? Date.parse(checkedAt) : NaN;
-        const maxAgeMs =
-          freshness && Number.isFinite(Number(freshness.maxAgeMs))
-            ? Number(freshness.maxAgeMs)
-            : 15 * 60 * 1000;
-        let status = freshness && freshness.status ? String(freshness.status) : '';
-        let ageMs =
-          freshness && Number.isFinite(Number(freshness.ageMs))
-            ? Number(freshness.ageMs)
-            : Number.isFinite(checkedMs)
-              ? Math.max(0, Date.now() - checkedMs)
-              : null;
-        if (!status) {
-          status = Number.isFinite(checkedMs) ? (ageMs > maxAgeMs ? 'stale' : 'fresh') : 'missing';
-        }
-        const stale = freshness && typeof freshness.stale === 'boolean' ? freshness.stale : status !== 'fresh';
-        const ageText =
-          ageMs == null
-            ? ''
-            : ageMs < 60 * 60 * 1000
-              ? `${Math.max(1, Math.round(ageMs / 60000))} minutes ago`
-              : `${Math.round(ageMs / 3600000)} hours ago`;
-        const checkedText = checkedAt ? `Checked at: ${checkedAt}${ageText ? ` (${ageText})` : ''}` : 'No complete validation yet';
-        const stateText =
-          status === 'missing'
-            ? 'Workbench E2E missing'
-            : status === 'invalid'
-              ? 'Workbench E2E invalid'
-              : stale
-                ? 'Last validation: stale'
-                : e2e && e2e.ok
-                  ? 'Workbench MCP chain passed'
-                  : 'Workbench E2E missing';
-        return (
-          '<div class="agent-mcp-e2e-freshness">' +
-          '<strong>' +
-          escapeAgentMcpHtml(stateText) +
-          '</strong>' +
-          `<div>${escapeAgentMcpHtml(checkedText)}</div>` +
-          `<div>${escapeAgentMcpHtml(stale ? 'Run validation again' : 'Validation is still fresh')}</div>` +
-          '</div>'
-        );
-      }
-
-      function renderAgentMcpE2e(result) {
-        const el = $('agentMcpE2eDetail');
-        const actions = $('agentMcpE2eActions');
-        const openBtn = $('btnOpenWorkbenchForMcpE2e');
-        if (!el) return;
-        const e2e = result && result.e2e ? result.e2e : result || null;
-        if (!e2e) {
-          el.hidden = true;
-          if (actions) actions.hidden = true;
-          return;
-        }
-        el.hidden = false;
-        const freshness = formatAgentMcpE2eFreshness(e2e);
-        if (e2e.ok) {
-          const assetText = e2e.assetId ? `; asset ${e2e.assetId}` : '';
-          el.innerHTML =
-            '<strong>Workbench MCP chain passed</strong>' +
-            '<ol class="agent-mcp-e2e-chain">' +
-            '<li>ensure_ready</li>' +
-            '<li>create_project</li>' +
-            '<li>run_capability</li>' +
-            '<li>list_assets</li>' +
-            '<li>get_asset</li>' +
-            '</ol>' +
-            `<div>Codex can use Workbench through the local tool channel${assetText}.</div>`;
-          el.innerHTML += freshness;
-          if (actions) actions.hidden = true;
-          return;
-        }
-        const step = e2e.failedStep ? `Stopped at ${e2e.failedStep}` : 'Not passed';
-        const code = e2e.errorCode ? ` (${e2e.errorCode})` : '';
-        const next = e2e.nextStep ? ` ${e2e.nextStep}` : '';
-        const diagnostics = formatAgentMcpE2eAuthDiagnostics(e2e);
-        el.innerHTML =
-          '<strong>Workbench chain needs attention</strong>' +
-          `<div>${escapeAgentMcpHtml(step)}${escapeAgentMcpHtml(code)}${escapeAgentMcpHtml(next)}</div>` +
-          diagnostics;
-        el.innerHTML += freshness;
-        if (actions) actions.hidden = false;
-        if (openBtn) {
-          openBtn.hidden =
-            e2e.action !== 'open_workbench_login' &&
-            e2e.errorCode !== 'AGENT_AUTH_REQUIRED' &&
-            e2e.authRequired !== true;
-        }
-      }
-
-      async function runAgentMcpWorkbenchE2eUi(options) {
-        const opts = options && typeof options === 'object' ? options : {};
-        const agent = shell.agentSession;
-        const btn = $('btnRunMcpWorkbenchE2e');
-        if (!agent || typeof agent.mcpWorkbenchE2e !== 'function') return;
-        if (btn) btn.disabled = true;
-        const detail = $('agentMcpE2eDetail');
-        const actions = $('agentMcpE2eActions');
-        if (detail) {
-          detail.hidden = false;
-          detail.textContent = opts.recoveryWaitMs
-            ? 'Opening Workbench and waiting for login; validation will continue after sign-in.'
-            : 'Running the real MCP Workbench validation chain; keep Workbench signed in and ready.';
-        }
-        if (actions) actions.hidden = true;
-        try {
-          const r = await agent.mcpWorkbenchE2e(opts);
-          if (r && r.ok) {
-            renderAgentMcpE2e(r);
-            renderAgentMcpProbe(r);
-          } else if (detail) {
-            detail.textContent = '\u5de5\u4f5c\u53f0\u9a8c\u6536\u672a\u5b8c\u6210\uff1a' + ((r && r.error) || '\u672a\u77e5\u9519\u8bef');
-          }
-          return r;
-        } catch (e) {
-          if (detail) {
-            detail.hidden = false;
-            detail.textContent = e && e.message ? e.message : String(e);
-          }
-          return { ok: false, error: e && e.message ? e.message : String(e) };
-        } finally {
-          if (btn) btn.disabled = false;
-        }
-      }
-      async function runAgentUsageUploadUi(options) {
-        const opts = options && typeof options === 'object' ? options : {};
-        const agent = shell.agentSession;
-        if (!agent || typeof agent.usageUploadCloudDraft !== 'function') return;
-        const dryRun = Boolean(opts.dryRun);
-        const btn = dryRun ? $('btnUsageUploadDryRun') : $('btnUsageUploadCloudDraft');
-        const detail = $('agentUsageUploadDetail');
-        if (btn) btn.disabled = true;
-        if (detail) {
-          detail.hidden = false;
-          detail.textContent = dryRun
-            ? '\u6b63\u5728\u6a21\u62df\u4e0a\u4f20 Copilot \u7528\u91cf\u8349\u7a3f...'
-            : '\u6b63\u5728\u4e0a\u4f20 Copilot \u7528\u91cf\u8349\u7a3f...';
-        }
-        try {
-          const r = await agent.usageUploadCloudDraft({ days: 1, limit: 5000, dryRun });
-          if (detail) {
-            const parts = [
-              r && r.ok ? 'ok=true' : 'ok=false',
-              `uploaded=${Boolean(r && r.uploaded)}`,
-              `eventCount=${Number(r && r.eventCount) || 0}`,
-              `inserted=${Number(r && r.inserted) || 0}`,
-              `skipped=${Number(r && r.skipped) || 0}`,
-              r && r.code ? `code=${r.code}` : '',
-              r && r.authRequired ? 'authRequired=true' : '',
-              r && r.noEvents ? 'noEvents=true' : '',
-              r && r.endpoint ? `endpoint=${r.endpoint}` : '',
-              r && r.partition ? `partition=${r.partition}` : '',
-              r && r.idempotencyScope ? `idempotency=${r.idempotencyScope}` : '',
-            ].filter(Boolean);
-            detail.textContent =
-              parts.join(' / ') +
-              (r && r.nextStep ? `\n${r.nextStep}` : r && r.message ? `\n${r.message}` : '');
-          }
-          await loadAgentSettingsUi();
-          return r;
-        } catch (e) {
-          if (detail) {
-            detail.hidden = false;
-            detail.textContent = e && e.message ? e.message : String(e);
-          }
-          return { ok: false, error: e && e.message ? e.message : String(e) };
-        } finally {
-          if (btn) btn.disabled = false;
-        }
-      }
-      async function runAgentUsageQuotaPolicyProbeUi() {
-        const agent = shell.agentSession;
-        if (!agent || typeof agent.usageQuotaPolicyProbe !== 'function') return;
-        const btn = $('btnUsageQuotaPolicyProbe');
-        const detail = $('agentUsageUploadDetail');
-        if (btn) btn.disabled = true;
-        if (detail) {
-          detail.hidden = false;
-          detail.textContent = '\u6b63\u5728\u68c0\u67e5 Copilot \u7528\u91cf\u7b56\u7565...';
-        }
-        try {
-          const r = await agent.usageQuotaPolicyProbe();
-          const quota = r && r.quotaPolicy && typeof r.quotaPolicy === 'object' ? r.quotaPolicy : {};
-          if (detail) {
-            const parts = [
-              r && r.ok ? 'ok=true' : 'ok=false',
-              `quotaEnforced=${Boolean(quota.cloudQuotaEnforced)}`,
-              r && Object.prototype.hasOwnProperty.call(r, 'usageBillingEnabled')
-                ? `usageBillingEnabled=${Boolean(r.usageBillingEnabled)}`
-                : '',
-              quota.enforcementSource ? `source=${quota.enforcementSource}` : '',
-              quota.policyId ? `policy=${quota.policyId}` : '',
-              r && r.code ? `code=${r.code}` : '',
-              r && r.authRequired ? 'authRequired=true' : '',
-              r && r.endpoint ? `endpoint=${r.endpoint}` : '',
-              r && r.partition ? `partition=${r.partition}` : '',
-            ].filter(Boolean);
-            detail.textContent = parts.join(' / ') + (r && r.message ? `\n${r.message}` : '');
-          }
-          await loadAgentSettingsUi();
-          return r;
-        } catch (e) {
-          if (detail) {
-            detail.hidden = false;
-            detail.textContent = e && e.message ? e.message : String(e);
-          }
-          return { ok: false, error: e && e.message ? e.message : String(e) };
-        } finally {
-          if (btn) btn.disabled = false;
-        }
-      }
-
-      function renderWorkflowPromotionPreflight(result) {
-        const detail = $('agentWorkflowPromotionDetail');
-        if (!detail) return;
-        detail.hidden = false;
-        const preflight = result && result.preflight && typeof result.preflight === 'object' ? result.preflight : null;
-        const toolResult = result && result.result && typeof result.result === 'object' ? result.result : null;
-        const error = toolResult && toolResult.error && toolResult.error.code ? toolResult.error.code : result && result.error ? result.error : '';
-        if (!preflight) {
-          detail.textContent = '\u5de5\u4f5c\u6d41\u9884\u53d1\u5e03\u68c0\u67e5\u672a\u8fd4\u56de\u7ed3\u679c' + (error ? ': ' + error : '');
-          return;
-        }
-        const passed = Array.isArray(preflight.passedGates) ? preflight.passedGates : [];
-        const missing = Array.isArray(preflight.missingGates) ? preflight.missingGates : [];
-        const lines = [
-          `target=${preflight.target || result.target || ''}`,
-          `publishable=${Boolean(preflight.publishable)}`,
-          `phase=${preflight.currentPhase || ''}`,
-          `adminApproved=${Boolean(preflight.adminConfirmation && preflight.adminConfirmation.passed)}`,
-          `passed=${passed.join(', ') || '-'}`,
-          `missing=${missing.join(', ') || '-'}`,
-          preflight.nextStep ? `next=${preflight.nextStep}` : '',
-          result.toolCallId ? `audit=${result.toolCallId}` : '',
-        ].filter(Boolean);
-        detail.textContent = lines.join('\n');
-      }
-
-      async function fillLatestWorkflowPromotionDraftUi() {
-        const agent = shell.agentSession;
-        const detail = $('agentWorkflowPromotionDetail');
-        const input = $('inpWorkflowPromotionSkillId');
-        const btn = $('btnFillLatestWorkflowDraft');
-        if (!agent || typeof agent.workflowPromotionDrafts !== 'function') return;
-        if (btn) btn.disabled = true;
-        try {
-          const r = await agent.workflowPromotionDrafts();
-          const latest = r && r.latest && typeof r.latest === 'object' ? r.latest : null;
-          if (!latest || !latest.id) {
-            if (detail) {
-              detail.hidden = false;
-              detail.textContent = 'No existing workflow drafts. Save one with ac.skills.save first.';
-            }
-            return { ok: false, error: 'no_workflow_drafts' };
-          }
-          if (input) input.value = latest.id;
-          if (detail) {
-            const caps = [
-              latest.hasWorkbenchPreset ? 'workbenchPreset' : '',
-              latest.hasScriptManifest ? 'scriptManifest' : '',
-            ].filter(Boolean);
-            detail.hidden = false;
-            detail.textContent = [
-              `selected=${latest.id}`,
-              latest.name ? `name=${latest.name}` : '',
-              `revision=${Number(latest.revision) || 1}`,
-              caps.length ? `targets=${caps.join(',')}` : 'targets=none',
-              latest.updatedAt ? `updatedAt=${latest.updatedAt}` : '',
-            ].filter(Boolean).join('\n');
-          }
-          return { ok: true, draft: latest };
-        } catch (e) {
-          if (detail) {
-            detail.hidden = false;
-            detail.textContent = e && e.message ? e.message : String(e);
-          }
-          return { ok: false, error: e && e.message ? e.message : String(e) };
-        } finally {
-          if (btn) btn.disabled = false;
-        }
-      }
-
-      async function runWorkflowPromotionPreflightUi(target) {
-        const agent = shell.agentSession;
-        if (!agent || typeof agent.workflowPromotionPreflight !== 'function') return;
-        const skillId = $('inpWorkflowPromotionSkillId') ? $('inpWorkflowPromotionSkillId').value.trim() : '';
-        const detail = $('agentWorkflowPromotionDetail');
-        const workbenchBtn = $('btnPromoteWorkbenchPresetPreflight');
-        const scriptBtn = $('btnPromoteScriptHubToolPreflight');
-        if (!skillId) {
-          if (detail) {
-            detail.hidden = false;
-            detail.textContent = '\u8bf7\u5148\u586b\u5199 workflow/skill ID\u3002';
-          }
-          return { ok: false, error: 'skill_id_required', target };
-        }
-        if (workbenchBtn) workbenchBtn.disabled = true;
-        if (scriptBtn) scriptBtn.disabled = true;
-        if (detail) {
-          detail.hidden = false;
-          detail.textContent = '\u6b63\u5728\u901a\u8fc7 Copilot UI \u6267\u884c\u5de5\u4f5c\u6d41\u9884\u53d1\u5e03\u68c0\u67e5...';
-        }
-        try {
-          const r = await agent.workflowPromotionPreflight({ target, skillId });
-          renderWorkflowPromotionPreflight(r);
-          if (r && r.mcpEntranceStatus) renderAgentMcpWorkbenchEntrance(r.mcpEntranceStatus);
-          return r;
-        } catch (e) {
-          if (detail) {
-            detail.hidden = false;
-            detail.textContent = e && e.message ? e.message : String(e);
-          }
-          return { ok: false, error: e && e.message ? e.message : String(e), target, skillId };
-        } finally {
-          if (workbenchBtn) workbenchBtn.disabled = false;
-          if (scriptBtn) scriptBtn.disabled = false;
-        }
-      }
-
-      async function loadAgentSettingsUi() {
-        const agent = shell.agentSession;
-        if (!agent || typeof agent.loadSettings !== 'function') return;
-        try {
-          const r = await agent.loadSettings();
-          if (!r || !r.ok) return;
-          agentSettingsCache = { ...(r.settings || {}) };
-          agentBrainCatalog = Array.isArray(r.brains) ? r.brains : [];
-          if ($('inpMcpEnabled')) $('inpMcpEnabled').checked = Boolean(r.settings && r.settings.mcpEnabled);
-          if ($('inpCodexSharedAuthEnabled')) {
-            $('inpCodexSharedAuthEnabled').checked = Boolean(r.settings && r.settings.codexSharedAuthEnabled);
-          }
-          if ($('inpCodexSharedAuthAutoUpdate')) {
-            $('inpCodexSharedAuthAutoUpdate').checked = Boolean(r.settings && r.settings.codexSharedAuthAutoUpdate);
-          }
-          if ($('inpCodexSharedAuthUrl')) {
-            $('inpCodexSharedAuthUrl').value = r.settings && r.settings.codexSharedAuthUrl ? String(r.settings.codexSharedAuthUrl) : '';
-          }
-          if ($('inpCodexSharedAuthToken')) {
-            $('inpCodexSharedAuthToken').value =
-              r.settings && r.settings.codexSharedAuthToken ? String(r.settings.codexSharedAuthToken) : '';
-          }
-          if ($('inpCodexCommand')) {
-            $('inpCodexCommand').value = r.settings && r.settings.codexCommand ? String(r.settings.codexCommand) : '';
-          }
-          if ($('inpCodexCwd')) {
-            $('inpCodexCwd').value = r.settings && r.settings.codexCwd ? String(r.settings.codexCwd) : '';
-          }
-          if ($('inpCodexModel')) {
-            $('inpCodexModel').value = r.settings && r.settings.codexModel ? String(r.settings.codexModel) : '';
-          }
-          renderBrainPicker(
-            (r.settings && r.settings.defaultBrainId) || (r.activeBrainId || 'codex'),
-          );
-          renderCodexSandboxPicker(r.settings && r.settings.codexSandbox);
-          renderCodexRuntimeStatus(r.codexRuntime);
-          if ($('inpMcpToken')) {
-            $('inpMcpToken').value = r.settings && r.settings.mcpToken ? String(r.settings.mcpToken) : '';
-          }
-          if ($('inpMcpConfig') && r.mcpConfig) {
-            $('inpMcpConfig').value = JSON.stringify(r.mcpConfig, null, 2);
-          }
-          agentMcpConfigCache = r.mcpConfig || null;
-          renderAgentMcpProbe({ mcp: r.mcp, mcpConfig: r.mcpConfig, mcpToolCatalog: r.mcpToolCatalog });
-          if (r.settings && r.settings.mcpWorkbenchLastE2e) {
-            renderAgentMcpE2e({ e2e: r.settings.mcpWorkbenchLastE2e });
-          }
-          renderAgentPolicyTemplates(r.policyTemplates);
-          renderAgentPolicy(r.agentPolicy);
-          const st = $('agentMcpStatus');
-          if (st && r.mcp) {
-            st.textContent = r.mcp.running
-              ? `MCP running: http://127.0.0.1:${r.mcp.port}/mcp`
-              : r.mcp.enabled
-                ? 'MCP enabled but not running'
-                : 'MCP disabled';
-          }
-          if ($('codexAuthStatus')) {
-            const auth = r.codexAuth || {};
-            const lastSync = r.settings && r.settings.codexSharedAuthLastSyncAt;
-            const lastError = r.settings && r.settings.codexSharedAuthLastError;
-            $('codexAuthStatus').textContent =
-              'Codex auth: ' +
-              (auth.exists ? 'local auth present' : 'local auth missing') +
-              (auth.path ? ' 路 ' + auth.path : '') +
-              (lastSync ? '\nLast sync: ' + lastSync : '') +
-              (lastError ? '\nLast error: ' + lastError : '');
-          }
-          const lastSetupText = formatCodexLastSetupReport(r.settings);
-          if (lastSetupText) setSetFeedback($('agentSettingsHint'), lastSetupText);
-          void loadAgentUsageSummaryUi();
-          void loadAgentExecutionsUi();
-        } catch {
-          /* ignore */
-        }
-      }
-
-      if ($('btnSaveAgentSettings')) {
-        $('btnSaveAgentSettings').addEventListener('click', async () => {
-          const agent = shell.agentSession;
-          const hintEl = $('agentSettingsHint');
-          if (!agent || typeof agent.saveSettings !== 'function') return;
-          const btn = $('btnSaveAgentSettings');
-          btn.disabled = true;
-          setSetFeedback(hintEl, 'Saving...');
-          try {
-            const patch = {
-              mcpEnabled: Boolean($('inpMcpEnabled') && $('inpMcpEnabled').checked),
-              defaultBrainId: agentSettingsCache.defaultBrainId || 'codex',
-              codexSharedAuthEnabled: Boolean(
-                $('inpCodexSharedAuthEnabled') && $('inpCodexSharedAuthEnabled').checked,
-              ),
-              codexSharedAuthAutoUpdate: Boolean(
-                $('inpCodexSharedAuthAutoUpdate') && $('inpCodexSharedAuthAutoUpdate').checked,
-              ),
-              codexSharedAuthUrl: $('inpCodexSharedAuthUrl') ? $('inpCodexSharedAuthUrl').value.trim() : '',
-              codexSharedAuthToken: $('inpCodexSharedAuthToken') ? $('inpCodexSharedAuthToken').value.trim() : '',
-              codexCommand: $('inpCodexCommand') ? $('inpCodexCommand').value.trim() : '',
-              codexCwd: $('inpCodexCwd') ? $('inpCodexCwd').value.trim() : '',
-              codexModel: $('inpCodexModel') ? $('inpCodexModel').value.trim() : '',
-              codexSandbox: agentSettingsCache.codexSandbox || 'workspace-write',
-            };
-            const r = await agent.saveSettings(patch);
-            if (r && r.ok) {
-              agentSettingsCache = { ...(r.settings || {}) };
-              renderBrainPicker(r.settings && r.settings.defaultBrainId);
-              renderCodexSandboxPicker(r.settings && r.settings.codexSandbox);
-              renderCodexRuntimeStatus(r.codexRuntime);
-              if ($('inpMcpToken') && r.settings && r.settings.mcpToken) {
-                $('inpMcpToken').value = String(r.settings.mcpToken);
-              }
-              if ($('inpMcpConfig') && r.mcpConfig) {
-                $('inpMcpConfig').value = JSON.stringify(r.mcpConfig, null, 2);
-              }
-              agentMcpConfigCache = r.mcpConfig || null;
-              renderAgentMcpProbe({ mcp: r.mcp, mcpConfig: r.mcpConfig, mcpToolCatalog: r.mcpToolCatalog });
-              if ($('agentMcpStatus') && r.mcp) {
-                $('agentMcpStatus').textContent = r.mcp.running
-                  ? `MCP running: http://127.0.0.1:${r.mcp.port}/mcp`
-                  : r.mcp.enabled
-                    ? 'MCP enabled but not running'
-                    : 'MCP disabled';
-              }
-              setSetFeedback(hintEl, 'Agent settings saved');
-            } else {
-              setSetFeedback(hintEl, 'Save failed: ' + ((r && r.error) || 'unknown error'));
-            }
-          } catch (e) {
-            setSetFeedback(hintEl, e && e.message ? e.message : String(e));
-          } finally {
-            btn.disabled = false;
-          }
-        });
-      }
-
-      if ($('btnSyncCodexAuth')) {
-        $('btnSyncCodexAuth').addEventListener('click', async () => {
-          const agent = shell.agentSession;
-          const hintEl = $('agentSettingsHint');
-          const btn = $('btnSyncCodexAuth');
-          if (!agent || typeof agent.saveSettings !== 'function' || typeof agent.syncCodexAuth !== 'function') return;
-          btn.disabled = true;
-          setSetFeedback(hintEl, 'Refreshing Codex credentials...');
-          try {
-            await agent.saveSettings({
-              codexSharedAuthEnabled: Boolean(
-                $('inpCodexSharedAuthEnabled') && $('inpCodexSharedAuthEnabled').checked,
-              ),
-              codexSharedAuthAutoUpdate: Boolean(
-                $('inpCodexSharedAuthAutoUpdate') && $('inpCodexSharedAuthAutoUpdate').checked,
-              ),
-              codexSharedAuthUrl: $('inpCodexSharedAuthUrl') ? $('inpCodexSharedAuthUrl').value.trim() : '',
-              codexSharedAuthToken: $('inpCodexSharedAuthToken') ? $('inpCodexSharedAuthToken').value.trim() : '',
-            });
-            const r = await agent.syncCodexAuth();
-            renderCodexRuntimeStatus(r && r.codexRuntime);
-            if (r && r.ok) {
-              setSetFeedback(hintEl, 'Codex credentials refreshed.');
-              if ($('codexAuthStatus')) {
-                const auth = r.status || {};
-                $('codexAuthStatus').textContent =
-                  'Codex auth: ' +
-                  (auth.exists ? 'local auth present' : 'local auth missing') +
-                  (auth.path ? ' path=' + auth.path : '') +
-                  (r.settings && r.settings.codexSharedAuthLastSyncAt
-                    ? '\nLast sync: ' + r.settings.codexSharedAuthLastSyncAt
-                    : '');
-              }
-              if (typeof window.__acCopilotRefreshOnboarding === 'function') {
-                window.__acCopilotRefreshOnboarding();
-              }
-            } else {
-              setSetFeedback(hintEl, 'Codex credential refresh failed: ' + ((r && r.error) || 'unknown error'));
-              void loadAgentSettingsUi();
-            }
-          } catch (e) {
-            setSetFeedback(hintEl, e && e.message ? e.message : String(e));
-          } finally {
-            btn.disabled = false;
-          }
-        });
-      }
-
-      if ($('btnSetupCodexRuntime')) {
-        $('btnSetupCodexRuntime').addEventListener('click', async () => {
-          const agent = shell.agentSession;
-          const btn = $('btnSetupCodexRuntime');
-          const hintEl = $('agentSettingsHint');
-          if (!agent || typeof agent.setupCodex !== 'function') return;
-          btn.disabled = true;
-          const progressRunId = 'settings-' + Date.now() + '-' + Math.random().toString(16).slice(2);
-          let unsubscribeProgress = null;
-          if (typeof agent.onCodexSetupProgress === 'function') {
-            unsubscribeProgress = agent.onCodexSetupProgress((payload) => {
-              if (!payload || String(payload.runId || '') !== progressRunId) return;
-              if (payload.message) setSetFeedback(hintEl, String(payload.message));
-            });
-          }
-          setSetFeedback(hintEl, '\u6b63\u5728\u4e00\u952e\u914d\u7f6e Codex...');
-          try {
-            const r = await setupCodexWithLoginRecoveryUi(agent, { install: true, progressRunId }, hintEl);
-            if (r && r.settings) {
-              agentSettingsCache = { ...(r.settings || {}) };
-              if ($('inpMcpEnabled')) $('inpMcpEnabled').checked = Boolean(r.settings.mcpEnabled);
-              if ($('inpMcpToken') && r.settings.mcpToken) $('inpMcpToken').value = String(r.settings.mcpToken);
-              if ($('inpCodexCommand')) $('inpCodexCommand').value = String(r.settings.codexCommand || '');
-              if ($('inpCodexCwd')) $('inpCodexCwd').value = String(r.settings.codexCwd || '');
-              if ($('inpCodexModel')) $('inpCodexModel').value = String(r.settings.codexModel || '');
-              renderBrainPicker(r.settings.defaultBrainId || 'codex');
-              renderCodexSandboxPicker(r.settings.codexSandbox);
-            }
-            renderCodexRuntimeStatus(r && r.codexRuntime, r && r.probe);
-            renderAgentMcpProbe({ mcp: r && r.mcp, mcpConfig: r && r.mcpConfig, mcpToolCatalog: r && r.mcpToolCatalog });
-            if ($('inpMcpConfig') && r && r.mcpConfig) $('inpMcpConfig').value = JSON.stringify(r.mcpConfig, null, 2);
-            if ($('agentMcpStatus') && r && r.mcp) {
-              $('agentMcpStatus').textContent = r.mcp.running
-                ? `MCP running: http://127.0.0.1:${r.mcp.port}/mcp`
-                : r.mcp.enabled
-                  ? 'MCP enabled but not running'
-                  : 'MCP disabled';
-            }
-            const install = (r && r.install) || {};
-            const probe = (r && r.probe) || {};
-            await requestShellUpdateCheckForCodexSetupUi(r, hintEl);
-            const message =
-              r && r.ok
-                ? 'Codex \u5df2\u5c31\u7eea\uff0c\u53ef\u4ee5\u76f4\u63a5\u5f00\u59cb\u5bf9\u8bdd\u3002'
-                : install.error === 'npm_missing'
-                  ? '\u81ea\u52a8\u5b89\u88c5 Node/npm \u672a\u5b8c\u6210\uff0c\u8bf7\u68c0\u67e5\u7f51\u7edc\u6216\u7cfb\u7edf\u5b89\u88c5\u6743\u9650\u540e\u518d\u70b9\u4e00\u6b21\u3002'
-                  : install.error === 'codex_install_failed'
-                    ? 'Codex CLI \u5b89\u88c5\u5931\u8d25\uff0c\u8bf7\u68c0\u67e5\u7f51\u7edc\u6216 npm \u6743\u9650\u3002'
-                    : r && r.cloudAuthLoginRequired
-                      ? '\u8bf7\u5148\u767b\u5f55\u5de5\u4f5c\u53f0\uff0c\u518d\u70b9\u4e00\u6b21\u4e00\u952e\u914d\u7f6e\u3002'
-                      : r && r.cloudAuthRouteMissing
-                        ? '\u4e91\u7aef Codex \u8eab\u4efd\u63a5\u53e3\u8fd8\u672a\u4e0a\u7ebf\uff0c\u8bf7\u7ba1\u7406\u5458\u5148\u53d1\u5e03\u65b0\u7248 auth-api\u3002'
-                        : r && r.cloudAuthNotConfigured
-                          ? '\u4e91\u7aef\u56e2\u961f Codex \u8eab\u4efd\u8fd8\u672a\u914d\u7f6e\u3002'
-                          : r && r.needsLogin
-                            ? 'Codex \u9700\u8981\u767b\u5f55\u3002\u8bf7\u5148\u6253\u5f00 Codex \u767b\u5f55\uff0c\u518d\u70b9\u4e00\u6b21\u3002'
-                            : 'Codex \u4ecd\u672a\u5c31\u7eea\uff1a' + (probe.detail || 'unknown');
-            const checksText = formatCodexSetupChecks(r);
-            setSetFeedback(hintEl, checksText ? `${message}\n${checksText}` : message);
-            if (typeof window.__acCopilotRefreshOnboarding === 'function') {
-              window.__acCopilotRefreshOnboarding();
-            }
-          } catch (e) {
-            setSetFeedback(hintEl, e && e.message ? e.message : String(e));
-          } finally {
-            if (typeof unsubscribeProgress === 'function') unsubscribeProgress();
-            btn.disabled = false;
-          }
-        });
-      }
-
-      if ($('btnProbeCodexRuntime')) {
-        $('btnProbeCodexRuntime').addEventListener('click', async () => {
-          const agent = shell.agentSession;
-          const btn = $('btnProbeCodexRuntime');
-          const hintEl = $('agentSettingsHint');
-          if (!agent || typeof agent.probeAllBrains !== 'function') return;
-          btn.disabled = true;
-          setSetFeedback(hintEl, 'Testing Codex...');
-          try {
-            const r = await agent.probeAllBrains();
-            const codex = r && Array.isArray(r.brains) ? r.brains.find((b) => b && b.id === 'codex') : null;
-            renderCodexRuntimeStatus(codexRuntimeStatusCache, codex && codex.probe);
-            setSetFeedback(hintEl, codex && codex.probe && codex.probe.ok ? 'Codex ready' : 'Codex test failed');
-          } catch (e) {
-            setSetFeedback(hintEl, e && e.message ? e.message : String(e));
-          } finally {
-            btn.disabled = false;
-          }
-        });
-      }
-
-      if ($('btnRegenerateMcpToken')) {
-        $('btnRegenerateMcpToken').addEventListener('click', async () => {
-          const agent = shell.agentSession;
-          const hintEl = $('agentSettingsHint');
-          if (!agent || typeof agent.regenerateMcpToken !== 'function') return;
-          try {
-            const r = await agent.regenerateMcpToken();
-            if (r && r.ok && r.settings && r.settings.mcpToken && $('inpMcpToken')) {
-              $('inpMcpToken').value = String(r.settings.mcpToken);
-              if ($('inpMcpConfig') && r.mcpConfig) {
-                $('inpMcpConfig').value = JSON.stringify(r.mcpConfig, null, 2);
-              }
-              agentMcpConfigCache = r.mcpConfig || null;
-              renderAgentMcpProbe({ mcp: r.mcp, mcpConfig: r.mcpConfig, mcpToolCatalog: r.mcpToolCatalog });
-              setSetFeedback(hintEl, 'Token regenerated.');
-            }
-          } catch (e) {
-            setSetFeedback(hintEl, e && e.message ? e.message : String(e));
-          }
-        });
-      }
-
-      if ($('btnProbeMcp')) {
-        $('btnProbeMcp').addEventListener('click', () => {
-          void probeAgentMcpUi();
-        });
-      }
-
-      if ($('btnRunMcpWorkbenchE2e')) {
-        $('btnRunMcpWorkbenchE2e').addEventListener('click', () => {
-          void runAgentMcpWorkbenchE2eUi();
-        });
-      }
-
-      if ($('btnUsageUploadDryRun')) {
-        $('btnUsageUploadDryRun').addEventListener('click', () => {
-          void runAgentUsageUploadUi({ dryRun: true });
-        });
-      }
-
-      if ($('btnUsageQuotaPolicyProbe')) {
-        $('btnUsageQuotaPolicyProbe').addEventListener('click', () => {
-          void runAgentUsageQuotaPolicyProbeUi();
-        });
-      }
-
-      if ($('btnUsageUploadCloudDraft')) {
-        $('btnUsageUploadCloudDraft').addEventListener('click', () => {
-          void runAgentUsageUploadUi({ dryRun: false });
-        });
-      }
-
-      if ($('btnPromoteWorkbenchPresetPreflight')) {
-        $('btnPromoteWorkbenchPresetPreflight').addEventListener('click', () => {
-          void runWorkflowPromotionPreflightUi('workbench_preset');
-        });
-      }
-
-      if ($('btnFillLatestWorkflowDraft')) {
-        $('btnFillLatestWorkflowDraft').addEventListener('click', () => {
-          void fillLatestWorkflowPromotionDraftUi();
-        });
-      }
-
-      if ($('btnPromoteScriptHubToolPreflight')) {
-        $('btnPromoteScriptHubToolPreflight').addEventListener('click', () => {
-          void runWorkflowPromotionPreflightUi('script_hub_tool');
-        });
-      }
-
-      if ($('btnRetryMcpWorkbenchE2e')) {
-        $('btnRetryMcpWorkbenchE2e').addEventListener('click', () => {
-          void runAgentMcpWorkbenchE2eUi();
-        });
-      }
-
-      if ($('btnWaitLoginMcpWorkbenchE2e')) {
-        $('btnWaitLoginMcpWorkbenchE2e').addEventListener('click', () => {
-          void (async () => {
-            await loadShellAccountStatusUi();
-            await openWorkbenchLoginUi();
-            const login = await waitForShellAccountLoginUi({ timeoutMs: 120000, intervalMs: 2000 });
-            await runAgentMcpWorkbenchE2eUi(login && login.ok ? {} : { recoveryWaitMs: 30000 });
-            await loadShellAccountStatusUi();
-          })();
-        });
-      }
-
-      if ($('btnOpenWorkbenchForMcpE2e')) {
-        $('btnOpenWorkbenchForMcpE2e').addEventListener('click', async () => {
-          await openWorkbenchLoginUi();
-        });
-      }
-
-      if ($('btnCopyMcpEndpoint')) {
-        $('btnCopyMcpEndpoint').addEventListener('click', () => {
-          const text = agentMcpEndpointCache || ($('agentMcpEndpoint') && $('agentMcpEndpoint').textContent) || '';
-          if (text && text !== '-') {
-            shell.copyText(text);
-            setSetFeedback($('agentSettingsHint'), 'MCP address copied');
-          }
-        });
-      }
-
-      if ($('btnCopyMcpConfig')) {
-        $('btnCopyMcpConfig').addEventListener('click', () => {
-          const text = agentMcpConfigCache ? JSON.stringify(agentMcpConfigCache, null, 2) : ($('inpMcpConfig') && $('inpMcpConfig').value) || '';
-          if (text) {
-            shell.copyText(text);
-            setSetFeedback(agentSettingsHint, 'MCP config copied');
-          }
-        });
-      }
-
-      if ($('btnCopyCodexSetupReport')) {
-        $('btnCopyCodexSetupReport').addEventListener('click', () => {
-          const text = formatCodexLastSetupReport(agentSettingsCache);
-          if (text && shell.copyText) {
-            shell.copyText(text);
-            setSetFeedback($('agentSettingsHint'), 'Codex setup report copied');
-          } else {
-            setSetFeedback($('agentSettingsHint'), 'No Codex setup report yet');
-          }
-        });
-      }
-
-      if ($('agentPolicyConfirmTools')) {
-        $('agentPolicyConfirmTools').addEventListener('change', () => {
-          agentPolicyCache = {
-            ...agentPolicyCache,
-            confirmTools: Boolean($('agentPolicyConfirmTools').checked),
-          };
-          renderAgentPolicy();
-        });
-      }
-
-      if ($('btnSaveAgentPolicy')) {
-        $('btnSaveAgentPolicy').addEventListener('click', async () => {
-          const agent = shell.agentSession;
-          const btn = $('btnSaveAgentPolicy');
-          if (!agent || typeof agent.savePolicy !== 'function') return;
-          btn.disabled = true;
-          setSetFeedback(agentSettingsHint, 'Saving permission policy...');
-          try {
-            const r = await agent.savePolicy({
-              confirmTools: Boolean(agentPolicyCache.confirmTools),
-              autoConfirmTools: normalizePolicyList(agentPolicyCache.autoConfirmTools),
-              forbiddenTools: normalizePolicyList(agentPolicyCache.forbiddenTools),
-            });
-            if (r && r.ok) {
-              if (r.mcpToolCatalog) renderAgentMcpToolCatalog(r.mcpToolCatalog);
-              renderAgentPolicyTemplates(r.policyTemplates);
-              renderAgentPolicy(r.agentPolicy);
-              setSetFeedback($('agentSettingsHint'), 'Permission policy saved');
-            } else {
-              setSetFeedback($('agentSettingsHint'), 'Save failed: ' + ((r && r.error) || 'unknown error'));
-            }
-          } catch (e) {
-            setSetFeedback($('agentSettingsHint'), e && e.message ? e.message : String(e));
-          } finally {
-            btn.disabled = false;
-          }
-        });
-      }
-
-      if ($('btnRefreshAgentExecutions')) {
-        $('btnRefreshAgentExecutions').addEventListener('click', () => {
-          void loadAgentExecutionsUi();
-        });
-      }
-
       async function refreshHome() {
         await refreshTray();
         void refreshSamLocalWinPanel();
         void refreshRembgWinPanel();
-        if (activeView === 'settings') {
-          await loadPlugins();
-        }
       }
 
       /** Periodic polling: refresh tray summary and built-in service capability tables only. */
@@ -8974,9 +7098,6 @@
         await refreshTray();
         void refreshSamLocalWinPanel();
         void refreshRembgWinPanel();
-        if (activeView === 'settings') {
-          await loadPlugins();
-        }
       }
 
       if (shell.onUpdaterState) {
@@ -8998,6 +7119,9 @@
       if (window.ShellConnectionPage) {
         window.ShellConnectionPage.bind(shell);
       }
+      if (window.ShellSendGate) {
+        window.ShellSendGate.bind(shell);
+      }
 
       async function init() {
         statusLabel.textContent = 'Connecting...';
@@ -9007,17 +7131,7 @@
             new Promise((_, rej) => setTimeout(() => rej(new Error('loadSettings timeout')), 8000)),
           ]);
         } catch {
-          $('inpSiteUrl').value = settingsCache.siteUrl;
-          if ($('inpScriptHubApiUrl')) $('inpScriptHubApiUrl').value = settingsCache.scriptHubApiUrl;
-          if ($('inpScriptHubApiToken')) $('inpScriptHubApiToken').value = settingsCache.scriptHubApiToken;
-          $('inpVolumeRoot').value = settingsCache.volumeRoot;
-          $('inpDownloadDir').value = settingsCache.downloadDir;
-        }
-        try {
-          const sum = await shell.traySummary();
-          $('localBase').value = 'http://127.0.0.1:' + (sum && sum.port ? sum.port : 18765) + '/';
-        } catch {
-          $('localBase').value = 'http://127.0.0.1:18765/';
+          if ($('inpDownloadDir')) $('inpDownloadDir').value = settingsCache.downloadDir;
         }
         try {
           await refreshHome();
@@ -9025,7 +7139,6 @@
           setStatusFromTray({ connected: false, note: '异常', lastError: String(e && e.message ? e.message : e), port: null });
         }
         await applyShellView('workbench');
-        void refreshVolumeEffectiveHint();
         setInterval(() => {
           void refreshHomePeriodic().catch(() => {});
         }, 3000);

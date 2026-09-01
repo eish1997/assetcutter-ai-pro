@@ -119,6 +119,14 @@ contextBridge.exposeInMainWorld('companionShell', {
   closeWindow: () => timedInvoke('shell-window-close'),
   toggleMaximize: () => timedInvoke('shell-window-toggle-maximize'),
   setShellView: (view) => timedInvoke('shell-set-view', view, 120000),
+  listLeasedRooms: () => timedInvoke('shell-leased-rooms-list'),
+  createLeasedRoom: () => timedInvoke('shell-leased-rooms-create'),
+  removeLeasedRoom: (id) => timedInvoke('shell-leased-rooms-remove', { id }),
+  exportRoomZip: (opts) => timedInvoke('shell-room-export-zip', opts || {}),
+  importRoomZip: (opts) => timedInvoke('shell-room-import-zip', opts || {}),
+  reloadRoom: () => timedInvoke('shell-room-reload'),
+  popupLeasedRoomMenu: (id) => timedInvoke('shell-leased-room-context-menu', { id }),
+  publishWorkspaceConnectionDrafts: (drafts) => timedInvoke('workspace-sync-connection-drafts', drafts || []),
   popupSidebarContextMenu: () => timedInvoke('shell-sidebar-context-menu-popup'),
   workbenchReload: () => timedInvoke('shell-workbench-reload'),
   workbenchReloadHard: () => timedInvoke('shell-workbench-reload-hard'),
@@ -199,6 +207,22 @@ contextBridge.exposeInMainWorld('companionShell', {
   })(),
   setCopilotLayout: (layout) => timedInvoke('shell-set-copilot-layout', layout || {}),
   getCopilotLayout: () => timedInvoke('shell-get-copilot-layout'),
+  setDshPaneWidth: (widthPx, opts) =>
+    timedInvoke('shell-set-dsh-pane-width', { widthPx, persist: !(opts && opts.persist === false) }),
+  setDshPaneCollapsed: (collapsed) => timedInvoke('shell-set-dsh-pane-collapsed', { collapsed: Boolean(collapsed) }),
+  openDshHandoff: (payload) => timedInvoke('shell-dsh-handoff', payload || {}),
+  getWorkspaceFinger: () => timedInvoke('shell-get-workspace-finger'),
+  sendToCurrentHost: (opts) => timedInvoke('shell-send-to-current-host', opts || {}),
+  onWorkspaceFingerChanged: (handler) => {
+    if (typeof handler !== 'function') return;
+    ipcRenderer.on('shell-workspace-finger-changed', (_evt, payload) => {
+      try {
+        handler(payload);
+      } catch {
+        /* ignore */
+      }
+    });
+  },
   onCopilotLayout: (handler) => {
     if (typeof handler !== 'function') return;
     ipcRenderer.on('shell-copilot-layout', (_evt, payload) => {
@@ -219,11 +243,31 @@ contextBridge.exposeInMainWorld('companionShell', {
       }
     });
   },
+  onLeasedRoomsChanged: (handler) => {
+    if (typeof handler !== 'function') return;
+    ipcRenderer.on('shell-leased-rooms-changed', (_evt, payload) => {
+      try {
+        handler(payload);
+      } catch {
+        /* ignore */
+      }
+    });
+  },
   onCopilotOnboardingFocus: (handler) => {
     if (typeof handler !== 'function') return;
     ipcRenderer.on('shell-focus-copilot-onboarding', () => {
       try {
         handler();
+      } catch {
+        /* ignore */
+      }
+    });
+  },
+  onFillCopilotComposer: (handler) => {
+    if (typeof handler !== 'function') return;
+    ipcRenderer.on('shell-fill-copilot-composer', (_evt, payload) => {
+      try {
+        handler(payload || {});
       } catch {
         /* ignore */
       }

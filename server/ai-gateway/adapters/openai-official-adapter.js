@@ -1,8 +1,9 @@
 // FormData 必须用 undici 的：Node 全局 FormData 会被 undici fetch 当成字符串 → Content-Type: text/plain
 import { fetch as undiciFetch, FormData, ProxyAgent } from 'undici';
+import path from 'path';
 import { AiGatewayValidationError } from '../job.js';
 import { finalizeAiGatewayTerminalPlan } from '../execution-finalize.js';
-import { applyAiGatewayAdapterResult } from '../adapter-result.js';
+import { applyAiGatewayAdapterResult, throwIfAdapterPlanTerminalFailed } from '../adapter-result.js';
 import {
   buildProviderTaskUsage,
   collectByteSize,
@@ -689,8 +690,20 @@ function extractText(data) {
   return '';
 }
 
+function normalizeImageArtifactUrl(raw) {
+  const value = nonEmptyString(raw);
+  if (!value) return '';
+  if (value.startsWith('data:')) return value;
+  if (/^https?:\/\//i.test(value)) return value;
+  if (value.startsWith('//')) return `https:${value}`;
+  if (/^file\.302\.ai\//i.test(value) || /file\.302\.ai\//i.test(value)) {
+    return `https://${value.replace(/^\/+/, '')}`;
+  }
+  return value;
+}
+
 function pushImageArtifact(out, url, providerId) {
-  const value = nonEmptyString(url);
+  const value = normalizeImageArtifactUrl(url);
   if (!value) return;
   out.push({ kind: 'image', url: value, source: providerId });
 }
@@ -740,7 +753,9 @@ function extractImageArtifactsFromGeminiCandidates(data, providerId) {
   for (const candidate of candidates) {
     const parts = Array.isArray(candidate?.content?.parts) ? candidate.content.parts : [];
     for (const part of parts) {
-      const httpsUrl = nonEmptyString(part?.url || part?.fileData?.fileUri || part?.file_data?.file_uri);
+      const httpsUrl = normalizeImageArtifactUrl(
+        part?.url || part?.fileData?.fileUri || part?.file_data?.file_uri
+      );
       if (/^https?:\/\//i.test(httpsUrl)) pushImageArtifact(httpsOut, httpsUrl, providerId);
       const inline = part?.inlineData || part?.inline_data;
       const b64 = nonEmptyString(inline?.data);
@@ -787,21 +802,26 @@ function extractImageArtifacts(data, providerId = OPENAI_PROVIDER_ID) {
   return extractImageArtifactsFromGeminiCandidates(data, providerId);
 }
 
-function assertGeminiNativeImageArtifacts(data, artifacts, providerLabel) {
-  if (Array.isArray(artifacts) && artifacts.length > 0) return;
+function buildUpstreamEmptyImageError(data, artifacts, providerLabel, requestPath = '') {
   const candidatesLen = Array.isArray(data?.candidates)
     ? data.candidates.length
     : Array.isArray(data?.response?.candidates)
       ? data.response.candidates.length
       : 0;
   const finish = nonEmptyString(data?.candidates?.[0]?.finishReason);
+  const pathHint = nonEmptyString(requestPath) ? ` path=${requestPath}` : '';
   const err = new Error(
     `${providerLabel} returned HTTP 200 but no image artifacts` +
-      ` (candidates=${candidatesLen}${finish ? `, finishReason=${finish}` : ''}). Often a transient empty Gemini response; retry.`
+      ` (candidates=${candidatesLen}${finish ? `, finishReason=${finish}` : ''}${pathHint}). Often a transient empty Gemini response; retry.`
   );
   err.status = 502;
   err.code = 'AI_GATEWAY_UPSTREAM_EMPTY_IMAGE';
-  throw err;
+  return err;
+}
+
+function assertGeminiNativeImageArtifacts(data, artifacts, providerLabel) {
+  if (Array.isArray(artifacts) && artifacts.length > 0) return;
+  throw buildUpstreamEmptyImageError(data, artifacts, providerLabel, '/google/');
 }
 
 export async function startOpenAiOfficialExecution(plan, options = {}) {
@@ -944,6 +964,21 @@ export async function startOpenAiOfficialExecution(plan, options = {}) {
       }
     }
   }
+  if (image && (!Array.isArray(artifacts) || artifacts.length === 0)) {
+    const err = buildUpstreamEmptyImageError(data, artifacts, providerLabel, request?.path || '');
+    recordProviderKeyError(key.id, err, {
+      status: 502,
+      cooldownMs: 5_000,
+      reason: `${providerLabel} empty image artifacts`,
+    });
+    throw decorateErrorWithFailureReason(err, {
+      defaultCode: 'AI_GATEWAY_UPSTREAM_EMPTY_IMAGE',
+      stage: 'upstream',
+      adapterId: plan?.route?.adapterId,
+      providerId,
+      status: 502,
+    });
+  }
   const text = image ? '' : extractText(data);
   const tokenUsage = extractOpenAiStyleTokenUsage(data);
   const providerCostUsd = extractProviderCostUsd(data);
@@ -969,7 +1004,7 @@ export async function startOpenAiOfficialExecution(plan, options = {}) {
         }
       : {}),
   });
-  const { plan: succeeded } = await applyAiGatewayAdapterResult(
+  const { plan: terminal } = await applyAiGatewayAdapterResult(
     running || plan,
     {
       status: 'succeeded',
@@ -989,6 +1024,7 @@ export async function startOpenAiOfficialExecution(plan, options = {}) {
     },
     options.store,
     {
+      modality: plan.job?.modality,
       metadata: {
         gatewayExecution: {
           completedAt: new Date(completedAtMs).toISOString(),
@@ -999,6 +1035,11 @@ export async function startOpenAiOfficialExecution(plan, options = {}) {
       },
     }
   );
-  await finalizeAiGatewayTerminalPlan(succeeded, options.store);
-  return { started: true, upstreamJobId: data?.id || null, plan: succeeded || running || plan };
+  const finalized = await finalizeAiGatewayTerminalPlan(terminal, options.store);
+  throwIfAdapterPlanTerminalFailed(finalized, {
+    providerId,
+    adapterId: plan?.route?.adapterId,
+    workerId: plan?.route?.workerId,
+  });
+  return { started: true, upstreamJobId: data?.id || null, plan: finalized || running || plan };
 }

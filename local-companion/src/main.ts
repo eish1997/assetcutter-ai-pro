@@ -63,6 +63,15 @@ async function main(): Promise<void> {
   startPaddleOcrIfConfigured();
 
   try {
+    const { startHostPrimitiveScanner, seedSendGateImportOnAllConnections } = await import('./capabilities/hostPrimitiveScanner.js');
+    seedSendGateImportOnAllConnections();
+    startHostPrimitiveScanner();
+    console.log('[local-companion] Host primitive scanner registered (6h interval)');
+  } catch (e) {
+    console.warn('[local-companion] host primitive scanner bootstrap failed:', e instanceof Error ? e.message : e);
+  }
+
+  try {
     const { bootstrapAuthoredWatchers } = await import('./shellToolAuthored.js');
     await bootstrapAuthoredWatchers();
     console.log('[local-companion] 已启动用户自建小工具热重载监视');

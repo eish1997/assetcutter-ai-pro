@@ -2,13 +2,13 @@
 
 > **⚠️ 已废弃（2026-06-30）**  
 > 本目录与主仓 `server/script-hub-api.js` 等为半成品，**不再维护**。  
-> **真源**：`F:/AI/ScriptHub`（Creative Production Runtime）— 见 [`DEPRECATED.md`](./DEPRECATED.md) 与 `docs/Script-Hub-开发规格.md` 文首说明。
+> **真源**：`F:/AI/ScriptHub`（Creative Production Runtime）— 见 [`DEPRECATED.md`](./DEPRECATED.md)。历史规格在 `docs/archived/Script-Hub-开发规格.md`。
 
 ---
 
 独立 Vite 应用，源码在 `**script-hub/**`，与根目录工作台 **分开构建**。
 
-**第一版公网入口（已锁定）**：`https://scripts.adrazzo.com`（独立子域；业务 API 同源 `/api` 反代，见 `docs/Script-Hub-开发规格.md`）。
+**第一版公网入口（已锁定）**：`https://scripts.adrazzo.com`（独立子域；业务 API 同源 `/api` 反代）。历史规格见 `docs/archived/Script-Hub-开发规格.md`。
 
 **UI**：与主站工作台对齐 — 见根目录 `index.html` 中 CSS 变量与字体；`script-hub/src/index.css` 使用同名 `--background` / `--surface-*` / `--accent-blue` 及 `sh-*` 工具类。
 
@@ -59,4 +59,4 @@ npm run script-hub:dev
 
 **本地 Postgres（与 auth 共用）**：仓库根 `docker-compose.script-hub-dev.yml`（端口 **55432**，用户/库 `assetcutter` / 密码见 compose）。先 `npm run pg:dev:script-hub`，根 `.env.local` 配置 `**DATABASE_URL`** 后执行 `**npm run migrate:auth-to-postgres**`（可选，从 `server/data/auth-db.json` 导入用户）；再 `npm run dev:script-hub-stack`。
 
-规格见 `**docs/Script-Hub-开发规格.md**`。
+规格见独立仓 `doc/`；主仓历史规格在 `docs/archived/Script-Hub-开发规格.md`。

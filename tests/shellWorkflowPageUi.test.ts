@@ -4,861 +4,203 @@ import { JSDOM } from 'jsdom';
 import vm from 'node:vm';
 import { describe, expect, it, vi } from 'vitest';
 
+function loadPage(htmlExtra = '') {
+  const code = readFileSync(join(process.cwd(), 'companion-desktop/shell/workflow-page.js'), 'utf8');
+  const dom = new JSDOM(
+    `
+      <html>
+        <head></head>
+        <body>
+          <div id="workflowInlineStatus"></div>
+          <div id="workflowEmpty" class="workflow-empty">
+            <div class="workflow-empty-title">还没有技能</div>
+            <div class="workflow-empty-sub">把刚才那套整理成技能</div>
+            <button type="button" id="btnReplayCompileWithButlerEmpty">整理成技能</button>
+          </div>
+          <button type="button" id="btnReplayCompileWithButler">整理成技能</button>
+          <input type="search" id="skillSearchInput" />
+          <div id="skillFilterRow">
+            <button type="button" class="tools-filter-chip active" data-skill-filter-source="all">全部</button>
+            <button type="button" class="tools-filter-chip" data-skill-filter-source="mine">我的</button>
+            <button type="button" class="tools-filter-chip" data-skill-filter-source="local">本地</button>
+            <button type="button" class="tools-filter-chip" data-skill-filter-source="cloud">云端</button>
+          </div>
+          <div id="workflowList"></div>
+          ${htmlExtra}
+        </body>
+      </html>
+    `,
+    { runScripts: 'outside-only' },
+  );
+  dom.window.eval(code);
+  return { dom, page: dom.window.ShellWorkflowPage };
+}
+
+const sampleWorkflow = {
+  id: 'workflow.maya.export_selection_fbx',
+  name: 'Maya FBX',
+  status: 'available',
+  userSummary: {
+    title: '导出 Maya 选中对象',
+    inputSummary: '输入输出目录、文件名和是否允许覆盖。',
+    outputSummary: '得到 FBX 文件。',
+  },
+  aiContract: {
+    inputSchema: {
+      properties: {
+        output_dir: { type: 'string' },
+        file_name: { type: 'string' },
+        overwrite: { type: 'boolean' },
+      },
+    },
+  },
+  systemContract: { validation: { status: 'validated' } },
+};
+
 describe('workflow page UI', () => {
-  it('wires a first-class local Workflow shell page', () => {
+  it('wires the replay room while keeping the workflow shell view', () => {
     const html = readFileSync(join(process.cwd(), 'companion-desktop/shell/index.html'), 'utf8');
     const main = readFileSync(join(process.cwd(), 'companion-desktop/main.cjs'), 'utf8');
+    const rooms = readFileSync(join(process.cwd(), 'companion-desktop/shell-rooms.cjs'), 'utf8');
 
     expect(html).toContain('data-view="workflow"');
     expect(html).toContain('id="view-workflow"');
-    expect(html).toContain('id="workflowSearch"');
-    expect(html).toContain('id="workflowSummary"');
+    expect(html).toContain('aria-label="技能"');
+    expect(html).toContain('title="技能"');
+    expect(html).toContain('<h1>技能</h1>');
+    expect(html).toContain('把刚才那套整理成技能');
+    expect(html).toContain('id="btnReplayCompileWithButler"');
+    expect(html).toContain('id="btnReplayCompileWithButlerEmpty"');
     expect(html).toContain('id="workflowInlineStatus"');
     expect(html).toContain('id="workflowList"');
-    expect(html).toContain('id="workflowHistory"');
-    expect(html).toContain('id="workflowHistoryEmpty"');
-    expect(html).toContain('id="workflowHistoryList"');
+    expect(html).toContain('id="skillSearchInput"');
+    expect(html).toContain('id="skillFilterRow"');
+    expect(html).toContain('data-skill-filter-source="all"');
+    expect(html).toContain('data-skill-filter-source="mine"');
+    expect(html).toContain('data-skill-filter-source="local"');
+    expect(html).toContain('data-skill-filter-source="cloud"');
     expect(html).toContain('<script src="workflow-page.js"></script>');
     expect(html).toContain("workflow: $('view-workflow')");
     expect(html).toContain('window.ShellWorkflowPage.onViewShown(shell)');
     expect(html).toContain('window.ShellWorkflowPage.bind(shell)');
-    expect(main).toContain("view === 'workflow'");
-    expect(main).toContain("'workbench' | 'workflow' | 'tools' | 'connections' | 'settings'");
-    expect(main).toContain("if (view === 'scripts') return 'workflow';");
+    expect(html).not.toContain('id="workflowSearch"');
+    expect(html).not.toContain('id="workflowHistory"');
+    expect(html).not.toContain('id="workflowHistoryEmpty"');
+    expect(html).not.toContain('id="workflowHistoryList"');
     expect(html).not.toContain('data-view="scripts"');
+    expect(main).toContain("require('./shell-rooms.cjs')");
+    expect(rooms).toContain("shellView: 'workflow'");
+    expect(rooms).toContain("if (v === 'scripts') return 'workflow'");
   });
 
-  it('loads WorkflowSkill records and runs through local companion workflow APIs', () => {
+  it('loads skills and last runs without posting run/preflight from the page', () => {
     const page = readFileSync(join(process.cwd(), 'companion-desktop/shell/workflow-page.js'), 'utf8');
 
     expect(page).toContain('window.ShellWorkflowPage');
     expect(page).toContain("shell.api('GET', '/v1/workflows/skills'");
     expect(page).toContain("shell.api('GET', '/v1/workflows/runs'");
-    expect(page).toContain("shell.api('GET', '/v1/workflows/drafts'");
-    expect(page).toContain("shell.api('GET', '/v1/workflows/pins'");
-    expect(page).toContain("'/v1/workflows/pins'");
-    expect(page).toContain("versionPolicy: { kind: 'follow_default' }");
-    expect(page).toContain("shell.api('DELETE', '/v1/workflows/pins/' + encodeURIComponent(existing.id)");
-    expect(page).toContain("'/v1/workflows/' + encodeURIComponent(workflow.id) + '/preflight'");
-    expect(page).toContain("'/v1/workflows/' + encodeURIComponent(workflow.id) + '/run'");
-    expect(page).toContain("'/v1/workflows/runs/' + encodeURIComponent(run.id) + '/save-draft'");
-    expect(page).toContain("'/v1/workflows/runs/' + encodeURIComponent(run.id) + '/repair-session'");
-    expect(page).toContain('reusedFromRunId');
-    expect(page).toContain('saved_as_draft_id');
-    expect(page).toContain('repair_actions');
-    expect(page).toContain('replay_snapshot_id');
-    expect(page).toContain('artifacts');
-    expect(page).toContain('__acOpenCopilotObjectSession');
+    expect(page).toContain("kind: 'replay_run'");
+    expect(page).toContain("kind: 'replay_compile'");
+    expect(page).toContain("replayKind === 'manual'");
+    expect(page).toContain("replayKind === 'skill'");
+    expect(page).toContain('compileReplayWithButler');
+    expect(page).toContain('openDshHandoff');
+    expect(page).toContain("'/v1/workflows/skills/' + encodeURIComponent(id)");
+    expect(page).toContain("'/v1/workflows/skills/' + encodeURIComponent(id) + '/cloud'");
+    expect(page).toContain("'/v1/workflows/skills/' + encodeURIComponent(id) + '/install-cloud'");
+    expect(page).toContain('data-action="remove"');
+    expect(page).toContain('data-action="publish"');
+    expect(page).toContain('data-action="install"');
+    expect(page).not.toContain("'/v1/workflows/' + encodeURIComponent(workflow.id) + '/run'");
+    expect(page).not.toContain("'/v1/workflows/' + encodeURIComponent(workflow.id) + '/preflight'");
+    expect(page).not.toContain('workflow-run-form');
+    expect(page).not.toContain('workflow-preflight');
+    expect(page).not.toContain('workflow-connectors');
+    expect(page).not.toContain('workflow-detail');
+    expect(page).not.toContain('workflow-history');
     expect(page).not.toContain('ScriptHub Workflow Runtime');
-    expect(page).not.toContain('workflow_run_blocked');
   });
 
-  it('renders empty, succeeded, and failed Workflow run history states', () => {
-    const code = readFileSync(join(process.cwd(), 'companion-desktop/shell/workflow-page.js'), 'utf8');
-    const dom = new JSDOM(`
-      <html>
-        <head></head>
-        <body>
-          <div id="workflowSummary"></div>
-          <div id="workflowInlineStatus"></div>
-          <div id="workflowEmpty" class="workflow-empty"></div>
-          <div id="workflowList"></div>
-          <div id="workflowHistoryMeta"></div>
-          <div id="workflowHistoryEmpty"></div>
-          <div id="workflowHistoryList"></div>
-        </body>
-      </html>
-    `, { runScripts: 'outside-only' });
-
-    dom.window.eval(code);
-    const page = dom.window.ShellWorkflowPage;
-    page.workflows = [{
-      id: 'workflow.maya.export_selection_fbx',
-      name: 'Maya FBX',
-      status: 'available',
-      userSummary: { title: '导出 Maya 选中对象', outputSummary: 'FBX' },
-      systemContract: { validation: { status: 'validated' } },
-    }];
-    page.historyRuns = [];
-    page.render();
-
-    expect(dom.window.document.getElementById('workflowHistoryEmpty')?.className).not.toContain('hidden');
-    expect(dom.window.document.getElementById('workflowHistoryList')?.textContent).toBe('');
-
-    page.historyRuns = [
-      {
-        id: 'run_success',
-        workflow_id: 'workflow.maya.export_selection_fbx',
-        workflow_version_id: 'workflow.maya.export_selection_fbx@0.1.0',
-        status: 'succeeded',
-        finished_at: '2026-08-10T14:00:02.000Z',
-        artifacts: [{ uri: 'project://exports/hero.fbx', metadata: { bytes: 512 } }],
-      },
-      {
-        id: 'run_failed',
-        workflow_id: 'workflow.maya.export_selection_fbx',
-        workflow_version: '0.1.0',
-        status: 'preflight_failed',
-        created_at: '2026-08-10T14:01:00.000Z',
-        artifacts: [],
-        preflight_results: [{ status: 'failed', message: '请先在 Maya 中选择对象' }],
-        repair_actions: [{ title: '选择 Maya 对象' }],
-      },
-    ];
-    page.render();
-
-    const historyText = dom.window.document.getElementById('workflowHistoryList')?.textContent || '';
-    expect(dom.window.document.getElementById('workflowHistoryEmpty')?.className).toContain('hidden');
-    expect(historyText).toContain('导出 Maya 选中对象');
-    expect(historyText).toContain('成功');
-    expect(historyText).toContain('project://exports/hero.fbx');
-    expect(historyText).toContain('512 bytes');
-    expect(historyText).toContain('workflow.maya.export_selection_fbx@0.1.0');
-    expect(historyText).toContain('检查未通过');
-    expect(historyText).toContain('请先在 Maya 中选择对象');
-    expect(historyText).toContain('0.1.0');
+  it('renders a description-and-execute card from userSummary', () => {
+    const { page } = loadPage();
+    const html = page.renderReplayCardHtml(sampleWorkflow, { status: 'succeeded' });
+    expect(html).toContain('导出 Maya 选中对象');
+    expect(html).toContain('输入输出目录、文件名和是否允许覆盖。');
+    expect(html).toContain('得到 FBX 文件。');
+    expect(html).toContain('执行');
+    expect(html).toContain('成功');
+    expect(html).not.toContain('data-action="remove"');
+    expect(html).not.toContain('data-action="publish"');
+    expect(html).not.toContain('data-action="install"');
+    expect(html).not.toContain('workflow-run-form');
+    expect(html).not.toContain('workflow-preflight');
+    expect(html).not.toContain('workflow-connectors');
+    expect(html).not.toContain('workflow-detail');
+    expect(html).not.toContain('workflow-history');
   });
 
-  it('renders passed, warning, and failed preflight results on workflow cards', () => {
-    const code = readFileSync(join(process.cwd(), 'companion-desktop/shell/workflow-page.js'), 'utf8');
-    const dom = new JSDOM(`
-      <html>
-        <head></head>
-        <body>
-          <div id="workflowSummary"></div>
-          <div id="workflowInlineStatus"></div>
-          <div id="workflowEmpty" class="workflow-empty"></div>
-          <div id="workflowList"></div>
-          <div id="workflowHistoryMeta"></div>
-          <div id="workflowHistoryEmpty"></div>
-          <div id="workflowHistoryList"></div>
-        </body>
-      </html>
-    `, { runScripts: 'outside-only' });
-
-    dom.window.eval(code);
-    const page = dom.window.ShellWorkflowPage;
-    page.workflows = [{
-      id: 'workflow.maya.export_selection_fbx',
-      name: 'Maya FBX',
-      status: 'available',
-      userSummary: { title: '导出 Maya 选中对象', outputSummary: 'FBX' },
-      systemContract: { validation: { status: 'validated' } },
-    }];
-    page.preflightByWorkflowId.set('workflow.maya.export_selection_fbx', {
-      status: 'failed',
-      repair_actions: [{ id: 'select_maya_objects', title: '选择 Maya 对象' }],
-      results: [
-        { check_id: 'maya_connector_online', message: 'Maya Connector 已连接。', status: 'passed' },
-        { check_id: 'output_conflict_resolved', message: '目标文件已存在。', status: 'warning' },
-        {
-          check_id: 'maya_selection_non_empty',
-          message: '当前没有选择 Maya 对象。',
-          repair_action_id: 'select_maya_objects',
-          status: 'failed',
-        },
-      ],
-    });
+  it('lists replay cards and empty-state copy without history or forms', () => {
+    const { dom, page } = loadPage();
+    page.workflows = [sampleWorkflow];
+    page.historyRuns = [{ id: 'run_success', workflow_id: sampleWorkflow.id, status: 'failed' }];
+    page.indexRuns();
     page.render();
 
     const text = dom.window.document.getElementById('workflowList')?.textContent || '';
-    expect(text).toContain('运行前检查');
-    expect(text).toContain('通过');
-    expect(text).toContain('提醒');
-    expect(text).toContain('未通过');
-    expect(text).toContain('Maya Connector 已连接');
-    expect(text).toContain('目标文件已存在');
-    expect(text).toContain('当前没有选择 Maya 对象');
-    expect(text).toContain('选择 Maya 对象');
+    expect(text).toContain('导出 Maya 选中对象');
+    expect(text).toContain('得到 FBX 文件');
+    expect(text).toContain('执行');
+    expect(text).toContain('失败');
+    expect(text).not.toContain('运行前检查');
+    expect(text).not.toContain('固定到首页');
+    expect(dom.window.document.getElementById('workflowEmpty')?.className).toContain('hidden');
+    expect(dom.window.document.querySelector('.workflow-run-form')).toBeNull();
+    expect(dom.window.document.querySelector('.workflow-preflight')).toBeNull();
+    expect(dom.window.document.getElementById('workflowHistory')).toBeNull();
   });
 
-  it('renders connector dependency summaries on workflow cards', () => {
-    const code = readFileSync(join(process.cwd(), 'companion-desktop/shell/workflow-page.js'), 'utf8');
-    const dom = new JSDOM(`
-      <html>
-        <head></head>
-        <body>
-          <div id="workflowSummary"></div>
-          <div id="workflowInlineStatus"></div>
-          <div id="workflowEmpty" class="workflow-empty"></div>
-          <div id="workflowList"></div>
-          <div id="workflowHistoryMeta"></div>
-          <div id="workflowHistoryEmpty"></div>
-          <div id="workflowHistoryList"></div>
-        </body>
-      </html>
-    `, { runScripts: 'outside-only' });
-
-    dom.window.eval(code);
-    const page = dom.window.ShellWorkflowPage;
-    page.workflows = [{
-      id: 'workflow.maya.export_selection_fbx',
-      name: 'Maya FBX',
-      status: 'available',
-      userSummary: { title: '导出 Maya 选中对象', outputSummary: 'FBX' },
-      connectorSummaries: [{
-        id: 'maya_connector',
-        title: 'Maya Connector',
-        label: '连接未配置',
-        status: 'unknown',
-      }],
-      systemContract: { validation: { status: 'validated' } },
-    }];
+  it('shows the butler empty-state when there are no replay items', () => {
+    const { dom, page } = loadPage();
+    page.workflows = [];
     page.render();
-
-    const text = dom.window.document.getElementById('workflowList')?.textContent || '';
-    expect(text).toContain('Maya Connector');
-    expect(text).toContain('连接未配置');
-    expect(text).toContain('未知');
+    const empty = dom.window.document.getElementById('workflowEmpty');
+    expect(empty?.className).not.toContain('hidden');
+    expect(empty?.textContent).toContain('把刚才那套整理成技能');
+    expect(empty?.querySelector('#btnReplayCompileWithButlerEmpty')).toBeTruthy();
   });
 
-  it('opens workflow detail with draft, validated, connector, and recent run states', () => {
-    const code = readFileSync(join(process.cwd(), 'companion-desktop/shell/workflow-page.js'), 'utf8');
-    const dom = new JSDOM(`
-      <html>
-        <head></head>
-        <body>
-          <div id="workflowSummary"></div>
-          <div id="workflowInlineStatus"></div>
-          <div id="workflowEmpty" class="workflow-empty"></div>
-          <div id="workflowList"></div>
-          <div id="workflowHistoryMeta"></div>
-          <div id="workflowHistoryEmpty"></div>
-          <div id="workflowHistoryList"></div>
-        </body>
-      </html>
-    `, { runScripts: 'outside-only' });
+  it('empty-state and toolbar compile doors hand the same replay_compile payload', async () => {
+    const { page, dom } = loadPage();
+    const openDshHandoff = vi.fn().mockResolvedValue({ ok: true });
+    page.bind({ openDshHandoff });
+    const payload = page.buildReplayCompileHandoff();
+    expect(payload.kind).toBe('replay_compile');
+    expect(payload.domain).toBe('replay');
+    expect(payload.composerText).toBe('把刚才那套整理成技能');
 
-    dom.window.eval(code);
-    const page = dom.window.ShellWorkflowPage;
-    page.workflows = [{
-      id: 'workflow.maya.export_selection_fbx',
-      name: 'Maya FBX',
-      version: '0.1.0',
-      status: 'available',
-      userSummary: { title: '导出 Maya 选中对象', outputSummary: 'FBX' },
-      aiContract: {
-        inputSchema: {
-          properties: {
-            file_name: { type: 'string' },
-            output_dir: { type: 'string' },
-          },
-        },
-      },
-      connectorSummaries: [{
-        id: 'maya_connector',
-        title: 'Maya Connector',
-        label: '已连接',
-        status: 'ok',
-      }],
-      systemContract: { validation: { status: 'validated' } },
-    }];
-    page.drafts = [
-      {
-        id: 'draft_ready',
-        name: '准备验收草稿',
-        status: 'draft',
-        definition: { executor_ref: { id: 'workflow.maya.export_selection_fbx' } },
-        source: { kind: 'run', run_id: 'run_success' },
-      },
-      {
-        id: 'draft_blocked',
-        name: '受阻草稿',
-        status: 'blocked',
-        definition: { executor_ref: { id: 'workflow.maya.export_selection_fbx' } },
-        source: { kind: 'conversation' },
-      },
-    ];
-    page.historyRuns = [{
-      id: 'run_success',
-      workflow_id: 'workflow.maya.export_selection_fbx',
-      status: 'succeeded',
-      finished_at: '2026-08-11T10:00:00.000Z',
-      artifacts: [],
-    }];
-    page.render();
-
-    expect(dom.window.document.getElementById('workflowList')?.textContent || '').not.toContain('草稿与状态');
-    dom.window.document.querySelector('[data-action="detail"]')?.dispatchEvent(new dom.window.Event('click', { bubbles: true }));
-
-    const text = dom.window.document.getElementById('workflowList')?.textContent || '';
-    expect(text).toContain('草稿与状态');
-    expect(text).toContain('稳定: validated');
-    expect(text).toContain('准备验收草稿: draft');
-    expect(text).toContain('受阻草稿: blocked');
-    expect(text).toContain('Maya Connector · 已连接');
-    expect(text).toContain('成功 / run_success');
-    expect(text).toContain('file_name, output_dir');
-  });
-
-  it('renders and toggles home and connection Workflow pins', async () => {
-    const code = readFileSync(join(process.cwd(), 'companion-desktop/shell/workflow-page.js'), 'utf8');
-    const dom = new JSDOM(`
-      <html>
-        <head></head>
-        <body>
-          <div id="workflowSummary"></div>
-          <div id="workflowInlineStatus"></div>
-          <div id="workflowEmpty" class="workflow-empty"></div>
-          <div id="workflowList"></div>
-          <div id="workflowHistoryMeta"></div>
-          <div id="workflowHistoryEmpty"></div>
-          <div id="workflowHistoryList"></div>
-        </body>
-      </html>
-    `, { runScripts: 'outside-only' });
-
-    dom.window.eval(code);
-    const page = dom.window.ShellWorkflowPage;
-    const shell = {
-      api: vi.fn()
-        .mockResolvedValueOnce({
-          ok: true,
-          json: {
-            pin: {
-              id: 'pin_home_export',
-              workflow_id: 'workflow.maya.export_selection_fbx',
-              scope: { kind: 'home' },
-              version_policy: { kind: 'follow_default' },
-            },
-          },
-        })
-        .mockResolvedValueOnce({
-          ok: true,
-          json: {
-            pin: {
-              id: 'pin_connection_maya_export',
-              workflow_id: 'workflow.maya.export_selection_fbx',
-              scope: { kind: 'connection', connection_id: 'maya' },
-              version_policy: { kind: 'follow_default' },
-            },
-          },
-        })
-        .mockResolvedValueOnce({
-          ok: true,
-          json: {
-            pins: [{
-              id: 'pin_connection_maya_export',
-              workflow_id: 'workflow.maya.export_selection_fbx',
-              scope: { kind: 'connection', connection_id: 'maya' },
-              version_policy: { kind: 'follow_default' },
-            }],
-          },
-        }),
-    };
-    page._shell = shell;
-    page.workflows = [{
-      id: 'workflow.maya.export_selection_fbx',
-      name: 'Maya FBX',
-      status: 'available',
-      userSummary: { title: '导出 Maya 选中对象', outputSummary: 'FBX' },
-      connectorSummaries: [{ capabilityPackageId: 'maya', title: 'Maya Connector', label: '已连接', status: 'ok' }],
-      systemContract: { validation: { status: 'validated' } },
-    }];
-    page.historyRuns = [];
-    page.pins = [];
-    page.render();
-
-    expect(dom.window.document.getElementById('workflowList')?.textContent || '').toContain('固定到首页');
-    await page.togglePin(page.workflows[0], { kind: 'home' });
-    expect(shell.api).toHaveBeenNthCalledWith(
-      1,
-      'POST',
-      '/v1/workflows/pins',
-      {
-        scope: { kind: 'home' },
-        versionPolicy: { kind: 'follow_default' },
-        workflowId: 'workflow.maya.export_selection_fbx',
-      },
-      { timeoutMs: 30000 },
-    );
-    expect(dom.window.document.getElementById('workflowList')?.textContent || '').toContain('固定: 首页');
-
-    await page.togglePin(page.workflows[0], { kind: 'connection', connection_id: 'maya' });
-    expect(shell.api).toHaveBeenNthCalledWith(
-      2,
-      'POST',
-      '/v1/workflows/pins',
-      {
-        scope: { kind: 'connection', connection_id: 'maya' },
-        versionPolicy: { kind: 'follow_default' },
-        workflowId: 'workflow.maya.export_selection_fbx',
-      },
-      { timeoutMs: 30000 },
-    );
-    expect(dom.window.document.getElementById('workflowList')?.textContent || '').toContain('固定: 连接:maya');
-
-    await page.togglePin(page.workflows[0], { kind: 'home' });
-    expect(shell.api).toHaveBeenNthCalledWith(
-      3,
-      'DELETE',
-      '/v1/workflows/pins/pin_home_export',
-      null,
-      { timeoutMs: 30000 },
-    );
-    expect(page.workflows).toHaveLength(1);
-    expect(page.pins.map((pin) => pin.id)).toEqual(['pin_connection_maya_export']);
-  });
-
-  it('shows pinned workflow status and runs pinned entries through preflight first', async () => {
-    const code = readFileSync(join(process.cwd(), 'companion-desktop/shell/workflow-page.js'), 'utf8');
-    const dom = new JSDOM(`
-      <html>
-        <head></head>
-        <body>
-          <div id="workflowSummary"></div>
-          <div id="workflowInlineStatus"></div>
-          <div id="workflowEmpty" class="workflow-empty"></div>
-          <div id="workflowList"></div>
-          <div id="workflowHistoryMeta"></div>
-          <div id="workflowHistoryEmpty"></div>
-          <div id="workflowHistoryList"></div>
-        </body>
-      </html>
-    `, { runScripts: 'outside-only' });
-
-    dom.window.eval(code);
-    const page = dom.window.ShellWorkflowPage;
-    const shell = {
-      api: vi.fn()
-        .mockResolvedValueOnce({
-          ok: true,
-          json: {
-            preflight: {
-              status: 'passed',
-              repair_actions: [],
-              results: [{ check_id: 'maya_connector_online', message: 'Maya Connector 已连接。', status: 'passed' }],
-            },
-          },
-        })
-        .mockResolvedValueOnce({
-          ok: true,
-          json: {
-            result: {
-              id: 'run_pinned',
-              workflow_id: 'workflow.maya.export_selection_fbx',
-              workflow_version_id: 'workflow.maya.export_selection_fbx@0.1.0',
-              status: 'succeeded',
-              output: { fbx_path: 'project://exports/pinned.fbx' },
-              artifacts: [],
-            },
-          },
-        }),
-    };
-    page._shell = shell;
-    const workflow = {
-      id: 'workflow.maya.export_selection_fbx',
-      name: 'Maya FBX',
-      status: 'available',
-      userSummary: { title: '导出 Maya 选中对象', outputSummary: 'FBX' },
-      connectorSummaries: [{ capabilityPackageId: 'maya', title: 'Maya Connector', label: '已连接', status: 'ok' }],
-      systemContract: { validation: { status: 'validated' } },
-    };
-    page.workflows = [workflow];
-    page.pins = [{
-      id: 'pin_home_export',
-      workflow_id: 'workflow.maya.export_selection_fbx',
-      scope: { kind: 'home' },
-      version_policy: { kind: 'follow_default' },
-    }];
-    page.historyRuns = [{
-      id: 'run_previous',
-      workflow_id: 'workflow.maya.export_selection_fbx',
-      status: 'succeeded',
-      artifacts: [],
-    }];
-    page.render();
-
-    const text = dom.window.document.getElementById('workflowList')?.textContent || '';
-    expect(text).toContain('固定: 首页 · follow default · 最近 成功 · 连接 已连接');
-    expect(text).toContain('运行固定项');
-    const card = dom.window.document.querySelector('[data-workflow-id="workflow.maya.export_selection_fbx"]');
-    await page.runWorkflow(workflow, card);
-
-    expect(shell.api).toHaveBeenNthCalledWith(
-      1,
-      'POST',
-      '/v1/workflows/workflow.maya.export_selection_fbx/preflight',
-      { params: { file_name: 'selected_asset', output_dir: 'project://exports', overwrite: false } },
-      { timeoutMs: 60000 },
-    );
-    expect(shell.api).toHaveBeenNthCalledWith(
-      2,
-      'POST',
-      '/v1/workflows/workflow.maya.export_selection_fbx/run',
-      { params: { file_name: 'selected_asset', output_dir: 'project://exports', overwrite: false } },
-      { timeoutMs: 120000 },
+    await page.compileReplayWithButler();
+    expect(openDshHandoff).toHaveBeenCalledTimes(1);
+    expect(openDshHandoff.mock.calls[0][0].kind).toBe('replay_compile');
+    expect(dom.window.document.getElementById('workflowInlineStatus')?.textContent).toContain(
+      '已填入管家输入框，确认后点发送即可。',
     );
   });
 
-  it('maps supported RepairAction records to buttons and leaves unknown actions as text', async () => {
-    const code = readFileSync(join(process.cwd(), 'companion-desktop/shell/workflow-page.js'), 'utf8');
-    const dom = new JSDOM(`
-      <html>
-        <head></head>
-        <body>
-          <a data-view="connections"></a>
-          <div id="workflowSummary"></div>
-          <div id="workflowInlineStatus"></div>
-          <div id="workflowEmpty" class="workflow-empty"></div>
-          <div id="workflowList"></div>
-          <div id="workflowHistoryMeta"></div>
-          <div id="workflowHistoryEmpty"></div>
-          <div id="workflowHistoryList"></div>
-        </body>
-      </html>
-    `, { runScripts: 'outside-only' });
+  it('execute hands the frozen replay to the butler', async () => {
+    const { page } = loadPage();
+    const openDshHandoff = vi.fn().mockResolvedValue({ ok: true });
+    page._shell = { openDshHandoff };
+    const payload = page.buildReplayHandoff(sampleWorkflow);
+    expect(payload.kind).toBe('replay_run');
+    expect(payload.replayId).toBe('workflow.maya.export_selection_fbx');
+    expect(payload.slots).toEqual(['output_dir', 'file_name', 'overwrite']);
+    expect(payload.suggestedMessage).toContain('replay_run');
 
-    dom.window.eval(code);
-    const page = dom.window.ShellWorkflowPage;
-    const shell = {
-      api: vi.fn().mockResolvedValue({
-        ok: true,
-        json: {
-          preflight: {
-            status: 'passed',
-            repair_actions: [],
-            results: [{ check_id: 'maya_connector_online', message: 'Maya Connector 已连接。', status: 'passed' }],
-          },
-        },
-      }),
-      setShellView: vi.fn().mockResolvedValue({ ok: true }),
-    };
-    page._shell = shell;
-    const workflow = {
-      id: 'workflow.maya.export_selection_fbx',
-      name: 'Maya FBX',
-      status: 'available',
-      userSummary: { title: '导出 Maya 选中对象', outputSummary: 'FBX' },
-      connectorSummaries: [{ capabilityPackageId: 'maya', title: 'Maya Connector', label: '连接未配置', status: 'unknown' }],
-      systemContract: { validation: { status: 'validated' } },
-    };
-    dom.window.ShellConnectionPage = { focusConnection: vi.fn() };
-    page.workflows = [workflow];
-    page.preflightByWorkflowId.set('workflow.maya.export_selection_fbx', {
-      status: 'failed',
-      repair_actions: [
-        { id: 'confirm_overwrite_or_rename', title: '允许覆盖或改名', actionType: 'confirm', suggestedInputPatch: { overwrite: true } },
-        { id: 'reconnect_maya_connector', title: '重新连接 Maya Connector', actionType: 'reconnect' },
-        { id: 'unknown_repair', title: '未知修复', actionType: 'open_folder' },
-      ],
-      results: [{
-        check_id: 'output_conflict_resolved',
-        message: '目标 FBX 已存在。',
-        repair_action_id: 'confirm_overwrite_or_rename',
-        status: 'failed',
-      }],
-    });
-    page.render();
-
-    const list = dom.window.document.getElementById('workflowList');
-    const text = list?.textContent || '';
-    expect(text).toContain('允许覆盖或改名');
-    expect(text).toContain('打开连接');
-    expect(text).toContain('未知修复');
-    expect(list?.querySelectorAll('.workflow-repair-action')).toHaveLength(2);
-
-    const card = list?.querySelector('[data-workflow-id="workflow.maya.export_selection_fbx"]');
-    await page.handleRepairAction(workflow, card, page.preflightByWorkflowId.get('workflow.maya.export_selection_fbx').repair_actions[0]);
-    expect(card?.querySelector<HTMLInputElement>('[data-field="overwrite"]')?.checked).toBe(true);
-    expect(shell.api).toHaveBeenCalledWith(
-      'POST',
-      '/v1/workflows/workflow.maya.export_selection_fbx/preflight',
-      expect.objectContaining({ params: expect.objectContaining({ overwrite: true }) }),
-      { timeoutMs: 60000 },
-    );
-
-    await page.handleRepairAction(workflow, card, { id: 'reconnect_maya_connector', title: '重新连接 Maya Connector', actionType: 'reconnect' });
-    expect(shell.setShellView).toHaveBeenCalledWith('connections');
-    expect(dom.window.ShellConnectionPage.focusConnection).toHaveBeenCalledWith('maya');
-  });
-
-  it('creates a repair session from a failed workflow result', async () => {
-    const code = readFileSync(join(process.cwd(), 'companion-desktop/shell/workflow-page.js'), 'utf8');
-    const dom = new JSDOM(`
-      <html>
-        <head></head>
-        <body>
-          <div id="workflowSummary"></div>
-          <div id="workflowInlineStatus"></div>
-          <div id="workflowEmpty" class="workflow-empty"></div>
-          <div id="workflowList"></div>
-          <div id="workflowHistoryMeta"></div>
-          <div id="workflowHistoryEmpty"></div>
-          <div id="workflowHistoryList"></div>
-        </body>
-      </html>
-    `, { runScripts: 'outside-only' });
-
-    dom.window.eval(code);
-    const page = dom.window.ShellWorkflowPage;
-    const shell = {
-      api: vi.fn().mockResolvedValue({
-        ok: true,
-        json: {
-          repairSession: {
-            id: 'repair_run_failed',
-          },
-        },
-      }),
-    };
-    const opened = vi.fn();
-    dom.window.__acOpenCopilotObjectSession = opened;
-    page._shell = shell;
-    page.workflows = [{
-      id: 'workflow.maya.export_selection_fbx',
-      name: 'Maya FBX',
-      status: 'available',
-      userSummary: { title: '导出 Maya 选中对象', outputSummary: 'FBX' },
-      systemContract: { validation: { status: 'validated' } },
-    }];
-    page.historyRuns = [{
-      id: 'run_failed',
-      workflow_id: 'workflow.maya.export_selection_fbx',
-      status: 'failed',
-      error: { code: 'maya_command_timeout', message: 'Maya timeout', recoverable: true },
-      repair_actions: [{ id: 'retry_or_restart_maya_connector', title: '重试或重启 Maya Connector' }],
-      artifacts: [],
-    }];
-    page.render();
-
-    expect(dom.window.document.getElementById('workflowList')?.textContent || '').toContain('修复会话');
-    await page.createRepairSession(page.workflows[0], page.historyRuns[0]);
-
-    expect(shell.api).toHaveBeenCalledWith(
-      'POST',
-      '/v1/workflows/runs/run_failed/repair-session',
-      {},
-      { timeoutMs: 30000 },
-    );
-    expect(dom.window.document.getElementById('workflowInlineStatus')?.textContent || '').toContain('已创建修复会话');
-    expect(opened).toHaveBeenCalledWith(expect.objectContaining({
-      type: 'workflow',
-      id: 'workflow.maya.export_selection_fbx',
-    }));
-  });
-
-  it('renders Artifact result panels and wires open/copy actions', async () => {
-    const code = readFileSync(join(process.cwd(), 'companion-desktop/shell/workflow-page.js'), 'utf8');
-    const dom = new JSDOM(`
-      <html>
-        <head></head>
-        <body>
-          <div id="workflowSummary"></div>
-          <div id="workflowInlineStatus"></div>
-          <div id="workflowEmpty" class="workflow-empty"></div>
-          <div id="workflowList"></div>
-          <div id="workflowHistoryMeta"></div>
-          <div id="workflowHistoryEmpty"></div>
-          <div id="workflowHistoryList"></div>
-        </body>
-      </html>
-    `, { runScripts: 'outside-only' });
-
-    dom.window.eval(code);
-    const page = dom.window.ShellWorkflowPage;
-    const shell = {
-      api: vi.fn().mockResolvedValue({
-        ok: true,
-        json: {
-          draft: {
-            id: 'draft_run_success',
-            name: 'Maya FBX 草稿',
-          },
-          run: {
-            id: 'run_success',
-            workflow_id: 'workflow.maya.export_selection_fbx',
-            status: 'succeeded',
-            saved_as_draft_id: 'draft_run_success',
-            artifacts: [{
-              id: 'artifact_run_success',
-              local_path: 'F:/exports/hero.fbx',
-              metadata: { bytes: 2048 },
-              status: 'created',
-              uri: 'project://exports/hero.fbx',
-            }],
-          },
-        },
-      }),
-      openFolderPath: vi.fn().mockResolvedValue({ ok: true }),
-    };
-    const writeText = vi.fn().mockResolvedValue(undefined);
-    Object.defineProperty(dom.window.navigator, 'clipboard', {
-      configurable: true,
-      value: { writeText },
-    });
-    page._shell = shell;
-    const workflow = {
-      id: 'workflow.maya.export_selection_fbx',
-      name: 'Maya FBX',
-      status: 'available',
-      userSummary: { title: '导出 Maya 选中对象', outputSummary: 'FBX' },
-      systemContract: { validation: { status: 'validated' } },
-    };
-    page.workflows = [workflow];
-    page.historyRuns = [{
-      id: 'run_success',
-      workflow_id: 'workflow.maya.export_selection_fbx',
-      status: 'succeeded',
-      finished_at: '2026-08-10T14:00:02.000Z',
-      artifacts: [{
-        id: 'artifact_run_success',
-        local_path: 'F:/exports/hero.fbx',
-        metadata: { bytes: 2048 },
-        status: 'created',
-        uri: 'project://exports/hero.fbx',
-      }],
-    }];
-    page.render();
-
-    const list = dom.window.document.getElementById('workflowList');
-    const text = list?.textContent || '';
-    expect(text).toContain('产物');
-    expect(text).toContain('可用');
-    expect(text).toContain('F:/exports/hero.fbx');
-    expect(text).toContain('2.0 KB');
-    expect(text).toContain('打开位置');
-    expect(text).toContain('复制路径');
-    expect(text).toContain('保存为工作流');
-    expect(text).toContain('再次运行');
-
-    const card = list?.querySelector('[data-workflow-id="workflow.maya.export_selection_fbx"]');
-    const artifact = page.runsByWorkflowId.get('workflow.maya.export_selection_fbx').artifacts[0];
-    await page.handleArtifactAction(workflow, card, artifact, 'open');
-    expect(shell.openFolderPath).toHaveBeenCalledWith('F:/exports/hero.fbx');
-    await page.handleArtifactAction(workflow, card, artifact, 'copy');
-    expect(writeText).toHaveBeenCalledWith('F:/exports/hero.fbx');
-    await page.handleArtifactAction(workflow, card, artifact, 'save-draft');
-    expect(shell.api).toHaveBeenCalledWith(
-      'POST',
-      '/v1/workflows/runs/run_success/save-draft',
-      { name: 'Maya FBX 草稿' },
-      { timeoutMs: 30000 },
-    );
-    expect(dom.window.document.getElementById('workflowInlineStatus')?.textContent || '').toContain('已保存为工作流草稿');
-    expect(dom.window.document.getElementById('workflowList')?.textContent || '').toContain('已保存草稿');
-
-    page.historyRuns = [{
-      id: 'run_missing',
-      workflow_id: 'workflow.maya.export_selection_fbx',
-      status: 'succeeded',
-      finished_at: '2026-08-10T14:03:02.000Z',
-      artifacts: [{
-        id: 'artifact_missing',
-        local_path: 'F:/exports/missing.fbx',
-        metadata: { bytes: 0 },
-        status: 'missing',
-        uri: 'project://exports/missing.fbx',
-      }],
-    }];
-    page.render();
-    expect(dom.window.document.getElementById('workflowList')?.textContent || '').toContain('文件失效');
-    expect(dom.window.document.querySelector('[data-artifact-action="open"]')?.hasAttribute('disabled')).toBe(true);
-  });
-
-  it('reuses ReplaySnapshot params from history and sends source run id on rerun', async () => {
-    const code = readFileSync(join(process.cwd(), 'companion-desktop/shell/workflow-page.js'), 'utf8');
-    const dom = new JSDOM(`
-      <html>
-        <head></head>
-        <body>
-          <div id="workflowSummary"></div>
-          <div id="workflowInlineStatus"></div>
-          <div id="workflowEmpty" class="workflow-empty"></div>
-          <div id="workflowList"></div>
-          <div id="workflowHistoryMeta"></div>
-          <div id="workflowHistoryEmpty"></div>
-          <div id="workflowHistoryList"></div>
-        </body>
-      </html>
-    `, { runScripts: 'outside-only' });
-
-    dom.window.eval(code);
-    const page = dom.window.ShellWorkflowPage;
-    const shell = {
-      api: vi.fn()
-        .mockResolvedValueOnce({
-          ok: true,
-          json: {
-            preflight: {
-              status: 'passed',
-              repair_actions: [],
-              results: [{ check_id: 'maya_connector_online', message: 'Maya Connector 已连接。', status: 'passed' }],
-            },
-          },
-        })
-        .mockResolvedValueOnce({
-          ok: true,
-          json: {
-            preflight: {
-              status: 'passed',
-              repair_actions: [],
-              results: [{ check_id: 'maya_connector_online', message: 'Maya Connector 已连接。', status: 'passed' }],
-            },
-          },
-        })
-        .mockResolvedValueOnce({
-          ok: true,
-          json: {
-            result: {
-              id: 'run_reuse_new',
-              workflow_id: 'workflow.maya.export_selection_fbx',
-              status: 'succeeded',
-              reused_from_run_id: 'run_source',
-              artifacts: [],
-            },
-          },
-        }),
-    };
-    page._shell = shell;
-    const workflow = {
-      id: 'workflow.maya.export_selection_fbx',
-      name: 'Maya FBX',
-      status: 'available',
-      userSummary: { title: '导出 Maya 选中对象', outputSummary: 'FBX' },
-      systemContract: { validation: { status: 'validated' } },
-    };
-    const sourceRun = {
-      id: 'run_source',
-      workflow_id: 'workflow.maya.export_selection_fbx',
-      status: 'succeeded',
-      replay_snapshot: {
-        normalized_input: {
-          file_name: 'hero.fbx',
-          output_dir: 'project://exports',
-          overwrite: true,
-        },
-      },
-      artifacts: [],
-    };
-    page.workflows = [workflow];
-    page.historyRuns = [sourceRun];
-    page.render();
-
-    await page.reuseRun(sourceRun);
-    const card = dom.window.document.querySelector('[data-workflow-id="workflow.maya.export_selection_fbx"]');
-    expect(card?.querySelector<HTMLInputElement>('[data-field="file_name"]')?.value).toBe('hero.fbx');
-    expect(card?.querySelector<HTMLInputElement>('[data-field="output_dir"]')?.value).toBe('project://exports');
-    expect(card?.querySelector<HTMLInputElement>('[data-field="overwrite"]')?.checked).toBe(true);
-    expect(shell.api).toHaveBeenNthCalledWith(
-      1,
-      'POST',
-      '/v1/workflows/workflow.maya.export_selection_fbx/preflight',
-      { params: { file_name: 'hero.fbx', output_dir: 'project://exports', overwrite: true } },
-      { timeoutMs: 60000 },
-    );
-
-    await page.runWorkflow(workflow, card);
-    expect(shell.api).toHaveBeenNthCalledWith(
-      3,
-      'POST',
-      '/v1/workflows/workflow.maya.export_selection_fbx/run',
-      {
-        params: { file_name: 'hero.fbx', output_dir: 'project://exports', overwrite: true },
-        reusedFromRunId: 'run_source',
-      },
-      { timeoutMs: 120000 },
-    );
+    await page.executeReplay(sampleWorkflow);
+    expect(openDshHandoff).toHaveBeenCalledTimes(1);
+    expect(openDshHandoff.mock.calls[0][0].kind).toBe('replay_run');
+    expect(openDshHandoff.mock.calls[0][0].replayId).toBe(sampleWorkflow.id);
+    expect(page.inlineStatus).toContain('已填入管家输入框，确认后点发送即可。');
   });
 
   it('keeps workflow capability cards runnable', () => {
@@ -874,5 +216,103 @@ describe('workflow page UI', () => {
       'export',
       'delete',
     ]);
+  });
+
+  it('filters shelf, local, and cloud cards and searches name/id/prompt', () => {
+    const { page } = loadPage();
+    const shelf = {
+      id: 'example-unreal-connection',
+      name: '示例：Unreal 连接',
+      origin: 'example',
+      hasLocal: true,
+      hasCloud: false,
+      skillPrompt: 'connection_probe Unreal',
+      userSummary: { title: '示例：Unreal 连接', inputSummary: '查地点并探活' },
+    };
+    const executor = {
+      ...sampleWorkflow,
+      origin: 'executor',
+      hasLocal: true,
+      hasCloud: false,
+    };
+    const cloudOnly = {
+      id: 'cloud-skill',
+      name: '云端技能',
+      origin: 'cloud',
+      hasLocal: false,
+      hasCloud: true,
+      skillPrompt: 'install me',
+      userSummary: { title: '云端技能', inputSummary: '从云端安装' },
+    };
+    expect(page.skillMatchesFilters(shelf, { filterSource: 'mine' })).toBe(true);
+    expect(page.skillMatchesFilters(executor, { filterSource: 'mine' })).toBe(false);
+    expect(page.skillMatchesFilters(executor, { filterSource: 'local' })).toBe(true);
+    expect(page.skillMatchesFilters(cloudOnly, { filterSource: 'local' })).toBe(false);
+    expect(page.skillMatchesFilters(cloudOnly, { filterSource: 'cloud' })).toBe(true);
+    expect(page.skillMatchesFilters(shelf, { filterSource: 'all', searchQuery: 'unreal' })).toBe(true);
+    expect(page.skillMatchesFilters(shelf, { filterSource: 'all', searchQuery: 'maya' })).toBe(false);
+    expect(page.skillMatchesFilters(shelf, { filterSource: 'all', searchQuery: 'connection_probe' })).toBe(true);
+
+    page.workflows = [shelf, executor, cloudOnly];
+    page.filterSource = 'mine';
+    expect(page.getFilteredWorkflows().map((row) => row.id)).toEqual(['example-unreal-connection']);
+    page.filterSource = 'cloud';
+    expect(page.getFilteredWorkflows().map((row) => row.id)).toEqual(['cloud-skill']);
+    page.filterSource = 'all';
+    page.searchQuery = 'FBX';
+    expect(page.getFilteredWorkflows().map((row) => row.id)).toEqual([sampleWorkflow.id]);
+  });
+
+  it('renders remove/publish on shelf cards and install on cloud-only cards', () => {
+    const { page } = loadPage();
+    const shelfHtml = page.renderReplayCardHtml({
+      id: 'example-unreal-connection',
+      name: '示例：Unreal 连接',
+      removable: true,
+      publishable: true,
+      installable: false,
+      userSummary: { title: '示例：Unreal 连接', inputSummary: '查地点并探活' },
+    });
+    expect(shelfHtml).toContain('data-action="remove"');
+    expect(shelfHtml).toContain('data-action="publish"');
+    expect(shelfHtml).not.toContain('data-action="install"');
+    const cloudHtml = page.renderReplayCardHtml({
+      id: 'cloud-skill',
+      name: '云端技能',
+      removable: false,
+      publishable: false,
+      installable: true,
+      userSummary: { title: '云端技能', inputSummary: '从云端安装' },
+    });
+    expect(cloudHtml).toContain('data-action="install"');
+    expect(cloudHtml).not.toContain('data-action="remove"');
+    expect(cloudHtml).not.toContain('data-action="publish"');
+  });
+
+  it('shows no-match copy when filters hide every skill', () => {
+    const { dom, page } = loadPage();
+    page.workflows = [{ ...sampleWorkflow, origin: 'executor', hasLocal: true, hasCloud: false }];
+    page.filterSource = 'cloud';
+    page.render();
+    expect(dom.window.document.getElementById('workflowEmpty')?.className).toContain('hidden');
+    expect(dom.window.document.getElementById('workflowList')?.textContent).toContain('无匹配技能');
+  });
+
+  it('binds search and source chips to re-render', () => {
+    const { dom, page } = loadPage();
+    page.workflows = [
+      { id: 'example-unreal-connection', name: '示例：Unreal 连接', origin: 'example', hasLocal: true, hasCloud: false, userSummary: { title: '示例：Unreal 连接' } },
+      { ...sampleWorkflow, origin: 'executor', hasLocal: true, hasCloud: false },
+    ];
+    page.bind({});
+    const search = dom.window.document.getElementById('skillSearchInput');
+    search.value = 'Unreal';
+    search.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+    expect(page.searchQuery).toBe('Unreal');
+    expect(dom.window.document.getElementById('workflowList')?.textContent).toContain('示例：Unreal 连接');
+    expect(dom.window.document.getElementById('workflowList')?.textContent).not.toContain('导出 Maya 选中对象');
+    dom.window.document.querySelector('[data-skill-filter-source="mine"]').click();
+    expect(page.filterSource).toBe('mine');
+    expect(dom.window.document.querySelector('[data-skill-filter-source="mine"]')?.className).toContain('active');
   });
 });

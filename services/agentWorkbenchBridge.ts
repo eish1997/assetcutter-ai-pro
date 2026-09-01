@@ -6,6 +6,8 @@ import type { CustomAppModule, GeneratedAssetSourceMeta, WorkflowAsset } from '.
 import type { CapabilityExecuteResult } from './capabilityExecutor';
 import { getCapabilityEngine, isImageProcessPreset } from './capabilityEngineKind';
 import { clampWorkflowTextBody } from './workflowTextLimits';
+import type { WorkspaceFinger } from './workspaceDocumentProtocol';
+import { emptyWorkspaceFinger, omitConnectedHostsFromFinger } from './workspaceDocumentProtocol';
 
 export type AgentCapabilityPresetSummary = {
   id: string;
@@ -25,7 +27,139 @@ export type AgentWorkbenchBridgeContext = {
   activeProjectName: string | null;
   projects: Array<{ id: string; name: string }>;
   capabilityPresets: AgentCapabilityPresetSummary[];
+  finger: WorkspaceFinger;
 };
+
+let publishedWorkbenchFinger: WorkspaceFinger = emptyWorkspaceFinger();
+
+export function publishAgentWorkbenchFinger(finger: WorkspaceFinger | null | undefined) {
+  const next = finger && typeof finger === 'object' ? finger : emptyWorkspaceFinger();
+  publishedWorkbenchFinger = {
+    ...emptyWorkspaceFinger(),
+    ...next,
+    connectedHosts: Array.isArray(next.connectedHosts) ? next.connectedHosts : [],
+  };
+}
+
+export function readAgentWorkbenchFinger(): WorkspaceFinger {
+  return publishedWorkbenchFinger;
+}
+
+export function dispatchWorkspaceSetFinger(finger: WorkspaceFinger | null | undefined): boolean {
+  if (typeof window === 'undefined') return false;
+  const api = window.assetCutterWorkbench as
+    | { dispatchWorkspaceCommand?: (command: unknown) => Promise<unknown> }
+    | undefined;
+  if (!api || typeof api.dispatchWorkspaceCommand !== 'function') return false;
+  const patch = omitConnectedHostsFromFinger(finger || emptyWorkspaceFinger());
+  void api.dispatchWorkspaceCommand({ type: 'set_finger', finger: patch });
+  return true;
+}
+
+export function applyAppendTextResultToAssets(
+  assets: WorkflowAsset[] | null | undefined,
+  args: { selectedAssetId?: string | null; text: string; now?: number },
+): { assets: WorkflowAsset[]; assetId: string; created: boolean; text: string } {
+  const list = Array.isArray(assets) ? assets.slice() : [];
+  const text = clampWorkflowTextBody(String(args.text || ''));
+  const selectedId = String(args.selectedAssetId || '').trim();
+  const selected = selectedId ? list.find((a) => String(a?.id || '') === selectedId) : undefined;
+  if (!selected) {
+    const built = buildAgentCreatedTextAsset({ text, now: args.now });
+    return { assets: [built.asset, ...list], assetId: built.assetId, created: true, text };
+  }
+  const now = Number.isFinite(args.now) ? Number(args.now) : Date.now();
+  const key = `append_${now}`;
+  const nextAsset: WorkflowAsset = {
+    ...selected,
+    displayKey: key,
+    textResults: { ...(selected.textResults || {}), [key]: text },
+    resultOrder: [...(Array.isArray(selected.resultOrder) ? selected.resultOrder : []), key],
+    resultMeta: {
+      ...(selected.resultMeta || {}),
+      [key]: {
+        executedAt: now,
+        displayStepLabel: 'dsh 文本结果',
+      },
+    },
+  };
+  return {
+    assets: list.map((a) => (a.id === selected.id ? nextAsset : a)),
+    assetId: selected.id,
+    created: false,
+    text,
+  };
+}
+
+export function pickGenerateOnCurrentPreset(
+  presets: CustomAppModule[] | null | undefined,
+  requestedId?: string | null,
+): { ok: true; preset: CustomAppModule } | { ok: false; error: string } {
+  const list = Array.isArray(presets) ? presets : [];
+  const requested = String(requestedId || '').trim();
+  if (requested) {
+    const hit = list.find((p) => String(p?.id || '') === requested);
+    if (!hit) return { ok: false, error: 'preset_not_found' };
+    const summary = summarizeAgentCapabilityPreset(hit);
+    if (summary.engine !== 'gen_image' || !summary.directRunSupported) {
+      return { ok: false, error: 'preset_not_image_generate' };
+    }
+    return { ok: true, preset: hit };
+  }
+  const hit = list.find((p) => {
+    const summary = summarizeAgentCapabilityPreset(p);
+    return summary.engine === 'gen_image' && summary.directRunSupported;
+  });
+  if (!hit) return { ok: false, error: 'no_image_preset' };
+  return { ok: true, preset: hit };
+}
+
+export function applyGenerateOnCurrentToAssets(
+  assets: WorkflowAsset[] | null | undefined,
+  args: {
+    selectedAssetId?: string | null;
+    ok: boolean;
+    error?: string;
+    resultKey?: string;
+    companionKey?: string;
+    image?: string;
+    now?: number;
+  },
+): { ok: boolean; error?: string; assets: WorkflowAsset[]; assetId?: string; resultKey?: string } {
+  const list = Array.isArray(assets) ? assets.slice() : [];
+  const selectedId = String(args.selectedAssetId || '').trim();
+  if (!selectedId) return { ok: false, error: 'no_selected_asset', assets: list };
+  if (!args.ok) return { ok: false, error: String(args.error || 'generate_failed'), assets: list };
+  const selected = list.find((a) => String(a?.id || '') === selectedId);
+  if (!selected) return { ok: false, error: 'no_selected_asset', assets: list };
+  const now = Number.isFinite(args.now) ? Number(args.now) : Date.now();
+  const resultKey = String(args.resultKey || '').trim() || `gen_${now}`;
+  const companionKey = String(args.companionKey || '').trim();
+  const image = String(args.image || '').trim();
+  const nextAsset: WorkflowAsset = {
+    ...selected,
+    displayKey: resultKey,
+    resultOrder: [...(Array.isArray(selected.resultOrder) ? selected.resultOrder : []), resultKey],
+    results: image ? { ...(selected.results || {}), [resultKey]: image } : selected.results,
+    resultsCompanionKeys: companionKey
+      ? { ...(selected.resultsCompanionKeys || {}), [resultKey]: companionKey }
+      : selected.resultsCompanionKeys,
+    resultMeta: {
+      ...(selected.resultMeta || {}),
+      [resultKey]: {
+        executedAt: now,
+        displayStepLabel: 'dsh 出图',
+        mediaKind: 'image',
+      },
+    },
+  };
+  return {
+    ok: true,
+    assets: list.map((a) => (a.id === selected.id ? nextAsset : a)),
+    assetId: selected.id,
+    resultKey,
+  };
+}
 
 export type AgentWorkflowAssetSummary = {
   id: string;
@@ -128,6 +262,13 @@ type BridgeHandlers = {
     mime?: string;
     imageByteLength?: number;
     localPath?: string;
+  }) => Promise<AgentWorkbenchBridgeResult>;
+  appendTextResult: (args: {
+    text: string;
+    assetId?: string;
+  }) => Promise<AgentWorkbenchBridgeResult>;
+  generateOnCurrent: (args: {
+    presetId?: string;
   }) => Promise<AgentWorkbenchBridgeResult>;
 };
 
@@ -480,6 +621,8 @@ declare global {
       runCapability: (args: Record<string, unknown>) => Promise<unknown>;
       createTextAsset: (args: Record<string, unknown>) => Promise<unknown>;
       createImageAsset: (args: Record<string, unknown>) => Promise<unknown>;
+      appendTextResult: (args: Record<string, unknown>) => Promise<unknown>;
+      generateOnCurrent: (args: Record<string, unknown>) => Promise<unknown>;
     };
   }
 }
@@ -535,6 +678,17 @@ export function initAgentWorkbenchBridge(handlers: BridgeHandlers) {
           localPath: args.localPath != null ? String(args.localPath) : undefined,
         });
       }
+      if (m === 'appendTextResult') {
+        return handlers.appendTextResult({
+          text: String(args.text || ''),
+          assetId: args.assetId != null ? String(args.assetId) : undefined,
+        });
+      }
+      if (m === 'generateOnCurrent') {
+        return handlers.generateOnCurrent({
+          presetId: args.presetId != null ? String(args.presetId) : undefined,
+        });
+      }
       return { ok: false, error: 'unknown_method' };
     },
     getContext: () => handlers.getContext(),
@@ -575,6 +729,15 @@ export function initAgentWorkbenchBridge(handlers: BridgeHandlers) {
         mime: args.mime != null ? String(args.mime) : undefined,
         imageByteLength: args.imageByteLength != null ? Number(args.imageByteLength) : undefined,
         localPath: args.localPath != null ? String(args.localPath) : undefined,
+      }),
+    appendTextResult: (args: Record<string, unknown>) =>
+      handlers.appendTextResult({
+        text: String(args.text || ''),
+        assetId: args.assetId != null ? String(args.assetId) : undefined,
+      }),
+    generateOnCurrent: (args: Record<string, unknown>) =>
+      handlers.generateOnCurrent({
+        presetId: args.presetId != null ? String(args.presetId) : undefined,
       }),
   };
 

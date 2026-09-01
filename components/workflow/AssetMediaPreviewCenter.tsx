@@ -25,7 +25,6 @@ type Props = {
   /** 右侧缩略图条宽度，传给 3D Viewer 做 PBR 面板避让 */
   uiRightInset?: string;
   resolvePbrTextureAssetSrc?: (assetId: string) => string;
-  onAddToComposeInput?: (text: string) => void;
   /** 纯 model3d centerSlot：注册截取当前 WebGL 画面 */
   onWebPreviewCaptureApiChange?: (api: ImagePreviewWebCaptureApi | null) => void;
   onModel3dViewDirty?: () => void;

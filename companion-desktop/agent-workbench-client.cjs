@@ -405,6 +405,7 @@ function createAgentWorkbenchClient(deps) {
       activeProject: client && typeof client === 'object' ? client.activeProject || null : null,
       projects: client && Array.isArray(client.projects) ? client.projects : [],
       capabilityPresets: client && Array.isArray(client.capabilityPresets) ? client.capabilityPresets : [],
+      finger: client && client.finger && typeof client.finger === 'object' ? client.finger : null,
       workbenchReady: Boolean(client && typeof client === 'object' && !client.error),
       nextStep:
         client && typeof client === 'object' && client.error

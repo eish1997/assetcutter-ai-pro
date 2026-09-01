@@ -28,6 +28,8 @@ export function toolManifestToCapabilityPackage(input: ToolManifestLike): Capabi
       ...(input.manifest || {}),
       kind: 'shell_tool',
       toolId: id,
+      tier: String((input.manifest || {}).tier || 'composed'),
+      dependsOn: Array.isArray((input.manifest || {}).dependsOn) ? (input.manifest || {}).dependsOn : [],
     },
     lifecycle: {
       validate: 'tool.validate',

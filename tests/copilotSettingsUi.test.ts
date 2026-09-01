@@ -23,6 +23,21 @@ const companionReleaseCheckPath = path.resolve(process.cwd(), 'scripts/companion
 const renderYamlPath = path.resolve(process.cwd(), 'render.yaml');
 
 describe('copilot settings UI', () => {
+  it('removes the legacy Copilot / Codex settings surface; butler is dsh', () => {
+    const html = fs.readFileSync(shellIndexPath, 'utf8');
+    expect(html).not.toContain('inpLegacyCopilotDebug');
+    expect(html).not.toContain('调试旧 Copilot');
+    expect(html).not.toContain("window.__loadLegacyCopilot");
+    expect(html).not.toContain('id="shell-copilot"');
+    expect(html).not.toContain('id="copilot-toggle"');
+    expect(html).not.toContain('id="settings-agent"');
+    expect(html).not.toContain('inpCodexCommand');
+    expect(html).not.toContain('Workflow Tool Bridge');
+    expect(html).not.toContain('id="pluginRows"');
+    expect(html).not.toMatch(/<script src="copilot-panel\.js"><\/script>/);
+    expect(html).toContain('id="btnDshPaneToggle"');
+  });
+
   it('keeps the shell page scripts parseable after wiring product entrances', () => {
     const html = fs.readFileSync(shellIndexPath, 'utf8');
     const scripts = [...html.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/gi)].map((m) => m[1]);
@@ -88,8 +103,7 @@ describe('copilot settings UI', () => {
     const preload = fs.readFileSync(shellPreloadPath, 'utf8').replace(/\r\n/g, '\n');
     const main = fs.readFileSync(shellMainPath, 'utf8').replace(/\r\n/g, '\n');
 
-    expect(html).toContain('id="copilot-clear-history"');
-    expect(html).toContain('copilot-head-actions');
+    expect(html).not.toContain('id="copilot-clear-history"');
     expect(panel).toContain('clearCopilotHistory');
     expect(panel).toContain('agent.clearHistory');
     expect(preload).toContain("clearHistory: (sessionId) => timedInvoke('agent-session-clear-history'");
@@ -124,12 +138,11 @@ describe('copilot settings UI', () => {
     expect(main).toContain('sessionId: capabilitySessionId');
     expect(main).toContain('sendUserMessage(outboundPrompt, { sessionId: capabilitySessionId })');
     expect(main).not.toContain("sendUserMessage(prompt, { sessionId: `tool-${toolId}` })");
-    expect(toolsPage).toContain("type: 'capability'");
-    expect(toolsPage).toContain('sessionId: session.sessionId');
-    expect(toolsPage).toContain('__acOpenCopilotObjectSession');
+    expect(toolsPage).not.toContain('__acOpenCopilotObjectSession');
+    expect(toolsPage).toContain('openDshHandoff');
+    expect(toolsPage).toContain("domain: 'tools'");
     expect(toolsPage).toContain('fetchToolCapabilityContext(shell, entry, toolId)');
     expect(toolsPage).toContain("'/v1/capability-packages/' + encodeURIComponent(capabilityId) + '/context'");
-    expect(toolsPage).toContain('context.contextPrompt');
     expect(toolsPage).toContain('fallbackToolCapabilityContext');
     expect(toolsPage).toContain('\\u672c\\u5730\\u7248\\u672c');
     expect(toolsPage).toContain('\\u4e91\\u7aef\\u5386\\u53f2\\u7248\\u672c');
@@ -169,16 +182,16 @@ describe('copilot settings UI', () => {
     expect(html).not.toContain('id="view-home"');
     expect(html).not.toContain('data-view="home"');
     expect(html).toContain('data-view="workbench" class="active"');
-    expect(html).toMatch(/<\/main>\s*<\/div>\s*<\/div>\s*<\/div>\s*<aside class="shell-copilot"/);
+    expect(html).not.toContain('aside class="shell-copilot"');
     expect(html).toContain('class="settings-section-nav"');
     expect(html).toContain('data-settings-section="overview"');
-    expect(html).toContain('data-settings-section="entrances"');
-    expect(html).toContain('data-settings-section="account"');
-    expect(html).toContain('data-settings-section="agent"');
+    expect(html).not.toContain('data-settings-section="entrances"');
+    expect(html).not.toContain('data-settings-section="account"');
+    expect(html).not.toContain('data-settings-section="agent"');
     expect(html).toContain('data-settings-section="storage"');
-    expect(html).toContain('data-settings-section="service"');
+    expect(html).not.toContain('data-settings-section="service"');
     expect(html).toContain('data-settings-section-panel="overview"');
-    expect(html).toContain('data-settings-section-panel="agent"');
+    expect(html).not.toContain('data-settings-section-panel="agent"');
     expect(html).toContain('function showSettingsSection');
     expect(html).toContain("showSettingsSection(activeSettingsSection, { preserveScroll: true })");
     expect(html).toContain("showSettingsSection(link.getAttribute('data-settings-section'))");
@@ -189,13 +202,18 @@ describe('copilot settings UI', () => {
     expect(html).not.toContain('grid-template-columns: repeat(2, minmax(280px, 1fr));');
     expect(html).not.toContain('grid-template-columns: repeat(3, minmax(0, 1fr));');
     expect(html).toContain('id="settings-overview"');
-    expect(html).toContain('id="settings-entrances"');
-    expect(html).toContain('id="settings-account"');
-    expect(html).toContain('id="settings-agent"');
+    expect(html).not.toContain('id="settings-entrances"');
+    expect(html).not.toContain('id="settings-account"');
+    expect(html).not.toContain('id="settings-agent"');
     expect(html).toContain('id="settings-storage"');
-    expect(html).toContain('id="settings-service"');
+    expect(html).not.toContain('id="settings-service"');
+    expect(html).toContain('id="inpDownloadDir"');
+    expect(html).toContain('id="inpWorkshopWorkspaceDir"');
+    expect(html).not.toContain('id="inpVolumeRoot"');
+    expect(html).not.toContain('id="inpSiteUrl"');
+    expect(html).not.toContain('id="localBase"');
     expect(html).toContain('id="statusLabel"');
-    expect(html).toContain('id="pluginRows"');
+    expect(html).not.toContain('id="pluginRows"');
     expect(html).toContain("await applyShellView('workbench')");
     expect(html).not.toContain('views.home');
 
@@ -204,61 +222,37 @@ describe('copilot settings UI', () => {
     expect(main).not.toContain("view === 'home'");
   });
 
-  it('skins the shell Copilot composer after the Workbench global input', () => {
+  it('does not expose Codex or Copilot controls on the settings page', () => {
     const html = fs.readFileSync(shellIndexPath, 'utf8');
 
-    expect(html).toContain('copilot-workbench-composer-skin');
-    expect(html).toContain('#shell-copilot .copilot-input-row');
-    expect(html).toContain('min-height: 104px !important');
-    expect(html).toContain('border-radius: 12px !important');
-    expect(html).toContain('background: #0f0f12 !important');
-    expect(html).toContain('#shell-copilot .copilot-send');
-    expect(html).toContain('border-radius: 999px !important');
-    expect(html).toContain('background: #fff !important');
+    expect(html).not.toContain('id="inpCodexCommand"');
+    expect(html).not.toContain('id="inpCodexCwd"');
+    expect(html).not.toContain('id="inpCodexModel"');
+    expect(html).not.toContain('id="codexSandboxPicker"');
+    expect(html).not.toContain('id="codexRuntimeStatusDetail"');
+    expect(html).not.toContain('id="btnSetupCodexRuntime"');
+    expect(html).not.toContain('id="btnProbeCodexRuntime"');
+    expect(html).not.toContain('id="btnCopyCodexSetupReport"');
+    expect(html).not.toContain('id="agentMcpProbeCard"');
+    expect(html).not.toContain('id="agentWorkflowPromotionCard"');
+    expect(html).not.toContain('Copilot currently uses Codex only');
+    expect(html).not.toContain('btnHermesOneClickSetup');
+    expect(html).not.toContain('id="inpSiteUrl"');
+    expect(html).not.toContain('id="btnOpenWorkbenchLogin"');
+    expect(html).not.toContain('id="inpVolumeRoot"');
+    expect(html).not.toContain('id="localBase"');
+    expect(html).not.toContain('id="inpPairToken"');
   });
 
-  it('exposes Codex runtime settings in the Agent settings panel', () => {
+  it('keeps leftover Codex runtime helpers out of the settings page script', () => {
     const html = fs.readFileSync(shellIndexPath, 'utf8');
 
-    expect(html).toContain('id="inpCodexCommand"');
-    expect(html).toContain('id="inpCodexCwd"');
-    expect(html).toContain('id="inpCodexModel"');
-    expect(html).toContain('id="codexSandboxPicker"');
-    expect(html).toContain('id="codexRuntimeStatusDetail"');
-    expect(html).toContain('id="btnSetupCodexRuntime"');
-    expect(html).toContain('id="btnProbeCodexRuntime"');
-    expect(html).toContain('id="btnCopyCodexSetupReport"');
-    expect(html).toMatch(
-      /<div class="agent-mcp-title">[\s\S]*?<span id="agentMcpProbeTitle">[\s\S]*?<\/span>\s*<\/div>\s*<span class="agent-mcp-endpoint" id="agentMcpEndpoint">/,
-    );
-    expect(html).toMatch(
-      /<div class="agent-mcp-tools" id="agentWorkflowPromotionCard">[\s\S]*?<div class="agent-mcp-tools-head">[\s\S]*?<span class="agent-mcp-endpoint">Copilot UI approval<\/span>\s*<\/div>[\s\S]*?<div class="agent-mcp-detail" id="agentWorkflowPromotionDetail"/,
-    );
-    expect(html).toMatch(
-      /<span class="agent-mcp-tools-summary" id="agentMcpToolsSummary">0 tools<\/span>\s*<\/div>\s*<div class="agent-mcp-tool-groups" id="agentMcpToolGroups">/,
-    );
-    expect(html).toMatch(
-      /<span class="agent-policy-summary" id="agentPolicySummary">[\s\S]*?<\/span>\s*<\/div>\s*<label class="agent-policy-toggle">/,
-    );
-    expect(html).toContain('agentPolicyTemplates');
-    expect(html).toContain('renderAgentPolicyTemplates');
-    expect(html).toContain('templateId: id');
-    expect(html.replace(/\r\n/g, '\n')).toContain('display: flex;\n      flex-direction: column;\n      gap: 8px;');
-    expect(html).toContain('renderCodexRuntimeStatus');
-    expect(html).toContain('codexRuntimeStatusCache');
-    expect(html).toContain('agent.probeAllBrains');
-    expect(html).toContain('agent.setupCodex');
+    expect(html).not.toContain('renderCodexRuntimeStatus');
+    expect(html).not.toContain('codexRuntimeStatusCache');
+    expect(html).not.toContain('agent.setupCodex');
+    expect(html).not.toContain("codexCommand: $('inpCodexCommand')");
     expect(html).not.toContain('btnHermesOneClickSetup');
     expect(html).not.toContain('btnHermesConnectExisting');
-    expect(html).toContain("codexCommand: $('inpCodexCommand')");
-    expect(html).toContain("codexCwd: $('inpCodexCwd')");
-    expect(html).toContain("codexModel: $('inpCodexModel')");
-    expect(html).toContain("codexSandbox: agentSettingsCache.codexSandbox");
-    const main = fs.readFileSync(shellMainPath, 'utf8');
-    expect(main).toContain('buildCodexRuntimeStatus');
-    expect(main).toContain('codexRuntime: buildCodexRuntimeStatus');
-    expect(main).toContain('cwdExists');
-    expect(main).toContain('readyHint');
   });
 
   it('auto-runs Codex setup before sending when the desired brain has fallen back to stub', () => {
@@ -422,30 +416,9 @@ describe('copilot settings UI', () => {
     const html = fs.readFileSync(shellIndexPath, 'utf8');
     const panel = fs.readFileSync(copilotPanelPath, 'utf8');
 
-    expect(html).toContain('setupCodexWithLoginRecoveryUi');
-    expect(html).toContain('formatCodexSetupChecks');
-    expect(html).toContain('formatCodexLastSetupReport');
-    expect(html).toContain('codexLastSetupReport');
-    expect(html).toContain('btnCopyCodexSetupReport');
-    expect(html).toContain('Codex setup report copied');
-    expect(html).toContain('No Codex setup report yet');
-    expect(html).toContain('shell.copyText(text)');
-    expect(html).toContain('check.nextAction');
-    expect(html).toContain('\\u5efa\\u8bae\\uff1a');
-    expect(html).not.toContain("Next: ' + next");
-    expect(html).toContain('\\u4e0a\\u6b21\\u4e00\\u952e\\u914d\\u7f6e');
-    expect(html).toContain('setupChecks');
-    expect(html).toContain('\\u5df2\\u901a\\u8fc7');
-    expect(html).toContain('\\u672a\\u901a\\u8fc7');
-    expect(html).toContain('requestShellUpdateCheckForCodexSetupUi');
-    expect(html).toContain('shell.checkShellUpdate');
-    expect(html).toContain('first.cloudAuthLoginRequired');
-    expect(html).toContain('await openWorkbenchLoginUi()');
-    expect(html).toContain('waitForShellAccountLoginUi({ timeoutMs: 120000, intervalMs: 2000 })');
-    expect(html).toContain('retryAfterLogin: true');
-    expect(html).toContain('cloudAuthRouteMissing');
-    expect(html).toContain('let unsubscribeProgress = null');
-    expect(html).toContain("if (typeof unsubscribeProgress === 'function') unsubscribeProgress()");
+    expect(html).not.toContain('setupCodexWithLoginRecoveryUi');
+    expect(html).not.toContain('btnCopyCodexSetupReport');
+    expect(html).toContain('async function openWorkbenchLoginUi');
     expect(panel).toContain('setup = await setupCodexWithLoginRecovery({');
     expect(panel).toContain('verifyConversation: true');
     expect(panel).toContain('verifyConversation: false');
@@ -689,7 +662,7 @@ describe('copilot settings UI', () => {
     const preload = fs.readFileSync(shellPreloadPath, 'utf8');
     const pkg = fs.readFileSync(packageJsonPath, 'utf8');
 
-    expect(html).toContain('Copilot currently uses Codex only');
+    expect(html).not.toContain('Copilot currently uses Codex only');
     expect(html).not.toContain('btnHermesOneClickSetup');
     expect(html).not.toContain('btnHermesConnectExisting');
     expect(html).not.toContain('npm run agent:init');
@@ -707,7 +680,7 @@ describe('copilot settings UI', () => {
     const app = fs.readFileSync(path.resolve(process.cwd(), 'App.tsx'), 'utf8');
 
     expect(rootHtml).toContain('/index.tsx');
-    expect(shellHtml).toContain('Copilot currently uses Codex only');
+    expect(shellHtml).not.toContain('Copilot currently uses Codex only');
     for (const text of [rootHtml, shellHtml, app]) {
       expect(text).not.toContain('btnHermesOneClickSetup');
       expect(text).not.toContain('btnHermesConnectExisting');
@@ -725,125 +698,14 @@ describe('copilot settings UI', () => {
     const main = fs.readFileSync(shellMainPath, 'utf8');
     const preload = fs.readFileSync(shellPreloadPath, 'utf8');
 
-    expect(html).toContain('formatAgentMcpE2eAuthDiagnostics');
+    expect(html).not.toContain('formatAgentMcpE2eAuthDiagnostics');
+    expect(html).not.toContain('id="agentMcpWorkbenchEntranceDetail"');
+    expect(html).not.toContain('id="agentWorkflowPromotionCard"');
     expect(html).toContain('formatShellAccountDiagnosticLine');
-    expect(html).toContain('Account: ${formatShellAccountDiagnosticLine(account)}');
     expect(html).toContain('Waiting for Workbench sign-in: ${remaining}s remaining');
-    expect(html).toContain('agent-mcp-e2e-diag');
-    expect(html).toContain('formatAgentMcpE2eFreshness');
-    expect(html).toContain('agent-mcp-e2e-freshness');
-    expect(html).toContain('id="agentMcpWorkbenchEntranceDetail"');
-    expect(html).toContain('renderAgentMcpWorkbenchEntrance');
-    expect(html).toContain('result && result.mcpEntranceStatus');
-    expect(html).toContain('workflowPublication');
-    expect(html).toContain('status.blockers');
-    expect(html).toContain('status.blockers');
-    expect(html).toContain('workbench_login_required');
-    expect(html).toContain('workflow_promotion_draft_only');
-    expect(html).toContain('usage_governance_local_only');
-    expect(html).toContain('blocker.actions');
-    expect(html).toContain('Actions: ${actions.join');
-    expect(html).toContain('renderAgentMcpBlockerActionButtons');
-    expect(html).toContain('Blocker actions');
-    expect(html).toContain('id="agentMcpBlockerActionDetail"');
-    expect(html).toContain('runAgentMcpBlockerAction');
-    expect(html).toContain('renderAgentMcpBlockerActionResult');
-    expect(html).toContain("renderAgentMcpBlockerActionResult(label, 'started'");
-    expect(html).toContain("renderAgentMcpBlockerActionResult(label, r && r.ok ? 'finished' : 'needs_input'");
-    expect(html).toContain("renderAgentMcpBlockerActionResult(label, 'failed'");
-    expect(html).toContain('skill_id_required');
-    expect((html.match(/skill_id_required/g) || []).length).toBe(1);
-    expect(html).toContain('unsupported_action');
-    expect(html).toContain('requiredInputs');
-    expect(html).toContain('inputs=${r.requiredInputs.map');
-    expect(html).toContain("tool === 'ac.usage.probe_quota_policy'");
-    expect(html).toContain("tool === 'ac.usage.upload_cloud_draft'");
-    expect(html).toContain("tool === 'ac.workflow.promote_workbench_preset'");
-    expect(html).toContain("tool === 'ac.workflow.promote_script_hub_tool'");
-    expect(html).toContain("command.includes('smoke:agent-mcp:e2e:open-login-wait')");
-    expect(html).toContain('teamEntranceReady');
-    expect(html).toContain('teamEntrancePhase');
-    expect(html).toContain('teamEntranceBlockers');
-    expect(html).toContain('Team entrance:');
-    expect(html).toContain('workbenchE2eAcceptance');
-    expect(html).toContain('Workbench E2E acceptance:');
-    expect(html).toContain('Proof: ${acceptance.proofSource}');
-    expect(html).toContain('工作台登录未完成');
-    expect(html).toContain('Workflow 仍是草稿阶段');
-    expect(html).toContain('Actions: ${actions.join');
-    expect(html).toContain('promotionReadiness');
-    expect(html).toContain('publishableNow');
-    expect(html).toContain('Promotion phase: ${promotionPhase}');
-    expect(html).toContain('not publishable');
-    expect(html).toContain('发布工具');
-    expect(html).toContain('plannedTool || target.id');
-    expect(html).toContain('promotionTargetLines');
-    expect(html).toContain('target.status');
-    expect(html).toContain('target.missing');
-    expect(html).toContain('Workflow promotion preflight');
-    expect(html).toContain('promotionTargetDetailLines');
-    expect(html).toContain('Workflow promotion gates');
-    expect(html).toContain('promotionPreflightEvidence');
-    expect(html).toContain('Workflow promotion evidence');
-    expect(html).toContain('latestPromotionEvidence');
-    expect(html).toContain('Skill exists: ${Boolean(latestPromotionEvidence.skillExists)}');
-    expect(html).toContain('Evidence current: ${Boolean(latestPromotionEvidence.evidenceCurrent)}');
-    expect(html).toContain('Passed: ${passed.join');
-    expect(html).toContain('Missing: ${missing.join');
-    expect(html).toContain('adminConfirmation');
-    expect(html).toContain('adminConfirmation');
-    expect(html).toContain('usageAudit');
-    expect(html).toContain('本地用量审计');
-    expect(html).toContain('assetcutter://mcp/usage-audit');
-    expect(html).toContain('usage.cloudDraft');
-    expect(html).toContain('usageUploadPlan.tool');
-    expect(html).toContain('Upload tool: ${usageUploadTool}');
-    expect(html).toContain('usageUploadReady');
-    expect(html).toContain('usageEventCount');
-    expect(html).toContain('usageBlockedBy');
-    expect(html).toContain('Upload ready: ${usageUploadReady} / events: ${usageEventCount}');
-    expect(html).toContain('Upload blockers: ${usageBlockedBy.join');
-    expect(html).toContain('Quota enforced: ${Boolean(usageQuotaPolicy.cloudQuotaEnforced)}');
-    expect(html).toContain('usageQuotaSource');
-    expect(html).toContain('usageQuotaPolicyId');
-    expect(html).toContain('usageQuotaProbeTool');
-    expect(html).toContain('usageQuotaExit');
-    expect(html).toContain('Quota source: ${usageQuotaSource}');
-    expect(html).toContain('Quota policy: ${usageQuotaPolicyId}');
-    expect(html).toContain('Quota probe: ${usageQuotaProbeTool}');
-    expect(html).toContain('Required to exit blocker: ${usageQuotaExit.join');
-    expect(html).toContain('usage.governanceEvidence');
-    expect(html).toContain('Usage governance evidence');
-    expect(html).toContain('latestUsageEvidence');
-    expect(html).toContain('Dry run: ${Boolean(latestUsageEvidence.dryRun)}');
-    expect(html).toContain('Exit ready: ${Boolean(latestUsageEvidence.exitReady)}');
-    expect(html).toContain('usageRemainingGates');
-    expect(html).toContain('Remaining: ${usageRemainingGates.join');
-    expect(html).toContain('ac.usage.upload_cloud_draft');
-    expect(html).toContain('id="btnUsageUploadDryRun"');
-    expect(html).toContain('id="btnUsageUploadCloudDraft"');
-    expect(html).toContain('id="btnUsageQuotaPolicyProbe"');
-    expect(html).toContain('id="agentUsageUploadDetail"');
-    expect(html).toContain('runAgentUsageUploadUi');
-    expect(html).toContain('runAgentUsageQuotaPolicyProbeUi');
-    expect(html).toContain('agent.usageUploadCloudDraft');
-    expect(html).toContain('agent.usageQuotaPolicyProbe');
-    expect(html).toContain('quotaEnforced=${Boolean(quota.cloudQuotaEnforced)}');
-    expect(html).toContain('id="agentWorkflowPromotionCard"');
-    expect(html).toContain('id="inpWorkflowPromotionSkillId"');
-    expect(html).toContain('id="btnFillLatestWorkflowDraft"');
-    expect(html).toContain('id="btnPromoteWorkbenchPresetPreflight"');
-    expect(html).toContain('id="btnPromoteScriptHubToolPreflight"');
-    expect(html).toContain('id="agentWorkflowPromotionDetail"');
-    expect(html).toContain('runWorkflowPromotionPreflightUi');
-    expect(html).toContain('fillLatestWorkflowPromotionDraftUi');
-    expect(html).toContain('agent.workflowPromotionDrafts');
-    expect(html).toContain('selected=${latest.id}');
-    expect(html).toContain('agent.workflowPromotionPreflight');
-    expect(html).toContain("target, skillId");
-    expect(html).toContain('adminApproved=${Boolean(preflight.adminConfirmation');
+    expect(html).not.toContain('id="btnOpenWorkbenchLogin"');
     expect(preload).toContain("workflowPromotionPreflight: (options) => timedInvoke('agent-workflow-promotion-preflight'");
-    expect(preload).toContain("workflowPromotionDrafts: () => timedInvoke('agent-workflow-promotion-drafts'");
+expect(preload).toContain("workflowPromotionDrafts: () => timedInvoke('agent-workflow-promotion-drafts'");
     expect(main).toContain("ipcMain.handle('agent-workflow-promotion-preflight'");
     expect(main).toContain("ipcMain.handle('agent-workflow-promotion-drafts'");
     expect(main).toContain('listWorkflowPromotionDraftSummaries');
@@ -851,29 +713,6 @@ describe('copilot settings UI', () => {
     expect(main).toContain("policyDecision: 'copilot_ui_admin_confirm'");
     expect(main).toContain("adminConfirmationSource: 'copilot_ui'");
     expect(main).toContain("auditRecordWritten: true");
-    expect(html).toContain('dryRun: true');
-    expect(html).toContain('dryRun: false');
-    expect(html).toContain('authRequired=true');
-    expect(html).toContain('noEvents=true');
-    expect(html).toContain('Copilot currently uses Codex only');
-    expect(html).toContain('usage.generatedAt');
-    expect(html).toContain('compactAgentUsageNumber(totals.totalTokens)');
-    expect(html).toContain('totals.freshInputTokens');
-    expect(html).toContain('totals.cachedInputTokens');
-    expect(html).toContain('totals.outputTokens');
-    expect(html).toContain('Workflow draft registry ready');
-    expect(html).toContain('Workflow draft registry needs approval');
-    expect(html).toContain('Workflow draft registry blocked by policy');
-    expect(html).toContain('Workflow draft registry tools missing');
-    expect(html).toContain('Codex can save a skill draft first');
-    expect(html).toContain('Workbench entrance ready');
-    expect(html).toContain('Workbench login required');
-    expect(html).toContain('Workbench E2E missing');
-    expect(html).toContain('cookieCount');
-    expect(html).toContain('hasLikelyAuthCookie');
-    expect(html).toContain('account && typeof account.hasAuthCookie');
-    expect(html).toContain('account && account.partition');
-    expect(html).toContain('Partition');
   });
 
   it('exposes a local shell account status card backed by the shared team partition', () => {
@@ -882,15 +721,11 @@ describe('copilot settings UI', () => {
     const preload = fs.readFileSync(shellPreloadPath, 'utf8');
     const scriptHubClient = fs.readFileSync(scriptHubClientPath, 'utf8');
 
-    expect(html).toContain('id="shellAccountCard"');
-    expect(html).toContain('id="btnOpenWorkbenchLogin"');
-    expect(html).toContain('id="btnShellAccountWaitLoginE2e"');
-    expect(html).toContain('id="btnRefreshShellAccount"');
+    expect(html).not.toContain('id="shellAccountCard"');
+    expect(html).not.toContain('id="btnOpenWorkbenchLogin"');
+    expect(html).not.toContain('id="btnShellAccountWaitLoginE2e"');
+    expect(html).not.toContain('id="btnRefreshShellAccount"');
     expect(html).toContain('loadShellAccountStatusUi');
-    expect(html).toContain("const btnShellAccountWaitLoginE2e = $('btnShellAccountWaitLoginE2e');");
-    expect(html).toContain('await loadShellAccountStatusUi();');
-    expect(html).toContain('waitForShellAccountLoginUi({ timeoutMs: 120000, intervalMs: 2000 })');
-    expect(html).toContain('runAgentMcpWorkbenchE2eUi(login && login.ok ? {} : { recoveryWaitMs: 30000 })');
     expect(html).toContain('openWorkbenchLoginUi');
     expect(preload).toContain("accountStatus: () => timedInvoke('shell-account-status')");
     expect(main).toContain("const FIRST_PARTY_WEB_PARTITION = TEAM_WEB_PARTITION");
@@ -909,7 +744,9 @@ describe('copilot settings UI', () => {
     expect(main).toMatch(/function ensureWorkbenchBrowserView\(\)[\s\S]*?webPreferences:\s*\{[\s\S]*?partition:\s*FIRST_PARTY_WEB_PARTITION/);
     expect(main).not.toContain('function ensureScriptsBrowserView()');
     expect(main).not.toContain('scriptsBrowserView');
-    expect(main).toContain("if (view === 'scripts') return 'workflow';");
+    expect(fs.readFileSync(path.resolve(process.cwd(), 'companion-desktop/shell-rooms.cjs'), 'utf8')).toContain(
+      "if (v === 'scripts') return 'workflow'",
+    );
     expect(main).toContain("credentials: 'include'");
     expect(main).toContain('const shellAccount = await readShellAccountStatus();');
     expect(main).toContain('summarizeWorkbenchE2eEntrance');
@@ -953,11 +790,7 @@ describe('copilot settings UI', () => {
     expect(main).not.toContain("partition: 'persist:assetcutter-workbench'");
     expect(scriptHubClient).toContain("const SCRIPT_HUB_PARTITION = TEAM_WEB_PARTITION");
     expect(scriptHubClient).not.toContain("const SCRIPT_HUB_PARTITION = 'persist:assetcutter-script-hub'");
-    expect(html).toContain('if (result && result.shellAccount) renderShellAccountStatus(result.shellAccount);');
-    expect(html).toContain('r.settings.mcpWorkbenchLastE2e');
-    expect(html).toContain('renderAgentMcpE2e({ e2e: r.settings.mcpWorkbenchLastE2e })');
-    expect(html).toContain('migration.copiedCount');
-    expect(html).toContain('\u5df2\u4ece\u65e7\u4f1a\u8bdd\u5206\u533a\u8fc1\u79fb ${Number(migration.copiedCount)} \u4e2a Cookie');
+    expect(html).toContain('renderShellAccountStatus');
   });
 
   it('surfaces workbench login readiness in the right-side Copilot entrance', () => {
@@ -1075,8 +908,9 @@ describe('copilot settings UI', () => {
     const html = fs.readFileSync(shellIndexPath, 'utf8').replace(/\r\n/g, '\n');
     const main = fs.readFileSync(shellMainPath, 'utf8');
 
+    expect(html).not.toContain('id="copilot-toggle"');
     expect(html).toMatch(
-      /id="copilot-toggle"[\s\S]*?id="btnTrafficMin"/,
+      /id="btnDshPaneToggle"[\s\S]*?id="btnTrafficMin"/,
     );
     expect(html).not.toMatch(
       /<aside class="shell-copilot"[\s\S]*?id="copilot-toggle"/,
@@ -1140,11 +974,9 @@ describe('copilot settings UI', () => {
     expect(preload).toContain('desktopObservationFrame');
     expect(preload).toContain('desktopObservationStatus');
     expect(preload).toContain('desktopObservationStop');
-    expect(html).toContain('data-shell-copilot-desktop-observation');
-    expect(html).toContain('data-desktop-observation-scope="current_window"');
-    expect(html).toContain('data-desktop-observation-scope="app"');
-    expect(html).toContain('data-desktop-observation-scope="desktop"');
-    expect(html).toContain('未授权时不采集');
+    expect(html).not.toContain('data-shell-copilot-desktop-observation');
+    expect(html).not.toContain('data-desktop-observation-scope="current_window"');
+    expect(html).not.toContain('未授权时不采集');
     expect(panel).toContain('请求桌面观察授权');
     expect(panel).toContain('暂停桌面观察');
     expect(panel).toContain('停止桌面观察');
@@ -1245,22 +1077,15 @@ describe('copilot settings UI', () => {
     expect(html).toContain('#shell-copilot .copilot-code-head');
     expect(html).toContain('#shell-copilot .copilot-code-copy');
     expect(html).toContain('#shell-copilot .copilot-inline-code');
-    expect(html).toContain('id="copilot-perception-bar"');
-    expect(html).toContain('data-shell-copilot-perception-bar');
-    expect(html).toContain('id="copilot-perception-desktop"');
-    expect(html).toContain('id="copilot-perception-refresh"');
-    expect(html).toContain('屏幕监控未开启');
-    expect(html).toContain('id="copilot-timeline"');
-    expect(html).toContain('data-shell-copilot-timeline');
-    expect(html).toContain('id="copilot-timeline-list"');
-    expect(html).toContain('id="copilot-desktop-observation"');
-    expect(html).toContain('data-shell-copilot-desktop-observation');
-    expect(html).toContain('data-desktop-observation-scope="current_window"');
-    expect(html).toContain('data-desktop-observation-scope="app"');
-    expect(html).toContain('data-desktop-observation-scope="desktop"');
-    expect(html).toContain('id="copilot-desktop-observation-enable"');
-    expect(html).toContain('id="copilot-desktop-observation-pause"');
-    expect(html).toContain('id="copilot-desktop-observation-stop"');
+    expect(html).not.toContain('id="copilot-perception-bar"');
+    expect(html).not.toContain('data-shell-copilot-perception-bar');
+    expect(html).not.toContain('id="copilot-perception-desktop"');
+    expect(html).not.toContain('屏幕监控未开启');
+    expect(html).not.toContain('id="copilot-timeline"');
+    expect(html).not.toContain('data-shell-copilot-timeline');
+    expect(html).not.toContain('id="copilot-desktop-observation"');
+    expect(html).not.toContain('data-shell-copilot-desktop-observation');
+    expect(html).not.toContain('data-desktop-observation-scope="current_window"');
     expect(html).toContain('#shell-copilot .copilot-perception-bar');
     expect(html).toContain('#shell-copilot .copilot-timeline');
     expect(html).toContain('#shell-copilot .copilot-timeline-event.is-failed');
@@ -1280,11 +1105,9 @@ describe('copilot settings UI', () => {
     expect(html).toContain('#shell-copilot .copilot-task-thread-card');
     expect(html).toContain('#shell-copilot .copilot-result-card');
     expect(html).toContain('#shell-copilot .copilot-recovery-detail');
-    expect(html).toContain('id="copilot-current-run"');
-    expect(html).toContain('id="copilot-current-run-state"');
-    expect(html).toContain('id="copilot-top-state"');
-    expect(html).toContain('id="copilot-context-title"');
-    expect(html).toContain('id="copilot-context-badge"');
+    expect(html).not.toContain('id="copilot-current-run"');
+    expect(html).not.toContain('id="copilot-top-state"');
+    expect(html).not.toContain('id="copilot-context-title"');
     expect(html).toContain('copilot-design-alignment');
     expect(html).toContain('copilot-context-height-guard');
     expect(html).toContain('#shell-copilot .copilot-messages');

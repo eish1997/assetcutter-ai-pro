@@ -23,4 +23,4 @@
 | `companion-desktop` 第五导航 `scripts` | `scriptHubUrl` 待改指向独立仓 dev/prod |
 | `agent-script-hub-client.cjs` | `ac.script_hub.*` → 独立仓 Tool Bridge（见 ScriptHub `doc/24-Companion-Integration.md`） |
 | `scripts/agent-p1-smoke.mjs` | Script Hub 段已标记 skip |
-| `docs/Script-Hub-开发规格.md` | 已废弃，见独立仓 `doc/` |
+| `docs/archived/Script-Hub-开发规格.md` | 已废弃，见独立仓 `doc/` |

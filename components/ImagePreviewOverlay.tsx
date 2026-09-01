@@ -16,6 +16,7 @@ import {
   imageNaturalIndicesFromClientPoint,
   readRgbFromCanvasMappedNatural,
 } from '../services/imagePreviewPointerGeometry';
+import { lockByOriginalDominantAxis, LIGHTBOX_FLAT_WELL_INSET } from '../services/imagePreviewFitViewport';
 import { Box, Contrast, Globe2, GripHorizontal, Image as ImageIcon, Mountain, PanelRight, Save, Scaling, X } from 'lucide-react';
 import { readLocalString, writeLocalString } from '../services/clientPersist';
 import {
@@ -317,24 +318,6 @@ export type FlatImageOverlayContext = {
   previewLayout: ImagePreviewLayoutMode;
 };
 
-function fitImageToPreviewViewport(nw: number, nh: number): { w: number; h: number } {
-  if (typeof window === 'undefined' || !nw || !nh) return { w: nw, h: nh };
-  const maxW = window.innerWidth * 0.92;
-  const maxH = window.innerHeight * 0.88;
-  const s = Math.min(maxW / nw, maxH / nh);
-  return { w: nw * s, h: nh * s };
-}
-
-function dominantAxisForImage(nw: number, nh: number): 'width' | 'height' {
-  return nw >= nh ? 'width' : 'height';
-}
-
-function lockByOriginalDominantAxis(nw: number, nh: number): { axis: 'width' | 'height'; size: number } {
-  const fit = fitImageToPreviewViewport(nw, nh);
-  const axis = dominantAxisForImage(nw, nh);
-  return { axis, size: axis === 'width' ? fit.w : fit.h };
-}
-
 /** 全景 Viewer 独立 chunk（registry 懒加载） */
 const LazyImageEquirectViewer = getLazyImagePreviewViewer('image.equirect');
 /** 3D Viewer 独立 chunk（registry 懒加载） */
@@ -374,7 +357,6 @@ export function ImagePreviewOverlay({
   onWheelInnerNavigate,
   innerWheelOptionCount = 1,
   innerLayoutStableKey,
-  layoutReferenceSrc,
   enablePanoramaMode = true,
   modelUrls,
   modelFileName,
@@ -479,6 +461,7 @@ export function ImagePreviewOverlay({
   /** 高度 3D / 模型 3D 预览根容器，用于截取 WebGL 当前帧 */
   const webglPreviewHostRef = useRef<HTMLDivElement | null>(null);
   const innerWrapRef = useRef<HTMLDivElement | null>(null);
+  const flatFitWellRef = useRef<HTMLDivElement | null>(null);
   const rotateDragRef = useRef<{ pivotX: number; pivotY: number; lastRad: number | null } | null>(null);
   const rKeyPressedRef = useRef(false);
   const pixelSampleCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -786,10 +769,13 @@ export function ImagePreviewOverlay({
     const im = imgRef.current;
     if (im?.complete && im.naturalWidth > 0 && im.naturalHeight > 0) {
       setPrimaryImageReady(true);
+      if (innerLayoutStableKey) {
+        setLockedDominant((prev) => prev ?? lockByOriginalDominantAxis(im.naturalWidth, im.naturalHeight));
+      }
       return true;
     }
     return false;
-  }, [open, centerSlot, imageSrc]);
+  }, [open, centerSlot, imageSrc, innerLayoutStableKey]);
 
   useLayoutEffect(() => {
     setPrimaryImageReady(false);
@@ -814,6 +800,30 @@ export function ImagePreviewOverlay({
     flatAnnotationColumnOutsidePanoStack,
     syncPrimaryImageReadyFromDom,
   ]);
+
+  useLayoutEffect(() => {
+    if (!open || centerSlot) return;
+    const well = flatFitWellRef.current;
+    if (!well) return;
+    const apply = () => {
+      const im = imgRef.current;
+      const nw = im?.naturalWidth || 0;
+      const nh = im?.naturalHeight || 0;
+      if (!nw || !nh) return;
+      const maxW = well.clientWidth;
+      const maxH = well.clientHeight;
+      if (maxW < 80 || maxH < 80) return;
+      const next = lockByOriginalDominantAxis(nw, nh, { maxW, maxH });
+      setLockedDominant((prev) => {
+        if (prev && prev.axis === next.axis && Math.abs(prev.size - next.size) < 0.5) return prev;
+        return next;
+      });
+    };
+    apply();
+    const ro = new ResizeObserver(apply);
+    ro.observe(well);
+    return () => ro.disconnect();
+  }, [open, centerSlot, imageSrc, uiHidden, splitLayoutActive]);
 
   useLayoutEffect(() => {
     if (!open || !centerSlot) return;
@@ -975,27 +985,10 @@ export function ImagePreviewOverlay({
   }, [flatPixelSampleActive, onFlatImagePixelSample, syncPixelSampleBuffer]);
 
   useEffect(() => {
-    if (!open || !innerLayoutStableKey) {
+    if (!open) {
       setLockedDominant(null);
-      return;
     }
-    setLockedDominant(null);
-    if (!layoutReferenceSrc) return;
-    let cancelled = false;
-    const img = new Image();
-    img.onload = () => {
-      if (cancelled) return;
-      const nw = img.naturalWidth;
-      const nh = img.naturalHeight;
-      if (!nw || !nh) return;
-      setLockedDominant(lockByOriginalDominantAxis(nw, nh));
-    };
-    img.onerror = () => {};
-    img.src = layoutReferenceSrc;
-    return () => {
-      cancelled = true;
-    };
-  }, [open, innerLayoutStableKey, layoutReferenceSrc]);
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
@@ -1445,12 +1438,7 @@ export function ImagePreviewOverlay({
 
   const useSplitLayout = splitLayoutActive;
 
-  const useFrameLock = Boolean(!centerSlot && innerLayoutStableKey && lockedDominant);
-  const shellStyle: React.CSSProperties = {
-    left: useSplitLayout ? '50%' : `calc((100% - ${contentRightInset}) / 2)`,
-    transform: `translate(-50%, -50%) translate(${offset.x}px, ${offset.y}px) scale(${scale})`,
-    transformOrigin: 'center center',
-  };
+  const useFrameLock = Boolean(!centerSlot && lockedDominant);
   const panoFlatStackStyle: React.CSSProperties = {
     left: useSplitLayout ? '50%' : `calc((100% - ${contentRightInset}) / 2)`,
     top: '50%',
@@ -1459,8 +1447,8 @@ export function ImagePreviewOverlay({
   };
   const lockedImgStyle: React.CSSProperties | undefined = useFrameLock && lockedDominant
     ? lockedDominant.axis === 'width'
-      ? { width: `${lockedDominant.size}px`, height: 'auto', maxWidth: useSplitLayout ? '100%' : '92vw', maxHeight: '88vh' }
-      : { height: `${lockedDominant.size}px`, width: 'auto', maxWidth: useSplitLayout ? '100%' : '92vw', maxHeight: '88vh' }
+      ? { width: `${lockedDominant.size}px`, height: 'auto' }
+      : { height: `${lockedDominant.size}px`, width: 'auto' }
     : undefined;
 
   const innerRotateStyle: React.CSSProperties = {
@@ -1474,6 +1462,77 @@ export function ImagePreviewOverlay({
   const showToolbarHeavyChrome = bootRank >= WORKFLOW_LIGHTBOX_BOOT_RANK.t3;
   const flatPrimaryImgRevealClass =
     panoAnnotationBridge || splitStretchEnabled ? '' : flatImageVisibleClass;
+
+  const flatImgCursorClass = panoAnnotationBridge
+    ? 'pointer-events-none cursor-default opacity-0'
+    : splitStretchEnabled
+      ? 'pointer-events-none opacity-0'
+      : suppressFlatImageInteraction
+        ? 'pointer-events-none'
+        : canvasPanArmed
+          ? 'cursor-grab active:cursor-grabbing'
+          : 'cursor-zoom-in';
+
+  const flatImageStack = (
+            <div
+              ref={innerWrapRef}
+              className={`relative inline-block ${panoAnnotationBridge ? 'pointer-events-none rounded-xl ring-1 ring-white/[0.12]' : ''}`}
+              style={panoAnnotationBridge ? undefined : innerRotateStyle}
+            >
+              <img
+                key={imageSrc}
+                src={imageSrc!}
+                className={`block object-contain rounded-xl select-none ${flatPrimaryImgRevealClass} ${flatImgCursorClass}`}
+                style={lockedImgStyle}
+                alt=""
+                draggable={false}
+                onContextMenu={(e) => e.preventDefault()}
+                onLoad={handleImgLoadGeneral}
+                onError={handleImgErrorGeneral}
+                onDoubleClick={
+                  panoAnnotationBridge || suppressFlatImageInteraction
+                    ? undefined
+                    : (e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        setScale(1);
+                        setOffset({ x: 0, y: 0 });
+                        setFlatRotationDeg(0);
+                        setRotOriginLocal(null);
+                        dragRef.current = null;
+                        panRef.current = null;
+                        zoomPivotRef.current = null;
+                        zoomLastScaleRef.current = 1;
+                        rotateDragRef.current = null;
+                      }
+                }
+                ref={imgRef}
+                onMouseDown={
+                  panoAnnotationBridge || suppressFlatImageInteraction || splitStretchEnabled
+                    ? undefined
+                    : handleImgMouseDown
+                }
+              />
+              {splitStretchUiOk && splitStretchEnabled && !uiHidden ? (
+                <ImagePreviewSplitStretchOverlay
+                  imgRef={imgRef}
+                  active
+                  resetKey={`${resetKey}\u001f${imageSrc ?? ''}`}
+                  exportStateRef={splitStretchExportRef}
+                />
+              ) : null}
+              {flatImageOverlay && !uiHidden ? (
+                // eslint-disable-next-line react-hooks/refs -- 将 ref 对象传入子 render 回调；不在此读取 .current
+                flatImageOverlay({
+                  imgRef,
+                  panoOverlayContainerRef: undefined,
+                  panoProjectionRef: undefined,
+                  panoViewerBindEpoch: undefined,
+                  previewLayout,
+                })
+              ) : null}
+            </div>
+  );
 
   const mainStageContent = (
     <>
@@ -1611,93 +1670,35 @@ export function ImagePreviewOverlay({
         ) : null}
 
         {flatAnnotationColumnOutsidePanoStack ? (
-          <div
-            className={`absolute top-1/2 ${panoAnnotationBridge ? 'flex items-center justify-center pointer-events-none' : useFrameLock ? 'flex items-center justify-center' : ''}`}
-            style={panoAnnotationBridge ? panoFlatStackStyle : shellStyle}
-          >
+          panoAnnotationBridge ? (
             <div
-              ref={innerWrapRef}
-              className={`relative inline-block max-w-full max-h-full ${panoAnnotationBridge ? 'pointer-events-none rounded-xl ring-1 ring-white/[0.12]' : ''}`}
-              style={panoAnnotationBridge ? undefined : innerRotateStyle}
+              className="absolute top-1/2 flex items-center justify-center pointer-events-none"
+              style={panoFlatStackStyle}
             >
-              <img
-                key={imageSrc}
-                src={imageSrc!}
-                className={
-                  useFrameLock
-                    ? `block max-h-full max-w-full object-contain rounded-xl select-none ${flatPrimaryImgRevealClass} ${
-                        panoAnnotationBridge
-                          ? 'pointer-events-none cursor-default opacity-0'
-                          : splitStretchEnabled
-                            ? 'pointer-events-none opacity-0'
-                            : suppressFlatImageInteraction
-                              ? 'pointer-events-none'
-                              : canvasPanArmed
-                                ? 'cursor-grab active:cursor-grabbing'
-                                : 'cursor-zoom-in'
-                      }`
-                    : `block max-h-[88vh] ${useSplitLayout ? 'max-w-full' : 'max-w-[92vw]'} object-contain rounded-xl select-none ${flatPrimaryImgRevealClass} ${
-                        panoAnnotationBridge
-                          ? 'pointer-events-none cursor-default opacity-0'
-                          : splitStretchEnabled
-                            ? 'pointer-events-none opacity-0'
-                            : suppressFlatImageInteraction
-                              ? 'pointer-events-none'
-                              : canvasPanArmed
-                                ? 'cursor-grab active:cursor-grabbing'
-                                : 'cursor-zoom-in'
-                      }`
-                }
-                style={lockedImgStyle}
-                alt=""
-                draggable={false}
-                onContextMenu={(e) => e.preventDefault()}
-                onLoad={handleImgLoadGeneral}
-                onError={handleImgErrorGeneral}
-                onDoubleClick={
-                  panoAnnotationBridge || suppressFlatImageInteraction
-                    ? undefined
-                    : (e) => {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        setScale(1);
-                        setOffset({ x: 0, y: 0 });
-                        setFlatRotationDeg(0);
-                        setRotOriginLocal(null);
-                        dragRef.current = null;
-                        panRef.current = null;
-                        zoomPivotRef.current = null;
-                        zoomLastScaleRef.current = 1;
-                        rotateDragRef.current = null;
-                      }
-                }
-                ref={imgRef}
-                onMouseDown={
-                  panoAnnotationBridge || suppressFlatImageInteraction || splitStretchEnabled
-                    ? undefined
-                    : handleImgMouseDown
-                }
-              />
-              {splitStretchUiOk && splitStretchEnabled && !uiHidden ? (
-                <ImagePreviewSplitStretchOverlay
-                  imgRef={imgRef}
-                  active
-                  resetKey={`${resetKey}\u001f${imageSrc ?? ''}`}
-                  exportStateRef={splitStretchExportRef}
-                />
-              ) : null}
-              {flatImageOverlay && !uiHidden ? (
-                // eslint-disable-next-line react-hooks/refs -- 将 ref 对象传入子 render 回调；不在此读取 .current
-                flatImageOverlay({
-                  imgRef,
-                  panoOverlayContainerRef: undefined,
-                  panoProjectionRef: undefined,
-                  panoViewerBindEpoch: undefined,
-                  previewLayout,
-                })
-              ) : null}
+              {flatImageStack}
             </div>
-          </div>
+          ) : (
+            <div
+              ref={flatFitWellRef}
+              data-lightbox-flat-well
+              className="absolute z-[4] flex items-center justify-center"
+              style={{
+                top: uiHidden ? LIGHTBOX_FLAT_WELL_INSET.hidden : LIGHTBOX_FLAT_WELL_INSET.top,
+                bottom: uiHidden ? LIGHTBOX_FLAT_WELL_INSET.hidden : LIGHTBOX_FLAT_WELL_INSET.bottom,
+                left: LIGHTBOX_FLAT_WELL_INSET.x,
+                right: LIGHTBOX_FLAT_WELL_INSET.x,
+              }}
+            >
+              <div
+                style={{
+                  transform: `translate(${offset.x}px, ${offset.y}px) scale(${scale})`,
+                  transformOrigin: 'center center',
+                }}
+              >
+                {flatImageStack}
+              </div>
+            </div>
+          )
         ) : null}
 
         {!uiHidden ? (

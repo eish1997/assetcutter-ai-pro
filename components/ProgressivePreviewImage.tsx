@@ -120,7 +120,7 @@ export type ProgressivePreviewImageProps = {
 /**
  * 渐进预览：**先微图（WebP）→ 小图（JPEG）**，微图一直显示到小图解码完成再切换；**不会在列表里再加载/展示原图**（原图只应在独立预览里使用）。
  * 大 data URL 在画布中解码一次用于生成缩略，DOM 中不出现原图 `src`。
- * 极短 data URL / http(s) 外链走直链 img（外链受 CORS 限制无法安全缩略）。
+ * 极短 data URL、已是网格 JPEG/WebP 的 data URL 走直链 img；http(s) 仍渐进缩略。
  * 微图→小图：叠化时**不**把微图 opacity 置 0（否则与小图 transition 首帧叠成「双透明」露黑底）；无微图时先离屏解码再一次性显示小图。
  * 仅命中小图缓存而无微图时，仍后台生成微图写入缓存，供下次渐进。
  */
@@ -153,6 +153,8 @@ export const ProgressivePreviewImage = forwardRef<HTMLImageElement, ProgressiveP
     const needThumb = shouldUsePreviewThumbnail(safe);
     const microEdge = microMaxEdgeProp ?? defaultMicroMaxEdge(thumbMaxEdge);
     const decodePri: PreviewThumbDecodePriority = thumbDecodePriority === 'high' ? 'high' : 'low';
+    const decodePriRef = useRef(decodePri);
+    decodePriRef.current = decodePri;
 
     const [microSrc, setMicroSrc] = useState<string | null>(null);
     const [thumbSrc, setThumbSrc] = useState<string | null>(null);
@@ -263,7 +265,7 @@ export const ProgressivePreviewImage = forwardRef<HTMLImageElement, ProgressiveP
             setThumbReady(true);
           });
           // 仅有小图缓存时仍从原图生成微图并写入缓存，下次可先发微图再叠小图
-          void createPreviewMicroThumbnail(s, microEdge, 0.62, 0.72, decodePri).then((m) => {
+          void createPreviewMicroThumbnail(s, microEdge, 0.62, 0.72, decodePriRef.current).then((m) => {
             if (cancelled) return;
             cacheSet(mKey, m);
           });
@@ -283,7 +285,7 @@ export const ProgressivePreviewImage = forwardRef<HTMLImageElement, ProgressiveP
 
       const runThumb = () => {
         if (thumbDoneRef.current) return;
-        void createPreviewThumbnail(decodeSrc, thumbMaxEdge, 0.82, decodePri).then(async (t) => {
+        void createPreviewThumbnail(decodeSrc, thumbMaxEdge, 0.82, decodePriRef.current).then(async (t) => {
           if (cancelled || thumbDoneRef.current) return;
           thumbDoneRef.current = true;
           if (isEmptyPreviewThumb(t)) {
@@ -312,7 +314,7 @@ export const ProgressivePreviewImage = forwardRef<HTMLImageElement, ProgressiveP
       };
 
       const runMicro = () => {
-        void createPreviewMicroThumbnail(decodeSrc, microEdge, 0.62, 0.72, decodePri).then((m) => {
+        void createPreviewMicroThumbnail(decodeSrc, microEdge, 0.62, 0.72, decodePriRef.current).then((m) => {
           if (cancelled) return;
           if (isEmptyPreviewThumb(m)) return;
           cacheSet(mKey, m);
@@ -347,7 +349,7 @@ export const ProgressivePreviewImage = forwardRef<HTMLImageElement, ProgressiveP
         cancelled = true;
         revokeResolvedSrc?.();
       };
-    }, [deferThumbnail, fullSrc, cacheKey, thumbMaxEdge, microEdge, safe, decodePri, companionBaseUrl, companionProjectId]);
+    }, [deferThumbnail, fullSrc, cacheKey, thumbMaxEdge, microEdge, safe, companionBaseUrl, companionProjectId]);
 
     const baseImg = imgClassName ?? '';
     const layerClass = `${baseImg} absolute inset-0 max-w-none max-h-none`;

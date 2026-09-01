@@ -14,6 +14,8 @@ import {
   type LocalSoftwareVersion,
 } from './connectionLocalVersions.js';
 import { resolveSoftwareBridgeDriver, resolveSoftwareBridgeStrategies } from './softwareBridgeRegistry.js';
+import { hostIdFromPackage, syncDriverSeedPrimitives } from './hostPrimitives.js';
+import { probeSeedPrimitivesAfterOuterProbe } from './hostPrimitiveProbe.js';
 
 type TemplateMissingLifecycleResult = {
   ok: false;
@@ -118,6 +120,69 @@ function appendLifecycleEvent(
   });
 }
 
+function manifestAfterSuccessfulProbe(
+  current: { manifest?: unknown; name?: string },
+  id: string,
+  input: CapabilityLifecycleInput,
+  verifiedStrategyId: string,
+): Record<string, unknown> {
+  const manifest =
+    current.manifest && typeof current.manifest === 'object'
+      ? (current.manifest as Record<string, unknown>)
+      : {};
+  const at = new Date().toISOString();
+  const resolved = lifecycleInputWithLocalVersion(id, input);
+  const selected = resolved.localVersion;
+  if (selected) {
+    const merged = mergeConnectionLocalVersionManifest(
+      manifest,
+      {
+        ...selected,
+        status: 'verified',
+        lastProbeAt: at,
+        ...(verifiedStrategyId ? { verifiedStrategyId } : {}),
+      },
+      { makeCurrent: false, makeDefault: false },
+    );
+    const draft = readCapabilityPackageDraft(id);
+    const driver = draft ? resolveSoftwareBridgeDriver({ ...draft, manifest: merged }) : null;
+    return syncDriverSeedPrimitives(merged, driver, hostIdFromPackage({ ...draft, manifest: merged } as never) || id, input);
+  }
+  const rawPath = String(manifest.executablePath || manifest.inputPath || manifest.shortcutPath || '').trim();
+  const softwareVersion = String(manifest.softwareVersion || manifest.versionHint || manifest.version || '').trim();
+  if (!rawPath && !softwareVersion) return manifest;
+  const executablePath = rawPath.toLowerCase().endsWith('.exe') ? rawPath : String(manifest.executablePath || '').trim();
+  const shortcutPath = rawPath.toLowerCase().endsWith('.lnk') ? rawPath : String(manifest.shortcutPath || '').trim();
+  const versionId = String(manifest.currentLocalVersionId || manifest.defaultLocalVersionId || `${id}-local`).trim();
+  const merged = mergeConnectionLocalVersionManifest(
+    manifest,
+    {
+      id: versionId,
+      label: String(manifest.localVersionLabel || manifest.appName || current.name || id).trim(),
+      softwareVersion,
+      ...(executablePath ? { executablePath } : {}),
+      ...(shortcutPath ? { shortcutPath } : {}),
+      installRoot: String(manifest.installRoot || '').trim(),
+      source: String(manifest.droppedFrom || '') === 'connection_page' ? 'drag_drop' : 'manual',
+      status: 'verified',
+      lastProbeAt: at,
+      ...(verifiedStrategyId ? { verifiedStrategyId } : {}),
+    },
+    {
+      makeCurrent: Boolean(manifest.currentLocalVersionId || manifest.defaultLocalVersionId),
+      makeDefault: false,
+    },
+  );
+  const draft = readCapabilityPackageDraft(id);
+  const driver = draft ? resolveSoftwareBridgeDriver({ ...draft, manifest: merged }) : null;
+  return syncDriverSeedPrimitives(
+    merged,
+    driver,
+    hostIdFromPackage(draft ? ({ ...draft, manifest: merged } as never) : ({ id, manifest: merged } as never)) || id,
+    input,
+  );
+}
+
 function mergeRunningTargetLocalVersion(id: string, result: unknown): unknown {
   if (!result || typeof result !== 'object') return null;
   const row = result as Record<string, unknown>;
@@ -214,17 +279,24 @@ export async function probeCapabilityPackage(
   const resolvedInput = lifecycleInputWithLocalVersion(id, input);
   const probe = await bridge.probe(resolvedInput);
   const verifiedStrategyId = probe.ok ? verifiedStrategyIdForDraft(id, input) : '';
-  const draft = updateCapabilityPackageDraft(id, (current) => ({
-    ...current,
-    draftStatus: probe.ok ? 'validated' : current.draftStatus,
-    lastProbe: {
-      ok: Boolean(probe.ok),
-      at: new Date().toISOString(),
-      softwareId: bridge.id,
-      ...(verifiedStrategyId ? { verifiedStrategyId } : {}),
-      result: probe,
-    },
-  }));
+  const draft = updateCapabilityPackageDraft(id, (current) => {
+    const next = {
+      ...current,
+      draftStatus: probe.ok ? 'validated' : current.draftStatus,
+      lastProbe: {
+        ok: Boolean(probe.ok),
+        at: new Date().toISOString(),
+        softwareId: bridge.id,
+        ...(verifiedStrategyId ? { verifiedStrategyId } : {}),
+        result: probe,
+      },
+    };
+    if (!probe.ok) return next;
+    return {
+      ...next,
+      manifest: manifestAfterSuccessfulProbe(current, id, input, verifiedStrategyId),
+    };
+  });
   if (!probe.ok) {
     appendLifecycleEvent(id, 'probe', false, String(probe.message || 'Software connection probe failed.'), probe);
     return {
@@ -235,6 +307,7 @@ export async function probeCapabilityPackage(
     };
   }
   const next = appendLifecycleEvent(id, 'probe', true, String(probe.message || 'Software connection probe passed.'), probe);
+  void probeSeedPrimitivesAfterOuterProbe(id, resolvedInput);
   return { ok: true, result: probe, draft: next || draft };
 }
 

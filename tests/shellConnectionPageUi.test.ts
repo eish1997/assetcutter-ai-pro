@@ -10,31 +10,40 @@ describe('connection page UI', () => {
     const preload = readFileSync(join(process.cwd(), 'companion-desktop/preload-shell.cjs'), 'utf8');
 
     expect(html).toContain('data-view="connections"');
-    expect(html).toContain('aria-label="连接"');
+    expect(html).toContain('aria-label="地图"');
     expect(html).toContain('id="view-connections"');
     expect(html).toContain('id="connectionsEmpty"');
-    expect(html).toContain('还没有连接');
+    expect(html).toContain('地图上还没有地点');
+    expect(html).not.toContain('id="connectionsDockBar"');
     expect(html).toContain('id="btnConnectionCreateWithCopilot"');
     expect(html).toContain('id="btnConnectionImportTransfer"');
     expect(html).toContain('id="btnConnectionsDiscoverRunning"');
+    expect(html).toContain('id="connectionsPageMenu"');
     expect(html).toContain('id="connectionsSearch"');
     expect(html).toContain('id="connectionsSummary"');
     expect(html).toContain('id="connectionsInlineStatus"');
-    expect(html).toContain('搜索连接、软件、路径或标签');
-    expect(html).toContain('对话添加连接');
-    expect(html).toContain('导入连接');
+    expect(html).toContain('搜索地点');
+    expect(html).toContain('添加地点');
+    expect(html).toContain('导入路线');
+    expect(html).toContain('<h1>地图</h1>');
+    expect(html).not.toContain('能力包');
     expect(html).toContain('也可以把桌面软件快捷方式或 exe 拖到这里');
     expect(html).toContain('connections-empty-drop');
     expect(html).toContain('<script src="capability-card-schema.js"></script>');
     expect(html).toContain('<script src="capability-version-picker.js"></script>');
     expect(html).toContain('<script src="connection-page.js"></script>');
     expect(html).toContain("connections: $('view-connections')");
-    expect(main).toContain("'workbench' | 'workflow' | 'tools' | 'connections' | 'settings'");
-    expect(main).toContain("if (view === 'scripts') return 'workflow'");
+    const rooms = readFileSync(join(process.cwd(), 'companion-desktop/shell-rooms.cjs'), 'utf8');
+    expect(rooms).toContain("shellView: 'connections'");
+    expect(rooms).toContain("shellView: 'workbench'");
+    expect(rooms).toContain("if (v === 'scripts') return 'workflow'");
     expect(main).not.toContain("view === 'workflows'");
-    expect(main).toContain("view === 'connections'");
     expect(main).toContain('detachAllEmbeddedBrowserViews()');
-    expect(preload).toContain('droppedFilePaths');
+    expect(preload).toContain('publishWorkspaceConnectionDrafts');
+    expect(preload).toContain('openDshHandoff');
+    expect(preload).toContain('getWorkspaceFinger');
+    expect(preload).toContain('sendToCurrentHost');
+    expect(main).toContain("ipcMain.handle('shell-dsh-handoff'");
     expect(preload).toContain('latestDroppedFilePaths');
     expect(preload).toContain("window.addEventListener('drop', rememberDroppedFilePaths, true)");
     expect(preload).toContain('pathsFromDroppedFiles(files)');
@@ -52,15 +61,15 @@ describe('connection page UI', () => {
     const page = readFileSync(join(process.cwd(), 'companion-desktop/shell/connection-page.js'), 'utf8');
 
     expect(page).toContain('window.ShellConnectionPage');
-    expect(page).toContain('openCreateConnectionCopilot');
-    expect(page).toContain('__acOpenCopilotObjectSession');
-    expect(page).toContain("type: 'capability'");
-    expect(page).toContain('ac.capability.draft_create');
+    expect(page).toContain('openCreateConnectionWithButler');
+    expect(page).toContain('openDshHandoff');
+    expect(page).not.toContain('__acOpenCopilotObjectSession');
+    expect(page).toContain('domain: \'connection\'');
+    expect(page).toContain('buildConnectionComposerMessage');
     expect(page).toContain('CapabilityPackage');
     expect(page).toContain('software_connection');
-    expect(page).toContain('不要把连接创建成 Workbench 文本资产');
-    expect(page).toContain('不要要求用户选择技术模板');
-    expect(page).toContain('不要恢复旧 62 宿主默认列表');
+    expect(page).toContain('composerText');
+    expect(page).toContain('我想在地图添加一个本机软件地点');
     expect(page).not.toContain('HOST_CENTER_FALLBACK_CATALOG');
     expect(page).not.toContain('ShellToolsBridges');
   });
@@ -69,68 +78,69 @@ describe('connection page UI', () => {
     const page = readFileSync(join(process.cwd(), 'companion-desktop/shell/connection-page.js'), 'utf8');
 
     expect(page).toContain("shell.api('GET', '/v1/capability-packages/drafts'");
+    expect(page).toContain('publishWorkspaceConnectionDrafts');
     expect(page).toContain("shell.api('GET', '/v1/capability-packages/cloud'");
     expect(page).toContain('mergePackages(drafts, cloud)');
     expect(page).toContain('discoverRunningConnections()');
     expect(page).toContain('btnConnectionsDiscoverRunning');
     expect(page).toContain("'/v1/capability-packages/' + encodeURIComponent(pkg.id) + '/context'");
     expect(page).toContain('fetchCapabilityContext(pkg)');
-    expect(page).toContain('sessionId: session.sessionId');
+    expect(page).toContain('buildConnectionComposerMessage');
+    expect(page).toContain('composerText');
+    expect(page).toContain('已填入管家输入框，确认后点发送即可。');
     expect(page).toContain("pkg.type === 'software_connection'");
     expect(page).toContain('renderCard(pkg)');
-    expect(page).toContain('data-action="conversation"');
     expect(page).toContain('data-action="agent_loop"');
-    expect(page).toContain('data-action="discover_running"');
-    expect(page).toContain('data-action="launch"');
-    expect(page).toContain('data-action="install"');
-    expect(page).toContain('data-action="probe"');
-    expect(page).toContain('data-action="close"');
-    expect(page).toContain('data-action="uninstall"');
-    expect(page).toContain('data-action="export"');
     expect(page).toContain('data-action="delete"');
-    expect(page).toContain("runLifecycleAction(pkg, 'discover_running')");
-    expect(page).toContain("runLifecycleAction(pkg, 'launch')");
-    expect(page).toContain("runLifecycleAction(pkg, 'close')");
+    expect(page).toContain('discoverRunningConnections()');
+    expect(page).toContain("{ action: 'discover_running' }");
+    expect(page).toContain('runLifecycleAction(pkg, action');
+    expect(page).toContain('installDraft(pkg)');
+    expect(page).toContain('probeDraft(pkg)');
     expect(page).toContain('runConnectionAgentLoop(pkg)');
-    expect(page).toContain('ac.capability.connection_loop_run');
-    expect(page).toContain('当前成熟度:');
-    expect(page).toContain('connectionState.maturity');
-    expect(page).toContain('不要 mock probe 成功');
-    expect(page).toContain('shell.agentSession.send(prompt, sessionId)');
-    expect(page).toContain('connection-card-fact-label">软件版本');
-    expect(page).toContain('connection-card-fact-label">启动位置');
-    expect(page).toContain('connection-card-next-label">下一步');
+    expect(page).toContain('openCapabilityConversation(pkg');
+    expect(page).not.toContain('shell.agentSession.send(prompt, sessionId)');
+    expect(page).toContain('connection-row');
+    expect(page).toContain('routeStatusFor(');
+    expect(page).not.toContain('deliverToPlace(pkg)');
+    expect(page).not.toContain('renderDockBar');
+    expect(page).not.toContain('确认配送');
+    expect(page).not.toContain('配送到此');
+    expect(page).not.toContain('deliver_here');
+    expect(page).toContain('overflowMenuLabel');
+    expect(page).toContain('wireConnectionRow(card, pkg)');
     expect(page).toContain('softwareVersionLabel(pkg, facts)');
     expect(page).toContain('manifest.softwareVersion');
-    expect(page).toContain('connection-card-support');
-    expect(page).toContain('维护摘要');
-    expect(page).toContain('connection-card-utility-actions');
-    expect(page).not.toContain('<summary>连接详情</summary>');
-    expect(page).not.toContain('<summary>更多</summary>');
+    expect(page).not.toContain('connection-card-support" aria-label="连接维护信息"');
+    expect(page).not.toContain('维护摘要');
+    expect(page).not.toContain('connection-card-fact-label">软件版本');
+    expect(page).not.toContain('connection-card-next-label">下一步');
     expect(page).toContain('connectionStateFor(pkg)');
-    expect(page).toContain("make('strategy_draft', '策略草稿'");
-    expect(page).toContain("make('exploring', '正在探索连接方式'");
-    expect(page).toContain("make('discovery_pending', '等待探索'");
-    expect(page).toContain('当前还没有已验证连接策略。');
-    expect(page).toContain('让 Copilot 基于事实选择候选策略。');
-    expect(page).toContain('actionLabel(action)');
-    expect(page).toContain('connection-card-availability');
+    expect(page).toContain("make('strategy_draft', '未开通'");
+    expect(page).toContain("make('exploring', '未开通'");
+    expect(page).toContain("make('discovery_pending', '未开通'");
+    expect(page).toContain('告诉管家开通这条路线。');
+    expect(page).toContain('displayVersionLabel');
+    expect(page).toContain('connection-version-top');
+    expect(page).toContain('connection-version-link');
+    expect(page).toContain('data-can-set-current');
+    expect(page).toContain('grid-template-columns: repeat(auto-fill, minmax(360px, 1fr))');
+    expect(page).toContain("const actions = ['agent_loop']");
+    expect(page).toContain('点窗口顶部「发送到」');
     expect(page).toContain('connection-card-result');
-    expect(page).toContain('connection-card-support');
-    expect(page).toContain('connection-card-support-chip');
     expect(page).toContain('latestStrategyDraft(pkg)');
     expect(page).toContain('connection_strategy_draft_created');
     expect(page).toContain('latestStrategyFailure(pkg)');
     expect(page).toContain('connection_strategy_failed');
     expect(page).toContain('factsSummary(facts)');
     expect(page).toContain('strategySummary(strategyDraft)');
-    expect(page).toContain('策略草稿');
     expect(page).toContain('connection_template_draft_created');
     expect(page).not.toContain('connection-card-template-draft');
     expect(page).not.toContain('模板草稿');
     expect(page).not.toContain('真实信号：');
     expect(page).not.toContain('需要目录：');
     expect(page).not.toContain('安全边界：');
+    expect(page).toContain('actionLabel(action)');
     expect(page).toContain('setCardResult(pkg');
     expect(page).toContain('处理中...');
     expect(page).toContain('安装中...');
@@ -147,8 +157,8 @@ describe('connection page UI', () => {
     expect(page).toContain('matchesSearch(pkg)');
     expect(page).toContain('renderSummary(this.packages, visiblePackages)');
     expect(page).toContain('connections-empty-result');
-    expect(page).toContain('没有匹配的连接，换个关键词试试。');
-    expect(page).toContain('筛选 ');
+    expect(page).toContain('没有匹配的地点，换个关键词试试。');
+    expect(page).toContain('共 ');
     expect(page).toContain("shell.pickPath({ pick: 'folder'");
     expect(page).toContain("'/v1/capability-packages/' + encodeURIComponent(pkg.id) + '/lifecycle'");
     expect(page).toContain("'/v1/capability-packages/' + encodeURIComponent(pkg.id) + '/install'");
@@ -194,12 +204,12 @@ describe('connection page UI', () => {
     }];
     expect(page.focusConnection('maya')).toBe(true);
     expect(dom.window.document.querySelector('[data-connection-id="maya"]')?.className).toContain('is-focused');
-    expect(dom.window.document.getElementById('connectionsInlineStatus')?.textContent).toContain('已定位连接：maya');
+    expect(dom.window.document.getElementById('connectionsInlineStatus')?.textContent).toContain('已定位地点：maya');
     expect(page.focusConnection('missing')).toBe(false);
-    expect(dom.window.document.getElementById('connectionsInlineStatus')?.textContent).toContain('未找到连接草稿：missing');
+    expect(dom.window.document.getElementById('connectionsInlineStatus')?.textContent).toContain('未找到地点：missing');
   });
 
-  it('renders a product-designed connection card with lightweight maintenance summary', () => {
+  it('renders a simplified map place row without maintenance summary clutter', () => {
     const schemaCode = readFileSync(join(process.cwd(), 'companion-desktop/shell/capability-card-schema.js'), 'utf8');
     const pageCode = readFileSync(join(process.cwd(), 'companion-desktop/shell/connection-page.js'), 'utf8');
     const dom = new JSDOM(`
@@ -280,39 +290,29 @@ describe('connection page UI', () => {
     expect(card).toBeTruthy();
     const text = card?.textContent || '';
     expect(text).toContain('Codex Smoke Unknown App');
-    expect(text).toContain('策略草稿');
-    expect(text).toContain('软件版本');
+    expect(text).toContain('1 个版本');
     expect(text).toContain('2026.1');
-    expect(text).toContain('启动位置');
-    expect(text).toContain('C:/Smoke/CodexSmokeApp.exe');
-    expect(text).toContain('下一步');
-    expect(text).toContain('run_next_connection_strategy');
-    expect(text).toContain('维护摘要');
-    expect(text).toContain('事实');
-    expect(text).toContain('exe / 进程 / 脚本目录 1');
-    expect(text).toContain('策略');
-    expect(text).toContain('运行进程探测 / 2 个候选');
-    expect(card?.querySelectorAll('.connection-card-support-chip')).toHaveLength(3);
-    expect(card?.querySelector('.connection-card-appmark')).toBeTruthy();
-    expect(card?.querySelector('.connection-card-next')).toBeTruthy();
-    expect(card?.querySelector('.connection-card-support')).toBeTruthy();
-    expect(card?.querySelector('.connection-card-utility-actions')).toBeTruthy();
-    expect(card?.querySelector('.connection-card-details')).toBeFalsy();
-    expect(card?.querySelector('.connection-card-more')).toBeFalsy();
-    expect(Array.from(card?.querySelectorAll('[data-action]') || []).map((node) => node.getAttribute('data-action'))).toEqual(
-      expect.arrayContaining(['agent_loop', 'conversation', 'install', 'probe', 'publish', 'delete']),
+    expect(text).not.toContain('C:/Smoke/CodexSmokeApp.exe');
+    expect(text).toContain('让管家验证');
+    expect(text).not.toContain('维护摘要');
+    expect(text).not.toContain('软件版本');
+    expect(text).not.toContain('下一步');
+    expect(card?.querySelector('.connection-row-mark')).toBeTruthy();
+    expect(card?.querySelector('.connection-version-row')).toBeTruthy();
+    expect(card?.querySelector('.connection-version-top')).toBeTruthy();
+    expect(card?.querySelector('.connection-version-path')).toBeFalsy();
+    expect(card?.querySelector('[data-version-action="open_route"]')).toBeTruthy();
+    expect(card?.querySelector('.connection-row-menu')).toBeTruthy();
+    expect(card?.querySelector('.connection-card-support')).toBeFalsy();
+    expect(Array.from(card?.querySelectorAll('.connection-row-menu-panel [data-action]') || []).map((node) => node.getAttribute('data-action'))).toEqual(
+      expect.arrayContaining(['agent_loop', 'publish', 'delete']),
     );
-    expect(Array.from(card?.querySelectorAll('.connection-card-actions > [data-action]') || []).map((node) => node.getAttribute('data-action'))).toEqual(
-      expect.arrayContaining(['agent_loop', 'launch', 'probe', 'publish']),
-    );
-    expect(Array.from(card?.querySelectorAll('.connection-card-utility-actions [data-action]') || []).map((node) => node.getAttribute('data-action'))).toEqual(
-      expect.arrayContaining(['conversation', 'install', 'delete']),
+    expect(Array.from(card?.querySelectorAll('.connection-row-menu-panel [data-action]') || []).map((node) => node.getAttribute('data-action'))).not.toEqual(
+      expect.arrayContaining(['conversation', 'launch', 'probe', 'install']),
     );
     const publishButton = card?.querySelector('[data-action="publish"]');
-    expect(publishButton?.getAttribute('aria-label')).toBe('提交云端');
-    expect(publishButton?.getAttribute('title')).toBe('提交云端');
-    expect(publishButton?.querySelector('svg.connection-card-action-icon')).toBeTruthy();
-    expect((publishButton?.textContent || '').trim()).toBe('');
+    expect(publishButton?.textContent).toContain('提交云端');
+    expect((publishButton?.textContent || '').trim()).not.toBe('');
   });
 
   it('prefers backend connectionCardView for current local version and card actions', () => {
@@ -379,18 +379,17 @@ describe('connection page UI', () => {
     const card = dom.window.document.querySelector('[data-connection-id="backend-card-model"]');
     const text = card?.textContent || '';
     expect(text).toContain('7.0');
-    expect(text).toContain('D:/Model/App7.exe');
-    expect(text).toContain('后端模型下一步');
-    expect(text).toContain('信号 OK');
+    expect(text).not.toContain('D:/Model/App7.exe');
+    expect(text).not.toContain('配送到此');
     expect(text).not.toContain('old-version');
     expect(text).not.toContain('C:/Old/App.exe');
     expect(text).not.toContain('第四个不显示');
-    expect(Array.from(card?.querySelectorAll('.connection-card-actions > [data-action]') || []).map((node) => node.getAttribute('data-action'))).toEqual(
-      expect.arrayContaining(['agent_loop', 'launch', 'probe', 'publish']),
-    );
+    expect(text).not.toContain('信号 OK');
+    expect(card?.querySelector('[data-action="publish"]')).toBeTruthy();
+    expect(card?.querySelector('.connection-row-primary')).toBeFalsy();
   });
 
-  it('opens a local software version drawer and targets selected versions', async () => {
+  it('renders version subrows and set-current without overflow drawer', async () => {
     const pageCode = readFileSync(join(process.cwd(), 'companion-desktop/shell/connection-page.js'), 'utf8');
     const dom = new JSDOM(`
       <html>
@@ -456,6 +455,27 @@ describe('connection page UI', () => {
             status: 'detected',
           },
         ],
+        versionRows: [
+          {
+            id: 'app-2024',
+            label: '2024',
+            softwareVersion: '2024',
+            targetLabel: 'C:/App/2024/App.exe',
+            routeTone: 'pending',
+            routeLabel: '未验证',
+            isCurrent: true,
+          },
+          {
+            id: 'app-2026',
+            label: '2026',
+            softwareVersion: '2026',
+            targetLabel: 'C:/App/2026/App.exe',
+            routeTone: 'pending',
+            routeLabel: '未开通',
+            isCurrent: false,
+          },
+        ],
+        placeSummary: { versionCount: 2, openCount: 0, summaryLabel: '2 个版本' },
         nextActionLabel: '选择一个本机版本继续',
         maintenanceChips: [{ label: '未验证', tone: 'neutral' }],
         primaryActions: ['agent_loop', 'launch', 'probe'],
@@ -465,20 +485,24 @@ describe('connection page UI', () => {
 
     page.render();
     let card = dom.window.document.querySelector('[data-connection-id="multi-version-app"]');
-    expect(card?.textContent || '').toContain('2024');
-    card?.querySelector('[data-action="local_versions"]')?.dispatchEvent(new dom.window.Event('click', { bubbles: true }));
+    expect(card?.classList.contains('connection-place-group')).toBe(true);
+    expect(card?.querySelector('.connection-place-head')).toBeTruthy();
+    expect(card?.textContent || '').toContain('2 个版本');
+    expect(card?.querySelector('.connection-card-version-drawer')).toBeFalsy();
+    expect(card?.querySelector('.connection-version-top')).toBeTruthy();
+    expect(card?.querySelector('.connection-version-path')).toBeFalsy();
+    expect(Array.from(card?.querySelectorAll('.connection-version-row') || []).map((node) => node.textContent || '').join('\n')).toContain('2026');
+    expect(card?.querySelector('.connection-version-row.is-current [data-action="set_local_version"]')).toBeFalsy();
 
-    card = dom.window.document.querySelector('[data-connection-id="multi-version-app"]');
-    expect(card?.querySelector('.connection-card-version-drawer')).toBeTruthy();
-    expect(Array.from(card?.querySelectorAll('.connection-card-version-row') || []).map((node) => node.textContent || '').join('\n')).toContain('App 2026');
-
-    card?.querySelector('[data-action="set_local_version"][data-local-version-id="app-2026"]')?.dispatchEvent(new dom.window.Event('click', { bubbles: true }));
+    card?.querySelector('.connection-version-row[data-local-version-id="app-2026"]')?.dispatchEvent(new dom.window.Event('click', { bubbles: true }));
+    await Promise.resolve();
     await Promise.resolve();
     card = dom.window.document.querySelector('[data-connection-id="multi-version-app"]');
+    expect(card?.querySelector('.connection-version-row.is-current')?.getAttribute('data-local-version-id')).toBe('app-2026');
     expect(card?.textContent || '').toContain('2026');
-    expect(card?.textContent || '').toContain('C:/App/2026/App.exe');
+    expect(card?.querySelector('.connection-version-path')).toBeFalsy();
 
-    card?.querySelector('.connection-card-version-drawer [data-action="launch"][data-local-version-id="app-2026"]')?.dispatchEvent(
+    card?.querySelector('[data-version-action="open_route"][data-local-version-id="app-2026"]')?.dispatchEvent(
       new dom.window.Event('click', { bubbles: true }),
     );
     await Promise.resolve();
@@ -488,15 +512,6 @@ describe('connection page UI', () => {
           method: 'POST',
           path: '/v1/capability-packages/drafts/multi-version-app/local-version',
           body: { localVersionId: 'app-2026', makeDefault: true },
-        }),
-      ]),
-    );
-    expect(calls).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          method: 'POST',
-          path: '/v1/capability-packages/multi-version-app/lifecycle',
-          body: { action: 'launch', localVersionId: 'app-2026' },
         }),
       ]),
     );
@@ -641,8 +656,12 @@ describe('connection page UI', () => {
     expect(page).toContain('bindDropCreate(shell)');
     expect(page).toContain('connection-drop-active .connections-empty');
     expect(page).toContain("target.addEventListener('drop'");
-    expect(page).toContain('handleDroppedConnectionFiles(files)');
-    expect(page).toContain('createConnectionFromDroppedPath(first)');
+    expect(page).toContain('handleDroppedConnectionFiles(files');
+    expect(page).toContain('mergeLocalVersionFromDroppedPath');
+    expect(page).toContain('merge-local-version');
+    expect(page).toContain('connection-place-group');
+    expect(page).toContain('connection-version-row');
+    expect(page).toContain('createConnectionFromDroppedPath(first');
     expect(page).toContain('shell.droppedFilePaths(files)');
     expect(page).toContain('shell.resolveDroppedConnectionPath({ path: rawPath })');
     expect(page).toContain("'/v1/capability-packages/drafts'");
@@ -748,7 +767,7 @@ describe('connection page UI', () => {
     expect(page).toContain('canPublishPackage(pkg)');
     expect(page).toContain('data-action="publish"');
     expect(page).toContain('data-action="version"');
-    expect(page).toContain("agent_loop: 'Copilot'");
+    expect(page).toContain("agent_loop: '管家'");
     expect(page).toContain("conversation: '对话'");
     expect(page).toContain("discover_running: '识别运行'");
     expect(page).toContain("launch: '启动'");
@@ -769,11 +788,27 @@ describe('connection page UI', () => {
     expect(page).toContain('当前账号不是管理员');
   });
 
-  it('refreshes connection cards when Copilot creates a software connection capability', () => {
+  it('refreshes connection cards when a software connection capability is created', () => {
     const page = readFileSync(join(process.cwd(), 'companion-desktop/shell/connection-page.js'), 'utf8');
 
     expect(page).toContain("window.addEventListener('assetcutter:capability-created'");
     expect(page).toContain("detail.type !== 'software_connection'");
     expect(page).toContain('void this.reload(this._shell || shell)');
+  });
+
+  it('renders inner route drill-down and host import probe wiring', () => {
+    const page = readFileSync(join(process.cwd(), 'companion-desktop/shell/connection-page.js'), 'utf8');
+    const main = readFileSync(join(process.cwd(), 'companion-desktop/main.cjs'), 'utf8');
+
+    expect(page).toContain('renderInternalRouteRowsHtml');
+    expect(page).toContain('connection-internal-routes');
+    expect(page).toContain('让管家验证此线');
+    expect(page).toContain('routeSummary');
+    expect(page).toContain('expandedConnectionIds');
+    expect(page).toContain('/host-primitives/');
+    expect(page).toContain('maybePromptHealthCheck');
+    expect(page).toContain('更多组合能力 → 五金铺');
+    expect(main).toContain('createHostPrimitiveBridge');
+    expect(main).toContain("'host.import_file'");
   });
 });

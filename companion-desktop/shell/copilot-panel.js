@@ -217,6 +217,11 @@
       void openObjectSession(payload || {});
     });
   }
+  if (typeof shell.onFillCopilotComposer === 'function') {
+    shell.onFillCopilotComposer((payload) => {
+      fillPrompt(payload && payload.text);
+    });
+  }
 
   function clearCodexWaitHintTimer() {
     if (!codexWaitHintTimer) return;

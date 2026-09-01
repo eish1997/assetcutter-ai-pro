@@ -18,7 +18,7 @@
 | 产品          | §3、§9、§11、附录 A                                |
 | 前端          | §4、§5、§6、§8、§10、`types.ts` 现有字段               |
 | 数据/合规       | §5.2、§9.2、§11、附录 A                            |
-| **发版 / QA** | **§14**（本机四环手测）；`**docs/网站与发布检查清单.md`** §2～§3 |
+| **发版 / QA** | **§14**（本机四环手测）；`**docs/archived/网站与发布检查清单.md`** §2～§3 |
 
 
 ---
@@ -316,7 +316,7 @@ flowchart TB
 - **2026-05-14**：Overlay 环 **IndexedDB 全量镜像**（`**WORKFLOW_OVERLAY_IDB_BUNDLE_BASE`** + `**workspaceBundleIdb`**）+ `**hydrateWorkflowOverlayRingSessionFromIdbOrLocalIfEmpty`**（`**WorkflowSection**`）；修复 §4 表格中 P1 行被 `|` 字符截断的问题。
 - **2026-05-14**：审计环 **IndexedDB 全量镜像**（`**WORKFLOW_AUDIT_IDB_BUNDLE_BASE`**）+ `**hydrateWorkflowAuditRingSessionFromIdbOrLocalIfEmpty`**，与 Overlay 环策略对齐。
 - **2026-05-14**：P0：`services/workflowStepTimeline.ts`；`resultOrder` 正向；`newest_first` 可选。
-- **2026-05-14**：§14 **本机四环手测清单**；`npm run test:workflow-rings`；CI 在 `typecheck` 后增加 **Workflow rings** 步骤；`docs/网站与发布检查清单.md` §3 与 `**.github/workflows/ci.yml`** 对齐（含 `**workflow_dispatch`**）。
+- **2026-05-14**：§14 **本机四环手测清单**；`npm run test:workflow-rings`；CI 在 `typecheck` 后增加 **Workflow rings** 步骤；`docs/archived/网站与发布检查清单.md` §3 与 `**.github/workflows/ci.yml`** 对齐（含 `**workflow_dispatch`**）。
 
 ---
 
@@ -349,7 +349,7 @@ scope 见 `**services/workflowMirrorPreferenceScope.ts**`（`WorkflowSection` �
 ### 14.3 自动化（与 CI 对齐）
 
 - 本地：`**npm run typecheck`** + `**npm run test:workflow-rings`** + 全量 `**npm test**`。
-- CI：`**docs/网站与发布检查清单.md` §3**、`**.github/workflows/ci.yml`**（`typecheck` 后 Workflow rings，随后 `**npm test`** 全量）。
+- CI：`**docs/archived/网站与发布检查清单.md` §3**、`**.github/workflows/ci.yml`**（`typecheck` 后 Workflow rings，随后 `**npm test`** 全量）。
 
 ---
 
@@ -366,4 +366,4 @@ scope 见 `**services/workflowMirrorPreferenceScope.ts**`（`WorkflowSection` �
 
 ---
 
-**文档版本**：v0.1.12（2026-05-14）— §4/§7.3/**§14**：`**workflowMirrorPreferenceScope`**；审计与 Overlay 环均为 session + scoped local + IDB 全量 + hydrate（Overlay local 另受 `**MAX_LOCAL_OVERLAY_RING_SERIALIZED_BYTES`**）；合并读；§9.x；§13～§14；CI 见 `**docs/网站与发布检查清单.md**`。
+**文档版本**：v0.1.12（2026-05-14）— §4/§7.3/**§14**：`**workflowMirrorPreferenceScope`**；审计与 Overlay 环均为 session + scoped local + IDB 全量 + hydrate（Overlay local 另受 `**MAX_LOCAL_OVERLAY_RING_SERIALIZED_BYTES`**）；合并读；§9.x；§13～§14；CI 见 `**docs/archived/网站与发布检查清单.md**`。

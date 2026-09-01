@@ -25,6 +25,8 @@ import {
   DT_AC_CAPABILITY_ACTION,
   DT_AC_CAPABILITY_ACTION_SOURCE,
   DT_AC_CAPABILITY_FROM_EDITOR,
+  DT_AC_WORKFLOW_EXPORT,
+  resolveCapabilityDropDragSources,
   type WorkflowDragSource,
 } from '../../services/workflowDragPipeline';
 import {
@@ -106,6 +108,42 @@ const SIDEBAR_FAVORITE_HEADER_DROP_ACTIVE =
 function sidebarSlotDragOver(e: DragEvent<HTMLElement>): void {
   e.preventDefault();
   markWorkflowDropTarget(e.currentTarget);
+}
+
+function sidebarHasAssetDrag(
+  draggingAssetIdsRef: RefObject<string[] | null>,
+  draggingGroupItemsRef: RefObject<{ groupAssetId: string; itemIndexes: number[] } | null>,
+): boolean {
+  return Boolean(
+    draggingAssetIdsRef.current?.length || draggingGroupItemsRef.current?.itemIndexes?.length,
+  );
+}
+
+function sidebarHasAssetDragFromEvent(
+  e: DragEvent<HTMLElement>,
+  draggingAssetIdsRef: RefObject<string[] | null>,
+  draggingGroupItemsRef: RefObject<{ groupAssetId: string; itemIndexes: number[] } | null>,
+): boolean {
+  if (sidebarHasAssetDrag(draggingAssetIdsRef, draggingGroupItemsRef)) return true;
+  try {
+    const types = Array.from(e.dataTransfer?.types || []);
+    if (types.includes(DT_AC_CAPABILITY_ACTION) || types.includes(DT_AC_CAPABILITY_FROM_EDITOR)) return false;
+    return types.includes(DT_AC_WORKFLOW_EXPORT) || types.includes('text/plain');
+  } catch {
+    return false;
+  }
+}
+
+function sidebarDropSources(
+  e: DragEvent<HTMLElement>,
+  draggingAssetIdsRef: RefObject<string[] | null>,
+  draggingGroupItemsRef: RefObject<{ groupAssetId: string; itemIndexes: number[] } | null>,
+) {
+  return resolveCapabilityDropDragSources(
+    draggingAssetIdsRef.current,
+    draggingGroupItemsRef.current,
+    e.dataTransfer,
+  );
 }
 
 function sidebarSlotDragLeave(e: DragEvent<HTMLElement>): void {
@@ -315,6 +353,9 @@ export type WorkflowSidebarColumnProps = {
   selectedGroupItemKeys: Set<string>;
   setSelectedGroupItemKeys: Dispatch<SetStateAction<Set<string>>>;
   moveGroupItemsToUpperLevel: (groupAssetId: string, itemIndexes: number[]) => void;
+  /** 磁盘文件夹组：把当前层选中的卡移到上一级目录 */
+  moveRootAssetsToUpperLevel?: (assetIds: string[]) => void;
+  canMoveRootToUpperLevel?: boolean;
   sidebarOpsAllowed: boolean;
   groupAssetForDrag: WorkflowAsset | null;
   currentGroupAsset: WorkflowAsset | null;
@@ -410,6 +451,8 @@ export function WorkflowSidebarColumn({
   selectedGroupItemKeys,
   setSelectedGroupItemKeys,
   moveGroupItemsToUpperLevel,
+  moveRootAssetsToUpperLevel,
+  canMoveRootToUpperLevel = false,
   sidebarOpsAllowed,
   groupAssetForDrag,
   currentGroupAsset,
@@ -1180,16 +1223,26 @@ export function WorkflowSidebarColumn({
           </div>
           <div
             onDragOver={(e) => {
-              if (!draggingGroupItemsRef.current) return;
+              const groupDrag = draggingGroupItemsRef.current;
+              const rootIds = draggingAssetIdsRef.current;
+              if (
+                !groupDrag &&
+                !(canMoveRootToUpperLevel && (rootIds?.length || sidebarHasAssetDragFromEvent(e, draggingAssetIdsRef, draggingGroupItemsRef)))
+              ) {
+                return;
+              }
               sidebarSlotDragOver(e);
             }}
             onDragLeave={sidebarSlotDragLeave}
             onDrop={(e) => {
               e.preventDefault();
-              const groupDrag = draggingGroupItemsRef.current;
-              if (groupDrag) {
-                const { groupAssetId, itemIndexes } = groupDrag;
-                moveGroupItemsToUpperLevel(groupAssetId, itemIndexes);
+              const sources = sidebarDropSources(e, draggingAssetIdsRef, draggingGroupItemsRef);
+              const groupSrc = sources.find((s) => s.kind === 'group');
+              const rootSrc = sources.find((s) => s.kind === 'root');
+              if (groupSrc && groupSrc.kind === 'group') {
+                moveGroupItemsToUpperLevel(groupSrc.groupAssetId, groupSrc.itemIndexes);
+              } else if (canMoveRootToUpperLevel && rootSrc && rootSrc.kind === 'root') {
+                moveRootAssetsToUpperLevel?.(rootSrc.assetIds);
               }
               clearWorkflowDragSession();
             }}
@@ -1205,21 +1258,20 @@ export function WorkflowSidebarColumn({
           </div>
           <div
             onDragOver={(e) => {
-              if (!sidebarOpsAllowed) return;
+              if (!sidebarHasAssetDragFromEvent(e, draggingAssetIdsRef, draggingGroupItemsRef)) return;
               sidebarSlotDragOver(e);
             }}
             onDragLeave={sidebarSlotDragLeave}
             onDrop={(e) => {
               e.preventDefault();
-              if (e.currentTarget.getAttribute('data-drag-over') !== '1') {
-                clearWorkflowDragSession();
-                return;
-              }
-              const rootIds = draggingAssetIdsRef.current;
-              const groupDrag = draggingGroupItemsRef.current;
-              if (rootIds?.length) {
-                duplicateAssetInPlace(rootIds, null);
-              } else if (groupDrag && groupAssetForDrag && currentGroupAsset) {
+              const sources = sidebarDropSources(e, draggingAssetIdsRef, draggingGroupItemsRef);
+              for (const src of sources) {
+                if (src.kind === 'root') {
+                  duplicateAssetInPlace(src.assetIds, null);
+                  continue;
+                }
+                const groupDrag = src;
+                if (!groupAssetForDrag || !currentGroupAsset) continue;
                 const groupId = currentGroupAsset.id;
                 setAssets((prev) => {
                   const { nextAssets, assetIds } = ensureGroupItemsAsAssets(
@@ -1274,33 +1326,30 @@ export function WorkflowSidebarColumn({
           </div>
           <div
             onDragOver={(e) => {
-              if (!sidebarOpsAllowed) return;
+              if (!sidebarHasAssetDragFromEvent(e, draggingAssetIdsRef, draggingGroupItemsRef)) return;
               sidebarSlotDragOver(e);
             }}
             onDragLeave={sidebarSlotDragLeave}
             onDrop={(e) => {
               e.preventDefault();
-              if (e.currentTarget.getAttribute('data-drag-over') !== '1') {
-                clearWorkflowDragSession();
-                return;
-              }
-              const rootIds = draggingAssetIdsRef.current;
-              const groupDrag = draggingGroupItemsRef.current;
-              if (rootIds?.length) {
-                rootIds.forEach((id) => removeAsset(id));
-              } else if (groupDrag) {
+              const sources = sidebarDropSources(e, draggingAssetIdsRef, draggingGroupItemsRef);
+              for (const src of sources) {
+                if (src.kind === 'root') {
+                  src.assetIds.forEach((id) => removeAsset(id));
+                  continue;
+                }
                 const { nextAssets, assetIds } = ensureGroupItemsAsAssets(
                   assets,
-                  groupDrag.groupAssetId,
-                  groupDrag.itemIndexes
+                  src.groupAssetId,
+                  src.itemIndexes
                 );
                 if (assetIds.length > 0) {
                   const afterRemove = removeGroupItems(
                     nextAssets,
-                    groupDrag.groupAssetId,
-                    groupDrag.itemIndexes
+                    src.groupAssetId,
+                    src.itemIndexes
                   );
-                  const groupRemoved = !afterRemove.some((a) => a.id === groupDrag.groupAssetId);
+                  const groupRemoved = !afterRemove.some((a) => a.id === src.groupAssetId);
                   setAssets(afterRemove);
                   assetIds.forEach((id) => removeAsset(id));
                   setSelectedGroupItemKeys(new Set());
@@ -1336,29 +1385,14 @@ export function WorkflowSidebarColumn({
               }
             }}
             onDragOver={(e) => {
-              if (!sidebarOpsAllowed) return;
+              if (!sidebarHasAssetDragFromEvent(e, draggingAssetIdsRef, draggingGroupItemsRef)) return;
               sidebarSlotDragOver(e);
             }}
             onDragLeave={sidebarSlotDragLeave}
             onDrop={(e) => {
               e.preventDefault();
-              if (e.currentTarget.getAttribute('data-drag-over') !== '1') {
-                clearWorkflowDragSession();
-                return;
-              }
-              const rootIds = draggingAssetIdsRef.current;
-              const groupDrag = draggingGroupItemsRef.current;
-              if (rootIds?.length) {
-                onDownloadWorkflowAssets([{ kind: 'root', assetIds: rootIds }]);
-              } else if (groupDrag) {
-                onDownloadWorkflowAssets([
-                  {
-                    kind: 'group',
-                    groupAssetId: groupDrag.groupAssetId,
-                    itemIndexes: groupDrag.itemIndexes,
-                  },
-                ]);
-              }
+              const sources = sidebarDropSources(e, draggingAssetIdsRef, draggingGroupItemsRef);
+              if (sources.length) onDownloadWorkflowAssets(sources);
               clearWorkflowDragSession();
             }}
             title="点击或拖入：下载选中资产当前展示内容（文字/图片/3D 等）"

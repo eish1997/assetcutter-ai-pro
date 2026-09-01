@@ -1,6 +1,9 @@
 import type { CapabilityPackage } from './capabilityPackages.js';
 import type { ConnectionStrategy } from './connectionStrategy.js';
 import type { LocalSoftwareVersion } from './connectionLocalVersions.js';
+import type { HostPrimitiveSeed } from './hostPrimitives.js';
+
+export type { HostPrimitiveSeed };
 
 export type SoftwareBridgeMatchInput = {
   packageId: string;
@@ -45,6 +48,13 @@ export type SoftwareBridgeDriver = {
   uninstall(input?: SoftwareBridgeLifecycleInput): SoftwareBridgeLifecycleResult | Promise<SoftwareBridgeLifecycleResult>;
   normalizeInstallInput?(input?: SoftwareBridgeLifecycleInput): SoftwareBridgeLifecycleInput;
   strategies?(input: SoftwareBridgeMatchInput): ConnectionStrategy[];
+  primitives?(input?: SoftwareBridgeLifecycleInput): HostPrimitiveSeed[];
+  probePrimitive?(primitiveId: string, input?: SoftwareBridgeLifecycleInput): SoftwareBridgeLifecycleResult | Promise<SoftwareBridgeLifecycleResult>;
+  invokePrimitive?(
+    primitiveId: string,
+    params: Record<string, unknown>,
+    input?: SoftwareBridgeLifecycleInput,
+  ): SoftwareBridgeLifecycleResult | Promise<SoftwareBridgeLifecycleResult>;
 };
 
 export function buildSoftwareBridgeMatchInput(pkg: CapabilityPackage): SoftwareBridgeMatchInput {

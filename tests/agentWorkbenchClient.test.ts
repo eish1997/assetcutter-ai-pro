@@ -88,6 +88,14 @@ function createClient(overrides: Record<string, unknown> = {}) {
             { id: 'text-preset', directRunSupported: true },
             { id: 'manual-preset', directRunSupported: false },
           ],
+          finger: {
+            selectedAssetId: 'asset-a',
+            selectedDisplayKey: 'original',
+            previewOpen: false,
+            previewAssetId: null,
+            surface: 'canvas',
+            connectedHosts: [],
+          },
         };
       }
       if (method === 'createProject') return { ok: true, projectId: 'p-new', projectName: args.name || 'Agent 项目' };
@@ -139,6 +147,7 @@ describe('agent workbench client', () => {
     expect(requestedUrls[0]).toBe('https://auth.assetcutter.test/api/agent/workbench/context');
     expect(result.structured.activeProjectId).toBe('p1');
     expect(result.structured.capabilityPresets[0].id).toBe('text-preset');
+    expect(result.structured.finger.selectedAssetId).toBe('asset-a');
   });
 
   it('falls back to Agent API origin when the workbench site does not host agent routes', async () => {

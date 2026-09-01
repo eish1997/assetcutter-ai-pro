@@ -2,6 +2,7 @@ import {
   gatewayFailureMetadata,
   publicAiGatewayFailureReason,
   resolveAiGatewayFailureReason,
+  decorateErrorWithFailureReason,
 } from './failure-reason.js';
 
 export const AI_GATEWAY_ADAPTER_RESULT_STATUSES = Object.freeze([
@@ -199,6 +200,14 @@ export function jobPatchFromAdapterResult(result, options = {}) {
   let effective = normalized;
 
   if (normalized.status === 'succeeded' && !validation.ok) {
+    const emptyMedia = validation.errors.some((code) =>
+      [
+        'succeeded_without_modality_artifact',
+        'succeeded_without_output_or_artifact',
+        'succeeded_without_text_output',
+      ].includes(code)
+    );
+    const failureCode = emptyMedia ? 'AI_GATEWAY_UPSTREAM_EMPTY_IMAGE' : 'AI_GATEWAY_ADAPTER_RESULT_INVALID';
     effective = normalizeAiGatewayAdapterResult(
       {
         status: 'failed',
@@ -211,14 +220,19 @@ export function jobPatchFromAdapterResult(result, options = {}) {
             contractErrors: validation.errors,
           },
         },
-        failureReason: {
-          code: 'AI_GATEWAY_ADAPTER_RESULT_INVALID',
-          message: `Adapter result failed contract: ${validation.errors.join(', ')}`,
-        },
+        failureReason: emptyMedia
+          ? {
+              code: 'AI_GATEWAY_UPSTREAM_EMPTY_IMAGE',
+              message: `Upstream returned succeeded without usable ${nonEmptyString(options.modality) || 'media'} artifacts`,
+            }
+          : {
+              code: 'AI_GATEWAY_ADAPTER_RESULT_INVALID',
+              message: `Adapter result failed contract: ${validation.errors.join(', ')}`,
+            },
       },
       {
         ...options,
-        defaultFailureCode: 'AI_GATEWAY_ADAPTER_RESULT_INVALID',
+        defaultFailureCode: failureCode,
       }
     );
   }
@@ -315,4 +329,29 @@ export async function applyAiGatewayAdapterResult(plan, resultInput, store, opti
   });
   const next = await store.update(plan.job.id, patch);
   return { plan: next, result, patch };
+}
+
+/** 契约层把 succeeded→failed 时不会抛错；调用方须检查并 throw 以触发 executor 同路由重试 */
+export function throwIfAdapterPlanTerminalFailed(plan, context = {}) {
+  if (!plan?.job || plan.job.status !== 'failed') return;
+  const jobError = asRecord(plan.job.error) || {};
+  const failureReason = asRecord(jobError.failureReason) || asRecord(asRecord(plan.job.metadata)?.gatewayFailure);
+  const code =
+    nonEmptyString(failureReason?.code) ||
+    nonEmptyString(jobError.code) ||
+    'AI_GATEWAY_EXECUTION_HANDOFF_FAILED';
+  const message =
+    nonEmptyString(failureReason?.adminMessage) ||
+    nonEmptyString(failureReason?.userMessage) ||
+    nonEmptyString(jobError.message) ||
+    'AI Gateway adapter failed';
+  const err = new Error(message);
+  err.code = code;
+  err.status = 502;
+  throw decorateErrorWithFailureReason(err, {
+    defaultCode: code,
+    providerId: context.providerId || plan.route?.providerId || plan.job?.provider || null,
+    adapterId: context.adapterId || plan.route?.adapterId || null,
+    workerId: context.workerId || plan.route?.workerId || null,
+  });
 }

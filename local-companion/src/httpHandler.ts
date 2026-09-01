@@ -83,6 +83,15 @@ import {
   uninstallCapabilityPackage,
 } from './capabilities/capabilityLifecycle.js';
 import { attachSoftwareConnectionState } from './capabilities/softwareConnectionState.js';
+import { mergeConnectionLocalVersionManifest } from './capabilities/connectionLocalVersions.js';
+import {
+  hostIdFromPackage,
+  listMapVisiblePrimitives,
+  readHealthCheckPending,
+} from './capabilities/hostPrimitives.js';
+import { probeHostPrimitive, reprobeHostPrimitives } from './capabilities/hostPrimitiveProbe.js';
+import { invokeHostPrimitive } from './capabilities/hostPrimitiveInvoke.js';
+import { listHealthCheckPending } from './capabilities/hostPrimitiveScanner.js';
 import { buildCapabilityPackageContext } from './capabilities/capabilityContext.js';
 import { checkCapabilityPublishGate } from './capabilities/capabilityPublishGate.js';
 import {
@@ -96,8 +105,11 @@ import {
   importCapabilityPackageTransfer,
 } from './capabilities/capabilityTransfer.js';
 import { summarizeWorkflowConnectors } from './capabilities/workflowConnectorSummary.js';
+import { compileReplayRequest, listReplayWallWorkflows } from './workflows/replayCompile.js';
+import { installCloudSkillToShelf, publishShelfSkillToCloud } from './workflows/skillCloud.js';
+import { deleteShelfSkill } from './workflows/skillShelf.js';
 import { listWorkflowRuns } from './workflows/runtime/workflowRunHistory.js';
-import { listWorkflowSkills } from './workflows/runtime/workflowSkills.js';
+import type { WorkflowSkill } from './workflows/runtime/workflowSkills.js';
 import { preflightWorkflowCapability, runWorkflowCapability } from './workflows/runWorkflowCapability.js';
 import {
   archiveWorkflowDraft,
@@ -753,14 +765,71 @@ export async function handleRequest(
       return;
     }
 
+    if (path === '/v1/workflows/replay/compile' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(Buffer.from(raw).toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { ok: false, error: 'invalid_json' }, origin);
+          return;
+        }
+      }
+      const traces = Array.isArray(body.traces) ? (body.traces as Parameters<typeof compileReplayRequest>[0]) : [];
+      const result = await compileReplayRequest(traces);
+      sendJson(res, result.ok ? 200 : 400, result, origin);
+      return;
+    }
+
     if (path === '/v1/workflows/skills' && method === 'GET') {
       sendJson(res, 200, {
         ok: true,
-        workflows: listWorkflowSkills().map((workflow) => ({
+        workflows: listReplayWallWorkflows().map((workflow) => ({
           ...workflow,
-          connectorSummaries: summarizeWorkflowConnectors(workflow),
+          connectorSummaries:
+            workflow && 'systemContract' in workflow && workflow.systemContract
+              ? summarizeWorkflowConnectors(workflow as WorkflowSkill)
+              : [],
         })),
       }, origin);
+      return;
+    }
+
+    const workflowSkillCloudMatch = path.match(/^\/v1\/workflows\/skills\/([^/]+)\/cloud$/);
+    if (workflowSkillCloudMatch && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(Buffer.from(raw).toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { ok: false, error: 'invalid_json' }, origin);
+          return;
+        }
+      }
+      const result = publishShelfSkillToCloud(decodeURIComponent(workflowSkillCloudMatch[1]!), {
+        semver: typeof body.semver === 'string' ? body.semver : undefined,
+        versionNote: typeof body.versionNote === 'string' ? body.versionNote : typeof body.note === 'string' ? body.note : undefined,
+        actorRole: typeof body.actorRole === 'string' ? body.actorRole : undefined,
+        isAdmin: body.isAdmin === true,
+        publishedBy: typeof body.publishedBy === 'string' ? body.publishedBy : undefined,
+      });
+      sendJson(res, result.ok ? 201 : result.error === 'skill_not_found' ? 404 : 422, result, origin);
+      return;
+    }
+
+    const workflowSkillInstallMatch = path.match(/^\/v1\/workflows\/skills\/([^/]+)\/install-cloud$/);
+    if (workflowSkillInstallMatch && method === 'POST') {
+      const result = installCloudSkillToShelf(decodeURIComponent(workflowSkillInstallMatch[1]!));
+      sendJson(res, result.ok ? 200 : result.error === 'cloud_skill_not_found' ? 404 : 400, result, origin);
+      return;
+    }
+
+    const workflowSkillDeleteMatch = path.match(/^\/v1\/workflows\/skills\/([^/]+)$/);
+    if (workflowSkillDeleteMatch && method === 'DELETE') {
+      const result = deleteShelfSkill(decodeURIComponent(workflowSkillDeleteMatch[1]!));
+      sendJson(res, result.ok ? 200 : result.error === 'invalid_skill_id' ? 400 : 404, result, origin);
       return;
     }
 
@@ -1222,6 +1291,49 @@ export async function handleRequest(
       return;
     }
 
+    const capabilityMergeLocalVersionMatch = path.match(/^\/v1\/capability-packages\/drafts\/([^/]+)\/merge-local-version$/);
+    if (capabilityMergeLocalVersionMatch && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(Buffer.from(raw).toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { ok: false, error: 'invalid_json' }, origin);
+          return;
+        }
+      }
+      const versionRaw = body.localVersion && typeof body.localVersion === 'object' && !Array.isArray(body.localVersion)
+        ? (body.localVersion as Record<string, unknown>)
+        : null;
+      if (!versionRaw) {
+        sendJson(res, 400, { ok: false, error: 'local_version_required' }, origin);
+        return;
+      }
+      const packageId = decodeURIComponent(capabilityMergeLocalVersionMatch[1]!);
+      const currentDraft = readCapabilityPackageDraft(packageId);
+      if (!currentDraft) {
+        sendJson(res, 404, { ok: false, error: 'draft_not_found' }, origin);
+        return;
+      }
+      if (currentDraft.type !== 'software_connection') {
+        sendJson(res, 400, { ok: false, error: 'not_software_connection' }, origin);
+        return;
+      }
+      const makeCurrent = body.makeCurrent !== false;
+      const makeDefault = body.makeDefault === true;
+      const updated = updateCapabilityPackageDraft(packageId, (current) => ({
+        ...current,
+        manifest: mergeConnectionLocalVersionManifest(current.manifest, versionRaw, { makeCurrent, makeDefault }),
+      }));
+      if (!updated) {
+        sendJson(res, 404, { ok: false, error: 'draft_not_found' }, origin);
+        return;
+      }
+      sendJson(res, 200, { ok: true, draft: attachSoftwareConnectionState(updated) }, origin);
+      return;
+    }
+
     const capabilityContextMatch = path.match(/^\/v1\/capability-packages\/([^/]+)\/context$/);
     if (capabilityContextMatch && method === 'GET') {
       const result = buildCapabilityPackageContext(decodeURIComponent(capabilityContextMatch[1]!));
@@ -1362,6 +1474,112 @@ export async function handleRequest(
         return;
       }
       sendJson(res, 200, result, origin);
+      return;
+    }
+
+    const hostPrimitiveProbeMatch = path.match(/^\/v1\/capability-packages\/([^/]+)\/host-primitives\/([^/]+)\/probe$/);
+    if (hostPrimitiveProbeMatch && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(Buffer.from(raw).toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json' }, origin);
+          return;
+        }
+      }
+      const draftId = decodeURIComponent(hostPrimitiveProbeMatch[1]!);
+      const primitiveId = decodeURIComponent(hostPrimitiveProbeMatch[2]!);
+      const result = await probeHostPrimitive(draftId, primitiveId, {
+        localVersionId: typeof body.localVersionId === 'string' ? body.localVersionId : undefined,
+        confirmed: body.confirmed === true,
+      });
+      sendJson(res, result.ok ? 200 : 424, result, origin);
+      return;
+    }
+
+    const hostPrimitiveInvokeMatch = path.match(/^\/v1\/capability-packages\/([^/]+)\/host-primitives\/invoke$/);
+    if (hostPrimitiveInvokeMatch && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(Buffer.from(raw).toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json' }, origin);
+          return;
+        }
+      }
+      const draftId = decodeURIComponent(hostPrimitiveInvokeMatch[1]!);
+      const primitiveId = typeof body.primitiveId === 'string' ? body.primitiveId : 'host.import_file';
+      const params =
+        body.params && typeof body.params === 'object' && !Array.isArray(body.params)
+          ? (body.params as Record<string, unknown>)
+          : body;
+      const result = await invokeHostPrimitive(draftId, primitiveId, params, {
+        localVersionId: typeof body.localVersionId === 'string' ? body.localVersionId : undefined,
+      });
+      sendJson(res, result.ok ? 200 : 422, result, origin);
+      return;
+    }
+
+    const hostPrimitiveListMatch = path.match(/^\/v1\/capability-packages\/([^/]+)\/host-primitives$/);
+    if (hostPrimitiveListMatch && method === 'GET') {
+      const draftId = decodeURIComponent(hostPrimitiveListMatch[1]!);
+      const draft = readCapabilityPackageDraft(draftId);
+      if (!draft) {
+        sendJson(res, 404, { ok: false, error: 'capability_not_found' }, origin);
+        return;
+      }
+      const manifest = draft.manifest && typeof draft.manifest === 'object' ? (draft.manifest as Record<string, unknown>) : {};
+      const hostId = hostIdFromPackage(draft) || draft.id;
+      sendJson(
+        res,
+        200,
+        {
+          ok: true,
+          draftId,
+          hostId,
+          primitives: listMapVisiblePrimitives(manifest, hostId),
+          healthCheckPending: readHealthCheckPending(manifest),
+        },
+        origin,
+      );
+      return;
+    }
+
+    if (path === '/v1/host-primitives/health-pending' && method === 'GET') {
+      sendJson(res, 200, { ok: true, pending: listHealthCheckPending() }, origin);
+      return;
+    }
+
+    if (path === '/v1/host-primitives/health-check' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(Buffer.from(raw).toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 403, { ok: false, error: 'invalid_json' }, origin);
+          return;
+        }
+      }
+      if (body.confirmed !== true) {
+        sendJson(res, 403, { ok: false, error: 'confirmation_required', message: 'Health re-probe requires confirmed: true.' }, origin);
+        return;
+      }
+      const draftId = typeof body.draftId === 'string' ? body.draftId : '';
+      const primitiveIds = Array.isArray(body.primitiveIds) ? body.primitiveIds.map(String).filter(Boolean) : [];
+      if (!draftId || !primitiveIds.length) {
+        sendJson(res, 400, { ok: false, error: 'missing_targets' }, origin);
+        return;
+      }
+      const result = await reprobeHostPrimitives(draftId, primitiveIds, {
+        confirmed: true,
+        localVersionId: typeof body.localVersionId === 'string' ? body.localVersionId : undefined,
+      });
+      sendJson(res, result.ok ? 200 : 424, { ok: result.ok, ...result }, origin);
       return;
     }
 
