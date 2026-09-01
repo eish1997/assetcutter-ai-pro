@@ -93,7 +93,9 @@ describe('workshopFileTree', () => {
     expect(src).toContain('WORKSHOP_BROWSER_LIBRARY_ROOT');
     expect(src).toContain('upgradeWorkshopLoose');
     expect(src).toContain('readWorkshopFile');
-    expect(src).toContain('getWorkshopMedia');
+    expect(src).toContain('WorkflowJustifiedVirtualGrid');
+    expect(src).not.toContain('useWorkflowJustifiedVirtualScroll');
+    expect(src).not.toContain('originalById: { ...workshopThumbById');
   });
 
   it('pins a browser-library root that is not a disk path', () => {
@@ -186,18 +188,33 @@ describe('workshopFileTree', () => {
           mtimeMs: 5,
         },
       ],
-      { originalById: { [looseId]: 'data:image/jpeg;base64,xx', [pkgId]: 'data:image/jpeg;base64,yy' } },
+      { originalById: { [looseId]: 'ac-workshop://v1/t/a.png', [pkgId]: 'ac-workshop://v1/t/1.jpg' } },
     );
     expect(cards).toHaveLength(4);
     expect(cards[0].id).toBe(looseId);
     expect(cards[0].assetKind).toBe('image');
-    expect(cards[0].original).toContain('data:image/jpeg');
+    expect(cards[0].original).toContain('ac-workshop://');
     expect(cards[1].id).toBe(pkgId);
     expect(cards[1].displayKey).toBe('c91e04d2');
     expect(cards[2].isGroup).toBe(true);
     expect(cards[2].assetIds).toEqual([workshopFileAssetId(root, '组/a.png')]);
     expect(cards[3].assetKind).toBe('text');
     expect(cards[3].original).toBe('');
+    const thumbOnly = workshopCanvasItemsToWorkflowAssets(
+      [
+        {
+          kind: 'loose',
+          root,
+          name: 'a.png',
+          rel: 'a.png',
+          assetKind: 'image',
+          size: 2,
+          mtimeMs: 3,
+        },
+      ],
+      {},
+    );
+    expect(thumbOnly[0].original).toBe('');
     const videoId = workshopFileAssetId(root, 'clip.mp4');
     const modelId = workshopFileAssetId(root, 'hero.glb');
     const mediaCards = workshopCanvasItemsToWorkflowAssets(
@@ -258,6 +275,44 @@ describe('workshopFileTree', () => {
     expect(mediaCards[2].stepModelFormats).toEqual({ original: ['fbx'] });
     expect(mediaCards[2].modelSourceName).toBe('prop.fbx');
     expect(mediaCards[3].textBody).toBe('# hello');
+    const pkgVideoId = workshopPackageCardId(root, 'vidpkg');
+    const pkgModelId = workshopPackageCardId(root, 'mdlpkg');
+    const pkgMediaCards = workshopCanvasItemsToWorkflowAssets(
+      [
+        {
+          kind: 'package',
+          root,
+          name: 'clip.mp4',
+          rel: 'vidpkg',
+          assetKind: 'video',
+          size: 9,
+          mtimeMs: 6,
+          assetId: 'vidpkg',
+          title: 'clip.mp4',
+        },
+        {
+          kind: 'package',
+          root,
+          name: 'hero.glb',
+          rel: 'mdlpkg',
+          assetKind: 'model3d',
+          size: 10,
+          mtimeMs: 7,
+          assetId: 'mdlpkg',
+          title: 'hero.glb',
+        },
+      ],
+      {
+        mediaById: {
+          [pkgVideoId]: { url: 'ac-workshop://v1/pkg-video/clip.mp4', kind: 'video' },
+          [pkgModelId]: { url: 'ac-workshop://v1/pkg-model/hero.glb', kind: 'model' },
+        },
+      },
+    );
+    expect(pkgMediaCards[0].original).toBe('ac-workshop://v1/pkg-video/clip.mp4');
+    expect(pkgMediaCards[1].original).toBe('');
+    expect(pkgMediaCards[1].stepModelUrls).toEqual({ original: ['ac-workshop://v1/pkg-model/hero.glb'] });
+    expect(pkgMediaCards[1].stepModelFormats).toEqual({ original: ['glb'] });
     expect(selectedRelFromAssetIds([looseId], root)).toBe('a.png');
     expect(
       selectedRelFromAssetIds([pkgId], root, [

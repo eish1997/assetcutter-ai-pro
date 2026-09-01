@@ -8,6 +8,10 @@ import {
   type SetStateAction,
 } from 'react';
 import type { WorkflowPendingTask } from '../types';
+import {
+  resolveWorkflowMarqueeCardIds,
+  type ClientRectLike,
+} from '../services/workflowJustifiedScroll';
 
 export type UseWorkflowMarqueeArgs = {
   registerMarqueeStartHandler?: (handler: ((e: ReactMouseEvent) => void) | null) => void;
@@ -20,6 +24,8 @@ export type UseWorkflowMarqueeArgs = {
   pendingRef: RefObject<WorkflowPendingTask[]>;
   setSelectedAssetIds: Dispatch<SetStateAction<Set<string>>>;
   setSelectedGroupItemKeys: Dispatch<SetStateAction<Set<string>>>;
+  /** 虚拟化时由网格写入 layout 命中；返回 null 则回退 DOM refs */
+  layoutHitIdsRef?: RefObject<((sel: ClientRectLike) => string[] | null) | null>;
 };
 
 type MarqueeRect = { left: number; top: number; width: number; height: number };
@@ -31,23 +37,19 @@ function applyMarqueeSelection(
   opts: {
     altKey: boolean;
     cardRefs: RefObject<Map<string, HTMLElement>>;
+    layoutHitIdsRef?: RefObject<((sel: ClientRectLike) => string[] | null) | null>;
     groupFilterIdRef: RefObject<string | null>;
     pendingRef: RefObject<WorkflowPendingTask[]>;
     setSelectedAssetIds: Dispatch<SetStateAction<Set<string>>>;
     setSelectedGroupItemKeys: Dispatch<SetStateAction<Set<string>>>;
   }
 ) {
-  const ids: string[] = [];
+  const mounted: Array<[string, ClientRectLike]> = [];
   opts.cardRefs.current?.forEach((el, id) => {
     const r = el.getBoundingClientRect();
-    const overlap = !(
-      sel.left + sel.width < r.left ||
-      r.left + r.width < sel.left ||
-      sel.top + sel.height < r.top ||
-      r.top + r.height < sel.top
-    );
-    if (overlap) ids.push(id);
+    mounted.push([id, { left: r.left, top: r.top, width: r.width, height: r.height }]);
   });
+  const ids = resolveWorkflowMarqueeCardIds(sel, opts.layoutHitIdsRef?.current, mounted);
   if (!ids.length) return;
   const currentGroupId = opts.groupFilterIdRef.current;
   const pendNow = opts.pendingRef.current ?? [];
@@ -101,6 +103,7 @@ export function useWorkflowMarquee({
   pendingRef,
   setSelectedAssetIds,
   setSelectedGroupItemKeys,
+  layoutHitIdsRef,
 }: UseWorkflowMarqueeArgs) {
   const marqueeDataRef = useRef({ startX: 0, startY: 0, endX: 0, endY: 0 });
   const marqueeOverlayElRef = useRef<SVGRectElement | null>(null);
@@ -195,6 +198,7 @@ export function useWorkflowMarquee({
         applyMarqueeSelection(sel, {
           altKey,
           cardRefs,
+          layoutHitIdsRef,
           groupFilterIdRef,
           pendingRef,
           setSelectedAssetIds,
@@ -205,6 +209,7 @@ export function useWorkflowMarquee({
     [
       cancelMarqueeOverlayDomUpdate,
       cardRefs,
+      layoutHitIdsRef,
       groupFilterIdRef,
       marqueeStartRef,
       pendingRef,

@@ -1,6 +1,5 @@
 import {
   useCallback,
-  useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -94,12 +93,11 @@ export function useWorkflowJustifiedVirtualScroll(
   const layoutMarqueeHitIds = useCallback(
     (sel: { left: number; top: number; width: number; height: number }) => {
       const gridEl = gridRef.current;
-      const scrollEl = scrollRef.current;
-      if (!gridEl || !scrollEl || !virtualize) return null;
+      if (!gridEl || !virtualize) return null;
       const gridRect = gridEl.getBoundingClientRect();
-      return workflowJustifiedMarqueeHitIds(sel, boxes, gridRect, scrollEl.scrollTop);
+      return workflowJustifiedMarqueeHitIds(sel, boxes, gridRect);
     },
-    [gridRef, scrollRef, virtualize, boxes]
+    [gridRef, virtualize, boxes]
   );
 
   return {

@@ -44,23 +44,39 @@ function rectsOverlap(a: ClientRectLike, b: ClientRectLike): boolean {
 }
 
 /**
- * 框选命中：虚拟列表未挂载 DOM 的卡片用 layout box + 网格/滚动容器几何换算到 client 坐标。
+ * 框选命中：虚拟列表未挂载 DOM 的卡片用 layout box + 网格 getBoundingClientRect 换算到 client 坐标。
+ * gridClientRect 已含滚动位移，不要再减 scrollTop。
  */
 export function workflowJustifiedMarqueeHitIds(
   sel: ClientRectLike,
   boxes: WorkflowJustifiedLayoutBox[],
-  gridClientRect: ClientRectLike,
-  scrollTop: number
+  gridClientRect: ClientRectLike
 ): string[] {
   const hits: string[] = [];
   for (const box of boxes) {
     const cardRect: ClientRectLike = {
       left: gridClientRect.left + box.left,
-      top: gridClientRect.top + box.top - scrollTop,
+      top: gridClientRect.top + box.top,
       width: box.width,
       height: box.height,
     };
     if (rectsOverlap(sel, cardRect)) hits.push(box.id);
   }
   return hits;
+}
+
+/** 虚拟化开启时用 layout 命中（含未挂载卡）；否则扫已挂载 DOM 矩形。 */
+export function resolveWorkflowMarqueeCardIds(
+  sel: ClientRectLike,
+  layoutHitIds: ((sel: ClientRectLike) => string[] | null) | null | undefined,
+  mountedCardRects?: Iterable<[string, ClientRectLike]>
+): string[] {
+  const layoutHits = layoutHitIds?.(sel) ?? null;
+  if (layoutHits) return layoutHits;
+  const ids: string[] = [];
+  if (!mountedCardRects) return ids;
+  for (const [id, r] of mountedCardRects) {
+    if (rectsOverlap(sel, r)) ids.push(id);
+  }
+  return ids;
 }

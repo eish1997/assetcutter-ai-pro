@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   filterWorkflowJustifiedBoxIdsInScroll,
+  resolveWorkflowMarqueeCardIds,
   shouldVirtualizeWorkflowJustifiedGrid,
   workflowJustifiedMarqueeHitIds,
 } from '../services/workflowJustifiedScroll';
@@ -27,9 +28,41 @@ describe('workflowJustifiedScroll', () => {
     const hits = workflowJustifiedMarqueeHitIds(
       { left: 105, top: 215, width: 50, height: 50 },
       boxes,
-      gridRect,
-      0
+      gridRect
     );
     expect(hits).toEqual(['x']);
+  });
+
+  it('workflowJustifiedMarqueeHitIds uses scrolled gridClientRect without subtracting scrollTop again', () => {
+    const boxes = [{ id: 'far', left: 0, top: 2000, width: 80, height: 60 }];
+    const gridRect = { left: 100, top: 200 - 1800, width: 500, height: 4000 };
+    const hits = workflowJustifiedMarqueeHitIds(
+      { left: 100, top: 380, width: 50, height: 50 },
+      boxes,
+      gridRect
+    );
+    expect(hits).toEqual(['far']);
+  });
+
+  it('resolveWorkflowMarqueeCardIds prefers layout hits so unmounted boxes can be selected', () => {
+    const sel = { left: 0, top: 0, width: 10, height: 10 };
+    const hits = resolveWorkflowMarqueeCardIds(
+      sel,
+      () => ['mounted', 'offscreen'],
+      [['mounted', { left: 0, top: 0, width: 10, height: 10 }]]
+    );
+    expect(hits).toEqual(['mounted', 'offscreen']);
+  });
+
+  it('resolveWorkflowMarqueeCardIds falls back to mounted rects when layout hits are null', () => {
+    const hits = resolveWorkflowMarqueeCardIds(
+      { left: 0, top: 0, width: 10, height: 10 },
+      () => null,
+      [
+        ['a', { left: 0, top: 0, width: 10, height: 10 }],
+        ['b', { left: 100, top: 100, width: 10, height: 10 }],
+      ]
+    );
+    expect(hits).toEqual(['a']);
   });
 });

@@ -6,6 +6,7 @@ AI-assisted asset workflow workbench (workspace, capability presets, experimenta
 
 - [x] Workspace asset list + capability presets (in-slot page switch)
 - [x] Justified row layout for assets and presets
+- [x] Workbench asset wall virtualizes at 48+ cards (viewport + overscan; marquee hits layout boxes)
 - [x] Quick compose bar / chat dock
 - [x] Capability sets and workflow composer
 - [x] Experimental: seam repair, PBR texture generation, prompt arena

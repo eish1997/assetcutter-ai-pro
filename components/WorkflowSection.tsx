@@ -22,6 +22,7 @@ import {
   Download,
   ImagePlus,
   Package,
+  Plus,
   Trash2,
 } from 'lucide-react';
 import type {
@@ -241,6 +242,7 @@ import {
 import AppIcon from './ui/AppIcon';
 import { AssetPreviewOverlay } from './workflow/AssetPreviewOverlay';
 import { AssetMediaPreviewCenter } from './workflow/AssetMediaPreviewCenter';
+import { WorkflowLightboxModel3dRail } from './workflow/WorkflowLightboxModel3dRail';
 import type {
   ImagePreviewCanvasAdjustControl,
   ImagePreviewLayoutMode,
@@ -323,8 +325,11 @@ import {
   updateWorkflowCardDragOver,
   workflowCardDragLeave,
 } from '../services/workflowCardDragUi';
-import { captureWorkflowListScrollSnapshot, pickWorkflowCardPlaceholderSrc } from '../services/workflowListPaneSnapshot';
-import { WorkflowLightboxInstantShell } from './workflow/WorkflowLightboxInstantShell';
+import { pickWorkflowCardPlaceholderSrc } from '../services/workflowListPaneSnapshot';
+import {
+  mountLightboxLoadingCover,
+  unmountLightboxLoadingCover,
+} from './workflow/WorkflowLightboxInstantShell';
 import { prefetchWorkflowLightboxImage } from '../services/workflowLightboxPrefetch';
 import { resolveWorkflowFunctionSidebarLayout } from '../services/workflowFunctionSidebarLayout';
 import { applyRootWorkflowAssetReorder } from '../services/workflowRootAssetReorder';
@@ -454,6 +459,7 @@ import {
   WORKFLOW_LIGHTBOX_COMPOSE_DOCKED_INSET,
   WORKFLOW_IMAGE_PREVIEW_RAIL,
   WORKFLOW_CARD_DISMISS_ICON_BTN,
+  WORKFLOW_IMAGE_PREVIEW_RAIL_DIVIDER,
 } from './workflow/workflowSectionUiConstants';
 import {
   dedupeWorkflowAssetsById,
@@ -487,6 +493,11 @@ import {
   resolveWorkflowAssetActiveVariant,
   resolveWorkflowAssetVariants,
 } from '../services/workflowAssetVariants';
+import {
+  resolveLightboxCenterRoute,
+  resolveLightboxChromeSlots,
+  resolveLightboxPreviewImageSrc,
+} from '../services/workflowLightboxCenterRoute';
 import { groupCapabilityPresetsByCategory } from './workflow/workflowCapabilityGroups';
 import { WorkflowSidebarColumn, type WorkflowSidebarFavoriteEntry } from './workflow/WorkflowSidebarColumn';
 import { WorkshopFileTreeColumn } from './workshop/WorkshopFileSource';
@@ -553,6 +564,7 @@ import WorkflowLightboxAssetThumbStrip from './workflow/WorkflowLightboxAssetThu
 import WorkflowAssetContextMenu from './workflow/WorkflowAssetContextMenu';
 import WorkflowAssetStepCountBadge from './workflow/WorkflowAssetStepCountBadge';
 import WorkflowGroupCardStackPreviews from './workflow/WorkflowGroupCardStackPreviews';
+import { WorkflowJustifiedVirtualGrid, type WorkflowJustifiedMarqueeHitFn } from './workflow/WorkflowJustifiedVirtualGrid';
 import {
   createSmoothWheelScrollController,
   type SmoothWheelScrollController,
@@ -1265,9 +1277,6 @@ const WorkflowSection: React.FC<{
   const [lightboxAssetId, setLightboxAssetId] = useState<string | null>(null);
   /** 打开大图前截取的列表视口静态图，作预览背景（列表卸载后仍可见） */
   const [lightboxListBackdropUrl, setLightboxListBackdropUrl] = useState<string | null>(null);
-  /** flushSync 即时壳（与重型 ImagePreviewOverlay 解耦） */
-  const [lightboxInstantShellAssetId, setLightboxInstantShellAssetId] = useState<string | null>(null);
-  /** 延后挂载完整预览层，避免与 instant shell 同帧 reconcile */
   const [lightboxOverlayMounted, setLightboxOverlayMounted] = useState(false);
   /**
    * 关 3D 大图：先视觉隐藏壳（露出资产列表），保留 3D 模块截缩略图后再卸载。
@@ -2063,12 +2072,12 @@ const WorkflowSection: React.FC<{
   const workshopFileAssets = useMemo(
     () =>
       workshopCanvasItemsToWorkflowAssets(workshopMergedCanvasItems, {
-        originalById: { ...workshopThumbById, ...workshopSourceById },
+        originalById: workshopSourceById,
         faceById: workshopFaceById,
         mediaById: workshopMediaById,
         textBodyById: workshopTextById,
       }),
-    [workshopMergedCanvasItems, workshopThumbById, workshopSourceById, workshopFaceById, workshopMediaById, workshopTextById]
+    [workshopMergedCanvasItems, workshopSourceById, workshopFaceById, workshopMediaById, workshopTextById]
   );
   const lastDispatchedCanvasFingerKeyRef = useRef('');
   const shellRoomRef = useRef('workbench');
@@ -2809,6 +2818,7 @@ const WorkflowSection: React.FC<{
     [snapWorkspacePaneToNode]
   );
   const cardRefs = useRef<Map<string, HTMLElement>>(new Map());
+  const layoutMarqueeHitIdsRef = useRef<WorkflowJustifiedMarqueeHitFn | null>(null);
   const setSelectedRootAssetIds = useCallback<React.Dispatch<React.SetStateAction<Set<string>>>>(
     (value) => {
       setSelectedAssetIds((prev) => {
@@ -2846,6 +2856,7 @@ const WorkflowSection: React.FC<{
     groupFilterIdRef,
     setSelectedAssetIds,
     setSelectedGroupItemKeys,
+    layoutHitIdsRef: layoutMarqueeHitIdsRef,
   });
 
   const addWorkflowStoryboardTableAsset = useCallback(
@@ -2874,7 +2885,7 @@ const WorkflowSection: React.FC<{
     setStoryboardPanelAssetId(assetId);
     setAssetSetPanelAssetId(null);
     lightboxModelThumbCloseGenRef.current += 1;
-    setLightboxInstantShellAssetId(null);
+    unmountLightboxLoadingCover();
     setLightboxOverlayClosingHidden(false);
     setLightboxOverlayMounted(false);
     setLightboxAssetId(null);
@@ -2888,7 +2899,7 @@ const WorkflowSection: React.FC<{
     setAssetSetPanelAssetId(assetId);
     setStoryboardPanelAssetId(null);
     lightboxModelThumbCloseGenRef.current += 1;
-    setLightboxInstantShellAssetId(null);
+    unmountLightboxLoadingCover();
     setLightboxOverlayClosingHidden(false);
     setLightboxOverlayMounted(false);
     setLightboxAssetId(null);
@@ -2930,17 +2941,11 @@ const WorkflowSection: React.FC<{
       assetId: string,
       sourceSlot?: { sourceGroupAssetId: string; sourceItemIndex: number } | null
     ) => {
-      const scrollEl = centerScrollRef.current;
-      const placeholder = scrollEl ? pickWorkflowCardPlaceholderSrc(scrollEl, assetId) : null;
       const openGen = ++lightboxOpenGenRef.current;
-
-      flushSync(() => {
-        setLightboxInstantShellAssetId(assetId);
-        setLightboxPlaceholderImageSrc(placeholder);
-        setLightboxOverlayMounted(false);
-        setLightboxOverlayClosingHidden(false);
-        setLightboxSourceSlot(sourceSlot ?? null);
-        setLightboxListBackdropUrl(null);
+      mountLightboxLoadingCover(() => {
+        if (lightboxOpenGenRef.current !== openGen) return;
+        lightboxOpenGenRef.current += 1;
+        unmountLightboxLoadingCover();
       });
 
       lightboxModel3dViewDirtyRef.current = false;
@@ -2948,10 +2953,13 @@ const WorkflowSection: React.FC<{
 
       window.requestAnimationFrame(() => {
         if (lightboxOpenGenRef.current !== openGen) return;
-        const el = centerScrollRef.current;
-        const backdrop = el ? captureWorkflowListScrollSnapshot(el) : null;
-        if (backdrop) setLightboxListBackdropUrl(backdrop);
+        setLightboxPlaceholderImageSrc(null);
+        setLightboxListBackdropUrl(null);
+        setLightboxOverlayClosingHidden(false);
+        setLightboxSourceSlot(sourceSlot ?? null);
         setLightboxAssetId(assetId);
+        setLightboxOverlayMounted(true);
+        beginLightboxBoot();
         if (fileSourceApi && parseWorkshopCardId(assetId)) {
           setThumbUnlockKeys((prev) => {
             if (prev.has(assetId)) return prev;
@@ -2960,11 +2968,6 @@ const WorkflowSection: React.FC<{
             return next;
           });
         }
-        beginLightboxBoot();
-        window.requestAnimationFrame(() => {
-          if (lightboxOpenGenRef.current !== openGen) return;
-          setLightboxOverlayMounted(true);
-        });
       });
     },
     [beginLightboxBoot, fileSourceApi]
@@ -3366,7 +3369,7 @@ const WorkflowSection: React.FC<{
   );
 
   const handleQuickComposeResultPreview = useCallback(
-    (assetId: string, event: React.MouseEvent<HTMLElement>) => {
+    (assetId: string, _event: React.MouseEvent<HTMLElement>) => {
       const id = String(assetId || '').trim();
       if (!id) return;
       const asset = assetsRef.current.find((a) => a.id === id);
@@ -3378,48 +3381,9 @@ const WorkflowSection: React.FC<{
         onLog?.('warn', '项目 Agent：这张结果暂不支持大图预览');
         return;
       }
-      const src = getAssetDisplayImage(asset).trim();
-      if (!src) {
-        openWorkflowLightbox(id);
-        return;
-      }
-      const rect = event.currentTarget.getBoundingClientRect();
-      const vw = typeof window !== 'undefined' ? window.innerWidth : 1200;
-      const vh = typeof window !== 'undefined' ? window.innerHeight : 800;
-      const from = {
-        left: rect.left,
-        top: rect.top,
-        width: Math.max(1, rect.width),
-        height: Math.max(1, rect.height),
-      };
-      const ratio = from.width / Math.max(1, from.height);
-      const maxW = Math.min(vw * 0.72, 960);
-      const maxH = Math.min(vh * 0.72, 720);
-      let width = maxW;
-      let height = width / Math.max(0.01, ratio);
-      if (height > maxH) {
-        height = maxH;
-        width = height * ratio;
-      }
-      const to = {
-        left: (vw - width) / 2,
-        top: (vh - height) / 2,
-        width,
-        height,
-      };
-      const animId = `${id}:${Date.now()}`;
-      setLightboxLaunchAnimation({ id: animId, src, from, to, active: false });
-      window.requestAnimationFrame(() => {
-        setLightboxLaunchAnimation((prev) =>
-          prev?.id === animId ? { ...prev, active: true } : prev
-        );
-      });
-      window.setTimeout(() => {
-        setLightboxLaunchAnimation((prev) => (prev?.id === animId ? null : prev));
-      }, 360);
       openWorkflowLightbox(id);
     },
-    [assetLightboxRasterEligible, getAssetDisplayImage, onLog, openWorkflowLightbox]
+    [assetLightboxRasterEligible, onLog, openWorkflowLightbox]
   );
 
   const companionHydrateKey = useMemo(() => {
@@ -4394,14 +4358,23 @@ ${lineSvg}
   }, [fileSourceApi, buildTextLightboxPreviewDataUrl, getAssetDisplayImage, getAssetDisplayText, getAssetGridDisplayImage]);
 
   const getLightboxPreviewImageSrc = useCallback((asset: WorkflowAsset): string => {
-    const display = getAssetDisplayImage(asset).trim();
-    if (display) return workflowSafeImgSrc(display);
-    if (fileSourceApi && parseWorkshopCardId(asset.id)) {
-      const thumb = getAssetGridDisplayImage(asset).trim();
-      if (thumb) return workflowSafeImgSrc(thumb);
-    }
-    return buildTextLightboxPreviewDataUrl(asset.textTitle || '', getAssetDisplayText(asset));
-  }, [fileSourceApi, buildTextLightboxPreviewDataUrl, getAssetDisplayImage, getAssetDisplayText, getAssetGridDisplayImage]);
+    const workshopCard = Boolean(fileSourceApi && parseWorkshopCardId(asset.id));
+    const route = resolveLightboxCenterRoute({
+      asset,
+      activeVariant: resolveWorkflowAssetActiveVariant(asset),
+      displayImage: getAssetDisplayImage(asset),
+      workshopGridThumb: workshopCard ? getAssetGridDisplayImage(asset) : '',
+      isWorkshopCard: workshopCard,
+    });
+    return workflowSafeImgSrc(
+      resolveLightboxPreviewImageSrc({
+        mode: route.mode,
+        displayImage: getAssetDisplayImage(asset),
+        workshopGridThumb: workshopCard ? getAssetGridDisplayImage(asset) : '',
+        isWorkshopCard: workshopCard,
+      })
+    );
+  }, [fileSourceApi, getAssetDisplayImage, getAssetGridDisplayImage]);
   const workflowAssetIdSig = useMemo(
     () => assets.map((a) => String(a.id || '').trim()).join('\0'),
     [assets]
@@ -9583,9 +9556,6 @@ ${lineSvg}
   }, [lightboxAssetId, resolveActiveExecutionForAsset]);
 
   const lightboxAsset = lightboxAssetId ? findLiveAsset(lightboxAssetId) : null;
-  const showLightboxInstantShell = Boolean(
-    lightboxInstantShellAssetId && !(lightboxOverlayMounted && lightboxBootPhase)
-  );
   const storyboardPanelAsset = storyboardPanelAssetId
     ? assets.find((a) => a.id === storyboardPanelAssetId && isWorkflowStoryboardTableAsset(a))
     : null;
@@ -9613,43 +9583,57 @@ ${lineSvg}
     () => (lightboxAsset ? resolveWorkflowAssetActiveVariant(lightboxAsset) : null),
     [lightboxAsset]
   );
-  const lightboxPreviewVariant = useMemo(() => {
-    // Always keep the active displayKey's variant. Falling back to "first model3d with
-    // URL" made version switches keep showing the previous model's mesh + textures.
-    return lightboxActiveVariant;
-  }, [lightboxActiveVariant]);
-  const lightboxShowsImage = Boolean(
-    lightboxAsset &&
-      (
-        getAssetDisplayImage(lightboxAsset).trim() ||
-        (fileSourceApi &&
-          parseWorkshopCardId(lightboxAsset.id) &&
-          getAssetGridDisplayImage(lightboxAsset).trim())
-      )
-  );
   const lightboxTexturePreviewSrc =
     lightboxTexturePreview && lightboxAsset && lightboxTexturePreview.assetId === lightboxAsset.id
       ? lightboxTexturePreview.src
       : '';
-  const lightboxMediaCenterVariant =
-    !lightboxTexturePreviewSrc &&
-    lightboxPreviewVariant &&
-    (
-      lightboxPreviewVariant.kind === 'video' ||
-      lightboxPreviewVariant.kind === 'audio' ||
-      lightboxPreviewVariant.kind === 'file' ||
-      lightboxPreviewVariant.kind === 'model3d'
-    )
-      ? lightboxPreviewVariant
-      : null;
-  /** 文字资产当前版本按文本通道展示（非 results 中的位图版本） */
-  const lightboxTextAssetOnTextChannel = Boolean(
-    lightboxAsset &&
-      (isWorkflowTextAsset(lightboxAsset) || isWorkshopTextPreviewName(lightboxAsset.textTitle || '')) &&
-      (workflowAssetCurrentDisplayIsTextChannel(lightboxAsset) ||
-        lightboxAsset.displayKey === 'original' ||
-        isWorkshopTextPreviewName(lightboxAsset.textTitle || ''))
+  const lightboxCenterRoute = useMemo(() => {
+    if (!lightboxAsset) return null;
+    const workshopCard = Boolean(fileSourceApi && parseWorkshopCardId(lightboxAsset.id));
+    return resolveLightboxCenterRoute({
+      asset: lightboxAsset,
+      activeVariant: lightboxActiveVariant,
+      texturePreviewSrc: lightboxTexturePreviewSrc,
+      displayImage: getAssetDisplayImage(lightboxAsset),
+      workshopGridThumb: workshopCard ? getAssetGridDisplayImage(lightboxAsset) : '',
+      isWorkshopCard: workshopCard,
+    });
+  }, [
+    fileSourceApi,
+    getAssetDisplayImage,
+    getAssetGridDisplayImage,
+    lightboxActiveVariant,
+    lightboxAsset,
+    lightboxTexturePreviewSrc,
+  ]);
+  const lightboxMediaCenterVariant = lightboxCenterRoute?.mediaVariant ?? null;
+  const lightboxTextAssetOnTextChannel = Boolean(lightboxCenterRoute?.useTextCenter);
+  const lightboxShowsImage = lightboxCenterRoute?.mode === 'image';
+  const lightboxChromeSlots = useMemo(
+    () =>
+      resolveLightboxChromeSlots({
+        mode: lightboxCenterRoute?.mode || 'image',
+        previewLayout: lightboxPreviewLayout,
+        rasterEligible: Boolean(lightboxAsset && assetLightboxRasterEligible(lightboxAsset)),
+        workshopNeedsApply: Boolean(
+          lightboxAsset && fileSourceApi && workshopCardNeedsApply(lightboxAsset.id, lightboxAsset.displayKey)
+        ),
+        mediaKind: lightboxMediaCenterVariant?.kind,
+      }),
+    [
+      assetLightboxRasterEligible,
+      fileSourceApi,
+      lightboxAsset,
+      lightboxCenterRoute?.mode,
+      lightboxMediaCenterVariant?.kind,
+      lightboxPreviewLayout,
+      workshopCardNeedsApply,
+    ]
   );
+
+  useLayoutEffect(() => {
+    if (lightboxOverlayMounted) unmountLightboxLoadingCover();
+  }, [lightboxOverlayMounted]);
 
   useEffect(() => {
     if (lightboxBootPhase !== 't1') return;
@@ -11114,7 +11098,7 @@ ${lineSvg}
         if (opts.flush) flushLightboxOverlayToAsset();
         lightboxOpenGenRef.current += 1;
         setQuickComposeSegmentsTracked((prev) => stripCurrentViewFromQuickComposeSegments(prev));
-        setLightboxInstantShellAssetId(null);
+        unmountLightboxLoadingCover();
         setLightboxOverlayMounted(false);
         setLightboxAssetId(null);
         setLightboxListBackdropUrl(null);
@@ -12057,7 +12041,7 @@ ${lineSvg}
     setWorkflowAssetContextMenu((prev) => (prev?.assetId === assetId ? null : prev));
     if (lightboxAssetId === assetId) {
       lightboxModelThumbCloseGenRef.current += 1;
-      setLightboxInstantShellAssetId(null);
+      unmountLightboxLoadingCover();
       setLightboxOverlayClosingHidden(false);
       setLightboxOverlayMounted(false);
       setLightboxAssetId(null);
@@ -12178,8 +12162,11 @@ ${lineSvg}
           workshopDiskOpen && isGroupAsset(a)
             ? (a.assetIds || []).map((id) => workshopThumbById[id] || '').find((s) => String(s).trim()) || ''
             : '';
+        const thumbCover = workshopDiskOpen ? String(workshopThumbById[a.id] || '').trim() : '';
         const hasDisplayImage =
-          (displayImg !== '' && !isWorkflowModelSvgPlaceholderSrc(displayImg)) || Boolean(folderCover.trim());
+          (displayImg !== '' && !isWorkflowModelSvgPlaceholderSrc(displayImg)) ||
+          Boolean(folderCover.trim()) ||
+          Boolean(thumbCover);
         return {
           id: a.id,
           aspectRatio: resolveWorkflowCanvasCardAspect(a, cardAspectByAssetId, {
@@ -16618,26 +16605,31 @@ ${lineSvg}
                 )}
               </div>
               ) : null}
-              <div
-                ref={groupGridRef}
+              <WorkflowJustifiedVirtualGrid
+                scrollRef={centerScrollRef}
+                gridRef={groupGridRef}
+                boxes={groupJustifiedLayout.boxes}
+                ready={groupJustifiedLayout.ready}
+                totalHeight={groupJustifiedLayout.totalHeight}
                 className={`relative pt-4 w-full ${WORKFLOW_EDGE_GUTTER} ${
                   groupJustifiedLayout.ready ? '' : 'opacity-0'
                 }`}
                 style={{
-                  height: groupJustifiedLayout.ready ? groupJustifiedLayout.totalHeight : undefined,
                   ['--wf-card-gap' as string]: `${WORKFLOW_ASSET_GRID_GAP_PX}px`,
                 }}
-              >
-                {!currentGroupAsset ? (
-                  <div className="py-8 text-center text-[9px] text-gray-500">该组已被删除或不存在，请返回</div>
-                ) : showAllImages
-                  ? showAllImages.map((flat, idx) => {
-                      const img = flat.src;
-                      const gallKey = `gall:${currentGroupAsset?.id ?? 'x'}:${idx}`;
-                      const layoutBox = groupJustifiedLayout.boxById.get(gallKey);
-                      return (
+                marqueeHitIdsRef={layoutMarqueeHitIdsRef}
+                renderBox={(layoutBox) => {
+                  if (!currentGroupAsset) return null;
+                  if (showAllImages) {
+                    const gallPrefix = `gall:${currentGroupAsset.id}:`;
+                    if (!layoutBox.id.startsWith(gallPrefix)) return null;
+                    const idx = Number(layoutBox.id.slice(gallPrefix.length));
+                    const flat = Number.isInteger(idx) && idx >= 0 ? showAllImages[idx] : undefined;
+                    if (!flat) return null;
+                    const img = flat.src;
+                    const gallKey = layoutBox.id;
+                    return (
                         <div
-                          key={idx}
                           data-workflow-card
                           data-workflow-thumb-key={gallKey}
                           ref={(el) => registerCardZoomHost(gallKey, el)}
@@ -16646,16 +16638,12 @@ ${lineSvg}
                             setHoveredCard({ controlId: gallKey, zoomEligible: true })
                           }
                           onMouseLeave={clearHoveredCard}
-                          style={
-                            layoutBox
-                              ? {
-                                  left: layoutBox.left,
-                                  top: layoutBox.top,
-                                  width: layoutBox.width,
-                                  height: layoutBox.height,
-                                }
-                              : undefined
-                          }
+                          style={{
+                            left: layoutBox.left,
+                            top: layoutBox.top,
+                            width: layoutBox.width,
+                            height: layoutBox.height,
+                          }}
                         >
                           <div className="relative w-full h-full bg-[#141416] flex justify-center">
                             <WorkflowGridImage
@@ -16679,10 +16667,15 @@ ${lineSvg}
                             />
                           </div>
                         </div>
-                      );
-                    })
-                  : currentGroupItems.map((item, idx) => {
-                      const groupKey = currentGroupAsset ? `${currentGroupAsset.id}::${idx}` : `${idx}`;
+                    );
+                  }
+                  const itemPrefix = `${currentGroupAsset.id}::`;
+                  if (!layoutBox.id.startsWith(itemPrefix)) return null;
+                  const idx = Number(layoutBox.id.slice(itemPrefix.length));
+                  if (!Number.isInteger(idx) || idx < 0) return null;
+                  const item = currentGroupItems[idx];
+                  if (item == null) return null;
+                      const groupKey = layoutBox.id;
                       const isAssetRef = typeof item === 'object' && item && 'assetId' in item;
                       const childAsset = isAssetRef ? assets.find((x) => x.id === (item as { assetId: string }).assetId) : null;
                       if (childAsset && !workshopCanvasKindMatches(childAsset, workshopCanvasKindFilter)) return null;
@@ -16693,7 +16686,6 @@ ${lineSvg}
                           : typeof item === 'string'
                             ? item
                             : currentGroupAsset?.original ?? '';
-                      const layoutBox = groupJustifiedLayout.boxById.get(groupKey);
                       const taskMatchesGroupSlot = (t: WorkflowPendingTask) =>
                         t.sourceGroupAssetId === currentGroupAsset?.id && t.sourceItemIndex === idx;
                       const taskMatchesCurrentItem = (t: WorkflowPendingTask) =>
@@ -16732,19 +16724,14 @@ ${lineSvg}
                         const childGroupLen = childIsGroup ? (childAsset.assetIds?.length ?? 0) : 0;
                         return (
                           <div
-                            key={idx}
                             className="absolute min-w-0"
                             data-workflow-thumb-key={groupKey}
-                            style={
-                              layoutBox
-                                ? {
-                                    left: layoutBox.left,
-                                    top: layoutBox.top,
-                                    width: layoutBox.width,
-                                    height: layoutBox.height,
-                                  }
-                                : undefined
-                            }
+                            style={{
+                              left: layoutBox.left,
+                              top: layoutBox.top,
+                              width: layoutBox.width,
+                              height: layoutBox.height,
+                            }}
                           >
                             <div className="relative h-full w-full min-h-0">
                             {childIsGroup && childGroupLen > 1 ? (
@@ -17097,7 +17084,6 @@ ${lineSvg}
 
                       return (
                         <div
-                          key={idx}
                           data-workflow-drop-host
                           ref={(el) =>
                             registerCardZoomHost(
@@ -17111,16 +17097,12 @@ ${lineSvg}
                               : WORKFLOW_CARD_SHELL_IDLE
                           }`}
                           data-workflow-thumb-key={groupKey}
-                          style={
-                            layoutBox
-                              ? {
-                                  left: layoutBox.left,
-                                  top: layoutBox.top,
-                                  width: layoutBox.width,
-                                  height: layoutBox.height,
-                                }
-                              : undefined
-                          }
+                          style={{
+                            left: layoutBox.left,
+                            top: layoutBox.top,
+                            width: layoutBox.width,
+                            height: layoutBox.height,
+                          }}
                           onDragOver={(e) => {
                             handleWorkflowAssetDropHostDragOver(e, groupKey, {
                               allowGroup: !!(isAssetRef && childAsset && !isWorkflowTextAsset(childAsset)),
@@ -17312,8 +17294,12 @@ ${lineSvg}
                         </div>
                         </div>
                       );
-                    })}
-              </div>
+                }}
+              >
+                {!currentGroupAsset ? (
+                  <div className="py-8 text-center text-[9px] text-gray-500">该组已被删除或不存在，请返回</div>
+                ) : null}
+              </WorkflowJustifiedVirtualGrid>
               {groupStringLightboxIndex != null && typeof currentGroupItems[groupStringLightboxIndex] === 'string' && (
                 <div
                   className="fixed inset-0 z-[2000] flex items-center justify-center bg-black/78 backdrop-blur-sm p-4"
@@ -17402,15 +17388,18 @@ ${lineSvg}
             </div>
           ) : (
             <div className={`min-h-0 min-w-0 py-6 ${WORKFLOW_EDGE_GUTTER}`}>
-              <div
-                ref={gridRef}
+              <WorkflowJustifiedVirtualGrid
+                scrollRef={centerScrollRef}
+                gridRef={gridRef}
+                boxes={rootJustifiedLayout.boxes}
+                ready={rootJustifiedLayout.ready}
+                totalHeight={rootJustifiedLayout.totalHeight}
                 className={`relative w-full ${rootJustifiedLayout.ready ? '' : 'opacity-0'}`}
                 style={{
-                  height: rootJustifiedLayout.ready ? rootJustifiedLayout.totalHeight : undefined,
                   ['--wf-card-gap' as string]: `${WORKFLOW_ASSET_GRID_GAP_PX}px`,
                 }}
-              >
-                {(rootJustifiedLayout.ready ? rootJustifiedLayout.boxes : []).map((layoutBox) => {
+                marqueeHitIdsRef={layoutMarqueeHitIdsRef}
+                renderBox={(layoutBox) => {
                   const a = rootCanvasAssetsById.get(layoutBox.id);
                   if (!a) return null;
                   const textDisplay = getAssetDisplayText(a);
@@ -17420,7 +17409,8 @@ ${lineSvg}
                     Object.values(a.textResults || {}).some((v) => String(v || '').trim() !== '');
                   const baseDisplayImage = getAssetDisplayImage(a);
                   const hasDisplayImage =
-                    baseDisplayImage.trim() !== '' && !isWorkflowModelSvgPlaceholderSrc(baseDisplayImage);
+                    (baseDisplayImage.trim() !== '' && !isWorkflowModelSvgPlaceholderSrc(baseDisplayImage)) ||
+                    (workshopDiskOpen && Boolean(String(workshopThumbById[a.id] || '').trim()));
                   const isBusy = busyAssetIds.has(a.id);
                   const isPendingOnly = pendingAssetIds.has(a.id) && !executingQueue;
                   const taskForRootSlot = rootExecutingTaskByAssetId.get(a.id) ?? null;
@@ -17864,8 +17854,8 @@ ${lineSvg}
                       </div>
                     </div>
                   );
-                })}
-              </div>
+                }}
+              />
             </div>
           )}
           </div>
@@ -17936,16 +17926,6 @@ ${lineSvg}
         />
       )}
 
-      {showLightboxInstantShell && lightboxInstantShellAssetId ? (
-        <WorkflowLightboxInstantShell
-          open
-          focusKey={lightboxInstantShellAssetId}
-          placeholderSrc={lightboxPlaceholderImageSrc}
-          backdropImageSrc={lightboxListBackdropUrl}
-          onClose={handleLightboxClose}
-        />
-      ) : null}
-
       {/* 进行中：大图弹窗；外壳统一为 ImagePreviewOverlay，当前版本为纯文本时仅中央为文字编辑区 */}
       {lightboxOverlayMounted && lightboxAssetId && lightboxBootPhase && lightboxAsset && !showArchived && (
         <AssetPreviewOverlay
@@ -17969,18 +17949,14 @@ ${lineSvg}
             )
           }
           imageSrc={
-            lightboxTexturePreviewSrc
+            lightboxCenterRoute?.mode === 'image'
               ? lightboxTexturePreviewSrc
-              : lightboxMediaCenterVariant
-              ? undefined
-              : lightboxShowsImage || !lightboxTextAssetOnTextChannel
-              ? lightboxShowsImage
-                ? lightboxPreviewUnderlaySrc || getLightboxPreviewImageSrc(lightboxAsset)
-                : getLightboxPreviewImageSrc(lightboxAsset)
+                ? lightboxCenterRoute.imageSrc
+                : lightboxPreviewUnderlaySrc || lightboxCenterRoute.imageSrc
               : undefined
           }
           centerSlot={
-            !lightboxTexturePreviewSrc && lightboxTextAssetOnTextChannel && !lightboxShowsImage ? (
+            lightboxCenterRoute?.useTextCenter ? (
               <WorkflowTextLightboxCenter
                 ref={textLightboxCenterRef}
                 resetKey={`${lightboxAsset.id}:${lightboxAsset.displayKey}`}
@@ -18017,7 +17993,7 @@ ${lineSvg}
                   );
                 }}
               />
-            ) : !lightboxTexturePreviewSrc && lightboxMediaCenterVariant ? (
+            ) : lightboxCenterRoute?.useMediaCenter && lightboxMediaCenterVariant ? (
                 <AssetMediaPreviewCenter
                   variant={lightboxMediaCenterVariant}
                   assetId={lightboxAsset.id}
@@ -18039,9 +18015,7 @@ ${lineSvg}
                 model3dBackfaceCulling={lightboxModel3dBackfaceCulling}
                 capturePreviewNonce={lightboxMediaCapturePreviewNonce}
                 uiRightInset={
-                  lightboxChromeReady && !lightboxUiHidden
-                    ? WORKFLOW_LIGHTBOX_ASSET_THUMB_STRIP_INSET
-                    : '0px'
+                  lightboxUiHidden ? '0px' : WORKFLOW_LIGHTBOX_ASSET_THUMB_STRIP_INSET
                 }
                 onWebPreviewCaptureApiChange={
                   lightboxMediaCenterVariant.kind === 'model3d'
@@ -18063,11 +18037,10 @@ ${lineSvg}
                     ? persistLightboxModel3dViewState
                     : undefined
                 }
-                onAddToComposeInput={(text) => appendQuickComposeTextInput(text, '媒体资产引用')}
               />
             ) : undefined
           }
-          centerSlotFullBleed={Boolean(!lightboxTexturePreviewSrc && lightboxMediaCenterVariant)}
+          centerSlotFullBleed={Boolean(lightboxCenterRoute?.centerSlotFullBleed)}
           onClose={handleLightboxClose}
           wheelListLength={lightboxList.length}
           onWheelNavigate={handleLightboxWheelNavigate}
@@ -18089,10 +18062,10 @@ ${lineSvg}
             workspaceQuickComposeExpanded ? WORKFLOW_LIGHTBOX_COMPOSE_DOCKED_INSET : undefined
           }
           contentRightInset={
-            lightboxChromeReady ? WORKFLOW_LIGHTBOX_ASSET_THUMB_STRIP_INSET : '0px'
+            lightboxUiHidden ? '0px' : WORKFLOW_LIGHTBOX_ASSET_THUMB_STRIP_INSET
           }
           rightRail={
-            lightboxChromeReady && !lightboxUiHidden ? (
+            !lightboxUiHidden ? (
               <WorkflowLightboxAssetThumbStrip
                 assets={lightboxList}
                 activeAssetId={lightboxAsset.id}
@@ -18114,10 +18087,8 @@ ${lineSvg}
             ) : undefined
           }
           contentLeftInset={
-            lightboxChromeReady && !lightboxUiHidden
-              ? lightboxStepSideChrome
-                ? WORKFLOW_LIGHTBOX_VGP_GRAPH_LEFT_INSET
-                : '0px'
+            !lightboxUiHidden && lightboxStepSideChrome
+              ? WORKFLOW_LIGHTBOX_VGP_GRAPH_LEFT_INSET
               : '0px'
           }
           enablePanoramaMode={Boolean(lightboxTexturePreviewSrc || lightboxShowsImage)}
@@ -18259,9 +18230,9 @@ ${lineSvg}
               : undefined
           }
           topRightExtra={
-            lightboxChromeReady && !lightboxMediaCenterVariant && lightboxPreviewLayout !== 'model3d' ? (
+            lightboxChromeReady ? (
             <>
-              {fileSourceApi && workshopCardNeedsApply(lightboxAsset.id, lightboxAsset.displayKey) ? (
+              {lightboxChromeSlots.showApply ? (
                 <button
                   type="button"
                   onClick={() => {
@@ -18276,48 +18247,22 @@ ${lineSvg}
               <button
                 type="button"
                 onClick={() => {
-                  if (!lightboxShowsImage) {
-                    const title = (lightboxAsset.textTitle || '').trim();
-                    const body = getAssetDisplayText(lightboxAsset);
-                    const t = title ? `${title}\n\n${body}` : body;
-                    const blob = new Blob([t], { type: 'text/plain;charset=utf-8' });
-                    const url = URL.createObjectURL(blob);
-                    try {
-                      const a = document.createElement('a');
-                      a.href = url;
-                      a.download = `workflow-text-${lightboxAsset.id.slice(0, 6)}.txt`;
-                      a.click();
-                    } finally {
-                      URL.revokeObjectURL(url);
-                    }
-                    appendWorkflowAuditEvent({
-                      level: 'info',
-                      code: WORKFLOW_AUDIT_CODES.EXPORT_TEXT_PREVIEW,
-                      assetId: lightboxAsset.id,
-                      displayKey: lightboxAsset.displayKey,
-                      message: '工作流大图：下载文字预览为 TXT',
-                      detail: { context: 'workflow_lightbox' },
-                    });
-                    return;
-                  }
-                  appendWorkflowAuditEvent({
-                    level: 'info',
-                    code: WORKFLOW_AUDIT_CODES.EXPORT_IMAGE,
-                    assetId: lightboxAsset.id,
-                    displayKey: lightboxAsset.displayKey,
-                    message: '工作流大图：下载当前预览图',
-                    detail: { context: 'workflow_lightbox' },
-                  });
-                  void triggerImageDownload(
-                    getAssetDisplayImage(lightboxAsset),
-                    `workflow-preview-${lightboxAsset.id.slice(0, 6)}`
-                  );
+                  void handleLightboxDownloadCurrent();
                 }}
                 className={LIGHTBOX_ICON_BTN_PRIMARY}
-                title={lightboxShowsImage ? '下载当前预览图' : '下载为文本文件'}
-                aria-label={lightboxShowsImage ? '下载当前预览图' : '下载为文本文件'}
+                title={lightboxShowsImage ? '下载当前预览图' : lightboxCenterRoute?.mode === 'text' ? '下载为文本文件' : '下载当前预览'}
+                aria-label={lightboxShowsImage ? '下载当前预览图' : lightboxCenterRoute?.mode === 'text' ? '下载为文本文件' : '下载当前预览'}
               >
                 <Download {...LIGHTBOX_BAR_IC} aria-hidden />
+              </button>
+              <button
+                type="button"
+                onClick={() => handleLightboxAddCurrentToInput()}
+                className={LIGHTBOX_ICON_BTN_NEUTRAL}
+                title="加入输入"
+                aria-label="加入输入"
+              >
+                <Plus {...LIGHTBOX_BAR_IC} aria-hidden />
               </button>
               {(() => {
                 const dk = lightboxAsset.displayKey;
@@ -18356,6 +18301,39 @@ ${lineSvg}
                   </button>
                 );
               })()}
+              {lightboxChromeSlots.typeCluster === 'model3d' ? (
+                <>
+                  <div className={WORKFLOW_IMAGE_PREVIEW_RAIL_DIVIDER} aria-hidden />
+                  <WorkflowLightboxModel3dRail
+                    displayMode={lightboxModel3dDisplayMode}
+                    showGrid={lightboxModel3dShowGrid}
+                    backfaceCulling={lightboxModel3dBackfaceCulling}
+                    onDisplayModeChange={(mode) => {
+                      markLightboxModel3dViewDirty();
+                      setLightboxModel3dDisplayMode(mode);
+                    }}
+                    onResetView={() => {
+                      markLightboxModel3dViewDirty();
+                      setLightboxModel3dResetViewNonce((nonce) => nonce + 1);
+                    }}
+                    onToggleGrid={() => {
+                      markLightboxModel3dViewDirty();
+                      setLightboxModel3dShowGrid((visible) => !visible);
+                    }}
+                    onToggleBackfaceCulling={() => {
+                      markLightboxModel3dViewDirty();
+                      setLightboxModel3dBackfaceCulling((enabled) => !enabled);
+                    }}
+                    onCapturePreview={() => {
+                      if (lightboxMediaCenterVariant?.kind === 'model3d') {
+                        setLightboxMediaCapturePreviewNonce((nonce) => nonce + 1);
+                      } else {
+                        void handleLightboxCapturePreview();
+                      }
+                    }}
+                  />
+                </>
+              ) : null}
             </>
             ) : undefined
           }
