@@ -250,6 +250,66 @@ function layoutVersionGraph(vgp: VgpAssetExtension): {
   };
 }
 
+function workshopVgpReuseSig(asset: WorkflowAsset): string {
+  const order = asset.resultOrder || [];
+  const results = asset.results || {};
+  return [
+    asset.id,
+    order.join(','),
+    String(asset.original || '').length,
+    order.map((k) => `${k}:${String(results[k] || '').length}`).join('|'),
+  ].join('\0');
+}
+
+function versionStepKey(v: ImageVersion): string {
+  return v.imageRef.kind === 'original_field' ? 'original' : v.imageRef.key;
+}
+
+/** 出图只追加步骤时沿用已有 version id，避免左侧树节点整棵重挂。 */
+function mergeVgpByStepKey(prev: VgpAssetExtension, next: VgpAssetExtension): VgpAssetExtension {
+  const prevByStep = new Map<string, ImageVersion>();
+  for (const id of prev.versionOrder) {
+    const v = prev.versionsById[id];
+    if (v) prevByStep.set(versionStepKey(v), v);
+  }
+  const idMap = new Map<string, string>();
+  const versionsById: Record<string, ImageVersion> = {};
+  const versionOrder: string[] = [];
+  for (const nextId of next.versionOrder) {
+    const nv = next.versionsById[nextId];
+    if (!nv) continue;
+    const kept = prevByStep.get(versionStepKey(nv));
+    const id = kept?.id || nv.id;
+    idMap.set(nv.id, id);
+    versionOrder.push(id);
+    versionsById[id] = {
+      ...nv,
+      id,
+      lineageRootId: kept?.lineageRootId || nv.lineageRootId,
+      parentVersionId: nv.parentVersionId,
+    };
+  }
+  for (const id of versionOrder) {
+    const v = versionsById[id];
+    if (!v.parentVersionId) continue;
+    versionsById[id] = {
+      ...v,
+      parentVersionId: idMap.get(v.parentVersionId) ?? v.parentVersionId,
+    };
+  }
+  return {
+    ...next,
+    versionsById,
+    versionOrder,
+    originalVersionId: next.originalVersionId
+      ? idMap.get(next.originalVersionId) ?? next.originalVersionId
+      : next.originalVersionId,
+    headVersionId: next.headVersionId
+      ? idMap.get(next.headVersionId) ?? next.headVersionId
+      : next.headVersionId,
+  };
+}
+
 function versionIdForDisplayKey(asset: WorkflowAsset, vgp: VgpAssetExtension): string | null {
   const dk = asset.displayKey;
   for (const id of vgp.versionOrder) {
@@ -294,7 +354,23 @@ export function WorkflowStepNodeGraphOverlay({
   pixelBusy = false,
   pixelBusyInputDisplayKeys = [],
 }: WorkflowStepNodeGraphOverlayProps) {
-  const displayAsset = useMemo(() => ensureWorkflowAssetVgp(asset), [asset]);
+  const vgpKeepRef = useRef<{ sig: string; vgp: VgpAssetExtension } | null>(null);
+  const displayAsset = useMemo(() => {
+    const next = ensureWorkflowAssetVgp(asset);
+    const sig = workshopVgpReuseSig(asset);
+    const keep = vgpKeepRef.current;
+    if (!next.vgp) return next;
+    if (keep && keep.sig === sig) {
+      return { ...next, vgp: keep.vgp };
+    }
+    if (!keep?.vgp) {
+      vgpKeepRef.current = { sig, vgp: next.vgp };
+      return next;
+    }
+    const merged = mergeVgpByStepKey(keep.vgp, next.vgp);
+    vgpKeepRef.current = { sig, vgp: merged };
+    return { ...next, vgp: merged };
+  }, [asset]);
   const vgp = displayAsset.vgp;
   const selectedId = vgp ? versionIdForDisplayKey(asset, vgp) : null;
 
@@ -683,11 +759,11 @@ export function WorkflowStepNodeGraphOverlay({
     // Always fingerprint verSrc + preview rev so close-3D / overwritten thumb busts Progressive LRU.
     const previewRev = Number(displayAsset.resultsPreviewRev?.[key]) || 0;
     const thumbCacheKey = companionKey
-      ? `${displayAsset.id}:vgp-step-graph:${v.id}:ck:${companionKey}:fp${previewSrcCacheFingerprint(verSrc)}:r${previewRev}`
-      : `${displayAsset.id}:vgp-step-graph:${v.id}:fp${previewSrcCacheFingerprint(verSrc)}:r${previewRev}`;
+      ? `${displayAsset.id}:vgp-step-graph:${key}:ck:${companionKey}:fp${previewSrcCacheFingerprint(verSrc)}:r${previewRev}`
+      : `${displayAsset.id}:vgp-step-graph:${key}:fp${previewSrcCacheFingerprint(verSrc)}:r${previewRev}`;
     return (
       <button
-        key={id}
+        key={key}
         type="button"
         data-pin-nopin="true"
         data-ac-allow-context-menu

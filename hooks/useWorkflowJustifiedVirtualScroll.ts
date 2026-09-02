@@ -9,8 +9,10 @@ import {
 import type { WorkflowJustifiedLayoutBox } from '../services/workflowJustifiedLayout';
 import {
   filterWorkflowJustifiedBoxIdsInScroll,
+  mergeWorkflowJustifiedLingerVisibleIds,
   shouldVirtualizeWorkflowJustifiedGrid,
   workflowJustifiedMarqueeHitIds,
+  WORKFLOW_JUSTIFIED_VIRTUAL_LINGER_PX,
   WORKFLOW_JUSTIFIED_VIRTUAL_OVERSCAN_PX,
 } from '../services/workflowJustifiedScroll';
 
@@ -19,6 +21,7 @@ export type UseWorkflowJustifiedVirtualScrollOptions = {
   /** 显式关闭；默认 itemCount >= 48 时开启 */
   virtualize?: boolean;
   overscanPx?: number;
+  lingerPx?: number;
 };
 
 export function useWorkflowJustifiedVirtualScroll(
@@ -28,12 +31,14 @@ export function useWorkflowJustifiedVirtualScroll(
 ) {
   const { boxes } = options;
   const overscanPx = options.overscanPx ?? WORKFLOW_JUSTIFIED_VIRTUAL_OVERSCAN_PX;
+  const lingerPx = options.lingerPx ?? WORKFLOW_JUSTIFIED_VIRTUAL_LINGER_PX;
   const virtualize =
     options.virtualize ?? shouldVirtualizeWorkflowJustifiedGrid(boxes.length);
 
   const [scrollTop, setScrollTop] = useState(0);
   const [viewportHeight, setViewportHeight] = useState(0);
   const scrollRafRef = useRef(0);
+  const lingerMountedIdsRef = useRef<Set<string>>(new Set());
 
   const readScroll = useCallback(() => {
     const el = scrollRef.current;
@@ -71,13 +76,26 @@ export function useWorkflowJustifiedVirtualScroll(
 
   const visibleBoxIds = useMemo(() => {
     if (!virtualize) {
-      return new Set(boxes.map((b) => b.id));
+      const all = new Set(boxes.map((b) => b.id));
+      lingerMountedIdsRef.current = all;
+      return all;
     }
     if (!(viewportHeight > 0)) {
-      return new Set(boxes.slice(0, Math.min(boxes.length, 24)).map((b) => b.id));
+      const seed = new Set(boxes.slice(0, Math.min(boxes.length, 24)).map((b) => b.id));
+      lingerMountedIdsRef.current = seed;
+      return seed;
     }
-    return filterWorkflowJustifiedBoxIdsInScroll(boxes, scrollTop, viewportHeight, overscanPx);
-  }, [virtualize, boxes, scrollTop, viewportHeight, overscanPx]);
+    const next = mergeWorkflowJustifiedLingerVisibleIds(
+      lingerMountedIdsRef.current,
+      boxes,
+      scrollTop,
+      viewportHeight,
+      overscanPx,
+      lingerPx
+    );
+    lingerMountedIdsRef.current = next;
+    return next;
+  }, [virtualize, boxes, scrollTop, viewportHeight, overscanPx, lingerPx]);
 
   const isBoxVisible = useCallback(
     (id: string) => visibleBoxIds.has(id),

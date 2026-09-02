@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
+import { workshopDisplayNeedsApply } from '../services/workshopCheckoutDebounce';
 import {
   applyWorkshopFileState,
   isWorkshopBrowserLibraryRoot,
@@ -329,6 +330,69 @@ describe('workshopFileTree', () => {
         },
       ]),
     ).toBe('a3f1c0e8/c91e04d2.png');
+  });
+
+  it('loose checkout with workspace versions exposes resultOrder and apply face', () => {
+    const root = 'C:/lib';
+    const looseId = workshopFileAssetId(root, 'a.png');
+    const cards = workshopCanvasItemsToWorkflowAssets(
+      [
+        {
+          kind: 'loose',
+          root,
+          name: 'a.png',
+          rel: 'a.png',
+          assetKind: 'image',
+          size: 2,
+          mtimeMs: 3,
+          assetId: 'bf629595',
+          resultOrder: ['c9ad9125'],
+          checkoutFileId: 'orig1',
+          faceFileId: 'orig1',
+          files: {
+            orig1: { name: 'a.png', role: 'original' },
+            c9ad9125: { name: 'c9ad9125.png', role: 'result', step: 'step1' },
+          },
+        },
+      ],
+      { faceById: { [looseId]: 'c9ad9125' } },
+    );
+    expect(cards[0].resultOrder).toEqual(['c9ad9125']);
+    expect(cards[0].displayKey).toBe('c9ad9125');
+    expect(workshopDisplayNeedsApply(cards[0].displayKey, 'orig1')).toBe(true);
+    const fromDoc = workshopCanvasItemsToWorkflowAssets(
+      [
+        {
+          kind: 'loose',
+          root,
+          name: 'a.png',
+          rel: 'a.png',
+          assetKind: 'image',
+          size: 2,
+          mtimeMs: 3,
+          assetId: 'bf629595',
+          resultOrder: ['c9ad9125'],
+          displayFileId: 'c9ad9125',
+          checkoutFileId: 'orig1',
+          faceFileId: 'orig1',
+          files: {
+            orig1: { name: 'a.png', role: 'original' },
+            c9ad9125: { name: 'c9ad9125.png', role: 'result', step: 'step1' },
+          },
+        },
+      ],
+      {
+        originalById: {
+          [looseId]: 'data:image/jpeg;base64,RESULT',
+          [`${looseId}::orig1`]: 'data:image/jpeg;base64,ORIG',
+          [`${looseId}::c9ad9125`]: 'data:image/jpeg;base64,RESULT',
+        },
+      },
+    );
+    expect(fromDoc[0].displayKey).toBe('c9ad9125');
+    expect(fromDoc[0].original).toBe('data:image/jpeg;base64,ORIG');
+    expect(fromDoc[0].results.c9ad9125).toBe('data:image/jpeg;base64,RESULT');
+    expect(workshopDisplayNeedsApply(fromDoc[0].displayKey, 'orig1')).toBe(true);
   });
 
   it('maps hydrated markdown onto loose and package text cards', () => {

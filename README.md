@@ -43,6 +43,7 @@ AI-assisted asset workflow workbench (workspace, capability presets, experimenta
 - [x] Companion Copilot product UI: runtime awareness bar, task cards, desktop observe
 - [x] Companion desktop shell: dsh concierge, map, tools shelf, skill wall, blank rooms, workshop library folder source
 - [x] Unified lightbox center routing (image / text / media) plus workshop multi-format preview
+- [x] Workshop loose-file generate: result versions stay in the workspace package (disk checkout stays original); step-tree thumbs reuse VGP/step keys and `data:` LRU so switching steps does not blank; lightbox center holds the previous frame until the next image loads
 - [x] Design tokens in `design-system/` (page overrides for workshop / shell / tools)
 - [ ] Removed: standalone dialog page, texture pattern extract page, prompt-effect analysis page
 
@@ -60,7 +61,7 @@ AI-assisted asset workflow workbench (workspace, capability presets, experimenta
 ```bash
 npm install
 npm run dev
-npm run restart:local-stack   # vite:3000 auth:9100 companion:18765 sam:18081 gemini:9002
+npm run restart:local-stack   # vite:3000 auth:9100 sam:18081 gemini:9002 + Electron desktop (spawns 18765)
 ```
 
 See `.env.example` for environment variables (including `AI_WORKER_PROXY_RATE_LIMIT_RETRIES`, `VITE_WORKFLOW_UNDERSTAND_IMAGE_CONCURRENCY`).

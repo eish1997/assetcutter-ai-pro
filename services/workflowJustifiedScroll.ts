@@ -1,6 +1,8 @@
 import type { WorkflowJustifiedLayoutBox } from './workflowJustifiedLayout';
 
 export const WORKFLOW_JUSTIFIED_VIRTUAL_OVERSCAN_PX = 720;
+/** 已挂载卡片离开 overscan 后仍保留，避免来回滚时拆装闪黑底 */
+export const WORKFLOW_JUSTIFIED_VIRTUAL_LINGER_PX = 1800;
 export const WORKFLOW_JUSTIFIED_VIRTUALIZE_MIN_ITEMS = 48;
 
 export type ClientRectLike = {
@@ -32,6 +34,32 @@ export function filterWorkflowJustifiedBoxIdsInScroll(
 
 export function shouldVirtualizeWorkflowJustifiedGrid(itemCount: number): boolean {
   return itemCount >= WORKFLOW_JUSTIFIED_VIRTUALIZE_MIN_ITEMS;
+}
+
+/**
+ * 视口+overscan 必须挂载；上一帧已挂载的卡片在 linger 范围内继续保留。
+ * 回滚短距离时不拆卡，缩略图不用从黑底重绘。
+ */
+export function mergeWorkflowJustifiedLingerVisibleIds(
+  prevMountedIds: ReadonlySet<string>,
+  boxes: WorkflowJustifiedLayoutBox[],
+  scrollTop: number,
+  viewportHeight: number,
+  overscanPx = WORKFLOW_JUSTIFIED_VIRTUAL_OVERSCAN_PX,
+  lingerPx = WORKFLOW_JUSTIFIED_VIRTUAL_LINGER_PX
+): Set<string> {
+  const required = filterWorkflowJustifiedBoxIdsInScroll(boxes, scrollTop, viewportHeight, overscanPx);
+  const keepBand = filterWorkflowJustifiedBoxIdsInScroll(
+    boxes,
+    scrollTop,
+    viewportHeight,
+    Math.max(overscanPx, lingerPx)
+  );
+  const next = new Set(required);
+  for (const id of prevMountedIds) {
+    if (keepBand.has(id)) next.add(id);
+  }
+  return next;
 }
 
 function rectsOverlap(a: ClientRectLike, b: ClientRectLike): boolean {

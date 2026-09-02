@@ -892,12 +892,13 @@ function createWorkshopFileTreeHost(deps) {
         continue;
       }
       const doc = packed.doc;
+      const originalId = Object.entries(doc.files || {}).find(([, rec]) => rec && rec.role === 'original')?.[0] || '';
       out.push({
         ...item,
         assetId: doc.id,
-        displayFileId: doc.faceFileId || doc.displayFileId,
-        faceFileId: doc.faceFileId || doc.displayFileId,
-        checkoutFileId: doc.checkoutFileId || doc.displayFileId,
+        displayFileId: doc.displayFileId || doc.faceFileId || originalId,
+        faceFileId: doc.faceFileId || originalId || doc.displayFileId,
+        checkoutFileId: doc.checkoutFileId || originalId || doc.faceFileId,
         resultOrder: doc.resultOrder,
         files: doc.files,
         title: doc.title || item.name,
@@ -1182,7 +1183,7 @@ function createWorkshopFileTreeHost(deps) {
     const doc = packed.doc;
     doc.files[fileId] = step ? { name, role: 'result', step } : { name, role: 'result' };
     doc.resultOrder = [...doc.resultOrder, fileId];
-    doc.displayFileId = doc.displayFileId || fileId;
+    doc.displayFileId = fileId;
     await writeManifest(packed.absDir, doc);
     return { ok: true, assetId: doc.id, fileId, displayFileId: doc.displayFileId, doc, checkoutRel: doc.checkoutRel };
   }
@@ -1365,7 +1366,8 @@ function createWorkshopFileTreeHost(deps) {
       return { ok: false, error: 'not_found' };
     }
     if (!st.isFile()) return { ok: false, error: 'not_file' };
-    const decoded = decodeDataUrl(payload && payload.dataUrl);
+    const rawDataUrl = payload && payload.dataUrl;
+    const decoded = decodeDataUrl(rawDataUrl);
     if (!decoded || !decoded.buf.length) return { ok: false, error: 'bad_data' };
     if (decoded.buf.length > MAX_FILE_BYTES) return { ok: false, error: 'too_large' };
     const bound = await bindLooseOriginal(root, srcRel, srcAbs);

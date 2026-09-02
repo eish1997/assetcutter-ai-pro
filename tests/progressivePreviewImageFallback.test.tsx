@@ -16,7 +16,10 @@ vi.mock('../services/workflowImageThumb', async () => {
   };
 });
 
-import { ProgressivePreviewImage } from '../components/ProgressivePreviewImage';
+import {
+  ProgressivePreviewImage,
+  seedPreviewThumbMemoryCache,
+} from '../components/ProgressivePreviewImage';
 
 afterEach(() => {
   cleanup();
@@ -75,5 +78,32 @@ describe('ProgressivePreviewImage', () => {
       window.setTimeout(resolve, 40);
     });
     expect(thumbFn.mock.calls.length).toBe(calls);
+  });
+
+  it('paints cached thumbs on the first remount frame instead of a blank hole', () => {
+    const thumb = `data:image/jpeg;base64,${'B'.repeat(400)}`;
+    seedPreviewThumbMemoryCache('scroll-remount-thumb', thumb);
+    render(
+      <ProgressivePreviewImage
+        fullSrc="http://127.0.0.1:9101/v1/projects/p/assets/image-full-2"
+        cacheKey="scroll-remount-thumb"
+        alt="cached remount"
+      />
+    );
+    expect(screen.getByRole('img', { name: 'cached remount' }).getAttribute('src')).toBe(thumb);
+  });
+
+  it('paints cached thumbs on remount when fullSrc is an inline data URL', () => {
+    const full = `data:image/png;base64,${'A'.repeat(200)}`;
+    const thumb = `data:image/jpeg;base64,${'C'.repeat(400)}`;
+    seedPreviewThumbMemoryCache('inline-data-remount', thumb);
+    render(
+      <ProgressivePreviewImage
+        fullSrc={full}
+        cacheKey="inline-data-remount"
+        alt="inline remount"
+      />
+    );
+    expect(screen.getByRole('img', { name: 'inline remount' }).getAttribute('src')).toBe(thumb);
   });
 });

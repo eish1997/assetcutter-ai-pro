@@ -205,6 +205,23 @@ function playableFieldsForCanvasItem(opts: {
   };
 }
 
+export function workshopOriginalFileId(item: WorkshopCanvasItem | null | undefined): string {
+  const files = item?.files || {};
+  const orig = Object.entries(files).find(([, rec]) => rec && rec.role === 'original');
+  return String(orig?.[0] || item?.checkoutFileId || '').trim();
+}
+
+export function workshopVersionFileIds(item: WorkshopCanvasItem | null | undefined): string[] {
+  const ids: string[] = [];
+  const orig = workshopOriginalFileId(item);
+  if (orig) ids.push(orig);
+  for (const fid of item?.resultOrder || []) {
+    const id = String(fid || '').trim();
+    if (id && !ids.includes(id)) ids.push(id);
+  }
+  return ids;
+}
+
 export function workshopCanvasItemsToWorkflowAssets(
   items: WorkshopCanvasItem[] | null | undefined,
   args: {
@@ -229,8 +246,17 @@ export function workshopCanvasItemsToWorkflowAssets(
         const key = `${id}::${fid}`;
         if (originalById[key]) results[fid] = originalById[key];
       }
+      if (originalById[id] && resultOrder.includes(displayKey) && !results[displayKey]) {
+        results[displayKey] = originalById[id];
+      }
       const pkgTitle = String(item.title || item.name || item.assetId);
-      const stored = originalById[id] || originalById[`${id}::${displayKey}`] || '';
+      const origId = workshopOriginalFileId(item);
+      const storedOriginal = origId ? originalById[`${id}::${origId}`] || '' : '';
+      const stored =
+        storedOriginal ||
+        (displayKey === origId || displayKey === 'original' || !origId
+          ? originalById[id] || originalById[`${id}::${displayKey}`] || ''
+          : '');
       const playable = playableFieldsForCanvasItem({
         name: item.name,
         title: pkgTitle,
@@ -278,14 +304,24 @@ export function workshopCanvasItemsToWorkflowAssets(
     }
     if (item.kind === 'loose') {
       const id = workshopFileAssetId(item.root, item.rel);
-      const faceKey = String(args.faceById?.[id] || item.faceFileId || 'original').trim() || 'original';
+      const faceKey =
+        String(args.faceById?.[id] || item.displayFileId || item.faceFileId || 'original').trim() || 'original';
       const resultOrder = Array.isArray(item.resultOrder) ? item.resultOrder.slice() : [];
       const results: Record<string, string> = {};
       for (const fid of resultOrder) {
         const key = `${id}::${fid}`;
         if (originalById[key]) results[fid] = originalById[key];
       }
-      const stored = originalById[id] || originalById[`${id}::${faceKey}`] || '';
+      if (originalById[id] && resultOrder.includes(faceKey) && !results[faceKey]) {
+        results[faceKey] = originalById[id];
+      }
+      const origId = workshopOriginalFileId(item);
+      const storedOriginal = origId ? originalById[`${id}::${origId}`] || '' : '';
+      const stored =
+        storedOriginal ||
+        (faceKey === origId || faceKey === 'original' || !origId
+          ? originalById[id] || originalById[`${id}::${faceKey}`] || ''
+          : '');
       const playable = playableFieldsForCanvasItem({
         name: item.name,
         title: String(item.title || item.name || item.rel),

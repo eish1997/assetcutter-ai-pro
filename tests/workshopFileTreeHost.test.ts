@@ -206,6 +206,12 @@ describe('workshop file tree host', () => {
     expect(fs.existsSync(path.join(rootB, 'same.png'))).toBe(true);
     const dirs = fs.readdirSync(rootA).filter((n) => n !== 'same.png');
     expect(dirs.every((n) => !fs.existsSync(path.join(rootA, n, AC_ASSET_MANIFEST)))).toBe(true);
+    const listed = await host.list({ root: rootA, rel: '', assetsOnly: true });
+    const same = (listed.items || []).find((i) => i.rel === 'same.png');
+    expect(same?.resultOrder?.length).toBe(1);
+    expect(same?.displayFileId).toBe(upgraded.fileId);
+    expect(same?.checkoutFileId).toBeTruthy();
+    expect(same?.checkoutFileId).not.toBe(upgraded.fileId);
     const readA = await host.readFile({ root: rootA, assetId: upgraded.assetId, fileId: upgraded.fileId });
     expect(readA.ok).toBe(true);
     const readB = await host.readFile({ root: rootB, rel: 'same.png' });

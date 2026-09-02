@@ -49,6 +49,20 @@ function isEmptyPreviewThumb(src: string | null | undefined): boolean {
   return workflowSafeImgSrc(src) === WORKFLOW_IMG_EMPTY_PLACEHOLDER;
 }
 
+function readCachedPreviewLayers(cacheKey: string): { micro: string | null; thumb: string | null } {
+  const thumbRaw = cacheGet(thumbCacheKey(cacheKey)) ?? cacheGet(cacheKey);
+  const microRaw = cacheGet(microCacheKey(cacheKey));
+  const thumb = thumbRaw && !isEmptyPreviewThumb(thumbRaw) ? thumbRaw : null;
+  const micro = microRaw && !isEmptyPreviewThumb(microRaw) ? microRaw : null;
+  return { micro, thumb };
+}
+
+/** 虚拟列表拆装后首帧就能画出缓存缩略，避免先闪黑底再进 effect。 */
+export function seedPreviewThumbMemoryCache(cacheKey: string, thumbSrc: string, microSrc?: string): void {
+  cacheSet(thumbCacheKey(cacheKey), thumbSrc);
+  if (microSrc) cacheSet(microCacheKey(cacheKey), microSrc);
+}
+
 function canDirectLoadAfterThumbMiss(src: string): boolean {
   return /^(https?:|blob:)/i.test(workflowSafeImgSrc(src));
 }
@@ -156,9 +170,21 @@ export const ProgressivePreviewImage = forwardRef<HTMLImageElement, ProgressiveP
     const decodePriRef = useRef(decodePri);
     decodePriRef.current = decodePri;
 
-    const [microSrc, setMicroSrc] = useState<string | null>(null);
-    const [thumbSrc, setThumbSrc] = useState<string | null>(null);
-    const [thumbReady, setThumbReady] = useState(false);
+    const [microSrc, setMicroSrc] = useState<string | null>(() => {
+      const s = workflowSafeImgSrc(fullSrc);
+      if (!shouldUsePreviewThumbnail(s)) return null;
+      return readCachedPreviewLayers(cacheKey).micro;
+    });
+    const [thumbSrc, setThumbSrc] = useState<string | null>(() => {
+      const s = workflowSafeImgSrc(fullSrc);
+      if (!shouldUsePreviewThumbnail(s)) return null;
+      return readCachedPreviewLayers(cacheKey).thumb;
+    });
+    const [thumbReady, setThumbReady] = useState(() => {
+      const s = workflowSafeImgSrc(fullSrc);
+      if (!shouldUsePreviewThumbnail(s)) return false;
+      return Boolean(readCachedPreviewLayers(cacheKey).thumb);
+    });
     const [directFallbackSrc, setDirectFallbackSrc] = useState<string | null>(null);
     /** 无微图时小图直接显现，不做叠化（避免「还在加载一层」的观感） */
     const thumbRevealSkipTransitionRef = useRef(false);
@@ -212,22 +238,28 @@ export const ProgressivePreviewImage = forwardRef<HTMLImageElement, ProgressiveP
         return;
       }
 
-      setMicroSrc(null);
-      setThumbSrc(null);
-      setThumbReady(false);
-      setDirectFallbackSrc(null);
-      thumbRevealSkipTransitionRef.current = false;
-      microPaintedRef.current = false;
-
       const tKey = thumbCacheKey(cacheKey);
       const mKey = microCacheKey(cacheKey);
       const thumbHit = cacheGet(tKey) ?? cacheGet(cacheKey);
       const microHit = cacheGet(mKey);
+      const canReuseThumb =
+        Boolean(thumbHit) &&
+        !isEmptyPreviewThumb(thumbHit);
+      const canReuseMicro =
+        Boolean(microHit) &&
+        !isEmptyPreviewThumb(microHit);
+      // 同源缓存命中时不要先清空，否则滚动拆装会闪一帧黑底。
+      if (!canReuseThumb) {
+        setThumbSrc(null);
+        setThumbReady(false);
+        if (!canReuseMicro) setMicroSrc(null);
+      }
+      setDirectFallbackSrc(null);
+      thumbRevealSkipTransitionRef.current = false;
+      microPaintedRef.current = canReuseMicro;
       const companionBase = String(companionBaseUrl || '').trim();
       const companionProject = String(companionProjectId || '').trim();
-      // Fresh data URLs (e.g. 3D lightbox capture) must regenerate — do not serve a
-      // stale memory thumb that shares a stable cacheKey (strip / VGP tree).
-      const sourceIsInlineData = /^data:image\//i.test(s);
+      // cacheKey 已含源指纹时，data URL 也可复用 LRU；源变了会换键再解码。
       const companionHttp = Boolean(parseCompanionAssetHttpUrl(s) && companionBase);
 
       let cancelled = false;
@@ -238,9 +270,7 @@ export const ProgressivePreviewImage = forwardRef<HTMLImageElement, ProgressiveP
         return true;
       };
 
-      // Only reuse LRU / companion thumbs for non-inline sources. Same cacheKey + new
-      // viewport JPEG would otherwise keep showing the previous / previous-previous thumb.
-      if (thumbHit && !sourceIsInlineData && !(companionHttp && isEmptyPreviewThumb(thumbHit))) {
+      if (thumbHit && canReuseThumb && !(companionHttp && isEmptyPreviewThumb(thumbHit))) {
         if (isEmptyPreviewThumb(thumbHit) && showDirectFallback()) {
           return () => {
             cancelled = true;
@@ -275,7 +305,7 @@ export const ProgressivePreviewImage = forwardRef<HTMLImageElement, ProgressiveP
         };
       }
 
-      if (microHit && !sourceIsInlineData && !isEmptyPreviewThumb(microHit)) {
+      if (microHit && canReuseMicro) {
         microPaintedRef.current = true;
         setMicroSrc(microHit);
       }

@@ -441,6 +441,10 @@ export function ImagePreviewOverlay({
   const splitStretchExportRef = useRef<ImagePreviewSplitStretchExportState | null>(null);
   const [lockedDominant, setLockedDominant] = useState<{ axis: 'width' | 'height'; size: number } | null>(null);
   const [primaryImageReady, setPrimaryImageReady] = useState(false);
+  const [holdImageSrc, setHoldImageSrc] = useState('');
+  const holdImageSrcRef = useRef('');
+  holdImageSrcRef.current = holdImageSrc;
+  const lastResetKeyRef = useRef(resetKey);
   const imgRef = useRef<HTMLImageElement | null>(null);
   const internalPanoViewerRef = useRef<PanoramaViewportProjection | null>(null);
   const panoViewerRef = panoViewerRefProp ?? internalPanoViewerRef;
@@ -778,6 +782,11 @@ export function ImagePreviewOverlay({
   }, [open, centerSlot, imageSrc, innerLayoutStableKey]);
 
   useLayoutEffect(() => {
+    if (lastResetKeyRef.current !== resetKey) {
+      lastResetKeyRef.current = resetKey;
+      setHoldImageSrc('');
+      holdImageSrcRef.current = '';
+    }
     setPrimaryImageReady(false);
     if (!open || centerSlot || !imageSrc?.trim()) return;
     syncPrimaryImageReadyFromDom();
@@ -1381,8 +1390,13 @@ export function ImagePreviewOverlay({
       hasImage &&
       !centerSlot &&
       !primaryImageReady &&
+      !holdImageSrc &&
       flatAnnotationColumnOutsidePanoStack
   );
+  const pendingFlatSrc = Boolean(
+    holdImageSrc && imageSrc && holdImageSrc !== imageSrc && !primaryImageReady
+  );
+  const visibleFlatSrc = pendingFlatSrc ? holdImageSrc : imageSrc!;
   const handleImgLoadGeneral = useCallback(
     (e: React.SyntheticEvent<HTMLImageElement>) => {
       const im = e.currentTarget;
@@ -1390,9 +1404,11 @@ export function ImagePreviewOverlay({
       const nh = im.naturalHeight;
       if (!nw || !nh) return;
       setPrimaryImageReady(true);
+      const loaded = String(imageSrc || '').trim();
+      if (loaded) setHoldImageSrc(loaded);
       handleImgLoad(e);
     },
-    [handleImgLoad]
+    [handleImgLoad, imageSrc]
   );
 
   const handleImgErrorGeneral = useCallback(
@@ -1480,14 +1496,16 @@ export function ImagePreviewOverlay({
               style={panoAnnotationBridge ? undefined : innerRotateStyle}
             >
               <img
-                key={imageSrc}
-                src={imageSrc!}
-                className={`block object-contain rounded-xl select-none ${flatPrimaryImgRevealClass} ${flatImgCursorClass}`}
+                key={visibleFlatSrc}
+                src={visibleFlatSrc}
+                className={`block object-contain rounded-xl select-none ${
+                  pendingFlatSrc ? 'opacity-100' : flatPrimaryImgRevealClass
+                } ${flatImgCursorClass}`}
                 style={lockedImgStyle}
                 alt=""
                 draggable={false}
                 onContextMenu={(e) => e.preventDefault()}
-                onLoad={handleImgLoadGeneral}
+                onLoad={pendingFlatSrc ? undefined : handleImgLoadGeneral}
                 onError={handleImgErrorGeneral}
                 onDoubleClick={
                   panoAnnotationBridge || suppressFlatImageInteraction
@@ -1506,13 +1524,25 @@ export function ImagePreviewOverlay({
                         rotateDragRef.current = null;
                       }
                 }
-                ref={imgRef}
+                ref={pendingFlatSrc ? undefined : imgRef}
                 onMouseDown={
                   panoAnnotationBridge || suppressFlatImageInteraction || splitStretchEnabled
                     ? undefined
                     : handleImgMouseDown
                 }
               />
+              {pendingFlatSrc ? (
+                <img
+                  key={`pending:${imageSrc}`}
+                  src={imageSrc!}
+                  alt=""
+                  draggable={false}
+                  className="pointer-events-none absolute h-px w-px opacity-0"
+                  onLoad={handleImgLoadGeneral}
+                  onError={handleImgErrorGeneral}
+                  ref={imgRef}
+                />
+              ) : null}
               {splitStretchUiOk && splitStretchEnabled && !uiHidden ? (
                 <ImagePreviewSplitStretchOverlay
                   imgRef={imgRef}

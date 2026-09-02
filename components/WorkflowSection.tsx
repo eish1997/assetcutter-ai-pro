@@ -12,6 +12,7 @@ import { useWorkflowWorkspacePanes } from '../hooks/useWorkflowWorkspacePanes';
 import { useWorkflowMarquee } from '../hooks/useWorkflowMarquee';
 import { useWorkflowExecutionStartedAt } from '../hooks/useWorkflowAssetExecutionElapsed';
 import { useWorkflowJustifiedLayout } from '../hooks/useWorkflowJustifiedLayout';
+import { shouldVirtualizeWorkflowJustifiedGrid } from '../services/workflowJustifiedScroll';
 import { useWorkflowAssetCardHoverKeys, type WorkflowCardHoverControl } from '../hooks/useWorkflowAssetCardHoverKeys';
 import { useEffectiveCapabilityModelRows } from '../hooks/useEffectiveCapabilityModelRows';
 import { stepDisplayKeyInOrder } from '../services/workflowAssetDisplayKeyCycle';
@@ -525,6 +526,7 @@ import {
   workshopCanvasItemsToWorkflowAssets,
   workshopHostFilePayload,
   workshopPackageCardId,
+  workshopVersionFileIds,
   type WorkshopCanvasItem,
   type WorkshopMediaHit,
 } from '../services/workshopAssetPackage';
@@ -2079,6 +2081,8 @@ const WorkflowSection: React.FC<{
       }),
     [workshopMergedCanvasItems, workshopSourceById, workshopFaceById, workshopMediaById, workshopTextById]
   );
+  const workshopFileAssetsRef = useRef(workshopFileAssets);
+  workshopFileAssetsRef.current = workshopFileAssets;
   const lastDispatchedCanvasFingerKeyRef = useRef('');
   const shellRoomRef = useRef('workbench');
   const [selectedGroupItemKeys, setSelectedGroupItemKeys] = useState<Set<string>>(new Set());
@@ -2587,26 +2591,54 @@ const WorkflowSection: React.FC<{
       if (textFile) {
         if (id !== lightboxAssetId && !selectedAssetIds.has(id)) continue;
         if (workshopTextById[id]) continue;
-      } else if (workshopSourceById[id]) {
-        continue;
       }
       const parsed = parseWorkshopCardId(id);
       if (!parsed) continue;
-      const faceKey = workshopFaceById[id] || asset?.displayKey || 'original';
-      const payload = workshopHostFilePayload(parsed, {
-        items: workshopMergedCanvasItems,
-        fileId: workshopFaceFileId(id, faceKey),
-      });
-      void api.readWorkshopFile(payload).then((out) => {
-        if (cancelled || !out?.ok || !out.dataUrl) return;
-        if (textFile) {
-          const body = utf8FromDataUrl(out.dataUrl as string);
-          if (body) setWorkshopTextById((prev) => (prev[id] ? prev : { ...prev, [id]: body }));
-          return;
+      const item = workshopMergedCanvasItems.find((row) => {
+        if (parsed.kind === 'package') {
+          return row.kind === 'package' && row.assetId === parsed.assetId && row.root === parsed.root;
         }
-        if (kind && kind !== 'image') return;
-        setWorkshopSourceById((prev) => (prev[id] ? prev : { ...prev, [id]: out.dataUrl as string }));
+        return row.root === parsed.root && row.rel === parsed.rel;
       });
+      const faceKey = workshopFaceById[id] || asset?.displayKey || 'original';
+      const faceId = workshopFaceFileId(id, faceKey);
+      const versionIds = workshopVersionFileIds(item);
+      const loadWorkshopImage = (fileId: string, assignCard: boolean) => {
+        const keyed = fileId ? `${id}::${fileId}` : '';
+        if (keyed && workshopSourceById[keyed] && (!assignCard || workshopSourceById[id])) return;
+        const payload = workshopHostFilePayload(parsed, {
+          items: workshopMergedCanvasItems,
+          fileId: fileId || undefined,
+        });
+        void api.readWorkshopFile(payload).then((out) => {
+          if (cancelled || !out?.ok || !out.dataUrl) return;
+          if (textFile) {
+            const body = utf8FromDataUrl(out.dataUrl as string);
+            if (body) setWorkshopTextById((prev) => (prev[id] ? prev : { ...prev, [id]: body }));
+            return;
+          }
+          if (kind && kind !== 'image') return;
+          setWorkshopSourceById((prev) => {
+            const next = { ...prev };
+            let changed = false;
+            if (keyed && !next[keyed]) {
+              next[keyed] = out.dataUrl as string;
+              changed = true;
+            }
+            if (assignCard && !next[id]) {
+              next[id] = out.dataUrl as string;
+              changed = true;
+            }
+            return changed ? next : prev;
+          });
+        });
+      };
+      if (!textFile && !workshopSourceById[id]) loadWorkshopImage(faceId, true);
+      if (!textFile) {
+        for (const fid of versionIds) loadWorkshopImage(fid, false);
+      } else {
+        loadWorkshopImage(faceId, true);
+      }
     }
     return () => {
       cancelled = true;
@@ -3243,6 +3275,15 @@ const WorkflowSection: React.FC<{
       const parsed = parseWorkshopCardId(a.id);
       if (parsed) {
         if (a.assetKind === 'text' || isWorkshopTextPreviewName(a.textTitle || '')) return '';
+        const dk = String(a.displayKey || 'original').trim() || 'original';
+        if (dk !== 'original') {
+          const keyed = workshopSourceById[`${a.id}::${dk}`] || String(a.results?.[dk] || '').trim();
+          if (keyed) return keyed;
+        }
+        if (dk === 'original') {
+          const orig = String(a.original || '').trim();
+          if (orig) return orig;
+        }
         const full = workshopSourceById[a.id];
         if (full) return full;
         return '';
@@ -3857,6 +3898,41 @@ const WorkflowSection: React.FC<{
               onLog?.('warn', '作坊散文件写入工作区失败', out?.error || 'upgrade_failed');
               return;
             }
+            const resultFileId = String(out.fileId || '').trim();
+            if (resultFileId) {
+              setWorkshopCanvasItems((prev) =>
+                prev.map((row) => {
+                  if (row.kind !== 'loose' || row.root !== parsed.root || row.rel !== parsed.rel) return row;
+                  const nextOrder = [...(Array.isArray(row.resultOrder) ? row.resultOrder : [])];
+                  if (!nextOrder.includes(resultFileId)) nextOrder.push(resultFileId);
+                  return {
+                    ...row,
+                    assetId: String(out.assetId || row.assetId || ''),
+                    resultOrder: nextOrder,
+                    checkoutFileId: String(row.checkoutFileId || out.checkoutFileId || ''),
+                    files: {
+                      ...(row.files || {}),
+                      [resultFileId]: { name: `${resultFileId}.png`, role: 'result', step: rk },
+                    },
+                  };
+                }),
+              );
+              setWorkshopFaceById((prev) =>
+                prev[assetId] === resultFileId ? prev : { ...prev, [assetId]: resultFileId },
+              );
+              setWorkshopSourceById((prev) => {
+                const keyed = `${assetId}::${resultFileId}`;
+                if (prev[assetId] === source && prev[keyed] === source) return prev;
+                return { ...prev, [assetId]: source, [keyed]: source };
+              });
+              workshopThumbRequestedRef.current.delete(assetId);
+              setWorkshopThumbById((prev) => {
+                if (!prev[assetId]) return prev;
+                const next = { ...prev };
+                delete next[assetId];
+                return next;
+              });
+            }
           } else if (api.writeWorkshopResult) {
             const item = workshopCanvasItemsRef.current.find(
               (row) =>
@@ -3925,31 +4001,12 @@ const WorkflowSection: React.FC<{
     [fileSourceApi, onLog, previewWorkshopAssetImage, setAssets, setSelectedAssetIds, workspaceProjectChrome?.activeProjectId]
   );
 
-  const clearWorkshopPreviewCache = useCallback((cardId: string) => {
-    const id = String(cardId || '').trim();
-    if (!id) return;
-    workshopThumbRequestedRef.current.delete(id);
-    setWorkshopThumbById((prev) => {
-      if (!prev[id]) return prev;
-      const next = { ...prev };
-      delete next[id];
-      return next;
-    });
-    setWorkshopSourceById((prev) => {
-      if (!prev[id]) return prev;
-      const next = { ...prev };
-      delete next[id];
-      return next;
-    });
-  }, []);
-
   const setWorkshopDisplayKey = useCallback(
     (cardId: string, displayKey: string) => {
       const key = String(displayKey || '').trim() || 'original';
       setWorkshopFaceById((prev) => (prev[cardId] === key ? prev : { ...prev, [cardId]: key }));
-      clearWorkshopPreviewCache(cardId);
     },
-    [clearWorkshopPreviewCache],
+    [],
   );
 
   const workshopCardNeedsApply = useCallback(
@@ -12242,6 +12299,9 @@ ${lineSvg}
     targetRowHeight: justifiedTargetRowHeight,
     remeasureKey: Math.round(workspacePane),
   });
+  const workflowListVirtualize = groupFilterId
+    ? shouldVirtualizeWorkflowJustifiedGrid(groupJustifiedLayout.boxes.length)
+    : shouldVirtualizeWorkflowJustifiedGrid(rootJustifiedLayout.boxes.length);
 
   const mergeThumbUnlockKeys = useCallback((prev: Set<string>, keys: Iterable<string>) => {
     const next = new Set(prev);
@@ -12345,7 +12405,7 @@ ${lineSvg}
 
   useEffect(() => {
     const root = centerScrollRef.current;
-    if (!root || lightboxAssetId) return;
+    if (!root || lightboxAssetId || workflowListVirtualize) return;
     let cancelled = false;
     let hotRaf = 0;
     const pendingHotAdd = new Set<string>();
@@ -12418,6 +12478,7 @@ ${lineSvg}
     showArchived,
     showAllInGroup,
     lightboxAssetId,
+    workflowListVirtualize,
   ]);
 
   /** 面包屑项，包含父级 ID 用于返回导航 */
@@ -16618,7 +16679,7 @@ ${lineSvg}
                   ['--wf-card-gap' as string]: `${WORKFLOW_ASSET_GRID_GAP_PX}px`,
                 }}
                 marqueeHitIdsRef={layoutMarqueeHitIdsRef}
-                renderBox={(layoutBox) => {
+                renderBox={(layoutBox, { virtualize }) => {
                   if (!currentGroupAsset) return null;
                   if (showAllImages) {
                     const gallPrefix = `gall:${currentGroupAsset.id}:`;
@@ -16650,9 +16711,9 @@ ${lineSvg}
                               fullSrc={img}
                               cacheKey={gallKey}
                               mediaVariant={flat.mediaVariant}
-                              deferThumbnail={!thumbUnlockKeys.has(gallKey)}
-                              thumbDecodePriority={thumbHotKeys.has(gallKey) ? 'high' : 'low'}
-                              imageFetchPriority={thumbHotKeys.has(gallKey) ? 'high' : 'auto'}
+                              deferThumbnail={!virtualize && !thumbUnlockKeys.has(gallKey)}
+                              thumbDecodePriority={virtualize || thumbHotKeys.has(gallKey) ? 'high' : 'low'}
+                              imageFetchPriority={virtualize || thumbHotKeys.has(gallKey) ? 'high' : 'auto'}
                               companionBaseUrl={String(getCompanionLocalBaseUrl() || '')}
                               companionProjectId={String(workspaceProjectChrome?.activeProjectId || '')}
                               className="relative z-0 block w-full h-full min-h-[5rem]"
@@ -16739,8 +16800,8 @@ ${lineSvg}
                                 groupAsset={childAsset}
                                 allAssets={assets}
                                 getDisplayImage={getAssetGridDisplayImage}
-                                deferThumbnail={!thumbUnlockKeys.has(groupKey)}
-                                thumbDecodePriority={thumbHotKeys.has(groupKey) ? 'high' : 'low'}
+                                deferThumbnail={!virtualize && !thumbUnlockKeys.has(groupKey)}
+                                thumbDecodePriority={virtualize || thumbHotKeys.has(groupKey) ? 'high' : 'low'}
                               />
                             ) : null}
                             {(() => {
@@ -16939,9 +17000,9 @@ ${lineSvg}
                                         cacheKey={childGridCacheKeyEffective}
                                         textDisplay={childTextDisplay}
                                         autoPlayVideo={selectedGroupItemKeys.has(groupKey)}
-                                        deferThumbnail={!thumbUnlockKeys.has(groupKey)}
-                                        thumbDecodePriority={thumbHotKeys.has(groupKey) ? 'high' : 'low'}
-                                        imageFetchPriority={thumbHotKeys.has(groupKey) ? 'high' : 'auto'}
+                                        deferThumbnail={!virtualize && !thumbUnlockKeys.has(groupKey)}
+                                        thumbDecodePriority={virtualize || thumbHotKeys.has(groupKey) ? 'high' : 'low'}
+                                        imageFetchPriority={virtualize || thumbHotKeys.has(groupKey) ? 'high' : 'auto'}
                                         onModelThumbnailCaptured={persistCapturedWorkflowModelThumbnail}
                                         companionBaseUrl={String(getCompanionLocalBaseUrl() || '')}
                                         companionProjectId={String(workspaceProjectChrome?.activeProjectId || '')}
@@ -17199,9 +17260,9 @@ ${lineSvg}
                                         : 'image'
                                     : 'image'
                                 }
-                                deferThumbnail={!thumbUnlockKeys.has(groupKey)}
-                                thumbDecodePriority={thumbHotKeys.has(groupKey) ? 'high' : 'low'}
-                                imageFetchPriority={thumbHotKeys.has(groupKey) ? 'high' : 'auto'}
+                                deferThumbnail={!virtualize && !thumbUnlockKeys.has(groupKey)}
+                                thumbDecodePriority={virtualize || thumbHotKeys.has(groupKey) ? 'high' : 'low'}
+                                imageFetchPriority={virtualize || thumbHotKeys.has(groupKey) ? 'high' : 'auto'}
                                 companionBaseUrl={String(getCompanionLocalBaseUrl() || '')}
                                 companionProjectId={String(workspaceProjectChrome?.activeProjectId || '')}
                                 className="relative z-0 block w-full h-full min-h-[5rem]"
@@ -17399,7 +17460,7 @@ ${lineSvg}
                   ['--wf-card-gap' as string]: `${WORKFLOW_ASSET_GRID_GAP_PX}px`,
                 }}
                 marqueeHitIdsRef={layoutMarqueeHitIdsRef}
-                renderBox={(layoutBox) => {
+                renderBox={(layoutBox, { virtualize }) => {
                   const a = rootCanvasAssetsById.get(layoutBox.id);
                   if (!a) return null;
                   const textDisplay = getAssetDisplayText(a);
@@ -17525,8 +17586,8 @@ ${lineSvg}
                           }
                           forceStack={workshopDiskOpen}
                           getDisplayImage={getAssetGridDisplayImage}
-                          deferThumbnail={!thumbUnlockKeys.has(a.id)}
-                          thumbDecodePriority={thumbHotKeys.has(a.id) ? 'high' : 'low'}
+                          deferThumbnail={!virtualize && !thumbUnlockKeys.has(a.id)}
+                          thumbDecodePriority={virtualize || thumbHotKeys.has(a.id) ? 'high' : 'low'}
                           companionBaseUrl={String(getCompanionLocalBaseUrl() || '')}
                           companionProjectId={String(workspaceProjectChrome?.activeProjectId || '')}
                         />
@@ -17722,9 +17783,9 @@ ${lineSvg}
                               thumbMaxEdge={
                                 resolveWorkflowStepModelUrls(a, a.displayKey).length > 0 ? 896 : undefined
                               }
-                              deferThumbnail={!thumbUnlockKeys.has(a.id)}
-                              thumbDecodePriority={thumbHotKeys.has(a.id) ? 'high' : 'low'}
-                              imageFetchPriority={thumbHotKeys.has(a.id) ? 'high' : 'auto'}
+                              deferThumbnail={!virtualize && !thumbUnlockKeys.has(a.id)}
+                              thumbDecodePriority={virtualize || thumbHotKeys.has(a.id) ? 'high' : 'low'}
+                              imageFetchPriority={virtualize || thumbHotKeys.has(a.id) ? 'high' : 'auto'}
                               onModelThumbnailCaptured={persistCapturedWorkflowModelThumbnail}
                               companionBaseUrl={String(getCompanionLocalBaseUrl() || '')}
                               companionProjectId={String(workspaceProjectChrome?.activeProjectId || '')}

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   filterWorkflowJustifiedBoxIdsInScroll,
+  mergeWorkflowJustifiedLingerVisibleIds,
   resolveWorkflowMarqueeCardIds,
   shouldVirtualizeWorkflowJustifiedGrid,
   workflowJustifiedMarqueeHitIds,
@@ -15,6 +16,30 @@ describe('workflowJustifiedScroll', () => {
     ];
     const visible = filterWorkflowJustifiedBoxIdsInScroll(boxes, 150, 400, 50);
     expect([...visible].sort()).toEqual(['a', 'b']);
+  });
+
+  it('mergeWorkflowJustifiedLingerVisibleIds keeps previously mounted boxes inside linger band', () => {
+    const boxes = [
+      { id: 'near', left: 0, top: 0, width: 100, height: 80 },
+      { id: 'mid', left: 0, top: 400, width: 100, height: 80 },
+      { id: 'far', left: 0, top: 2400, width: 100, height: 80 },
+    ];
+    const prev = new Set(['near', 'mid']);
+    const next = mergeWorkflowJustifiedLingerVisibleIds(prev, boxes, 0, 300, 80, 500);
+    expect(next.has('near')).toBe(true);
+    expect(next.has('mid')).toBe(true);
+    expect(next.has('far')).toBe(false);
+  });
+
+  it('mergeWorkflowJustifiedLingerVisibleIds drops boxes that leave the linger band', () => {
+    const boxes = [
+      { id: 'old', left: 0, top: 0, width: 100, height: 80 },
+      { id: 'now', left: 0, top: 2000, width: 100, height: 80 },
+    ];
+    const prev = new Set(['old']);
+    const next = mergeWorkflowJustifiedLingerVisibleIds(prev, boxes, 2000, 300, 80, 400);
+    expect(next.has('old')).toBe(false);
+    expect(next.has('now')).toBe(true);
   });
 
   it('shouldVirtualizeWorkflowJustifiedGrid gates on item count', () => {

@@ -25,10 +25,10 @@ export function WorkflowJustifiedVirtualGrid({
   className?: string;
   style?: CSSProperties;
   marqueeHitIdsRef?: RefObject<WorkflowJustifiedMarqueeHitFn | null>;
-  renderBox: (box: WorkflowJustifiedLayoutBox) => ReactNode;
+  renderBox: (box: WorkflowJustifiedLayoutBox, ctx: { virtualize: boolean }) => ReactNode;
   children?: ReactNode;
 }) {
-  const { isBoxVisible, layoutMarqueeHitIds } = useWorkflowJustifiedVirtualScroll(scrollRef, gridRef, {
+  const { isBoxVisible, layoutMarqueeHitIds, virtualize } = useWorkflowJustifiedVirtualScroll(scrollRef, gridRef, {
     boxes: ready ? boxes : [],
   });
 
@@ -55,7 +55,7 @@ export function WorkflowJustifiedVirtualGrid({
     >
       {children}
       {visibleBoxes.map((box) => (
-        <Fragment key={box.id}>{renderBox(box)}</Fragment>
+        <Fragment key={box.id}>{renderBox(box, { virtualize })}</Fragment>
       ))}
     </div>
   );
