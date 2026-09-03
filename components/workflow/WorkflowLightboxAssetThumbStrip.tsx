@@ -23,6 +23,7 @@ export type WorkflowLightboxAssetThumbStripProps = {
   onOpenFolder?: (asset: WorkflowAsset) => void | Promise<void>;
   onAddToComposeInput?: (asset: WorkflowAsset) => void | Promise<void>;
   canAddToComposeInput?: (asset: WorkflowAsset) => boolean;
+  onAssetContextMenu?: (asset: WorkflowAsset, e: React.MouseEvent) => void;
   getMediaVariant?: (asset: WorkflowAsset) => 'image' | 'video';
   onModelThumbnailCaptured?: (assetId: string, variantId: string, dataUrl: string) => void;
   companionBaseUrl?: string;
@@ -45,6 +46,7 @@ export default function WorkflowLightboxAssetThumbStrip({
   onOpenFolder,
   onAddToComposeInput,
   canAddToComposeInput,
+  onAssetContextMenu,
   getMediaVariant,
   onModelThumbnailCaptured,
   companionBaseUrl,
@@ -59,12 +61,16 @@ export default function WorkflowLightboxAssetThumbStrip({
 
   const handleThumbContextMenu = useCallback(
     (asset: WorkflowAsset, e: React.MouseEvent) => {
+      if (onAssetContextMenu) {
+        onAssetContextMenu(asset, e);
+        return;
+      }
       if (!onCopyImage && !onCopyId && !onOpenFolder && !onAddToComposeInput) return;
       e.preventDefault();
       e.stopPropagation();
       setContextMenu({ asset, x: e.clientX, y: e.clientY });
     },
-    [onAddToComposeInput, onCopyId, onCopyImage, onOpenFolder]
+    [onAddToComposeInput, onAssetContextMenu, onCopyId, onCopyImage, onOpenFolder]
   );
 
   useEffect(() => {

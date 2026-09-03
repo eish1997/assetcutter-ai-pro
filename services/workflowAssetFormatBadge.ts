@@ -66,7 +66,7 @@ function collectNameCandidates(asset: WorkflowAsset, variant: WorkflowAssetVaria
   const key = String(variant?.id || asset.displayKey || 'original').trim() || 'original';
   const kind = variant?.kind || resolveWorkflowAssetKind(asset);
   const slotSrc = key === 'original' ? asset.original : String((asset.results || {})[key] || '');
-  const names = [asset.modelSourceName, asset.textTitle, ...(variant?.modelUrls || []), ...(variant?.modelCompanionKeys || [])];
+  const names = [asset.modelSourceName, asset.textTitle, asset.id, ...(variant?.modelUrls || []), ...(variant?.modelCompanionKeys || [])];
   if (kind !== 'model3d') {
     names.push(variant?.url, slotSrc, asset.original);
   }

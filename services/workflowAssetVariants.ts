@@ -92,6 +92,7 @@ export function resolveWorkflowAssetKind(asset: WorkflowAsset): WorkflowAssetKin
   if (asset.assetKind === 'storyboard_table' || hasWorkflowStoryboardTablePayload(asset)) return 'storyboard_table';
   if (asset.assetKind === 'asset_set' || hasWorkflowAssetSetPayload(asset)) return 'asset_set';
   if (
+    asset.assetKind === 'image' ||
     asset.assetKind === 'text' ||
     asset.assetKind === 'video' ||
     asset.assetKind === 'model3d' ||

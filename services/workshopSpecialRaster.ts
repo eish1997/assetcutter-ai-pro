@@ -2,8 +2,48 @@ import { isWorkshopSpecialRasterName, workshopPreviewExt } from './workshopPrevi
 
 export { isWorkshopSpecialRasterName };
 
-const CARD_EDGE = 512;
-const LIGHTBOX_EDGE = 2048;
+const CARD_EDGE = 256;
+const LIGHTBOX_EDGE = 1024;
+const JPEG_MEMO_MAX = 80;
+const jpegMemo = new Map<string, string>();
+
+export const SPECIAL_RASTER_DECODE_PARALLEL = 2;
+
+export function workshopSpecialRasterSourceRow(
+  y: number,
+  srcH: number,
+  outH: number,
+  flipY: boolean,
+): number {
+  const sy = Math.min(srcH - 1, Math.floor((y * srcH) / outH));
+  return flipY ? srcH - 1 - sy : sy;
+}
+
+function jpegMemoKey(fileKey: string, lightbox: boolean): string {
+  return `${String(fileKey || '').trim()}::${lightbox ? 'lb' : 'card'}`;
+}
+
+export function peekWorkshopSpecialRasterJpeg(fileKey: string, lightbox: boolean): string | null {
+  const key = jpegMemoKey(fileKey, lightbox);
+  const hit = jpegMemo.get(key);
+  if (!hit) return null;
+  jpegMemo.delete(key);
+  jpegMemo.set(key, hit);
+  return hit;
+}
+
+export function rememberWorkshopSpecialRasterJpeg(fileKey: string, lightbox: boolean, jpeg: string): void {
+  const key = jpegMemoKey(fileKey, lightbox);
+  if (!key.startsWith('::') && jpeg) {
+    jpegMemo.delete(key);
+    jpegMemo.set(key, jpeg);
+    while (jpegMemo.size > JPEG_MEMO_MAX) {
+      const oldest = jpegMemo.keys().next().value;
+      if (!oldest) break;
+      jpegMemo.delete(oldest);
+    }
+  }
+}
 
 function clampEdge(maxEdge: number, fallback: number): number {
   const n = Math.floor(Number(maxEdge) || 0);
@@ -45,6 +85,7 @@ function floatBufferToJpeg(
   channels: number,
   maxEdge: number,
   quality: number,
+  flipY: boolean,
 ): string | null {
   if (typeof document === 'undefined') return null;
   const srcW = Math.max(1, Math.floor(width));
@@ -61,7 +102,7 @@ function floatBufferToJpeg(
   const out = image.data;
   const scale = autoExposeScale(data, ch);
   for (let y = 0; y < h; y += 1) {
-    const sy = Math.min(srcH - 1, Math.floor((y * srcH) / h));
+    const sy = workshopSpecialRasterSourceRow(y, srcH, h, flipY);
     for (let x = 0; x < w; x += 1) {
       const sx = Math.min(srcW - 1, Math.floor((x * srcW) / w));
       const si = (sy * srcW + sx) * ch;
@@ -77,7 +118,8 @@ function floatBufferToJpeg(
     }
   }
   ctx.putImageData(image, 0, 0);
-  return canvas.toDataURL('image/jpeg', quality);
+  const jpeg = canvas.toDataURL('image/jpeg', quality);
+  return jpeg;
 }
 
 async function decodeHdrOrExr(url: string, ext: string, maxEdge: number, quality: number): Promise<string | null> {
@@ -96,7 +138,7 @@ async function decodeHdrOrExr(url: string, ext: string, maxEdge: number, quality
     return null;
   }
   const channels = Math.max(1, Math.round(data.length / (width * height)));
-  const jpeg = floatBufferToJpeg(data, width, height, channels, maxEdge, quality);
+  const jpeg = floatBufferToJpeg(data, width, height, channels, maxEdge, quality, true);
   tex.dispose?.();
   return jpeg;
 }

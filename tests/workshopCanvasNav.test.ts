@@ -26,6 +26,13 @@ import {
   workshopNavForward,
   workshopNavRootLabel,
   workshopNavUpLoc,
+  defaultWorkshopCanvasListPrefs,
+  filterWorkshopCanvasByName,
+  isolateWorkshopCanvasKind,
+  parseWorkshopCanvasListPrefs,
+  sortWorkshopCanvasItems,
+  toggleWorkshopCanvasKind,
+  DEFAULT_WORKSHOP_CANVAS_KINDS,
 } from '../services/workshopCanvasNav';
 
 describe('workshopCanvasNav', () => {
@@ -133,9 +140,12 @@ describe('workshopCanvasNav', () => {
     expect(workshopNavRootLabel('D:/Library/3D')).toBe('3D');
   });
 
-  it('counts and filters kinds while always keeping folders', () => {
+  it('counts and filters kinds, hiding folders without matching contents', () => {
     const rows = [
-      { isGroup: true, assetKind: 'group' },
+      { isGroup: true, assetKind: 'group', containedKinds: ['image'] },
+      { isGroup: true, containedKinds: ['text'] },
+      { isGroup: true, containedKinds: [] },
+      { isGroup: true },
       { assetKind: 'image' },
       { assetKind: 'image' },
       { assetKind: 'model3d' },
@@ -144,7 +154,6 @@ describe('workshopCanvasNav', () => {
       { assetKind: 'video' },
     ];
     expect(countWorkshopCanvasKinds(rows)).toEqual({
-      all: 7,
       image: 2,
       model3d: 1,
       video: 1,
@@ -153,14 +162,36 @@ describe('workshopCanvasNav', () => {
     });
     expect(workshopCanvasKindOf({ isGroup: true })).toBe('folder');
     expect(workshopCanvasKindOf({ assetKind: 'video' })).toBe('video');
-    expect(filterWorkshopCanvasByKind(rows, 'image')).toEqual([
-      { isGroup: true, assetKind: 'group' },
-      { assetKind: 'image' },
-      { assetKind: 'image' },
+    expect(filterWorkshopCanvasByKind(rows, ['image']).map((r) => r.containedKinds || r.assetKind)).toEqual([
+      ['image'],
+      undefined,
+      'image',
+      'image',
     ]);
-    expect(workshopCanvasKindMatches({ assetKind: 'text' }, 'image')).toBe(false);
-    expect(workshopCanvasKindMatches({ isGroup: true }, 'image')).toBe(true);
-    expect(filterWorkshopCanvasByKind(rows, 'all')).toBe(rows);
+    expect(workshopCanvasKindMatches({ assetKind: 'text' }, ['image'])).toBe(false);
+    expect(workshopCanvasKindMatches({ isGroup: true, containedKinds: ['image'] }, ['image'])).toBe(true);
+    expect(workshopCanvasKindMatches({ isGroup: true, containedKinds: ['text'] }, ['image'])).toBe(false);
+    expect(workshopCanvasKindMatches({ isGroup: true, containedKinds: [] }, ['image'])).toBe(false);
+    expect(workshopCanvasKindMatches({ isGroup: true }, ['image'])).toBe(true);
+    expect(filterWorkshopCanvasByKind(rows, DEFAULT_WORKSHOP_CANVAS_KINDS).map((r) => r.containedKinds || r.assetKind)).toEqual([
+      ['image'],
+      ['text'],
+      undefined,
+      'image',
+      'image',
+      'model3d',
+      'text',
+      'video',
+    ]);
+    expect(filterWorkshopCanvasByKind(rows, []).map((r) => r.containedKinds || r.assetKind)).toEqual([]);
+    expect(filterWorkshopCanvasByKind(rows, ['file']).map((r) => r.containedKinds || r.assetKind)).toEqual([undefined, 'file']);
+    expect(toggleWorkshopCanvasKind(['image', 'video'], 'video')).toEqual(['image']);
+    expect(toggleWorkshopCanvasKind(['image'], 'file')).toEqual(['image', 'file']);
+    expect(isolateWorkshopCanvasKind('text')).toEqual(['text']);
+    expect(filterWorkshopCanvasByKind(rows, isolateWorkshopCanvasKind('video')).map((r) => r.containedKinds || r.assetKind)).toEqual([
+      undefined,
+      'video',
+    ]);
   });
 
   it('pins the canvas nav bar above the asset scroll port', () => {
@@ -171,5 +202,68 @@ describe('workshopCanvasNav', () => {
     expect(scrollAt).toBeGreaterThan(barAt);
     expect(src).toContain('filterWorkshopCanvasByKind');
     expect(src).toContain('fileSourceApi ? (');
+    expect(src).toContain('onRevealCurrent');
+    expect(src).toContain('toggleWorkshopCanvasKind');
+  });
+
+  it('sorts by name, time, size, folder-first, and type groups', () => {
+    const rows = [
+      { kind: 'loose', name: 'b.png', assetKind: 'image', size: 10, mtimeMs: 20, birthtimeMs: 5 },
+      { kind: 'folder', name: 'z-dir', assetKind: 'file', size: 0, mtimeMs: 1, birthtimeMs: 1 },
+      { kind: 'loose', name: 'a.glb', assetKind: 'model3d', size: 30, mtimeMs: 8, birthtimeMs: 40 },
+    ];
+    expect(sortWorkshopCanvasItems(rows, { ...defaultWorkshopCanvasListPrefs(), sortKey: 'name' }).map((r) => r.name)).toEqual([
+      'a.glb',
+      'b.png',
+      'z-dir',
+    ]);
+    expect(
+      sortWorkshopCanvasItems(rows, { ...defaultWorkshopCanvasListPrefs(), sortKey: 'name', sortDir: 'desc' }).map(
+        (r) => r.name,
+      ),
+    ).toEqual(['z-dir', 'b.png', 'a.glb']);
+    expect(
+      sortWorkshopCanvasItems(rows, { ...defaultWorkshopCanvasListPrefs(), sortKey: 'created' }).map((r) => r.name),
+    ).toEqual(['z-dir', 'b.png', 'a.glb']);
+    expect(
+      sortWorkshopCanvasItems(rows, { ...defaultWorkshopCanvasListPrefs(), sortKey: 'modified' }).map((r) => r.name),
+    ).toEqual(['z-dir', 'a.glb', 'b.png']);
+    expect(
+      sortWorkshopCanvasItems(rows, { ...defaultWorkshopCanvasListPrefs(), sortKey: 'size', sortDir: 'desc' }).map(
+        (r) => r.name,
+      ),
+    ).toEqual(['a.glb', 'b.png', 'z-dir']);
+    expect(sortWorkshopCanvasItems(rows, defaultWorkshopCanvasListPrefs()).map((r) => r.name)).toEqual([
+      'z-dir',
+      'a.glb',
+      'b.png',
+    ]);
+    expect(
+      sortWorkshopCanvasItems(rows, { ...defaultWorkshopCanvasListPrefs(), sortKey: 'name', groupByType: true }).map(
+        (r) => r.name,
+      ),
+    ).toEqual(['z-dir', 'b.png', 'a.glb']);
+  });
+
+  it('filters canvas items by name and parses list prefs', () => {
+    const rows = [
+      { kind: 'loose', name: 'Hero_01.png', title: '英雄' },
+      { kind: 'folder', name: 'props', title: 'props' },
+    ];
+    expect(filterWorkshopCanvasByName(rows, 'hero').map((r) => r.name)).toEqual(['Hero_01.png']);
+    expect(filterWorkshopCanvasByName(rows, 'PROPS').map((r) => r.name)).toEqual(['props']);
+    expect(filterWorkshopCanvasByName(rows, '').length).toBe(2);
+    expect(parseWorkshopCanvasListPrefs({ sortKey: 'size', sortDir: 'desc', flatten: true, groupByType: 1 })).toEqual({
+      sortKey: 'size',
+      sortDir: 'desc',
+      flatten: true,
+      hideFormatBadges: false,
+      groupByType: false,
+      kinds: DEFAULT_WORKSHOP_CANVAS_KINDS,
+    });
+    expect(parseWorkshopCanvasListPrefs({ hideFormatBadges: true }).hideFormatBadges).toBe(true);
+    expect(parseWorkshopCanvasListPrefs({ sortKey: 'nope' }).sortKey).toBe('folder');
+    expect(parseWorkshopCanvasListPrefs({ kinds: ['file', 'nope'] }).kinds).toEqual(['file']);
+    expect(defaultWorkshopCanvasListPrefs().kinds).toEqual(['image', 'model3d', 'video', 'text']);
   });
 });

@@ -5,7 +5,7 @@ import {
   useEffect,
   type WheelEvent as ReactWheelEvent,
 } from 'react';
-import { isWorkflowEditableTarget } from '../components/workflow/workflowDomUtils';
+import { isWorkflowEditableTarget, isWorkflowLightboxHotkeySurface } from '../components/workflow/workflowDomUtils';
 
 export type UseWorkflowWorkspacePanesArgs = {
   registerPaneWheelHandler?: (handler: ((e: ReactWheelEvent) => void) | null) => void;
@@ -117,6 +117,7 @@ export function useWorkflowWorkspacePanes({
       };
       const pane = paneByCode[e.code];
       if (pane === undefined) return;
+      if (isWorkflowLightboxHotkeySurface()) return;
       e.preventDefault();
       snapWorkspacePaneToNode(pane);
     };

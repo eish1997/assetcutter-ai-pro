@@ -1,3 +1,4 @@
+import { readLocalJson, scopedStorageKey, writeLocalJson } from './clientPersist';
 import {
   isWorkshopBrowserLibraryRoot,
   isWorkshopRecycleRoot,
@@ -20,11 +21,17 @@ export type WorkshopNavHistory = {
   index: number;
 };
 
-export type WorkshopCanvasKindFilter = 'all' | 'image' | 'model3d' | 'video' | 'text' | 'file';
+export type WorkshopCanvasKindId = 'image' | 'model3d' | 'video' | 'text' | 'file';
+export type WorkshopCanvasKindFilter = WorkshopCanvasKindId;
+
+export const WORKSHOP_CANVAS_KIND_IDS: WorkshopCanvasKindId[] = ['image', 'model3d', 'video', 'text', 'file'];
+export const DEFAULT_WORKSHOP_CANVAS_KINDS: WorkshopCanvasKindId[] = ['image', 'model3d', 'video', 'text'];
 
 export type WorkshopCanvasKindSource = {
   isGroup?: boolean;
   assetKind?: string | null;
+  /** 作坊文件夹卡：子树里出现过的种类。缺省时筛选仍显示（工作台组）。 */
+  containedKinds?: Iterable<string> | null;
 };
 
 export type WorkshopNavCrumb = {
@@ -163,27 +170,48 @@ export function workshopBreadcrumbSegments(args: {
 
 export function workshopCanvasKindOf(
   asset: WorkshopCanvasKindSource,
-): 'folder' | Exclude<WorkshopCanvasKindFilter, 'all'> {
+): 'folder' | WorkshopCanvasKindId {
   if (asset.isGroup) return 'folder';
   const k = String(asset.assetKind || '');
   if (k === 'image' || k === 'model3d' || k === 'text' || k === 'video') return k;
   return 'file';
 }
 
+export function workshopCanvasKindSet(kinds: Iterable<string> | null | undefined): Set<WorkshopCanvasKindId> {
+  const out = new Set<WorkshopCanvasKindId>();
+  for (const raw of kinds || []) {
+    if ((WORKSHOP_CANVAS_KIND_IDS as string[]).includes(raw)) out.add(raw as WorkshopCanvasKindId);
+  }
+  return out;
+}
+
+export function workshopCanvasFolderMatchesKinds(
+  asset: WorkshopCanvasKindSource,
+  kinds: Iterable<string> | null | undefined,
+): boolean {
+  const selected = workshopCanvasKindSet(kinds);
+  if (!selected.size) return false;
+  if (asset.containedKinds == null) return true;
+  const contained = workshopCanvasKindSet(asset.containedKinds);
+  for (const id of contained) {
+    if (selected.has(id)) return true;
+  }
+  return false;
+}
+
 export function workshopCanvasKindMatches(
   asset: WorkshopCanvasKindSource,
-  filter: WorkshopCanvasKindFilter,
+  kinds: Iterable<string> | null | undefined,
 ): boolean {
-  if (!filter || filter === 'all') return true;
   const k = workshopCanvasKindOf(asset);
-  return k === 'folder' || k === filter;
+  if (k === 'folder') return workshopCanvasFolderMatchesKinds(asset, kinds);
+  return workshopCanvasKindSet(kinds).has(k);
 }
 
 export function countWorkshopCanvasKinds(
   assets: WorkshopCanvasKindSource[],
-): Record<WorkshopCanvasKindFilter, number> {
-  const counts: Record<WorkshopCanvasKindFilter, number> = {
-    all: Array.isArray(assets) ? assets.length : 0,
+): Record<WorkshopCanvasKindId, number> {
+  const counts: Record<WorkshopCanvasKindId, number> = {
     image: 0,
     model3d: 0,
     video: 0,
@@ -200,9 +228,157 @@ export function countWorkshopCanvasKinds(
 
 export function filterWorkshopCanvasByKind<T extends WorkshopCanvasKindSource>(
   assets: T[],
-  filter: WorkshopCanvasKindFilter,
+  kinds: Iterable<string> | null | undefined,
 ): T[] {
   if (!Array.isArray(assets)) return [];
-  if (!filter || filter === 'all') return assets;
-  return assets.filter((asset) => workshopCanvasKindMatches(asset, filter));
+  const set = workshopCanvasKindSet(kinds);
+  return assets.filter((asset) => {
+    const k = workshopCanvasKindOf(asset);
+    return k === 'folder' ? workshopCanvasFolderMatchesKinds(asset, set) : set.has(k);
+  });
+}
+
+export function toggleWorkshopCanvasKind(
+  kinds: Iterable<string> | null | undefined,
+  id: WorkshopCanvasKindId,
+): WorkshopCanvasKindId[] {
+  const set = workshopCanvasKindSet(kinds);
+  if (set.has(id)) set.delete(id);
+  else set.add(id);
+  return WORKSHOP_CANVAS_KIND_IDS.filter((k) => set.has(k));
+}
+
+export function isolateWorkshopCanvasKind(id: WorkshopCanvasKindId): WorkshopCanvasKindId[] {
+  return [id];
+}
+
+export const WORKSHOP_CANVAS_LIST_PREFS_KEY = 'workshopCanvasListPrefs';
+
+export type WorkshopCanvasSortKey = 'name' | 'created' | 'modified' | 'size' | 'folder';
+export type WorkshopCanvasSortDir = 'asc' | 'desc';
+
+export type WorkshopCanvasListPrefs = {
+  sortKey: WorkshopCanvasSortKey;
+  sortDir: WorkshopCanvasSortDir;
+  flatten: boolean;
+  hideFormatBadges: boolean;
+  groupByType: boolean;
+  kinds: WorkshopCanvasKindId[];
+};
+
+export type WorkshopCanvasSortable = {
+  kind?: string;
+  name?: string;
+  title?: string;
+  size?: number;
+  mtimeMs?: number;
+  birthtimeMs?: number;
+  assetKind?: string | null;
+  isGroup?: boolean;
+};
+
+const SORT_KEYS = new Set<WorkshopCanvasSortKey>(['name', 'created', 'modified', 'size', 'folder']);
+const TYPE_ORDER = ['folder', 'image', 'model3d', 'video', 'text', 'file'];
+
+export function defaultWorkshopCanvasListPrefs(): WorkshopCanvasListPrefs {
+  return {
+    sortKey: 'folder',
+    sortDir: 'asc',
+    flatten: false,
+    hideFormatBadges: false,
+    groupByType: false,
+    kinds: DEFAULT_WORKSHOP_CANVAS_KINDS.slice(),
+  };
+}
+
+export function parseWorkshopCanvasListPrefs(raw: unknown): WorkshopCanvasListPrefs {
+  const fallback = defaultWorkshopCanvasListPrefs();
+  if (!raw || typeof raw !== 'object') return fallback;
+  const o = raw as Record<string, unknown>;
+  const key = String(o.sortKey || '');
+  const kinds = Array.isArray(o.kinds)
+    ? WORKSHOP_CANVAS_KIND_IDS.filter((id) => o.kinds.includes(id))
+    : fallback.kinds.slice();
+  return {
+    sortKey: SORT_KEYS.has(key as WorkshopCanvasSortKey) ? (key as WorkshopCanvasSortKey) : fallback.sortKey,
+    sortDir: o.sortDir === 'desc' ? 'desc' : 'asc',
+    flatten: o.flatten === true,
+    hideFormatBadges: o.hideFormatBadges === true,
+    groupByType: o.groupByType === true,
+    kinds,
+  };
+}
+
+export function readWorkshopCanvasListPrefs(scope: string | null | undefined): WorkshopCanvasListPrefs {
+  return readLocalJson(
+    scopedStorageKey(WORKSHOP_CANVAS_LIST_PREFS_KEY, scope),
+    defaultWorkshopCanvasListPrefs(),
+    (parsed) => parseWorkshopCanvasListPrefs(parsed),
+  );
+}
+
+export function writeWorkshopCanvasListPrefs(
+  scope: string | null | undefined,
+  prefs: WorkshopCanvasListPrefs,
+): void {
+  writeLocalJson(scopedStorageKey(WORKSHOP_CANVAS_LIST_PREFS_KEY, scope), parseWorkshopCanvasListPrefs(prefs));
+}
+
+export function filterWorkshopCanvasByName<T extends WorkshopCanvasSortable>(items: T[], query: string): T[] {
+  if (!Array.isArray(items)) return [];
+  const q = String(query || '').trim().toLowerCase();
+  if (!q) return items;
+  return items.filter((item) => {
+    const title = String(item.title || '').toLowerCase();
+    const name = String(item.name || '').toLowerCase();
+    return title.includes(q) || name.includes(q);
+  });
+}
+
+function canvasItemLabel(item: WorkshopCanvasSortable): string {
+  return String(item.title || item.name || '');
+}
+
+function canvasItemTypeRank(item: WorkshopCanvasSortable): number {
+  const kind = item.kind === 'folder' || item.isGroup ? 'folder' : workshopCanvasKindOf(item);
+  const idx = TYPE_ORDER.indexOf(kind);
+  return idx < 0 ? TYPE_ORDER.length : idx;
+}
+
+function compareBySortKey(a: WorkshopCanvasSortable, b: WorkshopCanvasSortable, key: WorkshopCanvasSortKey): number {
+  if (key === 'name') {
+    return canvasItemLabel(a).localeCompare(canvasItemLabel(b), undefined, { numeric: true, sensitivity: 'base' });
+  }
+  if (key === 'created') {
+    return (Number(a.birthtimeMs) || Number(a.mtimeMs) || 0) - (Number(b.birthtimeMs) || Number(b.mtimeMs) || 0);
+  }
+  if (key === 'modified') {
+    return (Number(a.mtimeMs) || 0) - (Number(b.mtimeMs) || 0);
+  }
+  if (key === 'size') {
+    return (Number(a.size) || 0) - (Number(b.size) || 0);
+  }
+  const aFolder = a.kind === 'folder' || a.isGroup === true;
+  const bFolder = b.kind === 'folder' || b.isGroup === true;
+  if (aFolder !== bFolder) return aFolder ? -1 : 1;
+  return canvasItemLabel(a).localeCompare(canvasItemLabel(b), undefined, { numeric: true, sensitivity: 'base' });
+}
+
+export function sortWorkshopCanvasItems<T extends WorkshopCanvasSortable>(
+  items: T[],
+  prefs: WorkshopCanvasListPrefs,
+): T[] {
+  if (!Array.isArray(items)) return [];
+  const parsed = parseWorkshopCanvasListPrefs(prefs);
+  const dir = parsed.sortDir === 'desc' ? -1 : 1;
+  return items.slice().sort((a, b) => {
+    if (parsed.groupByType) {
+      const typeCmp = canvasItemTypeRank(a) - canvasItemTypeRank(b);
+      if (typeCmp) return typeCmp;
+    }
+    const cmp = compareBySortKey(a, b, parsed.sortKey);
+    return cmp === 0
+      ? canvasItemLabel(a).localeCompare(canvasItemLabel(b), undefined, { numeric: true, sensitivity: 'base' })
+      : cmp * dir;
+  });
 }

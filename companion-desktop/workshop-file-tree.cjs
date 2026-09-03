@@ -29,12 +29,27 @@ const WORKSHOP_LIBRARY_README_TEXT = [
   '',
 ].join('\n');
 
-const JPEG_THUMB_EXT = new Set(['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.ico', '.tif', '.tiff']);
+const JPEG_THUMB_EXT = new Set([
+  '.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.ico', '.tif', '.tiff', '.svg', '.avif', '.jfif', '.apng',
+]);
 const SPECIAL_RASTER_EXT = new Set(['.exr', '.hdr', '.psd']);
-const IMAGE_EXT = new Set([...JPEG_THUMB_EXT, ...SPECIAL_RASTER_EXT]);
-const MODEL_EXT = new Set(['.glb', '.gltf', '.fbx', '.obj', '.stl', '.usd', '.usda', '.usdc']);
-const TEXT_EXT = new Set(['.md', '.txt']);
-const VIDEO_EXT = new Set(['.mp4', '.webm', '.mov', '.m4v']);
+const IMAGE_EXT = new Set([
+  ...JPEG_THUMB_EXT,
+  ...SPECIAL_RASTER_EXT,
+  '.tga', '.dds', '.ktx', '.ktx2', '.heic', '.heif',
+]);
+const MODEL_EXT = new Set([
+  '.glb', '.gltf', '.fbx', '.obj', '.stl', '.usd', '.usda', '.usdc', '.usdz', '.dae', '.ply', '.abc',
+  '.3ds', '.blend', '.vrm', '.3mf', '.dxf', '.step', '.stp', '.iges', '.igs',
+]);
+const TEXT_EXT = new Set([
+  '.md', '.txt', '.json', '.csv', '.xml', '.yaml', '.yml', '.html', '.htm', '.css', '.js', '.ts',
+  '.tsx', '.jsx', '.mdx', '.log', '.ini', '.toml', '.rtf',
+]);
+const VIDEO_EXT = new Set([
+  '.mp4', '.webm', '.mov', '.m4v', '.mkv', '.avi', '.mpeg', '.mpg', '.wmv', '.flv', '.3gp', '.ts',
+  '.mts', '.m2ts', '.ogv',
+]);
 const TEXT_PREVIEW_BYTES = 8 * 1024;
 const RECYCLE_DIR = 'recycle';
 const RECYCLE_ROOT_ID = 'ac-recycle:';
@@ -145,6 +160,13 @@ function compareEntries(a, b) {
   if (a.kind === 'dir' && b.kind !== 'dir') return -1;
   if (a.kind !== 'dir' && b.kind === 'dir') return 1;
   return String(a.name).localeCompare(String(b.name), undefined, { numeric: true, sensitivity: 'base' });
+}
+
+function birthMsFromStat(st) {
+  const birth = Number(st && st.birthtimeMs) || 0;
+  const ctime = Number(st && st.ctimeMs) || 0;
+  const mtime = Number(st && st.mtimeMs) || 0;
+  return birth > 0 ? birth : ctime > 0 ? ctime : mtime;
 }
 
 function newWorkshopId() {
@@ -426,94 +448,130 @@ function parseWorkshopLinkDoc(raw) {
   };
 }
 
-async function collectFolderPreviewRels(root, folderRel, maxN) {
-  const cap = Math.max(0, Number(maxN) || 0);
-  if (!cap) return [];
-  const abs = resolveInsideRoot(root, folderRel);
-  if (!abs) return [];
-  let names;
-  try {
-    names = await fsp.readdir(abs);
-  } catch {
-    return [];
-  }
-  const parent = toPosixRel(folderRel);
-  const out = [];
-  for (const name of names) {
-    if (skipDirentName(name)) continue;
-    if (kindFromName(name) !== 'image') continue;
-    if (SPECIAL_RASTER_EXT.has(path.extname(name).toLowerCase())) continue;
-    const childAbs = path.join(abs, name);
-    try {
-      const st = await fsp.lstat(childAbs);
-      if (!st.isFile()) continue;
-    } catch {
-      continue;
+const FOLDER_KIND_ORDER = ['image', 'model3d', 'video', 'text', 'file'];
+const FOLDER_KIND_WALK_MAX_DIRS = 60;
+
+async function collectFolderCanvasMeta(root, folderRel, previewMax) {
+  const capPreview = Math.max(0, Number(previewMax) || 0);
+  const previewRels = [];
+  const kinds = new Set();
+  const start = toPosixRel(folderRel);
+  const queue = [start];
+  const seen = new Set();
+  let dirs = 0;
+  while (queue.length && dirs < FOLDER_KIND_WALK_MAX_DIRS && kinds.size < FOLDER_KIND_ORDER.length) {
+    const cur = queue.shift();
+    if (seen.has(cur)) continue;
+    seen.add(cur);
+    dirs += 1;
+    const listed = await listDir(root, cur);
+    if (!listed.ok) continue;
+    for (const entry of listed.entries || []) {
+      if (entry.kind === 'dir') {
+        if (entry.isPackage) {
+          const abs = resolveInsideRoot(root, entry.rel);
+          const doc = abs ? await readManifestAt(abs) : null;
+          const rec = doc && doc.files ? doc.files[doc.displayFileId] : null;
+          kinds.add(assetKindFromEntryKind(rec ? kindFromName(rec.name) : 'file'));
+        } else {
+          queue.push(entry.rel);
+        }
+        continue;
+      }
+      const ak = assetKindFromEntryKind(entry.kind);
+      kinds.add(ak);
+      if (cur === start && ak === 'image' && previewRels.length < capPreview) {
+        const ext = path.extname(entry.name).toLowerCase();
+        if (!SPECIAL_RASTER_EXT.has(ext)) previewRels.push(entry.rel);
+      }
     }
-    out.push(parent ? `${parent}/${name}` : name);
-    if (out.length >= cap) break;
   }
-  return out;
+  return {
+    previewRels,
+    containedKinds: FOLDER_KIND_ORDER.filter((k) => kinds.has(k)),
+  };
 }
 
-async function listCanvas(root, rel) {
-  const first = await listDir(root, rel);
-  if (!first.ok) return first;
+async function listCanvas(root, rel, opts) {
+  const includeSubfolders = Boolean(opts && opts.includeSubfolders);
   const items = [];
-  let truncated = Boolean(first.truncated);
+  let truncated = false;
   const parent = toPosixRel(rel);
-  for (const entry of first.entries || []) {
-    if (items.length >= MAX_LIST) {
-      truncated = true;
-      break;
+  const queue = [parent];
+  const seen = new Set();
+  while (queue.length) {
+    const cur = queue.shift();
+    if (seen.has(cur)) continue;
+    seen.add(cur);
+    const listed = await listDir(root, cur);
+    if (!listed.ok) {
+      if (cur === parent) return listed;
+      continue;
     }
-    if (entry.kind === 'dir') {
-      if (entry.isPackage) {
-        const abs = resolveInsideRoot(root, entry.rel);
-        const doc = abs ? await readManifestAt(abs) : null;
-        if (!doc) continue;
-        const rec = doc.files[doc.displayFileId];
-        const displayRel = rec ? `${entry.rel}/${rec.name}` : entry.rel;
-        const kind = rec ? kindFromName(rec.name) : 'file';
+    if (listed.truncated) truncated = true;
+    for (const entry of listed.entries || []) {
+      if (items.length >= MAX_LIST) {
+        truncated = true;
+        break;
+      }
+      if (entry.kind === 'dir') {
+        if (entry.isPackage) {
+          const abs = resolveInsideRoot(root, entry.rel);
+          const doc = abs ? await readManifestAt(abs) : null;
+          if (!doc) continue;
+          const rec = doc.files[doc.displayFileId];
+          const displayRel = rec ? `${entry.rel}/${rec.name}` : entry.rel;
+          const kind = rec ? kindFromName(rec.name) : 'file';
+          items.push({
+            kind: 'package',
+            root,
+            name: doc.title || doc.id,
+            rel: entry.rel,
+            assetKind: assetKindFromEntryKind(kind),
+            size: entry.size,
+            mtimeMs: entry.mtimeMs,
+            birthtimeMs: entry.birthtimeMs || entry.mtimeMs,
+            assetId: doc.id,
+            displayFileId: doc.displayFileId,
+            displayRel,
+            title: doc.title,
+            resultOrder: doc.resultOrder,
+            files: doc.files,
+          });
+          continue;
+        }
+        if (includeSubfolders) {
+          queue.push(entry.rel);
+          continue;
+        }
+        const meta = await collectFolderCanvasMeta(root, entry.rel, FOLDER_PREVIEW_MAX);
         items.push({
-          kind: 'package',
+          kind: 'folder',
           root,
-          name: doc.title || doc.id,
+          name: entry.name,
           rel: entry.rel,
-          assetKind: assetKindFromEntryKind(kind),
-          size: entry.size,
+          assetKind: 'file',
+          size: 0,
           mtimeMs: entry.mtimeMs,
-          assetId: doc.id,
-          displayFileId: doc.displayFileId,
-          displayRel,
-          title: doc.title,
-          resultOrder: doc.resultOrder,
-          files: doc.files,
+          birthtimeMs: entry.birthtimeMs || entry.mtimeMs,
+          previewRels: meta.previewRels,
+          containedKinds: meta.containedKinds,
         });
         continue;
       }
+      if (entry.name === AC_ASSET_MANIFEST) continue;
       items.push({
-        kind: 'folder',
+        kind: 'loose',
         root,
         name: entry.name,
         rel: entry.rel,
-        assetKind: 'file',
-        size: 0,
+        assetKind: assetKindFromEntryKind(entry.kind),
+        size: entry.size,
         mtimeMs: entry.mtimeMs,
-        previewRels: await collectFolderPreviewRels(root, entry.rel, FOLDER_PREVIEW_MAX),
+        birthtimeMs: entry.birthtimeMs || entry.mtimeMs,
       });
-      continue;
     }
-    if (entry.name === AC_ASSET_MANIFEST) continue;
-    items.push({
-      kind: 'loose',
-      root,
-      name: entry.name,
-      rel: entry.rel,
-      assetKind: assetKindFromEntryKind(entry.kind),
-      size: entry.size,
-      mtimeMs: entry.mtimeMs,
-    });
+    if (truncated || !includeSubfolders) break;
   }
   return { ok: true, rel: parent, items, truncated };
 }
@@ -573,6 +631,7 @@ async function listDir(root, rel) {
         kind: 'dir',
         size: 0,
         mtimeMs: childSt.mtimeMs || 0,
+        birthtimeMs: birthMsFromStat(childSt),
         isPackage,
       });
       continue;
@@ -584,6 +643,7 @@ async function listDir(root, rel) {
       kind: kindFromName(name),
       size: childSt.size || 0,
       mtimeMs: childSt.mtimeMs || 0,
+      birthtimeMs: birthMsFromStat(childSt),
     });
   }
   entries.sort(compareEntries);
@@ -750,7 +810,9 @@ function createWorkshopFileTreeHost(deps) {
     await fsp.mkdir(fsRoot, { recursive: true });
     void purgeRecycleDir(fsRoot);
     if (payload && payload.assetsOnly) {
-      const canvas = await listCanvas(fsRoot, payload.rel);
+      const canvas = await listCanvas(fsRoot, payload.rel, {
+        includeSubfolders: Boolean(payload.includeSubfolders),
+      });
       if (!canvas.ok) return canvas;
       const items = remapCanvasRoot(await enrichCanvasItems(fsRoot, canvas.items || []), RECYCLE_ROOT_ID);
       return {
@@ -914,7 +976,9 @@ function createWorkshopFileTreeHost(deps) {
     if (!root) return { ok: false, error: 'no_root' };
     void purgeRecycleDir(recycleDirAbs());
     if (payload && payload.assetsOnly) {
-      const canvas = await listCanvas(root, payload.rel);
+      const canvas = await listCanvas(root, payload.rel, {
+        includeSubfolders: Boolean(payload.includeSubfolders),
+      });
       if (!canvas.ok) return canvas;
       const items = await enrichCanvasItems(root, canvas.items || []);
       return {
@@ -1660,6 +1724,59 @@ function createWorkshopFileTreeHost(deps) {
     return { ok: true, items: imported };
   }
 
+  function resolveAbs(payload) {
+    const wanted = String(payload && payload.root ? payload.root : '').trim();
+    const rel = toPosixRel(payload && payload.rel);
+    if (isRecycleRootId(wanted)) {
+      const fsRoot = recycleDirAbs();
+      if (!fsRoot) return { ok: false, error: 'no_workspace' };
+      const abs = resolveInsideRoot(fsRoot, rel);
+      if (!abs) return { ok: false, error: 'path_escape' };
+      return { ok: true, abs, root: wanted, rel };
+    }
+    const root = pickActiveRoot(payload);
+    if (!root) return { ok: false, error: 'no_root' };
+    const abs = resolveInsideRoot(root, rel);
+    if (!abs) return { ok: false, error: 'path_escape' };
+    return { ok: true, abs, root, rel };
+  }
+
+  async function reveal(payload) {
+    const hit = resolveAbs(payload);
+    if (!hit.ok) return hit;
+    if (typeof deps.revealPath === 'function') {
+      try {
+        const err = await deps.revealPath(hit.abs);
+        if (err) return { ...hit, ok: false, error: String(err) };
+      } catch (e) {
+        return { ...hit, ok: false, error: e instanceof Error ? e.message : String(e) };
+      }
+    }
+    return hit;
+  }
+
+  async function renameEntry(payload) {
+    const root = pickActiveRoot(payload);
+    if (!root) return { ok: false, error: 'no_root' };
+    const rel = toPosixRel(payload && payload.rel);
+    if (!rel) return { ok: false, error: 'no_rel' };
+    const nextName = String(payload && payload.name ? payload.name : '').trim();
+    if (!nextName || /[\\/]/.test(nextName) || nextName === '.' || nextName === '..') {
+      return { ok: false, error: 'bad_name' };
+    }
+    const parentRel = parentPosix(rel);
+    const destRel = parentRel ? `${parentRel}/${nextName}` : nextName;
+    if (destRel === rel) return { ok: true, from: rel, to: destRel };
+    const srcAbs = resolveInsideRoot(root, rel);
+    const destAbs = resolveInsideRoot(root, destRel);
+    if (!srcAbs || !destAbs) return { ok: false, error: 'path_escape' };
+    if (!(await pathExists(srcAbs))) return { ok: false, error: 'not_found' };
+    if (await pathExists(destAbs)) return { ok: false, error: 'exists' };
+    await fsp.rename(srcAbs, destAbs);
+    await remapIndexRels(root, rel, destRel);
+    return { ok: true, from: rel, to: destRel };
+  }
+
   async function mkdir(payload) {
     const root = pickActiveRoot(payload);
     if (!root) return { ok: false, error: 'no_root' };
@@ -1725,8 +1842,9 @@ function createWorkshopFileTreeHost(deps) {
       } catch {
         continue;
       }
-      const parentRel = parentPosix(rel);
-      const slot = await allocUniqueRel(root, parentRel, basePosix(rel), 1);
+      const destRel = payload && payload.destRel != null ? toPosixRel(payload.destRel) : parentPosix(rel);
+      if (destRel === rel || destRel.startsWith(`${rel}/`)) continue;
+      const slot = await allocUniqueRel(root, destRel, basePosix(rel), destRel === parentPosix(rel) ? 1 : 0);
       if (!slot) continue;
       if (st.isDirectory()) await fsp.cp(srcAbs, slot.abs, { recursive: true });
       else await fsp.copyFile(srcAbs, slot.abs);
@@ -1861,9 +1979,7 @@ function createWorkshopFileTreeHost(deps) {
     if (!st.isFile()) return { ok: false, error: 'not_file' };
     const kind = kindFromName(path.basename(hit.fileAbs));
     if (kind !== 'image') return { ok: true, kind, status: 'placeholder' };
-    if (SPECIAL_RASTER_EXT.has(path.extname(hit.fileAbs).toLowerCase())) {
-      return { ok: true, kind, status: 'placeholder' };
-    }
+    const specialRaster = SPECIAL_RASTER_EXT.has(path.extname(hit.fileAbs).toLowerCase());
     const dir = String(cacheDir() || '').trim();
     if (!dir) return { ok: true, kind, status: 'placeholder' };
     const id = thumbCacheId(hit.root, hit.fileRel, st.size, st.mtimeMs, THUMB_EDGE);
@@ -1882,6 +1998,7 @@ function createWorkshopFileTreeHost(deps) {
     } catch {
       /* miss */
     }
+    if (specialRaster) return { ok: true, kind, status: 'placeholder' };
     const jpeg = await encodeThumbJpeg(hit.fileAbs, st.size);
     if (!jpeg || !jpeg.length) return { ok: true, kind, status: 'placeholder' };
     try {
@@ -1897,6 +2014,48 @@ function createWorkshopFileTreeHost(deps) {
       rel: hit.fileRel,
       dataUrl: `data:image/jpeg;base64,${Buffer.from(jpeg).toString('base64')}`,
     };
+  }
+
+  function jpegBytesFromDataUrl(dataUrl) {
+    const raw = String(dataUrl || '');
+    const comma = raw.indexOf(',');
+    const header = comma < 0 ? '' : raw.slice(0, comma);
+    if (!/^data:image\/jpeg/i.test(header) || !/base64/i.test(header)) return null;
+    try {
+      const buf = Buffer.from(raw.slice(comma + 1), 'base64');
+      if (!buf.length || buf.length > 2 * 1024 * 1024) return null;
+      return buf;
+    } catch {
+      return null;
+    }
+  }
+
+  async function putThumb(payload) {
+    const hit = await resolveFileAbs(payload);
+    if (!hit.ok) return hit;
+    if (!SPECIAL_RASTER_EXT.has(path.extname(hit.fileAbs).toLowerCase())) {
+      return { ok: false, error: 'not_special_raster' };
+    }
+    const jpeg = jpegBytesFromDataUrl(payload && payload.dataUrl);
+    if (!jpeg) return { ok: false, error: 'bad_jpeg' };
+    let st;
+    try {
+      st = await fsp.stat(hit.fileAbs);
+    } catch {
+      return { ok: false, error: 'not_found' };
+    }
+    if (!st.isFile()) return { ok: false, error: 'not_file' };
+    const dir = String(cacheDir() || '').trim();
+    if (!dir) return { ok: false, error: 'no_cache' };
+    const id = thumbCacheId(hit.root, hit.fileRel, st.size, st.mtimeMs, THUMB_EDGE);
+    const cachePath = path.join(dir, `${id}.jpg`);
+    try {
+      fs.mkdirSync(dir, { recursive: true });
+      await fsp.writeFile(cachePath, jpeg);
+    } catch {
+      return { ok: false, error: 'write_failed' };
+    }
+    return { ok: true, rel: hit.fileRel };
   }
 
   async function resolveSendFile(finger) {
@@ -1937,6 +2096,7 @@ function createWorkshopFileTreeHost(deps) {
     removeRoot,
     list,
     thumb,
+    putThumb,
     readFile,
     getMedia,
     isAllowedMediaAbs,
@@ -1946,6 +2106,9 @@ function createWorkshopFileTreeHost(deps) {
     writeCheckoutFile,
     importFiles,
     mkdir,
+    resolveAbs,
+    reveal,
+    renameEntry,
     moveEntries,
     copyEntries,
     trashEntries,

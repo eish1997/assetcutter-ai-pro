@@ -28,6 +28,7 @@ describe('workflowAssetFormatBadge', () => {
     expect(formatSuffixFromFileName('https://cdn.example.com/a.webm?x=1')).toBe('WEBM');
     expect(formatSuffixFromFileName('data:video/mp4;base64,xx')).toBe('MP4');
     expect(formatSuffixFromFileName('blob:https://x/1')).toBe('');
+    expect(formatSuffixFromFileName('wsfile:D:/lib/Pictures/hero.png')).toBe('PNG');
   });
 
   it('uses filename then model format, never a generic VIDEO/TEXT label', () => {
@@ -63,5 +64,15 @@ describe('workflowAssetFormatBadge', () => {
       ),
     ).toBe('GLB');
     expect(workflowAssetFormatBadgeLabel(makeAsset({ assetKind: 'video', original: 'blob:video' }))).toBe('');
+    expect(
+      workflowAssetFormatBadgeLabel(
+        makeAsset({ assetKind: 'image', textTitle: 'env.hdr', original: 'data:image/jpeg;base64,x' }),
+      ),
+    ).toBe('HDR');
+    expect(
+      workflowAssetFormatBadgeLabel(
+        makeAsset({ assetKind: 'image', textTitle: 'hero.png', original: 'data:image/png;base64,x' }),
+      ),
+    ).toBe('PNG');
   });
 });

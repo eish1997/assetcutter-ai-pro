@@ -56,6 +56,40 @@ describe('AssetCardPreviewRenderer', () => {
     expect(screen.queryByText('Text')).toBeNull();
   });
 
+  it('renders image assets with a format badge', () => {
+    render(
+      <AssetCardPreviewRenderer
+        asset={makeAsset({
+          assetKind: 'image',
+          textTitle: 'sky.exr',
+          original: 'data:image/jpeg;base64,THUMB',
+        })}
+        previewSrc="data:image/jpeg;base64,THUMB"
+        cacheKey="image-exr"
+      />
+    );
+
+    expect(screen.getByText('EXR')).toBeTruthy();
+    expect(document.querySelector('img')?.getAttribute('src')).toBe('data:image/jpeg;base64,THUMB');
+  });
+
+  it('hides format badges when asked', () => {
+    render(
+      <AssetCardPreviewRenderer
+        asset={makeAsset({
+          assetKind: 'image',
+          textTitle: 'sky.exr',
+          original: 'data:image/jpeg;base64,THUMB',
+        })}
+        previewSrc="data:image/jpeg;base64,THUMB"
+        cacheKey="image-exr-hide"
+        hideFormatBadges
+      />
+    );
+
+    expect(screen.queryByText('EXR')).toBeNull();
+  });
+
   it('renders video variants with a format badge', () => {
     render(
       <AssetCardPreviewRenderer

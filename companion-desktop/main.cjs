@@ -856,6 +856,14 @@ const workshopFileTreeHost = createWorkshopFileTreeHost({
       properties: ['openDirectory'],
     });
   },
+  revealPath: async (abs) => {
+    try {
+      shell.showItemInFolder(String(abs || ''));
+      return '';
+    } catch (e) {
+      return e instanceof Error ? e.message : String(e);
+    }
+  },
 });
 
 function getAgentStoreRoot() {
@@ -7458,6 +7466,7 @@ if (!gotLock) {
   ipcMain.handle('workshop-file-remove-root', async (_event, payload) => workshopFileTreeHost.removeRoot(payload || {}));
   ipcMain.handle('workshop-file-list', async (_event, payload) => workshopFileTreeHost.list(payload || {}));
   ipcMain.handle('workshop-file-thumb', async (_event, payload) => workshopFileTreeHost.thumb(payload || {}));
+  ipcMain.handle('workshop-file-put-thumb', async (_event, payload) => workshopFileTreeHost.putThumb(payload || {}));
   ipcMain.handle('workshop-file-read', async (_event, payload) => workshopFileTreeHost.readFile(payload || {}));
   ipcMain.handle('workshop-file-media', async (_event, payload) => workshopFileTreeHost.getMedia(payload || {}));
   ipcMain.handle('workshop-file-write-result', async (_event, payload) => workshopFileTreeHost.writeResult(payload || {}));
@@ -7466,6 +7475,9 @@ if (!gotLock) {
   ipcMain.handle('workshop-file-write-checkout', async (_event, payload) => workshopFileTreeHost.writeCheckoutFile(payload || {}));
   ipcMain.handle('workshop-file-import', async (_event, payload) => workshopFileTreeHost.importFiles(payload || {}));
   ipcMain.handle('workshop-file-mkdir', async (_event, payload) => workshopFileTreeHost.mkdir(payload || {}));
+  ipcMain.handle('workshop-file-reveal', async (_event, payload) => workshopFileTreeHost.reveal(payload || {}));
+  ipcMain.handle('workshop-file-resolve-abs', async (_event, payload) => workshopFileTreeHost.resolveAbs(payload || {}));
+  ipcMain.handle('workshop-file-rename', async (_event, payload) => workshopFileTreeHost.renameEntry(payload || {}));
   ipcMain.handle('workshop-file-move', async (_event, payload) => workshopFileTreeHost.moveEntries(payload || {}));
   ipcMain.handle('workshop-file-copy', async (_event, payload) => workshopFileTreeHost.copyEntries(payload || {}));
   ipcMain.handle('workshop-file-trash', async (_event, payload) => workshopFileTreeHost.trashEntries(payload || {}));

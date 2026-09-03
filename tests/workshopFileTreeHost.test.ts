@@ -42,6 +42,8 @@ const {
     pickRoot: () => Promise<{ ok: boolean; root?: string; error?: string; canceled?: boolean }>;
     removeRoot: (payload: { root: string }) => { ok: boolean };
     createCheckoutFile: (payload: Record<string, unknown>) => Promise<{ ok: boolean; rel?: string; error?: string }>;
+    renameEntry: (payload: Record<string, unknown>) => Promise<{ ok: boolean; from?: string; to?: string; error?: string }>;
+    resolveAbs: (payload: Record<string, unknown>) => { ok: boolean; abs?: string; error?: string };
     groupEntries: (payload: Record<string, unknown>) => Promise<{ ok: boolean; destRel?: string; error?: string }>;
     copyEntries: (payload: Record<string, unknown>) => Promise<{ ok: boolean; copied?: Array<{ to: string }>; error?: string }>;
     trashEntries: (payload: Record<string, unknown>) => Promise<{ ok: boolean; rels?: string[]; error?: string }>;
@@ -59,9 +61,13 @@ const {
   isRelEscape: (rel: string) => boolean;
   kindFromName: (name: string) => string;
   listDir: (root: string, rel: string) => Promise<{ ok: boolean; entries?: Array<{ name: string; kind: string; isPackage?: boolean }> }>;
-  listCanvas: (root: string, rel: string) => Promise<{
+  listCanvas: (
+    root: string,
+    rel: string,
+    opts?: { includeSubfolders?: boolean },
+  ) => Promise<{
     ok: boolean;
-    items?: Array<{ kind: string; name: string; rel?: string; previewRels?: string[]; assetKind?: string }>;
+    items?: Array<{ kind: string; name: string; rel?: string; previewRels?: string[]; containedKinds?: string[]; assetKind?: string }>;
   }>;
   parseAcAssetDoc: (raw: unknown) => { id: string; displayFileId: string } | null;
   parseWorkshopLibrary: (raw: unknown, dir?: string) => {
@@ -110,6 +116,12 @@ describe('workshop file tree host', () => {
     expect(names).toEqual(['photo.jpg', 'sub']);
     const nested = await listDir(root, 'sub');
     expect(nested.entries?.map((e) => e.name)).toEqual(['deep.png']);
+    const flat = await listCanvas(root, '', { includeSubfolders: true });
+    expect(flat.items?.some((i) => i.kind === 'folder')).toBe(false);
+    expect(flat.items?.map((i) => i.name).sort()).toEqual(['deep.png', 'photo.jpg']);
+    const layered = await listCanvas(root, '');
+    expect(layered.items?.some((i) => i.kind === 'folder' && i.name === 'sub')).toBe(true);
+    expect(layered.items?.some((i) => i.name === 'deep.png')).toBe(false);
     fs.rmSync(root, { recursive: true, force: true });
   });
 
@@ -495,6 +507,12 @@ describe('workshop file tree host', () => {
     const refs = withFolder.items?.find((i) => i.kind === 'folder' && i.name === 'refs');
     expect(refs).toBeTruthy();
     expect(refs?.previewRels).toEqual(['refs/cover.png']);
+    expect(refs?.containedKinds).toEqual(['image']);
+    fs.mkdirSync(path.join(root, 'refs', 'notes'));
+    fs.writeFileSync(path.join(root, 'refs', 'notes', 'readme.md'), 'hi');
+    const nestedKinds = await listCanvas(root, '');
+    const refsWithNotes = nestedKinds.items?.find((i) => i.kind === 'folder' && i.name === 'refs');
+    expect(refsWithNotes?.containedKinds).toEqual(['image', 'text']);
 
     const bound = await host.upgradeLoose({
       root,

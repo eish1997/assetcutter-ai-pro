@@ -4,12 +4,18 @@ import {
   isWorkshopBrowserLibraryRoot,
   isWorkshopPinnedTreeRoot,
   isWorkshopRecycleRoot,
+  parentRel,
   workshopBrowserLibraryRoot,
   workshopRecycleLibraryRoot,
   workshopFileSourceApi,
   type WorkshopDirEntry,
   type WorkshopRootInfo,
 } from '../../services/workshopFileTree';
+import {
+  WorkshopFolderContextMenu,
+  type WorkshopFolderMenuTarget,
+} from './WorkshopFolderContextMenu';
+import { getWorkshopEntryClip, setWorkshopEntryClip, subscribeWorkshopEntryClip } from '../../services/workshopEntryClipboard';
 
 /** Keep a local export: Electron/Vite HMR can still import this name from this file. */
 export function hasWorkbenchFileSourceApi(): boolean {
@@ -38,12 +44,18 @@ export function WorkshopFileTreeColumn(props: {
   activeRoot: string;
   currentRel: string;
   workspaceDir?: string;
+  flatten: boolean;
+  onToggleFlatten: () => void;
   onSelectFolder: (root: string, rel: string) => void;
   onAddFolder: () => void;
   onRemoveRoot: (root: string) => void;
+  onTreeMutated: () => void;
 }): React.ReactElement {
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const [childrenByKey, setChildrenByKey] = useState<Record<string, WorkshopDirEntry[]>>({});
+  const [menu, setMenu] = useState<{ x: number; y: number; target: WorkshopFolderMenuTarget } | null>(null);
+  const [clip, setClip] = useState(getWorkshopEntryClip);
+  useEffect(() => subscribeWorkshopEntryClip(() => setClip(getWorkshopEntryClip())), []);
 
   const loadChildren = useCallback(async (root: string, rel: string) => {
     const api = workshopFileSourceApi();
@@ -64,6 +76,36 @@ export function WorkshopFileTreeColumn(props: {
       void loadChildren(item.root, '');
     }
   }, [props.roots, expanded, loadChildren]);
+
+  const onTreeMutated = props.onTreeMutated;
+  const refreshParent = useCallback(
+    (root: string, rel: string) => {
+      void loadChildren(root, rel);
+      void loadChildren(root, parentRel(rel));
+      onTreeMutated();
+    },
+    [loadChildren, onTreeMutated],
+  );
+
+  const openMenu = (event: React.MouseEvent, target: WorkshopFolderMenuTarget) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setMenu({ x: event.clientX, y: event.clientY, target });
+  };
+
+  const menuRel = menu?.target.kind === 'root' ? '' : menu?.target.rel || '';
+  const menuRoot = menu?.target.root || '';
+
+  const copyAbsPath = async () => {
+    const api = workshopFileSourceApi();
+    const hit = await api?.resolveWorkshopAbs?.({ root: menuRoot, rel: menuRel });
+    if (!hit?.ok || !hit.abs) return;
+    try {
+      await navigator.clipboard.writeText(hit.abs);
+    } catch {
+      /* ignore */
+    }
+  };
 
   const toggle = (root: string, rel: string) => {
     const key = treeKey(root, rel);
@@ -96,6 +138,7 @@ export function WorkshopFileTreeColumn(props: {
               type="button"
               title={dir.name}
               onClick={() => props.onSelectFolder(root, dir.rel)}
+              onContextMenu={(e) => openMenu(e, { kind: 'dir', root, rel: dir.rel, name: dir.name })}
               className={`flex min-w-0 flex-1 items-center gap-1.5 truncate rounded px-1 text-left text-[11px] leading-none ${
                 on ? 'bg-white/[0.1] text-white' : 'text-white/70 hover:bg-white/[0.05] hover:text-white'
               }`}
@@ -160,8 +203,7 @@ export function WorkshopFileTreeColumn(props: {
                     onClick={() => props.onSelectFolder(item.root, '')}
                     onContextMenu={(e) => {
                       if (pinned) return;
-                      e.preventDefault();
-                      props.onRemoveRoot(item.root);
+                      openMenu(e, { kind: 'root', root: item.root, label: item.label });
                     }}
                     className={`flex min-w-0 flex-1 items-center gap-1.5 truncate rounded px-1 text-left text-[11px] ${
                       on ? 'bg-white/[0.1] text-white' : 'text-white/80 hover:bg-white/[0.05]'
@@ -184,6 +226,83 @@ export function WorkshopFileTreeColumn(props: {
             );
           })}
       </div>
+      <WorkshopFolderContextMenu
+        open={Boolean(menu)}
+        x={menu?.x || 0}
+        y={menu?.y || 0}
+        target={menu?.target || null}
+        flatten={props.flatten}
+        canPaste={Boolean(clip && menu && clip.root === menu.target.root)}
+        onClose={() => setMenu(null)}
+        onReveal={() => {
+          void workshopFileSourceApi()?.revealWorkshopPath?.({ root: menuRoot, rel: menuRel });
+        }}
+        onCopyPath={() => {
+          void copyAbsPath();
+        }}
+        onRemoveRoot={
+          menu?.target.kind === 'root' ? () => props.onRemoveRoot(menu.target.root) : undefined
+        }
+        onMkdir={
+          menu?.target.kind === 'dir'
+            ? () => {
+                const name = window.prompt('新文件夹名称', '组');
+                if (!name?.trim()) return;
+                void workshopFileSourceApi()
+                  ?.mkdirWorkshopDir?.({ root: menuRoot, parentRel: menuRel, name: name.trim() })
+                  .then(() => refreshParent(menuRoot, menuRel));
+              }
+            : undefined
+        }
+        onRename={
+          menu?.target.kind === 'dir'
+            ? () => {
+                const name = window.prompt('重命名', menu.target.kind === 'dir' ? menu.target.name : '');
+                if (!name?.trim()) return;
+                void workshopFileSourceApi()
+                  ?.renameWorkshopEntry?.({ root: menuRoot, rel: menuRel, name: name.trim() })
+                  .then(() => refreshParent(menuRoot, menuRel));
+              }
+            : undefined
+        }
+        onTrash={
+          menu?.target.kind === 'dir'
+            ? () => {
+                void workshopFileSourceApi()
+                  ?.trashWorkshopEntries?.({ root: menuRoot, rel: menuRel })
+                  .then(() => refreshParent(menuRoot, menuRel));
+              }
+            : undefined
+        }
+        onCut={
+          menu?.target.kind === 'dir'
+            ? () => setWorkshopEntryClip({ root: menuRoot, rels: [menuRel], mode: 'cut' })
+            : undefined
+        }
+        onCopy={
+          menu?.target.kind === 'dir'
+            ? () => setWorkshopEntryClip({ root: menuRoot, rels: [menuRel], mode: 'copy' })
+            : undefined
+        }
+        onPaste={
+          clip && menu && clip.root === menu.target.root
+            ? () => {
+                const destRel = menuRel;
+                const api = workshopFileSourceApi();
+                const done = () => {
+                  if (clip.mode === 'cut') setWorkshopEntryClip(null);
+                  refreshParent(menuRoot, destRel);
+                };
+                if (clip.mode === 'cut') {
+                  void api?.moveWorkshopEntries?.({ root: clip.root, destRel, rels: clip.rels }).then(done);
+                } else {
+                  void api?.copyWorkshopEntries?.({ root: clip.root, destRel, rels: clip.rels }).then(done);
+                }
+              }
+            : undefined
+        }
+        onToggleFlatten={props.onToggleFlatten}
+      />
     </div>
   );
 }

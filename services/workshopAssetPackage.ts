@@ -39,6 +39,7 @@ export type WorkshopCanvasItem = {
   assetKind: 'image' | 'model3d' | 'file' | 'text' | 'video';
   size: number;
   mtimeMs: number;
+  birthtimeMs?: number;
   assetId?: string;
   displayFileId?: string;
   displayRel?: string;
@@ -48,6 +49,7 @@ export type WorkshopCanvasItem = {
   faceFileId?: string;
   checkoutFileId?: string;
   previewRels?: string[];
+  containedKinds?: Array<'image' | 'model3d' | 'file' | 'text' | 'video'>;
 };
 
 export function utf8FromDataUrl(dataUrl: string): string {
@@ -299,6 +301,7 @@ export function workshopCanvasItemsToWorkflowAssets(
         hiddenInGrid: false,
         createdAt: Math.floor(Number(item.mtimeMs) || 0),
         textTitle: String(item.title || item.name || item.rel),
+        ...(Array.isArray(item.containedKinds) ? { containedKinds: item.containedKinds.slice() } : {}),
       });
       continue;
     }

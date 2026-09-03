@@ -508,6 +508,7 @@ import {
   hasWorkbenchFileSourceApi,
   isWorkshopBrowserLibraryRoot,
   isWorkshopRecycleRoot,
+  toPosixRel,
   workshopRootAllowsCreate,
   parseWorkshopFileAssetId,
   selectedRelFromAssetIds,
@@ -543,8 +544,13 @@ import {
   countWorkshopCanvasKinds,
   emptyWorkshopNavHistory,
   filterWorkshopCanvasByKind,
+  filterWorkshopCanvasByName,
   normalizeWorkshopNavLoc,
   pushWorkshopNav,
+  readWorkshopCanvasListPrefs,
+  sortWorkshopCanvasItems,
+  isolateWorkshopCanvasKind,
+  toggleWorkshopCanvasKind,
   workshopBreadcrumbSegments,
   workshopCanvasKindMatches,
   workshopNavBack,
@@ -554,11 +560,19 @@ import {
   workshopNavForward,
   workshopNavRootLabel,
   workshopNavUpLoc,
-  type WorkshopCanvasKindFilter,
+  writeWorkshopCanvasListPrefs,
+  type WorkshopCanvasKindId,
+  type WorkshopCanvasListPrefs,
   type WorkshopNavLoc,
 } from '../services/workshopCanvasNav';
+import { getWorkshopEntryClip, setWorkshopEntryClip, subscribeWorkshopEntryClip } from '../services/workshopEntryClipboard';
 import { isWorkshopPlayableMediaUrl, isWorkshopSpecialRasterName, isWorkshopTextPreviewName } from '../services/workshopPreviewKind';
-import { decodeWorkshopSpecialRasterToJpeg } from '../services/workshopSpecialRaster';
+import {
+  decodeWorkshopSpecialRasterToJpeg,
+  peekWorkshopSpecialRasterJpeg,
+  rememberWorkshopSpecialRasterJpeg,
+  SPECIAL_RASTER_DECODE_PARALLEL,
+} from '../services/workshopSpecialRaster';
 import WorkflowSpaceMarqueeChrome from './workflow/WorkflowSpaceMarqueeChrome';
 import WorkflowMarqueeOverlay from './workflow/WorkflowMarqueeOverlay';
 import WorkflowLightboxDetailEdgePanel from './workflow/WorkflowLightboxDetailEdgePanel';
@@ -1984,7 +1998,6 @@ const WorkflowSection: React.FC<{
   const [groupFilterId, setGroupFilterId] = useState<string | null>(null);
   const groupFilterIdRef = useRef(groupFilterId);
   groupFilterIdRef.current = groupFilterId;
-  const [workshopCanvasKindFilter, setWorkshopCanvasKindFilter] = useState<WorkshopCanvasKindFilter>('all');
   const [workshopNavHistory, setWorkshopNavHistory] = useState(() =>
     emptyWorkshopNavHistory({ root: WORKSHOP_BROWSER_LIBRARY_ROOT, rel: '', groupId: null }),
   );
@@ -2022,6 +2035,22 @@ const WorkflowSection: React.FC<{
   const [workshopCanvasItems, setWorkshopCanvasItems] = useState<WorkshopCanvasItem[]>([]);
   const [workshopOptimisticItems, setWorkshopOptimisticItems] = useState<WorkshopCanvasItem[]>([]);
   const [workshopListEpoch, setWorkshopListEpoch] = useState(0);
+  const [workshopListPrefs, setWorkshopListPrefs] = useState<WorkshopCanvasListPrefs>(() =>
+    readWorkshopCanvasListPrefs(preferenceScope),
+  );
+  const [workshopNameFilter, setWorkshopNameFilter] = useState('');
+  useEffect(() => {
+    setWorkshopListPrefs(readWorkshopCanvasListPrefs(preferenceScope));
+  }, [preferenceScope]);
+  const applyWorkshopListPrefs = useCallback(
+    (next: WorkshopCanvasListPrefs) => {
+      setWorkshopListPrefs(next);
+      writeWorkshopCanvasListPrefs(preferenceScope, next);
+    },
+    [preferenceScope],
+  );
+  const [workshopClip, setWorkshopClip] = useState(getWorkshopEntryClip);
+  useEffect(() => subscribeWorkshopEntryClip(() => setWorkshopClip(getWorkshopEntryClip())), []);
   const [workshopThumbById, setWorkshopThumbById] = useState<Record<string, string>>({});
   const [workshopSourceById, setWorkshopSourceById] = useState<Record<string, string>>({});
   const [workshopMediaById, setWorkshopMediaById] = useState<Record<string, WorkshopMediaHit>>({});
@@ -2057,6 +2086,11 @@ const WorkflowSection: React.FC<{
     () => mergeWorkshopCanvasItems(workshopCanvasItems, workshopOptimisticItems),
     [workshopCanvasItems, workshopOptimisticItems],
   );
+  const workshopDisplayCanvasItems = useMemo(
+    () =>
+      sortWorkshopCanvasItems(filterWorkshopCanvasByName(workshopMergedCanvasItems, workshopNameFilter), workshopListPrefs),
+    [workshopMergedCanvasItems, workshopNameFilter, workshopListPrefs],
+  );
   workshopCanvasItemsRef.current = workshopMergedCanvasItems;
   workshopActiveRootRef.current = workshopActiveRoot;
   workshopCurrentRelRef.current = workshopCurrentRel;
@@ -2073,13 +2107,13 @@ const WorkflowSection: React.FC<{
   }, []);
   const workshopFileAssets = useMemo(
     () =>
-      workshopCanvasItemsToWorkflowAssets(workshopMergedCanvasItems, {
+      workshopCanvasItemsToWorkflowAssets(workshopDisplayCanvasItems, {
         originalById: workshopSourceById,
         faceById: workshopFaceById,
         mediaById: workshopMediaById,
         textBodyById: workshopTextById,
       }),
-    [workshopMergedCanvasItems, workshopSourceById, workshopFaceById, workshopMediaById, workshopTextById]
+    [workshopDisplayCanvasItems, workshopSourceById, workshopFaceById, workshopMediaById, workshopTextById]
   );
   const workshopFileAssetsRef = useRef(workshopFileAssets);
   workshopFileAssetsRef.current = workshopFileAssets;
@@ -2470,13 +2504,12 @@ const WorkflowSection: React.FC<{
     if (!api?.listWorkshopDir) return;
     let cancelled = false;
     workshopThumbRequestedRef.current = new Set();
-    workshopSpecialRasterRequestedRef.current = new Set();
     void api
       .listWorkshopDir({
         root: workshopActiveRoot,
         rel: workshopCurrentRel,
         assetsOnly: true,
-        includeSubfolders: false,
+        includeSubfolders: workshopListPrefs.flatten,
       })
       .then((out) => {
         if (cancelled) return;
@@ -2551,7 +2584,7 @@ const WorkflowSection: React.FC<{
     return () => {
       cancelled = true;
     };
-  }, [fileSourceApi, workshopActiveRoot, workshopCurrentRel, workshopListEpoch]);
+  }, [fileSourceApi, workshopActiveRoot, workshopCurrentRel, workshopListEpoch, workshopListPrefs.flatten]);
   useEffect(() => {
     if (!fileSourceApi || isWorkshopBrowserLibraryRoot(workshopActiveRoot)) {
       setWorkshopSelectedRel(null);
@@ -2667,9 +2700,10 @@ const WorkflowSection: React.FC<{
       if (!unlocked) continue;
       const specialRaster = a.assetKind === 'image' && isWorkshopSpecialRasterName(a.textTitle || '');
       const textFile = a.assetKind === 'text' || isWorkshopTextPreviewName(a.textTitle || '');
-      if (a.assetKind === 'video' || a.assetKind === 'model3d' || textFile || specialRaster) {
+      if (specialRaster) continue;
+      if (a.assetKind === 'video' || a.assetKind === 'model3d' || textFile) {
         if (textFile && workshopTextById[a.id]) continue;
-        if ((a.assetKind === 'video' || a.assetKind === 'model3d' || specialRaster) && workshopMediaById[a.id]?.url) continue;
+        if ((a.assetKind === 'video' || a.assetKind === 'model3d') && workshopMediaById[a.id]?.url) continue;
         pushMedia(a.id, a.displayKey || 'original');
       }
     }
@@ -2743,8 +2777,14 @@ const WorkflowSection: React.FC<{
   ]);
   useEffect(() => {
     if (!workshopDiskOpen || !workshopActiveRoot) return;
-    let cancelled = false;
-    const jobs: Array<{ id: string; url: string; fileName: string; lightbox: boolean }> = [];
+    const api = workshopFileSourceApi();
+    const jobs: Array<{
+      id: string;
+      url: string;
+      fileName: string;
+      lightbox: boolean;
+      displayKey: string;
+    }> = [];
     for (const a of workshopFileAssets) {
       if (a.assetKind !== 'image' || !isWorkshopSpecialRasterName(a.textTitle || '')) continue;
       const unlocked =
@@ -2752,46 +2792,130 @@ const WorkflowSection: React.FC<{
         selectedAssetIds.has(a.id) ||
         a.id === lightboxAssetId;
       if (!unlocked) continue;
-      const url = String(workshopMediaById[a.id]?.url || '').trim();
-      if (!url) continue;
-      const needThumb = !workshopThumbById[a.id];
+      const needThumb = !workshopThumbByIdRef.current[a.id];
       const needSource = a.id === lightboxAssetId && !workshopSourceById[a.id];
-      if (!needThumb && !needSource) continue;
-      const reqKey = needSource ? `${a.id}::lb` : `${a.id}::card`;
+      if (needThumb) {
+        const memo = peekWorkshopSpecialRasterJpeg(a.id, false);
+        if (memo) {
+          workshopThumbByIdRef.current[a.id] = memo;
+          setWorkshopThumbById((prev) => (prev[a.id] ? prev : { ...prev, [a.id]: memo }));
+        }
+      }
+      if (needSource) {
+        const memoLb = peekWorkshopSpecialRasterJpeg(a.id, true);
+        if (memoLb) {
+          setWorkshopSourceById((prev) => (prev[a.id] ? prev : { ...prev, [a.id]: memoLb }));
+          if (!workshopThumbByIdRef.current[a.id]) {
+            workshopThumbByIdRef.current[a.id] = memoLb;
+            setWorkshopThumbById((prev) => (prev[a.id] ? prev : { ...prev, [a.id]: memoLb }));
+          }
+        }
+      }
+      const stillThumb = !workshopThumbByIdRef.current[a.id];
+      const stillSource = a.id === lightboxAssetId && !workshopSourceById[a.id] && !peekWorkshopSpecialRasterJpeg(a.id, true);
+      if (!stillThumb && !stillSource) continue;
+      const reqKey = stillSource ? `${a.id}::lb` : `${a.id}::card`;
       if (workshopSpecialRasterRequestedRef.current.has(reqKey)) continue;
-      jobs.push({ id: a.id, url, fileName: a.textTitle || '', lightbox: needSource });
-    }
-    for (const job of jobs) {
-      const reqKey = job.lightbox ? `${job.id}::lb` : `${job.id}::card`;
-      workshopSpecialRasterRequestedRef.current.add(reqKey);
-      void decodeWorkshopSpecialRasterToJpeg({
-        url: job.url,
-        fileName: job.fileName,
-        lightbox: job.lightbox,
-      }).then((jpeg) => {
-        if (cancelled || !jpeg) {
-          if (cancelled) workshopSpecialRasterRequestedRef.current.delete(reqKey);
-          return;
-        }
-        if (job.lightbox) {
-          setWorkshopSourceById((prev) => (prev[job.id] ? prev : { ...prev, [job.id]: jpeg }));
-        }
-        setWorkshopThumbById((prev) => (prev[job.id] ? prev : { ...prev, [job.id]: jpeg }));
+      jobs.push({
+        id: a.id,
+        url: String(workshopMediaById[a.id]?.url || '').trim(),
+        fileName: a.textTitle || '',
+        lightbox: stillSource,
+        displayKey: a.displayKey || 'original',
       });
     }
-    return () => {
-      cancelled = true;
+    let cursor = 0;
+    const runOne = async (job: (typeof jobs)[number]) => {
+      const reqKey = job.lightbox ? `${job.id}::lb` : `${job.id}::card`;
+      workshopSpecialRasterRequestedRef.current.add(reqKey);
+      if (!job.lightbox) {
+        const parsed = parseWorkshopCardId(job.id);
+        if (parsed && api?.getWorkshopThumb) {
+          try {
+            const out = await api.getWorkshopThumb(
+              workshopHostFilePayload(parsed, {
+                items: workshopMergedCanvasItems,
+                fileId: workshopFaceFileId(job.id, job.displayKey),
+              }),
+            );
+            if (out?.ok && out.status === 'ready' && out.dataUrl) {
+              rememberWorkshopSpecialRasterJpeg(job.id, false, out.dataUrl);
+              workshopThumbByIdRef.current[job.id] = out.dataUrl;
+              setWorkshopThumbById((prev) => (prev[job.id] ? prev : { ...prev, [job.id]: out.dataUrl as string }));
+              return;
+            }
+          } catch {
+            /* decode below */
+          }
+        }
+      }
+      let url = job.url;
+      const parsed = parseWorkshopCardId(job.id);
+      if (!url && parsed && api?.getWorkshopMedia) {
+        try {
+          const media = await api.getWorkshopMedia(
+            workshopHostFilePayload(parsed, {
+              items: workshopMergedCanvasItems,
+              fileId: workshopFaceFileId(job.id, job.displayKey),
+            }),
+          );
+          url = String(media?.url || '').trim();
+          if (media?.ok && url) {
+            setWorkshopMediaById((prev) =>
+              prev[job.id]?.url ? prev : { ...prev, [job.id]: { url, kind: String(media.kind || ''), textPreview: media.textPreview } },
+            );
+          }
+        } catch {
+          url = '';
+        }
+      }
+      if (!url) {
+        workshopSpecialRasterRequestedRef.current.delete(reqKey);
+        return;
+      }
+      const jpeg = await decodeWorkshopSpecialRasterToJpeg({
+        url,
+        fileName: job.fileName,
+        lightbox: job.lightbox,
+      });
+      if (!jpeg) {
+        workshopSpecialRasterRequestedRef.current.delete(reqKey);
+        return;
+      }
+      rememberWorkshopSpecialRasterJpeg(job.id, job.lightbox, jpeg);
+      rememberWorkshopSpecialRasterJpeg(job.id, false, jpeg);
+      if (!job.lightbox && parsed && api?.putWorkshopThumb) {
+        void api.putWorkshopThumb({
+          ...workshopHostFilePayload(parsed, {
+            items: workshopMergedCanvasItems,
+            fileId: workshopFaceFileId(job.id, job.displayKey),
+          }),
+          dataUrl: jpeg,
+        });
+      }
+      if (job.lightbox) {
+        setWorkshopSourceById((prev) => (prev[job.id] ? prev : { ...prev, [job.id]: jpeg }));
+      }
+      setWorkshopThumbById((prev) => (prev[job.id] ? prev : { ...prev, [job.id]: jpeg }));
     };
+    const pump = async () => {
+      while (cursor < jobs.length) {
+        const job = jobs[cursor];
+        cursor += 1;
+        if (job) await runOne(job);
+      }
+    };
+    void Promise.all(Array.from({ length: Math.min(SPECIAL_RASTER_DECODE_PARALLEL, jobs.length) }, () => pump()));
   }, [
     workshopDiskOpen,
     workshopActiveRoot,
     workshopFileAssets,
-    workshopMediaById,
-    workshopThumbById,
+    workshopMergedCanvasItems,
     workshopSourceById,
     thumbUnlockKeys,
     selectedAssetIds,
     lightboxAssetId,
+    workshopFaceFileId,
   ]);
   const assetListMarqueeActive =
     quickComposeShellActive && !showArchived && Math.round(workspacePane) === 0;
@@ -9469,8 +9593,8 @@ ${lineSvg}
     );
   }, [workshopDiskOpen, workshopFileAssets, gridAssets, groupFilterId, pbrGridHideContext, assets]);
   const visibleAssets = useMemo(
-    () => filterWorkshopCanvasByKind(workshopCanvasLayerAssets, workshopCanvasKindFilter),
-    [workshopCanvasLayerAssets, workshopCanvasKindFilter],
+    () => filterWorkshopCanvasByKind(workshopCanvasLayerAssets, workshopListPrefs.kinds),
+    [workshopCanvasLayerAssets, workshopListPrefs.kinds],
   );
   const workshopCanvasKindCounts = useMemo(
     () => countWorkshopCanvasKinds(workshopCanvasLayerAssets),
@@ -10651,6 +10775,79 @@ ${lineSvg}
       onLog?.('warn', `打开资产文件夹失败：${'error' in out ? out.error : 'unknown_error'}`);
     },
     [onLog, setAssets, workspaceProjectChrome?.activeProjectId]
+  );
+
+  const workshopAssetDiskTarget = useCallback((asset: WorkflowAsset): { root: string; rel: string } | null => {
+    const parsed = parseWorkshopCardId(asset.id);
+    if (!parsed) return null;
+    if (parsed.kind === 'loose') return { root: parsed.root, rel: parsed.rel };
+    const rel = workshopCardDiskRel(asset.id, workshopCanvasItemsRef.current);
+    if (rel == null) return null;
+    return { root: parsed.root, rel };
+  }, []);
+
+  const handleWorkshopCopyPath = useCallback(
+    async (asset: WorkflowAsset) => {
+      const target = workshopAssetDiskTarget(asset);
+      if (!target) return;
+      const hit = await workshopFileSourceApi()?.resolveWorkshopAbs?.({ root: target.root, rel: target.rel });
+      const abs = String(hit?.abs || '').trim();
+      if (!abs) {
+        onLog?.('warn', '无法解析完整路径');
+        return;
+      }
+      try {
+        await navigator.clipboard.writeText(abs);
+        onLog?.('info', '已复制完整路径');
+      } catch {
+        onLog?.('warn', '复制路径失败（请检查浏览器剪贴板权限）');
+      }
+    },
+    [onLog, workshopAssetDiskTarget],
+  );
+
+  const handleWorkshopRenameAsset = useCallback(
+    (asset: WorkflowAsset) => {
+      const target = workshopAssetDiskTarget(asset);
+      if (!target) return;
+      const base = toPosixRel(target.rel).split('/').filter(Boolean).pop() || String(asset.textTitle || '').trim();
+      const name = window.prompt('重命名', base);
+      if (!name?.trim()) return;
+      void workshopFileSourceApi()
+        ?.renameWorkshopEntry?.({ root: target.root, rel: target.rel, name: name.trim() })
+        .then((out) => {
+          if (!out?.ok) onLog?.('warn', '作坊：重命名失败', out?.error || 'rename_failed');
+          setWorkshopListEpoch((epoch) => epoch + 1);
+        });
+    },
+    [onLog, workshopAssetDiskTarget],
+  );
+
+  const handleWorkshopClipAsset = useCallback(
+    (asset: WorkflowAsset, mode: 'cut' | 'copy') => {
+      const target = workshopAssetDiskTarget(asset);
+      if (!target) return;
+      setWorkshopEntryClip({ root: target.root, rels: [target.rel], mode });
+    },
+    [workshopAssetDiskTarget],
+  );
+
+  const handleWorkshopPasteEntries = useCallback(
+    (destRel: string) => {
+      const clip = getWorkshopEntryClip();
+      if (!clip || clip.root !== workshopActiveRoot) return;
+      const api = workshopFileSourceApi();
+      const done = () => {
+        if (clip.mode === 'cut') setWorkshopEntryClip(null);
+        setWorkshopListEpoch((epoch) => epoch + 1);
+      };
+      if (clip.mode === 'cut') {
+        void api?.moveWorkshopEntries?.({ root: clip.root, destRel, rels: clip.rels }).then(done);
+      } else {
+        void api?.copyWorkshopEntries?.({ root: clip.root, destRel, rels: clip.rels }).then(done);
+      }
+    },
+    [workshopActiveRoot],
   );
 
   const deleteWorkflowAssetCompanionObjects = useCallback(
@@ -12260,7 +12457,7 @@ ${lineSvg}
         ? assets.find((x) => x.id === (item as { assetId: string }).assetId) ?? null
         : null;
       if (childAsset) {
-        if (!workshopCanvasKindMatches(childAsset, workshopCanvasKindFilter)) return [];
+        if (!workshopCanvasKindMatches(childAsset, workshopListPrefs.kinds)) return [];
         const childTextDisplay = getAssetDisplayText(childAsset);
         const hasChildTextPayload =
           !!childTextDisplay ||
@@ -12276,7 +12473,7 @@ ${lineSvg}
           }),
         }];
       }
-      if (workshopCanvasKindFilter !== 'all' && workshopCanvasKindFilter !== 'image') return [];
+      if (!workshopListPrefs.kinds.includes('image')) return [];
       return [{
         id: groupKey,
         aspectRatio: resolveWorkflowGridCardAspect(undefined, cardAspectByAssetId, groupKey, 1),
@@ -12291,7 +12488,7 @@ ${lineSvg}
     cardAspectByAssetId,
     getAssetDisplayText,
     getAssetDisplayImage,
-    workshopCanvasKindFilter,
+    workshopListPrefs.kinds,
   ]);
 
   const groupJustifiedLayout = useWorkflowJustifiedLayout(groupCanvasLayoutItems, groupGridRef, {
@@ -16550,11 +16747,16 @@ ${lineSvg}
               activeRoot={workshopActiveRoot}
               currentRel={workshopCurrentRel}
               workspaceDir={workshopWorkspaceDir}
+              flatten={workshopListPrefs.flatten}
+              onToggleFlatten={() =>
+                applyWorkshopListPrefs({ ...workshopListPrefs, flatten: !workshopListPrefs.flatten })
+              }
               onSelectFolder={(root, rel) => {
                 applyWorkshopNavLoc({ root, rel, groupId: null });
               }}
               onAddFolder={() => void pickWorkshopRoot()}
               onRemoveRoot={(root) => void removeWorkshopRoot(root)}
+              onTreeMutated={() => setWorkshopListEpoch((epoch) => epoch + 1)}
             />
         </div>
         ) : showFunctionSidebar ? (
@@ -16590,9 +16792,20 @@ ${lineSvg}
             aria-hidden={Boolean(lightboxAssetId)}
           >
             <WorkshopCanvasNavBar
-              kindFilter={workshopCanvasKindFilter}
+              kindFilter={workshopListPrefs.kinds}
               kindCounts={workshopCanvasKindCounts}
-              onKindFilter={setWorkshopCanvasKindFilter}
+              onToggleKind={(id: WorkshopCanvasKindId) =>
+                applyWorkshopListPrefs({
+                  ...workshopListPrefs,
+                  kinds: toggleWorkshopCanvasKind(workshopListPrefs.kinds, id),
+                })
+              }
+              onIsolateKind={(id: WorkshopCanvasKindId) =>
+                applyWorkshopListPrefs({
+                  ...workshopListPrefs,
+                  kinds: isolateWorkshopCanvasKind(id),
+                })
+              }
               canBack={workshopNavCanBack(workshopNavHistory)}
               canForward={workshopNavCanForward(workshopNavHistory)}
               canUp={workshopNavCanUp(workshopNavLoc)}
@@ -16605,8 +16818,20 @@ ${lineSvg}
                 );
                 if (up) applyWorkshopNavLoc(up);
               }}
+              canRevealCurrent={!isWorkshopBrowserLibraryRoot(workshopActiveRoot)}
+              onRevealCurrent={() => {
+                void workshopFileSourceApi()?.revealWorkshopPath?.({
+                  root: workshopActiveRoot,
+                  rel: workshopCurrentRel,
+                });
+              }}
               crumbs={workshopNavCrumbs}
               onCrumb={(loc) => applyWorkshopNavLoc(loc)}
+              listPrefs={workshopListPrefs}
+              onListPrefs={applyWorkshopListPrefs}
+              onRefresh={() => setWorkshopListEpoch((epoch) => epoch + 1)}
+              nameFilter={workshopNameFilter}
+              onNameFilter={setWorkshopNameFilter}
             />
           </div>
         ) : null}
@@ -16739,8 +16964,8 @@ ${lineSvg}
                       const groupKey = layoutBox.id;
                       const isAssetRef = typeof item === 'object' && item && 'assetId' in item;
                       const childAsset = isAssetRef ? assets.find((x) => x.id === (item as { assetId: string }).assetId) : null;
-                      if (childAsset && !workshopCanvasKindMatches(childAsset, workshopCanvasKindFilter)) return null;
-                      if (!childAsset && workshopCanvasKindFilter !== 'all' && workshopCanvasKindFilter !== 'image') return null;
+                      if (childAsset && !workshopCanvasKindMatches(childAsset, workshopListPrefs.kinds)) return null;
+                      if (!childAsset && !workshopListPrefs.kinds.includes('image')) return null;
                       const img =
                         isAssetRef && childAsset
                           ? getAssetGridDisplayImage(childAsset)
@@ -16928,6 +17153,7 @@ ${lineSvg}
                                   }}
                                 >
                                   <div
+                                    data-ac-allow-context-menu
                                     className="relative h-full w-full cursor-pointer"
                                     onMouseEnter={() => {
                                       if (childAsset) {
@@ -16951,13 +17177,13 @@ ${lineSvg}
                                     onContextMenu={(e) => {
                                       if (showArchived) return;
                                       if (
-                                        isGroupAsset(childAsset) ||
                                         isWorkflowStoryboardTableAsset(childAsset) ||
                                         isWorkflowAssetSetAsset(childAsset) ||
-                                        (!hasChildDisplayImage && isWorkflowTextAsset(childAsset))
+                                        (!workshopDiskOpen && !hasChildDisplayImage && isWorkflowTextAsset(childAsset))
                                       ) {
                                         return;
                                       }
+                                      if (!workshopDiskOpen && isGroupAsset(childAsset)) return;
                                       openWorkflowAssetContextMenu(childAsset, e);
                                     }}
                                     onClick={() => {
@@ -16999,6 +17225,7 @@ ${lineSvg}
                                         previewSrc={childGridPreviewSrcEffective}
                                         cacheKey={childGridCacheKeyEffective}
                                         textDisplay={childTextDisplay}
+                                        hideFormatBadges={workshopListPrefs.hideFormatBadges}
                                         autoPlayVideo={selectedGroupItemKeys.has(groupKey)}
                                         deferThumbnail={!virtualize && !thumbUnlockKeys.has(groupKey)}
                                         thumbDecodePriority={virtualize || thumbHotKeys.has(groupKey) ? 'high' : 'low'}
@@ -17212,6 +17439,7 @@ ${lineSvg}
                           }}
                         >
                           <div
+                            data-ac-allow-context-menu
                             className="relative h-full w-full cursor-pointer"
                             onMouseEnter={() => {
                               if (isAssetRef && childAsset) {
@@ -17237,12 +17465,12 @@ ${lineSvg}
                             onContextMenu={(e) => {
                               if (showArchived || !isAssetRef || !childAsset) return;
                               if (
-                                isGroupAsset(childAsset) ||
                                 isWorkflowStoryboardTableAsset(childAsset) ||
                                 isWorkflowAssetSetAsset(childAsset)
                               ) {
                                 return;
                               }
+                              if (!workshopDiskOpen && isGroupAsset(childAsset)) return;
                               openWorkflowAssetContextMenu(childAsset, e);
                             }}
                             onClick={() => setGroupStringLightboxIndex(idx)}
@@ -17685,6 +17913,7 @@ ${lineSvg}
                         }}
                       >
                         <div
+                          data-ac-allow-context-menu
                           className="relative h-full w-full cursor-pointer"
                           onMouseEnter={() => {
                             if (showArchived) {
@@ -17779,6 +18008,7 @@ ${lineSvg}
                               previewSrc={gridPreviewSrcEffective}
                               cacheKey={gridPreviewCacheKeyEffective}
                               textDisplay={textDisplay}
+                              hideFormatBadges={workshopListPrefs.hideFormatBadges}
                               autoPlayVideo={selectedAssetIds.has(a.id)}
                               thumbMaxEdge={
                                 resolveWorkflowStepModelUrls(a, a.displayKey).length > 0 ? 896 : undefined
@@ -18140,6 +18370,7 @@ ${lineSvg}
                 onOpenFolder={handleWorkflowAssetOpenFolder}
                 onAddToComposeInput={handleWorkflowAssetAddToComposeInput}
                 canAddToComposeInput={canWorkflowAssetAddToComposeInput}
+                onAssetContextMenu={openWorkflowAssetContextMenu}
                 getMediaVariant={(asset) => (workflowResultUsesVideoPreview(asset) ? 'video' : 'image')}
                 onModelThumbnailCaptured={persistCapturedWorkflowModelThumbnail}
                 companionBaseUrl={String(getCompanionLocalBaseUrl() || '')}
@@ -19462,28 +19693,114 @@ ${lineSvg}
       : null}
     {workflowAssetContextMenu && typeof document !== 'undefined'
       ? (() => {
-          const menuAsset = assets.find((x) => x.id === workflowAssetContextMenu.assetId);
+          const menuAsset =
+            workshopFileAssets.find((x) => x.id === workflowAssetContextMenu.assetId) ||
+            assets.find((x) => x.id === workflowAssetContextMenu.assetId) ||
+            gridAssets.find((x) => x.id === workflowAssetContextMenu.assetId) ||
+            null;
           if (!menuAsset) return null;
+          const workshopTarget = workshopAssetDiskTarget(menuAsset);
+          const workshopMenu = Boolean(workshopDiskOpen && workshopTarget);
+          const workshopEditMenu = workshopMenu && !isWorkshopRecycleRoot(workshopActiveRoot);
+          const folderCard = isGroupAsset(menuAsset);
+          const pasteDestRel = folderCard && workshopTarget ? workshopTarget.rel : workshopCurrentRel;
+          const workbenchCopy = !workshopMenu && !folderCard;
           return createPortal(
             <WorkflowAssetContextMenu
               open
               x={workflowAssetContextMenu.x}
               y={workflowAssetContextMenu.y}
-              canCopyImage={canWorkflowAssetCopyImage(menuAsset)}
-              onCopyImage={() => {
-                void handleWorkflowAssetCopyImage(menuAsset);
+              onOpen={() => {
+                if (folderCard && workshopDiskOpen && workshopTarget) {
+                  openWorkshopDiskFolder(workshopTarget.root, workshopTarget.rel);
+                  return;
+                }
+                if (folderCard && !workshopDiskOpen) {
+                  applyWorkshopNavLoc({
+                    root: workshopActiveRoot,
+                    rel: '',
+                    groupId: menuAsset.id,
+                  });
+                  return;
+                }
+                openWorkflowLightbox(menuAsset.id);
               }}
-              onCopyId={() => {
-                void handleWorkflowAssetCopyId(menuAsset);
-              }}
-              canOpenFolder={canWorkflowAssetOpenFolder(menuAsset)}
-              openFolderDisabledReason={workflowAssetOpenFolderDisabledReason(menuAsset)}
-              onOpenFolder={() => {
-                void handleWorkflowAssetOpenFolder(menuAsset);
-              }}
-              canAddToComposeInput={canWorkflowAssetAddToComposeInput(menuAsset)}
-              onAddToComposeInput={() => {
-                handleWorkflowAssetAddToComposeInput(menuAsset);
+              openLabel={folderCard && workshopDiskOpen ? '进入文件夹' : '打开'}
+              onReveal={
+                workshopMenu && workshopTarget
+                  ? () => {
+                      void workshopFileSourceApi()?.revealWorkshopPath?.({
+                        root: workshopTarget.root,
+                        rel: workshopTarget.rel,
+                      });
+                    }
+                  : () => {
+                      void handleWorkflowAssetOpenFolder(menuAsset);
+                    }
+              }
+              canReveal={workshopMenu ? true : canWorkflowAssetOpenFolder(menuAsset)}
+              revealDisabledReason={workshopMenu ? '' : workflowAssetOpenFolderDisabledReason(menuAsset)}
+              onCopyPath={
+                workshopMenu
+                  ? () => {
+                      void handleWorkshopCopyPath(menuAsset);
+                    }
+                  : undefined
+              }
+              canCopyImage={workbenchCopy && canWorkflowAssetCopyImage(menuAsset)}
+              onCopyImage={
+                workbenchCopy
+                  ? () => {
+                      void handleWorkflowAssetCopyImage(menuAsset);
+                    }
+                  : undefined
+              }
+              onCopyId={
+                workbenchCopy
+                  ? () => {
+                      void handleWorkflowAssetCopyId(menuAsset);
+                    }
+                  : undefined
+              }
+              canAddToComposeInput={workbenchCopy && canWorkflowAssetAddToComposeInput(menuAsset)}
+              onAddToComposeInput={
+                workbenchCopy
+                  ? () => {
+                      handleWorkflowAssetAddToComposeInput(menuAsset);
+                    }
+                  : undefined
+              }
+              onRename={
+                workshopEditMenu
+                  ? () => {
+                      handleWorkshopRenameAsset(menuAsset);
+                    }
+                  : undefined
+              }
+              onCut={
+                workshopEditMenu
+                  ? () => {
+                      handleWorkshopClipAsset(menuAsset, 'cut');
+                    }
+                  : undefined
+              }
+              onCopyEntry={
+                workshopEditMenu
+                  ? () => {
+                      handleWorkshopClipAsset(menuAsset, 'copy');
+                    }
+                  : undefined
+              }
+              onPaste={
+                workshopEditMenu
+                  ? () => {
+                      handleWorkshopPasteEntries(pasteDestRel);
+                    }
+                  : undefined
+              }
+              canPaste={Boolean(workshopEditMenu && workshopClip && workshopClip.root === workshopActiveRoot)}
+              onDelete={() => {
+                removeAsset(menuAsset.id);
               }}
               onClose={() => setWorkflowAssetContextMenu(null)}
             />,

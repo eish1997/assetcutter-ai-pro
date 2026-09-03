@@ -24,6 +24,7 @@ type AssetCardPreviewRendererProps = {
   companionBaseUrl?: string;
   companionProjectId?: string;
   compactBadges?: boolean;
+  hideFormatBadges?: boolean;
 };
 
 const modelThumbnailCache = new Map<string, string | null>();
@@ -128,11 +129,11 @@ function Badge({
   );
 }
 
-function AudioWavePlaceholder({ label }: { label: string }) {
+function AudioWavePlaceholder({ label, hideBadge }: { label: string; hideBadge?: boolean }) {
   const bars = [28, 54, 38, 72, 45, 64, 34, 58, 42, 76, 36, 52, 30, 60];
   return (
     <div className="relative flex h-full w-full flex-col justify-between bg-[#141416] p-3">
-      <Badge icon="play" label={label} />
+      {hideBadge ? null : <Badge icon="play" label={label} />}
       <div className="flex flex-1 items-center justify-center gap-1.5 pt-6">
         {bars.map((height, index) => (
           <span
@@ -175,6 +176,7 @@ export const AssetCardPreviewRenderer: React.FC<AssetCardPreviewRendererProps> =
   companionBaseUrl,
   companionProjectId,
   compactBadges = false,
+  hideFormatBadges = false,
 }) => {
   const activeVariant = resolveWorkflowAssetActiveVariant(asset);
   const activeKind = activeVariant?.kind ?? resolveWorkflowAssetKind(asset);
@@ -284,7 +286,7 @@ export const AssetCardPreviewRenderer: React.FC<AssetCardPreviewRendererProps> =
     const { title, body } = readableText(asset, textDisplay);
     return (
       <div className="relative flex h-full w-full flex-col justify-start bg-[#141416] p-3 text-left">
-        <Badge icon="chat" label={formatBadge} />
+        {hideFormatBadges ? null : <Badge icon="chat" label={formatBadge} />}
         <div className="h-5 shrink-0" aria-hidden />
         {title ? (
           <p className="mb-1.5 line-clamp-2 text-[11px] font-bold leading-snug text-gray-100">{title}</p>
@@ -301,7 +303,7 @@ export const AssetCardPreviewRenderer: React.FC<AssetCardPreviewRendererProps> =
   }
 
   if (activeKind === 'audio') {
-    return <AudioWavePlaceholder label={formatBadge} />;
+    return <AudioWavePlaceholder label={formatBadge} hideBadge={hideFormatBadges} />;
   }
 
   if (activeKind === 'file') {
@@ -337,8 +339,15 @@ export const AssetCardPreviewRenderer: React.FC<AssetCardPreviewRendererProps> =
       ) : (
         <FilePlaceholder label="无预览" />
       )}
-      {activeKind === 'video' ? <Badge icon="video" label={formatBadge} compact={compactBadges} /> : null}
-      {hasModelPreview ? <Badge icon="cube" label={formatBadge} compact={compactBadges} /> : null}
+      {hideFormatBadges ? null : activeKind === 'video' ? (
+        <Badge icon="video" label={formatBadge} compact={compactBadges} />
+      ) : null}
+      {hideFormatBadges ? null : hasModelPreview ? (
+        <Badge icon="cube" label={formatBadge} compact={compactBadges} />
+      ) : null}
+      {hideFormatBadges ? null : activeKind === 'image' && !hasModelPreview && formatBadge ? (
+        <Badge icon="image" label={formatBadge} compact={compactBadges} />
+      ) : null}
       <div
         aria-hidden
         className="absolute inset-0 z-[1]"

@@ -37,6 +37,7 @@ export type WorkshopDirEntry = {
   kind: WorkshopEntryKind;
   size: number;
   mtimeMs: number;
+  birthtimeMs?: number;
   isPackage?: boolean;
 };
 
@@ -100,6 +101,14 @@ export type WorkshopFileSourceApi = {
     fileId?: string;
     packageRel?: string;
   }) => Promise<WorkshopThumbResult>;
+  putWorkshopThumb?: (payload: {
+    root?: string;
+    rel?: string;
+    assetId?: string;
+    fileId?: string;
+    packageRel?: string;
+    dataUrl: string;
+  }) => Promise<{ ok: boolean; rel?: string; error?: string }>;
   readWorkshopFile?: (payload: {
     root?: string;
     rel?: string;
@@ -173,6 +182,19 @@ export type WorkshopFileSourceApi = {
     parentRel?: string;
     name?: string;
   }) => Promise<{ ok: boolean; rel?: string; name?: string; error?: string }>;
+  revealWorkshopPath?: (payload: {
+    root?: string;
+    rel?: string;
+  }) => Promise<{ ok: boolean; abs?: string; rel?: string; error?: string }>;
+  resolveWorkshopAbs?: (payload: {
+    root?: string;
+    rel?: string;
+  }) => Promise<{ ok: boolean; abs?: string; rel?: string; error?: string }>;
+  renameWorkshopEntry?: (payload: {
+    root?: string;
+    rel: string;
+    name: string;
+  }) => Promise<{ ok: boolean; from?: string; to?: string; error?: string }>;
   moveWorkshopEntries?: (payload: {
     root?: string;
     destRel: string;
@@ -181,6 +203,7 @@ export type WorkshopFileSourceApi = {
   }) => Promise<{ ok: boolean; moved?: Array<{ from: string; to: string }>; error?: string }>;
   copyWorkshopEntries?: (payload: {
     root?: string;
+    destRel?: string;
     rels?: string[];
     rel?: string;
   }) => Promise<{ ok: boolean; copied?: Array<{ from: string; to: string }>; error?: string }>;

@@ -29,6 +29,12 @@ describe('workshopPreviewKind', () => {
     expect(workshopPreviewKindFromName('a.txt')).toBe('text');
     expect(workshopPreviewKindFromName('a.mp4')).toBe('video');
     expect(workshopPreviewKindFromName('a.bin')).toBe('file');
+    expect(workshopPreviewKindFromName('icon.svg')).toBe('image');
+    expect(workshopPreviewKindFromName('clip.mkv')).toBe('video');
+    expect(isWorkshopPreviewableName('clip.mkv')).toBe(false);
+    expect(workshopPreviewKindFromName('hero.usdz')).toBe('model3d');
+    expect(isWorkshopPreviewableName('hero.usdz')).toBe(false);
+    expect(workshopPreviewKindFromName('notes.json')).toBe('text');
     expect(workshopPreviewKindFromName('文本.md')).toBe('text');
     expect(isWorkshopTextPreviewName('文本.md')).toBe(true);
     expect(isWorkshopTextPreviewName('note.TXT')).toBe(true);

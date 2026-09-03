@@ -21,23 +21,32 @@ export type WorkshopPreviewKindDef = {
 export const WORKSHOP_PREVIEW_KIND_DEFS: WorkshopPreviewKindDef[] = [
   {
     kind: 'image',
-    extensions: ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.ico', '.tif', '.tiff', '.exr', '.hdr', '.psd'],
+    extensions: [
+      '.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.ico', '.tif', '.tiff', '.exr', '.hdr', '.psd',
+      '.svg', '.avif', '.jfif', '.apng', '.tga', '.dds', '.ktx', '.ktx2', '.heic', '.heif',
+    ],
     hydrate: 'thumb-jpeg',
     card: 'image-thumb',
     lightbox: 'image',
-    previewable: ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.ico', '.tif', '.tiff', '.exr', '.hdr', '.psd'],
+    previewable: ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.ico', '.tif', '.tiff', '.exr', '.hdr', '.psd', '.svg', '.avif', '.jfif', '.apng'],
   },
   {
     kind: 'text',
-    extensions: ['.md', '.txt'],
+    extensions: [
+      '.md', '.txt', '.json', '.csv', '.xml', '.yaml', '.yml', '.html', '.htm', '.css', '.js', '.ts',
+      '.tsx', '.jsx', '.mdx', '.log', '.ini', '.toml', '.rtf',
+    ],
     hydrate: 'text-body',
     card: 'text-snippet',
     lightbox: 'text',
-    previewable: ['.md', '.txt'],
+    previewable: ['.md', '.txt', '.json', '.csv', '.xml', '.yaml', '.yml', '.log', '.ini', '.toml'],
   },
   {
     kind: 'video',
-    extensions: ['.mp4', '.webm', '.mov', '.m4v'],
+    extensions: [
+      '.mp4', '.webm', '.mov', '.m4v', '.mkv', '.avi', '.mpeg', '.mpg', '.wmv', '.flv', '.3gp', '.ts',
+      '.mts', '.m2ts', '.ogv',
+    ],
     hydrate: 'media-url',
     card: 'video',
     lightbox: 'video',
@@ -45,7 +54,10 @@ export const WORKSHOP_PREVIEW_KIND_DEFS: WorkshopPreviewKindDef[] = [
   },
   {
     kind: 'model3d',
-    extensions: ['.glb', '.gltf', '.fbx', '.obj', '.stl', '.usd', '.usda', '.usdc'],
+    extensions: [
+      '.glb', '.gltf', '.fbx', '.obj', '.stl', '.usd', '.usda', '.usdc', '.usdz', '.dae', '.ply', '.abc',
+      '.3ds', '.blend', '.vrm', '.3mf', '.dxf', '.step', '.stp', '.iges', '.igs',
+    ],
     hydrate: 'media-url',
     card: 'model-capture',
     lightbox: 'model3d',

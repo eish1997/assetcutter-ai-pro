@@ -36,6 +36,11 @@ describe('workflowAssetVariants', () => {
     });
 
     expect(resolveWorkflowAssetKind(asset)).toBe('image');
+    expect(
+      resolveWorkflowAssetKind(
+        makeAsset({ assetKind: 'image', original: '', textTitle: '微信图片_20260429.jpg' }),
+      ),
+    ).toBe('image');
     expect(resolveWorkflowAssetVariants(asset).map((variant) => [variant.id, variant.kind, variant.label])).toEqual([
       ['original', 'image', 'Original'],
       ['upscale', 'image', 'Upscale'],

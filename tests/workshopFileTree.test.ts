@@ -84,9 +84,19 @@ describe('workshopFileTree', () => {
     expect(src).toContain('aria-hidden={Boolean(lightboxAssetId)}');
     expect(src).not.toContain('<WorkshopFileWall');
     expect(src).toContain('assetsOnly: true');
+    expect(src).toContain('includeSubfolders: workshopListPrefs.flatten');
+    expect(src).toContain('onRefresh');
     expect(src).toContain('指定库目录');
     expect(src).toContain('if (workshopDiskOpen) return workshopFileAssets');
     expect(src).toContain('WorkshopCanvasNavBar');
+    expect(src).toContain('workshopFileAssets.find((x) => x.id === workflowAssetContextMenu.assetId)');
+    expect(src).toContain('onRevealCurrent');
+    expect(src).toContain('onIsolateKind');
+    const nav = fs.readFileSync(path.resolve(process.cwd(), 'components/workshop/WorkshopCanvasNavBar.tsx'), 'utf8');
+    expect(nav).toContain('打开当前文件夹');
+    expect(nav).toContain('隐藏格式角标');
+    expect(nav).not.toContain("label: '全部'");
+    expect(nav).toContain('onIsolateKind');
     expect(src).toContain('moveRootAssetsToUpperLevel');
     expect(src).toContain('createWorkshopTextOnDisk');
     expect(src).toContain('groupWorkshopEntries');
@@ -110,6 +120,8 @@ describe('workshopFileTree', () => {
     const ui = fs.readFileSync(path.resolve(process.cwd(), 'components/workshop/WorkshopFileSource.tsx'), 'utf8');
     expect(ui).toContain('workshopBrowserLibraryRoot()');
     expect(ui).toContain('存在浏览器里的资产');
+    expect(ui).toContain('WorkshopFolderContextMenu');
+    expect(ui).not.toContain('props.onRemoveRoot(item.root)');
   });
 
   it('sidebar delete drop uses drag refs, not delayed React state', () => {
