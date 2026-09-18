@@ -12,6 +12,7 @@ const {
   kindFromName,
   listDir,
   listCanvas,
+  listBoardEntries,
   parseAcAssetDoc,
   parseWorkshopLibrary,
   parseWorkshopLinkDoc,
@@ -69,6 +70,12 @@ const {
     ok: boolean;
     items?: Array<{ kind: string; name: string; rel?: string; previewRels?: string[]; containedKinds?: string[]; assetKind?: string }>;
   }>;
+  listBoardEntries: (
+    root: string,
+  ) => Promise<{
+    ok: boolean;
+    entries?: Array<{ kind: string; name: string; rel?: string }>;
+  }>;
   parseAcAssetDoc: (raw: unknown) => { id: string; displayFileId: string } | null;
   parseWorkshopLibrary: (raw: unknown, dir?: string) => {
     v: number;
@@ -122,6 +129,20 @@ describe('workshop file tree host', () => {
     const layered = await listCanvas(root, '');
     expect(layered.items?.some((i) => i.kind === 'folder' && i.name === 'sub')).toBe(true);
     expect(layered.items?.some((i) => i.name === 'deep.png')).toBe(false);
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it('lists empty folders on the board tree without changing flatten listCanvas', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ws-board-'));
+    fs.mkdirSync(path.join(root, 'maps'));
+    fs.mkdirSync(path.join(root, 'notes'));
+    fs.writeFileSync(path.join(root, 'maps', 'hero.png'), 'x');
+    const board = await listBoardEntries(root);
+    expect(board.ok).toBe(true);
+    const rels = (board.entries || []).map((row) => `${row.kind}:${row.rel}`).sort();
+    expect(rels).toEqual(['dir:maps', 'dir:notes', 'loose:maps/hero.png'].sort());
+    const flat = await listCanvas(root, '', { includeSubfolders: true });
+    expect(flat.items?.some((item) => item.kind === 'folder' && item.name === 'notes')).toBe(false);
     fs.rmSync(root, { recursive: true, force: true });
   });
 

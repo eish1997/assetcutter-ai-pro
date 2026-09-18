@@ -29,6 +29,7 @@ import { useStoreCatalog, markStoreCatalogAutoSyncDone, shouldRunStoreCatalogAut
 import { buildCloudPresetIdSet, isCloudCapabilityPreset } from '../services/capabilityPresetCloudOrigin';
 import { publishPresetToUserR2Catalog } from '../services/capabilityPresetR2Publish';
 import { resolveCapabilityPreviewSrc } from '../services/capabilityPreviewUrl';
+import { loadImageForCanvasExport } from '../services/canvasExportImage';
 import { mergeCardAspectFromIntrinsic } from './workflow/workflowCardAspect';
 import {
   TITLE_ROW_STEPPER_SHELL,
@@ -941,25 +942,34 @@ const CapabilityPresetSection: React.FC<{
     const maxSideLimit = options?.maxSide ?? 640;
     const targetBytes = options?.targetBytes ?? 220 * 1024;
     const qualities = options?.qualities ?? [0.8, 0.72, 0.64];
-    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
-      const node = new Image();
-      node.onload = () => resolve(node);
-      node.onerror = () => reject(new Error('缩略图源加载失败'));
-      node.src = src;
-    });
-    const canvas = document.createElement('canvas');
-    const maxSide = Math.max(img.naturalWidth, img.naturalHeight);
-    const scale = maxSide > maxSideLimit ? maxSideLimit / maxSide : 1;
-    canvas.width = Math.max(1, Math.round(img.naturalWidth * scale));
-    canvas.height = Math.max(1, Math.round(img.naturalHeight * scale));
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return undefined;
-    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-    for (const q of qualities) {
-      const next = canvas.toDataURL('image/jpeg', q);
-      if (estimateDataUrlBytes(next) <= targetBytes) return next;
+    let loaded: Awaited<ReturnType<typeof loadImageForCanvasExport>> | undefined;
+    try {
+      loaded = await loadImageForCanvasExport(src);
+    } catch {
+      return undefined;
     }
-    return canvas.toDataURL('image/jpeg', Math.max(0.5, qualities[qualities.length - 1] ?? 0.58));
+    try {
+      const img = loaded.image;
+      const canvas = document.createElement('canvas');
+      const maxSide = Math.max(img.naturalWidth, img.naturalHeight);
+      const scale = maxSide > maxSideLimit ? maxSideLimit / maxSide : 1;
+      canvas.width = Math.max(1, Math.round(img.naturalWidth * scale));
+      canvas.height = Math.max(1, Math.round(img.naturalHeight * scale));
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return undefined;
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      try {
+        for (const q of qualities) {
+          const next = canvas.toDataURL('image/jpeg', q);
+          if (estimateDataUrlBytes(next) <= targetBytes) return next;
+        }
+        return canvas.toDataURL('image/jpeg', Math.max(0.5, qualities[qualities.length - 1] ?? 0.58));
+      } catch {
+        return undefined;
+      }
+    } finally {
+      loaded.revoke();
+    }
   };
 
   const updatePresetPreviewImage = (presetId: string, dataUrl: string | undefined) => {
@@ -1253,10 +1263,14 @@ const CapabilityPresetSection: React.FC<{
           latest.previewGeneratedImage ||
           latest.previewImage;
         const originalThumbPreview = originalRaw
-          ? await createThumbnailDataUrlFromAny(originalRaw, { maxSide: 640, targetBytes: 220 * 1024, qualities: [0.8, 0.72, 0.64] })
+          ? await createThumbnailDataUrlFromAny(originalRaw, { maxSide: 640, targetBytes: 220 * 1024, qualities: [0.8, 0.72, 0.64] }).catch(
+              () => undefined
+            )
           : undefined;
         const generatedThumbPreview = generatedRaw
-          ? await createThumbnailDataUrlFromAny(generatedRaw, { maxSide: 640, targetBytes: 220 * 1024, qualities: [0.8, 0.72, 0.64] })
+          ? await createThumbnailDataUrlFromAny(generatedRaw, { maxSide: 640, targetBytes: 220 * 1024, qualities: [0.8, 0.72, 0.64] }).catch(
+              () => undefined
+            )
           : undefined;
         const previewFields = {
           ...(generatedRaw ? { previewImage: generatedRaw, previewGeneratedImage: generatedRaw } : {}),

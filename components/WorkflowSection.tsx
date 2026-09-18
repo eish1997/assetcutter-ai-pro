@@ -566,6 +566,20 @@ import {
   type WorkshopNavLoc,
 } from '../services/workshopCanvasNav';
 import { getWorkshopEntryClip, setWorkshopEntryClip, subscribeWorkshopEntryClip } from '../services/workshopEntryClipboard';
+import {
+  boardEntriesToTreeInput,
+  boardNodesFromAcAssetDoc,
+  buildBoardStateFromTree,
+  dragTokenToNode,
+  f3AddToken,
+  f3RemoveToken,
+  mergeBoardPackageNodes,
+  tokensOnNode,
+  workshopFrontHallCameraFrameRel,
+  workshopFrontHallEntryId,
+} from '../services/workshopFrontHall';
+import { workshopFrontHallHotkey } from '../services/workshopFrontHallHotkeys';
+import { frontHallPreviewMap } from '../services/workshopFrontHallGraph';
 import { isWorkshopPlayableMediaUrl, isWorkshopSpecialRasterName, isWorkshopTextPreviewName } from '../services/workshopPreviewKind';
 import {
   decodeWorkshopSpecialRasterToJpeg,
@@ -893,6 +907,9 @@ function formatWorkflowRunTaskErrorMessage(err: unknown, taskLabel: string): str
 }
 
 const WorkflowComposerOverlay = lazy(() => import('./WorkflowComposerOverlay'));
+const WorkshopFrontHallBoardView = lazy(() =>
+  import('./workshop/WorkshopFrontHallBoardView').then((mod) => ({ default: mod.WorkshopFrontHallBoardView })),
+);
 
 type WorkflowPendingTaskOptions = {
   promptOverride?: string;
@@ -2049,6 +2066,38 @@ const WorkflowSection: React.FC<{
     },
     [preferenceScope],
   );
+  const [frontHallSelectedNodeId, setFrontHallSelectedNodeId] = useState<string | null>(null);
+  const [workshopBoardEntries, setWorkshopBoardEntries] = useState<
+    Array<{ rel: string; kind: string; assetKind?: string; files?: Record<string, { name?: string }> }>
+  >([]);
+  const [frontHallTokenOverride, setFrontHallTokenOverride] = useState<
+    import('../services/workshopFrontHall').WorkshopFrontHallToken[] | null
+  >(null);
+  const workshopFrontHallTreeState = useMemo(() => {
+    const fromBoard =
+      workshopListPrefs.viewMode === 'board' && workshopBoardEntries.length > 0
+        ? boardEntriesToTreeInput(workshopBoardEntries)
+        : workshopCanvasItems.map((item) => ({
+            rel: item.rel,
+            kind: item.kind === 'folder' ? 'dir' : item.assetKind || 'file',
+          }));
+    let state = buildBoardStateFromTree(workshopActiveRoot, fromBoard);
+    for (const item of workshopBoardEntries) {
+      if (item.kind !== 'package' || !item.files) continue;
+      state = mergeBoardPackageNodes(
+        state,
+        boardNodesFromAcAssetDoc(workshopActiveRoot, item.rel, { files: item.files }),
+      );
+    }
+    return state;
+  }, [workshopActiveRoot, workshopCanvasItems, workshopBoardEntries, workshopListPrefs.viewMode]);
+  const workshopFrontHallBoardState = useMemo(
+    () =>
+      frontHallTokenOverride
+        ? { ...workshopFrontHallTreeState, tokens: frontHallTokenOverride }
+        : workshopFrontHallTreeState,
+    [workshopFrontHallTreeState, frontHallTokenOverride],
+  );
   const [workshopClip, setWorkshopClip] = useState(getWorkshopEntryClip);
   useEffect(() => subscribeWorkshopEntryClip(() => setWorkshopClip(getWorkshopEntryClip())), []);
   const [workshopThumbById, setWorkshopThumbById] = useState<Record<string, string>>({});
@@ -2541,6 +2590,7 @@ const WorkflowSection: React.FC<{
             liveCardIds.add(workshopFileAssetId(item.root, item.rel));
           }
         }
+        if (workshopListPrefs.viewMode !== 'board') {
         setWorkshopThumbById((prev) => {
           const next: Record<string, string> = {};
           for (const [key, val] of Object.entries(prev)) {
@@ -2580,11 +2630,125 @@ const WorkflowSection: React.FC<{
             return liveCardIds.has(id);
           }),
         );
+        }
       });
     return () => {
       cancelled = true;
     };
-  }, [fileSourceApi, workshopActiveRoot, workshopCurrentRel, workshopListEpoch, workshopListPrefs.flatten]);
+  }, [fileSourceApi, workshopActiveRoot, workshopCurrentRel, workshopListEpoch, workshopListPrefs.flatten, workshopListPrefs.viewMode]);
+  useEffect(() => {
+    if (!fileSourceApi || isWorkshopBrowserLibraryRoot(workshopActiveRoot) || !workshopActiveRoot) {
+      setWorkshopBoardEntries([]);
+      return;
+    }
+    if (workshopListPrefs.viewMode !== 'board') return;
+    const api = workshopFileSourceApi();
+    if (!api?.listWorkshopDir) return;
+    let cancelled = false;
+    void api
+      .listWorkshopDir({
+        root: workshopActiveRoot,
+        boardTree: true, // listBoardEntries: hung-root frames, not flatten listing
+      })
+      .then((out) => {
+        if (cancelled) return;
+        const rows = out.ok && Array.isArray(out.entries) ? out.entries : [];
+        setWorkshopBoardEntries(
+          rows.map((row) => ({
+            rel: row.rel,
+            kind: String((row as { kind?: string }).kind || 'loose'),
+            assetKind: (row as { assetKind?: string }).assetKind,
+            files: (row as { files?: Record<string, { name?: string }> }).files,
+          })),
+        );
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [fileSourceApi, workshopActiveRoot, workshopListEpoch, workshopListPrefs.viewMode]);
+  useEffect(() => {
+    setFrontHallTokenOverride(null);
+  }, [workshopActiveRoot]);
+  const addFrontHallLocalToken = useCallback(async () => {
+    if (workshopFrontHallHotkey({ key: 'F3' }) !== 'f3-add') return;
+    const api = workshopFileSourceApi();
+    const folderRel = workshopFrontHallCameraFrameRel({ rel: workshopCurrentRel });
+    const created = await api?.createWorkshopCheckoutFile?.({
+      root: workshopActiveRoot,
+      parentRel: folderRel,
+      title: 'slot',
+      ext: '.md',
+      body: '',
+    });
+    if (!created?.ok || !created.rel) return;
+    const selected =
+      frontHallSelectedNodeId &&
+      workshopFrontHallBoardState.nodes.some((node) => node.id === frontHallSelectedNodeId)
+        ? frontHallSelectedNodeId
+        : workshopFrontHallEntryId(workshopActiveRoot, created.rel);
+    setFrontHallTokenOverride((prev) => {
+      const base = prev
+        ? { ...workshopFrontHallBoardState, tokens: prev }
+        : workshopFrontHallBoardState;
+      const withNode = base.nodes.some((node) => node.id === selected)
+        ? base
+        : {
+            ...base,
+            nodes: [...base.nodes, { id: selected, folderRel }],
+          };
+      return f3AddToken(withNode, selected, `tok:${created.rel}`, created.rel).tokens;
+    });
+    setWorkshopListEpoch((epoch) => epoch + 1);
+  }, [
+    workshopActiveRoot,
+    workshopCurrentRel,
+    frontHallSelectedNodeId,
+    workshopFrontHallBoardState,
+  ]);
+  const removeFrontHallLocalToken = useCallback(async () => {
+    if (workshopFrontHallHotkey({ key: 'F3', shiftKey: true }) !== 'f3-remove') return;
+    const selected = frontHallSelectedNodeId;
+    if (!selected) return;
+    const tokens = tokensOnNode(workshopFrontHallBoardState, selected);
+    const last = tokens[tokens.length - 1];
+    if (!last) return;
+    await workshopFileSourceApi()?.trashWorkshopEntries?.({
+      root: workshopActiveRoot,
+      rels: [last.fileRel],
+    });
+    setFrontHallTokenOverride(f3RemoveToken(workshopFrontHallBoardState, last.id).tokens);
+    setWorkshopListEpoch((epoch) => epoch + 1);
+  }, [frontHallSelectedNodeId, workshopFrontHallBoardState, workshopActiveRoot]);
+  const dragFrontHallTokenToNode = useCallback(
+    async (tokenId: string, nodeId: string) => {
+      const next = dragTokenToNode(workshopFrontHallBoardState, tokenId, nodeId);
+      const moved = next.tokens.find((token) => token.id === tokenId);
+      const previous = workshopFrontHallBoardState.tokens.find((token) => token.id === tokenId);
+      setFrontHallTokenOverride(next.tokens);
+      if (!moved || !previous) return;
+      const api = workshopFileSourceApi();
+      const targetRel = nodeId.includes('::') ? nodeId.slice(nodeId.indexOf('::') + 2) : nodeId;
+      const read = await api?.readWorkshopFile?.({ root: workshopActiveRoot, rel: targetRel });
+      if (read?.ok && read.dataUrl) {
+        await api?.writeWorkshopCheckoutFile?.({
+          root: workshopActiveRoot,
+          rel: previous.fileRel,
+          dataUrl: read.dataUrl,
+        });
+      } else {
+        await api?.applyWorkshopCheckout?.({ root: workshopActiveRoot, rel: previous.fileRel });
+      }
+      const destRel = moved.fileRel.includes('/') ? moved.fileRel.slice(0, moved.fileRel.lastIndexOf('/')) : '';
+      if (destRel !== (previous.fileRel.includes('/') ? previous.fileRel.slice(0, previous.fileRel.lastIndexOf('/')) : '')) {
+        await api?.moveWorkshopEntries?.({
+          root: workshopActiveRoot,
+          destRel,
+          rels: [previous.fileRel],
+        });
+      }
+    },
+    [workshopFrontHallBoardState, workshopActiveRoot],
+  );
   useEffect(() => {
     if (!fileSourceApi || isWorkshopBrowserLibraryRoot(workshopActiveRoot)) {
       setWorkshopSelectedRel(null);
@@ -10434,13 +10598,24 @@ ${lineSvg}
       missing.push({ id: key, displayKey });
     };
     for (const a of workshopFileAssets) {
-      const unlocked = thumbUnlockKeys.has(a.id) || Boolean(lightboxWant?.has(a.id));
+      const unlocked =
+        workshopListPrefs.viewMode === 'board' ||
+        thumbUnlockKeys.has(a.id) ||
+        Boolean(lightboxWant?.has(a.id));
       if (!unlocked) continue;
       if (a.assetKind === 'image' && !isWorkshopSpecialRasterName(a.textTitle || '')) {
         pushThumb(a.id, a.displayKey || 'original');
       }
       if (isGroupAsset(a)) {
         for (const id of a.assetIds || []) pushThumb(id);
+      }
+    }
+    if (workshopListPrefs.viewMode === 'board') {
+      for (const row of workshopBoardEntries) {
+        if (row.kind === 'dir' || row.kind === 'folder') continue;
+        if (row.assetKind && row.assetKind !== 'image') continue;
+        if (!row.assetKind && !/\.(png|jpe?g|webp|gif|bmp|svg)$/i.test(String(row.rel || ''))) continue;
+        pushThumb(workshopFileAssetId(workshopActiveRoot, row.rel));
       }
     }
     let cursor = 0;
@@ -10489,6 +10664,8 @@ ${lineSvg}
     workshopActiveRoot,
     workshopMergedCanvasItems,
     workshopFileAssets,
+    workshopBoardEntries,
+    workshopListPrefs.viewMode,
     thumbUnlockKeys,
     lightboxAssetId,
     lightboxList,
@@ -16788,7 +16965,7 @@ ${lineSvg}
         ) : null}
         {fileSourceApi ? (
           <div
-            className={lightboxAssetId ? 'pointer-events-none opacity-0' : undefined}
+            className={lightboxAssetId ? 'relative pointer-events-none opacity-0' : 'relative'}
             aria-hidden={Boolean(lightboxAssetId)}
           >
             <WorkshopCanvasNavBar
@@ -16833,12 +17010,28 @@ ${lineSvg}
               nameFilter={workshopNameFilter}
               onNameFilter={setWorkshopNameFilter}
             />
+            <button
+              type="button"
+              data-front-hall-view-toggle
+              className="absolute right-3 top-2 z-[1] inline-flex h-7 shrink-0 items-center rounded-md bg-white/[0.05] px-2 text-[10px] text-gray-300 ring-1 ring-white/[0.08] hover:bg-white/[0.1] hover:text-[#e8e6e1]"
+              aria-pressed={workshopListPrefs.viewMode === 'board'}
+              onClick={() =>
+                applyWorkshopListPrefs({
+                  ...workshopListPrefs,
+                  viewMode: workshopListPrefs.viewMode === 'board' ? 'grid' : 'board',
+                })
+              }
+            >
+              {workshopListPrefs.viewMode === 'board' ? '网格' : '画板'}
+            </button>
           </div>
         ) : null}
         <div
           ref={centerScrollRef}
           data-workflow-scroll-port="asset"
-          className="workflow-scroll-port flex h-0 flex-1 min-w-0 min-h-0 overflow-y-auto overscroll-y-contain no-scrollbar flex flex-col gap-3 rounded-xl transition-colors"
+          className={`workflow-scroll-port flex h-0 flex-1 min-w-0 min-h-0 overscroll-y-contain no-scrollbar flex flex-col gap-3 rounded-xl transition-colors ${
+            fileSourceApi && workshopListPrefs.viewMode === 'board' ? 'overflow-hidden' : 'overflow-y-auto'
+          }`}
           onWheelCapture={handleCenterWheelDuringDrag}
           onDragOver={(e) => {
             autoScrollContainerOnDrag(e.currentTarget as HTMLElement, e.clientY);
@@ -16848,10 +17041,29 @@ ${lineSvg}
           tabIndex={0}
         >
           <div
-            className={lightboxAssetId ? 'pointer-events-none opacity-0' : undefined}
+            className={`${lightboxAssetId ? 'pointer-events-none opacity-0' : ''} ${
+              fileSourceApi && workshopListPrefs.viewMode === 'board' ? 'flex h-full min-h-0 min-w-0 flex-1 flex-col' : ''
+            }`}
             aria-hidden={Boolean(lightboxAssetId)}
           >
-          {groupFilterId ? (
+          {fileSourceApi && workshopListPrefs.viewMode === 'board' ? (
+            <div className="flex h-full min-h-0 flex-1 flex-col">
+            <Suspense fallback={<div className="h-full min-h-0 flex-1 rounded-xl bg-[#0f0f12]" />}>
+              <WorkshopFrontHallBoardView
+                state={workshopFrontHallBoardState}
+                cameraFrameRel={workshopFrontHallCameraFrameRel({ rel: workshopCurrentRel })}
+                selectedNodeId={frontHallSelectedNodeId}
+                onSelectNode={setFrontHallSelectedNodeId}
+                onDragTokenToNode={dragFrontHallTokenToNode}
+                onF3Add={() => void addFrontHallLocalToken()}
+                onF3Remove={() => void removeFrontHallLocalToken()}
+                hotkeysEnabled={!lightboxAssetId}
+                previewByNodeId={frontHallPreviewMap(workshopThumbById, workshopFrontHallBoardState)}
+                viewFilter={{ kinds: workshopListPrefs.kinds, nameQuery: workshopNameFilter }}
+              />
+            </Suspense>
+            </div>
+          ) : groupFilterId ? (
             <>
               {!fileSourceApi ? (
               <div className={`flex items-center gap-2 shrink-0 ${WORKFLOW_EDGE_GUTTER}`}>

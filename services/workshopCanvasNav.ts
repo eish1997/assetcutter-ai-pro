@@ -264,6 +264,7 @@ export type WorkshopCanvasListPrefs = {
   hideFormatBadges: boolean;
   groupByType: boolean;
   kinds: WorkshopCanvasKindId[];
+  viewMode: 'grid' | 'board';
 };
 
 export type WorkshopCanvasSortable = {
@@ -288,6 +289,7 @@ export function defaultWorkshopCanvasListPrefs(): WorkshopCanvasListPrefs {
     hideFormatBadges: false,
     groupByType: false,
     kinds: DEFAULT_WORKSHOP_CANVAS_KINDS.slice(),
+    viewMode: 'grid',
   };
 }
 
@@ -306,6 +308,7 @@ export function parseWorkshopCanvasListPrefs(raw: unknown): WorkshopCanvasListPr
     hideFormatBadges: o.hideFormatBadges === true,
     groupByType: o.groupByType === true,
     kinds,
+    viewMode: o.viewMode === 'board' ? 'board' : 'grid',
   };
 }
 

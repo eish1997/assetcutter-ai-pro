@@ -90,6 +90,7 @@ export type WorkshopFileSourceApi = {
     rel?: string;
     assetsOnly?: boolean;
     includeSubfolders?: boolean;
+    boardTree?: boolean;
   }) => Promise<WorkshopListResult>;
   pickWorkshopRoot?: () => Promise<WorkshopFileState>;
   removeWorkshopRoot?: (payload: { root: string }) => Promise<WorkshopFileState>;

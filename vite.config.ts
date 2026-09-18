@@ -360,9 +360,15 @@ export default defineConfig(({ mode }) => {
         ),
       },
       resolve: {
-        alias: {
-          '@': path.resolve(__dirname, '.'),
-        }
+        // Array form: `@` is a prefix of `@ic`; object alias would swallow vendor imports.
+        alias: [
+          { find: '@ic', replacement: path.resolve(__dirname, 'vendor/basketikun-infinite-canvas') },
+          { find: '@', replacement: path.resolve(__dirname, '.') },
+          {
+            find: 'localforage',
+            replacement: path.resolve(__dirname, 'vendor/basketikun-infinite-canvas/shims/localforage.ts'),
+          },
+        ],
       },
       build: {
         rollupOptions: {

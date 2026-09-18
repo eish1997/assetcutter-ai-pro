@@ -576,6 +576,64 @@ async function listCanvas(root, rel, opts) {
   return { ok: true, rel: parent, items, truncated };
 }
 
+async function listBoardEntries(root) {
+  const entries = [];
+  const queue = [''];
+  const seen = new Set();
+  while (queue.length) {
+    const cur = queue.shift();
+    if (seen.has(cur)) continue;
+    seen.add(cur);
+    const listed = await listDir(root, cur);
+    if (!listed.ok) {
+      if (cur === '') return listed;
+      continue;
+    }
+    for (const entry of listed.entries || []) {
+      if (entry.kind === 'dir') {
+        if (!cur && entry.name === RECYCLE_DIR) continue;
+        if (entry.isPackage) {
+          entries.push({
+            kind: 'package',
+            root,
+            name: entry.name,
+            rel: entry.rel,
+            assetKind: 'file',
+            size: entry.size,
+            mtimeMs: entry.mtimeMs,
+            birthtimeMs: entry.birthtimeMs || entry.mtimeMs,
+          });
+          continue;
+        }
+        entries.push({
+          kind: 'dir',
+          root,
+          name: entry.name,
+          rel: entry.rel,
+          assetKind: 'file',
+          size: 0,
+          mtimeMs: entry.mtimeMs,
+          birthtimeMs: entry.birthtimeMs || entry.mtimeMs,
+        });
+        queue.push(entry.rel);
+        continue;
+      }
+      if (entry.name === AC_ASSET_MANIFEST) continue;
+      entries.push({
+        kind: 'loose',
+        root,
+        name: entry.name,
+        rel: entry.rel,
+        assetKind: assetKindFromEntryKind(entry.kind),
+        size: entry.size,
+        mtimeMs: entry.mtimeMs,
+        birthtimeMs: entry.birthtimeMs || entry.mtimeMs,
+      });
+    }
+  }
+  return { ok: true, entries };
+}
+
 async function listDir(root, rel) {
   const abs = resolveInsideRoot(root, rel);
   if (!abs) return { ok: false, error: 'path_escape' };
@@ -975,6 +1033,9 @@ function createWorkshopFileTreeHost(deps) {
     const root = pickActiveRoot(payload);
     if (!root) return { ok: false, error: 'no_root' };
     void purgeRecycleDir(recycleDirAbs());
+    if (payload && payload.boardTree) {
+      return listBoardEntries(root);
+    }
     if (payload && payload.assetsOnly) {
       const canvas = await listCanvas(root, payload.rel, {
         includeSubfolders: Boolean(payload.includeSubfolders),
@@ -2140,6 +2201,7 @@ module.exports = {
   thumbCacheId,
   listDir,
   listCanvas,
+  listBoardEntries,
   parseAcAssetDoc,
   uniqueRoots,
   isPathInside,

@@ -260,10 +260,15 @@ describe('workshopCanvasNav', () => {
       hideFormatBadges: false,
       groupByType: false,
       kinds: DEFAULT_WORKSHOP_CANVAS_KINDS,
+      viewMode: 'grid',
     });
     expect(parseWorkshopCanvasListPrefs({ hideFormatBadges: true }).hideFormatBadges).toBe(true);
     expect(parseWorkshopCanvasListPrefs({ sortKey: 'nope' }).sortKey).toBe('folder');
     expect(parseWorkshopCanvasListPrefs({ kinds: ['file', 'nope'] }).kinds).toEqual(['file']);
     expect(defaultWorkshopCanvasListPrefs().kinds).toEqual(['image', 'model3d', 'video', 'text']);
+    expect(defaultWorkshopCanvasListPrefs().viewMode).toBe('grid');
+    expect(parseWorkshopCanvasListPrefs({ viewMode: 'board' }).viewMode).toBe('board');
+    expect(parseWorkshopCanvasListPrefs({ viewMode: 'nope' }).viewMode).toBe('grid');
+    expect(parseWorkshopCanvasListPrefs({ flatten: true }).flatten).toBe(true);
   });
 });

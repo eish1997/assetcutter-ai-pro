@@ -1,0 +1,5 @@
+repo: https://github.com/basketikun/infinite-canvas
+commit: e856c878e0a34651bb828e28f0af20d71016a7d4
+tag: v0.19.0
+zip: https://github.com/basketikun/infinite-canvas/archive/e856c878e0a34651bb828e28f0af20d71016a7d4.zip
+vendoredAt: 2026-09-18T15:51:24.049Z
