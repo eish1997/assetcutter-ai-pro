@@ -4,6 +4,8 @@ import path from 'node:path';
 import {
   WORKSHOP_BROWSER_LIBRARY_LABEL,
   WORKSHOP_BROWSER_LIBRARY_ROOT,
+  WORKSHOP_PRESET_LIBRARY_LABEL,
+  WORKSHOP_PRESET_LIBRARY_ROOT,
   WORKSHOP_RECYCLE_LIBRARY_LABEL,
   WORKSHOP_RECYCLE_LIBRARY_ROOT,
 } from '../services/workshopFileTree';
@@ -24,6 +26,7 @@ import {
   workshopNavCanUp,
   workshopNavCurrent,
   workshopNavForward,
+  workshopNavLocFromFingerSurface,
   workshopNavRootLabel,
   workshopNavUpLoc,
   defaultWorkshopCanvasListPrefs,
@@ -136,8 +139,32 @@ describe('workshopCanvasNav', () => {
   it('labels pinned roots and hung folders', () => {
     expect(workshopNavRootLabel(WORKSHOP_BROWSER_LIBRARY_ROOT)).toBe(WORKSHOP_BROWSER_LIBRARY_LABEL);
     expect(workshopNavRootLabel(WORKSHOP_RECYCLE_LIBRARY_ROOT)).toBe(WORKSHOP_RECYCLE_LIBRARY_LABEL);
+    expect(workshopNavRootLabel(WORKSHOP_PRESET_LIBRARY_ROOT)).toBe(WORKSHOP_PRESET_LIBRARY_LABEL);
+    expect(
+      workshopBreadcrumbSegments({
+        loc: { root: WORKSHOP_PRESET_LIBRARY_ROOT, rel: 'image_process', groupId: null },
+        rootLabel: WORKSHOP_PRESET_LIBRARY_LABEL,
+      }).map((c) => c.label),
+    ).toEqual([WORKSHOP_PRESET_LIBRARY_LABEL, '图像处理']);
     expect(workshopNavRootLabel('C:/refs', [{ root: 'C:/refs', label: 'Pictures' }])).toBe('Pictures');
     expect(workshopNavRootLabel('D:/Library/3D')).toBe('3D');
+  });
+
+  it('finger canvas surface does not kick hung folders back to browser assets', () => {
+    const hung = { root: 'D:/refs', rel: '3D', groupId: null };
+    expect(workshopNavLocFromFingerSurface('canvas', hung)).toBeNull();
+    expect(workshopNavLocFromFingerSurface('canvas', { root: WORKSHOP_BROWSER_LIBRARY_ROOT, rel: '', groupId: null })).toBeNull();
+    expect(workshopNavLocFromFingerSurface('canvas', { root: WORKSHOP_PRESET_LIBRARY_ROOT, rel: 'basic', groupId: null })).toEqual({
+      root: WORKSHOP_BROWSER_LIBRARY_ROOT,
+      rel: '',
+      groupId: null,
+    });
+    expect(workshopNavLocFromFingerSurface('presets', hung)).toEqual({
+      root: WORKSHOP_PRESET_LIBRARY_ROOT,
+      rel: '',
+      groupId: null,
+    });
+    expect(workshopNavLocFromFingerSurface('presets', { root: WORKSHOP_PRESET_LIBRARY_ROOT, rel: 'sets', groupId: null })).toBeNull();
   });
 
   it('counts and filters kinds, hiding folders without matching contents', () => {
@@ -152,16 +179,19 @@ describe('workshopCanvasNav', () => {
       { assetKind: 'text' },
       { assetKind: 'file' },
       { assetKind: 'video' },
+      { assetKind: 'prompt' },
     ];
     expect(countWorkshopCanvasKinds(rows)).toEqual({
       image: 2,
       model3d: 1,
       video: 1,
       text: 1,
+      prompt: 1,
       file: 1,
     });
     expect(workshopCanvasKindOf({ isGroup: true })).toBe('folder');
     expect(workshopCanvasKindOf({ assetKind: 'video' })).toBe('video');
+    expect(workshopCanvasKindOf({ assetKind: 'prompt' })).toBe('prompt');
     expect(filterWorkshopCanvasByKind(rows, ['image']).map((r) => r.containedKinds || r.assetKind)).toEqual([
       ['image'],
       undefined,
@@ -173,6 +203,11 @@ describe('workshopCanvasNav', () => {
     expect(workshopCanvasKindMatches({ isGroup: true, containedKinds: ['text'] }, ['image'])).toBe(false);
     expect(workshopCanvasKindMatches({ isGroup: true, containedKinds: [] }, ['image'])).toBe(false);
     expect(workshopCanvasKindMatches({ isGroup: true }, ['image'])).toBe(true);
+    expect(workshopCanvasKindMatches({ assetKind: 'prompt' }, ['prompt'])).toBe(true);
+    expect(filterWorkshopCanvasByKind(rows, ['prompt']).map((r) => r.containedKinds || r.assetKind)).toEqual([
+      undefined,
+      'prompt',
+    ]);
     expect(filterWorkshopCanvasByKind(rows, DEFAULT_WORKSHOP_CANVAS_KINDS).map((r) => r.containedKinds || r.assetKind)).toEqual([
       ['image'],
       ['text'],
@@ -194,6 +229,34 @@ describe('workshopCanvasNav', () => {
     ]);
   });
 
+  it('infers dropped images/models and keeps storyboard/asset-set visible', () => {
+    expect(workshopCanvasKindOf({ original: 'data:image/png;base64,xx' })).toBe('image');
+    expect(workshopCanvasKindOf({ textTitle: 'shot.jpg' })).toBe('image');
+    expect(workshopCanvasKindOf({ name: 'ref.heic' })).toBe('image');
+    expect(workshopCanvasKindOf({ textTitle: 'hero.glb' })).toBe('model3d');
+    expect(workshopCanvasKindOf({ modelSourceName: 'prop.fbx' })).toBe('model3d');
+    expect(workshopCanvasKindOf({ original: '/api/r2/workspace/shot.png?sig=1' })).toBe('image');
+    expect(workshopCanvasKindOf({ original: 'blob:http://localhost/abc' })).toBe('image');
+    expect(workshopCanvasKindOf({ original: 'https://cdn.example/clip.mp4' })).toBe('video');
+    expect(workshopCanvasKindOf({ textBody: 'hello' })).toBe('text');
+    expect(workshopCanvasKindOf({ resultMeta: { original: { mediaKind: 'video' } } })).toBe('video');
+    expect(workshopCanvasKindOf({ assetKind: 'file' })).toBe('file');
+    expect(workshopCanvasKindOf({ assetKind: 'storyboard_table' })).toBe('workspace');
+    expect(workshopCanvasKindOf({ assetKind: 'asset_set' })).toBe('workspace');
+    expect(workshopCanvasKindMatches({ original: 'data:image/webp;base64,xx' }, DEFAULT_WORKSHOP_CANVAS_KINDS)).toBe(true);
+    expect(workshopCanvasKindMatches({ original: 'data:image/webp;base64,xx' }, ['file'])).toBe(false);
+    expect(workshopCanvasKindMatches({ assetKind: 'storyboard_table' }, DEFAULT_WORKSHOP_CANVAS_KINDS)).toBe(true);
+    expect(workshopCanvasKindMatches({ assetKind: 'asset_set' }, [])).toBe(false);
+    expect(countWorkshopCanvasKinds([{ original: 'data:image/png;base64,xx' }, { assetKind: 'storyboard_table' }])).toEqual({
+      image: 1,
+      model3d: 0,
+      video: 0,
+      text: 0,
+      prompt: 0,
+      file: 0,
+    });
+  });
+
   it('pins the canvas nav bar above the asset scroll port', () => {
     const src = fs.readFileSync(path.resolve(process.cwd(), 'components/WorkflowSection.tsx'), 'utf8');
     const barAt = src.indexOf('<WorkshopCanvasNavBar');
@@ -204,6 +267,15 @@ describe('workshopCanvasNav', () => {
     expect(src).toContain('fileSourceApi ? (');
     expect(src).toContain('onRevealCurrent');
     expect(src).toContain('toggleWorkshopCanvasKind');
+    expect(src).toContain("assetKind: 'image'");
+    expect(src).toContain('workshopPreviewKindFromName');
+    const nav = fs.readFileSync(path.resolve(process.cwd(), 'components/workshop/WorkshopCanvasNavBar.tsx'), 'utf8');
+    const chrome = fs.readFileSync(path.resolve(process.cwd(), 'components/workflow/WorkflowSpaceMarqueeChrome.tsx'), 'utf8');
+    expect(chrome).toContain('data-workflow-scroll-port="asset"');
+    expect(chrome).toContain('hint.top + 8');
+    expect(chrome).not.toContain('bottom-6');
+    expect(nav).toContain("id: 'prompt'");
+    expect(nav).toContain("label: '预设'");
   });
 
   it('sorts by name, time, size, folder-first, and type groups', () => {

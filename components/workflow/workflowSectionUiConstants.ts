@@ -15,7 +15,7 @@ export const SECTION_HEADER_BOTTOM_GAP_CLASS = 'mb-3';
 const TOP_CTRL_H = 'h-7';
 
 /** 顶栏按钮与控件：统一 ring、圆角 md、字重与字阶 */
-export const TITLE_ROW_BTN_BASE = `${TOP_CTRL_H} px-2.5 inline-flex items-center justify-center rounded-md text-[8px] font-black uppercase tracking-wide transition-colors outline-none focus-visible:ring-2 focus-visible:ring-blue-500/45`;
+export const TITLE_ROW_BTN_BASE = `${TOP_CTRL_H} px-2.5 inline-flex items-center justify-center rounded-md text-[8px] font-black uppercase tracking-wide transition-colors outline-none focus-visible:ring-2 focus-visible:ring-white/20`;
 export const TITLE_ROW_BTN_NEUTRAL = `${TITLE_ROW_BTN_BASE} bg-white/[0.05] text-gray-300 ring-1 ring-white/[0.06] hover:bg-white/[0.09] hover:text-gray-200 disabled:opacity-40 disabled:hover:bg-white/[0.05]`;
 export const TITLE_ROW_BTN_ACTIVE = `${TITLE_ROW_BTN_BASE} bg-blue-600 text-white ring-1 ring-blue-400/40 hover:bg-blue-500`;
 /** 主操作（一键执行等）：与 ACTIVE 同色阶，含禁用态 */
@@ -27,31 +27,44 @@ export const TITLE_ROW_STEPPER_SHELL = `${TOP_CTRL_H} inline-flex items-center r
 export const TITLE_ROW_STEPPER_VALUE = `w-8 ${TOP_CTRL_H} inline-flex items-center justify-center text-[8px] font-black text-blue-300/95 border-x border-white/[0.08]`;
 export const TITLE_ROW_STEPPER_BTN = `w-7 ${TOP_CTRL_H} text-[10px] font-black text-gray-300 hover:bg-white/[0.08] disabled:opacity-35 disabled:hover:bg-transparent`;
 
-export const TITLE_ROW_TAG_FILTER_INPUT = `${TOP_CTRL_H} min-w-[10rem] max-w-[18rem] rounded-md bg-white/[0.05] px-2 text-[8px] text-gray-200 ring-1 ring-white/[0.06] outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50`;
+export const TITLE_ROW_TAG_FILTER_INPUT = `${TOP_CTRL_H} min-w-[10rem] max-w-[18rem] rounded-md bg-white/[0.05] px-2 text-[8px] text-gray-200 ring-1 ring-white/[0.06] outline-none focus-visible:ring-2 focus-visible:ring-white/20`;
 
 export const TITLE_ROW_QUEUE_CHIP = `${TOP_CTRL_H} flex items-center gap-1.5 rounded-md bg-white/[0.04] px-2.5 ring-1 ring-white/[0.06]`;
 
-export const TITLE_ROW_DROPDOWN_TRIGGER = `${TOP_CTRL_H} min-w-[4.75rem] px-2 inline-flex items-center justify-center rounded-md bg-white/[0.05] ring-1 ring-white/[0.06] text-[8px] font-black text-gray-200 hover:bg-white/[0.09] outline-none focus-visible:ring-2 focus-visible:ring-blue-500/45`;
+export const TITLE_ROW_DROPDOWN_TRIGGER = `${TOP_CTRL_H} min-w-[4.75rem] px-2 inline-flex items-center justify-center rounded-md bg-white/[0.05] ring-1 ring-white/[0.06] text-[8px] font-black text-gray-200 hover:bg-white/[0.09] outline-none focus-visible:ring-2 focus-visible:ring-white/20`;
 
 /**
  * 功能区组头「覆 / 数 / 模 / 比…」与快捷栏 pill 同族：圆角 md + ring，非圆形实色边框。
  */
 export const SIDEBAR_COMPOSE_CHIP_BASE =
-  'inline-flex h-6 min-h-6 max-h-6 w-6 shrink-0 items-center justify-center rounded-md text-[9px] font-black leading-none ring-1 outline-none transition-colors box-border';
-export const SIDEBAR_COMPOSE_CHIP_IDLE = `${SIDEBAR_COMPOSE_CHIP_BASE} bg-white/[0.06] text-gray-300 ring-white/[0.08] hover:bg-white/[0.1]`;
-export const SIDEBAR_COMPOSE_CHIP_ACTIVE = `${SIDEBAR_COMPOSE_CHIP_BASE} bg-white text-[#0a0a0c] ring-white`;
+  'inline-flex h-6 min-h-6 max-h-6 w-6 shrink-0 items-center justify-center rounded-md text-[9px] font-black leading-none outline-none transition-colors box-border';
+export const SIDEBAR_COMPOSE_CHIP_IDLE = `${SIDEBAR_COMPOSE_CHIP_BASE} bg-white/[0.06] text-gray-300 hover:bg-white/[0.1]`;
+export const SIDEBAR_COMPOSE_CHIP_ACTIVE = `${SIDEBAR_COMPOSE_CHIP_BASE} bg-white text-[#0a0a0c]`;
 /** 自定义数量编辑中的胶囊（与 ACTIVE 同色阶，可横向伸展） */
 export const SIDEBAR_COMPOSE_CHIP_EDITING =
-  'h-6 min-h-6 max-h-6 inline-flex shrink-0 items-center gap-1 rounded-md bg-white/[0.16] px-1 text-[9px] font-black text-white ring-1 ring-white/[0.22]';
+  'h-6 min-h-6 max-h-6 inline-flex shrink-0 items-center gap-1 rounded-md bg-white/[0.16] px-1 text-[9px] font-black text-white';
 
 /** 功能区搜索框下方：全部 / 云端 / 我的 / 标签 */
 export const SIDEBAR_FILTER_CHIP_BASE =
-  'px-2 py-0.5 rounded-md text-[8px] font-black transition-colors ring-1 outline-none';
-export const SIDEBAR_FILTER_CHIP_IDLE = `${SIDEBAR_FILTER_CHIP_BASE} bg-white/[0.06] text-gray-400 ring-white/[0.08] hover:bg-white/[0.1] hover:text-gray-300`;
-export const SIDEBAR_FILTER_CHIP_ACTIVE = `${SIDEBAR_FILTER_CHIP_BASE} bg-white text-[#0a0a0c] ring-white`;
+  'px-2 py-0.5 rounded-md text-[8px] font-black transition-colors outline-none';
+export const SIDEBAR_FILTER_CHIP_IDLE = `${SIDEBAR_FILTER_CHIP_BASE} bg-white/[0.06] text-gray-400 hover:bg-white/[0.1] hover:text-gray-300`;
+export const SIDEBAR_FILTER_CHIP_ACTIVE = `${SIDEBAR_FILTER_CHIP_BASE} bg-white text-[#0a0a0c]`;
+
+/** 工作台主按钮：对齐底部发送键（白底黑字），不是 SaaS 蓝 */
+export const WORKBENCH_PRIMARY_BTN =
+  'flex h-10 w-full items-center justify-center rounded-xl bg-white px-2.5 text-[10px] font-black tracking-wide text-[#0a0a0c] shadow-md outline-none transition-colors hover:bg-[#f4f4f5] focus-visible:ring-2 focus-visible:ring-white/20 disabled:opacity-35 disabled:hover:bg-white';
+/** 工作台状态小条（归档 / 导出）：石墨，不占顶栏 */
+export const WORKBENCH_NOTICE_CHIP =
+  'mb-1.5 flex items-center gap-1.5 rounded-md bg-white/[0.04] px-2.5 py-1 text-[8px] text-[#e8e6e1]';
+/** 侧栏拖入高亮：白环 + 浅白底 */
+export const WORKBENCH_DROP_ACTIVE =
+  'ring-2 ring-inset ring-white/40 bg-white/[0.1] shadow-[inset_0_0_0_1px_rgba(255,255,255,0.16)]';
+/** 按住空格：列表范围细钨丝。用 inset box-shadow，避免系统 outline 转角/四边不齐 */
+export const WORKFLOW_SPACE_MARQUEE_FRAME =
+  'shadow-[inset_0_0_0_1px_rgba(201,163,106,0.32),inset_0_0_0_2px_rgba(201,163,106,0.08)]';
 
 /** 画布 / 仓库卡片默认外沿（非选中、非组强调） */
-export const WORKFLOW_CARD_SURFACE_IDLE = 'ring-1 ring-inset ring-white/[0.08] border-0';
+export const WORKFLOW_CARD_SURFACE_IDLE = 'border-0';
 
 /** 选中壳：外层 padding 填白，比 ring/box-shadow 更清晰、圆角无锯齿 */
 export const WORKFLOW_CARD_SHELL_PAD = 'rounded-2xl p-0.5';
@@ -71,7 +84,7 @@ export const WORKFLOW_META_PILL =
   'inline-flex items-center gap-1 rounded-full bg-[#151518] px-2 py-0.5 text-[7px] text-gray-300/95 ring-1 ring-white/[0.08] select-none';
 
 /** 顶栏：方形图标按钮（返回等） */
-export const WORKFLOW_TOPBAR_ICON_BTN = `inline-flex ${TOP_CTRL_H} w-7 shrink-0 items-center justify-center rounded-md bg-white/[0.05] text-gray-300 ring-1 ring-white/[0.06] hover:bg-white/[0.09] hover:text-white transition-colors outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50`;
+export const WORKFLOW_TOPBAR_ICON_BTN = `inline-flex ${TOP_CTRL_H} w-7 shrink-0 items-center justify-center rounded-md bg-white/[0.05] text-gray-300 ring-1 ring-white/[0.06] hover:bg-white/[0.09] hover:text-white transition-colors outline-none focus-visible:ring-2 focus-visible:ring-white/20`;
 
 /** 工作区内次要操作按钮（返回、工具条等），与顶栏同高同阶调 */
 export const WORKFLOW_CHROME_BTN_NEUTRAL = `${TOP_CTRL_H} inline-flex items-center justify-center rounded-md bg-white/[0.05] px-2.5 text-[8px] font-black uppercase tracking-wide text-gray-200 ring-1 ring-white/[0.06] hover:bg-white/[0.09] transition-colors`;

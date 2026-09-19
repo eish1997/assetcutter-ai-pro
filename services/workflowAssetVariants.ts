@@ -97,7 +97,8 @@ export function resolveWorkflowAssetKind(asset: WorkflowAsset): WorkflowAssetKin
     asset.assetKind === 'video' ||
     asset.assetKind === 'model3d' ||
     asset.assetKind === 'audio' ||
-    asset.assetKind === 'file'
+    asset.assetKind === 'file' ||
+    asset.assetKind === 'prompt'
   ) {
     return asset.assetKind;
   }
@@ -113,7 +114,7 @@ export function resolveWorkflowAssetKind(asset: WorkflowAsset): WorkflowAssetKin
 function buildOriginalVariant(asset: WorkflowAsset): WorkflowAssetVariant | null {
   const assetKind = resolveWorkflowAssetKind(asset);
   if (assetKind === 'storyboard_table' || assetKind === 'asset_set' || assetKind === 'group') return null;
-  if (assetKind === 'text') {
+  if (assetKind === 'text' || (assetKind === 'prompt' && !cleanString(asset.original))) {
     const title = cleanString(asset.textTitle);
     const body = String(asset.textBody || '');
     if (!title && !cleanString(body)) return null;

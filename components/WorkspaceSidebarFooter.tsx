@@ -13,9 +13,9 @@ import {
 } from '../shared/credits';
 import { useCreditBalance } from '../hooks/useCreditBalance';
 
-/** 侧栏底栏：与「已接」等同宽同间距（见 App 左侧 fixed w-14 栏最底部） */
+/** 侧栏底栏：与「已接」等同宽同间距（见 App 左侧 fixed w-7 栏最底部） */
 const SIDEBAR_STATUS_ROW_CLASS =
-  'flex w-full min-w-0 items-center justify-center gap-1.5 rounded-lg bg-white/[0.05] px-2 py-2 ring-1 ring-white/[0.07]';
+  'flex w-full min-w-0 items-center justify-center gap-0.5 rounded-md bg-white/[0.05] px-0.5 py-1';
 
 const SIDEBAR_STATUS_BTN_CLASS = `${SIDEBAR_STATUS_ROW_CLASS} hover:bg-white/[0.08] outline-none focus-visible:ring-2 focus-visible:ring-blue-500/55 focus-visible:ring-offset-2 focus-visible:ring-offset-[#050505]`;
 
@@ -152,7 +152,7 @@ const WorkspaceSidebarFooter: React.FC<WorkspaceSidebarFooterProps> = ({
       : '下载最新本地伴侣安装包';
 
   return (
-    <div className="flex w-full min-w-0 shrink-0 flex-col gap-2.5 px-1 py-2">
+    <div className="flex w-full min-w-0 shrink-0 flex-col gap-1 px-0.5 py-1">
       {user?.id ? (
         <div
           data-ac-sidebar-credits

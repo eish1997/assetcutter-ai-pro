@@ -29,6 +29,13 @@ export type WorkflowAssetContextMenuProps = {
   onCopyEntry?: () => void;
   onPaste?: () => void;
   canPaste?: boolean;
+  onCreateText?: () => void;
+  onCreateStoryboard?: () => void;
+  onCreateAssetSet?: () => void;
+  onCreatePreset?: () => void;
+  onCreateCapabilitySet?: () => void;
+  onImportExportPresets?: () => void;
+  onRefreshPresets?: () => void;
   onClose: () => void;
 };
 
@@ -56,6 +63,13 @@ export default function WorkflowAssetContextMenu({
   onCopyEntry,
   onPaste,
   canPaste = false,
+  onCreateText,
+  onCreateStoryboard,
+  onCreateAssetSet,
+  onCreatePreset,
+  onCreateCapabilitySet,
+  onImportExportPresets,
+  onRefreshPresets,
   onClose,
 }: WorkflowAssetContextMenuProps) {
   const menuRef = useRef<HTMLDivElement>(null);
@@ -73,7 +87,7 @@ export default function WorkflowAssetContextMenu({
     }
     const rect = el.getBoundingClientRect();
     setPosition(computeContextMenuPosition(x, y, rect.width, rect.height, window.innerWidth, window.innerHeight));
-  }, [open, x, y, canAddToComposeInput, canCopyImage, canOpenFolder, onOpen, onReveal, onCopyPath, onDelete]);
+  }, [open, x, y, canAddToComposeInput, canCopyImage, canOpenFolder, onOpen, onReveal, onCopyPath, onDelete, onCreateText, onCreateStoryboard, onCreateAssetSet, onCreatePreset, onCreateCapabilitySet, onImportExportPresets, onRefreshPresets]);
 
   useEffect(() => {
     if (!open) return;
@@ -122,6 +136,46 @@ export default function WorkflowAssetContextMenu({
       style={{ left: position.left, top: position.top }}
       onContextMenu={(event) => event.preventDefault()}
     >
+      {onCreatePreset ? (
+        <button type="button" className={ITEM} onClick={() => run(onCreatePreset)}>
+          新建预设
+        </button>
+      ) : null}
+      {onCreateCapabilitySet ? (
+        <button type="button" className={ITEM} onClick={() => run(onCreateCapabilitySet)}>
+          新建集合
+        </button>
+      ) : null}
+      {onImportExportPresets ? (
+        <button type="button" className={ITEM} onClick={() => run(onImportExportPresets)}>
+          导入/导出
+        </button>
+      ) : null}
+      {onRefreshPresets ? (
+        <button type="button" className={ITEM} onClick={() => run(onRefreshPresets)}>
+          刷新同步
+        </button>
+      ) : null}
+      {onCreateText ? (
+        <button type="button" className={ITEM} onClick={() => run(onCreateText)}>
+          新建文本
+        </button>
+      ) : null}
+      {onCreateStoryboard ? (
+        <button type="button" className={ITEM} onClick={() => run(onCreateStoryboard)}>
+          新建分镜表
+        </button>
+      ) : null}
+      {onCreateAssetSet ? (
+        <button type="button" className={ITEM} onClick={() => run(onCreateAssetSet)}>
+          新建资产集
+        </button>
+      ) : null}
+      {onCreateText || onCreateStoryboard || onCreateAssetSet || onCreatePreset || onCreateCapabilitySet || onImportExportPresets || onRefreshPresets
+        ? onOpen || onReveal || onOpenFolder || onCopyPath || onCopyImage || onCopyId || onAddToComposeInput || onRename || onCut || onCopyEntry || onPaste || onDelete
+          ? <div className="my-1 h-px bg-white/[0.08]" />
+          : null
+        : null}
       {onOpen ? (
         <button type="button" className={ITEM} onClick={() => run(onOpen)}>
           {openLabel}

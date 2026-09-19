@@ -5,7 +5,7 @@ import {
   useEffect,
   type WheelEvent as ReactWheelEvent,
 } from 'react';
-import { isWorkflowEditableTarget, isWorkflowLightboxHotkeySurface } from '../components/workflow/workflowDomUtils';
+import { isWorkflowEditableTarget } from '../components/workflow/workflowDomUtils';
 
 export type UseWorkflowWorkspacePanesArgs = {
   registerPaneWheelHandler?: (handler: ((e: ReactWheelEvent) => void) | null) => void;
@@ -14,7 +14,7 @@ export type UseWorkflowWorkspacePanesArgs = {
 };
 
 /**
- * 工作区「小盒子」页：0 = 资产列表（默认），1 = 能力预设。
+ * 工作区「小盒子」页：资产列表（默认）。能力预设已并入左树「预设」根。
  * 大盒子固定布局，不再整轨横向卷轴平移。
  */
 export function useWorkflowWorkspacePanes({
@@ -80,6 +80,7 @@ export function useWorkflowWorkspacePanes({
       if (workspacePaneRef.current !== 0) return;
       if (typeof document !== 'undefined' && !document.querySelector('[data-workflow-asset-list]')) return;
       e.preventDefault();
+      if (e.repeat) return;
       setSpaceMarqueeEnabled(true);
     };
     const onKeyUp = (e: KeyboardEvent) => {
@@ -98,32 +99,6 @@ export function useWorkflowWorkspacePanes({
       window.removeEventListener('blur', onBlur);
     };
   }, [enableSpaceMarquee]);
-
-  useEffect(() => {
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.repeat) return;
-      if (e.ctrlKey || e.altKey || e.metaKey) return;
-      if (isWorkflowEditableTarget(e.target)) return;
-      if (isWorkflowEditableTarget(document.activeElement)) return;
-
-      /** 1 = 小盒子预设页，2 = 小盒子资产页（默认）；0 同 1 */
-      const paneByCode: Record<string, number> = {
-        Digit1: 1,
-        Digit2: 0,
-        Digit0: 1,
-        Numpad1: 1,
-        Numpad2: 0,
-        Numpad0: 1,
-      };
-      const pane = paneByCode[e.code];
-      if (pane === undefined) return;
-      if (isWorkflowLightboxHotkeySurface()) return;
-      e.preventDefault();
-      snapWorkspacePaneToNode(pane);
-    };
-    window.addEventListener('keydown', onKeyDown, true);
-    return () => window.removeEventListener('keydown', onKeyDown, true);
-  }, [snapWorkspacePaneToNode]);
 
   return {
     workspacePane,

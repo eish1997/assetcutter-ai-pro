@@ -1,5 +1,5 @@
 import React from 'react';
-import { ArrowUp, Box, ChevronLeft, ChevronRight, File, FileText, Film, FolderOpen, FolderX, Image, ListFilter, RefreshCw, Tag } from 'lucide-react';
+import { ArrowUp, Box, ChevronLeft, ChevronRight, File, FileText, Film, FolderOpen, FolderX, Image, ListFilter, MessageSquare, RefreshCw, Tag } from 'lucide-react';
 import { CustomDropdown } from '../ui/CustomDropdown';
 import { WORKFLOW_EDGE_GUTTER } from '../workflow/workflowSectionUiConstants';
 import { workshopPreviewKindExts } from '../../services/workshopPreviewKind';
@@ -20,11 +20,12 @@ const KIND_CHIPS: Array<{
   { id: 'model3d', label: '三维', Icon: Box },
   { id: 'video', label: '视频', Icon: Film },
   { id: 'text', label: '文本', Icon: FileText },
+  { id: 'prompt', label: '预设', Icon: MessageSquare },
   { id: 'file', label: '其它', Icon: File },
 ];
 
 function chipTitle(id: WorkshopCanvasKindId, label: string): string {
-  if (id === 'file') return `${label} · 右键仅显示此类`;
+  if (id === 'file' || id === 'prompt') return `${label} · 右键仅显示此类`;
   const exts = workshopPreviewKindExts(id).join(' ');
   return `${label} ${exts} · 右键仅显示此类`;
 }
@@ -39,18 +40,58 @@ const SORT_OPTIONS: Array<{ value: string; label: string }> = [
 ];
 
 const NAV_BTN =
-  'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-white/[0.05] text-gray-300 ring-1 ring-white/[0.08] hover:bg-white/[0.1] hover:text-[#e8e6e1] transition-colors outline-none focus-visible:ring-2 focus-visible:ring-[#c9a36a]/45 disabled:opacity-35 disabled:pointer-events-none disabled:hover:bg-white/[0.05] disabled:hover:text-gray-300';
+  'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-gray-300 hover:bg-white/[0.08] hover:text-[#e8e6e1] transition-colors outline-none focus-visible:ring-2 focus-visible:ring-[#c9a36a]/45 disabled:opacity-35 disabled:pointer-events-none disabled:hover:bg-transparent disabled:hover:text-gray-300';
+
+const KIND_BTN =
+  'flex h-9 w-9 shrink-0 flex-col items-center justify-center gap-px text-[#8b8b93] outline-none transition-colors hover:bg-white/[0.1] hover:text-[#e8e6e1] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#c9a36a]/45';
 
 function kindChipClass(on: boolean): string {
-  return on
-    ? 'flex h-11 w-9 shrink-0 flex-col items-center justify-center gap-0.5 rounded-md bg-[#c9a36a]/15 text-[#c9a36a] ring-1 ring-[#c9a36a]/70 outline-none transition-colors focus-visible:ring-2 focus-visible:ring-[#c9a36a]/45'
-    : 'flex h-11 w-9 shrink-0 flex-col items-center justify-center gap-0.5 rounded-md bg-white/[0.05] text-[#8b8b93] ring-1 ring-white/[0.08] hover:bg-white/[0.1] hover:text-[#e8e6e1] outline-none transition-colors focus-visible:ring-2 focus-visible:ring-[#c9a36a]/45';
+  return on ? `${KIND_BTN} bg-[#c9a36a]/15 text-[#c9a36a]` : KIND_BTN;
 }
 
 function toolBtnClass(on: boolean): string {
   return on
-    ? `${NAV_BTN} text-[#c9a36a] ring-[#c9a36a]/70`
+    ? `${NAV_BTN} bg-[#c9a36a]/15 text-[#c9a36a]`
     : NAV_BTN;
+}
+
+const DENSITY_BTN =
+  'inline-flex h-7 w-7 shrink-0 items-center justify-center text-[10px] font-black text-gray-300 hover:bg-white/[0.1] hover:text-[#e8e6e1] outline-none transition-colors disabled:pointer-events-none disabled:opacity-35 disabled:hover:bg-transparent disabled:hover:text-gray-300';
+
+export function WorkflowColumnDensityButtons(props: {
+  columnCount: number;
+  onColumnCountChange: (next: number) => void;
+}): React.ReactElement {
+  const { columnCount, onColumnCountChange } = props;
+  return (
+    <div
+      className="inline-flex h-7 shrink-0 overflow-hidden rounded-md bg-white/[0.04]"
+      role="group"
+      aria-label="调整每行列数"
+    >
+      <button
+        type="button"
+        className={DENSITY_BTN}
+        disabled={columnCount <= 2}
+        onClick={() => onColumnCountChange(Math.max(2, columnCount - 1))}
+        aria-label="减少每行列数"
+        title="卡片变大"
+      >
+        −
+      </button>
+      <span className="w-px self-stretch bg-white/[0.08]" aria-hidden />
+      <button
+        type="button"
+        className={DENSITY_BTN}
+        disabled={columnCount >= 6}
+        onClick={() => onColumnCountChange(Math.min(6, columnCount + 1))}
+        aria-label="增加每行列数"
+        title="卡片变小"
+      >
+        +
+      </button>
+    </div>
+  );
 }
 
 export function WorkshopCanvasNavBar(props: {
@@ -73,36 +114,44 @@ export function WorkshopCanvasNavBar(props: {
   onRefresh: () => void;
   nameFilter: string;
   onNameFilter: (next: string) => void;
+  columnCount: number;
+  onColumnCountChange: (next: number) => void;
 }): React.ReactElement {
   const { listPrefs } = props;
   const kindSet = new Set(props.kindFilter);
   return (
     <div
       data-workshop-canvas-nav
-      className={`shrink-0 flex flex-col gap-1 ${WORKFLOW_EDGE_GUTTER} pt-1.5 pb-1`}
+      className={`shrink-0 flex flex-col gap-0.5 ${WORKFLOW_EDGE_GUTTER} py-0.5`}
     >
-      <div className="flex items-end gap-1">
-        {KIND_CHIPS.map((chip) => {
+      <div
+        className="inline-flex h-9 w-fit shrink-0 self-start overflow-hidden rounded-md bg-white/[0.04]"
+        role="group"
+        aria-label="筛选类型"
+      >
+        {KIND_CHIPS.map((chip, i) => {
           const on = kindSet.has(chip.id);
           const count = props.kindCounts[chip.id] ?? 0;
           return (
-            <button
-              key={chip.id}
-              type="button"
-              title={chipTitle(chip.id, chip.label)}
-              aria-pressed={on}
-              aria-label={`${chip.label} ${count}`}
-              onClick={() => props.onToggleKind(chip.id)}
-              onContextMenu={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                props.onIsolateKind(chip.id);
-              }}
-              className={kindChipClass(on)}
-            >
-              <chip.Icon className="h-3.5 w-3.5" strokeWidth={1.75} />
-              <span className="mono text-[8px] leading-none tabular-nums">{count}</span>
-            </button>
+            <React.Fragment key={chip.id}>
+              {i > 0 ? <span className="w-px self-stretch bg-white/[0.08]" aria-hidden /> : null}
+              <button
+                type="button"
+                title={chipTitle(chip.id, chip.label)}
+                aria-pressed={on}
+                aria-label={`${chip.label} ${count}`}
+                onClick={() => props.onToggleKind(chip.id)}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  props.onIsolateKind(chip.id);
+                }}
+                className={kindChipClass(on)}
+              >
+                <chip.Icon className="h-4 w-4" strokeWidth={1.75} />
+                <span className="mono text-[8px] leading-none tabular-nums">{count}</span>
+              </button>
+            </React.Fragment>
           );
         })}
       </div>
@@ -135,7 +184,7 @@ export function WorkshopCanvasNavBar(props: {
         </button>
         <nav
           aria-label="目录路径"
-          className="ml-1 flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto no-scrollbar rounded-md bg-white/[0.03] px-1.5 py-0.5 ring-1 ring-white/[0.06]"
+          className="ml-1 flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto no-scrollbar rounded-md px-1.5 py-0.5"
         >
           {props.crumbs.map((crumb, idx) => {
             const last = idx === props.crumbs.length - 1;
@@ -235,13 +284,17 @@ export function WorkshopCanvasNavBar(props: {
             props.onListPrefs({ ...listPrefs, sortKey, sortDir: 'asc' });
           }}
         />
+        <WorkflowColumnDensityButtons
+          columnCount={props.columnCount}
+          onColumnCountChange={props.onColumnCountChange}
+        />
         <input
           type="search"
           value={props.nameFilter}
           onChange={(e) => props.onNameFilter(e.target.value)}
           placeholder="过滤文件名"
           aria-label="过滤文件名"
-          className="h-7 w-[7.5rem] shrink-0 rounded-md bg-white/[0.05] px-2 text-[10px] text-[#e8e6e1] outline-none ring-1 ring-white/[0.08] placeholder:text-white/30 focus-visible:ring-2 focus-visible:ring-[#c9a36a]/45"
+          className="h-7 w-[7.5rem] shrink-0 rounded-md bg-white/[0.04] px-2 text-[10px] text-[#e8e6e1] outline-none placeholder:text-white/30 focus-visible:ring-2 focus-visible:ring-[#c9a36a]/45"
         />
       </div>
     </div>

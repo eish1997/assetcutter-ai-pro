@@ -280,8 +280,6 @@ import {
   compositePanoPatchOntoEquirect,
   rasterizePanoLocalEditCropFromSnapshot,
 } from '../services/panoLocalInpaintPano';
-import { CustomDropdown } from './ui/CustomDropdown';
-
 import { resolveCapabilityPreviewSrc } from '../services/capabilityPreviewUrl';
 import { WorkflowCapabilityHoverPreview } from './WorkflowCapabilityHoverPreview';
 import { WorkflowGridImage } from './ProgressivePreviewImage';
@@ -436,14 +434,6 @@ import {
 import { PromptTweakModal, ArchivedDetailModal, type PromptTweakTarget } from './workflow/modals';
 import {
   SET_ACTION_PREFIX,
-  TITLE_ROW_BTN_NEUTRAL,
-  TITLE_ROW_BTN_ACTIVE,
-  TITLE_ROW_BTN_PRIMARY,
-  TITLE_ROW_STEPPER_SHELL,
-  TITLE_ROW_STEPPER_VALUE,
-  TITLE_ROW_STEPPER_BTN,
-  TITLE_ROW_QUEUE_CHIP,
-  TITLE_ROW_DROPDOWN_TRIGGER,
   WORKFLOW_CARD_SURFACE_IDLE,
   WORKFLOW_CARD_SHELL_PAD,
   WORKFLOW_CARD_SHELL_SELECTED,
@@ -452,8 +442,9 @@ import {
   WORKFLOW_GROUP_CARD_FACE_CLASS,
   WORKFLOW_META_PILL,
   WORKFLOW_EDGE_GUTTER,
+  WORKBENCH_NOTICE_CHIP,
+  WORKFLOW_SPACE_MARQUEE_FRAME,
   WORKFLOW_CHROME_BTN_NEUTRAL,
-  WORKFLOW_TOPBAR_ICON_BTN,
   WORKFLOW_LIGHTBOX_BOTTOM_RAIL,
   WORKFLOW_LIGHTBOX_VGP_GRAPH_LEFT_INSET,
   WORKFLOW_LIGHTBOX_ASSET_THUMB_STRIP_INSET,
@@ -502,13 +493,17 @@ import {
 import { groupCapabilityPresetsByCategory } from './workflow/workflowCapabilityGroups';
 import { WorkflowSidebarColumn, type WorkflowSidebarFavoriteEntry } from './workflow/WorkflowSidebarColumn';
 import { WorkshopFileTreeColumn } from './workshop/WorkshopFileSource';
-import { WorkshopCanvasNavBar } from './workshop/WorkshopCanvasNavBar';
+import { WorkshopCanvasNavBar, WorkflowColumnDensityButtons } from './workshop/WorkshopCanvasNavBar';
 import {
   applyWorkshopFileState,
   hasWorkbenchFileSourceApi,
   isWorkshopBrowserLibraryRoot,
+  isWorkshopPresetLibraryRoot,
   isWorkshopRecycleRoot,
+  normalizeWorkshopPresetRel,
   toPosixRel,
+  workshopPresetFolderLabel,
+  WORKSHOP_PRESET_LIBRARY_ROOT,
   workshopRootAllowsCreate,
   parseWorkshopFileAssetId,
   selectedRelFromAssetIds,
@@ -558,6 +553,7 @@ import {
   workshopNavCanForward,
   workshopNavCanUp,
   workshopNavForward,
+  workshopNavLocFromFingerSurface,
   workshopNavRootLabel,
   workshopNavUpLoc,
   writeWorkshopCanvasListPrefs,
@@ -565,6 +561,7 @@ import {
   type WorkshopCanvasListPrefs,
   type WorkshopNavLoc,
 } from '../services/workshopCanvasNav';
+import { listWorkshopPresetLibraryAssets, parseWorkshopPresetAssetId } from '../services/workshopPresetLibrary';
 import { getWorkshopEntryClip, setWorkshopEntryClip, subscribeWorkshopEntryClip } from '../services/workshopEntryClipboard';
 import {
   boardEntriesToTreeInput,
@@ -580,7 +577,7 @@ import {
 } from '../services/workshopFrontHall';
 import { workshopFrontHallHotkey } from '../services/workshopFrontHallHotkeys';
 import { frontHallPreviewMap } from '../services/workshopFrontHallGraph';
-import { isWorkshopPlayableMediaUrl, isWorkshopSpecialRasterName, isWorkshopTextPreviewName } from '../services/workshopPreviewKind';
+import { isWorkshopPlayableMediaUrl, isWorkshopSpecialRasterName, isWorkshopTextPreviewName, workshopPreviewKindFromName } from '../services/workshopPreviewKind';
 import {
   decodeWorkshopSpecialRasterToJpeg,
   peekWorkshopSpecialRasterJpeg,
@@ -841,6 +838,11 @@ function isWorkflowVideoFile(file: File): boolean {
   return t.startsWith('video/');
 }
 
+function isWorkflowImageFile(file: File): boolean {
+  if (workshopPreviewKindFromName(file.name || '') === 'image') return true;
+  return String(file.type || '').toLowerCase().startsWith('image/');
+}
+
 function workflowModelItemLooksLikeModel(it: DataTransferItem): boolean {
   if (it.kind !== 'file') return false;
   const f = it.getAsFile();
@@ -968,19 +970,6 @@ const WORKFLOW_GROUP_GENERATE_COUNT_HARD_MAX = 999;
 const WORKFLOW_GROUP_GENERATE_CONFIRM_THRESHOLD = 20;
 /** 底部输入框仅图/文、未拖入预设卡片时，运行日志统一前缀（与当前快捷能力预设名解耦） */
 const WORKFLOW_QUICK_COMPOSE_PLAIN_LOG_LABEL = '底部输入';
-const CAPABILITY_PRESET_COLUMNS_KEY = 'ac_capability_preset_columns_v1';
-const CAPABILITY_PRESET_COLUMNS_MIN = 2;
-const CAPABILITY_PRESET_COLUMNS_MAX = 6;
-
-type CapabilityPresetTypeFilter = 'all' | 'text_to_text' | 'text_to_image' | 'image_to_image' | 'image_process' | 'image_to_text';
-const CAPABILITY_PRESET_TYPE_FILTER_OPTIONS: Array<{ value: CapabilityPresetTypeFilter; label: string }> = [
-  { value: 'all', label: '全部类型' },
-  { value: 'text_to_text', label: '文生文' },
-  { value: 'text_to_image', label: '文生图' },
-  { value: 'image_to_image', label: '图生图' },
-  { value: 'image_process', label: '图像处理' },
-  { value: 'image_to_text', label: '图生文' },
-];
 const DRAG_SCROLL_EDGE_PX = 64;
 const DRAG_SCROLL_MAX_STEP_PX = 28;
 
@@ -988,12 +977,6 @@ function normalizeWorkflowGenerateCount(raw: unknown): number {
   const n = Math.floor(Number(raw));
   if (!Number.isFinite(n)) return 1;
   return Math.max(1, Math.min(WORKFLOW_GROUP_GENERATE_COUNT_HARD_MAX, n));
-}
-
-function normalizeCapabilityPresetColumnCount(raw: unknown): number {
-  const n = Math.floor(Number(raw));
-  if (!Number.isFinite(n)) return 6;
-  return Math.max(CAPABILITY_PRESET_COLUMNS_MIN, Math.min(CAPABILITY_PRESET_COLUMNS_MAX, n));
 }
 
 function autoScrollContainerOnDrag(
@@ -1254,7 +1237,10 @@ const WorkflowSection: React.FC<{
   onLogRef.current = onLog;
   const [fileSourceApi, setFileSourceApi] = useState(() => hasWorkbenchFileSourceApi());
   const [workshopActiveRoot, setWorkshopActiveRoot] = useState(WORKSHOP_BROWSER_LIBRARY_ROOT);
-  const workshopDiskOpen = Boolean(fileSourceApi && !isWorkshopBrowserLibraryRoot(workshopActiveRoot));
+  const workshopPresetOpen = isWorkshopPresetLibraryRoot(workshopActiveRoot);
+  const workshopDiskOpen = Boolean(
+    fileSourceApi && !isWorkshopBrowserLibraryRoot(workshopActiveRoot) && !workshopPresetOpen,
+  );
 
   useEffect(() => {
     setWorkflowMirrorPreferenceScope(preferenceScope);
@@ -1333,7 +1319,7 @@ const WorkflowSection: React.FC<{
   /** 取消进行中的分帧开大图（用户快速关闭时） */
   const lightboxOpenGenRef = useRef(0);
   const [workflowAssetContextMenu, setWorkflowAssetContextMenu] = useState<{
-    assetId: string;
+    assetId: string | null;
     x: number;
     y: number;
   } | null>(null);
@@ -2066,6 +2052,19 @@ const WorkflowSection: React.FC<{
     },
     [preferenceScope],
   );
+  useEffect(() => {
+    if (!workshopPresetOpen) return;
+    if (workshopListPrefs.kinds.includes('prompt')) return;
+    applyWorkshopListPrefs({
+      ...workshopListPrefs,
+      kinds: [...workshopListPrefs.kinds, 'prompt'],
+    });
+  }, [applyWorkshopListPrefs, workshopListPrefs, workshopPresetOpen]);
+  const workshopBoardView = Boolean(fileSourceApi && !workshopPresetOpen && workshopListPrefs.viewMode === 'board');
+  const workshopCanvasKindFilter = useMemo(() => {
+    if (!workshopPresetOpen || workshopListPrefs.kinds.includes('prompt')) return workshopListPrefs.kinds;
+    return [...workshopListPrefs.kinds, 'prompt'];
+  }, [workshopPresetOpen, workshopListPrefs.kinds]);
   const [frontHallSelectedNodeId, setFrontHallSelectedNodeId] = useState<string | null>(null);
   const [workshopBoardEntries, setWorkshopBoardEntries] = useState<
     Array<{ rel: string; kind: string; assetKind?: string; files?: Record<string, { name?: string }> }>
@@ -2164,18 +2163,23 @@ const WorkflowSection: React.FC<{
       }),
     [workshopDisplayCanvasItems, workshopSourceById, workshopFaceById, workshopMediaById, workshopTextById]
   );
+  const presetLibraryAssets = useMemo(
+    () =>
+      workshopPresetOpen
+        ? listWorkshopPresetLibraryAssets({
+            root: workshopActiveRoot,
+            rel: workshopCurrentRel,
+            presets: capabilityPresets,
+            sets: capabilitySets,
+          })
+        : [],
+    [capabilityPresets, capabilitySets, workshopActiveRoot, workshopCurrentRel, workshopPresetOpen],
+  );
   const workshopFileAssetsRef = useRef(workshopFileAssets);
   workshopFileAssetsRef.current = workshopFileAssets;
   const lastDispatchedCanvasFingerKeyRef = useRef('');
   const shellRoomRef = useRef('workbench');
   const [selectedGroupItemKeys, setSelectedGroupItemKeys] = useState<Set<string>>(new Set());
-  const [capabilityPresetViewMode, setCapabilityPresetViewMode] = useState<'presets' | 'image_process' | 'sets'>('presets');
-  const [capabilityPresetTypeFilter, setCapabilityPresetTypeFilter] = useState<CapabilityPresetTypeFilter>('all');
-  const [capabilityPresetColumnCount, setCapabilityPresetColumnCount] = useState<number>(() =>
-    readLocalJson<number>(CAPABILITY_PRESET_COLUMNS_KEY, 6, (parsed) =>
-      typeof parsed === 'number' ? normalizeCapabilityPresetColumnCount(parsed) : null
-    )
-  );
   const [cardAspectByAssetId, setCardAspectByAssetId] = useState<Record<string, number>>({});
   const cardAspectProjectRef = useRef<string | null>(null);
   const [thumbUnlockKeys, setThumbUnlockKeys] = useState<Set<string>>(() => new Set());
@@ -2383,7 +2387,6 @@ const WorkflowSection: React.FC<{
   const marqueeStartRef = useRef(false);
   const {
     workspacePane,
-    snapWorkspacePaneToNode,
     handlePaneWheel,
     spaceMarqueeEnabled,
   } = useWorkflowWorkspacePanes({
@@ -2404,7 +2407,7 @@ const WorkflowSection: React.FC<{
       selectedFileId: parsed?.kind === 'package' ? String(item?.displayKey || '') : null,
       assets: workshopDiskOpen ? workshopFileAssets : assets,
       lightboxAssetId,
-      surface: Math.round(workspacePane) === 1 ? 'presets' : 'canvas',
+      surface: workshopPresetOpen ? 'presets' : 'canvas',
       connectedHosts: connectedHostsFromDrafts(readPublishedConnectionDrafts(), {
         hasSelectedCard: selectedAssetIds.size > 0 || Boolean(workshopSelectedRel),
       }),
@@ -2415,7 +2418,7 @@ const WorkflowSection: React.FC<{
     if (key === lastDispatchedCanvasFingerKeyRef.current) return;
     lastDispatchedCanvasFingerKeyRef.current = key;
     dispatchWorkspaceSetFinger(finger);
-  }, [selectedAssetIds, workshopSelectedRel, workshopActiveRoot, workshopDiskOpen, workshopFileAssets, assets, lightboxAssetId, workspacePane]);
+  }, [selectedAssetIds, workshopSelectedRel, workshopActiveRoot, workshopDiskOpen, workshopFileAssets, assets, lightboxAssetId, workshopPresetOpen]);
   useEffect(() => {
     const api = window.assetCutterWorkbench;
     if (!api || typeof api.onWorkspaceShellView !== 'function') return undefined;
@@ -2437,7 +2440,7 @@ const WorkflowSection: React.FC<{
         selectedFileId: parsed?.kind === 'package' ? String(item?.displayKey || '') : null,
         assets: workshopDiskOpen ? workshopFileAssets : assets,
         lightboxAssetId,
-        surface: Math.round(workspacePane) === 1 ? 'presets' : 'canvas',
+        surface: workshopPresetOpen ? 'presets' : 'canvas',
         connectedHosts: connectedHostsFromDrafts(readPublishedConnectionDrafts(), {
           hasSelectedCard: selectedAssetIds.size > 0 || Boolean(workshopSelectedRel),
         }),
@@ -2445,7 +2448,7 @@ const WorkflowSection: React.FC<{
       publishAgentWorkbenchFinger(finger);
       dispatchWorkspaceSetFinger(finger);
     });
-  }, [selectedAssetIds, workshopSelectedRel, workshopActiveRoot, workshopDiskOpen, workshopFileAssets, assets, lightboxAssetId, workspacePane]);
+  }, [selectedAssetIds, workshopSelectedRel, workshopActiveRoot, workshopDiskOpen, workshopFileAssets, assets, lightboxAssetId, workshopPresetOpen]);
   useEffect(() => {
     const on = hasWorkbenchFileSourceApi();
     setFileSourceApi(on);
@@ -2458,6 +2461,7 @@ const WorkflowSection: React.FC<{
       setWorkshopRoots(next.roots);
       setWorkshopActiveRoot((cur) => {
         if (isWorkshopBrowserLibraryRoot(cur) || !cur) return WORKSHOP_BROWSER_LIBRARY_ROOT;
+        if (isWorkshopPresetLibraryRoot(cur)) return cur;
         if (isWorkshopRecycleRoot(cur) && String(st.workspaceDir || '').trim()) return cur;
         if (next.roots.some((r) => r.root === cur)) return cur;
         return WORKSHOP_BROWSER_LIBRARY_ROOT;
@@ -2483,7 +2487,14 @@ const WorkflowSection: React.FC<{
     const next = applyWorkshopFileState(st);
     setWorkshopRoots(next.roots);
     setWorkshopActiveRoot((cur) => {
-      if (isWorkshopBrowserLibraryRoot(cur) || isWorkshopRecycleRoot(cur) || next.roots.some((r) => r.root === cur)) return cur;
+      if (
+        isWorkshopBrowserLibraryRoot(cur) ||
+        isWorkshopPresetLibraryRoot(cur) ||
+        isWorkshopRecycleRoot(cur) ||
+        next.roots.some((r) => r.root === cur)
+      ) {
+        return cur;
+      }
       return WORKSHOP_BROWSER_LIBRARY_ROOT;
     });
     setWorkshopCurrentRel('');
@@ -2539,13 +2550,22 @@ const WorkflowSection: React.FC<{
     (id: string | null | undefined): WorkflowAsset | null => {
       const t = String(id || '').trim();
       if (!t) return null;
-      const found = workshopFileAssets.find((a) => a.id === t) || assets.find((a) => a.id === t) || null;
+      const found =
+        workshopFileAssets.find((a) => a.id === t) ||
+        presetLibraryAssets.find((a) => a.id === t) ||
+        assets.find((a) => a.id === t) ||
+        null;
       return found;
     },
-    [workshopFileAssets, assets]
+    [workshopFileAssets, presetLibraryAssets, assets]
   );
   useEffect(() => {
-    if (!fileSourceApi || isWorkshopBrowserLibraryRoot(workshopActiveRoot) || !workshopActiveRoot) {
+    if (
+      !fileSourceApi ||
+      isWorkshopBrowserLibraryRoot(workshopActiveRoot) ||
+      isWorkshopPresetLibraryRoot(workshopActiveRoot) ||
+      !workshopActiveRoot
+    ) {
       setWorkshopCanvasItems([]);
       return;
     }
@@ -2637,7 +2657,12 @@ const WorkflowSection: React.FC<{
     };
   }, [fileSourceApi, workshopActiveRoot, workshopCurrentRel, workshopListEpoch, workshopListPrefs.flatten, workshopListPrefs.viewMode]);
   useEffect(() => {
-    if (!fileSourceApi || isWorkshopBrowserLibraryRoot(workshopActiveRoot) || !workshopActiveRoot) {
+    if (
+      !fileSourceApi ||
+      isWorkshopBrowserLibraryRoot(workshopActiveRoot) ||
+      isWorkshopPresetLibraryRoot(workshopActiveRoot) ||
+      !workshopActiveRoot
+    ) {
       setWorkshopBoardEntries([]);
       return;
     }
@@ -2750,7 +2775,11 @@ const WorkflowSection: React.FC<{
     [workshopFrontHallBoardState, workshopActiveRoot],
   );
   useEffect(() => {
-    if (!fileSourceApi || isWorkshopBrowserLibraryRoot(workshopActiveRoot)) {
+    if (
+      !fileSourceApi ||
+      isWorkshopBrowserLibraryRoot(workshopActiveRoot) ||
+      isWorkshopPresetLibraryRoot(workshopActiveRoot)
+    ) {
       setWorkshopSelectedRel(null);
       return;
     }
@@ -3106,37 +3135,6 @@ const WorkflowSection: React.FC<{
     e.stopPropagation();
     spaceMarqueeWheelScrollRef.current?.pushDelta(dy);
   }, [spaceMarqueeEnabled]);
-  /** 从功能区「词」进入能力页：横向滑到能力列并滚动到对应预设卡片 */
-  const jumpToCapabilityPreset = useCallback((preset: CustomAppModule) => {
-    const mode: 'presets' | 'image_process' = isImageProcessPreset(preset) ? 'image_process' : 'presets';
-    setCapabilityPresetViewMode(mode);
-    if (typeof window !== 'undefined') {
-      const emitJump = () => {
-        window.dispatchEvent(new CustomEvent('ac:capability-preset-view-mode', { detail: { mode } }));
-        window.dispatchEvent(new CustomEvent('ac:capability-jump-to-preset', { detail: { presetId: preset.id } }));
-      };
-      emitJump();
-      window.requestAnimationFrame(emitJump);
-      window.setTimeout(emitJump, 220);
-    }
-    snapWorkspacePaneToNode(1);
-  }, [snapWorkspacePaneToNode]);
-  const jumpToCapabilitySet = useCallback(
-    (setId: string) => {
-      setCapabilityPresetViewMode('sets');
-      if (typeof window !== 'undefined') {
-        const emitJump = () => {
-          window.dispatchEvent(new CustomEvent('ac:capability-preset-view-mode', { detail: { mode: 'sets' } }));
-          window.dispatchEvent(new CustomEvent('ac:capability-jump-to-set', { detail: { setId } }));
-        };
-        emitJump();
-        window.requestAnimationFrame(emitJump);
-        window.setTimeout(emitJump, 220);
-      }
-      snapWorkspacePaneToNode(1);
-    },
-    [snapWorkspacePaneToNode]
-  );
   const cardRefs = useRef<Map<string, HTMLElement>>(new Map());
   const layoutMarqueeHitIdsRef = useRef<WorkflowJustifiedMarqueeHitFn | null>(null);
   const setSelectedRootAssetIds = useCallback<React.Dispatch<React.SetStateAction<Set<string>>>>(
@@ -4367,6 +4365,45 @@ const WorkflowSection: React.FC<{
     }
   }, []);
 
+  const jumpToCapabilityPreset = useCallback((preset: CustomAppModule) => {
+    const rel = isImageProcessPreset(preset) ? 'image_process' : 'basic';
+    applyWorkshopNavLoc({ root: WORKSHOP_PRESET_LIBRARY_ROOT, rel, groupId: null });
+    if (typeof window === 'undefined') return;
+    window.dispatchEvent(
+      new CustomEvent('ac:capability-preset-open-detail', { detail: { presetId: preset.id } }),
+    );
+  }, [applyWorkshopNavLoc]);
+
+  const jumpToCapabilitySet = useCallback((setId: string) => {
+    applyWorkshopNavLoc({ root: WORKSHOP_PRESET_LIBRARY_ROOT, rel: 'sets', groupId: null });
+    if (typeof window === 'undefined') return;
+    window.dispatchEvent(new CustomEvent('ac:capability-set-open', { detail: { setId } }));
+  }, [applyWorkshopNavLoc]);
+
+  const dispatchPresetLibraryToolbar = useCallback((action: string, extra?: Record<string, string>) => {
+    if (typeof window === 'undefined') return;
+    window.dispatchEvent(new CustomEvent('ac:capability-preset-toolbar-action', { detail: { action, ...extra } }));
+  }, []);
+
+  const openWorkshopPresetLibraryCard = useCallback(
+    (asset: WorkflowAsset): boolean => {
+      const ref = parseWorkshopPresetAssetId(asset.id);
+      if (!ref) return false;
+      if (ref.kind === 'folder') {
+        applyWorkshopNavLoc({ root: WORKSHOP_PRESET_LIBRARY_ROOT, rel: ref.rel, groupId: null });
+        return true;
+      }
+      if (ref.kind === 'preset') {
+        const preset = capabilityPresets.find((p) => p.id === ref.id);
+        if (preset) jumpToCapabilityPreset(preset);
+        return true;
+      }
+      jumpToCapabilitySet(ref.id);
+      return true;
+    },
+    [applyWorkshopNavLoc, capabilityPresets, jumpToCapabilityPreset, jumpToCapabilitySet],
+  );
+
   const openWorkshopDiskFolder = useCallback((root: string, rel: string) => {
     applyWorkshopNavLoc({ root, rel, groupId: null });
   }, [applyWorkshopNavLoc]);
@@ -4611,6 +4648,7 @@ const WorkflowSection: React.FC<{
   );
 
   const getAssetDisplayText = useCallback((a: WorkflowAsset): string => {
+    if (a.assetKind === 'prompt') return (a.textBody ?? '').trim();
     if (!isWorkflowTextAsset(a)) return '';
     if (a.displayKey === 'original') return (a.textBody ?? '').trim();
     return ((a.textResults || {})[a.displayKey] ?? '').trim();
@@ -6112,6 +6150,7 @@ ${lineSvg}
                 const newAssets: WorkflowAsset[] = imagesToAdd.map((original) =>
                   attachInitialVgpToNewAsset({
                     id: uuid(),
+                    assetKind: 'image',
                     original,
                     displayKey: 'original',
                     results: {},
@@ -9086,7 +9125,7 @@ ${lineSvg}
   }, [submitLightboxQuickCompose]);
 
   const addImagesFromFiles = useCallback((files: File[]) => {
-    const imageFiles = files.filter((f) => f.type.startsWith('image/')).slice(0, 50);
+    const imageFiles = files.filter((f) => isWorkflowImageFile(f)).slice(0, 50);
     if (workshopDiskOpen) {
       if (imageFiles.length) void importWorkshopLocalFiles(imageFiles);
       return;
@@ -9104,6 +9143,7 @@ ${lineSvg}
             const parentGroup = groupFilterId ? prev.find((a) => a.id === groupFilterId) : null;
             const newAsset: WorkflowAsset = attachInitialVgpToNewAsset({
               id: newId,
+              assetKind: 'image',
               original: base64,
               displayKey: 'original',
               results: {},
@@ -9111,6 +9151,7 @@ ${lineSvg}
               archived: false,
               hiddenInGrid: false,
               createdAt: batchBase + (n - 1 - fileIdx),
+              ...(file.name ? { textTitle: file.name } : {}),
               ...(typeof aspectRatio === 'number' && aspectRatio > 0 ? { gridCardAspectRatio: aspectRatio } : {}),
               ...(parentGroup ? { groupId: parentGroup.id } : {}),
             });
@@ -9207,6 +9248,7 @@ ${lineSvg}
             hiddenInGrid: false,
             createdAt: batchBase + (n - 1 - fileIdx),
             gridCardAspectRatio: fallbackRatio,
+            ...(file.name ? { textTitle: file.name } : {}),
             resultMeta: {
               original: {
                 executedAt: Date.now(),
@@ -9326,6 +9368,7 @@ ${lineSvg}
           const parentGroup = groupFilterId ? prev.find((a) => a.id === groupFilterId) : null;
           const newAsset: WorkflowAsset = attachInitialVgpToNewAsset({
             id: newId,
+            assetKind: 'model3d',
             original: placeholder,
             displayKey: 'original',
             results: {},
@@ -9481,7 +9524,7 @@ ${lineSvg}
     if (dt.files?.length) {
       for (let i = 0; i < dt.files.length; i += 1) {
         const f = dt.files[i];
-        if (f.type?.startsWith('image/')) return true;
+        if (isWorkflowImageFile(f)) return true;
         if (isWorkflowVideoFile(f)) return true;
         if (isWorkflowModelFile(f)) return true;
       }
@@ -9509,7 +9552,7 @@ ${lineSvg}
   const ingestWorkflowFilesFromDataTransfer = useCallback((dt: DataTransfer | null | undefined) => {
     if (!dt) return false;
     const allFiles = Array.from(dt.files || []);
-    const imageFiles = allFiles.filter((f) => f.type?.startsWith('image/'));
+    const imageFiles = allFiles.filter((f) => isWorkflowImageFile(f));
     const videoFiles = allFiles.filter((f) => isWorkflowVideoFile(f));
     const modelFiles = allFiles.filter((f) => isWorkflowModelFile(f));
     if (imageFiles.length === 0 && videoFiles.length === 0 && modelFiles.length === 0) return false;
@@ -9727,6 +9770,7 @@ ${lineSvg}
   }, [assets, gridAssets, setAssets]);
 
   const workshopCanvasLayerAssets = useMemo(() => {
+    if (workshopPresetOpen) return presetLibraryAssets;
     if (workshopDiskOpen) return workshopFileAssets;
     const hideOpts = pbrGridHideContext;
     const base = gridAssets.filter(
@@ -9755,17 +9799,17 @@ ${lineSvg}
     return sortRootWorkflowAssetsNewestFirst(
       base.filter((a) => !a.groupId)
     );
-  }, [workshopDiskOpen, workshopFileAssets, gridAssets, groupFilterId, pbrGridHideContext, assets]);
+  }, [workshopPresetOpen, presetLibraryAssets, workshopDiskOpen, workshopFileAssets, gridAssets, groupFilterId, pbrGridHideContext, assets]);
   const visibleAssets = useMemo(
-    () => filterWorkshopCanvasByKind(workshopCanvasLayerAssets, workshopListPrefs.kinds),
-    [workshopCanvasLayerAssets, workshopListPrefs.kinds],
+    () => filterWorkshopCanvasByKind(workshopCanvasLayerAssets, workshopCanvasKindFilter),
+    [workshopCanvasLayerAssets, workshopCanvasKindFilter],
   );
   const workshopCanvasKindCounts = useMemo(
     () => countWorkshopCanvasKinds(workshopCanvasLayerAssets),
     [workshopCanvasLayerAssets],
   );
   const rootCanvasAssets = useMemo(() => {
-    if (workshopDiskOpen || !showAllInGroup) return visibleAssets;
+    if (workshopDiskOpen || workshopPresetOpen || !showAllInGroup) return visibleAssets;
     return sortRootWorkflowAssetsNewestFirst(
       gridAssets.filter((a) => {
         if (a.archived || a.inRepository) return false;
@@ -9776,44 +9820,7 @@ ${lineSvg}
         return true;
       })
     );
-  }, [workshopDiskOpen, gridAssets, showAllInGroup, visibleAssets, pbrGridHideContext]);
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    const onModeChanged = (event: Event) => {
-      const detail = (event as CustomEvent<{ mode?: string }>).detail;
-      if (detail?.mode === 'presets' || detail?.mode === 'image_process' || detail?.mode === 'sets') {
-        setCapabilityPresetViewMode(detail.mode);
-      }
-    };
-    const onColumnChanged = (event: Event) => {
-      const detail = (event as CustomEvent<{ value?: number }>).detail;
-      if (typeof detail?.value !== 'number') return;
-      setCapabilityPresetColumnCount(normalizeCapabilityPresetColumnCount(detail.value));
-    };
-    const onTypeFilterChanged = (event: Event) => {
-      const detail = (event as CustomEvent<{ filter?: CapabilityPresetTypeFilter }>).detail;
-      const filter = detail?.filter;
-      if (
-        filter === 'all' ||
-        filter === 'text_to_text' ||
-        filter === 'text_to_image' ||
-        filter === 'image_to_image' ||
-        filter === 'image_process' ||
-        filter === 'image_to_text'
-      ) {
-        setCapabilityPresetTypeFilter(filter);
-      }
-    };
-    window.addEventListener('ac:capability-preset-view-mode-changed', onModeChanged as EventListener);
-    window.addEventListener('ac:capability-preset-column-count-changed', onColumnChanged as EventListener);
-    window.addEventListener('ac:capability-preset-type-filter-changed', onTypeFilterChanged as EventListener);
-    return () => {
-      window.removeEventListener('ac:capability-preset-view-mode-changed', onModeChanged as EventListener);
-      window.removeEventListener('ac:capability-preset-column-count-changed', onColumnChanged as EventListener);
-      window.removeEventListener('ac:capability-preset-type-filter-changed', onTypeFilterChanged as EventListener);
-    };
-  }, []);
+  }, [workshopDiskOpen, workshopPresetOpen, gridAssets, showAllInGroup, visibleAssets, pbrGridHideContext]);
 
   const busyAssetIds = useMemo(() => {
     const busy = new Set<string>();
@@ -10862,6 +10869,19 @@ ${lineSvg}
     setWorkflowAssetContextMenu({ assetId: asset.id, x: e.clientX, y: e.clientY });
   }, []);
 
+  const openWorkflowCanvasBlankContextMenu = useCallback(
+    (e: React.MouseEvent) => {
+      if (showArchived || lightboxAssetId) return;
+      if (workshopBoardView) return;
+      const target = e.target as HTMLElement | null;
+      if (target?.closest('[data-workflow-card]')) return;
+      if (target?.closest('[data-workflow-asset-context-menu="1"]')) return;
+      e.preventDefault();
+      setWorkflowAssetContextMenu({ assetId: null, x: e.clientX, y: e.clientY });
+    },
+    [lightboxAssetId, showArchived, workshopBoardView]
+  );
+
   const handleWorkflowAssetCopyImage = useCallback(
     async (asset: WorkflowAsset) => {
       const imageSrc = getWorkflowAssetOriginalCopySrc(asset);
@@ -11682,11 +11702,17 @@ ${lineSvg}
             openWorkflowLightbox(pid);
           }
         }
-        if (patch.surface === 'presets') snapWorkspacePaneToNode(1);
-        else if (patch.surface === 'canvas') snapWorkspacePaneToNode(0);
+        if (patch.surface === 'presets' || patch.surface === 'canvas') {
+          const next = workshopNavLocFromFingerSurface(patch.surface, {
+            root: workshopActiveRootRef.current,
+            rel: workshopCurrentRelRef.current,
+            groupId: groupFilterIdRef.current,
+          });
+          if (next) applyWorkshopNavLoc(next);
+        }
       }
     });
-  }, [completeLightboxClose, openWorkflowLightbox, snapWorkspacePaneToNode]);
+  }, [applyWorkshopNavLoc, completeLightboxClose, openWorkflowLightbox]);
 
   /** 大图 overlay 编辑：debounce 写入 session 环 `reason: periodic`（仅当草稿与资产已持久化 **dirty** 时），与关窗 `close` 合并规则见 `workflowOverlaySnapshots` */
   useEffect(() => {
@@ -11910,6 +11936,7 @@ ${lineSvg}
       const newAssets: WorkflowAsset[] = outs.map((original) =>
         attachInitialVgpToNewAsset({
           id: uuid(),
+          assetKind: 'image',
           original,
           displayKey: 'original',
           results: {},
@@ -15920,403 +15947,6 @@ ${lineSvg}
     ]
   );
 
-  const activePaneNode = Math.max(0, Math.min(1, Math.round(workspacePane)));
-  const topTitleColumns = useMemo(() => {
-    if (activePaneNode === 0) {
-      const selectableCount = visibleAssets.filter(
-        (a) => !isGroupAsset(a) && !pending.some((t) => t.assetId === a.id)
-      ).length;
-      const allSelectableIds = new Set(
-        visibleAssets
-          .filter((a) => !isGroupAsset(a) && !pending.some((t) => t.assetId === a.id))
-          .map((a) => a.id)
-      );
-      const allSelected = selectedAssetIds.size === selectableCount && selectableCount > 0;
-      const inGroupView = !!currentGroupAsset;
-      const groupSelectableKeys =
-        currentGroupAsset && !showAllInGroup
-          ? currentGroupMemberIds
-              .map((_, i) => `${currentGroupAsset.id}::${i}`)
-              .filter(
-                (_, i) =>
-                  !pending.some(
-                    (t) =>
-                      t.sourceGroupAssetId === currentGroupAsset.id &&
-                      t.sourceItemIndex === i
-                  )
-              )
-          : [];
-      const groupAllSelected =
-        inGroupView &&
-        groupSelectableKeys.length > 0 &&
-        selectedGroupItemKeys.size === groupSelectableKeys.length;
-
-      const workspaceAndFunctionCols = [
-        {
-          title: inGroupView
-            ? selectedGroupItemKeys.size > 0
-              ? `工作区 · 已选 ${selectedGroupItemKeys.size}`
-              : '工作区'
-            : selectedAssetIds.size > 0
-            ? `工作区 · 已选 ${selectedAssetIds.size}`
-            : '工作区',
-          desc: '工作区资产管理',
-          actions: (
-            <>
-              <div className="flex items-center gap-1.5 whitespace-nowrap">
-                <div className={TITLE_ROW_STEPPER_SHELL}>
-                  <button
-                    type="button"
-                    onClick={() => setColumnCount((n) => Math.max(2, n - 1))}
-                    disabled={columnCount <= 2}
-                    className={TITLE_ROW_STEPPER_BTN}
-                    aria-label="减少每行列数"
-                  >
-                    −
-                  </button>
-                  <span className={TITLE_ROW_STEPPER_VALUE}>{columnCount}</span>
-                  <button
-                    type="button"
-                    onClick={() => setColumnCount((n) => Math.min(6, n + 1))}
-                    disabled={columnCount >= 6}
-                    className={TITLE_ROW_STEPPER_BTN}
-                    aria-label="增加每行列数"
-                  >
-                    +
-                  </button>
-                </div>
-              </div>
-              {archiveHint && !showArchived && (
-                <div className="flex h-7 items-center gap-1.5 rounded-md bg-[#152642] px-2.5 text-[8px] text-blue-200 ring-1 ring-blue-500/35">
-                  <span className="font-black uppercase tracking-wide">已归档</span>
-                  <span className="text-gray-300">已移出当前工作区画布</span>
-                </div>
-              )}
-              {!showArchived && (
-                <button
-                  type="button"
-                  onClick={createWorkflowTextAssetAndOpen}
-                  className={TITLE_ROW_BTN_NEUTRAL}
-                  title="新建文本资产并打开编辑"
-                >
-                  新建文本
-                </button>
-              )}
-              {!showArchived && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    const id = addWorkflowStoryboardTableAsset();
-                    openStoryboardTablePanel(id);
-                  }}
-                  className={TITLE_ROW_BTN_NEUTRAL}
-                  title="新建分镜表并打开编辑"
-                >
-                  新建分镜表
-                </button>
-              )}
-              {!showArchived && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    const id = addWorkflowAssetSetAsset();
-                    openAssetSetPanel(id);
-                  }}
-                  className={TITLE_ROW_BTN_NEUTRAL}
-                  title="新建资产集并打开拆解面板"
-                >
-                  新建资产集
-                </button>
-              )}
-              {!showArchived && (inGroupView || visibleAssets.length > 0) && (
-                <div className="flex items-center gap-1.5 whitespace-nowrap">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (!inGroupView) setGroupFilterId(null);
-                      setShowAllInGroup((v) => !v);
-                      setSelectedGroupItemKeys(new Set());
-                    }}
-                    className={TITLE_ROW_BTN_NEUTRAL}
-                  >
-                    {showAllInGroup ? '显示层级' : '显示全部'}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (inGroupView) {
-                        const allKeys = new Set(groupSelectableKeys);
-                        setSelectedGroupItemKeys((prev) =>
-                          prev.size === allKeys.size ? new Set() : allKeys
-                        );
-                        return;
-                      }
-                      setSelectedRootAssetIds((prev) =>
-                        prev.size === allSelectableIds.size ? new Set() : allSelectableIds
-                      );
-                    }}
-                    className={TITLE_ROW_BTN_NEUTRAL}
-                  >
-                    {inGroupView
-                      ? groupAllSelected
-                        ? '取消全选'
-                        : '全选'
-                      : allSelected
-                      ? '取消全选'
-                      : '全选'}
-                  </button>
-                </div>
-              )}
-            </>
-          ),
-        },
-        ...(showFunctionSidebar
-          ? [
-              {
-          title: '功能区',
-          desc: '基础能力与复合能力',
-          actions: (
-            <div className="flex flex-col items-end gap-1 whitespace-nowrap">
-              <div className="flex items-center gap-1.5">
-              <button
-                type="button"
-                onClick={() => executePending()}
-                disabled={pending.length === 0 || executing}
-                className={TITLE_ROW_BTN_PRIMARY}
-              >
-                {executing
-                  ? `执行中 ${executingQueueDoneCount}/${executingQueue?.total ?? 0}`
-                  : `一键执行（${pending.length}）`}
-              </button>
-              {storyboardExportRunning ? (
-                <div className={TITLE_ROW_QUEUE_CHIP} title={storyboardExportTitle}>
-                  <span className="text-[8px] font-black uppercase text-violet-300">分镜导出</span>
-                  <span className="text-[8px] tabular-nums text-gray-300">
-                    {storyboardExportPct}%
-                  </span>
-                </div>
-              ) : null}
-              {(pending.length > 0 || executingQueue) && (
-                <div className={TITLE_ROW_QUEUE_CHIP}>
-                  {executingQueue ? (
-                    <>
-                      <span className="text-[8px] font-black uppercase text-blue-300">执行中</span>
-                      <span className="text-[8px] text-gray-300">
-                        {executingQueueDoneCount} / {executingQueue.total}
-                      </span>
-                    </>
-                  ) : (
-                    <>
-                      <span className="text-[8px] font-black uppercase text-blue-300">待处理</span>
-                      <span className="text-[8px] text-gray-300">{pending.length} 项等待执行</span>
-                      <button
-                        type="button"
-                        onClick={() => setPending([])}
-                        className="text-[8px] text-blue-400 hover:text-blue-300 font-medium ml-1 leading-none"
-                      >
-                        清空
-                      </button>
-                    </>
-                  )}
-                </div>
-              )}
-              </div>
-            </div>
-          ),
-              } as const,
-            ]
-          : []),
-      ];
-      if (!showFunctionSidebar) return [workspaceAndFunctionCols[0]!];
-      return [workspaceAndFunctionCols[1]!, workspaceAndFunctionCols[0]!];
-    }
-    /** 小盒子预设页：顶栏显示能力预设工具；功能区仍在左侧大盒子中 */
-    return [
-      {
-        title: '能力预设',
-        desc: '当前能力配置与预设编辑',
-        actions: (
-          <div className="flex w-full min-w-0 items-center justify-between gap-1.5 whitespace-nowrap">
-            <div className={TITLE_ROW_STEPPER_SHELL}>
-              <button
-                type="button"
-                onClick={() => {
-                  setCapabilityPresetViewMode('presets');
-                  if (typeof window === 'undefined') return;
-                  window.dispatchEvent(new CustomEvent('ac:capability-preset-view-mode', { detail: { mode: 'presets' } }));
-                }}
-                className={`h-7 px-2.5 text-[8px] font-black uppercase tracking-wide ${
-                  capabilityPresetViewMode === 'presets'
-                    ? 'bg-blue-600 text-white ring-1 ring-inset ring-blue-400/30'
-                    : 'text-gray-300 hover:bg-white/[0.08]'
-                }`}
-              >
-                基础能力
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setCapabilityPresetViewMode('image_process');
-                  if (typeof window === 'undefined') return;
-                  window.dispatchEvent(new CustomEvent('ac:capability-preset-view-mode', { detail: { mode: 'image_process' } }));
-                }}
-                className={`h-7 border-l border-white/[0.08] px-2.5 text-[8px] font-black uppercase tracking-wide ${
-                  capabilityPresetViewMode === 'image_process'
-                    ? 'bg-blue-600 text-white ring-1 ring-inset ring-blue-400/30'
-                    : 'text-gray-300 hover:bg-white/[0.08]'
-                }`}
-              >
-                图像处理
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setCapabilityPresetViewMode('sets');
-                  if (typeof window === 'undefined') return;
-                  window.dispatchEvent(new CustomEvent('ac:capability-preset-view-mode', { detail: { mode: 'sets' } }));
-                }}
-                className={`h-7 border-l border-white/[0.08] px-2.5 text-[8px] font-black uppercase tracking-wide ${
-                  capabilityPresetViewMode === 'sets'
-                    ? 'bg-blue-600 text-white ring-1 ring-inset ring-blue-400/30'
-                    : 'text-gray-300 hover:bg-white/[0.08]'
-                }`}
-              >
-                能力集合
-              </button>
-            </div>
-            <div className="flex min-w-0 items-center justify-end gap-1.5">
-              {(capabilityPresetViewMode === 'presets' || capabilityPresetViewMode === 'image_process') && (
-                <>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (typeof window === 'undefined') return;
-                      window.dispatchEvent(new CustomEvent('ac:capability-preset-toolbar-action', { detail: { action: 'toggle-import-export' } }));
-                    }}
-                    className={TITLE_ROW_BTN_NEUTRAL}
-                  >
-                    导入/导出
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (typeof window === 'undefined') return;
-                      window.dispatchEvent(new CustomEvent('ac:capability-preset-toolbar-action', { detail: { action: 'refresh-remote' } }));
-                    }}
-                    className={TITLE_ROW_BTN_NEUTRAL}
-                  >
-                    刷新同步
-                  </button>
-                  {capabilityPresetViewMode === 'presets' && (
-                    <CustomDropdown
-                      options={CAPABILITY_PRESET_TYPE_FILTER_OPTIONS}
-                      value={capabilityPresetTypeFilter}
-                      onChange={(value) => {
-                        const filter = value as CapabilityPresetTypeFilter;
-                        setCapabilityPresetTypeFilter(filter);
-                        if (typeof window === 'undefined') return;
-                        window.dispatchEvent(
-                          new CustomEvent('ac:capability-preset-type-filter', { detail: { filter } })
-                        );
-                      }}
-                      triggerClassName={TITLE_ROW_DROPDOWN_TRIGGER}
-                    />
-                  )}
-                  {capabilityPresetViewMode === 'presets' && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (typeof window === 'undefined') return;
-                        window.dispatchEvent(new CustomEvent('ac:capability-preset-toolbar-action', { detail: { action: 'add-preset' } }));
-                      }}
-                      className={TITLE_ROW_BTN_ACTIVE}
-                    >
-                      新增能力
-                    </button>
-                  )}
-                </>
-              )}
-              {capabilityPresetViewMode === 'sets' && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (typeof window === 'undefined') return;
-                    window.dispatchEvent(new CustomEvent('ac:capability-preset-toolbar-action', { detail: { action: 'add-set' } }));
-                  }}
-                  className={TITLE_ROW_BTN_ACTIVE}
-                >
-                  添加能力集合
-                </button>
-              )}
-              <div className={TITLE_ROW_STEPPER_SHELL}>
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (typeof window === 'undefined') return;
-                    window.dispatchEvent(
-                      new CustomEvent('ac:capability-preset-column-count', { detail: { delta: -1 } })
-                    );
-                  }}
-                  disabled={capabilityPresetColumnCount <= CAPABILITY_PRESET_COLUMNS_MIN}
-                  className={TITLE_ROW_STEPPER_BTN}
-                  aria-label="减少能力预设列数"
-                >
-                  −
-                </button>
-                <span className={TITLE_ROW_STEPPER_VALUE}>{capabilityPresetColumnCount}</span>
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (typeof window === 'undefined') return;
-                    window.dispatchEvent(
-                      new CustomEvent('ac:capability-preset-column-count', { detail: { delta: 1 } })
-                    );
-                  }}
-                  disabled={capabilityPresetColumnCount >= CAPABILITY_PRESET_COLUMNS_MAX}
-                  className={TITLE_ROW_STEPPER_BTN}
-                  aria-label="增加能力预设列数"
-                >
-                  +
-                </button>
-              </div>
-            </div>
-          </div>
-        ),
-      },
-    ];
-  }, [
-    activePaneNode,
-    archiveHint,
-    columnCount,
-    executing,
-    executingQueue,
-    executingQueueDoneCount,
-    executePending,
-    pending,
-    creditBalance,
-    currentGroupAsset,
-    selectedAssetIds,
-    selectedGroupItemKeys,
-    showAllInGroup,
-    setColumnCount,
-    setPending,
-    setSelectedRootAssetIds,
-    setSelectedGroupItemKeys,
-    setGroupFilterId,
-    showArchived,
-    visibleAssets,
-    capabilityPresetViewMode,
-    capabilityPresetTypeFilter,
-    capabilityPresetColumnCount,
-    currentGroupMemberIds,
-    storyboardExportRunning,
-    storyboardExportPct,
-    storyboardExportTitle,
-    addWorkflowStoryboardTableAsset,
-    openStoryboardTablePanel,
-    createWorkflowTextAssetAndOpen,
-    showFunctionSidebar,
-  ]);
   const sidebarOpsAllowed = workflowDragSourceAllowsSidebarOps(
     parseWorkflowDragSource(draggingAssetIds, draggingGroupItems),
     showArchived
@@ -16735,12 +16365,32 @@ ${lineSvg}
             jumpToCapabilitySet={jumpToCapabilitySet}
             onDropPresetFromEditor={handleActivatePresetFromEditorDrop}
             onDropPresetAction={handlePresetActionDrop}
-            topActionMode={activePaneNode === 1 ? 'capabilityPreset' : 'asset'}
+            topActionMode={workshopPresetOpen ? 'capabilityPreset' : 'asset'}
             onComposeCapabilities={handleComposeCapabilities}
             linkedComposeSearchQuery={quickComposeDraft}
             onLinkHoverPresetIds={setSidebarLinkHoverPresetIds}
             cloudPresetIds={cloudPresetIds}
             onWorkflowFeatureClick={handleWorkflowFeatureClick}
+            onExecutePending={() => void executePending()}
+            onClearPending={() => setPending([])}
+            pendingCount={pending.length}
+            executing={executing}
+            executingDoneCount={executingQueueDoneCount}
+            executingTotal={executingQueue?.total ?? 0}
+            archiveHintVisible={Boolean(archiveHint && !showArchived)}
+            storyboardExport={
+              storyboardExportRunning
+                ? { pct: storyboardExportPct, title: storyboardExportTitle }
+                : null
+            }
+            noticeSlot={
+              <WorkflowZeroBalanceBanner
+                compact
+                preferenceScope={preferenceScope}
+                balance={creditBalance}
+                loading={creditBalanceLoading}
+              />
+            }
           />
           </div>
         </div>
@@ -16761,160 +16411,13 @@ ${lineSvg}
     ) : null}
     <div className="flex h-full min-h-0 min-w-0 flex-col gap-2">
       <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-2 overflow-hidden">
-      <div className={`flex flex-col items-stretch gap-1.5 shrink-0 ${WORKFLOW_EDGE_GUTTER}`}>
-        <div className="py-0.5" onWheelCapture={handlePaneWheel} data-workflow-topbar>
-          <div className="flex min-h-7 items-center gap-1.5">
-            {workspaceProjectChrome && !fileSourceApi ? (
-              <div className="mr-1 flex shrink-0 items-center gap-1 pr-1">
-                <button
-                  type="button"
-                  onClick={() => {
-                    void workspaceProjectChrome.onBackToProjectList();
-                  }}
-                  className={WORKFLOW_TOPBAR_ICON_BTN}
-                  title={
-                    isWorkspaceCompanionDirectorySourceOfTruth()
-                      ? '返回项目列表'
-                      : '返回项目列表（将先同步到云端）'
-                  }
-                  aria-label="返回项目列表"
-                >
-                  <svg aria-hidden viewBox="0 0 20 20" className="h-3 w-3" fill="none">
-                    <path
-                      d="M12.5 4.5L7 10l5.5 5.5"
-                      stroke="currentColor"
-                      strokeWidth="1.9"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    />
-                  </svg>
-                </button>
-                <div className="min-w-0 max-w-[min(11rem,32vw)]">
-                  <CustomDropdown
-                    options={workspaceProjectChrome.projectOptions}
-                    value={workspaceProjectChrome.activeProjectId}
-                    onChange={(id) => {
-                      if (!id || id === workspaceProjectChrome.activeProjectId) return;
-                      void workspaceProjectChrome.onSelectProject(id);
-                    }}
-                    placeholder={workspaceProjectChrome.activeProjectName || '项目'}
-                    triggerAriaLabel={`当前项目：${workspaceProjectChrome.activeProjectName || '选择项目'}`}
-                    renderTrigger={({ open }) => (
-                      <span
-                        className={`flex h-7 min-w-0 max-w-full items-center gap-1 rounded-md bg-white/[0.05] px-2 outline-none ring-1 transition-colors ${
-                          open
-                            ? 'shadow-[inset_0_0_0_1px_rgba(59,130,246,0.35)] ring-blue-500/50'
-                            : 'ring-white/[0.06] hover:bg-white/[0.09]'
-                        }`}
-                        title={workspaceProjectChrome.activeProjectName || '切换项目'}
-                      >
-                        <svg viewBox="0 0 20 20" className="h-3 w-3 shrink-0 text-blue-300/90" fill="none" aria-hidden>
-                          <path
-                            d="M4 6.5h12v9a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-9Z"
-                            stroke="currentColor"
-                            strokeWidth="1.5"
-                            strokeLinejoin="round"
-                          />
-                          <path d="M4 8.5h12" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-                        </svg>
-                        <span className="min-w-0 truncate text-[8px] font-black uppercase leading-none tracking-wide text-gray-300">
-                          {workspaceProjectChrome.activeProjectName || '项目'}
-                        </span>
-                      </span>
-                    )}
-                    triggerClassName="w-full min-w-0 p-0 border-0 bg-transparent"
-                    portalZIndex={{ backdrop: 1100, list: 1101 }}
-                  />
-                </div>
-              </div>
-            ) : null}
-            {fileSourceApi ? (
-              <button
-                type="button"
-                title={
-                  workshopWorkspaceDir
-                    ? `库目录：${workshopWorkspaceDir}`
-                    : '指定库目录：已挂文件夹、版本、预览和链接都放这里'
-                }
-                onClick={() => void pickWorkshopWorkspace()}
-                className={`h-7 shrink-0 rounded-[0.2rem] px-1.5 text-[8px] font-black tracking-wide transition-colors ${
-                  workshopWorkspaceDir
-                    ? 'bg-white/[0.08] text-gray-200 ring-1 ring-inset ring-white/10 hover:bg-white/[0.12]'
-                    : 'text-gray-400 hover:bg-white/[0.07] hover:text-gray-200'
-                }`}
-              >
-                指定库目录
-              </button>
-            ) : null}
-            <div
-              className="flex shrink-0 items-center gap-0.5"
-              role="group"
-              aria-label="内容区分档：1 能力预设 2 资产列表"
-            >
-              {(
-                [
-                  { pane: 1 as const, k: '1', t: '能力预设' },
-                  { pane: 0 as const, k: '2', t: '资产列表' },
-                ] as const
-              ).map(({ pane, k, t }) => {
-                const on = Math.round(workspacePane) === pane;
-                return (
-                  <button
-                    key={pane}
-                    type="button"
-                    title={t}
-                    onClick={() => snapWorkspacePaneToNode(pane)}
-                    className={`h-7 min-w-[1.625rem] rounded-[0.2rem] px-1 text-[8px] font-black tabular-nums tracking-wide transition-colors ${
-                      on
-                        ? 'bg-blue-600 text-white ring-1 ring-inset ring-blue-400/35'
-                        : 'text-gray-400 hover:bg-white/[0.07] hover:text-gray-200'
-                    }`}
-                  >
-                    {k}
-                  </button>
-                );
-              })}
-            </div>
-            <div className="flex min-h-7 min-w-0 flex-1 items-center gap-2 overflow-x-auto pl-1.5 no-scrollbar">
-              {topTitleColumns.map((item) => (
-                <div key={item.title} className="flex shrink-0 items-center gap-1 pr-1">
-                  <span
-                    className="max-w-[6.5rem] min-w-0 whitespace-normal break-words line-clamp-2 leading-tight text-[8px] font-black uppercase tracking-wide text-blue-300/90"
-                    title={item.desc}
-                  >
-                    {item.title}
-                  </span>
-                  {item.actions ? (
-                    <div className="flex shrink-0 flex-nowrap items-center gap-1">{item.actions}</div>
-                  ) : null}
-                </div>
-              ))}
-            </div>
-          </div>
-          <div className="mt-2.5 h-0.5 w-full overflow-hidden rounded-full bg-white/[0.06]" aria-hidden>
-            <div
-              className="h-full rounded-full bg-blue-500/40 transition-[width] duration-150 ease-out"
-              style={{
-                width: `${Math.max(0, Math.min(100, (1 - workspacePane) * 100))}%`,
-              }}
-            />
-          </div>
-        </div>
-      </div>
-      <WorkflowZeroBalanceBanner
-        preferenceScope={preferenceScope}
-        balance={creditBalance}
-        loading={creditBalanceLoading}
-      />
-
       <div className="flex flex-1 min-h-0 min-w-0 flex-col overflow-hidden">
         <div
           ref={workspaceViewportRef}
           className="flex-1 min-h-0 overflow-hidden"
         >
-          {/* 大盒子：文件夹树 / 功能区 + 小盒子 +（壳内）右侧预设功能区 */}
+          {/* 大盒子：文件夹树 + 小盒子 + 右侧功能区。无壳也挂钉死虚拟根（预设 / 浏览器资产）。 */}
           <div className="flex h-full min-h-0 w-full items-stretch overflow-hidden">
-        {fileSourceApi ? (
         <div
           className="flex h-full min-h-0 max-h-full shrink-0 self-stretch min-w-0 flex-col overflow-hidden"
           style={{ width: `${WORKSHOP_FOLDERS_PANE_WIDTH_PX}px`, minWidth: `${WORKSHOP_FOLDERS_PANE_WIDTH_PX}px` }}
@@ -16934,24 +16437,18 @@ ${lineSvg}
               onAddFolder={() => void pickWorkshopRoot()}
               onRemoveRoot={(root) => void removeWorkshopRoot(root)}
               onTreeMutated={() => setWorkshopListEpoch((epoch) => epoch + 1)}
+              onPickWorkspace={fileSourceApi ? () => void pickWorkshopWorkspace() : undefined}
             />
         </div>
-        ) : showFunctionSidebar ? (
-          renderWorkflowFunctionSidebar()
-        ) : null}
         {/* 小盒子：资产列表 ↔ 能力预设 */}
         <div
           ref={listPaneRef}
           data-workflow-content-slot
-          {...(activePaneNode === 0 ? { 'data-workflow-asset-list': true } : {})}
+          data-workflow-asset-list
           className="relative min-w-0 min-h-0 h-full max-h-full flex-1 self-stretch flex flex-col overflow-hidden"
         >
-        {/* 资产页保持占位测量（勿 display:none，否则 justified 宽度变 0 → opacity-0）；预设页叠在上方 */}
         <div
-          className={`relative min-h-0 min-w-0 h-full max-h-full w-full flex-1 flex-col overflow-hidden ${
-            activePaneNode === 0 ? 'flex' : 'pointer-events-none invisible flex'
-          }`}
-          aria-hidden={activePaneNode !== 0}
+          className="relative min-h-0 min-w-0 h-full max-h-full w-full flex-1 flex-col overflow-hidden flex"
         >
         {lightboxAssetId && lightboxListBackdropUrl ? (
           <div className="pointer-events-none absolute inset-0 z-0 overflow-hidden" aria-hidden>
@@ -16963,13 +16460,13 @@ ${lineSvg}
             />
           </div>
         ) : null}
-        {fileSourceApi ? (
+        {fileSourceApi || workshopPresetOpen ? (
           <div
             className={lightboxAssetId ? 'relative pointer-events-none opacity-0' : 'relative'}
             aria-hidden={Boolean(lightboxAssetId)}
           >
             <WorkshopCanvasNavBar
-              kindFilter={workshopListPrefs.kinds}
+              kindFilter={workshopCanvasKindFilter}
               kindCounts={workshopCanvasKindCounts}
               onToggleKind={(id: WorkshopCanvasKindId) =>
                 applyWorkshopListPrefs({
@@ -16995,7 +16492,7 @@ ${lineSvg}
                 );
                 if (up) applyWorkshopNavLoc(up);
               }}
-              canRevealCurrent={!isWorkshopBrowserLibraryRoot(workshopActiveRoot)}
+              canRevealCurrent={!isWorkshopBrowserLibraryRoot(workshopActiveRoot) && !workshopPresetOpen}
               onRevealCurrent={() => {
                 void workshopFileSourceApi()?.revealWorkshopPath?.({
                   root: workshopActiveRoot,
@@ -17009,7 +16506,10 @@ ${lineSvg}
               onRefresh={() => setWorkshopListEpoch((epoch) => epoch + 1)}
               nameFilter={workshopNameFilter}
               onNameFilter={setWorkshopNameFilter}
+              columnCount={columnCount}
+              onColumnCountChange={setColumnCount}
             />
+            {fileSourceApi && !workshopPresetOpen ? (
             <button
               type="button"
               data-front-hall-view-toggle
@@ -17024,15 +16524,54 @@ ${lineSvg}
             >
               {workshopListPrefs.viewMode === 'board' ? '网格' : '画板'}
             </button>
+            ) : null}
+          </div>
+        ) : (
+          <div className={`flex items-center ${WORKFLOW_EDGE_GUTTER} py-0.5`}>
+            <WorkflowColumnDensityButtons columnCount={columnCount} onColumnCountChange={setColumnCount} />
+          </div>
+        )}
+        {!showFunctionSidebar ? (
+          <div className="pointer-events-none absolute right-3 top-12 z-20 flex w-[min(18rem,70%)] flex-col items-stretch">
+            <div className="pointer-events-auto">
+              <WorkflowZeroBalanceBanner
+                compact
+                preferenceScope={preferenceScope}
+                balance={creditBalance}
+                loading={creditBalanceLoading}
+              />
+              {archiveHint && !showArchived ? (
+                <div className={WORKBENCH_NOTICE_CHIP}>
+                  <span className="font-semibold tracking-wide">已归档</span>
+                  <span className="text-[#8b8b93]">已移出当前画布</span>
+                </div>
+              ) : null}
+              {storyboardExportRunning ? (
+                <div className={WORKBENCH_NOTICE_CHIP} title={storyboardExportTitle}>
+                  <span className="font-semibold tracking-wide">分镜导出</span>
+                  <span className="tabular-nums text-[#8b8b93]">{storyboardExportPct}%</span>
+                </div>
+              ) : null}
+              {pending.length > 0 && !executing ? (
+                <button
+                  type="button"
+                  onClick={() => setPending([])}
+                  className={`${WORKBENCH_NOTICE_CHIP} w-full font-medium text-[#8b8b93] hover:text-[#e8e6e1]`}
+                >
+                  清空队列（{pending.length}）
+                </button>
+              ) : null}
+            </div>
           </div>
         ) : null}
         <div
           ref={centerScrollRef}
           data-workflow-scroll-port="asset"
-          className={`workflow-scroll-port flex h-0 flex-1 min-w-0 min-h-0 overscroll-y-contain no-scrollbar flex flex-col gap-3 rounded-xl transition-colors ${
-            fileSourceApi && workshopListPrefs.viewMode === 'board' ? 'overflow-hidden' : 'overflow-y-auto'
-          }`}
+          className={`workflow-scroll-port flex h-0 flex-1 min-w-0 min-h-0 overscroll-y-contain no-scrollbar flex flex-col gap-3 rounded-xl outline-none focus:outline-none focus-visible:outline-none transition-[box-shadow,colors] duration-150 ${
+            workshopBoardView ? 'overflow-hidden' : 'overflow-y-auto'
+          } ${spaceMarqueeEnabled && assetListMarqueeActive ? WORKFLOW_SPACE_MARQUEE_FRAME : ''}`}
           onWheelCapture={handleCenterWheelDuringDrag}
+          onContextMenu={openWorkflowCanvasBlankContextMenu}
           onDragOver={(e) => {
             autoScrollContainerOnDrag(e.currentTarget as HTMLElement, e.clientY);
             if (!hasWorkflowDropTransfer(e.dataTransfer)) return;
@@ -17042,11 +16581,11 @@ ${lineSvg}
         >
           <div
             className={`${lightboxAssetId ? 'pointer-events-none opacity-0' : ''} ${
-              fileSourceApi && workshopListPrefs.viewMode === 'board' ? 'flex h-full min-h-0 min-w-0 flex-1 flex-col' : ''
+              workshopBoardView ? 'flex h-full min-h-0 min-w-0 flex-1 flex-col' : ''
             }`}
             aria-hidden={Boolean(lightboxAssetId)}
           >
-          {fileSourceApi && workshopListPrefs.viewMode === 'board' ? (
+          {workshopBoardView ? (
             <div className="flex h-full min-h-0 flex-1 flex-col">
             <Suspense fallback={<div className="h-full min-h-0 flex-1 rounded-xl bg-[#0f0f12]" />}>
               <WorkshopFrontHallBoardView
@@ -17109,7 +16648,7 @@ ${lineSvg}
                 boxes={groupJustifiedLayout.boxes}
                 ready={groupJustifiedLayout.ready}
                 totalHeight={groupJustifiedLayout.totalHeight}
-                className={`relative pt-4 w-full ${WORKFLOW_EDGE_GUTTER} ${
+                className={`relative pt-1 w-full ${WORKFLOW_EDGE_GUTTER} ${
                   groupJustifiedLayout.ready ? '' : 'opacity-0'
                 }`}
                 style={{
@@ -17822,73 +17361,28 @@ ${lineSvg}
                 </div>
               )}
               {currentGroupAsset && currentGroupItems.length === 0 && !showAllImages && (
-                <div className="mx-auto my-auto flex max-w-sm flex-col items-center justify-center rounded-2xl bg-white/[0.03] px-8 py-10 text-center ring-1 ring-white/[0.06]">
-                  <p className="text-[10px] font-black uppercase tracking-wide text-gray-400">此组暂无内容</p>
-                  <p className="mt-1.5 text-[9px] leading-relaxed text-gray-600">在左侧大纲选中其他组，或向本组拖入资产</p>
+                <div className="mx-auto my-auto flex flex-col items-center justify-center px-6 text-center select-none">
+                  <p className="text-[17px] font-medium tracking-wide text-[#e8e6e1]">拖入</p>
                 </div>
               )}
             </>
           ) : rootCanvasAssets.length === 0 ? (
-            <div className="mx-auto flex min-h-[min(70vh,560px)] max-w-md flex-col items-center justify-center px-6 py-12">
-              <div className="flex w-full flex-col items-center rounded-2xl bg-white/[0.03] px-8 py-10 text-center ring-1 ring-white/[0.07]">
-                <AppIcon name="camera" className="mb-3 h-11 w-11 text-gray-500" />
-                {fileSourceApi && workshopDiskOpen ? (
-                  <>
-                    <p className="text-[11px] font-black uppercase tracking-wide text-gray-300">
-                      此文件夹没有文件
-                    </p>
-                    <p className="mt-2 text-[9px] leading-relaxed text-gray-500">
-                      拖入文件，或在此新建文本。
-                    </p>
-                    <button
-                      type="button"
-                      onClick={createWorkflowTextAssetAndOpen}
-                      className="mt-4 rounded-xl border border-emerald-500/35 bg-emerald-500/10 px-4 py-2 text-[10px] font-bold text-emerald-200 hover:bg-emerald-500/20"
-                    >
-                      新建文本
-                    </button>
-                  </>
+            <div className="mx-auto flex min-h-[min(70vh,560px)] flex-col items-center justify-center px-6 text-center select-none">
+              <p className="text-[17px] font-medium tracking-wide text-[#e8e6e1]">
+                {workshopPresetOpen ? (
+                  '拖入'
                 ) : (
                   <>
-                <p className="text-[11px] font-black uppercase tracking-wide text-gray-300">
-                  {fileSourceApi ? '浏览器里还没有资产' : '画布为空'}
-                </p>
-                <p className="mt-2 text-[9px] leading-relaxed text-gray-500">
-                  将图片或模型<strong className="text-gray-400">拖入画布</strong>，在左侧「仓库」拖入条目，或使用<strong className="text-gray-400">粘贴</strong>、功能区能力生成内容
-                </p>
-                <button
-                  type="button"
-                  onClick={createWorkflowTextAssetAndOpen}
-                  className="mt-4 rounded-xl border border-emerald-500/35 bg-emerald-500/10 px-4 py-2 text-[10px] font-bold text-emerald-200 hover:bg-emerald-500/20"
-                >
-                  新建文本
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    const id = addWorkflowStoryboardTableAsset();
-                    openStoryboardTablePanel(id);
-                  }}
-                  className="mt-2 rounded-xl border border-violet-500/35 bg-violet-500/10 px-4 py-2 text-[10px] font-bold text-violet-200 hover:bg-violet-500/20"
-                >
-                  新建分镜表
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    const id = addWorkflowAssetSetAsset();
-                    openAssetSetPanel(id);
-                  }}
-                  className="mt-2 rounded-xl border border-cyan-500/35 bg-cyan-500/10 px-4 py-2 text-[10px] font-bold text-cyan-200 hover:bg-cyan-500/20"
-                >
-                  新建资产集
-                </button>
+                    拖入
+                    <span className="mx-2.5 font-normal text-[#8b8b93]">或</span>
+                    粘贴
                   </>
                 )}
-              </div>
+              </p>
+              <p className="mt-3 text-[12px] text-[#8b8b93]">右键新建</p>
             </div>
           ) : (
-            <div className={`min-h-0 min-w-0 py-6 ${WORKFLOW_EDGE_GUTTER}`}>
+            <div className={`min-h-0 min-w-0 pt-1 pb-2 ${WORKFLOW_EDGE_GUTTER}`}>
               <WorkflowJustifiedVirtualGrid
                 scrollRef={centerScrollRef}
                 gridRef={gridRef}
@@ -18046,6 +17540,24 @@ ${lineSvg}
                         draggable={!showArchived && !isBusy}
                         onDragStart={(e) => {
                           if (showArchived || isBusy) return;
+                          const presetRef = parseWorkshopPresetAssetId(a.id);
+                          if (presetRef && presetRef.kind !== 'folder') {
+                            const dragId = presetRef.kind === 'set' ? `${SET_ACTION_PREFIX}${presetRef.id}` : presetRef.id;
+                            try {
+                              e.dataTransfer.setData(DT_AC_CAPABILITY_FROM_EDITOR, dragId);
+                              e.dataTransfer.setData('text/plain', dragId);
+                              if (presetRef.kind === 'set') {
+                                e.dataTransfer.setData(DT_AC_CAPABILITY_ACTION, dragId);
+                              }
+                              e.dataTransfer.effectAllowed = 'copy';
+                            } catch {
+                              /* ignore */
+                            }
+                            if (typeof window !== 'undefined') {
+                              (window as Window & { __acDraggingPresetId?: string | null }).__acDraggingPresetId = dragId;
+                            }
+                            return;
+                          }
                           const ids =
                             selectedAssetIds.has(a.id) && selectedAssetIds.size > 0
                               ? Array.from(selectedAssetIds)
@@ -18063,6 +17575,9 @@ ${lineSvg}
                           }
                         }}
                         onDragEnd={() => {
+                          if (typeof window !== 'undefined') {
+                            (window as Window & { __acDraggingPresetId?: string | null }).__acDraggingPresetId = null;
+                          }
                           clearWorkflowDragSession();
                         }}
                         onDragOver={(e) => {
@@ -18151,6 +17666,10 @@ ${lineSvg}
                           onMouseLeave={clearHoveredCard}
                           onContextMenu={(e) => {
                             if (showArchived) return;
+                            if (parseWorkshopPresetAssetId(a.id)) {
+                              openWorkflowAssetContextMenu(a, e);
+                              return;
+                            }
                             let target: WorkflowAsset | null = a;
                             if (isGroupCard && !workshopDiskOpen) {
                               const childId = a.assetIds?.[gSafe] ?? a.assetIds?.[0];
@@ -18169,6 +17688,8 @@ ${lineSvg}
                           onClick={() => {
                             if (showArchived) {
                               setArchivedDetailAssetId(a.id);
+                            } else if (openWorkshopPresetLibraryCard(a)) {
+                              return;
                             } else if (isGroupCard) {
                               const parsed = parseWorkshopFileAssetId(a.id);
                               if (workshopDiskOpen && parsed) {
@@ -18197,23 +17718,37 @@ ${lineSvg}
                             <div className="h-full w-full">
                               <AssetSetGridCard asset={a} />
                             </div>
-                          ) : !hasDisplayImage && isWorkflowTextAsset(a) ? (
+                          ) : !hasDisplayImage && (isWorkflowTextAsset(a) || a.assetKind === 'prompt') ? (
                             <div className="relative w-full h-full bg-[#141416] flex flex-col justify-start p-3 text-left">
                               {a.textTitle?.trim() ? (
                                 <p className="text-[11px] font-bold text-gray-100 line-clamp-2 mb-1.5">
                                   {a.textTitle.trim()}
                                 </p>
                               ) : null}
-                              <p
-                                className={`text-[10px] text-gray-400 leading-snug whitespace-pre-wrap flex-1 overflow-hidden ${
-                                  a.textTitle?.trim() ? 'line-clamp-6' : 'line-clamp-8'
-                                }`}
-                              >
-                                {textDisplay || '（空白，点击编辑）'}
-                              </p>
+                              {textDisplay ? (
+                                <p
+                                  className={`text-[10px] text-gray-400 leading-snug whitespace-pre-wrap flex-1 overflow-hidden ${
+                                    a.textTitle?.trim() ? 'line-clamp-6' : 'line-clamp-8'
+                                  }`}
+                                >
+                                  {textDisplay}
+                                </p>
+                              ) : a.assetKind === 'prompt' || parseWorkshopPresetAssetId(a.id) ? null : (
+                                <p
+                                  className={`text-[10px] text-gray-400 leading-snug whitespace-pre-wrap flex-1 overflow-hidden ${
+                                    a.textTitle?.trim() ? 'line-clamp-6' : 'line-clamp-8'
+                                  }`}
+                                >
+                                  （空白，点击编辑）
+                                </p>
+                              )}
                             </div>
                           ) : isGroupCard && !gridPreviewSrcEffective.trim() ? (
-                            <div className="relative h-full w-full bg-[#16161a]" />
+                            <div className="relative flex h-full w-full flex-col items-start justify-end bg-[#16161a] p-3 text-left">
+                              <p className="text-[11px] font-bold text-gray-100 line-clamp-2">
+                                {a.groupLabel?.trim() || a.textTitle?.trim() || '文件夹'}
+                              </p>
+                            </div>
                           ) : (
                             <AssetCardPreviewRenderer
                               asset={a}
@@ -18364,32 +17899,18 @@ ${lineSvg}
           </div>
         </div>
         </div>
-        {activePaneNode === 1 ? (
-          <div
-            data-workflow-preset-column
-            className="absolute inset-0 z-[1] flex h-full min-h-0 w-full flex-col overflow-hidden bg-[#0a0a0c] pl-3 pr-0"
-          >
-            {capabilityPresetPanel ? (
-              <div
-                data-workflow-preset
-                className="flex flex-col flex-1 min-h-0 overflow-hidden rounded-xl bg-transparent py-2 pr-3"
-              >
-                {cloneCapabilityPresetPanelWithScrollRef(capabilityPresetPanel, presetScrollRef, {
-                  onOpenWorkflowComposer: openUnifiedComposer,
-                  workflowComposeSearchQuery: quickComposeDraft,
-                  sidebarLinkHoverPresetIds,
-                  creditBalance,
-                })}
-              </div>
-            ) : (
-              <div className="flex-1 min-h-0 rounded-xl border border-dashed border-white/10 bg-white/[0.02] flex items-center justify-center text-[9px] text-gray-600">
-                未挂载能力预设
-              </div>
-            )}
+        {capabilityPresetPanel ? (
+          <div className="hidden" aria-hidden>
+            {cloneCapabilityPresetPanelWithScrollRef(capabilityPresetPanel, presetScrollRef, {
+              onOpenWorkflowComposer: openUnifiedComposer,
+              workflowComposeSearchQuery: quickComposeDraft,
+              sidebarLinkHoverPresetIds,
+              creditBalance,
+            })}
           </div>
         ) : null}
         </div>
-        {fileSourceApi && showFunctionSidebar ? renderWorkflowFunctionSidebar() : null}
+        {showFunctionSidebar ? renderWorkflowFunctionSidebar() : null}
           </div>
         </div>
       </div>
@@ -19905,8 +19426,56 @@ ${lineSvg}
       : null}
     {workflowAssetContextMenu && typeof document !== 'undefined'
       ? (() => {
+          if (workflowAssetContextMenu.assetId == null) {
+            const presetFolder = workshopPresetOpen ? normalizeWorkshopPresetRel(workshopCurrentRel) : '';
+            return createPortal(
+              <WorkflowAssetContextMenu
+                open
+                x={workflowAssetContextMenu.x}
+                y={workflowAssetContextMenu.y}
+                onCreatePreset={
+                  workshopPresetOpen && presetFolder && presetFolder !== 'sets'
+                    ? () => dispatchPresetLibraryToolbar('create-preset', {
+                        category: presetFolder === 'image_process' ? 'image_process' : 'image_to_image',
+                      })
+                    : undefined
+                }
+                onCreateCapabilitySet={
+                  workshopPresetOpen && presetFolder === 'sets'
+                    ? () => dispatchPresetLibraryToolbar('add-set')
+                    : undefined
+                }
+                onImportExportPresets={
+                  workshopPresetOpen ? () => dispatchPresetLibraryToolbar('toggle-import-export') : undefined
+                }
+                onRefreshPresets={
+                  workshopPresetOpen ? () => dispatchPresetLibraryToolbar('refresh-remote') : undefined
+                }
+                onCreateText={workshopPresetOpen ? undefined : createWorkflowTextAssetAndOpen}
+                onCreateStoryboard={
+                  workshopPresetOpen
+                    ? undefined
+                    : () => {
+                        const id = addWorkflowStoryboardTableAsset();
+                        openStoryboardTablePanel(id);
+                      }
+                }
+                onCreateAssetSet={
+                  workshopPresetOpen
+                    ? undefined
+                    : () => {
+                        const id = addWorkflowAssetSetAsset();
+                        openAssetSetPanel(id);
+                      }
+                }
+                onClose={() => setWorkflowAssetContextMenu(null)}
+              />,
+              document.body
+            );
+          }
           const menuAsset =
             workshopFileAssets.find((x) => x.id === workflowAssetContextMenu.assetId) ||
+            presetLibraryAssets.find((x) => x.id === workflowAssetContextMenu.assetId) ||
             assets.find((x) => x.id === workflowAssetContextMenu.assetId) ||
             gridAssets.find((x) => x.id === workflowAssetContextMenu.assetId) ||
             null;
@@ -19923,6 +19492,7 @@ ${lineSvg}
               x={workflowAssetContextMenu.x}
               y={workflowAssetContextMenu.y}
               onOpen={() => {
+                if (openWorkshopPresetLibraryCard(menuAsset)) return;
                 if (folderCard && workshopDiskOpen && workshopTarget) {
                   openWorkshopDiskFolder(workshopTarget.root, workshopTarget.rel);
                   return;
@@ -19937,9 +19507,15 @@ ${lineSvg}
                 }
                 openWorkflowLightbox(menuAsset.id);
               }}
-              openLabel={folderCard && workshopDiskOpen ? '进入文件夹' : '打开'}
+              openLabel={
+                parseWorkshopPresetAssetId(menuAsset.id)?.kind === 'folder' || (folderCard && workshopDiskOpen)
+                  ? '进入文件夹'
+                  : '打开'
+              }
               onReveal={
-                workshopMenu && workshopTarget
+                parseWorkshopPresetAssetId(menuAsset.id)
+                  ? undefined
+                  : workshopMenu && workshopTarget
                   ? () => {
                       void workshopFileSourceApi()?.revealWorkshopPath?.({
                         root: workshopTarget.root,
@@ -19950,7 +19526,13 @@ ${lineSvg}
                       void handleWorkflowAssetOpenFolder(menuAsset);
                     }
               }
-              canReveal={workshopMenu ? true : canWorkflowAssetOpenFolder(menuAsset)}
+              canReveal={
+                parseWorkshopPresetAssetId(menuAsset.id)
+                  ? false
+                  : workshopMenu
+                    ? true
+                    : canWorkflowAssetOpenFolder(menuAsset)
+              }
               revealDisabledReason={workshopMenu ? '' : workflowAssetOpenFolderDisabledReason(menuAsset)}
               onCopyPath={
                 workshopMenu

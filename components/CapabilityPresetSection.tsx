@@ -1200,6 +1200,45 @@ const CapabilityPresetSection: React.FC<{
   useEffect(() => {
     beginDetailEditRef.current = beginDetailEdit;
   }, [beginDetailEdit]);
+  const createPresetFromLibrary = useCallback(
+    (category: CapabilityCategory = 'image_to_image') => {
+      const id = genId();
+      const nextCategory: CapabilityCategory = category === 'image_process' ? 'image_process' : 'image_to_image';
+      const preset: CustomAppModule = {
+        id,
+        label: '新功能',
+        category: nextCategory,
+        instruction: '',
+        enabled: true,
+        order: presets.length,
+        engine: nextCategory === 'image_process' ? 'builtin' : 'gen_image',
+        imageModelRegistryId: nextCategory === 'image_process' ? undefined : DEFAULT_IMAGE_MODEL_REGISTRY_ID,
+      };
+      if (nextCategory === 'image_process') {
+        Object.assign(
+          preset,
+          applyImageProcessorDraftToPreset(preset, 'split_component', defaultParamsForImageProcessor('split_component')),
+        );
+      }
+      const normalized = normalizeCapabilityPreset(preset, presets.length);
+      update([...presets, normalized]);
+      openPresetDetail(normalized);
+      beginDetailEdit(normalized);
+    },
+    [beginDetailEdit, openPresetDetail, presets, update],
+  );
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const onToolbarAction = (event: Event) => {
+      const detail = (event as CustomEvent<{ action?: string; category?: string }>).detail;
+      if (detail?.action !== 'create-preset') return;
+      createPresetFromLibrary(detail.category === 'image_process' ? 'image_process' : 'image_to_image');
+    };
+    window.addEventListener('ac:capability-preset-toolbar-action', onToolbarAction as EventListener);
+    return () => {
+      window.removeEventListener('ac:capability-preset-toolbar-action', onToolbarAction as EventListener);
+    };
+  }, [createPresetFromLibrary]);
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const onOpenPresetDetail = (event: Event) => {
@@ -1330,6 +1369,20 @@ const CapabilityPresetSection: React.FC<{
     setEmbedComposerSessions((prev) => [...prev, { id, initialSet: set, sessionKey: Date.now() }]);
     setEmbedComposerActiveId(id);
   };
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const onOpenSet = (event: Event) => {
+      const id = String((event as CustomEvent<{ setId?: string }>).detail?.setId || '').trim();
+      if (!id) return;
+      const set = sets.find((s) => s.id === id);
+      if (!set) return;
+      openEditSet(set);
+    };
+    window.addEventListener('ac:capability-set-open', onOpenSet as EventListener);
+    return () => {
+      window.removeEventListener('ac:capability-set-open', onOpenSet as EventListener);
+    };
+  }, [sets]);
 
   const closeEmbedComposerSession = useCallback((sessionId: string) => {
     setEmbedComposerSessions((prev) => {
@@ -1760,8 +1813,9 @@ const CapabilityPresetSection: React.FC<{
       {catalogError && <div className="text-[10px] text-red-400 break-all">{catalogError}</div>}
       {packContentsLoading && <div className="text-[10px] text-gray-500">正在加载远程能力列表…</div>}
 
-      {showImportExport && (
-        <div className="rounded-2xl bg-[#16161a] ring-1 ring-white/[0.07] p-4 space-y-3">
+      {showImportExport && typeof document !== 'undefined' && createPortal(
+        <div className="fixed inset-0 z-[2400] flex items-center justify-center bg-black/60 p-4" onClick={() => setShowImportExport(false)}>
+        <div className="w-full max-w-xl rounded-2xl bg-[#16161a] ring-1 ring-white/[0.07] p-4 space-y-3" onClick={(e) => e.stopPropagation()}>
           <div className="flex items-center justify-between gap-2 flex-wrap">
             <div className="text-[9px] font-black text-gray-300 uppercase">导入本地种子</div>
             <div className="flex gap-2 flex-wrap">
@@ -1788,6 +1842,8 @@ const CapabilityPresetSection: React.FC<{
             <span className="text-[10px] text-gray-400">将 JSON 文件拖入此处（capability-presets.json 或 capability-sets.json）</span>
           </div>
         </div>
+        </div>,
+        document.body
       )}
 
       {isAdding && (

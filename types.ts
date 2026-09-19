@@ -565,7 +565,8 @@ export type WorkflowAssetKind =
   | 'storyboard_table'
   | 'asset_set'
   | 'group'
-  | 'file';
+  | 'file'
+  | 'prompt';
 
 export type WorkflowAssetVariantKind = 'text' | 'image' | 'video' | 'model3d' | 'audio' | 'file';
 export type WorkflowModelFormat = 'glb' | 'gltf' | 'fbx' | 'obj' | 'stl' | 'usdz' | 'zip';
@@ -631,7 +632,7 @@ export type WorkflowAsset = {
   /** 是否为组：true=组卡片，false/undefined=普通资产卡片 */
   isGroup?: boolean;
   /** 作坊文件夹卡：子树里出现过的种类，供图墙筛选。空数组表示没有可匹配文件。 */
-  containedKinds?: Array<'image' | 'model3d' | 'video' | 'text' | 'file'>;
+  containedKinds?: Array<'image' | 'model3d' | 'video' | 'text' | 'file' | 'prompt'>;
   /** 组内关联的资产 ID 列表（组卡片时使用）；筛选时根据此字段显示直接成员 */
   assetIds?: string[];
   /** 文字资产标题（可选） */

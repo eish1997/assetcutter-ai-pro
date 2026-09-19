@@ -10,7 +10,17 @@ type ViewportRect = {
   height: number;
 };
 
-function viewportRectsEqual(a: ViewportRect | null, b: ViewportRect): boolean {
+/** 亚像素抖动会让 ResizeObserver + setState 互踢，虚拟列表边缘卡会装上卸下狂闪。 */
+export function snapMarqueeViewportRect(r: ViewportRect): ViewportRect {
+  return {
+    left: Math.round(r.left),
+    top: Math.round(r.top),
+    width: Math.round(r.width),
+    height: Math.round(r.height),
+  };
+}
+
+export function marqueeViewportRectsEqual(a: ViewportRect | null, b: ViewportRect): boolean {
   if (!a) return false;
   return a.left === b.left && a.top === b.top && a.width === b.width && a.height === b.height;
 }
@@ -23,12 +33,12 @@ function rectFromDom(el: HTMLElement | null): ViewportRect | null {
   if (!el) return null;
   const rect = el.getBoundingClientRect();
   if (rect.width < 1 || rect.height < 1) return null;
-  return {
+  return snapMarqueeViewportRect({
     left: rect.left,
     top: rect.top,
     width: rect.width,
     height: rect.height,
-  };
+  });
 }
 
 /** 水平条带（顶/底暗区）在侧栏 x 范围挖洞 */
@@ -97,6 +107,7 @@ export default function WorkflowSpaceMarqueeChrome({
   const spotlightRef = useRef<ViewportRect | null>(null);
   const sidebarExcludeRefState = useRef<ViewportRect | null>(null);
   const [spotlight, setSpotlight] = useState<ViewportRect | null>(null);
+  const [hintSpot, setHintSpot] = useState<ViewportRect | null>(null);
   const [sidebarExclude, setSidebarExclude] = useState<ViewportRect | null>(null);
   const onMarqueePointerDownRef = useRef(onMarqueePointerDown);
   onMarqueePointerDownRef.current = onMarqueePointerDown;
@@ -136,23 +147,31 @@ export default function WorkflowSpaceMarqueeChrome({
       spotlightRef.current = null;
       sidebarExcludeRefState.current = null;
       setSpotlight(null);
+      setHintSpot(null);
       setSidebarExclude(null);
       return;
     }
 
     const update = () => {
       const list = rectFromDom(listPaneRef.current);
+      const portEl = listPaneRef.current?.querySelector('[data-workflow-scroll-port="asset"]');
+      const port = rectFromDom(portEl instanceof HTMLElement ? portEl : null);
       const sidebar = rectFromDom(sidebarExcludeRef?.current ?? null);
       spotlightRef.current = list;
       sidebarExcludeRefState.current = sidebar;
       syncMaskDom(list, sidebar);
       setSpotlight((prev) => {
         if (!list) return prev === null ? prev : null;
-        return viewportRectsEqual(prev, list) ? prev : list;
+        return marqueeViewportRectsEqual(prev, list) ? prev : list;
+      });
+      const hint = port || list;
+      setHintSpot((prev) => {
+        if (!hint) return prev === null ? prev : null;
+        return marqueeViewportRectsEqual(prev, hint) ? prev : hint;
       });
       setSidebarExclude((prev) => {
         if (!sidebar) return prev === null ? prev : null;
-        return viewportRectsEqual(prev, sidebar) ? prev : sidebar;
+        return marqueeViewportRectsEqual(prev, sidebar) ? prev : sidebar;
       });
     };
 
@@ -162,7 +181,11 @@ export default function WorkflowSpaceMarqueeChrome({
       typeof ResizeObserver !== 'undefined' && listPaneRef.current
         ? new ResizeObserver(update)
         : null;
-    if (listPaneRef.current && roList) roList.observe(listPaneRef.current);
+    if (listPaneRef.current && roList) {
+      roList.observe(listPaneRef.current);
+      const portEl = listPaneRef.current.querySelector('[data-workflow-scroll-port="asset"]');
+      if (portEl instanceof HTMLElement) roList.observe(portEl);
+    }
     const roSidebar =
       typeof ResizeObserver !== 'undefined' && sidebarExcludeRef?.current
         ? new ResizeObserver(update)
@@ -207,6 +230,7 @@ export default function WorkflowSpaceMarqueeChrome({
   if (!active || !spotlight || typeof document === 'undefined') return null;
 
   const { left, top, width, height } = spotlight;
+  const hint = hintSpot || spotlight;
   const bottomTop = top + height;
   const rightLeft = left + width;
   const viewportH = typeof window !== 'undefined' ? window.innerHeight : 0;
@@ -283,7 +307,10 @@ export default function WorkflowSpaceMarqueeChrome({
         </defs>
         <rect x="0" y="0" width="100%" height="100%" fill={SPOTLIGHT_DIM} mask={`url(#${maskId})`} />
       </svg>
-      <div className="pointer-events-none fixed inset-x-0 bottom-6 z-[142] flex justify-center px-4">
+      <div
+        className="pointer-events-none fixed z-[142] flex justify-center px-3"
+        style={{ left: hint.left, top: hint.top + 8, width: hint.width }}
+      >
         <div className="rounded-full border border-white/10 bg-[#0f0f12]/95 px-4 py-2 text-center shadow-lg">
           <p className="text-[11px] font-semibold text-gray-100">框选模式</p>
           <p className="mt-0.5 text-[10px] text-gray-400">

@@ -1,4 +1,5 @@
 import type { WorkflowAsset } from '../types';
+import { workshopHostEntryKindFromName } from './workshopPreviewKind';
 
 export const WORKSHOP_FOLDERS_PANE_WIDTH_PX = 220;
 /** 可见格缩略图 IPC 并发（不是整层一次拉，也不是每次 8 张再等 effect 重跑） */
@@ -9,6 +10,15 @@ export const WORKSHOP_BROWSER_LIBRARY_LABEL = '浏览器资产';
 export const WORKSHOP_RECYCLE_LIBRARY_ROOT = 'ac-recycle:';
 export const WORKSHOP_RECYCLE_LIBRARY_LABEL = '回收站';
 export const WORKSHOP_RECYCLE_DIR = 'recycle';
+export const WORKSHOP_PRESET_LIBRARY_ROOT = 'ac-preset:';
+export const WORKSHOP_PRESET_LIBRARY_LABEL = '预设';
+export const WORKSHOP_PRESET_FOLDER_RELS = ['basic', 'image_process', 'sets'] as const;
+export type WorkshopPresetFolderRel = (typeof WORKSHOP_PRESET_FOLDER_RELS)[number];
+export const WORKSHOP_PRESET_FOLDER_LABELS: Record<WorkshopPresetFolderRel, string> = {
+  basic: '基础能力',
+  image_process: '图像处理',
+  sets: '能力集合',
+};
 
 export function isWorkshopBrowserLibraryRoot(root: string | null | undefined): boolean {
   return String(root || '').trim() === WORKSHOP_BROWSER_LIBRARY_ROOT;
@@ -18,9 +28,27 @@ export function isWorkshopRecycleRoot(root: string | null | undefined): boolean 
   return String(root || '').trim() === WORKSHOP_RECYCLE_LIBRARY_ROOT;
 }
 
-/** 浏览器资产 / 回收站：左树钉死，不能「+」挂、不能右键拿掉 */
+export function isWorkshopPresetLibraryRoot(root: string | null | undefined): boolean {
+  return String(root || '').trim() === WORKSHOP_PRESET_LIBRARY_ROOT;
+}
+
+export function isWorkshopPresetFolderRel(rel: string | null | undefined): rel is WorkshopPresetFolderRel {
+  return (WORKSHOP_PRESET_FOLDER_RELS as readonly string[]).includes(toPosixRel(String(rel || '')));
+}
+
+export function normalizeWorkshopPresetRel(rel: string | null | undefined): '' | WorkshopPresetFolderRel {
+  const id = toPosixRel(String(rel || ''));
+  return isWorkshopPresetFolderRel(id) ? id : '';
+}
+
+export function workshopPresetFolderLabel(rel: string | null | undefined): string {
+  const id = normalizeWorkshopPresetRel(rel);
+  return id ? WORKSHOP_PRESET_FOLDER_LABELS[id] : WORKSHOP_PRESET_LIBRARY_LABEL;
+}
+
+/** 浏览器资产 / 回收站 / 预设：左树钉死，不能「+」挂、不能右键拿掉 */
 export function isWorkshopPinnedTreeRoot(root: string | null | undefined): boolean {
-  return isWorkshopBrowserLibraryRoot(root) || isWorkshopRecycleRoot(root);
+  return isWorkshopBrowserLibraryRoot(root) || isWorkshopRecycleRoot(root) || isWorkshopPresetLibraryRoot(root);
 }
 
 /** 可在当前根新建 / 导入 / 生成；回收站只看已删文件 */
@@ -52,6 +80,10 @@ export function workshopBrowserLibraryRoot(): WorkshopRootInfo {
 
 export function workshopRecycleLibraryRoot(): WorkshopRootInfo {
   return { root: WORKSHOP_RECYCLE_LIBRARY_ROOT, label: WORKSHOP_RECYCLE_LIBRARY_LABEL };
+}
+
+export function workshopPresetLibraryRoot(): WorkshopRootInfo {
+  return { root: WORKSHOP_PRESET_LIBRARY_ROOT, label: WORKSHOP_PRESET_LIBRARY_LABEL };
 }
 
 export type WorkshopFileState = {
@@ -375,7 +407,7 @@ export function workshopEntriesToWorkflowAssets(
   for (const entry of Array.isArray(entries) ? entries : []) {
     if (!entry || entry.kind === 'dir') continue;
     const id = workshopFileAssetId(root, entry.rel);
-    const assetKind: WorkflowAsset['assetKind'] =
+    const fromEntry: WorkflowAsset['assetKind'] =
       entry.kind === 'model'
         ? 'model3d'
         : entry.kind === 'image'
@@ -385,6 +417,9 @@ export function workshopEntriesToWorkflowAssets(
             : entry.kind === 'video'
               ? 'video'
               : 'file';
+    const fromName = workshopHostEntryKindFromName(entry.name);
+    const assetKind: WorkflowAsset['assetKind'] =
+      fromEntry !== 'file' ? fromEntry : fromName === 'model' ? 'model3d' : fromName;
     out.push({
       id,
       assetKind,

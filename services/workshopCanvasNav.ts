@@ -1,11 +1,17 @@
 import { readLocalJson, scopedStorageKey, writeLocalJson } from './clientPersist';
+import { workshopPreviewKindFromName } from './workshopPreviewKind';
 import {
   isWorkshopBrowserLibraryRoot,
+  isWorkshopPresetLibraryRoot,
   isWorkshopRecycleRoot,
   parentRel,
   toPosixRel,
   WORKSHOP_BROWSER_LIBRARY_LABEL,
+  WORKSHOP_BROWSER_LIBRARY_ROOT,
+  WORKSHOP_PRESET_LIBRARY_LABEL,
+  WORKSHOP_PRESET_LIBRARY_ROOT,
   WORKSHOP_RECYCLE_LIBRARY_LABEL,
+  workshopPresetFolderLabel,
 } from './workshopFileTree';
 
 export const WORKSHOP_NAV_HISTORY_CAP = 50;
@@ -21,10 +27,10 @@ export type WorkshopNavHistory = {
   index: number;
 };
 
-export type WorkshopCanvasKindId = 'image' | 'model3d' | 'video' | 'text' | 'file';
+export type WorkshopCanvasKindId = 'image' | 'model3d' | 'video' | 'text' | 'prompt' | 'file';
 export type WorkshopCanvasKindFilter = WorkshopCanvasKindId;
 
-export const WORKSHOP_CANVAS_KIND_IDS: WorkshopCanvasKindId[] = ['image', 'model3d', 'video', 'text', 'file'];
+export const WORKSHOP_CANVAS_KIND_IDS: WorkshopCanvasKindId[] = ['image', 'model3d', 'video', 'text', 'prompt', 'file'];
 export const DEFAULT_WORKSHOP_CANVAS_KINDS: WorkshopCanvasKindId[] = ['image', 'model3d', 'video', 'text'];
 
 export type WorkshopCanvasKindSource = {
@@ -32,7 +38,26 @@ export type WorkshopCanvasKindSource = {
   assetKind?: string | null;
   /** 作坊文件夹卡：子树里出现过的种类。缺省时筛选仍显示（工作台组）。 */
   containedKinds?: Iterable<string> | null;
+  name?: string | null;
+  textTitle?: string | null;
+  textBody?: string | null;
+  modelSourceName?: string | null;
+  original?: string | null;
+  stepModelUrls?: unknown;
+  modelUrls?: unknown;
+  resultMeta?: { original?: { mediaKind?: string } } | null;
 };
+
+function workshopCanvasKindFromUrl(value: string): WorkshopCanvasKindId | null {
+  const s = String(value || '').trim();
+  if (!s) return null;
+  if (/^data:image\//i.test(s)) return 'image';
+  if (/^data:video\//i.test(s)) return 'video';
+  if (/^data:text\//i.test(s) || /^data:application\/json/i.test(s)) return 'text';
+  const path = s.split(/[?#]/)[0] || s;
+  const fromName = workshopPreviewKindFromName(path);
+  return fromName === 'file' ? null : fromName;
+}
 
 export type WorkshopNavCrumb = {
   id: string;
@@ -117,12 +142,32 @@ export function workshopNavUpLoc(
   return { root: n.root, rel: parentRel(n.rel), groupId: null };
 }
 
+/** finger.surface 只表示预设墙 vs 资产墙，不能把已挂磁盘根打回浏览器资产。 */
+export function workshopNavLocFromFingerSurface(
+  surface: string | null | undefined,
+  current: WorkshopNavLoc,
+): WorkshopNavLoc | null {
+  const loc = normalizeWorkshopNavLoc(current);
+  if (surface === 'presets') {
+    return isWorkshopPresetLibraryRoot(loc.root)
+      ? null
+      : { root: WORKSHOP_PRESET_LIBRARY_ROOT, rel: '', groupId: null };
+  }
+  if (surface === 'canvas') {
+    return isWorkshopPresetLibraryRoot(loc.root)
+      ? { root: WORKSHOP_BROWSER_LIBRARY_ROOT, rel: '', groupId: null }
+      : null;
+  }
+  return null;
+}
+
 export function workshopNavRootLabel(
   root: string,
   roots: Array<{ root: string; label: string }> = [],
 ): string {
   if (isWorkshopBrowserLibraryRoot(root)) return WORKSHOP_BROWSER_LIBRARY_LABEL;
   if (isWorkshopRecycleRoot(root)) return WORKSHOP_RECYCLE_LIBRARY_LABEL;
+  if (isWorkshopPresetLibraryRoot(root)) return WORKSHOP_PRESET_LIBRARY_LABEL;
   const hit = roots.find((r) => r.root === root);
   if (hit?.label) return String(hit.label);
   const posix = String(root || '')
@@ -161,7 +206,7 @@ export function workshopBreadcrumbSegments(args: {
     acc = acc ? `${acc}/${part}` : part;
     out.push({
       id: `rel:${loc.root}:${acc}`,
-      label: part,
+      label: isWorkshopPresetLibraryRoot(loc.root) ? workshopPresetFolderLabel(part) : part,
       loc: { root: loc.root, rel: acc, groupId: null },
     });
   }
@@ -170,10 +215,31 @@ export function workshopBreadcrumbSegments(args: {
 
 export function workshopCanvasKindOf(
   asset: WorkshopCanvasKindSource,
-): 'folder' | WorkshopCanvasKindId {
+): 'folder' | 'workspace' | WorkshopCanvasKindId {
   if (asset.isGroup) return 'folder';
   const k = String(asset.assetKind || '');
-  if (k === 'image' || k === 'model3d' || k === 'text' || k === 'video') return k;
+  if (k === 'image' || k === 'model3d' || k === 'text' || k === 'video' || k === 'prompt') return k;
+  if (k === 'storyboard_table' || k === 'asset_set') return 'workspace';
+  const name = String(asset.textTitle || asset.modelSourceName || asset.name || '');
+  if (name) {
+    const fromName = workshopPreviewKindFromName(name);
+    if (fromName !== 'file') return fromName;
+  }
+  const fromOriginal = workshopCanvasKindFromUrl(String(asset.original || ''));
+  if (fromOriginal) return fromOriginal;
+  const media = asset.resultMeta?.original?.mediaKind;
+  if (media === 'video') return 'video';
+  if (media === 'image') return 'image';
+  if (
+    asset.modelSourceName ||
+    asset.stepModelUrls ||
+    (Array.isArray(asset.modelUrls) && asset.modelUrls.length > 0)
+  ) {
+    return 'model3d';
+  }
+  if (String(asset.textBody || '').trim()) return 'text';
+  // 浏览器资产旧卡经常没有 assetKind；hydrate 后 original 是 blob: / 云地址，不能掉进「其它」。
+  if (String(asset.original || '').trim()) return 'image';
   return 'file';
 }
 
@@ -203,9 +269,11 @@ export function workshopCanvasKindMatches(
   asset: WorkshopCanvasKindSource,
   kinds: Iterable<string> | null | undefined,
 ): boolean {
+  const selected = workshopCanvasKindSet(kinds);
   const k = workshopCanvasKindOf(asset);
-  if (k === 'folder') return workshopCanvasFolderMatchesKinds(asset, kinds);
-  return workshopCanvasKindSet(kinds).has(k);
+  if (k === 'folder') return workshopCanvasFolderMatchesKinds(asset, selected);
+  if (k === 'workspace') return selected.size > 0;
+  return selected.has(k);
 }
 
 export function countWorkshopCanvasKinds(
@@ -216,11 +284,12 @@ export function countWorkshopCanvasKinds(
     model3d: 0,
     video: 0,
     text: 0,
+    prompt: 0,
     file: 0,
   };
   for (const asset of Array.isArray(assets) ? assets : []) {
     const k = workshopCanvasKindOf(asset);
-    if (k === 'folder') continue;
+    if (k === 'folder' || k === 'workspace') continue;
     counts[k] += 1;
   }
   return counts;
@@ -231,11 +300,7 @@ export function filterWorkshopCanvasByKind<T extends WorkshopCanvasKindSource>(
   kinds: Iterable<string> | null | undefined,
 ): T[] {
   if (!Array.isArray(assets)) return [];
-  const set = workshopCanvasKindSet(kinds);
-  return assets.filter((asset) => {
-    const k = workshopCanvasKindOf(asset);
-    return k === 'folder' ? workshopCanvasFolderMatchesKinds(asset, set) : set.has(k);
-  });
+  return assets.filter((asset) => workshopCanvasKindMatches(asset, kinds));
 }
 
 export function toggleWorkshopCanvasKind(
@@ -279,7 +344,7 @@ export type WorkshopCanvasSortable = {
 };
 
 const SORT_KEYS = new Set<WorkshopCanvasSortKey>(['name', 'created', 'modified', 'size', 'folder']);
-const TYPE_ORDER = ['folder', 'image', 'model3d', 'video', 'text', 'file'];
+const TYPE_ORDER = ['folder', 'image', 'model3d', 'video', 'text', 'prompt', 'file'];
 
 export function defaultWorkshopCanvasListPrefs(): WorkshopCanvasListPrefs {
   return {

@@ -218,7 +218,7 @@ const QUICK_COMPOSE_MODE_CHIP_BASE =
 
 const VIEW_MARGIN = QUICK_COMPOSE_VIEW_MARGIN;
 /** 韫囶偅宓庨弶锟犵帛鐠併倛鍒涙惔鏇窗鎼存洝绔熺捄婵婎潒閸欙絽绨崇痪?28px閿涘牅绗岄弮褔鈧槒绶?top閳澊h閳?2閵嗕線鐝埉?4 娑撯偓閼疯揪绱?2閳?4=28閿?*/
-const QUICK_COMPOSE_BAR_BOTTOM_GAP = 28;
+const QUICK_COMPOSE_BAR_BOTTOM_GAP = 12;
 
 /** 鐏?fixed 鐎规矮缍呴惃?left/top 闂勬劕鍩楅崷銊ョ秼閸撳秷顫嬮崣锝呭敶閿涘牆鎯堟稉濠冩煙濞搭喖鐪?overhang閿?*/
 function clampBarToViewport(
@@ -904,19 +904,11 @@ export default function WorkspaceQuickComposeBar({
   const placeholder = trimmedOverride
     ? trimmedOverride
     : (() => {
-        if (composeMode === '3d') {
-          return '\u63cf\u8ff0\u4f60\u60f3\u751f\u6210\u7684 3D \u6a21\u578b\uff0c\u4e5f\u53ef\u4ee5 @ \u56fe\u7247\u4f5c\u4e3a\u53c2\u8003...';
-        }
-        if (composeMode === 'video') {
-          return '\u63cf\u8ff0\u4f60\u60f3\u751f\u6210\u7684\u89c6\u9891\u955c\u5934\uff0c\u53ef\u4ee5 @ \u56fe\u7247\u4f5c\u4e3a\u9996\u5e27\u6216\u53c2\u8003...';
-        }
-        if (composeMode === 'text') {
-          return '\u8bf4\u8bf4\u4f60\u60f3\u6574\u7406\u3001\u5206\u6790\u6216\u8bf4\u660e\u4ec0\u4e48...';
-        }
-        if (composeMode === 'auto') {
-          return '\u8bf4\u8bf4\u4f60\u60f3\u5b8c\u6210\u4ec0\u4e48\uff0cAgent \u4f1a\u81ea\u52a8\u9009\u62e9\u751f\u6210\u65b9\u5f0f...';
-        }
-        return `\u8bf4\u8bf4\u4f60\u60f3\u5b8c\u6210\u4ec0\u4e48... \u53ef @ \u8d44\u4ea7/\u9879\u76ee/\u4e13\u5bb6\uff08\u6700\u591a ${maxMentions} \u4e2a\uff09`;
+        if (composeMode === '3d') return '描述 3D，可 @';
+        if (composeMode === 'video') return '描述视频，可 @';
+        if (composeMode === 'text') return '说说你想整理什么';
+        if (composeMode === 'auto') return '说说你想完成什么';
+        return '说说你想完成什么，可 @';
       })();
   const aspectSummary =
     genSettings.aspectRatio === 'adaptive' ? '\u81ea\u9002\u5e94' : genSettings.aspectRatio || '\u81ea\u9002\u5e94';

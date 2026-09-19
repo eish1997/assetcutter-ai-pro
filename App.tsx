@@ -306,7 +306,7 @@ const SidebarIconButton: React.FC<{ active: boolean; label: string; onClick: () 
     type="button"
     onClick={onClick}
     aria-label={label}
-    className={`group relative flex h-10 w-full cursor-pointer items-center justify-center rounded-xl outline-none transition-colors duration-200 focus-visible:ring-2 focus-visible:ring-blue-500/55 focus-visible:ring-offset-2 focus-visible:ring-offset-[#050505] ${
+    className={`group relative flex h-7 w-full cursor-pointer items-center justify-center rounded-lg outline-none transition-colors duration-200 focus-visible:ring-2 focus-visible:ring-blue-500/55 focus-visible:ring-offset-2 focus-visible:ring-offset-[#050505] ${
       active
         ? 'bg-[#152a4a] text-blue-200 ring-1 ring-blue-500/40 shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]'
         : 'text-gray-400 ring-1 ring-transparent hover:bg-white/[0.06] hover:ring-white/[0.06]'
@@ -4209,7 +4209,7 @@ const MainApp: React.FC = () => {
           waveAmpY={13}
         />
       </div>
-      <div className="fixed top-0 left-0 right-0 z-[1102] px-3 pt-2 pointer-events-none lg:pl-20">
+      <div className="fixed top-0 left-0 right-0 z-[1102] px-3 pt-2 pointer-events-none lg:pl-12">
         <div className="pointer-events-auto max-w-3xl">
           <AiEnvTopologyBanner />
         </div>
@@ -4233,11 +4233,11 @@ const MainApp: React.FC = () => {
       </Suspense>
 
       <div
-        className={`fixed left-3 top-4 bottom-4 z-[1001] w-14 flex flex-col transition-all ${isSidebarOpen ? 'opacity-100' : 'opacity-100'}`}
+        className={`fixed left-3 top-2 bottom-2 z-[1001] w-7 flex flex-col transition-all ${isSidebarOpen ? 'opacity-100' : 'opacity-100'}`}
       >
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-          <div className="min-h-0 flex-1 overflow-y-auto no-scrollbar p-2">
-            <div className="flex flex-col items-center gap-2">
+          <div className="min-h-0 flex-1 overflow-y-auto no-scrollbar p-0.5">
+            <div className="flex flex-col items-center gap-1">
               {user ? (
                 <div className="w-full">
                   <CustomDropdown
@@ -4261,21 +4261,21 @@ const MainApp: React.FC = () => {
                         </span>
                       </span>
                     )}
-                    triggerClassName="w-full h-10 rounded-xl bg-white/[0.05] ring-1 ring-white/[0.06] p-0 flex items-center justify-center outline-none focus-visible:ring-blue-500/50 hover:bg-white/[0.09] transition-colors"
+                    triggerClassName="w-full h-7 rounded-lg bg-white/[0.05] p-0 flex items-center justify-center outline-none focus-visible:ring-blue-500/50 hover:bg-white/[0.09] transition-colors"
                     portalZIndex={{ backdrop: 1100, list: 1101 }}
                   />
                 </div>
               ) : null}
 
               <SidebarIconButton active={mode === AppMode.WORKFLOW} label="工作区" onClick={() => { setMode(AppMode.WORKFLOW); setIsSidebarOpen(false); }}>
-                <svg viewBox="0 0 20 20" className="w-4 h-4" fill="none" aria-hidden><path d="M3.5 8.5L10 3.5l6.5 5v8H3.5v-8Z" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round"/><path d="M8 16.5v-4h4v4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"/></svg>
+                <svg viewBox="0 0 20 20" className="w-3.5 h-3.5" fill="none" aria-hidden><path d="M3.5 8.5L10 3.5l6.5 5v8H3.5v-8Z" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round"/><path d="M8 16.5v-4h4v4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"/></svg>
               </SidebarIconButton>
               <SidebarIconButton active={mode === AppMode.SETTINGS} label="设置" onClick={() => { setMode(AppMode.SETTINGS); setIsSidebarOpen(false); }}>
-                <svg viewBox="0 0 20 20" className="w-4 h-4" fill="none" aria-hidden><circle cx="10" cy="10" r="2.5" stroke="currentColor" strokeWidth="1.6"/><path d="M10 3v2.1M10 14.9V17M17 10h-2.1M5.1 10H3M14.9 5.1l-1.5 1.5M6.6 13.4l-1.5 1.5M14.9 14.9l-1.5-1.5M6.6 6.6 5.1 5.1" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"/></svg>
+                <svg viewBox="0 0 20 20" className="w-3.5 h-3.5" fill="none" aria-hidden><circle cx="10" cy="10" r="2.5" stroke="currentColor" strokeWidth="1.6"/><path d="M10 3v2.1M10 14.9V17M17 10h-2.1M5.1 10H3M14.9 5.1l-1.5 1.5M6.6 13.4l-1.5 1.5M14.9 14.9l-1.5-1.5M6.6 6.6 5.1 5.1" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"/></svg>
               </SidebarIconButton>
               {showAdminEntry ? (
                 <SidebarIconButton active={false} label="管理后台" onClick={() => { navigateAdmin('/admin'); setIsSidebarOpen(false); }}>
-                  <svg viewBox="0 0 20 20" className="w-4 h-4" fill="none" aria-hidden>
+                  <svg viewBox="0 0 20 20" className="w-3.5 h-3.5" fill="none" aria-hidden>
                     <path d="M3.5 3.5h5v5h-5v-5Z M11.5 3.5h5v5h-5v-5Z M3.5 11.5h5v5h-5v-5Z M11.5 11.5h5v5h-5v-5Z" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
                   </svg>
                 </SidebarIconButton>
@@ -4289,7 +4289,7 @@ const MainApp: React.FC = () => {
                     setIsSidebarOpen(false);
                   }}
                 >
-                  <svg viewBox="0 0 20 20" className="w-4 h-4" fill="none" aria-hidden>
+                  <svg viewBox="0 0 20 20" className="w-3.5 h-3.5" fill="none" aria-hidden>
                     <path
                       d="M5 3.5h10v13H5v-13Z M7.5 6.5h5 M7.5 9.5h5 M7.5 12.5h3"
                       stroke="currentColor"
@@ -4304,7 +4304,7 @@ const MainApp: React.FC = () => {
               <button
                 type="button"
                 onClick={() => setExperimentalNavExpanded((e) => !e)}
-                className={`group relative flex h-10 w-full cursor-pointer items-center justify-center rounded-xl outline-none transition-colors duration-200 focus-visible:ring-2 focus-visible:ring-blue-500/55 focus-visible:ring-offset-2 focus-visible:ring-offset-[#050505] ${
+                className={`group relative flex h-7 w-full cursor-pointer items-center justify-center rounded-lg outline-none transition-colors duration-200 focus-visible:ring-2 focus-visible:ring-blue-500/55 focus-visible:ring-offset-2 focus-visible:ring-offset-[#050505] ${
                   isExperimentalMode(mode) && !experimentalNavExpanded
                     ? 'bg-[#152a4a] text-blue-200 ring-1 ring-blue-500/40'
                     : 'text-gray-400 ring-1 ring-transparent hover:bg-white/[0.06] hover:ring-white/[0.06]'
@@ -4312,7 +4312,7 @@ const MainApp: React.FC = () => {
                 aria-label="实验性功能"
                 aria-expanded={experimentalNavExpanded}
               >
-                <svg viewBox="0 0 20 20" className="w-4 h-4 shrink-0" fill="none" aria-hidden>
+                <svg viewBox="0 0 20 20" className="w-3.5 h-3.5 shrink-0" fill="none" aria-hidden>
                   <path
                     d="M8 3.5h4M9 3.5v4.2l-4.1 6.6a2 2 0 0 0 1.7 3h6.8a2 2 0 0 0 1.7-3L11 7.7V3.5"
                     stroke="currentColor"
@@ -4331,13 +4331,13 @@ const MainApp: React.FC = () => {
             {experimentalNavExpanded ? (
               <div className="mt-2 flex flex-col gap-2 pt-2">
                 <SidebarIconButton active={mode === AppMode.SEAM_REPAIR} label="贴图修缝" onClick={() => { setMode(AppMode.SEAM_REPAIR); setIsSidebarOpen(false); }}>
-                  <svg viewBox="0 0 20 20" className="w-4 h-4" fill="none" aria-hidden><path d="M4 6h5l2 2h5v6H4V6Z" stroke="currentColor" strokeWidth="1.6"/><path d="M8.2 8.2l3.6 3.6M11.8 8.2l-3.6 3.6" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/></svg>
+                  <svg viewBox="0 0 20 20" className="w-3.5 h-3.5" fill="none" aria-hidden><path d="M4 6h5l2 2h5v6H4V6Z" stroke="currentColor" strokeWidth="1.6"/><path d="M8.2 8.2l3.6 3.6M11.8 8.2l-3.6 3.6" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/></svg>
                 </SidebarIconButton>
                 <SidebarIconButton active={mode === AppMode.PBR_TEXTURE} label="生成贴图" onClick={() => { setMode(AppMode.PBR_TEXTURE); setIsSidebarOpen(false); }}>
-                  <svg viewBox="0 0 20 20" className="w-4 h-4" fill="none" aria-hidden><circle cx="10" cy="10" r="6.2" stroke="currentColor" strokeWidth="1.6"/><path d="M10 3.8v12.4M3.8 10h12.4" stroke="currentColor" strokeWidth="1.2"/></svg>
+                  <svg viewBox="0 0 20 20" className="w-3.5 h-3.5" fill="none" aria-hidden><circle cx="10" cy="10" r="6.2" stroke="currentColor" strokeWidth="1.6"/><path d="M10 3.8v12.4M3.8 10h12.4" stroke="currentColor" strokeWidth="1.2"/></svg>
                 </SidebarIconButton>
                 <SidebarIconButton active={mode === AppMode.ARENA} label="提示词擂台" onClick={() => { setMode(AppMode.ARENA); setIsSidebarOpen(false); }}>
-                  <svg viewBox="0 0 20 20" className="w-4 h-4" fill="none" aria-hidden><path d="M6 5.5h8l-1.2 2.6L15 10l-5 6-5-6 2.2-1.9L6 5.5Z" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round"/></svg>
+                  <svg viewBox="0 0 20 20" className="w-3.5 h-3.5" fill="none" aria-hidden><path d="M6 5.5h8l-1.2 2.6L15 10l-5 6-5-6 2.2-1.9L6 5.5Z" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round"/></svg>
                 </SidebarIconButton>
               </div>
             ) : null}
@@ -4688,8 +4688,8 @@ const MainApp: React.FC = () => {
           ref={mainScrollRef}
           className={`flex-1 min-h-0 no-scrollbar touch-pan-y ${
             mode === AppMode.WORKFLOW && showWorkflowCanvas
-              ? 'flex flex-col overflow-hidden pt-3 pb-3 pl-[calc(0.75rem+3.5rem+0.5rem)] pr-4 lg:pt-4 lg:pb-6 lg:pl-[calc(1rem+3.5rem+0.75rem)] lg:pr-6'
-              : 'overflow-y-auto pt-6 pb-4 pl-[calc(0.75rem+3.5rem+0.5rem)] pr-4 lg:py-10 lg:pl-[calc(1rem+3.5rem+0.75rem)] lg:pr-10'
+              ? 'flex flex-col overflow-hidden pt-1.5 pb-1.5 pl-[calc(0.75rem+1.75rem+0.5rem)] pr-4 lg:pt-2 lg:pb-2 lg:pl-[calc(1rem+1.75rem+0.75rem)] lg:pr-6'
+              : 'overflow-y-auto pt-6 pb-4 pl-[calc(0.75rem+1.75rem+0.5rem)] pr-4 lg:py-10 lg:pl-[calc(1rem+1.75rem+0.75rem)] lg:pr-10'
           }`}
           onMouseDownCapture={onMainMouseDownCapture}
           onWheelCapture={onMainWheelCapture}

@@ -13,9 +13,19 @@ import {
   workshopFileAssetId,
   workshopMoveToParentDestRel,
   workshopRecycleLibraryRoot,
+  workshopPresetLibraryRoot,
+  workshopPresetFolderLabel,
+  workshopEntriesToWorkflowAssets,
   workshopRootAllowsCreate,
+  isWorkshopPresetLibraryRoot,
+  isWorkshopPresetFolderRel,
+  isWorkshopPinnedTreeRoot,
+  normalizeWorkshopPresetRel,
   WORKSHOP_BROWSER_LIBRARY_LABEL,
   WORKSHOP_BROWSER_LIBRARY_ROOT,
+  WORKSHOP_PRESET_FOLDER_LABELS,
+  WORKSHOP_PRESET_LIBRARY_LABEL,
+  WORKSHOP_PRESET_LIBRARY_ROOT,
   WORKSHOP_RECYCLE_LIBRARY_LABEL,
   WORKSHOP_RECYCLE_LIBRARY_ROOT,
   WORKSHOP_THUMB_IPC_PARALLEL,
@@ -71,6 +81,18 @@ describe('workshopFileTree', () => {
     expect(next.openRel).toBe('refs');
   });
 
+  it('folder click expands and selected row uses a caret, not a bar', () => {
+    const tree = fs.readFileSync(path.resolve(process.cwd(), 'components/workshop/WorkshopFileSource.tsx'), 'utf8');
+    expect(tree).toContain('function FoldCaret');
+    expect(tree).toContain('const selectFolder');
+    expect(tree).toContain('if (alreadyOn && open) toggle(root, rel)');
+    expect(tree).toContain('else expand(root, rel)');
+    expect(tree).toContain('selectFolder(item.root, \'\', !browser)');
+    expect(tree).toContain('selectFolder(root, dir.rel, true)');
+    expect(tree).not.toContain('before:w-0.5');
+    expect(tree).not.toContain('before:absolute before:left-0');
+  });
+
   it('folders UI module re-exports hasWorkbenchFileSourceApi for stale HMR imports', () => {
     const ui = fs.readFileSync(path.resolve(process.cwd(), 'components/workshop/WorkshopFileSource.tsx'), 'utf8');
     expect(ui).toMatch(/export function hasWorkbenchFileSourceApi/);
@@ -79,14 +101,18 @@ describe('workshopFileTree', () => {
 
   it('workbench file source keeps the original asset list and presets on the right', () => {
     const src = fs.readFileSync(path.resolve(process.cwd(), 'components/WorkflowSection.tsx'), 'utf8');
-    expect(src).toContain('fileSourceApi && showFunctionSidebar ? renderWorkflowFunctionSidebar()');
+    expect(src).toContain('showFunctionSidebar ? renderWorkflowFunctionSidebar()');
     expect(src).toContain('WORKSHOP_FOLDERS_PANE_WIDTH_PX');
     expect(src).toContain('aria-hidden={Boolean(lightboxAssetId)}');
     expect(src).not.toContain('<WorkshopFileWall');
     expect(src).toContain('assetsOnly: true');
     expect(src).toContain('includeSubfolders: workshopListPrefs.flatten');
     expect(src).toContain('onRefresh');
-    expect(src).toContain('指定库目录');
+    expect(src).toContain('onPickWorkspace');
+    const tree = fs.readFileSync(path.resolve(process.cwd(), 'components/workshop/WorkshopFileSource.tsx'), 'utf8');
+    expect(tree).toContain('指定库');
+    expect(tree).toContain('onPickWorkspace');
+    expect(tree).toContain('workspaceDirLeaf');
     expect(src).toContain('if (workshopDiskOpen) return workshopFileAssets');
     expect(src).toContain('WorkshopCanvasNavBar');
     expect(src).toContain('workshopFileAssets.find((x) => x.id === workflowAssetContextMenu.assetId)');
@@ -118,6 +144,8 @@ describe('workshopFileTree', () => {
       label: WORKSHOP_BROWSER_LIBRARY_LABEL,
     });
     const ui = fs.readFileSync(path.resolve(process.cwd(), 'components/workshop/WorkshopFileSource.tsx'), 'utf8');
+    expect(ui).toContain('workshopPresetLibraryRoot()');
+    expect(ui.indexOf('workshopPresetLibraryRoot()')).toBeLessThan(ui.indexOf('workshopBrowserLibraryRoot()'));
     expect(ui).toContain('workshopBrowserLibraryRoot()');
     expect(ui).toContain('存在浏览器里的资产');
     expect(ui).toContain('WorkshopFolderContextMenu');
@@ -133,6 +161,32 @@ describe('workshopFileTree', () => {
     const deleteBlock = ui.slice(ui.indexOf('title="将图片拖到此处从工作流中删除（组内同效）"') - 800);
     expect(deleteBlock).toContain('sidebarDropSources');
     expect(deleteBlock).not.toContain("getAttribute('data-drag-over') !== '1'");
+  });
+
+  it('pins a preset library root that is not a disk path', () => {
+    expect(WORKSHOP_PRESET_LIBRARY_ROOT).toBe('ac-preset:');
+    expect(isWorkshopPresetLibraryRoot(WORKSHOP_PRESET_LIBRARY_ROOT)).toBe(true);
+    expect(isWorkshopPresetLibraryRoot(WORKSHOP_BROWSER_LIBRARY_ROOT)).toBe(false);
+    expect(isWorkshopPinnedTreeRoot(WORKSHOP_PRESET_LIBRARY_ROOT)).toBe(true);
+    expect(workshopRootAllowsCreate(WORKSHOP_PRESET_LIBRARY_ROOT)).toBe(false);
+    expect(workshopPresetLibraryRoot()).toEqual({
+      root: WORKSHOP_PRESET_LIBRARY_ROOT,
+      label: WORKSHOP_PRESET_LIBRARY_LABEL,
+    });
+    expect(isWorkshopPresetFolderRel('basic')).toBe(true);
+    expect(isWorkshopPresetFolderRel('image_process')).toBe(true);
+    expect(isWorkshopPresetFolderRel('sets')).toBe(true);
+    expect(isWorkshopPresetFolderRel('other')).toBe(false);
+    expect(normalizeWorkshopPresetRel('\\basic\\')).toBe('basic');
+    expect(normalizeWorkshopPresetRel('nope')).toBe('');
+    expect(workshopPresetFolderLabel('basic')).toBe(WORKSHOP_PRESET_FOLDER_LABELS.basic);
+    expect(workshopPresetFolderLabel('image_process')).toBe(WORKSHOP_PRESET_FOLDER_LABELS.image_process);
+    expect(workshopPresetFolderLabel('sets')).toBe(WORKSHOP_PRESET_FOLDER_LABELS.sets);
+    expect(workshopPresetFolderLabel('')).toBe(WORKSHOP_PRESET_LIBRARY_LABEL);
+    const ui = fs.readFileSync(path.resolve(process.cwd(), 'components/workshop/WorkshopFileSource.tsx'), 'utf8');
+    expect(ui).toContain('workshopPresetLibraryRoot()');
+    expect(ui).toContain('WORKSHOP_PRESET_FOLDER_RELS');
+    expect(ui.indexOf('workshopPresetLibraryRoot()')).toBeLessThan(ui.indexOf('workshopBrowserLibraryRoot()'));
   });
 
   it('pins a recycle root under the library, sibling to browser assets', () => {
@@ -449,6 +503,18 @@ describe('workshopFileTree', () => {
     expect(doc?.id).toBe('a3f1c0e8');
     expect(doc?.displayFileId).toBe('c91e04d2');
     expect(doc?.tags).toEqual(['ref']);
+  });
+
+  it('maps host file entries to image/model when name is known', () => {
+    const cards = workshopEntriesToWorkflowAssets(
+      [
+        { kind: 'file', name: 'shot.png', rel: 'shot.png', size: 1, mtimeMs: 1 },
+        { kind: 'file', name: 'hero.glb', rel: 'hero.glb', size: 2, mtimeMs: 2 },
+        { kind: 'image', name: 'a.jpg', rel: 'a.jpg', size: 3, mtimeMs: 3 },
+      ],
+      { root: 'C:/lib' },
+    );
+    expect(cards.map((c) => c.assetKind)).toEqual(['image', 'model3d', 'image']);
   });
 
   it('workshopHostFilePayload keeps fileId on loose cards', () => {

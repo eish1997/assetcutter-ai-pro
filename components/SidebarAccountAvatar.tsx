@@ -40,7 +40,7 @@ export const SidebarAccountAvatar: React.FC<{ user: AuthUser; prefs: UserUiPrefs
 
   return (
     <span
-      className="relative flex h-9 w-9 shrink-0 overflow-hidden rounded-xl ring-2 ring-black/35 shadow-[inset_0_1px_0_rgba(255,255,255,0.1)]"
+      className="relative flex h-6 w-6 shrink-0 overflow-hidden rounded-md ring-1 ring-black/35 shadow-[inset_0_1px_0_rgba(255,255,255,0.1)]"
       aria-hidden
     >
       {showImg && !imgBroken ? (
@@ -54,7 +54,7 @@ export const SidebarAccountAvatar: React.FC<{ user: AuthUser; prefs: UserUiPrefs
         />
       ) : (
         <span
-          className={`flex h-full w-full items-center justify-center bg-gradient-to-br ${g} text-[11px] font-black tracking-tight text-white`}
+          className={`flex h-full w-full items-center justify-center bg-gradient-to-br ${g} text-[8px] font-black tracking-tight text-white`}
         >
           {initials}
         </span>

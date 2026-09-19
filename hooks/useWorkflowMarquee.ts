@@ -49,7 +49,12 @@ function applyMarqueeSelection(
     const r = el.getBoundingClientRect();
     mounted.push([id, { left: r.left, top: r.top, width: r.width, height: r.height }]);
   });
-  const ids = resolveWorkflowMarqueeCardIds(sel, opts.layoutHitIdsRef?.current, mounted);
+  let ids: string[] = [];
+  try {
+    ids = resolveWorkflowMarqueeCardIds(sel, opts.layoutHitIdsRef?.current, mounted);
+  } catch {
+    return;
+  }
   if (!ids.length) return;
   const currentGroupId = opts.groupFilterIdRef.current;
   const pendNow = opts.pendingRef.current ?? [];
@@ -60,6 +65,13 @@ function applyMarqueeSelection(
       const next = new Set(s);
       toRemove.forEach((id) => next.delete(id));
       toAdd.forEach((id) => next.add(id));
+      if (next.size === s.size) {
+        let same = true;
+        next.forEach((id) => {
+          if (!s.has(id)) same = false;
+        });
+        if (same) return s;
+      }
       return next;
     });
   } else {
@@ -77,6 +89,13 @@ function applyMarqueeSelection(
       const next = new Set(s);
       toRemove.forEach((key) => next.delete(key));
       toAdd.forEach((key) => next.add(key));
+      if (next.size === s.size) {
+        let same = true;
+        next.forEach((key) => {
+          if (!s.has(key)) same = false;
+        });
+        if (same) return s;
+      }
       return next;
     });
   }
