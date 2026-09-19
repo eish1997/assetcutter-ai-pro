@@ -18,12 +18,18 @@ const {
   ipcMain,
   dialog,
   protocol,
+  screen,
 } = require('electron');
 const { spawn, execSync } = require('child_process');
 const { createHash, randomBytes } = require('node:crypto');
 const companionSandboxPaths = require('./companion-sandbox-paths.cjs');
 const { createCompanionAutoUpdate } = require('./companion-auto-update.cjs');
 const { computeWorkbenchAndDshBounds, detachBrowserViews } = require('./embedded-browser-manager.cjs');
+const {
+  isCursorInViewBounds,
+  shouldForwardSpaceToWorkbench,
+  spaceMarqueeIpcPayload,
+} = require('./workbench-space-forward.cjs');
 const { createDshHost, DEFAULT_VERSION: DSH_PINNED_VERSION, resolveDshCliEntry } = require('./dsh-host.cjs');
 const { viewsForShellView, DSH_SESSION_PARTITION, isDshPartitionAllowed, shellViewShowsDsh, sameDshOrigin, fingerSurfaceForShellView } = require('./dsh-workbench-views.cjs');
 const { isLeasedRoomView, normalizeResidentShellView } = require('./shell-rooms.cjs');
@@ -6053,6 +6059,11 @@ async function attachWorkbenchBrowserView() {
   }
 
   applyShellRoomFinger('workbench');
+  try {
+    if (shellMainProcessActiveView === 'workbench') focusWorkbenchWebContents();
+  } catch {
+    /* ignore */
+  }
   return { ok: true };
 }
 
@@ -6194,6 +6205,68 @@ async function buildAgentMcpToolCatalog() {
   return buildToolCatalog(tools);
 }
 
+const workbenchSpaceForwardBound = new WeakSet();
+
+function isWorkbenchWebContentsFocused() {
+  try {
+    return Boolean(
+      workbenchBrowserView &&
+        workbenchBrowserView.webContents &&
+        !workbenchBrowserView.webContents.isDestroyed() &&
+        workbenchBrowserView.webContents.isFocused()
+    );
+  } catch {
+    return false;
+  }
+}
+
+function isCursorOverWorkbenchView() {
+  if (!mainWindow || mainWindow.isDestroyed() || !workbenchBrowserView) return false;
+  try {
+    return isCursorInViewBounds(
+      screen.getCursorScreenPoint(),
+      mainWindow.getContentBounds(),
+      workbenchBrowserView.getBounds()
+    );
+  } catch {
+    return false;
+  }
+}
+
+function focusWorkbenchWebContents() {
+  if (!workbenchBrowserView || workbenchBrowserView.webContents.isDestroyed()) return;
+  try {
+    workbenchBrowserView.webContents.focus();
+  } catch {
+    /* ignore */
+  }
+}
+
+function bindWorkbenchSpaceKeyForward() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (workbenchSpaceForwardBound.has(mainWindow)) return;
+  workbenchSpaceForwardBound.add(mainWindow);
+  mainWindow.webContents.on('before-input-event', (event, input) => {
+    if (
+      !shouldForwardSpaceToWorkbench({
+        input,
+        shellView: shellMainProcessActiveView,
+        workbenchFocused: isWorkbenchWebContentsFocused(),
+        cursorInWorkbench: isCursorOverWorkbenchView(),
+      })
+    ) {
+      return;
+    }
+    event.preventDefault();
+    focusWorkbenchWebContents();
+    try {
+      workbenchBrowserView.webContents.send('workbench-space-marquee', spaceMarqueeIpcPayload(input));
+    } catch (e) {
+      companionLog('warn', '[companion-desktop] workbench space ipc:', e instanceof Error ? e.message : e);
+    }
+  });
+}
+
 function bindMainWindowWorkbenchLayoutHandlers() {
   if (!mainWindow || mainWindow.isDestroyed()) return;
   const relayout = () => layoutShellChrome();
@@ -6201,6 +6274,7 @@ function bindMainWindowWorkbenchLayoutHandlers() {
   mainWindow.on('move', relayout);
   mainWindow.on('maximize', relayout);
   mainWindow.on('unmaximize', relayout);
+  bindWorkbenchSpaceKeyForward();
 }
 
 function openMainWindow() {

@@ -43,6 +43,7 @@ AI-assisted asset workflow workbench (workspace, capability presets, experimenta
 - [x] Companion Workflow objects (draft / version / pin / repair); Maya run uses the connected Command Port from the connection page (no repo-root smoke as the product path)
 - [x] Companion Copilot product UI: runtime awareness bar, task cards, desktop observe
 - [x] Companion desktop shell: dsh concierge, map, tools shelf, skill wall, blank rooms, workshop library folder source
+- [x] Shell workbench marquee: Space is forwarded by IPC when the shell has focus; empty-area drag works in folder mode without a project id
 - [x] Workshop disk library: sort / flatten-all / refresh / filename filter; kind chips (multi-select, folders follow contained kinds); format badges with a hide toggle; folder tree and asset card context menus (open, path, rename, trash, cut/copy/paste)
 - [x] Unified lightbox center routing (image / text / media) plus workshop multi-format preview; EXR/HDR thumbs flip Y and cache JPEG so re-entry is fast; 1/2 in the lightbox only changes backdrop, not workspace panes
 - [x] Workshop loose-file generate: result versions stay in the workspace package (disk checkout stays original); step-tree thumbs reuse VGP/step keys and `data:` LRU so switching steps does not blank; lightbox center holds the previous frame until the next image loads

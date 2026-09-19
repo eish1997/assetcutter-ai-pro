@@ -65,6 +65,18 @@ contextBridge.exposeInMainWorld('assetCutterWorkbench', {
   setWorkshopFace: (payload) => timedInvoke('workshop-file-set-face', payload || {}),
   pickWorkshopWorkspace: () => timedInvoke('workshop-file-pick-workspace'),
   setWorkshopLibraryOpen: (payload) => timedInvoke('workshop-file-set-library-open', payload || {}),
+  onSpaceMarquee: (handler) => {
+    if (typeof handler !== 'function') return () => {};
+    const listener = (_evt, payload) => {
+      try {
+        handler(Boolean(payload && payload.down));
+      } catch {
+        /* ignore */
+      }
+    };
+    ipcRenderer.on('workbench-space-marquee', listener);
+    return () => ipcRenderer.removeListener('workbench-space-marquee', listener);
+  },
   onWorkspaceShellView: (handler) => {
     if (typeof handler !== 'function') return () => {};
     const listener = (_evt, view) => {

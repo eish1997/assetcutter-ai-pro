@@ -5,7 +5,17 @@ import {
   useEffect,
   type WheelEvent as ReactWheelEvent,
 } from 'react';
-import { isWorkflowEditableTarget } from '../components/workflow/workflowDomUtils';
+import { isWorkflowEditableTarget, isWorkflowSpaceKey } from '../components/workflow/workflowDomUtils';
+
+function isPointerOverAssetList(clientX: number, clientY: number): boolean {
+  if (typeof document === 'undefined') return false;
+  const top = document.elementFromPoint(clientX, clientY);
+  if (!top) return false;
+  if (top.closest('[data-workflow-quick-compose-bar], [data-workflow-quick-compose-dock-host], [data-workflow-quick-compose-chat-dock]')) {
+    return false;
+  }
+  return Boolean(top.closest('[data-workflow-asset-list]'));
+}
 
 export type UseWorkflowWorkspacePanesArgs = {
   registerPaneWheelHandler?: (handler: ((e: ReactWheelEvent) => void) | null) => void;
@@ -67,36 +77,73 @@ export function useWorkflowWorkspacePanes({
 
   useEffect(() => {
     if (!enableSpaceMarquee) return;
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.code !== 'Space') return;
+    const pointerOverListRef = { current: false };
+    const canArmMarquee = (): boolean => {
+      if (workspacePaneRef.current !== 0) return false;
+      if (typeof document === 'undefined' || !document.querySelector('[data-workflow-asset-list]')) return false;
       /**
-       * 仅在真正输入时让出。勿用 data-ac-block-workflow-marquee：
-       * 快捷栏常驻该属性，且点击资产列表后焦点常仍留在栏上，会误禁空格框选。
-       * 指针命中栏/遮罩的拦截由 WorkflowSpaceMarqueeChrome 的 target.closest 负责。
+       * 快捷栏常把焦点留在输入框。鼠标已在资产列表上时仍进入框选，
+       * 不要因为 activeElement 是 textarea 就让出。
        */
-      if (isWorkflowEditableTarget(e.target)) return;
-      if (isWorkflowEditableTarget(document.activeElement)) return;
-      /** 仅小盒子资产页（pane=0）可空格框选 */
-      if (workspacePaneRef.current !== 0) return;
-      if (typeof document !== 'undefined' && !document.querySelector('[data-workflow-asset-list]')) return;
+      if (isWorkflowEditableTarget(document.activeElement) && !pointerOverListRef.current) return false;
+      return true;
+    };
+    const armMarquee = () => {
+      if (!canArmMarquee()) return false;
+      if (isWorkflowEditableTarget(document.activeElement) && pointerOverListRef.current) {
+        try {
+          (document.activeElement as HTMLElement).blur();
+        } catch {
+          /* ignore */
+        }
+      }
+      setSpaceMarqueeEnabled(true);
+      return true;
+    };
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (!isWorkflowSpaceKey(e)) return;
+      if (isWorkflowEditableTarget(e.target) && !pointerOverListRef.current) return;
+      if (!canArmMarquee()) return;
       e.preventDefault();
       if (e.repeat) return;
-      setSpaceMarqueeEnabled(true);
+      armMarquee();
     };
     const onKeyUp = (e: KeyboardEvent) => {
-      if (e.code !== 'Space') return;
+      if (!isWorkflowSpaceKey(e)) return;
       setSpaceMarqueeEnabled(false);
     };
     const onBlur = () => {
+      if (typeof document !== 'undefined' && document.hasFocus()) return;
       setSpaceMarqueeEnabled(false);
     };
-    window.addEventListener('keydown', onKeyDown);
-    window.addEventListener('keyup', onKeyUp);
+    const onPointerMove = (e: PointerEvent) => {
+      pointerOverListRef.current = isPointerOverAssetList(e.clientX, e.clientY);
+    };
+    window.addEventListener('keydown', onKeyDown, true);
+    window.addEventListener('keyup', onKeyUp, true);
     window.addEventListener('blur', onBlur);
+    window.addEventListener('pointermove', onPointerMove, { passive: true });
+    window.addEventListener('pointerdown', onPointerMove, { passive: true });
+    const api = typeof window !== 'undefined' ? window.assetCutterWorkbench : undefined;
+    const unsubIpc =
+      api && typeof api.onSpaceMarquee === 'function'
+        ? api.onSpaceMarquee((down) => {
+            if (!down) {
+              setSpaceMarqueeEnabled(false);
+              return;
+            }
+            /** 壳侧已确认光标在工作台 BrowserView 内，避免指针事件没进页面时误拒 */
+            pointerOverListRef.current = true;
+            armMarquee();
+          })
+        : undefined;
     return () => {
-      window.removeEventListener('keydown', onKeyDown);
-      window.removeEventListener('keyup', onKeyUp);
+      window.removeEventListener('keydown', onKeyDown, true);
+      window.removeEventListener('keyup', onKeyUp, true);
       window.removeEventListener('blur', onBlur);
+      window.removeEventListener('pointermove', onPointerMove);
+      window.removeEventListener('pointerdown', onPointerMove);
+      unsubIpc?.();
     };
   }, [enableSpaceMarquee]);
 

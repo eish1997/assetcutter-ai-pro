@@ -315,6 +315,7 @@ export function useWorkflowMarquee({
 
   const handleMarqueeMouseDown = useCallback(
     (e: ReactMouseEvent) => {
+      if (e.button != null && e.button !== 0) return;
       if (spaceMarqueeEnabled) return;
       /** 仅资产列表页（小盒子 pane=0）可框选；预设页不框选 */
       if (Math.round(workspacePane) !== 0) return;
@@ -355,5 +356,6 @@ export function useWorkflowMarquee({
     marqueeOverlayElRef,
     marqueePaneRef,
     beginSpaceMarqueePointerDrag,
+    handleMarqueeMouseDown,
   };
 }

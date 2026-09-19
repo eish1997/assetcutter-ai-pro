@@ -73,6 +73,15 @@ describe('folder mode guards in web and shell', () => {
     expect(app).not.toMatch(/mode === AppMode\.WORKFLOW && activeWorkspaceProjectId\s*\n\s*\? 'flex flex-col overflow-hidden/);
   });
 
+  it('enables empty-area marquee capture in folder mode without a project id', () => {
+    const app = fs.readFileSync(path.resolve(process.cwd(), 'App.tsx'), 'utf8');
+    expect(app).toMatch(
+      /isWorkflowMarqueeWheelActive = mode === AppMode\.WORKFLOW && showWorkflowCanvas/,
+    );
+    const section = fs.readFileSync(path.resolve(process.cwd(), 'components/WorkflowSection.tsx'), 'utf8');
+    expect(section).toContain('onMouseDown={handleMarqueeMouseDown}');
+  });
+
   it('main.cjs forwards finger-only document events in folder mode', () => {
     const main = fs.readFileSync(path.resolve(process.cwd(), 'companion-desktop/main.cjs'), 'utf8');
     expect(main).toContain('filterWorkbenchDocumentEvents');

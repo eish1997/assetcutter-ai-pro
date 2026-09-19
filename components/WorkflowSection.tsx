@@ -3164,6 +3164,7 @@ const WorkflowSection: React.FC<{
   const {
     marqueeOverlayElRef,
     beginSpaceMarqueePointerDrag,
+    handleMarqueeMouseDown,
   } = useWorkflowMarquee({
     registerMarqueeStartHandler,
     showArchived,
@@ -16594,6 +16595,7 @@ ${lineSvg}
             workshopBoardView ? 'overflow-hidden' : 'overflow-y-auto'
           } ${spaceMarqueeEnabled && assetListMarqueeActive ? WORKFLOW_SPACE_MARQUEE_FRAME : ''}`}
           onWheelCapture={handleCenterWheelDuringDrag}
+          onMouseDown={handleMarqueeMouseDown}
           onContextMenu={openWorkflowCanvasBlankContextMenu}
           onDragOver={(e) => {
             autoScrollContainerOnDrag(e.currentTarget as HTMLElement, e.clientY);

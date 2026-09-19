@@ -20,6 +20,7 @@ type WorkbenchDownloadBridge = {
   getWorkshopThumb?: (payload: { rel: string; root?: string }) => Promise<unknown>;
   removeWorkshopRoot?: (payload: { root: string }) => Promise<unknown>;
   onWorkspaceShellView?: (handler: (view: string) => void) => () => void;
+  onSpaceMarquee?: (handler: (down: boolean) => void) => () => void;
 };
 
 declare global {

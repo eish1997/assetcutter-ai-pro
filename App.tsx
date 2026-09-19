@@ -3466,7 +3466,7 @@ const MainApp: React.FC = () => {
       setWorkspaceQuickComposeExpanded(false);
     }
   }, [mode, activeWorkspaceProjectId]);
-  const isWorkflowMarqueeWheelActive = mode === AppMode.WORKFLOW && !!activeWorkspaceProjectId;
+  const isWorkflowMarqueeWheelActive = mode === AppMode.WORKFLOW && showWorkflowCanvas;
   const tryDisableCapabilityPresetById = useCallback((id: string): boolean => {
     if (!id || id.startsWith('set:')) return false;
     let changed = false;
