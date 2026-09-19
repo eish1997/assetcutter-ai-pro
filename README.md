@@ -14,6 +14,7 @@ AI-assisted asset workflow workbench (workspace, capability presets, experimenta
 - [x] Compose-style dropdowns / sidebar chips (aligned with quick compose bar)
 - [x] Dev log (staff): plain-language day receipt + post-push R2 timeline (`dev-log:rewrite` to refresh tip)
 - [x] Production lazy-chunk recovery: exclude `/assets` from SPA rewrite; retry/reload on stale preview chunks
+- [x] Production Vite chunks: only `react` / `react-dom` / `scheduler` go in `react-vendor` (do not substring-match `react-i18next` or split `@xyflow`, or the site boots to a black screen)
 - [x] Upstream Gemini/Vertex 429: limited long-backoff retries (proxy + client); understand mode lowers image batch concurrency
 - [x] Task-envelope credits: sum-of-steps precharge + clear stale reserve after settle (avoids CREDITS_RESERVE_INVALID)
 - [x] Credit reserve reuse: an existing envelope (e.g. 149) covers a later smaller step (e.g. 134) instead of idempotency conflict

@@ -38,6 +38,9 @@ describe('basketikun infinite-canvas vendor snapshot', () => {
     const atFind = cfg.indexOf("find: '@'");
     expect(icFind).toBeGreaterThan(0);
     expect(atFind).toBeGreaterThan(icFind);
+    expect(cfg).not.toContain("includes('node_modules/react')");
+    expect(cfg).not.toContain('xyflow-vendor');
+    expect(cfg).toMatch(/react\|react-dom\|scheduler/);
   });
 
   it('lets select-tool empty drags pan and keeps the toolbar inside the board', () => {

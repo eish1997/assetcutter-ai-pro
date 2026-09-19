@@ -374,12 +374,14 @@ export default defineConfig(({ mode }) => {
         rollupOptions: {
           output: {
             manualChunks(id) {
-              if (!id.includes('node_modules')) return undefined;
-              if (id.includes('node_modules/three/examples')) return 'three-examples';
-              if (id.includes('node_modules/three')) return 'three-core';
-              if (id.includes('node_modules/@google/genai')) return 'genai-vendor';
-              if (id.includes('node_modules/@xyflow/react')) return 'xyflow-vendor';
-              if (id.includes('node_modules/react') || id.includes('node_modules/scheduler')) return 'react-vendor';
+              const n = id.replace(/\\/g, '/');
+              if (!n.includes('/node_modules/')) return undefined;
+              if (n.includes('/node_modules/three/examples/')) return 'three-examples';
+              if (n.includes('/node_modules/three/')) return 'three-core';
+              if (n.includes('/node_modules/@google/genai/')) return 'genai-vendor';
+              // Keep react-i18next / @xyflow out of this chunk. A substring match on "react"
+              // circular-inits and throws: Cannot set properties of undefined (setting 'Activity').
+              if (/\/node_modules\/(react|react-dom|scheduler)\//.test(n)) return 'react-vendor';
               return undefined;
             },
           },
