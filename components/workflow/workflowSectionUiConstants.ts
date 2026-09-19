@@ -44,11 +44,15 @@ export const SIDEBAR_COMPOSE_CHIP_ACTIVE = `${SIDEBAR_COMPOSE_CHIP_BASE} bg-whit
 export const SIDEBAR_COMPOSE_CHIP_EDITING =
   'h-6 min-h-6 max-h-6 inline-flex shrink-0 items-center gap-1 rounded-md bg-white/[0.16] px-1 text-[9px] font-black text-white';
 
-/** 功能区搜索框下方：全部 / 云端 / 我的 / 标签 */
+/** 功能区来源 / 标签芯片（云端、我的、变体…） */
 export const SIDEBAR_FILTER_CHIP_BASE =
-  'px-2 py-0.5 rounded-md text-[8px] font-black transition-colors outline-none';
+  'inline-flex items-center justify-center px-2 py-0.5 rounded-md text-[8px] font-black leading-4 transition-colors outline-none';
 export const SIDEBAR_FILTER_CHIP_IDLE = `${SIDEBAR_FILTER_CHIP_BASE} bg-white/[0.06] text-gray-400 hover:bg-white/[0.1] hover:text-gray-300`;
-export const SIDEBAR_FILTER_CHIP_ACTIVE = `${SIDEBAR_FILTER_CHIP_BASE} bg-white text-[#0a0a0c]`;
+export const SIDEBAR_FILTER_CHIP_ACTIVE = `${SIDEBAR_FILTER_CHIP_BASE} bg-white/[0.16] text-[#e8e6e1]`;
+/** 一级来源行：与二级标签同色同高；保留旧导出名，避免 Vite HMR 旧模块崩掉 */
+export const SIDEBAR_ORIGIN_BAR = 'flex w-full gap-1';
+export const SIDEBAR_ORIGIN_BTN_IDLE = `flex-1 ${SIDEBAR_FILTER_CHIP_IDLE}`;
+export const SIDEBAR_ORIGIN_BTN_ACTIVE = `flex-1 ${SIDEBAR_FILTER_CHIP_ACTIVE}`;
 
 /** 工作台主按钮：对齐底部发送键（白底黑字），不是 SaaS 蓝 */
 export const WORKBENCH_PRIMARY_BTN =

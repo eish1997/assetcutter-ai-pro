@@ -45,12 +45,14 @@ AI-assisted asset workflow workbench (workspace, capability presets, experimenta
 - [x] Workshop disk library: sort / flatten-all / refresh / filename filter; kind chips (multi-select, folders follow contained kinds); format badges with a hide toggle; folder tree and asset card context menus (open, path, rename, trash, cut/copy/paste)
 - [x] Unified lightbox center routing (image / text / media) plus workshop multi-format preview; EXR/HDR thumbs flip Y and cache JPEG so re-entry is fast; 1/2 in the lightbox only changes backdrop, not workspace panes
 - [x] Workshop loose-file generate: result versions stay in the workspace package (disk checkout stays original); step-tree thumbs reuse VGP/step keys and `data:` LRU so switching steps does not blank; lightbox center holds the previous frame until the next image loads
+- [x] Function sidebar: capability cards show cover thumbs; origin (cloud/mine) and tags are two-level multi-select chips
+- [x] Workshop loose persist: HTTPS generate results (e.g. 302 CDN) materialize via browser then auth-api `/api/media/fetch-url` before `upgradeWorkshopLoose`
 - [x] Design tokens in `design-system/` (page overrides for workshop / shell / tools)
 - [ ] Removed: standalone dialog page, texture pattern extract page, prompt-effect analysis page
 
 ## Sidebar / pages
 
-- **Workspace**: main asset canvas + function sidebar; content slot switches assets ??presets; Project Agent dock (right)
+- **Workspace**: main asset canvas + function sidebar (cover thumbs, cloud/mine + tag chips); presets live under the left-tree Preset root; Project Agent dock (right)
 - **Companion shell**: workshop, skills, tools, map, blank rooms; dsh on the right
 - **Settings**: API keys, sync, companion
 - **Admin** (staff): opens `/admin`

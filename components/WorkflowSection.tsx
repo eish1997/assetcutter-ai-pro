@@ -758,6 +758,7 @@ import {
   putCompanionAsset,
   revealCompanionAssetFolderWithProjectFallback,
 } from '../services/companionClient';
+import { fetchMediaUrlViaAuthApi } from '../services/mediaUrlAuthFetch';
 import {
   cloneWorkflowModelSlotsForDuplicatedAsset,
   companionRasterSlotNeedsHydrate,
@@ -4172,12 +4173,34 @@ const WorkflowSection: React.FC<{
         const api = workshopFileSourceApi();
         if (!api) return;
         void (async () => {
+          let persistSrc = source;
+          if (!parseDataUrlToBlob(persistSrc)) {
+            let materialized = await imageSrcToDataUrlForCompanion(persistSrc);
+            if (!materialized && /^https?:\/\//i.test(persistSrc)) {
+              try {
+                const blob = await fetchMediaUrlViaAuthApi(persistSrc);
+                materialized = await new Promise<string>((resolve, reject) => {
+                  const reader = new FileReader();
+                  reader.onload = () => resolve(String(reader.result || ''));
+                  reader.onerror = () => reject(reader.error || new Error('read_failed'));
+                  reader.readAsDataURL(blob);
+                });
+              } catch {
+                materialized = null;
+              }
+            }
+            if (!materialized) {
+              onLog?.('warn', '作坊散文件写入工作区失败', 'cannot_normalize_image_src');
+              return;
+            }
+            persistSrc = materialized;
+          }
           if (parsed.kind === 'loose') {
             if (!api.upgradeWorkshopLoose) return;
             const out = await api.upgradeWorkshopLoose({
               root: parsed.root,
               rel: parsed.rel,
-              dataUrl: source,
+              dataUrl: persistSrc,
               step: rk,
             });
             if (!out?.ok) {
@@ -4230,7 +4253,7 @@ const WorkflowSection: React.FC<{
               root: parsed.root,
               assetId: parsed.assetId,
               packageRel: item?.rel,
-              dataUrl: source,
+              dataUrl: persistSrc,
               step: rk,
             });
             if (!out?.ok) {
