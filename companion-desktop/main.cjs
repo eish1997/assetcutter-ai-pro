@@ -308,6 +308,9 @@ const SHELL_TOOL_WORKSPACE_COLLAPSED_MIN_HEIGHT = 160;
 const shellToolWorkspaceExpandedBounds = new WeakMap();
 /** @type {import('electron').BrowserView | null} */
 let workbenchBrowserView = null;
+/** @type {import('electron').BrowserWindow | null} */
+let functionSidebarPopupWindow = null;
+let quickComposePopupWindow = null;
 /** @type {import('electron').BrowserView | null} */
 let dshBrowserView = null;
 /** @type {import('electron').BrowserView | null} */
@@ -5580,6 +5583,92 @@ function bindWorkbenchDownloadHandler(wc) {
   });
 }
 
+function isWorkbenchOwnedPopup(details) {
+  const url = String((details && details.url) || '');
+  const frameName = String((details && details.frameName) || '');
+  const features = String((details && details.features) || '');
+  const disposition = String((details && details.disposition) || '');
+  if (disposition === 'picture-in-picture') return true;
+  if (frameName === 'ac-function-sidebar') return true;
+  if (frameName === 'ac-quick-compose') return true;
+  if (/picture-in-picture/i.test(`${features}\n${frameName}\n${url}`)) return true;
+  if (/^about:blank/i.test(url) || url === 'about:blank' || url === '') return true;
+  return false;
+}
+
+function shouldOpenExternalFromWorkbench(url) {
+  const raw = String(url || '').trim();
+  if (!raw) return false;
+  if (/^(about|blob|data|javascript|chrome|edge):/i.test(raw)) return false;
+  return /^https?:/i.test(raw);
+}
+
+function resolveFunctionSidebarPopupWindow() {
+  if (functionSidebarPopupWindow && !functionSidebarPopupWindow.isDestroyed()) {
+    return functionSidebarPopupWindow;
+  }
+  return findFunctionSidebarPipWindow();
+}
+
+function applyFunctionSidebarPopupPin(win, pinned) {
+  const on = Boolean(pinned);
+  if (on) {
+    win.setAlwaysOnTop(true, 'screen-saver');
+  } else {
+    win.setAlwaysOnTop(false);
+  }
+  if (process.platform === 'darwin') {
+    win.setVisibleOnAllWorkspaces(on, { visibleOnFullScreen: true });
+  }
+  return win.isAlwaysOnTop();
+}
+
+function rememberQuickComposePopupWindow(win) {
+  if (!win || win.isDestroyed()) return;
+  quickComposePopupWindow = win;
+  win.on('closed', () => {
+    if (quickComposePopupWindow === win) quickComposePopupWindow = null;
+  });
+}
+
+function isTrackedQuickComposePopupWindow(win) {
+  return Boolean(quickComposePopupWindow && !quickComposePopupWindow.isDestroyed() && quickComposePopupWindow === win);
+}
+
+function rememberFunctionSidebarPopupWindow(win) {
+  if (!win || win.isDestroyed()) return;
+  functionSidebarPopupWindow = win;
+  win.on('closed', () => {
+    if (functionSidebarPopupWindow === win) functionSidebarPopupWindow = null;
+  });
+}
+
+function findFunctionSidebarPipWindow() {
+  const wins = BrowserWindow.getAllWindows();
+  for (const win of wins) {
+    if (!win || win.isDestroyed() || win === mainWindow) continue;
+    if (isTrackedQuickComposePopupWindow(win)) continue;
+    try {
+      if (typeof win.isDocumentPictureInPicture === 'function' && win.isDocumentPictureInPicture()) return win;
+    } catch {
+      /* ignore */
+    }
+  }
+  if (mainWindow && !mainWindow.isDestroyed() && typeof mainWindow.getChildWindows === 'function') {
+    const kids = mainWindow.getChildWindows().filter((w) => w && !w.isDestroyed() && w !== mainWindow && !isTrackedQuickComposePopupWindow(w));
+    if (kids.length === 1) return kids[0];
+    const slim = kids.find((w) => {
+      try {
+        return w.getBounds().width <= 640;
+      } catch {
+        return false;
+      }
+    });
+    if (slim) return slim;
+  }
+  return null;
+}
+
 function ensureWorkbenchBrowserView() {
   if (workbenchBrowserView) return workbenchBrowserView;
 
@@ -5590,6 +5679,8 @@ function ensureWorkbenchBrowserView() {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      nativeWindowOpen: true,
+      enableBlinkFeatures: 'DocumentPictureInPictureAPI',
     },
   });
 
@@ -5602,9 +5693,55 @@ function ensureWorkbenchBrowserView() {
     console.warn('[companion-desktop] workbench setUserAgent', e);
   }
 
-  wc.setWindowOpenHandler(({ url }) => {
-    void shell.openExternal(url);
+  wc.setWindowOpenHandler((details) => {
+    if (isWorkbenchOwnedPopup(details)) {
+      const compose = String((details && details.frameName) || '') === 'ac-quick-compose';
+      const features = String((details && details.features) || '');
+      const parsedW = Number((/width=(\d+)/i.exec(features) || [])[1]);
+      const parsedH = Number((/height=(\d+)/i.exec(features) || [])[1]);
+      return {
+        action: 'allow',
+        overrideBrowserWindowOptions: {
+          frame: false,
+          titleBarStyle: 'hidden',
+          autoHideMenuBar: true,
+          alwaysOnTop: true,
+          parent: null,
+          modal: false,
+          fullscreenable: false,
+          transparent: compose,
+          backgroundColor: compose ? '#00000000' : '#0b0b0d',
+          width: Number.isFinite(parsedW) && parsedW > 0 ? parsedW : compose ? 720 : 360,
+          height: Number.isFinite(parsedH) && parsedH > 0 ? parsedH : compose ? 96 : 800,
+          minWidth: compose ? 760 : 220,
+          minHeight: compose ? 160 : 320,
+        },
+      };
+    }
+    if (shouldOpenExternalFromWorkbench(details && details.url)) {
+      void shell.openExternal(details.url);
+    }
     return { action: 'deny' };
+  });
+  wc.on('did-create-window', (win, details) => {
+    if (!win || win.isDestroyed()) return;
+    const frameName = String((details && details.frameName) || '');
+    if (frameName === 'ac-quick-compose') {
+      rememberQuickComposePopupWindow(win);
+    } else {
+      rememberFunctionSidebarPopupWindow(win);
+    }
+    try {
+      if (typeof win.setParentWindow === 'function') win.setParentWindow(null);
+    } catch {
+      /* ignore */
+    }
+    applyFunctionSidebarPopupPin(win, true);
+    try {
+      win.setMenuBarVisibility(false);
+    } catch {
+      /* ignore */
+    }
   });
 
   wc.on('will-navigate', (event, url) => {
@@ -6514,6 +6651,30 @@ if (!gotLock) {
     } catch (e) {
       return { ok: false, error: e instanceof Error ? e.message : String(e) };
     }
+  });
+
+  ipcMain.handle('workbench-function-sidebar-toggle-pin', (event, pinned) => {
+    if (!workbenchBrowserView || event.sender !== workbenchBrowserView.webContents) {
+      return { ok: false, error: 'not_workbench' };
+    }
+    const win = resolveFunctionSidebarPopupWindow();
+    if (!win || win.isDestroyed() || win === mainWindow) {
+      return { ok: false, error: 'pip_window_not_found' };
+    }
+    const on = pinned == null ? !win.isAlwaysOnTop() : Boolean(pinned);
+    const isPinned = applyFunctionSidebarPopupPin(win, on);
+    return { ok: true, pinned: isPinned };
+  });
+
+  ipcMain.handle('workbench-function-sidebar-get-pin', (event) => {
+    if (!workbenchBrowserView || event.sender !== workbenchBrowserView.webContents) {
+      return { ok: false, error: 'not_workbench' };
+    }
+    const win = resolveFunctionSidebarPopupWindow();
+    if (!win || win.isDestroyed() || win === mainWindow) {
+      return { ok: false, error: 'pip_window_not_found' };
+    }
+    return { ok: true, pinned: win.isAlwaysOnTop() };
   });
 
   ipcMain.handle('shell-settings-load', () => readShellSettings());

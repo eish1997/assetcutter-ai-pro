@@ -101,7 +101,7 @@ describe('workshopFileTree', () => {
 
   it('workbench file source keeps the original asset list and presets on the right', () => {
     const src = fs.readFileSync(path.resolve(process.cwd(), 'components/WorkflowSection.tsx'), 'utf8');
-    expect(src).toContain('showFunctionSidebar ? renderWorkflowFunctionSidebar()');
+    expect(src).toContain('renderWorkflowFunctionSidebar()');
     expect(src).toContain('WORKSHOP_FOLDERS_PANE_WIDTH_PX');
     expect(src).toContain('aria-hidden={Boolean(lightboxAssetId)}');
     expect(src).not.toContain('<WorkshopFileWall');
@@ -154,13 +154,29 @@ describe('workshopFileTree', () => {
 
   it('sidebar delete drop uses drag refs, not delayed React state', () => {
     const ui = fs.readFileSync(
-      path.resolve(process.cwd(), 'components/workflow/WorkflowSidebarColumn.tsx'),
+      path.resolve(process.cwd(), 'components/workflow/WorkflowAssetActionStrip.tsx'),
       'utf8',
     );
-    expect(ui).toContain('function sidebarHasAssetDrag');
+    expect(ui).toContain('function hasAssetDrag');
     const deleteBlock = ui.slice(ui.indexOf('title="将图片拖到此处从工作流中删除（组内同效）"') - 800);
-    expect(deleteBlock).toContain('sidebarDropSources');
+    expect(deleteBlock).toContain('dropSources');
     expect(deleteBlock).not.toContain("getAttribute('data-drag-over') !== '1'");
+  });
+
+  it('asset ops row is a dashed drop rail, not filled buttons', () => {
+    const ui = fs.readFileSync(
+      path.resolve(process.cwd(), 'components/workflow/WorkflowAssetActionStrip.tsx'),
+      'utf8',
+    );
+    expect(ui).toContain('data-workflow-asset-drop-rail');
+    expect(ui).toContain('border-dashed');
+    expect(ui).toContain('h-9');
+    expect(ui).toContain('w-14');
+    expect(ui).toContain("border-white/[0.16]");
+    expect(ui).not.toContain("bg-white/[0.03] hover:bg-white/[0.06]");
+    expect(ui).not.toContain('const SLOT_IDLE');
+    const workshop = fs.readFileSync(path.resolve(process.cwd(), 'design-system/pages/workshop.md'), 'utf8');
+    expect(workshop).toContain('虚线投放槽');
   });
 
   it('pins a preset library root that is not a disk path', () => {

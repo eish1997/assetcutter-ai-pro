@@ -75,6 +75,7 @@ export function useWorkflowMainScrollCapture(
       if (target?.closest('[data-prevent-wheel-scroll], [data-ac-dropdown-overlay], [data-ac-dropdown-list]')) {
         return;
       }
+      if (target?.closest('[data-front-hall-board]')) return;
       if (target?.closest('[data-ac-block-workflow-marquee]')) return;
 
       if (

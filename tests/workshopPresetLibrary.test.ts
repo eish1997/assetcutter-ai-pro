@@ -95,6 +95,8 @@ describe('workshopPresetLibrary', () => {
     const src = fs.readFileSync(path.resolve(process.cwd(), 'components/WorkflowSection.tsx'), 'utf8');
     expect(src).toContain('const workshopBoardView = Boolean(fileSourceApi && !workshopPresetOpen && workshopListPrefs.viewMode === \'board\')');
     expect(src).toContain('{workshopBoardView ? (');
+    expect(src).toContain('emptyMarqueeEnabled: !workshopBoardView');
+    expect(src).toContain("remeasureKey: `${Math.round(workspacePane)}:${workshopBoardView ? 'board' : 'grid'}`");
     expect(src).toContain('a.groupLabel?.trim() || a.textTitle?.trim() || \'文件夹\'');
     const tree = fs.readFileSync(path.resolve(process.cwd(), 'components/workshop/WorkshopFileSource.tsx'), 'utf8');
     expect(tree).toContain('treeKey(WORKSHOP_PRESET_LIBRARY_ROOT, \'\')');
@@ -114,5 +116,30 @@ describe('workshopPresetLibrary', () => {
     expect(panes).toContain('if (e.repeat) return');
     expect(panes).not.toContain('Digit1');
     expect(panes).not.toContain('Digit2');
+  });
+
+  it('compose send sits in the asset top row; asset ops share the kind-filter row, not the sidebar', () => {
+    const section = fs.readFileSync(path.resolve(process.cwd(), 'components/WorkflowSection.tsx'), 'utf8');
+    expect(section).toContain('data-quick-compose-top-row');
+    expect(section).toContain('data-workflow-canvas-and-sidebar');
+    expect(section).toContain('placement="topRow"');
+    expect(section.indexOf('data-quick-compose-top-row')).toBeLessThan(section.indexOf('data-workflow-asset-list'));
+    expect(section.indexOf('data-workflow-asset-list')).toBeLessThan(section.indexOf('renderWorkflowFunctionSidebar()'));
+    expect(section).toContain('opsRow={');
+    expect(section).not.toContain('segment="execute"');
+    expect(section).toContain('segment="ops"');
+    const bar = fs.readFileSync(path.resolve(process.cwd(), 'components/WorkspaceQuickComposeBar.tsx'), 'utf8');
+    expect(bar).toContain('QuickComposeQueueStack');
+    expect(bar).toContain("placement?: 'floating' | 'lightbox' | 'topRow'");
+    expect(bar).toContain('popoutStack || !isTopRow');
+    expect(bar).not.toContain('ProjectAgentDock');
+    expect(bar).toContain('handleSendOrExecute');
+    expect(bar).toContain('requestQuickComposePopoutWindow');
+    const navSrc = fs.readFileSync(path.resolve(process.cwd(), 'components/workshop/WorkshopCanvasNavBar.tsx'), 'utf8');
+    expect(navSrc.indexOf('筛选类型')).toBeGreaterThan(0);
+    expect(navSrc.indexOf('筛选类型')).toBeLessThan(navSrc.indexOf('props.opsRow'));
+    const sidebar = fs.readFileSync(path.resolve(process.cwd(), 'components/workflow/WorkflowSidebarColumn.tsx'), 'utf8');
+    expect(sidebar).not.toContain('一键执行');
+    expect(sidebar).toContain('data-capability-preset-action-drop');
   });
 });

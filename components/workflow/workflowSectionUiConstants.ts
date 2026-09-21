@@ -57,6 +57,9 @@ export const SIDEBAR_ORIGIN_BTN_ACTIVE = `flex-1 ${SIDEBAR_FILTER_CHIP_ACTIVE}`;
 /** 工作台主按钮：对齐底部发送键（白底黑字），不是 SaaS 蓝 */
 export const WORKBENCH_PRIMARY_BTN =
   'flex h-10 w-full items-center justify-center rounded-xl bg-white px-2.5 text-[10px] font-black tracking-wide text-[#0a0a0c] shadow-md outline-none transition-colors hover:bg-[#f4f4f5] focus-visible:ring-2 focus-visible:ring-white/20 disabled:opacity-35 disabled:hover:bg-white';
+/** 资产列表顶行内联一键执行：同主色，h-7 不定宽 */
+export const WORKBENCH_PRIMARY_BTN_INLINE =
+  'relative flex h-7 shrink-0 items-center justify-center rounded-md bg-white px-2.5 text-[10px] font-black tracking-wide text-[#0a0a0c] shadow-md outline-none transition-colors hover:bg-[#f4f4f5] focus-visible:ring-2 focus-visible:ring-white/20 disabled:opacity-35 disabled:hover:bg-white';
 /** 工作台状态小条（归档 / 导出）：石墨，不占顶栏 */
 export const WORKBENCH_NOTICE_CHIP =
   'mb-1.5 flex items-center gap-1.5 rounded-md bg-white/[0.04] px-2.5 py-1 text-[8px] text-[#e8e6e1]';
@@ -149,27 +152,10 @@ export const WORKFLOW_LIGHTBOX_RIGHT_PANEL_TAB_INSET = '2.25rem';
 export const WORKFLOW_LIGHTBOX_ASSET_THUMB_STRIP_WIDTH_CLASS = 'w-14';
 export const WORKFLOW_LIGHTBOX_ASSET_THUMB_STRIP_INSET = '3.5rem';
 
-/** 工作区 / 大图内嵌快捷生成侧栏宽度（与画卷列同量级，挤压主区域） */
-export const WORKFLOW_QUICK_COMPOSE_DOCKED_WIDTH_CLASS = 'w-[min(28rem,30vw)]';
-/** 展开侧栏时主区域右侧 inset（缩略图条不再单独预留，与侧栏同宽） */
-export const WORKFLOW_QUICK_COMPOSE_DOCKED_INSET = 'min(28rem, 30vw)';
-export const WORKFLOW_LIGHTBOX_COMPOSE_DOCKED_INSET = WORKFLOW_QUICK_COMPOSE_DOCKED_INSET;
-
-/** 与 `WORKFLOW_QUICK_COMPOSE_DOCKED_WIDTH_CLASS` / `shellRightGutter` 一致的像素宽度 */
-export function resolveWorkflowQuickComposeDockedWidthPx(
-  viewportWidth = typeof window !== 'undefined' ? window.innerWidth : 1280
-): number {
-  return Math.min(28 * 16, viewportWidth * 0.3);
-}
-
-/** 大图标注条默认居中：扣除 App 快捷侧栏或内嵌缩略图条占位（px） */
+/** 大图标注条默认居中：扣除内嵌缩略图条占位（px） */
 export function resolveLightboxToolbarCenterRightGutterPx(opts: {
-  composeDockExpanded: boolean;
   chromeReady: boolean;
-  viewportWidth?: number;
 }): number {
-  const vw = opts.viewportWidth ?? (typeof window !== 'undefined' ? window.innerWidth : 1280);
-  if (opts.composeDockExpanded) return resolveWorkflowQuickComposeDockedWidthPx(vw);
   if (opts.chromeReady) return 56;
   return 0;
 }

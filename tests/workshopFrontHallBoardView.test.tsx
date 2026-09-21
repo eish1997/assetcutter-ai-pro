@@ -155,7 +155,12 @@ describe('WorkshopFrontHallBoardView', () => {
     expect(src).toMatch(/import\('\.\/workshop\/WorkshopFrontHallBoardView'\)/);
     expect(src).not.toMatch(/import \{ WorkshopFrontHallBoardView \}/);
     expect(src).toContain('viewMode');
-    expect(src).toContain('data-front-hall-view-toggle');
+    const nav = fs.readFileSync(path.resolve('components/workshop/WorkshopCanvasNavBar.tsx'), 'utf8');
+    expect(nav).toContain('data-front-hall-view-toggle');
+    const toggleAt = nav.indexOf('data-front-hall-view-toggle');
+    const filterAt = nav.indexOf('过滤文件名');
+    expect(filterAt).toBeGreaterThan(0);
+    expect(toggleAt).toBeGreaterThan(filterAt);
     expect(src).toContain('listBoardEntries');
     expect(src).toContain('boardTree: true');
     expect(src).toContain('onDragTokenToNode');
@@ -170,6 +175,8 @@ describe('WorkshopFrontHallBoardView', () => {
     const host = fs.readFileSync(path.resolve('components/workshop/WorkshopFrontHallCanvasHost.tsx'), 'utf8');
     const src = board + host;
     expect(src).toContain('InfiniteCanvas');
+    expect(src).toContain('data-prevent-wheel-scroll');
+    expect(src).toContain('data-ac-block-workflow-marquee');
     expect(src).toContain('CanvasNode');
     expect(src).toContain('CanvasToolbar');
     expect(src).toContain('ConnectionPath');

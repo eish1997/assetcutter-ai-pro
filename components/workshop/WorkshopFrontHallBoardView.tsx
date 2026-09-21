@@ -102,6 +102,8 @@ export function WorkshopFrontHallBoardView(props: {
       data-front-hall-board
       data-front-hall-viewport
       data-front-hall-camera-frame={cameraRel}
+      data-prevent-wheel-scroll
+      data-ac-block-workflow-marquee
       className="relative flex h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-xl bg-[#0f0f12]"
     >
       <div className="min-h-0 flex-1" style={{ height: '100%' }}>

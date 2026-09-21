@@ -46,7 +46,7 @@ const KIND_BTN =
   'flex h-9 w-9 shrink-0 flex-col items-center justify-center gap-px text-[#8b8b93] outline-none transition-colors hover:bg-white/[0.1] hover:text-[#e8e6e1] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#c9a36a]/45';
 
 function kindChipClass(on: boolean): string {
-  return on ? `${KIND_BTN} bg-[#c9a36a]/15 text-[#c9a36a]` : KIND_BTN;
+  return on ? `${KIND_BTN} font-black text-[#c9a36a]` : KIND_BTN;
 }
 
 function toolBtnClass(on: boolean): string {
@@ -116,16 +116,26 @@ export function WorkshopCanvasNavBar(props: {
   onNameFilter: (next: string) => void;
   columnCount: number;
   onColumnCountChange: (next: number) => void;
+  /** 有本地文件源、且不是预设库时，在过滤文件名后显示画板/网格 */
+  showBoardToggle?: boolean;
+  /** 筛选行上方的右对齐执行条 */
+  actionRow?: React.ReactNode;
+  /** 与种类筛选同一行、右侧对齐的组操作 */
+  opsRow?: React.ReactNode;
 }): React.ReactElement {
   const { listPrefs } = props;
   const kindSet = new Set(props.kindFilter);
   return (
     <div
       data-workshop-canvas-nav
-      className={`shrink-0 flex flex-col gap-0.5 ${WORKFLOW_EDGE_GUTTER} py-0.5`}
+      className={`shrink-0 flex w-full min-w-0 flex-col gap-2 ${WORKFLOW_EDGE_GUTTER} py-0.5`}
     >
+      {props.actionRow ? (
+        <div className="flex w-full min-w-0 items-center justify-end">{props.actionRow}</div>
+      ) : null}
+      <div className="flex w-full min-w-0 items-center gap-2">
       <div
-        className="inline-flex h-9 w-fit shrink-0 self-start overflow-hidden rounded-md bg-white/[0.04]"
+        className="inline-flex h-9 w-fit shrink-0 overflow-hidden rounded-md bg-white/[0.04]"
         role="group"
         aria-label="筛选类型"
       >
@@ -155,7 +165,11 @@ export function WorkshopCanvasNavBar(props: {
           );
         })}
       </div>
-      <div className="flex min-w-0 items-center gap-1">
+      {props.opsRow ? (
+        <div className="ml-auto flex min-w-0 shrink-0 items-center justify-end">{props.opsRow}</div>
+      ) : null}
+      </div>
+      <div className="flex min-w-0 w-full items-center gap-1">
         <button type="button" className={NAV_BTN} disabled={!props.canBack} onClick={props.onBack} aria-label="后退" title="后退">
           <ChevronLeft className="h-3.5 w-3.5" strokeWidth={2} />
         </button>
@@ -210,6 +224,7 @@ export function WorkshopCanvasNavBar(props: {
             );
           })}
         </nav>
+        <div className="flex min-w-0 items-center gap-1">
         <button
           type="button"
           className={toolBtnClass(listPrefs.flatten)}
@@ -294,8 +309,25 @@ export function WorkshopCanvasNavBar(props: {
           onChange={(e) => props.onNameFilter(e.target.value)}
           placeholder="过滤文件名"
           aria-label="过滤文件名"
-          className="h-7 w-[7.5rem] shrink-0 rounded-md bg-white/[0.04] px-2 text-[10px] text-[#e8e6e1] outline-none placeholder:text-white/30 focus-visible:ring-2 focus-visible:ring-[#c9a36a]/45"
+          className="h-7 w-[7.5rem] min-w-[4.5rem] shrink rounded-md bg-white/[0.04] px-2 text-[10px] text-[#e8e6e1] outline-none placeholder:text-white/30 focus-visible:ring-2 focus-visible:ring-[#c9a36a]/45"
         />
+        {props.showBoardToggle ? (
+          <button
+            type="button"
+            data-front-hall-view-toggle
+            className="inline-flex h-7 shrink-0 items-center rounded-md bg-white/[0.05] px-2 text-[10px] text-gray-300 hover:bg-white/[0.1] hover:text-[#e8e6e1]"
+            aria-pressed={listPrefs.viewMode === 'board'}
+            onClick={() =>
+              props.onListPrefs({
+                ...listPrefs,
+                viewMode: listPrefs.viewMode === 'board' ? 'grid' : 'board',
+              })
+            }
+          >
+            {listPrefs.viewMode === 'board' ? '网格' : '画板'}
+          </button>
+        ) : null}
+        </div>
       </div>
     </div>
   );

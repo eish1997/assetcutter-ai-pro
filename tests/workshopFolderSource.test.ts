@@ -70,6 +70,8 @@ describe('folder mode guards in web and shell', () => {
   it('App locks workflow canvas height for folder mode without a project id', () => {
     const app = fs.readFileSync(path.resolve(process.cwd(), 'App.tsx'), 'utf8');
     expect(app).toMatch(/mode === AppMode\.WORKFLOW && showWorkflowCanvas/);
+    expect(app).toContain("lg:pr-1.5");
+    expect(app).not.toMatch(/showWorkflowCanvas\n\s*\? 'flex flex-col overflow-hidden[\s\S]*?lg:pr-6'/);
     expect(app).not.toMatch(/mode === AppMode\.WORKFLOW && activeWorkspaceProjectId\s*\n\s*\? 'flex flex-col overflow-hidden/);
   });
 
@@ -79,7 +81,15 @@ describe('folder mode guards in web and shell', () => {
       /isWorkflowMarqueeWheelActive = mode === AppMode\.WORKFLOW && showWorkflowCanvas/,
     );
     const section = fs.readFileSync(path.resolve(process.cwd(), 'components/WorkflowSection.tsx'), 'utf8');
-    expect(section).toContain('onMouseDown={handleMarqueeMouseDown}');
+    expect(section).toContain('onMouseDown={workshopBoardView ? undefined : handleMarqueeMouseDown}');
+    expect(section).toContain('emptyMarqueeEnabled: !workshopBoardView');
+    const capture = fs.readFileSync(path.resolve(process.cwd(), 'hooks/useWorkflowMainScrollCapture.ts'), 'utf8');
+    expect(capture).toContain("if (target?.closest('[data-front-hall-board]')) return;");
+    const marquee = fs.readFileSync(path.resolve(process.cwd(), 'hooks/useWorkflowMarquee.ts'), 'utf8');
+    expect(marquee).toContain("if ((e.target as Element).closest('[data-front-hall-board]')) return;");
+    expect(marquee).toContain('if (!emptyMarqueeEnabled) return;');
+    const justified = fs.readFileSync(path.resolve(process.cwd(), 'hooks/useWorkflowJustifiedLayout.ts'), 'utf8');
+    expect(justified).toContain('画板卸网格时 ref 为空');
   });
 
   it('main.cjs forwards finger-only document events in folder mode', () => {

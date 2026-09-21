@@ -37,6 +37,8 @@ export type QuickComposeMentionFieldProps = {
   placeholder: string;
   disabled?: boolean;
   multiline?: boolean;
+  /** 弹出窗堆叠态：输入区占满剩余高度 */
+  fillHeight?: boolean;
   rows?: number;
   /** 展开态由父级按视口预算传入，避免撑出页面 */
   multilineMaxHeightPx?: number;
@@ -130,6 +132,7 @@ function AutoWidthTextInput({
   disabled,
   ariaLabel,
   fillRemaining = false,
+  fillBox = false,
   multilineMaxHeightPx: multilineMaxHeightPxProp,
   inputRefs,
   onChange,
@@ -145,6 +148,8 @@ function AutoWidthTextInput({
   ariaLabel: string;
   /** 末段文本占满行内剩余宽度，便于点击空白区聚焦 */
   fillRemaining?: boolean;
+  /** 弹出窗堆叠态：文本框占满父级高度，不按内容收缩 */
+  fillBox?: boolean;
   multilineMaxHeightPx?: number;
   inputRefs: React.MutableRefObject<Map<string, HTMLInputElement | HTMLTextAreaElement>>;
   onChange: (value: string, el: HTMLInputElement | HTMLTextAreaElement) => void;
@@ -177,7 +182,7 @@ function AutoWidthTextInput({
   }, [multiline, fillRemaining, value, isEmpty, segmentId]);
 
   useLayoutEffect(() => {
-    if (!multiline) return;
+    if (!multiline || fillBox) return;
     const textarea = inputRef.current;
     if (!(textarea instanceof HTMLTextAreaElement)) return;
 
@@ -194,7 +199,7 @@ function AutoWidthTextInput({
     const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(sync) : null;
     ro?.observe(textarea);
     return () => ro?.disconnect();
-  }, [fillRemaining, multiline, multilineMaxHeightPxProp, rows, value, segmentId]);
+  }, [fillBox, fillRemaining, multiline, multilineMaxHeightPxProp, rows, value, segmentId]);
 
   const scheduleCaretSync = (el: HTMLInputElement | HTMLTextAreaElement) => {
     onCaretSync(el);
@@ -254,10 +259,10 @@ function AutoWidthTextInput({
     },
   };
 
-  if (multiline) {
+  if (multiline || fillBox) {
     return (
-      <span className={wrapperCls}>
-        {fillRemaining ? null : mirror}
+      <span className={fillBox ? 'flex h-full min-h-[3.5rem] w-full flex-1 flex-col' : wrapperCls}>
+        {fillRemaining || fillBox ? null : mirror}
         <textarea
           ref={registerRef as React.Ref<HTMLTextAreaElement>}
           value={value}
@@ -265,8 +270,12 @@ function AutoWidthTextInput({
           rows={rows}
           onChange={(e) => onChange(e.target.value, e.target)}
           onKeyDown={onKeyDown}
-          className={`${inputCls} resize-none`}
-          style={fillRemaining ? undefined : { width: isEmpty ? 1 : undefined }}
+          className={
+            fillBox
+              ? `${textCls} block h-full min-h-[3.5rem] w-full flex-1 resize-none overflow-auto`
+              : `${inputCls} resize-none`
+          }
+          style={fillBox || fillRemaining ? undefined : { width: isEmpty ? 1 : undefined }}
           aria-label={ariaLabel}
           {...inputEventHandlers}
         />
@@ -303,6 +312,7 @@ const QuickComposeMentionField = forwardRef<QuickComposeMentionFieldHandle, Quic
       placeholder,
       disabled = false,
       multiline = false,
+      fillHeight = false,
       rows = 5,
       multilineMaxHeightPx,
       ariaLabel,
@@ -869,11 +879,21 @@ const QuickComposeMentionField = forwardRef<QuickComposeMentionFieldHandle, Quic
   );
 
   return (
-    <div className="relative min-w-0 flex-1" onDragOver={onDragOver} onDrop={onDrop}>
+    <div
+      className={fillHeight ? 'relative flex h-full min-h-0 min-w-0 flex-1 flex-col' : 'relative min-w-0 flex-1'}
+      onDragOver={onDragOver}
+      onDrop={onDrop}
+    >
       <div
         ref={rowRef}
         className={`flex w-full gap-x-0.5 gap-y-1 py-0.5 ${
-          multiline ? 'min-h-[7rem] flex-wrap items-start content-start' : 'min-h-[2rem] flex-wrap items-center'
+          fillHeight
+            ? 'h-full min-h-[3.5rem] flex-1 flex-col items-stretch'
+            : multiline
+              ? multilineMaxHeightPx
+                ? 'flex-wrap items-start content-start'
+                : 'min-h-[7rem] flex-wrap items-start content-start'
+              : 'min-h-[2rem] flex-wrap items-center'
         } ${mentionPointerDragId ? 'select-none' : ''}`}
         role="group"
         aria-label={ariaLabel}
@@ -932,17 +952,20 @@ const QuickComposeMentionField = forwardRef<QuickComposeMentionFieldHandle, Quic
               key={seg.id}
               data-qc-seg-id={seg.id}
               className={
-                fillRemaining
-                  ? multiline
-                    ? 'inline-flex w-full min-w-full flex-[1_1_100%] basis-full max-w-full align-top'
-                    : 'inline-flex min-w-0 flex-1 max-w-full align-middle'
-                  : 'inline w-fit max-w-full align-middle'
+                fillHeight && fillRemaining
+                  ? 'flex h-full min-h-[3.5rem] w-full min-w-0 flex-1 flex-col'
+                  : fillRemaining
+                    ? multiline
+                      ? 'inline-flex w-full min-w-full flex-[1_1_100%] basis-full max-w-full align-top'
+                      : 'inline-flex min-w-0 flex-1 max-w-full align-middle'
+                    : 'inline w-fit max-w-full align-middle'
               }
             >
               <AutoWidthTextInput
                 segmentId={seg.id}
                 value={seg.value}
-                multiline={multiline}
+                multiline={multiline || fillHeight}
+                fillBox={fillHeight && fillRemaining}
                 rows={rows}
                 multilineMaxHeightPx={multilineMaxHeightPx}
                 disabled={disabled}

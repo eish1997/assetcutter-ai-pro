@@ -330,7 +330,11 @@ import {
   unmountLightboxLoadingCover,
 } from './workflow/WorkflowLightboxInstantShell';
 import { prefetchWorkflowLightboxImage } from '../services/workflowLightboxPrefetch';
-import { resolveWorkflowFunctionSidebarLayout } from '../services/workflowFunctionSidebarLayout';
+import { useWorkflowFunctionSidebarChrome } from '../hooks/useWorkflowFunctionSidebarChrome';
+import {
+  resolveFunctionSidebarHoverOwnerDocument,
+  resolveFunctionSidebarHoverPortalRoot,
+} from '../services/functionSidebarPopout';
 import { applyRootWorkflowAssetReorder } from '../services/workflowRootAssetReorder';
 import { reorderManualGroupItemIndexes } from '../services/workflowGroupItemReorder';
 import { copyWorkflowAssetIdToClipboard, copyWorkflowAssetOriginalImageToClipboard } from '../services/workflowAssetClipboard';
@@ -448,7 +452,6 @@ import {
   WORKFLOW_LIGHTBOX_BOTTOM_RAIL,
   WORKFLOW_LIGHTBOX_VGP_GRAPH_LEFT_INSET,
   WORKFLOW_LIGHTBOX_ASSET_THUMB_STRIP_INSET,
-  WORKFLOW_LIGHTBOX_COMPOSE_DOCKED_INSET,
   WORKFLOW_IMAGE_PREVIEW_RAIL,
   WORKFLOW_CARD_DISMISS_ICON_BTN,
   WORKFLOW_IMAGE_PREVIEW_RAIL_DIVIDER,
@@ -492,6 +495,7 @@ import {
 } from '../services/workflowLightboxCenterRoute';
 import { groupCapabilityPresetsByCategory } from './workflow/workflowCapabilityGroups';
 import { WorkflowSidebarColumn, type WorkflowSidebarFavoriteEntry } from './workflow/WorkflowSidebarColumn';
+import { WorkflowAssetActionStrip } from './workflow/WorkflowAssetActionStrip';
 import { WorkshopFileTreeColumn } from './workshop/WorkshopFileSource';
 import { WorkshopCanvasNavBar, WorkflowColumnDensityButtons } from './workshop/WorkshopCanvasNavBar';
 import {
@@ -621,7 +625,6 @@ import {
 } from '../services/quickComposeMention';
 import type {
   AgentSuggestedAction,
-  QuickComposeChatMessageView,
   QuickComposeThreadMessage,
   QuickComposeThreadScope,
 } from '../types/quickComposeThread';
@@ -631,7 +634,6 @@ import {
 } from '../services/quickComposeTurnContext';
 import {
   collectQuickComposeAttachmentAssetIds,
-  mapQuickComposeThreadMessagesToChatViews,
 } from '../services/quickComposeChatView';
 import { buildProjectAgentIntent } from '../services/projectAgent/intent';
 import { planTools } from '../services/projectAgent/planTools';
@@ -705,8 +707,6 @@ import {
 import { createWorkflowProjectAgentHostPort } from './project-agent/createWorkflowProjectAgentHostPort';
 import { mapPlanToQuickComposeInvoke } from './project-agent/mapPlanToQuickComposeInvoke';
 import {
-  PROJECT_AGENT_EMPTY_HINT,
-  PROJECT_AGENT_EMPTY_TITLE,
   quickComposeChatActionConfirmCopy,
   resolveComposerSubmitDisabledReason,
   shouldHardBlockComposerCredits,
@@ -1111,24 +1111,6 @@ function isWorkflowInternalSamMaskDisplayKey(dk: string | undefined | null): boo
   return String(dk || '').trim().startsWith('ac_internal_sam_');
 }
 
-export type QuickComposeChatDockHandlers = {
-  messages: QuickComposeChatMessageView[];
-  threadTitle: string;
-  /** Credits blocked — disables typing; does not block attachment drag */
-  isInputDisabled: boolean;
-  /** Credits / empty draft / in-flight assistant — disables send only */
-  isSendDisabled: boolean;
-  selectionStatusLabel: string;
-  selectionStatusTone: 'idle' | 'active' | 'preview';
-  perceptionContext?: ProjectAgentPerceptionContext;
-  onResultPreview: (assetId: string, event: React.MouseEvent<HTMLElement>) => void;
-  onSend: () => void;
-  onRetry: (messageId: string) => void;
-  onAction: (messageId: string, action: AgentSuggestedAction) => void;
-  /** §16.1 / 3A：取消进行中的助手 turn（跳过关联 task） */
-  onCancel: (messageId: string) => void;
-};
-
 const WorkflowSection: React.FC<{
   capabilityPresets: CustomAppModule[];
   capabilitySets?: CapabilitySet[];
@@ -1180,14 +1162,6 @@ const WorkflowSection: React.FC<{
    * 否则切到设置等页面时条仍会盖在最上层。
    */
   quickComposeShellActive?: boolean;
-  /** App 级右侧侧栏挂载点（工作区 / 大图共用展开态 portal 目标） */
-  quickComposeWorkspaceDockHostRef?: React.RefObject<HTMLDivElement | null>;
-  /** 工作区快捷栏展开态（供 App 挤压布局；大图预览壳层同步留白） */
-  workspaceQuickComposeExpanded?: boolean;
-  /** 工作区快捷栏展开态变化 */
-  onWorkspaceQuickComposeExpandedChange?: (expanded: boolean) => void;
-  /** 快捷栏展开态聊天 dock（workspace / lightbox 分线程） */
-  onQuickComposeChatDockHandlersChange?: (handlers: QuickComposeChatDockHandlers | null) => void;
 }> = ({
   capabilityPresets,
   capabilitySets: capabilitySetsProp = [],
@@ -1209,10 +1183,6 @@ const WorkflowSection: React.FC<{
   onboardingKey = null,
   workspaceProjectChrome,
   quickComposeShellActive = true,
-  quickComposeWorkspaceDockHostRef,
-  workspaceQuickComposeExpanded = false,
-  onWorkspaceQuickComposeExpandedChange,
-  onQuickComposeChatDockHandlersChange,
 }) => {
   const { balance: creditBalance, loading: creditBalanceLoading } = useCreditBalance(preferenceScope);
   const assets = useMemo(() => (Array.isArray(assetsProp) ? assetsProp : []), [assetsProp]);
@@ -2253,7 +2223,7 @@ const WorkflowSection: React.FC<{
     (e: React.WheelEvent, origin: 'inner' | 'gutter') => {
       if (isWorkflowEditableTarget(e.target)) return false;
       const t = e.target as Element | null;
-      if (t?.closest('[data-prevent-wheel-scroll]')) return false;
+      if (t?.closest('[data-prevent-wheel-scroll], [data-front-hall-board]')) return false;
       if (t?.closest('[data-ac-dropdown-overlay], [data-ac-dropdown-list]')) return false;
       if (t?.closest('[role="dialog"]')) return false;
       if (
@@ -2379,12 +2349,24 @@ const WorkflowSection: React.FC<{
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
-  const functionSidebarLayout = useMemo(
-    () => resolveWorkflowFunctionSidebarLayout(workspaceViewportWidth),
-    [workspaceViewportWidth]
-  );
+  const {
+    layout: functionSidebarLayout,
+    popoutMode,
+    popoutTarget,
+    pinned: functionSidebarPinned,
+    canPin: functionSidebarCanPin,
+    onSplitterPointerDown,
+    expandFromRail,
+    requestPopout,
+    dockBack,
+    togglePin: toggleFunctionSidebarPin,
+  } = useWorkflowFunctionSidebarChrome({
+    preferenceScope,
+    viewportWidthPx: workspaceViewportWidth,
+  });
   const functionSidebarWidth = functionSidebarLayout.functionSidebarWidthPx;
-  const showFunctionSidebar = functionSidebarLayout.mode !== 'hidden';
+  const functionSidebarPopped = popoutMode !== 'docked';
+  const showFunctionSidebarContent = functionSidebarLayout.mode === 'multiColumn' && !functionSidebarPopped;
   const marqueeStartRef = useRef(false);
   const {
     workspacePane,
@@ -2392,7 +2374,7 @@ const WorkflowSection: React.FC<{
     spaceMarqueeEnabled,
   } = useWorkflowWorkspacePanes({
     registerPaneWheelHandler,
-    enableSpaceMarquee: quickComposeShellActive && !showArchived,
+    enableSpaceMarquee: quickComposeShellActive && !showArchived && !workshopBoardView,
   });
   useEffect(() => {
     const selected = [...selectedAssetIds][0] || '';
@@ -3112,7 +3094,7 @@ const WorkflowSection: React.FC<{
     workshopFaceFileId,
   ]);
   const assetListMarqueeActive =
-    quickComposeShellActive && !showArchived && Math.round(workspacePane) === 0;
+    quickComposeShellActive && !showArchived && !workshopBoardView && Math.round(workspacePane) === 0;
   /** 供 document wheel capture 读取：按住空格时不拦截滚轮，以便滚动资产列表 */
   const spaceMarqueeEnabledRef = useRef(false);
   useLayoutEffect(() => {
@@ -3177,6 +3159,7 @@ const WorkflowSection: React.FC<{
     setSelectedAssetIds,
     setSelectedGroupItemKeys,
     layoutHitIdsRef: layoutMarqueeHitIdsRef,
+    emptyMarqueeEnabled: !workshopBoardView,
   });
 
   const addWorkflowStoryboardTableAsset = useCallback(
@@ -3455,10 +3438,15 @@ const WorkflowSection: React.FC<{
     []
   );
   useEffect(() => {
-    if (!hoverPreview || typeof window === 'undefined' || typeof document === 'undefined') return;
+    if (!hoverPreview || typeof window === 'undefined') return;
     const targetId = hoverPreview.mod.id;
+    const ownerDoc = resolveFunctionSidebarHoverOwnerDocument(
+      popoutMode === 'pip' ? popoutTarget : null,
+    );
+    if (!ownerDoc) return;
+    const ownerWin = ownerDoc.defaultView ?? window;
     const onMove = (ev: MouseEvent) => {
-      const el = document.elementFromPoint(ev.clientX, ev.clientY) as HTMLElement | null;
+      const el = ownerDoc.elementFromPoint(ev.clientX, ev.clientY) as HTMLElement | null;
       if (!el) {
         setHoverPreview(null);
         return;
@@ -3467,13 +3455,13 @@ const WorkflowSection: React.FC<{
       if (!holder) setHoverPreview(null);
     };
     const onBlur = () => setHoverPreview(null);
-    window.addEventListener('mousemove', onMove, true);
-    window.addEventListener('blur', onBlur);
+    ownerWin.addEventListener('mousemove', onMove, true);
+    ownerWin.addEventListener('blur', onBlur);
     return () => {
-      window.removeEventListener('mousemove', onMove, true);
-      window.removeEventListener('blur', onBlur);
+      ownerWin.removeEventListener('mousemove', onMove, true);
+      ownerWin.removeEventListener('blur', onBlur);
     };
-  }, [hoverPreview]);
+  }, [hoverPreview, popoutMode, popoutTarget]);
   const getSet = useCallback((id: string) => capabilitySets.find((s) => s.id === id), [capabilitySets]);
   const getActionLabel = useCallback((actionType: string) => {
     if (actionType.startsWith(SET_ACTION_PREFIX)) {
@@ -12283,6 +12271,7 @@ ${lineSvg}
   useEffect(() => {
     const handler = (e: WheelEvent) => {
       const el = e.target instanceof Element ? e.target : null;
+      if (el?.closest('[data-front-hall-board]')) return;
       if (el?.closest('[data-prevent-wheel-scroll]')) {
         if (spaceMarqueeEnabledRef.current) return;
         e.preventDefault();
@@ -12663,8 +12652,8 @@ ${lineSvg}
   const rootJustifiedLayout = useWorkflowJustifiedLayout(rootCanvasLayoutItems, gridRef, {
     gap: WORKFLOW_ASSET_GRID_GAP_PX,
     targetRowHeight: justifiedTargetRowHeight,
-    /** 小盒子切回资产页时须重绑 ResizeObserver（grid 曾被 hidden，宽度可能未更新） */
-    remeasureKey: Math.round(workspacePane),
+    /** 小盒子切回、画板↔网格须重绑 ResizeObserver（grid 曾卸载，宽度可能已是 0） */
+    remeasureKey: `${Math.round(workspacePane)}:${workshopBoardView ? 'board' : 'grid'}`,
   });
 
   const groupCanvasLayoutItems = useMemo(() => {
@@ -12722,7 +12711,7 @@ ${lineSvg}
   const groupJustifiedLayout = useWorkflowJustifiedLayout(groupCanvasLayoutItems, groupGridRef, {
     gap: WORKFLOW_ASSET_GRID_GAP_PX,
     targetRowHeight: justifiedTargetRowHeight,
-    remeasureKey: Math.round(workspacePane),
+    remeasureKey: `${Math.round(workspacePane)}:${workshopBoardView ? 'board' : 'grid'}`,
   });
   const workflowListVirtualize = groupFilterId
     ? shouldVirtualizeWorkflowJustifiedGrid(groupJustifiedLayout.boxes.length)
@@ -15979,12 +15968,6 @@ ${lineSvg}
     lightboxAsset && !showArchived && !lightboxUiHidden
   );
   const quickComposeInRasterLightbox = Boolean(quickComposeInLightbox && lightboxRasterChrome);
-  const handleQuickComposeInputExpandedChange = useCallback(
-    (expanded: boolean) => {
-      onWorkspaceQuickComposeExpandedChange?.(expanded);
-    },
-    [onWorkspaceQuickComposeExpandedChange]
-  );
   const quickComposeBarVisible =
     !promptTweakModal &&
     (quickComposeInLightbox || (quickComposeShellActive && !lightboxAsset));
@@ -16036,91 +16019,9 @@ ${lineSvg}
     };
   }, [quickComposeBarVisible]);
 
-  const quickComposeChatDockHandlers = useMemo((): QuickComposeChatDockHandlers | null => {
-    if (!quickComposeBarVisible) return null;
-    const selectedIds = [...selectedAssetIds].map((id) => id.trim()).filter(Boolean);
-    const lightboxAsset = lightboxAssetId ? findLiveAsset(lightboxAssetId) : null;
-    const selectedAssetList = selectedIds
-      .map((id) => findLiveAsset(id))
-      .filter((a): a is WorkflowAsset => Boolean(a));
-    const selectionStatusTone: QuickComposeChatDockHandlers['selectionStatusTone'] =
-      lightboxAsset ? 'preview' : selectedIds.length > 0 || selectedGroupItemKeys.size > 0 ? 'active' : 'idle';
-    const selectionStatusLabel = lightboxAsset
-      ? `\u5f53\u524d\u9884\u89c8\uff1a${workflowAssetMentionLabel(lightboxAsset)}`
-      : selectedGroupItemKeys.size > 0
-        ? `\u7ec4\u5185\u5df2\u9009 ${selectedGroupItemKeys.size} \u4e2a\u8d44\u4ea7`
-        : selectedAssetList.length > 1
-          ? `\u5f53\u524d\u9009\u4e2d ${selectedAssetList.length} \u4e2a\u8d44\u4ea7`
-          : selectedAssetList[0]
-            ? `\u5f53\u524d\u9009\u4e2d\uff1a${workflowAssetMentionLabel(selectedAssetList[0])}`
-            : '\u5f53\u524d\u672a\u9009\u4e2d\u8d44\u4ea7';
-    const threadTitle = quickComposeInLightbox
-      ? (() => {
-          const asset = lightboxAssetId ? findLiveAsset(lightboxAssetId) : null;
-          return asset ? workflowAssetMentionLabel(asset) : '\u5927\u56fe\u9884\u89c8';
-        })()
-      : workspaceProjectChrome?.activeProjectName || '\u5de5\u4f5c\u533a';    const messages: QuickComposeChatMessageView[] = activeQuickComposeThread
-      ? mapQuickComposeThreadMessagesToChatViews(activeQuickComposeThread.messages, {
-          assets,
-          pending,
-          executingQueue,
-          getAssetDisplayImage,
-          getAssetLabel: workflowAssetMentionLabel,
-          selectedAssetIds: [...selectedAssetIds],
-        })
-      : [];
-    const perceptionContext = buildQuickComposePerceptionContext();
-    return {
-      messages,
-      threadTitle,
-      isInputDisabled: quickComposeChatDockInputDisabled,
-      isSendDisabled: quickComposeChatDockSubmitDisabled,
-      selectionStatusLabel,
-      selectionStatusTone,
-      perceptionContext,
-      onResultPreview: handleQuickComposeResultPreview,
-      onSend: handleQuickComposeChatSend,
-      onRetry: handleQuickComposeChatRetry,
-      onAction: handleQuickComposeChatAction,
-      onCancel: handleQuickComposeChatCancel,
-    };
-  }, [
-    activeQuickComposeThread,
-    quickComposeBarVisible,
-    quickComposeInLightbox,
-    quickComposeChatDockInputDisabled,
-    quickComposeChatDockSubmitDisabled,
-    handleQuickComposeChatSend,
-    handleQuickComposeChatRetry,
-    handleQuickComposeChatAction,
-    handleQuickComposeChatCancel,
-    handleQuickComposeResultPreview,
-    buildQuickComposePerceptionContext,
-    quickComposeCreditsBypass,
-    preferenceScope,
-    creditBalance,
-    lightboxAssetId,
-    assets,
-    findLiveAsset,
-    pending,
-    executingQueue,
-    getAssetDisplayImage,
-    selectedAssetIds,
-    selectedGroupItemKeys,
-    workspaceProjectChrome?.activeProjectName,
-  ]);
-
-  useEffect(() => {
-    onQuickComposeChatDockHandlersChange?.(quickComposeChatDockHandlers);
-    return () => {
-      onQuickComposeChatDockHandlersChange?.(null);
-    };
-  }, [onQuickComposeChatDockHandlersChange, quickComposeChatDockHandlers]);
-
   const quickComposeBarCommonProps = useMemo(
     () => ({
       visible: quickComposeBarVisible,
-      placement: (quickComposeInLightbox ? 'lightbox' : 'floating') as 'lightbox' | 'floating',
       composeMode: quickComposeMode,
       onComposeModeChange: setQuickComposeMode,
       inputPresetsActive: quickComposeInLightbox ? false : quickComposePromptCards.length > 0,
@@ -16136,14 +16037,14 @@ ${lineSvg}
       hideMainDropZone: quickComposeInLightbox,
       pasteAssetRefZone: quickComposeInLightbox ? ('reference' as const) : undefined,
       maxMentions: quickComposeMaxReferenceImages,
-      onSubmit: quickComposeChatDockHandlers
-        ? quickComposeChatDockHandlers.onSend
+      onSubmit: quickComposeBarVisible
+        ? handleQuickComposeChatSend
         : quickComposeInRasterLightbox
           ? () => void submitLightboxQuickCompose()
           : (invoke?: QuickComposeSubmitInvokeOptions) => void submitQuickCompose(invoke),
-      inputDisabled: quickComposeChatDockHandlers?.isInputDisabled ?? quickComposeSubmitDisabled,
-      submitDisabled: quickComposeChatDockHandlers?.isSendDisabled ?? quickComposeSubmitDisabled,
-      submitDisabledReason: quickComposeChatDockHandlers
+      inputDisabled: quickComposeBarVisible ? quickComposeChatDockInputDisabled : quickComposeSubmitDisabled,
+      submitDisabled: quickComposeBarVisible ? quickComposeChatDockSubmitDisabled : quickComposeSubmitDisabled,
+      submitDisabledReason: quickComposeBarVisible
         ? quickComposeChatDockSubmitDisabledReason
         : quickComposeSubmitDisabledReason,
       showGenImageSettings: quickComposeShowGenImageSettings,
@@ -16198,63 +16099,6 @@ ${lineSvg}
       placeholderOverride: quickComposeInLightbox
         ? '\u63cf\u8ff0\u4fee\u6539\u610f\u56fe\uff1b\u9700\u8981\u65f6\u53ef @ \u5f53\u524d\u753b\u9762\u6216\u5176\u5b83\u8d44\u4ea7'
         : undefined,
-      chatDockProps: quickComposeChatDockHandlers
-        ? {
-            messages: quickComposeChatDockHandlers.messages,
-            selectionStatusLabel: quickComposeChatDockHandlers.selectionStatusLabel,
-            selectionStatusTone: quickComposeChatDockHandlers.selectionStatusTone,
-            perceptionContext: quickComposeChatDockHandlers.perceptionContext,
-            onResultPreview: quickComposeChatDockHandlers.onResultPreview,
-            onRetryMessage: quickComposeChatDockHandlers.onRetry,
-            onMessageAction: quickComposeChatDockHandlers.onAction,
-            onCancelMessage: quickComposeChatDockHandlers.onCancel,
-            onOpenPanel: (panel) => {
-              if (panel === 'memory') {
-                refreshProjectAgentMemoryPanel();
-                onLog?.('info', '项目 Agent：已打开记忆管理入口');
-              } else if (panel === 'skills') {
-                refreshProjectAgentSkillPanel();
-                onLog?.('info', 'Project Agent：已打开 Skill 管理入口');
-              }
-            },
-            memoryEntries: projectAgentMemoryEntries,
-            onToggleMemory: handleProjectAgentToggleMemory,
-            onDeleteMemory: handleProjectAgentDeleteMemory,
-            skillEntries: projectAgentSkillEntries,
-            onToggleSkill: handleProjectAgentToggleSkill,
-            onDeleteSkill: handleProjectAgentDeleteSkill,
-            onInstallSampleSkill: handleProjectAgentInstallSampleSkill,
-            onImportSkillPreview: handleProjectAgentImportSkillPreview,
-            onClearChat: handleQuickComposeClearChat,
-            onLoadEarlier: handleQuickComposeLoadEarlier,
-            canLoadEarlier: Boolean(
-              activeWorkspaceProjectId &&
-                preferenceScope != null &&
-                activeQuickComposeThread &&
-                hasEarlierMessagesLocal(
-                  {
-                    userId: preferenceScope,
-                    workspaceProjectId: activeWorkspaceProjectId,
-                  },
-                  activeQuickComposeThread
-                )
-            ),
-            onExportChat: handleQuickComposeExportChat,
-            threadEmptyTitle: PROJECT_AGENT_EMPTY_TITLE,
-            threadEmptyHint: PROJECT_AGENT_EMPTY_HINT,
-            minimizeDisabled: false,
-            expertStudio:
-              preferenceScope && activeWorkspaceProjectId
-                ? {
-                    userId: preferenceScope,
-                    workspaceProjectId: activeWorkspaceProjectId,
-                  }
-                : null,
-            onTryRunPrompt: (text: string) => {
-              setQuickComposeSegmentsTracked([newQuickComposeTextSegment(text)]);
-            },
-          }
-        : undefined,
     }),
     [
       quickComposeBarVisible,
@@ -16273,6 +16117,9 @@ ${lineSvg}
       quickComposeMaxReferenceImages,
       submitLightboxQuickCompose,
       submitQuickCompose,
+      handleQuickComposeChatSend,
+      quickComposeChatDockInputDisabled,
+      quickComposeChatDockSubmitDisabled,
       quickComposeSubmitDisabled,
       quickComposeSubmitDisabledReason,
       quickComposeChatDockSubmitDisabledReason,
@@ -16281,17 +16128,9 @@ ${lineSvg}
       quickComposeShowGenVideoSettings,
       quickComposeShowGenModel3dSettings,
       quickComposeAllowBatchCount,
-      projectAgentMemoryEntries,
-      projectAgentSkillEntries,
       onQuickComposeInputCapabilityDrop,
       handleQuickComposeWorkflowDrop,
       handleQuickComposePasteAssetRefs,
-      handleProjectAgentDeleteMemory,
-      handleProjectAgentToggleMemory,
-      handleProjectAgentDeleteSkill,
-      handleProjectAgentImportSkillPreview,
-      handleProjectAgentInstallSampleSkill,
-      handleProjectAgentToggleSkill,
       quickComposeImageModel,
       quickComposeTextModel,
       quickComposeVideoModel,
@@ -16312,26 +16151,12 @@ ${lineSvg}
       quickComposeSize,
       quickComposeCount,
       quickComposeUnderstand,
-      quickComposeChatDockHandlers,
-      handleQuickComposeClearChat,
-      handleQuickComposeLoadEarlier,
-      handleQuickComposeExportChat,
-      refreshProjectAgentMemoryPanel,
-      refreshProjectAgentSkillPanel,
-      onLog,
-      preferenceScope,
-      activeWorkspaceProjectId,
       setQuickComposeSegmentsTracked,
     ]
   );
 
-  const renderWorkflowFunctionSidebar = () => (
-        <div
-          className="flex h-full min-h-0 max-h-full shrink-0 self-stretch min-w-0 flex-col overflow-hidden"
-          style={{ width: `${functionSidebarWidth}px`, minWidth: `${functionSidebarWidth}px` }}
-          data-workflow-function-sidebar
-        >
-          <div className="flex h-full min-h-0 w-full flex-1 flex-col overflow-hidden">
+  const renderWorkflowFunctionSidebar = () => {
+    const column = (
           <WorkflowSidebarColumn
             actionModules={actionModules}
             capabilitySets={capabilitySets}
@@ -16342,29 +16167,7 @@ ${lineSvg}
             draggingGroupItemsRef={draggingGroupItemsRef}
             syncDraggingGroupItems={syncDraggingGroupItems}
             workflowAssetDragActive={workflowAssetDragActive}
-            clearWorkflowDragSession={clearWorkflowDragSession}
-            createGroupFromAssets={createGroupFromAssets}
-            createNestedGroupFromGroupItem={createNestedGroupFromGroupItem}
-            ensureGroupItemsAsAssets={ensureGroupItemsAsAssets}
             assets={assets}
-            getAssetDisplayImage={getAssetDisplayImage}
-            setAssets={setAssets}
-            selectedGroupItemKeys={selectedGroupItemKeys}
-            setSelectedGroupItemKeys={setSelectedGroupItemKeys}
-            moveGroupItemsToUpperLevel={moveGroupItemsToUpperLevel}
-            moveRootAssetsToUpperLevel={moveRootAssetsToUpperLevel}
-            canMoveRootToUpperLevel={
-              workshopDiskOpen && workshopMoveToParentDestRel(workshopCurrentRel) != null
-            }
-            sidebarOpsAllowed={sidebarOpsAllowed}
-            groupAssetForDrag={groupAssetForDrag}
-            currentGroupAsset={currentGroupAsset}
-            duplicateAssetInPlace={duplicateAssetInPlace}
-            removeAsset={removeAsset}
-            removeGroupItems={removeGroupItems}
-            setGroupFilterId={setGroupFilterId}
-            onDownloadWorkflowAssets={(sources) => void downloadWorkflowAssetsFromSources(sources)}
-            onDownloadSelectedWorkflowAssets={downloadSelectedWorkflowAssets}
             visiblePresets={visiblePresets}
             visibleCapabilitySets={visibleCapabilitySets}
             visibleByCategory={visibleByCategory}
@@ -16395,12 +16198,6 @@ ${lineSvg}
             onLinkHoverPresetIds={setSidebarLinkHoverPresetIds}
             cloudPresetIds={cloudPresetIds}
             onWorkflowFeatureClick={handleWorkflowFeatureClick}
-            onExecutePending={() => void executePending()}
-            onClearPending={() => setPending([])}
-            pendingCount={pending.length}
-            executing={executing}
-            executingDoneCount={executingQueueDoneCount}
-            executingTotal={executingQueue?.total ?? 0}
             archiveHintVisible={Boolean(archiveHint && !showArchived)}
             storyboardExport={
               storyboardExportRunning
@@ -16415,17 +16212,82 @@ ${lineSvg}
                 loading={creditBalanceLoading}
               />
             }
+            onPopOut={() => requestPopout(workspaceViewportRef.current?.clientHeight ?? 640)}
+            onDockBack={dockBack}
+            poppedOut={functionSidebarPopped}
+            canPin={functionSidebarCanPin}
+            pinned={functionSidebarPinned}
+            onTogglePin={toggleFunctionSidebarPin}
           />
+    );
+    const panel =
+      popoutMode === 'pip' && popoutTarget
+        ? createPortal(column, popoutTarget)
+        : popoutMode === 'overlay'
+          ? createPortal(
+              <div
+                data-function-sidebar-overlay
+                className="fixed bottom-0 right-0 top-10 z-[80] flex flex-col overflow-hidden bg-[#0b0b0d] shadow-[-12px_0_32px_rgba(0,0,0,0.45)]"
+                style={{ width: `${functionSidebarLayout.dockedWidthPx}px` }}
+              >
+                {column}
+              </div>,
+              document.body,
+            )
+          : column;
+    return (
+        <div
+          className="relative flex h-full min-h-0 max-h-full shrink-0 self-stretch min-w-0 flex-col overflow-hidden"
+          style={{ width: `${functionSidebarWidth}px`, minWidth: `${functionSidebarWidth}px` }}
+          data-workflow-function-sidebar
+          data-function-sidebar-mode={functionSidebarLayout.mode}
+        >
+          <div
+            data-function-sidebar-splitter
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="调整功能区宽度"
+            onPointerDown={onSplitterPointerDown}
+            className="absolute inset-y-0 left-0 z-20 w-1.5 cursor-col-resize hover:bg-white/20"
+          />
+          {!showFunctionSidebarContent ? (
+            <button
+              type="button"
+              data-function-sidebar-rail
+              aria-label="展开功能区"
+              title="展开功能区"
+              onPointerDown={onSplitterPointerDown}
+              onClick={expandFromRail}
+              className="flex h-full w-full items-center justify-center text-[9px] text-gray-500 hover:bg-white/[0.06] hover:text-[#e8e6e1]"
+            >
+              <span className="[writing-mode:vertical-rl]">功能</span>
+            </button>
+          ) : null}
+          <div
+            className={
+              showFunctionSidebarContent
+                ? 'flex h-full min-h-0 w-full flex-1 flex-col overflow-hidden'
+                : 'pointer-events-none invisible absolute inset-y-0 right-0 overflow-hidden'
+            }
+            aria-hidden={!showFunctionSidebarContent}
+            style={
+              showFunctionSidebarContent
+                ? undefined
+                : { width: `${functionSidebarLayout.dockedWidthPx}px` }
+            }
+          >
+            {functionSidebarPopped ? null : panel}
           </div>
+          {functionSidebarPopped ? panel : null}
         </div>
-  );
+    );
+  };
 
   return (
     <>
     <WorkflowSpaceMarqueeChrome
       active={spaceMarqueeEnabled && assetListMarqueeActive}
       listPaneRef={listPaneRef}
-      sidebarExcludeRef={quickComposeWorkspaceDockHostRef}
       workspacePane={workspacePane}
       onMarqueePointerDown={beginSpaceMarqueePointerDrag}
       onDimWheel={applyWheelToAssetListWhileSpaceMarquee}
@@ -16464,6 +16326,31 @@ ${lineSvg}
               onPickWorkspace={fileSourceApi ? () => void pickWorkshopWorkspace() : undefined}
             />
         </div>
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-2 overflow-visible" data-workflow-canvas-and-sidebar>
+        {quickComposeBarVisible && !quickComposeInLightbox ? (
+          <div className="relative z-20 w-full shrink-0 overflow-visible px-3" data-quick-compose-top-row>
+            <WorkspaceQuickComposeBar
+              {...quickComposeBarCommonProps}
+              placement="topRow"
+              hasSendableContent={quickComposeHasSendableContent}
+              onExecutePending={() => void executePending()}
+              onClearPending={() => setPending([])}
+              onRemoveQueueItem={(id) => setPending((prev) => prev.filter((task) => task.id !== id))}
+              queueItems={[
+                ...(executingQueue?.tasks ?? []),
+                ...pending.filter((task) => !(executingQueue?.tasks ?? []).some((running) => running.id === task.id)),
+              ].map((task) => ({
+                id: task.id,
+                thumb: task.inputImage || '',
+                label: getTaskLogLabel(task),
+              }))}
+              executing={executing}
+              executingDoneCount={executingQueueDoneCount}
+              executingTotal={executingQueue?.total ?? 0}
+            />
+          </div>
+        ) : null}
+        <div className="flex min-h-0 min-w-0 flex-1 items-stretch overflow-hidden">
         {/* 小盒子：资产列表 ↔ 能力预设 */}
         <div
           ref={listPaneRef}
@@ -16486,10 +16373,51 @@ ${lineSvg}
         ) : null}
         {fileSourceApi || workshopPresetOpen ? (
           <div
-            className={lightboxAssetId ? 'relative pointer-events-none opacity-0' : 'relative'}
+            className={
+              lightboxAssetId
+                ? 'relative flex w-full min-w-0 flex-col pointer-events-none opacity-0'
+                : 'relative flex w-full min-w-0 flex-col'
+            }
             aria-hidden={Boolean(lightboxAssetId)}
           >
             <WorkshopCanvasNavBar
+              opsRow={
+                <WorkflowAssetActionStrip
+                  segment="ops"
+                  padded={false}
+                  draggingAssetIdsRef={draggingAssetIdsRef}
+                  draggingGroupItemsRef={draggingGroupItemsRef}
+                  clearWorkflowDragSession={clearWorkflowDragSession}
+                  createGroupFromAssets={createGroupFromAssets}
+                  createNestedGroupFromGroupItem={createNestedGroupFromGroupItem}
+                  ensureGroupItemsAsAssets={ensureGroupItemsAsAssets}
+                  assets={assets}
+                  getAssetDisplayImage={getAssetDisplayImage}
+                  setAssets={setAssets}
+                  selectedGroupItemKeys={selectedGroupItemKeys}
+                  setSelectedGroupItemKeys={setSelectedGroupItemKeys}
+                  moveGroupItemsToUpperLevel={moveGroupItemsToUpperLevel}
+                  moveRootAssetsToUpperLevel={moveRootAssetsToUpperLevel}
+                  canMoveRootToUpperLevel={
+                    workshopDiskOpen && workshopMoveToParentDestRel(workshopCurrentRel) != null
+                  }
+                  sidebarOpsAllowed={sidebarOpsAllowed}
+                  groupAssetForDrag={groupAssetForDrag}
+                  currentGroupAsset={currentGroupAsset}
+                  duplicateAssetInPlace={duplicateAssetInPlace}
+                  removeAsset={removeAsset}
+                  removeGroupItems={removeGroupItems}
+                  setGroupFilterId={setGroupFilterId}
+                  onDownloadWorkflowAssets={(sources) => void downloadWorkflowAssetsFromSources(sources)}
+                  onDownloadSelectedWorkflowAssets={downloadSelectedWorkflowAssets}
+                  onExecutePending={() => void executePending()}
+                  onClearPending={() => setPending([])}
+                  pendingCount={pending.length}
+                  executing={executing}
+                  executingDoneCount={executingQueueDoneCount}
+                  executingTotal={executingQueue?.total ?? 0}
+                />
+              }
               kindFilter={workshopCanvasKindFilter}
               kindCounts={workshopCanvasKindCounts}
               onToggleKind={(id: WorkshopCanvasKindId) =>
@@ -16532,30 +16460,55 @@ ${lineSvg}
               onNameFilter={setWorkshopNameFilter}
               columnCount={columnCount}
               onColumnCountChange={setColumnCount}
+              showBoardToggle={Boolean(fileSourceApi && !workshopPresetOpen)}
             />
-            {fileSourceApi && !workshopPresetOpen ? (
-            <button
-              type="button"
-              data-front-hall-view-toggle
-              className="absolute right-3 top-2 z-[1] inline-flex h-7 shrink-0 items-center rounded-md bg-white/[0.05] px-2 text-[10px] text-gray-300 ring-1 ring-white/[0.08] hover:bg-white/[0.1] hover:text-[#e8e6e1]"
-              aria-pressed={workshopListPrefs.viewMode === 'board'}
-              onClick={() =>
-                applyWorkshopListPrefs({
-                  ...workshopListPrefs,
-                  viewMode: workshopListPrefs.viewMode === 'board' ? 'grid' : 'board',
-                })
-              }
-            >
-              {workshopListPrefs.viewMode === 'board' ? '网格' : '画板'}
-            </button>
-            ) : null}
           </div>
         ) : (
-          <div className={`flex items-center ${WORKFLOW_EDGE_GUTTER} py-0.5`}>
+          <div
+            className={lightboxAssetId ? 'pointer-events-none opacity-0' : undefined}
+            aria-hidden={Boolean(lightboxAssetId)}
+          >
+            <WorkflowAssetActionStrip
+              segment="ops"
+              padded={false}
+              draggingAssetIdsRef={draggingAssetIdsRef}
+              draggingGroupItemsRef={draggingGroupItemsRef}
+              clearWorkflowDragSession={clearWorkflowDragSession}
+              createGroupFromAssets={createGroupFromAssets}
+              createNestedGroupFromGroupItem={createNestedGroupFromGroupItem}
+              ensureGroupItemsAsAssets={ensureGroupItemsAsAssets}
+              assets={assets}
+              getAssetDisplayImage={getAssetDisplayImage}
+              setAssets={setAssets}
+              selectedGroupItemKeys={selectedGroupItemKeys}
+              setSelectedGroupItemKeys={setSelectedGroupItemKeys}
+              moveGroupItemsToUpperLevel={moveGroupItemsToUpperLevel}
+              moveRootAssetsToUpperLevel={moveRootAssetsToUpperLevel}
+              canMoveRootToUpperLevel={
+                workshopDiskOpen && workshopMoveToParentDestRel(workshopCurrentRel) != null
+              }
+              sidebarOpsAllowed={sidebarOpsAllowed}
+              groupAssetForDrag={groupAssetForDrag}
+              currentGroupAsset={currentGroupAsset}
+              duplicateAssetInPlace={duplicateAssetInPlace}
+              removeAsset={removeAsset}
+              removeGroupItems={removeGroupItems}
+              setGroupFilterId={setGroupFilterId}
+              onDownloadWorkflowAssets={(sources) => void downloadWorkflowAssetsFromSources(sources)}
+              onDownloadSelectedWorkflowAssets={downloadSelectedWorkflowAssets}
+              onExecutePending={() => void executePending()}
+              onClearPending={() => setPending([])}
+              pendingCount={pending.length}
+              executing={executing}
+              executingDoneCount={executingQueueDoneCount}
+              executingTotal={executingQueue?.total ?? 0}
+            />
+            <div className={`flex items-center ${WORKFLOW_EDGE_GUTTER} py-0.5`}>
             <WorkflowColumnDensityButtons columnCount={columnCount} onColumnCountChange={setColumnCount} />
+            </div>
           </div>
         )}
-        {!showFunctionSidebar ? (
+        {!showFunctionSidebarContent ? (
           <div className="pointer-events-none absolute right-3 top-12 z-20 flex w-[min(18rem,70%)] flex-col items-stretch">
             <div className="pointer-events-auto">
               <WorkflowZeroBalanceBanner
@@ -16595,7 +16548,7 @@ ${lineSvg}
             workshopBoardView ? 'overflow-hidden' : 'overflow-y-auto'
           } ${spaceMarqueeEnabled && assetListMarqueeActive ? WORKFLOW_SPACE_MARQUEE_FRAME : ''}`}
           onWheelCapture={handleCenterWheelDuringDrag}
-          onMouseDown={handleMarqueeMouseDown}
+          onMouseDown={workshopBoardView ? undefined : handleMarqueeMouseDown}
           onContextMenu={openWorkflowCanvasBlankContextMenu}
           onDragOver={(e) => {
             autoScrollContainerOnDrag(e.currentTarget as HTMLElement, e.clientY);
@@ -17935,7 +17888,9 @@ ${lineSvg}
           </div>
         ) : null}
         </div>
-        {showFunctionSidebar ? renderWorkflowFunctionSidebar() : null}
+        {renderWorkflowFunctionSidebar()}
+        </div>
+        </div>
           </div>
         </div>
       </div>
@@ -18107,9 +18062,6 @@ ${lineSvg}
             lightboxRasterChrome ? handleLightboxPreviewLayoutChange : undefined
           }
           onUiHiddenChange={handleLightboxUiHiddenChange}
-          shellRightGutter={
-            workspaceQuickComposeExpanded ? WORKFLOW_LIGHTBOX_COMPOSE_DOCKED_INSET : undefined
-          }
           contentRightInset={
             lightboxUiHidden ? '0px' : WORKFLOW_LIGHTBOX_ASSET_THUMB_STRIP_INSET
           }
@@ -18663,11 +18615,7 @@ ${lineSvg}
               top: 0,
               left: 0,
               bottom: 0,
-              right: workspaceQuickComposeExpanded
-                ? WORKFLOW_LIGHTBOX_COMPOSE_DOCKED_INSET
-                : lightboxChromeReady
-                  ? WORKFLOW_LIGHTBOX_ASSET_THUMB_STRIP_INSET
-                  : 0,
+              right: lightboxChromeReady ? WORKFLOW_LIGHTBOX_ASSET_THUMB_STRIP_INSET : 0,
             }}
           >
             <ImageAnnotationLightboxToolbar
@@ -18776,7 +18724,6 @@ ${lineSvg}
                   : undefined
               }
               canvasAdjust={lightboxAnnotationCanvasAdjust}
-              composeDockExpanded={workspaceQuickComposeExpanded}
               lightboxChromeReady={lightboxChromeReady}
             />
           </div>,
@@ -18968,6 +18915,7 @@ ${lineSvg}
           y={hoverPreview.y}
           original={getModulePreviewOriginal(hoverPreview.mod) ?? ''}
           generated={getModulePreviewGenerated(hoverPreview.mod) ?? ''}
+          portalRoot={resolveFunctionSidebarHoverPortalRoot(popoutMode === 'pip' ? popoutTarget : null)}
         />
       ) : null}
 
@@ -19407,14 +19355,13 @@ ${lineSvg}
       )}
       </div>
     </div>
-    {typeof document !== 'undefined'
+    {quickComposeInLightbox && typeof document !== 'undefined'
       ? createPortal(
           <WorkspaceQuickComposeBar
             {...quickComposeBarCommonProps}
-            lightboxAnchorClient={quickComposeInLightbox ? lightboxQuickComposeAnchor : null}
-            lightboxLayoutResetNonce={quickComposeInLightbox ? lightboxQuickComposeLayoutNonce : 0}
-            expandedDockHostRef={quickComposeWorkspaceDockHostRef}
-            onInputExpandedChange={handleQuickComposeInputExpandedChange}
+            placement="lightbox"
+            lightboxAnchorClient={lightboxQuickComposeAnchor}
+            lightboxLayoutResetNonce={lightboxQuickComposeLayoutNonce}
           />,
           document.body
         )

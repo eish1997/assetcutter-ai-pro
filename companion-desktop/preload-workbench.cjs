@@ -89,4 +89,6 @@ contextBridge.exposeInMainWorld('assetCutterWorkbench', {
     ipcRenderer.on('workspace-shell-view', listener);
     return () => ipcRenderer.removeListener('workspace-shell-view', listener);
   },
+  toggleFunctionSidebarPin: (pinned) => timedInvoke('workbench-function-sidebar-toggle-pin', pinned),
+  getFunctionSidebarPin: () => timedInvoke('workbench-function-sidebar-get-pin'),
 });

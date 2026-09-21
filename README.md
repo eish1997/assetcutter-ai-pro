@@ -7,7 +7,7 @@ AI-assisted asset workflow workbench (workspace, capability presets, experimenta
 - [x] Workspace asset list + capability presets (in-slot page switch)
 - [x] Justified row layout for assets and presets
 - [x] Workbench asset wall virtualizes at 48+ cards (viewport + overscan; marquee hits layout boxes)
-- [x] Quick compose bar / chat dock
+- [x] Quick compose bar on the asset top row (3-line expand, popout window). In-page menus stay inside the page; popout menus extend below the bar without moving the window. Expanding input does not open a right-side chat dock
 - [x] Capability sets and workflow composer
 - [x] Experimental: seam repair, PBR texture generation, prompt arena
 - [x] Admin console (`/admin`) for staff ops
@@ -18,7 +18,7 @@ AI-assisted asset workflow workbench (workspace, capability presets, experimenta
 - [x] Upstream Gemini/Vertex 429: limited long-backoff retries (proxy + client); understand mode lowers image batch concurrency
 - [x] Task-envelope credits: sum-of-steps precharge + clear stale reserve after settle (avoids CREDITS_RESERVE_INVALID)
 - [x] Credit reserve reuse: an existing envelope (e.g. 149) covers a later smaller step (e.g. 134) instead of idempotency conflict
-- [x] Project Agent (U1?U4): dock chat, @experts (real LLM), auto mode, child-run cards, export/cold-load; optimistic send while expert LLM runs
+- [x] Project Agent (U1?U4): compose-bar thread, @experts (real LLM), auto mode, child-run cards, export/cold-load; optimistic send while expert LLM runs. No right-side chat dock
 - [x] Vertex route: default `us-central1`; Gemini 3.x models hybrid to `global` (avoids regional Publisher 404)
 - [x] AI Gateway single execution door: catalog/ops route, image/Jimeng/video via Jobs; B-round ops (failure filters, auto-circuit, trend snapshots, cancel); BYOK when Settings enables a user API-key outlet (browser-direct, no site credits); Vertex site proxy still bills; no Jimeng digital-human / music-worker / client async-batch
 - [x] Env acceptance profiles: `npm run env:profile:dev|prod-like` (C-round local?prod contract)

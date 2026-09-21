@@ -23,7 +23,7 @@ export function useWorkflowJustifiedLayout(
   useLayoutEffect(() => {
     const el = containerRef.current;
     if (!el) {
-      setContainerWidth(0);
+      /** 画板卸网格时 ref 为空；保留上次宽度，避免 ready=false 整墙透明 */
       return;
     }
     const update = () => {

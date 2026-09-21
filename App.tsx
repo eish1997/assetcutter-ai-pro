@@ -78,10 +78,6 @@ import {
   RIGHT_DOCK_RIGHT,
 } from './components/floatingDockConstants';
 import { isWorkflowEditableTarget } from './components/workflow/workflowDomUtils';
-import {
-  WORKFLOW_QUICK_COMPOSE_DOCKED_INSET,
-  WORKFLOW_QUICK_COMPOSE_DOCKED_WIDTH_CLASS,
-} from './components/workflow/workflowSectionUiConstants';
 import KeyboardShortcutsModal from './components/KeyboardShortcutsModal';
 import { AC_NAVIGATE_SETTINGS_EVENT } from './services/navigateSettings';
 import { flushProjectAgentBackupRetryQueue } from './services/projectAgent';
@@ -3456,16 +3452,6 @@ const MainApp: React.FC = () => {
   const [arenaFirstVisit, setArenaFirstVisit] = useState(() => !localStorage.getItem('ac_arena_visited'));
 
   const { mainScrollRef, showBackToTop, scrollToTop } = useMainScrollBackToTop();
-  const quickComposeWorkspaceDockHostRef = useRef<HTMLDivElement | null>(null);
-  const [workspaceQuickComposeExpanded, setWorkspaceQuickComposeExpanded] = useState(false);
-  const handleWorkspaceQuickComposeExpandedChange = useCallback((expanded: boolean) => {
-    setWorkspaceQuickComposeExpanded((prev) => (prev === expanded ? prev : expanded));
-  }, []);
-  useEffect(() => {
-    if (mode !== AppMode.WORKFLOW || !activeWorkspaceProjectId) {
-      setWorkspaceQuickComposeExpanded(false);
-    }
-  }, [mode, activeWorkspaceProjectId]);
   const isWorkflowMarqueeWheelActive = mode === AppMode.WORKFLOW && showWorkflowCanvas;
   const tryDisableCapabilityPresetById = useCallback((id: string): boolean => {
     if (!id || id.startsWith('set:')) return false;
@@ -4670,25 +4656,13 @@ const MainApp: React.FC = () => {
         </div>
       )}
 
-      <main
-        className="flex min-w-0 flex-1 flex-row h-[100dvh] overflow-hidden"
-        style={
-          mode === AppMode.WORKFLOW && activeWorkspaceProjectId && workspaceQuickComposeExpanded
-            ? ({ ['--ac-agent-dock-inset' as string]: WORKFLOW_QUICK_COMPOSE_DOCKED_INSET } as React.CSSProperties)
-            : ({ ['--ac-agent-dock-inset' as string]: '0px' } as React.CSSProperties)
-        }
-        data-agent-dock-expanded={
-          mode === AppMode.WORKFLOW && activeWorkspaceProjectId && workspaceQuickComposeExpanded
-            ? 'true'
-            : 'false'
-        }
-      >
+      <main className="flex min-w-0 flex-1 flex-row h-[100dvh] overflow-hidden">
         <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
         <div
           ref={mainScrollRef}
           className={`flex-1 min-h-0 no-scrollbar touch-pan-y ${
             mode === AppMode.WORKFLOW && showWorkflowCanvas
-              ? 'flex flex-col overflow-hidden pt-1.5 pb-1.5 pl-[calc(0.75rem+1.75rem+0.5rem)] pr-4 lg:pt-2 lg:pb-2 lg:pl-[calc(1rem+1.75rem+0.75rem)] lg:pr-6'
+              ? 'flex flex-col overflow-hidden pt-1.5 pb-1.5 pl-[calc(0.75rem+1.75rem+0.5rem)] pr-1.5 lg:pt-2 lg:pb-2 lg:pl-[calc(1rem+1.75rem+0.75rem)] lg:pr-1.5'
               : 'overflow-y-auto pt-6 pb-4 pl-[calc(0.75rem+1.75rem+0.5rem)] pr-4 lg:py-10 lg:pl-[calc(1rem+1.75rem+0.75rem)] lg:pr-10'
           }`}
           onMouseDownCapture={onMainMouseDownCapture}
@@ -4756,9 +4730,6 @@ const MainApp: React.FC = () => {
                     <WorkflowSection
                       key={workflowSectionLoadAttempt}
                       quickComposeShellActive={mode === AppMode.WORKFLOW}
-                      quickComposeWorkspaceDockHostRef={quickComposeWorkspaceDockHostRef}
-                      workspaceQuickComposeExpanded={workspaceQuickComposeExpanded}
-                      onWorkspaceQuickComposeExpandedChange={handleWorkspaceQuickComposeExpandedChange}
                       textModelRegistryId={config.modelText}
                       capabilityPresets={capabilityPresets}
                       capabilitySets={capabilitySets}
@@ -5015,18 +4986,6 @@ const MainApp: React.FC = () => {
           </div>
         </div>
         </div>
-        {mode === AppMode.WORKFLOW && showWorkflowCanvas ? (
-          <div
-            ref={quickComposeWorkspaceDockHostRef}
-            className={`relative z-[2600] flex h-full min-h-0 shrink-0 self-stretch flex-col pointer-events-auto ${
-              workspaceQuickComposeExpanded
-                ? WORKFLOW_QUICK_COMPOSE_DOCKED_WIDTH_CLASS
-                : 'w-0 min-w-0 overflow-hidden'
-            }`}
-            data-workflow-quick-compose-dock-host
-            data-ac-block-workflow-marquee
-          />
-        ) : null}
       </main>
 
       {showBackToTop && (

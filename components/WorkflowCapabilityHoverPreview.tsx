@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { ProgressivePreviewImage } from './ProgressivePreviewImage';
+import { clampFunctionSidebarHoverPreviewPosition } from '../services/functionSidebarPopout';
 
 type Props = {
   label: string;
@@ -8,6 +9,7 @@ type Props = {
   y: number;
   original: string;
   generated: string;
+  portalRoot?: HTMLElement | null;
 };
 
 const HOVER_THUMB = 208;
@@ -25,6 +27,7 @@ export const WorkflowCapabilityHoverPreview = React.memo(function WorkflowCapabi
   y,
   original,
   generated,
+  portalRoot,
 }: Props) {
   const genRef = useRef<HTMLImageElement | null>(null);
   const lineRef = useRef<HTMLDivElement | null>(null);
@@ -57,8 +60,20 @@ export const WorkflowCapabilityHoverPreview = React.memo(function WorkflowCapabi
 
   if (!original.trim() || !generated.trim()) return null;
 
+  const host = portalRoot ?? (typeof document !== 'undefined' ? document.body : null);
+  if (!host) return null;
+  const view = host.ownerDocument.defaultView;
+  const pos = clampFunctionSidebarHoverPreviewPosition(x, y, {
+    width: view?.innerWidth ?? 0,
+    height: view?.innerHeight ?? 0,
+  });
+
   return createPortal(
-    <div className="fixed z-[2500] pointer-events-none" style={{ left: x + 18, top: y + 18 }}>
+    <div
+      data-capability-hover-preview
+      className="fixed z-[2500] pointer-events-none"
+      style={{ left: pos.left, top: pos.top }}
+    >
       <div className="w-52 rounded-xl border border-white/15 bg-[#0f1116]/90 backdrop-blur-sm p-2 shadow-2xl">
         <div className="text-[8px] text-gray-300 mb-1">{label}</div>
         <div className="relative w-full aspect-square rounded-lg overflow-hidden bg-black/30">
@@ -88,6 +103,6 @@ export const WorkflowCapabilityHoverPreview = React.memo(function WorkflowCapabi
         </div>
       </div>
     </div>,
-    document.body
+    host
   );
 });

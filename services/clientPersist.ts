@@ -215,3 +215,10 @@ export const STORAGE_WORKFLOW_FAVORITES_V1 = 'ac_workflow_favorites_v1';
 export function workflowFavoritesStorageKey(preferenceScope: string | null | undefined): string {
   return scopedStorageKey(STORAGE_WORKFLOW_FAVORITES_V1, preferenceScope);
 }
+
+/** 工作流右侧功能区宽度与折叠（local，按 `preferenceScope` 分键） */
+export const STORAGE_WORKFLOW_FUNCTION_SIDEBAR_CHROME_V1 = 'ac_workflow_function_sidebar_chrome_v1';
+
+export function workflowFunctionSidebarChromeStorageKey(preferenceScope: string | null | undefined): string {
+  return scopedStorageKey(STORAGE_WORKFLOW_FUNCTION_SIDEBAR_CHROME_V1, preferenceScope);
+}

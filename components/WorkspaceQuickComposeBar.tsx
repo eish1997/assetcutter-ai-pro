@@ -21,7 +21,6 @@ import {
 } from '../services/modelRegistry/textModels';
 import {
   WORKFLOW_QUICK_COMPOSE_BAR_SHELL,
-  WORKFLOW_QUICK_COMPOSE_DOCKED_WIDTH_CLASS,
 } from './workflow/workflowSectionUiConstants';
 import {
   DROPDOWN_OPTION_CHIP_ACTIVE,
@@ -29,12 +28,16 @@ import {
   DROPDOWN_OPTION_CHIP_IDLE,
 } from './ui/CustomDropdown';
 import QuickComposeDropTray from './workflow/QuickComposeDropTray';
+import QuickComposeQueueStack, {
+  type QuickComposeQueueStackItem,
+} from './workflow/QuickComposeQueueStack';
 import QuickComposeMentionField, {
   type QuickComposeMentionFieldHandle,
 } from './workflow/QuickComposeMentionField';
-import ProjectAgentDock, {
-  type ProjectAgentDockProps,
-} from './project-agent/ProjectAgentDock';
+import {
+  QUICK_COMPOSE_POPOUT_DRAG_CLASS,
+  requestQuickComposePopoutWindow,
+} from '../services/functionSidebarPopout';
 import type {
   QuickComposeDropSlot,
   QuickComposeDropZone,
@@ -102,8 +105,9 @@ export type WorkspaceQuickComposeComposeMode = 'text' | 'image' | 'video' | '3d'
 export type WorkspaceQuickComposeBarProps = {
   visible: boolean;
   /**
-   * `floating`閿涙艾褰查幏鏍уЗ閿涘矂绮拋銈堝垱鎼存洖鐪虫稉顓㈡鏉╂垯鈧?   * `lightbox`閿涙艾銇囬崶楣冾暕鐟欏牆鍞?portal閿涙稑褰查幏鏍уЗ鐎规矮缍呴敍鍫滅瑢閸忋劌鐪惄绋挎倱閿涘绱濈粋浣烘暏閸旂姴娴?/ 閹锋牕鍙嗛敍宀勬閸ュ墽鏁辨径鏍х湴閹绘劒姘﹂柅鏄忕帆濞夈劌鍙嗛妴?   */
-  placement?: 'floating' | 'lightbox';
+   * `topRow`：资产列顶行文档流；`lightbox`：灯箱浮层 portal；`floating`：页内 fixed（弹出失败回退）。
+   */
+  placement?: 'floating' | 'lightbox' | 'topRow';
   /**
    * 娴?`lightbox`閿涙岸鈧灏惔鏇＄珶娑擃厾鍋ｉ敍鍫ｎ潒閸?CSS 閸嶅繒绀岄敍澶堚偓鍌炴姜缁岀儤妞傛潏鎾冲弳閺夛紕些閸掓媽顕氶悙閫涚瑓閺傜櫢绱盽null` 閺冭埖浠径宥夌帛鐠併倛鍒涙惔鏇炵湷娑擃厹鈧?   */
   lightboxAnchorClient?: { x: number; y: number } | null;
@@ -137,6 +141,14 @@ export type WorkspaceQuickComposeBarProps = {
   submitDisabled?: boolean;
   submitDisabledReason?: string;
   onSubmit: () => void;
+  hasSendableContent?: boolean;
+  onExecutePending?: () => void;
+  queueItems?: QuickComposeQueueStackItem[];
+  executing?: boolean;
+  executingDoneCount?: number;
+  executingTotal?: number;
+  onClearPending?: () => void;
+  onRemoveQueueItem?: (id: string) => void;
   genSettings: WorkspaceQuickComposeGenSettings;
   /** 鐏炴洜銇氬锝勭秴 / 濮ｆ柧绶?/ 鏉堟挸鍤亸鍝勵嚟閿涘牏鏁撻崶鎯х穿閹垮函绱?*/
   showGenImageSettings: boolean;
@@ -158,49 +170,10 @@ export type WorkspaceQuickComposeBarProps = {
   pasteAssetRefZone?: QuickComposeDropZone;
   /** 娴?lightbox閿涙岸娈ｉ挊蹇庡瘜閸ユ儳灏敍鍫濈秼閸撳秶鏁鹃棃銏犲祮娑撹娴橀敍?*/
   hideMainDropZone?: boolean;
-  /** 鐏炴洖绱戦幀渚婄窗portal 閸掓澘顦荤仦鍌氬礁娓氀勫瘯鏉炵晫鍋ｉ敍鍫濅紣娴ｆ粌灏?/ 婢堆冩禈瀹革箑褰搁崚鍡樼埉閿?*/
-  expandedDockHostRef?: React.RefObject<HTMLDivElement | null>;
-  /** 閸愬懎绁电仦鏇炵磻閹礁褰夐崠鏍电礄娓氭稑顦荤仦鍌涙暪缁愬嫪瀵岄崠鍝勭厵閿?*/
-  onInputExpandedChange?: (expanded: boolean) => void;
   promptCards: WorkspaceQuickComposePromptCard[];
   onRemovePromptCard: (key: string) => void;
-  /**
-   * 鐏炴洖绱?dock 娑撴梹褰佹笟娑欐閿涙艾褰告笟褍鍞村畵灞藉隘濞撳弶鐓?`QuickComposeChatDock`閿涘牆顕拠婵堝殠缁?+ composer閿涘绱?   * 閺囧じ鍞?mention 婢堆嗙翻閸忋儱灏敍娑欐弓閹绘劒绶甸弮鏈电箽閹镐礁甯張?dock 鐢啫鐪敍鍧抋llback閿涘鈧?   */
-  chatDockProps?: Pick<
-    ProjectAgentDockProps,
-    | 'messages'
-    | 'onRetryMessage'
-    | 'onMessageAction'
-    | 'onCancelMessage'
-    | 'onResultPreview'
-    | 'selectionStatusLabel'
-    | 'selectionStatusTone'
-    | 'perceptionContext'
-    | 'onOpenPanel'
-    | 'onClearChat'
-    | 'onLoadEarlier'
-    | 'canLoadEarlier'
-    | 'onExportChat'
-    | 'threadEmptyTitle'
-    | 'threadEmptyHint'
-    | 'minimizeDisabled'
-    | 'className'
-    | 'expertStudio'
-    | 'onTryRunPrompt'
-    | 'memoryEntries'
-    | 'onToggleMemory'
-    | 'onDeleteMemory'
-    | 'skillEntries'
-    | 'onToggleSkill'
-    | 'onDeleteSkill'
-    | 'onInstallSampleSkill'
-    | 'onImportSkillPreview'
-  >;
 };
 
-export type WorkspaceQuickComposeChatDockProps = NonNullable<
-  WorkspaceQuickComposeBarProps['chatDockProps']
->;
 
 /** 閸欏倽鈧啫鐖剁憴浣烘晸閸ュ彞楠囬崫渚婄窗娑撶粯鐦笟瀣╃鐞?*/
 const QC_ASPECT_PRIMARY = ['16:9', '4:3', '1:1', '3:4', '9:16'] as const;
@@ -252,6 +225,14 @@ export default function WorkspaceQuickComposeBar({
   onReorderDropSlot,
   maxMentions,
   onSubmit,
+  hasSendableContent = false,
+  onExecutePending,
+  queueItems = [],
+  executing = false,
+  executingDoneCount = 0,
+  executingTotal = 0,
+  onClearPending,
+  onRemoveQueueItem,
   inputDisabled: inputDisabledProp,
   submitDisabled = false,
   submitDisabledReason,
@@ -266,11 +247,8 @@ export default function WorkspaceQuickComposeBar({
   onPasteAssetRefs,
   pasteAssetRefZone = 'main',
   hideMainDropZone = false,
-  expandedDockHostRef,
-  onInputExpandedChange,
   promptCards,
   onRemovePromptCard,
-  chatDockProps,
 }: WorkspaceQuickComposeBarProps) {
   const mentions = useMemo(() => mentionsFromSegments(segments), [segments]);
   const mentionFieldRef = useRef<QuickComposeMentionFieldHandle | null>(null);
@@ -297,10 +275,10 @@ export default function WorkspaceQuickComposeBar({
   const [inputExpanded, setInputExpanded] = useState(false);
   const [composeTextMaxHeightPx, setComposeTextMaxHeightPx] = useState<number | undefined>(undefined);
   const [panelPos, setPanelPos] = useState<{
-    /** 娑撳氦袝閸欐垼宓傛稉鍛婃寜楠炲啿鐪虫稉顓烆嚠姒绘劧绱伴弽宄扮础 left + translateX(-50%) */
-    anchorX: number;
+    left: number;
     top: number;
-    transform: string;
+    maxHeight?: number;
+    maxWidth?: number;
   } | null>(null);
 
   const { rows: effectiveModelRows, coerceModelId } = useEffectiveImageModelRows();
@@ -361,26 +339,105 @@ export default function WorkspaceQuickComposeBar({
   }, [inputExpanded]);
 
   const isLightbox = placement === 'lightbox';
-  const isLightboxInlineChatExpanded = inputExpanded && isLightbox && Boolean(chatDockProps);
-  const isWorkspaceDockedExpanded =
-    inputExpanded && expandedDockHostRef?.current != null && !isLightbox;
-
-  useLayoutEffect(() => {
-    onInputExpandedChange?.(inputExpanded);
-  }, [inputExpanded, onInputExpandedChange]);
-
-  const [dockHostRev, setDockHostRev] = useState(0);
-  useLayoutEffect(() => {
-    if (!isWorkspaceDockedExpanded) return;
-    if (!expandedDockHostRef?.current) return;
-    setDockHostRev((n) => n + 1);
-  }, [isWorkspaceDockedExpanded, expandedDockHostRef]);
-
-  const collapseInputExpanded = useCallback(() => {
-    const r = barRef.current?.getBoundingClientRect();
-    collapseAnchorBottomRef.current = r != null && r.height > 0 ? r.bottom : null;
-    setInputExpanded(false);
+  const isTopRow = placement === 'topRow';
+  const [popoutMode, setPopoutMode] = useState<'docked' | 'pip' | 'overlay'>('docked');
+  const [popoutTarget, setPopoutTarget] = useState<HTMLElement | null>(null);
+  const [popoutStack, setPopoutStack] = useState(false);
+  const [queueOpen, setQueueOpen] = useState(false);
+  const pipWindowRef = useRef<Window | null>(null);
+  const poppingRef = useRef(false);
+  const popoutBoundsSavedRef = useRef<{ x: number; y: number; w: number; h: number } | null>(null);
+  const [popoutBarHold, setPopoutBarHold] = useState<{
+    left: number;
+    top: number;
+    width: number;
+    height: number;
+  } | null>(null);
+  const restoreQuickComposePopoutBounds = useCallback(() => {
+    const saved = popoutBoundsSavedRef.current;
+    popoutBoundsSavedRef.current = null;
+    const win = pipWindowRef.current;
+    if (!saved || !win || win.closed) return;
+    try {
+      if (win.screenX !== saved.x || win.screenY !== saved.y) win.moveTo(saved.x, saved.y);
+      if (win.outerWidth !== saved.w || win.outerHeight !== saved.h) win.resizeTo(saved.w, saved.h);
+    } catch {
+      /* ignore */
+    }
   }, []);
+  const skipFixedLayout = isTopRow && popoutMode !== 'overlay';
+
+  const closeComposePopoutWindow = useCallback(() => {
+    const win = pipWindowRef.current;
+    pipWindowRef.current = null;
+    setPopoutTarget(null);
+    if (win && !win.closed) {
+      try {
+        win.close();
+      } catch {
+        /* ignore */
+      }
+    }
+  }, []);
+
+  const dockComposeBack = useCallback(() => {
+    closeComposePopoutWindow();
+    setPopoutMode('docked');
+    setPosition(null);
+  }, [closeComposePopoutWindow]);
+
+  const requestComposePopout = useCallback(() => {
+    if (!isTopRow || popoutMode !== 'docked' || poppingRef.current) return;
+    poppingRef.current = true;
+    const rect = barRef.current?.getBoundingClientRect();
+    const width = Math.max(760, Math.round(rect?.width ?? 760));
+    const height = Math.max(160, Math.round(rect?.height ?? 160));
+    void requestQuickComposePopoutWindow({ width, height })
+      .then((win) => {
+        if (!win) {
+          if (typeof window !== 'undefined' && (window as Window & { assetCutterWorkbench?: unknown }).assetCutterWorkbench) return;
+          const vw = window.innerWidth;
+          const vh = window.innerHeight;
+          setPosition(
+            clampBarToViewport(
+              { left: Math.max(VIEW_MARGIN, Math.floor((vw - width) / 2)), top: 48 },
+              barRef.current,
+              vw,
+              vh,
+            ),
+          );
+          setPopoutTarget(null);
+          setPopoutMode('overlay');
+          return;
+        }
+        pipWindowRef.current = win;
+        const dockIfThisWindow = () => {
+          if (pipWindowRef.current === win) {
+            pipWindowRef.current = null;
+            setPopoutTarget(null);
+            setPopoutMode('docked');
+            setPosition(null);
+          }
+        };
+        win.addEventListener('pagehide', dockIfThisWindow);
+        win.addEventListener('unload', dockIfThisWindow);
+        setPopoutTarget(win.document.body);
+        setPopoutMode('pip');
+      })
+      .finally(() => {
+        poppingRef.current = false;
+      });
+  }, [isTopRow, popoutMode]);
+
+  useLayoutEffect(() => {
+    return () => {
+      closeComposePopoutWindow();
+    };
+  }, [closeComposePopoutWindow]);
+
+  useEffect(() => {
+    if (queueItems.length === 0) setQueueOpen(false);
+  }, [queueItems.length]);
 
   const modeLockedByInputPresets = inputPresetsActive;
   const modeChipCls = (active: boolean) =>
@@ -566,16 +623,16 @@ export default function WorkspaceQuickComposeBar({
       setSettingsOpen(false);
       return;
     }
-    if (placement === 'lightbox') return;
+    if (placement === 'lightbox' || skipFixedLayout) return;
     if (position) return;
     resetToDefaultPosition();
-  }, [position, resetToDefaultPosition, visible, placement]);
+  }, [position, resetToDefaultPosition, visible, placement, skipFixedLayout]);
 
   useLayoutEffect(() => {
-    if (!visible || placement !== 'lightbox' || isWorkspaceDockedExpanded || isLightboxInlineChatExpanded) return;
+    if (!visible || placement !== 'lightbox') return;
     if (lightboxAnchorClient) return;
     resetToDefaultPosition();
-  }, [visible, placement, lightboxAnchorClient, lightboxLayoutResetNonce, resetToDefaultPosition, isWorkspaceDockedExpanded, isLightboxInlineChatExpanded]);
+  }, [visible, placement, lightboxAnchorClient, lightboxLayoutResetNonce, resetToDefaultPosition]);
 
   const lightboxAnchorRef = useRef(lightboxAnchorClient);
   lightboxAnchorRef.current = lightboxAnchorClient;
@@ -625,7 +682,7 @@ export default function WorkspaceQuickComposeBar({
 
   const syncExpandedBarViewport = useCallback(() => {
     const el = barRef.current;
-    if (!el || !inputExpanded || isWorkspaceDockedExpanded || isLightboxInlineChatExpanded) {
+    if (!el || !inputExpanded || skipFixedLayout) {
       setComposeTextMaxHeightPx(undefined);
       return;
     }
@@ -668,7 +725,7 @@ export default function WorkspaceQuickComposeBar({
       }
       return clamped;
     });
-  }, [inputExpanded, placement, applyLightboxBarToAnchor, clampPositionToViewport, isWorkspaceDockedExpanded, isLightboxInlineChatExpanded]);
+  }, [inputExpanded, placement, applyLightboxBarToAnchor, clampPositionToViewport, skipFixedLayout]);
 
   useEffect(() => {
     if (!dragging) return;
@@ -712,63 +769,150 @@ export default function WorkspaceQuickComposeBar({
 
   useLayoutEffect(() => {
     if (!settingsOpen || typeof window === 'undefined') return;
+    const margin = 8;
+    const gap = 6;
     const measure = () => {
       const tr = activeGenPanelTriggerRef.current;
       if (!tr) return;
+      const view = tr.ownerDocument.defaultView ?? window;
       const rect = tr.getBoundingClientRect();
-      const anchorX = rect.left + rect.width / 2;
+      const panel = panelRef.current;
+      const menuH = Math.ceil(Math.min(Math.max(panel?.scrollHeight ?? 0, panel?.getBoundingClientRect().height ?? 0, 120), 320));
+      const menuW = Math.ceil(Math.min(Math.max(panel?.scrollWidth ?? 0, panel?.getBoundingClientRect().width ?? 0, 160), 320));
+      const pipWin = popoutMode === 'pip' ? pipWindowRef.current : null;
+      const isPip = Boolean(pipWin && !pipWin.closed);
 
-      const gap = 6;
-      const measuredH = panelRef.current?.getBoundingClientRect().height ?? 0;
-      // 妫ｆ牗顐奸幐鍌濇祰閸?measuredH 娑?0閿涘瞼鏁ゆ穱婵嗙暓妤傛ê瀹虫导鏉垮窗娴ｅ稄绱濋柆鍨帳娑撳绔寸敮?rAF 閸ョ娀鐝惔锕€褰夐崠鏍倳鏉烆兛绗傛稉瀣╂櫠鐎佃壈鍤х捄鎶芥／
-      const estH = Math.max(measuredH, 200);
-      const roomBelow = window.innerHeight - rect.bottom - gap;
-      const roomAbove = rect.top - gap;
-      const preferBelow = roomBelow >= estH || roomBelow >= roomAbove;
+      const roomBelow = view.innerHeight - rect.bottom - gap;
+      const placeBelow = roomBelow >= menuH || roomBelow >= rect.top - gap;
+      let top = Math.round(placeBelow ? rect.bottom + gap : rect.top - gap - menuH);
+      let left = Math.round(rect.left + rect.width / 2 - menuW / 2);
 
-      if (preferBelow) {
-        setPanelPos({ anchorX, top: rect.bottom + gap, transform: 'translateX(-50%)' });
-      } else {
-        setPanelPos({ anchorX, top: rect.top - gap, transform: 'translateX(-50%) translateY(-100%)' });
+      if (isPip && pipWin) {
+        // 窗口左上角不动，只往右、往下加透明区。上移再加高会让整页跳一帧。
+        const placeLeft = Math.round(Math.max(margin, rect.left + rect.width / 2 - menuW / 2));
+        const placeTop = Math.round(rect.bottom + gap);
+        const overflowRight = Math.ceil(Math.max(0, placeLeft + menuW + margin - view.innerWidth));
+        const overflowBottom = Math.ceil(Math.max(0, placeTop + menuH + margin - view.innerHeight));
+        if (
+          !popoutBoundsSavedRef.current &&
+          panel &&
+          (overflowRight > 0 || overflowBottom > 0)
+        ) {
+          const bar = barRef.current;
+          const barRect = bar?.getBoundingClientRect();
+          const hold = {
+            left: barRect?.left ?? 0,
+            top: barRect?.top ?? 0,
+            width: barRect?.width ?? view.innerWidth,
+            height: barRect?.height ?? view.innerHeight,
+          };
+          popoutBoundsSavedRef.current = {
+            x: pipWin.screenX,
+            y: pipWin.screenY,
+            w: pipWin.outerWidth,
+            h: pipWin.outerHeight,
+          };
+          if (bar) {
+            bar.style.position = 'absolute';
+            bar.style.left = `${hold.left}px`;
+            bar.style.top = `${hold.top}px`;
+            bar.style.bottom = 'auto';
+            bar.style.width = `${hold.width}px`;
+            bar.style.height = `${hold.height}px`;
+            bar.style.maxWidth = `${hold.width}px`;
+            bar.style.maxHeight = `${hold.height}px`;
+          }
+          setPopoutBarHold(hold);
+          try {
+            pipWin.resizeTo(
+              pipWin.outerWidth + overflowRight,
+              pipWin.outerHeight + overflowBottom,
+            );
+          } catch {
+            popoutBoundsSavedRef.current = null;
+            setPopoutBarHold(null);
+          }
+          return;
+        }
+        setPanelPos((prev) =>
+          prev &&
+          prev.left === placeLeft &&
+          prev.top === placeTop &&
+          prev.maxHeight === 320 &&
+          prev.maxWidth === 320
+            ? prev
+            : { left: placeLeft, top: placeTop, maxHeight: 320, maxWidth: 320 },
+        );
+        return;
       }
+
+      const maxTop = Math.max(margin, view.innerHeight - margin - 80);
+      top = Math.round(Math.min(Math.max(margin, top), maxTop));
+      const room = Math.max(80, view.innerHeight - top - margin);
+      const maxHeight = Math.min(320, room);
+      const maxWidth = Math.min(320, Math.max(160, view.innerWidth - margin * 2));
+      const maxLeft = Math.max(margin, view.innerWidth - menuW - margin);
+      left = Math.round(Math.min(Math.max(margin, left), maxLeft));
+      setPanelPos((prev) =>
+        prev &&
+        prev.left === left &&
+        prev.top === top &&
+        prev.maxHeight === maxHeight &&
+        prev.maxWidth === maxWidth
+          ? prev
+          : { left, top, maxHeight, maxWidth },
+      );
     };
     measure();
-    const rafId = requestAnimationFrame(() => measure());
-    window.addEventListener('resize', measure);
+    const view = activeGenPanelTriggerRef.current?.ownerDocument.defaultView ?? window;
+    const rafId = view.requestAnimationFrame(() => measure());
+    view.addEventListener('resize', measure);
+    const panelEl = panelRef.current;
+    const resizeObserver = panelEl ? new ResizeObserver(() => measure()) : null;
+    if (panelEl && resizeObserver) resizeObserver.observe(panelEl);
     return () => {
-      cancelAnimationFrame(rafId);
-      window.removeEventListener('resize', measure);
+      view.cancelAnimationFrame(rafId);
+      view.removeEventListener('resize', measure);
+      resizeObserver?.disconnect();
     };
-  }, [settingsOpen, position, panelAnchor]);
+  }, [settingsOpen, position, panelAnchor, popoutTarget, popoutMode, popoutBarHold, panelPos]);
 
-  /** 閸忔娊妫撮弮鑸电缁岀尨绱濋柆鍨帳娑撳顐奸幍鎾崇磻閻劍妫崸鎰垼閸忓牊瑕嗛弻鎾茬鐢冨晙缁剧姵顒滈敍鍫ｎ潎閹扮喎鍎氶梻顏勭潌閿?*/
+  /** 菜单关闭时把弹出窗收回打开前的大小。圆角条还钉着时再缩，避免满高铺开闪一下。 */
   useEffect(() => {
-    if (!settingsOpen) setPanelPos(null);
-  }, [settingsOpen]);
+    if (settingsOpen) return () => restoreQuickComposePopoutBounds();
+    setPanelPos(null);
+    setPopoutBarHold(null);
+    restoreQuickComposePopoutBounds();
+  }, [settingsOpen, restoreQuickComposePopoutBounds]);
 
   useEffect(() => {
     if (!settingsOpen) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') setSettingsOpen(false);
     };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [settingsOpen]);
-
-  useEffect(() => {
-    if (!settingsOpen) return;
     const onDown = (e: MouseEvent) => {
       const t = e.target as Node;
       if (barRef.current?.contains(t)) return;
       if (panelRef.current?.contains(t)) return;
       setSettingsOpen(false);
     };
-    window.addEventListener('mousedown', onDown, true);
-    return () => window.removeEventListener('mousedown', onDown, true);
-  }, [settingsOpen]);
+    const views = new Set<Window>([window]);
+    const popView = popoutTarget?.ownerDocument?.defaultView;
+    if (popView) views.add(popView);
+    for (const view of views) {
+      view.addEventListener('keydown', onKey);
+      view.addEventListener('mousedown', onDown, true);
+    }
+    return () => {
+      for (const view of views) {
+        view.removeEventListener('keydown', onKey);
+        view.removeEventListener('mousedown', onDown, true);
+      }
+    };
+  }, [settingsOpen, popoutTarget]);
 
   useLayoutEffect(() => {
-    if (!visible || isWorkspaceDockedExpanded || isLightboxInlineChatExpanded) return;
+    if (!visible || skipFixedLayout) return;
     const el = barRef.current;
     if (!el) return;
     const vw = window.innerWidth;
@@ -807,10 +951,10 @@ export default function WorkspaceQuickComposeBar({
     }
 
     clampPositionToViewport();
-  }, [inputExpanded, visible, clampPositionToViewport, syncExpandedBarViewport, isWorkspaceDockedExpanded, isLightboxInlineChatExpanded]);
+  }, [inputExpanded, visible, clampPositionToViewport, syncExpandedBarViewport, skipFixedLayout]);
 
   useLayoutEffect(() => {
-    if (!visible || !inputExpanded || isWorkspaceDockedExpanded || isLightboxInlineChatExpanded) return;
+    if (!visible || !inputExpanded || skipFixedLayout) return;
     const el = barRef.current;
     if (!el) return;
     syncExpandedBarViewport();
@@ -818,17 +962,17 @@ export default function WorkspaceQuickComposeBar({
     const ro = new ResizeObserver(() => syncExpandedBarViewport());
     ro.observe(el);
     return () => ro.disconnect();
-  }, [visible, inputExpanded, syncExpandedBarViewport, segments, isWorkspaceDockedExpanded, isLightboxInlineChatExpanded]);
+  }, [visible, inputExpanded, syncExpandedBarViewport, segments, skipFixedLayout]);
 
   useEffect(() => {
-    if (!visible || !inputExpanded || isWorkspaceDockedExpanded || isLightboxInlineChatExpanded) return;
+    if (!visible || !inputExpanded || skipFixedLayout) return;
     const onResize = () => syncExpandedBarViewport();
     window.addEventListener('resize', onResize);
     return () => window.removeEventListener('resize', onResize);
-  }, [visible, inputExpanded, syncExpandedBarViewport, isWorkspaceDockedExpanded, isLightboxInlineChatExpanded]);
+  }, [visible, inputExpanded, syncExpandedBarViewport, skipFixedLayout]);
 
   useEffect(() => {
-    if (!visible) return;
+    if (!visible || skipFixedLayout) return;
 
     const RESIZE_RESET_DEBOUNCE_MS = 400;
     const RESIZE_RESET_MIN_DELTA_PX = 16;
@@ -858,6 +1002,8 @@ export default function WorkspaceQuickComposeBar({
         lastCommittedVh = window.innerHeight;
         if (placement === 'lightbox' && lightboxAnchorRef.current) {
           applyLightboxBarToAnchor();
+        } else if (isTopRow && popoutMode === 'overlay') {
+          clampPositionToViewport();
         } else {
           resetToDefaultPosition();
         }
@@ -877,6 +1023,9 @@ export default function WorkspaceQuickComposeBar({
   }, [
     visible,
     placement,
+    skipFixedLayout,
+    isTopRow,
+    popoutMode,
     clampPositionToViewport,
     resetToDefaultPosition,
     applyLightboxBarToAnchor,
@@ -900,6 +1049,26 @@ export default function WorkspaceQuickComposeBar({
   const inputDisabled = inputDisabledProp === true;
   const controlsDisabled = inputDisabled;
   const submitDisabledTitle = submitDisabled ? submitDisabledReason : undefined;
+  const mergeSendExecute = isTopRow;
+  const sendOrExecuteDisabled = mergeSendExecute
+    ? !hasSendableContent && queueItems.length === 0 && !executing
+    : submitDisabled;
+  const sendOrExecuteTitle = mergeSendExecute
+    ? executing
+      ? `执行中 ${executingDoneCount}/${executingTotal}`
+      : hasSendableContent
+        ? (submitDisabledTitle ?? '加入队列并执行')
+        : queueItems.length > 0
+          ? `执行待处理队列（${queueItems.length}）`
+          : '没有可发送内容或待处理任务'
+    : (submitDisabledTitle ?? '加入队列并执行');
+  const handleSendOrExecute = () => {
+    if (mergeSendExecute && !hasSendableContent) {
+      onExecutePending?.();
+      return;
+    }
+    onSubmit();
+  };
   const trimmedOverride = placeholderOverride?.trim();
   const placeholder = trimmedOverride
     ? trimmedOverride
@@ -1221,9 +1390,11 @@ export default function WorkspaceQuickComposeBar({
               ref={panelRef}
               className="fixed z-[2601] inline-table max-w-[min(20rem,calc(100vw-1.5rem))] max-h-[min(70vh,320px)] border-separate border-spacing-y-1 border-spacing-x-0 overflow-y-auto rounded-xl border border-white/10 bg-[#0f0f12] p-1.5 shadow-xl ring-1 ring-white/[0.05]"
               style={{
-                left: panelPos.anchorX,
+                left: panelPos.left,
                 top: panelPos.top,
-                transform: panelPos.transform,
+                maxHeight: panelPos.maxHeight,
+                maxWidth: panelPos.maxWidth,
+                WebkitAppRegion: 'no-drag',
               }}
               role="dialog"
               aria-label={
@@ -1363,7 +1534,7 @@ export default function WorkspaceQuickComposeBar({
                   {supportsCap(imageCapability, 'aspectRatio') ? (
                     <div className="table-row">
                       <div className="table-cell p-0 align-middle">
-                        <div className="flex flex-nowrap items-center gap-1">
+                        <div className="flex flex-wrap items-center gap-1">
                           <button type="button" onClick={() => genSettings.onAspectRatio('adaptive')} className={chipCls(genSettings.aspectRatio === 'adaptive')}>
                             自适应
                           </button>
@@ -1380,7 +1551,7 @@ export default function WorkspaceQuickComposeBar({
                   {supportsCap(imageCapability, 'imageSize') ? (
                     <div className="table-row">
                       <div className="table-cell w-full min-w-0 p-0 align-middle">
-                        <div className="flex min-w-0 w-full flex-nowrap items-stretch gap-1">
+                        <div className="flex min-w-0 w-full flex-wrap items-stretch gap-1">
                           <button type="button" onClick={() => genSettings.onImageSize('')} className={chipClsStretch(!genSettings.imageSize)} title="\u4e0d\u6307\u5b9a\u8f93\u51fa\u5c3a\u5bf8">
                             -
                           </button>
@@ -1396,7 +1567,7 @@ export default function WorkspaceQuickComposeBar({
 
                   <div className="table-row">
                     <div className="table-cell w-full min-w-0 p-0 align-middle">
-                      <div className="flex min-w-0 w-full flex-nowrap items-stretch gap-1">
+                      <div className="flex min-w-0 w-full flex-wrap items-stretch gap-1">
                         <button type="button" onClick={() => genSettings.onUnderstand(true)} className={chipClsStretch(genSettings.understand)} title="\u5148\u7406\u89e3\u610f\u56fe\uff0c\u518d\u751f\u6210\u753b\u9762">
                           理解
                         </button>
@@ -1412,28 +1583,28 @@ export default function WorkspaceQuickComposeBar({
               {panelAnchor === 'params' && showGenVideoSettings ? (
                 <>
                   {supportsCap(videoCapability, 'durationSeconds') ? (
-                    <div className="table-row"><div className="table-cell w-full min-w-0 p-0 align-middle"><div className="flex min-w-0 w-full flex-nowrap items-stretch gap-1">
+                    <div className="table-row"><div className="table-cell w-full min-w-0 p-0 align-middle"><div className="flex min-w-0 w-full flex-wrap items-stretch gap-1">
                       {capOptions(videoCapability, 'durationSeconds').map((s) => (
                         <button key={s.value} type="button" onClick={() => genSettings.onVideoDurationSeconds(s.value)} className={chipClsStretch((genSettings.videoDurationSeconds || '5') === s.value)}>{displayParamLabel(s.label)}</button>
                       ))}
                     </div></div></div>
                   ) : null}
                   {supportsCap(videoCapability, 'aspectRatio') ? (
-                    <div className="table-row"><div className="table-cell w-full min-w-0 p-0 align-middle"><div className="flex min-w-0 w-full flex-nowrap items-stretch gap-1">
+                    <div className="table-row"><div className="table-cell w-full min-w-0 p-0 align-middle"><div className="flex min-w-0 w-full flex-wrap items-stretch gap-1">
                       {capOptions(videoCapability, 'aspectRatio').map((s) => (
                         <button key={s.value} type="button" onClick={() => genSettings.onVideoAspectRatio(s.value)} className={chipClsStretch((genSettings.videoAspectRatio || '16:9') === s.value)}>{displayParamLabel(s.label)}</button>
                       ))}
                     </div></div></div>
                   ) : null}
                   {supportsCap(videoCapability, 'resolution') ? (
-                    <div className="table-row"><div className="table-cell w-full min-w-0 p-0 align-middle"><div className="flex min-w-0 w-full flex-nowrap items-stretch gap-1">
+                    <div className="table-row"><div className="table-cell w-full min-w-0 p-0 align-middle"><div className="flex min-w-0 w-full flex-wrap items-stretch gap-1">
                       {capOptions(videoCapability, 'resolution').map((s) => (
                         <button key={s.value} type="button" onClick={() => genSettings.onVideoResolution(s.value)} className={chipClsStretch((genSettings.videoResolution || '1080p') === s.value)}>{displayParamLabel(s.label)}</button>
                       ))}
                     </div></div></div>
                   ) : null}
                   {supportsCap(videoCapability, 'motionStrength') ? (
-                    <div className="table-row"><div className="table-cell w-full min-w-0 p-0 align-middle"><div className="flex min-w-0 w-full flex-nowrap items-stretch gap-1">
+                    <div className="table-row"><div className="table-cell w-full min-w-0 p-0 align-middle"><div className="flex min-w-0 w-full flex-wrap items-stretch gap-1">
                       {fallbackOptions(videoCapability, 'motionStrength', [
                         { value: '0.25', label: '\u8fd0\u52a8\u5f31' },
                         { value: '0.5', label: '\u8fd0\u52a8\u4e2d' },
@@ -1450,37 +1621,37 @@ export default function WorkspaceQuickComposeBar({
               {panelAnchor === 'params' && showGenModel3dSettings ? (
                 <>
                   {supportsCap(model3dCapability, 'quality') ? (
-                    <div className="table-row"><div className="table-cell w-full min-w-0 p-0 align-middle"><div className="flex min-w-0 w-full flex-nowrap items-stretch gap-1">
+                    <div className="table-row"><div className="table-cell w-full min-w-0 p-0 align-middle"><div className="flex min-w-0 w-full flex-wrap items-stretch gap-1">
                       <button type="button" onClick={() => genSettings.onModel3dQuality('')} className={chipClsStretch(!genSettings.model3dQuality)}>默认</button>
                       {capOptions(model3dCapability, 'quality').map((s) => <button key={s.value} type="button" onClick={() => genSettings.onModel3dQuality(s.value)} className={chipClsStretch(genSettings.model3dQuality === s.value)}>{displayParamLabel(s.label)}</button>)}
                     </div></div></div>
                   ) : null}
                   {supportsCap(model3dCapability, 'format') ? (
-                    <div className="table-row"><div className="table-cell w-full min-w-0 p-0 align-middle"><div className="flex min-w-0 w-full flex-nowrap items-stretch gap-1">
+                    <div className="table-row"><div className="table-cell w-full min-w-0 p-0 align-middle"><div className="flex min-w-0 w-full flex-wrap items-stretch gap-1">
                       <button type="button" onClick={() => genSettings.onModel3dFormat('')} className={chipClsStretch(!genSettings.model3dFormat)}>默认</button>
                       {capOptions(model3dCapability, 'format').slice(0, 5).map((s) => <button key={s.value} type="button" onClick={() => genSettings.onModel3dFormat(s.value)} className={chipClsStretch(genSettings.model3dFormat === s.value)}>{displayParamLabel(s.label)}</button>)}
                     </div></div></div>
                   ) : null}
                   {supportsCap(model3dCapability, 'geometryQuality') ? (
-                    <div className="table-row"><div className="table-cell w-full min-w-0 p-0 align-middle"><div className="flex min-w-0 w-full flex-nowrap items-stretch gap-1">
+                    <div className="table-row"><div className="table-cell w-full min-w-0 p-0 align-middle"><div className="flex min-w-0 w-full flex-wrap items-stretch gap-1">
                       <button type="button" onClick={() => genSettings.onModel3dGeometryQuality('')} className={chipClsStretch(!genSettings.model3dGeometryQuality)}>几何默认</button>
                       {capOptions(model3dCapability, 'geometryQuality').map((s) => <button key={s.value} type="button" onClick={() => genSettings.onModel3dGeometryQuality(s.value)} className={chipClsStretch(genSettings.model3dGeometryQuality === s.value)}>{displayParamLabel(s.label)}</button>)}
                     </div></div></div>
                   ) : null}
                   {supportsCap(model3dCapability, 'textureQuality') ? (
-                    <div className="table-row"><div className="table-cell w-full min-w-0 p-0 align-middle"><div className="flex min-w-0 w-full flex-nowrap items-stretch gap-1">
+                    <div className="table-row"><div className="table-cell w-full min-w-0 p-0 align-middle"><div className="flex min-w-0 w-full flex-wrap items-stretch gap-1">
                       <button type="button" onClick={() => genSettings.onModel3dTextureQuality('')} className={chipClsStretch(!genSettings.model3dTextureQuality)}>纹理默认</button>
                       {capOptions(model3dCapability, 'textureQuality').map((s) => <button key={s.value} type="button" onClick={() => genSettings.onModel3dTextureQuality(s.value)} className={chipClsStretch(genSettings.model3dTextureQuality === s.value)}>{displayParamLabel(s.label)}</button>)}
                     </div></div></div>
                   ) : null}
                   {supportsCap(model3dCapability, 'texture') ? (
-                    <div className="table-row"><div className="table-cell w-full min-w-0 p-0 align-middle"><div className="flex min-w-0 w-full flex-nowrap items-stretch gap-1">
+                    <div className="table-row"><div className="table-cell w-full min-w-0 p-0 align-middle"><div className="flex min-w-0 w-full flex-wrap items-stretch gap-1">
                       <button type="button" onClick={() => genSettings.onModel3dTexture(true)} className={chipClsStretch(genSettings.model3dTexture)}>贴图</button>
                       <button type="button" onClick={() => genSettings.onModel3dTexture(false)} className={chipClsStretch(!genSettings.model3dTexture)}>无贴图</button>
                     </div></div></div>
                   ) : null}
                   {supportsCap(model3dCapability, 'pbr') ? (
-                    <div className="table-row"><div className="table-cell w-full min-w-0 p-0 align-middle"><div className="flex min-w-0 w-full flex-nowrap items-stretch gap-1">
+                    <div className="table-row"><div className="table-cell w-full min-w-0 p-0 align-middle"><div className="flex min-w-0 w-full flex-wrap items-stretch gap-1">
                       <button type="button" onClick={() => genSettings.onModel3dPbr(true)} className={chipClsStretch(genSettings.model3dPbr)}>PBR</button>
                       <button type="button" onClick={() => genSettings.onModel3dPbr(false)} className={chipClsStretch(!genSettings.model3dPbr)}>无 PBR</button>
                     </div></div></div>
@@ -1491,7 +1662,7 @@ export default function WorkspaceQuickComposeBar({
               {panelAnchor === 'params' && allowBatchCount ? (
                 <div className="table-row">
                   <div className="table-cell w-full min-w-0 p-0 align-middle">
-                    <div className="flex min-w-0 w-full flex-nowrap items-stretch gap-1">
+                    <div className="flex min-w-0 w-full flex-wrap items-stretch gap-1">
                       {([1, 2, 3, 4] as const).map((n) => (
                         <button key={n} type="button" onClick={() => genSettings.onCount(n)} className={countChipClsStretch(genSettings.count === n)}>
                           {n === 1 ? '1x' : `x${n}`}
@@ -1520,11 +1691,11 @@ export default function WorkspaceQuickComposeBar({
               ) : null}
             </div>
           </>,
-          document.body
+          (popoutMode === 'pip' && popoutTarget ? popoutTarget : document.body)
         )
       : null;
   const barPositionStyle: React.CSSProperties | undefined =
-    isWorkspaceDockedExpanded || isLightboxInlineChatExpanded
+    skipFixedLayout || popoutMode === 'pip'
       ? undefined
       : position
         ? { left: `${position.left}px`, top: `${position.top}px`, userSelect: dragging ? 'none' : 'auto' }
@@ -1532,28 +1703,57 @@ export default function WorkspaceQuickComposeBar({
           ? { visibility: 'hidden' as const }
           : undefined;
 
-  const dockHostEl = expandedDockHostRef?.current ?? null;
-  const dockTitle = isLightbox ? '\u5927\u56fe / \u9879\u76ee Agent' : '\u9879\u76ee Agent';
-  const useChatDock = Boolean(
-    inputExpanded && (chatDockProps || isWorkspaceDockedExpanded || isLightboxInlineChatExpanded)
-  );
+  const isComposePopout = popoutMode === 'pip';
+  useLayoutEffect(() => {
+    if (!isComposePopout) {
+      setPopoutStack(false);
+      return;
+    }
+    const el = barRef.current;
+    if (!el) return;
+    const apply = () => {
+      if (popoutBoundsSavedRef.current) return;
+      const rect = el.getBoundingClientRect();
+      const stack = rect.width < 576 || rect.height >= 144;
+      setPopoutStack((prev) => (prev === stack ? prev : stack));
+    };
+    apply();
+    const observer = new ResizeObserver(apply);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [isComposePopout, popoutTarget]);
+  const topRowShellClass = isComposePopout
+    ? `pointer-events-auto h-full min-h-0 w-full overflow-hidden rounded-2xl bg-[#0f0f12] ${QUICK_COMPOSE_POPOUT_DRAG_CLASS}`
+    : popoutMode === 'overlay'
+      ? 'pointer-events-auto fixed z-[1600] max-w-[96vw] px-2 w-[min(44rem,calc(100vw-1.5rem))]'
+      : 'pointer-events-auto relative z-20 w-full min-w-0 overflow-visible';
 
   const barShell = (
       <div
         ref={barRef}
         data-workflow-quick-compose-bar
         data-ac-block-workflow-marquee
-        data-workflow-quick-compose-docked={isWorkspaceDockedExpanded || isLightboxInlineChatExpanded ? '' : undefined}
+        data-quick-compose-placement={placement}
+        data-quick-compose-popout={isTopRow ? popoutMode : undefined}
         className={
-          isWorkspaceDockedExpanded
-            ? useChatDock
-              ? 'pointer-events-auto flex h-full min-h-0 w-full flex-col'
-              : `pointer-events-auto flex h-full min-h-0 w-full flex-col border-l border-white/[0.08] bg-[#0f0f12] px-3 py-3`
-            : isLightboxInlineChatExpanded
-              ? `pointer-events-auto fixed right-0 top-0 bottom-0 z-[2500] flex flex-col ${WORKFLOW_QUICK_COMPOSE_DOCKED_WIDTH_CLASS}`
-              : `pointer-events-auto fixed max-w-[96vw] px-2 w-[min(44rem,calc(100vw-1.5rem))] ${isLightbox ? 'z-[2500]' : 'z-[1600]'}`
+          isTopRow
+            ? topRowShellClass
+            : `pointer-events-auto fixed max-w-[96vw] px-2 w-[min(44rem,calc(100vw-1.5rem))] ${isLightbox ? 'z-[2500]' : 'z-[1600]'}`
         }
-        style={barPositionStyle}
+        style={
+          popoutBarHold
+            ? {
+                position: 'absolute',
+                left: popoutBarHold.left,
+                top: popoutBarHold.top,
+                bottom: 'auto',
+                width: popoutBarHold.width,
+                height: popoutBarHold.height,
+                maxWidth: popoutBarHold.width,
+                maxHeight: popoutBarHold.height,
+              }
+            : barPositionStyle
+        }
         onClick={isLightbox ? (e) => e.stopPropagation() : undefined}
         onWheel={isLightbox ? (e) => e.stopPropagation() : undefined}
         onPasteCapture={(e) => handlePasteAssetRefs(e, pasteRefZone)}
@@ -1561,14 +1761,16 @@ export default function WorkspaceQuickComposeBar({
       >
         <div
           className={`relative min-w-0 ${
-            isWorkspaceDockedExpanded || isLightboxInlineChatExpanded
-              ? 'flex min-h-0 flex-1 flex-col overflow-hidden'
-              : 'overflow-visible'
+            isComposePopout ? 'flex h-full min-h-0 flex-col' : 'overflow-visible'
           }`}
         >
-          {!isWorkspaceDockedExpanded && !isLightboxInlineChatExpanded && hasDropZones ? (
+          {hasDropZones ? (
             <div
-              className="pointer-events-auto absolute bottom-full left-0 right-0 z-[1] mb-2 flex flex-col items-center gap-2 px-0.5"
+              className={
+                isTopRow
+                  ? 'pointer-events-auto absolute top-full left-0 right-0 z-[1] mt-2 flex flex-col items-center gap-2 px-0.5'
+                  : 'pointer-events-auto absolute bottom-full left-0 right-0 z-[1] mb-2 flex flex-col items-center gap-2 px-0.5'
+              }
               data-quick-compose-above
               onDragOver={
                 isLightbox || showSplitDropZones ? undefined : handleMainZoneDragOver
@@ -1684,190 +1886,46 @@ export default function WorkspaceQuickComposeBar({
             </div>
           ) : null}
 
-          {inputExpanded ? (
-            useChatDock ? (
-              <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-                <div className="min-h-0 flex-1 overflow-hidden">
-                  <ProjectAgentDock
-                    title={dockTitle}
-                    onMinimize={collapseInputExpanded}
-                    minimizeDisabled={chatDockProps?.minimizeDisabled}
-                    className={chatDockProps?.className}
-                    messages={chatDockProps?.messages ?? []}
-                    onRetryMessage={chatDockProps?.onRetryMessage}
-                    onMessageAction={chatDockProps?.onMessageAction}
-                    onCancelMessage={chatDockProps?.onCancelMessage}
-                    onResultPreview={chatDockProps?.onResultPreview}
-                    selectionStatusLabel={chatDockProps?.selectionStatusLabel}
-                    selectionStatusTone={chatDockProps?.selectionStatusTone}
-                    perceptionContext={chatDockProps?.perceptionContext}
-                    onClearChat={chatDockProps?.onClearChat}
-                    onLoadEarlier={chatDockProps?.onLoadEarlier}
-                    canLoadEarlier={chatDockProps?.canLoadEarlier}
-                    onExportChat={chatDockProps?.onExportChat}
-                    expertStudio={chatDockProps?.expertStudio}
-                    onTryRunPrompt={chatDockProps?.onTryRunPrompt}
-                    skillEntries={chatDockProps?.skillEntries}
-                    onToggleSkill={chatDockProps?.onToggleSkill}
-                    onDeleteSkill={chatDockProps?.onDeleteSkill}
-                    onInstallSampleSkill={chatDockProps?.onInstallSampleSkill}
-                    onImportSkillPreview={chatDockProps?.onImportSkillPreview}
-                    memoryEntries={chatDockProps?.memoryEntries}
-                    onToggleMemory={chatDockProps?.onToggleMemory}
-                    onDeleteMemory={chatDockProps?.onDeleteMemory}
-                    threadEmptyTitle={chatDockProps?.threadEmptyTitle ?? '\u5de5\u4f5c\u533a Agent'}
-                    threadEmptyHint={chatDockProps?.threadEmptyHint ?? '\u8bf4\u8bf4\u4f60\u60f3\u5b8c\u6210\u4ec0\u4e48\uff0cAgent \u4f1a\u8bfb\u53d6\u5f53\u524d\u9879\u76ee\u3001\u8d44\u4ea7\u548c\u9009\u62e9\u3002'}
-                    segments={segments}
-                    onSegmentsChange={onSegmentsChange}
-                    mentionCandidates={mentionCandidates}
-                    maxMentions={maxMentions}
-                    placeholder={placeholder}
-                    mainDropSlots={mainDropSlots}
-                    referenceDropSlots={referenceDropSlots}
-                    onRemoveMainDropSlot={onRemoveMainDropSlot}
-                    onRemoveReferenceDropSlot={onRemoveReferenceDropSlot}
-                    onMoveDropSlot={onMoveDropSlot}
-                    onReorderDropSlot={onReorderDropSlot}
-                    hideMainDropZone={hideMainDropZone}
-                    onComposeInputDragOver={handleComposeInputDragOver}
-                    onComposeInputDrop={handleComposeInputDrop}
-                    onDropSlotClick={handleDropSlotClick}
-                    promptCards={[]}
-                    onRemovePromptCard={onRemovePromptCard}
-                    inputDisabled={inputDisabled}
-                    submitDisabled={submitDisabled}
-                    submitDisabledReason={submitDisabledReason}
-                    onSubmit={onSubmit}
-                    composeMode={composeMode}
-                    onComposeModeChange={onComposeModeChange}
-                    modeLockedByInputPresets={inputPresetsActive}
-                    genControls={genActionControls}
-                  />
-                </div>
-              </div>
-            ) : isWorkspaceDockedExpanded ? (
-                <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden" role="search">
-                  <div className="flex shrink-0 items-center justify-between gap-2 pr-1">
-                    <span className="text-[10px] font-black uppercase tracking-wide text-gray-400">
-                      {dockTitle}
-                    </span>
-                    <button
-                      type="button"
-                      onClick={collapseInputExpanded}
-                      className="grid h-8 w-8 shrink-0 place-items-center rounded-md text-gray-400 outline-none transition-colors hover:bg-white/[0.08] hover:text-white focus-visible:ring-2 focus-visible:ring-blue-500/50"
-                      title="\u6536\u8d77\u4e3a\u5e95\u90e8\u8f93\u5165\u6761"
-                      aria-label="\u6536\u8d77\u8f93\u5165\u533a"
-                      aria-pressed
-                    >
-                      <Minimize2 className="h-4 w-4" strokeWidth={2.2} aria-hidden />
-                    </button>
-                  </div>
-                  <div className="min-h-0 flex-1 overflow-y-auto overscroll-y-contain no-scrollbar">
-                    <div className="flex flex-col gap-3 pr-1">
-                      {hasDropZones ? (
-                        <div className="flex flex-col gap-2">
-                          {promptCards.length > 0 ? (
-                            <div className="flex flex-wrap items-center gap-2">
-                              {promptCards.map((c) => (
-                                <div
-                                  key={c.key}
-                                  className={`group inline-flex max-w-full min-w-0 shrink-0 items-center gap-1.5 px-2.5 py-1.5 ${WORKFLOW_QUICK_COMPOSE_BAR_SHELL}`}
-                                  title={c.instruction.trim() ? c.instruction : c.label}
-                                >
-                                  <span className="min-w-0 truncate text-[13px] text-gray-100">{c.label}</span>
-                                  <button
-                                    type="button"
-                                    onClick={() => onRemovePromptCard(c.key)}
-                                    className="grid h-7 w-7 shrink-0 place-items-center rounded-full text-gray-400 outline-none transition-colors hover:bg-white/[0.08] hover:text-white focus-visible:ring-2 focus-visible:ring-blue-500/50"
-                                    aria-label={`\u79fb\u9664 ${c.label}`}
-                                  >
-                                    <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden>
-                                      <path d="M18 6 6 18M6 6l12 12" />
-                                    </svg>
-                                  </button>
-                                </div>
-                              ))}
-                            </div>
-                          ) : null}
-                          {showSplitDropZones ? (
-                            <div className={`grid gap-x-0 gap-y-1 px-0.5 py-1 ${splitDropZoneGridCols}`}>
-                              {showMainDropColumn ? (
-                                hasMainDropSlots ? (
-                                  <span className="justify-self-center px-1.5 text-[9px] font-semibold text-gray-500">{hideMainDropZone ? '\u53c2\u8003\u56fe\uff08\u5f53\u524d\u56fe\u4e3a\u4e3b\u56fe\uff09' : '\u53c2\u8003\u56fe'}</span>
-                                ) : (
-                                  <div className="px-1.5" aria-hidden />
-                                )
-                              ) : null}
-                              {showZoneDivider ? <div className="pointer-events-none" aria-hidden /> : null}
-                              {showReferenceDropColumn ? (
-                                <span className="justify-self-center px-1.5 text-[9px] font-semibold text-gray-500">{hideMainDropZone ? '\u53c2\u8003\u56fe\uff08\u5f53\u524d\u56fe\u4e3a\u4e3b\u56fe\uff09' : '\u53c2\u8003\u56fe'}</span>
-                              ) : null}
-                              {showMainDropColumn ? (
-                                <div data-quick-compose-drop-zone="main" className="inline-flex w-fit max-w-full shrink-0 justify-self-center px-1.5" {...bindQuickComposeDropZone('main')}>
-                                  <QuickComposeDropTray zone="main" slots={mainDropSlots} disabled={false} onRemoveSlot={onRemoveMainDropSlot} onReorderSlot={onReorderDropSlot ? (assetId, toIndex) => onReorderDropSlot(assetId, 'main', toIndex) : undefined} onMoveSlotToZone={onMoveDropSlot ? (assetId) => onMoveDropSlot(assetId, 'reference') : undefined} onSlotClick={handleDropSlotClick} onStashCaret={() => mentionFieldRef.current?.stashCaretBeforeBlur()} emptyHint="\u62d6\u5165\u4e3b\u56fe" />
-                                </div>
-                              ) : null}
-                              {showZoneDivider ? (
-                                <div className="pointer-events-none mx-auto h-[2px] w-full max-w-[12rem] justify-self-center rounded-full bg-white/35 shadow-[0_0_6px_rgba(255,255,255,0.12)]" aria-hidden />
-                              ) : null}
-                              {showReferenceDropColumn ? (
-                                <div data-quick-compose-drop-zone="reference" className="inline-flex w-fit max-w-full shrink-0 justify-self-center px-1.5" {...bindQuickComposeDropZone('reference')}>
-                                  <QuickComposeDropTray zone="reference" slots={referenceDropSlots} disabled={false} onRemoveSlot={onRemoveReferenceDropSlot} onReorderSlot={onReorderDropSlot ? (assetId, toIndex) => onReorderDropSlot(assetId, 'reference', toIndex) : undefined} onMoveSlotToZone={onMoveDropSlot && showMainDropColumn ? (assetId) => onMoveDropSlot(assetId, 'main') : undefined} onSlotClick={handleDropSlotClick} onStashCaret={() => mentionFieldRef.current?.stashCaretBeforeBlur()} emptyHint={hideMainDropZone ? '\u53c2\u8003\u56fe\uff08\u5f53\u524d\u56fe\u4e3a\u4e3b\u56fe\uff09' : '\u53c2\u8003\u56fe'} />
-                                </div>
-                              ) : null}
-                            </div>
-                          ) : null}
-                        </div>
-                      ) : null}
-                      <QuickComposeMentionField
-                        ref={mentionFieldRef}
-                        segments={segments}
-                        onSegmentsChange={onSegmentsChange}
-                        mentionCandidates={mentionCandidates}
-                        maxMentions={maxMentions}
-                        placeholder={placeholder}
-                        disabled={inputDisabled}
-                        multiline
-                        rows={10}
-                        ariaLabel={isLightbox ? '\u5927\u56fe\u9884\u89c8\u5feb\u6377\u751f\u6210\u63cf\u8ff0' : '\u5feb\u6377\u751f\u6210\u63cf\u8ff0'}
-                        onSubmit={onSubmit}
-                        onDragOver={handleComposeInputDragOver}
-                        onDrop={(e) => handleComposeInputDrop(e, 'main')}
-                      />
-                    </div>
-                  </div>
-                  <div className="flex shrink-0 flex-col gap-2 border-t border-white/[0.06] pt-3 pr-1">
-                    <div className="flex flex-wrap items-center gap-2">{genActionControls}</div>
-                    <div className="flex flex-wrap items-center justify-end gap-2">
-                      <button
-                        type="button"
-                        disabled={submitDisabled}
-                        onClick={onSubmit}
-                        className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-white text-[#0a0a0c] shadow-md outline-none transition-transform hover:scale-[1.03] active:scale-[0.98] disabled:opacity-35 focus-visible:ring-2 focus-visible:ring-blue-500/55"
-                        title={submitDisabledTitle ?? '\u52a0\u5165\u961f\u5217\u5e76\u6267\u884c'}
-                          aria-label={submitDisabledTitle ?? '\u52a0\u5165\u961f\u5217\u5e76\u6267\u884c'}
-                      >
-                        <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-                          <path d="M5 12h14M13 5l7 7-7 7" />
-                        </svg>
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              ) : null
-          ) : (
             <div
-              className={`flex items-center gap-2 px-2 py-1.5 ${WORKFLOW_QUICK_COMPOSE_BAR_SHELL}`}
+              data-quick-compose-row={isComposePopout ? '' : undefined}
+              data-quick-compose-layout={isComposePopout ? (popoutStack ? 'stack' : 'bar') : undefined}
+              className={
+                isComposePopout
+                  ? popoutStack
+                    ? 'flex h-full min-h-0 w-full min-w-0 flex-col gap-2 px-2 py-1.5'
+                    : 'flex h-full min-h-0 w-full min-w-0 items-center gap-2 px-2 py-1.5'
+                  : `flex w-full min-w-0 items-center gap-2 px-2 py-1.5 ${
+                      isTopRow && popoutMode === 'docked'
+                        ? 'rounded-md bg-white/[0.04]'
+                        : WORKFLOW_QUICK_COMPOSE_BAR_SHELL
+                    } ${isTopRow && inputExpanded ? 'items-center' : ''}`
+              }
               role="search"
             >
+              <div
+                data-quick-compose-tools={popoutStack ? '' : undefined}
+                className={popoutStack ? 'order-2 flex w-full shrink-0 flex-nowrap items-center gap-2' : 'contents'}
+              >
               <button
                 type="button"
+                data-quick-compose-grab
                 onDoubleClick={() => {
+                  if (isTopRow && popoutMode !== 'docked') {
+                    dockComposeBack();
+                    return;
+                  }
+                  if (isTopRow) return;
                   dragOffsetRef.current = null;
                   setDragging(false);
                   resetToDefaultPosition();
                 }}
                 onPointerDown={(e) => {
+                  if (isTopRow && popoutMode === 'docked') {
+                    e.preventDefault();
+                    requestComposePopout();
+                    return;
+                  }
+                  if (isTopRow && popoutMode === 'pip') return;
                   const rect = barRef.current?.getBoundingClientRect();
                   if (!rect) return;
                   dragOffsetRef.current = { x: e.clientX - rect.left, y: e.clientY - rect.top };
@@ -1875,11 +1933,84 @@ export default function WorkspaceQuickComposeBar({
                   setDragging(true);
                 }}
                 className="flex h-9 w-7 shrink-0 cursor-grab items-center justify-center rounded-md text-gray-400 outline-none transition-colors hover:bg-white/[0.08] hover:text-white active:cursor-grabbing disabled:opacity-35 focus-visible:ring-2 focus-visible:ring-blue-500/50"
-                title="\u62d6\u52a8\u8f93\u5165\u6846\uff08\u53cc\u51fb\u56de\u5230\u9ed8\u8ba4\u4f4d\u7f6e\uff09"
-                aria-label="\u62d6\u52a8\u8f93\u5165\u6846"
+                title={
+                  isTopRow
+                    ? popoutMode === 'docked'
+                      ? '拖出独立输入窗'
+                      : popoutMode === 'overlay'
+                        ? '拖动；双击贴回顶行'
+                        : '空白处拖动窗口；关闭窗口贴回顶行'
+                    : '拖动输入框（双击回到默认位置）'
+                }
+                aria-label={isTopRow ? '弹出输入行' : '拖动输入框'}
               >
                 <span className="select-none text-xs leading-none">::</span>
               </button>
+              {popoutStack ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (inputExpanded) {
+                        setInputExpanded(false);
+                        return;
+                      }
+                      setSettingsOpen(false);
+                      setInputExpanded(true);
+                    }}
+                    className="grid h-9 w-8 shrink-0 place-items-center rounded-md text-gray-400 outline-none transition-colors hover:bg-white/[0.08] hover:text-white focus-visible:ring-2 focus-visible:ring-blue-500/50"
+                    data-quick-compose-expand=""
+                    title={inputExpanded ? '收起多行输入' : '展开多行输入区；多行时 Ctrl+Enter 提交'}
+                    aria-label={inputExpanded ? '收起输入区' : '展开输入区'}
+                    aria-pressed={inputExpanded}
+                  >
+                    {inputExpanded ? (
+                      <Minimize2 className="h-4 w-4" strokeWidth={2.2} aria-hidden />
+                    ) : (
+                      <Maximize2 className="h-4 w-4" strokeWidth={2.2} aria-hidden />
+                    )}
+                  </button>
+                  {genActionControls}
+                  {isTopRow ? (
+                    <QuickComposeQueueStack
+                      compact
+                      items={queueItems}
+                      open={queueOpen}
+                      executing={executing}
+                      onToggle={() => setQueueOpen((open) => !open)}
+                      onClear={onClearPending}
+                      onRemoveItem={onRemoveQueueItem}
+                    />
+                  ) : null}
+                  <button
+                    type="button"
+                    disabled={sendOrExecuteDisabled}
+                    onClick={handleSendOrExecute}
+                    className="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-white text-[#0a0a0c] shadow-md outline-none transition-transform hover:scale-[1.03] active:scale-[0.98] disabled:opacity-35 focus-visible:ring-2 focus-visible:ring-blue-500/55"
+                    title={sendOrExecuteTitle}
+                    aria-label={sendOrExecuteTitle}
+                  >
+                    <svg
+                      viewBox="0 0 24 24"
+                      className="h-5 w-5"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth={2.2}
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      aria-hidden
+                    >
+                      <path d="M5 12h14M13 5l7 7-7 7" />
+                    </svg>
+                    {mergeSendExecute && executing ? (
+                      <span className="absolute -bottom-1 left-1/2 -translate-x-1/2 rounded-full bg-[#0a0a0c] px-1 text-[8px] font-black tabular-nums text-white">
+                        {executingDoneCount}/{executingTotal}
+                      </span>
+                    ) : null}
+                  </button>
+                </>
+              ) : null}
+              </div>
               {isLightbox ? (
                 <div
                   className="grid h-9 w-9 shrink-0 place-items-center rounded-md text-gray-400"
@@ -1889,6 +2020,16 @@ export default function WorkspaceQuickComposeBar({
                 </div>
               ) : null}
 
+              <div
+                data-quick-compose-field={isComposePopout ? '' : undefined}
+                className={
+                  popoutStack
+                    ? 'order-1 flex min-h-[3.5rem] min-w-0 w-full flex-1 flex-col'
+                    : isComposePopout
+                      ? 'flex min-w-[8rem] flex-1'
+                      : 'contents'
+                }
+              >
               <QuickComposeMentionField
                 ref={mentionFieldRef}
                 segments={segments}
@@ -1897,38 +2038,70 @@ export default function WorkspaceQuickComposeBar({
                 maxMentions={maxMentions}
                 placeholder={placeholder}
                 disabled={inputDisabled}
+                multiline={isTopRow && inputExpanded}
+                fillHeight={popoutStack}
+                rows={isTopRow && inputExpanded ? 3 : undefined}
+                multilineMaxHeightPx={isTopRow && inputExpanded ? 84 : undefined}
                 ariaLabel={isLightbox ? '\u5927\u56fe\u9884\u89c8\u5feb\u6377\u751f\u6210\u63cf\u8ff0' : '\u5feb\u6377\u751f\u6210\u63cf\u8ff0'}
                 onSubmit={onSubmit}
                 onDragOver={handleComposeInputDragOver}
                 onDrop={(e) => handleComposeInputDrop(e, 'main')}
               />
+              </div>
 
+              {popoutStack || !isTopRow ? null : (
               <button
                 type="button"
                 onClick={() => {
+                  if (isTopRow && inputExpanded) {
+                    setInputExpanded(false);
+                    return;
+                  }
                   const r = barRef.current?.getBoundingClientRect();
                   expandAnchorBottomRef.current = r != null && r.height > 0 ? r.bottom : null;
                   setSettingsOpen(false);
                   setInputExpanded(true);
                 }}
                 className="grid h-9 w-8 shrink-0 place-items-center rounded-md text-gray-400 outline-none transition-colors hover:bg-white/[0.08] hover:text-white focus-visible:ring-2 focus-visible:ring-blue-500/50"
-                title="\u5c55\u5f00\u591a\u884c\u8f93\u5165\u533a\uff1b\u591a\u884c\u65f6 Ctrl+Enter \u63d0\u4ea4"
-                aria-label="\u5c55\u5f00\u8f93\u5165\u533a"
-                aria-pressed={false}
+                data-quick-compose-expand={isComposePopout ? '' : undefined}
+                title={isTopRow && inputExpanded ? '收起多行输入' : '展开多行输入区；多行时 Ctrl+Enter 提交'}
+                aria-label={isTopRow && inputExpanded ? '收起输入区' : '展开输入区'}
+                aria-pressed={isTopRow && inputExpanded}
               >
-                <Maximize2 className="h-4 w-4" strokeWidth={2.2} aria-hidden />
+                {isTopRow && inputExpanded ? (
+                  <Minimize2 className="h-4 w-4" strokeWidth={2.2} aria-hidden />
+                ) : (
+                  <Maximize2 className="h-4 w-4" strokeWidth={2.2} aria-hidden />
+                )}
               </button>
+              )}
 
-              <div className="ml-2 flex shrink-0 items-center gap-3">
+              {popoutStack ? null : (
+              <div
+                data-quick-compose-tools={isComposePopout ? '' : undefined}
+                className="ml-2 flex shrink-0 items-center gap-3"
+              >
                 {genActionControls}
+
+                {isTopRow ? (
+                  <QuickComposeQueueStack
+                    compact={isComposePopout}
+                    items={queueItems}
+                    open={queueOpen}
+                    executing={executing}
+                    onToggle={() => setQueueOpen((open) => !open)}
+                    onClear={onClearPending}
+                    onRemoveItem={onRemoveQueueItem}
+                  />
+                ) : null}
 
                 <button
                   type="button"
-                  disabled={submitDisabled}
-                  onClick={onSubmit}
-                  className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-white text-[#0a0a0c] shadow-md outline-none transition-transform hover:scale-[1.03] active:scale-[0.98] disabled:opacity-35 focus-visible:ring-2 focus-visible:ring-blue-500/55"
-                  title={submitDisabledTitle ?? '\u52a0\u5165\u961f\u5217\u5e76\u6267\u884c'}
-                          aria-label={submitDisabledTitle ?? '\u52a0\u5165\u961f\u5217\u5e76\u6267\u884c'}
+                  disabled={sendOrExecuteDisabled}
+                  onClick={handleSendOrExecute}
+                  className="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-white text-[#0a0a0c] shadow-md outline-none transition-transform hover:scale-[1.03] active:scale-[0.98] disabled:opacity-35 focus-visible:ring-2 focus-visible:ring-blue-500/55"
+                  title={sendOrExecuteTitle}
+                  aria-label={sendOrExecuteTitle}
                 >
                   <svg
                     viewBox="0 0 24 24"
@@ -1942,19 +2115,29 @@ export default function WorkspaceQuickComposeBar({
                   >
                     <path d="M5 12h14M13 5l7 7-7 7" />
                   </svg>
+                  {mergeSendExecute && executing ? (
+                    <span className="absolute -bottom-1 left-1/2 -translate-x-1/2 rounded-full bg-[#0a0a0c] px-1 text-[8px] font-black tabular-nums text-white">
+                      {executingDoneCount}/{executingTotal}
+                    </span>
+                  ) : null}
                 </button>
               </div>
+              )}
             </div>
-          )}
         </div>
       </div>
   );
 
+  const hostedBar =
+    popoutMode === 'pip' && popoutTarget
+      ? createPortal(barShell, popoutTarget)
+      : popoutMode === 'overlay' && typeof document !== 'undefined'
+        ? createPortal(barShell, document.body)
+        : barShell;
+
   return (
     <>
-      {isWorkspaceDockedExpanded && dockHostEl && typeof document !== 'undefined'
-        ? createPortal(barShell, dockHostEl)
-        : barShell}
+      {hostedBar}
       {settingsPanel}
     </>
   );

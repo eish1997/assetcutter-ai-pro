@@ -26,6 +26,8 @@ export type UseWorkflowMarqueeArgs = {
   setSelectedGroupItemKeys: Dispatch<SetStateAction<Set<string>>>;
   /** 虚拟化时由网格写入 layout 命中；返回 null 则回退 DOM refs */
   layoutHitIdsRef?: RefObject<((sel: ClientRectLike) => string[] | null) | null>;
+  /** 画板等非网格表面为 false，避免左键被列表框选抢走 */
+  emptyMarqueeEnabled?: boolean;
 };
 
 type MarqueeRect = { left: number; top: number; width: number; height: number };
@@ -123,6 +125,7 @@ export function useWorkflowMarquee({
   setSelectedAssetIds,
   setSelectedGroupItemKeys,
   layoutHitIdsRef,
+  emptyMarqueeEnabled = true,
 }: UseWorkflowMarqueeArgs) {
   const marqueeDataRef = useRef({ startX: 0, startY: 0, endX: 0, endY: 0 });
   const marqueeOverlayElRef = useRef<SVGRectElement | null>(null);
@@ -316,10 +319,12 @@ export function useWorkflowMarquee({
   const handleMarqueeMouseDown = useCallback(
     (e: ReactMouseEvent) => {
       if (e.button != null && e.button !== 0) return;
+      if (!emptyMarqueeEnabled) return;
       if (spaceMarqueeEnabled) return;
       /** 仅资产列表页（小盒子 pane=0）可框选；预设页不框选 */
       if (Math.round(workspacePane) !== 0) return;
       if (showArchived) return;
+      if ((e.target as Element).closest('[data-front-hall-board]')) return;
       if ((e.target as Element).closest('[data-workflow-toolbar]')) return;
       if ((e.target as Element).closest('[data-workflow-card]')) return;
       if ((e.target as Element).closest('[data-ac-block-workflow-marquee]')) return;
@@ -330,7 +335,7 @@ export function useWorkflowMarquee({
       e.stopPropagation();
       startMarqueeDrag(e.clientX, e.clientY, 0);
     },
-    [showArchived, spaceMarqueeEnabled, startMarqueeDrag, workspacePane]
+    [emptyMarqueeEnabled, showArchived, spaceMarqueeEnabled, startMarqueeDrag, workspacePane]
   );
 
   useEffect(() => {
@@ -341,6 +346,7 @@ export function useWorkflowMarquee({
 
   const beginSpaceMarqueePointerDrag = useCallback(
     (clientX: number, clientY: number, pointerId: number, captureEl: HTMLElement) => {
+      if (!emptyMarqueeEnabled) return;
       if (showArchived) return;
       if (Math.round(workspacePane) !== 0) return;
       startMarqueeDrag(clientX, clientY, 0, {
@@ -348,7 +354,7 @@ export function useWorkflowMarquee({
         pointerId,
       });
     },
-    [showArchived, startMarqueeDrag, workspacePane]
+    [emptyMarqueeEnabled, showArchived, startMarqueeDrag, workspacePane]
   );
 
   return {

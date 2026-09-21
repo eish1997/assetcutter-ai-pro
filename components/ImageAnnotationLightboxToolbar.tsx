@@ -269,10 +269,7 @@ export type ImageAnnotationLightboxToolbarProps = {
     setResizeWriteBackPopOpen: React.Dispatch<React.SetStateAction<boolean>>;
     imageResizeWriteBackAvailable: boolean;
   } | null;
-  /**
-   * 预览区右侧占位：工具条默认居中于扣除 App 快捷侧栏或缩略图条后的区域。
-   */
-  composeDockExpanded?: boolean;
+  /** 预览区右侧占位：工具条默认居中于扣除缩略图条后的区域。 */
   lightboxChromeReady?: boolean;
 };
 
@@ -300,16 +297,14 @@ export function ImageAnnotationLightboxToolbar({
   samSegment,
   removeBg,
   canvasAdjust,
-  composeDockExpanded = false,
   lightboxChromeReady = false,
 }: ImageAnnotationLightboxToolbarProps) {
   const resolveRightGutterPx = useCallback(
     () =>
       resolveLightboxToolbarCenterRightGutterPx({
-        composeDockExpanded,
         chromeReady: lightboxChromeReady,
       }),
-    [composeDockExpanded, lightboxChromeReady]
+    [lightboxChromeReady]
   );
 
   const colorInputRef = useRef<HTMLInputElement | null>(null);
@@ -353,7 +348,7 @@ export function ImageAnnotationLightboxToolbar({
 
   useLayoutEffect(() => {
     resetToDefaultPosition();
-  }, [composeDockExpanded, lightboxChromeReady, resetToDefaultPosition]);
+  }, [lightboxChromeReady, resetToDefaultPosition]);
 
   /** 菜单打开或主栏移动后：下方空间更大则向下展开，否则向上，减少贴顶/贴底时溢出 */
   useLayoutEffect(() => {
@@ -413,7 +408,6 @@ export function ImageAnnotationLightboxToolbar({
           window.innerWidth,
           window.innerHeight,
           resolveLightboxToolbarCenterRightGutterPx({
-            composeDockExpanded,
             chromeReady: lightboxChromeReady,
           })
         );
@@ -421,7 +415,7 @@ export function ImageAnnotationLightboxToolbar({
     };
     window.addEventListener('resize', onResize);
     return () => window.removeEventListener('resize', onResize);
-  }, [composeDockExpanded, lightboxChromeReady]);
+  }, [lightboxChromeReady]);
 
   const toggleMenu = useCallback((key: AnnotationToolbarMenuKey) => {
     setOpenMenu((prev) => (prev === key ? null : key));

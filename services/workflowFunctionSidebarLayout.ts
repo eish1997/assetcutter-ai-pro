@@ -1,10 +1,46 @@
+import { WORKSHOP_FOLDERS_PANE_WIDTH_PX } from './workshopFileTree';
+
 export const WORKFLOW_FUNCTION_SIDEBAR_BASE_WIDTH_PX = 320;
 export const WORKFLOW_OUTLINE_SIDEBAR_WIDTH_PX = 320;
+export const WORKFLOW_FUNCTION_SIDEBAR_MIN_WIDTH_PX = 220;
+export const WORKFLOW_FUNCTION_SIDEBAR_MAX_WIDTH_PX = 520;
+export const WORKFLOW_FUNCTION_SIDEBAR_RAIL_PX = 12;
+export const WORKFLOW_FUNCTION_SIDEBAR_SNAP_COLLAPSE_BELOW_PX = 180;
+export const WORKFLOW_FUNCTION_SIDEBAR_GUTTER_X_PX = 16;
+export const WORKFLOW_FUNCTION_SIDEBAR_CANVAS_MIN_PX = 240;
 
-/** 视口宽度低于此值时隐藏功能区列（不再使用窄屏单列折中） */
+/** 视口窄于此值且用户未指定 collapsed 时，收成右缘拉手（不再整栏卸掉） */
 export const WORKFLOW_FUNCTION_SIDEBAR_HIDE_BELOW_PX = 880;
+export const WORKFLOW_FUNCTION_SIDEBAR_NARROW_RAIL_BELOW_PX = WORKFLOW_FUNCTION_SIDEBAR_HIDE_BELOW_PX;
 
-export type WorkflowFunctionSidebarLayoutMode = 'hidden' | 'multiColumn';
+export type WorkflowFunctionSidebarLayoutMode = 'rail' | 'multiColumn';
+
+export type WorkflowFunctionSidebarChrome = {
+  preferredWidthPx?: number;
+  collapsed?: boolean;
+};
+
+export type WorkflowFunctionSidebarChromeV1 = {
+  widthPx: number;
+  collapsed: boolean;
+};
+
+export function parseWorkflowFunctionSidebarChrome(raw: unknown): WorkflowFunctionSidebarChromeV1 | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const rec = raw as { widthPx?: unknown; collapsed?: unknown };
+  const widthPx = Number(rec.widthPx);
+  if (!Number.isFinite(widthPx)) return null;
+  return {
+    widthPx: clampWorkflowFunctionSidebarWidthPx(widthPx, 0),
+    collapsed: Boolean(rec.collapsed),
+  };
+}
+
+export type WorkflowFunctionSidebarLayout = {
+  mode: WorkflowFunctionSidebarLayoutMode;
+  functionSidebarWidthPx: number;
+  dockedWidthPx: number;
+};
 
 /** 滚轮不得转发到资产列表的功能区 DOM 标记（勿用泛用 data-workflow-scroll-port，会误伤资产/大纲列） */
 export const WORKFLOW_FUNCTION_SIDEBAR_WHEEL_GUARD_SELECTOR =
@@ -57,23 +93,110 @@ export function isClientPointInWorkflowAssetListWheelZone(clientX: number, clien
   return isClientPointInElementRect(clientX, clientY, outline);
 }
 
-export function resolveWorkflowFunctionSidebarLayout(viewportWidthPx: number): {
-  mode: WorkflowFunctionSidebarLayoutMode;
-  functionSidebarWidthPx: number;
-} {
+export function clampWorkflowFunctionSidebarWidthPx(
+  preferredWidthPx: number,
+  viewportWidthPx = 0,
+): number {
+  const preferred = Number.isFinite(preferredWidthPx)
+    ? Math.round(preferredWidthPx)
+    : WORKFLOW_FUNCTION_SIDEBAR_BASE_WIDTH_PX;
+  const viewport = Math.max(0, Math.floor(viewportWidthPx));
+  let maxPx = WORKFLOW_FUNCTION_SIDEBAR_MAX_WIDTH_PX;
+  if (viewport > 0) {
+    const remaining = viewport - WORKSHOP_FOLDERS_PANE_WIDTH_PX - WORKFLOW_FUNCTION_SIDEBAR_CANVAS_MIN_PX;
+    maxPx = Math.min(WORKFLOW_FUNCTION_SIDEBAR_MAX_WIDTH_PX, Math.max(WORKFLOW_FUNCTION_SIDEBAR_MIN_WIDTH_PX, remaining));
+  }
+  return Math.min(maxPx, Math.max(WORKFLOW_FUNCTION_SIDEBAR_MIN_WIDTH_PX, preferred));
+}
+
+export function resolveWorkflowFunctionSidebarInnerWidthPx(columnWidthPx: number): number {
+  return Math.max(0, Math.floor(columnWidthPx) - WORKFLOW_FUNCTION_SIDEBAR_GUTTER_X_PX);
+}
+
+export function resolveWorkflowFunctionSidebarCapabilityCols(innerWidthPx: number): 1 | 2 | 3 {
+  const w = Math.max(0, Math.floor(innerWidthPx));
+  if (w < 260) return 1;
+  if (w < 400) return 2;
+  return 3;
+}
+
+export function resolveWorkflowFunctionSidebarFavoriteCols(innerWidthPx: number): 3 | 4 | 5 {
+  const w = Math.max(0, Math.floor(innerWidthPx));
+  if (w < 340) return 3;
+  if (w < 420) return 4;
+  return 5;
+}
+
+export function workflowFunctionSidebarCapabilityGridClass(cols: 1 | 2 | 3, plain = false): string {
+  const stretch = plain ? '' : ' items-stretch';
+  if (cols === 1) return `grid min-w-0 grid-cols-1 gap-2${stretch}`;
+  if (cols === 3) return `grid min-w-0 grid-cols-3 gap-2${stretch}`;
+  return `grid min-w-0 grid-cols-2 gap-2${stretch}`;
+}
+
+export function workflowFunctionSidebarFavoriteGridClass(cols: 3 | 4 | 5): string {
+  if (cols === 3) return 'grid min-w-0 grid-cols-3 gap-1.5';
+  if (cols === 4) return 'grid min-w-0 grid-cols-4 gap-1.5';
+  return 'grid min-w-0 grid-cols-5 gap-1.5';
+}
+
+export function workflowFunctionSidebarTopActionGridClass(cols: 3 | 4 | 5): string {
+  if (cols === 3) return 'grid min-w-0 grid-cols-3 gap-2';
+  if (cols === 4) return 'grid min-w-0 grid-cols-4 gap-2';
+  return 'grid min-w-0 grid-cols-5 gap-2';
+}
+
+export function applyWorkflowFunctionSidebarPointerWidth(
+  proposedVisiblePx: number,
+  previousDockedWidthPx: number,
+  viewportWidthPx = 0,
+): { collapsed: boolean; preferredWidthPx: number } {
+  const proposed = Math.round(proposedVisiblePx);
+  const previous = clampWorkflowFunctionSidebarWidthPx(previousDockedWidthPx, viewportWidthPx);
+  if (proposed < WORKFLOW_FUNCTION_SIDEBAR_SNAP_COLLAPSE_BELOW_PX) {
+    return { collapsed: true, preferredWidthPx: previous };
+  }
+  return {
+    collapsed: false,
+    preferredWidthPx: clampWorkflowFunctionSidebarWidthPx(proposed, viewportWidthPx),
+  };
+}
+
+function resolveCollapsed(viewportWidthPx: number, chrome?: WorkflowFunctionSidebarChrome): boolean {
+  if (viewportWidthPx === 0) return false;
+  if (typeof chrome?.collapsed === 'boolean') return chrome.collapsed;
+  return viewportWidthPx < WORKFLOW_FUNCTION_SIDEBAR_NARROW_RAIL_BELOW_PX;
+}
+
+export function resolveWorkflowFunctionSidebarLayout(
+  viewportWidthPx: number,
+  chrome?: WorkflowFunctionSidebarChrome,
+): WorkflowFunctionSidebarLayout {
   const w = Math.max(0, Math.floor(viewportWidthPx));
+  const preferred =
+    chrome?.preferredWidthPx == null
+      ? WORKFLOW_FUNCTION_SIDEBAR_BASE_WIDTH_PX
+      : chrome.preferredWidthPx;
   /** ResizeObserver 首帧常为 0：按宽屏默认，避免功能区闪没 */
   if (w === 0) {
+    const dockedWidthPx = clampWorkflowFunctionSidebarWidthPx(preferred, 0);
     return {
       mode: 'multiColumn',
-      functionSidebarWidthPx: WORKFLOW_FUNCTION_SIDEBAR_BASE_WIDTH_PX,
+      functionSidebarWidthPx: dockedWidthPx,
+      dockedWidthPx,
     };
   }
-  if (w < WORKFLOW_FUNCTION_SIDEBAR_HIDE_BELOW_PX) {
-    return { mode: 'hidden', functionSidebarWidthPx: 0 };
+  const dockedWidthPx = clampWorkflowFunctionSidebarWidthPx(preferred, w);
+  if (resolveCollapsed(w, chrome)) {
+    return {
+      mode: 'rail',
+      functionSidebarWidthPx: WORKFLOW_FUNCTION_SIDEBAR_RAIL_PX,
+      dockedWidthPx,
+    };
   }
   return {
     mode: 'multiColumn',
-    functionSidebarWidthPx: WORKFLOW_FUNCTION_SIDEBAR_BASE_WIDTH_PX,
+    functionSidebarWidthPx: dockedWidthPx,
+    dockedWidthPx,
   };
 }
