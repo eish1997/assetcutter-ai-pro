@@ -181,6 +181,13 @@ export type AdminOpenAiCompatibleProviderConfig = {
   channel?: string;
   priority?: number;
   asyncCapable?: boolean;
+  /** openai (default) | gemini-native (Google /google/v1/models image path) */
+  imageApiFlavor?: 'openai' | 'gemini-native';
+  apiFlavor?: 'openai' | 'gemini-native';
+  /** multipart | json for /images/edits */
+  imageEditEncoding?: 'multipart' | 'json';
+  /** Form field name when multipart: image | image[] */
+  imageEditFormField?: 'image' | 'image[]';
   requestTimeoutMs?: number;
   timeouts?: {
     requestMs?: number;
@@ -192,6 +199,15 @@ export type AdminOpenAiCompatibleProviderConfig = {
     text?: string;
     imageGenerate?: string;
     imageEdit?: string;
+  };
+  /** Optional overrides for R5.1 async video endpoint template */
+  asyncEndpoints?: {
+    method?: string;
+    requestPath?: string;
+    pollPath?: string;
+    statusPath?: string;
+    artifactPath?: string;
+    taskIdPath?: string;
   };
   modelMapping?: Record<string, string>;
 };
@@ -609,10 +625,16 @@ export async function fetchAdminModelOpsConfig() {
   });
 }
 
-export async function saveAdminModelOpsConfig(config: AdminModelOpsConfig) {
+export async function saveAdminModelOpsConfig(
+  config: AdminModelOpsConfig,
+  options?: { forceOpenAiCompatibleRouteSync?: boolean }
+) {
   return requestJson<AdminModelOpsConfigResponse>(apiUrl('/api/admin/model-ops-config'), {
     method: 'PUT',
-    body: JSON.stringify({ config }),
+    body: JSON.stringify({
+      config,
+      ...(options?.forceOpenAiCompatibleRouteSync === true ? { forceOpenAiCompatibleRouteSync: true } : {}),
+    }),
   });
 }
 

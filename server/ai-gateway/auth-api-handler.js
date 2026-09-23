@@ -91,7 +91,8 @@ export function mapAuthAiGatewayError(err) {
       err.code === 'AI_GATEWAY_MODEL_ADAPTER_PENDING' ||
       err.code === 'AI_GATEWAY_MODEL_ROUTE_AMBIGUOUS' ||
       err.code === 'AI_GATEWAY_PROVIDER_PAUSED' ||
-      err.code === 'AI_GATEWAY_PROVIDER_KEY_UNAVAILABLE'
+      err.code === 'AI_GATEWAY_PROVIDER_KEY_UNAVAILABLE' ||
+      err.code === 'AI_GATEWAY_MODALITY_UNSUPPORTED'
     ) {
       return { status: 422, body };
     }

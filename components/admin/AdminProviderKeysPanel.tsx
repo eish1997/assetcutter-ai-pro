@@ -970,6 +970,20 @@ function normalizeOpenAiCompatibleProviderRows(value: unknown): AdminOpenAiCompa
                 .filter(([k, v]) => k && v)
             )
           : undefined;
+      const imageApiFlavorRaw = String(row.imageApiFlavor || row.apiFlavor || '').trim();
+      const imageEditEncodingRaw = String(row.imageEditEncoding || '').trim();
+      const imageEditFormFieldRaw = String(row.imageEditFormField || '').trim();
+      const syncIn =
+        row.syncEndpoints && typeof row.syncEndpoints === 'object' && !Array.isArray(row.syncEndpoints)
+          ? (row.syncEndpoints as Record<string, unknown>)
+          : {};
+      const syncEndpoints: NonNullable<AdminOpenAiCompatibleProviderConfig['syncEndpoints']> = {};
+      const textPath = String(syncIn.text || '').trim();
+      const imageGeneratePath = String(syncIn.imageGenerate || '').trim();
+      const imageEditPath = String(syncIn.imageEdit || '').trim();
+      if (textPath) syncEndpoints.text = textPath;
+      if (imageGeneratePath) syncEndpoints.imageGenerate = imageGeneratePath;
+      if (imageEditPath) syncEndpoints.imageEdit = imageEditPath;
       return {
         providerId,
         label: String(row.label || providerId).trim() || providerId,
@@ -978,6 +992,16 @@ function normalizeOpenAiCompatibleProviderRows(value: unknown): AdminOpenAiCompa
         channel: String(row.channel || '').trim() || undefined,
         ...(Number.isFinite(priority) ? { priority: Math.floor(priority) } : {}),
         asyncCapable: row.asyncCapable === true,
+        ...(imageApiFlavorRaw === 'gemini-native' || imageApiFlavorRaw === 'openai'
+          ? { imageApiFlavor: imageApiFlavorRaw as 'openai' | 'gemini-native' }
+          : {}),
+        ...(imageEditEncodingRaw === 'multipart' || imageEditEncodingRaw === 'json'
+          ? { imageEditEncoding: imageEditEncodingRaw as 'multipart' | 'json' }
+          : {}),
+        ...(imageEditFormFieldRaw === 'image' || imageEditFormFieldRaw === 'image[]'
+          ? { imageEditFormField: imageEditFormFieldRaw as 'image' | 'image[]' }
+          : {}),
+        ...(Object.keys(syncEndpoints).length ? { syncEndpoints } : {}),
         ...(Object.keys(timeouts).length
           ? {
               timeouts,
@@ -1590,6 +1614,33 @@ const AdminProviderKeysPanel: React.FC = () => {
     }
   };
 
+  const resolveOpenAiCompatibleProvidersForSave = (base: AdminModelOpsConfig) =>
+    mergeOpenAiCompatibleProviders(
+      base.openAiCompatibleProviders,
+      openAiCompatibleProvidersDraft.map((row, index) => {
+        const text = oaiModelMappingTextByIndex[index];
+        if (text === undefined) return row;
+        const modelMapping = parseOpenAiCompatibleModelMappingText(text);
+        if (!modelMapping) {
+          const next = { ...row };
+          delete next.modelMapping;
+          return next;
+        }
+        return { ...row, modelMapping };
+      })
+    );
+
+  const applySavedModelOpsConfig = (savedConfig: AdminModelOpsConfig, selectedFallback: string[]) => {
+    setModelOpsConfig(savedConfig);
+    setOaiModelMappingTextByIndex({});
+    setRoutePriorityDraft(routePriorityDraftFromConfig(savedConfig));
+    setRouteFallbackPolicyDraft(routeFallbackPolicyDraftFromConfig(savedConfig));
+    setRouteFallbackMaxAttemptsDraft(routeFallbackMaxAttemptsDraftFromConfig(savedConfig));
+    setEndpointMappingDraft(endpointMappingDraftFromConfig(savedConfig));
+    setOpenAiCompatibleProvidersDraft(openAiCompatibleProvidersDraftFromConfig(savedConfig));
+    setSelectedCanonicalModelIds(savedConfig.publishedCanonicalModelAllowlist || selectedFallback);
+  };
+
   const savePublishedModels = async (options: { force?: boolean } = {}) => {
     if (blockIfRolePreview(isRolePreview)) return;
     setSavingModelOps(true);
@@ -1647,29 +1698,9 @@ const AdminProviderKeysPanel: React.FC = () => {
         bindingOverrides,
         endpointMappings: mergeEndpointMappings(base.endpointMappings, endpointMappingDraft),
         gatewayRouteConfigs: mergeGatewayRouteConfigs(base.gatewayRouteConfigs, bindingOverrides, routePriorityDraft),
-        openAiCompatibleProviders: mergeOpenAiCompatibleProviders(
-          base.openAiCompatibleProviders,
-          openAiCompatibleProvidersDraft.map((row, index) => {
-            const text = oaiModelMappingTextByIndex[index];
-            if (text === undefined) return row;
-            const modelMapping = parseOpenAiCompatibleModelMappingText(text);
-            if (!modelMapping) {
-              const next = { ...row };
-              delete next.modelMapping;
-              return next;
-            }
-            return { ...row, modelMapping };
-          })
-        ),
+        openAiCompatibleProviders: resolveOpenAiCompatibleProvidersForSave(base),
       });
-      setModelOpsConfig(saved.config);
-      setOaiModelMappingTextByIndex({});
-      setRoutePriorityDraft(routePriorityDraftFromConfig(saved.config));
-      setRouteFallbackPolicyDraft(routeFallbackPolicyDraftFromConfig(saved.config));
-      setRouteFallbackMaxAttemptsDraft(routeFallbackMaxAttemptsDraftFromConfig(saved.config));
-      setEndpointMappingDraft(endpointMappingDraftFromConfig(saved.config));
-      setOpenAiCompatibleProvidersDraft(openAiCompatibleProvidersDraftFromConfig(saved.config));
-      setSelectedCanonicalModelIds(saved.config.publishedCanonicalModelAllowlist || selected);
+      applySavedModelOpsConfig(saved.config, selected);
       await refreshModelOpsConfig();
       setMessage(
         diagnosisGate.forceRequired || options.force
@@ -1678,6 +1709,53 @@ const AdminProviderKeysPanel: React.FC = () => {
       );
     } catch (err) {
       setError(err instanceof Error ? err.message : '保存工作区模型发布范围失败');
+    } finally {
+      setSavingModelOps(false);
+    }
+  };
+
+  const forceSyncOpenAiCompatibleRoutes = async () => {
+    if (blockIfRolePreview(isRolePreview)) return;
+    if (!selectedCanonicalModelIds.length) {
+      setError('发布白名单为空，自动同步会跳过。请先勾选要发布的模型，再点「同步已发布模型路由」。');
+      return;
+    }
+    setSavingModelOps(true);
+    setError('');
+    setMessage('');
+    try {
+      const known = new Set(WORKSPACE_CANONICAL_MODELS.map((model) => model.canonicalModelId));
+      const selected = selectedCanonicalModelIds.filter((id, index, arr) => known.has(id) && arr.indexOf(id) === index);
+      const base: AdminModelOpsConfig = modelOpsConfig || {
+        version: 1,
+        imageRegistryAllowlist: null,
+        publishedCanonicalModelAllowlist: null,
+        imageModelPreference: null,
+        bindingOverrides: null,
+        wiringEdges: null,
+      };
+      const bindingOverrides = mergeRouteBindingOverrides(
+        base.bindingOverrides,
+        routePriorityDraft,
+        routeFallbackPolicyDraft,
+        routeFallbackMaxAttemptsDraft
+      );
+      const saved = await saveAdminModelOpsConfig(
+        {
+          ...base,
+          publishedCanonicalModelAllowlist: selected,
+          bindingOverrides,
+          endpointMappings: mergeEndpointMappings(base.endpointMappings, endpointMappingDraft),
+          gatewayRouteConfigs: mergeGatewayRouteConfigs(base.gatewayRouteConfigs, bindingOverrides, routePriorityDraft),
+          openAiCompatibleProviders: resolveOpenAiCompatibleProvidersForSave(base),
+        },
+        { forceOpenAiCompatibleRouteSync: true }
+      );
+      applySavedModelOpsConfig(saved.config, selected);
+      await refreshModelOpsConfig();
+      setMessage('已强制同步已发布模型路由（文/图 gatewayRouteConfigs + 异步视频 endpointMappings）。');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '强制同步路由失败');
     } finally {
       setSavingModelOps(false);
     }
@@ -2161,29 +2239,44 @@ const AdminProviderKeysPanel: React.FC = () => {
               <div>
                 <h3 className="text-sm font-semibold text-white">OpenAI 兼容聚合商</h3>
                 <div className="mt-1 text-[11px] text-gray-500">
-                  填 baseURL / 模型映射 / 轮询超时后随「保存发布范围」写入 ops，无需新 adapter。详见 docs/AI-Gateway运营接聚合商手册.md
+                  填 baseURL / 模型映射 / 轮询超时后随「保存发布范围」自动挂文/图路由；勾选异步且发布含 video 模型时自动挂 endpointMappings。详见 docs/AI-Gateway运营接聚合商.md
                 </div>
               </div>
-              <button
-                type="button"
-                disabled={!canWriteOps || savingModelOps}
-                onClick={() =>
-                  setOpenAiCompatibleProvidersDraft((prev) => [
-                    ...prev,
-                    {
-                      providerId: '',
-                      label: '',
-                      defaultBaseUrl: 'https://',
-                      asyncCapable: true,
-                      timeouts: { requestMs: 60_000, pollIntervalMs: 2_000, pollTimeoutMs: 600_000 },
-                    },
-                  ])
-                }
-                className="rounded-md border border-emerald-500/25 bg-emerald-950/20 px-3 py-1.5 text-[10px] text-emerald-100 disabled:opacity-40"
-              >
-                添加聚合商
-              </button>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  disabled={!canWriteOps || savingModelOps}
+                  onClick={() => void forceSyncOpenAiCompatibleRoutes()}
+                  className="rounded-md border border-cyan-500/25 bg-cyan-950/20 px-3 py-1.5 text-[10px] text-cyan-100 disabled:opacity-40"
+                >
+                  同步已发布模型路由
+                </button>
+                <button
+                  type="button"
+                  disabled={!canWriteOps || savingModelOps}
+                  onClick={() =>
+                    setOpenAiCompatibleProvidersDraft((prev) => [
+                      ...prev,
+                      {
+                        providerId: '',
+                        label: '',
+                        defaultBaseUrl: 'https://',
+                        asyncCapable: true,
+                        timeouts: { requestMs: 60_000, pollIntervalMs: 2_000, pollTimeoutMs: 600_000 },
+                      },
+                    ])
+                  }
+                  className="rounded-md border border-emerald-500/25 bg-emerald-950/20 px-3 py-1.5 text-[10px] text-emerald-100 disabled:opacity-40"
+                >
+                  添加聚合商
+                </button>
+              </div>
             </div>
+            {!selectedCanonicalModelIds.length ? (
+              <div className="mb-3 rounded-md border border-amber-500/30 bg-amber-950/20 px-3 py-2 text-[11px] text-amber-100">
+                发布白名单为空：保存时不会自动同步 OpenAI 兼容路由。请先在下方勾选要发布的模型，或点「同步已发布模型路由」前先勾选。
+              </div>
+            ) : null}
             <div className="space-y-3">
               {openAiCompatibleProvidersDraft.length ? (
                 openAiCompatibleProvidersDraft.map((row, index) => (
@@ -2269,6 +2362,166 @@ const AdminProviderKeysPanel: React.FC = () => {
                       >
                         删除
                       </button>
+                    </div>
+                    <div className="grid gap-2 md:grid-cols-3">
+                      <label className="block">
+                        <span className="text-[10px] text-gray-500">生图协议</span>
+                        <div className="mt-1">
+                          <CustomDropdown
+                            value={row.imageApiFlavor || row.apiFlavor || 'openai'}
+                            disabled={!canWriteOps || savingModelOps}
+                            tone="settings"
+                            options={[
+                              { value: 'openai', label: 'OpenAI images' },
+                              { value: 'gemini-native', label: 'Gemini 原生 (/google/v1)' },
+                            ]}
+                            onChange={(value) =>
+                              setOpenAiCompatibleProvidersDraft((prev) =>
+                                prev.map((item, i) =>
+                                  i === index
+                                    ? {
+                                        ...item,
+                                        imageApiFlavor: (value === 'gemini-native' ? 'gemini-native' : 'openai') as
+                                          | 'openai'
+                                          | 'gemini-native',
+                                      }
+                                    : item
+                                )
+                              )
+                            }
+                          />
+                        </div>
+                      </label>
+                      <label className="block">
+                        <span className="text-[10px] text-gray-500">图生图编码</span>
+                        <div className="mt-1">
+                          <CustomDropdown
+                            value={row.imageEditEncoding || 'json'}
+                            disabled={!canWriteOps || savingModelOps}
+                            tone="settings"
+                            options={[
+                              { value: 'json', label: 'JSON images[]' },
+                              { value: 'multipart', label: 'multipart' },
+                            ]}
+                            onChange={(value) =>
+                              setOpenAiCompatibleProvidersDraft((prev) =>
+                                prev.map((item, i) =>
+                                  i === index
+                                    ? {
+                                        ...item,
+                                        imageEditEncoding: (value === 'multipart' ? 'multipart' : 'json') as
+                                          | 'multipart'
+                                          | 'json',
+                                      }
+                                    : item
+                                )
+                              )
+                            }
+                          />
+                        </div>
+                      </label>
+                      <label className="block">
+                        <span className="text-[10px] text-gray-500">multipart 字段名</span>
+                        <div className="mt-1">
+                          <CustomDropdown
+                            value={row.imageEditFormField || 'image'}
+                            disabled={!canWriteOps || savingModelOps || row.imageEditEncoding === 'json'}
+                            tone="settings"
+                            options={[
+                              { value: 'image', label: 'image' },
+                              { value: 'image[]', label: 'image[]（官方）' },
+                            ]}
+                            onChange={(value) =>
+                              setOpenAiCompatibleProvidersDraft((prev) =>
+                                prev.map((item, i) =>
+                                  i === index
+                                    ? {
+                                        ...item,
+                                        imageEditFormField: (value === 'image[]' ? 'image[]' : 'image') as
+                                          | 'image'
+                                          | 'image[]',
+                                      }
+                                    : item
+                                )
+                              )
+                            }
+                          />
+                        </div>
+                      </label>
+                    </div>
+                    <div className="grid gap-2 md:grid-cols-3">
+                      <label className="block">
+                        <span className="text-[10px] text-gray-500">text path</span>
+                        <input
+                          value={row.syncEndpoints?.text || ''}
+                          placeholder="/chat/completions"
+                          disabled={!canWriteOps || savingModelOps}
+                          onChange={(ev) => {
+                            const text = ev.target.value.trim();
+                            setOpenAiCompatibleProvidersDraft((prev) =>
+                              prev.map((item, i) => {
+                                if (i !== index) return item;
+                                const syncEndpoints = { ...(item.syncEndpoints || {}) };
+                                if (text) syncEndpoints.text = text;
+                                else delete syncEndpoints.text;
+                                return {
+                                  ...item,
+                                  syncEndpoints: Object.keys(syncEndpoints).length ? syncEndpoints : undefined,
+                                };
+                              })
+                            );
+                          }}
+                          className="mt-1 w-full rounded-md border border-white/[0.08] bg-[#0a0a0c] px-2 py-1.5 font-mono text-[11px] text-gray-100 disabled:opacity-40"
+                        />
+                      </label>
+                      <label className="block">
+                        <span className="text-[10px] text-gray-500">imageGenerate path</span>
+                        <input
+                          value={row.syncEndpoints?.imageGenerate || ''}
+                          placeholder="/images/generations"
+                          disabled={!canWriteOps || savingModelOps}
+                          onChange={(ev) => {
+                            const imageGenerate = ev.target.value.trim();
+                            setOpenAiCompatibleProvidersDraft((prev) =>
+                              prev.map((item, i) => {
+                                if (i !== index) return item;
+                                const syncEndpoints = { ...(item.syncEndpoints || {}) };
+                                if (imageGenerate) syncEndpoints.imageGenerate = imageGenerate;
+                                else delete syncEndpoints.imageGenerate;
+                                return {
+                                  ...item,
+                                  syncEndpoints: Object.keys(syncEndpoints).length ? syncEndpoints : undefined,
+                                };
+                              })
+                            );
+                          }}
+                          className="mt-1 w-full rounded-md border border-white/[0.08] bg-[#0a0a0c] px-2 py-1.5 font-mono text-[11px] text-gray-100 disabled:opacity-40"
+                        />
+                      </label>
+                      <label className="block">
+                        <span className="text-[10px] text-gray-500">imageEdit path</span>
+                        <input
+                          value={row.syncEndpoints?.imageEdit || ''}
+                          placeholder="/images/edits"
+                          disabled={!canWriteOps || savingModelOps}
+                          onChange={(ev) => {
+                            const imageEdit = ev.target.value.trim();
+                            setOpenAiCompatibleProvidersDraft((prev) =>
+                              prev.map((item, i) => {
+                                if (i !== index) return item;
+                                const syncEndpoints = { ...(item.syncEndpoints || {}) };
+                                if (imageEdit) syncEndpoints.imageEdit = imageEdit;
+                                else delete syncEndpoints.imageEdit;
+                                return {
+                                  ...item,
+                                  syncEndpoints: Object.keys(syncEndpoints).length ? syncEndpoints : undefined,
+                                };
+                              })
+                            );
+                          }}
+                          className="mt-1 w-full rounded-md border border-white/[0.08] bg-[#0a0a0c] px-2 py-1.5 font-mono text-[11px] text-gray-100 disabled:opacity-40"
+                        />
+                      </label>
                     </div>
                     <div className="grid gap-2 md:grid-cols-2">
                       <label className="block">

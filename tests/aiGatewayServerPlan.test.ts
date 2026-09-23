@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   AiGatewayRouteError,
+  AiGatewayValidationError,
   createAiGatewayJobPlan,
   createAiJobDraft,
   normalizeAiJobModality,
@@ -16,7 +17,9 @@ describe('server AI gateway job planning', () => {
       capability: 'video.generate',
     });
 
-    expect(() => createAiGatewayJobPlan({ modality: 'music', input: {} })).toThrow(AiGatewayRouteError);
+    expect(() => createAiJobDraft({ modality: 'music', input: {} })).toThrow(AiGatewayValidationError);
+    expect(() => createAiJobDraft({ modality: 'music', input: {} })).toThrow(/music-worker removed/i);
+    expect(() => createAiGatewayJobPlan({ modality: 'music', input: {} })).toThrow(AiGatewayValidationError);
     expect(() => createAiGatewayJobPlan({ modality: 'video', input: { prompt: 'a product turntable' } })).toThrow(
       AiGatewayRouteError
     );

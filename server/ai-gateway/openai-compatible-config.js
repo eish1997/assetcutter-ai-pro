@@ -18,6 +18,28 @@ const DEFAULT_TIMEOUTS = Object.freeze({
   pollRequestMs: 30_000,
 });
 
+const IMAGE_API_FLAVORS = new Set(['openai', 'gemini-native']);
+const IMAGE_EDIT_ENCODINGS = new Set(['multipart', 'json']);
+const IMAGE_EDIT_FORM_FIELDS = new Set(['image', 'image[]']);
+
+function defaultImageEditEncoding(providerId) {
+  if (providerId === 'openai-official' || providerId === '302ai' || providerId === 'aihubmix') {
+    return 'multipart';
+  }
+  return 'json';
+}
+
+function defaultImageEditFormField(providerId) {
+  return providerId === 'openai-official' ? 'image[]' : 'image';
+}
+
+function defaultImageApiFlavor(providerId, rawFlavor) {
+  const explicit = String(rawFlavor || '').trim();
+  if (IMAGE_API_FLAVORS.has(explicit)) return explicit;
+  // 302 Gemini 生图走 Google 原生 /google/v1/models；其它中转默认 OpenAI images API
+  return providerId === '302ai' ? 'gemini-native' : 'openai';
+}
+
 function freezeProviderConfig(raw) {
   const providerId = String(raw?.providerId || '').trim();
   if (!providerId) throw new Error('OpenAI-compatible provider config requires providerId');
@@ -29,6 +51,8 @@ function freezeProviderConfig(raw) {
       ? [...new Set(raw.adapterIds.map((id) => String(id || '').trim()).filter(Boolean))]
       : [...new Set([textAdapterId, imageAdapterId].filter(Boolean))]
   );
+  const imageEditEncodingRaw = String(raw.imageEditEncoding || '').trim();
+  const imageEditFormFieldRaw = String(raw.imageEditFormField || '').trim();
   return Object.freeze({
     providerId,
     label: String(raw.label || providerId).trim() || providerId,
@@ -41,6 +65,13 @@ function freezeProviderConfig(raw) {
     imageAdapterId,
     adapterIds,
     asyncCapable: raw.asyncCapable === true,
+    imageApiFlavor: defaultImageApiFlavor(providerId, raw.imageApiFlavor || raw.apiFlavor),
+    imageEditEncoding: IMAGE_EDIT_ENCODINGS.has(imageEditEncodingRaw)
+      ? imageEditEncodingRaw
+      : defaultImageEditEncoding(providerId),
+    imageEditFormField: IMAGE_EDIT_FORM_FIELDS.has(imageEditFormFieldRaw)
+      ? imageEditFormFieldRaw
+      : defaultImageEditFormField(providerId),
     auth: Object.freeze({ ...DEFAULT_AUTH, ...(raw.auth && typeof raw.auth === 'object' ? raw.auth : {}) }),
     syncEndpoints: Object.freeze({
       ...DEFAULT_SYNC_ENDPOINTS,
@@ -300,6 +331,20 @@ export function openAiCompatibleTimeoutsForProvider(providerId) {
 
 export function openAiCompatibleSyncEndpointsForProvider(providerId) {
   return openAiCompatibleConfigForProvider(providerId)?.syncEndpoints || DEFAULT_SYNC_ENDPOINTS;
+}
+
+/** Gemini native image path (`/google/v1/models/...`); 302 seed default, overridable via ops. */
+export function openAiCompatibleUsesGeminiNativeImage(providerId) {
+  return openAiCompatibleConfigForProvider(providerId)?.imageApiFlavor === 'gemini-native';
+}
+
+/** `/images/edits` body encoding: multipart vs JSON images[]. */
+export function openAiCompatibleImageEditEncoding(providerId) {
+  return openAiCompatibleConfigForProvider(providerId)?.imageEditEncoding || defaultImageEditEncoding(providerId);
+}
+
+export function openAiCompatibleImageEditFormField(providerId) {
+  return openAiCompatibleConfigForProvider(providerId)?.imageEditFormField || defaultImageEditFormField(providerId);
 }
 
 export function buildOpenAiCompatibleRuntimeRoutes() {

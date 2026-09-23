@@ -162,7 +162,13 @@ export function createAiGatewayJobPlan(input, options = {}) {
   };
 }
 
-export { createAiJobDraft, normalizeAiJobModality, AiGatewayValidationError } from './job.js';
+export { createAiJobDraft, normalizeAiJobModality, assertAiGatewayModalityExecutable, AiGatewayValidationError } from './job.js';
+export {
+  AI_GATEWAY_PUBLIC_JOB_CONTRACT_FIELDS,
+  AI_GATEWAY_PUBLIC_JOB_DETAIL_EXTRA_FIELDS,
+  AI_GATEWAY_FAILURE_REASON_FIELDS,
+  AI_GATEWAY_SUPPORTED_MODALITIES,
+} from './job-public-contract.js';
 export {
   resolveAiProviderRoute,
   lookupRuntimeAdapterDefaults,

@@ -17,7 +17,12 @@ import {
   isOpenAiCompatibleAdapterId,
   normalizeOpenAiCompatibleBaseUrl,
   openAiCompatibleConfigForProvider,
+  openAiCompatibleImageEditEncoding,
+  openAiCompatibleImageEditFormField,
   openAiCompatibleProviderLabel,
+  openAiCompatibleSyncEndpointsForProvider,
+  openAiCompatibleTimeoutsForProvider,
+  openAiCompatibleUsesGeminiNativeImage,
 } from '../openai-compatible-config.js';
 import { acquireProviderKey, recordProviderKeyError, recordProviderKeySuccess } from '../provider-key-store.js';
 import { decorateErrorWithFailureReason } from '../failure-reason.js';
@@ -236,16 +241,19 @@ function resolveOpenAiRequestTimeoutMs(plan, options = {}, providerKey = null) {
   const requestModel =
     plan?.workerRequest?.body?.model || plan?.adapterRequest?.body?.model || plan?.job?.model;
   const modality = String(plan?.job?.modality || '').trim().toLowerCase();
-  // 生图（含 302 Gemini native / gpt-image-2 / 其它 image modality）对齐客户端 600s；
+  const providerId = nonEmptyString(plan?.route?.providerId) || nonEmptyString(plan?.job?.provider);
+  // 生图（含 Gemini native / gpt-image-2 / 其它 image modality）对齐客户端 600s；
   // 避免运营短 requestTimeoutMs（45–60s）或默认 120s 把慢图生图误杀成 network unavailable。
   const longImageJob =
     isGptImage2Model(requestModel) ||
     isGeminiImageFamilyModel(requestModel) ||
     modality === 'image';
   const floorMs = longImageJob ? GPT_IMAGE2_DEFAULT_TIMEOUT_MS : 120_000;
+  const configRequestMs = Number(openAiCompatibleTimeoutsForProvider(providerId)?.requestMs || 0);
   const explicit = Number(
     options.timeoutMs ||
       providerKey?.credentials?.requestTimeoutMs ||
+      (Number.isFinite(configRequestMs) && configRequestMs > 0 ? configRequestMs : 0) ||
       process.env.AI_GATEWAY_OPENAI_TIMEOUT_MS ||
       0
   );
@@ -377,8 +385,8 @@ function stripOpenAiV1Suffix(baseUrl) {
 }
 
 function usesGeminiNativeImageApi(providerId) {
-  // 302 实测：Gemini 生图走 /google/v1/models/{model}；误走 /v1/chat/completions 会 503「无可用模型」
-  return providerId === '302ai';
+  // Config-driven (302 seed = gemini-native); other relays can opt in via ops imageApiFlavor.
+  return openAiCompatibleUsesGeminiNativeImage(providerId);
 }
 
 function buildGeminiNativeImagePartsFromContents(contents) {
@@ -573,9 +581,9 @@ function dataUrlToImageBlob(dataUrl, index) {
   };
 }
 
-/** OpenAI 官方用 image[]；302.AI / AIHubMix 文档字段为 image（可多文件重复同名） */
+/** OpenAI 官方默认 image[]；聚合商多为 image（可多文件重复同名）；ops 可覆盖 imageEditFormField */
 function openAiImageEditFormFieldName(providerId) {
-  return providerId === OPENAI_PROVIDER_ID ? 'image[]' : 'image';
+  return openAiCompatibleImageEditFormField(providerId);
 }
 
 function buildOpenAiImageEditFormData(body, providerId = OPENAI_PROVIDER_ID) {
@@ -599,16 +607,13 @@ function buildOpenAiImageEditFormData(body, providerId = OPENAI_PROVIDER_ID) {
 }
 
 /**
- * `/images/edits` 必须 multipart：官方 OpenAI、302.AI、AIHubMix。
- * TinySnow 等仍走 JSON images[]（见测试）。
+ * `/images/edits` (or configured imageEdit path) encoding from provider config.
  */
 function shouldUseMultipartImageEdit(providerId, requestPath) {
-  if (requestPath !== '/images/edits') return false;
-  return (
-    providerId === OPENAI_PROVIDER_ID ||
-    providerId === '302ai' ||
-    providerId === 'aihubmix'
-  );
+  const endpoints = openAiCompatibleSyncEndpointsForProvider(providerId);
+  const editPath = nonEmptyString(endpoints?.imageEdit) || '/images/edits';
+  if (requestPath !== editPath && requestPath !== '/images/edits') return false;
+  return openAiCompatibleImageEditEncoding(providerId) === 'multipart';
 }
 
 export { mapOpenAiChatModel, mapOpenAiImageModel };
@@ -628,17 +633,21 @@ export function buildOpenAiOfficialRequest(job, route) {
     body.modalities.includes('image') &&
     isGeminiImageFamilyModel(body?.model);
   const defaultBase = defaultBaseUrlForProvider(route?.providerId);
+  const syncEndpoints = openAiCompatibleSyncEndpointsForProvider(route?.providerId);
+  const textPath = nonEmptyString(syncEndpoints?.text) || '/chat/completions';
+  const imageGeneratePath = nonEmptyString(syncEndpoints?.imageGenerate) || '/images/generations';
+  const imageEditPath = nonEmptyString(syncEndpoints?.imageEdit) || '/images/edits';
   const requestPath = arkImage
-    ? '/images/generations'
+    ? imageGeneratePath
     : geminiNativeImage
       ? `/google/v1/models/${encodeURIComponent(body.model)}`
       : geminiChatImage
-        ? '/chat/completions'
+        ? textPath
         : image && body.images
-          ? '/images/edits'
+          ? imageEditPath
           : image
-            ? '/images/generations'
-            : '/chat/completions';
+            ? imageGeneratePath
+            : textPath;
   const multipartImageEdit =
     !geminiNativeImage && !geminiChatImage && shouldUseMultipartImageEdit(route?.providerId, requestPath);
   const outboundBody = geminiNativeImage

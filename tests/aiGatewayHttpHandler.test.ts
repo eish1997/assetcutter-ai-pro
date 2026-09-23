@@ -335,7 +335,7 @@ describe('AI gateway HTTP job sample', () => {
     );
 
     expect(res.statusCode).toBe(422);
-    expect(res.json()).toMatchObject({ error: 'AI_GATEWAY_MODEL_ROUTE_NOT_FOUND' });
+    expect(res.json()).toMatchObject({ error: 'AI_GATEWAY_MODALITY_UNSUPPORTED' });
     expect(store.size()).toBe(0);
   });
 

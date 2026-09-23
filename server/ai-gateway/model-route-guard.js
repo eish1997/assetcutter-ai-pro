@@ -1,4 +1,4 @@
-import { AiGatewayValidationError } from './job.js';
+import { AiGatewayValidationError, assertAiGatewayModalityExecutable } from './job.js';
 import { listProviderKeys } from './provider-key-store.js';
 import { resolveRequestedCanonicalModelId } from './model-publication-guard.js';
 import {
@@ -483,6 +483,9 @@ function readyDecision({ canonicalModelId, modality, route, modelOpsConfig, cand
 }
 
 export async function resolveAiGatewayRouteDecision(input, options = {}) {
+  if (input?.modality != null && String(input.modality).trim()) {
+    assertAiGatewayModalityExecutable(input.modality);
+  }
   // A2: only sync when ops explicitly carries openAiCompatibleProviders (avoid wiping test registers).
   if (
     options.applyOpenAiCompatibleFromOps !== false &&

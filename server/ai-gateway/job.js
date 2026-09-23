@@ -38,13 +38,26 @@ export function normalizeAiJobModality(value) {
   return normalized;
 }
 
+/** music-worker removed — reject before route/publication so create never yields a dead-end job. */
+export function assertAiGatewayModalityExecutable(value) {
+  const modality = normalizeAiJobModality(value);
+  if (modality === 'music') {
+    throw new AiGatewayValidationError(
+      'Music modality is not supported by AI Gateway (music-worker removed)',
+      'AI_GATEWAY_MODALITY_UNSUPPORTED',
+      { modality: 'music', reason: 'worker_not_registered' }
+    );
+  }
+  return modality;
+}
+
 export function createAiJobId(prefix = 'aijob') {
   return `${prefix}_${crypto.randomUUID()}`;
 }
 
 export function createAiJobDraft(input, options = {}) {
   const raw = input && typeof input === 'object' ? input : {};
-  const modality = normalizeAiJobModality(raw.modality);
+  const modality = assertAiGatewayModalityExecutable(raw.modality);
   const capability = nonEmptyString(raw.capability) || `${modality}.generate`;
   const nowIso = options.nowIso || new Date().toISOString();
   const payload = raw.input && typeof raw.input === 'object' ? raw.input : {};

@@ -4,6 +4,7 @@ import path from 'path';
 import { USE_POSTGRES, ensurePostgres, getPool } from '../auth-store.js';
 import { withAiGatewayPostgresRetry } from './postgres-transient-retry.js';
 import { normalizePublishDiagnosisByModel } from './rollout-control.js';
+import { upsertAllOpenAiCompatibleOpsRoutes } from './openai-compatible-route-sync.js';
 
 const DEFAULT_CONFIG = Object.freeze({
   version: 1,
@@ -150,6 +151,7 @@ function normalizeEndpointMappings(value) {
         upstreamOverride: nonEmptyString(row.upstreamOverride) || undefined,
         priority: Number.isFinite(priority) ? Math.floor(priority) : undefined,
         enabled: row.enabled === undefined ? undefined : row.enabled === true,
+        ruleId: nonEmptyString(row.ruleId) || undefined,
       };
     })
     .filter(Boolean);
@@ -248,6 +250,31 @@ function normalizeOpenAiCompatibleProviders(value) {
                 : {}),
             }
           : undefined;
+      const asyncEndpointsRaw =
+        row.asyncEndpoints && typeof row.asyncEndpoints === 'object' && !Array.isArray(row.asyncEndpoints)
+          ? row.asyncEndpoints
+          : null;
+      const asyncEndpoints = asyncEndpointsRaw
+        ? {
+            ...(nonEmptyString(asyncEndpointsRaw.method) ? { method: nonEmptyString(asyncEndpointsRaw.method) } : {}),
+            ...(endpointPath(asyncEndpointsRaw.requestPath)
+              ? { requestPath: endpointPath(asyncEndpointsRaw.requestPath) }
+              : {}),
+            ...(endpointPath(asyncEndpointsRaw.pollPath) ? { pollPath: endpointPath(asyncEndpointsRaw.pollPath) } : {}),
+            ...(nonEmptyString(asyncEndpointsRaw.statusPath)
+              ? { statusPath: nonEmptyString(asyncEndpointsRaw.statusPath) }
+              : {}),
+            ...(nonEmptyString(asyncEndpointsRaw.artifactPath)
+              ? { artifactPath: nonEmptyString(asyncEndpointsRaw.artifactPath) }
+              : {}),
+            ...(nonEmptyString(asyncEndpointsRaw.taskIdPath)
+              ? { taskIdPath: nonEmptyString(asyncEndpointsRaw.taskIdPath) }
+              : {}),
+          }
+        : undefined;
+      const imageApiFlavorRaw = nonEmptyString(row.imageApiFlavor) || nonEmptyString(row.apiFlavor);
+      const imageEditEncodingRaw = nonEmptyString(row.imageEditEncoding);
+      const imageEditFormFieldRaw = nonEmptyString(row.imageEditFormField);
       return {
         providerId,
         label: nonEmptyString(row.label) || providerId,
@@ -256,7 +283,17 @@ function normalizeOpenAiCompatibleProviders(value) {
         channel: nonEmptyString(row.channel) || undefined,
         priority: Number.isFinite(priority) ? Math.floor(priority) : undefined,
         asyncCapable: row.asyncCapable === true,
+        ...(imageApiFlavorRaw === 'gemini-native' || imageApiFlavorRaw === 'openai'
+          ? { imageApiFlavor: imageApiFlavorRaw }
+          : {}),
+        ...(imageEditEncodingRaw === 'multipart' || imageEditEncodingRaw === 'json'
+          ? { imageEditEncoding: imageEditEncodingRaw }
+          : {}),
+        ...(imageEditFormFieldRaw === 'image' || imageEditFormFieldRaw === 'image[]'
+          ? { imageEditFormField: imageEditFormFieldRaw }
+          : {}),
         ...(syncEndpoints && Object.keys(syncEndpoints).length ? { syncEndpoints } : {}),
+        ...(asyncEndpoints && Object.keys(asyncEndpoints).length ? { asyncEndpoints } : {}),
         timeouts: {
           ...(Number.isFinite(requestMs) && requestMs > 0 ? { requestMs: Math.floor(requestMs) } : {}),
           ...(Number.isFinite(pollIntervalMs) && pollIntervalMs > 0
@@ -366,8 +403,17 @@ export async function readModelOpsConfig() {
   return readModelOpsConfigSync();
 }
 
-export async function writeModelOpsConfig(input, { updatedByUserId = null } = {}) {
-  const config = normalizeModelOpsConfig(input);
+export async function writeModelOpsConfig(input, { updatedByUserId = null, syncOpenAiCompatibleRoutes = true, forceOpenAiCompatibleRouteSync = false } = {}) {
+  let config = normalizeModelOpsConfig(input);
+  if (
+    syncOpenAiCompatibleRoutes !== false &&
+    Array.isArray(config.openAiCompatibleProviders) &&
+    config.openAiCompatibleProviders.length
+  ) {
+    config = normalizeModelOpsConfig(
+      upsertAllOpenAiCompatibleOpsRoutes(config, { force: forceOpenAiCompatibleRouteSync === true })
+    );
+  }
   const payload = {
     ...config,
     updatedAt: new Date().toISOString(),

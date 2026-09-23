@@ -42,6 +42,8 @@ describe('AI gateway auth-api facade', () => {
     const result = await createAuthAiGatewayJob({}, imageJobBody('aijob_auth_1'), user, {
       store,
       modelOpsConfig: { publishedCanonicalModelAllowlist: ['gemini-3-pro-image-preview'] },
+      // Isolate from local disk key pools (302 etc.) so Vertex remains the selected platform route.
+      listProviderKeys: async () => [{ provider: 'vertex-site', enabled: true, hasSecret: true }],
     });
 
     expect(result.status).toBe(202);

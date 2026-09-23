@@ -108,6 +108,12 @@ describe('adminProviderKeysClient', () => {
       method: 'PUT',
       body: JSON.stringify({ config }),
     });
+
+    await saveAdminModelOpsConfig(config, { forceOpenAiCompatibleRouteSync: true });
+    expect(requestJson).toHaveBeenCalledWith('https://auth.example/api/admin/model-ops-config', {
+      method: 'PUT',
+      body: JSON.stringify({ config, forceOpenAiCompatibleRouteSync: true }),
+    });
   });
 
   it('reads model availability summary through the admin auth-api', async () => {

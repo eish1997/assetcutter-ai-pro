@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import {
   buildOpenAiCompatibleRuntimeRoutes,
   defaultOpenAiCompatibleBaseUrl,
@@ -8,14 +8,23 @@ import {
   openAiCompatibleChannelForProvider,
   openAiCompatibleConfigForProvider,
   openAiCompatibleProviderLabel,
+  registerOpenAiCompatibleProvider,
+  resetOpenAiCompatibleProviderOverrides,
 } from '../server/ai-gateway/openai-compatible-config.js';
+import { buildOpenAiOfficialRequest } from '../server/ai-gateway/adapters/openai-official-adapter.js';
 
 describe('OpenAI-compatible provider config', () => {
+  afterEach(() => {
+    resetOpenAiCompatibleProviderOverrides();
+  });
+
   it('registers aggregate gateways and adapter ids from one config table', () => {
     expect(openAiCompatibleConfigForProvider('302ai')).toMatchObject({
       label: '302.AI',
       defaultBaseUrl: 'https://api.302.ai/v1',
       adapterIds: ['302ai-openai'],
+      imageApiFlavor: 'gemini-native',
+      imageEditEncoding: 'multipart',
     });
     expect(isOpenAiCompatibleAdapterId('302ai-openai')).toBe(true);
     expect(openAiCompatibleProviderLabel('302ai')).toBe('302.AI');
@@ -86,5 +95,44 @@ describe('OpenAI-compatible provider config', () => {
         }),
       ])
     );
+  });
+
+  it('R4.2: syncEndpoints override text and imageGenerate paths', () => {
+    registerOpenAiCompatibleProvider({
+      providerId: 'path-override-agg',
+      label: 'Path Override',
+      defaultBaseUrl: 'https://path-override.example/v1',
+      syncEndpoints: {
+        text: '/v1/custom/chat',
+        imageGenerate: '/v1/custom/images',
+        imageEdit: '/v1/custom/edits',
+      },
+    });
+    const textReq = buildOpenAiOfficialRequest(
+      {
+        id: 'aijob_path_text',
+        modality: 'text',
+        model: 'gpt-4o-mini',
+        correlationId: 'corr_path_text',
+        input: { contents: [{ role: 'user', parts: [{ text: 'hi' }] }] },
+      },
+      { providerId: 'path-override-agg', adapterId: 'path-override-agg-openai' }
+    );
+    expect(textReq.path).toBe('/v1/custom/chat');
+
+    const imageReq = buildOpenAiOfficialRequest(
+      {
+        id: 'aijob_path_image',
+        modality: 'image',
+        model: 'gpt-image-1.5',
+        correlationId: 'corr_path_image',
+        input: {
+          contents: [{ role: 'user', parts: [{ text: 'cube' }] }],
+          config: { imageConfig: { size: '1024x1024' } },
+        },
+      },
+      { providerId: 'path-override-agg', adapterId: 'path-override-agg-openai' }
+    );
+    expect(imageReq.path).toBe('/v1/custom/images');
   });
 });

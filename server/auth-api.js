@@ -2836,7 +2836,10 @@ const server = http.createServer(async (req, res) => {
         return;
       }
       const config = normalizeModelOpsConfig(body?.config || body);
-      const saved = await writeModelOpsConfig(config, { updatedByUserId: staff.user.id });
+      const saved = await writeModelOpsConfig(config, {
+        updatedByUserId: staff.user.id,
+        forceOpenAiCompatibleRouteSync: body?.forceOpenAiCompatibleRouteSync === true,
+      });
       try {
         const { applyOpenAiCompatibleProvidersFromOps } = await import('./ai-gateway/openai-compatible-config.js');
         applyOpenAiCompatibleProvidersFromOps(saved);

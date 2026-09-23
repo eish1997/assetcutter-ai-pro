@@ -1,5 +1,7 @@
 # AI Gateway 运营接聚合商手册（OpenAI-compatible）
 
+> **2026-09-23**：活跃版已迁至 [`docs/AI-Gateway运营接聚合商.md`](../AI-Gateway运营接聚合商.md)（R4/R5：保存时自动挂文/图路由与异步视频 endpointMappings）。下文为历史稿，§3「必须手写 gatewayRouteConfigs」已过时。
+
 **日期**：2026-07-24  
 **读者**：运营 / 管理员（无需改仓库、无需新写 adapter）  
 **适用**：302.AI、AIHubMix、OpenRouter、SiliconFlow 等 OpenAI 兼容聚合商  
@@ -49,16 +51,17 @@
 }
 ```
 
-点「保存发布范围」后服务端会 `applyOpenAiCompatibleProvidersFromOps`，**不会**新建 `xxx-adapter.js`。
+点「保存发布范围」后服务端会 `applyOpenAiCompatibleProvidersFromOps`，**不会**新建 `xxx-adapter.js`。  
+（R4+）同时对已发布 text/image 自动 upsert `gatewayRouteConfigs`；`asyncCapable` + 发布 video 模型时自动 upsert `endpointMappings`（见活跃手册）。
 
 ### 2. 挂 Key
 
 在「供应商 Key」里为该 `providerId` 添加可用平台 Key，跑 **Key Check**。
 
-### 3. 挂路由
+### 3. 挂路由（历史说明；请以活跃手册为准）
 
-- 同步文本/图片：用 `gatewayRouteConfigs`（或发布目录里已有 seed 路由）指向该 `providerId`
-- 异步视频等：再补 `endpointMappings`（request/poll/status/artifact 路径）
+- ~~同步文本/图片：必须手写 `gatewayRouteConfigs`~~ → **已改为保存时自动同步**
+- ~~异步视频等：再补 `endpointMappings`~~ → **asyncCapable 时自动生成最小模板，可再覆盖**
 
 跑 **Route Check**（不要和 Generation 混淆）。
 
@@ -99,24 +102,6 @@ npm run smoke:ai-gateway-302
 
 | 退出码 | 含义 |
 | --- | --- |
-| 0 | 通过；或 `AI_GATEWAY_302_SMOKE_OPTIONAL=1` 时缺凭据 SKIP |
-| 1 | Key/Route/Generation 失败 |
-| 2 | BLOCKED：缺管理员凭据或 Key 池无可用 `302ai` Key |
-
-仅检查门禁、不打真实 Generation：`npm run smoke:ai-gateway-302 -- --dry-run`。  
-CI 可选挂 `smoke:ai-gateway-302`（建议 `AI_GATEWAY_302_SMOKE_OPTIONAL=1` 除非预发已注入凭据）。
-
-## 不要做的事
-
-- 不要为第 N 家 OpenAI 兼容平台再复制一份 adapter 源文件
-- 不要把 Key Check 通过当成 Generation 可用
-- 不要只改前端 catalog 而不写 `gatewayRouteConfigs` / endpoint 映射
-
-## 排障
-
-| 现象 | 先查 |
-| --- | --- |
-| Route Check 找不到 provider | `openAiCompatibleProviders` 是否已保存并 apply |
-| Key 不可用 | Key 池 providerId 是否与配置一致 |
-| 异步一直 mapping_incomplete | `endpointMappings` 必填字段 |
-| 前台看不见模型 | 发布白名单 + `gatewayRouteConfigs` / catalog 叠加 |
+| 0 | 通过或 OPTIONAL 跳过 |
+| 1 | 失败 |
+| 2 | 缺凭据/缺 Key（BLOCKED） |

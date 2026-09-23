@@ -1,7 +1,34 @@
 import { describe, expect, it } from 'vitest';
 import { fallbackSummary, publicAiJobSummary } from '../server/ai-gateway/job-public-summary.js';
+import {
+  AI_GATEWAY_PUBLIC_JOB_CONTRACT_FIELDS,
+  AI_GATEWAY_SUPPORTED_MODALITIES,
+} from '../server/ai-gateway/job-public-contract.js';
 
 describe('AI gateway public job summary', () => {
+  it('exposes the frozen public job contract fields on summary', () => {
+    const summary = publicAiJobSummary({
+      job: {
+        id: 'aijob_contract_1',
+        status: 'succeeded',
+        modality: 'text',
+        capability: 'text.generate',
+        provider: 'openai-official',
+        model: 'gpt-4o-mini',
+        userId: 'u1',
+        correlationId: 'corr_1',
+        createdAt: '2026-09-23T00:00:00.000Z',
+        updatedAt: '2026-09-23T00:00:01.000Z',
+        metadata: {},
+      },
+      route: { providerId: 'openai-official', adapterId: 'openai-official', workerId: 'text-worker' },
+    });
+    for (const key of AI_GATEWAY_PUBLIC_JOB_CONTRACT_FIELDS) {
+      expect(summary, `missing contract field ${key}`).toHaveProperty(key);
+    }
+    expect(AI_GATEWAY_SUPPORTED_MODALITIES).toEqual(['text', 'image', 'video', 'model3d']);
+  });
+
   it('summarizes fallback attempts and skipped decisions for operator views', () => {
     const metadata = {
       aiGatewayFallback: {
