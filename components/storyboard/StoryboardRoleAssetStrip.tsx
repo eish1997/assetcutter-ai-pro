@@ -1,11 +1,13 @@
-import React, { useRef } from 'react';
+import React, { useCallback, useRef, useState } from 'react';
 import { collectStoryboardFrameImageFiles } from '../../services/storyboardTableFrameImport';
 import {
   collectStoryboardFrameImageInputs,
   storyboardFrameImageDropAllowed,
 } from '../../services/storyboardFrameDrag';
 import { resolveStoryboardRoleAssetDisplaySrc } from '../../services/storyboardRoleAssets';
+import { downloadPbrTextureDataUrl } from '../../services/workflowModelPbrTextureActions';
 import AppIcon from '../ui/AppIcon';
+import NamedImageStripContextMenu from './NamedImageStripContextMenu';
 import {
   STORYBOARD_FIELD_INPUT,
   STORYBOARD_GAP_TIGHT,
@@ -33,11 +35,28 @@ type Props = {
   onSplitFromAsset?: (asset: { id: string; name: string; image?: string }) => void;
 };
 
+type StripContextMenuState = {
+  id: string;
+  x: number;
+  y: number;
+  src: string;
+  name: string;
+};
+
 function allowImageDrop(event: React.DragEvent) {
   if (!storyboardFrameImageDropAllowed(event.dataTransfer)) return;
   event.preventDefault();
   event.stopPropagation();
   event.dataTransfer.dropEffect = 'copy';
+}
+
+function sanitizeDownloadBasename(name: string): string {
+  const cleaned = String(name || '')
+    .trim()
+    .replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_')
+    .replace(/\s+/g, ' ')
+    .slice(0, 80);
+  return cleaned || '参考图';
 }
 
 export default function StoryboardRoleAssetStrip({
@@ -62,6 +81,7 @@ export default function StoryboardRoleAssetStrip({
 }: Props) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const pendingIdRef = useRef<string | null>(null);
+  const [contextMenu, setContextMenu] = useState<StripContextMenuState | null>(null);
 
   const openPicker = (id: string) => {
     if (readOnly || busyId) return;
@@ -106,6 +126,40 @@ export default function StoryboardRoleAssetStrip({
     })();
   };
 
+  const closeContextMenu = useCallback(() => setContextMenu(null), []);
+
+  const handleThumbContextMenu = (
+    event: React.MouseEvent,
+    asset: { id: string; name: string },
+    src: string
+  ) => {
+    if (!src) return;
+    event.preventDefault();
+    event.stopPropagation();
+    setContextMenu({
+      id: asset.id,
+      x: event.clientX,
+      y: event.clientY,
+      src,
+      name: asset.name,
+    });
+  };
+
+  const handleContextDownload = useCallback(() => {
+    if (!contextMenu) return;
+    const filename = `${sanitizeDownloadBasename(contextMenu.name)}.png`;
+    void downloadPbrTextureDataUrl(contextMenu.src, filename);
+  }, [contextMenu]);
+
+  const handleContextDelete = useCallback(() => {
+    if (!contextMenu || readOnly) return;
+    if (assets.length > 1) {
+      onRemove(contextMenu.id);
+      return;
+    }
+    onClearImage(contextMenu.id);
+  }, [assets.length, contextMenu, onClearImage, onRemove, readOnly]);
+
   return (
     <div
       className="min-w-0"
@@ -134,17 +188,22 @@ export default function StoryboardRoleAssetStrip({
                 }`}
                 onDragOver={readOnly || busy ? undefined : allowImageDrop}
                 onDrop={readOnly || busy ? undefined : (event) => handleDrop(asset.id, event)}
+                onContextMenu={
+                  img ? (event) => handleThumbContextMenu(event, asset, img) : undefined
+                }
               >
                 {img ? (
                   <button
                     type="button"
-                    className="block h-full w-full"
+                    className="block h-full w-full disabled:cursor-not-allowed"
                     onClick={() => {
+                      if (busy) return;
                       if (onAssetImageClick?.(asset)) return;
                       if (onPreviewImage) onPreviewImage(img);
-                      else openPicker(asset.id);
+                      else if (!readOnly) openPicker(asset.id);
                     }}
-                    disabled={readOnly || busy}
+                    onContextMenu={(event) => handleThumbContextMenu(event, asset, img)}
+                    disabled={busy}
                   >
                     <img
                       src={img}
@@ -166,7 +225,7 @@ export default function StoryboardRoleAssetStrip({
                 )}
                 {busy ? (
                   <div className="absolute inset-0 flex items-center justify-center bg-black/45 text-[9px] text-gray-300">
-                    压缩中…
+                    处理中…
                   </div>
                 ) : null}
                 {!readOnly && assets.length > 1 ? (
@@ -239,6 +298,15 @@ export default function StoryboardRoleAssetStrip({
           </button>
         ) : null}
       </div>
+      <NamedImageStripContextMenu
+        open={Boolean(contextMenu)}
+        x={contextMenu?.x ?? 0}
+        y={contextMenu?.y ?? 0}
+        canDelete={!readOnly}
+        onDownload={handleContextDownload}
+        onDelete={readOnly ? undefined : handleContextDelete}
+        onClose={closeContextMenu}
+      />
     </div>
   );
 }

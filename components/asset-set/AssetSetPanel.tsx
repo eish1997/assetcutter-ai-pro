@@ -48,6 +48,12 @@ import {
   resolveAssetSetComponentSheetPresetFallback,
   resolveAssetSetPreset,
 } from '../../services/assetSet/assetSetPresets';
+import {
+  assetSetComponentImageCompanionKey,
+  persistAssetSetGeneratedImageFields,
+  persistAssetSetImageFields,
+  resolveAssetSetImageDataUrl,
+} from '../../services/assetSet/assetSetImage';
 import { splitAssetSetSheetToViews } from '../../services/assetSet/assetSetSheetPipeline';
 import {
   pickAssetSet3dPreset,
@@ -60,11 +66,6 @@ import {
   clearAssetSetTaskSession,
   subscribeAssetSetTaskSession,
 } from '../../services/assetSet/assetSetTaskSession';
-import {
-  assetSetComponentImageCompanionKey,
-  persistAssetSetImageFields,
-  resolveAssetSetImageDataUrl,
-} from '../../services/assetSet/assetSetImage';
 import { clearStoryboardNamedAssetImageFields } from '../../services/storyboardNamedAssetImage';
 import {
   buildAssetSetCompanionHydrateKey,
@@ -462,20 +463,20 @@ export default function AssetSetPanel({
           onNotify?.('error', '生成未返回图片');
           return null;
         }
-        const compressed = await compressStoryboardFrameDataUrl(out);
 
         if (params.outputComponentId) {
-          const fieldsOut = await persistAssetSetImageFields({
-            dataUrl: compressed,
+          const fieldsOut = await persistAssetSetGeneratedImageFields({
+            dataUrl: out,
             tableAssetId: asset.id,
             companionKey: assetSetComponentImageCompanionKey(params.outputComponentId, 'crop'),
             companionBaseUrl,
             companionProjectId,
+            compress: compressStoryboardFrameDataUrl,
           });
           patchDoc((prev) =>
             patchAssetSetComponents(prev, [params.outputComponentId!], (c) => ({
               ...c,
-              cropPreview: fieldsOut.image ?? compressed,
+              cropPreview: fieldsOut.image ?? out,
               cropPreviewCompanionKey: fieldsOut.imageCompanionKey,
               cropPreviewObjectKey: fieldsOut.imageObjectKey,
               views: [],
@@ -492,19 +493,20 @@ export default function AssetSetPanel({
         if (params.outputMode === 'append') {
           const newId = Math.random().toString(36).slice(2, 11);
           const name = nextAssetSetGenerationOutputName(doc.sourceAssets);
-          const fieldsOut = await persistAssetSetImageFields({
-            dataUrl: compressed,
+          const fieldsOut = await persistAssetSetGeneratedImageFields({
+            dataUrl: out,
             tableAssetId: asset.id,
             companionKey: assetSetSourceAssetCompanionKey(newId),
             companionBaseUrl,
             companionProjectId,
+            compress: compressStoryboardFrameDataUrl,
           });
           const newAsset = createAssetSetSourceAsset(
             {
               id: newId,
               name,
               slotKind: 'custom',
-              image: fieldsOut.image ?? compressed,
+              image: fieldsOut.image ?? out,
               imageCompanionKey: fieldsOut.imageCompanionKey,
               imageObjectKey: fieldsOut.imageObjectKey,
             },
@@ -525,12 +527,13 @@ export default function AssetSetPanel({
           onNotify?.('warn', `缺少 ${slotKind} 槽位`);
           return null;
         }
-        const fieldsOut = await persistAssetSetImageFields({
-          dataUrl: compressed,
+        const fieldsOut = await persistAssetSetGeneratedImageFields({
+          dataUrl: out,
           tableAssetId: asset.id,
           companionKey: assetSetSourceAssetCompanionKey(target.id),
           companionBaseUrl,
           companionProjectId,
+          compress: compressStoryboardFrameDataUrl,
         });
         patchDoc((prev) => ({
           ...prev,
